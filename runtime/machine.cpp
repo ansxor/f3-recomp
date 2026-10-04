@@ -5,6 +5,7 @@
 #include "interpreter.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include <sstream>
 
 namespace f3rt {
 Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Video>()),
@@ -18,6 +19,7 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
     interpreter = std::make_unique<Interpreter>(*this);
     audio->set_cpu_runner([this](int cycles) { return interpreter->run_audio(cycles); });
     audio->set_reset_callback([this](bool asserted) { interpreter->audio_reset(asserted); });
+    audio->set_irq_callback([this](bool asserted) { interpreter->audio_irq(asserted); });
     reset();
 }
 Machine::~Machine() = default;
@@ -143,6 +145,11 @@ int Machine::boundary() {
 }
 int Machine::fallback() {
     if (cpu.halted) return 0;
+    if (!allow_main_fallback) {
+        std::ostringstream message;
+        message << "Untranslated main CPU instruction at PC 0x" << std::hex << cpu.pc;
+        throw std::runtime_error(message.str());
+    }
     ++fallback_instructions;
     if (!fallback_hits.empty()) ++fallback_hits[(cpu.pc & 0xffffff) >> 1];
     return interpreter->run_main(1) > 0 && !cpu.halted;

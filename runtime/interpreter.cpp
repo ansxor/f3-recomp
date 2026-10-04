@@ -56,6 +56,11 @@ void Interpreter::reset_main() {
 void Interpreter::audio_reset(bool asserted) {
     if (!asserted) sound_needs_reset = true;
 }
+void Interpreter::audio_irq(bool asserted) {
+    // DUART acknowledge/IMR writes can lower IRQ during m68k_execute. Waiting
+    // until the next slice causes a second, spurious interrupt after RTE.
+    if (active_machine == &machine && sound_bus) m68k_set_irq(asserted ? 6 : 0);
+}
 int Interpreter::run_main(int cycles) {
     bind(machine, false);
     m68k_set_context(main_context.data());

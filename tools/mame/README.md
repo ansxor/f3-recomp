@@ -24,29 +24,23 @@ captures/landmakrj_attract/
 └── frame_0301/ ...
 ```
 
-### Video Timing & Buffering Phase Evidence
-In Taito F3 (`taito_f3_v.cpp`), Land Maker uses `sprite_lag = 1`:
-- At each vertical frame update, `scanline_draw()` executes first, rendering playfields, text, pivot, and palette from current RAM, and sprites from `m_sprite_framebuffer` (which was rendered at the end of frame $N-1$).
-- Then `get_sprite_info()` and `draw_sprites()` execute, converting current `spriteram` (0x600000..0x60ffff) into `m_sprite_framebuffer` for frame $N+1$.
-- `emu.register_frame_done` fires immediately after this drawing pipeline finishes.
-- Therefore:
-  * `reference.argb` and `reference.bmp` represent the output of `scanline_draw()`.
-  * `palette.bin`, `control.bin`, and `graphics.bin` represent the RAM state used for the background layers.
-  * `spriteram_active.bin` holds the exact spriteram from frame $N-1$ that was actually rendered into pixels.
+### Video timing and capture phase
+
+Protocol version 2 pairs state sampled on frame callback N with `screen:pixels()` sampled on callback N+1. MAME swaps its bitmap before the Lua frame-done callback; the pixel API therefore exposes the previous completed frame. Version-1 captures incorrectly paired current RAM with previous pixels. Re-capture them for parity work.
+
+Land Maker's baseline MAME renderer uses one-frame sprite buffering: current palette/playfield/text/line RAM is combined with sprites built from frame N-1. `spriteram_active.bin` preserves that prior sprite RAM separately. Control-register taps are retained strongly and reinstalled on soft reset.
+
+Observed verification: 25 phase-correct captures, frames 600–3480 at step 120, replay with **zero RGB mismatches across all 1,856,000 pixels**. An additional 34 consecutive animated frames established the one-callback pixel delay. This validates renderer output, not native game execution or hardware truth. ROM behavior/observed output outrank primary hardware evidence, WIP notes, then emulator source; discrepancies are tracked in `NOTES.md`.
 
 ---
 
 ## 2. Prerequisites & MAME Binary Acquisition
 
-Per project orchestration instructions:
-- Do **not** compile a full MAME build here.
-- The baseline MAME binary is built with `SUBTARGET=f3` in one of the bug worktrees (e.g. `tcobra2-pan-120` or `recalh-service3-8723`).
-- Once confirmed clean (`git log origin/master..HEAD` is empty), copy the resulting `f3` executable:
-  ```bash
-  mkdir -p /Users/darien/Workspace/f3-stuff/tools/mame-baseline/
-  cp <worktree-path>/f3 /Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3
-  chmod +x /Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3
-  ```
+Use the preserved executable `/Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3`; do not rebuild or replace it.
+
+- Clean source revision: `cfc4760a3be9c5a79846b19b6a573cb38459fa7e`
+- Binary SHA-256: `156ffb34020580bc05d9ae0854b72e0f7f7168b1b1f466127d5d0c2f3610b91e`
+- Expected warnings: the undumped `palce16v8q-d77-15.ic21`, and the reduced-subtarget `spcinvdj` missing-parent diagnostic. Neither warning prevented the exercised Land Maker captures.
 
 ---
 
@@ -61,6 +55,8 @@ python3 tools/mame/stage_roms.py
 Options:
 - `--check-only`: Verifies CRCs without writing files.
 - `--out-zip <path>`: Specifies custom output ZIP path (default: `tools/mame/staged_roms/landmakrj.zip`).
+- `--source <dir>`: Japanese game chip directory.
+- `--board-source <dir>`: Common F3 board PLDs; defaults to the supplied Puchi Car set. Four PLDs are selected by verified CRC.
 
 ---
 
@@ -74,7 +70,7 @@ To execute MAME and record attract-mode frames:
 Options:
 - `--mame <path>`: Path to MAME/f3 executable (default: `/Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3`)
 - `--outdir <dir>`: Destination directory (default: `captures/landmakrj_attract`)
-- `--start-frame <N>`: First frame to capture (default: 300, after boot self-test into attract)
+- `--start-frame <N>`: First state frame to capture (default: 300; cold-boot self-test can still be visible).
 - `--count <N>`: Number of frames to capture (default: 10)
 - `--step <N>`: Cadence between captured frames (default: 1)
 - `--wav <path>`: Output audio WAV file (default: `<outdir>/attract.wav`)

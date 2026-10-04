@@ -45,6 +45,7 @@ public:
     const f3_block *blocks = nullptr;
     size_t block_count = 0;
     uint64_t native_blocks = 0, fallback_instructions = 0;
+    bool allow_main_fallback = true; // Native game target disables this; diagnostics opt in.
     // Optional PC coverage counter, allocated only when requested by tooling.
     std::vector<uint32_t> fallback_hits;
 

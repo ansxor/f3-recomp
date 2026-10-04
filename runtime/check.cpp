@@ -66,6 +66,11 @@ int main() try {
     m->interpreter->reset_main();
     require(cpu.d[0]==0xdeadbeef && cpu.sr==0x2715 && cpu.pc==0x100,
             "Reset preserves canonical native D/CCR, not stale fallback context");
+    m->allow_main_fallback=false;const auto fallback_count=m->fallback_instructions;
+    bool rejected=false;
+    try { f3_fallback(&cpu); } catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("0x100")!=std::string::npos; }
+    require(rejected && cpu.pc==0x100 && cpu.d[0]==0xdeadbeef && m->fallback_instructions==fallback_count,
+            "Native-only fallback rejection reports PC without executing or counting an instruction");
     const f3_block bad[]={{0x100,native},{0x100,native}};
     require(!f3_register_blocks(&cpu,bad,2),"Duplicate PCs rejected");
     std::cout<<"PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter\n";

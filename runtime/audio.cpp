@@ -49,6 +49,7 @@ struct Audio::Impl {
     float m_gain_right;
 
     bool m_reset_asserted;
+    bool m_esp_halted = true;
 
     std::function<int(int cycles)> m_cpu_runner;
     std::function<void(bool asserted)> m_reset_cb;
@@ -86,8 +87,7 @@ struct Audio::Impl {
         // Connect DUART OP6 output to ES5510 HALT pin
         m_duart.set_outport_callback([this](uint8_t output_pins) {
             // Pin OP6: 1 = ESPHALT asserted (halted), 0 = ESP running
-            bool halt = (output_pins & 0x40) != 0;
-            m_es5510.set_HALT(halt);
+            m_esp_halted = (output_pins & 0x40) != 0;
         });
 
         // Connect MB87078 gain change callback
@@ -136,7 +136,7 @@ struct Audio::Impl {
         m_es5510.ser_w(4, clamp16(int32_t(cursample[6] * 0.18f / 16.0f)));
         m_es5510.ser_w(5, clamp16(int32_t(cursample[7] * 0.18f / 16.0f)));
 
-        if (!m_es5510.get_HALT()) {
+        if (!m_esp_halted) {
             m_es5510.run_once();
         }
 
@@ -510,6 +510,10 @@ bool Audio::is_reset() const {
 
 void Audio::set_reset_callback(std::function<void(bool asserted)> cb) {
     m_impl->m_reset_cb = cb;
+}
+
+void Audio::set_irq_callback(std::function<void(bool asserted)> cb) {
+    m_impl->m_duart.set_irq_callback(std::move(cb));
 }
 
 uint8_t Audio::read8(uint32_t address) {
