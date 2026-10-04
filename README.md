@@ -14,7 +14,7 @@ ROMs live outside the repo: `../roms/<set>/`.
 
 ## Build and run the integrated game
 
-Use the repository-root `integration` branch. Prerequisites: CMake, Ninja,
+Build this checkout. Prerequisites: CMake, Ninja,
 a C/C++20 compiler, SDL3 development files, Python 3.11+, and Capstone 5.0.9.
 Install the Python dependency once with
 `python3 -m pip install --target build/python -r recomp/requirements.txt`.
@@ -33,7 +33,8 @@ directory is the executable's default; `--rom-dir DIR` overrides it.
 `landmakr` always selects generated main-CPU code and rejects any untranslated
 instruction. `--allow-fallback` explicitly opts into diagnostic interpretation;
 that mode does **not** satisfy native-game acceptance. The separate `f3rt-run`
-and `f3rt-replay` targets are test aids. The sound CPU remains emulated.
+and `f3rt-replay` targets are test aids. `landmakr` defaults to the native
+recompiled sound driver; `--sound-driver oracle` selects its interpreted reference.
 
 Controls: **5/6** coin, **1/2** start, **arrows** direction, **Z/X/C** buttons,
 **F1** service, **F2** test, **Escape** quit. `--eeprom build/landmakr.nv`
@@ -42,6 +43,34 @@ finite verification runs without changing the CPU execution path.
 
 The build command is smoke-tested; final playable frame/audio equivalence is
 tracked in `STATUS.md`, not implied by successful compilation.
+
+### Opt-in 1v1 rollback netplay
+
+Build the dependency-free Go relay and start it on a reachable UDP port:
+
+```sh
+(cd netplay/server && go build -o ../../build/netplay-server .)
+build/netplay-server -addr 0.0.0.0:9000
+```
+
+Use matching game builds and ROMs, then run on each client:
+
+```sh
+build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 1 --netplay-delay 2
+build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 2 --netplay-delay 2
+```
+
+Keys control the assigned local player: arrows, Z/X/C, either start key,
+either coin key, F1 service, F2 shared test. Coins/service/test are synchronized;
+focus loss releases inputs through the same delayed path. Both peers cold-boot
+the erased factory EEPROM; persisted settings and diagnostic execution modes
+are rejected. The title shows session state, RTT and rollback depth.
+
+Full usage, versus entry, protocol/state inventory, exact-reference oracle,
+impairment tests and measured rollback limits: [docs/NETPLAY.md](docs/NETPLAY.md).
+The default history retains 16 rollback frames, not a promise that replaying
+all 16 fits a 60 Hz display interval. Confirmed-only audio avoids duplicated
+speculative output at the cost of additional audio latency.
 
 ### Game-data video and presentation
 
@@ -78,7 +107,7 @@ Keep traces and extracted events under ignored `build/`; they contain ROM-derive
 data. The gameplay harness also accepts `--wav FILE`.
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver oracle \
   --sound-trace build/seed5.sound --wav build/seed5.wav
 python3 tools/decode_sound.py build/seed5.sound \
   --output build/seed5-writes.jsonl.gz

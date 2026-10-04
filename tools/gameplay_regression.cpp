@@ -5,6 +5,7 @@
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
 #include "sound_trace.hpp"
+#include "gameplay_inputs.hpp"
 
 #include <algorithm>
 #include <array>
@@ -223,23 +224,20 @@ int main(int argc, char **argv) try {
 
     while (m.frame < target_frames) {
         uint64_t f = m.frame;
-
-        // Exact handoff input schedule:
-        // Frame 700: coin press; Frame 720: coin release
-        if (f == 700) apply_key(m, KEY_COIN, true);
-        if (f == 720) apply_key(m, KEY_COIN, false);
+        // Deterministic schedule using shared config (retained exact timing)
+        constexpr f3rt::test::ScheduleConfig cfg{.versus = false};
+        if (f == cfg.p1_coin_frame) apply_key(m, KEY_COIN, true);
+        if (f == cfg.p1_coin_frame + cfg.p1_coin_duration) apply_key(m, KEY_COIN, false);
 
         // Frames [800, 2400): start pulse every 90 frames for 5 frames
-        if (f >= 800 && f < 2400 && f % 90 == 0) apply_key(m, KEY_START, true);
-        if (f >= 800 && f < 2400 && f % 90 == 5) apply_key(m, KEY_START, false);
+        if (f >= cfg.start_begin && f < cfg.start_end && f % cfg.start_period == 0) apply_key(m, KEY_START, true);
+        if (f >= cfg.start_begin && f < cfg.start_end && f % cfg.start_period == cfg.start_pulse_len) apply_key(m, KEY_START, false);
 
-        // Frames >= 1200: 64-bit LCG button mashing every 6 frames
-        if (f >= 1200 && f % 6 == 0) {
+        if (f >= cfg.mashing_begin && f % cfg.mashing_period == 0) {
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
             auto k = keys[(rng >> 33) % 7];
             apply_key(m, k, ((rng >> 20) & 1) != 0);
         }
-
         bool ok = false;
         try {
             ok = m.run_frame(/*translated=*/true);

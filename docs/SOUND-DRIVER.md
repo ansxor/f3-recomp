@@ -16,7 +16,7 @@ is a pin list, not evidence for an 8 MHz clock. This runtime retains its
 Neither instruction-atomic bus accesses nor those timings are claimed to be
 physical-bus measurements.
 
-ES5505/ES5510 stay emulated. The default interpreted driver remains the oracle;
+ES5505/ES5510 stay emulated. The interpreted driver remains the reference oracle;
 SDL3 remains the playback backend. Observation does not affect device scheduling,
 change a register write, or perform additional reads of side-effectful devices.
 
@@ -316,10 +316,12 @@ they are **not** independent left/right volume registers. The existing
 board mixer and quantized gains are unchanged. Trace reset markers retain
 the distinction between resetting DSP/DUART/volume and preserving OTIS.
 
-## Opt-in native driver and strict comparison
+## Native driver and strict comparison
 
 `--sound-driver oracle|native` is independent of the main-CPU execution mode.
-Default is `oracle`. `native` is a **literal statically recompiled ROM driver**,
+`landmakr` and the gameplay harness default to `native` when sound code is generated;
+select `--sound-driver oracle` explicitly for interpreted reference captures.
+`native` is a **literal statically recompiled ROM driver**,
 not a high-level musical rewrite: its own `f3_cpu` state executes generated C
 for the 68000 program, with native memory/control callbacks. It preserves the
 ROM's tasks, mailbox parser, tables, allocation, sequencer and DSP worker.

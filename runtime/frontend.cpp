@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/game_video.hpp"
+#include "f3rt/netplay.hpp"
 #include "interpreter.hpp"
 #include "sound_trace.hpp"
 #include "capture_io.hpp"
@@ -44,6 +45,24 @@ void key(f3rt::Machine &m, SDL_Scancode code, bool pressed) {
     default:break;
     }
 }
+void netplay_key(f3rt::netplay::InputWord &word, SDL_Scancode code, bool pressed) {
+    unsigned bit;
+    switch (code) {
+    case SDL_SCANCODE_UP: bit=0;break;
+    case SDL_SCANCODE_DOWN: bit=1;break;
+    case SDL_SCANCODE_LEFT: bit=2;break;
+    case SDL_SCANCODE_RIGHT: bit=3;break;
+    case SDL_SCANCODE_Z: bit=4;break;
+    case SDL_SCANCODE_X: bit=5;break;
+    case SDL_SCANCODE_C: bit=6;break;
+    case SDL_SCANCODE_1: case SDL_SCANCODE_2: bit=7;break;
+    case SDL_SCANCODE_5: case SDL_SCANCODE_6: bit=8;break;
+    case SDL_SCANCODE_F1: bit=9;break;
+    case SDL_SCANCODE_F2: bit=10;break;
+    default: return;
+    }
+    if (pressed) word |= uint16_t(1u<<bit); else word &= uint16_t(~(1u<<bit));
+}
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
@@ -55,6 +74,8 @@ int main(int argc,char **argv) try {
     bool sound_explicit=false;
     f3rt::GameVideoOptions video_options;
     std::string video_filter="nearest";
+    f3rt::netplay::TransportOptions net_options;
+    bool net_option_seen=false;
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
 #ifdef F3RT_LANDMAKR
@@ -91,6 +112,18 @@ int main(int argc,char **argv) try {
             video_options.border=unsigned(border);
         }
         else if(arg=="--video-filter")video_filter=value();
+        else if(arg=="--netplay-server") { net_options.server=value();net_option_seen=true; }
+        else if(arg=="--netplay-room") { net_options.room=value();net_option_seen=true; }
+        else if(arg=="--netplay-player") {
+            const auto player=std::stoul(value());
+            if(player<1 || player>2)throw std::runtime_error("--netplay-player must be 1 or 2");
+            net_options.player=unsigned(player);net_option_seen=true;
+        }
+        else if(arg=="--netplay-delay") {
+            const auto delay=std::stoul(value());
+            if(delay>8)throw std::runtime_error("--netplay-delay must be 0..8");
+            net_options.delay=unsigned(delay);net_option_seen=true;
+        }
         else if(arg=="--headless")headless=true;
         else if(arg=="--no-audio")sound=false;
         else if(arg=="--translated")translated=true;
@@ -100,10 +133,12 @@ int main(int argc,char **argv) try {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
-                     <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default oracle)\n"
+                     <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
+                     <<"  [--netplay-server HOST:PORT --netplay-room CODE --netplay-player 1|2 --netplay-delay 0..8]\n"
+                     <<"  Netplay: strict native game video/sound, factory-reset EEPROM, no local-only inputs.\n"
                      <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: "+arg);
@@ -132,6 +167,13 @@ int main(int argc,char **argv) try {
     if(video_filter!="nearest" && video_filter!="linear")throw std::runtime_error("--video-filter must be nearest or linear");
     if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
         throw std::runtime_error("Presentation enhancements require --video game or compare");
+    const bool netplay=net_option_seen;
+    if(netplay && (net_options.server.empty() || net_options.room.empty()))
+        throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
+    if(netplay && (!translated || allow_fallback || video_mode!="game" || video_options.expanded() ||
+                   sound_driver!="native" || !eeprom.empty() || !sound_trace_path.empty() || !fallback_report.empty()))
+        throw std::runtime_error("Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled");
+    if(netplay && frames>=UINT32_MAX-1024u)throw std::runtime_error("Netplay frame limit exceeds protocol range");
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
@@ -177,29 +219,91 @@ int main(int argc,char **argv) try {
     uint64_t audio_frames=0,nonzero_samples=0;
     int audio_peak=0;
     bool quit=false;
+    std::unique_ptr<f3rt::netplay::Transport> transport;
+    std::unique_ptr<f3rt::netplay::Rollback> rollback;
+    f3rt::netplay::InputWord local_word=0;
+    if(netplay)transport=std::make_unique<f3rt::netplay::Transport>(net_options,f3rt::netplay::machine_identity(m,net_options.delay));
+    bool finish_sent=false;
+    auto next_net_step=std::chrono::steady_clock::now();
+    auto next_status=next_net_step;
     const auto start=std::chrono::steady_clock::now();
-    while(!quit && (!frames || m.frame<frames)) {
+    while(!quit && ((!frames || m.frame<frames) || (transport && !transport->finished()))) {
         if(!headless) {
             SDL_Event event;
             while(SDL_PollEvent(&event)) {
                 if(event.type==SDL_EVENT_QUIT)quit=true;
                 if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) {
                     if(event.key.scancode==SDL_SCANCODE_ESCAPE)quit=true;
-                    if(!event.key.repeat)key(m,event.key.scancode,event.type==SDL_EVENT_KEY_DOWN);
+                    if(!event.key.repeat) {
+                        if(netplay)netplay_key(local_word,event.key.scancode,event.type==SDL_EVENT_KEY_DOWN);
+                        else key(m,event.key.scancode,event.type==SDL_EVENT_KEY_DOWN);
+                    }
                 }
-                if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) { m.inputs.fill(0xffffffff);m.system_inputs=0xff; }
+                if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST) {
+                    if(netplay)local_word=0;
+                    else { m.inputs.fill(0xffffffff);m.system_inputs=0xff; }
+                }
             }
         }
-        if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
-        if(!dumpdir.empty() && m.frame>=dump_start && (m.frame-dump_start)%dump_every==0)f3rt::dump_machine(m,dumpdir);
+        bool advanced=false;
+        if(transport) {
+            try {
+                transport->pump(uint32_t(m.frame),rollback?rollback->confirmed_frame():0);
+                if(transport->ready() && !rollback) {
+                    rollback=std::make_unique<f3rt::netplay::Rollback>(m,transport->slot(),net_options.delay);
+                    std::cout<<"netplay_ready player="<<transport->slot()+1<<" delay="<<net_options.delay<<'\n';
+                    next_net_step=std::chrono::steady_clock::now();
+                }
+                if(rollback) {
+                    f3rt::netplay::Input input;
+                    while(transport->receive(input))rollback->receive(input);
+                    f3rt::netplay::Checksum checksum;
+                    while(transport->receive_checksum(checksum))rollback->receive_checksum(checksum);
+                    const auto previous_rollbacks=rollback->rollback_count();
+                    rollback->synchronize();
+                    advanced=rollback->rollback_count()!=previous_rollbacks;
+                    const auto now=std::chrono::steady_clock::now();
+                    // The peer's advertised frame is already one transit old.
+                    // Allow that age plus two frames before yielding to a slower peer.
+                    const int lead_limit=throttle?2+int(transport->rtt_ms()*f3rt::Machine::pixel_clock/
+                        (2000.0*f3rt::Machine::frame_pixels)+0.999):16;
+                    if((!frames || m.frame<frames) && (!throttle || now>=next_net_step) && transport->frame_advantage()<=lead_limit) {
+                        if(rollback->needs_local_input())transport->submit(rollback->local_input(local_word));
+                        const bool stepped=rollback->advance();
+                        advanced|=stepped;
+                        if(stepped)next_net_step=std::max(next_net_step,now)+std::chrono::nanoseconds(
+                            uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
+                    }
+                    while(rollback->receive_checksum_to_send(checksum))transport->checksum(checksum);
+                    if(frames && m.frame==frames && rollback->confirmed_frame()==frames && !finish_sent) {
+                        transport->finish(uint32_t(frames),m.state_crc());finish_sent=true;
+                    }
+                }
+                const auto now=std::chrono::steady_clock::now();
+                if(now>=next_status) {
+                    const std::string status=transport->status()+" ping="+std::to_string(int(transport->rtt_ms()))+
+                        "ms rollback="+std::to_string(rollback?rollback->last_rollback_depth():0);
+                    if(sdl.window)check(SDL_SetWindowTitle(sdl.window,("Land Maker — "+status).c_str()));
+                    next_status=now+std::chrono::milliseconds(250);
+                }
+            } catch(const std::exception &error) {
+                if(sdl.window)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Netplay stopped",error.what(),sdl.window);
+                throw;
+            }
+        } else {
+            if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
+            advanced=true;
+        }
+        if(advanced && !dumpdir.empty() && m.frame>=dump_start && (m.frame-dump_start)%dump_every==0)f3rt::dump_machine(m,dumpdir);
         size_t count;
-        while((count=m.audio->render(samples.data(),samples.size()/2))!=0) {
+        while((count=rollback?rollback->render_audio(samples.data(),samples.size()/2):
+               m.audio->render(samples.data(),samples.size()/2))!=0) {
             audio_frames+=count;
             for(size_t i=0;i<count*2;++i) { audio_peak=std::max(audio_peak,std::abs(int(samples[i])));nonzero_samples+=samples[i]!=0; }
             if(wav)wav->append(std::span(samples.data(),count*2));
             if(sdl.audio)check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
         }
-        if(!headless) {
+        if(!headless && advanced) {
             const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
             check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
             check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
@@ -208,8 +312,9 @@ int main(int argc,char **argv) try {
                 check(shot!=nullptr);const bool saved=SDL_SaveBMP(shot,surface.string().c_str());SDL_DestroySurface(shot);check(saved);
             }
             check(SDL_RenderPresent(sdl.renderer));
-            if(throttle)std::this_thread::sleep_until(start+std::chrono::nanoseconds(uint64_t(double(m.frame)*1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock)));
+            if(throttle && !netplay)std::this_thread::sleep_until(start+std::chrono::nanoseconds(uint64_t(double(m.frame)*1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock)));
         }
+        if(transport && !advanced)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if(!eeprom.empty())m.save_eeprom(eeprom);
     if(!fallback_report.empty()) {
@@ -219,6 +324,8 @@ int main(int argc,char **argv) try {
         if(!report)throw std::runtime_error("Fallback report write failed");
     }
     if(m.game_video)m.game_video->report(std::cout);
+    if(rollback)std::cout<<"netplay_confirmed="<<rollback->confirmed_frame()<<" state_crc="<<m.state_crc()
+        <<" rollbacks="<<rollback->rollback_count()<<" max_rollback_depth="<<rollback->maximum_rollback_depth()<<'\n';
     if(m.sound_trace)m.sound_trace->finish(m);
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
              <<" sound_driver="<<sound_driver

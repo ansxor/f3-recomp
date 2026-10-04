@@ -57,8 +57,9 @@ file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
     runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp
-    runtime/sound_trace.cpp runtime/sound_native.cpp ${AUDIO_SOURCES})
-target_include_directories(f3rt PUBLIC include PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}")
+    runtime/sound_trace.cpp runtime/sound_native.cpp runtime/netplay.cpp
+    runtime/netplay_transport.cpp ${AUDIO_SOURCES})
+target_include_directories(f3rt PUBLIC include PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(f3rt PRIVATE f3rt_musashi)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 if(F3_SOUND_GENERATED_DIR)
@@ -80,6 +81,11 @@ if(F3_GENERATED_DIR)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-gameplay-regression PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
+    add_executable(f3rt-netplay-oracle tools/netplay_oracle.cpp)
+    target_link_libraries(f3rt-netplay-oracle PRIVATE f3rt f3_recompiled)
+    target_include_directories(f3rt-netplay-oracle PRIVATE runtime tools)
+    target_compile_definitions(f3rt-netplay-oracle PRIVATE
+        F3RT_GENERATED=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
 endif()
 if(F3RT_SDL)
     find_package(SDL3 CONFIG REQUIRED)
@@ -95,7 +101,7 @@ if(F3RT_SDL)
     endif()
 endif()
 if(F3_SOUND_GENERATED_DIR)
-    foreach(frontend f3rt-sound-extract f3rt-gameplay-regression f3rt-run landmakr)
+    foreach(frontend f3rt-sound-extract f3rt-gameplay-regression f3rt-netplay-oracle f3rt-run landmakr)
         if(TARGET ${frontend})
             target_link_libraries(${frontend} PRIVATE f3_sound_recompiled)
             target_compile_definitions(${frontend} PRIVATE F3RT_SOUND_GENERATED=1)
@@ -110,3 +116,35 @@ if(BUILD_TESTING)
     target_link_libraries(f3rt-check PRIVATE f3rt)
     add_test(NAME runtime-devices COMMAND f3rt-check)
 endif()
+
+# Content identity, not a branch name or dirty-tree-blind git revision. Different
+# compiler/platform/options or generated code must not silently join a match.
+file(GLOB_RECURSE NETPLAY_IDENTITY_FILES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    include/*.h include/*.hpp runtime/*.c runtime/*.h runtime/*.cpp runtime/*.hpp
+    recomp/*.py recomp/*.h recomp/*.csv games/*.toml)
+list(APPEND NETPLAY_IDENTITY_FILES CMakeLists.txt tools/compile_sound.py tools/netplay_build_id.cmake)
+list(SORT NETPLAY_IDENTITY_FILES)
+set(NETPLAY_IDENTITY "${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_C_FLAGS};${CMAKE_CXX_FLAGS};${CMAKE_C_FLAGS_RELEASE};${CMAKE_CXX_FLAGS_RELEASE}")
+foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    string(APPEND NETPLAY_IDENTITY ";${config}:${CMAKE_C_FLAGS_${config}};${CMAKE_CXX_FLAGS_${config}}")
+endforeach()
+string(APPEND NETPLAY_IDENTITY ";${CMAKE_OSX_ARCHITECTURES};${CMAKE_OSX_DEPLOYMENT_TARGET};${CMAKE_SYSROOT}")
+set(NETPLAY_IDENTITY_DEPENDS)
+foreach(source IN LISTS NETPLAY_IDENTITY_FILES)
+    list(APPEND NETPLAY_IDENTITY_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+endforeach()
+foreach(generated_dir IN ITEMS "${F3_GENERATED_DIR}" "${F3_SOUND_GENERATED_DIR}")
+    if(generated_dir)
+        file(GLOB generated_files "${generated_dir}/*.c" "${generated_dir}/*.h")
+        list(APPEND NETPLAY_IDENTITY_DEPENDS ${generated_files})
+    endif()
+endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/netplay_build.hpp"
+    COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DSOURCES=${NETPLAY_IDENTITY_FILES}" "-DCOMPILER_ID=${NETPLAY_IDENTITY}"
+        "-DGENERATED_DIR=${F3_GENERATED_DIR}" "-DSOUND_GENERATED_DIR=${F3_SOUND_GENERATED_DIR}"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/netplay_build.hpp"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/netplay_build_id.cmake"
+    DEPENDS ${NETPLAY_IDENTITY_DEPENDS}
+    VERBATIM)
+target_sources(f3rt PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/netplay_build.hpp")
