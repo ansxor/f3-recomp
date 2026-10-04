@@ -30,16 +30,18 @@ class ActorDiscoveryTests(unittest.TestCase):
         self.assertTrue({0x600, 0x620, 0x900}.isdisjoint(result.instructions))
 
     def test_register_staged_script_counter_records(self):
-        rom, config = self.fixture()
-        config["discovery"]["actor_scripts"]["pointer_table_strides"] = [4, 8]
-        rom[0x400:0x40e] = bytes.fromhex("203b007e4e714e712940001c4e75")
-        struct.pack_into(">IIIII", rom, 0x480, 0x600, 0, 0x620, 1, 0xffffffff)
-        for script, callback in ((0x600, 0x800), (0x620, 0x820)):
-            struct.pack_into(">HIH", rom, script, 0, callback, 10)
-            rom[callback:callback + 2] = bytes.fromhex("4e75")
-        result = discover(bytes(rom), config)
-        self.assertTrue({0x800, 0x820} <= result.instructions.keys())
-        self.assertTrue({0x480, 0x488, 0x600, 0x620}.isdisjoint(result.instructions))
+        for load, store in (("203b", "2940"), ("207b", "2948")):
+            with self.subTest(load=load):
+                rom, config = self.fixture()
+                config["discovery"]["actor_scripts"]["pointer_table_strides"] = [4, 8]
+                rom[0x400:0x40e] = bytes.fromhex(load + "007e4e714e71" + store + "001c4e75")
+                struct.pack_into(">IIIII", rom, 0x480, 0x600, 0, 0x620, 1, 0xffffffff)
+                for script, callback in ((0x600, 0x800), (0x620, 0x820)):
+                    struct.pack_into(">HIH", rom, script, 0, callback, 10)
+                    rom[callback:callback + 2] = bytes.fromhex("4e75")
+                result = discover(bytes(rom), config)
+                self.assertTrue({0x800, 0x820} <= result.instructions.keys())
+                self.assertTrue({0x480, 0x488, 0x600, 0x620}.isdisjoint(result.instructions))
 
     def test_explicit_script_table_count_excludes_adjacent_data(self):
         rom, config = self.fixture()

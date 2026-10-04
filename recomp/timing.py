@@ -39,7 +39,9 @@ def instruction_cycles(insn, pc_base, ea_extension_bytes) -> str:
     mnemonic = insn.mnemonic.split(".")[0]
     cycles = BASE_CYCLES[opcode]
     if mnemonic == "movem":
-        cycles += int.from_bytes(raw[2:4], "big").bit_count() * 4
+        # MAME's 68020 model distinguishes stores (3/register) from loads (4).
+        per_register = 4 if opcode & 0x0400 else 3
+        cycles += int.from_bytes(raw[2:4], "big").bit_count() * per_register
     if mnemonic == "reset":
         cycles += 518
     offset = pc_base(insn) - insn.address

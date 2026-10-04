@@ -301,16 +301,17 @@ def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
         if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217c and \
                 int.from_bytes(rom[pc + 6:pc + 8], "big") == field:
             roots.append(int.from_bytes(rom[pc + 2:pc + 6], "big"))
-        # Script-table loads may store directly or stage through Dn and NOPs.
+        # Script-table loads may stage through Dn/An and intervening NOPs.
         word = int.from_bytes(rom[pc:pc + 2], "big")
         table_store = (word & 0xf1ff) == 0x217b and \
             int.from_bytes(rom[pc + 4:pc + 6], "big") == field
-        if (word & 0xf1ff) == 0x203b:
+        if (word & 0xf1ff) in (0x203b, 0x207b):
             store_pc = pc + 4
             while store_pc < pc + 8 and rom[store_pc:store_pc + 2] == b"\x4e\x71":
                 store_pc += 2
             store = int.from_bytes(rom[store_pc:store_pc + 2], "big")
-            table_store = (store & 0xf1f8) == 0x2140 and \
+            store_base = 0x2148 if word & 0x0040 else 0x2140
+            table_store = (store & 0xf1f8) == store_base and \
                 (store & 7) == (word >> 9) & 7 and \
                 int.from_bytes(rom[store_pc + 2:store_pc + 4], "big") == field
         if table_store:
