@@ -274,24 +274,35 @@ def _extract_script_callbacks(rom: bytes, md: capstone.Cs, spec: dict) -> set[in
         if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217c and \
                 int.from_bytes(rom[pc + 6:pc + 8], "big") == field:
             roots.append(int.from_bytes(rom[pc + 2:pc + 6], "big"))
-        # MOVE.L d8(PC,Xn),d16(An): a bounded array of script pointers.
-        if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217b and \
-                int.from_bytes(rom[pc + 4:pc + 6], "big") == field:
+        # Script-table loads may store directly or stage through Dn and NOPs.
+        word = int.from_bytes(rom[pc:pc + 2], "big")
+        table_store = (word & 0xf1ff) == 0x217b and \
+            int.from_bytes(rom[pc + 4:pc + 6], "big") == field
+        if (word & 0xf1ff) == 0x203b:
+            store_pc = pc + 4
+            while store_pc < pc + 8 and rom[store_pc:store_pc + 2] == b"\x4e\x71":
+                store_pc += 2
+            store = int.from_bytes(rom[store_pc:store_pc + 2], "big")
+            table_store = (store & 0xf1f8) == 0x2140 and \
+                (store & 7) == (word >> 9) & 7 and \
+                int.from_bytes(rom[store_pc + 2:store_pc + 4], "big") == field
+        if table_store:
             extension = int.from_bytes(rom[pc + 2:pc + 4], "big")
             if extension & 0x100:
                 continue  # Full-format addressing needs separate metadata.
             table = pc + 2 + int.from_bytes(rom[pc + 3:pc + 4], "big", signed=True)
-            for offset in range(64):
-                entry = table + offset * 4
-                if entry < 0 or entry + 4 > len(rom):
-                    break
-                target = int.from_bytes(rom[entry:entry + 4], "big")
-                if target < 0x400 or target + 2 > len(rom) or target & 1:
-                    break
-                operation = int.from_bytes(rom[target:target + 2], "big")
-                if operation >= len(lengths) or lengths[operation] < 0:
-                    break
-                roots.append(target)
+            for stride in spec.get("pointer_table_strides", [4]):
+                for offset in range(64):
+                    entry = table + offset * stride
+                    if entry < 0 or entry + 4 > len(rom):
+                        break
+                    target = int.from_bytes(rom[entry:entry + 4], "big")
+                    if target < 0x400 or target + 2 > len(rom) or target & 1:
+                        break
+                    operation = int.from_bytes(rom[target:target + 2], "big")
+                    if operation >= len(lengths) or lengths[operation] < 0:
+                        break
+                    roots.append(target)
     roots.extend(spec.get("entry_points", []))
     visited, callbacks = set(), set()
     while roots:
