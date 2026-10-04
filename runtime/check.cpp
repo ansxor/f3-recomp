@@ -3,6 +3,7 @@
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
+#include "game_tiles.hpp"
 #include <array>
 #include <initializer_list>
 #include <iostream>
@@ -10,6 +11,47 @@
 
 namespace {
 void require(bool ok,const char *why) { if(!ok)throw std::runtime_error(why); }
+void check_game_tile_descriptors() {
+    std::array<uint8_t, 32> rom{};
+    std::array<uint8_t, 0x20000> ram{};
+    std::array<uint8_t, 4 * 256> assets{};
+    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
+        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+    };
+    const auto longword = [&](auto &bytes, unsigned offset, uint32_t value) {
+        word(bytes, offset, uint16_t(value >> 16)); word(bytes, offset + 2, uint16_t(value));
+    };
+    word(rom, 0, 1); word(rom, 2, 3);
+    for (unsigned tile = 1; tile <= 3; ++tile) {
+        longword(rom, tile * 4, 0x02010000u | tile);
+        for (unsigned y = 0; y < 16; ++y)
+            for (unsigned x = 0; x < 16; ++x)
+                assets[tile * 256 + y * 16 + x] = uint8_t(tile + (x == 0 ? 8 : 0));
+    }
+    f3rt::GameMemory memory{rom, ram};
+    f3rt::GameTiles scene;
+    f3_cpu cpu{};
+    cpu.pc = 0x5a5e; scene.observe(memory, cpu);
+    cpu.a[7] = 0x400100;
+    longword(ram, 0x104, 0); // Descriptor in the independent game ROM fixture.
+    longword(ram, 0x108, 0x612000);
+    word(ram, 0x10c, 2); // Palette XOR: source row 1 becomes row 3.
+    longword(ram, 0x10e, 0x40000000); // Horizontal descriptor reversal.
+    cpu.pc = 0x55c2; scene.observe(memory, cpu);
+    require(scene.supported(1), "Three-column reversed game descriptor stays cell-aligned");
+    const auto left = scene.playfield_pixel(1, 0, 0, false, assets);
+    const auto last = scene.playfield_pixel(1, 47, 0, false, assets);
+    require(left.palette == 51 && last.palette == 57 && left.flags == 0x11,
+            "Game rectangle reverses cell order and texels while XORing palette and preserving blend");
+    require(!(scene.playfield_pixel(1, 48, 0, false, assets).flags & 0x10),
+            "Reversed rectangle does not paint the cell beyond its width");
+    scene.observe_write(0x1234, 0x612000);
+    require(!scene.supported(1) && scene.unsupported_pc(1) == 0x1234,
+            "Unmodeled playfield mutation cannot silently retain a valid game scene");
+    cpu.pc = 0x5a5e; scene.observe(memory, cpu);
+    require(scene.supported(1) && !(scene.playfield_pixel(1, 0, 0, false, assets).flags & 0x10),
+            "Complete game clear restores ownership and removes old tiles");
+}
 f3rt::RomSet fixture() {
     f3rt::RomSet r;
     r.main.resize(0x200000);r.sprites.resize(0x400000);r.sprites_hi.resize(0x200000);
@@ -450,6 +492,7 @@ void check_audio_mixer() {
 }
 }
 int main() try {
+    check_game_tile_descriptors();
     check_audio_mixer();
     check_main_sound_ordering();
     check_audio_partitioning();

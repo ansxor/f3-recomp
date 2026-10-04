@@ -42,7 +42,7 @@ Attribute decoding used by the existing observed oracle and the game renderer:
 | `14` | Horizontal flip |
 | `15` | Vertical flip |
 
-Copy helpers use do/while `SUBQ.W` / signed `BGT`; the erase helper tests the decremented word before writing. Their zero-count behavior differs. Flip helpers `$566e/$5678/$5686/$5698` select ±4-byte column and ±256-byte row steps. The horizontal reversal's `LEA -4(A1,D1.W),A1` **does not multiply the width by four**. The port preserves that actual instruction, not an assumed rectangle convention.
+Copy helpers use do/while `SUBQ.W` / signed `BGT`; the erase helper tests the decremented word before writing. Their zero-count behavior differs. Flip helpers `$566e/$5678/$5686/$5698` select ±4-byte column and ±256-byte row steps. At `$5680/$56a0`, bytes `43f1 14fc` encode `LEA -4(A1,D1.W*4),A1`: extension bits 10..9 are `2`, selecting ×4. Capstone's printed operand omits that scale. The first PF1 comparison rejected an unaligned scene destination at frame 1560 and exposed this disassembly-display trap; raw extension bytes, not the misleading operand string, determine the implementation.
 
 ### Implemented producer hooks
 
@@ -73,6 +73,13 @@ Results: seeds **5, 6 and 7**, each 3600 frames. Each seed compares 26 PF0 sampl
 Comparison includes transparent coverage, palette index and blend selector for visible texels across the entire 1024×512 plane, including off-screen cells. Two transparent texels are the same rendered pixel regardless of their unused palette index. This is stronger than RGB equality for nontransparent texels, but does not yet prove scrolling, clipping, inter-layer mixing or final 320×232 output.
 
 The first run correctly rejected an uncovered producer at seed 5, frame 1320, PC `$09ec66`. ROM inspection identified the side-strip operation above. Adding its high-level routine hook—not copying its FDP writes—made the same scenario pass.
+
+The next incremental run selects all four maps:
+`--seed 5 --frames 6000 --video-diff --video-layer-mask 15`.
+PF0, PF1, PF2 and PF3 each compare **46 samples / 24,117,248 indexed pixels / zero mismatches**.
+The run executes 80,338,232 native blocks with zero fallback. The indexed-reversal correction also passes
+`f3rt-check`, including a three-column mirrored descriptor with palette XOR and blend selection,
+an unpainted right boundary, unknown-producer invalidation and recovery after a complete game clear.
 
 ## Remaining producer map: ROM evidence, not parity claims
 

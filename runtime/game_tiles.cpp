@@ -81,8 +81,8 @@ void GameTiles::observe(GameMemory &memory, const f3_cpu &cpu) {
     int column_step = 4, row_step = 256;
     if (attributes & 0x40000000u) {
         column_step = -4;
-        // ROM $5680/$56a0 use D1.W, without index scaling. Do not "fix" it.
-        destination += int16_t(columns) - 4;
+        // $5680/$56a0 extension $14fc encodes D1.W*4; Capstone's text omits it.
+        destination += int16_t(columns) * 4 - 4;
     }
     if (attributes & 0x80000000u) {
         row_step = -256;
