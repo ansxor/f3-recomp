@@ -276,7 +276,8 @@ int main(int argc, char **argv) try {
     // Attach native sound driver before audio clock advances if requested
     if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
-        m.use_native_sound(f3_sound_blocks, f3_sound_block_count);
+        m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count});
 #else
         throw std::runtime_error("Native sound driver (--sound-driver native) requested, but binary was built without F3RT_SOUND_GENERATED");
 #endif

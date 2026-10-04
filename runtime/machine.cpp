@@ -27,10 +27,11 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
     reset();
 }
 Machine::~Machine() = default;
-void Machine::use_native_sound(const f3_block *program, size_t count) {
+void Machine::use_native_sound(const f3_block *program, size_t count,
+                               std::span<const f3_excluded_range> excluded) {
     if (!audio->is_reset() || audio->clock_ticks())
         throw std::runtime_error("Select the native sound driver before machine execution");
-    sound_native = std::make_unique<SoundNative>(*this, program, count);
+    sound_native = std::make_unique<SoundNative>(*this, program, count, excluded);
     audio->set_cpu_runner([this](int cycles) { return sound_native->run(cycles); });
     audio->set_reset_callback([this](bool asserted) { sound_native->reset(asserted); });
     // Native SR/IRQ recognition reads the DUART's current line directly.
@@ -186,13 +187,25 @@ int Machine::boundary() {
 }
 int Machine::fallback() {
     if (cpu.halted) return 0;
+    const uint32_t physical_pc = cpu.pc & 0xffffffu;
+    for (const auto &range : excluded_code) {
+        if (physical_pc < range.start) break;
+        if (physical_pc < range.end) {
+            std::ostringstream message;
+            message << "Excluded main CPU instruction at PC 0x" << std::hex << cpu.pc
+                    << " in [0x" << range.start << ", 0x" << range.end << "): "
+                    << range.reason << "; evidence: " << range.evidence;
+            cpu.halted = 1;
+            throw std::runtime_error(message.str());
+        }
+    }
     if (!allow_main_fallback) {
         std::ostringstream message;
         message << "Untranslated main CPU instruction at PC 0x" << std::hex << cpu.pc;
         throw std::runtime_error(message.str());
     }
     ++fallback_instructions;
-    if (!fallback_hits.empty()) ++fallback_hits[(cpu.pc & 0xffffff) >> 1];
+    if (!fallback_hits.empty()) ++fallback_hits[physical_pc >> 1];
     return interpreter->run_main(1) > 0 && !cpu.halted;
 }
 bool Machine::run_frame(bool translated) {

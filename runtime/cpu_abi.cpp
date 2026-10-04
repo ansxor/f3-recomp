@@ -72,8 +72,31 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
         if (!blocks[i].execute || (blocks[i].address & 1) ||
             (i && blocks[i - 1].address >= blocks[i].address)) return 0;
     auto &m = machine(cpu);
+    for (const auto &range : m.excluded_code) {
+        const auto *entry = count ? std::lower_bound(blocks, blocks + count, range.start,
+            [](const f3_block &block, uint32_t pc) { return block.address < pc; }) : nullptr;
+        if (entry && entry != blocks + count && entry->address < range.end) return 0;
+    }
     m.blocks = blocks;
     m.block_count = count;
+    return 1;
+}
+int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count) {
+    if (!cpu || !cpu->runtime || (count && !ranges)) return 0;
+    auto &m = machine(cpu);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &range = ranges[i];
+        if ((range.start & 1) || (range.end & 1) || range.start >= range.end ||
+            range.end > 0x200000 || !range.reason || !*range.reason ||
+            !range.evidence || !*range.evidence ||
+            (i && ranges[i - 1].end > range.start)) return 0;
+        if (m.block_count) {
+            const auto *entry = std::lower_bound(m.blocks, m.blocks + m.block_count, range.start,
+                [](const f3_block &block, uint32_t pc) { return block.address < pc; });
+            if (entry != m.blocks + m.block_count && entry->address < range.end) return 0;
+        }
+    }
+    m.excluded_code = std::span(ranges, count);
     return 1;
 }
 int f3_dispatch(f3_cpu *cpu) {

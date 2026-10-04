@@ -88,6 +88,69 @@ def _parse_int_address(val: int | str) -> int:
     raise ValueError(f"Invalid address value: {val!r}")
 
 
+@dataclass(frozen=True)
+class ExcludeRegion:
+    """Guest instruction-start interval, inclusive start and exclusive end."""
+
+    start: int
+    end: int
+    reason: str
+    evidence: str
+
+
+def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
+                     base: int = 0) -> list[ExcludeRegion]:
+    regions = []
+    records = config.get("exclude", [])
+    if not isinstance(records, list):
+        raise ValueError("Exclusions must be top-level [[exclude]] records")
+    for record in records:
+        if not isinstance(record, dict) or record.get("cpu", "main") not in ("main", "sound"):
+            raise ValueError(f"Invalid exclusion CPU: {record!r}")
+        if record.get("cpu", "main") != cpu:
+            continue
+        if "start" not in record or "end" not in record:
+            raise ValueError("Each exclusion requires start and exclusive end")
+        start, end = (_parse_int_address(record[key]) for key in ("start", "end"))
+        if start & 1 or end & 1 or not base <= start < end <= base + rom_size:
+            raise ValueError(f"Invalid {cpu} exclusion interval [{start:#x}, {end:#x})")
+        for key in ("reason", "evidence"):
+            if not isinstance(record.get(key), str) or not record[key].strip():
+                raise ValueError(f"Exclusion [{start:#x}, {end:#x}) requires nonempty {key}")
+        regions.append(ExcludeRegion(start, end, record["reason"], record["evidence"]))
+    regions.sort(key=lambda region: region.start)
+    for previous, region in zip(regions, regions[1:]):
+        if previous.end > region.start:
+            raise ValueError(f"Overlapping {cpu} exclusions at {region.start:#x}")
+    return regions
+
+
+def exclusion_at(regions: list[ExcludeRegion], pc: int) -> ExcludeRegion | None:
+    for region in regions:
+        if pc < region.start:
+            break
+        if pc < region.end:
+            return region
+    return None
+
+
+def included_ranges(regions: list[ExcludeRegion], start: int, end: int):
+    for region in regions:
+        if start < region.start:
+            yield start, region.start
+        start = region.end
+    if start < end:
+        yield start, end
+
+
+def _require_included(regions: list[ExcludeRegion], pc: int, source: str) -> None:
+    region = exclusion_at(regions, pc)
+    if region is not None:
+        raise ValueError(
+            f"{source} targets excluded PC {pc:#x} in "
+            f"[{region.start:#x}, {region.end:#x}): {region.reason}; {region.evidence}")
+
+
 def load_rom(config_path: str | Path, rom_dir: str | Path) -> tuple[bytes, dict]:
     """Load and verify ROM lanes according to game config, returning interleaved bytes and config.
 
@@ -481,6 +544,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
     scan_callbacks = discovery_cfg.get("scan_callbacks", True)
     inline_string_helpers = {_parse_int_address(pc) for pc in
                              discovery_cfg.get("inline_string_helpers", [])}
+    exclusions = parse_exclusions(config, len(rom))
 
     proven_seeds: set[int] = set()
     speculative_seeds: set[int] = set()
@@ -528,6 +592,9 @@ def discover(rom: bytes, config: dict) -> Discovery:
                     if tgt % 2 == 0 and 0 <= tgt < len(rom):
                         targets.append(tgt)
             explicit_jump_tables[addr] = targets
+            _require_included(exclusions, addr, "Configured jump-table instruction")
+            for target in targets:
+                _require_included(exclusions, target, f"Configured jump table at {addr:#x}")
 
 
     # 5. Task spawn targets (trap #1)
@@ -545,12 +612,15 @@ def discover(rom: bytes, config: dict) -> Discovery:
 
     # Combined initial worklist
     all_seeds = sorted(proven_seeds | speculative_seeds)
+    for seed in all_seeds:
+        _require_included(exclusions, seed, "Vector/config/callback entry")
     worklist: deque[int] = deque(all_seeds)
 
     instructions: dict[int, CsInsn] = {}
     functions: set[int] = set(all_seeds)
     branch_targets: dict[int, list[int]] = {}
     unresolved_branches: list[dict] = []
+    excluded_transfers: list[dict] = []
 
     # Map of all jump table targets found
     active_jump_tables: dict[int, list[int]] = dict(explicit_jump_tables)
@@ -560,40 +630,51 @@ def discover(rom: bytes, config: dict) -> Discovery:
         # Scan every possible instruction start independently, including starts
         # inside another instruction's extension words. Pointer/trace seeds and
         # a bounded coherent-sequence test cannot prove computed-jump coverage.
-        for pc in range(0, len(rom), 2):
-            chunk = rom[pc:pc + 24]
-            # Capstone can report a truncated immediate as a shorter valid
-            # instruction. Decode padded lookahead, then enforce the ROM bound.
-            if len(chunk) < 24:
-                chunk = chunk.ljust(24, b"\0")
-            insn = next(md.disasm(chunk, pc, count=1), None)
-            if (insn is None or not insn.id or insn.mnemonic.startswith("dc")
-                    or insn.size % 2 or pc + insn.size > len(rom)):
-                invalid_pcs.append(pc)
-                continue
-            instructions[pc] = insn
-            base = insn.mnemonic.split(".")[0]
-            if base in CALL_MNEMONICS | UNCOND_BRANCH_MNEMONICS | COND_BRANCH_MNEMONICS:
-                target = _resolve_target(insn, insn.operands[-1]) if insn.operands else None
-                if target is not None and 0 <= target < len(rom) and not target & 1:
-                    branch_targets[pc] = [target]
-                    if base in CALL_MNEMONICS:
-                        functions.add(target)
-                else:
-                    unresolved_branches.append({
-                        "pc": f"0x{pc:06x}", "mnemonic": insn.mnemonic,
-                        "op_str": insn.op_str, "reason": "indirect_transfer",
-                    })
+        for start, end in included_ranges(exclusions, 0, len(rom)):
+            for pc in range(start, end, 2):
+                chunk = rom[pc:pc + 24]
+                # An excluded start does not forbid reading its bytes as an
+                # immediate or operand of an instruction starting outside it.
+                if len(chunk) < 24:
+                    chunk = chunk.ljust(24, b"\0")
+                insn = next(md.disasm(chunk, pc, count=1), None)
+                if (insn is None or not insn.id or insn.mnemonic.startswith("dc")
+                        or insn.size % 2 or pc + insn.size > len(rom)):
+                    invalid_pcs.append(pc)
+                    continue
+                instructions[pc] = insn
+                base = insn.mnemonic.split(".")[0]
+                if base in CALL_MNEMONICS | UNCOND_BRANCH_MNEMONICS | COND_BRANCH_MNEMONICS:
+                    target = _resolve_target(insn, insn.operands[-1]) if insn.operands else None
+                    if target is not None and 0 <= target < len(rom) and not target & 1:
+                        branch_targets[pc] = [target]
+                        if exclusion_at(exclusions, target) is not None:
+                            # Independent data decodes also invent transfers.
+                            # Do not infer reachability: the runtime rejects
+                            # this target if the instruction actually executes.
+                            excluded_transfers.append({
+                                "pc": f"0x{pc:06x}", "target": f"0x{target:06x}",
+                                "enforcement": "fatal_at_runtime",
+                            })
+                        elif base in CALL_MNEMONICS:
+                            functions.add(target)
+                    else:
+                        unresolved_branches.append({
+                            "pc": f"0x{pc:06x}", "mnemonic": insn.mnemonic,
+                            "op_str": insn.op_str, "reason": "indirect_transfer",
+                        })
 
     while worklist:
         entry = worklist.popleft()
         if entry in instructions or entry < 0 or entry >= len(rom) or entry % 2 != 0:
             continue
+        _require_included(exclusions, entry, "Discovered code entry")
 
         cur_pc = entry
         while True:
             if cur_pc < 0 or cur_pc >= len(rom) or cur_pc in instructions or cur_pc % 2 != 0:
                 break
+            _require_included(exclusions, cur_pc, "Recursive code path")
 
             chunk = rom[cur_pc:min(cur_pc + 24, len(rom))]
             if len(chunk) < 24:
@@ -851,11 +932,12 @@ def discover(rom: bytes, config: dict) -> Discovery:
     aligned_candidate_count = len(rom) // 2 if exhaustive else 0
     aligned_decoded_count = len(instructions)
     aligned_invalid_count = len(invalid_pcs)
+    excluded_candidate_count = sum((region.end - region.start) // 2 for region in exclusions)
 
     report = {
         "coverage_mode": coverage,
         "coverage_basis": (
-            "Exhaustive independent decode at every word-aligned ROM offset; "
+            "Exhaustive independent decode at every nonexcluded word-aligned ROM offset; "
             "includes overlapping starts and data, not a reachability classification."
             if exhaustive else
             "Unique bytes reachable from vector/config and heuristic seeds, not a proof that undiscovered bytes are data."
@@ -871,6 +953,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
             "aligned_candidate_count": aligned_candidate_count,
             "aligned_decoded_count": aligned_decoded_count,
             "aligned_invalid_count": aligned_invalid_count,
+            "excluded_candidate_count": excluded_candidate_count,
+            "excluded_transfers_count": len(excluded_transfers),
             "invalid_pcs_count": len(invalid_pcs),
             "proven_seeds_count": len(proven_seeds),
             "speculative_seeds_count": len(speculative_seeds),
@@ -879,6 +963,13 @@ def discover(rom: bytes, config: dict) -> Discovery:
         "aligned_candidate_count": aligned_candidate_count,
         "aligned_decoded_count": aligned_decoded_count,
         "aligned_invalid_count": aligned_invalid_count,
+        "excluded_candidate_count": excluded_candidate_count,
+        "exclusions": [
+            {"start": region.start, "end": region.end,
+             "reason": region.reason, "evidence": region.evidence}
+            for region in exclusions
+        ],
+        "excluded_transfers": excluded_transfers,
         "invalid_pcs": [f"0x{s:06x}" for s in sorted(invalid_pcs)],
         "proven_seeds": [f"0x{s:06x}" for s in sorted(proven_seeds)],
         "speculative_seeds": [f"0x{s:06x}" for s in sorted(speculative_seeds)],

@@ -16,12 +16,12 @@
 
 **ABI (application binary interface)** — The C interface between the generated code and the runtime. It is the file `include/f3rt/cpu_abi.h`. The runtime owns it. See [CPU ABI](/developer/runtime/cpu-abi) and [Architecture](/developer/architecture).
 
-**ABI version** — `F3RT_ABI_VERSION` in `cpu_abi.h`, currently 2.
-Main generated files reject a version mismatch during compilation. The sound generator does not emit this guard.
+**ABI version** — `F3RT_ABI_VERSION` in `cpu_abi.h`, currently 3.
+Both generated CPU programs reject a version mismatch during compilation.
 
 **A-line and F-line opcodes** — 68000 opcodes whose first four bits are `1010` (A) or `1111` (F). They raise exception vectors 10 and 11. Generated code handles them natively with `f3_exception`.
 
-**all_aligned** — A discovery mode that independently decodes each even ROM offset.
+**all_aligned** — A discovery mode that independently decodes each nonexcluded even ROM offset.
 Decodes can overlap and can interpret data as instructions.
 The mode does not prove reachability or supported lowering.
 See [Discovery](/developer/recompiler/discovery).

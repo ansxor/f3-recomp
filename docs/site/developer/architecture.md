@@ -23,7 +23,7 @@ The project copies the design of two N64 projects:
 
 The F3 program uses one flat ROM region, without relocatable overlays.
 The Japanese config sets `coverage = "all_aligned"`.
-Discovery independently decodes every even offset as a possible entry point.
+Discovery independently decodes every nonexcluded even offset as a possible entry point.
 These decodes can overlap. Data and instruction extension words can also decode successfully.
 Successful decoding does not prove reachability or native lowering support.
 The [Discovery](/developer/recompiler/discovery) page explains this distinction.
@@ -421,18 +421,18 @@ The ABI is the set of C declarations in `include/f3rt/cpu_abi.h`, plus the struc
 
 The **runtime owns the ABI**. The recompiler consumes it.
 The README requires a note in `docs/ABI-CHANGES.md` for an ABI change.
-The current `F3RT_ABI_VERSION` is 2.
+The current `F3RT_ABI_VERSION` is 3.
 The main recompiler adds this guard to generated C and `program.h`:
 
 ```c
-#if F3RT_ABI_VERSION != 2
+#if F3RT_ABI_VERSION != 3
 #error "Generated program and f3rt ABI versions differ"
 #endif
 ```
 
-The number 2 appears in two places that you must change together: `include/f3rt/cpu_abi.h` and `_RUNTIME_ABI_VERSION` in `recomp/generate.py`. Version 2 added `dispatch_deadline`. The [CPU ABI](/developer/runtime/cpu-abi) page lists every field and function, and the [Contributing](/developer/contributing) page gives the change rule.
+The number 3 appears in two places that you must change together: `include/f3rt/cpu_abi.h` and `_RUNTIME_ABI_VERSION` in `recomp/generate.py`. Version 2 added `dispatch_deadline`; version 3 adds immutable exclusion metadata without changing CPU layout. The [CPU ABI](/developer/runtime/cpu-abi) page lists every field and function, and the [Contributing](/developer/contributing) page gives the change rule.
 
-The sound generator includes `cpu_abi.h`, but it does not emit this version guard.
+The sound generator includes `cpu_abi.h` and emits the same version guard.
 Regenerate both CPU programs when an ABI change affects their shared state.
 
 ## Source anchors

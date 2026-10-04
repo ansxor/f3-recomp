@@ -93,9 +93,9 @@ The [Generated files](/reference/generated-files) page describes these files in 
 
 ### Step 2: generate the sound driver code
 
-CMake runs `tools/compile_sound.py` after main CPU generation.
+CMake runs `tools/compile_sound.py --config games/landmakrj/config.toml` after main CPU generation.
 The sound compiler verifies the interleaved region CRC32 (`5a7e9117`).
-It independently decodes each even offset in the 512 KiB sound region.
+It independently decodes each nonexcluded even offset in the 512 KiB sound region.
 Native lowerings, exception entries, and explicit unsupported stubs share the dispatch table.
 Aligned coverage does not mean that all bytes contain reachable instructions.
 The shards hold up to 1024 generated functions.

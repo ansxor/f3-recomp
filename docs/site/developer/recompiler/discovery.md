@@ -41,7 +41,7 @@ Any other decode is a *decode failure*. Discovery stores the PC in `invalid_pcs`
 
 | | `all_aligned` | `recursive` |
 | --- | --- | --- |
-| Idea | Decode at every even address. | Follow control flow from known roots. |
+| Idea | Decode at every nonexcluded even address. | Follow control flow from known roots. |
 | Used by | `landmakrj` | Default when the key is missing. Also `landmakr`. |
 | Needs metadata | No | Yes: entry points, tables, scripts |
 | Finds starts inside another instruction | Yes, through independent aligned decodes. | Only when another discovered path enters that address. |
@@ -77,7 +77,7 @@ flowchart TD
     J --> A
 ```
 
-The code loops over `range(0, len(rom), 2)`. Every decode is independent. An address that lies inside the extension words of an earlier instruction gets its own entry. Three decodes can overlap this way:
+The code loops over each nonexcluded interval in steps of two. Every decode is independent. An address that lies inside the extension words of an earlier instruction gets its own entry. Three decodes can overlap this way:
 
 ```text
 address:  0x500  0x502  0x504
@@ -89,7 +89,7 @@ decode C: 0x504 RTS                    (inside the immediate of A)
 
 The test `test_overlapping_starts` in `tools/test_discovery.py` uses these exact bytes. It checks that 0x500, 0x502 and 0x504 are all decoded.
 
-Because every even address is decoded, the `while worklist` loop that comes after has nothing to do in this mode. Every seed is already in `instructions`. The seed scans (`TRAP #1`, callbacks, scripts) are off in this mode. The explicit `jump_tables` config does not change the result, because the worklist skips addresses that are already decoded. The code still checks the table addresses and raises `ValueError` for an odd one.
+All nonexcluded even addresses are independently decoded. Seed scans (`TRAP #1`, callbacks, scripts) are off in this mode. Vector/config/hook seeds and explicit jump-table targets inside exclusions reject generation; arbitrary apparent direct transfers into exclusions are reported for fatal runtime enforcement, because exhaustive data decodes also invent branches.
 
 The mode still collects:
 
@@ -98,6 +98,20 @@ The mode still collects:
 - `unresolved_branches`: indirect transfers such as `JMP (A0)`.
 
 These items go into the report and into the basic block step. The emitter does not use them.
+
+### Explicit exclusions
+
+Top-level `[[exclude]]` records select half-open, even instruction-start ranges,
+with `cpu`, `start`, `end`, `reason` and `evidence`. No instructions or shared
+exception entries are generated for those PCs. Bytes remain accessible as data
+or as operands of instructions starting outside the interval.
+
+The full-image candidate count still equals `len(rom)/2`:
+`aligned_decoded_count + aligned_invalid_count + excluded_candidate_count`.
+The coverage report preserves each exclusion and apparent excluded transfers.
+Computed destinations that cannot be proven at generation fail at runtime
+before any interpreter fallback. See [Game config](/reference/game-config#exclude).
+
 
 ## `recursive` mode
 
@@ -275,6 +289,8 @@ The result is the dictionary `Discovery.blocks`, which maps a leader to its list
 | `summary.aligned_*`, `invalid_pcs_count` | Counts of candidates, decoded entries and failures. |
 | `summary.proven_seeds_count`, `speculative_seeds_count` | Seed counts. |
 | `summary.unresolved_branches_count` | Number of indirect transfers that discovery could not resolve. |
+| `excluded_candidate_count`, `exclusions` | Skipped even starts and their explicit bounds/reason/evidence. |
+| `excluded_transfers` | Apparent exhaustive direct transfers into exclusions; runtime-enforced, not proof of reachability. |
 | `invalid_pcs`, `proven_seeds`, `speculative_seeds` | Sorted lists of PCs as `0x...` strings. |
 | `unresolved_branches` | List of `{pc, mnemonic, op_str, reason}`. |
 | `bank_summary` | One entry per 64 KiB bank: range, instruction count, code bytes, and a class (`contains_decoded_code` or `unreached_or_data`). |

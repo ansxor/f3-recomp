@@ -186,7 +186,8 @@ int main(int argc, char **argv) try {
     if (!sound_trace_path.empty()) m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
-        m.use_native_sound(f3_sound_blocks, f3_sound_block_count);
+        m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count});
 #else
         throw std::runtime_error("Native sound requires a generated sound program (F3_ROM_DIR)");
 #endif

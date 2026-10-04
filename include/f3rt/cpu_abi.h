@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define F3RT_ABI_VERSION 2u
+#define F3RT_ABI_VERSION 3u
 
 /* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
  * stacks. All addresses/registers are host integers; bus accesses are big-endian.
@@ -36,6 +36,13 @@ typedef struct f3_block {
     f3_block_fn execute;
 } f3_block;
 
+/* Immutable instruction-start exclusions; end is exclusive. ROM data reads
+ * remain legal. Metadata and strings must outlive the CPU. */
+typedef struct f3_excluded_range {
+    uint32_t start, end;
+    const char *reason, *evidence;
+} f3_excluded_range;
+
 /* Native sound-mailbox/reset accesses catch device time up to cycles before
  * taking effect, including unaligned accesses crossing into the mapped range.
  * This does not deliver main-CPU IRQs or require pending flags to be flushed. */
@@ -57,6 +64,9 @@ void f3_reset_devices(f3_cpu *cpu);
 /* Table is sorted by address and remains valid for the CPU's lifetime.
  * Returns 1 on success, 0 if invalid. Duplicate addresses are rejected. */
 int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count);
+/* Sorted nonoverlapping even ROM intervals, disjoint from registered blocks.
+ * Excluded PCs fail before fallback, even when interpretation is enabled. */
+int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count);
 /* Execute one block at pc (or fallback), including boundary. Returns 1 for
  * progress, IRQ entry, or STOP time advancement; 0 on fatal host error/halt. */
 int f3_dispatch(f3_cpu *cpu);

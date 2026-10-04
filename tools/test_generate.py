@@ -35,6 +35,9 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *table, size_t count) {
     blocks = table;
     return 1;
 }
+int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count) {
+    (void)cpu; (void)ranges; (void)count; return 1;
+}
 int main(void) {
     f3_cpu cpu = {0};
     assert(f3_generated_register(&cpu));
@@ -91,6 +94,9 @@ static const f3_block *blocks;
 static size_t block_count;
 int f3_register_blocks(f3_cpu *cpu, const f3_block *table, size_t count) {
     (void)cpu; blocks = table; block_count = count; return 1;
+}
+int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count) {
+    (void)cpu; (void)ranges; (void)count; return 1;
 }
 static void dispatch(f3_cpu *cpu) {
     for (size_t i = 0; i < block_count; ++i)

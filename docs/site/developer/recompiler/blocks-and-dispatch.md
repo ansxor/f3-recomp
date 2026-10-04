@@ -93,7 +93,7 @@ Each full shard becomes `blocks_NNNN.c`. A final partial shard is also written. 
 
 `program.c` declares the native functions and writes sorted `translated_blocks` entries. Multiple PCs can point to one function.
 
-`f3_generated_register` passes this table to `f3_register_blocks`. The generated header and C preamble require `F3RT_ABI_VERSION == 2`.
+`f3_generated_register` passes this table to `f3_register_blocks` and its immutable exclusion metadata to `f3_register_exclusions`. The generated header and C preamble require `F3RT_ABI_VERSION == 3`. Excluded starts receive neither native entries nor shared exceptions.
 
 `sources.cmake` lists the shards and `program.c` in `F3_GENERATED_SOURCES`. It uses paths based on `CMAKE_CURRENT_LIST_DIR`.
 

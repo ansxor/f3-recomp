@@ -22,7 +22,7 @@ The [main recompiler](/developer/recompiler/) has a discovery phase. This sound 
 ```mermaid
 flowchart TD
     R["Two sound chips or sound.bin"] --> V["Interleave, pad and validate CRC32"]
-    V --> W["Visit every even ROM address"]
+    V --> W["Visit every nonexcluded even ROM address"]
     W --> T{"Opcode class?"}
     T -->|"A-line, F-line or illegal"| E["Shared exception function"]
     T -->|"Candidate instruction"| D["Capstone M68K_000: decode one instruction"]
@@ -31,7 +31,7 @@ flowchart TD
     L -->|"Cannot lower"| U["Fatal unsupported-PC function"]
     A --> S["C source shards"]
     U --> S
-    E --> B["Complete aligned dispatch table"]
+    E --> B["Compact aligned exclusion-complement table"]
     S --> B
     B --> C["Header, CMake source list and coverage.json"]
     C --> N["SoundNative instruction-boundary execution"]
@@ -47,7 +47,7 @@ Use the supplied sound chips in a local ROM directory:
 
 ```sh
 python3 tools/compile_sound.py --rom-dir /path/to/roms/landmakr \
-  --output build/generated/sound-landmakrj
+  --config games/landmakrj/config.toml --output build/generated/sound-landmakrj
 ```
 
 `load_sound_rom` first looks for both chip files:
@@ -65,15 +65,18 @@ It then requires CRC32 `0x5a7e9117`. This compiler targets that program, not arb
 
 The chip path enforces sizes explicitly. The `sound.bin` path relies on the CRC check and has no separate size check.
 
-`SoundNative` independently checks the loaded runtime ROM CRC. It also requires the complete `0x80000 / 2` table.
+`SoundNative` independently checks the loaded runtime ROM CRC and validates the exact every-even exclusion complement, including sorted entries and nonoverlapping exclusion metadata.
 
 Keep ROM-derived generated files in ignored build directories. Do not commit them.
 
 ## One entry per aligned address
 
-The ROM base is `0xc00000`. The compiler visits offsets `0, 2, 4, ...`, through the complete loaded region.
+The ROM base is `0xc00000`. The compiler visits every nonexcluded even offset.
 
-A 512 KiB ROM produces 262,144 entries. Each entry identifies one candidate instruction start, not one known reachable instruction.
+Without exclusions, a 512 KiB ROM produces 262,144 entries. Explicit
+`[[exclude]] cpu = "sound"` intervals remove their instruction starts and
+shared exception entries. Each retained entry is a syntactic candidate,
+not a known reachable instruction.
 
 An entry can point into data or the extension words of another instruction. Adjacent entries can therefore describe overlapping decodes.
 
@@ -83,7 +86,7 @@ A lowered function executes that one instruction. It updates registers, PC and c
 
 A-line, F-line and known illegal entries share exception functions. They do not each require a separate generated function.
 
-The table is complete even when instruction lowering is incomplete. Unsupported candidates still have an entry that fails if reached.
+The table is complete outside exclusions even when lowering is incomplete. Unsupported retained candidates still fail if reached. Excluded targets fail before an instruction fetch, with no interpreter fallback.
 
 There is no trace-derived coverage filter. The CLI accepts only `--coverage all_aligned`.
 
@@ -201,7 +204,7 @@ The signed helper also handles dividend `0x80000000` divided by `-1` without hos
 
 It also reports supported and unsupported mnemonic counts. Undecoded candidates use names such as `raw_0x1234`.
 
-The compiler collects unsupported PCs internally, but does not write that list into the current coverage report.
+The report writes `unsupported_pcs`, `excluded_words`, `excluded_regions`, true `emitted_functions`, and apparent `deferred_excluded_targets` with fatal runtime enforcement.
 
 The output directory is created when absent. The compiler writes its current files but does not remove obsolete shards from earlier generations.
 
@@ -211,16 +214,16 @@ CMake generates sound code when `F3_ROM_DIR` is supplied. A pre-generated build 
 
 See [build options](/reference/build-options) and [the build pipeline](/developer/build-pipeline) for target integration.
 
-Programs built with `F3RT_SOUND_GENERATED` include `sound_program.h`. They pass its table and count to `Machine::use_native_sound` before execution.
+Programs built with `F3RT_SOUND_GENERATED` include the ABI-guarded
+`sound_program.h`. They pass its table/count and
+`{f3_sound_excluded_ranges,f3_sound_excluded_count}` span to
+`Machine::use_native_sound` before execution.
 
-The runtime indexes the immutable table directly:
-
-```c
-index = (pc - 0xc00000) >> 1;
-function = f3_sound_blocks[index].execute;
-```
-
-It allocates no second dispatch map. The generated table's address order is therefore part of the compiler/runtime contract.
+Dispatch computes `(pc - 0xc00000)/2`, subtracting the word counts of
+preceding excluded intervals. A target inside an exclusion throws before
+any opcode/data read. Odd or out-of-ROM instruction starts also fail.
+No second map is allocated. The table's exact complement order and immutable
+exclusion metadata are part of the compiler/runtime contract.
 
 ## Coverage and proof limits
 

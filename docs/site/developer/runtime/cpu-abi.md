@@ -120,7 +120,7 @@ The runtime also clears `cc_op` when it writes SR. `f3_set_sr` does this, and `f
 
 ## ABI versions
 
-The macro `F3RT_ABI_VERSION` is `2u`. The full history is in [ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md).
+The macro `F3RT_ABI_VERSION` is `3u`. The full history is in [ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md).
 
 ### Version 1
 
@@ -143,17 +143,25 @@ Version 2 also changes these rules:
 - `f3_exception` charges the full exception cost. For `TRAP #n` (vectors 32 to 47) the charge is 24 cycles.
 - The sound 68000 timing corrections do not change the ABI.
 
+### Version 3
+
+Version 3 adds immutable `f3_excluded_range` metadata and
+`f3_register_exclusions(cpu,ranges,count)`. Sorted, even, half-open ROM intervals
+must not overlap native entries. Excluded PCs throw before fallback, including
+diagnostic interpretation, odd targets and 24-bit bus aliases. Data reads remain legal.
+The CPU layout, scheduling and canonical snapshots are unchanged.
+
 ### The version check
 
-The check happens at compile time. `recomp/generate.py` has the constant `_RUNTIME_ABI_VERSION = 2`. Each generated source file and `program.h` include this guard:
+The check happens at compile time. `recomp/generate.py` has the constant `_RUNTIME_ABI_VERSION = 3`. Each generated source file and `program.h` include this guard:
 
 ```c
-#if F3RT_ABI_VERSION != 2
+#if F3RT_ABI_VERSION != 3
 #error "Generated program and f3rt ABI versions differ"
 #endif
 ```
 
-The runtime has no check at run time. If you change the header version, you must regenerate the C code. The file `coverage.json` also records `runtime_abi_version`. The sound program from `tools/compile_sound.py` includes the same header but has no guard.
+The runtime has no version check at run time. Regenerate both CPU programs when the header version changes. Main `lowering.json` records `runtime_abi_version`; the sound program now emits an ABI 3 guard too.
 
 ## The functions
 
@@ -244,15 +252,16 @@ The function returns 1 on success and 0 on error. It rejects the table when:
 - An entry has a null `execute`.
 - An address is odd.
 - Addresses are not in strictly ascending order. This also rejects duplicates.
+- An entry overlaps registered instruction-start exclusions.
 
-The table must stay valid for the life of the CPU. The runtime keeps only the pointer. The generated file `program.c` owns the table `translated_blocks` and exports one function:
+The table must stay valid for the CPU's lifetime; the runtime keeps only the
+pointer. Generated `f3_generated_register` registers both `translated_blocks`
+and immutable exclusion metadata. Registration of either rejects overlap with
+the other; zero-count exclusion registration clears the metadata.
 
-```c
-int f3_generated_register(f3_cpu *cpu) {
-    return f3_register_blocks(cpu, translated_blocks,
-        sizeof(translated_blocks) / sizeof(translated_blocks[0]));
-}
-```
+`f3_register_exclusions` also validates sorted, nonoverlapping, even, half-open
+ROM bounds and nonempty reason/evidence strings. Excluded PCs throw before
+interpretation; byte reads from the same ranges remain legal.
 
 The frontend calls `f3_generated_register(&m.cpu)` once after it creates the `Machine`. The table has one entry for each instruction address, not only for block starts. Several entries can point to the same function. See [Frontend](/developer/runtime/frontend).
 
@@ -287,7 +296,14 @@ Three details matter:
 
 ### f3_fallback
 
-`int f3_fallback(f3_cpu *cpu)` executes exactly one instruction at `cpu->pc` with the interpreter. It calls `Machine::fallback()`. The CPU must have canonical SR on entry and exit. A zero result means no fallback exists. Generated blocks call it for instructions that the recompiler did not lower. They set `halted` if it returns 0. See [Interpreter](/developer/runtime/interpreter).
+`int f3_fallback(f3_cpu *cpu)` calls `Machine::fallback()`. A halted CPU returns 0.
+Exclusion checks use the physical `pc & 0xffffff` ROM address and throw before
+interpretation, even when diagnostic fallback is enabled. Strict-native mode
+rejects other misses without executing or counting an instruction.
+
+Explicitly enabled interpretation executes exactly one instruction, with
+canonical SR on entry and exit. Generated blocks set `halted` if it returns 0.
+See [Interpreter](/developer/runtime/interpreter).
 
 ## The deadline contract
 

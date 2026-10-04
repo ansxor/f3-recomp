@@ -50,6 +50,7 @@ public:
     uint8_t pending_irqs = 0;
     const f3_block *blocks = nullptr;
     size_t block_count = 0;
+    std::span<const f3_excluded_range> excluded_code;
     uint64_t native_blocks = 0, fallback_instructions = 0;
     bool allow_main_fallback = true; // Native game target disables this; diagnostics opt in.
     // Optional PC coverage counter, allocated only when requested by tooling.
@@ -58,7 +59,8 @@ public:
     void reset();
     void reset_devices();
     // Select before advancing the machine. The interpreted driver is the default.
-    void use_native_sound(const f3_block *program, size_t count);
+    void use_native_sound(const f3_block *program, size_t count,
+                          std::span<const f3_excluded_range> excluded);
     uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);

@@ -710,6 +710,28 @@ int main() try {
             "Native-only fallback rejection reports PC without executing or counting an instruction");
     const f3_block bad[]={{0x100,native},{0x100,native}};
     require(!f3_register_blocks(&cpu,bad,2),"Duplicate PCs rejected");
+    const f3_excluded_range excluded[]={{0x200,0x204,"synthetic data","fixture-owned words"}};
+    require(f3_register_exclusions(&cpu,excluded,1),"Exclusion complement registers");
+    const f3_block overlapping[]={{0x200,native}};
+    require(!f3_register_blocks(&cpu,overlapping,1),"Native entries cannot bypass exclusions");
+    m->allow_main_fallback=true;
+    for(uint32_t pc : {0x200u,0x201u,0x202u,0x203u,0xff000200u,0xff000203u}) {
+        cpu.pc=pc;cpu.halted=0;
+        bool excluded_rejected=false;
+        try { f3_fallback(&cpu); }
+        catch(const std::runtime_error &e) {
+            excluded_rejected=std::string(e.what()).find("Excluded main CPU")!=std::string::npos;
+        }
+        require(excluded_rejected && cpu.halted && m->fallback_instructions==fallback_count,
+                "Even, odd and physical-alias excluded targets fail before enabled interpretation");
+    }
+    cpu.pc=0x204;cpu.halted=0;
+    const auto before_end_fallback=m->fallback_instructions;
+    require(f3_fallback(&cpu) && m->fallback_instructions==before_end_fallback+1,
+            "Exclusive end remains executable");
+    require(f3_read16(&cpu,0x200)==0,"Excluded instruction bytes remain readable as data");
+    require(f3_register_exclusions(&cpu,nullptr,0),"Clearing immutable exclusion metadata");
+    cpu.halted=0;cpu.pc=0x100;
     m->audio->set_reset(true);
     m->audio->write8(0x280019,0x66);
     m->audio->write8(0x260001,0x12);m->audio->write8(0x260003,0x34);

@@ -255,12 +255,17 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
 ### Discovery and execution contracts
 
 - Japan uses `[discovery].coverage = "all_aligned"`: independently decode every
-  even ROM offset, including instruction starts inside another instruction's
+  nonexcluded even ROM offset, including starts inside another instruction's
   extension words. Computed jumps, odd-offset script pointers, and long
   straight-line routines do not depend on observed-PC lists or pointer scans.
   This deliberately includes data that resembles code; it is not a
   reachability classifier. Decoder rejections and unsupported lowerings remain
   explicit in `coverage.json` and `lowering.json`, never silently accepted.
+  Reviewed top-level `[[exclude]]` records have half-open `start`/`end`,
+  `reason`/`evidence`, and optional `cpu = "sound"` (main is default).
+  Config/vector/table conflicts reject generation; unresolved computed targets
+  fail with their PC/range before interpretation. ROM data reads remain legal.
+  Scanner, seeded access recorder and measured limits: [docs/BINSIZE-EXCLUDE.md](docs/BINSIZE-EXCLUDE.md).
 - Every decoded instruction PC is registered, including overlapping entries.
   All-aligned blocks group at most 32 word positions in a 64-byte ROM page;
   execution follows the decoded instruction length, not the next candidate

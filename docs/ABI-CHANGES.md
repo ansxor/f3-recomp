@@ -1,5 +1,27 @@
 # CPU ABI changes
 
+## Version 3 — explicit ROM instruction-start exclusions
+
+`f3_excluded_range` and `f3_register_exclusions` register immutable, sorted,
+nonoverlapping `[start,end)` ROM intervals with reason/evidence strings.
+Registration rejects overlap with native entries. Excluded PCs fail with their
+address/range before interpretation, including odd PCs, 24-bit bus aliases and
+diagnostic fallback.
+ROM reads from these intervals remain legal.
+
+The `f3_cpu` layout, instruction timing, lazy flags and scheduling contract are
+unchanged. `Machine::excluded_code` and sound exclusion spans are immutable build
+metadata, not snapshot state; canonical save/restore records remain unchanged.
+Main and sound generation now require ABI 3. Regenerate both programs.
+
+`Machine::use_native_sound` now takes the generated exclusion span explicitly.
+Sound tables contain exactly the even-address exclusion complement. Dispatch
+subtracts preceding excluded words from the dense index without allocating a
+second map; an excluded target throws before an instruction/opcode read.
+
+Evidence, scanner/profile commands and per-region size experiment:
+[BINSIZE-EXCLUDE.md](BINSIZE-EXCLUDE.md).
+
 ## Version 2 — instruction-granular scheduling
 
 `f3_cpu.dispatch_deadline` is a 64-bit main-cycle threshold immediately after
