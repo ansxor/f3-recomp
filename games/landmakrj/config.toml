@@ -74,6 +74,9 @@ entry_points = [
     0x0a4a36, 0x0a52d6, 0x0a52fc, 0x0a5d62, 0x0a7d34, 0x0d3d42,
     0x0d4088, 0x0d40b0, 0x0d40e6, 0x0e6458, 0x0e65f2,
     0x0958f2, # Additional player path after serial EEPROM busy timing was corrected.
+    # Active fire/secondary buttons and independently timed SDL play.
+    0x095988, 0x0a913c, 0x0d3dc0, 0x0e6518, 0x0e663c, 0x0f966c,
+    0x0fb70e, 0x0fb724,
 ]
 scan_jump_tables = true
 scan_task_traps = true
