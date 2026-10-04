@@ -137,6 +137,10 @@ end
 -- Reset remaps the program space and drops taps. Reinstall before CPU execution.
 local ctrl_tap
 local function install_control_tap()
+    if ctrl_tap then
+        ctrl_tap:reinstall()
+        return
+    end
     ctrl_tap = space:install_write_tap(0x660000, 0x66001f, "f3_ctrl_tap", function(offset, data, mem_mask)
         local rel = offset - 0x660000
         if rel >= 0 and rel <= 28 then

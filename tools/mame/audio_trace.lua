@@ -8,6 +8,10 @@ local file = assert(io.open(path, "wb"))
 file:write("F3AUD1\0\0")
 local space = assert(manager.machine.devices[":taito_en:audiocpu"]).spaces["program"]
 local function install()
+    if _G.f3rt_audio_tap then
+        _G.f3rt_audio_tap:reinstall()
+        return
+    end
     _G.f3rt_audio_tap = space:install_write_tap(0x200000, 0x340003, "f3rt_audio", function(address, data, mask)
         -- Emulated timestamp in 16 MHz main-clock ticks, then a 16-bit bus write.
         file:write(string.pack("<I8I4I2I2", math.floor(emu.time() * 16000000 + 0.5), address, data, mask))

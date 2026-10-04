@@ -198,7 +198,12 @@ struct Audio::Impl {
     void advance(uint32_t main_cycles) {
         constexpr uint32_t SLICE = 512;
         while (main_cycles > 0) {
-            uint32_t step = std::min<uint32_t>(main_cycles, SLICE);
+            // Stop the sound CPU at an output sample boundary, rather than
+            // applying writes from the rest of a fixed slice to that sample.
+            uint32_t step = std::min(main_cycles, SLICE);
+            const uint32_t rate = m_es5505.sample_rate();
+            if (m_sample_accum + uint64_t(step) * rate >= 16000000ULL)
+                step = uint32_t((16000000ULL - m_sample_accum + rate - 1) / rate);
             main_cycles -= step;
             advance_slice(step);
         }
