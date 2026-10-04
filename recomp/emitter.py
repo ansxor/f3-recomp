@@ -811,8 +811,8 @@ def lower(insn: CsInsn) -> list[str] | None:
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
 
-    # 14. TST
-    if mnem == 'tst':
+    # 14. TST / TAS: flags describe the original operand, before setting bit 7.
+    if mnem in ('tst', 'tas'):
         if not ops:
             return None
         src_ea = _decode_ea(insn, ops[0], size, "tst")
@@ -821,6 +821,8 @@ def lower(insn: CsInsn) -> list[str] | None:
         stmts = list(src_ea.ea_setup)
         stmts.extend(src_ea.read_stmts)
         stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = {src_ea.val_expr}; cpu->cc_width = {size};")
+        if mnem == 'tas':
+            stmts.extend(_gen_write(src_ea, f"({src_ea.val_expr} | 0x80u)", 1))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
