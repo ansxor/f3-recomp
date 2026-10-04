@@ -15,9 +15,18 @@ metadata, not snapshot state; canonical save/restore records remain unchanged.
 Main and sound generation now require ABI 3. Regenerate both programs.
 
 `Machine::use_native_sound` now takes the generated exclusion span explicitly.
-Sound tables contain exactly the even-address exclusion complement. Dispatch
-subtracts preceding excluded words from the dense index without allocating a
-second map; an excluded target throws before an instruction/opcode read.
+Ordinary/full-tier sound tables contain exactly the even-address exclusion
+complement. Dispatch subtracts preceding excluded words from the dense index
+without allocating a second map. Explicit profile-slim tables are validated
+sorted subsets of that complement and use sparse lookup. In every mode an
+excluded physical target (including odd/upper-byte aliases) fails before any
+opcode read, interpreter execution or profile-cold miss. Profile partitioning
+and instrumentation leave ABI 3 and canonical state unchanged.
+
+Both generators partition only the exclusion-filtered entries. Contradictory
+profile hits/misses reject generation with CPU/address/range/reason; profiles
+retain full-image CRC/base/size identities. Shared exception bodies are tiered
+by their retained hot aliases.
 
 Evidence, scanner/profile commands and per-region size experiment:
 [BINSIZE-EXCLUDE.md](BINSIZE-EXCLUDE.md).

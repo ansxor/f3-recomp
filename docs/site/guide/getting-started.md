@@ -82,6 +82,15 @@ cmake --build build --target landmakr -j 4
 
 Run the command from the repository root. A relative `F3_ROM_DIR` is relative to that directory. The program stores the ROM directory as its default.
 
+The Japan config exclusions and full-coverage compile tiers are on by default.
+Hot code uses `-O2`; cold code uses Clang `-Oz` (or `-Os` on other supported
+compilers). Every nonexcluded entry remains native. To keep exclusions but
+disable automatic tiers, add `-DF3_PROFILE_DEFAULT_TIERS=OFF` (and
+`-DF3_PROFILE_TIERS=` if reusing an explicit profile override).
+An explicit `-DF3_PROFILE_TIERS=/path/to/profile` replaces the frozen corpus.
+`F3_PROFILE_SLIM` removes cold code and is not the playable default.
+
+
 ::: tip Use a Release build
 Use the `Release` build type. The authors measured only Release builds. Netplay also compares the build type between the two players.
 :::
@@ -106,7 +115,7 @@ flowchart TD
 2. CMake runs `python3 tools/compile_sound.py`. The tool verifies the sound ROM and writes C into `build/generated/sound-landmakrj`.
 3. Ninja compiles the runtime library `f3rt`, the generated code and the frontend. It links them into `build/landmakr`.
 
-The generated code is large. In the author's build directory the main CPU C code uses about 260 MB, and the sound CPU C code uses about 53 MB. The first build takes a long time. Change `-j 4` to match your CPU.
+Generated C remains large: the measured combined build contains 175,404,686 bytes across main and sound sources. Its arm64 executable is 31,525,032 bytes. These are one Release build's measurements, not cross-platform size guarantees. Change `-j 4` to match your CPU.
 
 The generated directories are in `build/`, which Git ignores. Do not commit them.
 

@@ -1,5 +1,15 @@
 # Execution-profile binary-size experiment
 
+This records historical branch `binsize-profile` / `binsize-profile-3-tiers`,
+before the exclusion experiment was merged; its sizes and commands retain that
+provenance. The combined checkout uses ABI 3 exclusions plus full-coverage tiers
+by default. [BINSIZE-COMBINED.md](BINSIZE-COMBINED.md) records the combined
+measurements, current configure recipes and admission gates.
+The frozen address/count corpus is byte-identical after re-merging all original
+seeded/attract/user-confirmed campaign inputs: no excluded hits or misses,
+no held-out data added. Slim's removal/abort semantics remain opt-in.
+
+
 ## Decision
 
 **Use full-coverage tiers, not the slim build, for a playable size reduction.**

@@ -66,6 +66,35 @@ finite verification runs without changing the CPU execution path.
 The build command is smoke-tested; final playable frame/audio equivalence is
 tracked in `STATUS.md`, not implied by successful compilation.
 
+### Smaller full-coverage default
+
+ROM-based `landmakrj` builds apply the six reviewed `config.toml` exclusions
+and the frozen `profiles/landmakrj.profile` compile tiers by default:
+hot generated units `-O2`, cold units `-Oz` on Clang (`-Os` otherwise).
+Every nonexcluded dispatch entry remains available; cold execution does not
+need interpreter fallback. The measured combined arm64 executable is
+**31,525,032 bytes**, versus the exclusion experiment's 84,436,984-byte baseline.
+
+```sh
+# Keep config exclusions, disable automatic compile tiers.
+cmake -S . -B build/plain -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DF3_ROM_DIR=/path/to/roms/landmakr -DF3_PROFILE_DEFAULT_TIERS=OFF
+# Override the default with a CRC-matching full-coverage profile.
+cmake -S . -B build/custom -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DF3_ROM_DIR=/path/to/roms/landmakr -DF3_PROFILE_TIERS="$PWD/profiles/landmakrj.profile"
+```
+
+When reusing a build directory, clear an explicitly cached profile with
+`-DF3_PROFILE_TIERS=` as well as disabling `F3_PROFILE_DEFAULT_TIERS`.
+`-DF3_PROFILE_SLIM=<profile>` remains explicit experimental cold-code removal,
+**not** the combined default; its corpus failed 7/8 held-out seeds.
+ABI 3 rejects excluded targets, including odd PCs and physical aliases, even
+with diagnostic fallback enabled. Profile hits/misses inside exclusions reject
+generation rather than silently training contradictory addresses.
+Size/provenance tables and exact combined gates:
+[docs/BINSIZE-COMBINED.md](docs/BINSIZE-COMBINED.md).
+
+
 ### Opt-in 1v1 rollback netplay
 
 Build the dependency-free Go relay and start it on a reachable UDP port:

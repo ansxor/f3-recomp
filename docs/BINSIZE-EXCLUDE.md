@@ -1,5 +1,13 @@
 # Binary-size exclusion experiment
 
+This records the historical exclusion-only experiment at
+`binsize-exclude-3-applied`. The combined checkout now also enables full-coverage
+compile tiers by default; use `F3_PROFILE_DEFAULT_TIERS=OFF` and clear any
+explicit `F3_PROFILE_TIERS` cache override to measure exclusion-only code.
+[BINSIZE-COMBINED.md](BINSIZE-COMBINED.md) records the semantic ABI 3 merge,
+unchanged six intervals, profile contradiction guards and combined gates.
+
+
 ## Measurement checkpoint (before implementation)
 
 Land Maker Japan, Release Clang/arm64, `all_aligned` main and native sound.

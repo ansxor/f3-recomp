@@ -30,7 +30,8 @@ Set a cache variable with `-DNAME=value` on the `cmake` command line.
 | `F3_GENERATED_DIR` | path | empty | Directory with a generated program (`sources.cmake` and C files). If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/landmakrj`. |
 | `F3_SOUND_GENERATED_DIR` | path | empty | Directory with a generated sound program. If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/sound-landmakrj`. |
 | `F3_PROFILE_INSTRUMENT` | option | `OFF` | Compile allocation-free per-entry main/sound hit counters. Requires `F3_ROM_DIR` to regenerate both CPUs; `--profile-out FILE` enables recording with 30-second and exit flushes. |
-| `F3_PROFILE_TIERS` | filepath | empty | Full-coverage profile partition: hot generated units `-O2`, cold units `-Oz` on Clang or `-Os` otherwise. Requires ROM generation and a matching versioned profile. |
+| `F3_PROFILE_DEFAULT_TIERS` | option | `ON` | With `F3_ROM_DIR`, use the frozen `profiles/landmakrj.profile` full-coverage tiers unless an explicit tiers/slim profile is selected. `OFF` opts out without disabling config exclusions; clear a previously cached `F3_PROFILE_TIERS` override too. |
+| `F3_PROFILE_TIERS` | filepath | empty cache; frozen profile selected automatically | Override the full-coverage partition: hot generated units `-O2`, cold units `-Oz` on Clang or `-Os` otherwise. Requires ROM generation and a matching versioned profile. |
 | `F3_PROFILE_SLIM` | filepath | empty | Explicit opt-in removal of unprofiled main/sound code. Missing entries abort loudly with address, ROM CRC, re-profile hint and cold-hit record; no interpreter fallback. Mutually exclusive with tiers. |
 | `BUILD_TESTING` | option | `ON` (from `include(CTest)`) | Build `f3rt-check` and register the CTest test. |
 
@@ -57,12 +58,34 @@ inventories and `tools/block_profile.py report` distinguish executable entry
 addresses from packed host functions. A gameplay profile is evidence of observed
 execution, not proof that the remaining code can never execute.
 
+The six `landmakrj` main/sound exclusions in `config.toml` apply before tier
+assignment in every ROM-generated mode. Default tiers retain 336,775 main and
+61,997 sound entries (30,146 / 7,519 hot); slim retains only the hot subset.
+Hits or misses inside an excluded interval fail configuration with CPU/address/
+range diagnostics. Changing compilation tiers does not relax ABI 3 exclusion
+errors or permit fallback for excluded aliases.
+
+```sh
+# Full coverage with exclusions but ordinary Release optimization:
+cmake -S . -B build/plain -DF3_ROM_DIR=/path/to/roms/landmakr \
+  -DCMAKE_BUILD_TYPE=Release -DF3_PROFILE_DEFAULT_TIERS=OFF -DF3_PROFILE_TIERS=
+# Explicit, non-default removal experiment:
+cmake -S . -B build/slim -DF3_ROM_DIR=/path/to/roms/landmakr \
+  -DCMAKE_BUILD_TYPE=Release -DF3_PROFILE_SLIM="$PWD/profiles/landmakrj.profile"
+```
+
+The frozen corpus includes seeded and user-confirmed partial campaign data,
+not held-out gate seeds. Full tiers keep unobserved code; slim is rejected for
+general play. Historical and combined measurements:
+[BINSIZE-COMBINED.md](https://github.com/ansxor/f3-recomp/blob/main/docs/BINSIZE-COMBINED.md).
+
+
 ### What happens at configure time with F3_ROM_DIR
 
 1. CMake makes `F3_ROM_DIR` an absolute path and finds Python 3.
 2. CMake lists `recomp/*.py` and `recomp/*.csv`, and `games/landmakrj/config.toml`, as configure dependencies. If one of these files changes, the next build runs configure again.
-3. CMake runs `python3 -m recomp emit --config games/landmakrj/config.toml --rom-dir F3_ROM_DIR --output F3_GENERATED_DIR`. The environment variable `PYTHONPATH` starts with `BUILD_DIR/python`, so that a local `capstone` install is found.
-4. CMake runs `python3 tools/compile_sound.py --rom-dir F3_ROM_DIR --output F3_SOUND_GENERATED_DIR`. The file `tools/compile_sound.py` is also a configure dependency.
+3. CMake runs `python3 -m recomp emit --config games/landmakrj/config.toml --rom-dir F3_ROM_DIR --output F3_GENERATED_DIR` with the selected profile arguments. The environment variable `PYTHONPATH` starts with `BUILD_DIR/python`, so that a local `capstone` install is found.
+4. CMake runs `python3 tools/compile_sound.py --config games/landmakrj/config.toml --rom-dir F3_ROM_DIR --output F3_SOUND_GENERATED_DIR` with the same profile arguments. Both generators apply the config exclusions. The sound compiler and selected profile are also configure dependencies.
 5. If either command fails, the configure step fails (`COMMAND_ERROR_IS_FATAL ANY`).
 
 The game config is fixed to `games/landmakrj/config.toml` in the top-level `CMakeLists.txt`.

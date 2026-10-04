@@ -28,7 +28,7 @@ CMake adds `build/python` to `PYTHONPATH` when it runs the recompilers. You can 
 
 ## The CMake options
 
-The [Build options](/reference/build-options) reference page lists every option. These are the four that matter here:
+The [Build options](/reference/build-options) reference page lists every option. These are the main generation controls:
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -36,6 +36,9 @@ The [Build options](/reference/build-options) reference page lists every option.
 | `F3_ROM_DIR` | empty | A directory with the Land Maker Japan ROM files. A value turns on automatic generation of both the main and the sound C code. |
 | `F3_GENERATED_DIR` | empty (set to `build/generated/landmakrj` when `F3_ROM_DIR` is set) | A directory with already generated main CPU C code. |
 | `F3_SOUND_GENERATED_DIR` | empty (set to `build/generated/sound-landmakrj` when `F3_ROM_DIR` is set) | A directory with already generated sound driver C code. |
+| `F3_PROFILE_DEFAULT_TIERS` | `ON` | ROM generation uses the frozen full-coverage profile unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
+| `F3_PROFILE_TIERS` | empty cache; frozen profile selected automatically | Explicit CRC-keyed profile override: hot units `-O2`, cold units `-Oz`/`-Os`. |
+| `F3_PROFILE_SLIM` | empty | Explicit removal of unprofiled code, never enabled automatically. |
 
 For pre-generated code, leave `F3_ROM_DIR` empty and set the generated directory paths.
 CMake then uses those files without running Python.
@@ -77,12 +80,20 @@ The working directory is the repository root. `PYTHONPATH` starts with `build/py
 
 `CMakeLists.txt` also registers `recomp/*.py`, `recomp/*.csv` (with `CONFIGURE_DEPENDS`) and `games/landmakrj/config.toml` as configure dependencies. When one of them changes, the next `cmake --build` runs the configure step again. The configure step runs the recompiler again.
 
+The selected `--profile-tiers` or explicit `--profile-slim` argument is passed
+to both generators. Exclusion-filtered entries are the partition input:
+336,775 main and 61,997 sound registrations in full tiers. An excluded profile
+hit/miss is a configuration error, not evidence for silently undoing an exclusion.
+The selected profile is a configure dependency. Hot/cold page subsets and
+shared exception units have separate source lists and compiler options.
+
+
 The command writes these files (see `recomp/generate.py`):
 
 | File | Content |
 | --- | --- |
-| `blocks_0000.c`, `blocks_0001.c`, ... | The translated code. Each file holds up to 128 block functions (`blocks_per_file`). |
-| `program.c` | The sorted table `translated_blocks[]` and the function `f3_generated_register`. It also holds the exception stubs `f3_rom_exception_N`. |
+| `blocks_hot_0000.c`, `blocks_cold_0000.c`, ... | Tiered translated code; up to 128 packed functions per unit. Ordinary builds use `blocks_0000.c`, ... |
+| `program.c` | Sorted `translated_blocks[]`, immutable exclusions and `f3_generated_register`. Tier builds put shared exception bodies in `exceptions_hot.c` / `exceptions_cold.c`; ordinary builds keep them here. |
 | `program.h` | Declares `f3_generated_register`. Rejects a wrong ABI version with `#error`. |
 | `sources.cmake` | Sets `F3_GENERATED_SOURCES` to the list of C files. |
 | `coverage.json` | What discovery found, including decoder rejections and unresolved transfers. |
@@ -99,6 +110,9 @@ It independently decodes each nonexcluded even offset in the 512 KiB sound regio
 Native lowerings, exception entries, and explicit unsupported stubs share the dispatch table.
 Aligned coverage does not mean that all bytes contain reachable instructions.
 The shards hold up to 1024 generated functions.
+Full-coverage hot/cold shards keep that exact exclusion complement; only explicit
+slim uses a sparse hot subset. Shared exception bodies are tiered by retained
+executed aliases, not duplicated for each address. Both programs require ABI 3.
 `sound_program.c` supplies `f3_sound_blocks[]` and `f3_sound_block_count`.
 See [Sound-CPU compiler](/developer/recompiler/sound-compiler).
 
