@@ -4,6 +4,9 @@
 #include "game_tiles.hpp"
 #include <algorithm>
 #include <array>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <stdexcept>
 
 namespace f3rt {
@@ -92,24 +95,48 @@ uint32_t rgb(const PixelMix &pixel, std::span<const uint32_t> palette) {
 int floor_divide(int value, int divisor) {
     return value >= 0 ? value / divisor : -1 - (-1 - value) / divisor;
 }
-}
+struct SceneJob {
+    const GameTiles &tiles;
+    const GameText &text;
+    const GameLines &lines;
+    std::span<const uint16_t> sprites;
+    bool flipped;
+    std::span<const uint8_t> tile_pixels;
+    std::span<const uint32_t> colors;
+    std::span<uint32_t> output;
+    GameVideoOptions options;
+};
 
-void compose_game_scene(const GameTiles &tiles, const GameText &text, const GameLines &lines,
-                        std::span<const uint16_t> sprites, bool flipped,
-                        std::span<const uint8_t> tile_pixels, std::span<const uint32_t> colors,
-                        std::span<uint32_t> output, GameVideoOptions options) {
+void validate_scene(const SceneJob &job) {
+    const auto options = job.options;
     if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
         throw std::runtime_error("Game presentation scale/border out of range");
+    const size_t sprite_size = options.expanded() ? size_t(options.width()) * options.height() : 432 * 256;
+    if (job.sprites.size() < sprite_size || job.colors.size() < 8192 ||
+        job.output.size() < size_t(options.width()) * options.height())
+        throw std::runtime_error("Incomplete game scene render buffers");
+    // Reject unsupported rows on the caller before publishing any work.
+    for (unsigned y = 24; y < 256; ++y)
+        if (job.lines.row(y).bitmap)
+            throw std::runtime_error("Game scene bitmap pivot is unsupported");
+}
+
+void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
+    const auto &tiles = job.tiles;
+    const auto &text = job.text;
+    const auto &lines = job.lines;
+    const auto sprites = job.sprites;
+    const bool flipped = job.flipped;
+    const auto tile_pixels = job.tile_pixels;
+    const auto colors = job.colors;
+    const auto output = job.output;
+    const auto options = job.options;
     const int scale = int(options.scale), width = int(options.width());
     const int left_edge = 46 - int(options.border), right_edge = 366 + int(options.border);
-    const size_t sprite_size = options.expanded() ? size_t(width) * options.height() : 432 * 256;
-    if (sprites.size() < sprite_size || colors.size() < 8192 || output.size() < size_t(width) * options.height())
-        throw std::runtime_error("Incomplete game scene render buffers");
     constexpr unsigned max_width = (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_scale;
     std::array<PixelMix, max_width> pixels;
-    for (unsigned y = 24; y < 256; ++y) {
+    for (unsigned y = begin; y < end; ++y) {
         const auto &row = lines.row(y);
-        if (row.bitmap) throw std::runtime_error("Game scene bitmap pivot is unsupported");
         const auto layer = [&row](unsigned index) -> const SceneLayer & {
             return index < 4 ? row.playfields[index].layer : index < 8 ? row.sprites[index - 4] : row.text;
         };
@@ -180,5 +207,105 @@ void compose_game_scene(const GameTiles &tiles, const GameText &text, const Game
             for (int x = 0; x < width; ++x) output[output_y * width + x] = rgb(pixels[x], colors);
         }
     }
+}
+
+// Three persistent workers plus the caller leave room for emulation/audio on
+// a ten-core host. Each participant owns a contiguous native-row interval.
+class RowWorkers {
+public:
+    RowWorkers() {
+        const unsigned hardware = std::thread::hardware_concurrency();
+        count_ = hardware ? std::min(3u, hardware - 1) : 1;
+        try {
+            for (unsigned i = 0; i < count_; ++i)
+                threads_[i] = std::thread([this, i] { work(i + 1); });
+        } catch (...) {
+            stop();
+            throw;
+        }
+    }
+    ~RowWorkers() { stop(); }
+    RowWorkers(const RowWorkers &) = delete;
+    RowWorkers &operator=(const RowWorkers &) = delete;
+
+    void compose(const SceneJob &job) {
+        // Serialize submissions, not sampling: stack-owned jobs remain alive
+        // until every participant has finished, including concurrent callers.
+        std::unique_lock submission(submission_mutex_);
+        {
+            std::lock_guard lock(mutex_);
+            job_ = &job;
+            remaining_ = count_;
+            ++generation_;
+        }
+        ready_.notify_all();
+        compose_part(job, 0);
+        std::unique_lock lock(mutex_);
+        done_.wait(lock, [this] { return remaining_ == 0; });
+        job_ = nullptr;
+    }
+
+private:
+    void compose_part(const SceneJob &job, unsigned part) const noexcept {
+        const unsigned participants = count_ + 1;
+        compose_rows(job, 24 + 232 * part / participants,
+                     24 + 232 * (part + 1) / participants);
+    }
+    void work(unsigned part) {
+        uint64_t observed = 0;
+        std::unique_lock lock(mutex_);
+        for (;;) {
+            ready_.wait(lock, [this, observed] { return stopping_ || generation_ != observed; });
+            if (stopping_) return;
+            observed = generation_;
+            const SceneJob *job = job_;
+            lock.unlock();
+            compose_part(*job, part);
+            lock.lock();
+            if (--remaining_ == 0) done_.notify_one();
+        }
+    }
+    void stop() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        ready_.notify_all();
+        for (auto &thread : threads_)
+            if (thread.joinable()) thread.join();
+    }
+
+    std::array<std::thread, 3> threads_;
+    std::mutex submission_mutex_, mutex_;
+    std::condition_variable ready_, done_;
+    const SceneJob *job_ = nullptr;
+    uint64_t generation_ = 0;
+    unsigned count_ = 0, remaining_ = 0;
+    bool stopping_ = false;
+};
+} // namespace
+
+void compose_game_scene(const GameTiles &tiles, const GameText &text, const GameLines &lines,
+                        std::span<const uint16_t> sprites, bool flipped,
+                        std::span<const uint8_t> tile_pixels, std::span<const uint32_t> colors,
+                        std::span<uint32_t> output, GameVideoOptions options) {
+    const SceneJob job{tiles, text, lines, sprites, flipped, tile_pixels, colors, output, options};
+    validate_scene(job);
+    if (!options.expanded()) {
+        // Dispatch is not worthwhile for the strict-native 320x232 frame.
+        compose_rows(job, 24, 256);
+    } else {
+        static RowWorkers workers;
+        workers.compose(job);
+    }
+}
+
+void compose_game_scene_serial(const GameTiles &tiles, const GameText &text, const GameLines &lines,
+                               std::span<const uint16_t> sprites, bool flipped,
+                               std::span<const uint8_t> tile_pixels, std::span<const uint32_t> colors,
+                               std::span<uint32_t> output, GameVideoOptions options) {
+    const SceneJob job{tiles, text, lines, sprites, flipped, tile_pixels, colors, output, options};
+    validate_scene(job);
+    compose_rows(job, 24, 256);
 }
 } // namespace f3rt
