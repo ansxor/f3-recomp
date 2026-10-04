@@ -7008,7 +7008,7 @@ M68KMAKE_OP(movem, 16, re, pd)
 		}
 	AY = ea;
 
-	USE_CYCLES(count<<CYC_MOVEM_W);
+	USE_CYCLES(count * CYC_MOVEM_STORE_W);
 }
 
 
@@ -7027,7 +7027,7 @@ M68KMAKE_OP(movem, 16, re, .)
 			count++;
 		}
 
-	USE_CYCLES(count<<CYC_MOVEM_W);
+	USE_CYCLES(count * CYC_MOVEM_STORE_W);
 }
 
 
@@ -7048,7 +7048,7 @@ M68KMAKE_OP(movem, 32, re, pd)
 		}
 	AY = ea;
 
-	USE_CYCLES(count<<CYC_MOVEM_L);
+	USE_CYCLES(count * CYC_MOVEM_STORE_L);
 }
 
 
@@ -7067,7 +7067,7 @@ M68KMAKE_OP(movem, 32, re, .)
 			count++;
 		}
 
-	USE_CYCLES(count<<CYC_MOVEM_L);
+	USE_CYCLES(count * CYC_MOVEM_STORE_L);
 }
 
 

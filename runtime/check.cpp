@@ -25,6 +25,38 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_movem(f3rt::Machine &m) {
+    for (uint16_t opcode : {0x4891,0x48d1,0x48a1,0x48e1,0x4c99,0x4cd9}) {
+        const bool load=opcode&0x0400, wide=opcode&0x0040, predec=(opcode&0x0038)==0x20;
+        const unsigned size=wide?4:2;
+        const auto execute = [&](uint16_t mask) {
+            m.write16(0x400600,opcode);m.write16(0x400602,mask);
+            m.cpu.pc=0x400600;m.cpu.sr=0x2700;m.cpu.a[1]=0x400a20;
+            m.cpu.d[0]=0x12345678;m.cpu.d[1]=0x89abcdef;
+            if (load) {
+                if (wide) { m.write32(0x400a20,0x12345678);m.write32(0x400a24,0x89abcdef); }
+                else { m.write16(0x400a20,0x5678);m.write16(0x400a22,0xcdef); }
+            }
+            const auto before=m.cpu.cycles;
+            m.interpreter->run_main(1);
+            require(m.cpu.pc==0x400604,"MOVEM executes exactly one instruction");
+            return m.cpu.cycles-before;
+        };
+        const auto base=execute(0);
+        const auto cycles=execute(predec?0xc000:3);
+        require(cycles-base==(load?8u:6u),"EC020 MOVEM charges three cycles/store and four/load per register");
+        if (load) {
+            require(m.cpu.d[0]==(wide?0x12345678u:0x5678u) &&
+                    m.cpu.d[1]==(wide?0x89abcdefu:0xffffcdefu) &&
+                    m.cpu.a[1]==0x400a20+2*size,"MOVEM load width, sign extension and postincrement");
+        } else {
+            const uint32_t address=predec?0x400a20-2*size:0x400a20;
+            require((wide?m.read32(address):m.read16(address))==(wide?0x12345678u:0x5678u) &&
+                    (wide?m.read32(address+size):m.read16(address+size))==(wide?0x89abcdefu:0xcdefu) &&
+                    m.cpu.a[1]==address,"MOVEM store width, register order and predecrement");
+        }
+    }
+}
 void check_audio_mixer() {
     f3rt::Audio audio;
     const std::array<uint8_t,4> rom{0x40,0,0x40,0};
@@ -99,6 +131,7 @@ int main() try {
     boundary_at(second_vblank);
     require(m->frame==2 && m->pending_irqs==(1<<2),"Second vblank uses the full-frame epoch");
     m->pending_irqs=0;
+    check_movem(*m);
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

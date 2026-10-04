@@ -380,6 +380,8 @@ typedef uint32 uint64;
 #define CYC_SCC_R_TRUE   m68ki_cpu.cyc_scc_r_true
 #define CYC_MOVEM_W      m68ki_cpu.cyc_movem_w
 #define CYC_MOVEM_L      m68ki_cpu.cyc_movem_l
+#define CYC_MOVEM_STORE_W m68ki_cpu.cyc_movem_store_w
+#define CYC_MOVEM_STORE_L m68ki_cpu.cyc_movem_store_l
 #define CYC_SHIFT        m68ki_cpu.cyc_shift
 #define CYC_RESET        m68ki_cpu.cyc_reset
 #define HAS_PMMU	 m68ki_cpu.has_pmmu
@@ -985,6 +987,8 @@ typedef struct
 	uint cyc_scc_r_true;
 	uint cyc_movem_w;
 	uint cyc_movem_l;
+	uint cyc_movem_store_w; /* cycles/register, unlike the load shift counts */
+	uint cyc_movem_store_l;
 	uint cyc_shift;
 	uint cyc_reset;
 

@@ -28,3 +28,8 @@ Raster time zero is the reference screen's VBSTART beam epoch. IRQ2/render
 events occur at `ceil(n * 432 * 262 * 16000000 / 6671500)` main ticks for
 `n = 1, 2, ...`; IRQ3 follows each IRQ2 by 10000 ticks. Watchdog reset does not
 restart the continuous raster clock.
+
+The pinned 68EC020/68020 MOVEM reference charges three cycles per stored
+register for either width, and four per loaded register, in addition to the
+opcode/addressing cost. Generated blocks and the semantic reference must use
+the same distinction. Sound 68000 and other CPU-model costs are unchanged.
