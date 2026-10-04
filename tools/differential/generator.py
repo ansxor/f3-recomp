@@ -493,6 +493,16 @@ def generate_boundary_cases() -> list[RawTestCase]:
     add_case("pea_stack_target", "4857")
     add_case("unlk_stack_alias", "4e5f", memory=[
         MemInitItem(TEST_SP, bytes.fromhex("00029000"))])
+    for value in (0, 0x7f, 0x80, 0xff):
+        for sr in (0, 0x1f):
+            add_case(f"tas_register_{value:x}_{sr:x}", "4ac0",
+                     d=[0x12345600 | value, 0, 0, 0, 0, 0, 0, 0], sr=sr)
+            for mode, opcode, address in (
+                    ("indirect", "4ad0", TEST_A0),
+                    ("postinc", "4ad8", TEST_A0),
+                    ("stack_predec", "4ae7", TEST_SP - 2)):
+                add_case(f"tas_{mode}_{value:x}_{sr:x}", opcode, sr=sr,
+                         memory=[MemInitItem(address, bytes([value]))])
     for sr in (0x001f, 0x201f):
         for name, code in (("read_sr", "40c0"), ("write_sr", "46c0"),
                            ("read_ccr", "42c0"), ("write_ccr", "44c0"),
