@@ -52,6 +52,12 @@ void check_audio_mixer() {
     audio.set_gain_model(f3rt::Audio::GainModel::SingleStage);
     sample();
     require(pcm[0]==0 && pcm[1]==715,"Single-stage gain is distinct and preserves channel mute");
+    audio.set_reset(false);audio.set_reset(true);
+    sample();
+    require(pcm[0]==0 && pcm[1]==715,"CPU-line reset preserves attenuation and playing OTIS voices");
+    audio.reset_board();
+    sample();
+    require(pcm[0]==1428 && pcm[1]==1428,"Board reset restores volume without resetting OTIS voices");
 }
 }
 int main() try {
@@ -65,6 +71,11 @@ int main() try {
     }
     require(sample_count==uint64_t(clock_audio.sample_rate())*10,
             "Ten seconds of audio match the advertised stream rate without clock drift");
+    clock_audio.advance(638);
+    clock_audio.reset_board();
+    clock_audio.advance(438);
+    require(clock_audio.render(clock_samples.data(),clock_samples.size()/2)==2,
+            "Board reset preserves queued audio and fractional sample-clock phase");
     auto m=std::make_unique<f3rt::Machine>(fixture());
     require(m->cpu.cycles==4 && m->cpu.pc==0x100 && m->cpu.d[0]==0,
             "Cold reset charges four cycles without executing the first opcode");
@@ -149,6 +160,23 @@ int main() try {
             "Native-only fallback rejection reports PC without executing or counting an instruction");
     const f3_block bad[]={{0x100,native},{0x100,native}};
     require(!f3_register_blocks(&cpu,bad,2),"Duplicate PCs rejected");
+    m->audio->set_reset(true);
+    m->audio->write8(0x280019,0x66);
+    m->audio->write8(0x260001,0x12);m->audio->write8(0x260003,0x34);
+    m->audio->write8(0x260005,0x56);m->audio->write8(0x260141,0);
+    m->audio->set_reset(false);m->audio->set_reset(true);
+    m->audio->write8(0x260101,0);
+    require(m->audio->read8(0x260001)==0x12 && m->audio->read8(0x280019)==0x66,
+            "CPU-line reset preserves DSP registers and DUART configuration");
+    m->audio->write32(0,0xabcdef12);
+    cpu.sr=0x2700;cpu.cycles=3ull*f3rt::Machine::main_clock;
+    require(m->boundary()!=0 && m->audio->is_reset(),"Watchdog holds the sound CPU in reset");
+    require(m->audio->read8(0x280019)==0x0f,"Watchdog restores the DUART interrupt vector");
+    require(m->audio->read16(0x600)==0xa55a,"Whole-board reset preserves sound work RAM");
+    require(m->audio->read32(0)==0,"Whole-board reset reloads boot vectors from sound ROM");
+    m->audio->write8(0x260101,0);
+    require(m->audio->read8(0x260001)==0 && m->audio->read8(0x260003)==0 &&
+            m->audio->read8(0x260005)==0,"Watchdog clears DSP general-purpose registers");
     std::cout<<"PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter\n";
     return 0;
 } catch(const std::exception &e) { std::cerr<<"FAIL "<<e.what()<<'\n';return 1; }

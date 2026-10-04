@@ -40,6 +40,7 @@ void Machine::reset() {
     frame = hardware_cycles = 0;
     next_vblank = raster_cycle(256 * 432);
     reset_devices();
+    audio->reset_board();
     video->reset();
     interpreter->reset_main();
 }
@@ -134,6 +135,7 @@ int Machine::boundary() {
     }
     if (cpu.cycles >= watchdog_at) {
         reset_devices();
+        audio->reset_board();
         interpreter->reset_main();
         return 1;
     }

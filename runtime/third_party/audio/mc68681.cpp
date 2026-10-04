@@ -23,8 +23,8 @@ MC68681::MC68681()
     , m_opr(0)
     , m_ipcr(0)
     , m_ip_last_state(0x0f)
-    , m_ctr_preset(0xffff)
-    , m_ct_counter(0xffff)
+    , m_ctr_preset(0)
+    , m_ct_counter(0)
     , m_ct_accum(0)
     , m_half_period(0)
     , m_ct_running(false)
@@ -48,8 +48,8 @@ void MC68681::reset() {
     m_ipcr = 0;
     m_ip_last_state = 0x0f;
 
-    m_ctr_preset = 0xffff;
-    m_ct_counter = 0xffff;
+    m_ctr_preset = 0;
+    m_ct_counter = 0;
     m_ct_accum = 0;
     m_half_period = 0;
     m_ct_running = false;

@@ -123,12 +123,13 @@ build/runtime/f3rt-replay --rom-dir /path/to/roms/landmakr \
   --audio-trace build/mame-audio.trace --output build/replay-audio.wav
 ```
 
-The binary trace begins with eight bytes `F3AUD1\0\0`. Each 16-byte,
+The binary trace begins with eight bytes `F3AUD2\0\0`. Each 16-byte,
 little-endian record contains a 64-bit timestamp in 16 MHz ticks, a 32-bit
 sound-bus address, 16-bit data, and a 16-bit byte-lane mask. An address of
-`0xffffffff` terminates the stream at the recorded emulated time. Reset
-notifications reinstall the retained write tap. Traces contain game-derived
-data and must remain under ignored `build/`.
+`0xfffffffe` resets the sound-board devices; `0xffffffff` terminates the stream
+at the recorded emulated time. Reset notifications record the event and reinstall
+the retained write tap. Version 1 traces omitted board resets and must be
+recaptured. Traces contain game-derived data and must remain under ignored `build/`.
 
 Replay drives the real standalone OTIS/ESP/volume devices without executing
 the main or sound CPU. It isolates audio-device behavior; it does **not**

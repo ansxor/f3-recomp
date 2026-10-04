@@ -35,6 +35,9 @@ public:
     void set_reset(bool asserted);
     bool is_reset() const;
     void set_reset_callback(std::function<void(bool asserted)> cb);
+    // Whole-machine/watchdog reset: hold CPU, reset DUART/DSP/volume, reload
+    // boot vectors; preserve RAM, OTIS state, and the continuous audio clock.
+    void reset_board();
 
     // Sound 68000 bus handlers (called by Musashi memory map bridge)
     uint8_t read8(uint32_t address);
