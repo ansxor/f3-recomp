@@ -18,15 +18,44 @@ f3rt::RomSet fixture() {
     r.samples[0x2468a]=0x45;r.samples[0x2468b]=0x67; // OTIS word 0x12345, above old truncated mask
     return r;
 }
-void send_bit(f3rt::Eeprom &e,bool bit) { uint8_t pins=0x10|(bit?4:0);e.pins(pins);e.pins(pins|8); }
-void command(f3rt::Eeprom &e,unsigned word) { e.pins(0);for(int bit=8;bit>=0;--bit)send_bit(e,(word>>bit)&1); }
-void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value) {
-    command(e,0x140|address);for(int bit=15;bit>=0;--bit)send_bit(e,(value>>bit)&1);e.pins(0);
+void send_bit(f3rt::Eeprom &e,bool bit,uint64_t now) { uint8_t pins=0x10|(bit?4:0);e.pins(pins,now);e.pins(pins|8,now); }
+void command(f3rt::Eeprom &e,unsigned word,uint64_t now) { e.pins(0,now);for(int bit=8;bit>=0;--bit)send_bit(e,(word>>bit)&1,now); }
+void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) {
+    command(e,0x140|address,now);for(int bit=15;bit>=0;--bit)send_bit(e,(value>>bit)&1,now);e.pins(0,now);
 }
-uint16_t read_word(f3rt::Eeprom &e) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false);value=uint16_t((value<<1)|e.output()); }return value; }
+uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_audio_mixer() {
+    f3rt::Audio audio;
+    const std::array<uint8_t,4> rom{0x40,0,0x40,0};
+    audio.load_sample_rom(rom);
+    audio.write16(0x20001e,0x20);
+    for (unsigned reg=1;reg<=6;++reg) audio.write16(0x200000+reg*2,0x4000);
+    audio.write16(0x20001e,0);
+    audio.write16(0x200010,0xff00);audio.write16(0x200012,0xff00);
+    audio.write16(0x200000,0x0c00); // Constant sample, all poles lowpass, auxiliary pair.
+    std::array<int16_t,2> pcm{};
+    const auto sample = [&] {
+        audio.advance(538);
+        require(audio.render(pcm.data(),1)==1,"One complete audio sample is available");
+    };
+    sample();
+    // DC 0x4000, OTIS volume 15.5, /2^19, board 0.18, two 100/32
+    // gain stages, auxiliary route 0.5, and signed PCM scale 32768.
+    require(pcm[0]==13950 && pcm[1]==13950,"Board gain and signed PCM normalization");
+    audio.write8(0x340000,2);audio.write8(0x340002,0);
+    sample();
+    require(pcm[0]==0 && pcm[1]==13950,"Left volume mute preserves the right channel");
+    audio.write8(0x340000,7);audio.write8(0x340002,0x33);
+    sample();
+    require(pcm[0]==0 && pcm[1]==3487,"Minus-six-dB control applies both baseline gain stages");
+    audio.set_gain_model(f3rt::Audio::GainModel::SingleStage);
+    sample();
+    require(pcm[0]==0 && pcm[1]==715,"Single-stage gain is distinct and preserves channel mute");
+}
 }
 int main() try {
+    check_audio_mixer();
     f3rt::Audio clock_audio;
     std::array<int16_t, 128> clock_samples{};
     uint64_t sample_count=0;
@@ -54,12 +83,38 @@ int main() try {
     m->write8(0x4a0004,0x04);m->write8(0x4a0004,0x04);require(m->coin_count[0]==1,"Coin counter rising-edge only");
     m->set_input(0,0x1000,true);require(!(m->read32(0x4a0000)&0x1000),"Active-low start input");
     f3rt::Eeprom e;
-    serial_write(e,63,0x1234);require(e.words[63]==0xffff,"EEPROM write disabled at power-on");
-    command(e,0x130);e.pins(0); // EWEN
-    serial_write(e,63,0x1234);serial_write(e,0,0xabcd);
-    command(e,0x1bf);require(!e.output(),"EEPROM read dummy bit");
-    require(read_word(e)==0x1234 && read_word(e)==0xabcd,"EEPROM sequential read wraps 63 to 0");
-    e.pins(0);command(e,0x100);e.pins(0);serial_write(e,0,0x4321);require(e.words[0]==0xabcd,"EEPROM EWDS protects contents");
+    uint64_t now=100;
+    serial_write(e,63,0x1234,now);require(e.words[63]==0xffff,"EEPROM write disabled at power-on");
+    command(e,0x130,now);e.pins(0,now); // EWEN
+    serial_write(e,63,0x1234,now);
+    require(e.output(now),"Deselected EEPROM DO is pulled high while programming");
+    e.pins(0x10,now);
+    require(!e.output(now),"Raising CS exposes EEPROM programming busy");
+    serial_write(e,0,0xdead,now);
+    require(e.words[0]==0xffff,"EEPROM ignores new commands while programming");
+    e.pins(0x10,now);
+    now+=27999;require(!e.output(now),"EEPROM write remains busy before 1750us deadline");
+    ++now;require(e.output(now),"EEPROM write finishes without another clock edge");
+    serial_write(e,0,0xabcd,now);now+=28000;
+    command(e,0x1bf,now);require(!e.output(now),"EEPROM read dummy bit");
+    require(read_word(e,now)==0x1234 && read_word(e,now)==0xabcd,"EEPROM sequential read wraps 63 to 0");
+    e.pins(0,now);command(e,0x100,now);e.pins(0,now);serial_write(e,0,0x4321,now);
+    e.pins(0x10,now);
+    require(e.words[0]==0xabcd && e.output(now),"EEPROM EWDS protects contents without becoming busy");
+    command(e,0x130,now);command(e,0x1ff,now); // EWEN; erase word 63
+    e.pins(0,now);e.pins(0x10,now);
+    now+=15999;require(!e.output(now),"EEPROM erase remains busy before 1000us deadline");
+    ++now;require(e.output(now) && e.words[63]==0xffff,"EEPROM single-word erase completes");
+    command(e,0x120,now);e.pins(0,now);e.pins(0x10,now); // ERAL
+    now+=127999;require(!e.output(now),"EEPROM erase-all remains busy before 8000us deadline");
+    ++now;require(e.output(now) && e.words[0]==0xffff,"EEPROM erase-all completes");
+    command(e,0x110,now); // WRAL
+    for(int bit=15;bit>=0;--bit)send_bit(e,(0x5a5a>>bit)&1,now);
+    e.pins(0,now);e.pins(0x10,now);
+    now+=127999;require(!e.output(now),"EEPROM write-all remains busy before 8000us deadline");
+    ++now;require(e.output(now) && e.words[0]==0x5a5a && e.words[63]==0x5a5a,"EEPROM write-all completes");
+    e.reset();e.pins(0x10,0);
+    require(e.output(0) && e.words[0]==0x5a5a,"Power reset clears serial timing but preserves EEPROM contents");
     auto &cpu=m->cpu;
     cpu.usp=0x400800;cpu.a[7]=0x401000;cpu.sr=0x2000;
     f3_set_sr(&cpu,0);require(cpu.a[7]==0x400800 && cpu.ssp==0x401000,"Supervisor to user stack switch");

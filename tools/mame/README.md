@@ -140,3 +140,25 @@ Native-game audio must be checked separately against the baseline.
 The default gain model reproduces observed MAME routing. Embedders may select
 `Audio::GainModel::SingleStage` explicitly to investigate analog attenuation;
 that alternative is not claimed to match the physical board.
+
+### Reproducible waveform metrics
+
+`tools/compare_audio.py` requires NumPy and SciPy in the analysis Python
+environment. It uses one fixed latency for the entire comparison interval,
+does not fit gain or warp time, and reports per-channel RMS error, correlation,
+SNR, and two-second window metrics. A negative lag means the runtime is early.
+Metrics are not an automatic parity verdict.
+
+```sh
+PYTHONPATH=build/python python3 tools/compare_audio.py \
+  build/mame-audio.wav build/replay-audio.wav \
+  --start 18 --end 54 --json build/audio-comparison.json
+```
+
+For device-math comparisons, capture a separate fresh baseline with
+`-samplerate 29761`, then replay its trace. This avoids conflating MAME's host
+resampler with SciPy's band-limited resampling. Native-rate device replay over
+18–54 seconds measured correlation 0.999978 on both channels, about 1.3 PCM LSB
+RMS error, and identical channel peaks (1239/1264), after one sample of latency
+alignment. The actual native-game comparison remains separate; before EEPROM
+busy timing, its audio and video were approximately seven frames early.

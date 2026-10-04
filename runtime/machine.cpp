@@ -28,7 +28,7 @@ uint64_t Machine::raster_cycle(uint64_t pixels) const {
 }
 void Machine::reset_devices() {
     audio->set_reset(true);
-    eeprom->pins(0);
+    eeprom->pins(0, cpu.cycles);
     pending_irqs = 0;
     irq3_at = UINT64_MAX;
     watchdog_at = cpu.cycles + 3ull * main_clock;
@@ -36,6 +36,7 @@ void Machine::reset_devices() {
 void Machine::reset() {
     cpu = {};
     cpu.runtime = this;
+    eeprom->reset();
     frame = hardware_cycles = 0;
     next_vblank = raster_cycle(256 * 432);
     reset_devices();
@@ -46,7 +47,7 @@ uint32_t Machine::input_word(unsigned index) const {
     if (index >= inputs.size()) return 0xffffffff;
     uint32_t value = inputs[index];
     if (index == 0) {
-        const uint32_t io = (system_inputs & 0xfe) | unsigned(eeprom->output());
+        const uint32_t io = (system_inputs & 0xfe) | unsigned(eeprom->output(cpu.cycles));
         value = (value & 0xffff) | (io << 16) | (io << 24);
     } else if (index == 1 || index == 5) {
         value = (value & 0xffff) | (uint32_t(coin_word[index == 5]) << 16);
@@ -85,7 +86,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if (a >= 0x4a0000 && a <= 0x4a0003) { watchdog_at = cpu.cycles + 3ull * main_clock; return; }
     if (a == 0x4a0004 || a == 0x4a0014) { coin_write(a == 0x4a0014, v); return; }
     if (a == 0x4a0005 || a == 0x4a0015) { auto &word = coin_word[a == 0x4a0015]; word = uint16_t((word & 0xff00) | v); return; }
-    if (a == 0x4a0013) { eeprom->pins(v); return; }
+    if (a == 0x4a0013) { eeprom->pins(v, cpu.cycles); return; }
     if (a == 0x4c0000) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
     if (a == 0x4c0001) timer_control = uint16_t((timer_control & 0xff00) | v);
     // MAME records this timer control but does not assert timer IRQ5.
