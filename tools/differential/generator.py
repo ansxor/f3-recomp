@@ -621,6 +621,97 @@ def generate_boundary_cases() -> list[RawTestCase]:
             instruction_count=len(code) // 4, is_boundary=True,
             boundary_kind="lazy_flag_transition"))
 
+    # Exhaustive ROM coverage also compiles rare instruction forms. Exercise
+    # their state transitions, aliased EAs and exception paths, not just decode.
+    for name, code in (("abcd", "c300"), ("sbcd", "8300"), ("nbcd", "4800")):
+        for src, dst in ((0, 0), (1, 0), (0x99, 1), (0x09, 1), (0x80, 0x99), (0xff, 0xff)):
+            for sr in (0, 4, 0x14, 0x1f):
+                add_case(f"{name}_{src:x}_{dst:x}_{sr:x}", code,
+                         d=[0x12340000 | src, 0x56780000 | dst, 0, 0, 0, 0, 0, 0], sr=sr)
+    for name, code in (("abcd_mem", "c308"), ("sbcd_mem", "8308"),
+                       ("abcd_a7_alias", "cf0f"), ("sbcd_a7_alias", "8f0f"),
+                       ("nbcd_a7", "4827")):
+        for sr in (0, 4, 0x14, 0x1f):
+            add_case(f"{name}_{sr:x}", code, sr=sr, memory=[
+                MemInitItem(address - 8, bytes.fromhex("0000009912345699"))
+                for address in (TEST_A0, TEST_A1, TEST_SP)])
+    for name, opcode in (("pack_reg", 0x8340), ("unpk_reg", 0x8380),
+                         ("pack_mem", 0x8348), ("unpk_mem", 0x8388),
+                         ("pack_a7_alias", 0x8f4f), ("unpk_a7_alias", 0x8f8f)):
+        for adjustment in (0, 1, 0xffff, 0x1234):
+            add_case(f"{name}_{adjustment:x}", struct.pack(">HH", opcode, adjustment).hex(),
+                     d=[0xabcdef99, 0x12345678, 0, 0, 0, 0, 0, 0], sr=0x1f,
+                     memory=[MemInitItem(address - 8, bytes.fromhex("0000000012345699"))
+                             for address in (TEST_A0, TEST_A1, TEST_SP)])
+    for name, code in (("chk_w", "4380"), ("chk_l", "4300")):
+        for bound, value in ((0, 0), (127, -1), (127, 127), (127, 128), (-1, 1), (0x7fffffff, 0x80000000)):
+            add_case(f"{name}_{bound}_{value}", code, sr=0x201f,
+                     d=[bound & 0xffffffff, value & 0xffffffff, 0, 0, 0, 0, 0, 0])
+    for name, opcode in (("movep_load_word", 0x0308), ("movep_load_long", 0x0348),
+                         ("movep_store_word", 0x0388), ("movep_store_long", 0x03c8)):
+        add_case(name, struct.pack(">HH", opcode, 0xfff8).hex(), sr=0x1f,
+                 d=[0, 0x89abcdef, 0, 0, 0, 0, 0, 0],
+                 memory=[MemInitItem(TEST_A0 - 8, bytes.fromhex("8001fe027f03aa04"))])
+    for width, opcode in ((1, 0x0ad0), (2, 0x0cd0), (4, 0x0ed0)):
+        for compared in (0, 0x80, 0xffffffff):
+            for memory_value in (0, 0x80, 0xff):
+                add_case(f"cas_{width}_{compared:x}_{memory_value:x}",
+                         struct.pack(">HH", opcode, 0x0040).hex(), sr=0x1f,
+                         d=[compared, 0x12345678, 0, 0, 0, 0, 0, 0],
+                         memory=[MemInitItem(TEST_A0, memory_value.to_bytes(width, "big"))])
+    for width, opcode in ((2, 0x0cfc), (4, 0x0efc)):
+        for left, right in ((1, 2), (0, 2), (1, 0)):
+            for same_address in (False, True):
+                add_case(f"cas2_{width}_{left}_{right}_{same_address}",
+                         struct.pack(">HHH", opcode, 0x8040,
+                                     0x80c2 if same_address else 0x90c2).hex(),
+                         d=[1, 0x12345678, 2, 0x89abcdef, 0, 0, 0, 0], sr=0x1f,
+                         memory=[MemInitItem(TEST_A0, left.to_bytes(width, "big")),
+                                 MemInitItem(TEST_A1, right.to_bytes(width, "big"))])
+    for width, opcode in ((1, 0x0e10), (2, 0x0e50), (4, 0x0e90)):
+        for extension in (0x1000, 0x1800, 0x9000, 0x9800):
+            for sr in (0x001f, 0x201f):
+                add_case(f"moves_{width}_{extension:x}_{sr:x}",
+                         struct.pack(">HH", opcode, extension).hex(), sr=sr,
+                         memory=[MemInitItem(TEST_A0, bytes.fromhex("80fe7f01"))])
+    for name, code in (("tas_reg", "4ac0"), ("tas_mem", "4ad0"), ("tas_a7", "4ae7")):
+        for value in (0, 1, 0x80, 0xff):
+            add_case(f"{name}_{value}", code, d=[value, 0, 0, 0, 0, 0, 0, 0], sr=0x1f,
+                     memory=[MemInitItem(TEST_A0, bytes([value])),
+                             MemInitItem(TEST_SP - 2, bytes([value]))])
+    for condition in range(16):
+        for suffix, extension in ((0xfc, b""), (0xfa, b"\x12\x34"), (0xfb, b"\x12\x34\x56\x78")):
+            for sr in (0x2000, 0x201f):
+                add_case(f"trapcc_{condition}_{suffix}_{sr:x}",
+                         (struct.pack(">H", 0x5000 | condition << 8 | suffix) + extension).hex(), sr=sr)
+    for name, code in (("trapv", "4e76"), ("illegal", "4afc"),
+                       ("bkpt", "4848"),
+                       ("coprocessor_absent", "f2000000")):
+        for sr in (0, 0x201f):
+            add_case(f"{name}_{sr:x}", code, sr=sr)
+
+    for code in ("48d00000", "48e00000", "4cd00000", "4cd80000", "48f000000151"):
+        add_case(f"movem_empty_mask_{code}", code, sr=0x201f,
+                 memory=[MemInitItem(SAFE_A_REGS[0], struct.pack(">I", SAFE_A_REGS[1]))])
+    for size, opcode in ((2, 0x0cfc), (4, 0x0efc)):
+        add_case(f"cas2_{size}_same_address_success",
+                 struct.pack(">HHH", opcode, 0x8040, 0x80c2).hex(),
+                 d=[1, 0x12345678, 1, 0xabcdef98, 0, 0, 0, 0], sr=0x201f,
+                 memory=[MemInitItem(SAFE_A_REGS[0], (1).to_bytes(size, "big"))])
+    for size, opcode in ((1, 0x0ac0), (2, 0x0cc0), (4, 0x0ec0)):
+        for mode in (3, 4):
+            address = SAFE_A_REGS[0] - (size if mode == 4 else 0)
+            add_case(f"cas_{size}_mode{mode}", struct.pack(">HH", opcode | mode << 3, 0x40).hex(),
+                     d=[1, 0x12345678, 0, 0, 0, 0, 0, 0], sr=0x201f,
+                     memory=[MemInitItem(address, (1).to_bytes(size, "big"))])
+    for size, opcode in ((1, 0x0e00), (2, 0x0e40), (4, 0x0e80)):
+        for mode in (3, 4):
+            for store in (False, True):
+                address = SAFE_A_REGS[0] - (size if mode == 4 else 0)
+                add_case(f"moves_{size}_mode{mode}_alias_{store}",
+                         struct.pack(">HH", opcode | mode << 3, 0x8000 | (0x800 if store else 0)).hex(),
+                         sr=0x201f, memory=[MemInitItem(address, b"\x80\xfe\x7f\x01"[:size])])
+
     return cases
 
 

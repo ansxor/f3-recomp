@@ -85,5 +85,82 @@ class ActorDiscoveryTests(unittest.TestCase):
         self.assertNotIn(0x4e2, result.instructions)
 
 
+
+class AllAlignedDiscoveryTests(unittest.TestCase):
+    def fixture(self, coverage="all_aligned"):
+        rom = bytearray(0x1000)
+        struct.pack_into(">II", rom, 0, 0x410000, 0x400)
+        config = {"discovery": {"coverage": coverage}}
+        return rom, config
+
+    def test_computed_target_with_no_pointer_literal(self):
+        rom, config = self.fixture("all_aligned")
+        # MOVE.W #$80,D0; LEA $580(PC),A0; ADDA.W D0,A0; JMP (A0).
+        # The $600 destination exists only after adding a data-supplied offset.
+        rom[0x400:0x40c] = bytes.fromhex("303c008041fa017ad0c04ed0")
+        rom[0x600:0x604] = bytes.fromhex("702a4e75")      # moveq #42, d0; rts
+        self.assertNotIn(b"\x00\x00\x06\x00", rom)
+        result = discover(bytes(rom), config)
+        self.assertIn(0x600, result.instructions)
+        self.assertIn(0x602, result.instructions)
+
+    def test_odd_offset_24bit_pointer_target(self):
+        rom, config = self.fixture("all_aligned")
+        # 24-bit target pointer 0x000700 stored at ODD byte offset 0x481
+        rom[0x481:0x484] = b"\x00\x07\x00"
+        rom[0x700:0x704] = bytes.fromhex("4e714e75")      # nop; rts
+        result = discover(bytes(rom), config)
+        self.assertIn(0x700, result.instructions)
+        self.assertIn(0x702, result.instructions)
+
+    def test_greater_than_32_straight_line_instructions_without_filter(self):
+        rom, config = self.fixture("all_aligned")
+        # 40 NOPs followed by RTS at 0x800 (41 straight-line instructions, >32 heuristic limit)
+        rom[0x800:0x850] = bytes.fromhex("4e71") * 40
+        rom[0x850:0x852] = bytes.fromhex("4e75")
+        result = discover(bytes(rom), config)
+        expected_pcs = {0x800 + i * 2 for i in range(41)}
+        self.assertTrue(expected_pcs <= result.instructions.keys())
+
+    def test_overlapping_starts(self):
+        rom, config = self.fixture("all_aligned")
+        # At 0x500: move.l #$4e714e75, d0 (6 bytes: 20 3c 4e 71 4e 75)
+        # Inside extension words: 0x502 is NOP (4e71), 0x504 is RTS (4e75)
+        rom[0x500:0x506] = bytes.fromhex("203c4e714e75")
+        result = discover(bytes(rom), config)
+        self.assertTrue({0x500, 0x502, 0x504} <= result.instructions.keys())
+
+    def test_odd_pcs_and_truncated_instruction_boundary(self):
+        rom, config = self.fixture("all_aligned")
+        # MOVE.L immediate needs six bytes; only its first word remains.
+        rom[0xffe:0x1000] = bytes.fromhex("203c")
+        result = discover(bytes(rom), config)
+        # All decoded instructions must have even PCs and even sizes within ROM bounds
+        for pc, insn in result.instructions.items():
+            self.assertEqual(pc % 2, 0, f"Odd PC found: {pc:#x}")
+            self.assertEqual(insn.size % 2, 0, f"Odd size at {pc:#x}: {insn.size}")
+            self.assertLessEqual(pc + insn.size, len(rom))
+        # Odd PC is not in instructions
+        self.assertNotIn(0x401, result.instructions)
+        # Truncated 0xffe is rejected from instructions and recorded in invalid_pcs
+        self.assertNotIn(0xffe, result.instructions)
+        self.assertIn(0xffe, result.invalid_pcs)
+        # Odd entry points in config must raise ValueError
+        with self.assertRaises(ValueError):
+            discover(bytes(rom), {"discovery": {"entry_points": [0x401]}})
+        with self.assertRaises(ValueError):
+            discover(bytes(rom), {"hooks": [{"address": 0x401}]})
+
+    def test_recursive_behavior_retained(self):
+        rom, config = self.fixture("recursive")
+        # Reachable code at 0x400: rts
+        rom[0x400:0x402] = bytes.fromhex("4e75")
+        # Unreached code at 0x900: nop; rts (valid code, but no seed/transfer reaches it)
+        rom[0x900:0x904] = bytes.fromhex("4e714e75")
+        result = discover(bytes(rom), config)
+        self.assertIn(0x400, result.instructions)
+        self.assertNotIn(0x900, result.instructions)
+        self.assertNotIn(0x902, result.instructions)
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -71,7 +71,10 @@ class Discovery:
     blocks: dict[int, list[int]]
     functions: set[int]
     report: dict
-
+    aligned_candidate_count: int = 0
+    aligned_decoded_count: int = 0
+    aligned_invalid_count: int = 0
+    invalid_pcs: list[int] = field(default_factory=list)
 
 def _parse_int_address(val: int | str) -> int:
     """Parse address given as integer or hex/decimal string."""
@@ -390,6 +393,8 @@ def _extract_trap1_tasks(rom: bytes, md: capstone.Cs) -> set[int]:
 
 def _validate_code_sequence(rom: bytes, md: capstone.Cs, target: int) -> bool:
     """Validate that target decodes as a coherent instruction sequence ending with a branch or return."""
+    if target % 2 != 0:
+        return False
     cur = target
     count = 0
     while count < 32:
@@ -397,7 +402,7 @@ def _validate_code_sequence(rom: bytes, md: capstone.Cs, target: int) -> bool:
             return False
         chunk = rom[cur:min(cur + 24, len(rom))]
         dis = list(md.disasm(chunk, cur, count=1))
-        if not dis:
+        if not dis or dis[0].id == 0 or dis[0].size % 2 != 0 or cur + dis[0].size > len(rom):
             return False
         insn = dis[0]
         base = insn.mnemonic.lower().split(".")[0]
@@ -462,9 +467,15 @@ def discover(rom: bytes, config: dict) -> Discovery:
     md = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
     if len(rom) < 1024:
         raise ValueError("ROM must contain the complete 68020 vector table.")
+    if len(rom) % 2 != 0:
+        raise ValueError(f"ROM size must be word-aligned (even): {len(rom)}")
     md.detail = True
 
     discovery_cfg = config.get("discovery", {})
+    coverage = discovery_cfg.get("coverage", "recursive")
+    if coverage not in ("recursive", "all_aligned"):
+        raise ValueError(f"Unknown discovery coverage mode: {coverage!r}")
+    exhaustive = coverage == "all_aligned"
     scan_jump_tables = discovery_cfg.get("scan_jump_tables", True)
     scan_task_traps = discovery_cfg.get("scan_task_traps", True)
     scan_callbacks = discovery_cfg.get("scan_callbacks", True)
@@ -481,6 +492,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
     # 2. Explicit config entry points
     for ep in discovery_cfg.get("entry_points", []):
         addr = _parse_int_address(ep)
+        if addr % 2 != 0:
+            raise ValueError(f"Entry point must be word-aligned (even): {addr:#x}")
         if 0 <= addr < len(rom):
             proven_seeds.add(addr)
 
@@ -488,6 +501,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
     for hook in config.get("hooks", []):
         if isinstance(hook, dict) and "address" in hook:
             addr = _parse_int_address(hook["address"])
+            if addr % 2 != 0:
+                raise ValueError(f"Hook address must be word-aligned (even): {addr:#x}")
             if 0 <= addr < len(rom):
                 proven_seeds.add(addr)
 
@@ -496,27 +511,37 @@ def discover(rom: bytes, config: dict) -> Discovery:
     for jt in discovery_cfg.get("jump_tables", []):
         if isinstance(jt, dict) and "address" in jt:
             addr = _parse_int_address(jt["address"])
-            targets = [_parse_int_address(t) for t in jt.get("targets", [])]
+            if addr % 2 != 0:
+                raise ValueError(f"Jump table address must be word-aligned (even): {addr:#x}")
+            raw_targets = [_parse_int_address(t) for t in jt.get("targets", [])]
+            for t in raw_targets:
+                if t % 2 != 0:
+                    raise ValueError(f"Jump table target must be word-aligned (even): {t:#x}")
+            targets = [t for t in raw_targets if 0 <= t < len(rom)]
             if "table" in jt:
                 table = _parse_int_address(jt["table"])
                 count = int(jt["count"])
                 if count < 0 or table < 0 or table + count * 4 > len(rom):
                     raise ValueError(f"Jump table outside ROM: {table:#x}, count {count}")
-                targets.extend(int.from_bytes(rom[p:p + 4], "big")
-                               for p in range(table, table + count * 4, 4))
+                for p in range(table, table + count * 4, 4):
+                    tgt = int.from_bytes(rom[p:p + 4], "big")
+                    if tgt % 2 == 0 and 0 <= tgt < len(rom):
+                        targets.append(tgt)
             explicit_jump_tables[addr] = targets
 
+
     # 5. Task spawn targets (trap #1)
-    if scan_task_traps:
+    if not exhaustive and scan_task_traps:
         trap1_tasks = _extract_trap1_tasks(rom, md)
         speculative_seeds.update(trap1_tasks)
 
     # 6. Validated RAM callbacks
-    if scan_callbacks:
+    if not exhaustive and scan_callbacks:
         cb_seeds = _extract_lea_move_callbacks(rom, md)
         speculative_seeds.update(cb_seeds)
-    speculative_seeds.update(_extract_script_callbacks(
-        rom, discovery_cfg.get("actor_scripts", {})))
+    if not exhaustive:
+        speculative_seeds.update(_extract_script_callbacks(
+            rom, discovery_cfg.get("actor_scripts", {})))
 
     # Combined initial worklist
     all_seeds = sorted(proven_seeds | speculative_seeds)
@@ -530,19 +555,57 @@ def discover(rom: bytes, config: dict) -> Discovery:
     # Map of all jump table targets found
     active_jump_tables: dict[int, list[int]] = dict(explicit_jump_tables)
 
+    invalid_pcs: list[int] = []
+    if exhaustive:
+        # Scan every possible instruction start independently, including starts
+        # inside another instruction's extension words. Pointer/trace seeds and
+        # a bounded coherent-sequence test cannot prove computed-jump coverage.
+        for pc in range(0, len(rom), 2):
+            chunk = rom[pc:pc + 24]
+            # Capstone can report a truncated immediate as a shorter valid
+            # instruction. Decode padded lookahead, then enforce the ROM bound.
+            if len(chunk) < 24:
+                chunk = chunk.ljust(24, b"\0")
+            insn = next(md.disasm(chunk, pc, count=1), None)
+            if (insn is None or not insn.id or insn.mnemonic.startswith("dc")
+                    or insn.size % 2 or pc + insn.size > len(rom)):
+                invalid_pcs.append(pc)
+                continue
+            instructions[pc] = insn
+            base = insn.mnemonic.split(".")[0]
+            if base in CALL_MNEMONICS | UNCOND_BRANCH_MNEMONICS | COND_BRANCH_MNEMONICS:
+                target = _resolve_target(insn, insn.operands[-1]) if insn.operands else None
+                if target is not None and 0 <= target < len(rom) and not target & 1:
+                    branch_targets[pc] = [target]
+                    if base in CALL_MNEMONICS:
+                        functions.add(target)
+                else:
+                    unresolved_branches.append({
+                        "pc": f"0x{pc:06x}", "mnemonic": insn.mnemonic,
+                        "op_str": insn.op_str, "reason": "indirect_transfer",
+                    })
+
     while worklist:
         entry = worklist.popleft()
-        if entry in instructions or entry < 0 or entry >= len(rom):
+        if entry in instructions or entry < 0 or entry >= len(rom) or entry % 2 != 0:
             continue
 
         cur_pc = entry
         while True:
-            if cur_pc < 0 or cur_pc >= len(rom) or cur_pc in instructions:
+            if cur_pc < 0 or cur_pc >= len(rom) or cur_pc in instructions or cur_pc % 2 != 0:
                 break
 
             chunk = rom[cur_pc:min(cur_pc + 24, len(rom))]
+            if len(chunk) < 24:
+                chunk = chunk.ljust(24, b"\0")
             dis = list(md.disasm(chunk, cur_pc, count=1))
-            if not dis or dis[0].id == 0:
+            if (
+                not dis
+                or dis[0].id == 0
+                or dis[0].mnemonic.startswith("dc")
+                or dis[0].size % 2 != 0
+                or cur_pc + dis[0].size > len(rom)
+            ):
                 unresolved_branches.append({
                     "pc": f"0x{cur_pc:06x}",
                     "mnemonic": "invalid",
@@ -564,7 +627,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                 targets = active_jump_tables[cur_pc]
                 branch_targets[cur_pc] = targets
                 for t in targets:
-                    if 0 <= t < len(rom):
+                    if 0 <= t < len(rom) and t % 2 == 0:
                         if base_mnem in CALL_MNEMONICS:
                             functions.add(t)
                         if t not in instructions:
@@ -583,16 +646,16 @@ def discover(rom: bytes, config: dict) -> Discovery:
                     op = insn.operands[-1]
                     target = _resolve_target(insn, op)
                     if target is None and scan_jump_tables:
-                        # Try conservative jump table scan
                         if op.address_mode in (M68K_AM_PCI_INDEX_8_BIT_DISP, M68K_AM_PCI_INDEX_BASE_DISP):
                             scanned = _scan_pci_index_table(rom, md, insn, op)
                             if scanned:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
                                 for t in scanned:
-                                    functions.add(t)
-                                    if t not in instructions:
-                                        worklist.append(t)
+                                    if t % 2 == 0:
+                                        functions.add(t)
+                                        if t not in instructions:
+                                            worklist.append(t)
                                 cur_pc = fallthrough
                                 continue
                         elif op.address_mode in (M68K_AM_PC_MEMI_PRE_INDEX, M68K_AM_PC_MEMI_POST_INDEX):
@@ -601,13 +664,14 @@ def discover(rom: bytes, config: dict) -> Discovery:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
                                 for t in scanned:
-                                    functions.add(t)
-                                    if t not in instructions:
-                                        worklist.append(t)
+                                    if t % 2 == 0:
+                                        functions.add(t)
+                                        if t not in instructions:
+                                            worklist.append(t)
                                 cur_pc = fallthrough
                                 continue
 
-                if target is not None and 0 <= target < len(rom):
+                if target is not None and 0 <= target < len(rom) and target % 2 == 0:
                     functions.add(target)
                     branch_targets[cur_pc] = [target]
                     if target not in instructions:
@@ -640,7 +704,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                 if insn.operands:
                     target = _resolve_target(insn, insn.operands[-1])
 
-                if target is not None and 0 <= target < len(rom):
+                if target is not None and 0 <= target < len(rom) and target % 2 == 0:
                     branch_targets[cur_pc] = [target]
                     if target not in instructions:
                         worklist.append(target)
@@ -652,7 +716,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                         "reason": "indirect_branch",
                     })
 
-                if fallthrough not in instructions:
+                if fallthrough not in instructions and fallthrough % 2 == 0:
                     worklist.append(fallthrough)
                 break
 
@@ -669,7 +733,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
                                 for t in scanned:
-                                    if t not in instructions:
+                                    if t % 2 == 0 and t not in instructions:
                                         worklist.append(t)
                                 break
                         elif op.address_mode in (M68K_AM_PC_MEMI_PRE_INDEX, M68K_AM_PC_MEMI_POST_INDEX):
@@ -678,11 +742,11 @@ def discover(rom: bytes, config: dict) -> Discovery:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
                                 for t in scanned:
-                                    if t not in instructions:
+                                    if t % 2 == 0 and t not in instructions:
                                         worklist.append(t)
                                 break
 
-                if target is not None and 0 <= target < len(rom):
+                if target is not None and 0 <= target < len(rom) and target % 2 == 0:
                     branch_targets[cur_pc] = [target]
                     if target not in instructions:
                         worklist.append(target)
@@ -705,7 +769,6 @@ def discover(rom: bytes, config: dict) -> Discovery:
 
             else:
                 cur_pc += insn.size
-
     # Form clean basic blocks with splitting at all entry leaders
     all_pcs = sorted(instructions.keys())
     pc_set = set(all_pcs)
@@ -780,19 +843,43 @@ def discover(rom: bytes, config: dict) -> Discovery:
             "classification": "contains_decoded_code" if bank_pcs else "unreached_or_data",
         })
 
+    if not exhaustive:
+        invalid_pcs = [
+            int(b["pc"], 16) for b in unresolved_branches
+            if b.get("reason") == "decode_failure"
+        ]
+    aligned_candidate_count = len(rom) // 2 if exhaustive else 0
+    aligned_decoded_count = len(instructions)
+    aligned_invalid_count = len(invalid_pcs)
+
     report = {
-        "coverage_basis": "Unique bytes reachable from vector/config and heuristic seeds, not a proof that undiscovered bytes are data.",
+        "coverage_mode": coverage,
+        "coverage_basis": (
+            "Exhaustive independent decode at every word-aligned ROM offset; "
+            "includes overlapping starts and data, not a reachability classification."
+            if exhaustive else
+            "Unique bytes reachable from vector/config and heuristic seeds, not a proof that undiscovered bytes are data."
+        ),
         "summary": {
             "rom_size_bytes": len(rom),
             "total_instructions": len(instructions),
             "total_blocks": len(blocks),
             "total_functions": len(functions),
+            "potential_entries": len(instructions),
             "code_bytes": total_code_bytes,
             "coverage_pct": round(coverage_ratio * 100.0, 3),
+            "aligned_candidate_count": aligned_candidate_count,
+            "aligned_decoded_count": aligned_decoded_count,
+            "aligned_invalid_count": aligned_invalid_count,
+            "invalid_pcs_count": len(invalid_pcs),
             "proven_seeds_count": len(proven_seeds),
             "speculative_seeds_count": len(speculative_seeds),
             "unresolved_branches_count": len(unresolved_branches),
         },
+        "aligned_candidate_count": aligned_candidate_count,
+        "aligned_decoded_count": aligned_decoded_count,
+        "aligned_invalid_count": aligned_invalid_count,
+        "invalid_pcs": [f"0x{s:06x}" for s in sorted(invalid_pcs)],
         "proven_seeds": [f"0x{s:06x}" for s in sorted(proven_seeds)],
         "speculative_seeds": [f"0x{s:06x}" for s in sorted(speculative_seeds)],
         "unresolved_branches": unresolved_branches,
@@ -807,4 +894,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
         blocks=blocks,
         functions=functions,
         report=report,
+        aligned_candidate_count=aligned_candidate_count,
+        aligned_decoded_count=aligned_decoded_count,
+        aligned_invalid_count=aligned_invalid_count,
+        invalid_pcs=sorted(invalid_pcs),
     )

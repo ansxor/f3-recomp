@@ -92,7 +92,7 @@ def _pc_base(insn: CsInsn) -> int:
     """PC-relative EA base is its extension word, after any operand prefix."""
     opcode = int.from_bytes(insn.bytes[:2], "big")
     mnem = _get_base_mnemonic(insn)
-    if mnem.startswith("bf") or mnem in ("cmp2", "chk2"):
+    if mnem.startswith("bf") or mnem in ("cmp2", "chk2", "cas", "moves"):
         return insn.address + 4
     if mnem == "movem" or (mnem in ("mulu", "muls", "divu", "divs", "divul", "divsl") and _get_size(insn) == 4):
         return insn.address + 4
@@ -352,6 +352,18 @@ def lower(insn: CsInsn) -> list[str] | None:
 
     Returns None if the instruction is unsupported (signaling fallback to Musashi).
     """
+    opcode = int.from_bytes(insn.bytes[:2], "big")
+    # The board's EC020 has no coprocessor. Capstone can give F-line bytes
+    # misleading integer mnemonics; the opcode, not that mnemonic, selects
+    # the unimplemented-coprocessor exception on this CPU.
+    if opcode >> 12 in (10, 15):
+        vector = 10 if opcode >> 12 == 10 else 11
+        return ["f3_cc_flush(cpu);",
+                f"f3_exception(cpu, {vector}, 0x{insn.address:x}u);", "return;"]
+    if opcode == 0x4afc or opcode & 0xfff8 == 0x4848:
+        # BKPT without external instruction substitution takes illegal opcode.
+        return ["f3_cc_flush(cpu);",
+                f"f3_exception(cpu, 4, 0x{insn.address:x}u);", "return;"]
     if getattr(insn, 'id', 0) == 0:
         return None
     try:
@@ -362,6 +374,227 @@ def lower(insn: CsInsn) -> list[str] | None:
     size = _get_size(insn)
     next_pc = insn.address + insn.size
     cycles = instruction_cycles(insn, _pc_base, _ea_extension_bytes)
+
+    if mnem == "reset":
+        return ["f3_cc_flush(cpu);",
+                f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8, 0x{insn.address:x}u); return; }}",
+                "f3_reset_devices(cpu);",
+                f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "chk":
+        ea = _decode_ea(insn, ops[0], size, "chk", post_inc_on_read=True)
+        if size not in (2, 4) or not ea or (ea.is_reg and ea.reg_type != "d"):
+            return None
+        register = (opcode >> 9) & 7
+        return ea.ea_setup + ea.read_stmts + [
+            f"int{size * 8}_t value = (int{size * 8}_t)cpu->d[{register}];",
+            f"int{size * 8}_t bound = (int{size * 8}_t){ea.val_expr};",
+            "f3_cc_flush(cpu);",
+            "cpu->sr = (cpu->sr & ~0x1fu) | (cpu->sr & (F3_CCR_X | F3_CCR_N)) | (value == 0 ? F3_CCR_Z : 0u);",
+            "if (value < 0 || value > bound) {",
+            "    cpu->sr = (cpu->sr & ~F3_CCR_N) | (value < 0 ? F3_CCR_N : 0u);",
+            f"    f3_exception(cpu, 6, 0x{next_pc:x}u); return;",
+            "}",
+            f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "nbcd":
+        ea = _decode_ea(insn, ops[0], 1, "nbcd")
+        if not ea or ea.is_imm or (ea.is_reg and ea.reg_type != "d"):
+            return None
+        stmts = ea.ea_setup + ea.read_stmts + [
+            "f3_cc_flush(cpu);",
+            f"uint32_t result = (0x9au - {ea.val_expr} - ((cpu->sr & F3_CCR_X) != 0)) & 0xffu;",
+            "if (result != 0x9au) {",
+            "    uint32_t overflow = ~result;",
+            "    if ((result & 0xfu) == 0xau) result = (result & 0xf0u) + 0x10u;",
+            "    result &= 0xffu;",
+            "    cpu->sr = (cpu->sr & ~0x1fu) | F3_CCR_X | F3_CCR_C |",
+            "        (result & 0x80u ? F3_CCR_N : 0u) | (overflow & result & 0x80u ? F3_CCR_V : 0u) |",
+            "        (result == 0 ? (cpu->sr & F3_CCR_Z) : 0u);",
+        ]
+        if ea.is_reg:
+            stmts += [f"    cpu->d[{ea.reg_num}] = (cpu->d[{ea.reg_num}] & 0xffffff00u) | result;"]
+        else:
+            stmts += [f"    f3_write8(cpu, {ea.ea_expr}, (uint8_t)result);"]
+        return stmts + [
+            "} else {",
+            "    cpu->sr = (cpu->sr & ~0x1fu) | (cpu->sr & F3_CCR_Z) | F3_CCR_N;",
+            "}",
+        ] + ea.post_step + [f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem in ("abcd", "sbcd", "pack", "unpk"):
+        # Capstone labels memory UNPK as SBCD; the primary word is unambiguous.
+        form = opcode & 0xf1f0
+        source, destination = opcode & 7, (opcode >> 9) & 7
+        memory = bool(opcode & 8)
+        source_step = 2 if source == 7 else 1
+        destination_step = 2 if destination == 7 else 1
+        stmts = []
+        if memory:
+            stmts += [f"cpu->a[{source}] -= {source_step}u;",
+                      f"uint32_t src = f3_read8(cpu, cpu->a[{source}]);"]
+        else:
+            stmts += [f"uint32_t src = cpu->d[{source}];"]
+        if form in (0xc100, 0x8100):
+            if memory:
+                stmts += [f"cpu->a[{destination}] -= {destination_step}u;",
+                          f"uint32_t dst = f3_read8(cpu, cpu->a[{destination}]);"]
+            else:
+                stmts += [f"uint32_t dst = cpu->d[{destination}];"]
+            add = form == 0xc100
+            stmts += [
+                "f3_cc_flush(cpu);",
+                "uint32_t extend = (cpu->sr & F3_CCR_X) != 0;",
+                ("uint32_t result = (dst & 0xfu) + (src & 0xfu) + extend;" if add else
+                 "uint32_t result = (dst & 0xfu) - (src & 0xfu) - extend;"),
+                "uint32_t overflow = ~result;",
+                f"if (result > 9u) result {'+=' if add else '-='} 6u;",
+                f"result += (dst & 0xf0u) {'+' if add else '-'} (src & 0xf0u);",
+                "uint32_t carry = result > 0x99u;",
+                f"if (carry) result {'-=' if add else '+='} 0xa0u;",
+                "result &= 0xffu;",
+                "cpu->sr = (cpu->sr & ~0x1fu) | (carry ? F3_CCR_X | F3_CCR_C : 0u) |",
+                "    (result & 0x80u ? F3_CCR_N : 0u) | (overflow & result & 0x80u ? F3_CCR_V : 0u) |",
+                "    (result == 0 ? (cpu->sr & F3_CCR_Z) : 0u);",
+            ]
+            if memory:
+                stmts += [f"f3_write8(cpu, cpu->a[{destination}], (uint8_t)result);"]
+            else:
+                stmts += [f"cpu->d[{destination}] = (cpu->d[{destination}] & 0xffffff00u) | result;"]
+            next_pc = insn.address + 2
+        elif form in (0x8140, 0x8180):
+            adjustment = int.from_bytes(insn.bytes[2:4], "big")
+            if form == 0x8140:
+                if memory:
+                    stmts += [f"cpu->a[{source}] -= {source_step}u;",
+                              f"src = (src << 8) | f3_read8(cpu, cpu->a[{source}]);"]
+                stmts += [f"src += 0x{adjustment:x}u;",
+                          "uint32_t result = ((src >> 4) & 0xf0u) | (src & 0xfu);"]
+                width = 1
+            else:
+                stmts += [f"uint32_t result = ((((src << 4) & 0xf00u) | (src & 0xfu)) + 0x{adjustment:x}u) & 0xffffu;"]
+                width = 2
+            if memory:
+                for byte in range(width):
+                    stmts += [f"cpu->a[{destination}] -= {destination_step}u;",
+                              f"f3_write8(cpu, cpu->a[{destination}], (uint8_t)(result >> {(width - 1 - byte) * 8}));"]
+            else:
+                stmts += [f"cpu->d[{destination}] = (cpu->d[{destination}] & 0x{(~MASK_MAP[width]) & 0xffffffff:x}u) | result;"]
+            next_pc = insn.address + 4
+        else:
+            return None
+        return stmts + [f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "movep":
+        register = (opcode >> 9) & 7
+        address = opcode & 7
+        width = 4 if opcode & 0x40 else 2
+        displacement = int.from_bytes(insn.bytes[2:4], "big", signed=True)
+        stmts = [f"uint32_t ea = cpu->a[{address}] + 0x{displacement & 0xffffffff:x}u;"]
+        if opcode & 0x80:
+            for byte in range(width):
+                stmts.append(f"f3_write8(cpu, ea + {byte * 2}u, (uint8_t)(cpu->d[{register}] >> {(width - 1 - byte) * 8}));")
+        else:
+            # Separate statements preserve the peripheral bus-read order.
+            stmts.append("uint32_t value = 0;")
+            for byte in range(width):
+                stmts.append(f"value = (value << 8) | f3_read8(cpu, ea + {byte * 2}u);")
+            high = f"(cpu->d[{register}] & 0xffff0000u) | " if width == 2 else ""
+            stmts.append(f"cpu->d[{register}] = {high}value;")
+        return stmts + [f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "moves":
+        extension = int.from_bytes(insn.bytes[2:4], "big")
+        store = bool(extension & 0x800)
+        register = (extension >> 12) & 7
+        field = f"cpu->{'a' if extension & 0x8000 else 'd'}[{register}]"
+        ea = _decode_ea(insn, ops[1 if store else 0], size, "moves")
+        if not ea or not ea.is_mem:
+            return None
+        stmts = ["f3_cc_flush(cpu);",
+                 f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8, 0x{insn.address:x}u); return; }}"]
+        stmts += ea.ea_setup + [f"uint32_t ea = {ea.ea_expr};"] + ea.post_step
+        if store:
+            stmts.append(f"f3_write{size * 8}(cpu, ea, (uint{size * 8}_t){field});")
+        else:
+            stmts.append(f"uint32_t value = f3_read{size * 8}(cpu, ea);")
+            if extension & 0x8000:
+                stmts.append(f"{field} = (uint32_t)(int32_t)(int{size * 8}_t)value;")
+            else:
+                stmts.append(f"{field} = ({field} & 0x{(~MASK_MAP[size]) & 0xffffffff:x}u) | value;")
+        # EC020 memory-to-register and long register-to-memory charge two extra.
+        extra = 2 if not store or size == 4 else 0
+        return stmts + [f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles} + {extra}u;"]
+
+    if mnem == "cas":
+        extension = int.from_bytes(insn.bytes[2:4], "big")
+        compare, update = extension & 7, (extension >> 6) & 7
+        ea = _decode_ea(insn, ops[2], size, "cas")
+        if not ea or not ea.is_mem:
+            return None
+        stmts = ea.ea_setup + [f"uint32_t ea = {ea.ea_expr};"] + ea.post_step + [
+            f"uint32_t value = f3_read{size * 8}(cpu, ea);",
+            f"uint32_t compared = cpu->d[{compare}] & 0x{MASK_MAP[size]:x}u;",
+            f"uint32_t result = (value - compared) & 0x{MASK_MAP[size]:x}u;",
+            "f3_cc_flush(cpu);",
+            f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = compared; cpu->cc_dst = value; cpu->cc_result = result; cpu->cc_width = {size};",
+            "if (result == 0) {",
+            "    cpu->cycles += 3u;",
+            f"    f3_write{size * 8}(cpu, ea, (uint{size * 8}_t)cpu->d[{update}]);",
+            "} else {",
+            f"    cpu->d[{compare}] = (cpu->d[{compare}] & 0x{(~MASK_MAP[size]) & 0xffffffff:x}u) | value;",
+            "}",
+            f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return stmts
+
+    if mnem == "cas2":
+        extensions = [int.from_bytes(insn.bytes[pos:pos + 2], "big") for pos in (2, 4)]
+        stmts = []
+        for index, extension in enumerate(extensions):
+            bank = "a" if extension & 0x8000 else "d"
+            stmts += [
+                f"uint32_t ea{index} = cpu->{bank}[{(extension >> 12) & 7}];",
+                f"uint32_t value{index} = f3_read{size * 8}(cpu, ea{index});",
+                f"uint32_t compare{index} = cpu->d[{extension & 7}] & 0x{MASK_MAP[size]:x}u;",
+                f"uint32_t result{index} = (value{index} - compare{index}) & 0x{MASK_MAP[size]:x}u;",
+            ]
+        stmts += [
+            "f3_cc_flush(cpu);",
+            f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_width = {size};",
+            "cpu->cc_src = result0 ? compare0 : compare1;",
+            "cpu->cc_dst = result0 ? value0 : value1;",
+            "cpu->cc_result = result0 ? result0 : result1;",
+            "if (result0 == 0 && result1 == 0) {",
+            "    cpu->cycles += 3u;",
+        ]
+        for index, extension in enumerate(extensions):
+            stmts.append(f"    f3_write{size * 8}(cpu, ea{index}, (uint{size * 8}_t)cpu->d[{(extension >> 6) & 7}]);")
+        stmts.append("} else {")
+        for index, extension in enumerate(extensions):
+            field = f"cpu->d[{extension & 7}]"
+            # Retain the pinned core's CAS2.W address-bank sign-extension rule.
+            value = (f"(uint32_t)(int32_t)(int16_t)value{index}"
+                     if size == 2 and extension & 0x8000 else
+                     f"({field} & 0x{(~MASK_MAP[size]) & 0xffffffff:x}u) | value{index}")
+            stmts.append(f"    {field} = {value};")
+        return stmts + ["}", f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "tas":
+        ea = _decode_ea(insn, ops[0], 1, "tas")
+        if not ea or ea.is_imm or (ea.is_reg and ea.reg_type != "d"):
+            return None
+        return ea.ea_setup + ea.read_stmts + [
+            f"uint32_t original = {ea.val_expr};",
+            "f3_cc_flush(cpu);",
+            "cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = original; cpu->cc_width = 1;",
+        ] + _gen_write(ea, "(original | 0x80u)", 1) + [
+            f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+
+    if mnem == "trapv" or (mnem.startswith("trap") and mnem[4:] in COND_MAP):
+        condition = 9 if mnem == "trapv" else COND_MAP[mnem[4:]]
+        return ["f3_cc_flush(cpu);",
+                f"if (f3_eval_cond(cpu, {condition})) {{ f3_exception(cpu, 7, 0x{next_pc:x}u); return; }}",
+                f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
 
     if mnem == "movec":
         ext = int.from_bytes(insn.bytes[2:4], "big")
@@ -744,7 +977,7 @@ def lower(insn: CsInsn) -> list[str] | None:
                 if not mem_ea or not mem_ea.is_mem:
                     return None
                 stmts.extend(mem_ea.ea_setup)
-                stmts.append(f"uint32_t movem_addr = {mem_ea.ea_expr};")
+                stmts.append(f"uint32_t movem_addr = {mem_ea.ea_expr};" if mask else f"(void)({mem_ea.ea_expr});")
                 # Hardware stores D0..D7, then A0..A7
                 for bit in range(16):
                     if (mask >> bit) & 1:
@@ -781,7 +1014,7 @@ def lower(insn: CsInsn) -> list[str] | None:
                 if not mem_ea or not mem_ea.is_mem:
                     return None
                 stmts.extend(mem_ea.ea_setup)
-                stmts.append(f"uint32_t movem_addr = {mem_ea.ea_expr};")
+                stmts.append(f"uint32_t movem_addr = {mem_ea.ea_expr};" if mask else f"(void)({mem_ea.ea_expr});")
                 for bit in range(16):
                     if (mask >> bit) & 1:
                         if movem_size == 2:
@@ -811,8 +1044,8 @@ def lower(insn: CsInsn) -> list[str] | None:
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
 
-    # 14. TST / TAS: flags describe the original operand, before setting bit 7.
-    if mnem in ('tst', 'tas'):
+    # 14. TST
+    if mnem == 'tst':
         if not ops:
             return None
         src_ea = _decode_ea(insn, ops[0], size, "tst")
@@ -821,8 +1054,6 @@ def lower(insn: CsInsn) -> list[str] | None:
         stmts = list(src_ea.ea_setup)
         stmts.extend(src_ea.read_stmts)
         stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = {src_ea.val_expr}; cpu->cc_width = {size};")
-        if mnem == 'tas':
-            stmts.extend(_gen_write(src_ea, f"({src_ea.val_expr} | 0x80u)", 1))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts

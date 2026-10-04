@@ -74,15 +74,19 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
 
 ### Discovery and execution contracts
 
-- Vector/config entry points, direct branches/calls, bounded jump-table
-  heuristics, task-entry and callback scans discover code. Reports distinguish
-  explicit/vector seeds from heuristic seeds. Unreached bytes are **not**
-  assumed to be data. The emitted `coverage.json` reports current instruction,
-  byte, function-candidate, seed, and unresolved-transfer counts. These are
-  discovery counts, not a proof of complete executable-code coverage.
-- Every decoded instruction PC is registered, including block interiors.
-  Native blocks have at most 32 instructions; emulated calls use the guest
-  stack, not recursive host calls. ABI v2's `dispatch_deadline` ends a block
+- Japan uses `[discovery].coverage = "all_aligned"`: independently decode every
+  even ROM offset, including instruction starts inside another instruction's
+  extension words. Computed jumps, odd-offset script pointers, and long
+  straight-line routines do not depend on observed-PC lists or pointer scans.
+  This deliberately includes data that resembles code; it is not a
+  reachability classifier. Decoder rejections and unsupported lowerings remain
+  explicit in `coverage.json` and `lowering.json`, never silently accepted.
+- Every decoded instruction PC is registered, including overlapping entries.
+  All-aligned blocks group at most 32 word positions in a 64-byte ROM page;
+  execution follows the decoded instruction length, not the next candidate
+  word. Known illegal/A-line/F-line words use native architectural exception
+  handlers, not interpretation. Emulated calls use the guest stack, not
+  recursive host calls. ABI v2's `dispatch_deadline` ends a block
   at the first instruction boundary reaching a scheduled event. Lowering the
   IRQ mask invalidates the deadline so pending interrupts are reconsidered.
   Generated C and headers reject incompatible runtime ABI versions.
@@ -104,9 +108,10 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   writes, and reset-line changes. This prevents main-block interior accesses
   from becoming visible to earlier sound execution without adding CPU cycles,
   forcing single-instruction blocks, or delivering IRQs inside an instruction.
-- TOML `[discovery].entry_points` accepts observed runtime PCs.
-  `[[discovery.jump_tables]]` records a transfer `address` and its `targets`,
-  or a ROM `table` address and `count` of big-endian longword destinations.
+- The optional `coverage = "recursive"` mode retains vector/config roots and
+  bounded table/task/callback scans for other configurations. Its explicit
+  `entry_points` and `[[discovery.jump_tables]]` (`address` plus `targets`,
+  or `table` plus `count`) are not used to establish Japan coverage.
   `[discovery.actor_scripts]` describes bytecode operand lengths, native callback
   commands, and script jump/call/return commands. Script roots include immediate
   stores and indexed PC-relative pointer arrays, including register-staged loads
@@ -119,6 +124,24 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   code calls `void symbol(f3_cpu *)` before the instruction with canonical SR.
   Changing PC or stopping the CPU skips that instruction. Link your hook
   implementation explicitly.
+
+### Strict seeded gameplay regression
+
+```sh
+cmake --build build --target f3rt-gameplay-regression -j 4
+python3 tools/run_gameplay_regression.py --rom-dir ../roms/landmakr \
+  --frames 40000 --seeds 1 2 3 4 5 6 7 8
+```
+
+The headless executable runs the real machine, renderer and sound hardware.
+Each seed starts cold, inserts a coin at frames 700/720, pulses start every
+90 frames during 800–2399, then applies the crash reproducer's 64-bit LCG
+direction/Z/X/C schedule every six frames from frame 1200. It rejects fallback,
+CPU halt, and execution errors, reporting the seed, frame and CPU state.
+`--binary` selects an isolated build; the executable's `--seed`, `--frames`,
+`--dump-dir` and `--surface` options reproduce individual runs and captures.
+Passing seeds are sampled gameplay evidence, not proof that every possible
+game state has executed.
 
 ## Instruction-level differential self-test
 

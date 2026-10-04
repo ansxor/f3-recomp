@@ -11,6 +11,7 @@ import json
 import re
 
 from .emitter import lower
+from .timing import BASE_CYCLES
 
 _RUNTIME_ABI_VERSION = 2
 
@@ -32,29 +33,40 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             raise ValueError(f"duplicate hook at {pc:#x}")
         hooks[pc] = symbol
 
-    # Discovery can revisit block interiors. Deduplicate and split at any
-    # discontinuity; a decoded PC is never silently omitted from the table.
-    seen = set()
-    blocks = []
-    for _, pcs in sorted(discovery.blocks.items()):
-        block = []
-        for pc in pcs:
-            if pc in seen:
-                if block:
+    exhaustive = config.get("discovery", {}).get("coverage") == "all_aligned"
+    if exhaustive:
+        # Independent decodes overlap: an extension word can also be a computed
+        # jump destination. Pack by word-address page, not by assumed instruction
+        # boundaries. Every fallthrough below names its actual successor label.
+        pages = {}
+        page_bytes = max_block_instructions * 2
+        for pc in sorted(discovery.instructions):
+            pages.setdefault(pc // page_bytes, []).append(pc)
+        blocks = list(pages.values())
+    else:
+        # Discovery can revisit block interiors. Deduplicate and split at any
+        # discontinuity; a decoded PC is never silently omitted from the table.
+        seen = set()
+        blocks = []
+        for _, pcs in sorted(discovery.blocks.items()):
+            block = []
+            for pc in pcs:
+                if pc in seen:
+                    if block:
+                        blocks.append(block)
+                        block = []
+                    continue
+                if block and (len(block) >= max_block_instructions or
+                              block[-1] + discovery.instructions[block[-1]].size != pc):
                     blocks.append(block)
                     block = []
-                continue
-            if block and (len(block) >= max_block_instructions or
-                          block[-1] + discovery.instructions[block[-1]].size != pc):
+                block.append(pc)
+                seen.add(pc)
+            if block:
                 blocks.append(block)
-                block = []
-            block.append(pc)
-            seen.add(pc)
-        if block:
-            blocks.append(block)
-    for pc in sorted(discovery.instructions.keys() - seen):
-        blocks.append([pc])
-    blocks.sort(key=lambda block: block[0])
+        for pc in sorted(discovery.instructions.keys() - seen):
+            blocks.append([pc])
+        blocks.sort(key=lambda block: block[0])
 
     abi_guard = (f'#if F3RT_ABI_VERSION != {_RUNTIME_ABI_VERSION}\n'
                  '#error "Generated program and f3rt ABI versions differ"\n'
@@ -74,6 +86,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         name = f'f3_native_{pcs[0]:06x}'
         declarations.append(f'extern void {name}(f3_cpu *cpu);\n')
         table.extend((pc, name) for pc in pcs)
+        block_pcs = set(pcs)
         lines = [f'void {name}(f3_cpu *cpu) {{', '    switch (cpu->pc) {']
         lines.extend(f'    case 0x{pc:08x}u: goto L_{pc:06x};' for pc in pcs)
         lines.extend(['    default: return;', '    }'])
@@ -93,7 +106,14 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             else:
                 supported[insn.mnemonic] += 1
                 lines.extend('    ' + statement for statement in statements)
-                if position + 1 < len(pcs):
+                if exhaustive:
+                    next_pc = pc + insn.size
+                    if next_pc in block_pcs:
+                        lines.append(f'    if (cpu->pc != 0x{next_pc:08x}u || cpu->stopped || cpu->halted || cpu->cycles >= cpu->dispatch_deadline) {{ f3_cc_flush(cpu); return; }}')
+                        lines.append(f'    goto L_{next_pc:06x};')
+                    else:
+                        lines.extend(['    f3_cc_flush(cpu);', '    return;'])
+                elif position + 1 < len(pcs):
                     next_pc = pcs[position + 1]
                     # Yield at the first instruction boundary reaching a runtime
                     # event, and never fall through after a control transfer.
@@ -107,10 +127,30 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             source_names.append(filename)
             shard = []
 
+    exception_entries = Counter()
+    if exhaustive:
+        for pc in discovery.invalid_pcs:
+            opcode = int.from_bytes(rom[pc:pc + 2], "big")
+            vector = (10 if opcode >> 12 == 10 else
+                      11 if opcode >> 12 == 15 else
+                      4 if not BASE_CYCLES[opcode] and opcode != 0x4e70 else None)
+            if vector is not None:
+                # The pinned opcode metadata defaults unassigned primary words
+                # to zero. RESET is the only non-F-line valid zero-base opcode.
+                # A valid primary word rejected on its extensions is NOT an
+                # illegal-opcode proof: leave that decoder failure explicit.
+                table.append((pc, f'f3_rom_exception_{vector}'))
+                exception_entries[vector] += 1
+
     table.sort()
     if not table:
         raise ValueError("discovery produced no instructions")
     program = preamble + '#include "program.h"\n' + ''.join(declarations)
+    for vector in sorted(exception_entries):
+        program += (f'static void f3_rom_exception_{vector}(f3_cpu *cpu) {{\n'
+                    '    f3_cc_flush(cpu);\n'
+                    f'    f3_exception(cpu, {vector}, cpu->pc);\n'
+                    '}\n')
     program += 'static const f3_block translated_blocks[] = {\n'
     program += ''.join(f'    {{ 0x{pc:08x}u, {name} }},\n' for pc, name in table)
     program += ('};\nint f3_generated_register(f3_cpu *cpu) {\n'
@@ -129,12 +169,18 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     # Used by runtime loader, not embedded in generated C or committed.
     (output / 'program.bin').write_bytes(rom)
     report = {
-        "decoded_instructions": len(table), "native_instructions": sum(supported.values()),
+        "decoded_instructions": len(discovery.instructions),
+        "registered_entries": len(table),
+        "native_instructions": sum(supported.values()),
+        "exception_entries": dict(sorted(exception_entries.items())),
+        "undecoded_valid_primary_entries": (
+            len(discovery.invalid_pcs) - sum(exception_entries.values()) if exhaustive else 0),
         "fallback_instructions": sum(unsupported.values()), "native_blocks": len(blocks),
         "native_mnemonics": dict(sorted(supported.items())),
         "fallback_mnemonics": dict(sorted(unsupported.items())),
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
         "runtime_abi_version": _RUNTIME_ABI_VERSION,
+        "coverage_mode": "all_aligned" if exhaustive else "recursive",
         "max_block_instructions": max_block_instructions,
         "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
     }
