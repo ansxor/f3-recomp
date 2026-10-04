@@ -33,7 +33,7 @@ subscription = emu.add_machine_frame_notifier(function()
         dump(base .. "-ram.bin", 0x400000, 0x41ffff)
         dump(base .. "-palette.bin", 0x440000, 0x447fff)
         dump(base .. "-video.bin", 0x600000, 0x63ffff)
-        log:write(string.format("%d\t%d\t%08x\t%04x", frame, screen.frame_number, register("PC"), register("SR")))
+        log:write(string.format("%d\t%d\t%08x\t%04x", frame, screen:frame_number(), register("PC"), register("SR")))
         for i = 0, 7 do log:write(string.format("\t%08x", register("D" .. i))) end
         for i = 0, 7 do log:write(string.format("\t%08x", register("A" .. i))) end
         log:write("\n")

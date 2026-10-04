@@ -312,7 +312,7 @@ def _validate_code_sequence(rom: bytes, md: capstone.Cs, target: int) -> bool:
 
 
 def _extract_lea_move_callbacks(rom: bytes, md: capstone.Cs) -> set[int]:
-    """Scan for callbacks registered via 'lea target(pc), aX; move.l aX, (aY)'."""
+    """Find callback stores and register-linked return continuations."""
     callbacks = set()
     for i in range(0, len(rom) - 8, 2):
         w1 = (rom[i] << 8) | rom[i + 1]
@@ -322,13 +322,13 @@ def _extract_lea_move_callbacks(rom: bytes, md: capstone.Cs) -> set[int]:
             target = i + 2 + disp
             if 0x400 <= target < len(rom) and target % 2 == 0:
                 w2 = (rom[i + 4] << 8) | rom[i + 5]
-                # move.l aX, ...
-                if (w2 & 0xF000) == 0x2000:
-                    src_mode = (w2 >> 3) & 7
-                    src_reg = w2 & 7
-                    if src_mode == 1 and src_reg == reg:
-                        if _validate_code_sequence(rom, md, target):
-                            callbacks.add(target)
+                # The boot ROM also uses LEA return(pc),An; JMP routine instead
+                # of BSR/RTS during RAM tests before a working stack exists.
+                stores_callback = ((w2 & 0xF000) == 0x2000 and
+                                   ((w2 >> 3) & 7) == 1 and (w2 & 7) == reg)
+                register_link = (w2 & 0xffc0) == 0x4ec0
+                if (stores_callback or register_link) and _validate_code_sequence(rom, md, target):
+                    callbacks.add(target)
     return callbacks
 
 
