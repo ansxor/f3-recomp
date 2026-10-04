@@ -1,33 +1,45 @@
-IN PROGRESS
+DONE
 
 # Phase 4 — Land Maker 1v1 rollback netplay
 
-Worktree `wt/netplay`, branch `netplay`, based on `checkpoint-5-sound-default`. Local commits only; no pushes or edits to integration/other worktrees. Snapshot, rollback, UDP relay, client integration and impaired-network acceptance are not yet verified. Prior phase evidence follows; it is not netplay acceptance.
+Worktree `wt/netplay`, branch `netplay`, based on `checkpoint-5-sound-default`.
+Implementation, eight-seed full-length impaired acceptance, snapshot proof,
+frontend verification and preserved parity gates are complete.
+Local commits only; no pushes or edits to integration/other worktrees.
 
 ## Delivered
 
-- Decoded interpreted-driver log landed before native implementation: timestamped mailbox publication/consumption/dispatch, note allocation, physical voice ownership, ES5505 sample/pitch/loop/volume/filter/bank/output pair, ES5510 programming, DUART and MB87078 writes. Full register stream and onset projection are available.
-- `--sound-driver oracle|native` on both frontends and seeded gameplay. Oracle remains default. Native is an independent **literal statically recompiled ROM driver**, not a high-level sequencer rewrite or trace replay; no sound-interpreter fallback. ES5505/ES5510 and SDL3 are unchanged.
-- `tools/compile_sound.py`, pinned 68000 timing metadata and native runtime; generated ROM code stays ignored. CMake generates the sound program with `F3_ROM_DIR`.
-- `tools/compare_sound.py`: exact full-record comparison, including timestamps, reads and ownership metadata; no normalization or tolerance.
-- `f3rt-sound-extract`: normal main-game boot, frozen-main packet scheduling, complete sound trace and optional full/event-window WAV. `tools/decode_sound.py` produces sequence/SFX events.
-- `docs/SOUND-DRIVER.md`: packet grammar, main selectors, tables, allocation, sequencer/timer arithmetic, DSP/gain protocol, ROM addresses, evidence, reproduction commands and limits.
+- Fixed-size, pointer-free canonical machine snapshots; zero save/load allocations. Full native CPU/lazy flags, scheduler, RAM, EEPROM, both sound CPU modes, OTIS/DSP/DUART/gain, queued PCM, retained FDP and GameVideo state. Expanded presentation is preserved, not reconstructed approximately.
+- Headless rollback core: 16-frame prediction window, 17 preallocated full snapshots, delayed local input, repeat-last prediction, earliest-dirty resimulation, bounded stalls, full-state checksums every 60 confirmed frames, explicit desync errors.
+- Confirmed-only audio: speculative PCM is replaced on correction and never emitted twice. State/frame/PCM/sample-count parity against a single-machine reference is enforced by the oracle.
+- Dependency-free Go UDP two-player relay and native client transport: ROM/build/settings/EEPROM/initial-state handshake, fixed input histories, redundant packets and separate cumulative input/checksum ACKs, ping/frame pacing, persistent finite-match verdict, room/packet/rate bounds, safe fail-closed disconnect/rejoin.
+- Frontend flags `--netplay-server`, `--netplay-room`, `--netplay-player`, `--netplay-delay`; local-player controls include synchronized coin/start/service and shared test. Live SDL title reports connection, RTT, frame advantage and rollback. Offline defaults remain native main/native sound/game video.
+- `tools/netplay_oracle.cpp`, `tools/run_netplay_oracle.py`, shared deterministic versus schedule, build fingerprint generation, [docs/NETPLAY.md](docs/NETPLAY.md), README and ABI inventory.
 
 ## Exercised evidence
 
-- Seed 5 ×6000 frames: **12,258,121 identical oracle/native sound records**, including 9,643 main writes, 10,489,728 sound writes, 1,420,314 sound reads and one warm reset. Both main runs execute 80,338,232 native blocks with zero fallback.
-- 852 published/consumed/dispatched commands, 1,639 allocated notes, 3,768 voice contexts. All 2,202 non-startup voice starts have note-origin commands: 277 direct and 1,925 sequenced; two additional starts are silent startup probes.
-- Complete 3,029,425-frame seeded WAVs are byte-identical across both sound drivers and the original untraced oracle capture.
-- Fresh ×3600 attract runs: native-main/oracle-sound, interpreted-main/oracle-sound and native-main/native-sound produce identical complete 1,817,655-frame WAVs. Native main: 51,507,335 blocks, zero fallback.
-- MAME comparison, seconds 20–54: correlation **0.9956761849580716 / 0.9952171577492129**, RMS error 18.722660457703864 / 19.499802079856668 LSB, fixed lag -1 sample. Exact baseline retained.
-- Extracted music: 1,697,152 identical records and identical 148,805-frame event WAVs, peak 414. Extracted SFX: 1,446,519 identical records and identical 89,283-frame event WAVs, peak 530. Default boot includes the game's output-gain initialization at 13.23 seconds; event origin is 15.268770 seconds.
-- Runtime `f3rt-check` and five decoder boundary/ownership tests pass. Extractor rejects a packet scheduled exactly at the capture endpoint. Actual CLI runs exercised both driver modes and event-window WAV output.
+- **8 impaired seeds × 20,000 frames** (1, 2, 3, 5, 8, 13, 21, 34), two actual native client processes through the actual Go server, with **80 ms RTT, ±20 ms jitter, 3% loss, 3% reorder**. Both clients exactly match reference state CRC, framebuffer CRC, confirmed PCM CRC and sample count. Impaired runs exercised 877–988 rollbacks per client, including depth 16. Four additional clean-network seeds (1, 2, 3, 5) also pass 20,000 frames each.
+- **240 varied-N/K snapshot checks**: 4 seeds × 2 sound drivers × N={0,1000,2000,3000,4000,5000} × K={1,7,16,31,97}. Exact immediate restore/state CRC, RAM/palette/graphics/control/shared memory, pixels, PCM and complete sound trace bytes. Every replay includes host-clock perturbation; every save/load allocation count is zero.
+- **120 additional dense snapshot/performance checks** (both drivers, N every 100 through 5900) and **15 expanded-presentation checks** (scale 2, border 48 through frame 2200), all exact and allocation-free.
+- Late input (120 ms withholding at frame 1500): event-local depth-16 correction after a 49.23 ms full-window stall. One-second pause: 942.63 ms full-window stall then recovery. Both recovered to exact reference state/PCM at frame 3000. Build mismatch explicitly rejected; peer kill detected by transport, not harness watchdog.
+- Delay endpoints 0 and 8: actual two-client 2000-frame matches equal references. Additional MMIO smoke covers both player ports, coin/start/service, shared test OR/release and nibble mapping. Native-core wrong frame-60 checksum produces explicit local/remote `DESYNC` diagnostics.
+- Actual Cocoa/Metal frontend pairs completed 1800 and 3600 impaired frames with equal states and pixels. The 1800-frame WAVs are byte-equal. Live window/title captured. Separate seed-1 captures visibly show two-player selection and sustained two-board versus play.
+- Fresh MAME parity: **25/25** native frames, 600–3480 at step 120, **zero differing pixels**; frame-600 RAM byte-equal. Default 3600-frame WAV byte-equal to root `build/coverage-final.wav`. **51,507,335 main native blocks; zero interpreter fallbacks**.
+- The existing seed-5 single-player gameplay harness completes 6000 frames with the prior 80,338,232 native-block count, zero fallback, framebuffer CRC `04ea93ae` and 3,029,425 stereo sample frames.
+- `f3rt-check` and `go test -race ./...` pass. Parser regressions rejected malformed trailing bytes/flags/input bits/frame overflow and the server/client input-count mismatch after failing-before fixes. Relay tests cover endpoint/session isolation, identity rejection and lost final-verdict recovery after a finisher leaves.
 
-## Limits
+## Performance and limits
 
-- Native mode targets sound ROM CRC32 `5a7e9117`. Its complete aligned map contains 944 unlowered candidates, including overlapping/data decodes; none is reached in the exercised runs. Executing one or work-RAM code fails with PC/opcode, never silently falls back. This is not a general-purpose 68000 emulator or exhaustive proof of every command/alias/error path.
-- Timing matches the interpreted oracle at instruction boundaries, not physical bus cycles. Existing intra-instruction read/modify/write versus sample-edge residual remains; MAME correlation is not hardware waveform equality.
-- Note-origin IDs are RAM-linked causal ownership, not a claim that every later control write has one exclusive originating command. Control commands and all subsequent register writes remain explicit in the full timeline. Unknown alias origins remain null; `--notes-only` intentionally omits later envelope/control writes.
-- Extraction accepts raw driver packets, not a packaged named-song catalog. Earlier boot overrides may retain startup attenuation. No alternate audio backend or hardware-model changes were introduced.
+Apple M5, 10 logical CPUs, 32 GiB RAM, Darwin 25.2/arm64, Release build; no other netplay verification jobs during the isolated benchmark. Native snapshot: **4,231,509 bytes**, default snapshot ring **68.6 MiB**. Oracle sound snapshot: 4,231,724 bytes.
 
-Evidence remains local and ignored: `build/seed5-oracle-v2.*`, `build/seed5-native.*`, `build/seed5-parity.json`, `build/final-*`, `build/music-*`, `build/sfx-*`. Reproduce with README and docs/SOUND-DRIVER.md.
+| Native operation | Mean | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Save | 113.0 µs | 183.5 µs | 290.9 µs |
+| Load | 99.8 µs | 176.8 µs | 217.3 µs |
+| Normal step | 3620.7 µs | 3989.4 µs | 9848.4 µs |
+
+Native mean step throughput **276.2 FPS**; oracle **146.3 FPS**. Including replay and snapshot copies, `(D+1)*(step+save)+load <= 16.667 ms` permits native rollback depth **3 mean / 2 p95 / 0 worst observed**, oracle **1 / 1 / 0**. A 16-frame history is not 16-frame real-time headroom. Periodic state CRC, network, SDL and scheduling add cost; stalls/catch-up can take multiple display intervals. Confirmed-only audio adds latency.
+
+Snapshots require the same build/configuration and emulation-thread ownership; they are not portable/untrusted save files. Frontend netplay cold-boots erased EEPROM, requires strict native CPU/sound and native-size game video, and rejects persistence/diagnostic modes. No hot-resume state transfer, encryption, account authentication, spectators or anti-cheat. Nonmatching builds fail closed. Main CPU interpretation is never a netplay fallback; existing FDP rendering of unsupported boot frames is separate.
+
+Full commands, protocol, state inventory, determinism reasoning, evidence and deployment limits: [docs/NETPLAY.md](docs/NETPLAY.md). Artifacts remain local under ignored `build/`; ROMs/generated code/captures are not committed.

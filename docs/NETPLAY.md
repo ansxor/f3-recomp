@@ -4,7 +4,7 @@ Target: Japanese Land Maker 2.01J (`landmakrj`), strict statically recompiled ma
 
 ## Build and play
 
-Use the same build and ROMs on both clients. The Go relay needs Go 1.22 or newer and only the standard library; the game uses the existing CMake/SDL3 dependencies.
+Use the same build and ROMs on both clients. The Go relay needs Go 1.22 or newer and only the standard library; the game uses the existing CMake/SDL3 dependencies. The native client transport uses POSIX sockets and was exercised on macOS; this is not a Windows client port.
 
 ```sh
 # From wt/netplay; use ../roms/landmakr instead in a repository-root checkout.
@@ -67,7 +67,7 @@ Excluded: immutable ROM/dispatch tables, pointers/callbacks, native-block/fallba
 
 The confirmed frontier is exclusive: all frames below it have both actual inputs. Prediction never exceeds the configured window; an older-than-retained correction is an error, never a guessed recovery. A stalled peer therefore freezes at a bounded frontier and can resume without losing history. Input history is a fixed 1024-frame ring, separately tagged by absolute frame.
 
-Resimulation runs the real CPUs, renderers and sound devices. It does **not** publish SDL frames, WAV samples or device writes a second time. Per-frame speculative PCM is retained and replaced during correction; only confirmed PCM enters the bounded host-output queue. This trades audio latency for exact output: no duplicated speculative sound or heuristic crossfade. A consumer must drain that queue; overflow is explicit. Finite runs stop simulation at the requested frame, wait for confirmation, exchange final CRCs and await the server's persistent completion verdict.
+Resimulation runs the real CPUs, renderers and sound devices. It does **not** publish SDL frames, WAV samples or external trace records a second time. Per-frame speculative PCM is retained and replaced during correction; only confirmed PCM enters the bounded host-output queue. This trades audio latency for exact output: no duplicated speculative sound or heuristic crossfade. A consumer must drain that queue; overflow is explicit. Finite runs stop simulation at the requested frame, wait for confirmation, exchange final CRCs and await the server's persistent completion verdict.
 
 CRC32 covers the full canonical machine snapshot after every 60 confirmed frames. It excludes host output and diagnostics but includes device queues/state. Mismatch stops with frame/local/remote CRC diagnostics. Inputs and checksum delivery are independently acknowledged.
 
@@ -130,7 +130,7 @@ python3 tools/run_netplay_oracle.py --suite snapshot --frames 6000 \
 python3 tools/run_netplay_oracle.py --suite baseline --frames 20000 \
   --seeds 1 2 3 5 --sound-driver native --log-dir build/netplay-baseline
 python3 tools/run_netplay_oracle.py --suite impaired --frames 20000 \
-  --seeds 1 2 3 5 --sound-driver native --log-dir build/netplay-impaired
+  --seeds 1 2 3 5 8 13 21 34 --sound-driver native --log-dir build/netplay-impaired
 python3 tools/run_netplay_oracle.py --suite cases --log-dir build/netplay-cases
 ```
 
@@ -182,9 +182,10 @@ Exercised acceptance:
 
 - Four native baseline seeds (1, 2, 3, 5), each 20,000 frames. Both clients equal
   their single-machine reference's state, framebuffer and confirmed PCM.
-- The same four full-length seeds under 80 ms RTT / ±20 ms jitter / 3% loss /
-  3% reorder. Per-client rollback counts were 877–957, with actual depth-16
-  corrections. State CRCs by seed: `b9715bee`, `d7e729ba`, `127ec5e5`, `99e5910b`.
+- Eight full-length impaired seeds (1, 2, 3, 5, 8, 13, 21, 34), each 20,000
+  frames, under 80 ms RTT / ±20 ms jitter / 3% loss / 3% reorder. Both clients
+  equal the reference's state, framebuffer, PCM and sample count. Per-client
+  rollback counts were 877–988, with actual depth-16 corrections.
 - 240 varied-N/K snapshot checks across four seeds and both sound drivers,
   plus 120 dense-sampling checks in the isolated performance run. Exact state,
   memory, pixels, PCM and sound trace agreement; zero save/load allocations.
@@ -209,8 +210,24 @@ Exercised acceptance:
   pixels; frame-600 RAM byte-equal. Default native 3600-frame WAV byte-equal to
   the `checkpoint-5-sound-default` reference `build/coverage-final.wav`.
   51,507,335 main native blocks, **zero interpreter fallbacks**.
+- The existing single-player seed-5 gameplay harness also completed 6000
+  strict-native frames: 80,338,232 native blocks (the recorded pre-netplay count),
+  zero fallback, framebuffer CRC `04ea93ae`, 3,029,425 stereo sample frames.
 - `f3rt-check` and `go test -race ./...` passed. Malformed-wire and input-count
   boundary regressions were observed failing before their parser fixes.
+
+Final reference/peer agreement for the impaired 20,000-frame runs:
+
+| Seed | State CRC32 | Confirmed PCM CRC32 |
+| ---: | --- | --- |
+| 1 | `b9715bee` | `106b0e7b` |
+| 2 | `d7e729ba` | `0e4cabc2` |
+| 3 | `127ec5e5` | `4a491d11` |
+| 5 | `99e5910b` | `94bee9b2` |
+| 8 | `4b5925a8` | `7f7dda63` |
+| 13 | `3aceeda3` | `754ea8b9` |
+| 21 | `7d7d98da` | `0b76f433` |
+| 34 | `b6288683` | `8fde76c0` |
 
 Logs/captures live under ignored `build/netplay-*`, `build/versus-proof`,
 `build/versus-images`, `build/native-parity` and `build/mame-reference`.
