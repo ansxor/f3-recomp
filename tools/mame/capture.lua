@@ -164,9 +164,19 @@ local captured_frames_meta = {}
 --   scanline_draw() renders sprites from spriteram of frame N-1.
 --   get_sprite_info() then updates sprite framebuffer from current spriteram for frame N+1.
 local prev_spriteram = nil
+local pending_capture = nil
 
 local function on_frame_done()
     frame_counter = frame_counter + 1
+    -- screen:pixels() exposes the previous completed bitmap after the video
+    -- output swap. Match state N to pixels read on callback N+1. Consecutive
+    -- animated-frame replay verifies this one-frame API delay exactly.
+    if pending_capture then
+        local finish = pending_capture
+        pending_capture = nil
+        finish()
+    end
+    if captured_count >= capture_count then return end
 
     -- Read current spriteram (0x600000..0x60ffff, 0x10000 bytes)
     local current_spriteram = space:read_range(0x600000, 0x60ffff, 8)
@@ -186,7 +196,7 @@ local function on_frame_done()
         return
     end
 
-    captured_count = captured_count + 1
+    local capture_frame = frame_counter
     local frame_tag = string.format("frame_%04d", frame_counter)
     local frame_dir = outdir .. "/" .. frame_tag
     ensure_dir(frame_dir)
@@ -230,6 +240,9 @@ local function on_frame_done()
     -- 5. Active Spriteram (0x10000 bytes BE, from frame N-1)
     write_binary_file(frame_dir .. "/spriteram_active.bin", active_spriteram)
 
+    local palette_size, graphics_size = #palette_bin, #graphics_bin
+    pending_capture = function()
+    captured_count = captured_count + 1
     -- 6. Screen pixels (visible resolution 320x232)
     local pixels, w, h = screen:pixels()
     write_binary_file(frame_dir .. "/reference.argb", pixels)
@@ -238,6 +251,7 @@ local function on_frame_done()
     -- 7. Frame metadata JSON
     local frame_meta_json = string.format([[{
   "frame_index": %d,
+  "reference_callback_frame": %d,
   "width": %d,
   "height": %d,
   "pixel_format": "ARGB32_LE_BGRA",
@@ -251,19 +265,20 @@ local function on_frame_done()
     "reference_bmp": "reference.bmp"
   },
   "control_regs_hex": "%s"
-}]], frame_counter, w, h, table.concat(ctrl_hex, ""))
+}]], capture_frame, capture_frame + 1, w, h, table.concat(ctrl_hex, ""))
     write_text_file(frame_dir .. "/metadata.json", frame_meta_json)
 
-    table.insert(captured_frames_meta, string.format([[    { "frame_index": %d, "dir": "%s" }]], frame_counter, frame_tag))
+    table.insert(captured_frames_meta, string.format([[    { "frame_index": %d, "dir": "%s" }]], capture_frame, frame_tag))
     print(string.format("[MameCapture] Captured %s (%d/%d): %dx%d pixels, palette 0x%x, gfx 0x%x",
-        frame_tag, captured_count, capture_count, w, h, #palette_bin, #graphics_bin))
+        frame_tag, captured_count, capture_count, w, h, palette_size, graphics_size))
 
     -- Check completion
     if captured_count >= capture_count then
         -- 8. Write overall metadata.json
         local visarea = { min_x = 46, max_x = 365, min_y = 24, max_y = 255 }
         local global_meta_json = string.format([[{
-  "format_version": 1,
+  "format_version": 2,
+  "pixel_delay_frames": 1,
   "game": "landmakrj",
   "description": "MAME Land Maker attract mode trace capture",
   "visible_width": %d,
@@ -294,6 +309,7 @@ local function on_frame_done()
             print("[MameCapture] Exiting MAME...")
             manager.machine:exit()
         end
+    end
     end
 end
 

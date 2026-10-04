@@ -46,6 +46,7 @@ public:
     // Sound 68000 interrupt handling
     int irq_level() const;
     uint8_t irq_ack(int level);
+    void set_irq_callback(std::function<void(bool asserted)> cb);
 
     // Time advancement driven by main CPU 16MHz cycles
     void advance(uint32_t main_cycles);
