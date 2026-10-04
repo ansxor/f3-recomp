@@ -22,15 +22,15 @@ Target: **Land Maker Japan 2.01J (`landmakrj`)**, as approved after identifying 
 | Instruction differential | 5,000 passed, zero failed, zero unsupported; independent corrected Musashi EC020 reference, including cycles and exception state |
 | Discovery/deadline regressions | Six passed; synthetic generated C executes deadline equality/overshoot, canonical flags, and interior-PC resumption |
 | Strict native cold boot | 3,600 frames; 52,342,915 native blocks; zero fallback instructions |
-| Cold-boot audio output | 1,817,655 PCM frames, peak 1286 after the clocked DUART TX correction |
+| Cold-boot audio output | 1,817,655 PCM frames, peak 1244 after the event-based DUART counter correction |
 | Direct native vs MAME pixels | **25/25 frames RGB-exact**, frames 600–3480 at intervals of 120; zero mismatched pixels out of 1,856,000 |
 | Main state | Frame 600 matches all 131,072 main-RAM bytes; sampled later RNG states match |
 | Actual SDL gameplay | **8,400 frames**, 120,080,217 native blocks, **zero fallback instructions**; real foreground coin/start/selection/movement/Z/X/C input; visible character selection and scored combat |
 | Gameplay audio output | 4,241,196 PCM frames, peak 1303; nonzero output, not a waveform-parity claim |
-| Current SDL smoke | 900 frames on Cocoa/Metal, 15,407,878 native blocks, zero fallback; actual SDL framebuffer shows the Japan-only boot notice; this short boot segment is silent |
-| Integrated native audio, seconds 20–54 | L/R correlation **0.831907254/0.829002777**, RMS error **116.722162/116.514766 PCM LSB**, fixed analysis lag **−4 samples (−0.134404 ms)**; **not parity** |
+| SDL smoke at `a7c8606` | 900 frames on Cocoa/Metal, 15,407,878 native blocks, zero fallback; actual SDL framebuffer shows the Japan-only boot notice; this short boot segment is silent |
+| Integrated native audio, seconds 20–54 | L/R correlation **0.886013889/0.882232851**, RMS error **96.173675/96.749467 PCM LSB**, fixed analysis lag **−2 samples (−0.067202 ms)**; **not parity** |
 
-Latest cold-boot/frame/audio and SDL-smoke verification: `a7c8606`, cherry-picked from runtime peer `2bcc9dd`. Full SDL gameplay/input verification remains from `d31b3aa`; the 8,400-frame input scenario was not repeated for this sound-device correction. No ABI, compiler-contract, 68000 instruction, MUL, or Group-2 exception change was required.
+Latest cold-boot/frame/audio verification: `2fc5df5`, cherry-picked from runtime peer `c31066c`. The latest SDL window smoke remains from `a7c8606`; full SDL gameplay/input verification remains from `d31b3aa`. Neither SDL scenario was repeated for this counter-only correction. No CPU, compiler, or ABI change was required.
 
 ## Reproduce
 
@@ -49,25 +49,25 @@ PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
 PYTHONPATH=build/python python3 tools/differential/run.py \
   --musashi runtime/third_party/musashi --output build/differential --cases 5000
 ./build/landmakr --headless --no-audio --frames 3600 \
-  --dump-dir build/captures/native-duart-tx --dump-start 600 --dump-every 120 \
-  --wav build/native-duart-tx.wav
+  --dump-dir build/captures/native-duart-counter --dump-start 600 --dump-every 120 \
+  --wav build/native-duart-counter.wav
 python3 tools/compare_frames.py \
-  wt/runtime/build/captures/mame-aligned build/captures/native-duart-tx --json
+  wt/runtime/build/captures/mame-aligned build/captures/native-duart-counter --json
 cmp wt/runtime/build/captures/mame-aligned/frame_0600/mainram.bin \
-  build/captures/native-duart-tx/frame_0600/mainram.bin
+  build/captures/native-duart-counter/frame_0600/mainram.bin
 PYTHONPATH=wt/runtime/build/python python3 tools/compare_audio.py \
-  wt/runtime/build/mame-audio-reset-v2.wav build/native-duart-tx.wav \
-  --start 20 --end 54 --json build/native-duart-tx-audio.json
-./build/landmakr --frames 900 --surface build/native-duart-tx-window.bmp
+  wt/runtime/build/mame-audio-reset-v2.wav build/native-duart-counter.wav \
+  --start 20 --end 54 --json build/native-duart-counter-audio.json
 ```
 
-The frame comparison uses the existing local format-2 MAME baseline. Baseline regeneration is documented in `tools/mame/README.md`. Current SDL framebuffer evidence is root `build/native-duart-tx-window.bmp` (also converted to PNG for inspection). Earlier full gameplay evidence remains in `build/captures/native-play-deadline`, `build/native-play-deadline-grid.png`, and `build/native-play-deadline.wav`. ROM bytes, generated C, captures, WAVs, and raw traces remain ignored; completed temporary probes were removed.
+The frame comparison uses the existing local format-2 MAME baseline. Baseline regeneration is documented in `tools/mame/README.md`. The SDL smoke at `a7c8606` used `./build/landmakr --frames 900 --surface build/native-duart-tx-window.bmp`; its framebuffer was also converted to PNG for inspection. Earlier full gameplay evidence remains in `build/captures/native-play-deadline`, `build/native-play-deadline-grid.png`, and `build/native-play-deadline.wav`. ROM bytes, generated C, captures, WAVs, and raw traces remain ignored; completed temporary probes were removed.
 
-The refreshed waveform report is root `build/native-duart-tx-audio.json`, using the unchanged reset-aware MAME baseline at 29,761 Hz without resampling. The separate native-audio row above is measured from strict native execution, not the peer's independent-interpreter result (correlation 0.830637220/0.827688326).
+The refreshed waveform report is root `build/native-duart-counter-audio.json`, using the unchanged reset-aware MAME baseline at 29,761 Hz without resampling. The separate native-audio row above is measured from strict native execution, not the peer's independent-interpreter result (correlation 0.899887521/0.896598008, RMS error 90.141461/90.667383 PCM LSB).
 
 ## Remaining limitations
 
-- **Integrated sound timing/waveforms:** the clocked DUART correction improves native correlation from the preceding IRQ/DIVU run's 0.810242/0.809857 to **0.831907254/0.829002777**, but substantial waveform error remains. The fixed lag is an analysis measurement only; no fitted runtime delay, sample masking, waveform shift, or output compensation was introduced. The peer's controlled MAME-mailbox injection leaves similar residuals, locating the remaining error downstream of main-side commands. The corrected TXEMPTY poll removes the first sustained instruction-path drift; it does not establish the cause of the earlier single-sample split or the full remaining audio error.
+- **Integrated sound timing/waveforms:** the event-based DUART counter correction improves native correlation from the preceding TX-only run's 0.831907254/0.829002777 to **0.886013889/0.882232851**, but substantial waveform error remains, and native/interpreter results still differ. The fixed lag is an analysis measurement only; no fitted runtime delay, sample masking, waveform shift, or output compensation was introduced. Earlier controlled MAME-mailbox injection leaves similar residuals, locating that error downstream of main-side commands. Remaining bus/instruction timing is under investigation; no single cause of the full residual is established.
+- **Counter reset compatibility:** preserving the queued counter expiration and output phase across board reset follows MAME's executed behavior, despite its contradictory reset comment. The reference warm test begins with ISR `$08` already latched; discarding that event previously added roughly 160,000 main ticks. This is explicitly **MAME compatibility, not a physical DUART RESET claim**. Restart now clears old divider residue, and source/preset writes do not rescale an already scheduled event.
 - **Retained IRQ/DIVU correction:** `ca08bf9` (local `59f3362`) remains on qualified primary evidence, not improved audio metrics. Motorola documents nominal no-wait IRQ entry at 44 clocks. Its DIVU maximum of 140 clocks does not establish the exact dynamic formula; its “less than 10%” variation statement conflicts with Cwik's published range. Cwik's detailed 10/76/136-cycle timing account explicitly reports partial assembler testing on real 68000 hardware, not exhaustive physical proof or published raw traces. Source links and provenance are preserved in `NOTES.md`.
 - Static discovery counts are not proof that every possible game path has been exercised. The 94 unresolved transfers remain reported; strict runtime execution prevents them from being silently accepted as native coverage.
 - Pixel equivalence covers the stated attract samples, not every gameplay scene or physical FDP behavior. Disputed clipping behavior and the ROM evidence actually exercised are recorded in `NOTES.md`.
