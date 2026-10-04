@@ -79,6 +79,26 @@ int main() try {
     auto m=std::make_unique<f3rt::Machine>(fixture());
     require(m->cpu.cycles==4 && m->cpu.pc==0x100 && m->cpu.d[0]==0,
             "Cold reset charges four cycles without executing the first opcode");
+    const auto raster_tick = [](uint64_t pixels) {
+        return (pixels*f3rt::Machine::main_clock+f3rt::Machine::pixel_clock-1)/f3rt::Machine::pixel_clock;
+    };
+    const auto boundary_at = [&](uint64_t tick) { m->cpu.cycles=tick;m->boundary(); };
+    const auto first_vblank=raster_tick(f3rt::Machine::frame_pixels);
+    boundary_at(first_vblank-1);
+    require(m->frame==0 && m->pending_irqs==0,"First vblank waits one full frame from the VBSTART epoch");
+    boundary_at(first_vblank);
+    require(m->frame==1 && m->pending_irqs==(1<<2),"First vblank renders and requests IRQ2 at its deadline");
+    boundary_at(first_vblank+9999);
+    require(m->pending_irqs==(1<<2),"IRQ3 is not requested before its 10000-cycle delay");
+    boundary_at(first_vblank+10000);
+    require(m->pending_irqs==((1<<2)|(1<<3)),"IRQ3 is requested at its delayed deadline");
+    m->pending_irqs=0;
+    const auto second_vblank=raster_tick(2ull*f3rt::Machine::frame_pixels);
+    boundary_at(second_vblank-1);
+    require(m->frame==1 && m->pending_irqs==0,"Next vblank retains the absolute raster phase");
+    boundary_at(second_vblank);
+    require(m->frame==2 && m->pending_irqs==(1<<2),"Second vblank uses the full-frame epoch");
+    m->pending_irqs=0;
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

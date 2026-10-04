@@ -38,7 +38,8 @@ void Machine::reset() {
     cpu.runtime = this;
     eeprom->reset();
     frame = hardware_cycles = 0;
-    next_vblank = raster_cycle(256 * 432);
+    // Reference beam time zero is VBSTART, not scanline zero.
+    next_vblank = raster_cycle(frame_pixels);
     reset_devices();
     audio->reset_board();
     video->reset();
@@ -106,7 +107,7 @@ void Machine::advance_to(uint64_t cycles) {
             pending_irqs |= 1u << 2;
             irq3_at = next_vblank + 10000;
             ++frame;
-            next_vblank = raster_cycle(frame * frame_pixels + 256 * 432);
+            next_vblank = raster_cycle((frame + 1) * frame_pixels);
         }
         if (hardware_cycles == irq3_at) { pending_irqs |= 1u << 3; irq3_at = UINT64_MAX; }
     }
