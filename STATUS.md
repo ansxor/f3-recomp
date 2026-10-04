@@ -22,13 +22,13 @@ Target: **Land Maker Japan 2.01J (`landmakrj`)**, as approved after identifying 
 | Instruction differential | 5,000 passed, zero failed, zero unsupported; independent corrected Musashi EC020 reference, including cycles and exception state |
 | Discovery/deadline regressions | Six passed; synthetic generated C executes deadline equality/overshoot, canonical flags, and interior-PC resumption |
 | Strict native cold boot | 3,600 frames; 52,342,915 native blocks; zero fallback instructions |
-| Cold-boot audio output | 1,817,655 PCM frames, peak 1289 after the sound-68000 timing corrections |
+| Cold-boot audio output | 1,817,655 PCM frames, peak 1360 after the sound-68000 IRQ/DIVU timing corrections |
 | Direct native vs MAME pixels | **25/25 frames RGB-exact**, frames 600–3480 at intervals of 120; zero mismatched pixels out of 1,856,000 |
 | Main state | Frame 600 matches all 131,072 main-RAM bytes; sampled later RNG states match |
 | Actual SDL gameplay | **8,400 frames**, 120,080,217 native blocks, **zero fallback instructions**; real foreground coin/start/selection/movement/Z/X/C input; visible character selection and scored combat |
 | Gameplay audio output | 4,241,196 PCM frames, peak 1303; nonzero output, not a waveform-parity claim |
 
-Latest cold-boot/frame/audio verification: `bfa140b`, cherry-picked from runtime peer `b456211`. Compiler/deadline and SDL gameplay verification remains from `d31b3aa`; the SDL input scenario was not repeated for this sound-only change. Runtime ABI/TRAP changes were cherry-picked from peer `36c8555` as `f74f66b`.
+Latest cold-boot/frame/audio verification: `59f3362`, cherry-picked from runtime peer `ca08bf9`. Compiler/deadline and SDL gameplay verification remains from `d31b3aa`; the SDL input scenario was not repeated for these sound-only changes. No ABI or compiler-contract change was required.
 
 ## Reproduce
 
@@ -47,19 +47,19 @@ PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
 PYTHONPATH=build/python python3 tools/differential/run.py \
   --musashi runtime/third_party/musashi --output build/differential --cases 5000
 ./build/landmakr --headless --no-audio --frames 3600 \
-  --dump-dir build/captures/native-sound-timing --dump-start 600 --dump-every 120 \
-  --wav build/native-sound-timing.wav
+  --dump-dir build/captures/native-irq-divu --dump-start 600 --dump-every 120 \
+  --wav build/native-irq-divu.wav
 python3 tools/compare_frames.py \
-  wt/runtime/build/captures/mame-aligned build/captures/native-sound-timing --json
+  wt/runtime/build/captures/mame-aligned build/captures/native-irq-divu --json
 ```
 
 The last command uses the existing local format-2 MAME baseline. Baseline regeneration is documented in `tools/mame/README.md`. Gameplay evidence is in root `build/captures/native-play-deadline`, `build/native-play-deadline-grid.png`, and `build/native-play-deadline.wav`. ROM bytes, generated C, captures, WAVs, and raw traces remain ignored; completed temporary probes were removed.
 
-The refreshed waveform report is root `build/native-sound-timing-audio.json`. Its measured native result differs slightly from the peer's independent interpreter run; the figures below are from strict native execution.
+The refreshed waveform report is root `build/native-irq-divu-audio.json`. Its measured native result differs from the peer's independent interpreter run; the figures below are from strict native execution.
 
 ## Remaining limitations
 
-- **Integrated sound timing/waveforms:** after the scoped sound-68000 corrections, seconds 20–54 against the same reset-aware MAME baseline give fixed lag **−4 samples (−0.134404 ms)**, native L/R correlation **0.844473/0.847484**, and RMS error **112.314/110.057 PCM LSB**. The smaller lag does not establish waveform parity. The runtime owner continues post-initialization sound arithmetic/MMIO event investigation; renderer parity and sound-register replay do not establish integrated audio parity.
+- **Integrated sound timing/waveforms:** after the scoped sound-68000 IRQ/DIVU corrections, seconds 20–54 against the unchanged reset-aware MAME baseline give fixed lag **−5 samples (−0.168005 ms)**, native L/R correlation **0.810242/0.809857**, and RMS error **123.959/122.810 PCM LSB**. Native correlation is worse than the preceding `bfa140b` run (0.844473/0.847484), despite the isolated timing corrections matching the reference measurements. Audio parity remains unresolved; no offset or waveform compensation was introduced. The runtime owner continues post-initialization sound arithmetic/MMIO event investigation.
 - Static discovery counts are not proof that every possible game path has been exercised. The 94 unresolved transfers remain reported; strict runtime execution prevents them from being silently accepted as native coverage.
 - Pixel equivalence covers the stated attract samples, not every gameplay scene or physical FDP behavior. Disputed clipping behavior and the ROM evidence actually exercised are recorded in `NOTES.md`.
 - World ROM execution remains untested and was not substituted for the approved Japanese target.
