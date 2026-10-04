@@ -12,7 +12,8 @@ if(F3_ROM_DIR)
     if(NOT F3_GENERATED_DIR)
         set(F3_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/landmakrj")
     endif()
-    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py")
+    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py" "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         ${RECOMP_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/games/landmakrj/config.toml")
     execute_process(

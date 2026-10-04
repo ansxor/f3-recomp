@@ -21,6 +21,7 @@ void diff_env_init(DiffEnv *env) {
     memset(env->pages, 0, sizeof(env->pages));
     env->num_touched_pages = 0;
     env->num_writes = 0;
+    env->cycles = 0;
     env->exception_taken = 0;
     env->exception_vector = 0;
     env->exception_pc = 0;
@@ -37,6 +38,7 @@ void diff_env_reset(DiffEnv *env) {
     }
     env->num_touched_pages = 0;
     env->num_writes = 0;
+    env->cycles = 0;
     env->exception_taken = 0;
     env->exception_vector = 0;
     env->exception_pc = 0;
@@ -184,6 +186,11 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     cpu->a[7] -= 2;
     f3_write16(cpu, cpu->a[7], old_sr);
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
+    static const uint8_t exception_cycles[16] = {
+        4, 4, 50, 50, 20, 38, 40, 20, 34, 25, 20, 20, 4, 4, 4, 30
+    };
+    cpu->cycles += vector < 16 ? exception_cycles[vector] :
+        vector >= 24 && vector < 32 ? 30 : vector >= 32 && vector < 48 ? 20 : 4;
 }
 
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
@@ -373,7 +380,7 @@ void diff_musashi_run_case(const TestCase *tc, DiffEnv *env,
     /* Each positive one-cycle slice executes one complete instruction. */
     for (unsigned step = 0; step < tc->instruction_count; ++step) {
         s_musashi_insn_count = 0;
-        m68k_execute(1);
+        env->cycles += (unsigned)m68k_execute(1);
         if (s_musashi_insn_count != 1) {
             fprintf(stderr, "FATAL: Musashi did not step one instruction in '%s': count=%d\n",
                     tc->name, s_musashi_insn_count);
@@ -485,6 +492,13 @@ bool diff_compare_states(const TestCase *tc,
         written = snprintf(desc, rem,
                            "  PC: expected 0x%08X (Musashi), got 0x%08X (Recomp)\n",
                            musashi_pc, recomp_cpu->pc);
+        if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+    }
+
+    if (musashi_env->cycles != recomp_cpu->cycles) {
+        delta->has_mismatch = true;
+        written = snprintf(desc, rem, "  Cycles: expected %llu, got %llu\n",
+            (unsigned long long)musashi_env->cycles, (unsigned long long)recomp_cpu->cycles);
         if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
     }
 

@@ -77,22 +77,23 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
 - Vector/config entry points, direct branches/calls, bounded jump-table
   heuristics, task-entry and callback scans discover code. Reports distinguish
   explicit/vector seeds from heuristic seeds. Unreached bytes are **not**
-  assumed to be data. Current Japan discovery finds 21,373 instructions,
-  79,734 unique bytes (3.802% of the entire mixed code/data ROM), 563 candidate
-  functions, and 55 unresolved transfers. These are discovery counts, not a
-  proof of complete executable-code coverage.
+  assumed to be data. The emitted `coverage.json` reports current instruction,
+  byte, function-candidate, seed, and unresolved-transfer counts. These are
+  discovery counts, not a proof of complete executable-code coverage.
 - Every decoded instruction PC is registered, including block interiors.
   Native blocks have at most 32 instructions; emulated calls use the guest
-  stack, not recursive host calls. Unknown or RAM PCs use the runtime's
-  one-instruction interpreter; an unavailable fallback halts rather than
-  pretending to execute.
+  stack, not recursive host calls. Diagnostic execution may interpret unknown
+  or RAM PCs one instruction at a time. The integrated `landmakr` target
+  rejects these by default; fallback is not native-game acceptance.
 - NZVC flags are lazy inside blocks; X is retained eagerly for partial flag
   updates. Native exits materialize SR before the runtime boundary/IRQ check.
   Only ordinary bus reads/writes may observe pending flags. Trace-enabled
   execution must use runtime fallback, not multi-instruction native blocks.
-- Scheduling costs are nominal (currently four ticks per lowered instruction),
-  **not cycle-exact**. Runtime vblank/timer interrupt delivery is at block
-  boundaries. Pixel/frame timing equivalence is a separate integration check.
+- Scheduling uses pinned Musashi 68EC020 opcode costs, including MOVEM counts,
+  full-index extensions, conditional branches, and loop expiration. These are
+  reference-emulator timings, not physical bus-cycle accuracy. Runtime IRQ
+  delivery remains at native block boundaries; frame/audio parity is checked
+  separately against observed Land Maker output.
 - TOML `[discovery].entry_points` accepts observed runtime PCs.
   `[[discovery.jump_tables]]` records a transfer `address` and its `targets`.
   `inline_string_helpers` is game-specific metadata for routines that consume
