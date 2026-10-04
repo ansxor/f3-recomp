@@ -295,6 +295,19 @@ void check_sound_irq(f3rt::Machine &m) {
         require(m.audio->read16(0xfefa)==0x2000 && m.audio->read32(0xfefc)==0x1004,
                 "Vectored IRQ entry preserves the stopped CPU's SR and return PC");
     }
+    for (int budget : {1,2,3,4,8,16,32,47,48,52}) {
+        m.audio->reset_board();
+        m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(0x100,0x2000);
+        m.audio->write16(0x1000,0x4e72);m.audio->write16(0x1002,0x2000);m.audio->write16(0x2000,0x4e71);
+        m.audio->set_reset(false);m.interpreter->run_audio(1);
+        m.audio->write8(0x280019,64);m.audio->write8(0x28000b,1);m.audio->write8(0x280005,4);
+        require(m.audio->irq_level()==6,"TX-ready IRQ is pending while reset SR masks interrupts");
+        require(m.interpreter->run_audio(budget)==52 && m.interpreter->sound_pc()==0x2000,
+                "STOP unmasking an IRQ retains four instruction clocks, a four-clock poll and 44 entry clocks");
+        require(m.audio->read16(0xfefa)==0x2000 && m.audio->read32(0xfefc)==0x1004 &&
+                m.interpreter->run_audio(1)==4 && m.interpreter->sound_pc()==0x2002,
+                "Immediate STOP wake stacks the next PC and resumes the handler without remaining stopped");
+    }
     m.audio->reset_board();
 }
 void check_trap_cycles(f3rt::Machine &m) {

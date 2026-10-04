@@ -56,6 +56,14 @@ undercharging these operands by two cycles. Register, memory and immediate
 forms now match executed reference microprograms. Zero/negative sources,
 MULU, products/flags and all other CPU-model timings retain their prior behavior.
 
+When a 68000 STOP lowers SR and exposes an already-pending IRQ, its idle-budget
+clamp must not discard interrupt-entry cycles. This transition charges four
+instruction clocks, one four-clock STOP polling iteration, and 44 IRQ-entry
+clocks: 52 total before the handler. The polling iteration matches the executed
+reference microprogram and its latch-before-mask-update microcode. Normal STOP
+waiting, later IRQ wakeups and other CPU models are unchanged. This is a scoped
+reference timing correction, not a general bus-cycle-accurate execution model.
+
 The DUART now models both transmitters' ready/empty transitions, one-byte
 holding registers, framed serial clocks, enable/reset commands and TX-ready
 interrupts. F3's external clocks are 1 MHz (A) and 500 kHz (B); the game's

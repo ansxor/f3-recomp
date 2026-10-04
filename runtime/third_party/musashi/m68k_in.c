@@ -9529,10 +9529,17 @@ M68KMAKE_OP(stop, 0, ., .)
 		m68ki_trace_t0();			   /* auto-disable (see m68kcpu.h) */
 		CPU_STOPPED |= STOP_LEVEL_STOP;
 		m68ki_set_sr(new_sr);
-		if(m68ki_remaining_cycles >= CYC_INSTRUCTION[REG_IR])
-			m68ki_remaining_cycles = CYC_INSTRUCTION[REG_IR];
+		/* Mask lowering exposes a pending 68000 IRQ on the next four-clock
+		 * STOP poll. Retain that poll and the interrupt-entry charge. */
+		if(CPU_TYPE_IS_000(CPU_TYPE) && !(CPU_STOPPED & STOP_LEVEL_STOP))
+			USE_CYCLES(4);
 		else
-			USE_ALL_CYCLES();
+		{
+			if(m68ki_remaining_cycles >= CYC_INSTRUCTION[REG_IR])
+				m68ki_remaining_cycles = CYC_INSTRUCTION[REG_IR];
+			else
+				USE_ALL_CYCLES();
+		}
 		return;
 	}
 	m68ki_exception_privilege_violation();
