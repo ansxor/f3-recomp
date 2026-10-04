@@ -15,6 +15,7 @@ class Audio;
 class Interpreter;
 class Eeprom;
 class SoundTrace;
+class SoundNative;
 class Machine {
 public:
     static constexpr uint32_t main_clock = 16000000;
@@ -38,6 +39,7 @@ public:
     std::unique_ptr<Eeprom> eeprom;
     std::unique_ptr<Interpreter> interpreter;
     std::unique_ptr<SoundTrace> sound_trace;
+    std::unique_ptr<SoundNative> sound_native;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff};
     uint8_t system_inputs = 0xff; // EEPROMIN: service/test, four coins, active low.
     std::array<uint64_t, 4> coin_count{};
@@ -55,6 +57,9 @@ public:
 
     void reset();
     void reset_devices();
+    // Select before advancing the machine. The interpreted driver is the default.
+    void use_native_sound(const f3_block *program, size_t count);
+    uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);
     int boundary();

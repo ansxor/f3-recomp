@@ -3,6 +3,7 @@
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
 #include "sound_trace.hpp"
+#include "sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include <algorithm>
@@ -25,6 +26,19 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
     reset();
 }
 Machine::~Machine() = default;
+void Machine::use_native_sound(const f3_block *program, size_t count) {
+    if (!audio->is_reset() || audio->clock_ticks())
+        throw std::runtime_error("Select the native sound driver before machine execution");
+    sound_native = std::make_unique<SoundNative>(*this, program, count);
+    audio->set_cpu_runner([this](int cycles) { return sound_native->run(cycles); });
+    audio->set_reset_callback([this](bool asserted) { sound_native->reset(asserted); });
+    // Native SR/IRQ recognition reads the DUART's current line directly.
+    audio->set_irq_callback({});
+    sound_native->reset(true);
+}
+uint32_t Machine::sound_pc() const {
+    return sound_native ? sound_native->pc() : interpreter->sound_pc();
+}
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
     return (pixels * main_clock + pixel_clock - 1) / pixel_clock;
 }

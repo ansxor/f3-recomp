@@ -13,6 +13,9 @@
 #ifdef F3RT_GENERATED
 #include "program.h"
 #endif
+#ifdef F3RT_SOUND_GENERATED
+#include "sound_program.h"
+#endif
 
 namespace {
 struct Sdl {
@@ -47,6 +50,7 @@ int main(int argc,char **argv) try {
     std::filesystem::path sound_trace_path;
     std::string set="landmakrj";
     std::string video_mode="fdp";
+    std::string sound_driver="oracle";
     f3rt::GameVideoOptions video_options;
     std::string video_filter="nearest";
     uint64_t frames=0,dump_start=1,dump_every=1;
@@ -70,6 +74,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--eeprom")eeprom=value();
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--sound-trace")sound_trace_path=value();
+        else if(arg=="--sound-driver")sound_driver=value();
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
         else if(arg=="--video")video_mode=value();
@@ -93,7 +98,7 @@ int main(int argc,char **argv) try {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
-                     <<"  [--sound-trace FILE] (interpreted sound CPU bus log)\n"
+                     <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default oracle)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
@@ -103,6 +108,8 @@ int main(int argc,char **argv) try {
     }
     if(romdir.empty() || !dump_every)throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if(headless && !frames)throw std::runtime_error("Headless execution requires --frames");
+    if(sound_driver!="oracle" && sound_driver!="native")
+        throw std::runtime_error("--sound-driver must be oracle or native");
 #ifdef F3RT_LANDMAKR
     if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
 #endif
@@ -116,6 +123,13 @@ int main(int argc,char **argv) try {
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
+    if(sound_driver=="native") {
+#ifdef F3RT_SOUND_GENERATED
+        m.use_native_sound(f3_sound_blocks,f3_sound_block_count);
+#else
+        throw std::runtime_error("Native sound requires a generated sound program (F3_ROM_DIR)");
+#endif
+    }
     m.allow_main_fallback=allow_fallback;
     if(video_mode!="fdp")
         m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
@@ -194,7 +208,8 @@ int main(int argc,char **argv) try {
     }
     if(m.game_video)m.game_video->report(std::cout);
     if(m.sound_trace)m.sound_trace->finish(m);
-    std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.interpreter->sound_pc()
+    std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
+             <<" sound_driver="<<sound_driver
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';

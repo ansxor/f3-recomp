@@ -68,10 +68,10 @@ centered with black side borders, rather than invented off-screen geometry.
 ROM addresses, descriptor layouts, measured per-layer parity, fallback limits
 and presentation evidence: [docs/VIDEO-HLE.md](docs/VIDEO-HLE.md).
 
-### Sound-driver observation
+### Sound-driver observation and native execution
 
 `--sound-trace FILE` on `landmakr`, `f3rt-run`, or the seeded gameplay harness
-records the interpreted sound CPU's device reads/writes and main-CPU mailbox
+records the selected sound driver's device reads/writes and main-CPU mailbox
 writes without changing dispatch deadlines or reading registers a second time.
 Keep traces and extracted events under ignored `build/`; they contain ROM-derived
 data. The gameplay harness also accepts `--wav FILE`.
@@ -88,6 +88,40 @@ Device timestamps use the effective 16 MHz device cursor and emitted-sample
 ordinal, not the enclosing main-CPU block's endpoint. Register snapshots expose
 sample-ROM word addresses, pitch increment, loop/direction, L/R volume, filter,
 bank and output pair. See [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md).
+
+Sound defaults to the interpreted oracle. `--sound-driver native` selects the
+independent, statically recompiled ROM driver; it does not replay traces or call
+the sound interpreter. ES5505/ES5510 and SDL3 remain unchanged. Configuring with
+`F3_ROM_DIR` generates both main and sound programs.
+
+```sh
+build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver native \
+  --sound-trace build/seed5-native.sound --wav build/seed5-native.wav
+python3 tools/compare_sound.py build/seed5.sound build/seed5-native.sound
+cmp build/seed5.wav build/seed5-native.wav
+```
+
+The comparator requires exact records, timestamps and ownership metadata.
+The seed-5 gate matches 12,258,121 records and complete WAV bytes.
+
+Extract a music sequence after normal game initialization, then decode its
+command/note/voice timeline:
+
+```sh
+build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+  --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
+  --wav-window event --sound-trace build/music.sound --wav build/music.wav
+python3 tools/decode_sound.py build/music.sound --notes-only \
+  --output build/music.jsonl
+```
+
+The extractor freezes the main CPU after 900 boot frames, drains its pending
+mailbox packets, and schedules `--packet HEX` / `--at SECONDS:HEX` against sound
+time. The default wait includes the game's output-gain writes at 13.23 seconds;
+earlier `--boot-frames` values can retain startup attenuation. No hidden setup
+packets are injected. Full traces retain boot; `--wav-window event` trims only
+the WAV. See [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md) for SFX, timing, ROM
+evidence and non-exhaustive native-mode limits.
 
 
 

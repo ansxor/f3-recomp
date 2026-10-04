@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(F3RT_SDL "Build SDL3 frontend" ON)
 set(F3_ROM_DIR "" CACHE PATH "Land Maker Japan ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated Land Maker C directory (optional)")
+set(F3_SOUND_GENERATED_DIR "" CACHE PATH "Pre-generated Land Maker sound driver C directory (optional)")
 if(F3_ROM_DIR)
     get_filename_component(F3_ROM_DIR "${F3_ROM_DIR}" ABSOLUTE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -20,6 +21,17 @@ if(F3_ROM_DIR)
         COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/python:$ENV{PYTHONPATH}"
             ${Python3_EXECUTABLE} -m recomp emit
             --config games/landmakrj/config.toml --rom-dir "${F3_ROM_DIR}" --output "${F3_GENERATED_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    if(NOT F3_SOUND_GENERATED_DIR)
+        set(F3_SOUND_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/sound-landmakrj")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_sound.py")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/python:$ENV{PYTHONPATH}"
+            ${Python3_EXECUTABLE} tools/compile_sound.py
+            --rom-dir "${F3_ROM_DIR}" --output "${F3_SOUND_GENERATED_DIR}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMAND_ERROR_IS_FATAL ANY)
 endif()
@@ -45,10 +57,20 @@ file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
     runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp
-    runtime/sound_trace.cpp ${AUDIO_SOURCES})
-target_include_directories(f3rt PUBLIC include PRIVATE runtime)
+    runtime/sound_trace.cpp runtime/sound_native.cpp ${AUDIO_SOURCES})
+target_include_directories(f3rt PUBLIC include PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(f3rt PRIVATE f3rt_musashi)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
+if(F3_SOUND_GENERATED_DIR)
+    include("${F3_SOUND_GENERATED_DIR}/sources.cmake")
+    add_library(f3_sound_recompiled STATIC ${F3_SOUND_GENERATED_SOURCES})
+    target_include_directories(f3_sound_recompiled PUBLIC
+        include "${CMAKE_CURRENT_SOURCE_DIR}" "${F3_SOUND_GENERATED_DIR}")
+    target_link_libraries(f3_sound_recompiled PUBLIC f3rt)
+endif()
+add_executable(f3rt-sound-extract tools/sound_extract.cpp)
+target_include_directories(f3rt-sound-extract PRIVATE runtime)
+target_link_libraries(f3rt-sound-extract PRIVATE f3rt)
 if(F3_GENERATED_DIR)
     add_subdirectory(recomp)
     add_executable(f3rt-gameplay-regression tools/gameplay_regression.cpp)
@@ -71,6 +93,14 @@ if(F3RT_SDL)
         target_compile_definitions(landmakr PRIVATE
             F3RT_GENERATED=1 F3RT_LANDMAKR=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
+endif()
+if(F3_SOUND_GENERATED_DIR)
+    foreach(frontend f3rt-sound-extract f3rt-gameplay-regression f3rt-run landmakr)
+        if(TARGET ${frontend})
+            target_link_libraries(${frontend} PRIVATE f3_sound_recompiled)
+            target_compile_definitions(${frontend} PRIVATE F3RT_SOUND_GENERATED=1)
+        endif()
+    endforeach()
 endif()
 add_executable(f3rt-replay runtime/replay.cpp)
 target_link_libraries(f3rt-replay PRIVATE f3rt)

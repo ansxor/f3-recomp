@@ -315,3 +315,105 @@ DUART OP6 controls DSP HALT. `$28001d/$28001f` are set/reset-output writes
 they are **not** independent left/right volume registers. The existing
 board mixer and quantized gains are unchanged. Trace reset markers retain
 the distinction between resetting DSP/DUART/volume and preserving OTIS.
+
+## Opt-in native driver and strict comparison
+
+`--sound-driver oracle|native` is independent of the main-CPU execution mode.
+Default is `oracle`. `native` is a **literal statically recompiled ROM driver**,
+not a high-level musical rewrite: its own `f3_cpu` state executes generated C
+for the 68000 program, with native memory/control callbacks. It preserves the
+ROM's tasks, mailbox parser, tables, allocation, sequencer and DSP worker.
+It neither calls Musashi for sound execution nor replays captured events.
+ES5505, ES5510, DUART, banks, gain hardware and SDL3 remain the existing devices.
+
+`tools/compile_sound.py` validates sound CRC32 `5a7e9117` and generates under
+`build/generated/sound-landmakrj`. CMake does this with `F3_ROM_DIR`; pre-generated
+builds can set `F3_SOUND_GENERATED_DIR`. The compiler reuses arithmetic lowering,
+but provides 68000 instruction costs, data-dependent multiplication/division
+timing, six-byte exception frames, reset debt and immediate IRQ recognition.
+Capstone rejects a nonzero ignored upper byte on CCR/bit immediates; only that
+decoder input byte is normalized, preserving the CPU's effective operand.
+The generated table covers every even ROM address, not just PCs from a trace.
+Runtime dispatch indexes that immutable table without allocating a second map.
+
+This is oracle compatibility at **instruction boundaries**, not cycle-accurate
+physical bus emulation. In particular, the existing `$c17814` intra-instruction
+read/modify/write versus sample-edge residual is preserved. This is not a
+general-purpose 68000 emulator: executing work-RAM code or an unlowered ROM
+candidate fails with its PC/opcode, with no interpreter fallback. The current
+manifest contains 944 unlowered aligned candidates, including overlapping/data
+decodes. None is reached by the exercised runs. All packet variants, sequence
+aliases and error paths have **not** been exhaustively exercised.
+
+```sh
+build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+  --sound-trace build/seed5-oracle.sound --wav build/seed5-oracle.wav
+build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver native \
+  --sound-trace build/seed5-native.sound --wav build/seed5-native.wav
+python3 tools/compare_sound.py build/seed5-oracle.sound build/seed5-native.sound \
+  --json build/seed5-parity.json
+cmp build/seed5-oracle.wav build/seed5-native.wav
+```
+
+`compare_sound.py` compares every field in order, including reads, repeated
+writes, timestamps, PCM ordinals, PCs and RAM ownership metadata. No lag fitting,
+sorting, tolerance or write deduplication. A mismatch reports the first record
+and recent submitted packets; truncated/incomplete captures fail.
+
+Final seed-5 gate: **12,258,121 identical records**, 3,768 voice contexts,
+1,639 note allocations, 852 commands and byte-identical 3,029,425-frame WAVs.
+The native main CPU executes 80,338,232 blocks with zero fallback in both modes.
+Fresh 3600-frame attract WAVs are also identical for native-main/oracle-sound,
+interpreted-main/oracle-sound and native-main/native-sound. MAME correlation
+retains exactly the observation-gate values above; it does not improve or
+regress the separate hardware-model residual.
+
+## Extracting music and SFX events
+
+`f3rt-sound-extract` runs the interpreted main game for 900 frames by default,
+then freezes it and advances only the sound subsystem. The game publishes its
+startup packets itself. Main `$3400/$3404/$340a/$3410` writes the four gain
+requests at main `$c007f8..$c007fb` around 13.2338 seconds; the old 660-frame
+freeze point preceded these writes and produced highly attenuated output.
+Default 900-frame event origin is tick 244,300,326 / PCM frame 454,413
+(15.268770 seconds) with the supplied ROM and cold default state.
+
+Pending main packets are drained before the event origin. `--packet` injects
+at time zero; repeated `--at SECONDS:HEX` schedules relative to that origin,
+rounded once to the 16 MHz clock. Equal-time packets retain argument order.
+Injection uses the actual ring and producer index, with writer PC `ffffffff`.
+Full-ring, malformed packets, unreleased reset and events at/after `--seconds`
+are errors, not silently delayed/dropped commands. No hidden initialization
+packets or master-volume overrides are inserted.
+
+Music sequence 8 with sequence volume `$74`:
+
+```sh
+build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+  --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
+  --wav-window event --sound-trace build/music.sound --wav build/music.wav
+python3 tools/decode_sound.py build/music.sound --notes-only \
+  --output build/music.jsonl
+```
+
+An observed direct SFX program/key/velocity, followed by note release:
+
+```sh
+build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+  --sound-driver native --packet 068d01074002 --packet 068e01072768 \
+  --at 1.5:058f010727 --seconds 3 --wav-window event \
+  --sound-trace build/sfx.sound --wav build/sfx.wav
+python3 tools/decode_sound.py build/sfx.sound --notes-only \
+  --output build/sfx.jsonl
+```
+
+Use `--sound-driver oracle` to reproduce each independent reference and compare
+with `compare_sound.py` plus `cmp`. Exercised music: 1,697,152 identical records,
+148,805 event-window PCM frames, peak 414; SFX: 1,446,519 identical records,
+89,283 event-window frames, peak 530. Both WAVs are byte-identical across drivers.
+The complete bus trace always starts at cold boot. `--wav-window event` trims
+only WAV output; default `full` retains boot. CLI audio counters include boot
+regardless of the chosen WAV window. JSONL uses absolute trace time and retains
+command provenance; `--notes-only` omits subsequent envelope/control writes.
+For complete reproduction, decode without that projection. This is packet-level
+extraction, not a promise that every program/sequence ID yields an audible note.
