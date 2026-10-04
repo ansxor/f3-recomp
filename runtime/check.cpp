@@ -28,12 +28,13 @@ uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
 void check_sound_cycles(f3rt::Machine &m) {
     struct Result { int cycles;uint32_t d0,a1;uint16_t sr; };
-    const auto execute = [&](std::initializer_list<uint16_t> instruction,uint32_t bit=0) {
+    const auto execute = [&](std::initializer_list<uint16_t> instruction,uint32_t source=0,uint32_t d0=0) {
         m.audio->set_reset(true);
-        m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(0x4000,0);
+        m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(0x4000,source<<16);
         uint32_t pc=0x1000;
         const auto emit = [&](uint16_t word) { m.audio->write16(pc,word);pc+=2; };
-        for (uint16_t word : {uint16_t(0x7000),uint16_t(0x223c),uint16_t(bit>>16),uint16_t(bit),
+        for (uint16_t word : {uint16_t(0x203c),uint16_t(d0>>16),uint16_t(d0),
+                              uint16_t(0x223c),uint16_t(source>>16),uint16_t(source),
                               uint16_t(0x227c),uint16_t(0),uint16_t(0x4000),uint16_t(0x46fc),uint16_t(0x271b)})
             emit(word);
         for (auto word : instruction) emit(word);
@@ -84,6 +85,41 @@ void check_sound_cycles(f3rt::Machine &m) {
         require(reg.d0==result && immediate.d0==result && reg.sr==0x271f && immediate.sr==0x271f,
                 "Bit timing preserves result, old-bit Z and untouched X/N/V/C flags");
     }
+    const struct { uint32_t dividend;uint16_t divisor;int cycles; } divisions[]={
+        {0,1,136},{0xffff,1,106},{0x10000,1,10},{0x10000,2,134},
+        {0xff1234,0x100,116},{0x80000000,0xffff,132},{0xfffeffff,0xffff,76}
+    };
+    for (const auto &test : divisions) {
+        const auto reg=execute({0x80c1},test.divisor,test.dividend);
+        const auto immediate=execute({0x80fc,test.divisor},test.divisor,test.dividend);
+        const auto memory=execute({0x80d1},test.divisor,test.dividend);
+        require(reg.cycles==test.cycles && immediate.cycles==test.cycles+4 && memory.cycles==test.cycles+4,
+                "68000 DIVU.W timing follows the operand-dependent subtract stages and EA cost");
+        const auto quotient=test.dividend/test.divisor;
+        const bool overflow=quotient>0xffff;
+        const auto result=overflow?test.dividend:((test.dividend%test.divisor)<<16)|quotient;
+        const uint16_t flags=0x10|(overflow?2:((quotient==0?4:0)|(quotient&0x8000?8:0)));
+        const uint16_t mask=overflow?0x13:0x1f; // N/Z are undefined on overflow.
+        require(reg.d0==result && immediate.d0==result && memory.d0==result &&
+                (reg.sr&mask)==flags && (immediate.sr&mask)==flags && (memory.sr&mask)==flags,
+                "DIVU timing preserves packed remainder/quotient, overflow destination and defined flags");
+    }
+}
+void check_sound_irq(f3rt::Machine &m) {
+    for (unsigned vector : {15,30,64,255}) {
+        m.audio->reset_board();
+        m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(vector*4,0x2000);
+        m.audio->write16(0x1000,0x4e72);m.audio->write16(0x1002,0x2000);m.audio->write16(0x2000,0x4e71);
+        m.audio->set_reset(false);m.interpreter->run_audio(1);m.interpreter->run_audio(1);
+        m.audio->write8(0x280019,vector);m.audio->write8(0x28000d,0);m.audio->write8(0x28000f,1);
+        m.audio->write8(0x28000b,8);m.audio->write8(0x280009,0x60);m.audio->advance(8);
+        require(m.audio->irq_level()==6,"DUART timer wakes the stopped sound CPU on IRQ6");
+        require(m.interpreter->run_audio(1)==48 && m.interpreter->sound_pc()==0x2002,
+                "68000 IRQ entry costs 44 cycles independently of vector number, plus the handler NOP");
+        require(m.audio->read16(0xfefa)==0x2000 && m.audio->read32(0xfefc)==0x1004,
+                "Vectored IRQ entry preserves the stopped CPU's SR and return PC");
+    }
+    m.audio->reset_board();
 }
 void check_trap_cycles(f3rt::Machine &m) {
     const auto old_vbr=m.cpu.vbr;
@@ -238,6 +274,7 @@ int main() try {
     check_rotate_cycles(*m);
     check_trap_cycles(*m);
     check_sound_cycles(*m);
+    check_sound_irq(*m);
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

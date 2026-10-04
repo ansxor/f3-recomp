@@ -4456,6 +4456,8 @@ M68KMAKE_OP(divu, 16, ., d)
 
 	if(src != 0)
 	{
+		if(CPU_TYPE_IS_000(CPU_TYPE))
+			USE_CYCLES(m68ki_divu_000_cycles(*r_dst, src) - 140);
 		/* f3rt: current MAME clears C even on word division overflow. */
 		FLAG_C = CFLAG_CLEAR;
 		uint quotient = *r_dst / src;
@@ -4484,6 +4486,8 @@ M68KMAKE_OP(divu, 16, ., .)
 
 	if(src != 0)
 	{
+		if(CPU_TYPE_IS_000(CPU_TYPE))
+			USE_CYCLES(m68ki_divu_000_cycles(*r_dst, src) - 140);
 		/* f3rt: current MAME clears C even on word division overflow. */
 		FLAG_C = CFLAG_CLEAR;
 		uint quotient = *r_dst / src;

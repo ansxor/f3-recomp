@@ -2154,8 +2154,9 @@ static inline void m68ki_exception_interrupt(uint int_level)
 
 	m68ki_jump(new_pc);
 
-	/* Defer cycle counting until later */
-	USE_CYCLES(CYC_EXCEPTION[vector]);
+	/* 68000 interrupt entry has the same cost for every IACK vector. */
+	USE_CYCLES(CYC_EXCEPTION[CPU_TYPE_IS_000(CPU_TYPE) ?
+		EXCEPTION_INTERRUPT_AUTOVECTOR + int_level : vector]);
 
 #if !M68K_EMULATE_INT_ACK
 	/* Automatically clear IRQ if we are not using an acknowledge scheme */
@@ -2174,6 +2175,32 @@ static inline void m68ki_check_interrupts(void)
 	}
 	else if(CPU_INT_LEVEL > FLAG_INT_MASK)
 		m68ki_exception_interrupt(CPU_INT_LEVEL>>8);
+}
+
+/* 68000 DIVU.W timing for a nonzero divisor, excluding effective-address cost. */
+static inline int m68ki_divu_000_cycles(uint dividend, uint divisor)
+{
+	int cycles = 76;
+	uint shifted_divisor = divisor << 16;
+	if((dividend >> 16) >= divisor)
+		return 10;
+
+	/* The final quotient bit has fixed timing; the preceding stages vary. */
+	for(uint bit = 0; bit < 15; bit++)
+	{
+		uint carry = dividend & 0x80000000u;
+		dividend <<= 1;
+		if(carry)
+			dividend -= shifted_divisor;
+		else if(dividend >= shifted_divisor)
+		{
+			dividend -= shifted_divisor;
+			cycles += 2;
+		}
+		else
+			cycles += 4;
+	}
+	return cycles;
 }
 
 /* Helper to load a bitfield from EA */

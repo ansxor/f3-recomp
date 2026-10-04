@@ -30,6 +30,14 @@ register bit-index timing have dedicated regressions. Other CPU models retain
 their prior costs. This changes no ABI fields or main-CPU generated costs and
 does not establish integrated audio parity.
 
+The sound 68000 charges 44 cycles for IRQ entry regardless of whether IACK
+selects an autovector or a device-supplied vector. The vector still selects the
+handler and exception frame. For a nonzero divisor, DIVU.W now follows the
+measured operand-dependent cost: 10 cycles on quotient overflow, otherwise
+76–136 cycles, plus the effective-address cost. Results, flags, divide-by-zero,
+MUL, DIVS, Group 2 exceptions and all other CPU-model timings are unchanged.
+These corrections neither change ABI 2 nor establish audio parity.
+
 ## Version 1 — 2026-10-03
 
 `include/f3rt/cpu_abi.h` is the frozen initial C interface. Generated blocks use numeric 68020 registers, materialized SR at non-memory callbacks, cumulative cycle accounting, big-endian bus accessors, a per-block boundary hook, exception entry, sorted dynamic block registration, device reset, and a one-instruction interpreter fallback. `f3_set_sr` handles user/interrupt/master stack switching and invalidates lazy flags. Blocks set successor PC and return; `f3_dispatch` owns iterative lookup and fallback. The runtime pointer is opaque and runtime-owned. No serialized struct layout is promised across pointer widths.
