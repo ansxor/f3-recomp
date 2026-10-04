@@ -331,6 +331,12 @@ def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
                         break
                     roots.append(target)
     roots.extend(spec.get("entry_points", []))
+    for table_spec in spec.get("pointer_tables", []):
+        table = _parse_int_address(table_spec["table"])
+        count = int(table_spec["count"])
+        roots.extend(int.from_bytes(rom[entry:entry + 4], "big")
+                     for entry in range(table, table + count * 4, 4)
+                     if 0 <= entry and entry + 4 <= len(rom))
     visited, callbacks = set(), set()
     while roots:
         pc = roots.pop()

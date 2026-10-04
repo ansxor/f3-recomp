@@ -89,6 +89,8 @@ scan_callbacks = true
 pointer_field = 0x1c
 # Plain pointer arrays and {script, counter} pairs (e.g. $a26f2).
 pointer_table_strides = [4, 8]
+# $ec12c supplies this table through D1; $f8b62 indexes it by actor size.
+pointer_tables = [{ table = 0x0f967c, count = 20 }]
 operand_bytes = [4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 0, 8, -1, -1, -1, 6, -1, 0, -1, 6, 6, 4, 0, 0]
 code_pointer_opcodes = [0, 1, 2, 3, 4]
 jump_opcode = 5
