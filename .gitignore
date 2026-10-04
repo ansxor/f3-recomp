@@ -6,3 +6,6 @@ games/*/rom/
 *.bin
 .DS_Store
 wt/
+__pycache__/
+*.pyc
+.venv/

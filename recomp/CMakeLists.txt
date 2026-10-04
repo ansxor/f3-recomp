@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.20)
+project(f3_recompiled C)
+
+set(F3_GENERATED_DIR "" CACHE PATH "Directory emitted by python -m recomp emit")
+if(NOT EXISTS "${F3_GENERATED_DIR}/sources.cmake")
+    message(FATAL_ERROR "Set F3_GENERATED_DIR to emitted program directory (sources.cmake missing)")
+endif()
+include("${F3_GENERATED_DIR}/sources.cmake")
+add_library(f3_recompiled STATIC ${F3_GENERATED_SOURCES})
+target_compile_features(f3_recompiled PUBLIC c_std_11)
+target_include_directories(f3_recompiled PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "${F3_GENERATED_DIR}")
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(f3_recompiled PRIVATE -Wall -Wextra -Werror)
+endif()

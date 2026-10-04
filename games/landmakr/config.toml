@@ -1,0 +1,44 @@
+[game]
+name = "Land Maker (World)"
+id = "landmakr"
+platform = "taito_f3"
+
+[rom]
+size = 2097152 # 2 MiB (0x200000)
+interleave = 4
+
+# 4 x 524288 (0x80000) byte lanes interleaved at offsets 0, 1, 2, 3
+[[rom.lanes]]
+file = "e61-19.20"
+offset = 0
+size = 524288
+crc = "f92eccd0"
+sha1 = "88e836390be1ca08c578080662d17007a9e0bcc3"
+
+[[rom.lanes]]
+file = "e61-18.19"
+offset = 1
+size = 524288
+crc = "5a26c9e0"
+sha1 = "e7f09722f6b7a459248c2c8ad0a2695365cc78dc"
+
+[[rom.lanes]]
+file = "e61-17.18"
+offset = 2
+size = 524288
+crc = "710776a8"
+sha1 = "669aa086e7a5faedd90407e558c01bf5f0869790"
+
+[[rom.lanes]]
+file = "e61-16.17"
+offset = 3
+size = 524288
+crc = "b073cda9"
+sha1 = "a8b713c3e17e431b5789a70d6f9b0e0a6b02624a"
+
+[discovery]
+# Config-only: World lanes were not supplied, so no Japan-specific addresses.
+entry_points = []
+scan_jump_tables = true
+scan_task_traps = true
+scan_callbacks = true
