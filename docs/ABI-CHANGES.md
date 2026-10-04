@@ -33,3 +33,8 @@ The pinned 68EC020/68020 MOVEM reference charges three cycles per stored
 register for either width, and four per loaded register, in addition to the
 opcode/addressing cost. Generated blocks and the semantic reference must use
 the same distinction. Sound 68000 and other CPU-model costs are unchanged.
+
+EC020/68020 ROL, ROR, ROXL and ROXR have no count-dependent cycle surcharge
+for either immediate or register counts. The pinned reference stores shift
+timing as cycles per count, not a shift exponent; zero must mean zero extra
+cycles. Operand, flag and other CPU-model behavior is unchanged.
