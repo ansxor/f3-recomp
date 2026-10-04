@@ -95,9 +95,14 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   delivery remains at native block boundaries; frame/audio parity is checked
   separately against observed Land Maker output.
 - TOML `[discovery].entry_points` accepts observed runtime PCs.
-  `[[discovery.jump_tables]]` records a transfer `address` and its `targets`.
-  `inline_string_helpers` is game-specific metadata for routines that consume
-  an aligned NUL-terminated inline string after a call.
+  `[[discovery.jump_tables]]` records a transfer `address` and its `targets`,
+  or a ROM `table` address and `count` of big-endian longword destinations.
+  `[discovery.actor_scripts]` describes bytecode operand lengths, native callback
+  commands, and script jump/call/return commands. Script roots include immediate
+  stores and indexed PC-relative pointer arrays, including register-staged loads
+  and configured record strides. This avoids decoding script words as 68020 code.
+  `inline_string_helpers` identifies routines that consume an aligned
+  NUL-terminated inline string after a call.
 - Optional `[[hooks]]` entries have numeric `address` and C `symbol`; generated
   code calls `void symbol(f3_cpu *)` before the instruction with canonical SR.
   Changing PC or stopping the CPU skips that instruction. Link your hook
