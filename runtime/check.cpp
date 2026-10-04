@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "eeprom.hpp"
+#include "interpreter.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -14,6 +15,7 @@ f3rt::RomSet fixture() {
     r.main[6]=1; // PC 100
     r.main[0x100]=0x70;r.main[0x101]=0x2a; // moveq #42,d0
     r.main[0x102]=0x60;r.main[0x103]=0xfe; // bra self
+    r.samples[0x2468a]=0x45;r.samples[0x2468b]=0x67; // OTIS word 0x12345, above old truncated mask
     return r;
 }
 void send_bit(f3rt::Eeprom &e,bool bit) { uint8_t pins=0x10|(bit?4:0);e.pins(pins);e.pins(pins|8); }
@@ -33,6 +35,13 @@ int main() try {
     m->write8(0x100,0xff);require(m->read16(0x100)==0x702a,"ROM is read-only");
     m->write8(0xc00010,0x75);require(m->audio->read16(0x140020)==0x75ff,"DPRAM sound high-byte lane");
     m->audio->write16(0x140020,0xaabb);require(m->read8(0xc00010)==0xaa,"DPRAM reverse lane");
+    m->audio->write16(0x20001e,0); // Voice 0, register page
+    m->audio->write16(0x200014,0x0246);m->audio->write16(0x200016,0x8a00);
+    m->audio->write16(0x20001e,0x20); // Stopped voice sample-ROM readback
+    require(m->audio->read16(0x20000c)==0x4567,"OTIS stopped voice reads full 20-bit sample address");
+    m->audio->write16(0x600,0xa55a);m->audio->set_reset(false);
+    m->audio->set_reset(true);m->audio->set_reset(false);
+    require(m->audio->read16(0x600)==0xa55a,"Sound CPU RESET preserves board work RAM");
     m->write8(0x4a0004,0x04);m->write8(0x4a0004,0x04);require(m->coin_count[0]==1,"Coin counter rising-edge only");
     m->set_input(0,0x1000,true);require(!(m->read32(0x4a0000)&0x1000),"Active-low start input");
     f3rt::Eeprom e;
@@ -53,6 +62,10 @@ int main() try {
     require(f3_register_blocks(&cpu,blocks,1)==1,"Valid block table");
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_dispatch(&cpu) && cpu.d[0]==99,"Native dispatch executes matching block");
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_fallback(&cpu) && cpu.d[0]==42 && cpu.pc==0x102,"Fallback executes exactly one real instruction");
+    cpu.d[0]=0xdeadbeef;cpu.sr=0x2015;
+    m->interpreter->reset_main();
+    require(cpu.d[0]==0xdeadbeef && cpu.sr==0x2715 && cpu.pc==0x100,
+            "Reset preserves canonical native D/CCR, not stale fallback context");
     const f3_block bad[]={{0x100,native},{0x100,native}};
     require(!f3_register_blocks(&cpu,bad,2),"Duplicate PCs rejected");
     std::cout<<"PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter\n";

@@ -45,6 +45,9 @@ void Interpreter::reset_main() {
     bind(machine, false);
     m68k_set_context(main_context.data());
     m68k_set_cpu_type(M68K_CPU_TYPE_68EC020);
+    // RESET preserves general registers and CCR: generated execution may have
+    // advanced them since the last interpreter context was saved.
+    f3rt_core_import(&machine.cpu);
     callbacks();
     m68k_pulse_reset();
     f3rt_core_export(&machine.cpu);
