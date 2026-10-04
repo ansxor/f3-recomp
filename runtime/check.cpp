@@ -27,6 +27,53 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_duart_counter() {
+    const auto preset=[](f3rt::MC68681 &d,unsigned count) { d.write(6,count>>8);d.write(7,count); };
+    f3rt::MC68681 restart;
+    preset(restart,3);restart.write(4,0x30);restart.read(14);restart.advance(17);
+    restart.read(14);restart.advance(47);
+    require((restart.read(5)&8)==0,"Restarting the counter discards the preceding divider phase");
+    restart.advance(1);
+    require((restart.read(5)&8)!=0 && restart.read(6)==0xff && restart.read(7)==0xff,
+            "Counter expires at the new deadline and reloads the reference 0xffff period");
+    restart.advance(16);
+    require(restart.read(7)==0xfe,"Counter underflow reload is independent of the programmed preset");
+    restart.read(15);restart.advance(1000000);
+    require((restart.read(5)&8)==0,"Stop-counter read acknowledges and cancels counter-mode expiration");
+
+    f3rt::MC68681 mode;
+    preset(mode,3);mode.write(4,0x30);mode.read(14);mode.advance(17);mode.read(15);
+    mode.write(4,0x60);mode.advance(5);
+    require((mode.read(5)&8)==0,"Entering timer mode starts a fresh full period without old divider residue");
+    mode.advance(1);
+    require((mode.read(5)&8)!=0,"Timer ready asserts after both half-periods");
+    mode.read(15);mode.advance(6);
+    require((mode.read(5)&8)!=0,"Timer-mode acknowledgement does not stop periodic interrupts");
+
+    f3rt::MC68681 source;
+    preset(source,2);source.write(4,0x70);source.advance(8);source.write(4,0x60);
+    source.advance(23);
+    require(source.read(7)==1 && (source.read(5)&8)==0,"Clock-source change preserves the armed duration");
+    source.advance(1);source.advance(1);
+    require((source.read(5)&8)==0,"The next half-period uses the newly selected source");
+    source.advance(1);
+    require((source.read(5)&8)!=0,"Reload adopts the new clock without rescaling elapsed time");
+
+    f3rt::MC68681 reset;
+    reset.advance(1000000);
+    require(reset.read(5)==0,"A cold DUART has no scheduled counter event");
+    preset(reset,100);reset.write(4,0x60);reset.advance(37);reset.reset();
+    require(reset.read(5)==0 && !reset.irq_pending(),"Board reset clears the visible IRQ registers");
+    reset.advance(62);
+    require(reset.read(5)==0,"Board reset preserves the remaining deadline, not a restarted period");
+    reset.advance(1);
+    require(reset.read(5)==8 && !reset.irq_pending(),"Retained expiration latches counter-ready while reset IMR masks IRQ");
+    reset.write(12,64);reset.write(5,8);
+    require(reset.irq_pending() && reset.get_irq_vector()==64 && reset.irq_pending(),
+            "Unmasking retained counter-ready asserts IRQ; IACK supplies vector without clearing it");
+    reset.read(15);
+    require(!reset.irq_pending(),"Counter acknowledge clears a retained post-reset interrupt");
+}
 void check_duart_tx() {
     for (unsigned channel : {0,1}) {
         f3rt::MC68681 duart;
@@ -339,6 +386,7 @@ int main() try {
     check_sound_cycles(*m);
     check_sound_irq(*m);
     check_duart_tx();
+    check_duart_counter();
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

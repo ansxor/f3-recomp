@@ -53,6 +53,8 @@ public:
 
 private:
     void update_interrupts();
+    uint32_t counter_divider() const;
+    void start_counter();
     void tx_interrupt(unsigned channel);
     void tx_clock_select(unsigned channel);
     void tx_command(unsigned channel, uint8_t data);
@@ -80,8 +82,7 @@ private:
     uint8_t m_ip_last_state;
 
     uint16_t m_ctr_preset;
-    int32_t  m_ct_counter;
-    uint32_t m_ct_accum;
+    uint32_t m_ct_remaining;
     uint8_t  m_half_period;
     bool     m_ct_running;
 

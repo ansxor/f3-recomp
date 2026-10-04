@@ -24,8 +24,7 @@ MC68681::MC68681()
     , m_ipcr(0)
     , m_ip_last_state(0x0f)
     , m_ctr_preset(0)
-    , m_ct_counter(0)
-    , m_ct_accum(0)
+    , m_ct_remaining(0)
     , m_half_period(0)
     , m_ct_running(false)
     , m_mr1a(0), m_mr2a(0), m_mr_ptra(0)
@@ -49,10 +48,9 @@ void MC68681::reset() {
     m_ip_last_state = 0x0f;
 
     m_ctr_preset = 0;
-    m_ct_counter = 0;
-    m_ct_accum = 0;
-    m_half_period = 0;
-    m_ct_running = false;
+    // Match the reference device's pending timer event across board reset.
+    // Registers reset, but the scheduled deadline and output phase survive;
+    // its next expiration is interpreted using the reset ACR (counter mode).
 
     m_mr1a = m_mr2a = m_mr_ptra = 0;
     m_sra = 0;
@@ -220,9 +218,9 @@ uint8_t MC68681::read(uint32_t offset) {
     case 0x05: // ISR
         return m_isr;
     case 0x06: // CTUR
-        return uint8_t(m_ct_counter >> 8);
+        return uint8_t((m_ct_remaining / counter_divider()) >> 8);
     case 0x07: // CTLR
-        return uint8_t(m_ct_counter & 0xff);
+        return uint8_t(m_ct_remaining / counter_divider());
 
     case 0x08: { // MR1B / MR2B
         uint8_t val = (m_mr_ptrb == 0) ? m_mr1b : m_mr2b;
@@ -246,8 +244,7 @@ uint8_t MC68681::read(uint32_t offset) {
         if (m_acr & 0x40) {
             m_half_period = 0;
         }
-        m_ct_counter = std::max<uint16_t>(m_ctr_preset, 1);
-        m_ct_running = true;
+        start_counter();
         return 0;
 
     case 0x0f: // Stop counter command
@@ -293,8 +290,7 @@ void MC68681::write(uint32_t offset, uint8_t data) {
             if (data & 0x40) {
                 // Entering timer mode
                 m_half_period = 0;
-                m_ct_counter = std::max<uint16_t>(m_ctr_preset, 1);
-                m_ct_running = true;
+                start_counter();
             } else {
                 m_ct_running = false;
             }
@@ -360,62 +356,59 @@ void MC68681::write(uint32_t offset, uint8_t data) {
     }
 }
 
+uint32_t MC68681::counter_divider() const {
+    if (m_acr & 0x40) {
+        switch ((m_acr >> 4) & 3) {
+        case 0: return 4;  // IP2 (1 MHz)
+        case 1: return 64; // IP2 / 16
+        case 2: return 1;  // X1/CLK (4 MHz)
+        default: return 16; // X1/CLK / 16
+        }
+    }
+    return (m_acr & 0x30) == 0x30 ? 16 : 4;
+}
+
+void MC68681::start_counter() {
+    m_ct_remaining = std::max<uint16_t>(m_ctr_preset, 1) * counter_divider();
+    m_ct_running = true;
+}
+
 void MC68681::advance(uint32_t duart_cycles) {
     tx_advance(0, duart_cycles);
     tx_advance(1, duart_cycles);
     if (!m_ct_running) return;
 
-    // Determine divider from 4MHz DUART clock based on ACR[6:4]
-    uint32_t divider = 1;
-    if (m_acr & 0x40) { // Timer mode
-        switch ((m_acr >> 4) & 3) {
-        case 0: divider = 4; break;  // IP2 (1MHz): 4MHz / 4
-        case 1: divider = 64; break; // IP2/16 (62.5kHz): 4MHz / 64
-        case 2: divider = 1; break;  // X1/CLK (4MHz)
-        case 3: divider = 16; break; // X1/CLK/16 (250kHz)
-        }
-    } else { // Counter mode
-        switch ((m_acr >> 4) & 3) {
-        case 0: divider = 4; break;  // IP2
-        case 3: divider = 16; break; // X1/16
-        default: divider = 4; break;
-        }
-    }
-
-    m_ct_accum += duart_cycles;
-    while (m_ct_accum >= divider) {
-        m_ct_accum -= divider;
-        --m_ct_counter;
-        if (m_ct_counter <= 0) {
-            if (m_acr & 0x40) { // Timer mode: square wave toggle
-                m_ct_counter = std::max<uint16_t>(m_ctr_preset, 1);
-                m_half_period = !m_half_period;
-                for (unsigned channel = 0; channel < 2; ++channel) {
-                    if (((channel ? m_csrb : m_csra) & 15) == 13) {
-                        auto &tx = m_tx[channel];
-                        if (m_half_period) {
-                            if (--tx.counter_prescaler == 8) {
-                                const bool rising = !tx.clock;
-                                tx.clock = true;
-                                if (rising) tx_bit(channel);
-                            } else if (tx.counter_prescaler == 0) {
-                                tx.counter_prescaler = 16;
-                                tx.clock = false;
-                            }
-                        }
+    // Store the scheduled duration in crystal clocks, not live ACR units.
+    // Preset/source writes affect the next reload, not an already armed event.
+    while (duart_cycles >= m_ct_remaining) {
+        duart_cycles -= m_ct_remaining;
+        if (m_acr & 0x40) {
+            m_half_period = !m_half_period;
+            for (unsigned channel = 0; channel < 2; ++channel) {
+                if (((channel ? m_csrb : m_csra) & 15) == 13 && m_half_period) {
+                    auto &tx = m_tx[channel];
+                    if (--tx.counter_prescaler == 8) {
+                        const bool rising = !tx.clock;
+                        tx.clock = true;
+                        if (rising) tx_bit(channel);
+                    } else if (tx.counter_prescaler == 0) {
+                        tx.counter_prescaler = 16;
+                        tx.clock = false;
                     }
                 }
-                if (m_half_period == 0) {
-                    m_isr |= INT_COUNTER_READY;
-                    update_interrupts();
-                }
-            } else { // Counter mode
-                m_ct_counter = 0x10000;
+            }
+            if (m_half_period == 0) {
                 m_isr |= INT_COUNTER_READY;
                 update_interrupts();
             }
+            start_counter();
+        } else {
+            m_isr |= INT_COUNTER_READY;
+            update_interrupts();
+            m_ct_remaining = 0xffff * counter_divider();
         }
     }
+    m_ct_remaining -= duart_cycles;
 }
 
 } // namespace f3rt

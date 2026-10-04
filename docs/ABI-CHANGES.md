@@ -47,6 +47,14 @@ also retain the required divide-by-16 prescaler. TX pins are unconnected, so no
 serial payload storage or output callback is needed. This corrects the ROM's
 TXEMPTY polling duration without modifying CPU instruction costs or ABI 2.
 
+DUART counter deadlines are stored in crystal clocks, independent of subsequent
+clock-source/preset writes. Restart discards prior divider phase. Board reset
+preserves an already queued expiration and the timer output phase, reproducing
+the observed reference reset path; register reset still clears IMR/ISR/IVR.
+This intentionally follows MAME's scheduled-event behavior rather than its
+contradictory reset comment, and is not asserted to model physical RESET.
+No CPU ABI or generated-code contract changes are involved.
+
 ## Version 1 — 2026-10-03
 
 `include/f3rt/cpu_abi.h` is the frozen initial C interface. Generated blocks use numeric 68020 registers, materialized SR at non-memory callbacks, cumulative cycle accounting, big-endian bus accessors, a per-block boundary hook, exception entry, sorted dynamic block registration, device reset, and a one-instruction interpreter fallback. `f3_set_sr` handles user/interrupt/master stack switching and invalidates lazy flags. Blocks set successor PC and return; `f3_dispatch` owns iterative lookup and fallback. The runtime pointer is opaque and runtime-owned. No serialized struct layout is promised across pointer widths.
