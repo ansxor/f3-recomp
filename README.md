@@ -43,6 +43,32 @@ finite verification runs without changing the CPU execution path.
 The build command is smoke-tested; final playable frame/audio equivalence is
 tracked in `STATUS.md`, not implied by successful compilation.
 
+### Game-data video and presentation
+
+`--video fdp` (default) retains the hardware-RAM renderer. `--video game`
+instead reconstructs Land Maker's scene from its native display producers
+and ROM/work-RAM descriptors. `--video compare` renders both and rejects
+any supported-frame RGB mismatch. Both game-data modes require strict-native
+`landmakrj`; renderer fallback for explicitly unsupported frames is separate
+from, and never enables, main-CPU interpreter fallback.
+
+After native pixel parity, opt into scene rerasterization and extra border:
+
+```sh
+./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter linear
+```
+
+Defaults preserve native presentation: scale **1**, border **0**, filter
+**nearest**. Scale accepts 1–4; border accepts 0–160 native columns **per side**.
+Border 48 gives 416×232 before internal scaling. Linear is optional final
+SDL texture filtering; source ROM artwork is unchanged. Native captures/CRCs
+remain 320×232. Unsupported enhanced frames show the exact oracle picture
+centered with black side borders, rather than invented off-screen geometry.
+
+ROM addresses, descriptor layouts, measured per-layer parity, fallback limits
+and presentation evidence: [docs/VIDEO-HLE.md](docs/VIDEO-HLE.md).
+
+
 
 ## Recompile the supplied game
 
@@ -142,6 +168,16 @@ CPU halt, and execution errors, reporting the seed, frame and CPU state.
 `--dump-dir` and `--surface` options reproduce individual runs and captures.
 Passing seeds are sampled gameplay evidence, not proof that every possible
 game state has executed.
+
+Add `--video-diff` to compare the game renderer's four playfields, four sprite
+priority planes, text, visible row descriptions and final native RGB against
+the FDP oracle. Sampling starts at frame 600, every 120 frames by default;
+`--video-diff-every N` changes that interval. `--video-layer-mask N` selects
+bits 0–3 (PF), 4–7 (sprites) and 8 (text); default 511 also compares composition.
+Each layer reports exact compared-pixel and mismatch counts. Unsupported
+sampled state fails explicitly; it is not counted as a matching HLE frame.
+The executable's `--dump-dir DIR` also captures the first video mismatch.
+
 
 ## Instruction-level differential self-test
 

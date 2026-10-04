@@ -10,7 +10,6 @@ public:
     void reset();
     void observe(GameMemory &memory, const f3_cpu &cpu);
     void observe_write(uint32_t pc, uint32_t address);
-    static std::span<const uint32_t> hooks();
     bool supported() const;
     uint32_t unsupported_pc() const { return unsupported_pc_; }
     ScenePixel pixel(int x, int y, bool flipped) const;

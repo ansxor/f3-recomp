@@ -5,6 +5,7 @@
 #include "third_party/audio/mc68681.hpp"
 #include "game_tiles.hpp"
 #include "game_sprites.hpp"
+#include <algorithm>
 #include <array>
 #include <initializer_list>
 #include <iostream>
@@ -83,6 +84,42 @@ void check_game_sprite_descriptors() {
                 sprite.flip_x && !sprite.flip_y && sprite.palette == 0xe2,
                 "Grid geometry uses full zoom precision while raster width masks the low four zoom bits");
     }
+    cpu.a[0] = 0x610000; cpu.pc = 0x4688;
+    scene.observe(memory, cpu);
+    require(!scene.supported() && scene.unsupported_pc() == 0x4688,
+            "An unreadable sprite descriptor is unsupported, not an empty tile that silently disappears");
+}
+void check_game_sprite_top_edge() {
+    std::array<uint8_t, 8> rom{};
+    std::array<uint8_t, 0x20000> ram{};
+    std::array<uint8_t, 3 * 256> assets{};
+    std::array<uint16_t, 432 * 256> pixels{};
+    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
+        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+    };
+    word(rom, 2, 2); word(rom, 6, 1);
+    std::fill(assets.begin() + 512, assets.end(), 3); // Background tile.
+    std::fill(assets.begin() + 496, assets.begin() + 512, 15); // Foreground's last texel row.
+    f3rt::GameMemory memory{rom, ram};
+    f3rt::GameSprites scene;
+    f3_cpu cpu{};
+    cpu.pc = 0x41d0; scene.observe(memory, cpu);
+    const auto draw = [&](int foreground_y) {
+        cpu.pc = 0x4528; scene.observe(memory, cpu);
+        word(ram, 0, 0); word(ram, 2, 0); word(ram, 6, 0); word(ram, 8, 0xc0);
+        cpu.a[0] = 0; cpu.a[4] = 0x400000;
+        cpu.pc = 0x4688; scene.observe(memory, cpu);
+        word(ram, 0, 48); word(ram, 2, 48); word(ram, 6, uint16_t(foreground_y)); word(ram, 8, 0xf0);
+        cpu.a[0] = 4;
+        scene.observe(memory, cpu);
+        cpu.pc = 0x4480; scene.observe(memory, cpu);
+        scene.latch();
+        scene.raster(assets, pixels);
+    };
+    draw(-13); // At scanout Y=11, height 16*208/256=13: bottom is exactly the active top.
+    require(pixels[24 * 432 + 46] == 0x1c03, "A fully clipped scaled sprite cannot leak its rounded last row into the viewport");
+    draw(-12);
+    require(pixels[25 * 432 + 46] == 0x1f0f, "The adjacent partially visible scaled sprite retains its last texel row");
 }
 f3rt::RomSet fixture() {
     f3rt::RomSet r;
@@ -526,6 +563,7 @@ void check_audio_mixer() {
 int main() try {
     check_game_tile_descriptors();
     check_game_sprite_descriptors();
+    check_game_sprite_top_edge();
     check_audio_mixer();
     check_main_sound_ordering();
     check_audio_partitioning();

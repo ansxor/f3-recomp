@@ -45,6 +45,8 @@ int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
     std::string set="landmakrj";
     std::string video_mode="fdp";
+    f3rt::GameVideoOptions video_options;
+    std::string video_filter="nearest";
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
 #ifdef F3RT_LANDMAKR
@@ -68,6 +70,17 @@ int main(int argc,char **argv) try {
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
         else if(arg=="--video")video_mode=value();
+        else if(arg=="--video-scale") {
+            const auto scale=std::stoul(value());
+            if(!scale || scale>f3rt::GameVideoOptions::max_scale)throw std::runtime_error("--video-scale must be 1..4");
+            video_options.scale=unsigned(scale);
+        }
+        else if(arg=="--video-border") {
+            const auto border=std::stoul(value());
+            if(border>f3rt::GameVideoOptions::max_border)throw std::runtime_error("--video-border must be 0..160");
+            video_options.border=unsigned(border);
+        }
+        else if(arg=="--video-filter")video_filter=value();
         else if(arg=="--headless")headless=true;
         else if(arg=="--no-audio")sound=false;
         else if(arg=="--translated")translated=true;
@@ -78,6 +91,8 @@ int main(int argc,char **argv) try {
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
+                     <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
+                     <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
                      <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: "+arg);
@@ -91,11 +106,14 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("--video must be fdp, game or compare");
     if(video_mode!="fdp" && (set!="landmakrj" || !translated || allow_fallback))
         throw std::runtime_error("Game-data video requires strict native landmakrj");
+    if(video_filter!="nearest" && video_filter!="linear")throw std::runtime_error("--video-filter must be nearest or linear");
+    if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
+        throw std::runtime_error("Presentation enhancements require --video game or compare");
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     m.allow_main_fallback=allow_fallback;
     if(video_mode!="fdp")
-        m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare);
+        m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
     if(!eeprom.empty())m.load_eeprom(eeprom);
     if(!fallback_report.empty())m.fallback_hits.resize(0x800000);
     if(translated) {
@@ -109,17 +127,18 @@ int main(int argc,char **argv) try {
     uint32_t audio_rate=m.audio->sample_rate();
     if(!headless) {
         check(SDL_Init(SDL_INIT_VIDEO|(sound?SDL_INIT_AUDIO:0)));
-        check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),960,696,SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
-        check(SDL_SetRenderLogicalPresentation(sdl.renderer,320,232,SDL_LOGICAL_PRESENTATION_LETTERBOX));
-        sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,320,232);
+        check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
+        check(SDL_SetRenderLogicalPresentation(sdl.renderer,int(video_options.width()),int(video_options.height()),SDL_LOGICAL_PRESENTATION_LETTERBOX));
+        sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,int(video_options.width()),int(video_options.height()));
         check(sdl.texture!=nullptr);
-        check(SDL_SetTextureScaleMode(sdl.texture,SDL_SCALEMODE_NEAREST));
+        check(SDL_SetTextureScaleMode(sdl.texture,video_filter=="linear"?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST));
         if(sound) {
             SDL_AudioSpec spec{SDL_AUDIO_S16,2,int(audio_rate)};
             sdl.audio=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,nullptr,nullptr);
             check(sdl.audio!=nullptr);check(SDL_ResumeAudioStreamDevice(sdl.audio));
         }
-        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" renderer="<<SDL_GetRendererName(sdl.renderer)<<'\n';
+        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" renderer="<<SDL_GetRendererName(sdl.renderer)
+                 <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()<<" filter="<<video_filter<<'\n';
     }
     std::unique_ptr<f3rt::WavWriter> wav;
     if(!wav_path.empty())wav=std::make_unique<f3rt::WavWriter>(wav_path,audio_rate);
@@ -150,7 +169,8 @@ int main(int argc,char **argv) try {
             if(sdl.audio)check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
         }
         if(!headless) {
-            check(SDL_UpdateTexture(sdl.texture,nullptr,m.pixels.data(),320*4));
+            const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
+            check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
             check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
             if(!surface.empty() && frames && m.frame==frames) {
                 SDL_Surface *shot=SDL_RenderReadPixels(sdl.renderer,nullptr);

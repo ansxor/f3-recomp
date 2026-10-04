@@ -11,6 +11,7 @@
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace f3rt {
 namespace {
@@ -22,9 +23,13 @@ bool differs(ScenePixel game, ScenePixel oracle) {
 }
 }
 struct GameVideo::Impl {
-    Impl(Machine &value, GameVideoMode selected) : machine(value), mode(selected) {}
+    Impl(Machine &value, GameVideoMode selected, GameVideoOptions presentation_options)
+        : machine(value), mode(selected), options(presentation_options) {}
     Machine &machine;
     GameVideoMode mode;
+    GameVideoOptions options;
+    std::vector<uint32_t> presentation_pixels;
+    std::vector<uint16_t> presentation_sprites;
     struct Fallback {
         const char *component = nullptr;
         uint32_t pc = 0;
@@ -57,7 +62,15 @@ struct GameVideo::Impl {
     std::array<uint64_t, 9> frames{}, mismatches{};
 };
 
-GameVideo::GameVideo(Machine &machine, GameVideoMode mode) : impl_(std::make_unique<Impl>(machine, mode)) {
+GameVideo::GameVideo(Machine &machine, GameVideoMode mode, GameVideoOptions options)
+    : impl_(std::make_unique<Impl>(machine, mode, options)) {
+    if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
+        throw std::runtime_error("Game presentation scale must be 1..4 and border 0..160");
+    if (options.expanded()) {
+        const size_t size = size_t(options.width()) * options.height();
+        impl_->presentation_pixels.resize(size);
+        impl_->presentation_sprites.resize(size);
+    }
     machine.video->enable_scene_inspection(mode != GameVideoMode::Game);
     reset();
 }
@@ -68,6 +81,8 @@ void GameVideo::reset() {
     impl_->sprites.reset();
     impl_->lines.reset();
     impl_->sprite_plane.fill(0);
+    std::fill(impl_->presentation_sprites.begin(), impl_->presentation_sprites.end(), 0);
+    std::fill(impl_->presentation_pixels.begin(), impl_->presentation_pixels.end(), 0xff000000);
     impl_->frames.fill(0);
     impl_->mismatches.fill(0);
     impl_->rendered = false;
@@ -96,29 +111,9 @@ void GameVideo::observe_write(uint32_t pc, uint32_t address) {
 void GameVideo::latch_sprites() {
     auto &state = *impl_;
     state.sprites.latch();
-    if (!state.sprites.trails()) state.sprite_plane.fill(0);
     const auto assets = state.machine.video->sprite_tiles();
-    if (assets.empty()) return;
-    const auto sprites = state.sprites.sprites();
-    for (size_t i = sprites.size(); i; --i) {
-        const auto &sprite = sprites[i - 1];
-        const auto *pixels = assets.data() + (sprite.tile & 32767) * 256;
-        int32_t dy8 = sprite.y + (state.sprites.flipped() ? 0 : 255);
-        for (int y = 0; y < 16; ++y, dy8 += sprite.scale_y) {
-            const int dy = dy8 >> 8;
-            if (dy < 24 || dy >= 256) continue;
-            int32_t dx8 = sprite.x + 128;
-            for (int x = 0; x < 16; ++x) {
-                const int dx = dx8 >> 8;
-                dx8 += sprite.scale_x;
-                if (dx < 46 || dx >= 366 || dx == (dx8 >> 8)) continue;
-                const unsigned source = ((y ^ (sprite.flip_y ? 15 : 0)) * 16) + (x ^ (sprite.flip_x ? 15 : 0));
-                const uint8_t pen = pixels[source] & state.sprites.pen_mask();
-                auto &destination = state.sprite_plane[dy * 432 + dx];
-                if (pen && !destination) destination = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
-            }
-        }
-    }
+    state.sprites.raster(assets, state.sprite_plane);
+    if (state.options.expanded()) state.sprites.raster(assets, state.presentation_sprites, state.options);
 }
 
 void GameVideo::render_frame() {
@@ -134,6 +129,15 @@ void GameVideo::render_frame() {
         m.video->render_frame(m.palette, m.graphics, m.control, m.pixels);
         if (state.rendered && state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
     }
+    if (!state.rendered && state.options.expanded()) {
+        // Unsupported geometry is never extrapolated into a made-up border.
+        // Preserve the exact oracle image in the center, with black side bars.
+        std::fill(state.presentation_pixels.begin(), state.presentation_pixels.end(), 0xff000000);
+        const unsigned scale = state.options.scale, width = state.options.width();
+        for (unsigned y = 0; y < state.options.height(); ++y)
+            for (unsigned x = 0; x < 320 * scale; ++x)
+                state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels[(y / scale) * 320 + x / scale];
+    }
     latch_sprites();
 }
 
@@ -143,6 +147,10 @@ void GameVideo::render() {
     if (!state.lines.supported()) { state.fallback("lines", state.lines.unsupported_pc()); return; }
     if (!state.text.supported()) { state.fallback("text", state.text.unsupported_pc()); return; }
     if (!state.sprites.supported()) { state.fallback("sprites", state.sprites.unsupported_pc()); return; }
+    // Descriptor decoding retains these command bits, but their complete
+    // scanout behavior is outside the measured normal-orientation contract.
+    if (state.sprites.flipped()) { state.fallback("flipped-screen", 0x43e0); return; }
+    if (state.sprites.trails()) { state.fallback("sprite-trails", 0x43e0); return; }
     for (unsigned layer = 0; layer < 4; ++layer) {
         if (state.tiles.supported(layer)) continue;
         state.fallback(layer_names[layer], state.tiles.unsupported_pc(layer));
@@ -151,11 +159,23 @@ void GameVideo::render() {
     state.lines.prepare(state.sprites.flipped());
     for (unsigned y = 24; y < 256; ++y)
         if (state.lines.row(y).bitmap) { state.fallback("bitmap-pivot", 0); return; }
+    std::array<uint32_t, 8192> colors;
+    const auto &palette = state.machine.palette;
+    for (unsigned i = 0; i < colors.size(); ++i)
+        colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) | palette[i * 4 + 3];
     compose_game_scene(state.tiles, state.text, state.lines, state.sprite_plane,
                        state.sprites.flipped(), state.machine.video->playfield_tiles(),
-                       state.machine.palette, state.pixels);
+                       colors, state.pixels);
+    if (state.options.expanded())
+        compose_game_scene(state.tiles, state.text, state.lines, state.presentation_sprites,
+                           state.sprites.flipped(), state.machine.video->playfield_tiles(),
+                           colors, state.presentation_pixels, state.options);
     state.rendered = true;
     ++state.rendered_frames;
+}
+
+std::span<const uint32_t> GameVideo::presentation() const {
+    return impl_->options.expanded() ? std::span<const uint32_t>(impl_->presentation_pixels) : impl_->machine.pixels;
 }
 
 void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {

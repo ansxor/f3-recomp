@@ -4,30 +4,12 @@
 namespace f3rt {
 namespace {
 
-constexpr std::array<uint32_t, 11> sprite_hooks{
-    0x41d0,  // Hardware sprite init (proven reinitialization)
-    0x43b0,  // Sprite global scroll update
-    0x43e0,  // Sprite command word update
-    0x4480,  // Frame submit (promotes staging to submitted batch)
-    0x4528,  // Frame compiler start (clears staging buffer)
-    0x4688,  // Single-tile sprite compiler
-    0x46c0,  // Multi-tile grid compiler (unscaled & scaled)
-    0xa8f38, // Master object multi-tile grid helper
-    0xa8f84, // Master object 3-tile helper
-    0xa90f4, // Master object 4-tile helper
-    0xa913c  // Master object scaled grid helper
-};
-
 inline int16_t sext12(uint16_t v) {
     v &= 0x0fff;
     return (v & 0x0800) ? int16_t(v | 0xf000) : int16_t(v);
 }
 
 } // namespace
-
-std::span<const uint32_t> GameSprites::hooks() {
-    return sprite_hooks;
-}
 
 void GameSprites::reset() {
     staging_count_ = 0;
@@ -159,6 +141,11 @@ void GameSprites::parse_single(GameMemory &memory, const f3_cpu &cpu) {
 
     const uint16_t attr_xor = memory.u16(a0);
     const uint16_t tile = memory.u16(a0 + 2);
+    if (!memory.supported) {
+        supported_ = false;
+        if (!unsupported_pc_) unsupported_pc_ = cpu.pc;
+        return;
+    }
     if (!tile) return;
 
     const uint8_t y_zoom = memory.u8(a4 + 1);
@@ -506,6 +493,53 @@ void GameSprites::observe(GameMemory &memory, const f3_cpu &cpu) {
 
     default:
         return;
+    }
+}
+void GameSprites::raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
+                         GameVideoOptions options) const {
+    if (!trails()) std::fill(output.begin(), output.end(), 0);
+    if (assets.empty()) return;
+    const bool expanded = options.expanded();
+    const int scale = int(options.scale);
+    const int width = expanded ? int(options.width()) : 432;
+    const int origin_x = expanded ? 46 - int(options.border) : 0;
+    const int origin_y = expanded ? 24 : 0;
+    const int left = expanded ? 0 : 46, right = expanded ? width : 366;
+    const int top = expanded ? 0 : 24, bottom = expanded ? int(options.height()) : 256;
+    const int y_bias = flipped() ? 0 : 255;
+    const uint8_t mask = pen_mask();
+    const auto sprites = this->sprites();
+    for (size_t i = sprites.size(); i; --i) {
+        const auto &sprite = sprites[i - 1];
+        // Cull the nominal fixed-point rectangle BEFORE rounding texel rows.
+        // Otherwise a sprite ending exactly at Y=24 leaks its last row into
+        // the active picture through the +255 native raster phase.
+        if (sprite.x + sprite.scale_x * 16 <= (46 - int(options.border)) * 256 ||
+            sprite.x > (365 + int(options.border)) * 256 ||
+            sprite.y + sprite.scale_y * 16 <= 24 * 256 || sprite.y > 255 * 256)
+            continue;
+        const auto *pixels = assets.data() + (sprite.tile & 32767) * 256;
+        for (int y = 0; y < 16; ++y) {
+            const int position_y = (sprite.y + y * sprite.scale_y) * scale + y_bias;
+            const int start_y = (position_y >> 8) - origin_y * scale;
+            const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * scale) >> 8) - origin_y * scale);
+            if (end_y <= top || start_y >= bottom) continue;
+            const auto *row = pixels + (y ^ (sprite.flip_y ? 15 : 0)) * 16;
+            for (int x = 0; x < 16; ++x) {
+                const int position_x = (sprite.x + x * sprite.scale_x) * scale + 128;
+                const int start_x = (position_x >> 8) - origin_x * scale;
+                const int end_x = ((position_x + sprite.scale_x * scale) >> 8) - origin_x * scale;
+                if (start_x == end_x || end_x <= left || start_x >= right) continue;
+                const uint8_t pen = row[x ^ (sprite.flip_x ? 15 : 0)] & mask;
+                if (!pen) continue;
+                const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
+                for (int dy = std::max(top, start_y); dy < std::min(bottom, end_y); ++dy)
+                    for (int dx = std::max(left, start_x); dx < std::min(right, end_x); ++dx) {
+                        auto &destination = output[dy * width + dx];
+                        if (!destination) destination = color;
+                    }
+            }
+        }
     }
 }
 

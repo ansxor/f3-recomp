@@ -1,13 +1,6 @@
 #include "game_tiles.hpp"
 
 namespace f3rt {
-namespace {
-constexpr std::array<uint32_t, 9> tile_hooks{
-    0x55c2, 0x5614, 0x56ae, 0x5a22, 0x5a5e, 0x5a9a, 0x5af4, 0x9bcea, 0x9ec4e
-};
-}
-
-std::span<const uint32_t> GameTiles::hooks() { return tile_hooks; }
 
 void GameTiles::reset() {
     for (auto &map : maps_) map.fill({});

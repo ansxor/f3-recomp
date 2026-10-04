@@ -141,3 +141,11 @@ producers rather than copy FDP values. `Video` exposes immutable decoded ROM
 assets and optional diagnostic layer/row readback. The oracle renderer and
 its one-frame sprite latch remain intact. These are C++ runtime interfaces,
 not changes to generated register layouts, bus callbacks or CPU timing.
+
+`GameVideoOptions` fixes presentation scale/border at construction.
+`GameVideo::presentation()` returns a read-only span of that frame's pixels;
+its contents change at the next render/reset. Default dimensions are 320×232;
+optional dimensions are `(320 + 2*border)*scale` by `232*scale`.
+`Machine::pixels` always remains the native 320×232 image, including when
+presentation enhancements are enabled. This avoids changing capture, CRC or
+CPU/device interfaces to accommodate optional display resolution.

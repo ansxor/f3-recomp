@@ -139,6 +139,8 @@ ROM `$480c..$4a36` uses half-pixel carry accumulators but uploads only integer c
 
 After that correction, seed 5 × 6000 frames passes all four sprite priority planes: **46 samples / 3,415,040 indexed pixels per group, each zero mismatches**. The comparison domain is the visible crop of the sprite plane prepared for the *next* frame, matching the oracle's one-frame lag. `f3rt-check` passes the new quantization regression. Final composition remains separately checked.
 
+Continuous sprite-plane sampling subsequently exposed a one-pixel top-edge leak at seed 5, frame 3404; coarse complete-frame sampling exposed the same issue as two RGB pixels at frame 21960. A sprite at scanout Y=11 with Y scale `208/256` ends exactly at Y=24. The oracle rejects its nominal fixed-point rectangle before the `+255` texel-row rounding; omitting that cull lets the last row enter the active image. The game raster now applies the same geometric cull before sampling, including for expanded viewports. A permanent regression failed before this correction and passes after it, while also checking the adjacent partially visible sprite. This is the retained oracle's observed compatibility rule, not an assertion about an unmeasured physical-chip edge case.
+
 ### Line-profile source contracts
 
 | Hook / producer | Semantic input and verified operation |
@@ -180,10 +182,55 @@ The 6000-frame run reconstructs 5769 frames and delegates 231 startup frames to 
 
 Continuous no-input attract comparison through frame 3480 now checks **3249 supported frames / 241,205,760 RGB pixels / zero mismatches**, with only the same 231 startup fallbacks. Native execution is 49,866,062 blocks / zero fallback instructions; final CRC `$b490d7d9`. Earlier runs exposed the ordinary attract profiles listed above via the missing-writer guard; each was reconstructed from its ROM producer before accepting its frames.
 
+Extended runs with all nine layer bits selected pass seeds **5, 6 and 7 × 40,000 frames**. Each seed compares **329 samples**: 172,490,752 indexed texels per PF, 24,424,960 pixels per sprite group, 86,245,376 text texels and **24,424,960 final RGB pixels**, all zero mismatches. Native blocks are 534,492,746 /529,768,165 /536,649,307, respectively, with zero CPU fallback. Final CRCs are `$1101a39b` /`$54a2ed76` /`$e9a0299a`. Each run has only 231 startup renderer fallback frames, last at frame 418. Seeds 5 and 6 include the corrected nominal sprite-edge cull.
+
+The final continuous seed-5 run selects **every frame 600–4000**: 3401 samples, 1,783,103,488 pixels per PF, 252,490,240 per sprite group, 891,551,744 text pixels and **252,490,240 final RGB pixels**, all exact. It executes 54,087,373 native blocks with zero fallback, including the formerly failing sprite-edge frame.
+
+Fresh `--video game` attract captures independently match **25/25 retained MAME frames**, 1,856,000 RGB pixels, zero mismatches/max channel error. All 25 samples are beyond the last startup fallback. The run uses 49,866,062 native blocks, zero CPU fallback and CRC `$b490d7d9`, matching the separately refreshed FDP oracle mode. Artifacts: `build/captures/video-game-attract`.
+
 ## Evidence conflict
 
 `graphics-structs.txt` labels packed playfield bit 31 as horizontal and bit 30 as vertical. The existing oracle does the opposite. The game's own `$565e` dispatch table sends bit-30-only input to the negative-column-step helper `$5678`, and bit-31-only input to the negative-row-step helper `$5686`. The game renderer therefore uses bit 30 for horizontal and bit 31 for vertical; this remains explicit in `GameTiles::put`. This is ROM-backed behavior, not a claim that the work-in-progress hardware notes are authoritative.
 
-## Acceptance still open
+Clipping has a separate unresolved hardware-evidence conflict inherited from the baseline investigation: pinned MAME `cfc4760a` and y-ack `fdp-collapse` `28e411d4f760df3d55fae070a2f6424f89966a2f` use an inverted-plane `max(range.left, endpoint)` combiner, while WIP `clip.txt:157–190` proposes a bitmask/union model with different no-plane/global-invert cases. The independent game compositor retains the baseline rule and now matches the exercised game water/selection clipping profiles. Neither those profiles nor the unavailable die material establish every inverted multi-plane combination on physical hardware; no speculative alternate implementation is substituted.
 
-Extended seeded runs, explicit unsupported-feature limits and complete frontend presentation verification remain open. The base-parity gate has been met by the complete seeded scene above. No phase-2 completion claim is made yet.
+## Actually exercised features and limits
+
+The measured normal-orientation runs exercise all four 64×32 playfields, tile flips/palette XOR/blend selectors, ROM sprite grids and fixed/scaled master objects, programmable text/glyph fades, per-line priorities and alpha profiles, selection water clipping, PF0 sine rowscroll, and the board's perspective X zoom, Y step, palette-add gradient and column scroll. Sprite extra-pen-plane use is concrete: the frame-3404 capture has game command `$0101` at `$407a1e`, selecting a 5-bit pen mask. Hardware-sized map wrapping and tile-origin quantization remain part of game geometry.
+
+Rows are normalized to a game scene before composition: four PF layers, four sprite priority groups, text, four clipping intervals, four blend weights, palette background, per-PF X/Y phase and step, and text position. Equal-priority order is text, SP0, PF0, SP3, PF3, SP2, PF2, SP1, PF1. The compositor uses opaque, normal and reverse eight-step alpha modes and explicit source/destination priority state. Mosaic state is decoded and compared, but no nontrivial mosaic animation is claimed as exercised by these runs.
+
+| Unsupported HLE case | Exact-visible behavior and recovery |
+| --- | --- |
+| POST / incomplete initial ownership | Oracle only for the 231 measured startup frames through frame 418: line producer `$1003a` (229), incomplete glyphs (1), sprite POST writer `$10412` (1). Known profile/map/glyph/sprite initialization establishes ownership. |
+| Ending transitions `$fe620/$fefe6/$ff0fa` | Explicit line-component invalidation; oracle rendering until the known line-profile reinitialization. These endings are not claimed as reconstructed or exercised. |
+| Bitmap pivot layer | Explicit `bitmap-pivot` frame fallback. The programmable text layer is implemented; bitmap-pivot geometry is not. |
+| Global screen flip / retained sprite framebuffer | Explicit `flipped-screen` / `sprite-trails` frame fallback while the command remains active. Their command bits and descriptors are decoded, but complete flipped/trail scanout is outside the measured contract. |
+| Unknown FDP producer or unsupported descriptor source/range | Guard uses only PC/address; invalidates the affected component. No write-value readback, fabricated scene or silently skipped layer. Complete known PF/text/profile initialization or sprite reset restores ownership as appropriate. |
+| Oversized sprite grids/batches | Descriptor rejection rather than truncation: supported grids are at most 32×32 tiles and batches at most 1024 sprites. |
+
+The default oracle path remains available for every frame. The game path retains the oracle's sprite lag each frame, even while not using its composition, so fallback has the correct preceding sprite plane. A two-machine strict-native smoke deliberately injected an unknown PF0 writer at frame 2392: both native images matched through all 2400 frames, and exactly the last eight frames used the reported `$222220` fallback. This proves transition into fallback after sustained game rendering, not merely cold-start behavior.
+
+## Opt-in presentation
+
+These options were introduced only after the complete seeded base-parity gate above:
+
+| Option | Default | Operation |
+| --- | --- | --- |
+| `--video-scale 1..4` | `1` | Rerasterizes scene geometry at the requested internal resolution. PF fractional X/Y sampling and sprite zoom are evaluated at the higher resolution; this is not enlargement of the finished native RGB frame. Original ROM textures/glyphs remain the artwork. |
+| `--video-border 0..160` | `0` | Adds that many native scene columns on each side. `48` gives a 416×232 viewport, approximately 16:9. Native game logic and HUD layout are not widened; off-screen map content can be empty or wrapped. |
+| `--video-filter nearest\|linear` | `nearest` | Optional SDL presentation-texture filtering. Linear filters the final display texture; it does not claim higher-detail source art or alter native captures. |
+
+Options require `--video game` or `compare`. The invariant native `Machine::pixels` stays 320×232 for comparison, captures and CRCs. Presentation buffers are allocated once only when scale/border are enabled. Unsupported frames preserve the exact oracle picture, integer-scaled in the center, with black added columns; no invented ending/bitmap/flip geometry is extrapolated.
+
+Two independent real machines, one FDP and one `game`, ran the seed-5 input schedule for 2400 frames at scale 1 /border 48 and scale 2 /border 48, including the injected fallback above. **178,176,000 native RGB pixels per run matched**, and PC, cycles and D/A registers remained equal; CPU fallback was zero. Scale 1's native center matched in every frame. Nonblack off-screen content reached all 22,272 added pixels at frame 1407 (89,088 at 2×); 2× rerasterization differed from nearest-enlarged native RGB in 5,450,015 pixels across the run, peaking at 11,850 at frame 1409.
+
+Actual Cocoa/Metal frontend runs through attract frame 1920 produced **832×464 internal images** in **1248×696 SDL surfaces**, with scale 2 /border 48, for both filters. The captured surfaces were visually inspected. Nearest versus linear changes 172,330 RGB surface pixels while both runs retain native CRC `$3fadf226`, 28,866,756 native blocks and zero CPU fallback. Captures are under `build/captures/game-wide-2x-{nearest,linear}.{bmp,png}`; generated evidence is not committed.
+
+Maximum-border smoke also passes scales **3 and 4 /border 160** through 1500 seeded frames: actual internal dimensions **1920×696 /2560×928**, 111,360,000 exact native RGB pixels per run, equal CPU state and zero fallback. Compared with nearest-enlarged native RGB, the central scene has 6,937,948 /13,969,522 rerasterized pixels across the runs. The final Cocoa/Metal `game` frontend also passes through frame 3480 at scale 2 /border 48 /linear, with native CRC `$b490d7d9`; its saved surface `build/captures/game-final-metal.png` was visually inspected.
+
+CLI smoke rejects scale 0/5, border 161, an unknown filter and attempted enhancements in `fdp` mode with explicit errors. `f3rt-check` passes both geometry regressions and the descriptor-source regression; no ROMs, generated C, captures or throwaway verification programs are committed.
+
+## Acceptance
+
+The scoped phase is complete: ROM-owned scene reconstruction, independent oracle selection, exact incremental and extended seeded parity, preserved strict-native/MAME acceptance, explicit fallback limits and opt-in presentation are implemented and exercised. The unsupported cases listed above remain deliberate oracle fallbacks, not claims of complete physical FDP coverage or verified ending/flip/trail HLE.

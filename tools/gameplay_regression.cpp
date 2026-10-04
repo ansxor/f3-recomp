@@ -94,7 +94,7 @@ int main(int argc, char **argv) try {
     bool seed_specified = false;
     uint64_t target_frames = 40000;
     bool video_diff = false;
-    unsigned video_layer_mask = 1;
+    unsigned video_layer_mask = 511;
     uint64_t video_diff_every = 120;
     std::filesystem::path dump_dir;
     std::filesystem::path capture_surface;
@@ -133,10 +133,10 @@ int main(int argc, char **argv) try {
                       << "  --set SET              ROM set name (default: landmakrj)\n"
                       << "  --seed N               PRNG seed for input schedule (default: 12345, or SEED env)\n"
                       << "  --frames N             Number of frames to advance (default: 40000)\n"
-                      << "  --dump-dir DIR         Dump final machine state using f3rt::dump_machine\n"
+                      << "  --dump-dir DIR         Dump final state or the first video mismatch\n"
                       << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
-                      << "  --video-diff           Compare game-owned tilemap pixels against FDP oracle from frame 600\n"
-                      << "  --video-layer-mask N   Playfield bit mask (default: 1, PF0)\n"
+                      << "  --video-diff           Compare game-owned layers and final RGB against FDP from frame 600\n"
+                      << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
                       << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
                       << "  --help, -h             Show this help message\n";
             return 0;
@@ -233,7 +233,13 @@ int main(int argc, char **argv) try {
             return 1;
         }
         if (video_diff && m.frame >= 600 && (m.frame - 600) % video_diff_every == 0) {
-            m.game_video->compare_layers(m.frame, video_layer_mask);
+            try {
+                m.game_video->compare_layers(m.frame, video_layer_mask);
+            } catch (...) {
+                m.game_video->report(std::cerr);
+                if (!dump_dir.empty()) f3rt::dump_machine(m, dump_dir);
+                throw;
+            }
         }
 
         // Drain audio output

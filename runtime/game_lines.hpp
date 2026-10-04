@@ -20,7 +20,6 @@ public:
     bool supported() const { return supported_; }
     uint32_t unsupported_pc() const { return unsupported_pc_; }
     void observe_write(uint32_t pc, uint32_t address);
-    static std::span<const uint32_t> hooks();
     void compare_rows(const Video &oracle, uint64_t frame);
 
 private:

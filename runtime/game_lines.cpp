@@ -7,20 +7,6 @@
 namespace f3rt {
 namespace {
 
-constexpr std::array<uint32_t, 32> line_hooks{
-    0x00136e,
-    0x005a22, 0x005a5e, 0x005a9a, 0x005af4,
-    0x005cd8, 0x005d10,
-    0x010044,
-    0x08cfba, 0x08cfe0,
-    0x091490, 0x091506, 0x0915d2, 0x091834, 0x09217c, 0x098dba,
-    0x099b5a, 0x099f86, 0x09a6e6, 0x09a8de, 0x09acbe, 0x09ad3e,
-    0x09a252, 0x09a28a, 0x09a2f6,
-    0x09d66a, 0x09d72a, 0x09d7b6,
-    0x09ecb0,
-    0x0fe620, 0x0fefe6, 0x0ff0fa
-};
-
 bool is_covered_write(uint32_t pc) {
     static constexpr struct Range { uint32_t start, end; } ranges[] = {
         {0x00136e, 0x00145e}, // Display register uploader (0x660000..0x66001e)
@@ -73,10 +59,6 @@ std::string format_layer(const SceneLayer &l) {
 }
 
 } // namespace
-
-std::span<const uint32_t> GameLines::hooks() {
-    return line_hooks;
-}
 
 void GameLines::observe_write(uint32_t pc, uint32_t address) {
     address &= 0xffffff;

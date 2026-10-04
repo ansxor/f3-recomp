@@ -12,9 +12,9 @@ struct ClipRanges {
     std::array<SceneClip, 16> ranges{};
     unsigned count = 1;
 };
-ClipRanges clip_ranges(const SceneRow &row, const SceneLayer &layer) {
+ClipRanges clip_ranges(const SceneRow &row, const SceneLayer &layer, int16_t left, int16_t right) {
     ClipRanges result;
-    result.ranges[0] = {46, 366};
+    result.ranges[0] = {left, right};
     unsigned normal = layer.clip_enabled & ~layer.clip_inverted;
     unsigned inverted = layer.clip_enabled & layer.clip_inverted;
     if (!layer.clip_inverse) std::swap(normal, inverted);
@@ -32,7 +32,7 @@ ClipRanges clip_ranges(const SceneRow &row, const SceneLayer &layer) {
             ClipRanges next;
             next.count = 0;
             for (unsigned i = 0; i < result.count * 2; ++i) {
-                SceneClip candidate = i < result.count ? SceneClip{46, clip.left} : SceneClip{clip.right, 366};
+                SceneClip candidate = i < result.count ? SceneClip{left, clip.left} : SceneClip{clip.right, right};
                 bool keep = true;
                 for (unsigned j = 0; j < result.count; ++j) {
                     const auto range = result.ranges[j];
@@ -49,9 +49,9 @@ ClipRanges clip_ranges(const SceneRow &row, const SceneLayer &layer) {
     return result;
 }
 struct PixelMix {
-    uint16_t source = 0, destination = 0;
-    uint8_t source_weight = 0, destination_weight = 8;
-    uint8_t source_priority = 0, destination_priority = 0, source_mode = 255;
+    uint16_t source, destination;
+    uint8_t source_weight, destination_weight;
+    uint8_t source_priority, destination_priority, source_mode;
 };
 void mix(PixelMix &pixel, const SceneLayer &layer, uint16_t color, bool select,
          const std::array<uint8_t, 4> &blend) {
@@ -78,7 +78,7 @@ void mix(PixelMix &pixel, const SceneLayer &layer, uint16_t color, bool select,
         pixel.destination_weight = blend[unsigned(select) + (pixel.source_mode == 1 ? 0 : 2)];
     }
 }
-uint32_t rgb(const PixelMix &pixel, const std::array<uint32_t, 8192> &palette) {
+uint32_t rgb(const PixelMix &pixel, std::span<const uint32_t> palette) {
     const uint32_t source = palette[pixel.source & 8191];
     const uint32_t destination = palette[pixel.destination & 8191];
     uint32_t color = 0xff000000;
@@ -89,17 +89,24 @@ uint32_t rgb(const PixelMix &pixel, const std::array<uint32_t, 8192> &palette) {
     }
     return color;
 }
+int floor_divide(int value, int divisor) {
+    return value >= 0 ? value / divisor : -1 - (-1 - value) / divisor;
+}
 }
 
 void compose_game_scene(const GameTiles &tiles, const GameText &text, const GameLines &lines,
                         std::span<const uint16_t> sprites, bool flipped,
-                        std::span<const uint8_t> tile_pixels, std::span<const uint8_t> palette,
-                        std::span<uint32_t> output) {
-    if (sprites.size() < 432 * 256 || palette.size() < 32768 || output.size() < 320 * 232)
+                        std::span<const uint8_t> tile_pixels, std::span<const uint32_t> colors,
+                        std::span<uint32_t> output, GameVideoOptions options) {
+    if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
+        throw std::runtime_error("Game presentation scale/border out of range");
+    const int scale = int(options.scale), width = int(options.width());
+    const int left_edge = 46 - int(options.border), right_edge = 366 + int(options.border);
+    const size_t sprite_size = options.expanded() ? size_t(width) * options.height() : 432 * 256;
+    if (sprites.size() < sprite_size || colors.size() < 8192 || output.size() < size_t(width) * options.height())
         throw std::runtime_error("Incomplete game scene render buffers");
-    std::array<uint32_t, 8192> colors;
-    for (unsigned i = 0; i < colors.size(); ++i)
-        colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) | palette[i * 4 + 3];
+    constexpr unsigned max_width = (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_scale;
+    std::array<PixelMix, max_width> pixels;
     for (unsigned y = 24; y < 256; ++y) {
         const auto &row = lines.row(y);
         if (row.bitmap) throw std::runtime_error("Game scene bitmap pivot is unsupported");
@@ -116,46 +123,62 @@ void compose_game_scene(const GameTiles &tiles, const GameText &text, const Game
             }
             order[j] = item;
         }
-        std::array<PixelMix, 320> pixels;
-        for (auto &pixel : pixels) pixel.destination = row.background;
-        for (unsigned index : order) {
-            const auto &state = layer(index);
-            if (!state.enabled) continue;
-            const auto ranges = clip_ranges(row, state);
-            for (unsigned r = 0; r < ranges.count; ++r) {
-                const int left = std::max<int>(46, ranges.ranges[r].left);
-                const int right = std::min<int>(366, ranges.ranges[r].right);
-                for (int hardware_x = left; hardware_x < right; ++hardware_x) {
-                    auto &pixel = pixels[hardware_x - 46];
-                    if (state.blend_mode == pixel.source_mode) continue;
-                    int sample_x = hardware_x;
-                    if (state.mosaic && row.mosaic_period > 1) {
-                        int count = hardware_x + 68;
-                        if (count >= 432) count -= 432;
-                        sample_x -= count % row.mosaic_period;
+        std::array<ClipRanges, 9> clips;
+        for (unsigned index : order)
+            if (layer(index).enabled) clips[index] = clip_ranges(row, layer(index), int16_t(left_edge), int16_t(right_edge));
+        for (int sub_y = 0; sub_y < scale; ++sub_y) {
+            const unsigned output_y = (y - 24) * scale + sub_y;
+            std::fill_n(pixels.begin(), width, PixelMix{0, row.background, 0, 8, 0, 0, 255});
+            for (unsigned index : order) {
+                const auto &state = layer(index);
+                if (!state.enabled) continue;
+                const auto &ranges = clips[index];
+                for (unsigned r = 0; r < ranges.count; ++r) {
+                    const int left = (std::max<int>(left_edge, ranges.ranges[r].left) - left_edge) * scale;
+                    const int right = (std::min<int>(right_edge, ranges.ranges[r].right) - left_edge) * scale;
+                    for (int output_x = left; output_x < right; ++output_x) {
+                        auto &pixel = pixels[output_x];
+                        if (state.blend_mode == pixel.source_mode) continue;
+                        int sample_x = output_x + left_edge * scale;
+                        if (state.mosaic && row.mosaic_period > 1) {
+                            const int hardware_x = left_edge + output_x / scale;
+                            int count = hardware_x + 68;
+                            count = (count % 432 + 432) % 432;
+                            sample_x = (hardware_x - count % row.mosaic_period) * scale;
+                        }
+                        ScenePixel source;
+                        bool select = state.blend_select;
+                        if (index < 4) {
+                            const auto &pf = row.playfields[index];
+                            // Divide only after combining the native phase and output
+                            // subpixel. This samples geometry, not an enlarged RGB frame.
+                            const int x = floor_divide(pf.source_x * scale + (sample_x - 46 * scale) * pf.x_step, scale * 256);
+                            const int fy = (int(pf.y_fraction) * scale + sub_y * pf.y_step) / scale;
+                            source = tiles.playfield_pixel(index, x, pf.source_y + (fy >> 8), flipped, tile_pixels);
+                            select = (source.flags & 1) != 0;
+                            if (!(source.flags & 0x10) || !source.palette) continue;
+                            source.palette = uint16_t(source.palette + pf.palette_add);
+                        } else if (index < 8) {
+                            if (options.expanded()) {
+                                const int source_x = sample_x - left_edge * scale;
+                                if (source_x < 0 || source_x >= width) continue;
+                                source.palette = sprites[output_y * width + source_x];
+                            } else {
+                                if (sample_x < 0 || sample_x >= 432) continue;
+                                source.palette = sprites[y * 432 + sample_x];
+                            }
+                            if (!source.palette || ((source.palette >> 10) & 3) != index - 4) continue;
+                        } else {
+                            const int x = floor_divide(row.text_x * scale + sample_x - 46 * scale, scale);
+                            source = text.pixel(x, row.text_y, flipped);
+                            if (!(source.flags & 0x10)) continue;
+                        }
+                        mix(pixel, state, source.palette, select, row.blend);
                     }
-                    ScenePixel source;
-                    bool select = state.blend_select;
-                    if (index < 4) {
-                        const auto &pf = row.playfields[index];
-                        const int x = (pf.source_x + (sample_x - 46) * pf.x_step) >> 8;
-                        source = tiles.playfield_pixel(index, x, pf.source_y, flipped, tile_pixels);
-                        select = (source.flags & 1) != 0;
-                        if (!(source.flags & 0x10) || !source.palette) continue;
-                        source.palette = uint16_t(source.palette + pf.palette_add);
-                    } else if (index < 8) {
-                        if (sample_x < 0 || sample_x >= 432) continue;
-                        source.palette = sprites[y * 432 + sample_x];
-                        if (!source.palette || ((source.palette >> 10) & 3) != index - 4) continue;
-                    } else {
-                        source = text.pixel(row.text_x + sample_x - 46, row.text_y, flipped);
-                        if (!(source.flags & 0x10)) continue;
-                    }
-                    mix(pixel, state, source.palette, select, row.blend);
                 }
             }
+            for (int x = 0; x < width; ++x) output[output_y * width + x] = rgb(pixels[x], colors);
         }
-        for (unsigned x = 0; x < 320; ++x) output[(y - 24) * 320 + x] = rgb(pixels[x], colors);
     }
 }
 } // namespace f3rt

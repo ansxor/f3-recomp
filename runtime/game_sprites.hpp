@@ -1,6 +1,7 @@
 #pragma once
 #include "game_scene.hpp"
 #include "f3rt/cpu_abi.h"
+#include "f3rt/game_video.hpp"
 #include <array>
 #include <cstdint>
 #include <span>
@@ -14,6 +15,8 @@ public:
     void reset();
     void observe(GameMemory &memory, const f3_cpu &cpu);
     void latch();
+    void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
+                GameVideoOptions options = {}) const;
     std::span<const SceneSprite> sprites() const;
     bool flipped() const;
     uint8_t pen_mask() const;
@@ -21,7 +24,6 @@ public:
     bool supported() const;
     uint32_t unsupported_pc() const;
     void observe_write(uint32_t pc, uint32_t address);
-    static std::span<const uint32_t> hooks();
 
 private:
     static constexpr size_t kMaxSprites = 1024;

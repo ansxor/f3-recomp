@@ -3,15 +3,9 @@
 
 namespace f3rt {
 namespace {
-constexpr std::array<uint32_t, 21> text_hooks{
-    0x56e6, 0x5726, 0x5768, 0x57a2, 0x57cc, 0x581c, 0x5856,
-    0x59bc, 0x59ee, 0x5b80, 0x5bac, 0x5bce, 0x5be0, 0x5c08,
-    0x8de56, 0x8e0a6, 0x8e0dc, 0x8e9c6, 0x9b530, 0x9b544, 0xa1170
-};
 unsigned tested_word_count(uint16_t value) { return value <= 0x8000 ? value : 0; }
 }
 
-std::span<const uint32_t> GameText::hooks() { return text_hooks; }
 void GameText::reset() {
     cells_.fill({});
     glyphs_.fill(0);
