@@ -31,6 +31,7 @@ public:
     void load_state(StateReader &reader);
 
 private:
+    friend class GameVideo;
     static constexpr size_t kMaxSprites = 1024;
 
     std::array<SceneSprite, kMaxSprites> staging_sprites_{};

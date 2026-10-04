@@ -16,6 +16,7 @@ This page lists CMake options, cache variables, targets and compile definitions.
 - SDL3 with CMake config files, only if `F3RT_SDL` is on.
 - Python 3 with `capstone` 5.0.9, only if `F3_ROM_DIR` is set. The file `recomp/requirements.txt` pins the version.
 - Go, only to build the relay server. CMake does not build the relay server.
+- `glslangValidator`, `spirv-cross` and Python 3 for offline SPIR-V/MSL shader generation when `F3RT_GPU` and `F3RT_SDL` are on.
 
 ## Cache variables
 
@@ -24,6 +25,7 @@ Set a cache variable with `-DNAME=value` on the `cmake` command line.
 | Variable | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `F3RT_SDL` | option (`ON`/`OFF`) | `ON` | Build the SDL3 frontends `f3rt-run` and `landmakr`. If `OFF`, CMake does not look for SDL3. |
+| `F3RT_GPU` | option (`ON`/`OFF`) | `ON` | SDL3 GPU presentation and GPU regression harness; requires offline shader tools. `OFF` retains CPU presentation. |
 | `F3_ROM_DIR` | path | empty | Directory with the Land Maker Japan ROM files. If set, CMake runs the recompiler and the sound compiler at configure time. |
 | `F3_GENERATED_DIR` | path | empty | Directory with a generated program (`sources.cmake` and C files). If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/landmakrj`. |
 | `F3_SOUND_GENERATED_DIR` | path | empty | Directory with a generated sound program. If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/sound-landmakrj`. |
@@ -67,6 +69,8 @@ The game config is fixed to `games/landmakrj/config.toml` in the top-level `CMak
 | `f3rt-netplay-oracle` | executable | `F3_GENERATED_DIR` is set | `tools/netplay_oracle.cpp` | `f3rt`, `f3_recompiled` |
 | `f3rt-run` | executable | `F3RT_SDL` is on | `runtime/frontend.cpp` | `f3rt`, `SDL3::SDL3`, and `f3_recompiled` if `F3_GENERATED_DIR` is set |
 | `landmakr` | executable | `F3RT_SDL` is on and `F3_GENERATED_DIR` is set | `runtime/frontend.cpp` | `f3rt`, `f3_recompiled`, `SDL3::SDL3` |
+| `f3rt-gpu` | static library | `F3RT_SDL` and `F3RT_GPU` | SDL GPU backend and generated `video_shaders.hpp` | `SDL3::SDL3` (PUBLIC) |
+| `f3rt-gpu-regression` | executable | GPU support and generated main program | `tools/gpu_video_regression.cpp` | `f3rt`, `f3_recompiled`, `f3rt-gpu`; generated sound when available |
 | `f3rt-replay` | executable | always | `runtime/replay.cpp` | `f3rt` |
 | `f3rt-check` | executable | `BUILD_TESTING` is on | `runtime/check.cpp` | `f3rt` |
 
@@ -103,6 +107,7 @@ Source files use these definitions to turn code on or off.
 | `F3RT_GENERATED` | `f3rt-gameplay-regression`, `f3rt-netplay-oracle`, `f3rt-run` (if `F3_GENERATED_DIR`), `landmakr` | `1` | The program includes `program.h` and can call `f3_generated_register`. Without it, `--translated` fails at run time. |
 | `F3RT_LANDMAKR` | `landmakr` | `1` | Changes the defaults of `runtime/frontend.cpp`: native execution on, fallback off, default ROM directory, and `landmakrj` only. See [CLI reference](/reference/cli#landmakr-and-f3rt-run). |
 | `F3RT_SOUND_GENERATED` | Every target that links `f3_sound_recompiled` | `1` | The program includes `sound_program.h`. It can call `use_native_sound` with `f3_sound_blocks`. The frontend then defaults to the `native` sound driver. |
+| `F3RT_GPU` | GPU-enabled frontends | `1` | Enables `--video-backend gpu`; headless and native outputs still use CPU. |
 | `F3RT_DEFAULT_ROM_DIR` | `landmakr`; `f3rt-netplay-oracle` (always); `f3rt-gameplay-regression` (only if `F3_ROM_DIR` is set) | The string `F3_ROM_DIR` | Default value of the ROM directory. For `f3rt-netplay-oracle`, the string is empty if `F3_ROM_DIR` is empty. `f3rt-sound-extract` reads this definition too, but CMake does not set it for that target. |
 
 ## Generated header: netplay_build.hpp

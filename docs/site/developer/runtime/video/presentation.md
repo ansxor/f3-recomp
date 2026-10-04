@@ -11,6 +11,7 @@ Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/
 | `--video-scale 1..4` | 1 | Integer internal rendering scale |
 | `--video-border 0..160` | 0 | Additional native scene columns on each side |
 | `--video-filter nearest\|linear` | `nearest` | SDL sampling of the completed presentation texture |
+| `--video-backend cpu\|gpu` | `cpu` | CPU expanded raster or SDL3 GPU presentation |
 
 `GameVideoOptions` holds scale and border. Filtering belongs to the frontend, not this structure.
 
@@ -65,6 +66,14 @@ The constructor allocates expanded ARGB and indexed-sprite buffers once. Each co
 
 The expanded sprite plane follows the same latch timing as the native plane. It is prepared after the current frame for the next frame.
 
+GPU mode captures a host-only scanout snapshot before the next sprite latch.
+It uploads semantic cells/glyphs, palette, normalized rows and the rendered
+sprite list; ROM pens are uploaded once. An indexed sprite pass precedes a
+per-output-sample fragment compositor. The CPU still makes native pixels.
+Expanded CPU presentation is materialized lazily for `presentation()`/save,
+so canonical snapshots remain byte-compatible. GPU caches/resources are not
+machine state. See [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+
 ## What rerasterization changes
 
 The compositor combines native fixed-point phase with each output subpixel before sampling the playfield texture. It preserves fractional X and Y positions and source steps.
@@ -102,11 +111,11 @@ Unsupported frames use the centered oracle fallback at either scale. Read [Compa
 
 The frontend creates a resizable window with initial size `(320 + 2 * border) * 3` by 696. This initial window size does not depend on internal scale.
 
-It creates an ARGB8888 streaming texture at the internal dimensions. `SDL_SetRenderLogicalPresentation` selects letterbox presentation at those dimensions.
-
-`SDL_SetTextureScaleMode` selects nearest or linear filtering. This filter acts only when SDL maps the texture onto the surface.
-
-Each advanced frame uploads `presentation()` with pitch `width * 4`. SDL clears the surface, draws the texture, and presents it.
+The CPU backend creates an ARGB8888 streaming texture and uses SDL letterbox
+presentation; each advanced frame uploads `presentation()` with pitch `width*4`.
+The GPU backend renders the internal-resolution texture directly with SDL3
+GPU, then blits/letterboxes it to the swapchain with nearest or linear filtering.
+Normal GPU presentation has no expanded RGB upload or readback.
 
 ## Captures and CRCs
 
@@ -114,12 +123,13 @@ Each advanced frame uploads `presentation()` with pitch `width * 4`. SDL clears 
 | --- | --- | --- |
 | `--dump-dir`: `rendered.argb` and `rendered.bmp` | `Machine::pixels` | Always 320x232 |
 | Frontend `frame_crc` | Raw native pixel array | Always 320x232 |
-| Frontend `--surface FILE` | `SDL_RenderReadPixels` | Current rendered SDL surface |
+| Frontend `--surface FILE` | CPU `SDL_RenderReadPixels`; GPU fenced texture readback | CPU window surface; GPU internal-resolution image |
 | Gameplay regression `--surface FILE` | `write_bmp(m.pixels)` | Always 320x232 |
 
-The same option name has different capture semantics in the two programs. A frontend surface includes the actual window mapping and filter.
-
-Frontend surface capture requires a non-headless run and a finite `--frames` endpoint. The frontend saves a BMP before the final `SDL_RenderPresent`.
+The same option name has different capture semantics across backends/programs.
+CPU frontend captures include actual window mapping/filtering; GPU captures
+retain the internal-resolution compositor image. Frontend capture requires
+a window and finite `--frames`; native dumps/CRC always retain CPU pixels.
 
 Native dumps also contain palette, graphics, controls, main RAM, shared RAM, and CPU state. See [capture_io.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp).
 

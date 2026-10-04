@@ -171,3 +171,142 @@ not a new claim about scanout lag. Actual Cocoa/Metal frontend additionally
 ran 1500 frames at scale 4/border 48, internal 1664x928, nearest, with native
 CRC `4fe25eb9`, 23,203,423 native blocks and zero fallback instructions;
 its surface PNG was visually inspected.
+
+## Port invariant and fallback evidence
+
+Native output is still composed on the CPU at every VBSTART. GPU export occurs
+before `latch_sprites`, so its sprite list is the list rendered in that frame,
+not the following list. GPU resources/caches are absent from canonical state.
+CPU-only presentation remains the default; GPU selection is explicit.
+
+An independent CPU-backend snapshot branch exposed an expanded trails history
+bug: deferring every expanded sprite raster lost intermediate retained sprites.
+Seed 5/frame 3404, four induced trail lists with changing scroll, failed before
+the correction with **213,384 differing canonical bytes**. The fix seeds the
+preceding expanded plane on entering retention and keeps rasterizing while
+trails are latched. The same regression now has **zero differing bytes**.
+Trail frames remain exact native oracle presentation, not unsupported HLE.
+
+Seed 5 through 3600 frames additionally induced actual bitmap, trails, flip,
+unknown-writer and ending-producer fallback boundaries at frame 3404, restoring
+and replaying the original native frame after each branch. All five fallback
+images and supported recoveries match CPU output; canonical restore is exact.
+The ending case is an **induced producer boundary, not a played-through ending**.
+The original 231 startup fallback frames remain unchanged.
+Isolated-layer counts exclude fallback images, since fallback bypasses masks.
+
+Fresh headless `--video compare --video-backend gpu` (GPU flag intentionally
+does not instantiate a device headlessly) ran 3600 native frames:
+3369 supported native RGB comparisons / 250,114,560 pixels / zero mismatches;
+51,507,335 native blocks and zero CPU fallback. Retained MAME captures at
+600..3480 compare **25/25**, 1,856,000 pixels, zero mismatches/channel error.
+Frame-600 main RAM and the complete 3600-frame WAV are byte-equal to the
+retained MAME RAM / integration `build/coverage-final.wav` respectively.
+
+Actual SDL GPU/Metal window runs at scale 4/border 48 retain native CRC
+`3fadf226` at frame 1920, 28,866,756 native blocks and zero CPU fallback.
+Nearest/linear presentation is supported; internal-resolution readback is
+saved separately from the native CPU capture. External GPU artifacts are in
+`/tmp/f3-gpuvideo/gpu-parity`; no images or generated shader binaries are in git.
+
+## Seeded GPU parity checkpoint
+
+Metal, seeds **5/6/7/41**, all scales **1/2/3/4** and borders **0/48**:
+32 runs × 4000 native frames = **128,000 frames**. GPU/CPU comparisons sampled
+every 30 frames plus the final frame: **4320 full frames**, comprising
+4096 supported scenes and 224 exact native-oracle fallback images.
+
+| Layer | Supported comparisons | Mismatching pixels |
+|---|---:|---:|
+| PF0 | 4096 | 0 |
+| PF1 | 4096 | 0 |
+| PF2 | 4096 | 0 |
+| PF3 | 4096 | 0 |
+| SP0 | 4096 | 0 |
+| SP1 | 4096 | 0 |
+| SP2 | 4096 | 0 |
+| SP3 | 4096 | 0 |
+| Text | 4096 | 0 |
+| Composite (including fallback) | 4320 | 0 |
+
+Every run has 3769 supported native frames, 231 actual startup fallback
+frames, three actual oracle-mode transitions, native sound and **zero CPU
+fallback instructions**. These numbers do not claim every emulated frame was
+GPU-diffed. Logs and machine-readable totals:
+`/tmp/f3-gpuvideo/parity-matrix/{seed*-s*-b*.log,runs.json,summary.json}`.
+
+Both rendering passes are guarded by exact canonical snapshot byte comparisons.
+Expanded deferred presentation also has an independent CPU-backend trail-history
+branch, rather than relying only on a same-machine checksum.
+
+An allocation-counting smoke caught **11 first-save allocations** in an expanded
+GPU scene. Reference storage is now allocated at enablement, and the rare lazy
+snapshot materialization uses serial composition rather than starting workers.
+At frame 601, scale 1/border 0 and scale 4/border 48 each report **zero first-save
+and restore/save allocations**, zero restored byte differences and zero CPU
+fallback. Native netplay remains scale 1/border 0; no snapshot schema changed.
+
+## GPU parity checkpoint performance
+
+M5/10-core GPU/32 GiB MacBook Pro, Release `-O3`, SDL 3.4.16, Metal.
+One benchmark process at a time; seed 5 through 4000 frames, border 48,
+600 native warmup frames. The final build specializes scale 1/2/4 divisions
+to shifts and scale 3 to constant division; signed floor and signed truncation
+remain distinct. The complete 32-case parity matrix passed again afterward.
+
+**Final supported frame, 100 repetitions after five warmups**, milliseconds:
+
+| Scale | Path | Mean | p95 | Worst |
+|---:|---|---:|---:|---:|
+| 1 | CPU serial | 1.727 | 1.760 | 1.781 |
+| 1 | CPU threaded | 0.522 | 0.794 | 0.798 |
+| 1 | GPU upload/submit/fence/readback | 1.246 | 1.669 | 2.599 |
+| 2 | CPU serial | 6.905 | 6.993 | 7.049 |
+| 2 | CPU threaded | 1.989 | 3.057 | 3.219 |
+| 2 | GPU upload/submit/fence/readback | 3.026 | 3.105 | 4.618 |
+| 4 | CPU serial | 27.084 | 28.283 | 28.933 |
+| 4 | CPU threaded | 7.540 | 8.803 | 11.471 |
+| 4 | GPU upload/submit/fence/readback | 6.473 | 7.414 | 8.243 |
+
+**Varied supported frames** (117 timed composites, 116 matched native/render
+budgets; the extra composite is the frozen benchmark readback), milliseconds:
+
+| Scale | Path | Mean | p95 | Worst |
+|---:|---|---:|---:|---:|
+| 1 | CPU threaded compositor | 0.503 | 0.775 | 0.816 |
+| 1 | GPU fenced compositor | 1.714 | 1.960 | 2.139 |
+| 2 | CPU threaded compositor | 1.945 | 2.995 | 4.118 |
+| 2 | GPU fenced compositor | 2.977 | 3.446 | 4.085 |
+| 4 | CPU threaded compositor | 6.948 | 8.413 | 10.980 |
+| 4 | GPU fenced compositor | 7.112 | 7.496 | 8.393 |
+| 1 | Native CPU + threaded render budget | 3.753 | 4.275 | 5.108 |
+| 1 | Native CPU + fenced GPU render budget | 4.963 | 5.566 | 6.336 |
+| 2 | Native CPU + threaded render budget | 5.228 | 6.388 | 7.872 |
+| 2 | Native CPU + fenced GPU render budget | 6.261 | 7.194 | 7.420 |
+| 4 | Native CPU + threaded render budget | 10.279 | 11.905 | 14.165 |
+| 4 | Native CPU + fenced GPU render budget | 10.443 | 11.082 | 11.720 |
+
+Native timing covers emulation, native CPU video and scene export. The budget
+sums those measured phases for the same sampled frame; it excludes PCM mixing,
+window blit, vsync, snapshot guards and comparison loops. GPU numbers include
+fenced readback, which normal presentation does not perform. They are not
+hardware timestamp-query measurements of the shader alone.
+
+Actual scale-4/border-48 nearest GPU **window** execution, `--unthrottled
+--frames 3600 --no-audio`, completes in **31.56 seconds / 114.1 frames/s**
+including startup and final PNG readback. The normal native audio driver and
+PCM rendering still execute (`--no-audio` disables the output device only).
+This exercises presentation with headroom over nominal 60 Hz, rather than
+inferring window performance from a standalone shader benchmark.
+Native frame CRC `3359f200`, 51,507,335 native blocks, zero fallback.
+An actual live SDL window screenshot and final internal-resolution images
+were inspected.
+
+The same benchmark run also independently replays its final frame on an
+ordinary **CPU-backend Machine**, comparing canonical bytes and the GPU image
+against the original CPU `presentation()`: zero differences at all three
+scales. Full logs: `/tmp/f3-gpuvideo/bench-fastdiv`.
+Earlier full-4000-frame timing logs (before division specialization) are retained
+in `/tmp/f3-gpuvideo/bench`; their CPU scheduling outliers are not suppressed.
+GPU is not made default: native/2x CPU threading is cheaper than a fenced GPU
+comparison, and devices without GPU support retain the explicit CPU choice.

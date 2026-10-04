@@ -25,6 +25,7 @@ This page lists the project commands and their arguments. The tables give defaul
 | `f3rt-sound-extract` | `tools/sound_extract.cpp` | 1 (message starts with `SOUND_EXTRACT ERROR:`) |
 | `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | 1 (message starts with `ORACLE ERROR:`) |
 | `f3rt-check` | `runtime/check.cpp` | 1 (message starts with `FAIL`) |
+| `f3rt-gpu-regression` | `tools/gpu_video_regression.cpp` | 1 (`GPU REGRESSION ERROR:`) |
 
 ## landmakr and f3rt-run
 
@@ -78,11 +79,12 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
 | `--dump-start` | `N` | `1` | First frame to dump | |
 | `--dump-every` | `N` | `1` | Dump every N frames | `0` is an error. |
-| `--surface` | `BMP` | none | Save a screenshot of the window when the frame count reaches `--frames` | Works only with a window (not `--headless`) and with `--frames`. |
+| `--surface` | `BMP` or GPU `PNG` | none | Save the CPU window surface or GPU internal-resolution image at `--frames` | Window runs only. Native dumps remain CPU-produced. |
 | `--video` | `fdp`, `game` or `compare` | `fdp`. In `landmakr` strict native: `game` | Choose the video renderer | `fdp` draws from the F3 video chip memory. `game` draws from the game data. `compare` runs both and checks them. `game` and `compare` need strict native `landmakrj`. |
 | `--video-scale` | `1` to `4` | `1` | Integer scale of the internal picture | Else: `--video-scale must be 1..4`. Needs `--video game` or `compare`. |
 | `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
 | `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
+| `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
 | `--netplay-server` | `HOST:PORT` | none | Address of the relay server | Any `--netplay-*` flag turns netplay on. |
 | `--netplay-room` | `CODE` | none | Room name on the relay server | Required in netplay mode. The transport rejects an empty room. |
 | `--netplay-player` | `1` or `2` | automatic | Player slot | Else: `--netplay-player must be 1 or 2`. If you omit it, the transport option stays `0` (automatic). |
@@ -268,6 +270,39 @@ This program proves that snapshots and netplay give the same result as a single 
 | `--help`, `-h` | none | | Print usage | |
 
 `client` mode stops with `Client mode requires --player 1 or --player 2` if the player is wrong. See [Tools](/reference/tools) for the script that runs the full test suite.
+
+## f3rt-gpu-regression
+
+Strict-native Land Maker CPU-versus-GPU presentation diagnostics, built with
+`F3RT_GPU`, SDL3 and generated main/sound programs. No interpolation in the
+parity comparison. Native machine/audio output remains CPU-produced.
+
+```sh
+./build/f3rt-gpu-regression --seed 5 --frames 4000 --scale 4 --border 48 --layers
+./build/f3rt-gpu-regression --seed 5 --frames 4000 --scale 4 --border 48 --bench
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--rom-dir DIR` | Configured ROM directory | Japan 2.01J ROM set |
+| `--seed N` | `12345`, or `SEED` environment | Deterministic single-player input schedule |
+| `--frames N` | `4000` | Native frames to execute |
+| `--scale N`, `--border N` | `1`, `0` | Scale 1..4; border 0..160 |
+| `--every N` | `1` | Sample every N frames; always sample the final frame |
+| `--layers` | Off | Compare all nine isolated supported layers plus the composite |
+| `--bench` | Off | Varied-scene timings after 600 frames; 100 serial/threaded/GPU repeats of the last supported frame |
+| `--dump-dir DIR` | None | External CPU/GPU PNGs and native BMPs |
+| `--inject-frame N` | `1407` | Supported baseline for diagnostic branches |
+| `--inject-bitmap`, `--inject-trails`, `--inject-globalflip` | Off | Induce actual unsupported-mode boundaries and verify oracle presentation/recovery |
+| `--inject-unknown`, `--inject-ending` | Off | Induce unsupported writer/ending-producer boundaries; not a played-through ending |
+| `--sound-driver native` | Native | Only native sound is accepted |
+
+GPU timings include upload, submission, fence wait and readback. Normal window
+presentation does not read back. Both rendering paths are checked against
+canonical snapshot bytes; trails additionally compare an independent CPU-backend
+branch. Fallback comparisons bypass layer masks and are counted only as full
+frames. `PARITY`, per-layer mismatch counts, `BENCH` and `SUCCESS` lines report
+the exercised coverage. Any mismatch or CPU fallback exits nonzero.
 
 ## f3rt-check
 

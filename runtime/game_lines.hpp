@@ -28,6 +28,7 @@ public:
     void load_state(StateReader &reader);
 
 private:
+    friend class GameVideo;
     struct LineClip {
         int16_t left = 0;
         int16_t right = 0;

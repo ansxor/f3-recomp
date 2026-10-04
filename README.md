@@ -34,7 +34,10 @@ ROMs live outside the repo: `../roms/<set>/`.
 ## Build and run the integrated game
 
 Build this checkout. Prerequisites: CMake, Ninja,
-a C/C++20 compiler, SDL3 development files, Python 3.11+, and Capstone 5.0.9.
+a C/C++20 compiler, SDL3 development files, Python 3.11+, Capstone 5.0.9,
+and `glslangValidator` plus `spirv-cross` for SDL GPU shaders.
+On macOS: `brew install sdl3 glslang spirv-cross`.
+`-DF3RT_GPU=OFF` builds the retained CPU-only frontend without shader tools.
 Install the Python dependency once with
 `python3 -m pip install --target build/python -r recomp/requirements.txt`.
 
@@ -104,7 +107,7 @@ from, and never enables, main-CPU interpreter fallback.
 After native pixel parity, opt into scene rerasterization and extra border:
 
 ```sh
-./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter linear
+./build/landmakr --video game --video-backend gpu --video-scale 4 --video-border 48 --video-filter linear
 ```
 
 Defaults preserve native presentation: scale **1**, border **0**, filter
@@ -113,6 +116,19 @@ Border 48 gives 416×232 before internal scaling. Linear is optional final
 SDL texture filtering; source ROM artwork is unchanged. Native captures/CRCs
 remain 320×232. Unsupported enhanced frames show the exact oracle picture
 centered with black side borders, rather than invented off-screen geometry.
+
+`--video-backend cpu|gpu` selects presentation only (default `cpu`).
+GPU uses SDL3 GPU/Metal on macOS and SPIR-V/Vulkan on supported hosts.
+It rerasterizes indexed sprites and evaluates PF/text fixed-point sampling and
+integer blending at every output sample; it does not stretch a 1x RGB frame.
+CPU keeps persistent row workers for expanded images. Headless execution,
+native dumps, CRCs, WAVs and netplay checksums retain the CPU path.
+GPU `--surface` writes the internal-resolution GPU image (BMP or PNG);
+CPU `--surface` retains the rendered SDL window capture.
+GPU availability errors are explicit; select `--video-backend cpu` for fallback.
+
+Exact sampling design, tagged checkpoints, parity harness and measured timings:
+[docs/GPU-VIDEO.md](docs/GPU-VIDEO.md).
 
 ROM addresses, descriptor layouts, measured per-layer parity, fallback limits
 and presentation evidence: [docs/VIDEO-HLE.md](docs/VIDEO-HLE.md).

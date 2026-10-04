@@ -6,6 +6,7 @@
 
 namespace f3rt {
 class Machine;
+struct GpuScene;
 enum class GameVideoMode { Diagnostic, Game, Compare };
 
 struct GameVideoOptions {
@@ -31,6 +32,11 @@ public:
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;
+    // Host-only presentation snapshot. Native pixels/state remain CPU-produced.
+    void enable_gpu_presentation(bool enabled = true, bool retain_reference = false);
+    const GpuScene &gpu_scene() const;
+    void render_reference(std::span<uint32_t> output, GameVideoOptions options,
+                          unsigned layer_mask = 511, bool serial = false) const;
     size_t state_size() const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);

@@ -6,6 +6,8 @@
 #include "game_sprites.hpp"
 #include "game_lines.hpp"
 #include "game_compositor.hpp"
+#include "game_clip.hpp"
+#include "gpu_scene.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <array>
@@ -59,6 +61,161 @@ struct GameVideo::Impl {
     std::array<uint16_t, 432 * 256> sprite_plane{};
     std::array<uint32_t, 320 * 232> pixels{};
     bool rendered = false;
+    std::unique_ptr<GpuScene> gpu;
+    struct Reference {
+        GameTiles tiles;
+        GameText text;
+        GameLines lines;
+        GameSprites sprites;
+        std::vector<uint16_t> sprite_plane;
+        bool ready = false;
+        explicit Reference(GameVideoOptions options)
+            : sprite_plane(options.expanded() ? size_t(options.width()) * options.height() : 432 * 256) {}
+    };
+    std::unique_ptr<Reference> reference;
+    bool presentation_pending = false;
+
+    void capture_gpu() {
+        auto &scene = *gpu;
+        scene.fallback = !rendered;
+        if (scene.fallback)
+            std::copy(machine.pixels.begin(), machine.pixels.end(), scene.native_pixels.begin());
+        if (reference) reference->ready = false;
+        if (scene.fallback) return;
+        auto &w = scene.words;
+        for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i) {
+            const auto &c = tiles.maps_[l][i];
+            const unsigned at = GpuScene::pf_cells + (l * 2048 + i) * 2;
+            w[at] = c.tile;
+            w[at + 1] = c.palette | (uint32_t(c.pen_mask) << 16) |
+                (uint32_t(c.flip_x) << 24) | (uint32_t(c.flip_y) << 25) | (uint32_t(c.blend) << 26);
+        }
+        for (unsigned i = 0; i < 4096; ++i) {
+            const auto &c = text.cells_[i];
+            w[GpuScene::text_cells + i] = c.tile | (uint32_t(c.palette) << 8) |
+                (uint32_t(c.flip_x) << 16) | (uint32_t(c.flip_y) << 17);
+            const auto *pens = text.glyphs_.data() + i * 4;
+            w[GpuScene::glyphs + i] = pens[0] | (uint32_t(pens[1]) << 8) |
+                (uint32_t(pens[2]) << 16) | (uint32_t(pens[3]) << 24);
+        }
+        for (unsigned i = 0; i < 8192; ++i)
+            w[GpuScene::palette + i] = (uint32_t(machine.palette[i * 4 + 1]) << 16) |
+                (uint32_t(machine.palette[i * 4 + 2]) << 8) | machine.palette[i * 4 + 3];
+        for (unsigned y = 0; y < 256; ++y) {
+            const auto &r = lines.row(y);
+            scene.reference_rows[y] = r;
+            const unsigned at = GpuScene::rows + y * GpuScene::row_stride;
+            w[at] = r.background;
+            w[at + 1] = r.mosaic_period;
+            w[at + 2] = uint32_t(r.text_x); w[at + 3] = uint32_t(r.text_y);
+            w[at + 4] = r.blend[0] | (uint32_t(r.blend[1]) << 8) |
+                (uint32_t(r.blend[2]) << 16) | (uint32_t(r.blend[3]) << 24);
+            const auto order = scene_order(r);
+            for (unsigned i = 0; i < 9; ++i) {
+                w[at + 5 + i] = order[i];
+                const auto &l = scene_layer(r, i);
+                const unsigned la = at + GpuScene::row_layers + i * GpuScene::layer_stride;
+                w[la] = l.priority | (uint32_t(l.blend_mode) << 4) | (uint32_t(l.enabled) << 6) |
+                    (uint32_t(l.blend_select) << 7) | (uint32_t(l.mosaic) << 8);
+                const auto clips = clip_ranges(r, l, int16_t(46 - int(options.border)), int16_t(366 + options.border));
+                w[la + 1] = clips.count;
+                for (unsigned c = 0; c < clips.count; ++c) {
+                    w[la + 2 + c * 2] = uint32_t(clips.ranges[c].left);
+                    w[la + 3 + c * 2] = uint32_t(clips.ranges[c].right);
+                }
+            }
+            for (unsigned i = 0; i < 4; ++i) {
+                const auto &p = r.playfields[i];
+                const unsigned pa = at + GpuScene::row_pf + i * 6;
+                w[pa] = uint32_t(p.source_x); w[pa + 1] = uint32_t(p.source_y);
+                w[pa + 2] = uint32_t(p.x_step); w[pa + 3] = uint32_t(p.y_step);
+                w[pa + 4] = p.y_fraction; w[pa + 5] = p.palette_add;
+            }
+        }
+        const auto current = sprites.sprites();
+        scene.sprite_count = unsigned(current.size());
+        scene.pen_mask = sprites.pen_mask();
+        for (unsigned i = 0; i < current.size(); ++i) {
+            const auto &s = current[i];
+            const unsigned at = GpuScene::sprites + i * GpuScene::sprite_stride;
+            w[at] = uint32_t(s.x); w[at + 1] = uint32_t(s.y);
+            w[at + 2] = s.scale_x; w[at + 3] = s.scale_y;
+            w[at + 4] = s.tile; w[at + 5] = s.palette;
+            w[at + 6] = unsigned(s.flip_x) | (unsigned(s.flip_y) << 1);
+        }
+    }
+
+    void prepare_reference() {
+        if (!reference) reference = std::make_unique<Reference>(options);
+        auto &ref = *reference;
+        if (ref.ready) return;
+        const auto &w = gpu->words;
+        for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i) {
+            auto &c = ref.tiles.maps_[l][i];
+            const unsigned at = GpuScene::pf_cells + (l * 2048 + i) * 2;
+            const auto a = w[at + 1];
+            c.tile = uint16_t(w[at]); c.palette = uint16_t(a); c.pen_mask = uint8_t(a >> 16);
+            c.flip_x = (a & (1u << 24)) != 0; c.flip_y = (a & (1u << 25)) != 0;
+            c.blend = (a & (1u << 26)) != 0;
+        }
+        for (unsigned i = 0; i < 4096; ++i) {
+            const auto a = w[GpuScene::text_cells + i];
+            auto &c = ref.text.cells_[i];
+            c.tile = uint8_t(a); c.palette = uint8_t(a >> 8);
+            c.flip_x = (a & (1u << 16)) != 0; c.flip_y = (a & (1u << 17)) != 0;
+            for (unsigned b = 0; b < 4; ++b) ref.text.glyphs_[i * 4 + b] = uint8_t(w[GpuScene::glyphs + i] >> (b * 8));
+        }
+        ref.sprites.current_count_ = gpu->sprite_count;
+        ref.sprites.current_flipped_ = false;
+        ref.sprites.current_trails_ = false;
+        ref.sprites.current_pen_mask_ = uint8_t(gpu->pen_mask);
+        for (unsigned i = 0; i < gpu->sprite_count; ++i) {
+            const unsigned at = GpuScene::sprites + i * GpuScene::sprite_stride;
+            auto &s = ref.sprites.current_sprites_[i];
+            s.x = int32_t(w[at]); s.y = int32_t(w[at + 1]);
+            s.scale_x = uint16_t(w[at + 2]); s.scale_y = uint16_t(w[at + 3]);
+            s.tile = w[at + 4]; s.palette = uint8_t(w[at + 5]);
+            s.flip_x = (w[at + 6] & 1) != 0; s.flip_y = (w[at + 6] & 2) != 0;
+        }
+        ref.sprites.raster(machine.video->sprite_tiles(), ref.sprite_plane, options);
+        ref.ready = true;
+    }
+
+    void render_reference(std::span<uint32_t> output, GameVideoOptions opts, unsigned mask, bool serial) {
+        if (!gpu || opts.scale != options.scale || opts.border != options.border ||
+            output.size() < size_t(opts.width()) * opts.height() || (mask & ~511u))
+            throw std::runtime_error("Invalid GPU CPU-reference request");
+        if (gpu->fallback) {
+            const unsigned left = opts.border * opts.scale;
+            for (unsigned y = 0; y < opts.height(); ++y) for (unsigned x = 0; x < opts.width(); ++x)
+                output[size_t(y) * opts.width() + x] = x < left || x >= left + 320 * opts.scale ?
+                    0xff000000u : gpu->native_pixels[(y / opts.scale) * 320 + (x - left) / opts.scale];
+            return;
+        }
+        prepare_reference();
+        auto &ref = *reference;
+        ref.lines.rows_ = gpu->reference_rows;
+        for (auto &r : ref.lines.rows_) {
+            for (unsigned i = 0; i < 4; ++i) {
+                r.playfields[i].layer.enabled &= (mask & (1u << i)) != 0;
+                r.sprites[i].enabled &= (mask & (1u << (i + 4))) != 0;
+            }
+            r.text.enabled &= (mask & 256u) != 0;
+        }
+        const auto compositor = serial ? compose_game_scene_serial : compose_game_scene;
+        compositor(ref.tiles, ref.text, ref.lines, ref.sprite_plane, false,
+                   machine.video->playfield_tiles(), std::span(gpu->words).subspan(GpuScene::palette, 8192),
+                   output, opts);
+    }
+
+    void materialize_presentation() {
+        if (!presentation_pending) return;
+        // Snapshot/save paths must not lazily allocate row workers.
+        render_reference(presentation_pixels, options, 511, true);
+        // Canonical snapshots retain the NEXT-frame expanded sprite plane too.
+        sprites.raster(machine.video->sprite_tiles(), presentation_sprites, options);
+        presentation_pending = false;
+    }
     uint64_t composite_frames = 0, composite_mismatches = 0;
     std::array<uint64_t, 9> frames{}, mismatches{};
     size_t state_size() const {
@@ -120,6 +277,11 @@ void GameVideo::reset() {
     impl_->sprite_plane.fill(0);
     std::fill(impl_->presentation_sprites.begin(), impl_->presentation_sprites.end(), 0);
     std::fill(impl_->presentation_pixels.begin(), impl_->presentation_pixels.end(), 0xff000000);
+    impl_->presentation_pending = false;
+    if (impl_->gpu) {
+        impl_->gpu->fallback = true;
+        impl_->gpu->native_pixels.fill(0xff000000);
+    }
     impl_->frames.fill(0);
     impl_->mismatches.fill(0);
     impl_->rendered = false;
@@ -147,10 +309,16 @@ void GameVideo::observe_write(uint32_t pc, uint32_t address) {
 
 void GameVideo::latch_sprites() {
     auto &state = *impl_;
-    state.sprites.latch();
     const auto assets = state.machine.video->sprite_tiles();
+    if (state.gpu && state.options.expanded() && state.sprites.reg_trails_ && !state.sprites.trails()) {
+        // Seed retention with the preceding expanded plane before latching the
+        // first trail list. Reconstructing only the final list loses history.
+        state.sprites.raster(assets, state.presentation_sprites, state.options);
+    }
+    state.sprites.latch();
     state.sprites.raster(assets, state.sprite_plane);
-    if (state.options.expanded()) state.sprites.raster(assets, state.presentation_sprites, state.options);
+    if (state.options.expanded() && (!state.gpu || state.sprites.trails()))
+        state.sprites.raster(assets, state.presentation_sprites, state.options);
 }
 
 void GameVideo::render_frame() {
@@ -166,7 +334,7 @@ void GameVideo::render_frame() {
         m.video->render_frame(m.palette, m.graphics, m.control, m.pixels);
         if (state.rendered && state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
     }
-    if (!state.rendered && state.options.expanded()) {
+    if (!state.rendered && state.options.expanded() && !state.gpu) {
         // Unsupported geometry is never extrapolated into a made-up border.
         // Preserve the exact oracle image in the center, with black side bars.
         std::fill(state.presentation_pixels.begin(), state.presentation_pixels.end(), 0xff000000);
@@ -174,6 +342,10 @@ void GameVideo::render_frame() {
         for (unsigned y = 0; y < state.options.height(); ++y)
             for (unsigned x = 0; x < 320 * scale; ++x)
                 state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels[(y / scale) * 320 + x / scale];
+    }
+    if (state.gpu) {
+        state.capture_gpu();
+        state.presentation_pending = state.options.expanded();
     }
     latch_sprites();
 }
@@ -203,7 +375,7 @@ void GameVideo::render() {
     compose_game_scene(state.tiles, state.text, state.lines, state.sprite_plane,
                        state.sprites.flipped(), state.machine.video->playfield_tiles(),
                        colors, state.pixels);
-    if (state.options.expanded())
+    if (state.options.expanded() && !state.gpu)
         compose_game_scene(state.tiles, state.text, state.lines, state.presentation_sprites,
                            state.sprites.flipped(), state.machine.video->playfield_tiles(),
                            colors, state.presentation_pixels, state.options);
@@ -212,7 +384,28 @@ void GameVideo::render() {
 }
 
 std::span<const uint32_t> GameVideo::presentation() const {
+    impl_->materialize_presentation();
     return impl_->options.expanded() ? std::span<const uint32_t>(impl_->presentation_pixels) : impl_->machine.pixels;
+}
+
+void GameVideo::enable_gpu_presentation(bool enabled, bool retain_reference) {
+    if (enabled) {
+        if (!impl_->gpu) impl_->gpu = std::make_unique<GpuScene>();
+        if ((retain_reference || impl_->options.expanded()) && !impl_->reference)
+            impl_->reference = std::make_unique<Impl::Reference>(impl_->options);
+    } else {
+        impl_->materialize_presentation();
+        impl_->gpu.reset();
+        impl_->reference.reset();
+    }
+}
+const GpuScene &GameVideo::gpu_scene() const {
+    if (!impl_->gpu) throw std::runtime_error("GPU presentation snapshot is not enabled");
+    return *impl_->gpu;
+}
+void GameVideo::render_reference(std::span<uint32_t> output, GameVideoOptions options,
+                                 unsigned layer_mask, bool serial) const {
+    impl_->render_reference(output, options, layer_mask, serial);
 }
 
 void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
@@ -335,6 +528,7 @@ void GameVideo::save_state(std::span<uint8_t> dst) const {
     if (dst.size() != state_size()) {
         throw std::invalid_argument("GameVideo::save_state size mismatch");
     }
+    impl_->materialize_presentation();
     StateWriter writer(dst);
     impl_->save_state(writer);
     if (writer.remaining() != 0) {
@@ -347,6 +541,12 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
     }
     StateReader reader(src);
     impl_->load_state(reader);
+    impl_->presentation_pending = false;
+    if (impl_->gpu) {
+        impl_->gpu->fallback = true;
+        std::copy(impl_->machine.pixels.begin(), impl_->machine.pixels.end(), impl_->gpu->native_pixels.begin());
+        if (impl_->reference) impl_->reference->ready = false;
+    }
     if (reader.remaining() != 0) {
         throw std::logic_error("GameVideo::load_state remaining unread bytes");
     }

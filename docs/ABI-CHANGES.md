@@ -208,3 +208,20 @@ consumer may race save/load.
 - Retained Video State:
   - FDP Renderer (`Video`): buffered spriteram (64 KiB), sprite framebuffer (432x256 indexed, 221,184 B), sprite priority row usage, 1024-entry tempsprite list, control registers, and row usage maps. Derived line caches (`last_y`) are invalidated upon load to ensure deterministic regeneration.
   - Enhanced Renderer (`GameVideo`, when configured): GameTiles tile maps (4 layers x 2048 cells) and layer validity, GameText cells (4096) and glyph RAM, GameSprites staging, submitted, and current sprite buffers (1024 each) with scroll registers, GameLines profile parameters and scene row calibration. Native pixels, sprite plane, and both expanded presentation buffers are serialized; restoring never substitutes nearest-neighbor pixels for rerasterized output.
+
+## GPU presentation snapshot
+
+The C CPU ABI remains version 2; generated hooks, lazy flags, bus callbacks
+and scheduler are unchanged. `GameVideo::enable_gpu_presentation` enables a
+host-only scanout snapshot exported by `gpu_scene()`. It captures semantic
+cells, normalized rows and the **rendered** sprite list before the next latch.
+GPU resources, packed shader data and CPU diagnostic caches are not serialized.
+`render_reference` rerenders that snapshot through the retained CPU compositor,
+with optional isolated layer masks and serial dispatch for parity/measurement.
+
+Native `Machine::pixels` is still CPU-produced every frame. Expanded GPU
+presentation avoids the per-frame expanded CPU raster; `presentation()` and
+`save_state()` materialize the exact CPU presentation and next sprite plane
+lazily when requested, preserving the existing canonical snapshot byte layout.
+Load invalidates GPU host caches and initially presents the restored native
+frame; the next scanout rebuilds GPU scene data. Netplay retains scale 1/border 0.

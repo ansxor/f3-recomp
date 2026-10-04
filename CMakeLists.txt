@@ -4,6 +4,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(F3RT_SDL "Build SDL3 frontend" ON)
+option(F3RT_GPU "Build SDL3 GPU presentation (offline SPIR-V/MSL shader tools required)" ON)
 set(F3_ROM_DIR "" CACHE PATH "Land Maker Japan ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated Land Maker C directory (optional)")
 set(F3_SOUND_GENERATED_DIR "" CACHE PATH "Pre-generated Land Maker sound driver C directory (optional)")
@@ -99,9 +100,39 @@ if(F3RT_SDL)
         target_compile_definitions(landmakr PRIVATE
             F3RT_GENERATED=1 F3RT_LANDMAKR=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
+    if(F3RT_GPU)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        find_program(F3_GLSLANG glslangValidator REQUIRED)
+        find_program(F3_SPIRV_CROSS spirv-cross REQUIRED)
+        set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
+        add_custom_command(OUTPUT "${VIDEO_SHADER_HEADER}"
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_video_shaders.py"
+                --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/shaders"
+                --output "${VIDEO_SHADER_HEADER}" --glslang "${F3_GLSLANG}" --spirv-cross "${F3_SPIRV_CROSS}"
+            DEPENDS tools/compile_video_shaders.py runtime/shaders/scene.glsl
+                runtime/shaders/fullscreen.vert runtime/shaders/sprite.vert
+                runtime/shaders/sprite.frag runtime/shaders/scene.frag
+            VERBATIM)
+        add_library(f3rt-gpu STATIC runtime/gpu_video.cpp "${VIDEO_SHADER_HEADER}")
+        target_include_directories(f3rt-gpu PUBLIC include runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_link_libraries(f3rt-gpu PUBLIC SDL3::SDL3)
+        target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)
+        foreach(frontend f3rt-run landmakr)
+            if(TARGET ${frontend})
+                target_link_libraries(${frontend} PRIVATE f3rt-gpu)
+                target_compile_definitions(${frontend} PRIVATE F3RT_GPU=1)
+            endif()
+        endforeach()
+        if(F3_GENERATED_DIR)
+            add_executable(f3rt-gpu-regression tools/gpu_video_regression.cpp)
+            target_link_libraries(f3rt-gpu-regression PRIVATE f3rt f3_recompiled f3rt-gpu)
+            target_compile_definitions(f3rt-gpu-regression PRIVATE
+                F3RT_GENERATED=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
+        endif()
+    endif()
 endif()
 if(F3_SOUND_GENERATED_DIR)
-    foreach(frontend f3rt-sound-extract f3rt-gameplay-regression f3rt-netplay-oracle f3rt-run landmakr)
+    foreach(frontend f3rt-sound-extract f3rt-gameplay-regression f3rt-netplay-oracle f3rt-run landmakr f3rt-gpu-regression)
         if(TARGET ${frontend})
             target_link_libraries(${frontend} PRIVATE f3_sound_recompiled)
             target_compile_definitions(${frontend} PRIVATE F3RT_SOUND_GENERATED=1)

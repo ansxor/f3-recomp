@@ -59,11 +59,12 @@ After the pictures match at native size, you can add three options. All three ne
 | `--video-scale N` | 1 to 4 | 1 | Draws the scene at N times the native resolution. |
 | `--video-border N` | 0 to 160 | 0 | Adds N native columns to **each** side of the picture. |
 | `--video-filter F` | `nearest` or `linear` | `nearest` | Sets the filter that SDL uses to scale the final picture to the window. |
+| `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
 
 Example:
 
 ```sh
-./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter linear
+./build/landmakr --video game --video-backend gpu --video-scale 4 --video-border 48 --video-filter linear
 ```
 
 The internal picture size is:
@@ -85,6 +86,12 @@ Important facts:
 - **Linear filtering** changes only how SDL scales the final picture. It does not add detail.
 - **Native data stays native.** The frame CRC, the dumps and the compare mode always use the 320 × 232 picture.
 - **Unsupported frames stay exact.** When the oracle draws a frame in expanded mode, the program shows the exact oracle picture in the center with black columns at the sides. It does not invent new geometry.
+
+GPU uses Metal on macOS and SPIR-V/Vulkan on supported hosts. Both backends
+use the same integer sampling, sprite raster rules and blend ordering.
+Headless, native captures/CRCs, audio and rollback checksums remain CPU-produced.
+Use `--video-backend cpu` if GPU device creation is unavailable.
+The GPU port does not interpolate adjacent native line values by default.
 
 The program checks the values:
 

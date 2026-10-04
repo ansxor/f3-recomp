@@ -20,6 +20,7 @@ public:
     void load_state(StateReader &reader);
 
 private:
+    friend class GameVideo;
     struct Cell {
         uint16_t tile = 0;
         uint16_t palette = 0;
