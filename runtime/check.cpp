@@ -27,6 +27,15 @@ uint16_t read_word(f3rt::Eeprom &e) { uint16_t value=0;for(int i=0;i<16;++i) { s
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
 }
 int main() try {
+    f3rt::Audio clock_audio;
+    std::array<int16_t, 128> clock_samples{};
+    uint64_t sample_count=0;
+    for (unsigned i=0;i<10000;++i) {
+        clock_audio.advance(16000);
+        sample_count+=clock_audio.render(clock_samples.data(),clock_samples.size()/2);
+    }
+    require(sample_count==uint64_t(clock_audio.sample_rate())*10,
+            "Ten seconds of audio match the advertised stream rate without clock drift");
     auto m=std::make_unique<f3rt::Machine>(fixture());
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
@@ -58,6 +67,14 @@ int main() try {
     m->pending_irqs=1<<2;require(f3_boundary(&cpu)!=0,"IRQ redirects boundary");
     require(cpu.pc==0x400300 && !cpu.stopped && (cpu.sr&0x2700)==0x2200,"IRQ releases STOP and raises mask");
     require(cpu.a[7]==0x400ff8 && m->read32(cpu.a[7]+2)==0x100 && m->read16(cpu.a[7]+6)==104,"68020 interrupt frame");
+    m->write32(cpu.vbr+5*4,0x400310);m->write16(0x400310,0x4e73); // RTE handler
+    cpu.pc=0x100;cpu.sr=0x2700;
+    const auto exception_cycles=cpu.cycles;const auto exception_sp=cpu.a[7];
+    f3_exception(&cpu,5,0x102);
+    require(cpu.cycles-exception_cycles==38 && m->read16(cpu.a[7]+6)==0x2014 &&
+            m->read32(cpu.a[7]+8)==0x100,"Divide-by-zero full charge and format-2 instruction PC");
+    require(f3_fallback(&cpu) && cpu.pc==0x102 && cpu.a[7]==exception_sp && cpu.sr==0x2700,
+            "Real RTE restores the format-2 resume PC and stack");
     const f3_block blocks[]={{0x100,native}};
     require(f3_register_blocks(&cpu,blocks,1)==1,"Valid block table");
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_dispatch(&cpu) && cpu.d[0]==99,"Native dispatch executes matching block");
