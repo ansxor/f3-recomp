@@ -2,6 +2,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "m68k.h"
+#include "sound_trace.hpp"
 #include <mutex>
 
 extern "C" {
@@ -26,15 +27,39 @@ void callbacks() {
     m68k_set_int_ack_callback(acknowledge);
     m68k_set_reset_instr_callback(reset_devices);
 }
+void trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
+    if (!active_machine->sound_trace || address < 0x140000 || address >= 0x340004) return;
+    active_machine->sound_trace->record(*active_machine,
+        write ? f3rt::SoundTrace::SoundWrite : f3rt::SoundTrace::SoundRead,
+        m68k_get_reg(nullptr, M68K_REG_PPC), address, value, width);
+}
 }
 extern "C" {
-unsigned int m68k_read_memory_8(unsigned int a) { return sound_bus ? active_machine->audio->read8(a) : active_machine->read8(a); }
-unsigned int m68k_read_memory_16(unsigned int a) { return sound_bus ? active_machine->audio->read16(a) : active_machine->read16(a); }
-unsigned int m68k_read_memory_32(unsigned int a) { return sound_bus ? active_machine->audio->read32(a) : active_machine->read32(a); }
-void m68k_write_memory_8(unsigned int a, unsigned int v) { if (sound_bus) active_machine->audio->write8(a,uint8_t(v)); else active_machine->write8(a,uint8_t(v)); }
-void m68k_write_memory_16(unsigned int a, unsigned int v) { if (sound_bus) active_machine->audio->write16(a,uint16_t(v)); else active_machine->write16(a,uint16_t(v)); }
-void m68k_write_memory_32(unsigned int a, unsigned int v) { if (sound_bus) active_machine->audio->write32(a,v); else active_machine->write32(a,v); }
+unsigned int m68k_read_memory_8(unsigned int a) {
+    if (!sound_bus) return active_machine->read8(a);
+    const auto value=active_machine->audio->read8(a); trace_sound(a,value,1,false); return value;
 }
+unsigned int m68k_read_memory_16(unsigned int a) {
+    if (!sound_bus) return active_machine->read16(a);
+    const auto value=active_machine->audio->read16(a); trace_sound(a,value,2,false); return value;
+}
+unsigned int m68k_read_memory_32(unsigned int a) {
+    if (!sound_bus) return active_machine->read32(a);
+    const auto value=active_machine->audio->read32(a); trace_sound(a,value,4,false); return value;
+}
+void m68k_write_memory_8(unsigned int a, unsigned int v) {
+    if (!sound_bus) { active_machine->write8(a,uint8_t(v)); return; }
+    trace_sound(a,uint8_t(v),1,true); active_machine->audio->write8(a,uint8_t(v));
+}
+void m68k_write_memory_16(unsigned int a, unsigned int v) {
+    if (!sound_bus) { active_machine->write16(a,uint16_t(v)); return; }
+    trace_sound(a,uint16_t(v),2,true); active_machine->audio->write16(a,uint16_t(v));
+}
+void m68k_write_memory_32(unsigned int a, unsigned int v) {
+    if (!sound_bus) { active_machine->write32(a,v); return; }
+    trace_sound(a,v,4,true); active_machine->audio->write32(a,v);
+}
+} // extern "C"
 namespace f3rt {
 Interpreter::Interpreter(Machine &m) : machine(m) {
     std::call_once(init_flag, [] { m68k_init(); });

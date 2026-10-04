@@ -68,6 +68,28 @@ centered with black side borders, rather than invented off-screen geometry.
 ROM addresses, descriptor layouts, measured per-layer parity, fallback limits
 and presentation evidence: [docs/VIDEO-HLE.md](docs/VIDEO-HLE.md).
 
+### Sound-driver observation
+
+`--sound-trace FILE` on `landmakr`, `f3rt-run`, or the seeded gameplay harness
+records the interpreted sound CPU's device reads/writes and main-CPU mailbox
+writes without changing dispatch deadlines or reading registers a second time.
+Keep traces and extracted events under ignored `build/`; they contain ROM-derived
+data. The gameplay harness also accepts `--wav FILE`.
+
+```sh
+build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+  --sound-trace build/seed5.sound --wav build/seed5.wav
+python3 tools/decode_sound.py build/seed5.sound \
+  --output build/seed5-writes.jsonl.gz
+```
+
+`--notes-only` extracts voice starts rather than every bus/register update.
+Device timestamps use the effective 16 MHz device cursor and emitted-sample
+ordinal, not the enclosing main-CPU block's endpoint. Register snapshots expose
+sample-ROM word addresses, pitch increment, loop/direction, L/R volume, filter,
+bank and output pair. See [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md).
+
+
 
 
 ## Recompile the supplied game

@@ -14,6 +14,7 @@ class GameVideo;
 class Audio;
 class Interpreter;
 class Eeprom;
+class SoundTrace;
 class Machine {
 public:
     static constexpr uint32_t main_clock = 16000000;
@@ -36,6 +37,7 @@ public:
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;
     std::unique_ptr<Interpreter> interpreter;
+    std::unique_ptr<SoundTrace> sound_trace;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff};
     uint8_t system_inputs = 0xff; // EEPROMIN: service/test, four coins, active low.
     std::array<uint64_t, 4> coin_count{};

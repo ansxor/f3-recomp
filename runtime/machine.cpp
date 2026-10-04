@@ -2,6 +2,7 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
+#include "sound_trace.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include <algorithm>
@@ -44,6 +45,7 @@ void Machine::reset() {
     next_vblank = raster_cycle(frame_pixels);
     reset_devices();
     audio->reset_board();
+    if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
     video->reset();
     if (game_video) game_video->reset();
     interpreter->reset_main();
@@ -92,9 +94,14 @@ void Machine::write8(uint32_t a, uint8_t v) {
         if (game_video) game_video->observe_write(cpu.pc, a);
         control[a - 0x660000] = v; return;
     }
-    if (a >= 0xc00000 && a < 0xc00800) { shared[a - 0xc00000] = v; return; }
-    if (a >= 0xc80000 && a <= 0xc80003) { audio->set_reset(false); return; }
-    if (a >= 0xc80100 && a <= 0xc80103) { audio->set_reset(true); return; }
+    if (a >= 0xc00000 && a < 0xc00800) {
+        if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
+        shared[a - 0xc00000] = v; return;
+    }
+    if ((a >= 0xc80000 && a <= 0xc80003) || (a >= 0xc80100 && a <= 0xc80103)) {
+        if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
+        audio->set_reset(a >= 0xc80100); return;
+    }
     if (a >= 0x4a0000 && a <= 0x4a0003) { watchdog_at = cpu.cycles + 3ull * main_clock; return; }
     if (a == 0x4a0004 || a == 0x4a0014) { coin_write(a == 0x4a0014, v); return; }
     if (a == 0x4a0005 || a == 0x4a0015) { auto &word = coin_word[a == 0x4a0015]; word = uint16_t((word & 0xff00) | v); return; }
@@ -149,6 +156,7 @@ int Machine::boundary() {
     if (cpu.cycles >= watchdog_at) {
         reset_devices();
         audio->reset_board();
+        if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
         interpreter->reset_main();
         return 1;
     }

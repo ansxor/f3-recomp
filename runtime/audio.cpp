@@ -60,6 +60,8 @@ struct Audio::Impl {
     int64_t m_cpu_accum;
     uint32_t m_duart_accum;
     uint64_t m_sample_accum;
+    uint64_t m_clock_ticks = 0;
+    uint64_t m_generated_frames = 0;
 
     // Thread-safe audio sample ring buffer (interleaved stereo)
     mutable std::mutex m_audio_mutex;
@@ -147,6 +149,7 @@ struct Audio::Impl {
     }
 
     void generate_one_frame() {
+        ++m_generated_frames;
         int32_t cursample[ES5505::NUM_CHANNELS];
         m_es5505.generate_one_sample(cursample);
 
@@ -175,6 +178,7 @@ struct Audio::Impl {
     }
 
     void advance_slice(uint32_t main_cycles) {
+        m_clock_ticks += main_cycles;
         // Advance DUART 68681 (clock 4.0 MHz = 16MHz / 4).
         m_duart_accum += main_cycles;
         uint32_t duart_cycles = m_duart_accum / 4;
@@ -534,6 +538,9 @@ void Audio::set_reset(bool asserted) {
 void Audio::reset_board() {
     m_impl->reset_board();
 }
+
+uint64_t Audio::clock_ticks() const { return m_impl->m_clock_ticks; }
+uint64_t Audio::generated_frames() const { return m_impl->m_generated_frames; }
 
 bool Audio::is_reset() const {
     return m_impl->m_reset_asserted;

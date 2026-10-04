@@ -4,6 +4,7 @@
 #include "interpreter.hpp"
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
+#include "sound_trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -98,6 +99,7 @@ int main(int argc, char **argv) try {
     uint64_t video_diff_every = 120;
     std::filesystem::path dump_dir;
     std::filesystem::path capture_surface;
+    std::filesystem::path sound_trace_path, wav_path;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -119,6 +121,10 @@ int main(int argc, char **argv) try {
             dump_dir = value();
         } else if (arg == "--capture-surface" || arg == "--surface") {
             capture_surface = value();
+        } else if (arg == "--sound-trace") {
+            sound_trace_path = value();
+        } else if (arg == "--wav") {
+            wav_path = value();
         } else if (arg == "--video-diff") {
             video_diff = true;
         } else if (arg == "--video-layer-mask") {
@@ -135,6 +141,8 @@ int main(int argc, char **argv) try {
                       << "  --frames N             Number of frames to advance (default: 40000)\n"
                       << "  --dump-dir DIR         Dump final state or the first video mismatch\n"
                       << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
+                      << "  --sound-trace FILE     Record interpreted sound CPU and main mailbox bus events\n"
+                      << "  --wav FILE             Save oracle-mode audio\n"
                       << "  --video-diff           Compare game-owned layers and final RGB against FDP from frame 600\n"
                       << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
                       << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
@@ -165,6 +173,9 @@ int main(int argc, char **argv) try {
 
     auto machine = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir, set));
     auto &m = *machine;
+    if (!sound_trace_path.empty()) m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
+    std::unique_ptr<f3rt::WavWriter> wav;
+    if (!wav_path.empty()) wav=std::make_unique<f3rt::WavWriter>(wav_path,m.audio->sample_rate());
     if (video_diff) {
         if (!video_diff_every || !video_layer_mask || (video_layer_mask & ~511u))
             throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
@@ -246,6 +257,7 @@ int main(int argc, char **argv) try {
         size_t count = 0;
         while ((count = m.audio->render(audio_buffer.data(), audio_buffer.size() / 2)) != 0) {
             audio_frames += count;
+            if (wav) wav->append(std::span(audio_buffer.data(),count*2));
             for (size_t i = 0; i < count * 2; ++i) {
                 audio_peak = std::max(audio_peak, std::abs(int(audio_buffer[i])));
                 nonzero_samples += (audio_buffer[i] != 0);
@@ -269,6 +281,7 @@ int main(int argc, char **argv) try {
         f3rt::write_bmp(capture_surface, m.pixels);
     }
     if (m.game_video) m.game_video->report(std::cout);
+    if (m.sound_trace) m.sound_trace->finish(m);
 
     std::cout << "SUCCESS set=" << set
               << " seed=" << seed

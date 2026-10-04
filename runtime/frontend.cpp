@@ -2,6 +2,7 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/game_video.hpp"
 #include "interpreter.hpp"
+#include "sound_trace.hpp"
 #include "capture_io.hpp"
 #include <SDL3/SDL.h>
 #include <array>
@@ -43,6 +44,7 @@ void key(f3rt::Machine &m, SDL_Scancode code, bool pressed) {
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
+    std::filesystem::path sound_trace_path;
     std::string set="landmakrj";
     std::string video_mode="fdp";
     f3rt::GameVideoOptions video_options;
@@ -67,6 +69,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--dump-every")dump_every=std::stoull(value());
         else if(arg=="--eeprom")eeprom=value();
         else if(arg=="--wav")wav_path=value();
+        else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
         else if(arg=="--video")video_mode=value();
@@ -90,6 +93,7 @@ int main(int argc,char **argv) try {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
+                     <<"  [--sound-trace FILE] (interpreted sound CPU bus log)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
@@ -111,6 +115,7 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("Presentation enhancements require --video game or compare");
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
+    if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     m.allow_main_fallback=allow_fallback;
     if(video_mode!="fdp")
         m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
@@ -188,6 +193,7 @@ int main(int argc,char **argv) try {
         if(!report)throw std::runtime_error("Fallback report write failed");
     }
     if(m.game_video)m.game_video->report(std::cout);
+    if(m.sound_trace)m.sound_trace->finish(m);
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.interpreter->sound_pc()
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions

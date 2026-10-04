@@ -54,6 +54,9 @@ public:
 
     // Time advancement driven by main CPU 16MHz cycles
     void advance(uint32_t main_cycles);
+    // Continuous effective device time, not the caller's main-block endpoint.
+    uint64_t clock_ticks() const;
+    uint64_t generated_frames() const;
 
     // Audio output stream: interleaved stereo (Left, Right)
     // Sample rate is fixed to ES5505 native output rate (~29762 Hz, or resampled)
