@@ -12,7 +12,7 @@ class Machine;
 
 class SoundNative {
 public:
-    // Generated table: one entry per even ROM address, in address order.
+    // Generated table: dense aligned ROM entries, or sorted retained entries in slim builds.
     SoundNative(Machine &machine, const f3_block *blocks, size_t block_count);
     ~SoundNative();
 
@@ -54,6 +54,9 @@ private:
 
     Machine &m_machine;
     const f3_block *m_blocks;
+#ifdef F3_PROFILE_SLIM_ENABLED
+    size_t m_block_count;
+#endif
 
     f3_cpu m_cpu{};
     bool m_needs_reset = true;

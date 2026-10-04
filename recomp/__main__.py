@@ -15,6 +15,11 @@ def main() -> int:
     parser.add_argument('--output', type=Path, required=True,
                         help='ignored generated-output directory (e.g. build/landmakrj)')
     parser.add_argument('--max-block-instructions', type=int, default=32)
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument('--profile-tiers', type=Path,
+                          help='retain all entries, splitting hot and cold sources using this profile')
+    profiles.add_argument('--profile-slim', type=Path,
+                          help='retain only executed entries from this profile (strict sparse build)')
     args = parser.parse_args()
     try:
         from .discovery import load_rom, discover
@@ -27,7 +32,9 @@ def main() -> int:
         if args.command == 'emit':
             from .generate import generate
             report = generate(rom, result, args.output, config,
-                              max_block_instructions=args.max_block_instructions)
+                              max_block_instructions=args.max_block_instructions,
+                              profile_tiers=args.profile_tiers,
+                              profile_slim=args.profile_slim)
             print(json.dumps({key: value for key, value in report.items()
                               if key not in ('fallback_pcs', 'source_files')}, indent=2))
         return 0

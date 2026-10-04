@@ -5,6 +5,8 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
+#include "f3rt/block_profile.h"
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 
@@ -12,6 +14,9 @@ namespace f3rt {
 
 SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_count)
     : m_machine(machine), m_blocks(blocks)
+#ifdef F3_PROFILE_SLIM_ENABLED
+    , m_block_count(block_count)
+#endif
 {
     const auto &rom_bytes = m_machine.roms.sound;
     uint32_t crc = crc32(rom_bytes.data(), rom_bytes.size());
@@ -24,8 +29,18 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
     m_cpu.runtime = this;
     m_cpu.sr = F3_CCR_Z; // A zeroed Musashi context starts with its inverted-Z latch clear.
 
+#ifdef F3_PROFILE_SLIM_ENABLED
+    if (!blocks || !block_count || block_count > ROM_SIZE / 2)
+        throw std::runtime_error("SoundNative requires a nonempty retained ROM table");
+    for (size_t index = 0; index < block_count; ++index)
+        if (!blocks[index].execute || (blocks[index].address & 1) ||
+            blocks[index].address < ROM_BASE || blocks[index].address >= ROM_BASE + ROM_SIZE ||
+            (index && blocks[index - 1].address >= blocks[index].address))
+            throw std::runtime_error("Invalid profile-slim sound ROM table");
+#else
     if (!blocks || block_count != ROM_SIZE / 2)
         throw std::runtime_error("SoundNative requires the complete aligned ROM table");
+#endif
 }
 
 SoundNative::~SoundNative() = default;
@@ -215,13 +230,23 @@ void SoundNative::check_interrupts() {
 void SoundNative::dispatch_one() {
     uint32_t pc = m_cpu.pc;
     if (pc >= ROM_BASE && pc < ROM_BASE + ROM_SIZE && !(pc & 1)) {
+#ifdef F3_PROFILE_SLIM_ENABLED
+        const auto *end = m_blocks + m_block_count;
+        const auto *entry = std::lower_bound(m_blocks, end, pc,
+            [](const f3_block &block, uint32_t address) { return block.address < address; });
+        f3_block_fn fn = entry != end && entry->address == pc ? entry->execute : nullptr;
+#else
         f3_block_fn fn = m_blocks[(pc - ROM_BASE) >> 1].execute;
+#endif
         if (fn) {
             ++m_instruction_count;
             fn(&m_cpu);
             return;
         }
     }
+#ifdef F3_PROFILE_SLIM_ENABLED
+    f3_profile_cold_abort(F3_PROFILE_SOUND, 0x5a7e9117u, pc);
+#endif
     uint16_t op = read16(pc);
     char buf[128];
     snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC: 0x%08x (opcode 0x%04x)", pc, op);

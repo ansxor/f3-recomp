@@ -29,6 +29,9 @@ Set a cache variable with `-DNAME=value` on the `cmake` command line.
 | `F3_ROM_DIR` | path | empty | Directory with the Land Maker Japan ROM files. If set, CMake runs the recompiler and the sound compiler at configure time. |
 | `F3_GENERATED_DIR` | path | empty | Directory with a generated program (`sources.cmake` and C files). If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/landmakrj`. |
 | `F3_SOUND_GENERATED_DIR` | path | empty | Directory with a generated sound program. If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/sound-landmakrj`. |
+| `F3_PROFILE_INSTRUMENT` | option | `OFF` | Compile allocation-free per-entry main/sound hit counters. Requires `F3_ROM_DIR` to regenerate both CPUs; `--profile-out FILE` enables recording with 30-second and exit flushes. |
+| `F3_PROFILE_TIERS` | filepath | empty | Full-coverage profile partition: hot generated units `-O2`, cold units `-Oz` on Clang or `-Os` otherwise. Requires ROM generation and a matching versioned profile. |
+| `F3_PROFILE_SLIM` | filepath | empty | Explicit opt-in removal of unprofiled main/sound code. Missing entries abort loudly with address, ROM CRC, re-profile hint and cold-hit record; no interpreter fallback. Mutually exclusive with tiers. |
 | `BUILD_TESTING` | option | `ON` (from `include(CTest)`) | Build `f3rt-check` and register the CTest test. |
 
 Other standard CMake variables, such as `CMAKE_BUILD_TYPE` and `CMAKE_C_FLAGS`, also change the build. The netplay build identity includes them. See below.
@@ -43,6 +46,16 @@ Other standard CMake variables, such as `CMAKE_BUILD_TYPE` and `CMAKE_C_FLAGS`, 
 cmake -S . -B build -DF3_ROM_DIR=/path/to/roms/landmakrj -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
+
+### Execution-profile builds
+
+Use separate build directories for instrumentation, full-coverage tiers and slim.
+Collect with both native CPUs; merge independent output paths with
+`python3 tools/block_profile.py merge --output profiles/landmakrj.profile RUN.profile ...`.
+Profiles contain identities, addresses and counts, never ROM bytes. The generated
+inventories and `tools/block_profile.py report` distinguish executable entry
+addresses from packed host functions. A gameplay profile is evidence of observed
+execution, not proof that the remaining code can never execute.
 
 ### What happens at configure time with F3_ROM_DIR
 

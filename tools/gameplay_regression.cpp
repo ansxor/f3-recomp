@@ -6,6 +6,7 @@
 #include "capture_io.hpp"
 #include "sound_trace.hpp"
 #include "gameplay_inputs.hpp"
+#include "block_profile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -103,7 +104,7 @@ int main(int argc, char **argv) try {
     uint64_t video_diff_every = 120;
     std::filesystem::path dump_dir;
     std::filesystem::path capture_surface;
-    std::filesystem::path sound_trace_path, wav_path;
+    std::filesystem::path sound_trace_path, wav_path, profile_path;
 
     std::string sound_driver = "oracle";
     for (int i = 1; i < argc; ++i) {
@@ -128,6 +129,8 @@ int main(int argc, char **argv) try {
             capture_surface = value();
         } else if (arg == "--sound-trace") {
             sound_trace_path = value();
+        } else if (arg == "--profile-out") {
+            profile_path = value();
         } else if (arg == "--sound-driver") {
             sound_driver = value();
         } else if (arg == "--wav") {
@@ -151,6 +154,7 @@ int main(int argc, char **argv) try {
                       << "  --sound-trace FILE     Record sound CPU and main mailbox bus events\n"
                       << "  --sound-driver MODE    oracle (default) or native (generated driver)\n"
                       << "  --wav FILE             Save audio\n"
+                      << "  --profile-out FILE     Merge main/sound entry counts (instrumented build; flush every 30s and at exit)\n"
                       << "  --video-diff           Compare game-owned layers and final RGB against FDP from frame 600\n"
                       << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
                       << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
@@ -180,9 +184,12 @@ int main(int argc, char **argv) try {
     }
     if (sound_driver != "oracle" && sound_driver != "native")
         throw std::runtime_error("--sound-driver must be oracle or native");
+    if (!profile_path.empty() && sound_driver != "native")
+        throw std::runtime_error("Profiling requires --sound-driver native");
 
     auto machine = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir, set));
     auto &m = *machine;
+    f3rt::BlockProfileSession profile(m.roms, profile_path);
     if (!sound_trace_path.empty()) m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
@@ -223,6 +230,7 @@ int main(int argc, char **argv) try {
     const auto start_time = std::chrono::steady_clock::now();
 
     while (m.frame < target_frames) {
+        profile.tick();
         uint64_t f = m.frame;
         // Deterministic schedule using shared config (retained exact timing)
         constexpr f3rt::test::ScheduleConfig cfg{.versus = false};
@@ -278,6 +286,7 @@ int main(int argc, char **argv) try {
             }
         }
     }
+    profile.flush();
 
     const auto elapsed = std::chrono::steady_clock::now() - start_time;
     const double elapsed_sec = std::chrono::duration<double>(elapsed).count();

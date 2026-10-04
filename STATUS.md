@@ -1,50 +1,41 @@
-DONE: threaded CPU, exact SDL3 GPU compositor and guarded opt-in linear/fitted PF2 water interpolation. Metal verified; ending coverage is induced, not a played ending.
+BLOCKED: human gameplay profile and both size/safety evaluations are pending; instrumentation is verified.
 
-# Phase 5 — GPU video
+# Binary-size experiment B — execution profiles
 
-## Distinct local checkpoints
+Worktree-local experiment; strict native main CPU and sound CPU, no interpreter fallback. No pushes, ROMs, generated code or binaries committed.
 
-- `gpuvideo-1-threaded-cpu` — `e7dc01c`: persistent CPU row workers, exact serial reference and measured improvement.
-- `gpuvideo-2-gpu-parity` — `93e9774`: portable SDL3 GPU/Metal compositor, no interpolation, exact oracle presentation.
-- `gpuvideo-3-interp` — separate opt-in `--video-interp off|linear|fit`; CPU and off remain defaults.
+## Instrumentation checkpoint
 
-No pushes, ROMs or binaries committed. Captures, CSVs and logs remain outside
-this worktree under `/tmp/f3-gpuvideo`: `threaded-cpu`, `gpu-parity`,
-`line-profile`, `interpolation`, and `interpolation-smoke`.
+- Optional `-DF3_PROFILE_INSTRUMENT=ON`, enabled by `--profile-out FILE` in `landmakr` and the seeded gameplay harness.
+- Every generated executable address is instrumented at actual execution, including intra-page main fallthrough, indirect dispatch entries and shared main/sound exception handlers. Counts use dense address-indexed arrays; no hot-path allocation and no instrumentation when the build option is off. Counts saturate at uint64 max.
+- Version 1 ASCII `F3-BLOCK-PROFILE` records ROM CRC, CPU, base, length, address and hit/miss counts, with no ROM bytes. Sequential runs merge in place; a nonblocking advisory lock rejects concurrent writers to the same output. Atomic replacement plus fsync occurs every 30 wall-clock seconds at frame boundaries and on exit. Separate files can be unioned with `tools/block_profile.py merge`.
+- Original inventories: main 1,033,276 registered executable entries (464,523 decoded instructions plus 568,753 proven exception entries); sound 262,144 aligned entries. These are entry addresses, not merely 17,534 main packed functions.
+- Release configure: 16.78 s. First instrumentation build (`landmakr`, gameplay harness, runtime check, `-j 6`): 117.12 s. Saturating-counter rebuild including reconfigure: 232.58 s.
+- Actual frame-600 smoke: zero main instruction fallback; frame-600 main RAM byte-identical to fresh MAME. Two deterministic 600-frame runs produced exact count doubling at all 4,425 executed entry keys (main 1,467, sound 2,958).
+- Compiled deadline/overlap/discovery regressions: 13 passing. Profile format/identity/count and compiled hot/cold/slim/shared-exception scenarios: 6 passing; saturation scenario additionally passing. Runtime device executable: PASS.
+- Periodic-flush crash proof: a separate full profiling process was killed with SIGKILL at 35.051 s. The previously atomic-flushed file retained 18,561 executed entry keys and 272,208,868 hits; the human window was not touched.
 
-## Verification
+## Human collection (launched; awaiting user Escape exit)
 
-- Off parity matrix rerun after interpolation integration: seeds 5/6/7/41 × scales 1–4 × borders 0/48 × 4000 = 128,000 native frames; 4320 composites and 4096 comparisons per each of nine isolated layers, zero mismatches.
-- Linear/fit: 22 more 4000-frame runs, 88,000 native frames, 2970 sampled images, 768 accepted sprite-isolation checks and 20×11 invalid-input/boundary fixtures. Outside/whole boundary rows, declined/oracle images, canonical bytes and sprite contributions remain exact. Same-option off/linear/fit native/audio/state CRCs, cycles and native block counts match; zero instruction fallback.
-- Native output retains the existing 25/25 MAME comparison and frame-600 RAM. Fresh headless fit flags retain 250,114,560 native RGB checks with zero differences and byte-identical integration WAV. Native frame CRC `3359f200`, 51,507,335 native blocks, zero CPU fallback.
-- Independent ordinary CPU-backend snapshots/presentation and allocation-free save/restore are verified; four-frame expanded trail retention regression remains exact.
-- `F3RT_GPU=OFF` frontend builds/runs, runtime device check passes, and an actual CPU window is exercised. Actual 4x Metal off and fitted-water windows/internal surfaces are inspected.
+```sh
+./build/landmakr --profile-out build/evidence/human.profile --video-scale 2
+```
 
-## Performance and visible gain
+Profile: `/Users/darien/Workspace/f3-stuff/f3-recomp/wt/binsize-profile/build/evidence/human.profile`.
+Default game video, native sound, windowed, scale 2. Exact command above launched as `HumanProfileWindow`, pid 32163; direct window capture verifies the rendered attract tutorial. A pre-existing GPU-regression crash-report dialog covers the desktop; the user was notified. The process must not be stopped early.
 
-Scale-4/border-48 parity checkpoint native+fenced-GPU render budget:
-mean/p95/worst **10.443/11.082/11.720 ms**. Actual off frontend:
-3600 frames in **31.56 s / 114.1 fps**.
+## Automated collection / references
 
-Accepted water frame 1560, 100 warmed frozen samples, scale 4/border 48:
-GPU linear **4.640/6.201/7.043 ms**; fit **4.848/6.963/7.595 ms**
-(mean/p95/worst, includes uploads/fence/readback). Actual fitted frontend:
-3600 frames in **30.31 s / 118.8 fps**, native CPU/audio still running.
-CPU/GPU scale 1/2/4 tables and precise timing scopes: `docs/GPU-VIDEO.md`.
+- Training seeds: 101–108 × 20,000 frames, strict-native headless harness, native sound; per-run profiles and WAV/state evidence under `build/evidence/training/`.
+- Held-out seeds: 301–308 × 20,000 frames, excluded from the committed profile; abort rate and WAV/state parity evaluated separately.
+- Baseline executable: `/Users/darien/Workspace/f3-stuff/f3-recomp/build/landmakr`; 84,291,656 file bytes, __TEXT 56,770,560 bytes, __text 54,706,200 bytes.
+- Baseline generated C: main 261,098,018 bytes, sound 55,210,095 bytes.
+- Fresh MAME captures: 25 frames, 600–3480 step 120, separate cold-boot NVRAM/config under `build/evidence/mame-*`. Captures complete; comparison against candidates is pending.
 
-Character-select water is PF2. Geometry uses validated screen rows 152–255;
-measured continuous palette prefix is 152–237. Linear visibly removes 4x
-water stair steps; fitted sampling additionally smooths source packing/palette
-grading. Three-mode frames/details at 1409/1500/1560 and PF0 sine frame 1300
-are captured. No outside-run differences or smeared horizon band.
+## Pending evaluations
 
-## Qualified limits
+A. Full coverage: hot subsets `-O2`, cold subsets `-Oz` (Clang; `-Os` on GCC), separate units. No removal and no fallback.
 
-- Only the complete known normal PF2 water/puzzle-board profile interpolates. No raw per-field enable/active-descriptor API was claimed; known program origin plus full normalized-row validity/shape/continuity checks establish the range. Unknown effects, including PF0 sine, remain unchanged.
-- RGB bank 0↔1 has a real discontinuity and remains discrete; palette indices/pen roles and sprites are never interpolated. Fitted sampling is a guarded approximation, not the ROM palette table's proven analytic function.
-- Bitmap, trails, flip, unknown writer and ending-producer fallback/recovery are additionally induced. A campaign ending was not played through; unsupported geometry remains exact oracle output, not reconstructed HLE.
-- Runtime evidence is M5/Metal. SPIR-V/MSL compile/resource contracts are verified; other GPU hosts are not runtime-tested. GPU availability errors are explicit; CPU backend remains available.
-- Headless/native captures, CRCs, WAV and canonical snapshots remain CPU-produced. Netplay remains scale 1/border 0; interpolation is inactive at scale 1.
+B. Explicit `-DF3_PROFILE_SLIM=<profile>`: sparse retained main/sound tables; removed code aborts with address, ROM CRC, re-profile hint and a durable cold-hit record. No interpreter path may cover a removed entry.
 
-Design, boundary-candidate comparison, per-scene acceptance/rejection counts,
-commands, captures and full performance evidence: [docs/GPU-VIDEO.md](docs/GPU-VIDEO.md).
+Final report must contain merged human+seeded coverage by descriptive ROM region, file/__TEXT/generated-C size, configure/build timings, every acceptance gate, held-out abort rate, and limits. Region classifications are descriptive only, never an exclusion proof.

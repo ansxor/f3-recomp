@@ -1,5 +1,6 @@
 #include "f3rt/cpu_abi.h"
 #include "f3rt/machine.hpp"
+#include "f3rt/block_profile.h"
 #include <algorithm>
 
 namespace {
@@ -91,6 +92,10 @@ int f3_dispatch(f3_cpu *cpu) {
             return !cpu->halted;
         }
     }
+#ifdef F3_PROFILE_SLIM_ENABLED
+    f3_profile_cold_abort(F3_PROFILE_MAIN,
+        f3rt::crc32(m.roms.main.data(), m.roms.main.size()), cpu->pc);
+#endif
     return f3_fallback(cpu);
 }
 int f3_fallback(f3_cpu *cpu) { return machine(cpu).fallback(); }
