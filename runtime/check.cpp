@@ -57,6 +57,27 @@ void check_movem(f3rt::Machine &m) {
         }
     }
 }
+void check_rotate_cycles(f3rt::Machine &m) {
+    const auto execute = [&](uint16_t opcode,unsigned count) {
+        m.write16(0x400700,opcode);
+        m.cpu.pc=0x400700;m.cpu.sr=0x2710;m.cpu.d[0]=0x12345678;m.cpu.d[1]=count;
+        const auto before=m.cpu.cycles;
+        m.interpreter->run_main(1);
+        require(m.cpu.pc==0x400702,"Shift/rotate executes one instruction");
+        return m.cpu.cycles-before;
+    };
+    for (unsigned kind=0;kind<4;++kind) for(unsigned left=0;left<2;++left) for(unsigned size=0;size<3;++size) {
+        const uint16_t form=uint16_t(0xe000|(kind<<3)|(left<<8)|(size<<6));
+        const uint16_t reg=uint16_t(form|0x0220);
+        const auto base=execute(reg,0);
+        for(unsigned count : {1,8,9,16,17,31,32,33,63})
+            require(execute(reg,count)==base,"EC020 register shifts/rotates have no count-dependent cycle surcharge");
+        require(execute(uint16_t(form|0x0200),0)==execute(form,0),
+                "EC020 immediate counts one and eight have identical timing");
+    }
+    execute(0xe898,0); // ROR.L #4,D0, used by the ROM's early boot path.
+    require(m.cpu.d[0]==0x81234567 && (m.cpu.sr&0x1f)==0x19,"ROR.L result, carry and preserved extend flag");
+}
 void check_audio_mixer() {
     f3rt::Audio audio;
     const std::array<uint8_t,4> rom{0x40,0,0x40,0};
@@ -132,6 +153,7 @@ int main() try {
     require(m->frame==2 && m->pending_irqs==(1<<2),"Second vblank uses the full-frame epoch");
     m->pending_irqs=0;
     check_movem(*m);
+    check_rotate_cycles(*m);
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

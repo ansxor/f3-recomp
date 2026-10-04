@@ -808,7 +808,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 3;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 8;
-			CYC_SHIFT        = 1;
+			CYC_SHIFT        = 2;
 			CYC_RESET        = 132;
 			HAS_PMMU	 = 0;
 			return;
@@ -832,7 +832,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 3;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 8;
-			CYC_SHIFT        = 1;
+			CYC_SHIFT        = 2;
 			CYC_RESET        = 130;
 			HAS_PMMU	 = 0;
 			return;
@@ -889,7 +889,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 2;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 4;
-			CYC_SHIFT        = 0;
+			CYC_SHIFT        = 1;
 			CYC_RESET        = 518;
 			HAS_PMMU	       = 1;
 			return;
@@ -908,7 +908,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 2;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 4;
-			CYC_SHIFT        = 0;
+			CYC_SHIFT        = 1;
 			CYC_RESET        = 518;
 			HAS_PMMU	       = 0;		/* EC030 lacks the PMMU and is effectively a die-shrink 68020 */
 			return;
@@ -927,7 +927,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 2;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 4;
-			CYC_SHIFT        = 0;
+			CYC_SHIFT        = 1;
 			CYC_RESET        = 518;
 			HAS_PMMU	 = 1;
 			return;
@@ -946,7 +946,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			CYC_MOVEM_L      = 2;
 			CYC_MOVEM_STORE_W = 4;
 			CYC_MOVEM_STORE_L = 4;
-			CYC_SHIFT        = 0;
+			CYC_SHIFT        = 1;
 			CYC_RESET        = 518;
 			HAS_PMMU	 = 0;
 			return;
@@ -964,7 +964,7 @@ void m68k_set_cpu_type(unsigned int cpu_type)
 			m68ki_cpu.cyc_movem_l      = 2;
 			m68ki_cpu.cyc_movem_store_w = 4;
 			m68ki_cpu.cyc_movem_store_l = 4;
-			m68ki_cpu.cyc_shift        = 0;
+			m68ki_cpu.cyc_shift        = 1;
 			m68ki_cpu.cyc_reset        = 518;
 			HAS_PMMU	       = 1;
 			return;

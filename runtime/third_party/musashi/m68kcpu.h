@@ -989,7 +989,7 @@ typedef struct
 	uint cyc_movem_l;
 	uint cyc_movem_store_w; /* cycles/register, unlike the load shift counts */
 	uint cyc_movem_store_l;
-	uint cyc_shift;
+	uint cyc_shift; /* extra cycles per count, not a shift exponent */
 	uint cyc_reset;
 
 	/* Virtual IRQ lines state */
