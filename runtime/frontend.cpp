@@ -206,6 +206,7 @@ int main(int argc,char **argv) try {
         check(sdl.texture!=nullptr);
         check(SDL_SetTextureScaleMode(sdl.texture,video_filter=="linear"?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST));
         if(sound) {
+            SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES,"512");
             SDL_AudioSpec spec{SDL_AUDIO_S16,2,int(audio_rate)};
             sdl.audio=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,nullptr,nullptr);
             check(sdl.audio!=nullptr);check(SDL_ResumeAudioStreamDevice(sdl.audio));
@@ -226,6 +227,9 @@ int main(int argc,char **argv) try {
     bool finish_sent=false;
     auto next_net_step=std::chrono::steady_clock::now();
     auto next_status=next_net_step;
+    auto next_frame=std::chrono::steady_clock::now();
+    constexpr int max_audio_queue_ms=50,max_catchup_ms=50;
+    uint64_t audio_queue_drops=0,clock_resyncs=0,audio_queue_sum=0,audio_queue_samples=0,audio_queue_max=0;
     const auto start=std::chrono::steady_clock::now();
     while(!quit && ((!frames || m.frame<frames) || (transport && !transport->finished()))) {
         if(!headless) {
@@ -301,7 +305,16 @@ int main(int argc,char **argv) try {
             audio_frames+=count;
             for(size_t i=0;i<count*2;++i) { audio_peak=std::max(audio_peak,std::abs(int(samples[i])));nonzero_samples+=samples[i]!=0; }
             if(wav)wav->append(std::span(samples.data(),count*2));
-            if(sdl.audio)check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
+            if(sdl.audio) {
+                // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the picture.
+                // Past the latency cap, drop the stale backlog so new sound plays now.
+                if(throttle && SDL_GetAudioStreamQueued(sdl.audio)>int(audio_rate*4*max_audio_queue_ms/1000)) {
+                    check(SDL_ClearAudioStream(sdl.audio));++audio_queue_drops;
+                }
+                check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
+                const uint64_t queued=uint64_t(SDL_GetAudioStreamQueued(sdl.audio));
+                audio_queue_sum+=queued;++audio_queue_samples;audio_queue_max=std::max(audio_queue_max,queued);
+            }
         }
         if(!headless && advanced) {
             const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
@@ -312,7 +325,15 @@ int main(int argc,char **argv) try {
                 check(shot!=nullptr);const bool saved=SDL_SaveBMP(shot,surface.string().c_str());SDL_DestroySurface(shot);check(saved);
             }
             check(SDL_RenderPresent(sdl.renderer));
-            if(throttle && !netplay)std::this_thread::sleep_until(start+std::chrono::nanoseconds(uint64_t(double(m.frame)*1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock)));
+            if(throttle && !netplay) {
+                // Pace against a rolling deadline. After a stall longer than one catch-up window, resync to now instead of
+                // running flat out to make up lost time (that burst is what delayed audio by the length of the stall).
+                const auto frame_time=std::chrono::nanoseconds(uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
+                next_frame+=frame_time;
+                const auto now=std::chrono::steady_clock::now();
+                if(now-next_frame>std::chrono::milliseconds(max_catchup_ms)) { next_frame=now;++clock_resyncs; }
+                std::this_thread::sleep_until(next_frame);
+            }
         }
         if(transport && !advanced)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -332,5 +353,8 @@ int main(int argc,char **argv) try {
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
+    if(audio_queue_samples)std::cerr<<"f3rt: pacing clock_resyncs="<<clock_resyncs<<" audio_queue_drops="<<audio_queue_drops
+        <<" queued_ms mean="<<1000.0*double(audio_queue_sum)/double(audio_queue_samples)/(4.0*audio_rate)
+        <<" max="<<1000.0*double(audio_queue_max)/(4.0*audio_rate)<<'\n';
     return 0;
 } catch(const std::exception &e) { std::cerr<<"f3rt: "<<e.what()<<'\n';return 1; }
