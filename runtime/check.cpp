@@ -2,6 +2,7 @@
 #include "f3rt/audio.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
+#include "third_party/audio/mc68681.hpp"
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
@@ -26,6 +27,68 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_duart_tx() {
+    for (unsigned channel : {0,1}) {
+        f3rt::MC68681 duart;
+        const unsigned base=channel*8,half=channel?64:32;
+        const uint8_t mask=channel?0x10:0x01;
+        bool irq=false;
+        duart.set_irq_callback([&](bool asserted) { irq=asserted; });
+        const auto configure=[&] {
+            duart.write(base,0x13);duart.write(base,0x0f); // 8N2
+            duart.write(base+1,0xee); // F3 external clock / 16
+            duart.write(5,mask);duart.write(base+2,4);
+        };
+        require((duart.read(base+1)&0x0c)==0,"Reset disables the UART transmitter");
+        configure();
+        require((duart.read(base+1)&0x0c)==0x0c && irq,"Enabling an idle transmitter asserts ready/empty and its IRQ");
+        duart.write(base+3,0x80);
+        require((duart.read(base+1)&0x0c)==0 && !irq,"THR write clears ready and empty");
+        duart.advance(3*half-1);
+        require((duart.read(base+1)&0x0c)==0,"TX ready waits through the start-bit time");
+        duart.advance(1);
+        require((duart.read(base+1)&0x0c)==4 && irq,"The second rising edge releases THR and asserts TX ready");
+        duart.advance(18*half-1);
+        require((duart.read(base+1)&8)==0,"TX empty stays clear until the last framed bit");
+        duart.advance(1);
+        require((duart.read(base+1)&0x0c)==0x0c,"First 8N2 frame completes after 21 half-bit clocks");
+        duart.write(base+3,0x90);duart.advance(4*half);
+        duart.write(base+3,0x7f);duart.write(base+3,0x44); // One holding slot; third byte is rejected.
+        require((duart.read(base+1)&0x0c)==0 && !irq,"A queued byte occupies THR while the current byte shifts");
+        duart.advance(18*half);
+        require((duart.read(base+1)&0x0c)==4 && irq,"Buffered transfer restores ready without asserting empty");
+        duart.advance(22*half-1);
+        require((duart.read(base+1)&8)==0,"Queued frame retains the continuous serial edge phase");
+        duart.advance(1);
+        require((duart.read(base+1)&0x0c)==0x0c,"Holding-register overflow does not enqueue an extra frame");
+        duart.reset();configure();duart.write(base+3,0x80);duart.advance(22*half-1);
+        require((duart.read(base+1)&8)==0,"Board reset retains the stopped serial clock edge state");
+        duart.advance(1);
+        require((duart.read(base+1)&8)!=0,"Post-reset frame uses a full first bit period");
+        duart.write(base+3,0x55);duart.advance(4*half);duart.write(base+2,0x30);duart.advance(100*half);
+        require((duart.read(base+1)&0x0c)==0 && !irq,"Transmitter reset aborts the frame and clears its IRQ");
+        duart.write(base+2,0x10);duart.write(base,0);duart.write(base,7); // 5E1
+        duart.write(base+1,0xef);duart.write(base+2,4);duart.write(base+3,0x15);
+        const unsigned fast_half=half/16;
+        duart.advance(16*fast_half-1);
+        require((duart.read(base+1)&8)==0,"Word length, parity and direct external clock determine frame duration");
+        duart.advance(1);
+        require((duart.read(base+1)&8)!=0,"5E1 frame completes at its eight-bit boundary");
+    }
+    f3rt::MC68681 counter_clock;
+    counter_clock.write(6,0);counter_clock.write(7,1);counter_clock.write(4,0x60);
+    counter_clock.write(8,0x13);counter_clock.write(8,0x0f);
+    counter_clock.write(9,0xed);counter_clock.write(10,4);counter_clock.write(11,0x80);
+    counter_clock.read(14);
+    counter_clock.advance(46);
+    require((counter_clock.read(9)&0x0c)==0,"Counter-derived TX clock retains the divide-by-16 prescaler");
+    counter_clock.advance(1);
+    require((counter_clock.read(9)&0x0c)==4,"Counter-derived TX ready follows the second serial rising edge");
+    counter_clock.advance(287);
+    require((counter_clock.read(9)&8)==0,"Counter-derived TX empty waits for the full frame");
+    counter_clock.advance(1);
+    require((counter_clock.read(9)&0x0c)==0x0c,"Counter-derived 8N2 frame completes at its eleventh serial edge");
+}
 void check_sound_cycles(f3rt::Machine &m) {
     struct Result { int cycles;uint32_t d0,a1;uint16_t sr; };
     const auto execute = [&](std::initializer_list<uint16_t> instruction,uint32_t source=0,uint32_t d0=0) {
@@ -275,6 +338,7 @@ int main() try {
     check_trap_cycles(*m);
     check_sound_cycles(*m);
     check_sound_irq(*m);
+    check_duart_tx();
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

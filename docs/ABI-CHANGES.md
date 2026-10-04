@@ -30,13 +30,22 @@ register bit-index timing have dedicated regressions. Other CPU models retain
 their prior costs. This changes no ABI fields or main-CPU generated costs and
 does not establish integrated audio parity.
 
-The sound 68000 charges 44 cycles for IRQ entry regardless of whether IACK
-selects an autovector or a device-supplied vector. The vector still selects the
-handler and exception frame. For a nonzero divisor, DIVU.W now follows the
+The sound 68000 charges the nominal no-wait 44 cycles for IRQ entry regardless
+of whether IACK selects an autovector or a device-supplied vector. This assumes
+the manual's four-clock IACK, not arbitrary bus wait states. The vector still
+selects the handler and exception frame. For a nonzero divisor, DIVU.W follows the
 measured operand-dependent cost: 10 cycles on quotient overflow, otherwise
 76–136 cycles, plus the effective-address cost. Results, flags, divide-by-zero,
 MUL, DIVS, Group 2 exceptions and all other CPU-model timings are unchanged.
 These corrections neither change ABI 2 nor establish audio parity.
+
+The DUART now models both transmitters' ready/empty transitions, one-byte
+holding registers, framed serial clocks, enable/reset commands and TX-ready
+interrupts. F3's external clocks are 1 MHz (A) and 500 kHz (B); the game's
+channel-B 8N2 configuration divides the latter by 16. Counter-derived TX clocks
+also retain the required divide-by-16 prescaler. TX pins are unconnected, so no
+serial payload storage or output callback is needed. This corrects the ROM's
+TXEMPTY polling duration without modifying CPU instruction costs or ABI 2.
 
 ## Version 1 — 2026-10-03
 

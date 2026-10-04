@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 
@@ -52,8 +53,22 @@ public:
 
 private:
     void update_interrupts();
-    uint32_t get_ct_rate() const;
-    void start_ct(uint32_t count);
+    void tx_interrupt(unsigned channel);
+    void tx_clock_select(unsigned channel);
+    void tx_command(unsigned channel, uint8_t data);
+    void tx_write(unsigned channel);
+    void tx_bit(unsigned channel);
+    void tx_advance(unsigned channel, uint32_t cycles);
+    uint8_t tx_frame_bits(unsigned channel) const;
+    uint8_t &tx_status(unsigned channel) { return channel ? m_srb : m_sra; }
+    struct Transmitter {
+        uint64_t phase = 0;
+        uint32_t baud = 0;
+        uint8_t remaining = 0, sent = 0;
+        uint8_t counter_prescaler = 16;
+        bool clock = false, running = false, enabled = false, buffered = false;
+    };
+    std::array<Transmitter, 2> m_tx{};
 
     uint8_t m_acr;
     uint8_t m_imr;
