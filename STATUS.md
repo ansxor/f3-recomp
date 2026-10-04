@@ -1,4 +1,64 @@
-DONE: threaded CPU, exact SDL3 GPU compositor and guarded opt-in linear/fitted PF2 water interpolation. Metal verified; ending coverage is induced, not a played ending.
+DONE: landmakrj ROM exclusions cut binary size 49.3%; zero-fallback gates pass. Finite coverage, not all-state proof; other sets unvalidated.
+
+# Binary-size experiment — ROM exclusions
+
+## Local checkpoints
+
+- `binsize-exclude-1-measure`: per-region baseline measured before implementation;
+  padding/graphics text-table payload bound 31,887,756 bytes, not a promised file delta.
+- `binsize-exclude-2-scanner`: proof-first proposals plus native instruction-fetch/data-read
+  recording; ABI 3 exclusion enforcement is included in the preceding infrastructure commits.
+- `binsize-exclude-3-applied`: six explicit main/sound intervals in
+  `games/landmakrj/config.toml`; no ROMs, binaries or generated code committed, no pushes.
+
+## Measured result
+
+Release AppleClang 21 / arm64, GPU-enabled frontend:
+
+| Metric | Before | Selected exclusions |
+|---|---:|---:|
+| `landmakr` file bytes | 84,436,984 | 42,778,072 |
+| `__TEXT` segment bytes | 56,901,632 | 32,604,160 |
+| Generated C bytes | 316,308,113 | 164,220,955 |
+| Generated object file bytes | 105,939,312 | 52,023,360 |
+| Main registered PCs / native functions | 1,033,276 / 17,534 | 336,775 / 10,878 |
+| Sound registered PCs / emitted functions | 262,144 / 93,329 | 61,997 / 49,423 |
+| Fresh configure / two-target `-j 6` build | 14.864 / 54.537 s | 7.844 / 26.999 s |
+
+## Verified behavior
+
+- Both successful candidate sets: **25/25** MAME attract frames,
+  **1,856,000 RGB pixels**, zero differences; exact frame-600 main RAM and
+  baseline-identical 3600-frame attract WAV.
+- Each set: seeds **1–8 × 20,000 = 160,000** native main/sound,
+  headless/unthrottled frames; all eight seeded WAVs and six final memory/pixel
+  dumps identical to baseline; **2,140,582,066 native blocks**, **0 fallback**.
+- Untrimmed-data profile: another **160,000** native frames, all eight WAVs
+  identical; **0 instruction-fetch bytes** inside the two added data banks.
+  Partial reads and rooted references support the decisions, not universal proof.
+- First breaking set: add statistical-only main `0x2000..0x3000`.
+  Actual attract run exits **1** at excluded **PC `0x2f84`**, before frame 600.
+  The scanner rejects this code-containing entropy window; it is not applied.
+- **25** forced even/odd/range-end/computed-target failures with zero
+  fallback/sound fetch. A real `0xff020000` physical-alias probe fails before
+  interpretation; its previously observed one-instruction fallback is fixed.
+- **26** Python discovery/lowering/scanner checks pass; actual `f3rt-check`
+  passes, and every migrated sound caller compiles. Final-source production
+  repeats all MAME/RAM/attract-WAV gates. The reused-output recorder completes
+  3600 seeded native frames with a byte-identical production WAV.
+
+## Limits and evidence
+
+Only `landmakrj` is applied/validated. World `landmakr` lacks required supplied
+program lanes; `gunlock`, `puchicar`, `recalh` and `tcobra2` lack game configs/
+runtime ports here. No other-set correctness claim. This is not a maximal safe
+boundary or proof of unplayed endings/cold indirect paths. Excluded targets,
+including odd PCs and 24-bit bus aliases, fail loudly rather than invoking
+interpreter fallback. ROM reads and canonical snapshots remain unchanged.
+
+Per-region accounting, candidate ladder, seed counters, command recipes,
+contention/disk-interruption notes and evidence paths:
+[docs/BINSIZE-EXCLUDE.md](docs/BINSIZE-EXCLUDE.md).
 
 # Phase 5 — GPU video
 

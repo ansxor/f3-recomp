@@ -247,3 +247,43 @@ symbol = "f3_landmakr_video_hook"
 [[hooks]]
 address = 0x9a2f6
 symbol = "f3_landmakr_video_hook"
+
+# Instruction starts only; all ROM bytes remain available to data reads.
+[[exclude]]
+start = 0x007030
+end = 0x010000
+reason = "Interior FF fill"
+evidence = "Verified program image: every byte is FF; seeded native gates documented in docs/BINSIZE-EXCLUDE.md"
+
+[[exclude]]
+start = 0x11b362
+end = 0x1ffffe
+reason = "Trailing FF fill, preserving the final checksum word"
+evidence = "Verified program image: every byte is FF; seeded native gates documented in docs/BINSIZE-EXCLUDE.md"
+
+[[exclude]]
+cpu = "sound"
+start = 0xc1e45a
+end = 0xc20000
+reason = "Interior sound-program FF fill"
+evidence = "Verified 5a7e9117 sound image: every byte is FF; native WAV gates documented in docs/BINSIZE-EXCLUDE.md"
+
+[[exclude]]
+cpu = "sound"
+start = 0xc39a30
+end = 0xc80000
+reason = "Trailing sound-program FF fill, including unpopulated chip halves"
+evidence = "Verified 5a7e9117 sound image: every byte is FF; native WAV gates documented in docs/BINSIZE-EXCLUDE.md"
+
+[[exclude]]
+start = 0x020000
+end = 0x088000
+reason = "Graphics/script-table data bank"
+evidence = "No rooted instruction starts, entries or rooted control references; native fetch/data profile and eight-seed parity gates in docs/BINSIZE-EXCLUDE.md; absence of sampled execution is not a universal proof"
+
+[[exclude]]
+cpu = "sound"
+start = 0xc20000
+end = 0xc39a30
+reason = "Sound sequence/header data bank"
+evidence = "No rooted instruction starts or code references; sequence-bank readers documented in docs/SOUND-DRIVER.md; native fetch/data profile and eight-seed WAV gates in docs/BINSIZE-EXCLUDE.md"
