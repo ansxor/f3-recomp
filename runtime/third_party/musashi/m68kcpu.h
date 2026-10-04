@@ -1883,8 +1883,9 @@ static inline void m68ki_exception_trapN(uint vector)
 	m68ki_stack_frame_0000(REG_PC, sr, vector);
 	m68ki_jump_vector(vector);
 
-	/* Use up some clock cycles and undo the instruction's cycles */
-	USE_CYCLES(CYC_EXCEPTION[vector] - CYC_INSTRUCTION[REG_IR]);
+	/* The pinned EC020/020 model retains TRAP's four-cycle opcode charge. */
+	USE_CYCLES(CYC_EXCEPTION[vector] -
+		(CPU_TYPE_IS_020_VARIANT(CPU_TYPE) ? 0 : CYC_INSTRUCTION[REG_IR]));
 }
 
 /* Exception for trace mode */

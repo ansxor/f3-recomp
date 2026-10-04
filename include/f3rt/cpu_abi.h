@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define F3RT_ABI_VERSION 1u
+#define F3RT_ABI_VERSION 2u
 
 /* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
  * stacks. All addresses/registers are host integers; bus accesses are big-endian.
@@ -24,6 +24,9 @@ typedef struct f3_cpu {
     uint32_t cc_src, cc_dst, cc_result;
     uint8_t cc_op, cc_width, cc_mask, cc_pad;
     uint64_t cycles;
+    /* Conservative event threshold. Zero forces a boundary recheck.
+     * Native blocks must flush SR and yield between instructions when due. */
+    uint64_t dispatch_deadline;
     void *runtime;
 } f3_cpu;
 

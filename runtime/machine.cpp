@@ -27,6 +27,7 @@ uint64_t Machine::raster_cycle(uint64_t pixels) const {
     return (pixels * main_clock + pixel_clock - 1) / pixel_clock;
 }
 void Machine::reset_devices() {
+    cpu.dispatch_deadline = 0;
     audio->set_reset(true);
     eeprom->pins(0, cpu.cycles);
     pending_irqs = 0;
@@ -113,6 +114,7 @@ void Machine::advance_to(uint64_t cycles) {
     }
 }
 int Machine::boundary() {
+    cpu.dispatch_deadline = 0;
     advance_to(cpu.cycles);
     if (cpu.halted) return 1;
     for (int level = 7; level > int((cpu.sr >> 8) & 7); --level) {
@@ -140,11 +142,13 @@ int Machine::boundary() {
         interpreter->reset_main();
         return 1;
     }
+    const uint64_t next_event = std::min({next_vblank, irq3_at, watchdog_at});
     if (cpu.stopped) {
-        cpu.cycles = std::min(next_vblank, irq3_at);
+        cpu.cycles = next_event;
         advance_to(cpu.cycles);
         return 1;
     }
+    cpu.dispatch_deadline = next_event;
     return 0;
 }
 int Machine::fallback() {

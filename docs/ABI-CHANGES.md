@@ -1,5 +1,28 @@
 # CPU ABI changes
 
+## Version 2 — instruction-granular scheduling
+
+`f3_cpu.dispatch_deadline` is a 64-bit main-cycle threshold immediately after
+`cycles`. Generated code and the runtime must both use ABI 2; rebuild all
+consumers. Between instructions, a native block must publish its successor PC,
+materialize SR and return when `cycles >= dispatch_deadline`. This preserves
+multi-instruction blocks and lazy flags without delaying hardware events until
+the end of a block.
+
+Zero forces a boundary recheck. A runnable `f3_boundary` publishes the minimum
+of the next vblank, delayed IRQ3 and watchdog expiry. Redirects, STOP and device
+resets leave the cache invalid. STOP advances to that same earliest event,
+including watchdog expiry. Lowering the SR interrupt mask invalidates the
+deadline in both `f3_set_sr` and interpreter state export, so an already-pending
+IRQ is reconsidered immediately. Raising the mask leaves a valid deadline
+intact. A watchdog strobe may retain an earlier conservative threshold but must
+not overwrite an outstanding zero/recheck.
+
+TRAP #n vectors 32–47 have a full EC020/68020 charge of 24 cycles. The semantic
+reference retains the four-cycle opcode charge in addition to the 20-cycle
+exception-table entry; `f3_exception` owns all 24 cycles for generated code.
+Other exception classes and CPU variants are unchanged.
+
 ## Version 1 — 2026-10-03
 
 `include/f3rt/cpu_abi.h` is the frozen initial C interface. Generated blocks use numeric 68020 registers, materialized SR at non-memory callbacks, cumulative cycle accounting, big-endian bus accessors, a per-block boundary hook, exception entry, sorted dynamic block registration, device reset, and a one-instruction interpreter fallback. `f3_set_sr` handles user/interrupt/master stack switching and invalidates lazy flags. Blocks set successor PC and return; `f3_dispatch` owns iterative lookup and fallback. The runtime pointer is opaque and runtime-owned. No serialized struct layout is promised across pointer widths.
@@ -10,7 +33,7 @@ The first publication and peer draft crossed in transit. The final agreed v1 ret
 
 Group-2 exceptions (vectors 5, 6, 7, 9) use a 68020 format-2 stack frame: `return_pc` is the stacked resume PC, and `cpu->pc` on entry is the instruction address. Other normal exceptions use format 0; a master-mode interrupt also produces the format-1 throwaway frame on ISP. Trace-active execution routes through the interpreter, with Musashi trace support enabled.
 
-`f3_exception` owns the full exception cycle charge. Generated trap, privilege, divide-by-zero, and other exception paths must not add the instruction's normal base/nominal charge. Costs follow the pinned 68EC020 table: bus/address error 50; illegal/A-line/F-line/TRAPV and TRAP #n 20; divide-by-zero 38; CHK 40; privilege 34; trace 25; format error 4; uninitialized/spurious/autovectored interrupt 30; remaining vectors 4. These are emulator-model timings, not measured hardware bus-cycle accuracy.
+`f3_exception` owns the full exception cycle charge. Generated trap, privilege, divide-by-zero, and other exception paths must not add the instruction's normal base/nominal charge. Current costs: bus/address error 50; illegal/A-line/F-line/TRAPV 20; TRAP #n 24 (corrected in ABI 2); divide-by-zero 38; CHK 40; privilege 34; trace 25; format error 4; uninitialized/spurious/autovectored interrupt 30; remaining vectors 4. These are emulator-model timings, not measured hardware bus-cycle accuracy or a blanket timing-parity claim.
 
 Initial and watchdog main-CPU resets consume the pinned 68EC020 reset latency
 before the first generated block or fallback instruction. The runtime drains

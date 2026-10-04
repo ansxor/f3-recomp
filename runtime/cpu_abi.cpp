@@ -17,6 +17,7 @@ void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) { machine(cpu).write16(a,v)
 void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) { machine(cpu).write32(a,v); }
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     sr &= 0xf71f; // 68EC020 writable status bits.
+    if ((sr & 0x0700) < (cpu->sr & 0x0700)) cpu->dispatch_deadline = 0;
     auto &old_stack = stack(cpu, cpu->sr);
     auto &new_stack = stack(cpu, sr);
     if (&old_stack != &new_stack) { old_stack = cpu->a[7]; cpu->a[7] = new_stack; }
@@ -43,7 +44,7 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     };
     cpu->cycles += vector < 16 ? system_cycles[vector]
         : vector >= 24 && vector < 32 ? 30
-        : vector >= 32 && vector < 48 ? 20 : 4;
+        : vector >= 32 && vector < 48 ? 24 : 4;
 }
 void f3_reset_devices(f3_cpu *cpu) { machine(cpu).reset_devices(); }
 int f3_boundary(f3_cpu *cpu) { return machine(cpu).boundary(); }

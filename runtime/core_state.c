@@ -24,12 +24,14 @@ void f3rt_core_import(const f3_cpu *cpu) {
 }
 void f3rt_core_export(f3_cpu *cpu) {
     unsigned i;
+    const uint16_t sr = (uint16_t)m68k_get_reg(0, M68K_REG_SR);
+    if ((sr & 0x0700) < (cpu->sr & 0x0700)) cpu->dispatch_deadline = 0;
     for (i = 0; i < 8; ++i) {
         cpu->d[i] = m68k_get_reg(0, (m68k_register_t)(M68K_REG_D0 + i));
         cpu->a[i] = m68k_get_reg(0, (m68k_register_t)(M68K_REG_A0 + i));
     }
     cpu->pc = m68k_get_reg(0, M68K_REG_PC);
-    cpu->sr = (uint16_t)m68k_get_reg(0, M68K_REG_SR);
+    cpu->sr = sr;
     cpu->usp = m68k_get_reg(0, M68K_REG_USP);
     cpu->ssp = m68k_get_reg(0, M68K_REG_ISP);
     cpu->msp = m68k_get_reg(0, M68K_REG_MSP);

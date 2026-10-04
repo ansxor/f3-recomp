@@ -25,6 +25,23 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_trap_cycles(f3rt::Machine &m) {
+    const auto old_vbr=m.cpu.vbr;
+    for (unsigned trap=0;trap<16;++trap) for (bool reference : {false,true}) {
+        m.cpu.pc=0x400700;m.cpu.sr=0x2700;m.cpu.a[7]=0x401000;m.cpu.vbr=0x400000;
+        m.write16(0x400700,uint16_t(0x4e40|trap));
+        m.write32(m.cpu.vbr+(32+trap)*4,0x400720);
+        const auto before=m.cpu.cycles;
+        if (reference) m.interpreter->run_main(1);
+        else f3_exception(&m.cpu,32+trap,0x400702);
+        require(m.cpu.cycles-before==24 && m.cpu.pc==0x400720,
+                "TRAP #n charges 24 cycles before entering its vector");
+        require(m.cpu.a[7]==0x400ff8 && m.read16(m.cpu.a[7])==0x2700 &&
+                m.read32(m.cpu.a[7]+2)==0x400702 && m.read16(m.cpu.a[7]+6)==(32+trap)*4,
+                "TRAP #n stacks the resume PC in a format-0 frame");
+    }
+    m.cpu.vbr=old_vbr;
+}
 void check_movem(f3rt::Machine &m) {
     for (uint16_t opcode : {0x4891,0x48d1,0x48a1,0x48e1,0x4c99,0x4cd9}) {
         const bool load=opcode&0x0400, wide=opcode&0x0040, predec=(opcode&0x0038)==0x20;
@@ -132,6 +149,7 @@ int main() try {
     auto m=std::make_unique<f3rt::Machine>(fixture());
     require(m->cpu.cycles==4 && m->cpu.pc==0x100 && m->cpu.d[0]==0,
             "Cold reset charges four cycles without executing the first opcode");
+    require(m->cpu.dispatch_deadline==0,"Reset requires a fresh scheduling boundary");
     const auto raster_tick = [](uint64_t pixels) {
         return (pixels*f3rt::Machine::main_clock+f3rt::Machine::pixel_clock-1)/f3rt::Machine::pixel_clock;
     };
@@ -139,12 +157,16 @@ int main() try {
     const auto first_vblank=raster_tick(f3rt::Machine::frame_pixels);
     boundary_at(first_vblank-1);
     require(m->frame==0 && m->pending_irqs==0,"First vblank waits one full frame from the VBSTART epoch");
+    require(m->cpu.dispatch_deadline==first_vblank,"Native deadline is the first vblank event");
     boundary_at(first_vblank);
     require(m->frame==1 && m->pending_irqs==(1<<2),"First vblank renders and requests IRQ2 at its deadline");
+    require(m->cpu.dispatch_deadline==first_vblank+10000,"Delayed IRQ3 becomes the next native deadline");
     boundary_at(first_vblank+9999);
     require(m->pending_irqs==(1<<2),"IRQ3 is not requested before its 10000-cycle delay");
     boundary_at(first_vblank+10000);
     require(m->pending_irqs==((1<<2)|(1<<3)),"IRQ3 is requested at its delayed deadline");
+    require(m->cpu.dispatch_deadline==raster_tick(2ull*f3rt::Machine::frame_pixels),
+            "Serviced timer deadlines advance to the next absolute frame");
     m->pending_irqs=0;
     const auto second_vblank=raster_tick(2ull*f3rt::Machine::frame_pixels);
     boundary_at(second_vblank-1);
@@ -154,6 +176,7 @@ int main() try {
     m->pending_irqs=0;
     check_movem(*m);
     check_rotate_cycles(*m);
+    check_trap_cycles(*m);
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);
@@ -204,11 +227,20 @@ int main() try {
     e.reset();e.pins(0x10,0);
     require(e.output(0) && e.words[0]==0x5a5a,"Power reset clears serial timing but preserves EEPROM contents");
     auto &cpu=m->cpu;
-    cpu.usp=0x400800;cpu.a[7]=0x401000;cpu.sr=0x2000;
+    cpu.usp=0x400800;cpu.a[7]=0x401000;cpu.sr=0x2600;
+    require(m->boundary()==0 && cpu.dispatch_deadline>cpu.cycles,"Runnable boundary publishes a future deadline");
+    const auto masked_deadline=cpu.dispatch_deadline;
+    f3_set_sr(&cpu,0x2715);
+    require(cpu.dispatch_deadline==masked_deadline,"Raising the IRQ mask preserves the event deadline");
     f3_set_sr(&cpu,0);require(cpu.a[7]==0x400800 && cpu.ssp==0x401000,"Supervisor to user stack switch");
+    require(cpu.dispatch_deadline==0,"Lowering the IRQ mask invalidates the cached deadline");
+    m->write8(0x4a0000,0);
+    const auto watchdog_deadline=cpu.cycles+3ull*f3rt::Machine::main_clock;
+    require(cpu.dispatch_deadline==0,"Watchdog strobe cannot suppress an outstanding IRQ recheck");
     m->write32(0x400000+26*4,0x400300);cpu.vbr=0x400000;cpu.pc=0x100;cpu.stopped=1;
     m->pending_irqs=1<<2;require(f3_boundary(&cpu)!=0,"IRQ redirects boundary");
     require(cpu.pc==0x400300 && !cpu.stopped && (cpu.sr&0x2700)==0x2200,"IRQ releases STOP and raises mask");
+    require(cpu.dispatch_deadline==0,"IRQ redirect requires lookup through a fresh boundary");
     require(cpu.a[7]==0x400ff8 && m->read32(cpu.a[7]+2)==0x100 && m->read16(cpu.a[7]+6)==104,"68020 interrupt frame");
     m->write32(cpu.vbr+5*4,0x400310);m->write16(0x400310,0x4e73); // RTE handler
     cpu.pc=0x100;cpu.sr=0x2700;
@@ -218,6 +250,10 @@ int main() try {
             m->read32(cpu.a[7]+8)==0x100,"Divide-by-zero full charge and format-2 instruction PC");
     require(f3_fallback(&cpu) && cpu.pc==0x102 && cpu.a[7]==exception_sp && cpu.sr==0x2700,
             "Real RTE restores the format-2 resume PC and stack");
+    require(m->boundary()==0 && cpu.dispatch_deadline>cpu.cycles,"Restored masked CPU refreshes its event deadline");
+    m->write16(0x400320,0x46fc);m->write16(0x400322,0x2000);cpu.pc=0x400320;
+    m->interpreter->run_main(1);
+    require(cpu.sr==0x2000 && cpu.dispatch_deadline==0,"Interpreted SR lowering also invalidates the native deadline");
     const f3_block blocks[]={{0x100,native}};
     require(f3_register_blocks(&cpu,blocks,1)==1,"Valid block table");
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_dispatch(&cpu) && cpu.d[0]==99,"Native dispatch executes matching block");
@@ -244,8 +280,14 @@ int main() try {
     require(m->audio->read8(0x260001)==0x12 && m->audio->read8(0x280019)==0x66,
             "CPU-line reset preserves DSP registers and DUART configuration");
     m->audio->write32(0,0xabcdef12);
-    cpu.sr=0x2700;cpu.cycles=3ull*f3rt::Machine::main_clock;
+    cpu.sr=0x2700;cpu.cycles=watchdog_deadline-1;
+    require(m->boundary()==0 && cpu.dispatch_deadline==watchdog_deadline,
+            "Watchdog expiry can precede the next raster interrupt");
+    cpu.stopped=1;
+    require(m->boundary()!=0 && cpu.cycles==watchdog_deadline && cpu.dispatch_deadline==0,
+            "STOP advances to watchdog expiry without skipping it");
     require(m->boundary()!=0 && m->audio->is_reset(),"Watchdog holds the sound CPU in reset");
+    require(cpu.dispatch_deadline==0,"Watchdog reset invalidates the native deadline");
     require(m->audio->read8(0x280019)==0x0f,"Watchdog restores the DUART interrupt vector");
     require(m->audio->read16(0x600)==0xa55a,"Whole-board reset preserves sound work RAM");
     require(m->audio->read32(0)==0,"Whole-board reset reloads boot vectors from sound ROM");
