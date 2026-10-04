@@ -85,7 +85,7 @@ Rules that the emitter follows:
 - **Packing in `all_aligned` mode.** The emitter groups decoded addresses into pages of `max_block_instructions × 2` bytes. A block is one page. Two decoded instructions can overlap, so the emitter packs by address and not by instruction boundary. The code at the end of an instruction jumps to the next label only if that address is in the same block.
 - **Packing in `recursive` mode.** The emitter uses the blocks from discovery. It cuts a block when it reaches `max_block_instructions`, or at a gap, or at an address that is already placed. It puts addresses that no block holds into blocks of one instruction.
 - **Profile instrumentation.** `F3_PROFILE_HIT_MAIN(address)` runs at every actual label, including fallthrough and entries whose hook redirects or stops execution. Shared exception handlers count `cpu->pc`. The macros compile away in ordinary builds.
-- **Profile tiers.** Existing pages split into hot/cold subsets. A successor in a different subset flushes flags and returns to dispatch; every entry remains registered. `sources.cmake` exports separate hot/cold lists in addition to the complete source list.
+- **Profile tiers.** Existing pages split into hot/cold subsets. A successor in a different subset flushes flags and returns to dispatch; every entry remains registered. Shared exception vectors have separate hot/cold source files; a vector is hot if any profile-hit entry uses it. `sources.cmake` exports separate hot/cold lists in addition to the complete source list.
 - **Profile slim.** Only profile-hit addresses retain executable statements and dispatch entries. Removed successors return to dispatch, where the runtime aborts and records the missing address instead of interpreting it.
 
 ### program.c

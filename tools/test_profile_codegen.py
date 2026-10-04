@@ -118,6 +118,48 @@ int main(void) {
 }
 ''')
 
+    def test_main_shared_exception_entries_remain_counted_once_in_each_mode(self):
+        rom = bytes.fromhex("a000f0007100")
+        crc = zlib.crc32(rom)
+        discovery = SimpleNamespace(instructions={}, blocks={}, invalid_pcs=[0, 2, 4], report={})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "entries.profile"
+            BlockProfile({("main", crc): (0, len(rom))},
+                         {("main", crc, 0): 1, ("main", crc, 4): 1}).write(profile)
+            for mode in ("baseline", "tiers", "slim"):
+                with self.subTest(mode=mode):
+                    output = root / mode
+                    options = {} if mode == "baseline" else {"profile_" + mode: profile}
+                    report = generate(rom, discovery, output, {"discovery": {"coverage": "all_aligned"}}, **options)
+                    execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + r'''
+#include <assert.h>
+#include "program.h"
+#include <f3rt/block_profile.h>
+uint64_t counts[3];
+uint64_t *f3_profile_main_counts=counts;
+uint64_t *f3_profile_sound_counts;
+static const f3_block *blocks;
+static size_t n;
+static unsigned exception;
+int f3_register_blocks(f3_cpu *cpu, const f3_block *table, size_t count) {
+    (void)cpu; blocks=table; n=count; return 1;
+}
+void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t pc) {
+    assert(pc==cpu->pc); exception=vector;
+}
+int main(void) {
+    f3_cpu cpu={0}; f3_generated_register(&cpu);
+    for(size_t i=0;i<n;++i) {
+        cpu.pc=blocks[i].address; exception=0;
+        blocks[i].execute(&cpu);
+        assert(exception==(cpu.pc==0 ? 10u : cpu.pc==2 ? 11u : 4u));
+    }
+    assert(counts[0]==1 && counts[1]==(SLIM ? 0u : 1u) && counts[2]==1);
+    return 0;
+}
+''')
+
     def test_sound_shared_exceptions_are_counted_once_and_slim_table_is_sparse(self):
         rom = bytes.fromhex("4e714e71a000f0004afc")
         crc = zlib.crc32(rom)

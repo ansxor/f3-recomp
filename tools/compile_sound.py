@@ -418,12 +418,30 @@ def compile_sound_rom(
         '#include <f3rt/block_profile.h>\n',
         '#include "sound_program.h"\n\n',
     ]
+    exception_names = {name for _, name in table if name.startswith("f3_sound_vector_")}
+    hot_exception_names = ({name for pc, name in table if pc in hot_entries and name in exception_names}
+                           if profile_tiers is not None else set())
+    exception_sources = {"hot": [], "cold": []}
     for vector in (4, 10, 11):
-        if any(name == f"f3_sound_vector_{vector}" for _, name in table):
-            program_c.append(
-                f"static void f3_sound_vector_{vector}(f3_cpu *cpu) {{ "
+        name = f"f3_sound_vector_{vector}"
+        if name in exception_names:
+            storage = "" if profile_tiers is not None else "static "
+            definition = (
+                f"{storage}void {name}(f3_cpu *cpu) {{ "
                 f"F3_PROFILE_HIT_SOUND(cpu->pc); f3_sound_exception(cpu, {vector}, cpu->pc); }}\n"
             )
+            if profile_tiers is None:
+                program_c.append(definition)
+            else:
+                program_c.append(f"extern void {name}(f3_cpu *cpu);\n")
+                tier = "hot" if name in hot_exception_names else "cold"
+                exception_sources[tier].append(definition)
+    for tier, definitions in exception_sources.items():
+        if definitions:
+            filename = f"sound_exceptions_{tier}.c"
+            (output_dir / filename).write_text(preamble + "".join(definitions))
+            source_names.append(filename)
+            tier_sources[tier].append(filename)
     for name in sorted({name for _, name in table if not name.startswith("f3_sound_vector_")}):
         program_c.append(f"void {name}(f3_cpu *cpu);\n")
     program_c.append("\nconst f3_block f3_sound_blocks[] = {\n")

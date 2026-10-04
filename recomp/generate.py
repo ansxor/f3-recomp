@@ -183,12 +183,28 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     if not table:
         raise ValueError("discovery produced no instructions")
     program = preamble + '#include "program.h"\n' + ''.join(declarations)
+    hot_exception_vectors = ({rom_exceptions[pc] for pc in hot if pc in rom_exceptions}
+                             if profile_tiers is not None else set())
+    exception_sources = {"hot": [], "cold": []}
     for vector in sorted(exception_entries):
-        program += (f'static void f3_rom_exception_{vector}(f3_cpu *cpu) {{\n'
-                    '    F3_PROFILE_HIT_MAIN(cpu->pc);\n'
-                    '    f3_cc_flush(cpu);\n'
-                    f'    f3_exception(cpu, {vector}, cpu->pc);\n'
-                    '}\n')
+        storage = '' if profile_tiers is not None else 'static '
+        definition = (f'{storage}void f3_rom_exception_{vector}(f3_cpu *cpu) {{\n'
+                      '    F3_PROFILE_HIT_MAIN(cpu->pc);\n'
+                      '    f3_cc_flush(cpu);\n'
+                      f'    f3_exception(cpu, {vector}, cpu->pc);\n'
+                      '}\n')
+        if profile_tiers is None:
+            program += definition
+        else:
+            program += f'extern void f3_rom_exception_{vector}(f3_cpu *cpu);\n'
+            tier = "hot" if vector in hot_exception_vectors else "cold"
+            exception_sources[tier].append(definition)
+    for tier, definitions in exception_sources.items():
+        if definitions:
+            filename = f'exceptions_{tier}.c'
+            (output / filename).write_text(preamble + ''.join(definitions))
+            source_names.append(filename)
+            tier_sources[tier].append(filename)
     program += 'static const f3_block translated_blocks[] = {\n'
     program += ''.join(f'    {{ 0x{pc:08x}u, {name} }},\n' for pc, name in table)
     program += ('};\nint f3_generated_register(f3_cpu *cpu) {\n'
