@@ -1,0 +1,6 @@
+# Recompiler decisions
+
+- 2026-10-03: MAME `taito_f3.cpp` lines 4166–4171 defines World `landmakr` as four 0x80000-byte lanes e61-19.20, e61-18.19, e61-17.18, e61-16.17, interleaved at byte offsets 0,1,2,3. Supplied `roms/landmakr` instead contains e61-13.20, e61-12.19, e61-11.18, e61-10.17: MAME `landmakrj`. Keep distinct validated game configurations; never silently identify Japan as World. Runtime peer and orchestrator notified.
+- N64Recomp design reference: https://github.com/N64Recomp/N64Recomp — literal instruction lowering, metadata-guided discovery, per-game TOML, runtime-resolved indirect transfers. N64ModernRuntime reference: https://github.com/N64Recomp/N64ModernRuntime — separate hardware implementation and recompilation bridge. F3 flat ROM needs no relocatable overlays unless RAM execution is observed; unresolved/RAM PCs go through explicit runtime fallback, not invented relocation metadata.
+- Dispatch uses emulated PC and stack, never native recursive calls. Basic-block boundary callback permits IRQ delivery without retaining stale PC/flags. Lazy flags must materialize before exceptions or external state observation.
+- Source and verification tools are committed. ROM bytes, generated game C, third-party downloaded reference builds, and generated traces remain ignored.
