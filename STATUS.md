@@ -1,4 +1,4 @@
-VERIFYING COVERAGE FIX — exhaustive ROM-entry discovery; long seeded gameplay gates still running
+DONE — coverage fix verified on 16 seeds × 40,000 strict-native frames; decoder/ISA and sound-bus limits documented below
 
 # Integrated Land Maker acceptance
 
@@ -31,11 +31,39 @@ Target: **Land Maker Japan 2.01J (`landmakrj`)**, as approved after identifying 
 | Direct native vs MAME pixels | **25/25 frames RGB-exact**, frames 600–3480 at intervals of 120; zero mismatched pixels out of 1,856,000 |
 | Main state | Frame 600 matches all 131,072 main-RAM bytes |
 | Reproducer gameplay capture | Seed 5 reaches frame 3,500 with zero fallback, 47,504,223 native blocks; inspected active first-match framebuffer, 1P score 30 |
+| Long strict-native gameplay | **Seeds 1–16 × 40,000 frames = 640,000 frames**, 8,551,456,140 native blocks, **zero fallback**, zero failures; includes handoff failures 5–7 |
 | Native audio vs MAME, seconds 20–54 | L/R correlation **0.9956761849580716/0.9952171577492129**, RMS error **18.722660457703864/19.499802079856668 PCM LSB**, analysis lag **−1 sample (−0.033601 ms)** |
 | Clean build, AppleClang 21 arm64 Release, `-j4` | Configure/discovery/emission 12.72 s; compile/link 62.96 s; measured while gameplay jobs ran |
 | Binary size | `landmakr` 64,950,520 bytes versus previous 7,294,872; native archive 77,686,440 versus 8,591,784 bytes |
 
-The current measurements use the isolated `wt/recomp/build/coverage` candidate with unchanged runtime `b3f5578` (imported from frozen `5699a0b`). The integration executable remains untouched while the 40,000-frame-per-seed acceptance runs finish. Exhaustive candidate discovery is an overapproximation, not a proof of reachability or universal decoder/ISA support.
+The coverage implementation is `7e0bd43`, following regression-tool commit `7d7f6ef`, with unchanged runtime `b3f5578` (imported from frozen `5699a0b`). Acceptance was completed in isolated `wt/recomp/build/coverage` before updating integration. Exhaustive candidate discovery is an overapproximation, not a proof of reachability or universal decoder/ISA support.
+
+## Seeded strict-native gameplay
+
+Every row completed 40,000 frames with fallback disabled and zero fallback
+instructions. Two independent runner batches exercised seeds 1–8 and 9–16;
+elapsed times were 1,928.451 s and 1,922.876 s while sharing the host. The
+final framebuffer CRCs record deterministic run outcomes, not MAME gameplay
+pixel-equivalence claims.
+
+| Seed | Native blocks | Final framebuffer CRC |
+| --- | ---: | --- |
+| 1 | 536,824,912 | `131034a3` |
+| 2 | 533,870,651 | `5ec55dda` |
+| 3 | 535,596,406 | `ced0390e` |
+| 4 | 535,618,377 | `05bd2b0d` |
+| 5 | 534,492,746 | `1101a39b` |
+| 6 | 529,768,165 | `54a2ed76` |
+| 7 | 536,649,307 | `e9a0299a` |
+| 8 | 536,771,773 | `5892f0dd` |
+| 9 | 537,594,246 | `7f5cf230` |
+| 10 | 534,119,872 | `28774d0f` |
+| 11 | 534,256,119 | `5470ff88` |
+| 12 | 529,419,728 | `dd16329c` |
+| 13 | 535,629,043 | `f126eae1` |
+| 14 | 534,004,931 | `1a3906b0` |
+| 15 | 533,779,909 | `12c0848e` |
+| 16 | 533,059,955 | `dbc48e33` |
 
 ## Reproduce
 
