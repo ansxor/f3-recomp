@@ -1,0 +1,83 @@
+[game]
+name = "Land Maker (Japan)"
+id = "landmakrj"
+platform = "taito_f3"
+
+[rom]
+size = 2097152 # 2 MiB (0x200000)
+interleave = 4
+
+# 4 x 524288 (0x80000) byte lanes interleaved at offsets 0, 1, 2, 3
+[[rom.lanes]]
+file = "e61-13.20"
+offset = 0
+size = 524288
+crc = "0af756a2"
+sha1 = "2dadac6873f2491ee77703f07f00dde2aa909355"
+
+[[rom.lanes]]
+file = "e61-12.19"
+offset = 1
+size = 524288
+crc = "636b3df9"
+sha1 = "78a5bf4977bb90d710942188ce5016f3df499feb"
+
+[[rom.lanes]]
+file = "e61-11.18"
+offset = 2
+size = 524288
+crc = "279a0ee4"
+sha1 = "08380286737b33db76a79b27d0df5faba17dfb96"
+
+[[rom.lanes]]
+file = "e61-10.17"
+offset = 3
+size = 524288
+crc = "daabf2b2"
+sha1 = "dbfbe38841fc2f937052353eff1202790d364b9f"
+
+[discovery]
+# These 2.01J helpers consume the aligned NUL-terminated inline string.
+inline_string_helpers = [0x0fcd5c, 0x0fcd78, 0x0fcd88]
+# Explicit entry points to seed discovery alongside vectors
+entry_points = [
+    0x01008a, # Boot sequence continuation after register-linked RAM test
+]
+scan_jump_tables = true
+scan_task_traps = true
+scan_callbacks = true
+
+[[discovery.jump_tables]]
+address = 0x000c42
+targets = [0x000c46, 0x000c48]
+
+[[discovery.jump_tables]]
+address = 0x0030c6
+targets = [0x0030e0, 0x003176, 0x0031cc, 0x003270, 0x003286]
+
+[[discovery.jump_tables]]
+address = 0x0032b0
+targets = [0x0032ca, 0x003302, 0x00333e]
+
+[[discovery.jump_tables]]
+address = 0x003906
+targets = [0x003914, 0x003920, 0x00392c, 0x003938, 0x00394c]
+
+[[discovery.jump_tables]]
+address = 0x0066d4
+targets = [0x006702, 0x00671c]
+
+[[discovery.jump_tables]]
+address = 0x00677e
+targets = [0x006920, 0x006952]
+
+[[discovery.jump_tables]]
+address = 0x09fa04
+targets = [
+    0x0009fcfc, 0x000a0240, 0x000a02e8, 0x0009fcac, 0x0009fc64,
+    0x0009fc1c, 0x0009fbac, 0x0009fb58, 0x0009fb04, 0x0009fab4,
+]
+
+[[discovery.jump_tables]]
+address = 0x0ff168
+targets = [0x000ff1fc, 0x000ff1be, 0x000ff190]

@@ -1,7 +1,7 @@
 # f3-recomp
 
 Taito F3 static recompilation + modern runtime, modeled on N64Recomp + N64ModernRuntime.
-Target: Land Maker (`landmakr`, main CPU 68EC020) running natively and matching MAME's behavior.
+Execution target: Land Maker Japan 2.01J (`landmakrj`, main CPU 68EC020), using the supplied ROM directory named `landmakr`. World `landmakr` is configuration-only and untested: its e61-19..16 program lanes were not supplied.
 
 ## split
 - `recomp/`   tool: ROM -> C (68020 lifter, function discovery, jump-table/indirect handling, per-game TOML config). Output C calls only the runtime ABI.
@@ -11,3 +11,92 @@ Target: Land Maker (`landmakr`, main CPU 68EC020) running natively and matching 
 - `tools/mame/`  MAME lua scripts that dump traces (memory writes, regs, frames, audio) for differential testing.
 
 ROMs live outside the repo: `../roms/<set>/`.
+
+## Recompile the supplied game
+
+Python 3.11+ and Capstone 5.0.9 are required. Install `recomp/requirements.txt`
+into your Python environment. From the repository root:
+
+```sh
+python3 -m recomp emit \
+  --config games/landmakrj/config.toml \
+  --rom-dir /path/to/roms/landmakr \
+  --output games/landmakrj/generated
+cmake -S recomp -B build/native -G Ninja \
+  -DF3_GENERATED_DIR="$PWD/games/landmakrj/generated" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native
+```
+
+`discover` instead of `emit` writes only `coverage.json`. Both commands verify
+each program lane's size, CRC32 and SHA-1 against MAME's `taito_f3.cpp`, then
+interleave bytes at offsets 0,1,2,3 into a 2 MiB image. No silent Japan/World
+substitution.
+
+The generated directory contains `program.bin`, sharded C, `program.h`,
+`sources.cmake`, `coverage.json`, and `lowering.json`. It must remain ignored.
+`libf3_recompiled.a` links with the runtime ABI; call `f3_generated_register`
+once after creating the CPU, then let `f3_dispatch` run it. Alternatively include
+`sources.cmake` and compile `F3_GENERATED_SOURCES`, with the repository root,
+`include/`, and the generated directory on the include path.
+
+### Discovery and execution contracts
+
+- Vector/config entry points, direct branches/calls, bounded jump-table
+  heuristics, task-entry and callback scans discover code. Reports distinguish
+  explicit/vector seeds from heuristic seeds. Unreached bytes are **not**
+  assumed to be data. Current Japan discovery finds 21,373 instructions,
+  79,734 unique bytes (3.802% of the entire mixed code/data ROM), 563 candidate
+  functions, and 55 unresolved transfers. These are discovery counts, not a
+  proof of complete executable-code coverage.
+- Every decoded instruction PC is registered, including block interiors.
+  Native blocks have at most 32 instructions; emulated calls use the guest
+  stack, not recursive host calls. Unknown or RAM PCs use the runtime's
+  one-instruction interpreter; an unavailable fallback halts rather than
+  pretending to execute.
+- NZVC flags are lazy inside blocks; X is retained eagerly for partial flag
+  updates. Native exits materialize SR before the runtime boundary/IRQ check.
+  Only ordinary bus reads/writes may observe pending flags. Trace-enabled
+  execution must use runtime fallback, not multi-instruction native blocks.
+- Scheduling costs are nominal (currently four ticks per lowered instruction),
+  **not cycle-exact**. Runtime vblank/timer interrupt delivery is at block
+  boundaries. Pixel/frame timing equivalence is a separate integration check.
+- TOML `[discovery].entry_points` accepts observed runtime PCs.
+  `[[discovery.jump_tables]]` records a transfer `address` and its `targets`.
+  `inline_string_helpers` is game-specific metadata for routines that consume
+  an aligned NUL-terminated inline string after a call.
+- Optional `[[hooks]]` entries have numeric `address` and C `symbol`; generated
+  code calls `void symbol(f3_cpu *)` before the instruction with canonical SR.
+  Changing PC or stopping the CPU skips that instruction. Link your hook
+  implementation explicitly.
+
+## Instruction-level differential self-test
+
+```sh
+python3 tools/differential/run.py \
+  --musashi runtime/third_party/musashi \
+  --output build/differential --cases 5000
+```
+
+This compiles literal native instruction cases and steps an independent Musashi
+68EC020 core. It compares all D/A registers, PC, canonical SR, ordered bus writes,
+and memory contents, with deterministic randomized states and targeted
+arithmetic, addressing, privilege, exception-frame, and lazy-flag transitions.
+Unsupported instructions are counted separately, never as passes. Native test
+code is compiled with warnings as errors and undefined-behavior sanitization.
+The reference library is built separately; its reset-cycle debt is drained and
+single-instruction stepping is asserted. `--seed`, `--filter`, and
+`--instructions` support reproducing or extending cases.
+
+The runtime owns the single vendored Musashi copy. Keep the documented MAME
+parity fixes in that copy: current MAME clears C on nonzero-divisor word DIV
+overflow, unlike unpatched upstream Musashi. Long DIV overflow preserves C/N/Z.
+
+## MAME capture
+
+`tools/mame/capture.lua` captures PNG frames, CPU register TSV, and raw main RAM,
+palette and video RAM. Set `F3_CAPTURE_PREFIX` to an existing output directory
+plus basename, optionally set `F3_CAPTURE_FRAMES=1,60,300,600,1200`, and run a
+clean MAME build with `-autoboot_delay 0 -autoboot_script tools/mame/capture.lua`.
+Capture indices count frames after the script starts; the TSV also records
+MAME's screen frame number. Keep all captures under ignored `build/`.

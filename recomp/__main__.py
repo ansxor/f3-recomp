@@ -22,7 +22,8 @@ def main() -> int:
         result = discover(rom, config)
         args.output.mkdir(parents=True, exist_ok=True)
         (args.output / 'coverage.json').write_text(json.dumps(result.report, indent=2) + '\n')
-        print(json.dumps(result.report, indent=2))
+        print(json.dumps({"coverage": result.report["summary"],
+                          "report": str(args.output / "coverage.json")}, indent=2))
         if args.command == 'emit':
             from .generate import generate
             report = generate(rom, result, args.output, config,
