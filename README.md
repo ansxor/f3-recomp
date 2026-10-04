@@ -45,9 +45,10 @@ tracked in `STATUS.md`, not implied by successful compilation.
 
 ### Game-data video and presentation
 
-`--video fdp` (default) retains the hardware-RAM renderer. `--video game`
-instead reconstructs Land Maker's scene from its native display producers
-and ROM/work-RAM descriptors. `--video compare` renders both and rejects
+`--video game` (default for the strict-native `landmakr` executable)
+reconstructs Land Maker's scene from its native display producers
+and ROM/work-RAM descriptors. `--video fdp` selects the hardware-RAM
+renderer (the oracle, and the default under `--allow-fallback`). `--video compare` renders both and rejects
 any supported-frame RGB mismatch. Both game-data modes require strict-native
 `landmakrj`; renderer fallback for explicitly unsupported frames is separate
 from, and never enables, main-CPU interpreter fallback.

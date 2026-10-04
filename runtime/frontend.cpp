@@ -50,6 +50,7 @@ int main(int argc,char **argv) try {
     std::filesystem::path sound_trace_path;
     std::string set="landmakrj";
     std::string video_mode="fdp";
+    bool video_explicit=false;
     std::string sound_driver="oracle";
     f3rt::GameVideoOptions video_options;
     std::string video_filter="nearest";
@@ -77,7 +78,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--sound-driver")sound_driver=value();
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
-        else if(arg=="--video")video_mode=value();
+        else if(arg=="--video") { video_mode=value();video_explicit=true; }
         else if(arg=="--video-scale") {
             const auto scale=std::stoul(value());
             if(!scale || scale>f3rt::GameVideoOptions::max_scale)throw std::runtime_error("--video-scale must be 1..4");
@@ -112,6 +113,11 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("--sound-driver must be oracle or native");
 #ifdef F3RT_LANDMAKR
     if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
+#endif
+#ifdef F3RT_LANDMAKR
+    // The strict-native Land Maker executable renders from game data by default;
+    // diagnostic fallback execution has no producer hooks, so it keeps the FDP renderer.
+    if(!video_explicit && translated && !allow_fallback)video_mode="game";
 #endif
     if(video_mode!="fdp" && video_mode!="game" && video_mode!="compare")
         throw std::runtime_error("--video must be fdp, game or compare");
