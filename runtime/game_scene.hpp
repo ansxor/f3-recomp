@@ -58,6 +58,8 @@ struct ScenePlayfield {
     int32_t source_x = 0; // 24.8 source coordinate at native screen column zero.
     int32_t source_y = 0; // Integer source row before global screen flipping.
     int32_t x_step = 256;
+    int32_t y_step = 256;
+    uint8_t y_fraction = 0; // Native subpixel phase retained for high-resolution sampling.
     uint16_t palette_add = 0;
 };
 

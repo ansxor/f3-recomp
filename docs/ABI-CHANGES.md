@@ -126,3 +126,18 @@ EC020/68020 ROL, ROR, ROXL and ROXR have no count-dependent cycle surcharge
 for either immediate or register counts. The pinned reference stores shift
 timing as cycles per count, not a shift exponent; zero must mean zero extra
 cycles. Operand, flag and other CPU-model behavior is unchanged.
+
+## Optional game-data video interface
+
+The C CPU ABI remains version 2. Japan's existing configured-hook mechanism
+calls `f3_landmakr_video_hook(f3_cpu *)` before selected display-producer
+instructions with materialized flags. The hook observes registers and
+ROM/work-RAM data; it does not skip instructions or change CPU state.
+
+The runtime C++ `Machine` owns an optional `GameVideo`; VBSTART selects it
+instead of the default FDP renderer when requested. Graphics/control writes
+notify it of only producer PC and destination address, to reject missing
+producers rather than copy FDP values. `Video` exposes immutable decoded ROM
+assets and optional diagnostic layer/row readback. The oracle renderer and
+its one-frame sprite latch remain intact. These are C++ runtime interfaces,
+not changes to generated register layouts, bus callbacks or CPU timing.

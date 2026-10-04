@@ -7,13 +7,15 @@
 namespace f3rt {
 namespace {
 
-constexpr std::array<uint32_t, 23> line_hooks{
+constexpr std::array<uint32_t, 32> line_hooks{
     0x00136e,
     0x005a22, 0x005a5e, 0x005a9a, 0x005af4,
     0x005cd8, 0x005d10,
     0x010044,
     0x08cfba, 0x08cfe0,
     0x091490, 0x091506, 0x0915d2, 0x091834, 0x09217c, 0x098dba,
+    0x099b5a, 0x099f86, 0x09a6e6, 0x09a8de, 0x09acbe, 0x09ad3e,
+    0x09a252, 0x09a28a, 0x09a2f6,
     0x09d66a, 0x09d72a, 0x09d7b6,
     0x09ecb0,
     0x0fe620, 0x0fefe6, 0x0ff0fa
@@ -37,6 +39,15 @@ bool is_covered_write(uint32_t pc) {
         {0x09187a, 0x091882}, // Water clip window animation (0x625760, 0x624760)
         {0x09218a, 0x09218a}, // Selection transition sprite priorities (0x627630)
         {0x098dc8, 0x098dc8}, // Full-screen alpha profile (0x626200)
+        {0x099b72, 0x099b74}, // Attract sprite modes and priorities (0x626030/0x627630)
+        {0x099fc2, 0x099fca}, // Attract reverse/normal blend transition
+        {0x09a25c, 0x09a25c}, // Attract alpha fade from task D2
+        {0x09a2ac, 0x09a2b0}, // Attract PF1/PF3 blend restoration
+        {0x09a300, 0x09a300}, // Second attract alpha fade from task D2
+        {0x09a6f4, 0x09a6f4}, // Attract PF2 blend/priority (0x62b400)
+        {0x09a8ec, 0x09a8ec}, // Attract sprite priorities (0x627600)
+        {0x09accc, 0x09accc}, // Attract PF2 blending on
+        {0x09ad4c, 0x09ad4c}, // Attract PF2 blending off
         {0x09d684, 0x09d6a0}, // Gameboard PF2 palette add gradient (0x629530, 0x629500, 0x62b400)
         {0x09d75e, 0x09d7aa}, // Gameboard PF2 zoom & rowscroll (0x628530, 0x62a400)
         {0x09d7d6, 0x09d812}, // Gameboard PF2 column scroll (0x624530, 0x624500)
@@ -334,6 +345,57 @@ void GameLines::observe(GameMemory &memory, const f3_cpu &cpu) {
         for (auto &line : lines_) line.blend = {3, 4, 5, 4}; // ROM $babc.
         break;
 
+    case 0x099b5a:
+        for (unsigned y = 24; y < 249; ++y) {
+            auto &line = lines_[y];
+            line.pivot.pivot_control = 0;
+            line.pivot.blend_select_v = false;
+            for (unsigned group = 0; group < 4; ++group) {
+                line.sp[group].blend_mode = (0xdf >> (group * 2)) & 3;
+                line.sp[group].prio = (0xdd88 >> (group * 4)) & 15;
+            }
+        }
+        break;
+    case 0x099f86:
+        for (unsigned y = 0; y < 248; ++y) {
+            lines_[y].pf[2].set_mix(0x700b);
+            lines_[y].pf[3].set_mix(0xb00d);
+            lines_[y].blend = {0, 4, 8, 4};
+            auto &next = lines_[y + 1];
+            next.pivot.pivot_control = 0;
+            next.pivot.blend_select_v = false;
+            for (unsigned group = 0; group < 4; ++group) {
+                next.sp[group].prio = (0xcc88 >> (group * 4)) & 15;
+                next.sp[group].blend_mode = 3;
+            }
+        }
+        break;
+    case 0x09a252:
+    case 0x09a2f6:
+        for (unsigned y = 0; y < 248; ++y)
+            for (unsigned slot = 0; slot < 4; ++slot)
+                lines_[y].blend[slot] = std::min(8u, 15u - ((cpu.d[2] >> (slot * 4)) & 15));
+        break;
+    case 0x09a28a:
+        for (unsigned y = 0; y < 248; ++y) {
+            lines_[y].pf[1].set_mix(0x700b);
+            lines_[y].pf[3].set_mix(0x300d);
+            lines_[y].blend = {0, 4, 8, 4};
+        }
+        break;
+    case 0x09a6e6:
+    case 0x09acbe:
+        for (unsigned y = 0; y < 248; ++y) lines_[y].pf[2].set_mix(0x700c);
+        break;
+    case 0x09ad3e:
+        for (unsigned y = 0; y < 248; ++y) lines_[y].pf[2].set_mix(0x300c);
+        break;
+    case 0x09a8de:
+        for (unsigned y = 0; y < 248; ++y)
+            for (unsigned group = 0; group < 4; ++group)
+                lines_[y].sp[group].prio = (0xee88 >> (group * 4)) & 15;
+        break;
+
     case 0x09d66a: {
         // In-game puzzle gameboard effect setup (ROM 0x9d66a..0x9d6a6)
         const bool flipped = (flipscreen_ != 0);
@@ -594,6 +656,8 @@ void GameLines::prepare(bool flipped) {
             reg_fx_x += 10 * (line.pf[i].x_scale - 256);
             row.playfields[i].source_x = reg_fx_x + (46 << 8);
             row.playfields[i].x_step = line.pf[i].x_scale;
+            row.playfields[i].y_step = line.pf[i].y_scale;
+            row.playfields[i].y_fraction = uint8_t(reg_fx_y[i]);
             row.playfields[i].palette_add = line.pf[i].pal_add;
 
             int32_t line_y_pf = ((reg_fx_y[i] >> 8) + line.pf[i].colscroll) & 0x1ff;
@@ -728,14 +792,18 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
                 if (g_pf.source_x != o_pf.source_x ||
                     g_pf.source_y != o_pf.source_y ||
                     g_pf.x_step != o_pf.x_step ||
+                    g_pf.y_step != o_pf.y_step ||
+                    g_pf.y_fraction != o_pf.y_fraction ||
                     g_pf.palette_add != o_pf.palette_add) {
                     std::ostringstream ss;
                     ss << "Frame " << frame << " row " << screen_y << " PF[" << i
                        << "] coords mismatch: game {sx=" << g_pf.source_x
                        << " sy=" << g_pf.source_y << " step=" << g_pf.x_step
+                       << " y_step=" << g_pf.y_step << " y_phase=" << int(g_pf.y_fraction)
                        << " pal_add=" << g_pf.palette_add
                        << "} vs oracle {sx=" << o_pf.source_x
                        << " sy=" << o_pf.source_y << " step=" << o_pf.x_step
+                       << " y_step=" << o_pf.y_step << " y_phase=" << int(o_pf.y_fraction)
                        << " pal_add=" << o_pf.palette_add << "}";
                     throw std::runtime_error(ss.str());
                 }

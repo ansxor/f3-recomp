@@ -1074,6 +1074,8 @@ struct Video::Impl {
 
                     oracle_row.playfields[i].source_x = line_data.pf[i].reg_fx_x + (H_START << 8);
                     oracle_row.playfields[i].x_step = line_data.pf[i].x_scale;
+                    oracle_row.playfields[i].y_step = line_data.pf[i].y_scale;
+                    oracle_row.playfields[i].y_fraction = uint8_t(line_data.pf[i].reg_fx_y);
                     oracle_row.playfields[i].palette_add = line_data.pf[i].pal_add;
                     oracle_row.playfields[i].source_y = line_data.pf[i].y_index(line_data.y);
                 }

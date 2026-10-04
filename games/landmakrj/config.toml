@@ -220,3 +220,30 @@ symbol = "f3_landmakr_video_hook"
 [[hooks]]
 address = 0x9217c
 symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x99b5a
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9a6e6
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9a8de
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x99f86
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9acbe
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9ad3e
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9a252
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9a28a
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9a2f6
+symbol = "f3_landmakr_video_hook"

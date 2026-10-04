@@ -6,7 +6,7 @@ Target: supplied **Japan 2.01J (`landmakrj`)** program, based on `checkpoint-1-c
 
 The game renderer observes native display-building routines. Hooks do not replace instructions, advance guest time, change registers or write guest memory. `GameMemory` permits only program-ROM and main-work-RAM reads; it deliberately cannot read FDP memory. Game tile blocks become semantic cells (tile, palette, pen mask, flips and blend selector), rather than a second byte-for-byte graphics-RAM image. A graphics-write observer checks **only producer PC and destination address** to detect missing hooks; it never supplies write values to the scene.
 
-`runtime/video.cpp` remains the independent FDP oracle. Immutable decoded ROM textures are shared to avoid a duplicate 16 MiB asset decode. Oracle layer readback is diagnostic only; it does not advance sprite latches. The first milestone compares complete logical PF0 texture planes; it is **not yet a final composited-frame parity claim**.
+`runtime/video.cpp` remains the independent FDP oracle. Immutable decoded ROM textures are shared to avoid a duplicate 16 MiB asset decode. Oracle layer readback is diagnostic only; it does not advance sprite latches. The incremental proof below starts with complete logical PF0 texture planes and then establishes nine-layer and final composited-frame parity.
 
 Color indices resolve through the shared FDA palette RAM; this is a color asset, not FDP geometry. The game compositor takes semantic maps, decoded glyph pens, semantic sprite geometry and semantic row descriptions. Its normal path never reads FDP tile/sprite/line memory. Runtime mode `fdp` remains the default; `game` composes the supported scene and maintains only the oracle sprite latch for exact fallback, while `compare` renders both and rejects any supported-frame RGB difference. A fallback report names the component, producer PC, count and first/last affected frame; it is not CPU interpreter fallback.
 
@@ -83,7 +83,7 @@ The run executes 80,338,232 native blocks with zero fallback. The indexed-revers
 `f3rt-check`, including a three-column mirrored descriptor with palette XOR and blend selection,
 an unpainted right boundary, unknown-producer invalidation and recovery after a complete game clear.
 
-## Remaining producer map: ROM evidence, not parity claims
+## ROM producer map
 
 | Routine | Game-owned input / function |
 | --- | --- |
@@ -93,7 +93,7 @@ an unpainted right boundary, unknown-producer invalidation and recovery after a 
 | `$0056e6` | Text rectangle descriptor uploader; its loop/count convention differs from PF copies |
 | `$0057a2`, `$0057cc`, `$00581c`, `$005856` | String, hexadecimal, bit and decimal text producers |
 | `$005b80`, `$005bac`, `$005bce` | ROM/RAM glyph uploads with 16-bit word swap |
-| `$005d10` and surrounding helpers | Line-profile initialization; actual latch/feature use still requires measured coverage |
+| `$005cd8/$005d10` | ROM line-profile initialization and selector setup; exact row ranges are detailed below |
 | `$091490..$091612`, `$091834` | Character-select water mixing/clipping |
 | `$09d66a..$09d812` | Board palette gradient, perspective zoom/rowscroll and column scroll |
 | `$09ecb0..$09ecf4` | Selection PF0 sine-wave rowscroll from ROM table `$1c84` and phase at `A5-$6f6` |
@@ -102,7 +102,7 @@ an unpainted right boundary, unknown-producer invalidation and recovery after a 
 
 The common frame handler `$1110` calls `$136e`, input handling, coin handling, palette dispatch and sound dispatch. Runtime scanout occurs at VBSTART before IRQ2; the oracle then prepares the current sprite list for the following rendered frame. A callback at `$1134` alone is not assumed to represent every completed display task.
 
-### Text and sprite source contracts under differential validation
+### Text and sprite source contracts
 
 The text map is represented by glyph/palette/flip cells and decoded glyph pens, not copied FDP bytes. `$56e6` consumes `u16 rows, u16 columns, u16 glyphs[]`; its stack arguments are source pointer at `SP+4`, destination at `SP+8`, attribute word at `SP+12`. `$5726` instead consumes byte glyphs, reverses columns and XORs the attribute byte with `$40`. `$5768` erases the described rectangle with glyph zero. `$59bc` fills the complete map with `$0290`; `$59ee` fills 30 rows by 40 columns. `$5be0/$5c08` set the first/second column in 29 rows.
 
@@ -110,9 +110,24 @@ The text map is represented by glyph/palette/flip cells and decoded glyph pens, 
 
 Glyph `$90` is also a game cover/fade primitive: `$8de56` blanks it, `$8e9c6/$a1170` fill it, and `$8e0a6/$8e0dc` apply two ROM offset/mask pairs at `A1` to the glyph based at `A0`. `$9b530` fills glyph `$60`; `$9b544` uses it across 42 columns in rows 0–5 and 26–28. Unknown text/glyph writers invalidate the affected semantic state rather than reading hardware RAM back.
 
-Game sprite queues contain 18-byte entries: `+0` graphics descriptor pointer, `+4` zoom long, `+8/+10` X/Y words, `+12` palette word, `+14/+16` horizontal/vertical flip words. Their bases are `$408cf0/$408870/$408630/$408510/$4083f0/$408360/$408120/$407ee0`. `$4528` visits queues 4,5,6,7, then the master-object list, then queues 0,1,2,3. At `$4688/$46c0`, `A4` points four bytes into the queue entry and `A0` follows the graphics descriptor's 32-bit header; `D7` holds that header. The grid header stores rows-minus-one in its upper word and columns-minus-one in its lower word; tile entries are column-major packed attribute/code longs. `$4480` submits a completed batch. The semantic sprite list must retain fractional positions and the one-frame scanout lag, rather than using the current queue as the current visible frame.
+Game sprite queues contain 18-byte entries: `+0` graphics descriptor pointer, `+4` zoom long, `+8/+10` X/Y words, `+12` palette word, `+14/+16` horizontal/vertical flip words. Their bases are `$408cf0/$408870/$408630/$408510/$4083f0/$408360/$408120/$407ee0`. `$4528` visits queues 4,5,6,7, then the master-object list, then queues 0,1,2,3.
 
-These contracts come from the ROM instruction stream. Text-plane parity is now measured: `--seed {5,6,7} --frames 6000 --video-diff --video-layer-mask 256` compares 46 complete 512×512 text textures per seed, **12,058,624 indexed pixels per seed / 36,175,872 total, zero mismatches**. Native block counts are 80,338,232 / 79,921,207 / 81,856,920; all three runs execute zero fallback instructions. Sprite and line-composition parity are still unproven.
+At `$4688/$46c0`, `A4` points four bytes into the queue entry and `A0` follows the graphics descriptor's 32-bit header; `D7` holds that header. The grid header stores rows-minus-one in its upper word and columns-minus-one in its lower word; tile entries are column-major packed attribute/code longs. `$4480` submits a completed batch. The scene preserves the game's **integer tile-origin quantization**, per-tile fractional raster step and one-frame scanout lag; it does not display the current queue immediately.
+
+| Sprite hook | Game source and scene operation |
+| --- | --- |
+| `$0041d0` | Reinitializes sprite ownership and clears all three semantic batches. |
+| `$0043b0` | Global signed-12-bit scroll from main RAM `$407a16/$407a1a`. |
+| `$0043e0` | Command at `$407a1e`: screen flip bit 13, extra pen planes bits 8–9, framebuffer-retention bit 1. |
+| `$004528/$004480` | Begin staging / submit completed active batch; scanout latches the submitted batch after the current frame. |
+| `$004688` | Single-tile descriptor: attribute/code words at `A0`; queue zoom bytes `A4+1/+3`, coordinate words `+4/+6`, palette/flip words `+8/+10/+12`. |
+| `$0046c0` | General column-major grid described above; scaled grids quantize each tile origin and mask the low four X raster-zoom bits. |
+| `$0a8f38` | Master-object grid at `A0`; positions in `D1.W/D2.W`, palette/flags in `D3.W`, per-tile attribute XOR. |
+| `$0a8f84` | Three-tile object: common attribute XOR `A0+4`, codes `+6/+10/+14`, positions `(x+5,y)`, `(x,y+16)`, `(x+16,y+16)`. |
+| `$0a90f4` | Four-tile object: codes `A0+6/+10/+14/+18`, column-major 2×2 placement, palette/flags from `D3.W`. |
+| `$0a913c` | Scaled master grid: descriptor at `A0`, object at `A3`, zoom bytes `A3+$10/$12`, flips in low two bits of word `A3+$12`; palette from `D3`. Center offsets are `(columns*zoomX+8)/32` and `(rows*zoomY+8)/16`. |
+
+These contracts come from the ROM instruction stream. Text-plane parity: `--seed {5,6,7} --frames 6000 --video-diff --video-layer-mask 256` compares 46 complete 512×512 text textures per seed, **12,058,624 indexed pixels per seed / 36,175,872 total, zero mismatches**. Native block counts are 80,338,232 / 79,921,207 / 81,856,920; all three runs execute zero fallback instructions. The sprite and complete-scene proofs below are separate subsequent milestones.
 
 The longer text-only seed-5 run also passes **40,000 frames**, 329 sampled text planes / **86,245,376 indexed pixels**, zero mismatches; 534,492,746 native blocks, zero fallback instructions. Frame CRC `$1101a39b`.
 
@@ -128,6 +143,8 @@ After that correction, seed 5 × 6000 frames passes all four sprite priority pla
 
 | Hook / producer | Semantic input and verified operation |
 | --- | --- |
+| `$010044` | Captures the boot uploader's game register value for PF and pivot controls. |
+| `$00136e` | Converts game-owned positions/calibration values from the producer-map addresses into native scanout origins; preserves word arithmetic, NOT/ASR rounding and control semantics. |
 | `$005cd8` | Reads ROM profile table `$5d74`; writes exactly 232 rows starting at row 24 normally or row 0 when the game flip byte is set. Blanking rows are not overwritten. |
 | `$005d10` | Initializes selectors, not profile values; `$626000` (or `$6261fe` flipped) becomes `$0800`. |
 | `$005a22/$005a5e` | Clear PF0/PF1 rowscroll. |
@@ -136,7 +153,14 @@ After that correction, seed 5 × 6000 frames passes all four sprite priority pla
 | `$091490/$091506` | Special selection label windows: 20 rows of text mix `$380f` and PF3 mix `$3800`; normal starts 224/202, flipped starts 199/181. |
 | `$0915d2` | Water region rows 176–251: alpha `$bcba`, PF3 mix `$380e`, sprite priorities `$dd81`, sprite blend/pivot control `$00eb`. |
 | `$091834` | Water clipping from `D7`: unsigned word arithmetic computes `(60-D7)*6`; the flipped left edge is `($6980-amount)&511`, not a guessed reflection. |
+| `$09217c` | Selection transition: all four sprite priorities become 14 on rows 24–215. |
 | `$098dba` | All 256 alpha rows become `$babc`; first observed by the missing-writer guard at frame 1080, store `$098dc8`. |
+| `$099b5a` | Attract rows 24–248: sprite blend modes `$df`, priorities `$dd88`, pivot control zero. |
+| `$099f86` | Rows 0–247: PF2 mix `$700b`, PF3 `$b00d`, alpha `$b7bf`; rows 1–248: sprite priorities `$cc88`, sprite modes 3, pivot control zero. |
+| `$09a252/$09a2f6` | Attract fades: task register `D2.W` supplies 248 alpha words. No FDP readback or guessed animation interpolation. |
+| `$09a28a` | Rows 0–247: PF1 mix `$700b`, PF3 `$300d`, alpha `$b7bf`. |
+| `$09a6e6/$09acbe/$09ad3e` | Rows 0–247: PF2 mix `$700c`, `$700c`, `$300c` respectively. |
+| `$09a8de` | Rows 0–247: sprite priorities `$ee88`. |
 | `$09d66a` | PF2 mix `$3005` plus a run-length palette-add gradient from ROM `$9d6a8..$9d6d0`. |
 | `$09d72a` | Symmetric board X zoom around row 152 normally /128 flipped; zoom is an eight-bit value, including wrap in blanking rows. Rowscroll uses the exact division/remainder conversion in `$9d784..$9d7a8`. |
 | `$09d7b6` | Board animated column scroll reads phase `$40790a&127` **after** the task's `$9d7b0` yield. In normal orientation the 152-word lower half crosses into PF3 rows 0–47; clipping upper bits are cleared by those same writes. |
@@ -146,7 +170,7 @@ The first normalized-line failure at frame 600 was PF1 Y `489` versus oracle `0`
 
 ### Fresh oracle compatibility
 
-`landmakr --headless --frames 3480 --video fdp --dump-dir build/captures/video-oracle-attract --dump-start 600 --dump-every 120` executes **49,866,062 native blocks, zero fallback instructions**. Comparing those fresh frames with the retained MAME `mame-taps-fixed` captures gives **25/25 exact RGB frames**, 1,856,000 compared pixels, zero mismatches and zero maximum channel error. This validates the unchanged default oracle path independently of unfinished HLE composition.
+`landmakr --headless --frames 3480 --video fdp --dump-dir build/captures/video-oracle-attract --dump-start 600 --dump-every 120` executes **49,866,062 native blocks, zero fallback instructions**. Comparing those fresh frames with the retained MAME `mame-taps-fixed` captures gives **25/25 exact RGB frames**, 1,856,000 compared pixels, zero mismatches and zero maximum channel error. This validates the unchanged default oracle path independently of HLE composition.
 
 ## First complete seeded scene parity
 
@@ -154,7 +178,7 @@ Seed 5 × 6000 frames, every 120 frames from frame 600: **46 samples**, all nine
 
 The 6000-frame run reconstructs 5769 frames and delegates 231 startup frames to the oracle: line initialization/POST (229), glyph initialization (1), sprite POST (1), last fallback at frame 418. The normalized line comparison catches geometry, clipping, priority, blend selector/weights and mosaic state independently of the RGB composition.
 
-Continuous no-input attract comparison additionally checks 1786 supported frames /132,592,640 RGB pixels with zero mismatches. It exposes three ordinary attract profiles not present before the seeded coin/start path: stores `$99b72`, `$9a6f4`, `$9a8ec`. Those frames currently use the oracle and remain implementation work, not a claim that attract HLE is complete.
+Continuous no-input attract comparison through frame 3480 now checks **3249 supported frames / 241,205,760 RGB pixels / zero mismatches**, with only the same 231 startup fallbacks. Native execution is 49,866,062 blocks / zero fallback instructions; final CRC `$b490d7d9`. Earlier runs exposed the ordinary attract profiles listed above via the missing-writer guard; each was reconstructed from its ROM producer before accepting its frames.
 
 ## Evidence conflict
 
@@ -162,4 +186,4 @@ Continuous no-input attract comparison additionally checks 1786 supported frames
 
 ## Acceptance still open
 
-Ordinary attract-profile coverage, extended seeded runs, explicit unsupported-feature limits and actual frontend surface verification remain open. Resolution scale, extra border and filtering are still unexposed; their base-parity gate has now been met by the complete seeded scene above. No phase-2 completion claim is made yet.
+Extended seeded runs, explicit unsupported-feature limits and complete frontend presentation verification remain open. The base-parity gate has been met by the complete seeded scene above. No phase-2 completion claim is made yet.
