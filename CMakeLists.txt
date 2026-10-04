@@ -4,8 +4,24 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(F3RT_SDL "Build SDL3 frontend" ON)
-set(F3_GENERATED_DIR "" CACHE PATH "Generated Land Maker C directory")
-set(F3_RECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../recomp" CACHE PATH "Recompiler source root (for generated helper headers)")
+set(F3_ROM_DIR "" CACHE PATH "Land Maker Japan ROM directory; enables automatic native generation")
+set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated Land Maker C directory (optional)")
+if(F3_ROM_DIR)
+    get_filename_component(F3_ROM_DIR "${F3_ROM_DIR}" ABSOLUTE)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    if(NOT F3_GENERATED_DIR)
+        set(F3_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/landmakrj")
+    endif()
+    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${RECOMP_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/games/landmakrj/config.toml")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/python:$ENV{PYTHONPATH}"
+            ${Python3_EXECUTABLE} -m recomp emit
+            --config games/landmakrj/config.toml --rom-dir "${F3_ROM_DIR}" --output "${F3_GENERATED_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endif()
 
 set(MUSASHI ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/musashi)
 add_executable(f3rt_m68kmake ${MUSASHI}/m68kmake.c)
@@ -35,10 +51,13 @@ if(F3RT_SDL)
     add_executable(f3rt-run runtime/frontend.cpp)
     target_link_libraries(f3rt-run PRIVATE f3rt SDL3::SDL3)
     if(F3_GENERATED_DIR)
-        include(${F3_GENERATED_DIR}/sources.cmake)
-        target_sources(f3rt-run PRIVATE ${F3_GENERATED_SOURCES})
-        target_include_directories(f3rt-run PRIVATE ${F3_GENERATED_DIR} ${F3_RECOMP_ROOT})
+        add_subdirectory(recomp)
+        target_link_libraries(f3rt-run PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-run PRIVATE F3RT_GENERATED=1)
+        add_executable(landmakr runtime/frontend.cpp)
+        target_link_libraries(landmakr PRIVATE f3rt f3_recompiled SDL3::SDL3)
+        target_compile_definitions(landmakr PRIVATE
+            F3RT_GENERATED=1 F3RT_LANDMAKR=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
 endif()
 add_executable(f3rt-replay runtime/replay.cpp)

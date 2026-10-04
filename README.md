@@ -12,6 +12,38 @@ Execution target: Land Maker Japan 2.01J (`landmakrj`, main CPU 68EC020), using 
 
 ROMs live outside the repo: `../roms/<set>/`.
 
+## Build and run the integrated game
+
+Use the repository-root `integration` branch. Prerequisites: CMake, Ninja,
+a C/C++20 compiler, SDL3 development files, Python 3.11+, and Capstone 5.0.9.
+Install the Python dependency once with
+`python3 -m pip install --target build/python -r recomp/requirements.txt`.
+
+From this repository root, the build-and-run command is:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR=../roms/landmakr &&
+cmake --build build --target landmakr -j 4 &&
+./build/landmakr
+```
+
+CMake validates the Japanese program lanes, generates C into ignored
+`build/generated/landmakrj`, and links it with `f3rt`. The configured ROM
+directory is the executable's default; `--rom-dir DIR` overrides it.
+`landmakr` always selects generated main-CPU code and rejects any untranslated
+instruction. `--allow-fallback` explicitly opts into diagnostic interpretation;
+that mode does **not** satisfy native-game acceptance. The separate `f3rt-run`
+and `f3rt-replay` targets are test aids. The sound CPU remains emulated.
+
+Controls: **5/6** coin, **1/2** start, **arrows** direction, **Z/X/C** buttons,
+**F1** service, **F2** test, **Escape** quit. `--eeprom build/landmakr.nv`
+persists settings. `--frames N --headless --wav build/audio.wav` supports
+finite verification runs without changing the CPU execution path.
+
+The build command is smoke-tested; final playable frame/audio equivalence is
+tracked in `STATUS.md`, not implied by successful compilation.
+
+
 ## Recompile the supplied game
 
 Python 3.11+ and Capstone 5.0.9 are required. Install `recomp/requirements.txt`
@@ -94,9 +126,10 @@ overflow, unlike unpatched upstream Musashi. Long DIV overflow preserves C/N/Z.
 
 ## MAME capture
 
-`tools/mame/capture.lua` captures PNG frames, CPU register TSV, and raw main RAM,
-palette and video RAM. Set `F3_CAPTURE_PREFIX` to an existing output directory
-plus basename, optionally set `F3_CAPTURE_FRAMES=1,60,300,600,1200`, and run a
-clean MAME build with `-autoboot_delay 0 -autoboot_script tools/mame/capture.lua`.
-Capture indices count frames after the script starts; the TSV also records
-MAME's screen frame number. Keep all captures under ignored `build/`.
+`tools/mame/capture.lua` captures aligned frame/state bundles, CPU state,
+main RAM, video/palette/control RAM, active sprites, and audio-state evidence.
+See [the capture protocol and commands](tools/mame/README.md).
+Use format-2 captures: MAME's frame-done pixel API returns the preceding
+completed bitmap, so the script defers pixel capture one callback to align it
+with the saved machine state. Old format-1 bundles are not valid parity pairs.
+Keep all captures under ignored `build/`.

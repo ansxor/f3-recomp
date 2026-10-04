@@ -45,6 +45,13 @@ int main(int argc,char **argv) try {
     std::string set="landmakrj";
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
+#ifdef F3RT_LANDMAKR
+    romdir=F3RT_DEFAULT_ROM_DIR;
+    translated=true;
+    bool allow_fallback=false;
+#else
+    bool allow_fallback=true;
+#endif
     for(int i=1;i<argc;++i) {
         const std::string arg=argv[i];
         auto value=[&]() -> const char * { if(i+1>=argc)throw std::runtime_error("Missing value for "+arg);return argv[++i]; };
@@ -61,10 +68,11 @@ int main(int argc,char **argv) try {
         else if(arg=="--headless")headless=true;
         else if(arg=="--no-audio")sound=false;
         else if(arg=="--translated")translated=true;
+        else if(arg=="--allow-fallback")allow_fallback=true;
         else if(arg=="--unthrottled")throttle=false;
         else if(arg=="--help") {
-            std::cout<<"f3rt-run --rom-dir DIR [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
-                     <<"  [--translated] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
+            std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
+                     <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n";
             return 0;
@@ -72,8 +80,12 @@ int main(int argc,char **argv) try {
     }
     if(romdir.empty() || !dump_every)throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if(headless && !frames)throw std::runtime_error("Headless execution requires --frames");
+#ifdef F3RT_LANDMAKR
+    if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
+#endif
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
+    m.allow_main_fallback=allow_fallback;
     if(!eeprom.empty())m.load_eeprom(eeprom);
     if(!fallback_report.empty())m.fallback_hits.resize(0x800000);
     if(translated) {
