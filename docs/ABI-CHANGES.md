@@ -23,6 +23,13 @@ reference retains the four-cycle opcode charge in addition to the 20-cycle
 exception-table entry; `f3_exception` owns all 24 cycles for generated code.
 Other exception classes and CPU variants are unchanged.
 
+Sound 68000 timing is independently calibrated against executed reference
+microprograms, not inferred from the main EC020 table. ADDQ.W-to-An, long
+register arithmetic, immediate operand widths, TAS effective addresses and
+register bit-index timing have dedicated regressions. Other CPU models retain
+their prior costs. This changes no ABI fields or main-CPU generated costs and
+does not establish integrated audio parity.
+
 ## Version 1 — 2026-10-03
 
 `include/f3rt/cpu_abi.h` is the frozen initial C interface. Generated blocks use numeric 68020 registers, materialized SR at non-memory callbacks, cumulative cycle accounting, big-endian bus accessors, a per-block boundary hook, exception entry, sorted dynamic block registration, device reset, and a one-instruction interpreter fallback. `f3_set_sr` handles user/interrupt/master stack switching and invalidates lazy flags. Blocks set successor PC and return; `f3_dispatch` owns iterative lookup and fallback. The runtime pointer is opaque and runtime-owned. No serialized struct layout is promised across pointer widths.

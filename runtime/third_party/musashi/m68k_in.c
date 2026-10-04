@@ -393,8 +393,8 @@ add        8  er    .     1101...000......  A+-DXWLdxI  U U U U U   4   4   2   
 add       16  er    d     1101...001000...  ..........  U U U U U   4   4   2   2   2
 add       16  er    a     1101...001001...  ..........  U U U U U   4   4   2   2   2
 add       16  er    .     1101...001......  A+-DXWLdxI  U U U U U   4   4   2   2   2
-add       32  er    d     1101...010000...  ..........  U U U U U   6   6   2   2   2
-add       32  er    a     1101...010001...  ..........  U U U U U   6   6   2   2   2
+add       32  er    d     1101...010000...  ..........  U U U U U   8   6   2   2   2
+add       32  er    a     1101...010001...  ..........  U U U U U   8   6   2   2   2
 add       32  er    .     1101...010......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 add        8  re    .     1101...100......  A+-DXWL...  U U U U U   8   8   4   4   4
 add       16  re    .     1101...101......  A+-DXWL...  U U U U U   8   8   4   4   4
@@ -402,8 +402,8 @@ add       32  re    .     1101...110......  A+-DXWL...  U U U U U  12  12   4   
 adda      16  .     d     1101...011000...  ..........  U U U U U   8   8   2   2   2
 adda      16  .     a     1101...011001...  ..........  U U U U U   8   8   2   2   2
 adda      16  .     .     1101...011......  A+-DXWLdxI  U U U U U   8   8   2   2   2
-adda      32  .     d     1101...111000...  ..........  U U U U U   6   6   2   2   2
-adda      32  .     a     1101...111001...  ..........  U U U U U   6   6   2   2   2
+adda      32  .     d     1101...111000...  ..........  U U U U U   8   6   2   2   2
+adda      32  .     a     1101...111001...  ..........  U U U U U   8   6   2   2   2
 adda      32  .     .     1101...111......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 addi       8  .     d     0000011000000...  ..........  U U U U U   8   8   2   2   2
 addi       8  .     .     0000011000......  A+-DXWL...  U U U U U  12  12   4   4   4
@@ -414,7 +414,7 @@ addi      32  .     .     0000011010......  A+-DXWL...  U U U U U  20  20   4   
 addq       8  .     d     0101...000000...  ..........  U U U U U   4   4   2   2   2
 addq       8  .     .     0101...000......  A+-DXWL...  U U U U U   8   8   4   4   4
 addq      16  .     d     0101...001000...  ..........  U U U U U   4   4   2   2   2
-addq      16  .     a     0101...001001...  ..........  U U U U U   4   4   2   2   2
+addq      16  .     a     0101...001001...  ..........  U U U U U   8   4   2   2   2
 addq      16  .     .     0101...001......  A+-DXWL...  U U U U U   8   8   4   4   4
 addq      32  .     d     0101...010000...  ..........  U U U U U   8   8   2   2   2
 addq      32  .     a     0101...010001...  ..........  U U U U U   8   8   2   2   2
@@ -432,7 +432,7 @@ and        8  er    d     1100...000000...  ..........  U U U U U   4   4   2   
 and        8  er    .     1100...000......  A+-DXWLdxI  U U U U U   4   4   2   2   2
 and       16  er    d     1100...001000...  ..........  U U U U U   4   4   2   2   2
 and       16  er    .     1100...001......  A+-DXWLdxI  U U U U U   4   4   2   2   2
-and       32  er    d     1100...010000...  ..........  U U U U U   6   6   2   2   2
+and       32  er    d     1100...010000...  ..........  U U U U U   8   6   2   2   2
 and       32  er    .     1100...010......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 and        8  re    .     1100...100......  A+-DXWL...  U U U U U   8   8   4   4   4
 and       16  re    .     1100...101......  A+-DXWL...  U U U U U   8   8   4   4   4
@@ -752,7 +752,7 @@ or         8  er    d     1000...000000...  ..........  U U U U U   4   4   2   
 or         8  er    .     1000...000......  A+-DXWLdxI  U U U U U   4   4   2   2   2
 or        16  er    d     1000...001000...  ..........  U U U U U   4   4   2   2   2
 or        16  er    .     1000...001......  A+-DXWLdxI  U U U U U   4   4   2   2   2
-or        32  er    d     1000...010000...  ..........  U U U U U   6   6   2   2   2
+or        32  er    d     1000...010000...  ..........  U U U U U   8   6   2   2   2
 or        32  er    .     1000...010......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 or         8  re    .     1000...100......  A+-DXWL...  U U U U U   8   8   4   4   4
 or        16  re    .     1000...101......  A+-DXWL...  U U U U U   8   8   4   4   4
@@ -824,8 +824,8 @@ sub        8  er    .     1001...000......  A+-DXWLdxI  U U U U U   4   4   2   
 sub       16  er    d     1001...001000...  ..........  U U U U U   4   4   2   2   2
 sub       16  er    a     1001...001001...  ..........  U U U U U   4   4   2   2   2
 sub       16  er    .     1001...001......  A+-DXWLdxI  U U U U U   4   4   2   2   2
-sub       32  er    d     1001...010000...  ..........  U U U U U   6   6   2   2   2
-sub       32  er    a     1001...010001...  ..........  U U U U U   6   6   2   2   2
+sub       32  er    d     1001...010000...  ..........  U U U U U   8   6   2   2   2
+sub       32  er    a     1001...010001...  ..........  U U U U U   8   6   2   2   2
 sub       32  er    .     1001...010......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 sub        8  re    .     1001...100......  A+-DXWL...  U U U U U   8   8   4   4   4
 sub       16  re    .     1001...101......  A+-DXWL...  U U U U U   8   8   4   4   4
@@ -833,8 +833,8 @@ sub       32  re    .     1001...110......  A+-DXWL...  U U U U U  12  12   4   
 suba      16  .     d     1001...011000...  ..........  U U U U U   8   8   2   2   2
 suba      16  .     a     1001...011001...  ..........  U U U U U   8   8   2   2   2
 suba      16  .     .     1001...011......  A+-DXWLdxI  U U U U U   8   8   2   2   2
-suba      32  .     d     1001...111000...  ..........  U U U U U   6   6   2   2   2
-suba      32  .     a     1001...111001...  ..........  U U U U U   6   6   2   2   2
+suba      32  .     d     1001...111000...  ..........  U U U U U   8   6   2   2   2
+suba      32  .     a     1001...111001...  ..........  U U U U U   8   6   2   2   2
 suba      32  .     .     1001...111......  A+-DXWLdxI  U U U U U   6   6   2   2   2
 subi       8  .     d     0000010000000...  ..........  U U U U U   8   8   2   2   2
 subi       8  .     .     0000010000......  A+-DXWL...  U U U U U  12  12   4   4   4
@@ -861,7 +861,7 @@ subx      16  mm    .     1001...101001...  ..........  U U U U U  18  18  12  1
 subx      32  mm    .     1001...110001...  ..........  U U U U U  30  30  12  12  12
 swap      32  .     .     0100100001000...  ..........  U U U U U   4   4   4   4   4
 tas        8  .     d     0100101011000...  ..........  U U U U U   4   4   4   4   4
-tas        8  .     .     0100101011......  A+-DXWL...  U U U U U  14  14  12  12  12
+tas        8  .     .     0100101011......  A+-DXWL...  U U U U U  10  14  12  12  12
 trap       0  .     .     010011100100....  ..........  U U U U U   4   4   4   4   4
 trapt      0  .     .     0101000011111100  ..........  . . U U U   .   .   4   4   4
 trapt     16  .     .     0101000011111010  ..........  . . U U U   .   .   6   6   6
@@ -2352,7 +2352,8 @@ M68KMAKE_OP(bcc, 32, ., .)
 M68KMAKE_OP(bchg, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst ^= mask;
@@ -2373,7 +2374,8 @@ M68KMAKE_OP(bchg, 8, r, .)
 M68KMAKE_OP(bchg, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst ^= mask;
@@ -2394,7 +2396,8 @@ M68KMAKE_OP(bchg, 8, s, .)
 M68KMAKE_OP(bclr, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst &= ~mask;
@@ -2415,7 +2418,8 @@ M68KMAKE_OP(bclr, 8, r, .)
 M68KMAKE_OP(bclr, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst &= ~mask;
@@ -3135,7 +3139,8 @@ M68KMAKE_OP(bra, 32, ., .)
 M68KMAKE_OP(bset, 32, r, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (DX & 0x1f);
+	uint mask = 1u << (DX & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst |= mask;
@@ -3156,7 +3161,8 @@ M68KMAKE_OP(bset, 8, r, .)
 M68KMAKE_OP(bset, 32, s, d)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint mask = 1u << (OPER_I_8() & 0x1f);
+	if(CPU_TYPE_IS_000(CPU_TYPE) && (mask & 0xffff)) USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst |= mask;

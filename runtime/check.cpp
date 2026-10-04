@@ -2,6 +2,7 @@
 #include "f3rt/audio.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 
@@ -25,6 +26,65 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_sound_cycles(f3rt::Machine &m) {
+    struct Result { int cycles;uint32_t d0,a1;uint16_t sr; };
+    const auto execute = [&](std::initializer_list<uint16_t> instruction,uint32_t bit=0) {
+        m.audio->set_reset(true);
+        m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(0x4000,0);
+        uint32_t pc=0x1000;
+        const auto emit = [&](uint16_t word) { m.audio->write16(pc,word);pc+=2; };
+        for (uint16_t word : {uint16_t(0x7000),uint16_t(0x223c),uint16_t(bit>>16),uint16_t(bit),
+                              uint16_t(0x227c),uint16_t(0),uint16_t(0x4000),uint16_t(0x46fc),uint16_t(0x271b)})
+            emit(word);
+        for (auto word : instruction) emit(word);
+        // Save SR before the MOVE instructions used to observe D0/A1 change flags.
+        for (uint16_t word : {0x40f8,0x1508,0x21c0,0x1500,0x21c9,0x1504}) emit(word);
+        m.audio->set_reset(false);
+        for (int i=0;i<5;++i) m.interpreter->run_audio(1); // Reset plus register/SR setup.
+        const int cycles=m.interpreter->run_audio(1);
+        for (int i=0;i<3;++i) m.interpreter->run_audio(1);
+        const Result result{cycles,m.audio->read32(0x1500),m.audio->read32(0x1504),m.audio->read16(0x1508)};
+        m.audio->set_reset(true);
+        return result;
+    };
+    const auto quick=execute({0x5049});
+    require(quick.cycles==8 && quick.a1==0x4008 && quick.sr==0x271b,
+            "68000 ADDQ.W to an address register takes eight cycles and preserves flags");
+    require(execute({0x544f}).cycles==8,"68000 ADDQ.W stack adjustment has the same full cost");
+    require(execute({0xd2fc,10}).cycles==12 && execute({0x92fc,10}).cycles==12,
+            "68000 immediate word address arithmetic has no long-operand surcharge");
+    require(execute({0xd3fc,0,10}).cycles==16 && execute({0x93fc,0,10}).cycles==16,
+            "68000 immediate long address arithmetic retains its surcharge");
+    for (uint16_t family : {0xd000,0x9000,0xc000,0x8000}) {
+        require(execute({uint16_t(family|0x3c),1}).cycles==8 &&
+                execute({uint16_t(family|0x7c),1}).cycles==8 &&
+                execute({uint16_t(family|0xbc),0,1}).cycles==16,
+                "68000 immediate EA arithmetic charges byte, word and long operands distinctly");
+        require(execute({uint16_t(family|0x81)}).cycles==8,
+                "68000 long register arithmetic takes eight cycles");
+        if (family==0xd000 || family==0x9000)
+            require(execute({uint16_t(family|0x89)}).cycles==8,"68000 long arithmetic accepts address-register sources");
+    }
+    for (uint16_t opcode : {0xd3c0,0xd3c8,0x93c0,0x93c8})
+        require(execute({opcode}).cycles==8,"68000 long address arithmetic has an eight-cycle register cost");
+    const auto tas=execute({0x4ad1});
+    require(tas.cycles==14 && tas.sr==0x2714 && m.audio->read8(0x4000)==0x80,
+            "68000 memory TAS charges its read-modify-write once and reports the original byte");
+    require(execute({0x4ac0}).cycles==4 && execute({0x4ad9}).cycles==14 &&
+            execute({0x4ae1}).cycles==16 && execute({0x4ae9,16}).cycles==18 &&
+            execute({0x4af8,0x4000}).cycles==18 && execute({0x4af9,0,0x4000}).cycles==22,
+            "68000 TAS retains register and effective-address timing distinctions");
+    for (unsigned kind=1;kind<=3;++kind) for (unsigned bit : {0,2,15,16,31,32,47,48,63}) {
+        const int cycles=(kind==2?8:6)+((bit&31)>=16?2:0);
+        const uint32_t result=kind==2?0:1u<<(bit&31);
+        const auto reg=execute({uint16_t(0x0300|(kind<<6))},bit);
+        const auto immediate=execute({uint16_t(0x0800|(kind<<6)),uint16_t(bit)});
+        require(reg.cycles==cycles && immediate.cycles==cycles+4,
+                "68000 register bit mutations distinguish low/high halves after modulo-32 selection");
+        require(reg.d0==result && immediate.d0==result && reg.sr==0x271f && immediate.sr==0x271f,
+                "Bit timing preserves result, old-bit Z and untouched X/N/V/C flags");
+    }
+}
 void check_trap_cycles(f3rt::Machine &m) {
     const auto old_vbr=m.cpu.vbr;
     for (unsigned trap=0;trap<16;++trap) for (bool reference : {false,true}) {
@@ -177,6 +237,7 @@ int main() try {
     check_movem(*m);
     check_rotate_cycles(*m);
     check_trap_cycles(*m);
+    check_sound_cycles(*m);
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);

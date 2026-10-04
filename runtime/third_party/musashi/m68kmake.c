@@ -633,8 +633,8 @@ int get_oper_cycles(opcode_struct* op, int ea_mode, int cpu_type)
 				return op->cycles[cpu_type] + g_clr_cycle_table[ea_mode][size];
 		}
 
-		/* ASG: added these cases -- immediate modes take 2 extra cycles here */
-		if(cpu_type == CPU_TYPE_000 && ea_mode == EA_MODE_I &&
+		/* Only long immediate forms need this 68000 surcharge. */
+		if(cpu_type == CPU_TYPE_000 && op->size == 32 && ea_mode == EA_MODE_I &&
 		   ((strcmp(op->name, "add") == 0 && strcmp(op->spec_proc, "er") == 0) ||
 			strcmp(op->name, "adda")   == 0                                    ||
 			(strcmp(op->name, "and") == 0 && strcmp(op->spec_proc, "er") == 0) ||
