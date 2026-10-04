@@ -1,23 +1,78 @@
 #include "f3rt/rom.hpp"
 #include "f3rt/video.hpp"
+#include "f3rt/audio.hpp"
 #include "capture_io.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
 
+namespace {
+int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
+                 const std::filesystem::path &output) {
+    std::ifstream input(trace, std::ios::binary);
+    std::array<char, 8> magic{};
+    input.read(magic.data(), magic.size());
+    if (magic != std::array<char, 8>{'F','3','A','U','D','1',0,0})
+        throw std::runtime_error("Invalid F3 audio trace header");
+    f3rt::Audio audio;
+    audio.load_sample_rom(roms.samples);
+    f3rt::WavWriter wav(output, audio.sample_rate());
+    std::array<int16_t, 1024> samples{};
+    std::array<uint8_t, 16> record{};
+    uint64_t now = 0, writes = 0, frames = 0;
+    int peak = 0;
+    bool ended = false;
+    const auto little = [](const uint8_t *p, unsigned bytes) {
+        uint64_t value = 0;
+        for (unsigned i = 0; i < bytes; ++i) value |= uint64_t(p[i]) << (8 * i);
+        return value;
+    };
+    while (input.read(reinterpret_cast<char *>(record.data()), record.size())) {
+        const uint64_t at = little(record.data(), 8);
+        if (at < now) throw std::runtime_error("Audio trace time moved backwards");
+        while (now < at) {
+            const auto cycles = uint32_t(std::min<uint64_t>(at - now, 16000));
+            audio.advance(cycles);
+            now += cycles;
+            const size_t count = audio.render(samples.data(), samples.size() / 2);
+            wav.append(std::span(samples).first(count * 2));
+            frames += count;
+            for (size_t i = 0; i < count * 2; ++i) peak = std::max(peak, std::abs(int(samples[i])));
+        }
+        const auto address = uint32_t(little(record.data() + 8, 4));
+        const auto data = uint16_t(little(record.data() + 12, 2));
+        const auto mask = uint16_t(little(record.data() + 14, 2));
+        if (address == 0xffffffff) { ended = true; break; }
+        if (mask == 0xffff) audio.write16(address, data);
+        else {
+            if (mask & 0xff00) audio.write8(address, uint8_t(data >> 8));
+            if (mask & 0x00ff) audio.write8(address + 1, uint8_t(data));
+        }
+        ++writes;
+    }
+    if (!ended) throw std::runtime_error("Truncated audio trace: missing end timestamp");
+    std::cout << "audio_writes=" << writes << " frames=" << frames
+              << " sample_rate=" << audio.sample_rate() << " peak=" << peak << '\n';
+    return 0;
+}
+}
+
 int main(int argc, char **argv) try {
-    std::filesystem::path romdir, captures, output;
+    std::filesystem::path romdir, captures, output, audio_trace;
     for (int i=1;i<argc;++i) {
         const std::string arg=argv[i];
-        if ((arg=="--rom-dir" || arg=="--captures" || arg=="--output") && i+1<argc) {
+        if ((arg=="--rom-dir" || arg=="--captures" || arg=="--output" || arg=="--audio-trace") && i+1<argc) {
             const std::filesystem::path value=argv[++i];
             if(arg=="--rom-dir") romdir=value;
             if(arg=="--captures") captures=value;
             if(arg=="--output") output=value;
-        } else throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR --captures DIR --output DIR");
+            if(arg=="--audio-trace") audio_trace=value;
+        } else throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR (--captures DIR | --audio-trace FILE) --output PATH");
     }
-    if(romdir.empty() || captures.empty() || output.empty()) throw std::runtime_error("--rom-dir, --captures and --output are required");
+    if(romdir.empty() || output.empty() || (captures.empty() == audio_trace.empty()))
+        throw std::runtime_error("--rom-dir, --output and exactly one of --captures/--audio-trace are required");
     auto roms=f3rt::RomSet::load(romdir);
+    if (!audio_trace.empty()) return replay_audio(roms, audio_trace, output);
     f3rt::Video video;
     if(!video.load_roms(roms.sprites,roms.sprites_hi,roms.tiles,roms.tiles_hi)) throw std::runtime_error("Video ROM decode failed");
     std::vector<std::filesystem::path> frames;

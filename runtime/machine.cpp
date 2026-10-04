@@ -159,8 +159,9 @@ bool Machine::run_frame(bool translated) {
     while (frame < target && !cpu.halted) {
         if (translated) { if (!f3_dispatch(&cpu)) return false; }
         else if (!boundary()) {
-            const auto remaining = std::min(next_vblank, irq3_at) - cpu.cycles;
-            interpreter->run_main(int(std::min<uint64_t>(remaining, 512)));
+            // Reference execution must hand MMIO/IRQ changes back at every
+            // instruction boundary. Coarse slices alter the ROM boot checks.
+            interpreter->run_main(1);
         }
     }
     return !cpu.halted;

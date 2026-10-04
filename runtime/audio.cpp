@@ -9,6 +9,7 @@
 #include "third_party/audio/mc68681.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -45,8 +46,9 @@ struct Audio::Impl {
     MC68681 m_duart;
     MB87078 m_volume;
 
-    float m_gain_left;
-    float m_gain_right;
+    Audio::GainModel m_gain_model = Audio::GainModel::MameRouting;
+    std::array<float, 2> m_volume_gain{1.0f, 1.0f};
+    std::array<float, 2> m_otis_gain{}, m_output_gain{};
 
     bool m_reset_asserted;
     bool m_esp_halted = true;
@@ -71,8 +73,6 @@ struct Audio::Impl {
         , m_bank_mask(7)
         , m_shared_ram(nullptr)
         , m_shared_ram_size(0x800)
-        , m_gain_left(1.0f)
-        , m_gain_right(1.0f)
         , m_reset_asserted(true)
         , m_cpu_accum(0)
         , m_duart_accum(0)
@@ -90,14 +90,27 @@ struct Audio::Impl {
             m_esp_halted = (output_pins & 0x40) != 0;
         });
 
-        // Connect MB87078 gain change callback
+        // The baseline board mixer applies quantized MB87078 percent/32 gain
+        // both before ESP input and after the pump. Keep that observable model
+        // separate from a single analog attenuation stage.
+        update_gains();
         m_volume.set_gain_callback([this](int channel, float gain) {
-            if (channel == 2) {
-                m_gain_left = gain;
-            } else if (channel == 3) {
-                m_gain_right = gain;
+            if (channel >= 2) {
+                m_volume_gain[channel & 1] = gain;
+                update_gains();
             }
         });
+    }
+
+    void update_gains() {
+        for (unsigned channel = 0; channel < 2; ++channel) {
+            const float physical = m_volume_gain[channel];
+            const float route = float(int(physical * 100.0f + 0.5f)) / 32.0f;
+            m_otis_gain[channel] = 0.18f *
+                (m_gain_model == Audio::GainModel::MameRouting ? route : 1.0f);
+            m_output_gain[channel] =
+                m_gain_model == Audio::GainModel::MameRouting ? route : physical;
+        }
     }
 
 
@@ -127,14 +140,13 @@ struct Audio::Impl {
         int32_t cursample[ES5505::NUM_CHANNELS];
         m_es5505.generate_one_sample(cursample);
 
-        // ESQPUMP: route channels 2..7 to ES5510 serial inputs
-        // Normalized scale: cursample * 0.18 / 16.0
-        m_es5510.ser_w(0, clamp16(int32_t(cursample[2] * 0.18f / 16.0f)));
-        m_es5510.ser_w(1, clamp16(int32_t(cursample[3] * 0.18f / 16.0f)));
-        m_es5510.ser_w(2, clamp16(int32_t(cursample[4] * 0.18f / 16.0f)));
-        m_es5510.ser_w(3, clamp16(int32_t(cursample[5] * 0.18f / 16.0f)));
-        m_es5510.ser_w(4, clamp16(int32_t(cursample[6] * 0.18f / 16.0f)));
-        m_es5510.ser_w(5, clamp16(int32_t(cursample[7] * 0.18f / 16.0f)));
+        // ES5505 has a signed 20-bit accumulator. Clamp at its output before
+        // applying board gain, then quantize only the six serial DSP inputs.
+        float channels[ES5505::NUM_CHANNELS];
+        for (unsigned i = 0; i < ES5505::NUM_CHANNELS; ++i)
+            channels[i] = std::clamp(float(cursample[i]) / 524288.0f, -1.0f, 1.0f) * m_otis_gain[i & 1];
+        for (unsigned i = 0; i < 6; ++i)
+            m_es5510.ser_w(i, int16_t(int32_t(channels[i + 2] * 32768.0f)));
 
         if (!m_esp_halted) {
             m_es5510.run_once();
@@ -144,13 +156,10 @@ struct Audio::Impl {
         int16_t main_l = m_es5510.ser_r(6);
         int16_t main_r = m_es5510.ser_r(7);
 
-        // Aux L / Aux R directly from ES5505 channels 0 & 1
-        int16_t aux_l = clamp16(int32_t(cursample[0] * 0.18f / 16.0f));
-        int16_t aux_r = clamp16(int32_t(cursample[1] * 0.18f / 16.0f));
-
-        // Output mixer: 0.5 * Main + 0.5 * Aux with volume gain applied
-        float out_l = (float(main_l) * 0.5f + float(aux_l) * 0.5f) * m_gain_left / 32768.0f;
-        float out_r = (float(main_r) * 0.5f + float(aux_r) * 0.5f) * m_gain_right / 32768.0f;
+        // Aux bypasses ESP and retains floating precision, as in the baseline
+        // mixer; the main route comes from the DSP's signed 16-bit output.
+        const float out_l = (float(main_l) / 32768.0f + channels[0]) * 0.5f * m_output_gain[0];
+        const float out_r = (float(main_r) / 32768.0f + channels[1]) * 0.5f * m_output_gain[1];
 
         push_frame(out_l, out_r);
     }
@@ -176,11 +185,12 @@ struct Audio::Impl {
             m_duart.advance(duart_cycles);
         }
 
-        // 3. Advance ES5505 sample generation
-        m_sample_accum += uint64_t(main_cycles) * 15238090ULL;
-        uint64_t clocks_per_sample = uint64_t(16 * (m_es5505.active_voices() + 1)) * 16000000ULL;
-        while (m_sample_accum >= clocks_per_sample) {
-            m_sample_accum -= clocks_per_sample;
+        // Use the same integer stream rate advertised to SDL/WAV consumers.
+        // A rational crystal divider here drifts against both that metadata
+        // and the baseline's integer-rate OTIS stream (~30 ppm at 32 voices).
+        m_sample_accum += uint64_t(main_cycles) * m_es5505.sample_rate();
+        while (m_sample_accum >= 16000000ULL) {
+            m_sample_accum -= 16000000ULL;
             generate_one_frame();
         }
     }
@@ -561,6 +571,11 @@ void Audio::advance(uint32_t main_cycles) {
 
 uint32_t Audio::sample_rate() const {
     return m_impl->m_es5505.sample_rate();
+}
+
+void Audio::set_gain_model(GainModel model) {
+    m_impl->m_gain_model = model;
+    m_impl->update_gains();
 }
 
 size_t Audio::available_frames() const {

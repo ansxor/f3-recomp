@@ -10,6 +10,7 @@ namespace f3rt {
 
 class Audio {
 public:
+    enum class GainModel { MameRouting, SingleStage };
     Audio();
     ~Audio();
 
@@ -57,6 +58,9 @@ public:
     size_t available_frames() const;
     size_t render(int16_t *interleaved_stereo, size_t max_frames);
     size_t render(float *interleaved_stereo, size_t max_frames);
+    // Default matches the observed MAME board mix; SingleStage is an explicit
+    // unverified analog-gain experiment, not an asserted board schematic.
+    void set_gain_model(GainModel model);
 
 private:
     struct Impl;

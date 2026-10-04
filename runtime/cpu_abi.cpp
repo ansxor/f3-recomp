@@ -36,7 +36,14 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     f3_write16(cpu, cpu->a[7] + 6, uint16_t((format2 ? 0x2000 : 0) | (vector * 4)));
     if (format2) f3_write32(cpu, cpu->a[7] + 8, instruction_pc);
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
-    cpu->cycles += 30;
+    // Full exception charge, matching the pinned 68EC020 timing model.
+    // Generated instructions must not add their normal base charge on this path.
+    static constexpr uint8_t system_cycles[16] = {
+        4, 4, 50, 50, 20, 38, 40, 20, 34, 25, 20, 20, 4, 4, 4, 30
+    };
+    cpu->cycles += vector < 16 ? system_cycles[vector]
+        : vector >= 24 && vector < 32 ? 30
+        : vector >= 32 && vector < 48 ? 20 : 4;
 }
 void f3_reset_devices(f3_cpu *cpu) { machine(cpu).reset_devices(); }
 int f3_boundary(f3_cpu *cpu) { return machine(cpu).boundary(); }

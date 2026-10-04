@@ -17,7 +17,6 @@ namespace {
 constexpr int H_TOTAL = 432;
 constexpr int H_VIS   = 320;
 constexpr int H_START = 46;
-constexpr int V_TOTAL = 262;
 constexpr int V_VIS   = 232;
 constexpr int V_START = 24;
 
@@ -206,52 +205,50 @@ struct tempsprite {
     uint8_t pri = 0;
 };
 
-std::vector<clip_plane_inf> calc_clip(const clip_plane_inf clip[NUM_CLIPPLANES], const mixable &layer) {
+struct clip_ranges {
+    // Each of four planes can at most split every preceding interval in two.
+    std::array<clip_plane_inf, 1 << NUM_CLIPPLANES> values;
+    size_t count = 0;
+    const clip_plane_inf *begin() const { return values.data(); }
+    const clip_plane_inf *end() const { return values.data() + count; }
+};
+
+clip_ranges calc_clip(const clip_plane_inf clip[NUM_CLIPPLANES], const mixable &layer) {
     constexpr int16_t INF_L = H_START;
     constexpr int16_t INF_R = H_START + H_VIS;
-
     uint8_t normal_planes = layer.clip_enable() & ~layer.clip_inv();
     uint8_t invert_planes = layer.clip_enable() & layer.clip_inv();
-    if (!layer.clip_inv_mode()) {
-        std::swap(normal_planes, invert_planes);
-    }
+    if (!layer.clip_inv_mode()) std::swap(normal_planes, invert_planes);
 
-    std::vector<clip_plane_inf> ranges{ clip_plane_inf{ INF_L, INF_R } };
-    std::vector<clip_plane_inf> new_ranges;
-
+    clip_ranges ranges;
+    ranges.values[ranges.count++] = {INF_L, INF_R};
     for (int plane = 0; plane < NUM_CLIPPLANES; ++plane) {
         const int16_t clip_l = clip[plane].l - 1;
         const int16_t clip_r = clip[plane].r - 2;
-
         if (normal_planes & (1 << plane)) {
-            for (auto it = ranges.begin(); it != ranges.end(); ) {
-                if (clip_l > clip_r || it->r < clip_l || it->l > clip_r) {
-                    it = ranges.erase(it);
-                } else {
-                    it->l = std::max(it->l, clip_l);
-                    it->r = std::min(it->r, clip_r);
-                    ++it;
-                }
+            size_t kept = 0;
+            for (auto range : ranges) {
+                if (clip_l <= clip_r && range.r >= clip_l && range.l <= clip_r)
+                    ranges.values[kept++] = {std::max(range.l, clip_l), std::min(range.r, clip_r)};
             }
-        } else if ((invert_planes & (1 << plane)) && (clip_l <= clip_r)) {
-            new_ranges.reserve(2 * ranges.size());
-            new_ranges.insert(new_ranges.end(), ranges.size(), clip_plane_inf{ INF_L, clip_l });
-            new_ranges.insert(new_ranges.end(), ranges.size(), clip_plane_inf{ clip_r, INF_R });
-
-            for (auto it = new_ranges.begin(); it != new_ranges.end(); ) {
-                auto n = std::next(it);
+            ranges.count = kept;
+        } else if ((invert_planes & (1 << plane)) && clip_l <= clip_r) {
+            clip_ranges next;
+            for (size_t i = 0; i < 2 * ranges.count; ++i) {
+                clip_plane_inf candidate = i < ranges.count
+                    ? clip_plane_inf{INF_L, clip_l} : clip_plane_inf{clip_r, INF_R};
+                bool keep = true;
                 for (const auto &range : ranges) {
-                    it->l = std::max(range.l, it->l);
-                    it->r = std::max(range.l, it->r);
-                    if (it->l >= it->r) {
-                        n = new_ranges.erase(it);
-                        break;
-                    }
+                    // Preserve the observed baseline's inverted-plane combining
+                    // rule; the hardware notes still investigate this case.
+                    candidate.l = std::max(range.l, candidate.l);
+                    candidate.r = std::max(range.l, candidate.r);
+                    if (candidate.l >= candidate.r) { keep = false; break; }
                 }
-                it = n;
+                if (keep) next.values[next.count++] = candidate;
             }
-            ranges = std::move(new_ranges);
-            new_ranges.clear();
+            std::copy_n(next.values.begin(), next.count, ranges.values.begin());
+            ranges.count = next.count;
         }
     }
     return ranges;
@@ -809,7 +806,7 @@ struct Video::Impl {
         }
     }
 
-    void generate_pixel_line(int y, const uint8_t *textram, const uint8_t *pivot_ram) {
+    void generate_pixel_line(int y, const uint8_t *textram) {
         if (pivot_line.last_y == y)
             return;
         pivot_line.last_y = y;
@@ -873,7 +870,9 @@ struct Video::Impl {
                         const clip_plane_inf &range,
                         const uint16_t *src,
                         const uint8_t *flags) {
-        for (int x = range.l; x < range.r; ++x) {
+        const int left = std::max<int>(range.l, H_START);
+        const int right = std::min<int>(range.r, H_START + H_VIS);
+        for (int x = left; x < right; ++x) {
             if (gfx.blend_mode == pri.src_blendmode[x])
                 continue;
 
@@ -1040,10 +1039,17 @@ struct Video::Impl {
                 &line_data.sp[1], &line_data.pf[1]
             };
 
-            std::stable_sort(layers.begin(), layers.end(),
-                [](const mixable *a, const mixable *b) {
-                    return a->prio > b->prio;
-                });
+            // Nine elements: stable insertion sort avoids stable_sort's
+            // temporary heap allocation on every scanline.
+            for (size_t i = 1; i < layers.size(); ++i) {
+                auto *layer = layers[i];
+                size_t j = i;
+                while (j && layers[j - 1]->prio < layer->prio) {
+                    layers[j] = layers[j - 1];
+                    --j;
+                }
+                layers[j] = layer;
+            }
 
             if (screen_y >= V_START && screen_y < (V_START + V_VIS)) {
                 for (auto *layer : layers) {
@@ -1052,7 +1058,7 @@ struct Video::Impl {
                             auto clip_ranges = calc_clip(line_data.clip, line_data.pivot);
                             int line_y = line_data.pivot.y_index(line_data.y);
                             if (line_data.pivot.use_pix()) {
-                                generate_pixel_line(line_y, textram, pivot_ram);
+                                generate_pixel_line(line_y, textram);
                                 for (const auto &clip : clip_ranges) {
                                     mix_line_layer(line_data.pivot, line_buf, line_pri, line_data, clip,
                                                    pivot_line.pix.data(), pivot_line.flags.data());
@@ -1065,7 +1071,8 @@ struct Video::Impl {
                                 }
                             }
                         }
-                    } else if (layer >= &line_data.sp[0] && layer <= &line_data.sp[3]) {
+                    } else if (layer == &line_data.sp[0] || layer == &line_data.sp[1] ||
+                               layer == &line_data.sp[2] || layer == &line_data.sp[3]) {
                         auto &sp = static_cast<sprite_inf&>(*layer);
                         if (sp.layer_enable() && is_used(sp, screen_y)) {
                             auto clip_ranges = calc_clip(line_data.clip, sp);
