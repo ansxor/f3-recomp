@@ -46,8 +46,8 @@ little-endian Python `struct` format `<QQIIIBB2x`:
 | pc, u32 | Sound instruction PPC or main writer PC |
 | address, u32 | Original bus address |
 | value, u32 | Actual read result or write operand |
-| kind, u8 | 1 main write, 2 sound read, 3 sound write, 4 board reset, 5 end |
-| width, u8 | Bus bytes 1/2/4; zero for reset/end |
+| kind, u8 | 1 main write, 2 sound read, 3 sound write, 4 board reset, 5 end; 6 voice-context marker, 7 RAM snapshot, 8 allocated note, 9 direct-note operand, 10 note-event pointer |
+| width, u8 | Bus bytes 1/2/4; zero for metadata/reset/end |
 
 Sound MMIO reads/writes and main mailbox/reset writes are retained, including
 repeated writes. Long sound transfers decode to two ordered word transfers at
@@ -61,6 +61,45 @@ voice write. `voice_start` means an observed stopped-to-running CR transition,
 including silent startup probes; it is not automatically an audible note.
 `--notes-only` is an onset projection, **not** a substitute for the full
 pitch/filter/envelope stream. A voice continues to change between note starts.
+
+### Command ownership, not nearest-event matching
+
+Main `$2fde` copies length-prefixed packets into the 1024-byte ring at
+`$c00000`, wrapping with `& $3ff`. Main `$3270` copies lists of these packets.
+The big-endian producer word at main `$c00480` is **twice** the byte index.
+Sound sees even byte lanes: producer `$140900`, consumer `$140904`, ring
+`$140000..$1407fe`. `$c11116` reads packet length; `$c11128` reads opcode.
+`$c11146..$c11150` advances/wraps the consumer at `$800` and publishes it
+with MOVEP. Length includes the length and opcode bytes.
+
+Consumption posts a task message carrying the ring offset. Actual dispatch
+is later: `$c12ecc` for high commands, `$c0b414` for effects commands.
+The decoder follows both queues by ring offset and occurrence; it does not
+attribute an onset to the most recently submitted packet.
+
+`$8e` operands are `[sequence, logical_track, key, velocity]`. Its handler
+at `$c130ea` writes the key at `$c130f0` and branches to the note factory
+`$c140d6`. At `$c140e4`, A5 is the allocated note node, A1 the owning
+channel, A6 the track. The voice initializer copies that node to voice
+`+$0e`; it copies the channel pointer to `+$10`. Music notes use the same
+factory but are owned by the sequence-start command, not the last control
+command. Channel `+$0e` points to `$5e5c + sequence * $28`.
+
+The optional observer snapshots **work RAM only** at note allocation and
+voice programming/key-on. JSON `driver.origin` includes the stable note ID,
+originating command ID, sequence, logical track, key and velocity. Reusing a
+RAM node or stealing a hardware voice does not retroactively change old
+events. Raw voice/channel/sample-descriptor snapshots preserve evidence for
+fields whose semantics are not yet established. Command IDs identify note
+origin; subsequent volume/program/control commands remain separate timeline
+events, not falsely relabeled as new note initiators.
+
+Seed 5/frame 6000: **852 published, consumed and dispatched commands**;
+1,639 note allocations; all **2,202 non-startup voice starts** have an
+originating command. 277 are direct `$8e` notes, 1,925 are sequenced voice
+starts. The other two starts are silent initialization probes. The augmented
+capture still produces the same WAV bytes as the untraced run.
+
 
 ### Voice fields
 
