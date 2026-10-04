@@ -274,6 +274,24 @@ def _extract_script_callbacks(rom: bytes, md: capstone.Cs, spec: dict) -> set[in
         if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217c and \
                 int.from_bytes(rom[pc + 6:pc + 8], "big") == field:
             roots.append(int.from_bytes(rom[pc + 2:pc + 6], "big"))
+        # MOVE.L d8(PC,Xn),d16(An): a bounded array of script pointers.
+        if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217b and \
+                int.from_bytes(rom[pc + 4:pc + 6], "big") == field:
+            extension = int.from_bytes(rom[pc + 2:pc + 4], "big")
+            if extension & 0x100:
+                continue  # Full-format addressing needs separate metadata.
+            table = pc + 2 + int.from_bytes(rom[pc + 3:pc + 4], "big", signed=True)
+            for offset in range(64):
+                entry = table + offset * 4
+                if entry < 0 or entry + 4 > len(rom):
+                    break
+                target = int.from_bytes(rom[entry:entry + 4], "big")
+                if target < 0x400 or target + 2 > len(rom) or target & 1:
+                    break
+                operation = int.from_bytes(rom[target:target + 2], "big")
+                if operation >= len(lengths) or lengths[operation] < 0:
+                    break
+                roots.append(target)
     roots.extend(spec.get("entry_points", []))
     visited, callbacks = set(), set()
     while roots:
@@ -433,6 +451,13 @@ def discover(rom: bytes, config: dict) -> Discovery:
         if isinstance(jt, dict) and "address" in jt:
             addr = _parse_int_address(jt["address"])
             targets = [_parse_int_address(t) for t in jt.get("targets", [])]
+            if "table" in jt:
+                table = _parse_int_address(jt["table"])
+                count = int(jt["count"])
+                if count < 0 or table < 0 or table + count * 4 > len(rom):
+                    raise ValueError(f"Jump table outside ROM: {table:#x}, count {count}")
+                targets.extend(int.from_bytes(rom[p:p + 4], "big")
+                               for p in range(table, table + count * 4, 4))
             explicit_jump_tables[addr] = targets
 
     # 5. Task spawn targets (trap #1)

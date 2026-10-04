@@ -83,6 +83,13 @@ jump_opcode = 5
 call_opcode = 9
 return_opcode = 10
 
+# Actor types 1..60: $3a76 indexes this initializer table, then JSR (A1).
+# These include player and enemy init paths not exercised by attract mode.
+[[discovery.jump_tables]]
+address = 0x003a88
+table = 0x0d0de4
+count = 60
+
 [[discovery.jump_tables]]
 address = 0x000c42
 targets = [0x000c46, 0x000c48]
