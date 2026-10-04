@@ -5,6 +5,8 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
+#include "f3rt/block_profile.h"
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -14,6 +16,9 @@ namespace f3rt {
 SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
                          std::span<const f3_excluded_range> excluded)
     : m_machine(machine), m_blocks(blocks), m_excluded(excluded)
+#ifdef F3_PROFILE_SLIM_ENABLED
+    , m_block_count(block_count)
+#endif
 {
     const auto &rom_bytes = m_machine.roms.sound;
     uint32_t crc = crc32(rom_bytes.data(), rom_bytes.size());
@@ -36,6 +41,24 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
         excluded_words += (range.end - range.start) / 2;
         previous_end = range.end;
     }
+#ifdef F3_PROFILE_SLIM_ENABLED
+    if (!blocks || !block_count || block_count > ROM_SIZE / 2 - excluded_words)
+        throw std::runtime_error("SoundNative requires a nonempty retained ROM exclusion complement");
+    size_t excluded_index = 0;
+    for (size_t index = 0; index < block_count; ++index) {
+        const auto &block = blocks[index];
+        if (!block.execute || (block.address & 1u) ||
+            block.address < ROM_BASE || block.address >= ROM_BASE + ROM_SIZE ||
+            (index && blocks[index - 1].address >= block.address))
+            throw std::runtime_error("Invalid profile-slim sound ROM table");
+        while (excluded_index < m_excluded.size() &&
+               m_excluded[excluded_index].end <= block.address)
+            ++excluded_index;
+        if (excluded_index < m_excluded.size() &&
+            block.address >= m_excluded[excluded_index].start)
+            throw std::runtime_error("SoundNative: retained sound ROM entry is excluded");
+    }
+#else
     if ((!blocks && block_count) || block_count != ROM_SIZE / 2 - excluded_words)
         throw std::runtime_error("SoundNative requires the exact aligned ROM exclusion complement");
     size_t index = 0;
@@ -51,6 +74,7 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
         if (blocks[index].address != next_pc || !blocks[index].execute)
             throw std::runtime_error("SoundNative: missing or unsorted aligned ROM entry");
     }
+#endif
 }
 
 SoundNative::~SoundNative() = default;
@@ -238,17 +262,23 @@ void SoundNative::check_interrupts() {
 }
 
 size_t SoundNative::block_index(uint32_t pc) const {
+    // Test the physical bus address first, including odd and upper-byte aliases.
+    const uint32_t physical_pc = pc & 0x00ffffffu;
+#ifndef F3_PROFILE_SLIM_ENABLED
     size_t removed_words = 0;
+#endif
     for (const auto &range : m_excluded) {
-        if (pc < range.start) break;
-        if (pc < range.end) {
+        if (physical_pc < range.start) break;
+        if (physical_pc < range.end) {
             char prefix[128];
             snprintf(prefix, sizeof(prefix),
                      "SoundNative: fatal excluded reachable PC 0x%08x in [0x%08x, 0x%08x): ",
                      pc, range.start, range.end);
             throw std::runtime_error(std::string(prefix) + range.reason);
         }
+#ifndef F3_PROFILE_SLIM_ENABLED
         removed_words += (range.end - range.start) / 2;
+#endif
     }
     if (pc < ROM_BASE || pc >= ROM_BASE + ROM_SIZE || (pc & 1u)) {
         char buf[128];
@@ -256,11 +286,22 @@ size_t SoundNative::block_index(uint32_t pc) const {
                  pc, (pc & 1u) ? "odd address" : "outside sound ROM");
         throw std::runtime_error(buf);
     }
+#ifdef F3_PROFILE_SLIM_ENABLED
+    const auto *end = m_blocks + m_block_count;
+    const auto *entry = std::lower_bound(m_blocks, end, pc,
+        [](const f3_block &block, uint32_t address) { return block.address < address; });
+    return entry != end && entry->address == pc ? size_t(entry - m_blocks) : m_block_count;
+#else
     return ((pc - ROM_BASE) >> 1) - removed_words;
+#endif
 }
 
 void SoundNative::dispatch_one() {
     const size_t index = block_index(m_cpu.pc);
+#ifdef F3_PROFILE_SLIM_ENABLED
+    if (index == m_block_count)
+        f3_profile_cold_abort(F3_PROFILE_SOUND, 0x5a7e9117u, m_cpu.pc);
+#endif
     ++m_instruction_count;
     m_blocks[index].execute(&m_cpu);
 }

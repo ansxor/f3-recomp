@@ -7,6 +7,7 @@
 #include "capture_io.hpp"
 #include "video_scale.hpp"
 #include "gpu_interp.hpp"
+#include "block_profile.hpp"
 #ifdef F3RT_GPU
 #include "gpu_video.hpp"
 #include "f3rt/video.hpp"
@@ -80,7 +81,7 @@ void netplay_key(f3rt::netplay::InputWord &word, SDL_Scancode code, bool pressed
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
-    std::filesystem::path sound_trace_path;
+    std::filesystem::path sound_trace_path,profile_path;
     std::string set="landmakrj";
     std::string video_mode="fdp";
     bool video_explicit=false;
@@ -115,6 +116,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--eeprom")eeprom=value();
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--sound-trace")sound_trace_path=value();
+        else if(arg=="--profile-out")profile_path=value();
         else if(arg=="--sound-driver") { sound_driver=value();sound_explicit=true; }
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
@@ -165,6 +167,7 @@ int main(int argc,char **argv) try {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
+                     <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
@@ -222,9 +225,18 @@ int main(int argc,char **argv) try {
     if(netplay && (!translated || allow_fallback || video_mode!="game" || video_options.expanded() || automatic_scale ||
                    sound_driver!="native" || !eeprom.empty() || !sound_trace_path.empty() || !fallback_report.empty()))
         throw std::runtime_error("Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled");
+#ifdef F3_PROFILE_SLIM_ENABLED
+    if(allow_fallback || !translated || sound_driver!="native")
+        throw std::runtime_error("Profile-slim requires strict native main and sound CPUs; no interpreter fallback");
+#endif
+#ifdef F3_PROFILE_INSTRUMENT
+    if(!profile_path.empty() && (!translated || allow_fallback || sound_driver!="native"))
+        throw std::runtime_error("Profiling requires strict native main and sound CPUs");
+#endif
     if(netplay && frames>=UINT32_MAX-1024u)throw std::runtime_error("Netplay frame limit exceeds protocol range");
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
+    f3rt::BlockProfileSession profile(m.roms,profile_path);
     if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     if(sound_driver=="native") {
 #ifdef F3RT_SOUND_GENERATED
@@ -316,6 +328,7 @@ int main(int argc,char **argv) try {
     uint64_t scale_changes=0;
 #endif
     while(!quit && ((!frames || m.frame<frames) || (transport && !transport->finished()))) {
+        profile.tick();
         if(!headless) {
             SDL_Event event;
             while(SDL_PollEvent(&event)) {
@@ -478,6 +491,7 @@ int main(int argc,char **argv) try {
     if(rollback)std::cout<<"netplay_confirmed="<<rollback->confirmed_frame()<<" state_crc="<<m.state_crc()
         <<" rollbacks="<<rollback->rollback_count()<<" max_rollback_depth="<<rollback->maximum_rollback_depth()<<'\n';
     if(m.sound_trace)m.sound_trace->finish(m);
+    profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
              <<" sound_driver="<<sound_driver
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec

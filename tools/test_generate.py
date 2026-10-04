@@ -19,7 +19,7 @@ class DeadlineTests(unittest.TestCase):
         code = bytes.fromhex("70ff52407201")
         instructions = {insn.address: insn for insn in decoder.disasm(code, 0x400)}
         discovery = SimpleNamespace(instructions=instructions,
-                                    blocks={0x400: list(instructions)}, report={})
+                                    blocks={0x400: list(instructions)}, invalid_pcs=[], report={})
         root = Path(__file__).resolve().parent.parent
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

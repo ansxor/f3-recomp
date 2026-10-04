@@ -1,5 +1,6 @@
 #include "f3rt/cpu_abi.h"
 #include "f3rt/machine.hpp"
+#include "f3rt/block_profile.h"
 #include <algorithm>
 
 namespace {
@@ -114,6 +115,17 @@ int f3_dispatch(f3_cpu *cpu) {
             return !cpu->halted;
         }
     }
+#ifdef F3_PROFILE_SLIM_ENABLED
+    // ABI 3 exclusions take precedence over opt-in slim misses, including
+    // odd PCs and 24-bit aliases; fallback rejects them before interpretation.
+    const uint32_t physical_pc = cpu->pc & 0xffffffu;
+    for (const auto &range : m.excluded_code) {
+        if (physical_pc < range.start) break;
+        if (physical_pc < range.end) return f3_fallback(cpu);
+    }
+    f3_profile_cold_abort(F3_PROFILE_MAIN,
+        f3rt::crc32(m.roms.main.data(), m.roms.main.size()), cpu->pc);
+#endif
     return f3_fallback(cpu);
 }
 int f3_fallback(f3_cpu *cpu) { return machine(cpu).fallback(); }

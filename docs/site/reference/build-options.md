@@ -29,6 +29,9 @@ Set a cache variable with `-DNAME=value` on the `cmake` command line.
 | `F3_ROM_DIR` | path | empty | Directory with the Land Maker Japan ROM files. If set, CMake runs the recompiler and the sound compiler at configure time. |
 | `F3_GENERATED_DIR` | path | empty | Directory with a generated program (`sources.cmake` and C files). If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/landmakrj`. |
 | `F3_SOUND_GENERATED_DIR` | path | empty | Directory with a generated sound program. If you set `F3_ROM_DIR` and leave this empty, CMake uses `BUILD_DIR/generated/sound-landmakrj`. |
+| `F3_PROFILE_INSTRUMENT` | option | `OFF` | Compile allocation-free per-entry main/sound hit counters. Requires `F3_ROM_DIR` to regenerate both CPUs; `--profile-out FILE` enables recording with 30-second and exit flushes. |
+| `F3_PROFILE_TIERS` | filepath | empty | Full-coverage profile partition: hot generated units `-O2`, cold units `-Oz` on Clang or `-Os` otherwise. Requires ROM generation and a matching versioned profile. |
+| `F3_PROFILE_SLIM` | filepath | empty | Explicit opt-in removal of unprofiled main/sound code. Missing entries abort loudly with address, ROM CRC, re-profile hint and cold-hit record; no interpreter fallback. Mutually exclusive with tiers. |
 | `BUILD_TESTING` | option | `ON` (from `include(CTest)`) | Build `f3rt-check` and register the CTest test. |
 
 Other standard CMake variables, such as `CMAKE_BUILD_TYPE` and `CMAKE_C_FLAGS`, also change the build. The netplay build identity includes them. See below.
@@ -43,6 +46,16 @@ Other standard CMake variables, such as `CMAKE_BUILD_TYPE` and `CMAKE_C_FLAGS`, 
 cmake -S . -B build -DF3_ROM_DIR=/path/to/roms/landmakrj -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
+
+### Execution-profile builds
+
+Use separate build directories for instrumentation, full-coverage tiers and slim.
+Collect with both native CPUs; merge independent output paths with
+`python3 tools/block_profile.py merge --output profiles/landmakrj.profile RUN.profile ...`.
+Profiles contain identities, addresses and counts, never ROM bytes. The generated
+inventories and `tools/block_profile.py report` distinguish executable entry
+addresses from packed host functions. A gameplay profile is evidence of observed
+execution, not proof that the remaining code can never execute.
 
 ### What happens at configure time with F3_ROM_DIR
 
@@ -61,7 +74,7 @@ The game config is fixed to `games/landmakrj/config.toml` in the top-level `CMak
 | `f3rt_m68kmake` | executable | always | `runtime/third_party/musashi/m68kmake.c` | none |
 | `f3rt_musashi_generated` | custom target | always | Runs `f3rt_m68kmake` on `m68k_in.c`. Writes `m68kops.c` and `m68kops.h` in `BUILD_DIR/musashi`. | depends on `f3rt_m68kmake` |
 | `f3rt_musashi` | static library | always | Musashi `m68kcpu.c`, `softfloat/softfloat.c`, generated `m68kops.c`, `runtime/core_state.c` | none. Depends on `f3rt_musashi_generated`. |
-| `f3rt` | static library | always | `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `video.cpp`, `game_video.cpp`, `game_tiles.cpp`, `game_text.cpp`, `game_sprites.cpp`, `game_lines.cpp`, `game_compositor.cpp`, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` (all in `runtime/`), every `runtime/third_party/audio/*.cpp`, and `BUILD_DIR/netplay_build.hpp` | `f3rt_musashi` |
+| `f3rt` | static library | always | `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `video.cpp`, `game_video.cpp`, `game_tiles.cpp`, `game_text.cpp`, `game_sprites.cpp`, `game_lines.cpp`, `game_compositor.cpp`, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `block_profile.cpp`, `netplay.cpp`, `netplay_transport.cpp` (all in `runtime/`), every `runtime/third_party/audio/*.cpp`, and `BUILD_DIR/netplay_build.hpp` | `f3rt_musashi` |
 | `f3_sound_recompiled` | static library | `F3_SOUND_GENERATED_DIR` is set | `F3_SOUND_GENERATED_SOURCES` from the `sources.cmake` file of the sound output | `f3rt` (PUBLIC) |
 | `f3_recompiled` | static library | `F3_GENERATED_DIR` is set (defined in `recomp/CMakeLists.txt`) | `F3_GENERATED_SOURCES` from the `sources.cmake` file of the program output | none |
 | `f3rt-sound-extract` | executable | always | `tools/sound_extract.cpp` | `f3rt` |
@@ -132,6 +145,7 @@ The hash is the SHA-256 of one string. The string contains these parts, in order
 - A custom command runs `tools/netplay_build_id.cmake` in script mode (`cmake -P`) at build time. The command depends on all the files above. A change to a runtime file updates the hash without a new configure step and without a new run of the recompiler.
 - The script does not write the header again if the content is equal. This avoids needless recompiling.
 - The ROM content is not in the hash directly. But the generated C files come from the ROM, so a different ROM gives a different hash.
+- Profile instrumentation, full/tier/slim mode and the selected cold optimization flag participate in the compiler/options identity. Profile paths do not; retained generated C content already identifies the selected addresses.
 
 ::: tip
 Two machines with different compilers build different hashes. This is on purpose. Floating-point and compiler differences can break determinism. Players who want to play together must use the same build artifacts.

@@ -12,6 +12,15 @@ target_include_directories(f3_recompiled PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/../include"
     "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${F3_GENERATED_DIR}")
+if(F3_PROFILE_INSTRUMENT)
+    target_compile_definitions(f3_recompiled PRIVATE F3_PROFILE_INSTRUMENT=1)
+endif()
+if(F3_PROFILE_TIERS)
+    set_source_files_properties(${F3_GENERATED_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS -O2)
+    if(F3_GENERATED_COLD_SOURCES)
+        set_source_files_properties(${F3_GENERATED_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${F3_PROFILE_COLD_OPT}")
+    endif()
+endif()
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(f3_recompiled PRIVATE -Wall -Wextra -Werror)
 endif()

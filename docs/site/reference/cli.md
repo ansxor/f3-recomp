@@ -75,6 +75,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--wav` | `FILE` | none | Write the generated audio to a 16-bit stereo WAV file | The sample rate is the rate of the audio core. |
 | `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Netplay rejects this flag. Decode the trace with `tools/decode_sound.py`. |
 | `--sound-driver` | `oracle` or `native` | See the table above | Choose the sound CPU implementation | `oracle` runs the interpreted 68000 sound driver. `native` runs the recompiled driver. `native` needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. |
+| `--profile-out` | `FILE` | none | Merge versioned main/sound entry counts, atomically flush every 30 seconds and on exit | Requires `F3_PROFILE_INSTRUMENT=ON` and strict native main/sound execution. Relative destinations are fixed against the startup working directory, including after later cwd changes. Slim builds also accept it for immediate `miss` records; cold aborts always append a durable `.cold-hits` log (or `f3-cold-hits.log` without this flag). Concurrent writers must use separate paths and merge later. |
 | `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used the fallback | Netplay rejects this flag. |
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
 | `--dump-start` | `N` | `1` | First frame to dump | |
@@ -108,6 +109,7 @@ The program checks these rules in this order.
 7. The video filter must be `nearest` or `linear`.
 8. In `fdp` mode, a scale other than 1, a border other than 0, or the filter `linear` is an error: `Presentation enhancements require --video game or compare`.
 9. In netplay mode, the server and the room must be set.
+10. Instrumented collection requires strict native main and sound CPUs. Profile-slim rejects interpreter execution, `--allow-fallback` and oracle sound.
 
 ### Netplay mode rules
 
@@ -202,6 +204,7 @@ This program runs the strict native game for many frames with a seeded input sch
 | `--sound-trace` | `FILE` | none | Record the sound CPU and mailbox bus events | |
 | `--sound-driver` | `oracle` or `native` | `oracle` | Sound CPU implementation | Unlike the frontend, the default does not change when the sound program is generated. `native` needs `F3RT_SOUND_GENERATED`. |
 | `--wav` | `FILE` | none | Save the audio | |
+| `--profile-out` | `FILE` | none | Merge actual generated main/sound entry counts, with periodic and exit flush | Requires instrumentation and `--sound-driver native`; one file per concurrent collector. |
 | `--video-diff` | none | off | Compare the game-data renderer with the FDP renderer | Starts at frame 600. |
 | `--video-layer-mask` | `N` | `511` | Layers to compare | Bits 0 to 3: playfields. Bits 4 to 7: sprites. Bit 8: text. A value of `0` or a value above `511` is an error. Accepts `0x` hex. |
 | `--video-diff-every` | `N` | `120` | Compare every N frames | `0` is an error. |
@@ -347,6 +350,8 @@ python3 -m recomp emit --config games/landmakrj/config.toml --rom-dir roms/landm
 | `--rom-dir` | `DIR` | none | Directory with the ROM lane files | Required. |
 | `--output` | `DIR` | none | Output directory | Required. The program creates it. |
 | `--max-block-instructions` | `N` | `32` | Maximum instructions in one native block (and the page size in `all_aligned` mode, as `N × 2` bytes) | Used by `emit` only. A value below 1 raises `block and shard sizes must be positive`. |
+| `--profile-tiers` | `PROFILE` | none | Split emitted hot/cold units without losing any executable entry | Matching CRC/base/size required; mutually exclusive with slim. |
+| `--profile-slim` | `PROFILE` | none | Retain only observed entry addresses | Explicit opt-in; matching ROM identity required. Missing dispatch aborts in the paired slim runtime. |
 
 On success the program prints a JSON summary and exits with code 0. `OSError`, `ValueError`, `KeyError` and `ImportError` give the message `f3-recomp: ...` on stderr and exit code 1. See [Generated files](/reference/generated-files) for the output.
 
@@ -360,10 +365,34 @@ This script compiles the sound CPU ROM to C. CMake runs it when `F3_ROM_DIR` is 
 | `--output` | `DIR` | none | Output directory | Required. |
 | `--blocks-per-file` | `N` | `1024` | Number of block functions in each C file | |
 | `--coverage` | `all_aligned` | `all_aligned` | Coverage mode | The only allowed value. The script compiles every even address of the sound ROM. |
+| `--profile-tiers` | `PROFILE` | none | Split sound units into hot/cold compilation tiers | Full aligned table retained; mutually exclusive with slim. |
+| `--profile-slim` | `PROFILE` | none | Emit only profiled sound statements and a sparse sorted table | Requires paired slim runtime; no interpreter fallback for omitted entries. |
 
 ```sh
 python3 tools/compile_sound.py --rom-dir roms/landmakrj --output build/generated/sound-landmakrj
 ```
+
+## tools/block_profile.py
+
+`merge --output PROFILE RUN.profile ...` unions ROM identities and entry addresses,
+summing hit/miss counts with uint64 saturation. Duplicate input paths are rejected.
+Use separate files for simultaneous collectors; the runtime rejects a second
+writer to the same path. Sequential runs automatically merge their output.
+
+`report PROFILE --main-generated DIR --sound-generated DIR [--binary MACH_O]
+[--output JSON]` reports original/retained/executed entry counts and active
+generated-C bytes by descriptive ROM region. Optional Mach-O measurements include
+file size, __TEXT size and native function spans; function-span attribution includes
+alignment/page packing and does not assign shared/runtime __TEXT overhead to ROMs.
+The Japanese padding and gfx-looking bins are descriptive, never exclusion proofs.
+
+Profile version 1 is ASCII. `rom CPU CRC BASE SIZE` defines a CPU/ROM identity;
+`hit CPU CRC ADDRESS COUNT` records execution, and `miss ...` records a slim abort.
+CRC, base, size and address are eight hexadecimal digits; counts are positive
+decimal uint64 values. The header is `F3-BLOCK-PROFILE 1`. Both compilers reject
+incompatible versions or CRC/base/size. A miss is not hot until a full profiling
+build actually executes that entry. No profile contains ROM bytes.
+
 
 ## netplay/server (relay)
 

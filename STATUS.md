@@ -1,3 +1,17 @@
+BLOCKED: combined build/basic native checks pass; full automated gates and human Escape run pending. Finite-profile/exclusion coverage, landmakrj only; slim remains rejected for general play.
+
+# Combined binary-size experiment
+
+ABI 3 semantic merge complete. Default full-coverage hot `-O2` / cold `-Oz`
+retains 336,775 main and 61,997 sound entries; exclusions are filtered before
+tier assignment. Frozen seeded/campaign corpus re-merges byte-identically,
+with zero excluded profile records. All 45 Python checks and real `f3rt-check`
+pass. Real 600-frame native run: zero fallback. Runtime probes pass 48 main
+and 12 sound excluded-PC/odd/alias/trace checks, three half-open boundaries
+and both CPUs' retained cold NOPs. Full gates/human run remain pending.
+
+## Historical integration and experiment evidence
+
 DONE — Phase 8 sprite checkpoint `gpuvideo-8-sprites`, following `gpuvideo-7-general-lineram`. Existing CPU/GPU zoom already samples ROM texels on the N-grid; no missing supported transform field or justified additional sprite resampler. Exact off/native behavior retained. Metal exercised; other GPUs/another monitor and a played campaign ending unverified.
 
 ## Delivered
@@ -95,51 +109,70 @@ Per-region accounting, candidate ladder, seed counters, command recipes,
 contention/disk-interruption notes and evidence paths:
 [docs/BINSIZE-EXCLUDE.md](docs/BINSIZE-EXCLUDE.md).
 
-# Phase 5 — GPU video
+# Binary-size experiment B — execution profiles
 
-## Distinct local checkpoints
+Complete report: [docs/BINSIZE-PROFILE.md](docs/BINSIZE-PROFILE.md).
 
-- `gpuvideo-1-threaded-cpu` — `e7dc01c`: persistent CPU row workers, exact serial reference and measured improvement.
-- `gpuvideo-2-gpu-parity` — `93e9774`: portable SDL3 GPU/Metal compositor, no interpolation, exact oracle presentation.
-- `gpuvideo-3-interp` — separate opt-in `--video-interp off|linear|fit`; CPU and off remain defaults.
+Strict native main + sound. Zero fallback in all successful candidate runs and all held-out abort diagnostics. No pushes, ROM bytes, generated code or binaries committed.
 
-No pushes, ROMs or binaries committed. Captures, CSVs and logs remain outside
-this worktree under `/tmp/f3-gpuvideo`: `threaded-cpu`, `gpu-parity`,
-`line-profile`, `interpolation`, and `interpolation-smoke`.
+## Result
 
-## Verification
+| Build | File bytes | __TEXT bytes | Generated C bytes | Main / sound retained entries |
+|---|---:|---:|---:|---:|
+| Supplied reference | 84,291,656 | 56,770,560 | 316,308,113 | 1,033,276 / 262,144 |
+| Fresh ordinary full | 84,458,008 | 56,918,016 | 337,607,288 | 1,033,276 / 262,144 |
+| Instrumented full | 105,856,488 | 78,102,528 | 337,607,288 | 1,033,276 / 262,144 |
+| A: full hot -O2 / cold -Oz | 62,699,592 | 31,473,664 | 336,532,136 | 1,033,276 / 262,144 |
+| B: explicit slim | 6,003,528 | 4,571,136 | 19,119,297 | 30,146 / 7,519 |
 
-- Off parity matrix rerun after interpolation integration: seeds 5/6/7/41 × scales 1–4 × borders 0/48 × 4000 = 128,000 native frames; 4320 composites and 4096 comparisons per each of nine isolated layers, zero mismatches.
-- Linear/fit: 22 more 4000-frame runs, 88,000 native frames, 2970 sampled images, 768 accepted sprite-isolation checks and 20×11 invalid-input/boundary fixtures. Outside/whole boundary rows, declined/oracle images, canonical bytes and sprite contributions remain exact. Same-option off/linear/fit native/audio/state CRCs, cycles and native block counts match; zero instruction fallback.
-- Native output retains the existing 25/25 MAME comparison and frame-600 RAM. Fresh headless fit flags retain 250,114,560 native RGB checks with zero differences and byte-identical integration WAV. Native frame CRC `3359f200`, 51,507,335 native blocks, zero CPU fallback.
-- Independent ordinary CPU-backend snapshots/presentation and allocation-free save/restore are verified; four-frame expanded trail retention regression remains exact.
-- `F3RT_GPU=OFF` frontend builds/runs, runtime device check passes, and an actual CPU window is exercised. Actual 4x Metal off and fitted-water windows/internal surfaces are inspected.
+A reduces reference file / __TEXT by 25.616% / 44.560% while retaining every baseline entry. Hot/cold main pages, sound shards and shared exception helpers are separately compiled. Real cold NOPs and -Oz shared exception handlers executed without fallback.
 
-## Performance and visible gain
+B removes cold code rather than registering cold stubs. Both CPUs' missing entries abort with CRC/address/re-profile hint and durable recording; real probes verified no opcode progress or interpreter execution, even with main fallback deliberately enabled. Held-out aborts demonstrate that this corpus cannot support a generally playable slim cutover.
 
-Scale-4/border-48 parity checkpoint native+fenced-GPU render budget:
-mean/p95/worst **10.443/11.082/11.720 ms**. Actual off frontend:
-3600 frames in **31.56 s / 114.1 fps**.
+## Gates
 
-Accepted water frame 1560, 100 warmed frozen samples, scale 4/border 48:
-GPU linear **4.640/6.201/7.043 ms**; fit **4.848/6.963/7.595 ms**
-(mean/p95/worst, includes uploads/fence/readback). Actual fitted frontend:
-3600 frames in **30.31 s / 118.8 fps**, native CPU/audio still running.
-CPU/GPU scale 1/2/4 tables and precise timing scopes: `docs/GPU-VIDEO.md`.
+- Fresh reference MAME captures: frames 600–3480, step 120; 25/25 comparisons / 1,856,000 pixels each, zero RGB differences for reference, fresh full, instrumented, tiers and slim.
+- Frame-600 main RAM exact for every build; attract WAV byte-identical to native reference.
+- Seeds 101–108 × 20,000 frames: full, instrumentation, A and B each 8/8 success; zero fallback; all eight WAVs and seven final state files byte-identical to reference.
+- Held-outs 301–308 excluded from profiling: reference 8/8 completed; B 1/8 completed (seed 306, WAV/state exact), 7/8 loud cold aborts. Exact addresses/frames in the report.
+- 22 unique passing parser/discovery/compiled C/C++ regressions. Actual `f3rt-check` PASS. Final corrected instrumentation frontend also exercised --profile-out and all attract parity gates.
+- Sequential merge count doubling, active-writer exclusion and independent 35.051-second SIGKILL periodic-snapshot preservation verified.
 
-Character-select water is PF2. Geometry uses validated screen rows 152–255;
-measured continuous palette prefix is 152–237. Linear visibly removes 4x
-water stair steps; fitted sampling additionally smooths source packing/palette
-grading. Three-mode frames/details at 1409/1500/1560 and PF0 sine frame 1300
-are captured. No outside-run differences or smeared horizon band.
+Final configure/build seconds (-j 6, reused runtime objects): full 14.913 / 47.911; instrumentation 22.798 / 98.180; A 14.851 / 48.650; B 6.587 / 3.948. Initial clean-build times, regional source/text/table attribution and observed regional compiler-duration sums are in the report. Timings include concurrent host load, not isolated performance claims.
 
-## Qualified limits
+## Frozen profile and real human provenance
 
-- Only the complete known normal PF2 water/puzzle-board profile interpolates. No raw per-field enable/active-descriptor API was claimed; known program origin plus full normalized-row validity/shape/continuity checks establish the range. Unknown effects, including PF0 sine, remain unchanged.
-- RGB bank 0↔1 has a real discontinuity and remains discrete; palette indices/pen roles and sprites are never interpolated. Fitted sampling is a guarded approximation, not the ROM palette table's proven analytic function.
-- Bitmap, trails, flip, unknown writer and ending-producer fallback/recovery are additionally induced. A campaign ending was not played through; unsupported geometry remains exact oracle output, not reconstructed HLE.
-- Runtime evidence is M5/Metal. SPIR-V/MSL compile/resource contracts are verified; other GPU hosts are not runtime-tested. GPU availability errors are explicit; CPU backend remains available.
-- Headless/native captures, CRCs, WAV and canonical snapshots remain CPU-produced. Netplay remains scale 1/border 0; interpolation is inactive at scale 1.
+`profiles/landmakrj.profile`: 1,186,177 bytes, CRC keys main `15a59a08`, sound `5a7e9117`; addresses/counts only. SHA256 `5ae3c7b6e01b07a569ab984a7409cce33ab13282090435188ad65cb61ccffebb`.
 
-Design, boundary-candidate comparison, per-scene acceptance/rejection counts,
-commands, captures and full performance evidence: [docs/GPU-VIDEO.md](docs/GPU-VIDEO.md).
+| Descriptive region | Ever executed / original entries |
+|---|---:|
+| Main code bin | 28,817 / 290,024 |
+| Main homogeneous padding | 0 / 486,966 |
+| Main gfx-looking bin | 1,329 / 256,286 |
+| Sound program | 7,519 / 262,144 |
+
+Main total 30,146 / 1,033,276 (2.9175%); sound 2.8683%. Gfx-looking contains actual executed entries: entropy is not a discovery exclusion proof.
+
+The first window (8m22s / 29,428 frames, normal exit) was never seen/played by the user. `build/evidence/human.profile` is **unattended attract**, not human matches. Its command was `./build/landmakr --profile-out build/evidence/human.profile --video-scale 2`.
+
+The second window was visibly foregrounded and the user confirms playing single-player campaign for a while. Exact command:
+
+```sh
+./build/landmakr --profile-out build/evidence/human-play.profile --video-scale 2
+```
+
+Working directory `/Users/darien/Workspace/f3-stuff/f3-recomp/wt/binsize-profile`.
+Profile `/Users/darien/Workspace/f3-stuff/f3-recomp/wt/binsize-profile/build/evidence/human-play.profile`.
+Service `HumanProfilePlay2`, pid 74901; native sound, default CPU game video, scale 2, no time/frame limit and no collector early stop. Desktop proof `build/evidence/human-play-visible.png` (ignored).
+
+It exited 1 on `Block profile write failed: build/evidence/human-play.profile.tmp`, not normal Escape completion. The preserved periodic snapshot has 25,244 keys (main 17,858, sound 7,386) / 266,141,218 hits and adds 9 main entries to the prior union. The unflushed tail / exact final frame count are unavailable. Disk was nearly full. A relative-destination cwd failure was separately reproduced/fixed, but the original window's precise cause was not recorded with errno. Destination paths are now startup-cwd stable and write/open failures include errno.
+
+Frozen merge: eight seeded runs + unattended window + instrumented attract + genuine campaign snapshot. No held-outs, forced cold probes or crash-proof data merged.
+
+## Local evidence and checkpoints
+
+Ignored `build/evidence/` retains final-gates JSON, final-size JSON, held-out cold-hit table, regional compiler times, exact command logs, profiles, screenshots and golden WAVs. Some early evidence writes hit ENOSPC; inconclusive gates were rerun after freeing only experiment-owned reproducible C / verified duplicate WAVs. Previously observed real cold-abort logs were retained, not retrained or suppressed.
+
+Generated C was measured then removed for storage; rerun CMake configure before rebuilding those directories or recomputing source attribution. Binaries, objects and inventories remain local. Throwaway smoke sources/executables were removed after proof; no shared/user artifacts deleted.
+
+Local tags: `binsize-profile-1-instrumentation`, `binsize-profile-2-collected`, `binsize-profile-3-tiers`. Frontend changes remain isolated to profile option/session and strict-mode guards. ABI 2 and canonical game state remain unchanged.

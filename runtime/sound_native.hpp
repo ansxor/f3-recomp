@@ -13,7 +13,7 @@ class Machine;
 
 class SoundNative {
 public:
-    // Generated table: exact sorted complement of excluded even ROM addresses.
+    // Exact exclusion complement, or sorted nonexcluded retained entries in slim builds.
     SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
                 std::span<const f3_excluded_range> excluded);
     ~SoundNative();
@@ -58,6 +58,9 @@ private:
     Machine &m_machine;
     const f3_block *m_blocks;
     std::span<const f3_excluded_range> m_excluded;
+#ifdef F3_PROFILE_SLIM_ENABLED
+    size_t m_block_count;
+#endif
 
     f3_cpu m_cpu{};
     bool m_needs_reset = true;

@@ -8,9 +8,16 @@ The compiler is described on [another page](/developer/recompiler/sound-compiler
 
 ## The idea
 
-The compiler creates one table entry per aligned sound-ROM address. Entries select a single-instruction function, a shared exception function, or an unsupported-instruction failure.
+In ordinary/tier builds the compiler creates one table entry per nonexcluded aligned sound-ROM address. Entries select a single-instruction function, a shared exception function, or an unsupported-instruction failure.
 
 `SoundNative` keeps registers in `f3_cpu` and dispatches through that table.
+
+The diagram below describes the default full-coverage table. Profile tiers keep
+that dense table. Explicit `F3_PROFILE_SLIM` builds instead validate a nonempty,
+strictly sorted retained table and binary-search it; a missing sound entry aborts
+with address, ROM CRC, re-profile hint and a durable cold-hit record. It never
+switches to the interpreter. Instrumentation counts each actual single-instruction
+or shared-exception entry once, outside canonical machine/snapshot state.
 
 ```mermaid
 flowchart TB
@@ -32,7 +39,7 @@ flowchart TB
 
     RUN --> IRQ
     RUN --> DISP
-    DISP -->|"index (pc - 0xc00000) / 2"| TBL
+    DISP -->|"word index minus preceding excluded words"| TBL
     TBL --> FN
     TBL --> VEC
     FN -->|"reads and writes registers"| CPU
@@ -71,7 +78,7 @@ The functions with the prefix `f3_sound_` that need the runtime are implemented 
 The constructor performs two validation checks and initializes its CPU state:
 
 1. The runtime sound ROM must have CRC32 `0x5a7e9117`. A mismatch throws an unsupported-ROM error.
-2. The table must contain exactly the sorted every-even ROM exclusion complement, with valid functions and sorted, even, nonoverlapping `f3_excluded_range` metadata. With no exclusions the count is 262,144.
+2. Ordinary/tier tables contain exactly the sorted every-even ROM exclusion complement; with no exclusions the count is 262,144. Explicit slim tables are nonempty sorted subsets of that complement. Both modes validate even, nonoverlapping exclusion metadata and reject entries in excluded ranges.
 3. The CPU's `runtime` pointer identifies this `SoundNative`. Initial SR is `F3_CCR_Z`, matching the zeroed oracle's inverted-Z latch.
 
 ## `run(cycles)`
@@ -117,13 +124,13 @@ The function runs at the first `run` after the reset line is released. It does t
 
 ### `dispatch_one`
 
-`dispatch_one` computes the compact table index by subtracting the lengths
-of preceding excluded intervals from `(pc - ROM_BASE)/2`.
-It does not binary-search the blocks or allocate a second map.
-An excluded target throws with its PC/range/reason before any opcode read;
-an odd or out-of-ROM instruction start also throws.
-The 68000 program cannot run from work RAM in this design.
-There is no interpreter fallback.
+Ordinary/tier `dispatch_one` computes the compact table index by subtracting
+preceding excluded words from `(pc - ROM_BASE)/2`; no second map is allocated.
+Slim instead binary-searches its sorted retained table and aborts on a cold miss.
+In both modes the physical 24-bit PC is checked against exclusions first,
+including odd addresses and aliases, before any opcode read or cold-miss handling.
+An excluded target throws with its PC/range/reason; an odd or out-of-ROM start
+also throws. The sound program cannot run from work RAM; there is no fallback.
 
 A block function updates `pc`, `cycles` and the registers. After it returns, the next call to `dispatch_one` reads the new `pc`.
 
