@@ -1,31 +1,20 @@
-DONE — Phase 6 GPU automatic internal resolution; production cap 4, checkpoint tag `gpuvideo-5-auto-scale`.
+DONE — Phase 7 survey checkpoint only (`gpuvideo-6-survey`, docs/data); executable is the Phase 6 baseline.
 
-## Behavior
+## Evidence-first survey
 
-- GPU-only `--video-scale auto-integer`: largest fitting integer including border, physical SDL window pixels, clamp 1–4; nearest 1:1 centered on black. Below 1x centrally crops. Linear window filter cannot introduce fractional scaling.
-- GPU-only `--video-scale auto`: ceil limiting fit ratio, clamp 1–4; existing aspect-preserving nearest/linear final blit. Above the cap the final image upscales rather than supersamples.
-- Numeric 1–4 behavior and CPU default preserved. Headless auto stays at startup 1 without SDL; netplay explicitly requires fixed 1/border 0.
-- Resize/fullscreen/pixel-density polling; 100ms quiet/250ms maximum debounce. Same-scale changes update viewport only. F11/Alt+Enter fullscreen/back.
-- Scale setter replaces only resolution-dependent textures and already-used diagnostic storage. No device/asset/pipeline rebuild or GPU-idle wait. Opt-in interpolation works across scale 1.
-- Constructor canonical buffers/snapshot layout remain fixed. Host reference scale is separate; native trail history is retained. No machine, native renderer, sound, snapshot schema or netplay changes.
-- Integrated audiosync pre-enqueue 50ms queue cap, rolling deadline and late-clock resync retained; scale work follows audio enqueue.
+- Phase 6 committed/tagged first: `89aa284` / `gpuvideo-5-auto-scale`. Latest Phase 7 brief then read, including Y's clip/alpha/mosaic/zoom/rowscroll checklist and independently switchable palette-add requirement.
+- Strict-native main/sound: seeds 5/6/7/41 ×40,000 plus 12,000 no-input attract =172,000 frames,170,845 semantic-supported,1155 startup oracle,zero fallback instructions. Every-frame field shares; sampled all256 rows of all9 layers including disabled/blanking inputs. Five additional result capture passes overlap54,600 frames, excluded from denominators.
+- Actual title/attract/how-to/selection/played boards/WON-LOST captures and frozen replay snapshots retained. Campaign ending not reached; its explicit unsupported bitmap/slide producers are source-audited, not passed off as played coverage.
+- PF0 table-wave source-X varies1352 frames (0.786%); PF2 perspective X-step/source-X/palette4381 (2.547%); shared alpha block variation5458 (3.173%). PF1/PF3 have no varying X/Y step, source-X or palette-add. All sampled enabled Y steps256,Y fractions0. No active animated mosaic, four-row active clip ramp or alpha ramp.
+- The actual played diamond floor is **PF0 pre-drawn ROM perspective**, not PF2 water. Seed5 frame6000 isolated PF0 identifies it; PF1 is the architectural backdrop, PF2/PF3 empty. Entire4x frame and all isolated layers differ by zero pixels from nearest1x on that unit-scale frame. Inventing a new transform would not be recovering detail.
+- PF2 water has two valid symmetric X-ramp halves, an eight-bit wrap boundary, discrete column-offset halves and palette RLE bands. PF0 sine uses packed ROM-table samples and map-period wrapping; do not substitute analytic sine.
+- Clip edges move per frame but are constant in row blocks; alpha fades are uniform row blocks/frame-time changes; priority/mix/enable and mosaic are discrete. Full producer-address/field decision table in `docs/GPU-VIDEO.md`.
+- 32,571,398 sprite records:259,072 zoomed (0.795%),zero fractional origins. Axis-aligned scale/flips only; ROM quantizes intermediate carry before submitting integer coordinates, no sprite rotation matrix. Existing off4x already changes frame1080 SP2/SP3 by2560/8832 pixels versus nearest1x, with zero newly sampled RGB values; unscaled frame6000 gains zero.
+- Existing frame1500 palette baseline: linear invents339 active-palette-nonentry RGB colors over18,745 pixels (nearest native entry mean/max4.543/6.928 RGB units); fit895 over228,892 (3.880/6.928). Off has zero. Old fit also changes62,661 native subrow-zero pixels; Phase7's locally anchored fit must correct that contract.
 
-## Exercised verification
+## Checkpoint scope and limits
 
-- Final 27-case corpus: 108,000 native frames, 7188 full composites, 2160 comparisons of each of nine isolated layers; **zero differing pixels, zero fallback instructions**.
-- Fixed scales 1–4, borders 0/48; changing scales across seeds 5/6/7/41 and linear/fit at both borders. One changing run checks every frame. Repeated `1→3→2→4→1` transitions force exact first-image checks.
-- Canonical bytes identical before/after each setter. Same-seed/border fixed-1 and changing runs retain identical machine/audio/state CRCs, cycles, native blocks, sample counts/peaks; independent CPU replay and retained trail history are exact.
-- Actual Mac frontend in both auto modes: 1800 frames each, Retina 2x pixels, real 640×480/1280×720/1920×1080/2560×1440 resize, 3024×1898 fullscreen, restored 1920×1080. Water windows/fullscreen/back captured and visually inspected. Six-call resize burst creates no extra targets.
-- Both window modes: native frame CRC `fb9bec22`, 26,271,485 native blocks, zero fallback, byte-identical 908,827-frame WAVs. Real setter costs 0.031–0.080ms. Capture pauses and an induced 250ms stall produce 9 pacing resyncs each; queue drops 0/1, mean 32.212/30.305ms, max 61.792/61.826ms after enqueue. The 50ms cap is before enqueue, not a post-enqueue bound.
-- Frozen first-frame transitions: 25 samples per target after warmup; setter worst 0.068ms, setter plus first fenced/readback image worst 8.800ms. All 104 resized images exact; canonical bytes unchanged.
-- Sequential frozen scale 1–8 measurements select cap 4. GPU fenced/readback mean/p95/worst at 4: 5.998/7.631/9.985ms; at 5: 8.318/13.044/14.552ms before native CPU (~3.4ms), interpolation/presentation. Diagnostic API/harness still measures 1–8; player flags do not expose 5–8.
-- Fresh actual headless auto-integer/fit run: 250,114,560 native RGB checks, zero mismatches, frame CRC `3359f200`, 51,507,335 native blocks, zero fallback; 1,817,655-frame WAV byte-identical to prior native integration baseline.
-- Fresh `F3RT_GPU=OFF` build and actual CPU-only frontend/device check pass. Actual CLI rejects CPU auto, numeric 5 and automatic netplay with clear errors. Geometry smoke covers border 0/48, exact thresholds, one-pixel crossings, cap and undersized crop.
-
-## Evidence and limits
-
-- Full design, timings, geometry, replay commands and qualified results: `docs/GPU-VIDEO.md`, section “Automatic internal resolution (phase 6)”. README/help/site and ABI docs updated.
-- External logs/captures/WAVs retained under `/tmp/f3-gpuvideo/auto-scale`; throwaway drivers and their binaries removed after proof. No ROMs, generated machine code or binaries committed.
-- Runtime exercised on M5/Metal only. Retina density and real fullscreen changes observed; no physical second-monitor density transition or other GPU host exercised.
-- Ending coverage is an induced producer boundary, not a played campaign ending. No auditory listening claim; queue behavior and native WAV identity are measured.
-- Scale 4 is an intentional measured production cap, not a blocked implementation. CPU/off interpolation defaults unchanged. No Phase 7 generalization included before this checkpoint.
+- This tag changes documentation/data only; no interpolation or sprite cutover is included yet. Runtime/canonical/audio behavior remains the committed Phase6 state, including the measured production cap4 and auto-scaling guarantees.
+- `docs/GPU-VIDEO.md` records the survey, producer formulas, actual floor identity, field checklist, frame-share denominators, baseline gains and palette distances. `NOTES.md` has the requested Video results slot.
+- All row/descriptor/frame CSVs, PNGs, pre-scanout snapshots and logs remain external under `/tmp/f3-gpuvideo/general`; no ROMs/generated blocks/binaries committed. Metal/Retina host only. Raw mode/phase words are recorded without falsely treating character/match values as a scene enum.
+- Separate general-line and sprite implementation tags follow within Phase7; this checkpoint exists to compare the untouched baseline against those implementations.

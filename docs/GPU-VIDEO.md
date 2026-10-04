@@ -691,3 +691,179 @@ CPU frame, and deliberately differ from the steady frame-1560 workload above.
 | 1 | 0.033 / 0.067 / 0.067 | 1.201 / 1.712 / 2.351 |
 
 Observed output: `/tmp/f3-gpuvideo/auto-scale/scale-latency.log`.
+
+## General-effect survey (phase 7, docs/data checkpoint)
+
+Survey starts **after** commit `89aa284` / tag `gpuvideo-5-auto-scale`.
+This checkpoint changes documentation/data only; the executable remains the
+Phase 6 water-only interpolation baseline. General line sampling and sprite
+sampling have separate subsequent checkpoints.
+
+### Corpus, row dumps and actual scene coverage
+
+Strict native main/sound, canonical scale 1/border 48, selected GPU scale 4:
+seeds **5/6/7/41 ×40,000** plus **12,000 no-input attract frames** =
+**172,000 frames**, **170,845 supported**, **1155 startup oracle frames**,
+zero fallback instructions. No frame/time/state manipulation in these routes.
+Count field variation on every enabled visible row of every frame. Dump all
+256 rows of PF0–3, SP0–3 and text every 120 frames and at selected captures,
+including source phases/steps, palette add, priority/blend/clip selectors,
+four raw clip planes, four saturated alpha weights, mosaic and bitmap state.
+
+An additional five replay/capture passes total 54,600 overlapping frames,
+excluded from the share denominators. Actual captures include title/attract,
+how-to, game/character selection, several played match backgrounds and
+**WON/LOST** transitions: seed 5 frame 4850, seed 7 frame 4250 and seed 6
+frame 14030 were visually inspected. Late captures return to the attract demo,
+not a played campaign ending. Ending hooks are audited below, but no campaign
+ending is reached in these routes.
+
+Artifacts stay outside the repository:
+
+- `/tmp/f3-gpuvideo/general/survey-runs.json`, `survey-summary.json`,
+  `{seed5,seed6,seed7,seed41,attract}.log`.
+- `survey-data/<route>/{frames,rows,sprites,captures}.csv`: exact every-frame
+  field masks/counts and sampled per-row/descriptor dumps. The row CSV includes
+  disabled and blanking rows; they are **not** counted as valid effect inputs.
+- `survey-data/<route>/frameN.{off4.png,native.bmp,before.state}`: original
+  4x surfaces, native captures and untouched pre-scanout snapshots for replay.
+- `results-data/<route>` and `results-runs.json`: targeted actual result frames
+  with the same per-layer row dumps and replay snapshots.
+
+Work-RAM words at `$401f54/$401f5c` are recorded as **raw mode/phase**, not
+trusted human scene labels. Values 2/3/4/7 occur in visibly played matches;
+`$ffff` occurs in no-input demos. Calling these a simple charsel/game enum
+would mislabel the census. Captures and producer/field signatures label effects.
+
+### Effects by frame share
+
+Counts are frames with at least two unequal values among enabled visible rows.
+They are not disjoint; raw alpha/clip planes are shared row state and can be
+inactive for a particular layer. Counts do not prove a smooth run.
+
+| Route | Frames | PF0 sine source-X variation | PF2 X-step/source-X/palette variation | Alpha row-block variation |
+|---|---:|---:|---:|---:|
+| Seed 5 | 40000 | 170 | 1368 | 1288 |
+| Seed 6 | 40000 | 332 | 1368 | 982 |
+| Seed 7 | 40000 | 476 | 277 | 1594 |
+| Seed 41 | 40000 | 374 | 1368 | 982 |
+| No-input attract | 12000 | 0 | 0 | 612 |
+| **Total** | **172000** | **1352 (0.786%)** | **4381 (2.547%)** | **5458 (3.173%)** |
+
+PF1/PF3 have **zero** varying source-X, X/Y step, Y fraction or palette-add
+frames on these routes. PF2 column-offset halves vary in 4373 frames; PF3's
+spill at row 48 varies in 4337. PF3 clip-selector blocks vary in 256 frames;
+raw clip-plane-3 edges vary in 248. Priority changes are explicitly discrete:
+PF1 1683, PF2 5338, PF3 256; SP0/1/2/3 752/496/21645/21645 frames.
+All four PFs have **Y step 256 and Y fraction 0** throughout the enabled,
+visible sampled corpus; no vertical zoom ramp is observed. Mosaic enables never
+vary and no active nontrivial mosaic is observed.
+
+### The scaled floor is not the water
+
+The played board's diamond/perspective **ground texture is PF0**, demonstrated
+by isolated GPU/CPU-exact PF0 capture at seed 5 frame 6000. PF1 contains the
+surrounding architectural backdrop; PF2/PF3 are empty on that frame. The ground
+art itself is pre-drawn perspective in ROM tiles, not a per-line perspective
+zoom. Its normalized X/Y steps are 256, source-X is row-constant and source-Y
+advances by one. At frame 6000 **every isolated layer and the complete 4x image
+have zero differences from nearest-enlarged 1x**. There is no extra source
+detail to recover there without inventing texture or changing the transform.
+
+The separate animated water/star backdrop during selection **is PF2**:
+`$9d66a/$9d72a/$9d7b6`, X-step 2–256, centering source-X, two column-offset
+halves and an RLE palette gradient. The old “water/puzzle-board floor” naming
+conflated two visually different surfaces. General sampling must handle the
+PF0 wave and both valid PF2 ramp halves, not manufacture a transform for the
+ordinary unit-scale PF0 floor.
+
+Isolated images: `survey-data/seed5/frame6000.before.state.layers/{pf0,pf1}.png`.
+Measured zero-gain and zoomed-sprite baseline:
+`/tmp/f3-gpuvideo/general/frozen-survey-gains.log`.
+
+### Producer and boundary catalog
+
+| Producer | Layer/field | Data/formula and boundary |
+|---|---|---|
+| `$5cd8`, ROM profile `$5d74` | All layer controls, alpha, mosaic, X/Y step | Visible default profile; X step `256-highByte`, Y step `2*lowByte`, cross-PF Y mapping `{0,3,2,1}`. Default/reset is not an effect endpoint. |
+| `$136e` | PF/text global scroll | Actual integer/fractional register conversions; frame-level movement is not a line ramp. |
+| `$9d72a` | PF2 X zoom/rowscroll | Symmetric about 151/152; first steps at both center rows are 256, then change by 2 per row. Eight-bit wrap is a hard boundary. Centering conversion uses division/remainder at `$9d774..$9d7aa`, not an assumed floating formula. Normalized adjacent source-X steps include ±76/±332/±588 (24.8). |
+| `$9d7b6` | PF2/PF3 column offset | Phase `$40790a&127` after task wake; two constant PF2 halves at row 152, plus PF3 rows 0–47 from the uploader spill. These are discrete offsets, not a vertical ramp. |
+| `$9ecb0` | PF0 sine rowscroll | Signed-byte phase into actual 32-bit ROM table `$1c84`, low-word negation, shift/swap and phase +2 per line. Source-X wraps at the 1024-texel map period. Interpolate the **packed table samples**, never replace them with analytic sine. |
+| `$9d66a`, table `$9d6a8..$9d6d8` | PF2 palette add | 11 held bands: lengths 4/4/4/6/8/8/8/12/16/16/18, offsets 640→0 by 64. Same-pen RGB blending is a separate optional color invention; actual bank discontinuities remain raw. |
+| `$91490/$91506/$915d2` | Text/PF3/SP priority/clip/blend | Rectangular selection label/water row blocks; PF3 water rows 176–251, fixed alpha `{5,4,3,4}`. Preserve row-block topology and priority switches. |
+| `$91834` | Clip plane 3 | Held edge across rows 176–251, expanding by 6 **per frame**, not a per-line edge ramp. Native half-open clipping stays discrete. |
+| `$98dba..$9ad3e`, `$8cfba/$8cfe0` | Alpha, mix and sprite priorities | Uniform row blocks, frame-time fades and saved-alpha restore. Field variation across block borders is not an alpha gradient. |
+| `$fe620/$fefe6/$ff0fa` | Ending bitmap/slides | Audited producers explicitly unsupported by semantic lines; exact oracle fallback, no interpolation. Not exercised as a played ending. |
+
+`runtime/game_lines.cpp` is the literal semantic producer and normalizer;
+`docs/VIDEO-HLE.md` and site developer `lines.md` document the source addresses.
+Preparation preserves current-row Y phase and advances the accumulator by that
+row's Y step. A source-Y discontinuity relative to this advance identifies the
+column-offset boundary; a texture wrap alone does not.
+
+### Y's field checklist — evidence, not blanket safety
+
+Survey decisions here describe the intended general cutover, not extra runtime
+features already present at the survey tag.
+
+| Field | Used by this game / observed scene | Survey decision | Why / edge cases |
+|---|---|---|---|
+| Clip edges | Yes: rectangular charsel labels/water, held per row block | **Keep discrete on this corpus** | Zero four-row active edge ramps in all sampled routes; moving edge is temporal. Do not blend mask bits or bleed across rectangle/topology changes. |
+| Alpha | Yes: attract/selection fades and dim/restore | **Keep native/discrete** | 5458 varying block frames, but zero four-row alpha ramps; weights are 0–8, constant within blocks. Preserve priority/mix ordering. No invented sub-line alpha weights. |
+| Mosaic | Decoded; no active animation observed | **Discrete** | Quantized integer cell size/alignment, not a continuous source coordinate. No evidence supports fractional mosaic. |
+| Horizontal zoom | Yes: PF2 symmetric water transform | **General per-layer smooth runs** | Affine ±2 steps; exclude wrap, disabled/invalid rows and hard controls. Keep each native subrow-zero sample raw. |
+| Vertical zoom | Decoded; all sampled enabled Y steps 256 | **Existing finer subrow sampling; no extra ramp claimed** | Native phase/Y step already sampled at scale N. No observed line ramp to fit; column jumps must not become zoom. |
+| Rowscroll | PF0 table wave and PF2 packed centering | **General sampled-coordinate runs** | Periodic map-phase unwrapping and bounded local linear/fit curves preserve the ROM samples, extrema and discrete jumps. No guessed sine, water-only row range or layer number. |
+| Column scroll | PF2 halves, PF3 spill | **Discrete offsets** | Two producer-written constants with real boundaries at 152/48, not a smooth per-line family. |
+| Palette add | PF2 RLE banks | **Separately switchable RGB blend** | Same pen in checked compatible banks only. Bank/pen identity, unsafe RGB jump and invalid endpoints remain discrete; outputs can be absent from the native palette. |
+| Priority / blend selector / enable | Attract/selection/results blocks, all groups | **Discrete** | Integer topology/order; never continuous endpoints or fit samples across a change. |
+
+### Sprite precision and honest baseline gain
+
+Across the 172,000-frame census, **32,571,398 sprite records**, **259,072 zoomed
+records (0.795%)**, and **zero fractional X/Y origins**. Counts include
+offscreen/occluded records, not just visible pixels. ROM `$4688` single tiles
+retain 8-bit X/Y zoom; `$480c..$4a36` and `$a913c..$a93a2` grid widths mask the
+low four X-zoom bits while placement uses all bits. Intermediate half-pixel
+carry is quantized to integer tile origins before descriptor submission.
+Preserving discarded carry previously caused the frame-1080 native mismatch;
+it is not honest subpixel positioning data.
+
+Descriptors support axis-aligned scale and flips, **no angle/rotation matrix**.
+Retain the one-frame rendered sprite lag, reverse descriptor/texel precedence,
+nominal culling before `+255` Y rounding and the existing off raster.
+
+Existing off 4x already gains source sampling on zoomed sprites: frame 1080
+SP2 differs from nearest 1x by **2560 pixels**, SP3 by **8832**, composite by
+**8832**, with zero new sampled RGB values in those images. Frame 6000's unit
+sprites differ by **zero**. Generalization must distinguish that existing gain
+from any newly measured sprite path; do not claim new art, fractional native
+motion, rotation or unscaled-texture detail.
+
+### Palette invention and native-anchor baseline
+
+Frozen seed 5 frame 1500, 4x/border 48, 1834 distinct colors among all 8192
+**active native palette entries**. For each rendered RGB, measure Euclidean
+distance to the nearest of those real entries (8-bit RGB units); mean is
+pixel-weighted over non-entry colors. This compares the active game palette,
+not an invented color-space curve or only the current two water banks.
+
+| Existing Phase 6 mode | Changed pixels vs off | Changed native subrow-zero pixels | Non-entry RGB pixels / colors | Nearest-entry mean / max |
+|---|---:|---:|---|---|
+| off | 0 | 0 | 0 / 0 | 0 / 0 |
+| linear | 91476 | 0 | 18745 / 339 | 4.543 / 6.928 |
+| fit | 264351 | 62661 | 228892 / 895 | 3.880 / 6.928 |
+
+Canonical snapshot bytes are unchanged and instruction fallback is zero.
+The old fit changes **62,661 native subrow-zero pixels**: its absolute fitted
+source/palette value is not anchored to the packed native row. The new Phase 7
+contract requires those samples exact; the general fit must be locally anchored,
+not simply broaden the old absolute water model.
+
+RGB blending visibly removes water color-band steps but is quantitatively a
+different operation from source-coordinate sampling. Keep palette blending a
+separate control; compare geometry-only against geometry+palette after the
+general cutover before deciding its default. Native alpha already blends RGB in
+other scenes; the survey finds no genuine sub-line alpha ramp to interpolate.
+Evidence: `/tmp/f3-gpuvideo/general/survey-data/seed5/frame1500.before.state.{off,linear,fit}.png`.
