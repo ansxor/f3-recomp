@@ -175,18 +175,7 @@ struct Audio::Impl {
     }
 
     void advance_slice(uint32_t main_cycles) {
-        // Retain instruction overrun as debt; otherwise every short slice makes
-        // the sound CPU run too fast, especially under native main-CPU blocks.
-        if (!m_reset_asserted && m_cpu_runner) {
-            m_cpu_accum += int64_t(main_cycles) * 15238090LL;
-            const int requested = int(m_cpu_accum / 16000000LL);
-            if (requested > 0)
-                m_cpu_accum -= int64_t(m_cpu_runner(requested)) * 16000000LL;
-        } else {
-            m_cpu_accum = 0;
-        }
-
-        // 2. Advance DUART 68681 (clock 4.0 MHz = 16MHz / 4)
+        // Advance DUART 68681 (clock 4.0 MHz = 16MHz / 4).
         m_duart_accum += main_cycles;
         uint32_t duart_cycles = m_duart_accum / 4;
         m_duart_accum %= 4;
@@ -203,17 +192,30 @@ struct Audio::Impl {
             m_sample_accum -= 16000000ULL;
             generate_one_frame();
         }
+
+        // Device edges precede the CPU dispatch due at this clock. Dispatch one
+        // instruction at a time so IRQ recognition cannot depend on main blocks.
+        if (!m_reset_asserted && m_cpu_runner) {
+            m_cpu_accum += int64_t(main_cycles) * 15238090LL;
+            if (m_cpu_accum >= 16000000LL)
+                m_cpu_accum -= int64_t(m_cpu_runner(1)) * 16000000LL;
+        } else {
+            m_cpu_accum = 0;
+        }
     }
 
     void advance(uint32_t main_cycles) {
-        constexpr uint32_t SLICE = 512;
         while (main_cycles > 0) {
-            // Stop the sound CPU at an output sample boundary, rather than
-            // applying writes from the rest of a fixed slice to that sample.
-            uint32_t step = std::min(main_cycles, SLICE);
+            // Stop at each sample or CPU deadline, retaining fractional clocks
+            // and complete-instruction overrun across arbitrary caller chunks.
+            uint32_t step = main_cycles;
             const uint32_t rate = m_es5505.sample_rate();
             if (m_sample_accum + uint64_t(step) * rate >= 16000000ULL)
                 step = uint32_t((16000000ULL - m_sample_accum + rate - 1) / rate);
+            if (!m_reset_asserted && m_cpu_runner) {
+                const uint32_t until_cpu = uint32_t((16000000LL - m_cpu_accum + 15238089LL) / 15238090LL);
+                step = std::min(step, until_cpu);
+            }
             main_cycles -= step;
             advance_slice(step);
         }

@@ -3,6 +3,7 @@
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
+#include <array>
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
@@ -77,6 +78,36 @@ void check_main_sound_ordering() {
         require(m->audio->is_reset() && m->audio->read8(0x600)==0x11 && m->shared[1]==0x5a,
                 "Reset assertion preserves sound execution preceding the reset instruction");
     }
+}
+void check_audio_partitioning() {
+    const auto run=[](unsigned quantum) {
+        auto m=std::make_unique<f3rt::Machine>(fixture());
+        m->audio->write32(0,0xff00);m->audio->write32(4,0x1000);m->audio->write32(0x100,0x2000);
+        // Foreground counts iterations; each timer IRQ records the interrupted count.
+        const uint16_t foreground[]={0x7000,0x227c,0,0x600,0x46fc,0x2000,0x5280,0x60fc};
+        const uint16_t handler[]={0x22c0,0x1239,0x0028,0x001f,0x4e73};
+        for (unsigned i=0;i<std::size(foreground);++i) m->audio->write16(0x1000+2*i,foreground[i]);
+        for (unsigned i=0;i<std::size(handler);++i) m->audio->write16(0x2000+2*i,handler[i]);
+        m->audio->write8(0x280019,64);m->audio->write8(0x28000b,8);
+        m->audio->write8(0x28000d,0);m->audio->write8(0x28000f,125);m->audio->write8(0x280009,0x60);
+        m->audio->set_reset(false);
+        for (unsigned elapsed=0;elapsed<10050;) {
+            const unsigned step=quantum<10050-elapsed?quantum:10050-elapsed;
+            m->audio->advance(step);elapsed+=step;
+        }
+        std::array<uint32_t,11> state{};
+        for (unsigned i=0;i<10;++i) {
+            state[i]=m->audio->read32(0x600+4*i);
+            require(state[i]>(i?state[i-1]:0),"Each periodic IRQ observes further real foreground execution");
+        }
+        require(m->audio->read32(0x628)==0,"Ten elapsed timer deadlines produce exactly ten interrupt records");
+        state[10]=m->interpreter->sound_pc();
+        return state;
+    };
+    const auto single_clock=run(1);
+    for (unsigned quantum : {7,64,511,4096})
+        require(run(quantum)==single_clock,
+                "Sound IRQ recognition and CPU state are independent of main-block time partitioning");
 }
 void check_duart_counter() {
     const auto preset=[](f3rt::MC68681 &d,unsigned count) { d.write(6,count>>8);d.write(7,count); };
@@ -282,6 +313,8 @@ void check_sound_cycles(f3rt::Machine &m) {
     }
 }
 void check_sound_irq(f3rt::Machine &m) {
+    // These core-cycle checks step the CPU explicitly, separately from the timer.
+    m.audio->set_cpu_runner({});
     for (unsigned vector : {15,30,64,255}) {
         m.audio->reset_board();
         m.audio->write32(0,0xff00);m.audio->write32(4,0x1000);m.audio->write32(vector*4,0x2000);
@@ -309,6 +342,7 @@ void check_sound_irq(f3rt::Machine &m) {
                 "Immediate STOP wake stacks the next PC and resumes the handler without remaining stopped");
     }
     m.audio->reset_board();
+    m.audio->set_cpu_runner([&m](int cycles) { return m.interpreter->run_audio(cycles); });
 }
 void check_trap_cycles(f3rt::Machine &m) {
     const auto old_vbr=m.cpu.vbr;
@@ -418,6 +452,7 @@ void check_audio_mixer() {
 int main() try {
     check_audio_mixer();
     check_main_sound_ordering();
+    check_audio_partitioning();
     f3rt::Audio clock_audio;
     std::array<int16_t, 128> clock_samples{};
     uint64_t sample_count=0;

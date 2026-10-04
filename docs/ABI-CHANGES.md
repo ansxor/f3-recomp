@@ -64,6 +64,14 @@ reference microprogram and its latch-before-mask-update microcode. Normal STOP
 waiting, later IRQ wakeups and other CPU models are unchanged. This is a scoped
 reference timing correction, not a general bus-cycle-accurate execution model.
 
+Sound scheduling is independent of native main-block partitioning. `Audio`
+advances to the next sample or sound-CPU dispatch deadline, applies device
+edges first, then dispatches one sound instruction and retains its full cycle
+debt. Fractional clocks survive all caller chunks. Main native blocks and ABI 2
+deadlines remain unchanged; there is no public header or callback change.
+Sound instructions and their bus effects are still atomic, not microcycle
+accurate. Equal native/interpreter PCM does not imply MAME waveform parity.
+
 The DUART now models both transmitters' ready/empty transitions, one-byte
 holding registers, framed serial clocks, enable/reset commands and TX-ready
 interrupts. F3's external clocks are 1 MHz (A) and 500 kHz (B); the game's
