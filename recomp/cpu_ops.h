@@ -568,6 +568,8 @@ static inline uint32_t f3_bchg(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t 
     return val ^ (1u << (bit & mask));
 }
 
+#include "bitfield.h"
+
 #ifdef __cplusplus
 }
 #endif

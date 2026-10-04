@@ -535,6 +535,52 @@ def generate_boundary_cases() -> list[RawTestCase]:
     for name, code in (("divu_zero", "82c0"), ("divs_zero", "83c0"),
                        ("divul_zero", "4c401002"), ("divsl_zero", "4c401802")):
         add_case(name, code, d=[0, 100, 23, 0, 0, 0, 0, 0], sr=0x201f)
+    add_case("full_negative_word_bd", "41f50520fa26")
+    add_case("full_negative_word_outer", "24301b220000fff8",
+             d=[0, 4, 0, 0, 0, 0, 0, 0], memory=[
+                 MemInitItem(TEST_A0 + 8, bytes.fromhex("00035008")),
+                 MemInitItem(0x35000, bytes.fromhex("cafebabe"))])
+    add_case("move_two_full_extensions", "23b01120fff021200010",
+             d=[0, 4, 8, 0, 0, 0, 0, 0], memory=[
+                 MemInitItem(TEST_A0 - 12, bytes.fromhex("deadbeef"))])
+    add_case("brief_zero_displacement", "10300000",
+             d=[3, 0, 0, 0, 0, 0, 0, 0],
+             memory=[MemInitItem(TEST_A0 + 3, bytes.fromhex("a5"))])
+    add_case("move_two_brief_extensions", "21b100001000",
+             d=[4, 8, 0, 0, 0, 0, 0, 0],
+             memory=[MemInitItem(TEST_A1 + 4, bytes.fromhex("cafebabe"))])
+    for operation in range(8):
+        for memory_ea in (False, True):
+            for offset in (-9, -1, 0, 7, 31, 32):
+                for width in (1, 8, 9, 16, 17, 24, 31, 32):
+                    opcode = 0xe8c0 | (operation << 8) | (0x10 if memory_ea else 4)
+                    add_case(f"bitfield_{operation}_{int(memory_ea)}_{offset}_{width}",
+                             struct.pack(">HH", opcode, 0x3862 if operation & 1 else 0x0862).hex(),
+                             d=[0, offset & 0xffffffff, width, 0xdeadbeef, 0xaabbccdd, 0, 0, 0],
+                             sr=0x1f, memory=[
+                                 MemInitItem(TEST_A0 - 8, bytes.fromhex("80ff5533aa661177809abcdeff012345"))])
+    for fmt in (0, 1, 2, 3):
+        frame = struct.pack(">HIH", 0x2015, TEST_PC + 0x80, fmt << 12)
+        if fmt == 1:
+            frame += struct.pack(">HIH", 0x2004, TEST_PC + 0x100, 0)
+        add_case(f"rte_format_{fmt}", "4e73", sr=0x2700,
+                 memory=[MemInitItem(TEST_SP, frame + bytes(8))])
+    add_case("rte_privilege", "4e73", sr=0x001f)
+    for control in (0, 1, 2, 0x800, 0x801, 0x802, 0x803, 0x804):
+        code = struct.pack(">HHHH", 0x4e7b, control, 0x4e7a, 0x1000 | control)
+        cases.append(RawTestCase(
+            id=len(cases) + 1, name=f"movec_roundtrip_{control:03x}", code_bytes=code,
+            initial_d=[0xabcdef01, 0, 0, 0, 0, 0, 0, 0], initial_sr=0x201f,
+            instruction_count=2, is_boundary=True, boundary_kind="control_register"))
+    add_case("movec_privilege", "4e7b0002", sr=0x001f)
+    for width, opcode in ((1, 0x00d0), (2, 0x02d0), (4, 0x04d0)):
+        for value in (-129, -128, -1, 0, 1, 126, 127, 128, 0x10000):
+            for reg in (0, 8):
+                add_case(f"cmp2_{width}_{reg}_{value}", struct.pack(">HH", opcode, reg << 12).hex(),
+                         d=[value & 0xffffffff, 0, 0, 0, 0, 0, 0, 0],
+                         sr=0x1f, memory=[MemInitItem(TEST_A0,
+                             (-128).to_bytes(width, "big", signed=True) +
+                             (127).to_bytes(width, "big", signed=True))])
     for name, code in (
             ("lazy_x_through_move", "d2807600d583"),
             ("lazy_x_through_compare", "d280b680d583"),

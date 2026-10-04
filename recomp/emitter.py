@@ -91,6 +91,8 @@ def _pc_base(insn: CsInsn) -> int:
     """PC-relative EA base is its extension word, after any operand prefix."""
     opcode = int.from_bytes(insn.bytes[:2], "big")
     mnem = _get_base_mnemonic(insn)
+    if mnem.startswith("bf") or mnem in ("cmp2", "chk2"):
+        return insn.address + 4
     if mnem == "movem" or (mnem in ("mulu", "muls", "divu", "divs", "divul", "divsl") and _get_size(insn) == 4):
         return insn.address + 4
     if opcode & 0xff00 == 0x0800:
@@ -108,6 +110,64 @@ def _base_expr(insn: CsInsn, mem) -> str:
     if m68k.M68K_REG_A0 <= mem.base_reg <= m68k.M68K_REG_A7:
         return f"cpu->a[{mem.base_reg - m68k.M68K_REG_A0}]"
     return "0u"  # Full extension base-suppression bit.
+
+
+def _ea_extension_bytes(raw: bytes, offset: int, mode: int, reg: int, size: int) -> int:
+    if mode <= 4:
+        return 0
+    if mode == 5 or (mode == 7 and reg in (0, 2)):
+        return 2
+    if mode == 7 and reg == 1:
+        return 4
+    if mode == 7 and reg == 4:
+        return max(2, size)
+    if mode == 6 or (mode == 7 and reg == 3):
+        ext = int.from_bytes(raw[offset:offset + 2], "big")
+        if not ext & 0x100:
+            return 2
+        return 2 + {0: 0, 1: 0, 2: 2, 3: 4}[(ext >> 4) & 3] + \
+            {0: 0, 1: 0, 2: 2, 3: 4}[ext & 3]
+    return 0
+
+
+def _full_ea(insn: CsInsn, op, size: int, prefix: str) -> tuple[list[str], str] | None:
+    # Capstone exposes full-format word displacements as unsigned values.
+    # Decode the extension layout to retain their widths and suppression bits.
+    raw = bytes(insn.bytes)
+    offset = _pc_base(insn) - insn.address
+    if _get_base_mnemonic(insn) == "move" and prefix == "dst":
+        opcode = int.from_bytes(raw[:2], "big")
+        offset += _ea_extension_bytes(raw, offset, (opcode >> 3) & 7, opcode & 7, size)
+    if offset + 2 > len(raw):
+        return None
+    ext = int.from_bytes(raw[offset:offset + 2], "big")
+    reg = f"cpu->{'a' if ext & 0x8000 else 'd'}[{(ext >> 12) & 7}]"
+    idx = reg if ext & 0x0800 else f"(uint32_t)(int32_t)(int16_t){reg}"
+    idx = f"({idx} * {1 << ((ext >> 9) & 3)}u)"
+    address = f"ea_{prefix}"
+    if not ext & 0x100:
+        # Capstone labels brief extensions with zero displacement BASE_DISP.
+        disp = int.from_bytes(raw[offset + 1:offset + 2], "big", signed=True)
+        expression = f"{_base_expr(insn, op.mem)} + 0x{disp & 0xffffffff:x}u + {idx}"
+        return [f"uint32_t {address} = {expression};"], address
+    bd_size = {1: 0, 2: 2, 3: 4}.get((ext >> 4) & 3)
+    indirect = ext & 7
+    if ext & 8 or bd_size is None or indirect == 4:
+        return None
+    od_size = {0: 0, 1: 0, 2: 2, 3: 4}[indirect & 3]
+    if offset + 2 + bd_size + od_size > len(raw):
+        return None
+    bd = int.from_bytes(raw[offset + 2:offset + 2 + bd_size], "big", signed=True)
+    od = int.from_bytes(raw[offset + 2 + bd_size:offset + 2 + bd_size + od_size], "big", signed=True)
+    base = "0u" if ext & 0x80 else _base_expr(insn, op.mem)
+    idx = "0u" if ext & 0x40 else idx
+    if indirect == 0:
+        expression = f"{base} + 0x{bd & 0xffffffff:x}u + {idx}"
+    elif indirect < 4:
+        expression = f"f3_read32(cpu, {base} + 0x{bd & 0xffffffff:x}u + {idx}) + 0x{od & 0xffffffff:x}u"
+    else:
+        expression = f"f3_read32(cpu, {base} + 0x{bd & 0xffffffff:x}u) + {idx} + 0x{od & 0xffffffff:x}u"
+    return [f"uint32_t {address} = {expression};"], address
 
 
 def _decode_ea(insn: CsInsn, op, size: int, var_prefix: str, post_inc_on_read: bool = False) -> _EA | None:
@@ -198,26 +258,14 @@ def _decode_ea(insn: CsInsn, op, size: int, var_prefix: str, post_inc_on_read: b
         ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({base_s} + {idx_expr} + (int32_t)({disp}));")
         ea.ea_expr = addr_var
 
-    elif am == m68k.M68K_AM_AREGI_INDEX_BASE_DISP:
-        base_s = _base_expr(insn, op.mem)
-        idx_expr = _decode_index_expr(op.mem)
-        disp = op.mem.in_disp
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({base_s} + {idx_expr} + (int32_t)({disp}));")
-        ea.ea_expr = addr_var
-
-    elif am == m68k.M68K_AM_MEMI_POST_INDEX:
-        base_s = _base_expr(insn, op.mem)
-        idx_expr = _decode_index_expr(op.mem)
-        ea.ea_setup.append(f"uint32_t {addr_var}_ptr = f3_read32(cpu, (uint32_t)({base_s} + (int32_t)({op.mem.in_disp})));")
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({addr_var}_ptr + {idx_expr} + (int32_t)({op.mem.out_disp}));")
-        ea.ea_expr = addr_var
-
-    elif am == m68k.M68K_AM_MEMI_PRE_INDEX:
-        base_s = _base_expr(insn, op.mem)
-        idx_expr = _decode_index_expr(op.mem)
-        ea.ea_setup.append(f"uint32_t {addr_var}_ptr = f3_read32(cpu, (uint32_t)({base_s} + {idx_expr} + (int32_t)({op.mem.in_disp})));")
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({addr_var}_ptr + (int32_t)({op.mem.out_disp}));")
-        ea.ea_expr = addr_var
+    elif am in (m68k.M68K_AM_AREGI_INDEX_BASE_DISP,
+                m68k.M68K_AM_MEMI_POST_INDEX, m68k.M68K_AM_MEMI_PRE_INDEX,
+                m68k.M68K_AM_PCI_INDEX_BASE_DISP,
+                m68k.M68K_AM_PC_MEMI_POST_INDEX, m68k.M68K_AM_PC_MEMI_PRE_INDEX):
+        decoded = _full_ea(insn, op, size, var_prefix)
+        if decoded is None:
+            return None
+        ea.ea_setup, ea.ea_expr = decoded
 
     elif am == m68k.M68K_AM_PCI_DISP:
         pc_base = _pc_base(insn)
@@ -228,26 +276,6 @@ def _decode_ea(insn: CsInsn, op, size: int, var_prefix: str, post_inc_on_read: b
         pc_base = _pc_base(insn)
         idx_expr = _decode_index_expr(op.mem)
         ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)(0x{pc_base:08x}u + {idx_expr} + (int32_t)({op.mem.disp}));")
-        ea.ea_expr = addr_var
-
-    elif am == m68k.M68K_AM_PCI_INDEX_BASE_DISP:
-        pc_base = _pc_base(insn)
-        idx_expr = _decode_index_expr(op.mem)
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)(0x{pc_base:08x}u + {idx_expr} + (int32_t)({op.mem.in_disp}));")
-        ea.ea_expr = addr_var
-
-    elif am == m68k.M68K_AM_PC_MEMI_POST_INDEX:
-        pc_base = _pc_base(insn)
-        idx_expr = _decode_index_expr(op.mem)
-        ea.ea_setup.append(f"uint32_t {addr_var}_ptr = f3_read32(cpu, (uint32_t)(0x{pc_base:08x}u + (int32_t)({op.mem.in_disp})));")
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({addr_var}_ptr + {idx_expr} + (int32_t)({op.mem.out_disp}));")
-        ea.ea_expr = addr_var
-
-    elif am == m68k.M68K_AM_PC_MEMI_PRE_INDEX:
-        pc_base = _pc_base(insn)
-        idx_expr = _decode_index_expr(op.mem)
-        ea.ea_setup.append(f"uint32_t {addr_var}_ptr = f3_read32(cpu, (uint32_t)(0x{pc_base:08x}u + {idx_expr} + (int32_t)({op.mem.in_disp})));")
-        ea.ea_setup.append(f"uint32_t {addr_var} = (uint32_t)({addr_var}_ptr + (int32_t)({op.mem.out_disp}));")
         ea.ea_expr = addr_var
 
     elif am == m68k.M68K_AM_ABSOLUTE_DATA_SHORT:
@@ -332,6 +360,83 @@ def lower(insn: CsInsn) -> list[str] | None:
     mnem = _get_base_mnemonic(insn)
     size = _get_size(insn)
     next_pc = insn.address + insn.size
+
+    if mnem == "movec":
+        ext = int.from_bytes(insn.bytes[2:4], "big")
+        reg = f"cpu->{'a' if ext & 0x8000 else 'd'}[{(ext >> 12) & 7}]"
+        controls = {0: "sfc", 1: "dfc", 2: "cacr", 0x800: "usp",
+                    0x801: "vbr", 0x802: "caar", 0x803: "msp", 0x804: "ssp"}
+        control = ext & 0xfff
+        stmts = ["f3_cc_flush(cpu);",
+                 f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8, 0x{insn.address:x}u); return; }}"]
+        if control not in controls:
+            return stmts + [f"f3_exception(cpu, 4, 0x{insn.address:x}u);", "return;"]
+        field = f"cpu->{controls[control]}"
+        if int.from_bytes(insn.bytes[:2], "big") == 0x4e7a:
+            if control in (0x803, 0x804):
+                active = "cpu->sr & 0x1000u" if control == 0x803 else "!(cpu->sr & 0x1000u)"
+                field = f"(({active}) ? cpu->a[7] : {field})"
+            stmts.append(f"{reg} = {field};")
+        else:
+            value = f"({reg} & {7 if control < 2 else 15}u)" if control <= 2 else reg
+            if control in (0x803, 0x804):
+                active = "cpu->sr & 0x1000u" if control == 0x803 else "!(cpu->sr & 0x1000u)"
+                stmts.append(f"if ({active}) cpu->a[7] = {value}; else {field} = {value};")
+            else:
+                stmts.append(f"{field} = {value};")
+        return stmts + [f"cpu->pc = 0x{next_pc:x}u;", "cpu->cycles += 4u;"]
+
+    if mnem == "rte":
+        return [
+            "f3_cc_flush(cpu);",
+            f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8, 0x{insn.address:x}u); return; }}",
+            "for (;;) {",
+            "    uint32_t sp = cpu->a[7];",
+            "    unsigned format = f3_read16(cpu, sp + 6u) >> 12;",
+            f"    if (format > 2) {{ f3_exception(cpu, 14, 0x{next_pc:x}u); return; }}",
+            "    uint16_t sr = f3_read16(cpu, sp);",
+            "    uint32_t pc = format == 1 ? 0u : f3_read32(cpu, sp + 2u);",
+            "    cpu->a[7] = sp + (format == 2 ? 12u : 8u);",
+            "    f3_set_sr(cpu, sr);",
+            "    if (format != 1) { cpu->pc = pc; break; }",
+            "}",
+            "cpu->cycles += 4u;",
+            "return;",
+        ]
+
+    if mnem in ("bftst", "bfextu", "bfchg", "bfexts", "bfclr", "bfffo", "bfset", "bfins"):
+        opcode = int.from_bytes(insn.bytes[:2], "big")
+        ext = int.from_bytes(insn.bytes[2:4], "big")
+        operation = (opcode >> 8) & 7
+        operand = ops[-1] if mnem == "bfins" else ops[0]
+        ea = _decode_ea(insn, operand, 1, "bitfield")
+        if not ea or (ea.is_reg and ea.reg_type != "d"):
+            return None
+        offset = f"(int32_t)cpu->d[{(ext >> 6) & 7}]" if ext & 0x800 else str((ext >> 6) & 31)
+        width = f"cpu->d[{ext & 7}]" if ext & 0x20 else str(ext & 31)
+        location = ea.ea_expr if ea.is_mem else str(ea.reg_num)
+        return ea.ea_setup + [
+            f"f3_bitfield(cpu, {operation}, {int(ea.is_mem)}, {location}, {offset}, {width}, {(ext >> 12) & 7});",
+            f"cpu->pc = 0x{next_pc:x}u;", "cpu->cycles += 4u;"]
+
+    if mnem in ("cmp2", "chk2"):
+        ext = int.from_bytes(insn.bytes[2:4], "big")
+        ea = _decode_ea(insn, ops[0], size, "bounds")
+        if not ea or not ea.is_mem:
+            return None
+        reg = f"cpu->{'a' if ext & 0x8000 else 'd'}[{(ext >> 12) & 7}]"
+        cast = f"uint{size * 8}_t" if ext & 0x8000 and size < 4 else f"int{size * 8}_t"
+        stmts = ea.ea_setup + [
+            f"int32_t value = ({cast}){reg};",
+            f"int32_t lower = (int{size * 8}_t)f3_read{size * 8}(cpu, {ea.ea_expr});",
+            f"int32_t upper = (int{size * 8}_t)f3_read{size * 8}(cpu, {ea.ea_expr} + {size}u);",
+            "f3_cc_flush(cpu);",
+            "unsigned outside = value < lower || value > upper;",
+            "cpu->sr = (uint16_t)((cpu->sr & ~5u) | outside | ((value == lower || value == upper) ? 4u : 0u));",
+        ]
+        if ext & 0x800:
+            stmts.append(f"if (outside) {{ f3_exception(cpu, 6, 0x{next_pc:x}u); return; }}")
+        return stmts + [f"cpu->pc = 0x{next_pc:x}u;", "cpu->cycles += 4u;"]
 
     # 1. NOP
     if mnem == 'nop':
