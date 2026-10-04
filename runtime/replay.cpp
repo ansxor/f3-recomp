@@ -12,7 +12,7 @@ int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
     std::ifstream input(trace, std::ios::binary);
     std::array<char, 8> magic{};
     input.read(magic.data(), magic.size());
-    if (magic != std::array<char, 8>{'F','3','A','U','D','1',0,0})
+    if (magic != std::array<char, 8>{'F','3','A','U','D','2',0,0})
         throw std::runtime_error("Invalid F3 audio trace header");
     f3rt::Audio audio;
     audio.load_sample_rom(roms.samples);
@@ -43,6 +43,7 @@ int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
         const auto data = uint16_t(little(record.data() + 12, 2));
         const auto mask = uint16_t(little(record.data() + 14, 2));
         if (address == 0xffffffff) { ended = true; break; }
+        if (address == 0xfffffffe) { audio.reset_board(); continue; }
         if (mask == 0xffff) audio.write16(address, data);
         else {
             if (mask & 0xff00) audio.write8(address, uint8_t(data >> 8));

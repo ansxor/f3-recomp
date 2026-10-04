@@ -17,3 +17,14 @@ before the first generated block or fallback instruction. The runtime drains
 the reference core's four reset cycles immediately and charges `cpu.cycles`;
 importing canonical state must not silently lose that debt. This is distinct
 from the privileged guest `RESET` instruction, which resets external devices.
+
+Sound-CPU reset writes at `$c80000`/`$c80100` retain DUART, DSP, volume and
+sound RAM state. Whole-machine/watchdog reset instead uses the C++ board-level
+`Audio::reset_board`: reset DUART/DSP/volume, reload the first eight sound-ROM
+bytes into work RAM, and hold the CPU. OTIS voices, remaining work RAM, queued
+samples and the fractional output clock are preserved. The C CPU ABI is unchanged.
+
+Raster time zero is the reference screen's VBSTART beam epoch. IRQ2/render
+events occur at `ceil(n * 432 * 262 * 16000000 / 6671500)` main ticks for
+`n = 1, 2, ...`; IRQ3 follows each IRQ2 by 10000 ticks. Watchdog reset does not
+restart the continuous raster clock.

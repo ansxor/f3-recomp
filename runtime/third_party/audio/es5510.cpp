@@ -166,7 +166,7 @@ const ES5510::RamControl RAM_CONTROL[8] = {
 ES5510::ES5510()
     : halt_asserted(false)
     , pc(0)
-    , state(STATE_HALTED)
+    , state(STATE_RUNNING)
     , m_gpr(std::make_unique<int32_t[]>(0xc0))
     , m_instr(std::make_unique<uint64_t[]>(160))
     , m_dram(std::make_unique<int16_t[]>(DRAM_SIZE))
@@ -196,7 +196,7 @@ ES5510::ES5510()
     , gpr_latch(0)
     , instr_latch(0)
     , ram_sel(0)
-    , host_control(0)
+    , host_control(0x04)
     , host_serial(0)
 {
     dol[0] = dol[1] = 0;
@@ -209,45 +209,24 @@ ES5510::ES5510()
 
 ES5510::~ES5510() = default;
 
+// The pinned reference reset clears memories, not serial/special-register state.
 void ES5510::reset() {
     pc = 0;
-    state = STATE_HALTED;
-    halt_asserted = false;
-    dol_count = 0;
-    dol[0] = dol[1] = 0;
-    machl = 0;
-    mac_overflow = false;
-    dil = 0;
-    memsiz = 0x00ffffff;
-    memmask = 0x00000000;
-    memincrement = 0x01000000;
-    memshift = 24;
-    dlength = 0;
-    abase = 0;
-    bbase = 0;
-    dbase = 0;
+    state = STATE_RUNNING;
     sigreg = 0;
     mulshift = 2;
-    ccr = 0;
-    cmr = 0;
-    ser0r = ser0l = 0;
-    ser1r = ser1l = 0;
-    ser2r = ser2l = 0;
-    ser3r = ser3l = 0;
     dol_latch = 0;
     dil_latch = 0;
     dadr_latch = 0;
     gpr_latch = 0;
     instr_latch = 0;
     ram_sel = 0;
-    host_control = 0;
+    host_control = 0x04;
     host_serial = 0;
 
     std::memset(m_gpr.get(), 0, sizeof(int32_t) * 0xc0);
     std::memset(m_instr.get(), 0, sizeof(uint64_t) * 160);
     std::memset(m_dram.get(), 0, sizeof(int16_t) * DRAM_SIZE);
-    std::memset(&alu, 0, sizeof(alu));
-    std::memset(&mulacc, 0, sizeof(mulacc));
     std::memset(&ram, 0, sizeof(ram));
     std::memset(&ram_p, 0, sizeof(ram_p));
     std::memset(&ram_pp, 0, sizeof(ram_pp));

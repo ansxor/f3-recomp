@@ -123,6 +123,16 @@ struct Audio::Impl {
         }
     }
 
+    void reset_board() {
+        set_reset(true);
+        m_cpu_accum = 0;
+        m_duart.reset();
+        m_es5510.reset();
+        m_volume.reset();
+        if (m_sound_rom.size() >= 8)
+            std::memcpy(m_work_ram.data(), m_sound_rom.data(), 8);
+    }
+
     void push_frame(float left, float right) {
         std::lock_guard<std::mutex> lock(m_audio_mutex);
         if (m_rb_count >= RING_BUFFER_CAPACITY) {
@@ -517,6 +527,10 @@ void Audio::set_cpu_runner(std::function<int(int cycles)> runner) {
 
 void Audio::set_reset(bool asserted) {
     m_impl->set_reset(asserted);
+}
+
+void Audio::reset_board() {
+    m_impl->reset_board();
 }
 
 bool Audio::is_reset() const {
