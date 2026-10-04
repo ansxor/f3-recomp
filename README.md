@@ -90,9 +90,9 @@ ordinal, not the enclosing main-CPU block's endpoint. Register snapshots expose
 sample-ROM word addresses, pitch increment, loop/direction, L/R volume, filter,
 bank and output pair. See [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md).
 
-Sound defaults to the interpreted oracle. `--sound-driver native` selects the
-independent, statically recompiled ROM driver; it does not replay traces or call
-the sound interpreter. ES5505/ES5510 and SDL3 remain unchanged. Configuring with
+Sound defaults to the independent, statically recompiled ROM driver when the
+build generated it (`F3_ROM_DIR`); it does not replay traces or call the sound
+interpreter. `--sound-driver oracle` selects the interpreted reference driver. ES5505/ES5510 and SDL3 remain unchanged. Configuring with
 `F3_ROM_DIR` generates both main and sound programs.
 
 ```sh

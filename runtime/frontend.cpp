@@ -52,6 +52,7 @@ int main(int argc,char **argv) try {
     std::string video_mode="fdp";
     bool video_explicit=false;
     std::string sound_driver="oracle";
+    bool sound_explicit=false;
     f3rt::GameVideoOptions video_options;
     std::string video_filter="nearest";
     uint64_t frames=0,dump_start=1,dump_every=1;
@@ -75,7 +76,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--eeprom")eeprom=value();
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--sound-trace")sound_trace_path=value();
-        else if(arg=="--sound-driver")sound_driver=value();
+        else if(arg=="--sound-driver") { sound_driver=value();sound_explicit=true; }
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
         else if(arg=="--video") { video_mode=value();video_explicit=true; }
@@ -109,6 +110,11 @@ int main(int argc,char **argv) try {
     }
     if(romdir.empty() || !dump_every)throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if(headless && !frames)throw std::runtime_error("Headless execution requires --frames");
+#ifdef F3RT_SOUND_GENERATED
+    // Builds that generated the sound program default to the recompiled driver;
+    // --sound-driver oracle selects the interpreted reference.
+    if(!sound_explicit)sound_driver="native";
+#endif
     if(sound_driver!="oracle" && sound_driver!="native")
         throw std::runtime_error("--sound-driver must be oracle or native");
 #ifdef F3RT_LANDMAKR
