@@ -7,6 +7,8 @@
 #include <span>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class GameSprites {
 public:
@@ -24,6 +26,9 @@ public:
     bool supported() const;
     uint32_t unsupported_pc() const;
     void observe_write(uint32_t pc, uint32_t address);
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     static constexpr size_t kMaxSprites = 1024;

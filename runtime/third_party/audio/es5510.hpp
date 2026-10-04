@@ -14,6 +14,8 @@
 #include <vector>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class ES5510 {
 public:
@@ -122,6 +124,9 @@ public:
 
     uint64_t &instr_at(int pc) { return m_instr[pc % 160]; }
     int16_t &dram_at(int addr) { return m_dram[addr & DRAM_MASK]; }
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     int32_t alu_operation(uint8_t op, int32_t aValue, int32_t bValue, uint8_t &flags);

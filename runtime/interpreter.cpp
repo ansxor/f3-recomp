@@ -2,6 +2,8 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "m68k.h"
+#include "state_io.hpp"
+#include "state_oracle.h"
 #include "sound_trace.hpp"
 #include <mutex>
 
@@ -133,5 +135,37 @@ int Interpreter::run_audio(int cycles) {
 }
 uint32_t Interpreter::sound_pc() const {
     return m68k_get_reg(const_cast<uint64_t *>(sound_context.data()), M68K_REG_PC);
+}
+size_t Interpreter::sound_state_size() const {
+    return sizeof(f3rt_sound_oracle_state);
+}
+
+void Interpreter::save_sound_state(StateWriter &writer) const {
+    f3rt_sound_oracle_state st{};
+    f3rt_sound_core_export(sound_context.data(), &st);
+    st.sound_needs_reset = sound_needs_reset ? 1 : 0;
+    writer.write(st);
+}
+
+void Interpreter::load_sound_state(StateReader &reader) {
+    f3rt_sound_oracle_state st;
+    reader.read(st);
+    f3rt_sound_core_import(sound_context.data(), &st);
+    sound_needs_reset = st.sound_needs_reset != 0;
+    if (!sound_needs_reset) {
+        bind(machine, true);
+        m68k_set_context(sound_context.data());
+        callbacks();
+        m68k_get_context(sound_context.data());
+        bind(machine, false);
+    }
+}
+
+void Interpreter::sync_main_from_cpu() {
+    bind(machine, false);
+    m68k_set_context(main_context.data());
+    f3rt_core_import(&machine.cpu);
+    callbacks();
+    m68k_get_context(main_context.data());
 }
 }

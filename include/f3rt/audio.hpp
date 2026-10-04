@@ -68,6 +68,11 @@ public:
     // unverified analog-gain experiment, not an asserted board schematic.
     void set_gain_model(GainModel model);
 
+    // State snapshot serialization
+    size_t state_size() const;
+    void save_state(std::span<uint8_t> dst) const;
+    void load_state(std::span<const uint8_t> src);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

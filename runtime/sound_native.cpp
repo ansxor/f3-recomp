@@ -4,6 +4,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
+#include "state_io.hpp"
 #include <cstdio>
 #include <stdexcept>
 
@@ -248,6 +249,74 @@ int SoundNative::run(int cycles) {
     }
     if (m_cpu.stopped && m_cpu.cycles < deadline) m_cpu.cycles = deadline;
     return int(m_cpu.cycles - begin);
+}
+
+size_t SoundNative::state_size() const {
+    return sizeof(CanonicalSoundNative);
+}
+
+void SoundNative::save_state(StateWriter &writer) const {
+    CanonicalSoundNative st{};
+    for (int i = 0; i < 8; ++i) {
+        st.cpu.d[i] = m_cpu.d[i];
+        st.cpu.a[i] = m_cpu.a[i];
+    }
+    st.cpu.pc = m_cpu.pc;
+    st.cpu.usp = m_cpu.usp;
+    st.cpu.ssp = m_cpu.ssp;
+    st.cpu.msp = m_cpu.msp;
+    st.cpu.vbr = m_cpu.vbr;
+    st.cpu.sfc = m_cpu.sfc;
+    st.cpu.dfc = m_cpu.dfc;
+    st.cpu.cacr = m_cpu.cacr;
+    st.cpu.caar = m_cpu.caar;
+    st.cpu.sr = m_cpu.sr;
+    st.cpu.stopped = m_cpu.stopped;
+    st.cpu.halted = m_cpu.halted;
+    st.cpu.cc_src = m_cpu.cc_src;
+    st.cpu.cc_dst = m_cpu.cc_dst;
+    st.cpu.cc_result = m_cpu.cc_result;
+    st.cpu.cc_op = m_cpu.cc_op;
+    st.cpu.cc_width = m_cpu.cc_width;
+    st.cpu.cc_mask = m_cpu.cc_mask;
+    st.cpu.cycles = m_cpu.cycles;
+    st.cpu.dispatch_deadline = m_cpu.dispatch_deadline;
+    st.needs_reset = m_needs_reset ? 1 : 0;
+    st.reset_cycles = m_reset_cycles;
+    writer.write(st);
+}
+
+void SoundNative::load_state(StateReader &reader) {
+    CanonicalSoundNative st;
+    reader.read(st);
+    for (int i = 0; i < 8; ++i) {
+        m_cpu.d[i] = st.cpu.d[i];
+        m_cpu.a[i] = st.cpu.a[i];
+    }
+    m_cpu.pc = st.cpu.pc;
+    m_cpu.usp = st.cpu.usp;
+    m_cpu.ssp = st.cpu.ssp;
+    m_cpu.msp = st.cpu.msp;
+    m_cpu.vbr = st.cpu.vbr;
+    m_cpu.sfc = st.cpu.sfc;
+    m_cpu.dfc = st.cpu.dfc;
+    m_cpu.cacr = st.cpu.cacr;
+    m_cpu.caar = st.cpu.caar;
+    m_cpu.sr = st.cpu.sr;
+    m_cpu.stopped = st.cpu.stopped;
+    m_cpu.halted = st.cpu.halted;
+    m_cpu.cc_src = st.cpu.cc_src;
+    m_cpu.cc_dst = st.cpu.cc_dst;
+    m_cpu.cc_result = st.cpu.cc_result;
+    m_cpu.cc_op = st.cpu.cc_op;
+    m_cpu.cc_width = st.cpu.cc_width;
+    m_cpu.cc_mask = st.cpu.cc_mask;
+    m_cpu.cc_pad = 0;
+    m_cpu.cycles = st.cpu.cycles;
+    m_cpu.dispatch_deadline = st.cpu.dispatch_deadline;
+    m_cpu.runtime = this;
+    m_needs_reset = st.needs_reset != 0;
+    m_reset_cycles = st.reset_cycles;
 }
 
 } // namespace f3rt

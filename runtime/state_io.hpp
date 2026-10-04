@@ -1,0 +1,519 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <span>
+#include <stdexcept>
+#include <type_traits>
+
+#include "state_oracle.h"
+namespace f3rt {
+
+class StateWriter {
+public:
+    explicit StateWriter(std::span<uint8_t> dst)
+        : m_ptr(dst.data()), m_remaining(dst.size()) {}
+
+    template <typename T>
+    void write(const T &val) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        if (m_remaining < sizeof(T)) {
+            throw std::runtime_error("StateWriter buffer overflow");
+        }
+        std::memcpy(m_ptr, &val, sizeof(T));
+        m_ptr += sizeof(T);
+        m_remaining -= sizeof(T);
+    }
+
+    void write_bytes(const void *src, size_t size) {
+        if (!size) return;
+        if (m_remaining < size) {
+            throw std::runtime_error("StateWriter buffer overflow");
+        }
+        std::memcpy(m_ptr, src, size);
+        m_ptr += size;
+        m_remaining -= size;
+    }
+
+    template <typename T, size_t N>
+    void write_array(const std::array<T, N> &arr) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        write_bytes(arr.data(), sizeof(T) * N);
+    }
+
+    template <typename T, size_t Extent = std::dynamic_extent>
+    void write_span(std::span<const T, Extent> sp) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        write_bytes(sp.data(), sp.size_bytes());
+    }
+
+    template <typename T, size_t Extent = std::dynamic_extent>
+    void write_span(std::span<T, Extent> sp) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        write_bytes(sp.data(), sp.size_bytes());
+    }
+
+    void advance(size_t size) {
+        if (m_remaining < size) {
+            throw std::runtime_error("StateWriter buffer overflow");
+        }
+        m_ptr += size;
+        m_remaining -= size;
+    }
+
+    size_t remaining() const { return m_remaining; }
+    uint8_t *current() { return m_ptr; }
+
+private:
+    uint8_t *m_ptr;
+    size_t m_remaining;
+};
+
+class StateReader {
+public:
+    explicit StateReader(std::span<const uint8_t> src)
+        : m_ptr(src.data()), m_remaining(src.size()) {}
+
+    template <typename T>
+    void read(T &val) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        if (m_remaining < sizeof(T)) {
+            throw std::runtime_error("StateReader buffer underflow");
+        }
+        std::memcpy(&val, m_ptr, sizeof(T));
+        m_ptr += sizeof(T);
+        m_remaining -= sizeof(T);
+    }
+
+    void read_bytes(void *dst, size_t size) {
+        if (!size) return;
+        if (m_remaining < size) {
+            throw std::runtime_error("StateReader buffer underflow");
+        }
+        std::memcpy(dst, m_ptr, size);
+        m_ptr += size;
+        m_remaining -= size;
+    }
+
+    void advance(size_t size) {
+        if (m_remaining < size) {
+            throw std::runtime_error("StateReader buffer underflow");
+        }
+        m_ptr += size;
+        m_remaining -= size;
+    }
+    void skip(size_t size) { advance(size); }
+
+    template <typename T, size_t N>
+    void read_array(std::array<T, N> &arr) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        read_bytes(arr.data(), sizeof(T) * N);
+    }
+
+    template <typename T, size_t Extent = std::dynamic_extent>
+    void read_span(std::span<T, Extent> sp) {
+        static_assert(std::is_trivially_copyable_v<T>, "Type must be trivially copyable");
+        read_bytes(sp.data(), sp.size_bytes());
+    }
+
+    size_t remaining() const { return m_remaining; }
+    const uint8_t *current() const { return m_ptr; }
+
+private:
+    const uint8_t *m_ptr;
+    size_t m_remaining;
+};
+
+#pragma pack(push, 1)
+
+// Native f3_cpu canonical representation (no host pointer runtime, no cc_pad)
+struct CanonicalF3Cpu {
+    uint32_t d[8];
+    uint32_t a[8];
+    uint32_t pc;
+    uint32_t usp;
+    uint32_t ssp;
+    uint32_t msp;
+    uint32_t vbr;
+    uint32_t sfc;
+    uint32_t dfc;
+    uint32_t cacr;
+    uint32_t caar;
+    uint16_t sr;
+    uint8_t stopped;
+    uint8_t halted;
+    uint32_t cc_src;
+    uint32_t cc_dst;
+    uint32_t cc_result;
+    uint8_t cc_op;
+    uint8_t cc_width;
+    uint8_t cc_mask;
+    uint64_t cycles;
+    uint64_t dispatch_deadline;
+};
+
+struct CanonicalMachineClocks {
+    uint64_t hardware_cycles;
+    uint64_t next_vblank;
+    uint64_t irq3_at;
+    uint64_t watchdog_at;
+    uint64_t frame;
+    uint8_t pending_irqs;
+    uint16_t timer_control;
+    uint32_t inputs[6];
+    uint8_t system_inputs;
+    uint64_t coin_count[4];
+    uint8_t coin_locked[4];
+    uint16_t coin_word[2];
+};
+
+struct CanonicalEeprom {
+    uint16_t words[64];
+    uint8_t mode;
+    uint8_t selected;
+    uint8_t old_clock;
+    uint8_t data_out;
+    uint8_t writable;
+    uint32_t shift;
+    uint32_t count;
+    uint32_t address;
+    uint32_t read_bit;
+    uint64_t ready_at;
+};
+
+struct CanonicalMC68681Tx {
+    uint64_t phase;
+    uint32_t baud;
+    uint8_t remaining;
+    uint8_t sent;
+    uint8_t counter_prescaler;
+    uint8_t clock;
+    uint8_t running;
+    uint8_t enabled;
+    uint8_t buffered;
+};
+
+struct CanonicalMC68681 {
+    uint8_t acr;
+    uint8_t imr;
+    uint8_t isr;
+    uint8_t ivr;
+    uint8_t opcr;
+    uint8_t opr;
+    uint8_t ipcr;
+    uint8_t ip_last_state;
+    uint16_t ctr_preset;
+    uint32_t ct_remaining;
+    uint8_t half_period;
+    uint8_t ct_running;
+    uint8_t mr1a, mr2a, mr_ptra, sra, csra, cra;
+    uint8_t mr1b, mr2b, mr_ptrb, srb, csrb, crb;
+    CanonicalMC68681Tx tx[2];
+};
+
+struct CanonicalMB87078 {
+    uint8_t gain_index[4];
+    uint16_t channel_latch[4];
+    uint8_t control;
+    uint8_t data;
+};
+
+struct CanonicalES5505Voice {
+    uint32_t control;
+    uint64_t freqcount;
+    uint64_t start;
+    uint32_t lvol;
+    uint64_t end;
+    uint32_t lvramp;
+    uint64_t accum;
+    uint32_t rvol;
+    uint32_t rvramp;
+    uint32_t ecount;
+    uint32_t k2;
+    uint32_t k2ramp;
+    uint32_t k1;
+    uint32_t k1ramp;
+    int32_t o4n1;
+    int32_t o3n1;
+    int32_t o3n2;
+    int32_t o2n1;
+    int32_t o2n2;
+    int32_t o1n1;
+    uint8_t index;
+    uint8_t filtcount;
+};
+
+struct CanonicalES5505 {
+    uint32_t master_clock;
+    uint32_t sample_rate;
+    uint8_t active_voices;
+    uint8_t current_page;
+    uint8_t irqv;
+    uint16_t mode;
+    int32_t voice_index;
+    uint32_t voice_bank[32];
+    CanonicalES5505Voice voices[32];
+};
+
+struct CanonicalES5510Alu {
+    uint8_t aReg;
+    uint8_t bReg;
+    uint8_t src;
+    uint8_t dst;
+    uint8_t op;
+    int32_t aValue;
+    int32_t bValue;
+    int32_t result;
+    uint8_t update_ccr;
+    uint8_t write_result;
+};
+
+struct CanonicalES5510MulAcc {
+    uint8_t cReg;
+    uint8_t dReg;
+    uint8_t src;
+    uint8_t dst;
+    uint8_t accumulate;
+    int32_t cValue;
+    int32_t dValue;
+    int64_t product;
+    int64_t result;
+    uint8_t write_result;
+};
+
+struct CanonicalES5510Ram {
+    int32_t address;
+    uint8_t io;
+    uint8_t cycle;
+};
+
+struct CanonicalES5510Registers {
+    uint8_t halt_asserted;
+    uint8_t pc;
+    uint8_t state;
+    int16_t ser_regs[8];
+    int64_t machl;
+    uint8_t mac_overflow;
+    int16_t dil;
+    int32_t memsiz;
+    int32_t memmask;
+    int32_t memincrement;
+    int8_t memshift;
+    int32_t dlength;
+    int32_t abase;
+    int32_t bbase;
+    int32_t dbase;
+    int32_t sigreg;
+    int32_t mulshift;
+    int8_t ccr;
+    int8_t cmr;
+    int16_t dol[2];
+    int32_t dol_count;
+    int32_t dol_latch;
+    int32_t dil_latch;
+    uint32_t dadr_latch;
+    int32_t gpr_latch;
+    uint64_t instr_latch;
+    uint8_t ram_sel;
+    uint8_t host_control;
+    uint8_t host_serial;
+    CanonicalES5510Alu alu;
+    CanonicalES5510MulAcc mulacc;
+    CanonicalES5510Ram ram;
+    CanonicalES5510Ram ram_p;
+    CanonicalES5510Ram ram_pp;
+};
+
+struct CanonicalAudioCore {
+    uint32_t bank_mask;
+    uint16_t bank_table[32];
+    uint8_t reset_asserted;
+    uint8_t esp_halted;
+    uint8_t gain_model;
+    float volume_gain[2];
+    float otis_gain[2];
+    float output_gain[2];
+    int64_t cpu_accum;
+    uint32_t duart_accum;
+    uint64_t sample_accum;
+    uint64_t clock_ticks;
+    uint64_t generated_frames;
+    uint32_t rb_count;
+};
+
+struct CanonicalSoundNative {
+    CanonicalF3Cpu cpu;
+    uint8_t needs_reset;
+    int32_t reset_cycles;
+};
+
+using CanonicalSoundOracle = f3rt_sound_oracle_state;
+
+struct CanonicalTempsprite {
+    int32_t code;
+    uint8_t color;
+    uint8_t flip_x;
+    uint8_t flip_y;
+    uint8_t pri;
+    int32_t x;
+    int32_t y;
+    int32_t scale_x;
+    int32_t scale_y;
+};
+
+struct CanonicalVideo {
+    uint8_t has_buffered_spriteram;
+    uint8_t flipscreen;
+    uint8_t sprite_bank;
+    uint8_t sprite_trails;
+    uint8_t sprite_extra_planes;
+    uint8_t sprite_pen_mask;
+    uint32_t sprite_count;
+    uint16_t control_0[8];
+    uint16_t control_1[8];
+    uint8_t tilemap_row_usage[32][8];
+    uint8_t textram_row_usage[64];
+    CanonicalTempsprite spritelist[1024];
+};
+
+struct CanonicalGameTileCell {
+    uint16_t tile;
+    uint16_t palette;
+    uint8_t pen_mask;
+    uint8_t flip_x;
+    uint8_t flip_y;
+    uint8_t blend;
+};
+
+struct CanonicalGameTextCell {
+    uint8_t tile;
+    uint8_t palette;
+    uint8_t flip_x;
+    uint8_t flip_y;
+};
+
+struct CanonicalSceneSprite {
+    int32_t x, y;
+    uint16_t scale_x, scale_y;
+    uint32_t tile;
+    uint8_t palette;
+    uint8_t flip_x, flip_y;
+};
+
+struct CanonicalSceneLayer {
+    uint8_t priority;
+    uint8_t blend_mode;
+    uint8_t clip_enabled;
+    uint8_t clip_inverted;
+    uint8_t clip_inverse;
+    uint8_t enabled;
+    uint8_t blend_select;
+    uint8_t mosaic;
+};
+
+struct CanonicalScenePlayfield {
+    CanonicalSceneLayer layer;
+    int32_t source_x;
+    int32_t source_y;
+    int32_t x_step;
+    int32_t y_step;
+    uint8_t y_fraction;
+    uint16_t palette_add;
+};
+
+struct CanonicalSceneClip {
+    int16_t left, right;
+};
+
+struct CanonicalSceneRow {
+    CanonicalScenePlayfield playfields[4];
+    CanonicalSceneLayer sprites[4];
+    CanonicalSceneLayer text;
+    CanonicalSceneClip clips[4];
+    uint8_t blend[4];
+    uint16_t background;
+    int16_t text_x, text_y;
+    uint8_t mosaic_period;
+    uint8_t bitmap;
+};
+
+struct CanonicalLinePivot {
+    uint16_t mix_value;
+    uint8_t prio;
+    uint8_t blend_mode;
+    uint8_t clip_enable;
+    uint8_t clip_inv;
+    uint8_t clip_inv_mode;
+    uint8_t blend_select_v;
+    uint8_t x_sample_enable;
+    uint8_t pivot_control;
+    uint16_t pivot_enable;
+};
+
+struct CanonicalLineSprite {
+    uint16_t mix_value;
+    uint8_t prio;
+    uint8_t blend_mode;
+    uint8_t clip_enable;
+    uint8_t clip_inv;
+    uint8_t clip_inv_mode;
+    uint8_t blend_select_v;
+    uint8_t x_sample_enable;
+};
+
+struct CanonicalLinePlayfield {
+    uint16_t mix_value;
+    uint8_t prio;
+    uint8_t blend_mode;
+    uint8_t clip_enable;
+    uint8_t clip_inv;
+    uint8_t clip_inv_mode;
+    uint8_t x_sample_enable;
+    uint16_t colscroll;
+    int32_t x_scale;
+    int32_t y_scale;
+    uint16_t pal_add;
+    int32_t rowscroll;
+};
+
+struct CanonicalLineParams {
+    CanonicalSceneClip clip[4];
+    uint8_t blend[4];
+    uint8_t x_sample;
+    uint16_t bg_palette;
+    CanonicalLinePivot pivot;
+    CanonicalLineSprite sp[4];
+    CanonicalLinePlayfield pf[4];
+};
+
+struct CanonicalGameVideoHeader {
+    uint8_t rendered;
+    uint8_t tile_valid[4];
+    uint32_t tile_unsupported[4];
+    uint8_t text_map_valid;
+    uint32_t text_unsupported_pc;
+    uint32_t sprite_staging_count;
+    uint32_t sprite_submitted_count;
+    uint32_t sprite_current_count;
+    uint8_t sprite_current_flipped;
+    uint8_t sprite_current_pen_mask;
+    uint8_t sprite_current_trails;
+    int16_t sprite_reg_scroll_x;
+    int16_t sprite_reg_scroll_y;
+    uint8_t sprite_reg_flipped;
+    uint8_t sprite_reg_pen_mask;
+    uint8_t sprite_reg_trails;
+    uint8_t sprite_supported;
+    uint32_t sprite_unsupported_pc;
+    uint16_t lines_control_0[8];
+    uint16_t lines_control_1[8];
+    uint16_t lines_flipscreen;
+    uint8_t lines_supported;
+    uint32_t lines_unsupported_pc;
+};
+
+#pragma pack(pop)
+
+} // namespace f3rt

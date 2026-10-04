@@ -14,6 +14,8 @@
 #include <functional>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class MC68681 {
 public:
@@ -50,6 +52,9 @@ public:
     }
 
     uint8_t output_port() const { return m_opr ^ 0xff; }
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     void update_interrupts();

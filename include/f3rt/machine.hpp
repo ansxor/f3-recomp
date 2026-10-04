@@ -73,6 +73,10 @@ public:
     void load_eeprom(const std::filesystem::path &path);
     void save_eeprom(const std::filesystem::path &path) const;
     void set_input(unsigned port, uint32_t mask, bool pressed);
+    size_t state_size() const;
+    void save_state(std::span<uint8_t> dst) const;
+    void load_state(std::span<const uint8_t> src);
+    uint32_t state_crc() const;
 private:
     uint64_t hardware_cycles = 0;
     uint64_t next_vblank = 0, irq3_at = UINT64_MAX;
@@ -80,5 +84,6 @@ private:
     uint64_t raster_cycle(uint64_t pixels) const;
     uint32_t input_word(unsigned index) const;
     void coin_write(unsigned bank, uint8_t value);
+    mutable std::vector<uint8_t> state_scratch_;
 };
 }

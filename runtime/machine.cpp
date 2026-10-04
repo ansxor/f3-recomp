@@ -6,6 +6,7 @@
 #include "sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
+#include "state_io.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <sstream>
@@ -211,5 +212,230 @@ void Machine::save_eeprom(const std::filesystem::path &p) const { eeprom->save(p
 void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
     if (port >= inputs.size()) throw std::out_of_range("Input port index");
     if (pressed) inputs[port] &= ~mask; else inputs[port] |= mask;
+}
+size_t Machine::state_size() const {
+    size_t sz = sizeof(CanonicalF3Cpu) +
+                sizeof(CanonicalMachineClocks) +
+                ram.size() +
+                palette.size() +
+                graphics.size() +
+                control.size() +
+                shared.size() +
+                sizeof(uint32_t) * pixels.size() +
+                eeprom->state_size() +
+                audio->state_size() +
+                video->state_size();
+    if (sound_native) sz += sound_native->state_size();
+    else sz += interpreter->sound_state_size();
+    if (game_video) sz += game_video->state_size();
+    return sz;
+}
+
+void Machine::save_state(std::span<uint8_t> dst) const {
+    if (dst.size() != state_size()) {
+        throw std::invalid_argument("Machine::save_state size mismatch: expected " +
+            std::to_string(state_size()) + ", got " + std::to_string(dst.size()));
+    }
+    StateWriter writer(dst);
+    // 1. Native CPU
+    CanonicalF3Cpu cpu_st{};
+    for (int i = 0; i < 8; ++i) {
+        cpu_st.d[i] = cpu.d[i];
+        cpu_st.a[i] = cpu.a[i];
+    }
+    cpu_st.pc = cpu.pc;
+    cpu_st.usp = cpu.usp;
+    cpu_st.ssp = cpu.ssp;
+    cpu_st.msp = cpu.msp;
+    cpu_st.vbr = cpu.vbr;
+    cpu_st.sfc = cpu.sfc;
+    cpu_st.dfc = cpu.dfc;
+    cpu_st.cacr = cpu.cacr;
+    cpu_st.caar = cpu.caar;
+    cpu_st.sr = cpu.sr;
+    cpu_st.stopped = cpu.stopped;
+    cpu_st.halted = cpu.halted;
+    cpu_st.cc_src = cpu.cc_src;
+    cpu_st.cc_dst = cpu.cc_dst;
+    cpu_st.cc_result = cpu.cc_result;
+    cpu_st.cc_op = cpu.cc_op;
+    cpu_st.cc_width = cpu.cc_width;
+    cpu_st.cc_mask = cpu.cc_mask;
+    cpu_st.cycles = cpu.cycles;
+    cpu_st.dispatch_deadline = cpu.dispatch_deadline;
+    writer.write(cpu_st);
+
+    // 2. Machine clocks, scheduler, inputs & coins
+    CanonicalMachineClocks mcl{};
+    mcl.hardware_cycles = hardware_cycles;
+    mcl.next_vblank = next_vblank;
+    mcl.irq3_at = irq3_at;
+    mcl.watchdog_at = watchdog_at;
+    mcl.frame = frame;
+    mcl.pending_irqs = pending_irqs;
+    mcl.timer_control = timer_control;
+    for (int i = 0; i < 6; ++i) mcl.inputs[i] = inputs[i];
+    mcl.system_inputs = system_inputs;
+    for (int i = 0; i < 4; ++i) {
+        mcl.coin_count[i] = coin_count[i];
+        mcl.coin_locked[i] = coin_locked[i] ? 1 : 0;
+    }
+    for (int i = 0; i < 2; ++i) mcl.coin_word[i] = coin_word[i];
+    writer.write(mcl);
+
+    // 3. RAM regions
+    writer.write_span(std::span<const uint8_t, 0x20000>(ram));
+    writer.write_span(std::span<const uint8_t, 0x8000>(palette));
+    writer.write_span(std::span<const uint8_t, 0x40000>(graphics));
+    writer.write_span(std::span<const uint8_t, 0x20>(control));
+    writer.write_span(std::span<const uint8_t, 0x800>(shared));
+    writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
+
+    // 4. EEPROM
+    eeprom->save_state(writer);
+
+    // 5. Audio
+    {
+        std::span<uint8_t> audio_slice(writer.current(), audio->state_size());
+        audio->save_state(audio_slice);
+        writer.advance(audio->state_size());
+    }
+
+    // 6. Sound CPU
+    if (sound_native) {
+        sound_native->save_state(writer);
+    } else {
+        interpreter->save_sound_state(writer);
+    }
+
+    // 7. Video (always FDP)
+    {
+        std::span<uint8_t> v_slice(writer.current(), video->state_size());
+        video->save_state(v_slice);
+        writer.advance(video->state_size());
+    }
+
+    // 8. GameVideo (when present)
+    if (game_video) {
+        std::span<uint8_t> gv_slice(writer.current(), game_video->state_size());
+        game_video->save_state(gv_slice);
+        writer.advance(game_video->state_size());
+    }
+
+    if (writer.remaining() != 0) {
+        throw std::logic_error("Machine::save_state remaining unwritten bytes");
+    }
+}
+
+void Machine::load_state(std::span<const uint8_t> src) {
+    if (src.size() != state_size()) {
+        throw std::invalid_argument("Machine::load_state size mismatch: expected " +
+            std::to_string(state_size()) + ", got " + std::to_string(src.size()));
+    }
+    StateReader reader(src);
+    // 1. Native CPU
+    CanonicalF3Cpu cpu_st;
+    reader.read(cpu_st);
+    for (int i = 0; i < 8; ++i) {
+        cpu.d[i] = cpu_st.d[i];
+        cpu.a[i] = cpu_st.a[i];
+    }
+    cpu.pc = cpu_st.pc;
+    cpu.usp = cpu_st.usp;
+    cpu.ssp = cpu_st.ssp;
+    cpu.msp = cpu_st.msp;
+    cpu.vbr = cpu_st.vbr;
+    cpu.sfc = cpu_st.sfc;
+    cpu.dfc = cpu_st.dfc;
+    cpu.cacr = cpu_st.cacr;
+    cpu.caar = cpu_st.caar;
+    cpu.sr = cpu_st.sr;
+    cpu.stopped = cpu_st.stopped;
+    cpu.halted = cpu_st.halted;
+    cpu.cc_src = cpu_st.cc_src;
+    cpu.cc_dst = cpu_st.cc_dst;
+    cpu.cc_result = cpu_st.cc_result;
+    cpu.cc_op = cpu_st.cc_op;
+    cpu.cc_width = cpu_st.cc_width;
+    cpu.cc_mask = cpu_st.cc_mask;
+    cpu.cc_pad = 0;
+    cpu.cycles = cpu_st.cycles;
+    cpu.dispatch_deadline = cpu_st.dispatch_deadline;
+    cpu.runtime = this;
+
+    // 2. Machine clocks, scheduler, inputs & coins
+    CanonicalMachineClocks mcl;
+    reader.read(mcl);
+    hardware_cycles = mcl.hardware_cycles;
+    next_vblank = mcl.next_vblank;
+    irq3_at = mcl.irq3_at;
+    watchdog_at = mcl.watchdog_at;
+    frame = mcl.frame;
+    pending_irqs = mcl.pending_irqs;
+    timer_control = mcl.timer_control;
+    for (int i = 0; i < 6; ++i) inputs[i] = mcl.inputs[i];
+    system_inputs = mcl.system_inputs;
+    for (int i = 0; i < 4; ++i) {
+        coin_count[i] = mcl.coin_count[i];
+        coin_locked[i] = mcl.coin_locked[i] != 0;
+    }
+    for (int i = 0; i < 2; ++i) coin_word[i] = mcl.coin_word[i];
+
+    // 3. RAM regions
+    reader.read_span(std::span<uint8_t, 0x20000>(ram));
+    reader.read_span(std::span<uint8_t, 0x8000>(palette));
+    reader.read_span(std::span<uint8_t, 0x40000>(graphics));
+    reader.read_span(std::span<uint8_t, 0x20>(control));
+    reader.read_span(std::span<uint8_t, 0x800>(shared));
+    reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
+
+    // 4. EEPROM
+    eeprom->load_state(reader);
+
+    // 5. Audio
+    {
+        std::span<const uint8_t> audio_slice(reader.current(), audio->state_size());
+        audio->load_state(audio_slice);
+        reader.skip(audio->state_size());
+    }
+
+    // 6. Sound CPU
+    if (sound_native) {
+        sound_native->load_state(reader);
+    } else {
+        interpreter->load_sound_state(reader);
+    }
+
+    // Also sync main interpreter context so Musashi is ready for any fallback
+    if (interpreter) {
+        interpreter->sync_main_from_cpu();
+    }
+
+    // 7. Video (always FDP)
+    {
+        std::span<const uint8_t> v_slice(reader.current(), video->state_size());
+        video->load_state(v_slice);
+        reader.skip(video->state_size());
+    }
+
+    // 8. GameVideo (when present)
+    if (game_video) {
+        std::span<const uint8_t> gv_slice(reader.current(), game_video->state_size());
+        game_video->load_state(gv_slice);
+        reader.skip(game_video->state_size());
+    }
+
+    if (reader.remaining() != 0) {
+        throw std::logic_error("Machine::load_state remaining unread bytes");
+    }
+}
+
+uint32_t Machine::state_crc() const {
+    const size_t sz = state_size();
+    if (state_scratch_.size() != sz) {
+        state_scratch_.resize(sz);
+    }
+    save_state(state_scratch_);
+    return crc32(state_scratch_.data(), state_scratch_.size());
 }
 }

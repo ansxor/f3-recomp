@@ -13,6 +13,8 @@
 #include <functional>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class MB87078 {
 public:
@@ -30,6 +32,9 @@ public:
     void set_gain_callback(std::function<void(int channel, float gain)> cb) {
         m_gain_cb = cb;
     }
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     void gain_recalc();

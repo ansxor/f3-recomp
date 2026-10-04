@@ -31,6 +31,9 @@ public:
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;
+    size_t state_size() const;
+    void save_state(std::span<uint8_t> dst) const;
+    void load_state(std::span<const uint8_t> src);
 private:
     void latch_sprites();
     void render();

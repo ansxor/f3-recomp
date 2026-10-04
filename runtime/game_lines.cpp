@@ -1,5 +1,6 @@
 #include "game_lines.hpp"
 #include "f3rt/video.hpp"
+#include "state_io.hpp"
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
@@ -792,6 +793,197 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
             }
         }
     }
+}
+
+static void pack_layer(const SceneLayer &s, CanonicalSceneLayer &d) {
+    d.priority = s.priority;
+    d.blend_mode = s.blend_mode;
+    d.clip_enabled = s.clip_enabled;
+    d.clip_inverted = s.clip_inverted;
+    d.clip_inverse = s.clip_inverse ? 1 : 0;
+    d.enabled = s.enabled ? 1 : 0;
+    d.blend_select = s.blend_select ? 1 : 0;
+    d.mosaic = s.mosaic ? 1 : 0;
+}
+
+static void unpack_layer(const CanonicalSceneLayer &s, SceneLayer &d) {
+    d.priority = s.priority;
+    d.blend_mode = s.blend_mode;
+    d.clip_enabled = s.clip_enabled;
+    d.clip_inverted = s.clip_inverted;
+    d.clip_inverse = s.clip_inverse != 0;
+    d.enabled = s.enabled != 0;
+    d.blend_select = s.blend_select != 0;
+    d.mosaic = s.mosaic != 0;
+}
+
+size_t GameLines::state_size() const {
+    return sizeof(CanonicalLineParams) * 256 +
+           sizeof(CanonicalSceneRow) * 256 +
+           sizeof(uint16_t) * 16 +
+           sizeof(uint16_t) +
+           1 +
+           sizeof(uint32_t);
+}
+
+void GameLines::save_state(StateWriter &writer) const {
+    for (size_t i = 0; i < 256; ++i) {
+        const auto &s = lines_[i];
+        CanonicalLineParams d{};
+        for (int c = 0; c < 4; ++c) {
+            d.clip[c].left = s.clip[c].left;
+            d.clip[c].right = s.clip[c].right;
+        }
+        std::copy_n(s.blend.data(), 4, d.blend);
+        d.x_sample = s.x_sample;
+        d.bg_palette = s.bg_palette;
+        d.pivot.mix_value = s.pivot.mix_value;
+        d.pivot.prio = s.pivot.prio;
+        d.pivot.blend_mode = s.pivot.blend_mode;
+        d.pivot.clip_enable = s.pivot.clip_enable;
+        d.pivot.clip_inv = s.pivot.clip_inv;
+        d.pivot.clip_inv_mode = s.pivot.clip_inv_mode ? 1 : 0;
+        d.pivot.blend_select_v = s.pivot.blend_select_v ? 1 : 0;
+        d.pivot.x_sample_enable = s.pivot.x_sample_enable ? 1 : 0;
+        d.pivot.pivot_control = s.pivot.pivot_control;
+        d.pivot.pivot_enable = s.pivot.pivot_enable;
+        for (int p = 0; p < 4; ++p) {
+            d.sp[p].mix_value = s.sp[p].mix_value;
+            d.sp[p].prio = s.sp[p].prio;
+            d.sp[p].blend_mode = s.sp[p].blend_mode;
+            d.sp[p].clip_enable = s.sp[p].clip_enable;
+            d.sp[p].clip_inv = s.sp[p].clip_inv;
+            d.sp[p].clip_inv_mode = s.sp[p].clip_inv_mode ? 1 : 0;
+            d.sp[p].blend_select_v = s.sp[p].blend_select_v ? 1 : 0;
+            d.sp[p].x_sample_enable = s.sp[p].x_sample_enable ? 1 : 0;
+
+            d.pf[p].mix_value = s.pf[p].mix_value;
+            d.pf[p].prio = s.pf[p].prio;
+            d.pf[p].blend_mode = s.pf[p].blend_mode;
+            d.pf[p].clip_enable = s.pf[p].clip_enable;
+            d.pf[p].clip_inv = s.pf[p].clip_inv;
+            d.pf[p].clip_inv_mode = s.pf[p].clip_inv_mode ? 1 : 0;
+            d.pf[p].x_sample_enable = s.pf[p].x_sample_enable ? 1 : 0;
+            d.pf[p].colscroll = s.pf[p].colscroll;
+            d.pf[p].x_scale = s.pf[p].x_scale;
+            d.pf[p].y_scale = s.pf[p].y_scale;
+            d.pf[p].pal_add = s.pf[p].pal_add;
+            d.pf[p].rowscroll = s.pf[p].rowscroll;
+        }
+        writer.write(d);
+    }
+    for (size_t i = 0; i < 256; ++i) {
+        const auto &s = rows_[i];
+        CanonicalSceneRow d{};
+        for (int p = 0; p < 4; ++p) {
+            pack_layer(s.playfields[p].layer, d.playfields[p].layer);
+            d.playfields[p].source_x = s.playfields[p].source_x;
+            d.playfields[p].source_y = s.playfields[p].source_y;
+            d.playfields[p].x_step = s.playfields[p].x_step;
+            d.playfields[p].y_step = s.playfields[p].y_step;
+            d.playfields[p].y_fraction = s.playfields[p].y_fraction;
+            d.playfields[p].palette_add = s.playfields[p].palette_add;
+        }
+        for (int sp = 0; sp < 4; ++sp) pack_layer(s.sprites[sp], d.sprites[sp]);
+        pack_layer(s.text, d.text);
+        for (int c = 0; c < 4; ++c) {
+            d.clips[c].left = s.clips[c].left;
+            d.clips[c].right = s.clips[c].right;
+        }
+        std::copy_n(s.blend.data(), 4, d.blend);
+        d.background = s.background;
+        d.text_x = s.text_x;
+        d.text_y = s.text_y;
+        d.mosaic_period = s.mosaic_period;
+        d.bitmap = s.bitmap ? 1 : 0;
+        writer.write(d);
+    }
+    writer.write_span(std::span<const uint16_t, 8>(control_0_));
+    writer.write_span(std::span<const uint16_t, 8>(control_1_));
+    writer.write(flipscreen_);
+    writer.write(uint8_t(supported_ ? 1 : 0));
+    writer.write(unsupported_pc_);
+}
+
+void GameLines::load_state(StateReader &reader) {
+    for (size_t i = 0; i < 256; ++i) {
+        CanonicalLineParams s;
+        reader.read(s);
+        auto &d = lines_[i];
+        for (int c = 0; c < 4; ++c) {
+            d.clip[c].left = s.clip[c].left;
+            d.clip[c].right = s.clip[c].right;
+        }
+        std::copy_n(s.blend, 4, d.blend.data());
+        d.x_sample = s.x_sample;
+        d.bg_palette = s.bg_palette;
+        d.pivot.mix_value = s.pivot.mix_value;
+        d.pivot.prio = s.pivot.prio;
+        d.pivot.blend_mode = s.pivot.blend_mode;
+        d.pivot.clip_enable = s.pivot.clip_enable;
+        d.pivot.clip_inv = s.pivot.clip_inv;
+        d.pivot.clip_inv_mode = s.pivot.clip_inv_mode != 0;
+        d.pivot.blend_select_v = s.pivot.blend_select_v != 0;
+        d.pivot.x_sample_enable = s.pivot.x_sample_enable != 0;
+        d.pivot.pivot_control = s.pivot.pivot_control;
+        d.pivot.pivot_enable = s.pivot.pivot_enable;
+        for (int p = 0; p < 4; ++p) {
+            d.sp[p].mix_value = s.sp[p].mix_value;
+            d.sp[p].prio = s.sp[p].prio;
+            d.sp[p].blend_mode = s.sp[p].blend_mode;
+            d.sp[p].clip_enable = s.sp[p].clip_enable;
+            d.sp[p].clip_inv = s.sp[p].clip_inv;
+            d.sp[p].clip_inv_mode = s.sp[p].clip_inv_mode != 0;
+            d.sp[p].blend_select_v = s.sp[p].blend_select_v != 0;
+            d.sp[p].x_sample_enable = s.sp[p].x_sample_enable != 0;
+
+            d.pf[p].mix_value = s.pf[p].mix_value;
+            d.pf[p].prio = s.pf[p].prio;
+            d.pf[p].blend_mode = s.pf[p].blend_mode;
+            d.pf[p].clip_enable = s.pf[p].clip_enable;
+            d.pf[p].clip_inv = s.pf[p].clip_inv;
+            d.pf[p].clip_inv_mode = s.pf[p].clip_inv_mode != 0;
+            d.pf[p].x_sample_enable = s.pf[p].x_sample_enable != 0;
+            d.pf[p].colscroll = s.pf[p].colscroll;
+            d.pf[p].x_scale = s.pf[p].x_scale;
+            d.pf[p].y_scale = s.pf[p].y_scale;
+            d.pf[p].pal_add = s.pf[p].pal_add;
+            d.pf[p].rowscroll = s.pf[p].rowscroll;
+        }
+    }
+    for (size_t i = 0; i < 256; ++i) {
+        CanonicalSceneRow s;
+        reader.read(s);
+        auto &d = rows_[i];
+        for (int p = 0; p < 4; ++p) {
+            unpack_layer(s.playfields[p].layer, d.playfields[p].layer);
+            d.playfields[p].source_x = s.playfields[p].source_x;
+            d.playfields[p].source_y = s.playfields[p].source_y;
+            d.playfields[p].x_step = s.playfields[p].x_step;
+            d.playfields[p].y_step = s.playfields[p].y_step;
+            d.playfields[p].y_fraction = s.playfields[p].y_fraction;
+            d.playfields[p].palette_add = s.playfields[p].palette_add;
+        }
+        for (int sp = 0; sp < 4; ++sp) unpack_layer(s.sprites[sp], d.sprites[sp]);
+        unpack_layer(s.text, d.text);
+        for (int c = 0; c < 4; ++c) {
+            d.clips[c].left = s.clips[c].left;
+            d.clips[c].right = s.clips[c].right;
+        }
+        std::copy_n(s.blend, 4, d.blend.data());
+        d.background = s.background;
+        d.text_x = s.text_x;
+        d.text_y = s.text_y;
+        d.mosaic_period = s.mosaic_period;
+        d.bitmap = s.bitmap != 0;
+    }
+    reader.read_span(std::span<uint16_t, 8>(control_0_));
+    reader.read_span(std::span<uint16_t, 8>(control_1_));
+    reader.read(flipscreen_);
+    uint8_t u8;
+    reader.read(u8);
+    supported_ = u8 != 0;
+    reader.read(unsupported_pc_);
 }
 
 } // namespace f3rt

@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Bryan McPhail, ywy, 12Me21, f3rt authors
 #include "f3rt/video.hpp"
+#include "state_io.hpp"
 #include "game_scene.hpp"
 
 #include <algorithm>
@@ -312,6 +313,84 @@ struct Video::Impl {
         for (auto &pf : pf_lines) pf.last_y = -1;
         text_line.last_y = -1;
         pivot_line.last_y = -1;
+    }
+    size_t state_size() const {
+        return sizeof(CanonicalVideo) +
+               0x10000 +
+               sizeof(uint16_t) * 432 * 256 +
+               256;
+    }
+
+    void save_state(StateWriter &writer) const {
+        CanonicalVideo st{};
+        st.has_buffered_spriteram = has_buffered_spriteram ? 1 : 0;
+        st.flipscreen = flipscreen ? 1 : 0;
+        st.sprite_bank = sprite_bank ? 1 : 0;
+        st.sprite_trails = sprite_trails ? 1 : 0;
+        st.sprite_extra_planes = sprite_extra_planes;
+        st.sprite_pen_mask = sprite_pen_mask;
+        st.sprite_count = uint32_t(sprite_count);
+        for (int i = 0; i < 8; ++i) {
+            st.control_0[i] = control_0[i];
+            st.control_1[i] = control_1[i];
+        }
+        std::memcpy(st.tilemap_row_usage, tilemap_row_usage, sizeof(st.tilemap_row_usage));
+        std::memcpy(st.textram_row_usage, textram_row_usage, sizeof(st.textram_row_usage));
+        for (size_t i = 0; i < 1024; ++i) {
+            const auto &src = spritelist[i];
+            auto &dst = st.spritelist[i];
+            dst.code = src.code;
+            dst.color = src.color;
+            dst.flip_x = src.flip_x ? 1 : 0;
+            dst.flip_y = src.flip_y ? 1 : 0;
+            dst.pri = src.pri;
+            dst.x = src.x;
+            dst.y = src.y;
+            dst.scale_x = src.scale_x;
+            dst.scale_y = src.scale_y;
+        }
+        writer.write(st);
+        writer.write_bytes(buffered_spriteram.data(), 0x10000);
+        writer.write_bytes(sprite_framebuffer.data(), sizeof(uint16_t) * 432 * 256);
+        writer.write_bytes(sprite_pri_row_usage.data(), 256);
+    }
+
+    void load_state(StateReader &reader) {
+        CanonicalVideo st;
+        reader.read(st);
+        has_buffered_spriteram = st.has_buffered_spriteram != 0;
+        flipscreen = st.flipscreen != 0;
+        sprite_bank = st.sprite_bank != 0;
+        sprite_trails = st.sprite_trails != 0;
+        sprite_extra_planes = st.sprite_extra_planes;
+        sprite_pen_mask = st.sprite_pen_mask;
+        sprite_count = std::min(size_t(st.sprite_count), size_t(1024));
+        for (int i = 0; i < 8; ++i) {
+            control_0[i] = st.control_0[i];
+            control_1[i] = st.control_1[i];
+        }
+        std::memcpy(tilemap_row_usage, st.tilemap_row_usage, sizeof(tilemap_row_usage));
+        std::memcpy(textram_row_usage, st.textram_row_usage, sizeof(textram_row_usage));
+        for (auto &pf : pf_lines) pf.last_y = -1;
+        text_line.last_y = -1;
+        pivot_line.last_y = -1;
+        oracle_scene_rows_.fill({});
+        for (size_t i = 0; i < 1024; ++i) {
+            const auto &src = st.spritelist[i];
+            auto &dst = spritelist[i];
+            dst.code = src.code;
+            dst.color = src.color;
+            dst.flip_x = src.flip_x != 0;
+            dst.flip_y = src.flip_y != 0;
+            dst.pri = src.pri;
+            dst.x = src.x;
+            dst.y = src.y;
+            dst.scale_x = src.scale_x;
+            dst.scale_y = src.scale_y;
+        }
+        reader.read_bytes(buffered_spriteram.data(), 0x10000);
+        reader.read_bytes(sprite_framebuffer.data(), sizeof(uint16_t) * 432 * 256);
+        reader.read_bytes(sprite_pri_row_usage.data(), 256);
     }
 
     bool decode_roms(std::span<const uint8_t> sprites,
@@ -1278,6 +1357,31 @@ const SceneRow &Video::inspect_scene_row(unsigned scanout_y) const {
 
 void Video::enable_scene_inspection(bool enable) {
     m_impl->m_scene_inspection_enabled = enable;
+}
+size_t Video::state_size() const {
+    return m_impl->state_size();
+}
+
+void Video::save_state(std::span<uint8_t> dst) const {
+    if (dst.size() != state_size()) {
+        throw std::invalid_argument("Video::save_state size mismatch");
+    }
+    StateWriter writer(dst);
+    m_impl->save_state(writer);
+    if (writer.remaining() != 0) {
+        throw std::logic_error("Video::save_state remaining unwritten bytes");
+    }
+}
+
+void Video::load_state(std::span<const uint8_t> src) {
+    if (src.size() != state_size()) {
+        throw std::invalid_argument("Video::load_state size mismatch");
+    }
+    StateReader reader(src);
+    m_impl->load_state(reader);
+    if (reader.remaining() != 0) {
+        throw std::logic_error("Video::load_state remaining unread bytes");
+    }
 }
 
 } // namespace f3rt

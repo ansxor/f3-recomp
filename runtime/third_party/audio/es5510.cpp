@@ -8,6 +8,7 @@
  ***************************************************************************************/
 
 #include "es5510.hpp"
+#include "state_io.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -712,6 +713,165 @@ void ES5510::run_once() {
     while (state != STATE_HALTED && safety-- > 0) {
         execute_run(1);
     }
+}
+
+size_t ES5510::state_size() const {
+    return sizeof(CanonicalES5510Registers) +
+           sizeof(int32_t) * 0xc0 +
+           sizeof(uint64_t) * 160 +
+           sizeof(int16_t) * DRAM_SIZE;
+}
+
+void ES5510::save_state(StateWriter &writer) const {
+    CanonicalES5510Registers st{};
+    st.halt_asserted = halt_asserted ? 1 : 0;
+    st.pc = pc;
+    st.state = uint8_t(state);
+    st.ser_regs[0] = ser0r; st.ser_regs[1] = ser0l;
+    st.ser_regs[2] = ser1r; st.ser_regs[3] = ser1l;
+    st.ser_regs[4] = ser2r; st.ser_regs[5] = ser2l;
+    st.ser_regs[6] = ser3r; st.ser_regs[7] = ser3l;
+    st.machl = machl;
+    st.mac_overflow = mac_overflow ? 1 : 0;
+    st.dil = dil;
+    st.memsiz = memsiz;
+    st.memmask = memmask;
+    st.memincrement = memincrement;
+    st.memshift = memshift;
+    st.dlength = dlength;
+    st.abase = abase;
+    st.bbase = bbase;
+    st.dbase = dbase;
+    st.sigreg = sigreg;
+    st.mulshift = mulshift;
+    st.ccr = ccr;
+    st.cmr = cmr;
+    st.dol[0] = dol[0];
+    st.dol[1] = dol[1];
+    st.dol_count = dol_count;
+    st.dol_latch = dol_latch;
+    st.dil_latch = dil_latch;
+    st.dadr_latch = dadr_latch;
+    st.gpr_latch = gpr_latch;
+    st.instr_latch = instr_latch;
+    st.ram_sel = ram_sel;
+    st.host_control = host_control;
+    st.host_serial = host_serial;
+
+    st.alu.aReg = alu.aReg;
+    st.alu.bReg = alu.bReg;
+    st.alu.src = uint8_t(alu.src);
+    st.alu.dst = uint8_t(alu.dst);
+    st.alu.op = alu.op;
+    st.alu.aValue = alu.aValue;
+    st.alu.bValue = alu.bValue;
+    st.alu.result = alu.result;
+    st.alu.update_ccr = alu.update_ccr ? 1 : 0;
+    st.alu.write_result = alu.write_result ? 1 : 0;
+
+    st.mulacc.cReg = mulacc.cReg;
+    st.mulacc.dReg = mulacc.dReg;
+    st.mulacc.src = uint8_t(mulacc.src);
+    st.mulacc.dst = uint8_t(mulacc.dst);
+    st.mulacc.accumulate = mulacc.accumulate ? 1 : 0;
+    st.mulacc.cValue = mulacc.cValue;
+    st.mulacc.dValue = mulacc.dValue;
+    st.mulacc.product = mulacc.product;
+    st.mulacc.result = mulacc.result;
+    st.mulacc.write_result = mulacc.write_result ? 1 : 0;
+
+    st.ram.address = ram.address;
+    st.ram.io = ram.io ? 1 : 0;
+    st.ram.cycle = uint8_t(ram.cycle);
+
+    st.ram_p.address = ram_p.address;
+    st.ram_p.io = ram_p.io ? 1 : 0;
+    st.ram_p.cycle = uint8_t(ram_p.cycle);
+
+    st.ram_pp.address = ram_pp.address;
+    st.ram_pp.io = ram_pp.io ? 1 : 0;
+    st.ram_pp.cycle = uint8_t(ram_pp.cycle);
+
+    writer.write(st);
+    writer.write_bytes(m_gpr.get(), sizeof(int32_t) * 0xc0);
+    writer.write_bytes(m_instr.get(), sizeof(uint64_t) * 160);
+    writer.write_bytes(m_dram.get(), sizeof(int16_t) * DRAM_SIZE);
+}
+
+void ES5510::load_state(StateReader &reader) {
+    CanonicalES5510Registers st;
+    reader.read(st);
+    halt_asserted = st.halt_asserted != 0;
+    pc = st.pc;
+    state = State(st.state);
+    ser0r = st.ser_regs[0]; ser0l = st.ser_regs[1];
+    ser1r = st.ser_regs[2]; ser1l = st.ser_regs[3];
+    ser2r = st.ser_regs[4]; ser2l = st.ser_regs[5];
+    ser3r = st.ser_regs[6]; ser3l = st.ser_regs[7];
+    machl = st.machl;
+    mac_overflow = st.mac_overflow != 0;
+    dil = st.dil;
+    memsiz = st.memsiz;
+    memmask = st.memmask;
+    memincrement = st.memincrement;
+    memshift = st.memshift;
+    dlength = st.dlength;
+    abase = st.abase;
+    bbase = st.bbase;
+    dbase = st.dbase;
+    sigreg = st.sigreg;
+    mulshift = st.mulshift;
+    ccr = st.ccr;
+    cmr = st.cmr;
+    dol[0] = st.dol[0];
+    dol[1] = st.dol[1];
+    dol_count = st.dol_count;
+    dol_latch = st.dol_latch;
+    dil_latch = st.dil_latch;
+    dadr_latch = st.dadr_latch;
+    gpr_latch = st.gpr_latch;
+    instr_latch = st.instr_latch;
+    ram_sel = st.ram_sel;
+    host_control = st.host_control;
+    host_serial = st.host_serial;
+
+    alu.aReg = st.alu.aReg;
+    alu.bReg = st.alu.bReg;
+    alu.src = OpSrcDst(st.alu.src);
+    alu.dst = OpSrcDst(st.alu.dst);
+    alu.op = st.alu.op;
+    alu.aValue = st.alu.aValue;
+    alu.bValue = st.alu.bValue;
+    alu.result = st.alu.result;
+    alu.update_ccr = st.alu.update_ccr != 0;
+    alu.write_result = st.alu.write_result != 0;
+
+    mulacc.cReg = st.mulacc.cReg;
+    mulacc.dReg = st.mulacc.dReg;
+    mulacc.src = OpSrcDst(st.mulacc.src);
+    mulacc.dst = OpSrcDst(st.mulacc.dst);
+    mulacc.accumulate = st.mulacc.accumulate != 0;
+    mulacc.cValue = st.mulacc.cValue;
+    mulacc.dValue = st.mulacc.dValue;
+    mulacc.product = st.mulacc.product;
+    mulacc.result = st.mulacc.result;
+    mulacc.write_result = st.mulacc.write_result != 0;
+
+    ram.address = st.ram.address;
+    ram.io = st.ram.io != 0;
+    ram.cycle = RamCycle(st.ram.cycle);
+
+    ram_p.address = st.ram_p.address;
+    ram_p.io = st.ram_p.io != 0;
+    ram_p.cycle = RamCycle(st.ram_p.cycle);
+
+    ram_pp.address = st.ram_pp.address;
+    ram_pp.io = st.ram_pp.io != 0;
+    ram_pp.cycle = RamCycle(st.ram_pp.cycle);
+
+    reader.read_bytes(m_gpr.get(), sizeof(int32_t) * 0xc0);
+    reader.read_bytes(m_instr.get(), sizeof(uint64_t) * 160);
+    reader.read_bytes(m_dram.get(), sizeof(int16_t) * DRAM_SIZE);
 }
 
 } // namespace f3rt

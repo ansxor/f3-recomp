@@ -3,6 +3,8 @@
 #include "f3rt/cpu_abi.h"
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class GameTiles {
 public:
@@ -13,6 +15,9 @@ public:
     uint32_t unsupported_pc(unsigned layer) const { return unsupported_[layer]; }
     ScenePixel playfield_pixel(unsigned layer, int x, int y, bool flipped,
                                std::span<const uint8_t> tiles) const;
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     struct Cell {

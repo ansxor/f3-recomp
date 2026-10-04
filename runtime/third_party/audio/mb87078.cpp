@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "mb87078.hpp"
+#include "state_io.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -86,6 +87,33 @@ void MB87078::write(uint32_t offset, uint8_t data) {
 
 uint8_t MB87078::read(uint32_t offset) const {
     return (offset & 1) ? m_control : m_data;
+}
+
+size_t MB87078::state_size() const {
+    return sizeof(CanonicalMB87078);
+}
+
+void MB87078::save_state(StateWriter &writer) const {
+    CanonicalMB87078 st{};
+    for (int i = 0; i < 4; ++i) {
+        st.gain_index[i] = m_gain_index[i];
+        st.channel_latch[i] = m_channel_latch[i];
+    }
+    st.control = m_control;
+    st.data = m_data;
+    writer.write(st);
+}
+
+void MB87078::load_state(StateReader &reader) {
+    CanonicalMB87078 st;
+    reader.read(st);
+    for (int i = 0; i < 4; ++i) {
+        m_gain_index[i] = st.gain_index[i];
+        m_channel_latch[i] = st.channel_latch[i];
+    }
+    m_control = st.control;
+    m_data = st.data;
+    gain_recalc();
 }
 
 } // namespace f3rt

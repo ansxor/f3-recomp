@@ -6,6 +6,7 @@
 #include "game_sprites.hpp"
 #include "game_lines.hpp"
 #include "game_compositor.hpp"
+#include "state_io.hpp"
 #include <algorithm>
 #include <array>
 #include <ostream>
@@ -60,6 +61,42 @@ struct GameVideo::Impl {
     bool rendered = false;
     uint64_t composite_frames = 0, composite_mismatches = 0;
     std::array<uint64_t, 9> frames{}, mismatches{};
+    size_t state_size() const {
+        return 1 +
+               tiles.state_size() +
+               text.state_size() +
+               sprites.state_size() +
+               lines.state_size() +
+               sizeof(uint16_t) * 432 * 256 +
+               sizeof(uint32_t) * pixels.size() +
+               sizeof(uint32_t) * presentation_pixels.size() +
+               sizeof(uint16_t) * presentation_sprites.size();
+    }
+    void save_state(StateWriter &writer) const {
+        uint8_t r = rendered ? 1 : 0;
+        writer.write(r);
+        tiles.save_state(writer);
+        text.save_state(writer);
+        sprites.save_state(writer);
+        lines.save_state(writer);
+        writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_plane));
+        writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
+        writer.write_span(std::span<const uint32_t>(presentation_pixels));
+        writer.write_span(std::span<const uint16_t>(presentation_sprites));
+    }
+    void load_state(StateReader &reader) {
+        uint8_t r;
+        reader.read(r);
+        rendered = r != 0;
+        tiles.load_state(reader);
+        text.load_state(reader);
+        sprites.load_state(reader);
+        lines.load_state(reader);
+        reader.read_span(std::span<uint16_t, 432 * 256>(sprite_plane));
+        reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
+        reader.read_span(std::span<uint32_t>(presentation_pixels));
+        reader.read_span(std::span<uint16_t>(presentation_sprites));
+    }
 };
 
 GameVideo::GameVideo(Machine &machine, GameVideoMode mode, GameVideoOptions options)
@@ -289,6 +326,29 @@ void GameVideo::report(std::ostream &output) const {
         const auto &entry = impl_->fallbacks[i];
         output << "VIDEO fallback=" << entry.component << " producer_pc=0x" << std::hex << entry.pc << std::dec
                << " frames=" << entry.frames << " first=" << entry.first << " last=" << entry.last << '\n';
+    }
+}
+size_t GameVideo::state_size() const {
+    return impl_->state_size();
+}
+void GameVideo::save_state(std::span<uint8_t> dst) const {
+    if (dst.size() != state_size()) {
+        throw std::invalid_argument("GameVideo::save_state size mismatch");
+    }
+    StateWriter writer(dst);
+    impl_->save_state(writer);
+    if (writer.remaining() != 0) {
+        throw std::logic_error("GameVideo::save_state remaining unwritten bytes");
+    }
+}
+void GameVideo::load_state(std::span<const uint8_t> src) {
+    if (src.size() != state_size()) {
+        throw std::invalid_argument("GameVideo::load_state size mismatch");
+    }
+    StateReader reader(src);
+    impl_->load_state(reader);
+    if (reader.remaining() != 0) {
+        throw std::logic_error("GameVideo::load_state remaining unread bytes");
     }
 }
 } // namespace f3rt

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include "state_io.hpp"
 namespace f3rt {
 // 93C46, 64 x 16 organization. DO read dummy bit and sequential reads included.
 class Eeprom {
@@ -41,6 +42,37 @@ public:
         for (size_t i = 0; i < 64; ++i) { data[2*i] = uint8_t(words[i] >> 8); data[2*i+1] = uint8_t(words[i]); }
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
         if (!f.write(reinterpret_cast<const char *>(data.data()), data.size())) throw std::runtime_error("EEPROM write failed");
+    }
+    size_t state_size() const { return sizeof(CanonicalEeprom); }
+    void save_state(StateWriter &writer) const {
+        CanonicalEeprom st{};
+        std::memcpy(st.words, words.data(), sizeof(st.words));
+        st.mode = uint8_t(mode);
+        st.selected = selected ? 1 : 0;
+        st.old_clock = old_clock ? 1 : 0;
+        st.data_out = data_out ? 1 : 0;
+        st.writable = writable ? 1 : 0;
+        st.shift = shift;
+        st.count = count;
+        st.address = address;
+        st.read_bit = read_bit;
+        st.ready_at = ready_at;
+        writer.write(st);
+    }
+    void load_state(StateReader &reader) {
+        CanonicalEeprom st;
+        reader.read(st);
+        std::memcpy(words.data(), st.words, sizeof(st.words));
+        mode = Mode(st.mode);
+        selected = st.selected != 0;
+        old_clock = st.old_clock != 0;
+        data_out = st.data_out != 0;
+        writable = st.writable != 0;
+        shift = st.shift;
+        count = st.count;
+        address = st.address;
+        read_bit = st.read_bit;
+        ready_at = st.ready_at;
     }
 private:
     enum class Mode { Command, Read, Write, WriteAll, Done } mode = Mode::Command;

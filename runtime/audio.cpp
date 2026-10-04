@@ -7,6 +7,7 @@
 #include "third_party/audio/es5510.hpp"
 #include "third_party/audio/mb87078.hpp"
 #include "third_party/audio/mc68681.hpp"
+#include "state_io.hpp"
 
 #include <algorithm>
 #include <array>
@@ -497,6 +498,96 @@ struct Audio::Impl {
         write16(address, uint16_t(value >> 16));
         write16(address + 2, uint16_t(value & 0xffff));
     }
+
+    size_t state_size() const {
+        return sizeof(CanonicalAudioCore) +
+               WORK_RAM_SIZE +
+               sizeof(float) * RING_BUFFER_CAPACITY * 2 +
+               m_es5505.state_size() +
+               m_es5510.state_size() +
+               m_duart.state_size() +
+               m_volume.state_size();
+    }
+
+    void save_state(StateWriter &writer) const {
+        std::lock_guard<std::mutex> lock(m_audio_mutex);
+        CanonicalAudioCore core{};
+        core.bank_mask = m_bank_mask;
+        for (int i = 0; i < ES5505::MAX_VOICES; ++i) core.bank_table[i] = m_bank_table[i];
+        core.reset_asserted = m_reset_asserted ? 1 : 0;
+        core.esp_halted = m_esp_halted ? 1 : 0;
+        core.gain_model = uint8_t(m_gain_model);
+        core.volume_gain[0] = m_volume_gain[0]; core.volume_gain[1] = m_volume_gain[1];
+        core.otis_gain[0] = m_otis_gain[0]; core.otis_gain[1] = m_otis_gain[1];
+        core.output_gain[0] = m_output_gain[0]; core.output_gain[1] = m_output_gain[1];
+        core.cpu_accum = m_cpu_accum;
+        core.duart_accum = m_duart_accum;
+        core.sample_accum = m_sample_accum;
+        core.clock_ticks = m_clock_ticks;
+        core.generated_frames = m_generated_frames;
+        core.rb_count = uint32_t(m_rb_count);
+        writer.write(core);
+
+        writer.write_bytes(m_work_ram.data(), WORK_RAM_SIZE);
+
+        // Fast block copy for canonical ring buffer: m_rb_count frames in play order, remainder 0.0f
+        if (m_rb_count > 0) {
+            size_t first_part = std::min(m_rb_count, RING_BUFFER_CAPACITY - m_rb_read_pos);
+            writer.write_bytes(&m_sample_buffer[m_rb_read_pos * 2], first_part * 2 * sizeof(float));
+            if (m_rb_count > first_part) {
+                size_t second_part = m_rb_count - first_part;
+                writer.write_bytes(&m_sample_buffer[0], second_part * 2 * sizeof(float));
+            }
+        }
+        size_t zero_frames = RING_BUFFER_CAPACITY - m_rb_count;
+        if (zero_frames > 0) {
+            size_t bytes = zero_frames * 2 * sizeof(float);
+            if (writer.remaining() < bytes) throw std::runtime_error("StateWriter buffer overflow");
+            std::memset(writer.current(), 0, bytes);
+            writer.advance(bytes);
+        }
+
+        m_es5505.save_state(writer);
+        m_es5510.save_state(writer);
+        m_duart.save_state(writer);
+        m_volume.save_state(writer);
+    }
+
+    void load_state(StateReader &reader) {
+        std::lock_guard<std::mutex> lock(m_audio_mutex);
+        CanonicalAudioCore core;
+        reader.read(core);
+        m_bank_mask = core.bank_mask;
+        for (int i = 0; i < ES5505::MAX_VOICES; ++i) m_bank_table[i] = core.bank_table[i];
+        m_reset_asserted = core.reset_asserted != 0;
+        m_esp_halted = core.esp_halted != 0;
+        m_gain_model = Audio::GainModel(core.gain_model);
+        m_volume_gain[0] = core.volume_gain[0]; m_volume_gain[1] = core.volume_gain[1];
+        m_otis_gain[0] = core.otis_gain[0]; m_otis_gain[1] = core.otis_gain[1];
+        m_output_gain[0] = core.output_gain[0]; m_output_gain[1] = core.output_gain[1];
+        m_cpu_accum = core.cpu_accum;
+        m_duart_accum = core.duart_accum;
+        m_sample_accum = core.sample_accum;
+        m_clock_ticks = core.clock_ticks;
+        m_generated_frames = core.generated_frames;
+
+        reader.read_bytes(m_work_ram.data(), WORK_RAM_SIZE);
+
+        m_rb_count = std::min(size_t(core.rb_count), RING_BUFFER_CAPACITY);
+        m_rb_read_pos = 0;
+        m_rb_write_pos = m_rb_count % RING_BUFFER_CAPACITY;
+        if (m_rb_count > 0) {
+            reader.read_bytes(m_sample_buffer.data(), m_rb_count * 2 * sizeof(float));
+        }
+        std::memset(&m_sample_buffer[m_rb_count * 2], 0, (RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
+        reader.skip((RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
+
+        m_es5505.load_state(reader);
+        m_es5510.load_state(reader);
+        m_duart.load_state(reader);
+        m_volume.load_state(reader);
+        update_gains();
+    }
 };
 
 Audio::Audio() : m_impl(std::make_unique<Impl>()) {}
@@ -638,4 +729,29 @@ size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
     return frames;
 }
 
+size_t Audio::state_size() const {
+    return m_impl->state_size();
+}
+
+void Audio::save_state(std::span<uint8_t> dst) const {
+    if (dst.size() != state_size()) {
+        throw std::invalid_argument("Audio::save_state size mismatch");
+    }
+    StateWriter writer(dst);
+    m_impl->save_state(writer);
+    if (writer.remaining() != 0) {
+        throw std::logic_error("Audio::save_state remaining unwritten bytes");
+    }
+}
+
+void Audio::load_state(std::span<const uint8_t> src) {
+    if (src.size() != state_size()) {
+        throw std::invalid_argument("Audio::load_state size mismatch");
+    }
+    StateReader reader(src);
+    m_impl->load_state(reader);
+    if (reader.remaining() != 0) {
+        throw std::logic_error("Audio::load_state remaining unread bytes");
+    }
+}
 } // namespace f3rt

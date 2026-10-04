@@ -16,6 +16,8 @@
 #include <span>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class ES5505 {
 public:
@@ -76,6 +78,9 @@ public:
     uint8_t irqv() const { return m_irqv; }
 
     int get_voice_index() const { return m_voice_index; }
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     void compute_tables();

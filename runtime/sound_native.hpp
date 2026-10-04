@@ -5,6 +5,8 @@
 #include <f3rt/cpu_abi.h>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class Machine;
 
@@ -23,6 +25,9 @@ public:
     void reset(bool asserted);
     uint32_t pc() const;
     uint64_t instruction_count() const { return m_instruction_count; }
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
     f3_cpu &cpu() { return m_cpu; }
     const f3_cpu &cpu() const { return m_cpu; }

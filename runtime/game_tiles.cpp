@@ -1,4 +1,5 @@
 #include "game_tiles.hpp"
+#include "state_io.hpp"
 
 namespace f3rt {
 
@@ -133,6 +134,49 @@ ScenePixel GameTiles::playfield_pixel(unsigned layer, int x, int y, bool flipped
     const unsigned ty = (y & 15) ^ (cell.flip_y ? 15 : 0);
     const uint8_t pen = tiles[(cell.tile & 0x7fff) * 256 + ty * 16 + tx] & cell.pen_mask;
     return {uint16_t(cell.palette + pen), uint8_t((pen ? 0x10 : 0) | unsigned(cell.blend))};
+}
+
+size_t GameTiles::state_size() const {
+    return sizeof(CanonicalGameTileCell) * 4 * 2048 + 4 * (1 + sizeof(uint32_t));
+}
+
+void GameTiles::save_state(StateWriter &writer) const {
+    for (int l = 0; l < 4; ++l) {
+        for (int i = 0; i < 2048; ++i) {
+            const auto &c = maps_[l][i];
+            CanonicalGameTileCell sc{};
+            sc.tile = c.tile;
+            sc.palette = c.palette;
+            sc.pen_mask = c.pen_mask;
+            sc.flip_x = c.flip_x ? 1 : 0;
+            sc.flip_y = c.flip_y ? 1 : 0;
+            sc.blend = c.blend ? 1 : 0;
+            writer.write(sc);
+        }
+        uint8_t v = valid_[l] ? 1 : 0;
+        writer.write(v);
+        writer.write(unsupported_[l]);
+    }
+}
+
+void GameTiles::load_state(StateReader &reader) {
+    for (int l = 0; l < 4; ++l) {
+        for (int i = 0; i < 2048; ++i) {
+            CanonicalGameTileCell sc;
+            reader.read(sc);
+            auto &c = maps_[l][i];
+            c.tile = sc.tile;
+            c.palette = sc.palette;
+            c.pen_mask = sc.pen_mask;
+            c.flip_x = sc.flip_x != 0;
+            c.flip_y = sc.flip_y != 0;
+            c.blend = sc.blend != 0;
+        }
+        uint8_t v;
+        reader.read(v);
+        valid_[l] = v != 0;
+        reader.read(unsupported_[l]);
+    }
 }
 
 } // namespace f3rt

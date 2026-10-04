@@ -6,6 +6,8 @@
 #include <span>
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 class Video;
 
 
@@ -21,6 +23,9 @@ public:
     uint32_t unsupported_pc() const { return unsupported_pc_; }
     void observe_write(uint32_t pc, uint32_t address);
     void compare_rows(const Video &oracle, uint64_t frame);
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     struct LineClip {

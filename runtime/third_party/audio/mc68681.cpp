@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "mc68681.hpp"
+#include "state_io.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -409,6 +410,91 @@ void MC68681::advance(uint32_t duart_cycles) {
         }
     }
     m_ct_remaining -= duart_cycles;
+}
+size_t MC68681::state_size() const {
+    return sizeof(CanonicalMC68681);
+}
+
+void MC68681::save_state(StateWriter &writer) const {
+    CanonicalMC68681 st{};
+    st.acr = m_acr;
+    st.imr = m_imr;
+    st.isr = m_isr;
+    st.ivr = m_ivr;
+    st.opcr = m_opcr;
+    st.opr = m_opr;
+    st.ipcr = m_ipcr;
+    st.ip_last_state = m_ip_last_state;
+    st.ctr_preset = m_ctr_preset;
+    st.ct_remaining = m_ct_remaining;
+    st.half_period = m_half_period;
+    st.ct_running = m_ct_running ? 1 : 0;
+    st.mr1a = m_mr1a;
+    st.mr2a = m_mr2a;
+    st.mr_ptra = m_mr_ptra;
+    st.sra = m_sra;
+    st.csra = m_csra;
+    st.cra = m_cra;
+    st.mr1b = m_mr1b;
+    st.mr2b = m_mr2b;
+    st.mr_ptrb = m_mr_ptrb;
+    st.srb = m_srb;
+    st.csrb = m_csrb;
+    st.crb = m_crb;
+    for (unsigned i = 0; i < 2; ++i) {
+        st.tx[i].phase = m_tx[i].phase;
+        st.tx[i].baud = m_tx[i].baud;
+        st.tx[i].remaining = m_tx[i].remaining;
+        st.tx[i].sent = m_tx[i].sent;
+        st.tx[i].counter_prescaler = m_tx[i].counter_prescaler;
+        st.tx[i].clock = m_tx[i].clock ? 1 : 0;
+        st.tx[i].running = m_tx[i].running ? 1 : 0;
+        st.tx[i].enabled = m_tx[i].enabled ? 1 : 0;
+        st.tx[i].buffered = m_tx[i].buffered ? 1 : 0;
+    }
+    writer.write(st);
+}
+
+void MC68681::load_state(StateReader &reader) {
+    CanonicalMC68681 st;
+    reader.read(st);
+    m_acr = st.acr;
+    m_imr = st.imr;
+    m_isr = st.isr;
+    m_ivr = st.ivr;
+    m_opcr = st.opcr;
+    m_opr = st.opr;
+    m_ipcr = st.ipcr;
+    m_ip_last_state = st.ip_last_state;
+    m_ctr_preset = st.ctr_preset;
+    m_ct_remaining = st.ct_remaining;
+    m_half_period = st.half_period;
+    m_ct_running = st.ct_running != 0;
+    m_mr1a = st.mr1a;
+    m_mr2a = st.mr2a;
+    m_mr_ptra = st.mr_ptra;
+    m_sra = st.sra;
+    m_csra = st.csra;
+    m_cra = st.cra;
+    m_mr1b = st.mr1b;
+    m_mr2b = st.mr2b;
+    m_mr_ptrb = st.mr_ptrb;
+    m_srb = st.srb;
+    m_csrb = st.csrb;
+    m_crb = st.crb;
+    for (unsigned i = 0; i < 2; ++i) {
+        m_tx[i].phase = st.tx[i].phase;
+        m_tx[i].baud = st.tx[i].baud;
+        m_tx[i].remaining = st.tx[i].remaining;
+        m_tx[i].sent = st.tx[i].sent;
+        m_tx[i].counter_prescaler = st.tx[i].counter_prescaler;
+        m_tx[i].clock = st.tx[i].clock != 0;
+        m_tx[i].running = st.tx[i].running != 0;
+        m_tx[i].enabled = st.tx[i].enabled != 0;
+        m_tx[i].buffered = st.tx[i].buffered != 0;
+    }
+    if (m_outport_cb) m_outport_cb(output_port());
+    update_interrupts();
 }
 
 } // namespace f3rt

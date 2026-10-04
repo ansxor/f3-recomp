@@ -78,6 +78,11 @@ public:
     const SceneRow &inspect_scene_row(unsigned scanout_y) const;
     void enable_scene_inspection(bool enable = true);
 
+    // State snapshot serialization
+    size_t state_size() const;
+    void save_state(std::span<uint8_t> dst) const;
+    void load_state(std::span<const uint8_t> src);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

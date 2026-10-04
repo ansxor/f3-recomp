@@ -149,3 +149,62 @@ optional dimensions are `(320 + 2*border)*scale` by `232*scale`.
 `Machine::pixels` always remains the native 320×232 image, including when
 presentation enhancements are enabled. This avoids changing capture, CRC or
 CPU/device interfaces to accommodate optional display resolution.
+
+## Machine snapshot contract and canonical state inventory
+
+The C CPU ABI remains version 2. The C++ `Machine` adds state snapshot methods:
+- `Machine::state_size() const -> size_t`
+- `Machine::save_state(std::span<uint8_t> dst) const`
+- `Machine::load_state(std::span<const uint8_t> src)`
+- `Machine::state_crc() const -> uint32_t`
+
+Snapshot storage has a fixed size for a configured machine, allocated once by
+the rollback core (preallocated >= 16 slot ring). `save_state` and `load_state`
+are allocation-free per frame. `state_crc()` computes the standard `f3rt::crc32`
+over the canonical bytes written by `save_state()`. Its scratch buffer allocates
+on the first call after configuration; rollback hashes its existing snapshots
+instead. Snapshots are same-build, host-endian in-process state, not a portable
+save-file format. Load only snapshots produced by the same machine configuration,
+at frame boundaries on the emulation thread; no device reconfiguration or SDL
+consumer may race save/load.
+
+### Canonical state byte rules
+1. No host pointers or virtual dispatch tables are written.
+2. No uninitialized memory or compiler padding bytes exist in serialized records;
+   all structures use 1-byte packed layouts.
+3. Diagnostic counters (`native_blocks`, `fallback_instructions`, `fallback_hits`,
+   `sound_trace`, video fallback counters) are excluded.
+4. Native CPU lazy flags (`cc_src`, `cc_dst`, `cc_result`, `cc_op`, `cc_width`,
+   `cc_mask`) and `dispatch_deadline` are serialized directly, preserving
+   instruction-boundary lazy flags and deadline without state mutation.
+5. Sound contexts support both static native recompiled execution (`SoundNative`)
+   and interpreted Musashi 68000 execution (`Interpreter`). Musashi host callbacks
+   and cycle tables are excluded from canonical serialization and preserved across
+   process instances upon load.
+6. Audio queued PCM is canonicalized: active frames from the circular buffer are
+   serialized in sequential playback order, with remainder zeroed up to capacity.
+   All hardware device states (ES5505 OTIS voices, ES5510 DSP DRAM and pipeline,
+   MC68681 DUART timers/transmitters, MB87078 electronic volume) and mixer phase
+   accumulators are completely inventoried.
+7. Retained video state (TC0630FDP buffered spriteram, sprite framebuffer, spritelist,
+   and optional GameVideo scene records) is restored deterministically.
+### Inventory of serialized components
+- Main CPU: `f3_cpu` registers (D0-D7, A0-A7, PC, USP, SSP, MSP, VBR, SFC, DFC, CACR, CAAR, SR, stopped, halted), native lazy flags (`cc_src`, `cc_dst`, `cc_result`, `cc_op`, `cc_width`, `cc_mask`), and `dispatch_deadline`.
+- Machine Clocks and Scheduler: `hardware_cycles`, `next_vblank`, `irq3_at`, `watchdog_at`, `frame`, `pending_irqs`, `timer_control`.
+- Inputs and Coins: input ports 0-5, `system_inputs`, `coin_count` [0..3], `coin_locked` [0..3], `coin_word` [0..1].
+- Memory Regions: Main RAM (128 KiB), Palette RAM (32 KiB), Graphics RAM (256 KiB), Control RAM (32 B), Shared DPRAM (2 KiB), Display Framebuffer (320x232 ARGB8888, 296,960 B).
+- EEPROM: 93C46 words (64x16), mode, pin latches, shift register, bit counter, address, ready deadline.
+- Audio Subsystem:
+  - Work RAM (64 KiB), bank mask, bank table (32 voices), reset/halt lines, gain model, volume/output gains.
+  - Mixer accumulators: CPU accumulator, DUART accumulator, sample accumulator, clock ticks, generated frames.
+  - Queued PCM: ring buffer active frames in playback sequence, remainder zero-filled to fixed 32,768-frame capacity.
+  - ES5505 OTIS: master clock, sample rate, active voices, page, IRQ vector, mode, voice index, bank table, and 32 full voice channels (control, pitch, addresses, volumes, envelopes, BQ filters).
+  - ES5510 DSP: halt line, PC, state, 192 GPRs (24-bit), 160 microcode instructions (48-bit), 1M-word DRAM (2 MiB delay RAM), serial sample registers, ALU/MAC/RAM pipeline stages, and host latches.
+  - MC68681 DUART: control/status registers, baud/timer presets and remaining clocks, half-period latch, channels A/B mode and command registers, and serial transmitters.
+  - MB87078 Electronic Volume: channel latches, gain indexes, control, and data registers.
+- Sound CPU:
+  - Native mode (`SoundNative`): `f3_cpu` registers, lazy flags, dispatch deadline, reset state, and reset debt cycles.
+  - Oracle mode (`Interpreter`): Musashi 68000 architectural registers, status register, interrupt masks, internal flags, prefetch registers, virtual IRQ lines, and reset state. Pointer tables and host callbacks are restored in-process.
+- Retained Video State:
+  - FDP Renderer (`Video`): buffered spriteram (64 KiB), sprite framebuffer (432x256 indexed, 221,184 B), sprite priority row usage, 1024-entry tempsprite list, control registers, and row usage maps. Derived line caches (`last_y`) are invalidated upon load to ensure deterministic regeneration.
+  - Enhanced Renderer (`GameVideo`, when configured): GameTiles tile maps (4 layers x 2048 cells) and layer validity, GameText cells (4096) and glyph RAM, GameSprites staging, submitted, and current sprite buffers (1024 each) with scroll registers, GameLines profile parameters and scene row calibration. Native pixels, sprite plane, and both expanded presentation buffers are serialized; restoring never substitutes nearest-neighbor pixels for rerasterized output.

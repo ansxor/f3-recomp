@@ -3,6 +3,8 @@
 #include "f3rt/cpu_abi.h"
 
 namespace f3rt {
+class StateWriter;
+class StateReader;
 
 class GameText {
 public:
@@ -13,6 +15,9 @@ public:
     bool supported() const;
     uint32_t unsupported_pc() const { return unsupported_pc_; }
     ScenePixel pixel(int x, int y, bool flipped) const;
+    size_t state_size() const;
+    void save_state(StateWriter &writer) const;
+    void load_state(StateReader &reader);
 
 private:
     struct Cell {

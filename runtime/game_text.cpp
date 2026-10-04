@@ -1,4 +1,5 @@
 #include "game_text.hpp"
+#include "state_io.hpp"
 #include <algorithm>
 
 namespace f3rt {
@@ -207,6 +208,52 @@ ScenePixel GameText::pixel(int x, int y, bool flipped) const {
     const unsigned ty = (y & 7) ^ (cell.flip_y ? 7 : 0);
     const uint8_t pen = glyphs_[cell.tile * 64 + ty * 8 + tx];
     return {uint16_t(cell.palette * 16 + pen), uint8_t(pen ? 0x10 : 0)};
+}
+
+size_t GameText::state_size() const {
+    return sizeof(CanonicalGameTextCell) * 4096 +
+           256 * 64 +
+           256 +
+           sizeof(uint16_t) * 256 +
+           1 +
+           sizeof(uint32_t);
+}
+
+void GameText::save_state(StateWriter &writer) const {
+    for (size_t i = 0; i < 4096; ++i) {
+        const auto &c = cells_[i];
+        CanonicalGameTextCell sc{};
+        sc.tile = c.tile;
+        sc.palette = c.palette;
+        sc.flip_x = c.flip_x ? 1 : 0;
+        sc.flip_y = c.flip_y ? 1 : 0;
+        writer.write(sc);
+    }
+    writer.write_bytes(glyphs_.data(), glyphs_.size());
+    writer.write_bytes(glyph_rows_.data(), glyph_rows_.size());
+    writer.write_bytes(references_.data(), sizeof(uint16_t) * references_.size());
+    uint8_t mv = map_valid_ ? 1 : 0;
+    writer.write(mv);
+    writer.write(unsupported_pc_);
+}
+
+void GameText::load_state(StateReader &reader) {
+    for (size_t i = 0; i < 4096; ++i) {
+        CanonicalGameTextCell sc;
+        reader.read(sc);
+        auto &c = cells_[i];
+        c.tile = sc.tile;
+        c.palette = sc.palette;
+        c.flip_x = sc.flip_x != 0;
+        c.flip_y = sc.flip_y != 0;
+    }
+    reader.read_bytes(glyphs_.data(), glyphs_.size());
+    reader.read_bytes(glyph_rows_.data(), glyph_rows_.size());
+    reader.read_bytes(references_.data(), sizeof(uint16_t) * references_.size());
+    uint8_t mv;
+    reader.read(mv);
+    map_valid_ = mv != 0;
+    reader.read(unsupported_pc_);
 }
 
 } // namespace f3rt

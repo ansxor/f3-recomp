@@ -8,6 +8,7 @@
  **********************************************************************************************/
 
 #include "es5505.hpp"
+#include "state_io.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -608,6 +609,88 @@ void ES5505::write(uint32_t offset, uint16_t data, uint16_t mem_mask) {
         reg_write_high(voice, offset, data, mem_mask);
     } else {
         reg_write_test(voice, offset, data, mem_mask);
+    }
+}
+
+size_t ES5505::state_size() const {
+    return sizeof(CanonicalES5505);
+}
+
+void ES5505::save_state(StateWriter &writer) const {
+    CanonicalES5505 st{};
+    st.master_clock = m_master_clock;
+    st.sample_rate = m_sample_rate;
+    st.active_voices = m_active_voices;
+    st.current_page = m_current_page;
+    st.irqv = m_irqv;
+    st.mode = m_mode;
+    st.voice_index = m_voice_index;
+    for (int i = 0; i < MAX_VOICES; ++i) {
+        st.voice_bank[i] = m_voice_bank[i];
+        const auto &v = m_voices[i];
+        auto &sv = st.voices[i];
+        sv.control = v.control;
+        sv.freqcount = v.freqcount;
+        sv.start = v.start;
+        sv.lvol = v.lvol;
+        sv.end = v.end;
+        sv.lvramp = v.lvramp;
+        sv.accum = v.accum;
+        sv.rvol = v.rvol;
+        sv.rvramp = v.rvramp;
+        sv.ecount = v.ecount;
+        sv.k2 = v.k2;
+        sv.k2ramp = v.k2ramp;
+        sv.k1 = v.k1;
+        sv.k1ramp = v.k1ramp;
+        sv.o4n1 = v.o4n1;
+        sv.o3n1 = v.o3n1;
+        sv.o3n2 = v.o3n2;
+        sv.o2n1 = v.o2n1;
+        sv.o2n2 = v.o2n2;
+        sv.o1n1 = v.o1n1;
+        sv.index = v.index;
+        sv.filtcount = v.filtcount;
+    }
+    writer.write(st);
+}
+
+void ES5505::load_state(StateReader &reader) {
+    CanonicalES5505 st;
+    reader.read(st);
+    m_master_clock = st.master_clock;
+    m_sample_rate = st.sample_rate;
+    m_active_voices = st.active_voices;
+    m_current_page = st.current_page;
+    m_irqv = st.irqv;
+    m_mode = st.mode;
+    m_voice_index = st.voice_index;
+    for (int i = 0; i < MAX_VOICES; ++i) {
+        m_voice_bank[i] = st.voice_bank[i];
+        auto &v = m_voices[i];
+        const auto &sv = st.voices[i];
+        v.control = sv.control;
+        v.freqcount = sv.freqcount;
+        v.start = sv.start;
+        v.lvol = sv.lvol;
+        v.end = sv.end;
+        v.lvramp = sv.lvramp;
+        v.accum = sv.accum;
+        v.rvol = sv.rvol;
+        v.rvramp = sv.rvramp;
+        v.ecount = sv.ecount;
+        v.k2 = sv.k2;
+        v.k2ramp = sv.k2ramp;
+        v.k1 = sv.k1;
+        v.k1ramp = sv.k1ramp;
+        v.o4n1 = sv.o4n1;
+        v.o3n1 = sv.o3n1;
+        v.o3n2 = sv.o3n2;
+        v.o2n1 = sv.o2n1;
+        v.o2n2 = sv.o2n2;
+        v.o1n1 = sv.o1n1;
+        v.index = sv.index;
+        v.filtcount = sv.filtcount;
     }
 }
 

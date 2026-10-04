@@ -1,4 +1,5 @@
 #include "game_sprites.hpp"
+#include "state_io.hpp"
 #include <algorithm>
 
 namespace f3rt {
@@ -541,6 +542,98 @@ void GameSprites::raster(std::span<const uint8_t> assets, std::span<uint16_t> ou
             }
         }
     }
+}
+
+size_t GameSprites::state_size() const {
+    return sizeof(CanonicalSceneSprite) * kMaxSprites * 3 +
+           sizeof(uint32_t) * 3 +
+           sizeof(uint8_t) * 3 +
+           sizeof(int16_t) * 2 +
+           sizeof(uint8_t) * 3 +
+           sizeof(uint8_t) +
+           sizeof(uint32_t);
+}
+
+void GameSprites::save_state(StateWriter &writer) const {
+    writer.write(uint32_t(staging_count_));
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        const auto &s = staging_sprites_[i];
+        CanonicalSceneSprite ss{s.x, s.y, s.scale_x, s.scale_y, s.tile, s.palette,
+                               uint8_t(s.flip_x ? 1 : 0), uint8_t(s.flip_y ? 1 : 0)};
+        writer.write(ss);
+    }
+    writer.write(uint32_t(submitted_count_));
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        const auto &s = submitted_sprites_[i];
+        CanonicalSceneSprite ss{s.x, s.y, s.scale_x, s.scale_y, s.tile, s.palette,
+                               uint8_t(s.flip_x ? 1 : 0), uint8_t(s.flip_y ? 1 : 0)};
+        writer.write(ss);
+    }
+    writer.write(uint32_t(current_count_));
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        const auto &s = current_sprites_[i];
+        CanonicalSceneSprite ss{s.x, s.y, s.scale_x, s.scale_y, s.tile, s.palette,
+                               uint8_t(s.flip_x ? 1 : 0), uint8_t(s.flip_y ? 1 : 0)};
+        writer.write(ss);
+    }
+    writer.write(uint8_t(current_flipped_ ? 1 : 0));
+    writer.write(current_pen_mask_);
+    writer.write(uint8_t(current_trails_ ? 1 : 0));
+    writer.write(reg_scroll_x_);
+    writer.write(reg_scroll_y_);
+    writer.write(uint8_t(reg_flipped_ ? 1 : 0));
+    writer.write(reg_pen_mask_);
+    writer.write(uint8_t(reg_trails_ ? 1 : 0));
+    writer.write(uint8_t(supported_ ? 1 : 0));
+    writer.write(unsupported_pc_);
+}
+
+void GameSprites::load_state(StateReader &reader) {
+    uint32_t c;
+    reader.read(c);
+    staging_count_ = std::min(size_t(c), kMaxSprites);
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        CanonicalSceneSprite ss;
+        reader.read(ss);
+        auto &s = staging_sprites_[i];
+        s.x = ss.x; s.y = ss.y;
+        s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
+        s.tile = ss.tile; s.palette = ss.palette;
+        s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+    }
+    reader.read(c);
+    submitted_count_ = std::min(size_t(c), kMaxSprites);
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        CanonicalSceneSprite ss;
+        reader.read(ss);
+        auto &s = submitted_sprites_[i];
+        s.x = ss.x; s.y = ss.y;
+        s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
+        s.tile = ss.tile; s.palette = ss.palette;
+        s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+    }
+    reader.read(c);
+    current_count_ = std::min(size_t(c), kMaxSprites);
+    for (size_t i = 0; i < kMaxSprites; ++i) {
+        CanonicalSceneSprite ss;
+        reader.read(ss);
+        auto &s = current_sprites_[i];
+        s.x = ss.x; s.y = ss.y;
+        s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
+        s.tile = ss.tile; s.palette = ss.palette;
+        s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+    }
+    uint8_t u8;
+    reader.read(u8); current_flipped_ = u8 != 0;
+    reader.read(current_pen_mask_);
+    reader.read(u8); current_trails_ = u8 != 0;
+    reader.read(reg_scroll_x_);
+    reader.read(reg_scroll_y_);
+    reader.read(u8); reg_flipped_ = u8 != 0;
+    reader.read(reg_pen_mask_);
+    reader.read(u8); reg_trails_ = u8 != 0;
+    reader.read(u8); supported_ = u8 != 0;
+    reader.read(unsupported_pc_);
 }
 
 } // namespace f3rt
