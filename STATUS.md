@@ -38,6 +38,13 @@ Target: **Land Maker Japan 2.01J (`landmakrj`)**, as approved after identifying 
 
 The coverage implementation is `7e0bd43`, following regression-tool commit `7d7f6ef`, with unchanged runtime `b3f5578` (imported from frozen `5699a0b`). Acceptance was completed in isolated `wt/recomp/build/coverage` before updating integration. Exhaustive candidate discovery is an overapproximation, not a proof of reachability or universal decoder/ISA support.
 
+After fast-forwarding integration to `771507e`, both root executables were rebuilt.
+The root seed-5 3,500-frame smoke reproduces CRC `55f4df69`, 47,504,223 native
+blocks and zero fallback. A fresh root 3,600-frame run reproduces the cold-boot
+counts above, all 25 exact reference frames, frame-600 RAM and the complete
+interpreter WAV. Root artifacts: `build/captures/coverage-final` and
+`build/coverage-final.wav`.
+
 ## Seeded strict-native gameplay
 
 Every row completed 40,000 frames with fallback disabled and zero fallback
