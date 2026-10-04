@@ -150,7 +150,10 @@ selects geometry and same-pen RGB bank blending; **geometry is the default**.
 Palette blending can invent RGB colors and is separately opt-in. Alpha,
 clip/mosaic/priority boundaries and column-scroll jumps remain native/discrete.
 Both modes preserve every native subrow-zero sample and unflagged row exactly.
-Sprites are unchanged at the general-line checkpoint.
+Sprites already sample original ROM texels at the selected internal scale,
+including both zoom axes and flips; line interpolation does not resample them.
+Unscaled sprites gain no new detail, and submitted descriptors contain neither
+fractional placement nor rotation.
 The native frame, CPU captures, WAV and rollback state remain unchanged.
 
 ```sh

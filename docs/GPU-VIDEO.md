@@ -1018,3 +1018,157 @@ Reproduction and full logs: `/tmp/f3-gpuvideo/general/parity/{runs,summary}.json
 `general/bench-runs.json`, `survey-data/seed5/frame*.general-bench.log`
 and `general/windows/*`. No changed game state, CPU ABI, netplay snapshot
 schema or palette/texture asset data; Metal on this Mac is the exercised GPU.
+
+## Sprite sampling and precision (Phase 8)
+
+Sprite zoom already reaches the internal-resolution grid in the CPU oracle
+and GPU sprite pass. For source texel `(a,b)`, scale `N`, descriptor 24.8 origin
+`(x,y)` and raster steps `(sx,sy)`, the existing unflipped equations are:
+
+```text
+px = (x + a * sx) * N + 128
+py = (y + b * sy) * N + 255
+x0 = (px >> 8) - origin_x * N
+x1 = ((px + sx * N) >> 8) - origin_x * N
+y0 = (py >> 8) - origin_y * N
+y1 = max(y0 + 1, ((py + sy * N) >> 8) - origin_y * N)
+```
+
+The multiply occurs **before** native fixed-point rounding. Boundaries resolve
+at `1/N` native pixel, exposing ROM texels lost by a 1x sprite raster. This is
+not an enlarged 1x sprite bitmap, and it applies to every supported X/Y zoom
+and flip regardless of the line-interpolation setting. Unscaled tiles naturally
+produce identical repeated pens. Descriptor origins are already integer native
+positions: restoring intermediate producer carry would invent different
+placement, not reveal a submitted fractional position.
+
+No additional sprite resampler is justified just by producing a different
+image. Floating texel edges, rescaled `+128/+255` phases, removal of minimum
+Y splats, bilinear RGB filtering or temporal motion interpolation would change
+coverage/native precedence or invent colors, not expose a missing descriptor
+field. Preserve nominal bounding-box culling before Y rounding, reverse
+descriptor/texel overlap order, transparent-pen handling and the existing
+same-scale native sample anchors. `linear`/`fit` describe line-RAM field
+interpolation; they do not invent a sprite scale curve or rotation matrix.
+
+Per-row survey/result CSV files under the external evidence directories were
+losslessly compressed to `.csv.gz` after disk pressure. Recorded metrics,
+snapshots, captures and command JSON are unchanged.
+
+### Sprite exactness, gains and limits
+
+Phase 8 is a verification/diagnostic checkpoint, **not a new sprite sampling
+algorithm**. The existing N-grid raster consumes every supported descriptor
+field. No fractional origins or rotation matrix were found; there is no
+additional supported field to interpolate. The shader now states its
+multiply-before-rounding/constant-phase invariant explicitly.
+
+Frozen actual seed-5 frames 1080, 3404 and 6000 were replayed with native main
+and sound code. At scales 1–4, borders 0/48, all nine isolated contributions
+and composite match the existing CPU raster/compositor: 240 exact comparisons.
+The reconstructed scratch CPU reference also matches the public CPU reference
+at canonical border 48 in 120 comparisons; 96 original-descriptor subset
+comparisons cover unit, minified, enlarged and offscreen/partial categories.
+Enlarged subsets are honestly empty in these scenes. All 384 isolated
+linear/fit geometry/both sprite comparisons match same-scale off, including
+native sample rows. Full canonical scene/machine bytes, state CRC and frozen
+native replay remain exact, with zero fallback instructions.
+
+| Actual frame/layer, 4x border 48 | Changed pixels versus nearest 1x | RGB colors, 1x → 4x | Sampled indexed colors, 1x → 4x |
+| --- | ---: | ---: | ---: |
+| 1080 SP2 | 2560 | 41 → 41 | 40 → 40 |
+| 1080 SP3 | 8832 | 64 → 64 | 77 → 77 |
+| 3404 SP3 | 2149 | 109 → 109 | 127 → 127 |
+| 6000 SP0/SP1/SP2/SP3 | 0 / 0 / 0 / 0 | 57 / 1 / 83 / 128, unchanged | 57 / 0 / 87 / 156, unchanged |
+
+RGB counts include background; indexed-color counts are enabled/clipped/
+mosaic-adjusted compositor inputs before blend weights, not new artwork.
+The 4x raster resolves source-texel coverage more finely but adds no palette
+colors in these samples. Changing from 1x to 4x also changes 105/368/93 native
+lattice pixels in those three zoomed layers because the original raster phases
+are evaluated on different grids. This is existing CPU behavior, **not** a
+claim that every cross-scale anchor equals 1x. Enabling line interpolation
+changes zero sprite pixels/native rows at the *same* scale. Unscaled descriptor
+subsets in all three scenes have zero changed pixels versus nearest 1x.
+
+`f3rt-gpu-regression --inject-sprite-boundaries` submits actual native producers
+with a real ROM tile and distinguishable branch palettes:
+
+- Y-step 1 plus overlapping descriptors: first opaque texel and later
+  descriptor ownership remain exact; visible pixels at 1/2/3/4x are 17/34/51/68.
+- Mirrored X/Y steps 144/173: sampled zoom remains exact; visible pixels are
+  53/174/367/671.
+- Nominal Y=23, Y-step 16, ending exactly at Y=24: zero visible leakage at all
+  four scales, preserving culling before the `+255` raster phase.
+
+These branches passed 24 scale/border/mode runs (25,920 native frames, 72
+boundary branches). All layer/composite mismatches are zero. Native/audio CRC,
+cycles/blocks and state CRC within each geometry are identical across modes;
+branch restore/replay remains exact. A further 1600-frame fit/both run changes
+scale nine times including retained trail history, exercises all six induced
+scenario types and restores exact snapshots/baseline CRC. Ending here is an
+induced unsupported producer, **not** a played campaign ending.
+
+Requested captures now include PF0–3, SP0–3 and text, not just PF layers.
+Reproduce the boundary matrix with:
+
+```sh
+build/f3rt-gpu-regression --seed 5 --frames 1080 --every 1080 \
+  --scale 4 --border 48 --interp fit --interp-fields geometry,palette \
+  --layers --inject-frame 1080 --inject-sprite-boundaries \
+  --capture-frame 1080 --dump-dir /tmp/f3-gpuvideo/sprites/repro
+```
+
+Use each scale 1–4, border 0/48 and mode off/linear/fit. Full commands, logs,
+counts and PNGs are under `/tmp/f3-gpuvideo/sprites/{proof*,boundaries/*,
+transitions.*,windows/*,bench*}`. No ROMs, snapshots, captures or proof programs
+are committed.
+
+### Sprite-scene frame times
+
+Same final binary, border 48, frozen native scenes, 25 warmup plus 100 isolated
+repeats. Entries are **mean / p95 / worst milliseconds**. GPU timing includes
+submission, explicit fence and RGB readback; it is not pure GPU execution or
+end-to-end frontend pacing. No additional sprite pass/work was introduced.
+
+| Frame | Scale | CPU threaded reference | GPU off | GPU fit geometry |
+| --- | ---: | --- | --- | --- |
+| 1080, zoomed | 1 | 0.524 / 0.781 / 0.813 | 1.288 / 1.698 / 3.335 | 1.023 / 1.125 / 1.314 |
+| 1080, zoomed | 2 | 1.954 / 2.959 / 3.005 | 1.164 / 2.372 / 6.866 | 1.234 / 1.307 / 1.341 |
+| 1080, zoomed | 4 | 7.510 / 8.818 / 11.485 | 2.063 / 2.429 / 4.695 | 2.088 / 2.186 / 2.274 |
+| 6000, unscaled | 1 | 0.509 / 0.778 / 0.798 | 0.750 / 1.078 / 1.341 | 0.525 / 0.576 / 0.592 |
+| 6000, unscaled | 2 | 2.164 / 3.234 / 3.384 | 0.835 / 0.895 / 0.932 | 0.866 / 0.943 / 0.971 |
+| 6000, unscaled | 4 | 7.394 / 8.870 / 10.093 | 1.981 / 2.188 / 2.267 | 2.038 / 2.098 / 2.191 |
+
+Both modes leave sprites unchanged; timing differences are driver/CPU
+variation, not a claimed new sprite optimization. Linear and separately enabled
+palette measurements are in `sprites/bench-runs.json`. Canonical bytes remain
+unchanged after every measurement, zero fallback instructions.
+
+### Actual sprite frontend and unchanged native output
+
+Foreground Cocoa/Metal off/linear/fit geometry runs each execute 1600 native
+frames at 4x/border 48 through the real key-event frontend. Actual introduction
+and character-select window surfaces were inspected alongside fenced isolated
+sprite captures. Background/non-activated Cocoa screenshot attempts were not
+reliably frame-aligned; they are not substituted for these foreground checks.
+Every run retains native RGB CRC `90d70624`, 434,311,748 cycles, 23,892,754
+native blocks, 807,846 audio frames and zero fallback instructions. Each native
+compare checks 101,634,560 RGB pixels with zero mismatches; WAV files are
+byte-identical across modes and the earlier diagnostic runs.
+
+Synchronous OS screenshots are stalls, not ordinary frame work: each run has
+three pacing resyncs. Off/linear queue mean/max are 40.426/56.248 and
+32.989/43.950 ms with zero queue drops; fit is 25.522/66.328 ms with one queue
+drop. These numbers do not replace the separate ordinary automatic-integer
+pacing proof above or claim that captures are free. Foreground commands/
+metrics and actual surfaces are in `sprites/windows/foreground-{plan,
+results}.json`, `fit-geometry-foreground/run.json` and the three foreground
+capture directories. Full-resolution source captures/metrics remain external;
+throwaway executables and sources were removed after smoke proof.
+
+Current integrated `f3rt-check` passes. The GPU-off Cocoa frontend also accepts
+the field-control CLI without GPU support and presents its native boot surface.
+No sprite/canonical data layout, CPU ABI, machine/audio semantics, rollback
+schema or existing MAME acceptance path changed. Metal on this Mac is exercised;
+other GPUs, another monitor and a played campaign ending remain unverified.

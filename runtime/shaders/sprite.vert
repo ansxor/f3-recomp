@@ -20,6 +20,8 @@ void main() {
     bool native_plane = s == 1 && params.dimensions.y == 0u;
     int origin_x = native_plane ? 0 : left, origin_y = native_plane ? 0 : 24;
     vec2 extent = native_plane ? vec2(432,256) : vec2(params.dimensions.zw);
+    // Sample source texel coverage on the output grid before native rounding.
+    // Biases stay in output-grid 24.8 units; scaling them changes CPU phases.
     int px = (x + a * sx) * s + 128;
     int py = (y + b * sy) * s + 255;
     int x0 = (px >> 8) - origin_x * s, x1 = ((px + sx * s) >> 8) - origin_x * s;

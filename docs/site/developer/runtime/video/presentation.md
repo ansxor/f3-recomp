@@ -107,6 +107,11 @@ machine state. See [GPU design](https://github.com/ansxor/f3-recomp/blob/main/do
 The compositor combines native fixed-point phase with each output subpixel before sampling the playfield texture. It preserves fractional X and Y positions and source steps.
 
 `GameSprites::raster` evaluates sprite texel coverage at the expanded scale. It does not enlarge the completed native sprite image.
+Both zoom axes and mirrored texel selection use the original sprite descriptor.
+GPU texel boundaries multiply by the internal scale before fixed-point
+rounding, matching this CPU path. Unscaled sprites gain no extra texture
+detail; submitted positions are integer native pixels and descriptors contain
+no rotation matrix. There is no additional sprite interpolation flag.
 
 Text uses the original programmable 8x8 glyphs. Text rows repeat across expanded subrows. Tile and sprite source textures also remain the original ROM artwork.
 
@@ -137,7 +142,8 @@ native palette. Alpha, clip, mosaic, priority and column offsets stay discrete:
 the survey found held blocks/jumps, not smooth per-line ramps.
 
 Only the upload copy gains appended per-field metadata; canonical scene and
-CPU buffers do not change. Sprites stay unchanged at this checkpoint.
+CPU buffers do not change. Sprite ROM sampling already runs on the selected
+output grid in off/linear/fit; these line modes do not change sprite coverage.
 
 Boundary measurements, false-positive limits, guard fixtures, captures and
 timings: [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).

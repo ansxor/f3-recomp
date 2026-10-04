@@ -249,3 +249,12 @@ Only render targets and already-used diagnostic readback buffers are replaced;
 SDL defers releasing queued GPU resources. Scale/interpolation/blit policy is not
 serialized. Netplay still requires fixed scale 1/border 0; no CPU ABI, machine
 state or snapshot schema cutover.
+
+### Sprite sampling verification
+
+Sprite scale and flip already feed the internal-resolution raster directly.
+Phase 8 retains the existing `SceneSprite`, GPU word layout, fixed-point raster
+phases, producer hooks and canonical state. Diagnostic captures now include
+all nine isolated layers; native-producer boundary branches cover crushed
+opaque overlap, mirrored zoom and nominal top-edge culling. No new sprite
+mode, transform field, CPU ABI, snapshot or netplay schema is introduced.

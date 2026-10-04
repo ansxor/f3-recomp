@@ -41,7 +41,7 @@ struct Options {
     f3rt::InterpolationFields fields = f3rt::InterpolationFields::Geometry;
     std::vector<uint64_t> capture_frames;
     std::vector<std::pair<uint64_t, unsigned>> scale_changes;
-    std::array<bool, 5> injections{};
+    std::array<bool, 6> injections{};
 };
 uint64_t number(const std::string &text) {
     if (text.empty() || text.front() == '-') throw std::runtime_error("Expected unsigned integer: " + text);
@@ -105,6 +105,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--inject-globalflip") o.injections[2] = true;
         else if (arg == "--inject-unknown") o.injections[3] = true;
         else if (arg == "--inject-ending") o.injections[4] = true;
+        else if (arg == "--inject-sprite-boundaries") o.injections[5] = true;
         else if (arg == "--sound-driver") {
             if (value() != "native") throw std::runtime_error("GPU regression requires --sound-driver native");
         } else if (arg == "--help" || arg == "-h") {
@@ -118,6 +119,7 @@ Options parse(int argc, char **argv) {
                 "--change-scale FRAME:SCALE (repeatable; constructor/canonical scale remains 1)\n"
                 "--inject-frame N (1407) --inject-bitmap --inject-trails --inject-globalflip\n"
                 "--inject-unknown --inject-ending (induced producer boundary, NOT played ending)\n"
+                "--inject-sprite-boundaries (ROM-texel crushed overlap, mirrored zoom, nominal top cull)\n"
                 "Run each scale 1..4 with border 0 and 48 for the parity matrix.\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown argument: " + arg);
@@ -419,13 +421,15 @@ struct Harness {
         if (!csv) throw std::runtime_error("Cannot open playfield capture CSV");
         csv << "frame,pf,screen_y,visible_y,field_mask,enabled,bitmap,mosaic,source_x,source_y,x_step,y_step,y_fraction,palette_add,priority,blend_mode,clip_enabled,clip_inverted\n";
         const auto stats = interpolated_gpu ? interpolated_gpu->last_interpolation() : f3rt::InterpolationStats{};
-        for (unsigned pf = 0; pf < 4; ++pf) {
-            sprite_off.resize(device.size()); sprite_selected.resize(device.size());
-            gpu.draw(scene, sprite_off, 1u << pf);
-            if (interpolated_gpu) interpolated_gpu->draw(scene, sprite_selected, 1u << pf);
-            capture_png(o.dump_dir / (stem + "_off_" + names[pf] + ".png"), sprite_off, o.video);
-            capture_png(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + "_" + names[pf] + ".png"),
+        sprite_off.resize(device.size()); sprite_selected.resize(device.size());
+        for (unsigned layer = 0; layer < 9; ++layer) {
+            gpu.draw(scene, sprite_off, 1u << layer);
+            if (interpolated_gpu) interpolated_gpu->draw(scene, sprite_selected, 1u << layer);
+            capture_png(o.dump_dir / (stem + "_off_" + names[layer] + ".png"), sprite_off, o.video);
+            capture_png(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + "_" + names[layer] + ".png"),
                 interpolated_gpu ? std::span<const uint32_t>(sprite_selected) : std::span<const uint32_t>(sprite_off), o.video);
+        }
+        for (unsigned pf = 0; pf < 4; ++pf) {
             for (unsigned y = 0; y < 256; ++y) {
                 const auto &r = scene.reference_rows[y];
                 const auto &p = r.playfields[pf];
@@ -598,6 +602,85 @@ void inject(Harness &h, unsigned kind) {
     m.game_video->render_frame();
     if (!m.game_video->gpu_scene().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
 }
+// Native single-sprite producer branches with actual decoded ROM texels.
+// The caller replays the original pre-scanout frame to restore host/native state.
+void verify_sprite_boundaries(Harness &h) {
+    auto &m = h.m;
+    const auto baseline = snapshot(m);
+    const auto tiles = m.video->sprite_tiles();
+    unsigned tile = 0;
+    for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256); ++candidate) {
+        const auto pens = tiles.subspan(candidate * 256, 256);
+        bool collision = false, bottom = false;
+        for (unsigned x = 0; x < 16; ++x) {
+            unsigned first = 0;
+            for (unsigned y = 0; y < 16; ++y) {
+                const unsigned pen = pens[y * 16 + x] & 15;
+                if (pen && !first) first = pen;
+                else if (pen && pen != first) collision = true;
+            }
+            bottom |= (pens[15 * 16 + x] & 15) != 0;
+        }
+        if (collision && bottom) { tile = candidate; break; }
+    }
+    if (!tile) throw std::runtime_error("ROM has no sprite tile witnessing crushed-row ordering and top-edge leakage");
+    constexpr std::array<const char *, 3> tags{
+        "sprite_crushed_first_opaque_overlap", "sprite_mirrored_sampled_zoom", "sprite_nominal_top_cull"};
+    std::vector<uint32_t> blank(h.device.size());
+    for (unsigned kind = 0; kind < tags.size(); ++kind) {
+        m.load_state(baseline);
+        // Make opaque ROM pens and descriptor ownership distinguishable even
+        // when gameplay has not populated these two palette banks.
+        for (unsigned bank = 0; bank < 2; ++bank)
+            for (unsigned pen = 1; pen < 16; ++pen) {
+                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
+                m.palette[at + 1] = uint8_t(bank ? 32 : 224);
+                m.palette[at + 2] = uint8_t(pen * 15);
+                m.palette[at + 3] = uint8_t(bank ? 224 : 32);
+            }
+        observe(m, 0x41d0);
+        put16(m.ram, 0x7a16, 0); put16(m.ram, 0x7a1a, 0);
+        observe(m, 0x43b0);
+        put16(m.ram, 0x7a1e, 0);
+        observe(m, 0x43e0);
+        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
+        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
+        put16(m.ram, 0x7000, 0); put16(m.ram, 0x7002, uint16_t(tile));
+        put16(m.ram, 0x7010, kind == 0 ? 255 : kind == 1 ? 83 : 240);
+        put16(m.ram, 0x7012, kind == 1 ? 112 : 0);
+        put16(m.ram, 0x7014, 80);
+        put16(m.ram, 0x7016, kind == 2 ? 0x0fff : 56);
+        put16(m.ram, 0x7018, 0xc0);
+        put16(m.ram, 0x701a, kind == 1 ? 1 : 0);
+        put16(m.ram, 0x701c, kind == 1 ? 1 : 0);
+        observe(m, 0x4688);
+        if (kind == 0) {
+            // Later descriptor owns overlap; its earliest opaque ROM row must
+            // win when the 16 texel rows crush onto one output row.
+            put16(m.ram, 0x7018, 0xc1);
+            observe(m, 0x4688);
+        }
+        observe(m, 0x4480);
+        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+        m.game_video->render_frame(); // Scanout precedes the native sprite latch.
+        m.game_video->render_frame(); // Present the injected, now-latched list.
+        if (m.game_video->gpu_scene().fallback)
+            throw std::runtime_error(std::string(tags[kind]) + " unexpectedly left supported native producers");
+        // Compare the isolated consumer even without --layers, then composite
+        // and the existing exact whole-sprite line-mode comparisons.
+        h.compare(7, tags[kind], true);
+        m.game_video->render_reference(blank, h.o.video, 0, true);
+        size_t visible = 0;
+        for (size_t i = 0; i < blank.size(); ++i) visible += h.device[i] != blank[i];
+        if ((kind == 2 && visible) || (kind != 2 && !visible))
+            throw std::runtime_error(std::string(tags[kind]) + " did not witness its visible/cull boundary");
+        h.capture(std::string(tags[kind]) + "_sp3");
+        h.sample(tags[kind], true, true);
+        std::cout << "SPRITE_BOUNDARY scenario=" << tags[kind] << " tile=" << tile
+                  << " scale=" << h.o.video.scale << " visible_pixels=" << visible
+                  << " isolated_and_composite=exact (native producer branch)\n";
+    }
+}
 // Saving after several trail frames must retain every intervening sprite list.
 void verify_trail_history(Harness &h) {
     auto &m = h.m;
@@ -741,7 +824,7 @@ int main(int argc, char **argv) try {
     std::vector<double> native_frame_ms;
     if (o.bench) native_frame_ms.reserve(o.frames);
     std::vector<uint8_t> last_supported_pre;
-    constexpr std::array<const char *, 5> scenarios{"bitmap", "trails", "globalflip", "unknown-producer", "ending-producer-boundary-NOT-played-ending"};
+    constexpr std::array<const char *, 6> scenarios{"bitmap", "trails", "globalflip", "unknown-producer", "ending-producer-boundary-NOT-played-ending", "sprite-boundaries"};
     const auto start = Clock::now();
     size_t next_scale_change = 0;
     try {
@@ -777,15 +860,20 @@ int main(int argc, char **argv) try {
                 }
                 for (unsigned kind = 0; kind < scenarios.size(); ++kind) if (o.injections[kind]) {
                     m.load_state(baseline);
-                    inject(h, kind);
-                    h.sample(scenarios[kind], true, true);
+                    if (kind == 5) verify_sprite_boundaries(h);
+                    else {
+                        inject(h, kind);
+                        h.sample(scenarios[kind], true, true);
+                    }
                     // Restore pre-scanout and execute the original frame, rebuilding
                     // host snapshots with the correct sprite lag and producer state.
                     m.load_state(pre); advance(m);
                     if (m.game_video->gpu_scene().fallback || m.state_crc() != baseline_crc)
                         throw std::runtime_error("Oracle-to-supported recovery changed baseline native state");
                     h.sample(std::string(scenarios[kind]) + "_restored", true);
-                    std::cout << "INJECTED scenario=" << scenarios[kind] << " frame=" << m.frame << " fallback_and_recovery=exact (branch only)\n";
+                    std::cout << "INJECTED scenario=" << scenarios[kind] << " frame=" << m.frame
+                              << (kind == 5 ? " supported_branch_and_recovery=exact" : " fallback_and_recovery=exact")
+                              << " (branch only)\n";
                 }
                 m.native_blocks = baseline_blocks; // Diagnostic replays are not gameplay execution.
             }
