@@ -1,0 +1,55 @@
+Standalone hardware implementations derived from MAME BSD-3-Clause files:
+  video.cpp / video.hpp: Bryan McPhail, ywy, 12Me21
+  audio.cpp: Bryan McPhail, Aaron Giles, R. Belmont, Philip Bennett
+  third_party/audio/es5505.*: Aaron Giles
+  third_party/audio/es5510.*: Christian Brunschen
+  third_party/audio/mc68681.*: Mariusz Wojcieszek, R. Belmont
+  third_party/audio/mb87078.*: Fabio Priuli, Philip Bennett, hap
+Reference source: https://github.com/mamedev/mame, revision
+cfc4760a3be9c5a79846b19b6a573cb38459fa7e, local source headers retain authors.
+Only individually BSD-licensed hardware algorithms were adapted. The MAME
+framework, executable, and GPL-only source are not linked into f3rt.
+
+BSD 3-Clause License
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+Musashi: https://github.com/kstenerud/Musashi
+Revision 313ebf1bd9f4d0d93341eb5ce21fd8a119e9dbdd.
+Copyright 1998-2001 Karl Stenerud. MIT-style permission grant and disclaimer
+are retained in third_party/musashi/readme.txt and source headers.
+Local change: DIVS.W/DIVU.W nonzero divisor clears C before overflow handling,
+matching current MAME rather than upstream Musashi.
+
+Musashi includes a derivative of John R. Hauser's SoftFloat Release 2b.
+This dependency is NOT MIT/BSD: its original permissive commercial-derivative
+notice includes responsibility/indemnification conditions and mandatory
+source notices. All four original notice paragraphs are retained verbatim
+in third_party/musashi/softfloat source files, and the legal overview is in
+third_party/musashi/softfloat/README.txt. No modifications to SoftFloat code.
+
+SDL3: zlib license, linked as a system dependency; not vendored.
+No ROMs, generated game code, decoded graphics, or captured game media are
+included in the committed runtime sources.

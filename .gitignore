@@ -9,3 +9,8 @@ wt/
 __pycache__/
 *.pyc
 .venv/
+captures/
+diffs/
+nvram/
+cfg/
+*.wav
