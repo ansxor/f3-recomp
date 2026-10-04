@@ -73,6 +73,16 @@ scan_jump_tables = true
 scan_task_traps = true
 scan_callbacks = true
 
+# Actor interpreter at $409e, relative handler table at $40aa. Commands 0..4
+# contain native callback pointers; 5/9/10 are bytecode jump/call/return.
+[discovery.actor_scripts]
+pointer_field = 0x1c
+operand_bytes = [4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 0, 8, -1, -1, -1, 6, -1, 0, -1, 6, 6, 4, 0, 0]
+code_pointer_opcodes = [0, 1, 2, 3, 4]
+jump_opcode = 5
+call_opcode = 9
+return_opcode = 10
+
 [[discovery.jump_tables]]
 address = 0x000c42
 targets = [0x000c46, 0x000c48]
