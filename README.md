@@ -82,17 +82,23 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   discovery counts, not a proof of complete executable-code coverage.
 - Every decoded instruction PC is registered, including block interiors.
   Native blocks have at most 32 instructions; emulated calls use the guest
-  stack, not recursive host calls. Diagnostic execution may interpret unknown
-  or RAM PCs one instruction at a time. The integrated `landmakr` target
-  rejects these by default; fallback is not native-game acceptance.
+  stack, not recursive host calls. ABI v2's `dispatch_deadline` ends a block
+  at the first instruction boundary reaching a scheduled event. Lowering the
+  IRQ mask invalidates the deadline so pending interrupts are reconsidered.
+  Generated C and headers reject incompatible runtime ABI versions.
+  Diagnostic execution may interpret unknown or RAM PCs one instruction at
+  a time. The integrated `landmakr` target rejects these by default; fallback
+  is not native-game acceptance.
 - NZVC flags are lazy inside blocks; X is retained eagerly for partial flag
   updates. Native exits materialize SR before the runtime boundary/IRQ check.
   Only ordinary bus reads/writes may observe pending flags. Trace-enabled
   execution must use runtime fallback, not multi-instruction native blocks.
-- Scheduling uses pinned Musashi 68EC020 opcode costs, including MOVEM counts,
+- Scheduling uses pinned Musashi 68EC020 opcode costs, with observed MAME
+  corrections for MOVEM stores, fixed-cost rotates, and `TRAP #n`, plus
   full-index extensions, conditional branches, and loop expiration. These are
-  reference-emulator timings, not physical bus-cycle accuracy. Runtime IRQ
-  delivery remains at native block boundaries; frame/audio parity is checked
+  reference-emulator timings, not physical bus-cycle accuracy. Deadline yields
+  preserve multi-instruction blocks and lazy flags without delaying scheduled
+  IRQs to the original static block end. Frame/audio parity is checked
   separately against observed Land Maker output.
 - TOML `[discovery].entry_points` accepts observed runtime PCs.
   `[[discovery.jump_tables]]` records a transfer `address` and its `targets`,
@@ -113,7 +119,8 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
 ## Instruction-level differential self-test
 
 ```sh
-python3 tools/differential/run.py \
+PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
+PYTHONPATH=build/python python3 tools/differential/run.py \
   --musashi runtime/third_party/musashi \
   --output build/differential --cases 5000
 ```
@@ -131,6 +138,10 @@ single-instruction stepping is asserted. `--seed`, `--filter`, and
 The runtime owns the single vendored Musashi copy. Keep the documented MAME
 parity fixes in that copy: current MAME clears C on nonzero-divisor word DIV
 overflow, unlike unpatched upstream Musashi. Long DIV overflow preserves C/N/Z.
+EC020 MOVEM stores cost three cycles/register, rotates have no count surcharge,
+and `TRAP #n` takes 24 cycles. See [ABI changes](docs/ABI-CHANGES.md).
+Synthetic generated-code tests exercise deadline equality/overshoot, resumption
+at an interior PC, and materialized flags on each yield.
 
 ## MAME capture
 
