@@ -228,37 +228,64 @@ def _scan_pci_index_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op
     return list(set(entries))
 
 
-def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op: capstone.m68k.M68KOp) -> list[int]:
-    """Scan 68020 pre-indexed memory-indirect jump table (e.g. jmp ([$table, pc, dx.w*4]))."""
-    table_addr = insn.address + 2 + op.mem.in_disp
-    if not (0 <= table_addr < len(rom) - 4):
-        return []
-
+def _scan_absolute_table(rom: bytes, md: capstone.Cs, table_addr: int, destination_offset: int = 0) -> list[int]:
+    """Read bounded longword destinations, allowing code before the table."""
     entries = []
-    ptr = table_addr
-    first_val = struct.unpack(">I", rom[ptr:ptr + 4])[0]
-    if not (0x400 <= first_val < len(rom) and first_val % 2 == 0):
+    limit = len(rom)
+    for index in range(64):
+        ptr = table_addr + index * 4
+        if ptr < 0 or ptr + 4 > limit:
+            break
+        target = (int.from_bytes(rom[ptr:ptr + 4], "big") + destination_offset) & 0xffffffff
+        if not (0x400 <= target < len(rom)) or target & 1:
+            break
+        decoded = list(md.disasm(rom[target:target + 24], target, count=1))
+        if not decoded or decoded[0].id == 0:
+            break
+        entries.append(target)
+        if target >= table_addr:
+            limit = min(limit, target)
+    return sorted(set(entries))
+
+
+def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> list[int]:
+    # Capstone 5 exposes a signed word base displacement as an unsigned value.
+    # Read full-extension widths/signs from the opcode rather than its text/detail.
+    raw = bytes(insn.bytes)
+    extension = int.from_bytes(raw[2:4], "big")
+    base_size = {1: 0, 2: 2, 3: 4}.get((extension >> 4) & 3)
+    indirect = extension & 7
+    if base_size is None or indirect not in (1, 2, 3):
+        return []  # Post-indexed indirection is not an indexed pointer table.
+    displacement = int.from_bytes(raw[4:4 + base_size], "big", signed=True)
+    outer_size = {1: 0, 2: 2, 3: 4}[indirect]
+    outer = int.from_bytes(raw[4 + base_size:4 + base_size + outer_size], "big", signed=True)
+    table = (0 if extension & 0x80 else insn.address + 2) + displacement
+    return _scan_absolute_table(rom, md, table, outer)
+
+
+def _scan_register_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> list[int]:
+    """MOVEA table(PC,Xn),An; JMP (An), or LEA table(PC,Xn),An; JMP ([An])."""
+    jump = int.from_bytes(insn.bytes[:2], "big")
+    indirect = (jump & 0xfff8) in (0x4eb0, 0x4ef0)
+    if indirect:
+        if bytes(insn.bytes[2:]) != b"\x01\x51":
+            return []
+    elif (jump & 0xfff8) not in (0x4e90, 0x4ed0):
         return []
-
-    min_target = first_val
-    entries.append(first_val)
-    ptr += 4
-
-    while ptr < len(rom) - 4 and len(entries) < 64:
-        if ptr >= min_target:
-            break
-        val = struct.unpack(">I", rom[ptr:ptr + 4])[0]
-        if not (0x400 <= val < len(rom) and val % 2 == 0):
-            break
-        dis = list(md.disasm(rom[val:min(val + 4, len(rom))], val))
-        if not dis:
-            break
-        if val < min_target:
-            min_target = val
-        entries.append(val)
-        ptr += 4
-
-    return list(set(entries))
+    end = insn.address
+    while end >= insn.address - 2 and rom[end - 2:end] == b"\x4e\x71":
+        end -= 2
+    pc = end - 4
+    if pc < 0:
+        return []
+    load = int.from_bytes(rom[pc:pc + 2], "big")
+    if (load & 0xf1ff) != (0x41fb if indirect else 0x207b):
+        return []
+    if ((load >> 9) & 7) != (jump & 7) or rom[pc + 2] & 1:
+        return []
+    table = pc + 2 + int.from_bytes(rom[pc + 3:pc + 4], "big", signed=True)
+    return _scan_absolute_table(rom, md, table)
 
 
 def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
@@ -520,6 +547,10 @@ def discover(rom: bytes, config: dict) -> Discovery:
             insn = dis[0]
             instructions[cur_pc] = insn
             base_mnem = insn.mnemonic.lower().split(".")[0]
+            if scan_jump_tables and base_mnem in CALL_MNEMONICS | UNCOND_BRANCH_MNEMONICS:
+                scanned = _scan_register_table(rom, md, insn)
+                if scanned:
+                    active_jump_tables.setdefault(cur_pc, scanned)
 
             # Check explicit or previously discovered jump tables
             if cur_pc in active_jump_tables:
@@ -558,7 +589,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                                 cur_pc = fallthrough
                                 continue
                         elif op.address_mode in (M68K_AM_PC_MEMI_PRE_INDEX, M68K_AM_PC_MEMI_POST_INDEX):
-                            scanned = _scan_pc_memi_table(rom, md, insn, op)
+                            scanned = _scan_pc_memi_table(rom, md, insn)
                             if scanned:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
@@ -635,7 +666,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
                                         worklist.append(t)
                                 break
                         elif op.address_mode in (M68K_AM_PC_MEMI_PRE_INDEX, M68K_AM_PC_MEMI_POST_INDEX):
-                            scanned = _scan_pc_memi_table(rom, md, insn, op)
+                            scanned = _scan_pc_memi_table(rom, md, insn)
                             if scanned:
                                 active_jump_tables[cur_pc] = scanned
                                 branch_targets[cur_pc] = scanned
