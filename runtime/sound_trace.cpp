@@ -7,7 +7,7 @@
 namespace f3rt {
 SoundTrace::SoundTrace(const std::filesystem::path &path) : output(path, std::ios::binary) {
     if (!output) throw std::runtime_error("Cannot open sound trace: " + path.string());
-    output.write("F3SND1\0\0", 8);
+    output.write("F3SND2\0\0", 8);
 }
 void SoundTrace::record(const Machine &m, Kind kind, uint32_t pc, uint32_t address,
                         uint32_t value, uint8_t width) {
@@ -31,11 +31,11 @@ void SoundTrace::ram_snapshot(const Machine &m, uint32_t pc, uint32_t address, u
 void SoundTrace::voice_context(const Machine &m, uint32_t pc, uint32_t voice_address) {
     // Only work-RAM mirrors are inspected; these reads have no device side effects.
     const uint32_t voice = voice_address & 0xffff;
-    record(m, VoiceContext, pc, voice, 0, 0);
     ram_snapshot(m, pc, voice, 0xac);
     ram_snapshot(m, pc, m.audio->read16(0xff0000|((voice+0x10)&0xffff)), 0x40);
     ram_snapshot(m, pc, m.audio->read16(0xff0000|((voice+0x8c)&0xffff)), 0x20);
     ram_snapshot(m, pc, 0xd81a, 0x28);
+    record(m, VoiceContext, pc, voice, m.audio->read16(0xff0000|((voice+0x0c)&0xffff))&31, 0);
 }
 void SoundTrace::note_context(const Machine &m, uint32_t pc, uint32_t note, uint32_t channel,
                               uint32_t track, uint32_t event) {

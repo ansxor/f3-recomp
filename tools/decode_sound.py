@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode F3SND1 oracle bus traces without touching the running sound devices."""
+"""Decode F3SND2 driver bus traces without touching the running sound devices."""
 import argparse
 from collections import Counter, defaultdict, deque
 import gzip
@@ -15,8 +15,8 @@ HIGH_REGS = ("CR", "O4N1", "O3N1", "O3N2", "O2N1", "O2N2", "O1N1")
 
 def records(path):
     with path.open("rb") as source:
-        if source.read(8) != b"F3SND1\0\0":
-            raise ValueError("Expected F3SND1 oracle trace")
+        if source.read(8) != b"F3SND2\0\0":
+            raise ValueError("Expected F3SND2 driver trace")
         ended = False
         previous = 0
         while block := source.read(RECORD.size * 8192):
@@ -113,7 +113,6 @@ class Decoder:
         self.dsp = bytearray(256)
         self.commands = CommandRing()
         self.ram = bytearray(0x10000)
-        self.context_address = None
         self.driver = [None] * 32
         self.dispatch_command = None
         self.sequence_commands = {}
@@ -128,21 +127,21 @@ class Decoder:
     def ram_int(self, address, size):
         return int.from_bytes(self.ram_bytes(address, size), "big")
 
-    def voice_context(self, voice):
-        at = self.context_address
+    def voice_context(self, voice, at):
         channel = self.ram_int(at + 0x10, 2)
         sample = self.ram_int(at + 0x8c, 2)
         node = self.ram_int(at + 0x0e, 2)
         sequence = (self.ram_int(channel + 0x0e, 2) - 0x5e5c) // 0x28
         source = dict(voice_state=at, channel_state=channel,
-                      patch_descriptor=self.ram_int(at + 0x16, 4), sample_descriptor=sample,
+                      patch_descriptor=self.ram_int(at + 0x16, 4), channel_descriptor=sample,
+                      sample_descriptor=self.ram_int(at + 0x1a, 4),
                       key=self.ram[at + 4], tag5=self.ram[at + 5],
                       tag6=self.ram[at + 6], tag7=self.ram[at + 7], sequence=sequence,
                       note_node=node, origin=self.note_sources.get(node))
         self.driver[voice] = source
         return dict(voice=voice, driver=source, voice_ram=self.ram_bytes(at, 0xac).hex(),
                     channel_ram=self.ram_bytes(channel, 0x40).hex(),
-                    sample_descriptor_ram=self.ram_bytes(sample, 0x20).hex())
+                    channel_descriptor_ram=self.ram_bytes(sample, 0x20).hex())
 
     def snapshot(self, voice):
         r = self.voices[voice]
@@ -161,7 +160,7 @@ class Decoder:
         tick, sample, pc, address, value, kind, width = row
         base = dict(tick=tick, seconds=tick / 16000000, sample=sample, pc=f"0x{pc:06x}")
         if kind == 6:
-            self.context_address = address
+            yield base | dict(event="voice_context", **self.voice_context(value, address))
             return
         if kind == 7:
             for i, byte in enumerate(value.to_bytes(width, "big")):
@@ -229,9 +228,6 @@ class Decoder:
                 if reg == 15:
                     if write and mask & 0xff:
                         self.page = data & 127
-                    if write and pc in (0xc17e62, 0xc17806) and self.context_address is not None:
-                        yield event | dict(event="voice_context", **self.voice_context(self.page & 31))
-                        self.context_address = None
                     if write:
                         yield event | dict(event="page", page=self.page)
                 elif reg == 13:
