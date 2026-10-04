@@ -715,7 +715,7 @@ int main() try {
     const f3_block overlapping[]={{0x200,native}};
     require(!f3_register_blocks(&cpu,overlapping,1),"Native entries cannot bypass exclusions");
     m->allow_main_fallback=true;
-    for(uint32_t pc : {0x200u,0x201u,0x202u,0x203u}) {
+    for(uint32_t pc : {0x200u,0x201u,0x202u,0x203u,0xff000200u,0xff000203u}) {
         cpu.pc=pc;cpu.halted=0;
         bool excluded_rejected=false;
         try { f3_fallback(&cpu); }
@@ -723,7 +723,7 @@ int main() try {
             excluded_rejected=std::string(e.what()).find("Excluded main CPU")!=std::string::npos;
         }
         require(excluded_rejected && cpu.halted && m->fallback_instructions==fallback_count,
-                "Even and odd excluded targets fail before enabled interpretation");
+                "Even, odd and physical-alias excluded targets fail before enabled interpretation");
     }
     cpu.pc=0x204;cpu.halted=0;
     const auto before_end_fallback=m->fallback_instructions;

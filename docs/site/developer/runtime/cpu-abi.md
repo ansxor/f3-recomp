@@ -148,7 +148,7 @@ Version 2 also changes these rules:
 Version 3 adds immutable `f3_excluded_range` metadata and
 `f3_register_exclusions(cpu,ranges,count)`. Sorted, even, half-open ROM intervals
 must not overlap native entries. Excluded PCs throw before fallback, including
-diagnostic interpretation and odd targets. Data reads remain legal.
+diagnostic interpretation, odd targets and 24-bit bus aliases. Data reads remain legal.
 The CPU layout, scheduling and canonical snapshots are unchanged.
 
 ### The version check
@@ -296,7 +296,14 @@ Three details matter:
 
 ### f3_fallback
 
-`int f3_fallback(f3_cpu *cpu)` executes exactly one instruction at `cpu->pc` with the interpreter. It calls `Machine::fallback()`. The CPU must have canonical SR on entry and exit. A zero result means no fallback exists. Generated blocks call it for instructions that the recompiler did not lower. They set `halted` if it returns 0. See [Interpreter](/developer/runtime/interpreter).
+`int f3_fallback(f3_cpu *cpu)` calls `Machine::fallback()`. A halted CPU returns 0.
+Exclusion checks use the physical `pc & 0xffffff` ROM address and throw before
+interpretation, even when diagnostic fallback is enabled. Strict-native mode
+rejects other misses without executing or counting an instruction.
+
+Explicitly enabled interpretation executes exactly one instruction, with
+canonical SR on entry and exit. Generated blocks set `halted` if it returns 0.
+See [Interpreter](/developer/runtime/interpreter).
 
 ## The deadline contract
 

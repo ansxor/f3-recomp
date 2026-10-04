@@ -5,7 +5,8 @@
 `f3_excluded_range` and `f3_register_exclusions` register immutable, sorted,
 nonoverlapping `[start,end)` ROM intervals with reason/evidence strings.
 Registration rejects overlap with native entries. Excluded PCs fail with their
-address/range before interpretation, including odd PCs and diagnostic fallback.
+address/range before interpretation, including odd PCs, 24-bit bus aliases and
+diagnostic fallback.
 ROM reads from these intervals remain legal.
 
 The `f3_cpu` layout, instruction timing, lazy flags and scheduling contract are
