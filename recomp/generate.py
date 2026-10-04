@@ -12,6 +12,8 @@ import re
 
 from .emitter import lower
 
+_RUNTIME_ABI_VERSION = 2
+
 
 def generate(rom: bytes, discovery, output: Path, config: dict,
              max_block_instructions: int = 32, blocks_per_file: int = 128) -> dict:
@@ -54,8 +56,12 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         blocks.append([pc])
     blocks.sort(key=lambda block: block[0])
 
+    abi_guard = (f'#if F3RT_ABI_VERSION != {_RUNTIME_ABI_VERSION}\n'
+                 '#error "Generated program and f3rt ABI versions differ"\n'
+                 '#endif\n')
     preamble = ('/* Generated from user-supplied ROM. Do not commit. */\n'
-                '#include <f3rt/cpu_abi.h>\n#include "recomp/cpu_ops.h"\n')
+                '#include <f3rt/cpu_abi.h>\n' + abi_guard +
+                '#include "recomp/cpu_ops.h"\n')
     hook_declarations = ''.join(f'extern void {name}(f3_cpu *cpu);\n'
                                 for name in sorted(set(hooks.values())))
     table = []
@@ -89,9 +95,9 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                 lines.extend('    ' + statement for statement in statements)
                 if position + 1 < len(pcs):
                     next_pc = pcs[position + 1]
-                    # Includes exceptions and conditional control transfers;
-                    # never execute fallthrough after an unexpected new PC.
-                    lines.append(f'    if (cpu->pc != 0x{next_pc:08x}u || cpu->stopped || cpu->halted) {{ f3_cc_flush(cpu); return; }}')
+                    # Yield at the first instruction boundary reaching a runtime
+                    # event, and never fall through after a control transfer.
+                    lines.append(f'    if (cpu->pc != 0x{next_pc:08x}u || cpu->stopped || cpu->halted || cpu->cycles >= cpu->dispatch_deadline) {{ f3_cc_flush(cpu); return; }}')
             lines.append('}')
         lines.extend(['    f3_cc_flush(cpu);', '}\n'])
         shard.append('\n'.join(lines))
@@ -113,7 +119,8 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     (output / 'program.c').write_text(program)
     (output / 'program.h').write_text(
         '#ifndef F3_GENERATED_PROGRAM_H\n#define F3_GENERATED_PROGRAM_H\n'
-        '#include <f3rt/cpu_abi.h>\n#ifdef __cplusplus\nextern "C" {\n#endif\n'
+        '#include <f3rt/cpu_abi.h>\n' + abi_guard +
+        '#ifdef __cplusplus\nextern "C" {\n#endif\n'
         'int f3_generated_register(f3_cpu *cpu);\n'
         '#ifdef __cplusplus\n}\n#endif\n#endif\n')
     source_names.append('program.c')
@@ -127,8 +134,9 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "native_mnemonics": dict(sorted(supported.items())),
         "fallback_mnemonics": dict(sorted(unsupported.items())),
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
+        "runtime_abi_version": _RUNTIME_ABI_VERSION,
         "max_block_instructions": max_block_instructions,
-        "timing": "68EC020 reference instruction costs; IRQ delivery at native block boundaries",
+        "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
     }
     (output / 'lowering.json').write_text(json.dumps(report, indent=2) + '\n')
     (output / 'coverage.json').write_text(json.dumps(discovery.report, indent=2) + '\n')

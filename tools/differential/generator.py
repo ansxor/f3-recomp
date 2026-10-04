@@ -591,6 +591,11 @@ def generate_boundary_cases() -> list[RawTestCase]:
         add_case(f"rte_format_{fmt}", "4e73", sr=0x2700,
                  memory=[MemInitItem(TEST_SP, frame + bytes(8))])
     add_case("rte_privilege", "4e73", sr=0x001f)
+    for vector in range(16):
+        for sr in (0x0015, 0x201f):
+            add_case(f"trap_{vector}_{sr:x}", f"{0x4e40 | vector:04x}", sr=sr,
+                     memory=[MemInitItem((32 + vector) * 4,
+                                         struct.pack(">I", TEST_PC + 0x100 + vector * 2))])
     for control in (0, 1, 2, 0x800, 0x801, 0x802, 0x803, 0x804):
         code = struct.pack(">HHHH", 0x4e7b, control, 0x4e7a, 0x1000 | control)
         cases.append(RawTestCase(

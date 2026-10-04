@@ -190,10 +190,11 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
         4, 4, 50, 50, 20, 38, 40, 20, 34, 25, 20, 20, 4, 4, 4, 30
     };
     cpu->cycles += vector < 16 ? exception_cycles[vector] :
-        vector >= 24 && vector < 32 ? 30 : vector >= 32 && vector < 48 ? 20 : 4;
+        vector >= 24 && vector < 32 ? 30 : vector >= 32 && vector < 48 ? 24 : 4;
 }
 
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
+    if ((sr & 0x0700u) < (cpu->sr & 0x0700u)) cpu->dispatch_deadline = 0;
     uint32_t *old_stack = !(cpu->sr & 0x2000) ? &cpu->usp :
         (cpu->sr & 0x1000) ? &cpu->msp : &cpu->ssp;
     uint32_t *new_stack = !(sr & 0x2000) ? &cpu->usp :
@@ -419,6 +420,7 @@ void diff_recomp_run_case(const TestCase *tc, DiffEnv *env, f3_cpu *out_cpu) {
     memcpy(out_cpu->a, tc->initial_a, sizeof(out_cpu->a));
     out_cpu->pc = tc->initial_pc;
     out_cpu->sr = tc->initial_sr;
+    out_cpu->dispatch_deadline = UINT64_MAX;
     out_cpu->runtime = env;
 
     /* Execute the lowered C statements */
