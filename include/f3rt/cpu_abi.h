@@ -1,36 +1,32 @@
-/* SPDX-License-Identifier: MIT
- * f3rt CPU ABI v1. All addresses and register values are guest numeric values.
- * Guest memory is big endian; no host-endian RAM pointers cross this ABI.
- */
 #ifndef F3RT_CPU_ABI_H
 #define F3RT_CPU_ABI_H
+
 #include <stddef.h>
 #include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 #define F3RT_ABI_VERSION 1u
 
+/* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
+ * stacks. All addresses/registers are host integers; bus accesses are big-endian.
+ * Pending flags are private to recomp lowering and MUST be flushed before any
+ * runtime callback except ordinary memory reads/writes. Runtime writes to SR
+ * invalidate cc_op. cycles is a monotonic scheduling clock, not exact timing. */
 typedef struct f3_cpu {
-    uint32_t d[8];
-    uint32_t a[8];
-    uint32_t pc;
-    uint32_t usp;
-    uint32_t ssp;
-    uint32_t vbr;
+    uint32_t d[8], a[8];
+    uint32_t pc, usp, ssp, msp, vbr;
+    uint32_t sfc, dfc, cacr, caar;
     uint16_t sr;
-    uint8_t stopped;
-    uint8_t reserved;
+    uint8_t stopped, halted;
+    uint32_t cc_src, cc_dst, cc_result;
+    uint8_t cc_op, cc_width, cc_mask, cc_pad;
     uint64_t cycles;
     void *runtime;
 } f3_cpu;
 
-/* SR is always materialized at ABI calls. a[7] is the active stack;
- * usp/ssp hold the inactive stack (the active shadow need not be current).
- * cycles is cumulative main-CPU cycles, increased by each translated block
- * and by fallback. Blocks return to the dispatcher, never recursively call
- * another guest block. Every block sets pc to its successor before returning.
- */
 typedef void (*f3_block_fn)(f3_cpu *cpu);
 typedef struct f3_block {
     uint32_t address;
@@ -44,31 +40,24 @@ void f3_write8(f3_cpu *cpu, uint32_t address, uint8_t value);
 void f3_write16(f3_cpu *cpu, uint32_t address, uint16_t value);
 void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value);
 
-/* Call before each block. Nonzero: do not execute the selected block because
- * an interrupt changed pc, STOP remains active, or the host requested yield.
- * Do not clear stopped in translated code except RESET/exception semantics.
- */
+/* Called before lookup at every block boundary with canonical SR. Nonzero:
+ * do not execute the previously selected block (IRQ changed PC, STOP, halt).
+ * Dispatch must look up the new PC at the next step, never retain stale code. */
 int f3_boundary(f3_cpu *cpu);
-/* Enter vector (number, not byte offset) using a 68020 format-0 stack frame.
- * return_pc is pushed exactly; exception entry clears STOP and trace bits.
- */
-void f3_exception(f3_cpu *cpu, uint32_t vector, uint32_t return_pc);
-/* Set SR with supervisor/user stack switching. */
+void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc);
 void f3_set_sr(f3_cpu *cpu, uint16_t sr);
-/* Install caller-owned address-sorted table; duplicate addresses rejected.
- * Returns 1 on success, 0 on invalid table. Table lives until replaced.
- */
+void f3_reset_devices(f3_cpu *cpu);
+
+/* Table is sorted by address and remains valid for the CPU's lifetime.
+ * Returns 1 on success, 0 if invalid. Duplicate addresses are rejected. */
 int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count);
-/* Execute one block at pc (or fallback), including boundary. Returns 1 if
- * progress/interrupt/STOP time advancement occurred; 0 on a fatal host error.
- */
+/* Execute one block at pc (or fallback), including boundary. Returns 1 for
+ * progress, IRQ entry, or STOP time advancement; 0 on fatal host error/halt. */
 int f3_dispatch(f3_cpu *cpu);
-/* Execute exactly one instruction at pc using the runtime interpreter.
- * Returns 1 on success, 0 if no interpreter is configured or execution fails.
- * All registers/SR/pc and cycles are synchronized; never called inside a block
- * after that block has already performed part of the same instruction.
- */
+/* Execute exactly one instruction at cpu->pc. Canonical SR on entry/exit.
+ * Return nonzero on success; zero means no fallback is available. */
 int f3_fallback(f3_cpu *cpu);
+
 #ifdef __cplusplus
 }
 #endif

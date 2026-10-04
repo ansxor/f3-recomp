@@ -5,3 +5,9 @@ games/*/generated/
 games/*/rom/
 *.bin
 .DS_Store
+captures/
+diffs/
+nvram/
+cfg/
+*.wav
+__pycache__/
