@@ -17,6 +17,7 @@ struct GpuScene {
     static constexpr unsigned row_layers = 16;
     static constexpr unsigned layer_stride = 34;
     static constexpr unsigned row_pf = row_layers + 9 * layer_stride;
+    static constexpr unsigned row_interp = row_pf + 4 * 6;
     static constexpr unsigned sprites = rows + 256 * row_stride;
     static constexpr unsigned sprite_stride = 8;
     static constexpr unsigned word_count = sprites + 1024 * sprite_stride;

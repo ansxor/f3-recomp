@@ -380,7 +380,7 @@ void GameLines::observe(GameMemory &memory, const f3_cpu &cpu) {
         break;
 
     case 0x09d66a: {
-        // In-game puzzle gameboard effect setup (ROM 0x9d66a..0x9d6a6)
+        // PF2 water/puzzle-board setup, also used during player select (ROM 0x9d66a..0x9d6a6).
         const bool flipped = (flipscreen_ != 0);
         const unsigned start_line = flipped ? 128 : 152;
 
@@ -406,7 +406,7 @@ void GameLines::observe(GameMemory &memory, const f3_cpu &cpu) {
     }
 
     case 0x09d72a: {
-        // Gameboard trapezoidal zoom and centering rowscroll (PF2)
+        // Water/puzzle-board trapezoidal zoom and centering rowscroll (PF2).
         // Exact ROM 0x9d72a..0x9d7ae trace:
         const bool flipped = (flipscreen_ != 0);
         if (!flipped) {

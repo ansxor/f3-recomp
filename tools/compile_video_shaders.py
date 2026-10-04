@@ -11,6 +11,7 @@ SHADERS = (
     ("sprite", "vert", 0, 1, 1),
     ("sprite", "frag", 0, 1, 0),
     ("scene", "frag", 1, 3, 1),
+    ("scene_interp", "frag", 1, 3, 1),
 )
 
 

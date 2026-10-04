@@ -12,6 +12,7 @@ Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/
 | `--video-border 0..160` | 0 | Additional native scene columns on each side |
 | `--video-filter nearest\|linear` | `nearest` | SDL sampling of the completed presentation texture |
 | `--video-backend cpu\|gpu` | `cpu` | CPU expanded raster or SDL3 GPU presentation |
+| `--video-interp off\|linear\|fit` | `off` | Independent GPU PF2 water/board line sampling; no sprite interpolation |
 
 `GameVideoOptions` holds scale and border. Filtering belongs to the frontend, not this structure.
 
@@ -85,6 +86,27 @@ Text uses the original programmable 8x8 glyphs. Text rows repeat across expanded
 A 2x output can differ from nearest enlargement of the native RGB frame. It samples geometry at additional positions. It does not create higher-detail texture data.
 
 Mosaic periods remain native scene widths. Clip boundaries scale with output dimensions. Palette lookup and blending use the same integer rules at either resolution.
+
+### Opt-in line interpolation
+
+The off pipeline retains all integer rules above. A separate shader variant
+uses only validated PF2 lower-water rows from the normal `0x9d66a/0x9d72a`
+producer profile, not an unverified generic effect descriptor. Geometry input
+range is screen 152–255; the measured continuous palette prefix is 152–237.
+Whole first/last rows retain the original corresponding field. Unknown or
+invalid profiles remain off, including PF0's sine effect.
+
+Linear mode lerps adjacent source X/scale values. Fit mode evaluates the exact
+scale slope and a guarded affine source-X/cubic palette model. Palette sampling
+lerps the same pen's RGB across 64-color banks, preserving the measured bank
+0/1 discontinuity. CPU analysis writes six padding words only in the upload
+copy; neither the original snapshot nor canonical buffers gain interpolated
+fields. Native subrow-zero samples stay exact in linear mode; fitted GPU
+presentation may differ there too, while `Machine::pixels` stays unchanged.
+
+Boundary measurements, false-positive limits, guard fixtures, captures and
+timings: [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+
 
 ## Unsupported frames
 

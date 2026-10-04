@@ -5,6 +5,10 @@
 #include "interpreter.hpp"
 #include "sound_trace.hpp"
 #include "capture_io.hpp"
+#ifdef F3RT_GPU
+#include "gpu_video.hpp"
+#include "f3rt/video.hpp"
+#endif
 #include <SDL3/SDL.h>
 #include <array>
 #include <chrono>
@@ -24,7 +28,15 @@ struct Sdl {
     SDL_Renderer *renderer=nullptr;
     SDL_Texture *texture=nullptr;
     SDL_AudioStream *audio=nullptr;
-    ~Sdl() { SDL_DestroyAudioStream(audio);SDL_DestroyTexture(texture);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit(); }
+#ifdef F3RT_GPU
+    std::unique_ptr<f3rt::GpuVideo> gpu;
+#endif
+    ~Sdl() {
+#ifdef F3RT_GPU
+        gpu.reset();
+#endif
+        SDL_DestroyAudioStream(audio);SDL_DestroyTexture(texture);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
+    }
 };
 void check(bool result) { if(!result) throw std::runtime_error(SDL_GetError()); }
 void key(f3rt::Machine &m, SDL_Scancode code, bool pressed) {
@@ -74,6 +86,8 @@ int main(int argc,char **argv) try {
     bool sound_explicit=false;
     f3rt::GameVideoOptions video_options;
     std::string video_filter="nearest";
+    std::string video_backend="cpu";
+    std::string video_interp="off";
     f3rt::netplay::TransportOptions net_options;
     bool net_option_seen=false;
     uint64_t frames=0,dump_start=1,dump_every=1;
@@ -112,6 +126,8 @@ int main(int argc,char **argv) try {
             video_options.border=unsigned(border);
         }
         else if(arg=="--video-filter")video_filter=value();
+        else if(arg=="--video-backend")video_backend=value();
+        else if(arg=="--video-interp")video_interp=value();
         else if(arg=="--netplay-server") { net_options.server=value();net_option_seen=true; }
         else if(arg=="--netplay-room") { net_options.room=value();net_option_seen=true; }
         else if(arg=="--netplay-player") {
@@ -136,6 +152,8 @@ int main(int argc,char **argv) try {
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
+                     <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
+                     <<"  [--video-interp off|linear|fit] (opt-in GPU PF2 water sampling; default off)\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
                      <<"  [--netplay-server HOST:PORT --netplay-room CODE --netplay-player 1|2 --netplay-delay 0..8]\n"
                      <<"  Netplay: strict native game video/sound, factory-reset EEPROM, no local-only inputs.\n"
@@ -167,6 +185,14 @@ int main(int argc,char **argv) try {
     if(video_filter!="nearest" && video_filter!="linear")throw std::runtime_error("--video-filter must be nearest or linear");
     if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
         throw std::runtime_error("Presentation enhancements require --video game or compare");
+    if(video_backend!="cpu" && video_backend!="gpu")throw std::runtime_error("--video-backend must be cpu or gpu");
+    if(video_backend=="gpu" && video_mode=="fdp")throw std::runtime_error("GPU presentation requires --video game or compare");
+    if(video_interp!="off" && video_interp!="linear" && video_interp!="fit")
+        throw std::runtime_error("--video-interp must be off, linear or fit");
+    if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --video-backend gpu");
+#ifndef F3RT_GPU
+    if(video_backend=="gpu" && !headless)throw std::runtime_error("GPU presentation requires F3RT_GPU build support");
+#endif
     const bool netplay=net_option_seen;
     if(netplay && (net_options.server.empty() || net_options.room.empty()))
         throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
@@ -200,18 +226,32 @@ int main(int argc,char **argv) try {
     uint32_t audio_rate=m.audio->sample_rate();
     if(!headless) {
         check(SDL_Init(SDL_INIT_VIDEO|(sound?SDL_INIT_AUDIO:0)));
-        check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
-        check(SDL_SetRenderLogicalPresentation(sdl.renderer,int(video_options.width()),int(video_options.height()),SDL_LOGICAL_PRESENTATION_LETTERBOX));
-        sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,int(video_options.width()),int(video_options.height()));
-        check(sdl.texture!=nullptr);
-        check(SDL_SetTextureScaleMode(sdl.texture,video_filter=="linear"?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST));
+#ifdef F3RT_GPU
+        if(video_backend=="gpu") {
+            sdl.window=SDL_CreateWindow(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE);
+            check(sdl.window!=nullptr);
+            sdl.gpu=std::make_unique<f3rt::GpuVideo>(sdl.window,video_options,m.video->playfield_tiles(),
+                                                   m.video->sprite_tiles(),video_filter=="linear",throttle,
+                                                   video_interp=="fit"?f3rt::VideoInterpolation::Fit:
+                                                   video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off);
+            m.game_video->enable_gpu_presentation();
+        } else
+#endif
+        {
+            check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
+            check(SDL_SetRenderLogicalPresentation(sdl.renderer,int(video_options.width()),int(video_options.height()),SDL_LOGICAL_PRESENTATION_LETTERBOX));
+            sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,int(video_options.width()),int(video_options.height()));
+            check(sdl.texture!=nullptr);
+            check(SDL_SetTextureScaleMode(sdl.texture,video_filter=="linear"?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST));
+        }
         if(sound) {
             SDL_AudioSpec spec{SDL_AUDIO_S16,2,int(audio_rate)};
             sdl.audio=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,nullptr,nullptr);
             check(sdl.audio!=nullptr);check(SDL_ResumeAudioStreamDevice(sdl.audio));
         }
-        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" renderer="<<SDL_GetRendererName(sdl.renderer)
-                 <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()<<" filter="<<video_filter<<'\n';
+        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" backend="<<video_backend
+                 <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()
+                 <<" filter="<<video_filter<<" interp="<<video_interp<<'\n';
     }
     std::unique_ptr<f3rt::WavWriter> wav;
     if(!wav_path.empty())wav=std::make_unique<f3rt::WavWriter>(wav_path,audio_rate);
@@ -304,14 +344,22 @@ int main(int argc,char **argv) try {
             if(sdl.audio)check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
         }
         if(!headless && advanced) {
-            const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
-            check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
-            check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
-            if(!surface.empty() && frames && m.frame==frames) {
-                SDL_Surface *shot=SDL_RenderReadPixels(sdl.renderer,nullptr);
-                check(shot!=nullptr);const bool saved=SDL_SaveBMP(shot,surface.string().c_str());SDL_DestroySurface(shot);check(saved);
+#ifdef F3RT_GPU
+            if(sdl.gpu) {
+                sdl.gpu->draw(m.game_video->gpu_scene());
+                if(!surface.empty() && frames && m.frame==frames)sdl.gpu->save_surface(surface.string().c_str());
+            } else
+#endif
+            {
+                const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
+                check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
+                check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
+                if(!surface.empty() && frames && m.frame==frames) {
+                    SDL_Surface *shot=SDL_RenderReadPixels(sdl.renderer,nullptr);
+                    check(shot!=nullptr);const bool saved=SDL_SaveBMP(shot,surface.string().c_str());SDL_DestroySurface(shot);check(saved);
+                }
+                check(SDL_RenderPresent(sdl.renderer));
             }
-            check(SDL_RenderPresent(sdl.renderer));
             if(throttle && !netplay)std::this_thread::sleep_until(start+std::chrono::nanoseconds(uint64_t(double(m.frame)*1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock)));
         }
         if(transport && !advanced)std::this_thread::sleep_for(std::chrono::milliseconds(1));

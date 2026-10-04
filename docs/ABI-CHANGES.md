@@ -225,3 +225,11 @@ presentation avoids the per-frame expanded CPU raster; `presentation()` and
 lazily when requested, preserving the existing canonical snapshot byte layout.
 Load invalidates GPU host caches and initially presents the restored native
 frame; the next scanout rebuilds GPU scene data. Netplay retains scale 1/border 0.
+
+Opt-in GPU interpolation adds only host-side `VideoInterpolation` analysis and
+six shader metadata padding words in the **upload copy** of each normalized
+row. No `SceneRow`, `GameLines`, machine-state, snapshot, CPU ABI or netplay
+schema changes. The original `GpuScene` and lazily materialized CPU images
+remain non-interpolated. Sprite uniforms retain the original count; the
+fragment-only mode uses its otherwise-unused high 16 bits after the sprite
+pass has copied its vertex uniforms.

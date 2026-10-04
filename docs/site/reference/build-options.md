@@ -69,7 +69,7 @@ The game config is fixed to `games/landmakrj/config.toml` in the top-level `CMak
 | `f3rt-netplay-oracle` | executable | `F3_GENERATED_DIR` is set | `tools/netplay_oracle.cpp` | `f3rt`, `f3_recompiled` |
 | `f3rt-run` | executable | `F3RT_SDL` is on | `runtime/frontend.cpp` | `f3rt`, `SDL3::SDL3`, and `f3_recompiled` if `F3_GENERATED_DIR` is set |
 | `landmakr` | executable | `F3RT_SDL` is on and `F3_GENERATED_DIR` is set | `runtime/frontend.cpp` | `f3rt`, `f3_recompiled`, `SDL3::SDL3` |
-| `f3rt-gpu` | static library | `F3RT_SDL` and `F3RT_GPU` | SDL GPU backend and generated `video_shaders.hpp` | `SDL3::SDL3` (PUBLIC) |
+| `f3rt-gpu` | static library | `F3RT_SDL` and `F3RT_GPU` | SDL GPU backend, host-only interpolation analysis and generated `video_shaders.hpp` | `SDL3::SDL3` (PUBLIC) |
 | `f3rt-gpu-regression` | executable | GPU support and generated main program | `tools/gpu_video_regression.cpp` | `f3rt`, `f3_recompiled`, `f3rt-gpu`; generated sound when available |
 | `f3rt-replay` | executable | always | `runtime/replay.cpp` | `f3rt` |
 | `f3rt-check` | executable | `BUILD_TESTING` is on | `runtime/check.cpp` | `f3rt` |

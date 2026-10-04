@@ -60,6 +60,7 @@ After the pictures match at native size, you can add three options. All three ne
 | `--video-border N` | 0 to 160 | 0 | Adds N native columns to **each** side of the picture. |
 | `--video-filter F` | `nearest` or `linear` | `nearest` | Sets the filter that SDL uses to scale the final picture to the window. |
 | `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
+| `--video-interp I` | `off`, `linear` or `fit` | `off` | Opt-in GPU line sampling for validated PF2 water/puzzle-board effects. |
 
 Example:
 
@@ -92,6 +93,18 @@ use the same integer sampling, sprite raster rules and blend ordering.
 Headless, native captures/CRCs, audio and rollback checksums remain CPU-produced.
 Use `--video-backend cpu` if GPU device creation is unavailable.
 The GPU port does not interpolate adjacent native line values by default.
+
+`--video-interp linear` smooths scale/scroll and valid palette-bank colors
+between adjacent water rows. `--video-interp fit` uses a guarded smooth model
+across the effect. They require `--video-backend gpu` and take effect only
+above scale 1. This is independent of `--video-filter linear`, which only
+filters the finished window image.
+
+Both modes keep the water boundary and discrete palette transition intact.
+Sprites and native captures do not change. Unknown effects, invalid/disabled
+rows, jumps and uncertain fits use the non-interpolated picture instead.
+The measured gain is smoother water perspective, not new texture detail;
+see [GPU measurements](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
 
 The program checks the values:
 

@@ -112,8 +112,9 @@ if(F3RT_SDL)
             DEPENDS tools/compile_video_shaders.py runtime/shaders/scene.glsl
                 runtime/shaders/fullscreen.vert runtime/shaders/sprite.vert
                 runtime/shaders/sprite.frag runtime/shaders/scene.frag
+                runtime/shaders/scene_interp.frag runtime/shaders/scene_body.glsl
             VERBATIM)
-        add_library(f3rt-gpu STATIC runtime/gpu_video.cpp "${VIDEO_SHADER_HEADER}")
+        add_library(f3rt-gpu STATIC runtime/gpu_video.cpp runtime/gpu_interp.cpp "${VIDEO_SHADER_HEADER}")
         target_include_directories(f3rt-gpu PUBLIC include runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         target_link_libraries(f3rt-gpu PUBLIC SDL3::SDL3)
         target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)

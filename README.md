@@ -127,6 +127,18 @@ GPU `--surface` writes the internal-resolution GPU image (BMP or PNG);
 CPU `--surface` retains the rendered SDL window capture.
 GPU availability errors are explicit; select `--video-backend cpu` for fallback.
 
+`--video-interp linear|fit` separately opts into PF2 water/puzzle-board line
+sampling on the GPU at scales above 1; default `off` retains exact CPU parity.
+Linear samples adjacent valid rows; fit evaluates the known scale function and
+guarded affine-source/cubic-palette model. Both interpolate the same pen's RGB
+between valid 64-color palette banks, never pen indices or sprites. Unknown,
+disabled, discontinuous or poorly fitted profiles stay un-interpolated.
+The native frame, CPU captures, WAV and rollback state remain unchanged.
+
+```sh
+./build/landmakr --video-backend gpu --video-scale 4 --video-border 48 --video-interp fit
+```
+
 Exact sampling design, tagged checkpoints, parity harness and measured timings:
 [docs/GPU-VIDEO.md](docs/GPU-VIDEO.md).
 

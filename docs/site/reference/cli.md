@@ -85,6 +85,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
 | `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
 | `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
+| `--video-interp` | `off`, `linear` or `fit` | `off` | Separate opt-in GPU PF2 water/board line sampling | Non-off needs `--video-backend gpu`; scale 1 and headless remain unchanged. Does not interpolate sprites. |
 | `--netplay-server` | `HOST:PORT` | none | Address of the relay server | Any `--netplay-*` flag turns netplay on. |
 | `--netplay-room` | `CODE` | none | Room name on the relay server | Required in netplay mode. The transport rejects an empty room. |
 | `--netplay-player` | `1` or `2` | automatic | Player slot | Else: `--netplay-player must be 1 or 2`. If you omit it, the transport option stays `0` (automatic). |
@@ -280,6 +281,7 @@ parity comparison. Native machine/audio output remains CPU-produced.
 ```sh
 ./build/f3rt-gpu-regression --seed 5 --frames 4000 --scale 4 --border 48 --layers
 ./build/f3rt-gpu-regression --seed 5 --frames 4000 --scale 4 --border 48 --bench
+./build/f3rt-gpu-regression --seed 5 --frames 1560 --scale 4 --border 48 --interp fit --capture-frame 1500 --capture-frame 1560 --dump-dir /tmp/f3-water --bench
 ```
 
 | Flag | Default | Meaning |
@@ -292,6 +294,8 @@ parity comparison. Native machine/audio output remains CPU-produced.
 | `--layers` | Off | Compare all nine isolated supported layers plus the composite |
 | `--bench` | Off | Varied-scene timings after 600 frames; 100 serial/threaded/GPU repeats of the last supported frame |
 | `--dump-dir DIR` | None | External CPU/GPU PNGs and native BMPs |
+| `--interp off\|linear\|fit` | `off` | Second opt-in renderer; CPU parity comparison always uses the off renderer |
+| `--capture-frame N` | None | Repeatable; forces selected off/mode PNGs and complete PF2 row CSVs, even off the sampling interval; needs `--dump-dir` |
 | `--inject-frame N` | `1407` | Supported baseline for diagnostic branches |
 | `--inject-bitmap`, `--inject-trails`, `--inject-globalflip` | Off | Induce actual unsupported-mode boundaries and verify oracle presentation/recovery |
 | `--inject-unknown`, `--inject-ending` | Off | Induce unsupported writer/ending-producer boundaries; not a played-through ending |
@@ -303,6 +307,15 @@ canonical snapshot bytes; trails additionally compare an independent CPU-backend
 branch. Fallback comparisons bypass layer masks and are counted only as full
 frames. `PARITY`, per-layer mismatch counts, `BENCH` and `SUCCESS` lines report
 the exercised coverage. Any mismatch or CPU fallback exits nonzero.
+
+Interpolation diagnostics compare every declined/oracle image and all rows
+outside the validated geometry run (including whole boundary rows) against
+off. Accepted scenes also isolate sprites and exercise induced invalid-run,
+garbage-input, jump, residual and palette-continuity cases. Logs identify the
+known-ROM-profile source or rejection reason per scene transition/requested
+frame and summarize sampled scene counts. `--bench` additionally reports
+opt-in fenced timings; choose a final water frame such as 1560 to benchmark an
+actually accepted effect rather than a declined later scene.
 
 ## f3rt-check
 

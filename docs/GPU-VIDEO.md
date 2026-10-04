@@ -310,3 +310,203 @@ Earlier full-4000-frame timing logs (before division specialization) are retaine
 in `/tmp/f3-gpuvideo/bench`; their CPU scheduling outliers are not suppressed.
 GPU is not made default: native/2x CPU threading is cheaper than a fenced GPU
 comparison, and devices without GPU support retain the explicit CPU choice.
+
+## Interpolation input measurements (after the parity checkpoint)
+
+Seed 5, frames 1–4000: PF0 source-X varies across rows in 170 frames (the
+`0x9ecb0` sine-wave producer); PF2 scale/source-X and palette-add vary in 1368
+frames; PF1/PF3 have no corresponding varying fields on this route. The
+character-select water is **PF2**, not the separate PF3 character-select
+clip/blend setup. Frame 1409 shows the water/stars entrance; frames 1500 and
+1560 show the player-select portraits above it. Native/4x captures and complete
+256-row field dumps are in `/tmp/f3-gpuvideo/line-profile`.
+
+For the lower PF2 region, screen rows **152–255** (visible rows 128–231):
+
+| Field | Measured profile | Adjacent step |
+|---|---|---|
+| X scale | 256 down to 50 | −2 |
+| Source X (24.8) | 18352 to 51780 at frame 1409 | +76, +332, or +588 |
+| Source Y | 128 to 231 at frame 1409; animated phase later | +1 |
+| Y scale/fraction | 256 / 0 | 0 |
+| Palette add | 640 down to 0 | 0 or −64 |
+
+Palette bands are `(add, length)`: `(640,4), (576,4), (512,4), (448,6),
+`(384,8), (320,8), (256,8), (192,12), (128,16), (64,16), (0,18)`.
+Screen row 151 has scale 256 but palette add 0; row 152 also has scale 256
+but palette add 640. Thus scale-only value-run detection gives the wrong start.
+
+`game_lines.cpp` already reconstructs the actual `0x9d66a` palette table,
+`0x9d72a` scale/centering function, and `0x9d7b6` phase. Its non-flipped origin
+152 matches the captured water boundary exactly. It does **not** expose an
+active-effect descriptor or raw per-field line-enable bits in `SceneRow`.
+The candidate is therefore a presentation-only recognizer of that complete
+known producer profile, not a claimed existing descriptor API: require all
+104 enabled, non-mosaic rows and the exact scale/palette shape, validate
+source continuity and stable layer controls, and reject the entire candidate
+if any input is invalid. Only those rows may enter endpoints/fits. Unknown
+effects, including PF0's sine, remain unchanged.
+
+The game's centering function implies a smooth source-X slope of 324 in
+24.8 units per row; its integer packing leaves at most 182.462 units
+(0.713 texels) residual in the captured profile. Candidate limits are
+640 for a positive adjacent source-X jump and 192 for affine residual.
+The scale function itself is exactly linear (−2 per row).
+Source X is also limited to ±2^24 raw units for reliable float precision;
+out-of-domain coordinates decline instead of guessing.
+
+Palette addition is a **64-color bank offset**, not a continuous pen index.
+Interpolating its numeric index would select unrelated pens. Blend RGB values
+of the same pen in adjacent 64-color banks instead. Actual sampled tile pens
+at frames 1409/1500/1560 have maximum channel step 8 for bank pairs 1–10, but
+bank 0↔1 has a real 144-channel discontinuity. Preserve that discrete boundary:
+the continuous palette candidate ends at row 237 (bank 1), excluding rows
+238–255 from palette fit samples. A 32-channel continuity limit separates the
+observed smooth pairs from the discontinuity. Fit geometry over 152–255 and
+palette only over 152–237; preserve both fields' first/last rows on their
+outside edges. A cubic fit of this 86-row palette prefix has maximum residual
+39.306 bank-index units; candidate residual limit is 48. These are measured
+thresholds, not a universal interpolation rule.
+
+The implemented comparison is off, piecewise-linear, and affine-source/cubic-
+palette fitted sampling at 4x. Both opt-in methods leave sprites, source Y,
+native pixels, machine state and CPU captures alone. The fit is a guarded
+smooth approximation, not proof of the ROM palette table's analytic function.
+
+### Boundary candidate comparison
+
+Cheap value-only runs on the captured visible rows give:
+
+| Frame | Adjacent scale delta ≤2 | Scale plus palette delta ≤64 |
+|---:|---|---|
+| 1200, no PF2 effect | 24–255 | 24–255 |
+| 1409 / 1500 / 1560, water | 24–255 | 24–151 and 152–255 |
+
+The combined value threshold recovers the lower water boundary but also
+admits an upper run; scale alone joins across it and recognizes a no-effect
+scene. The measured producer origin 152 plus the **complete** lower profile
+validation is therefore the conservative shipped choice. No persistent
+setter hook/state field or generic value-run fallback was added. This avoids
+new canonical state and unknown-effect false positives; it deliberately
+declines otherwise smooth effects not covered by this one family.
+
+### Visible gain and boundary proof
+
+Off/linear/fit full frames and water details at 1409/1500/1560 were inspected.
+The linear mode visibly removes the four-output-row staircase in the water's
+perspective streaks. Fitted geometry removes the packed-source jitter and
+spreads smooth palette grading across the valid prefix; its visible advantage
+over linear is smaller than the off→linear change. Neither adds ROM texture
+detail or changes portrait/sprite geometry. The bank-0 transition remains
+discrete, and the water horizon has no added smeared/garbage band.
+
+| 4x frame, border 48 | Linear vs off changed pixels | Fit vs off changed pixels | Outside/boundary pixels changed |
+|---:|---:|---:|---:|
+| 1500 | 91,476 / 1,544,192 (5.92%) | 264,351 / 1,544,192 (17.12%) | 0 |
+| 1560 | 82,781 / 1,544,192 (5.36%) | 229,435 / 1,544,192 (14.86%) | 0 |
+
+The off 4x center differs from plain nearest enlargement of native RGB in only
+25,668 / 1,187,840 pixels (2.16%) at 1500 and 20,948 (1.76%) at 1560:
+extra sampling without line interpolation mostly retains native geometry.
+These difference counts are not a quality score. Linear leaves every
+native subrow-zero sample exact; fitted GPU presentation also changes 62,661
+such samples at 1500 / 54,089 at 1560, while CPU native output remains exact.
+
+An actual Cocoa/Metal window was replayed to seed-5 frame 1500 with fit
+accepted (`geometry=152..255`, `palette=152..237`, 22,705,262 native blocks,
+zero instruction fallback). Its internal surface and live window screenshot
+were inspected, not merely an offline shader image. Captures:
+`/tmp/f3-gpuvideo/interpolation/actual-water-{surface,window}-fit.png`.
+
+The harness checks whole first/last geometry rows and every outside row
+bit-identically against off on each accepted sampled frame. It compares
+entire declined/oracle images, isolated sprite contributions and canonical
+scene/machine bytes. Eleven induced scene-copy cases cover garbage and zero
+above 152, disabled/zero inside, jumps, nonmonotonic source, a short valid
+region, high source-fit residual, corrupt palette shape, a too-short
+RGB-continuous prefix and an out-of-domain source offset. Invalid inside
+cases decline with zero image differences against off of the same scene;
+above-region corruption leaves eligibility, residuals and all run pixels
+exact. These are guard fixtures, not claims of played scenes.
+
+### Final cross-mode corpus
+
+After integration, the off shader's full 32-case matrix was rerun: seeds
+5/6/7/41 × scales 1–4 × borders 0/48 × 4000 = 128,000 native frames,
+4320 composites, 4096 comparisons of **each** isolated layer, zero mismatches.
+Linear and fit each ran eleven additional 4000-frame cases: all four seeds at
+4x/borders 0 and 48, plus seed 5 at scales 1/2/3 with border 48.
+
+| Mode | Native frames | Sampled images | Applied | No known effect | Oracle | Native-scale skip |
+|---|---:|---:|---:|---:|---:|---:|
+| Linear | 44,000 | 1485 | 384 | 896 | 70 | 135 |
+| Fit | 44,000 | 1485 | 384 | 896 | 70 | 135 |
+
+Every outside/boundary, declined/oracle and isolated-sprite comparison is
+exact; 768 accepted sprite-isolation checks and twenty sets of eleven guard
+fixtures pass. All same-seed/scale/border off/linear/fit runs have identical
+native frame/audio/state CRCs, native cycles and block counts, with zero
+instruction fallback. Logs and summary: `/tmp/f3-gpuvideo/interpolation/matrix`.
+Counts are sampled every 30 frames plus the final frame, not all native frames.
+
+For each mode at 4x/border 48:
+
+| Seed | Applied samples | No-known-effect samples | Oracle samples | Sampled accepted interval |
+|---:|---:|---:|---:|---|
+| 5 | 46 | 82 | 7 | 1411–2761 |
+| 6 | 45 | 83 | 7 | 1591–2911 |
+| 7 | 9 | 119 | 7 | 1741–1981 |
+| 41 | 46 | 82 | 7 | 1621–2971 |
+
+The same results hold at border 0. Native-scale requests stay fully off.
+Seed-5 frame 1300 is the separate PF0 sine-wave game-select screen; its PF0
+source X ranges −52..261688. Both modes decline it with a whole-image exact
+comparison. Off/linear/fit captures are in
+`/tmp/f3-gpuvideo/interpolation/other-line-effect`. No generic effect coverage
+or interpolation on genuinely discrete unrelated profiles is claimed.
+
+The 4000-frame fit run also exercises induced bitmap, trails, flip, unknown
+writer and ending-producer fallback/recovery, keeping canonical bytes exact;
+ending remains an **induced boundary, not a played-through ending**.
+A fresh headless `--video compare --video-backend gpu --video-interp fit`
+3600-frame run retains 250,114,560 native RGB comparisons with zero differences,
+frame CRC `3359f200`, 51,507,335 native blocks and zero instruction fallback.
+Its WAV compares byte-identically with both the parity checkpoint and
+integration `coverage-final.wav`. The retained `F3RT_GPU=OFF` frontend and
+`f3rt-check` also build/run without shader tools.
+
+### Accepted-water performance
+
+M5/Metal, seed-5 frame 1560, 4x/border 48. Separate sequential mode runs;
+100 frozen repeats after five warmups. Milliseconds, including CPU metadata
+analysis, uploads, submission, fence and readback for GPU rows:
+
+| Mode run | Path | Mean | p95 | Worst |
+|---|---|---:|---:|---:|
+| Linear | CPU serial | 26.226 | 26.958 | 28.086 |
+| Linear | CPU threaded | 7.685 | 9.784 | 11.513 |
+| Linear | GPU off | 4.387 | 6.022 | 6.476 |
+| Linear | GPU linear | 4.640 | 6.201 | 7.043 |
+| Fit | CPU serial | 26.456 | 27.120 | 27.579 |
+| Fit | CPU threaded | 7.721 | 9.236 | 11.158 |
+| Fit | GPU off | 4.786 | 6.844 | 8.490 |
+| Fit | GPU fit | 4.848 | 6.963 | 7.595 |
+
+The selected effect is actually accepted in these frozen timings, unlike the
+earlier frame-4000 benchmark where fit declines. GPU clocks/cache/order vary
+between runs; these data do not establish that fit is faster than linear.
+Full varied timings and unfiltered logs: `/tmp/f3-gpuvideo/interpolation/perf`.
+Independent CPU-backend canonical bytes and GPU-off pixels at frame 1560
+remain exact in both runs.
+
+Actual frontend `--video-backend gpu --video-interp fit --video-scale 4
+--video-border 48 --frames 3600 --no-audio --unthrottled` completes in
+**30.31 seconds / 118.8 frames/s**, including startup and final PNG readback.
+Native CPU/audio still run: frame CRC `3359f200`, 1,817,655 audio frames,
+51,507,335 native blocks, zero instruction fallback. Internal surface inspected:
+`/tmp/f3-gpuvideo/interpolation/perf/frontend-fit-4x.png`.
+
+Decision: ship both as separate opt-in modes, off/CPU still defaults. The
+measured water gain is worthwhile; broad unknown-effect interpolation is not
+justified. Keep the known-family/validity guards rather than infer arbitrary
+smooth runs or claim a universally accurate fitted effect function.
