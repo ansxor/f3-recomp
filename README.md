@@ -100,6 +100,10 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   preserve multi-instruction blocks and lazy flags without delaying scheduled
   IRQs to the original static block end. Frame/audio parity is checked
   separately against observed Land Maker output.
+- Native bus callbacks synchronize device time before sound-mailbox reads,
+  writes, and reset-line changes. This prevents main-block interior accesses
+  from becoming visible to earlier sound execution without adding CPU cycles,
+  forcing single-instruction blocks, or delivering IRQs inside an instruction.
 - TOML `[discovery].entry_points` accepts observed runtime PCs.
   `[[discovery.jump_tables]]` records a transfer `address` and its `targets`,
   or a ROM `table` address and `count` of big-endian longword destinations.

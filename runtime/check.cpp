@@ -27,6 +27,57 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void check_main_sound_ordering() {
+    const auto sound_machine=[] {
+        auto roms=fixture();
+        roms.sound[2]=0x80;roms.sound[6]=1; // SSP 8000, PC 100.
+        auto m=std::make_unique<f3rt::Machine>(std::move(roms));
+        // Real sound CPU: snapshot mailbox byte zero, post a reply, then loop.
+        const uint16_t code[]={0x13f9,0x0014,0x0000,0x0000,0x0600,
+                               0x13fc,0x005a,0x0014,0x0002,0x60fe};
+        for (unsigned i=0;i<std::size(code);++i) m->audio->write16(0x100+2*i,code[i]);
+        m->write8(0xc00000,0x11);
+        return m;
+    };
+    {
+        auto m=sound_machine();
+        m->cpu.cycles=2048;
+        f3_write16(&m->cpu,0xc80000,0);
+        m->boundary();
+        require(m->audio->read8(0x600)==0 && m->shared[1]==0,
+                "Sound reset release cannot execute the CPU during preceding main-block time");
+        m->cpu.cycles+=1024;m->boundary();
+        require(m->audio->read8(0x600)==0x11 && m->shared[1]==0x5a,
+                "Sound CPU executes the mailbox program after reset release");
+    }
+    for (unsigned width : {1,2,4}) {
+        auto m=sound_machine();
+        m->audio->set_reset(false);m->cpu.cycles=1024;
+        if (width==1) f3_write8(&m->cpu,0xc00000,0x22);
+        else if (width==2) f3_write16(&m->cpu,0xc00000,0x2233);
+        else f3_write32(&m->cpu,0xbfffff,0x99223344); // Unaligned access enters shared RAM.
+        m->boundary();
+        require(m->audio->read8(0x600)==0x11 && m->shared[0]==0x22,
+                "Mailbox writes become visible only after preceding sound execution");
+    }
+    for (unsigned width : {1,2,4}) {
+        auto m=sound_machine();
+        m->audio->set_reset(false);m->cpu.cycles=1024;
+        const uint32_t value=width==1?f3_read8(&m->cpu,0xc00001):
+            width==2?f3_read16(&m->cpu,0xc00000):f3_read32(&m->cpu,0xbfffff);
+        require(value==(width==1?0x5au:width==2?0x115au:0xff115a00u),
+                "Mailbox reads observe sound replies produced before the current main instruction");
+    }
+    for (bool reset_instruction : {false,true}) {
+        auto m=sound_machine();
+        m->audio->set_reset(false);m->cpu.cycles=1024;
+        if (reset_instruction) f3_reset_devices(&m->cpu);
+        else f3_write8(&m->cpu,0xc80100,0);
+        m->boundary();
+        require(m->audio->is_reset() && m->audio->read8(0x600)==0x11 && m->shared[1]==0x5a,
+                "Reset assertion preserves sound execution preceding the reset instruction");
+    }
+}
 void check_duart_counter() {
     const auto preset=[](f3rt::MC68681 &d,unsigned count) { d.write(6,count>>8);d.write(7,count); };
     f3rt::MC68681 restart;
@@ -338,6 +389,7 @@ void check_audio_mixer() {
 }
 int main() try {
     check_audio_mixer();
+    check_main_sound_ordering();
     f3rt::Audio clock_audio;
     std::array<int16_t, 128> clock_samples{};
     uint64_t sample_count=0;

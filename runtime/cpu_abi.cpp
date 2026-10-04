@@ -4,17 +4,31 @@
 
 namespace {
 f3rt::Machine &machine(f3_cpu *cpu) { return *static_cast<f3rt::Machine *>(cpu->runtime); }
+f3rt::Machine &bus(f3_cpu *cpu, uint32_t address, uint32_t width) {
+    auto &m = machine(cpu);
+    const uint32_t start = address & 0xffffff;
+    const uint32_t end = start + width;
+    // Native blocks can run ahead of devices. Sound must finish preceding
+    // time before a mailbox access or reset-line change becomes visible.
+    // Include unaligned accesses crossing into a mapped range. Only advance
+    // devices here: IRQ entry still belongs to the next instruction boundary.
+    if (end > 0xc00000 && (start < 0xc00800 ||
+        (start < 0xc80004 && end > 0xc80000) ||
+        (start < 0xc80104 && end > 0xc80100)))
+        m.advance_to(cpu->cycles);
+    return m;
+}
 uint32_t &stack(f3_cpu *cpu, uint16_t sr) {
     return !(sr & 0x2000) ? cpu->usp : (sr & 0x1000) ? cpu->msp : cpu->ssp;
 }
 }
 extern "C" {
-uint8_t f3_read8(f3_cpu *cpu, uint32_t a) { return machine(cpu).read8(a); }
-uint16_t f3_read16(f3_cpu *cpu, uint32_t a) { return machine(cpu).read16(a); }
-uint32_t f3_read32(f3_cpu *cpu, uint32_t a) { return machine(cpu).read32(a); }
-void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) { machine(cpu).write8(a,v); }
-void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) { machine(cpu).write16(a,v); }
-void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) { machine(cpu).write32(a,v); }
+uint8_t f3_read8(f3_cpu *cpu, uint32_t a) { return bus(cpu,a,1).read8(a); }
+uint16_t f3_read16(f3_cpu *cpu, uint32_t a) { return bus(cpu,a,2).read16(a); }
+uint32_t f3_read32(f3_cpu *cpu, uint32_t a) { return bus(cpu,a,4).read32(a); }
+void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) { bus(cpu,a,1).write8(a,v); }
+void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) { bus(cpu,a,2).write16(a,v); }
+void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) { bus(cpu,a,4).write32(a,v); }
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     sr &= 0xf71f; // 68EC020 writable status bits.
     if ((sr & 0x0700) < (cpu->sr & 0x0700)) cpu->dispatch_deadline = 0;
@@ -46,7 +60,11 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
         : vector >= 24 && vector < 32 ? 30
         : vector >= 32 && vector < 48 ? 24 : 4;
 }
-void f3_reset_devices(f3_cpu *cpu) { machine(cpu).reset_devices(); }
+void f3_reset_devices(f3_cpu *cpu) {
+    auto &m = machine(cpu);
+    m.advance_to(cpu->cycles);
+    m.reset_devices();
+}
 int f3_boundary(f3_cpu *cpu) { return machine(cpu).boundary(); }
 int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
     if (!cpu || !cpu->runtime || (count && !blocks)) return 0;

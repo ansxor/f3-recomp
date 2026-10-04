@@ -36,6 +36,9 @@ typedef struct f3_block {
     f3_block_fn execute;
 } f3_block;
 
+/* Native sound-mailbox/reset accesses catch device time up to cycles before
+ * taking effect, including unaligned accesses crossing into the mapped range.
+ * This does not deliver main-CPU IRQs or require pending flags to be flushed. */
 uint8_t f3_read8(f3_cpu *cpu, uint32_t address);
 uint16_t f3_read16(f3_cpu *cpu, uint32_t address);
 uint32_t f3_read32(f3_cpu *cpu, uint32_t address);

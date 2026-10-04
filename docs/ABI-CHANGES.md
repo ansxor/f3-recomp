@@ -18,6 +18,17 @@ IRQ is reconsidered immediately. Raising the mask leaves a valid deadline
 intact. A watchdog strobe may retain an earlier conservative threshold but must
 not overwrite an outstanding zero/recheck.
 
+Native ABI memory callbacks synchronize devices to `cpu.cycles` before sound
+mailbox reads/writes and sound reset-line accesses, including wide accesses
+starting outside but overlapping the mapped range. `f3_reset_devices` also
+drains preceding device time before changing reset state. Otherwise a native
+block can expose a new command/reset to sound execution in the block's past.
+This does not charge extra CPU cycles, materialize lazy flags on memory
+callbacks, or deliver main IRQs inside an instruction. IRQ entry remains at
+the next dispatch boundary. ABI layout/version 2 and multi-instruction blocks
+are unchanged; direct interpreter memory callbacks retain their existing
+instruction-boundary synchronization and do not re-enter the sound core.
+
 TRAP #n vectors 32–47 have a full EC020/68020 charge of 24 cycles. The semantic
 reference retains the four-cycle opcode charge in addition to the 20-cycle
 exception-table entry; `f3_exception` owns all 24 cycles for generated code.
