@@ -3,6 +3,25 @@
 Taito F3 static recompilation + modern runtime, modeled on N64Recomp + N64ModernRuntime.
 Execution target: Land Maker Japan 2.01J (`landmakrj`, main CPU 68EC020), using the supplied ROM directory named `landmakr`. World `landmakr` is configuration-only and untested: its e61-19..16 program lanes were not supplied.
 
+## Documentation
+
+Read the [user guide, CLI reference and Developer documentation](https://ansxor.github.io/f3-recomp/).
+The VitePress source is in [`docs/site`](docs/site).
+The Developer section covers architecture, code emission, hardware models, netplay and verification.
+
+Use Node.js 22 or newer to run the documentation locally:
+
+```sh
+cd docs/site
+npm ci
+npm run dev
+```
+
+Use `npm run build` to generate the site. Use `npm run preview` to inspect the production output.
+Documentation builds do not require ROM files.
+The [Pages workflow](.github/workflows/docs.yml) builds pull requests and deploys documentation changes on `main`.
+You can also start it with **Run workflow** in GitHub Actions.
+
 ## split
 - `recomp/`   tool: ROM -> C (68020 lifter, function discovery, jump-table/indirect handling, per-game TOML config). Output C calls only the runtime ABI.
 - `runtime/`  library `f3rt`: memory map + I/O, interrupts/vblank timing, FDP (video), OTIS/ES5505 + sound CPU (audio), input, EEPROM, SDL3 frontend.

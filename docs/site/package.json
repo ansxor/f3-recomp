@@ -1,0 +1,16 @@
+{
+  "name": "f3-recomp-docs",
+  "private": true,
+  "version": "0.0.0",
+  "description": "VitePress documentation for f3-recomp",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "mermaid": "^11.17.2",
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-mermaid": "^2.0.17"
+  }
+}
