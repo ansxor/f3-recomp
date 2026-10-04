@@ -8,9 +8,16 @@ The compiler is described on [another page](/developer/recompiler/sound-compiler
 
 ## The idea
 
-The compiler creates one table entry per aligned sound-ROM address. Entries select a single-instruction function, a shared exception function, or an unsupported-instruction failure.
+In ordinary builds the compiler creates one table entry per aligned sound-ROM address. Entries select a single-instruction function, a shared exception function, or an unsupported-instruction failure.
 
 `SoundNative` keeps registers in `f3_cpu` and dispatches through that table.
+
+The diagram below describes the default full-coverage table. Profile tiers keep
+that dense table. Explicit `F3_PROFILE_SLIM` builds instead validate a nonempty,
+strictly sorted retained table and binary-search it; a missing sound entry aborts
+with address, ROM CRC, re-profile hint and a durable cold-hit record. It never
+switches to the interpreter. Instrumentation counts each actual single-instruction
+or shared-exception entry once, outside canonical machine/snapshot state.
 
 ```mermaid
 flowchart TB
@@ -71,7 +78,7 @@ The functions with the prefix `f3_sound_` that need the runtime are implemented 
 The constructor performs two validation checks and initializes its CPU state:
 
 1. The runtime sound ROM must have CRC32 `0x5a7e9117`. A mismatch throws an unsupported-ROM error.
-2. The table pointer must exist and its count must equal `0x80000 / 2`, or 262,144.
+2. In ordinary/tier builds the pointer must exist and its count must equal `0x80000 / 2`, or 262,144. In slim builds the count is at most that value, every pointer/address is valid, and addresses strictly increase inside the aligned sound ROM.
 3. The CPU's `runtime` pointer identifies this `SoundNative`. Initial SR is `F3_CCR_Z`, matching the zeroed oracle's inverted-Z latch.
 
 ## `run(cycles)`

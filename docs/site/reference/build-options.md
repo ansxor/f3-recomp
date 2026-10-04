@@ -74,7 +74,7 @@ The game config is fixed to `games/landmakrj/config.toml` in the top-level `CMak
 | `f3rt_m68kmake` | executable | always | `runtime/third_party/musashi/m68kmake.c` | none |
 | `f3rt_musashi_generated` | custom target | always | Runs `f3rt_m68kmake` on `m68k_in.c`. Writes `m68kops.c` and `m68kops.h` in `BUILD_DIR/musashi`. | depends on `f3rt_m68kmake` |
 | `f3rt_musashi` | static library | always | Musashi `m68kcpu.c`, `softfloat/softfloat.c`, generated `m68kops.c`, `runtime/core_state.c` | none. Depends on `f3rt_musashi_generated`. |
-| `f3rt` | static library | always | `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `video.cpp`, `game_video.cpp`, `game_tiles.cpp`, `game_text.cpp`, `game_sprites.cpp`, `game_lines.cpp`, `game_compositor.cpp`, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` (all in `runtime/`), every `runtime/third_party/audio/*.cpp`, and `BUILD_DIR/netplay_build.hpp` | `f3rt_musashi` |
+| `f3rt` | static library | always | `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `video.cpp`, `game_video.cpp`, `game_tiles.cpp`, `game_text.cpp`, `game_sprites.cpp`, `game_lines.cpp`, `game_compositor.cpp`, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `block_profile.cpp`, `netplay.cpp`, `netplay_transport.cpp` (all in `runtime/`), every `runtime/third_party/audio/*.cpp`, and `BUILD_DIR/netplay_build.hpp` | `f3rt_musashi` |
 | `f3_sound_recompiled` | static library | `F3_SOUND_GENERATED_DIR` is set | `F3_SOUND_GENERATED_SOURCES` from the `sources.cmake` file of the sound output | `f3rt` (PUBLIC) |
 | `f3_recompiled` | static library | `F3_GENERATED_DIR` is set (defined in `recomp/CMakeLists.txt`) | `F3_GENERATED_SOURCES` from the `sources.cmake` file of the program output | none |
 | `f3rt-sound-extract` | executable | always | `tools/sound_extract.cpp` | `f3rt` |
@@ -145,6 +145,7 @@ The hash is the SHA-256 of one string. The string contains these parts, in order
 - A custom command runs `tools/netplay_build_id.cmake` in script mode (`cmake -P`) at build time. The command depends on all the files above. A change to a runtime file updates the hash without a new configure step and without a new run of the recompiler.
 - The script does not write the header again if the content is equal. This avoids needless recompiling.
 - The ROM content is not in the hash directly. But the generated C files come from the ROM, so a different ROM gives a different hash.
+- Profile instrumentation, full/tier/slim mode and the selected cold optimization flag participate in the compiler/options identity. Profile paths do not; retained generated C content already identifies the selected addresses.
 
 ::: tip
 Two machines with different compilers build different hashes. This is on purpose. Floating-point and compiler differences can break determinism. Players who want to play together must use the same build artifacts.

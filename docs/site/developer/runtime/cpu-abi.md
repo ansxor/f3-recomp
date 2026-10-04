@@ -263,6 +263,13 @@ It returns 0 for an invalid CPU context or a halted CPU.
 Exceptions from strict fallback and other host errors propagate to the caller.
 They are not converted into a zero return.
 
+The following flow is the normal full-coverage runtime. Explicit profile-slim
+builds replace the missing/unavailable native-dispatch path with a loud
+CRC/address cold-hit abort and re-profile hint, never an interpreter fallback.
+Tier builds retain every registration; cross-tier successors return with flags
+materialized and are selected by the same dispatcher. ABI version/layout 2 is
+unchanged; profiling counts are observational data outside snapshots.
+
 ```mermaid
 flowchart TD
   A["f3_dispatch"] --> H{"halted or no runtime"}

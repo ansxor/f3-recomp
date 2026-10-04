@@ -36,9 +36,10 @@ The `discover` command writes only `coverage.json`. The `emit` command writes al
 | File | Count | Written by | Meaning |
 | --- | --- | --- | --- |
 | `blocks_NNNN.c` | many | `generate()` | Native block functions. `NNNN` is a 4-digit index that starts at `0000`. Each file holds up to 128 blocks (`blocks_per_file`, not a command-line option). |
-| `program.c` | 1 | `generate()` | The address table, the exception stubs, and `f3_generated_register`. |
+| `program.c` | 1 | `generate()` | Address table and `f3_generated_register`; non-tier builds also keep shared exception bodies here. |
+| `exceptions_hot.c`, `exceptions_cold.c` | up to 2, tiers only | `generate()` | Shared exception vectors partitioned by whether any of their entry addresses executed. |
 | `program.h` | 1 | `generate()` | Declares `f3_generated_register`. Checks the ABI version. |
-| `sources.cmake` | 1 | `generate()` | Sets the CMake list `F3_GENERATED_SOURCES`. |
+| `sources.cmake` | 1 | `generate()` | Complete, hot and cold source lists (`F3_GENERATED_SOURCES`, `F3_GENERATED_HOT_SOURCES`, `F3_GENERATED_COLD_SOURCES`). |
 | `program.bin` | 1 | `generate()` | A copy of the interleaved program ROM image. |
 | `coverage.json` | 1 | `__main__` and `generate()` | Discovery report. |
 | `lowering.json` | 1 | `generate()` | Emit report. `emit` only. |
@@ -94,7 +95,7 @@ This file holds these parts, in order:
 
 1. The same preamble as the block files, then `#include "program.h"`.
 2. `extern void f3_native_XXXXXX(f3_cpu *cpu);` for every block.
-3. In `all_aligned` mode: `static void f3_rom_exception_N(f3_cpu *cpu)` for each vector number N that occurs (4, 10 or 11). Each stub calls `f3_cc_flush(cpu)` and then `f3_exception(cpu, N, cpu->pc)`.
+3. In `all_aligned` mode: a shared `f3_rom_exception_N(f3_cpu *cpu)` for each vector number N that occurs (4, 10 or 11). Non-tier builds define it here; tier builds declare it and define it in `exceptions_hot.c` or `exceptions_cold.c`. Each handler counts the actual entry, flushes flags and calls `f3_exception(cpu, N, cpu->pc)`.
 4. `static const f3_block translated_blocks[]`. Each entry is `{ 0xADDRESSu, FUNCTION }`. The table is sorted by address. It has one entry for every decoded address, and (in `all_aligned` mode) one entry for every address that holds an illegal opcode or a line-A or line-F opcode.
 5. `int f3_generated_register(f3_cpu *cpu)`. It calls `f3_register_blocks` with the table.
 
@@ -189,9 +190,10 @@ The script compiles the 512 KiB sound ROM. The ROM starts at address `0xc00000` 
 | File | Count | Meaning |
 | --- | --- | --- |
 | `sound_blocks_NNNN.c` | many | One C function for each compiled word. Each file holds up to `--blocks-per-file` functions (default 1024). |
-| `sound_program.c` | 1 | The address table and the exception stubs. |
+| `sound_program.c` | 1 | Address table; non-tier builds also keep shared exception bodies here. |
+| `sound_exceptions_hot.c`, `sound_exceptions_cold.c` | up to 2, tiers only | Shared exception vectors classified by profile-hit entry addresses. |
 | `sound_program.h` | 1 | Declares `f3_sound_blocks` and `f3_sound_block_count`. |
-| `sources.cmake` | 1 | Sets the CMake list `F3_SOUND_GENERATED_SOURCES`. |
+| `sources.cmake` | 1 | Complete, hot and cold `F3_SOUND_GENERATED_*_SOURCES` lists. |
 | `coverage.json` | 1 | Report. |
 
 The function for the word at address `PC` has the name `f3_sound_block_XXXXXX` (6 hexadecimal digits). It has one instruction. It ends with `f3_sound_cc_flush(cpu)`. A word that the script cannot translate gets a function that calls `f3_sound_unsupported_pc(cpu, PC)`. This is an *actionable error stub*: the program reports the address when it runs the stub. A word with an illegal, line-A or line-F opcode does not get a function. The table points to `f3_sound_vector_4`, `f3_sound_vector_10` or `f3_sound_vector_11`, which call `f3_sound_exception`.
