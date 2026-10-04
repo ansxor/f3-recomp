@@ -511,6 +511,7 @@ def generate_boundary_cases() -> list[RawTestCase]:
                            ("eori_sr", "0a7c0004")):
             add_case(f"{name}_{sr:04x}", code, sr=sr)
     add_case("movem_predec_base_in_list", "48e080c0")
+    add_case("movem_word_predec_base_in_list", "48a080c0")
     add_case("movem_postinc_base_in_list", "4cd80301", memory=[
         MemInitItem(TEST_A0, bytes.fromhex("800012341122334455667788"))])
     add_case("movem_word_sign_extend", "4c900003", memory=[
