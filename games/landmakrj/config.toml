@@ -77,6 +77,7 @@ entry_points = [
     # Active fire/secondary buttons and independently timed SDL play.
     0x095988, 0x0a913c, 0x0d3dc0, 0x0e6518, 0x0e663c, 0x0f966c,
     0x0fb70e, 0x0fb724,
+    0x0f8d28, # Actor callback selected through the register-supplied script table.
 ]
 scan_jump_tables = true
 scan_task_traps = true

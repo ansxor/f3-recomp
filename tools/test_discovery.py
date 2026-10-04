@@ -41,6 +41,33 @@ class ActorDiscoveryTests(unittest.TestCase):
         self.assertTrue({0x800, 0x820} <= result.instructions.keys())
         self.assertTrue({0x480, 0x488, 0x600, 0x620}.isdisjoint(result.instructions))
 
+    def test_staged_jump_tables_with_backward_destinations(self):
+        for dispatch in ("207b003e4e714e714ed0", "41fb003e4e714e714ef00151"):
+            with self.subTest(dispatch=dispatch):
+                rom, config = self.fixture()
+                config["discovery"]["scan_jump_tables"] = True
+                struct.pack_into(">I", rom, 4, 0x500)
+                code = bytes.fromhex(dispatch)
+                rom[0x500:0x500 + len(code)] = code
+                struct.pack_into(">III", rom, 0x540, 0x400, 0x420, 0xffffffff)
+                rom[0x400:0x402] = bytes.fromhex("4e75")
+                rom[0x420:0x424] = bytes.fromhex("70014e75")
+                result = discover(bytes(rom), config)
+                self.assertTrue({0x400, 0x420, 0x422} <= result.instructions.keys())
+                self.assertNotIn(0x540, result.instructions)
+
+    def test_signed_full_extension_table_displacement(self):
+        rom, config = self.fixture()
+        config["discovery"]["scan_jump_tables"] = True
+        struct.pack_into(">I", rom, 4, 0x500)
+        rom[0x500:0x508] = bytes.fromhex("4ebb0121ffe04e75")
+        struct.pack_into(">III", rom, 0x4e2, 0x400, 0x420, 0xffffffff)
+        rom[0x400:0x402] = bytes.fromhex("4e75")
+        rom[0x420:0x422] = bytes.fromhex("4e75")
+        result = discover(bytes(rom), config)
+        self.assertTrue({0x400, 0x420, 0x506} <= result.instructions.keys())
+        self.assertNotIn(0x4e2, result.instructions)
+
 
 if __name__ == "__main__":
     unittest.main()
