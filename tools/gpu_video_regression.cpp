@@ -38,6 +38,7 @@ struct Options {
     f3rt::GameVideoOptions video;
     bool layers = false, bench = false;
     f3rt::VideoInterpolation interpolation = f3rt::VideoInterpolation::Off;
+    f3rt::InterpolationFields fields = f3rt::InterpolationFields::Geometry;
     std::vector<uint64_t> capture_frames;
     std::vector<std::pair<uint64_t, unsigned>> scale_changes;
     std::array<bool, 5> injections{};
@@ -83,6 +84,11 @@ Options parse(int argc, char **argv) {
             else if (mode == "fit") o.interpolation = f3rt::VideoInterpolation::Fit;
             else throw std::runtime_error("Interpolation must be off, linear or fit");
         }
+        else if (arg == "--interp-fields") {
+            const auto fields = f3rt::parse_interpolation_fields(value());
+            if (!fields) throw std::runtime_error("--interp-fields must be none, geometry, palette or geometry,palette");
+            o.fields = *fields;
+        }
         else if (arg == "--scale") {
             auto n = number(value());
             if (!n || n > f3rt::GameVideoOptions::max_gpu_scale) throw std::runtime_error("Diagnostic GPU scale must be 1..8");
@@ -108,6 +114,7 @@ Options parse(int argc, char **argv) {
                 "--bench (600-frame varied-scene warmup; 100 repeats on final supported snapshot)\n"
                 "--dump-dir DIR (external PNG captures) --sound-driver native\n"
                 "--interp off|linear|fit (off) --capture-frame N (repeatable; requires --dump-dir)\n"
+                "--interp-fields none|geometry|palette|geometry,palette (geometry; native alpha stays discrete)\n"
                 "--change-scale FRAME:SCALE (repeatable; constructor/canonical scale remains 1)\n"
                 "--inject-frame N (1407) --inject-bitmap --inject-trails --inject-globalflip\n"
                 "--inject-unknown --inject-ending (induced producer boundary, NOT played ending)\n"
@@ -162,93 +169,122 @@ const char *mode_name(f3rt::VideoInterpolation mode) {
     return mode == f3rt::VideoInterpolation::Fit ? "fit" :
         mode == f3rt::VideoInterpolation::Linear ? "linear" : "off";
 }
-bool same_stats(const f3rt::InterpolationStats &a, const f3rt::InterpolationStats &b) {
-    return a.reason == b.reason && a.first == b.first && a.last == b.last &&
-        a.palette_last == b.palette_last && a.geometry_rows == b.geometry_rows &&
-        a.palette_rows == b.palette_rows && a.unsafe_palette_pairs == b.unsafe_palette_pairs &&
-        a.source_residual == b.source_residual && a.palette_residual == b.palette_residual;
-}
 void require_exact(std::span<const uint32_t> a, std::span<const uint32_t> b, const std::string &context) {
     for (size_t i = 0; i < a.size(); ++i)
         if (a[i] != b[i]) throw std::runtime_error(context + " differs at pixel " + std::to_string(i));
 }
-// Scene-copy fixtures are induced boundaries, never played scenes or machine mutations.
-void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected,
-        const f3rt::GpuScene &scene, const f3rt::InterpolationStats &baseline,
-        f3rt::GameVideoOptions options, uint64_t frame) {
+// Deterministic scene-copy boundaries with visible ROM texels, not machine mutations.
+void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3rt::GpuVideo &geometry,
+        const f3rt::GpuScene &scene, f3rt::GameVideoOptions options, uint64_t frame,
+        std::span<const uint8_t> tiles) {
+    auto base = std::make_unique<f3rt::GpuScene>(scene);
     auto copy = std::make_unique<f3rt::GpuScene>(scene);
-    std::vector<uint32_t> reference(size_t(options.width()) * options.height()), result(reference.size());
-    auto packed = [&](unsigned y) { return f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride; };
-    auto pf = [&](unsigned y) { return packed(y) + f3rt::GpuScene::row_pf + 12; };
-    auto source = [&](unsigned y, int32_t value) {
-        copy->reference_rows[y].playfields[2].source_x = value;
-        copy->words[pf(y)] = uint32_t(value);
-    };
-    auto disable = [&](unsigned y) {
-        copy->reference_rows[y].playfields[2].layer.enabled = false;
-        copy->words[packed(y) + f3rt::GpuScene::row_layers + 2 * f3rt::GpuScene::layer_stride] &= ~(1u << 6);
-    };
-    auto zero = [&](unsigned y) {
-        disable(y);
-        copy->reference_rows[y].playfields[2] = {};
-        copy->reference_rows[y].playfields[2].x_step = 0;
-        copy->reference_rows[y].playfields[2].y_step = 0;
-        for (unsigned field = 0; field < 6; ++field) copy->words[pf(y) + field] = 0;
-    };
-    selected.draw(scene, result);
-    const auto accepted_image = result;
-    for (unsigned kind = 0; kind < 11; ++kind) {
-        *copy = scene;
-        const char *name = "";
-        if (kind == 0 || kind == 1) {
-            name = kind == 0 ? "garbage-above-152" : "zero-above-152";
-            for (unsigned y = 0; y < 152; ++y) {
-                zero(y);
-                if (kind == 0) source(y, int32_t(0x7fffffff));
+    unsigned plane = 0, anchor = 256;
+    for (unsigned pf = 0; pf < 4 && anchor == 256; ++pf)
+        for (unsigned y = 24; y < 256; ++y) {
+            const auto &p = scene.reference_rows[y].playfields[pf];
+            if (p.layer.enabled && !p.layer.mosaic && !scene.reference_rows[y].bitmap) {
+                plane = pf; anchor = y; break;
             }
-        } else if (kind == 2) { name = "disabled-inside"; disable(190); }
-        else if (kind == 3) { name = "zero-inside"; zero(190); }
-        else if (kind == 4) {
-            name = "source-jump";
-            for (unsigned y = 190; y <= 255; ++y) source(y, scene.reference_rows[y].playfields[2].source_x + 4096);
-        } else if (kind == 5) {
-            name = "nonmonotonic-source"; source(190, scene.reference_rows[189].playfields[2].source_x - 1);
-        } else if (kind == 6) {
-            name = "short-valid-region"; for (unsigned y = 168; y <= 255; ++y) disable(y);
-        } else if (kind == 7) {
-            name = "high-affine-residual";
-            // Preserve positive <=640 adjacent steps while exceeding the .75-texel fit guard.
-            for (unsigned y = 152; y <= 255; ++y)
-                source(y, scene.reference_rows[y].playfields[2].source_x + int32_t(std::min(y - 152, 255 - y) * 40));
-        } else if (kind == 8) {
-            name = "corrupt-palette-shape";
-            copy->reference_rows[190].playfields[2].palette_add += 64;
-            copy->words[pf(190) + 5] += 64;
-        } else if (kind == 9) {
-            name = "discontinuous-palette-short-prefix";
-            for (unsigned i = 0; i < 8192; ++i)
-                copy->words[f3rt::GpuScene::palette + i] = (i / 64) & 1 ? 0xffffff : 0;
-        } else {
-            name = "garbage-source-offset";
-            for (unsigned y = 152; y <= 255; ++y)
-                source(y, scene.reference_rows[y].playfields[2].source_x + (1 << 28));
         }
-        off.draw(*copy, reference); selected.draw(*copy, result);
+    if (anchor == 256) throw std::runtime_error("No valid playfield fixture template");
+    auto row = [](unsigned y) { return f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride; };
+    auto pf = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_pf + plane * 6; };
+    auto control = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_layers + plane * f3rt::GpuScene::layer_stride; };
+    unsigned tile = 0;
+    for (; tile < 32768; ++tile) {
+        bool varying = false;
+        for (unsigned p = 1; p < 256; ++p)
+            if (p % 16 && (tiles[tile * 256 + p] & 63) != (tiles[tile * 256 + p - 1] & 63)) {
+                varying = true; break;
+            }
+        if (varying) break;
+    }
+    if (tile == 32768) throw std::runtime_error("No horizontally varying ROM tile for visible guard fixture");
+    for (unsigned cell = 0; cell < 2048; ++cell) {
+        const unsigned at = f3rt::GpuScene::pf_cells + (plane * 2048 + cell) * 2;
+        base->words[at] = tile; base->words[at + 1] = 63u << 16;
+    }
+    for (unsigned y = 0; y < 256; ++y) {
+        base->reference_rows[y] = scene.reference_rows[anchor];
+        std::copy_n(scene.words.begin() + row(anchor), f3rt::GpuScene::row_stride, base->words.begin() + row(y));
+        auto &p = base->reference_rows[y].playfields[plane];
+        p.source_x = int32_t(y * 256); p.source_y = int32_t(y);
+        p.x_step = 128; p.y_step = 256; p.y_fraction = 0; p.palette_add = uint16_t(y / 8 * 64);
+        const std::array<uint32_t, 6> w{uint32_t(p.source_x), uint32_t(p.source_y), 128, 256, 0, p.palette_add};
+        std::copy(w.begin(), w.end(), base->words.begin() + pf(y));
+    }
+    for (unsigned i = 0; i < 8192; ++i) {
+        const unsigned channel = 16 + (i % 64) * 2 + (i / 64) % 32;
+        base->words[f3rt::GpuScene::palette + i] = channel * 0x010101;
+    }
+    std::vector<uint32_t> reference(size_t(options.width()) * options.height()), result(reference.size()),
+        geometry_result(reference.size());
+    off.draw(*base, reference, 1u << plane);
+    geometry.draw(*base, geometry_result, 1u << plane);
+    selected.draw(*base, result, 1u << plane);
+    const auto accepted = result;
+    if (geometry_result == reference) throw std::runtime_error("Safe source fixture had no visible geometry sampling");
+    if (result == geometry_result) throw std::runtime_error("Compatible fixture had no visible palette blending");
+    for (unsigned sy : {24u, 255u}) {
+        const size_t at = size_t(sy - 24) * options.scale * options.width();
+        require_exact(std::span(reference).subspan(at, options.width() * options.scale),
+            std::span(result).subspan(at, options.width() * options.scale), "Raw fixture run endpoint");
+    }
+    constexpr std::array labels{"disabled-endpoint", "zero-endpoint", "garbage-endpoint",
+        "hard-source-jump", "hard-control-jump", "column-phase-jump", "unsafe-palette-safe-geometry"};
+    for (unsigned kind = 0; kind < labels.size(); ++kind) {
+        *copy = *base;
+        auto &p = copy->reference_rows[80].playfields[plane];
+        if (kind == 0) { p.layer.enabled = false; copy->words[control(80)] &= ~(1u << 6); }
+        else if (kind < 3) {
+            p.x_step = kind == 1 ? 0 : int32_t(0x7fffffff); copy->words[pf(80) + 2] = uint32_t(p.x_step);
+        } else if (kind == 3) {
+            for (unsigned y = 80; y < 256; ++y) {
+                copy->reference_rows[y].playfields[plane].source_x += 16384; copy->words[pf(y)] += 16384;
+            }
+        } else if (kind == 4) { p.layer.priority ^= 1; copy->words[control(80)] ^= 1; }
+        else if (kind == 5) {
+            unsigned phase = 0;
+            for (unsigned y = 0; y < 256; ++y) {
+                auto &v = copy->reference_rows[y].playfields[plane];
+                v.y_step = int32_t(64 + y); v.source_y = int32_t((phase >> 8) & 511); v.y_fraction = uint8_t(phase);
+                copy->words[pf(y) + 1] = uint32_t(v.source_y);
+                copy->words[pf(y) + 3] = uint32_t(v.y_step);
+                copy->words[pf(y) + 4] = v.y_fraction;
+                phase += unsigned(v.y_step);
+            }
+            p.source_y += 32; copy->words[pf(80) + 1] += 32;
+        } else {
+            for (unsigned i = 0; i < 8192; ++i) {
+                const unsigned channel = (((i / 64) & 1) ? 180 : 20) + i % 64;
+                copy->words[f3rt::GpuScene::palette + i] = channel * 0x010101;
+            }
+        }
+        off.draw(*copy, reference, 1u << plane); selected.draw(*copy, result, 1u << plane);
+        geometry.draw(*copy, geometry_result, 1u << plane);
         const auto stats = selected.last_interpolation();
-        if (kind < 2) {
-            if (!same_stats(stats, baseline)) throw std::runtime_error(std::string(name) + " changed fit eligibility/statistics");
-            const size_t first = size_t(128 * options.scale) * options.width();
-            require_exact(std::span(result).subspan(first), std::span(accepted_image).subspan(first), name);
-            require_exact(std::span(result).first(first), std::span(reference).first(first), name);
-        } else {
-            if (stats.reason == f3rt::InterpolationReason::Applied)
-                throw std::runtime_error(std::string(name) + " accepted an induced invalid profile");
-            require_exact(reference, result, name);
+        if (kind != 6) for (unsigned sy : {79u, 80u}) {
+            const size_t at = size_t(sy - 24) * options.scale * options.width();
+            require_exact(std::span(reference).subspan(at, options.width() * options.scale),
+                std::span(geometry_result).subspan(at, options.width() * options.scale), labels[kind]);
         }
-        std::cout << "INTERP induced_boundary=" << name << " frame=" << frame
-            << " reason=" << f3rt::interpolation_reason_name(stats.reason)
-            << " source_residual=" << stats.source_residual << " palette_residual=" << stats.palette_residual
-            << " image_guard=exact\n";
+        if (kind == 6) {
+            require_exact(geometry_result, result, "Unsafe palette must preserve geometry without RGB blending");
+            if (geometry_result == reference) throw std::runtime_error("Unsafe palette disabled visible safe geometry");
+        }
+        for (unsigned y = 0; y < options.height(); ++y) {
+            const unsigned sy = y / options.scale + 24;
+            const size_t at = size_t(y) * options.width();
+            if (y % options.scale == 0 || !stats.row_fields[plane][sy])
+                require_exact(std::span(reference).subspan(at, options.width()),
+                    std::span(result).subspan(at, options.width()), labels[kind]);
+            if (kind < 3 && sy >= 100)
+                require_exact(std::span(accepted).subspan(at, options.width()),
+                    std::span(result).subspan(at, options.width()), "Invalid row leaked beyond neighbors");
+        }
+        std::cout << "INTERP induced_boundary=" << labels[kind] << " frame=" << frame
+            << " pf=" << plane << " native_and_unflagged=exact\n";
     }
 }
 struct Harness {
@@ -269,7 +305,8 @@ struct Harness {
     std::vector<uint32_t> interpolated, sprite_off, sprite_selected;
     std::vector<double> interpolation_ms;
     std::array<uint64_t, size_t(f3rt::InterpolationReason::Applied) + 1> interpolation_reasons{};
-    float max_source_residual = 0, max_palette_residual = 0;
+    std::array<std::array<uint64_t, size_t(f3rt::InterpolationReason::Applied) + 1>, 4> layer_reasons{};
+    std::array<std::array<uint64_t, 7>, 4> layer_totals{};
     f3rt::InterpolationStats previous_interpolation{};
     bool have_interpolation = false, boundaries_checked = false;
     uint64_t sprite_checks = 0;
@@ -285,7 +322,7 @@ struct Harness {
         }
         if (o.interpolation != f3rt::VideoInterpolation::Off) {
             interpolated_gpu = std::make_unique<f3rt::GpuVideo>(nullptr, o.video,
-                m.video->playfield_tiles(), m.video->sprite_tiles(), false, true, o.interpolation);
+                m.video->playfield_tiles(), m.video->sprite_tiles(), false, true, o.interpolation, o.fields);
             canonical_guard = std::make_unique<f3rt::GpuScene>();
             interpolated.resize(cpu.size()); sprite_off.resize(cpu.size()); sprite_selected.resize(cpu.size());
         }
@@ -378,19 +415,28 @@ struct Harness {
         capture_png(o.dump_dir / (stem + "_off.png"), device, o.video);
         capture_png(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + ".png"),
             interpolated_gpu ? std::span<const uint32_t>(interpolated) : std::span<const uint32_t>(device), o.video);
-        std::ofstream csv(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + "_pf2.csv"));
-        if (!csv) throw std::runtime_error("Cannot open PF2 capture CSV");
-        csv << "frame,screen_y,visible_y,enabled,bitmap,mosaic,source_x,source_y,x_step,y_step,y_fraction,palette_add,priority,blend_mode,clip_enabled,clip_inverted\n";
-        for (unsigned y = 0; y < 256; ++y) {
-            const auto &r = scene.reference_rows[y];
-            const auto &p = r.playfields[2];
-            csv << m.frame << ',' << y << ',' << int(y) - 24 << ',' << p.layer.enabled << ',' << r.bitmap
-                << ',' << p.layer.mosaic << ',' << p.source_x << ',' << p.source_y << ',' << p.x_step
-                << ',' << p.y_step << ',' << unsigned(p.y_fraction) << ',' << p.palette_add
-                << ',' << unsigned(p.layer.priority) << ',' << unsigned(p.layer.blend_mode)
-                << ',' << unsigned(p.layer.clip_enabled) << ',' << unsigned(p.layer.clip_inverted) << '\n';
+        std::ofstream csv(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + "_rows.csv"));
+        if (!csv) throw std::runtime_error("Cannot open playfield capture CSV");
+        csv << "frame,pf,screen_y,visible_y,field_mask,enabled,bitmap,mosaic,source_x,source_y,x_step,y_step,y_fraction,palette_add,priority,blend_mode,clip_enabled,clip_inverted\n";
+        const auto stats = interpolated_gpu ? interpolated_gpu->last_interpolation() : f3rt::InterpolationStats{};
+        for (unsigned pf = 0; pf < 4; ++pf) {
+            sprite_off.resize(device.size()); sprite_selected.resize(device.size());
+            gpu.draw(scene, sprite_off, 1u << pf);
+            if (interpolated_gpu) interpolated_gpu->draw(scene, sprite_selected, 1u << pf);
+            capture_png(o.dump_dir / (stem + "_off_" + names[pf] + ".png"), sprite_off, o.video);
+            capture_png(o.dump_dir / (stem + "_" + mode_name(o.interpolation) + "_" + names[pf] + ".png"),
+                interpolated_gpu ? std::span<const uint32_t>(sprite_selected) : std::span<const uint32_t>(sprite_off), o.video);
+            for (unsigned y = 0; y < 256; ++y) {
+                const auto &r = scene.reference_rows[y];
+                const auto &p = r.playfields[pf];
+                csv << m.frame << ',' << pf << ',' << y << ',' << int(y) - 24 << ',' << unsigned(stats.row_fields[pf][y])
+                    << ',' << p.layer.enabled << ',' << r.bitmap << ',' << p.layer.mosaic << ',' << p.source_x
+                    << ',' << p.source_y << ',' << p.x_step << ',' << p.y_step << ',' << unsigned(p.y_fraction)
+                    << ',' << p.palette_add << ',' << unsigned(p.layer.priority) << ',' << unsigned(p.layer.blend_mode)
+                    << ',' << unsigned(p.layer.clip_enabled) << ',' << unsigned(p.layer.clip_inverted) << '\n';
+            }
         }
-        if (!csv) throw std::runtime_error("PF2 capture CSV write failed");
+        if (!csv) throw std::runtime_error("Playfield capture CSV write failed");
     }
     void check_interpolation(const std::string &tag, bool injected) {
         if (!interpolated_gpu) return;
@@ -403,54 +449,67 @@ struct Harness {
         const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
         const auto stats = interpolated_gpu->last_interpolation();
         ++interpolation_reasons[size_t(stats.reason)];
-        max_source_residual = std::max(max_source_residual, stats.source_residual);
-        max_palette_residual = std::max(max_palette_residual, stats.palette_residual);
+        for (unsigned pf = 0; pf < 4; ++pf) {
+            const auto &s = stats.layers[pf];
+            ++layer_reasons[pf][size_t(s.reason)];
+            const std::array<unsigned, 7> values{s.source_rows, s.zoom_rows, s.vertical_rows, s.palette_rows,
+                s.invalid_rows, s.discontinuities, s.unsafe_palette_pairs};
+            for (unsigned i = 0; i < values.size(); ++i) layer_totals[pf][i] += values[i];
+        }
         if (o.bench && m.frame > 600 && !injected) interpolation_ms.push_back(elapsed);
-        const bool applied = stats.reason == f3rt::InterpolationReason::Applied;
         for (unsigned y = 0; y < o.video.height(); ++y) {
-            const unsigned screen_y = y / o.video.scale + 24;
-            if (!applied || screen_y <= stats.first || screen_y >= stats.last) {
+            const unsigned sy = y / o.video.scale + 24;
+            bool flagged = false;
+            for (unsigned pf = 0; pf < 4; ++pf) flagged |= stats.row_fields[pf][sy] != 0;
+            if (y % o.video.scale == 0 || !flagged) {
                 const size_t at = size_t(y) * o.video.width();
                 require_exact(std::span(device).subspan(at, o.video.width()),
-                    std::span(interpolated).subspan(at, o.video.width()), "Interpolation outside/declined/oracle frame " + std::to_string(m.frame));
+                    std::span(interpolated).subspan(at, o.video.width()), "Composite native-anchor/unflagged frame " + std::to_string(m.frame));
             }
         }
-        if (applied) {
-            gpu.draw(scene, sprite_off, 0xf0);
-            interpolated_gpu->draw(scene, sprite_selected, 0xf0);
-            require_exact(sprite_off, sprite_selected, "Interpolation sprite isolation frame " + std::to_string(m.frame));
-            ++sprite_checks;
-            if (!boundaries_checked) {
-                interpolation_boundaries(gpu, *interpolated_gpu, scene, stats, o.video, m.frame);
-                boundaries_checked = true;
-            }
+        for (unsigned pf = 0; pf < 4; ++pf) {
+            gpu.draw(scene, sprite_off, 1u << pf);
+            interpolated_gpu->draw(scene, sprite_selected, 1u << pf);
+            for (unsigned y = 0; y < o.video.height(); ++y)
+                if (y % o.video.scale == 0 || !stats.row_fields[pf][y / o.video.scale + 24]) {
+                    const size_t at = size_t(y) * o.video.width();
+                    require_exact(std::span(sprite_off).subspan(at, o.video.width()),
+                        std::span(sprite_selected).subspan(at, o.video.width()),
+                        std::string(names[pf]) + " native-anchor/unflagged frame " + std::to_string(m.frame));
+                }
+        }
+        for (unsigned layer = 4; layer < 9; ++layer) {
+            gpu.draw(scene, sprite_off, 1u << layer);
+            interpolated_gpu->draw(scene, sprite_selected, 1u << layer);
+            require_exact(sprite_off, sprite_selected, std::string(names[layer]) + " exact frame " + std::to_string(m.frame));
+        }
+        ++sprite_checks;
+        if (!boundaries_checked && !scene.fallback && o.video.scale > 1) {
+            f3rt::GpuVideo guards(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
+                false, true, o.interpolation, f3rt::InterpolationFields::All);
+            f3rt::GpuVideo geometry(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
+                false, true, o.interpolation, f3rt::InterpolationFields::Geometry);
+            interpolation_boundaries(gpu, guards, geometry, scene, o.video, m.frame, m.video->playfield_tiles());
+            boundaries_checked = true;
         }
         m.save_state(state_after);
         if (state_before != state_after || crc != m.state_crc() ||
             std::memcmp(canonical_guard.get(), &scene, sizeof(scene)) != 0)
             throw std::runtime_error("Interpolation mutated canonical scene/native bytes at frame " + std::to_string(m.frame));
         if (!have_interpolation || previous_interpolation.reason != stats.reason ||
-            previous_interpolation.palette_last != stats.palette_last ||
-            previous_interpolation.unsafe_palette_pairs != stats.unsafe_palette_pairs || requested_capture()) {
+            previous_interpolation.layers != stats.layers || requested_capture()) {
             std::cout << "INTERP scene_frame=" << m.frame << " scenario=" << tag << " injected=" << injected
-                << " mode=" << mode_name(o.interpolation)
-                << " source=" << (applied ? "known-ROM-profile" : "rejected")
+                << " mode=" << mode_name(o.interpolation) << " fields=" << f3rt::interpolation_fields_name(o.fields)
                 << " reason=" << f3rt::interpolation_reason_name(stats.reason)
-                << " source_residual=" << stats.source_residual << " palette_residual=" << stats.palette_residual
-                << " geometry_rows=" << stats.geometry_rows << " geometry_guard_run=" << stats.first << ".." << stats.last
-                << " geometry_interior=" << (stats.geometry_rows ? stats.first + 1 : 0) << ".."
-                << (stats.geometry_rows ? stats.last - 1 : 0)
-                << " palette_rows=" << stats.palette_rows << " palette_guard_run=" << stats.first << ".." << stats.palette_last
-                << " palette_interior=" << (stats.palette_rows ? stats.first + 1 : 0) << ".."
-                << (stats.palette_rows ? stats.palette_last - 1 : 0)
-                << " source_x_endpoints=" << scene.reference_rows[152].playfields[2].source_x << ".."
-                << scene.reference_rows[255].playfields[2].source_x
-                << " x_step_endpoints=" << scene.reference_rows[152].playfields[2].x_step << ".."
-                << scene.reference_rows[255].playfields[2].x_step
-                << " palette_add_endpoints=" << scene.reference_rows[152].playfields[2].palette_add << ".."
-                << scene.reference_rows[255].playfields[2].palette_add
-                << " unsafe_palette_pairs=0x" << std::hex << stats.unsafe_palette_pairs << std::dec
-                << " outside_declined_oracle_differences=0 sprites_differences=0 canonical_bytes=unchanged\n";
+                << " native_unflagged_text_sprites=exact canonical_bytes=unchanged\n";
+            for (unsigned pf = 0; pf < 4; ++pf) {
+                const auto &s = stats.layers[pf];
+                std::cout << "  pf=" << pf << " reason=" << f3rt::interpolation_reason_name(s.reason)
+                    << " source_rows=" << s.source_rows << " zoom_rows=" << s.zoom_rows
+                    << " vertical_rows=" << s.vertical_rows << " palette_rows=" << s.palette_rows
+                    << " invalid_rows=" << s.invalid_rows << " discontinuities=" << s.discontinuities
+                    << " unsafe_palette_pairs=" << s.unsafe_palette_pairs << '\n';
+            }
         }
         previous_interpolation = stats; have_interpolation = true;
     }
@@ -475,8 +534,17 @@ struct Harness {
         if (interpolated_gpu) {
             std::cout << "INTERP summary mode=" << mode_name(o.interpolation) << " sprite_checks=" << sprite_checks
                 << " induced_boundaries_checked=" << boundaries_checked << '\n';
-            std::cout << "  max_source_residual=" << max_source_residual
-                << " max_palette_residual=" << max_palette_residual << '\n';
+            for (unsigned pf = 0; pf < 4; ++pf) {
+                const auto &t = layer_totals[pf];
+                std::cout << "  pf=" << pf << " total_source_rows=" << t[0] << " total_zoom_rows=" << t[1]
+                    << " total_vertical_rows=" << t[2] << " total_palette_rows=" << t[3]
+                    << " total_invalid_rows=" << t[4] << " total_discontinuities=" << t[5]
+                    << " total_unsafe_palette_pairs=" << t[6] << '\n';
+                for (size_t i = 0; i < layer_reasons[pf].size(); ++i)
+                    if (layer_reasons[pf][i])
+                        std::cout << "    reason=" << f3rt::interpolation_reason_name(f3rt::InterpolationReason(i))
+                            << " scenes=" << layer_reasons[pf][i] << '\n';
+            }
             for (size_t i = 0; i < interpolation_reasons.size(); ++i)
                 if (interpolation_reasons[i])
                     std::cout << "  reason=" << f3rt::interpolation_reason_name(f3rt::InterpolationReason(i))

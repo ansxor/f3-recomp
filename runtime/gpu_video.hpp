@@ -12,7 +12,8 @@ public:
     GpuVideo(SDL_Window *window, GameVideoOptions options,
              std::span<const uint8_t> playfield_assets,
              std::span<const uint8_t> sprite_assets, bool linear = false, bool vsync = true,
-             VideoInterpolation interpolation = VideoInterpolation::Off);
+             VideoInterpolation interpolation = VideoInterpolation::Off,
+             InterpolationFields fields = InterpolationFields::Geometry);
     ~GpuVideo();
     GpuVideo(const GpuVideo &) = delete;
     GpuVideo &operator=(const GpuVideo &) = delete;

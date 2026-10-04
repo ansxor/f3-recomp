@@ -58,6 +58,7 @@ The code checks these rules after it parses the options. Each failure throws a `
 - `--video-scale` must be 1 to 4, `auto` or `auto-integer`. Automatic modes require GPU; `--video-border` must be 0 to 160.
 - `--video-filter` must be `nearest` or `linear`.
 - FDP mode rejects expanded dimensions and linear filtering. Explicit scale 1, border 0, and nearest filtering remain valid.
+- `--video-interp` must be `off`, `linear` or `fit`; non-off requires GPU. `--video-interp-fields` must be `none`, `geometry`, `palette` or `geometry,palette` (default `geometry`); alpha remains discrete.
 - `--netplay-player` must be 1 or 2. `--netplay-delay` must be 0 to 8.
 - Any `--netplay-*` option turns netplay on. Netplay needs `--netplay-server` and `--netplay-room`.
 - Netplay also needs translated mode, no fallback, `--video game` at fixed scale 1 and border 0 (auto modes rejected), the native sound driver, and no `--eeprom`, `--sound-trace` or `--fallback-report`. This keeps both peers on one deterministic path.

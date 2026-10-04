@@ -85,7 +85,8 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
 | `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
 | `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
-| `--video-interp` | `off`, `linear` or `fit` | `off` | Separate opt-in GPU PF2 water/board line sampling | Non-off needs `--video-backend gpu`; scale 1 and headless remain unchanged. Does not interpolate sprites. |
+| `--video-interp` | `off`, `linear` or `fit` | `off` | Opt-in validated GPU line sampling on all four playfields | Non-off needs GPU; scale 1/headless stay exact. Both modes preserve native subrow-zero and unflagged samples. |
+| `--video-interp-fields` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Independent geometry sampling and same-pen RGB palette-bank blending | Palette blending invents colors; alpha/clip/mosaic/priority and column jumps stay discrete. No sprite change at the general-line checkpoint. |
 | `--netplay-server` | `HOST:PORT` | none | Address of the relay server | Any `--netplay-*` flag turns netplay on. |
 | `--netplay-room` | `CODE` | none | Room name on the relay server | Required in netplay mode. The transport rejects an empty room. |
 | `--netplay-player` | `1` or `2` | automatic | Player slot | Else: `--netplay-player must be 1 or 2`. If you omit it, the transport option stays `0` (automatic). |

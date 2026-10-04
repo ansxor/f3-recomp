@@ -312,6 +312,10 @@ GPU is not made default: native/2x CPU threading is cheaper than a fenced GPU
 comparison, and devices without GPU support retain the explicit CPU choice.
 
 ## Interpolation input measurements (after the parity checkpoint)
+This section records the **historical Phase 5 water-only checkpoint**, not the
+current detector. General per-field sampling and native-anchor corrections
+are documented in the Phase 7 implementation section below.
+
 
 Seed 5, frames 1–4000: PF0 source-X varies across rows in 170 frames (the
 `0x9ecb0` sine-wave producer); PF2 scale/source-X and palette-add vary in 1368
@@ -867,3 +871,150 @@ separate control; compare geometry-only against geometry+palette after the
 general cutover before deciding its default. Native alpha already blends RGB in
 other scenes; the survey finds no genuine sub-line alpha ramp to interpolate.
 Evidence: `/tmp/f3-gpuvideo/general/survey-data/seed5/frame1500.before.state.{off,linear,fit}.png`.
+
+## General line sampling implementation (Phase 7)
+
+The water-only recognizer and absolute fitted source/palette curves are
+removed. `runtime/gpu_interp.cpp` analyzes all four playfields independently,
+over the complete visible scanout. This is host presentation analysis:
+no raw FDP reads, game-producer changes, serialized fields or CPU rendering
+changes. The uploaded scene retains its canonical words and appends 13 words
+per row/playfield: flags plus four triples of local polynomial increments.
+Both the storage buffer and cycled staging upload include the entire appended
+region; interpolation-off retains the original smaller allocation.
+
+### Valid runs and field controls
+
+- Numeric/enabled validation excludes disabled, zero/garbage, bitmap and
+  mosaic rows. Blend/clip/control changes and non-continuous vertical phase
+  split runs; the current row's Y step must predict the next packed phase.
+- Source X uses shortest map-phase deltas modulo 1024 texels, bounded to
+  4096 raw 24.8 units per row (measured steps peak at 588); X zoom deltas are
+  bounded to 8 (actual PF2 slope magnitude 2). Four real neighbors and multiple
+  changing steps are required. No hard-coded playfield number or water band.
+- `linear` evaluates the measured next value. `fit` uses harmonic-mean local
+  Hermite tangents, zero at sign changes, then clamps to the endpoint range.
+  The polynomial is an increment from the current raw sample. At subrow zero
+  the original integer path is used, **including fit**. Run edges remain raw.
+  PF0's table wave is sampled-coordinate interpolation, not a guessed sine.
+- Varying vertical zoom can use a validated accumulated-phase run; constant
+  nonunit Y steps already have finer sampling in the off path. The real survey
+  found no varying Y zoom. Column-scroll offsets never become fitted zoom.
+- `--video-interp-fields none|geometry|palette|geometry,palette` defaults to
+  **geometry**. `none` is image-identical to off. Palette is independent:
+  it cannot disable safe source/zoom geometry. Alpha has no pretend smoothing
+  flag; all observed alpha/clip/mosaic/priority changes remain native/discrete.
+- Palette runs require compatible 16-aligned bank strides and monotone multiple
+  bank steps. Every traversed same-pen bank pair is checked against actual ROM
+  tile pen sets over all endpoint source/zoom combinations, including border
+  and fractional taps. Per-channel RGB jumps above 32 remain discrete.
+  Palette blending is RGB interpolation, not fractional pen/index selection.
+
+Per-layer diagnostics report source/zoom/vertical/palette row counts, invalid
+rows, discontinuities and unsafe palette pairs. Declines are local to the
+uncertain field/run; no invalid neighbor contributes to a cubic derivative.
+At seed 5 frame 1500, PF2 accepts 226 source and zoom rows across both halves,
+with 9 compatible palette transitions and one unsafe bank pair. The center
+column-phase jump stays discrete. PF0 frame 1300 now gains real sampling.
+Sprites remain the prior exact off renderer at this checkpoint.
+
+### 4x captures and color decision
+
+Frozen actual native scenes, border 48, 1664x928. Counts compare whole RGB
+images with the same-scale off image; all native subrow-zero and unflagged
+per-layer rows, text/sprites and canonical machine bytes remain exact.
+
+| Scene | Linear geometry changed pixels | Fit geometry changed pixels | Decision |
+|---|---:|---:|---|
+| PF0 sampled wave, seed 5 frame 1300 | 49,635 | 49,558 | Smooth the actual packed coordinates; no new RGB values |
+| PF2 entrance/column boundary, frame 1409 | 127,706 | 127,595 | Both valid halves; column jump raw |
+| PF2 character-select water, frame 1500 | 85,792 | 86,231 | Geometry alone removes line-scale/source stair steps |
+| PF2 water, frame 1560 | 75,213 | 75,352 | Same validated field/run treatment |
+| PF0 prewarped game floor, frame 6000 | 0 | 0 | ROM texture perspective; no live transform to invent |
+| Attract/alpha blocks, frame 2400 | 0 | 0 | Native held alpha/clip blocks |
+| Played results, seed 5 frame 4850 | 0 | 0 | Native discrete controls |
+
+Geometry-only captures above contain **zero** RGB values absent from the
+current native palette. This is not a universal claim that native alpha
+composition can never blend colors: no additional alpha interpolation occurs.
+
+At frame 1500, separately enabling palette with geometry changes 98,727 pixels
+for linear and 99,144 for fit. Both add 339 non-palette RGB colors, occupying
+18,745/18,746 pixels. Pixel-weighted Euclidean RGB distance to the nearest
+of all 8192 current native palette entries is mean 4.543/3.407, worst 6.928
+(8-bit channel units). Palette-only changes 18,684 pixels, with means
+4.541/3.406. Fit's bounded bank transition is gentler, but the 4x inspected
+images do not justify silently inventing colors by default: **geometry on,
+palette off** for both opt-in interpolation modes. Interpolation itself still
+defaults off. Alpha/clip/mosaic/priority/column offsets remain discrete for
+the measured reasons in the survey checklist, not because they are water-free.
+
+External captures and metrics: `/tmp/f3-gpuvideo/general/effect-runs.json`,
+`survey-data/*/frame*.before.state.general/*` and
+`results-data/seed5/frame4850.before.state.general/*`. They include off, linear/
+fit geometry-only, palette-only, combined and none, with isolated PF outputs.
+No ROMs, snapshots, helper programs or captures are committed.
+
+### General-line exactness and frame times
+
+The integrated corpus has 56 runs: 224,000 native frames, 3112 whole-image
+CPU/off-GPU comparisons and 2544 comparisons in each of nine isolated layers.
+All mismatching-pixel counts are zero. Off covers scales 1–4 and borders 0/48;
+linear/fit cover those dimensions, geometry/palette/both/none, seeds 5/6/7/41,
+and 136 actual host scale changes. Forty opt-in cases add 2248 complete
+native-anchor/unflagged/per-layer checks. The 252 uncertain-edge guard checks
+use visible real ROM texels, including disabled/zero/garbage neighbors, source/
+control/column jumps and unsafe palette pairs: rejected smoothing is checked
+in rendered pixels, and unsafe palette must retain visible safe geometry.
+
+For each seed, native cycles, native block count, audio frame count, audio CRC
+and final native RGB CRC match across every field/mode/scale. Canonical
+snapshots match for the same constructor geometry; runtime scale transitions
+leave those constructor-fixed bytes unchanged. Each case independently
+replays the final frame on the ordinary CPU backend. Bitmap, trails, global
+flip, unknown writers and ending-producer fallback/recovery are induced.
+These are branch proofs, not a played campaign ending. No CPU fallback.
+
+Fresh 3600-frame headless `compare`, GPU/fit/combined flags and automatic scale
+retain 250,114,560 exact native RGB comparisons and byte-identical WAV against
+the established native baseline. `F3RT_GPU=OFF` frontend and existing
+`f3rt-check` build/run; the device check passes. Native/MAME acceptance remains
+the earlier 25/25 proof; no guest/video/audio implementation changed here.
+
+Frozen seed 5 frame 1560, border 48, **100 measured draws after 25 warmup**,
+isolated from the corpus/window processes. Milliseconds mean / p95 / worst:
+
+| Scale | CPU reference | Off GPU | Linear geometry GPU | Fit geometry GPU | Fit geometry+palette GPU |
+|---|---|---|---|---|---|
+| 1 | 1.819 / 3.146 / 6.591 | 1.155 / 1.799 / 2.167 | 0.938 / 1.200 / 1.719 | 0.934 / 1.268 / 1.720 | 0.953 / 1.298 / 1.695 |
+| 2 | 6.955 / 10.023 / 15.343 | 1.106 / 1.353 / 1.809 | 0.991 / 1.264 / 1.409 | 0.921 / 1.076 / 1.274 | 0.948 / 1.124 / 1.349 |
+| 4 | 21.496 / 29.055 / 30.559 | 2.008 / 2.294 / 2.434 | 2.119 / 2.418 / 2.479 | 2.162 / 2.434 / 2.527 | 2.169 / 2.451 / 2.590 |
+
+These GPU times include scene upload, host analysis, render, download, fence
+and CPU readback, not just GPU kernel time. Scale 1 has no interpolation;
+different scale-1 means reflect scheduling/order, not a smoothing speedup.
+CPU reference costs are only presentation raster costs, not guest execution.
+For the newly accepted PF0 wave at frame 1300, scale-4 CPU is
+22.777/29.728/37.922; off GPU 2.037/2.363/2.655, linear geometry
+2.122/2.393/2.449 and fit geometry 2.179/2.446/2.637 ms.
+Do not compare separate historical runs as a hardware-independent speedup.
+
+Actual Cocoa/Metal frontend runs use the real key-event path and `compare`;
+off, linear geometry and fit+palette show both PF0 and PF2 acceptance, with
+identical final native RGB CRC, cycles/block counts and byte-identical WAVs.
+Those diagnostic runs are unthrottled; their intentional audio queue growth
+is **not** a production pacing claim. Current-color/source sampling was
+visually inspected in the external window/internal-surface captures.
+
+A separate **paced** automatic-integer fit/geometry run exercises a 2496x1392
+physical-pixel Cocoa window, internal 1664x928, nearest centered integer
+presentation. Over 1600 frames it retains the same native CRC/cycles/blocks
+and byte-identical WAV, with audio queue mean 27.984 ms/max 37.499 ms, zero
+queue drops and four clock resyncs including screenshot stalls. The actual
+automatic-size surface/black remainder was inspected; captured diagnostic
+window runs are not substituted for an unobserved second-monitor GPU test.
+
+Reproduction and full logs: `/tmp/f3-gpuvideo/general/parity/{runs,summary}.json`,
+`general/bench-runs.json`, `survey-data/seed5/frame*.general-bench.log`
+and `general/windows/*`. No changed game state, CPU ABI, netplay snapshot
+schema or palette/texture asset data; Metal on this Mac is the exercised GPU.

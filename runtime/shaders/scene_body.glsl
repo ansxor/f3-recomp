@@ -65,13 +65,22 @@ int truncate_scale(int n, int scale) {
     return (n + (n < 0 ? (1 << shift) - 1 : 0)) >> shift;
 }
 #ifdef VIDEO_INTERP
-// Same pen in adjacent 64-color banks; never lerp palette indices/pen roles.
-uint palette_rgb(uint base, float addition) {
-    float banks = addition / 64.0;
+const uint INTERPOLATION = 131072u;
+const uint INTERPOLATION_ROW_STRIDE = 52u, INTERPOLATION_PF_STRIDE = 13u;
+// Anchored increments only; subrow-zero always uses the original integer path.
+float interpolated_field(uint at, float native_value, float fraction) {
+    float c1 = uintBitsToFloat(scene.words[at]);
+    float c2 = uintBitsToFloat(scene.words[at + 1u]);
+    float c3 = uintBitsToFloat(scene.words[at + 2u]);
+    return native_value + fraction * (c1 + fraction * (c2 + fraction * c3));
+}
+// Same pen in checked compatible banks; never interpolate pen/index roles.
+uint palette_rgb(uint base, float addition, uint stride) {
+    float banks = addition / float(stride);
     uint low = uint(floor(banks));
     float weight = banks - float(low);
-    uint a = scene.words[PALETTE + ((base + low * 64u) & 8191u)];
-    uint b = weight == 0.0 ? a : scene.words[PALETTE + ((base + (low + 1u) * 64u) & 8191u)];
+    uint a = scene.words[PALETTE + ((base + low * stride) & 8191u)];
+    uint b = weight == 0.0 ? a : scene.words[PALETTE + ((base + (low + 1u) * stride) & 8191u)];
     uint rgb = 0xff000000u; // Valid override, including RGB black.
     for (uint shift = 0u; shift < 24u; shift += 8u) {
         float value = mix(float((a >> shift) & 255u),float((b >> shift) & 255u),weight);
@@ -121,20 +130,28 @@ void main() {
                 uint pf = row + 322u + index * 6u;
                 int x = floor_scale((int(scene.words[pf]) * s + (q - 46 * s) * int(scene.words[pf + 2u])) >> 8, s) & 1023;
 #ifdef VIDEO_INTERP
-                uint metadata = row + 346u, interp_flags = scene.words[metadata];
-                uint method = params.controls.x >> 16u;
-                bool interpolate = index == 2u && (interp_flags & 1u) != 0u && (method == 2u || sub_y != 0);
+                uint metadata = INTERPOLATION + uint(24 + native_y) * INTERPOLATION_ROW_STRIDE +
+                    index * INTERPOLATION_PF_STRIDE;
+                uint interp_flags = scene.words[metadata];
                 float fraction = float(sub_y) / float(s);
-                if (interpolate) {
-                    float source = method == 2u
-                        ? uintBitsToFloat(scene.words[metadata + 1u]) + 324.0 * fraction
-                        : mix(float(int(scene.words[pf])),float(int(scene.words[pf + ROW_STRIDE])),fraction);
-                    float step = float(int(scene.words[pf + 2u])) - 2.0 * fraction;
+                if (sub_y != 0 && (interp_flags & 3u) != 0u) {
+                    float source = float(int(scene.words[pf]));
+                    float step = float(int(scene.words[pf + 2u]));
+                    if ((interp_flags & 1u) != 0u)
+                        source = interpolated_field(metadata + 1u, source, fraction);
+                    if ((interp_flags & 2u) != 0u)
+                        step = interpolated_field(metadata + 4u, step, fraction);
                     x = int(floor((source + float(q - 46 * s) / float(s) * step) / 256.0)) & 1023;
                 }
 #endif
                 int fy = truncate_scale(int(scene.words[pf + 4u]) * s + sub_y * int(scene.words[pf + 3u]), s);
                 int y = (int(scene.words[pf + 1u]) + (fy >> 8)) & 511;
+#ifdef VIDEO_INTERP
+                if (sub_y != 0 && (interp_flags & 4u) != 0u) {
+                    float phase = float(int(scene.words[pf + 1u]) * 256 + int(scene.words[pf + 4u]));
+                    y = (int(floor(interpolated_field(metadata + 7u, phase, fraction))) >> 8) & 511;
+                }
+#endif
                 uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * 64 + x / 16)) * 2u;
                 uint attr = scene.words[cell + 1u];
                 uint tx = uint(x & 15) ^ ((attr & (1u << 24u)) != 0u ? 15u : 0u);
@@ -144,19 +161,12 @@ void main() {
                 color = ((attr & 65535u) + pen) & 65535u;
                 if (pen == 0u || color == 0u) continue;
 #ifdef VIDEO_INTERP
-                if (interpolate && (interp_flags & 2u) != 0u) {
-                    float addition;
-                    if (method == 2u) {
-                        float c0 = uintBitsToFloat(scene.words[metadata + 2u]);
-                        float c1 = uintBitsToFloat(scene.words[metadata + 3u]);
-                        float c2 = uintBitsToFloat(scene.words[metadata + 4u]);
-                        float c3 = uintBitsToFloat(scene.words[metadata + 5u]);
-                        addition = ((c3 * fraction + c2) * fraction + c1) * fraction + c0;
-                    } else {
-                        addition = mix(float(scene.words[pf + 5u]),float(scene.words[pf + ROW_STRIDE + 5u]),fraction);
-                    }
-                    addition = clamp(addition,float(interp_flags >> 16u),640.0);
-                    color_rgb = palette_rgb(color,addition);
+                if (sub_y != 0 && (interp_flags & 8u) != 0u) {
+                    float current = float(scene.words[pf + 5u]);
+                    float next = float(scene.words[pf + ROW_STRIDE + 5u]);
+                    float addition = clamp(interpolated_field(metadata + 10u, current, fraction),
+                        min(current, next), max(current, next));
+                    color_rgb = palette_rgb(color, addition, interp_flags >> 16u);
                 }
 #endif
                 color = (color + scene.words[pf + 5u]) & 65535u;

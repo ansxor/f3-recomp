@@ -12,7 +12,8 @@ Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/
 | `--video-border 0..160` | 0 | Additional native scene columns on each side |
 | `--video-filter nearest\|linear` | `nearest` | SDL sampling of the completed presentation texture |
 | `--video-backend cpu\|gpu` | `cpu` | CPU expanded raster or SDL3 GPU presentation |
-| `--video-interp off\|linear\|fit` | `off` | Independent GPU PF2 water/board line sampling; no sprite interpolation |
+| `--video-interp off\|linear\|fit` | `off` | Validated per-field GPU sampling on all four playfields |
+| `--video-interp-fields none\|geometry\|palette\|geometry,palette` | `geometry` | Independent geometry and same-pen RGB bank blending; alpha stays native/discrete |
 
 `GameVideoOptions` holds scale and border. Filtering belongs to the frontend, not this structure.
 
@@ -116,19 +117,27 @@ Mosaic periods remain native scene widths. Clip boundaries scale with output dim
 ### Opt-in line interpolation
 
 The off pipeline retains all integer rules above. A separate shader variant
-uses only validated PF2 lower-water rows from the normal `0x9d66a/0x9d72a`
-producer profile, not an unverified generic effect descriptor. Geometry input
-range is screen 152–255; the measured continuous palette prefix is 152–237.
-Whole first/last rows retain the original corresponding field. Unknown or
-invalid profiles remain off, including PF0's sine effect.
+uses per-playfield/per-field valid runs, including PF0's sampled wave and both
+valid PF2 scale/centering halves. No fixed layer, water band or analytic sine is
+required. Disabled, zero, garbage, bitmap and mosaic rows cannot be endpoints
+or derivative samples. Controls, clip/alpha changes and column-phase jumps
+split runs; field-specific source/zoom limits preserve discrete jumps.
 
-Linear mode lerps adjacent source X/scale values. Fit mode evaluates the exact
-scale slope and a guarded affine source-X/cubic palette model. Palette sampling
-lerps the same pen's RGB across 64-color banks, preserving the measured bank
-0/1 discontinuity. CPU analysis writes six padding words only in the upload
-copy; neither the original snapshot nor canonical buffers gain interpolated
-fields. Native subrow-zero samples stay exact in linear mode; fitted GPU
-presentation may differ there too, while `Machine::pixels` stays unchanged.
+Linear mode uses the next measured value. Fit uses shape-preserving local
+cubic increments anchored at the current raw value, not an absolute fitted
+curve. Both preserve every native subrow-zero sample and unflagged row exactly.
+Four valid neighbors are required; run endpoints remain raw. Per-layer logs
+report accepted source/zoom/vertical/palette row counts and rejection reasons.
+
+Geometry is the default field set. Separately selected palette blending uses
+the same pen in compatible banks only, checked against actual ROM tile pens
+over an endpoint-bounded footprint including border; unsafe RGB jumps remain
+discrete without disabling valid geometry. Blended RGB can be absent from the
+native palette. Alpha, clip, mosaic, priority and column offsets stay discrete:
+the survey found held blocks/jumps, not smooth per-line ramps.
+
+Only the upload copy gains appended per-field metadata; canonical scene and
+CPU buffers do not change. Sprites stay unchanged at this checkpoint.
 
 Boundary measurements, false-positive limits, guard fixtures, captures and
 timings: [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).

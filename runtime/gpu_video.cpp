@@ -2,6 +2,7 @@
 #include "video_shaders.hpp"
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -29,6 +30,7 @@ struct Command {
 };
 constexpr Uint32 asset_bytes = 32768 * 256;
 constexpr Uint32 scene_bytes = GpuScene::word_count * sizeof(uint32_t);
+constexpr Uint32 interpolation_scene_bytes = InterpolationLayout::word_count * sizeof(uint32_t);
 constexpr Uint32 native_bytes = 320 * 232 * sizeof(uint32_t);
 }
 
@@ -40,7 +42,11 @@ struct GpuVideo::Impl {
     GameVideoOptions options{};
     VideoScaleMode scale_mode = VideoScaleMode::Fixed;
     VideoInterpolation interpolation = VideoInterpolation::Off;
+    InterpolationFields fields = InterpolationFields::Geometry;
     InterpolationStats interpolation_stats{};
+    std::array<LayerInterpolationStats, 4> logged_layers{};
+    InterpolationReason logged_reason = InterpolationReason::Off;
+    bool have_interpolation_log = false;
     std::vector<uint64_t> tile_pen_masks;
     SDL_GPUBuffer *scene_buffer = nullptr, *pf_assets = nullptr, *sp_assets = nullptr, *native_buffer = nullptr;
     SDL_GPUTexture *sprite_plane = nullptr, *surface = nullptr;
@@ -139,7 +145,8 @@ struct GpuVideo::Impl {
                 !SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE))
                 fail("Set unthrottled GPU presentation");
         }
-        scene_buffer = buffer(scene_bytes); native_buffer = buffer(native_bytes);
+        scene_buffer = buffer(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes);
+        native_buffer = buffer(native_bytes);
         pf_assets = buffer(asset_bytes); sp_assets = buffer(asset_bytes);
         sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
         surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
@@ -153,7 +160,8 @@ struct GpuVideo::Impl {
         if (interpolation != VideoInterpolation::Off)
             interpolation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
         upload = transfer(asset_bytes * 2, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-        if (interpolation != VideoInterpolation::Off) tile_pen_masks.resize(32768);
+        if (interpolation != VideoInterpolation::Off && (unsigned(fields) & unsigned(InterpolationFields::Palette)))
+            tile_pen_masks.resize(32768);
         auto *mapped = static_cast<uint32_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, false), "Map GPU asset upload"));
         // Explicit low-byte-first packing also works on big-endian hosts.
         for (Uint32 i = 0; i < asset_bytes; i += 4) {
@@ -173,7 +181,8 @@ struct GpuVideo::Impl {
         if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU asset upload");
         SDL_ReleaseGPUTransferBuffer(device, upload);
         upload = nullptr;
-        upload = transfer(std::max(scene_bytes, native_bytes), SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
+        upload = transfer(std::max(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes,
+                                   native_bytes), SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
     }
     void set_scale(unsigned scale) {
         if (!scale || scale > GameVideoOptions::max_gpu_scale)
@@ -228,26 +237,53 @@ struct GpuVideo::Impl {
         std::memcpy(output.data(), mapped, size_t(options.width()) * options.height() * 4);
         SDL_UnmapGPUTransferBuffer(device, download);
     }
+    void report_interpolation() {
+        if (interpolation == VideoInterpolation::Off) return;
+        const auto &stats = interpolation_stats;
+        if (have_interpolation_log && logged_reason == stats.reason && logged_layers == stats.layers) return;
+        std::cout << "video_interp fields=" << interpolation_fields_name(fields)
+                  << " reason=" << interpolation_reason_name(stats.reason);
+        for (unsigned i = 0; i < stats.layers.size(); ++i) {
+            const auto &layer = stats.layers[i];
+            std::cout << " pf" << i << '=' << interpolation_reason_name(layer.reason)
+                      << ':' << layer.source_rows << '/' << layer.zoom_rows << '/' << layer.vertical_rows << '/' << layer.palette_rows
+                      << " invalid" << i << '=' << layer.invalid_rows
+                      << " boundaries" << i << '=' << layer.discontinuities
+                      << " unsafe_palette" << i << '=' << layer.unsafe_palette_pairs;
+        }
+        std::cout << '\n';
+        logged_reason = stats.reason; logged_layers = stats.layers; have_interpolation_log = true;
+    }
     void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask) {
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
         if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
+        const bool active_interpolation = interpolation != VideoInterpolation::Off && options.scale > 1;
+        const Uint32 frame_scene_bytes = active_interpolation ? interpolation_scene_bytes : scene_bytes;
         auto *mapped = static_cast<uint8_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, true), "Map GPU frame upload"));
         if (scene.fallback) {
             std::memcpy(mapped, scene.native_pixels.data(), native_bytes);
             interpolation_stats = {};
             if (interpolation != VideoInterpolation::Off)
                 interpolation_stats.reason = options.scale == 1 ? InterpolationReason::NativeScale : InterpolationReason::Oracle;
+            for (auto &layer : interpolation_stats.layers) layer.reason = interpolation_stats.reason;
         } else {
             std::memcpy(mapped, scene.words.data(), scene_bytes);
-            if (interpolation != VideoInterpolation::Off)
-                interpolation_stats = analyze_gpu_interpolation(scene, options, interpolation,
-                    {reinterpret_cast<uint32_t *>(mapped), GpuScene::word_count}, tile_pen_masks);
+            if (active_interpolation)
+                interpolation_stats = analyze_gpu_interpolation(scene, options, interpolation, fields,
+                    {reinterpret_cast<uint32_t *>(mapped), InterpolationLayout::word_count}, tile_pen_masks);
+            else {
+                interpolation_stats = {};
+                if (interpolation != VideoInterpolation::Off) interpolation_stats.reason = InterpolationReason::NativeScale;
+                for (auto &layer : interpolation_stats.layers) layer.reason = interpolation_stats.reason;
+            }
         }
         SDL_UnmapGPUTransferBuffer(device, upload);
+        report_interpolation();
         Command command(device);
         auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU frame copy");
-        upload_buffer(copy, upload, scene.fallback ? native_buffer : scene_buffer, 0, scene.fallback ? native_bytes : scene_bytes, true);
+        upload_buffer(copy, upload, scene.fallback ? native_buffer : scene_buffer, 0,
+            scene.fallback ? native_bytes : frame_scene_bytes, true);
         SDL_EndGPUCopyPass(copy);
         GpuUniforms uniforms{options.scale, options.border, options.width(), options.height(), scene.sprite_count,
                              scene.pen_mask, unsigned(scene.fallback), layer_mask};
@@ -264,8 +300,6 @@ struct GpuVideo::Impl {
             SDL_DrawGPUPrimitives(pass, 256 * 6, scene.sprite_count, 0, 0);
             SDL_EndGPURenderPass(pass);
         }
-        // Vertex sprite uniforms already copied; only the compositor sees the mode.
-        uniforms.sprite_count |= unsigned(interpolation) << 16;
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
         auto *pass = render_pass(command.value, surface);
         SDL_BindGPUGraphicsPipeline(pass, options.scale > 1 && interpolation_pipeline ? interpolation_pipeline : scene_pipeline);
@@ -298,10 +332,11 @@ struct GpuVideo::Impl {
 
 GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options, std::span<const uint8_t> playfield_assets,
                    std::span<const uint8_t> sprite_assets, bool linear, bool vsync,
-                   VideoInterpolation interpolation) : impl_(std::make_unique<Impl>()) {
+                   VideoInterpolation interpolation, InterpolationFields fields) : impl_(std::make_unique<Impl>()) {
     impl_->window = window; impl_->options = options; impl_->linear = linear;
     impl_->vsync = vsync;
     impl_->interpolation = interpolation;
+    impl_->fields = fields;
     impl_->init(playfield_assets, sprite_assets);
 }
 GpuVideo::~GpuVideo() = default;

@@ -6,6 +6,7 @@
 #include "sound_trace.hpp"
 #include "capture_io.hpp"
 #include "video_scale.hpp"
+#include "gpu_interp.hpp"
 #ifdef F3RT_GPU
 #include "gpu_video.hpp"
 #include "f3rt/video.hpp"
@@ -90,6 +91,7 @@ int main(int argc,char **argv) try {
     std::string video_filter="nearest";
     std::string video_backend="cpu";
     std::string video_interp="off";
+    std::string video_interp_fields="geometry";
     f3rt::netplay::TransportOptions net_options;
     bool net_option_seen=false;
     uint64_t frames=0,dump_start=1,dump_every=1;
@@ -141,6 +143,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--video-filter")video_filter=value();
         else if(arg=="--video-backend")video_backend=value();
         else if(arg=="--video-interp")video_interp=value();
+        else if(arg=="--video-interp-fields")video_interp_fields=value();
         else if(arg=="--netplay-server") { net_options.server=value();net_option_seen=true; }
         else if(arg=="--netplay-room") { net_options.room=value();net_option_seen=true; }
         else if(arg=="--netplay-player") {
@@ -166,7 +169,8 @@ int main(int argc,char **argv) try {
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
-                     <<"  [--video-interp off|linear|fit] (opt-in GPU PF2 water sampling; default off)\n"
+                     <<"  [--video-interp off|linear|fit] (opt-in GPU line sampling; default off)\n"
+                     <<"  [--video-interp-fields none|geometry|palette|geometry,palette] (default geometry; native alpha stays discrete)\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
                      <<"  Auto scales follow window pixels (GPU only); auto-integer uses nearest filtering. Netplay requires fixed scale 1.\n"
                      <<"  [--netplay-server HOST:PORT --netplay-room CODE --netplay-player 1|2 --netplay-delay 0..8]\n"
@@ -207,6 +211,8 @@ int main(int argc,char **argv) try {
     if(video_interp!="off" && video_interp!="linear" && video_interp!="fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
     if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --video-backend gpu");
+    const auto interpolation_fields=f3rt::parse_interpolation_fields(video_interp_fields);
+    if(!interpolation_fields)throw std::runtime_error("--video-interp-fields must be none, geometry, palette or geometry,palette");
 #ifndef F3RT_GPU
     if(video_backend=="gpu" && !headless)throw std::runtime_error("GPU presentation requires F3RT_GPU build support");
 #endif
@@ -260,7 +266,8 @@ int main(int argc,char **argv) try {
             sdl.gpu=std::make_unique<f3rt::GpuVideo>(sdl.window,video_options,m.video->playfield_tiles(),
                                                    m.video->sprite_tiles(),video_filter=="linear",throttle,
                                                    video_interp=="fit"?f3rt::VideoInterpolation::Fit:
-                                                   video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off);
+                                                   video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off,
+                                                   *interpolation_fields);
             sdl.gpu->set_scale_mode(video_scale_mode);
         } else
 #endif
@@ -281,7 +288,8 @@ int main(int argc,char **argv) try {
         std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" backend="<<video_backend
                  <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()
                  <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
-                 <<" filter="<<video_filter<<" interp="<<video_interp<<'\n';
+                 <<" filter="<<video_filter<<" interp="<<video_interp
+                 <<" interp_fields="<<f3rt::interpolation_fields_name(*interpolation_fields)<<'\n';
     }
     std::unique_ptr<f3rt::WavWriter> wav;
     if(!wav_path.empty())wav=std::make_unique<f3rt::WavWriter>(wav_path,audio_rate);

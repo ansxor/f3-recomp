@@ -141,12 +141,16 @@ netplay requires fixed scale 1. The measured 5–8x tail costs retain the 4x cap
 ./build/landmakr --video-backend gpu --video-scale auto --video-filter linear
 ```
 
-`--video-interp linear|fit` separately opts into PF2 water/puzzle-board line
-sampling on the GPU at scales above 1; default `off` retains exact CPU parity.
-Linear samples adjacent valid rows; fit evaluates the known scale function and
-guarded affine-source/cubic-palette model. Both interpolate the same pen's RGB
-between valid 64-color palette banks, never pen indices or sprites. Unknown,
-disabled, discontinuous or poorly fitted profiles stay un-interpolated.
+`--video-interp linear|fit` opts into validated per-field GPU line sampling on
+all four playfields at scales above 1; default `off` retains exact CPU parity.
+Linear samples adjacent ROM coordinates; fit uses anchored, shape-preserving
+local cubics, including PF0's sampled wave and both valid PF2 zoom halves.
+`--video-interp-fields none|geometry|palette|geometry,palette` independently
+selects geometry and same-pen RGB bank blending; **geometry is the default**.
+Palette blending can invent RGB colors and is separately opt-in. Alpha,
+clip/mosaic/priority boundaries and column-scroll jumps remain native/discrete.
+Both modes preserve every native subrow-zero sample and unflagged row exactly.
+Sprites are unchanged at the general-line checkpoint.
 The native frame, CPU captures, WAV and rollback state remain unchanged.
 
 ```sh
