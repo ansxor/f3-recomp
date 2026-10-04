@@ -1,4 +1,4 @@
-IN PROGRESS
+DONE
 
 # Phase 2 — Land Maker game-data video renderer
 
@@ -31,6 +31,6 @@ Startup/POST, ending line transitions, bitmap pivot, global screen flip, retaine
 
 The Furrtek die page was inaccessible (403/Cloudflare); no unread claim is used. ROM behavior/observed output outrank WIP notes and MAME implementation details. The sprite nominal-rectangle edge cull is explicitly a retained-oracle compatibility rule, not an unmeasured physical-chip claim. Existing accepted audio timing limits are unchanged; audio parity work is out of scope.
 
-## Remaining
+## Delivery
 
-All implementation and exercised acceptance are complete. Throwaway smoke source/executable have been removed; generated captures remain ignored evidence. Local delivery commits and the final status stamp remain.
+Implementation and exercised acceptance are complete, with the explicit limits above. Local milestones: `ee76002` isolation, `08a5178` first PF0 proof, `7e5ff57` four-playfield parity, `09cd6a8` text/sprite descriptors, `8924ea5` complete base scene parity, `8d33ccd` attract profiles, and `c011048` verified post-parity presentation and safeguards. No pushes or other-worktree edits. Throwaway smoke source/executable were removed; generated captures remain ignored evidence.
