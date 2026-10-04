@@ -50,6 +50,9 @@ void Interpreter::reset_main() {
     f3rt_core_import(&machine.cpu);
     callbacks();
     m68k_pulse_reset();
+    // Drain reset latency before canonical imports can discard it. A budget
+    // below the 020's four reset cycles returns without executing an opcode.
+    machine.cpu.cycles += unsigned(m68k_execute(1));
     f3rt_core_export(&machine.cpu);
     m68k_get_context(main_context.data());
 }

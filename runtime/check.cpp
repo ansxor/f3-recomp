@@ -66,6 +66,8 @@ int main() try {
     require(sample_count==uint64_t(clock_audio.sample_rate())*10,
             "Ten seconds of audio match the advertised stream rate without clock drift");
     auto m=std::make_unique<f3rt::Machine>(fixture());
+    require(m->cpu.cycles==4 && m->cpu.pc==0x100 && m->cpu.d[0]==0,
+            "Cold reset charges four cycles without executing the first opcode");
     m->write32(0x400001,0x12345678);
     require(m->read32(0x420001)==0x12345678,"BE misaligned work RAM mirror");
     m->write32(0x41fffe,0xaabbccdd);
@@ -135,9 +137,11 @@ int main() try {
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_dispatch(&cpu) && cpu.d[0]==99,"Native dispatch executes matching block");
     cpu.pc=0x100;cpu.sr=0x2700;require(f3_fallback(&cpu) && cpu.d[0]==42 && cpu.pc==0x102,"Fallback executes exactly one real instruction");
     cpu.d[0]=0xdeadbeef;cpu.sr=0x2015;
+    const auto reset_cycles=cpu.cycles;
     m->interpreter->reset_main();
     require(cpu.d[0]==0xdeadbeef && cpu.sr==0x2715 && cpu.pc==0x100,
             "Reset preserves canonical native D/CCR, not stale fallback context");
+    require(cpu.cycles-reset_cycles==4,"Warm reset charges its four-cycle latency exactly once");
     m->allow_main_fallback=false;const auto fallback_count=m->fallback_instructions;
     bool rejected=false;
     try { f3_fallback(&cpu); } catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("0x100")!=std::string::npos; }
