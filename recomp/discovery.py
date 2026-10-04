@@ -261,6 +261,43 @@ def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op: 
     return list(set(entries))
 
 
+def _extract_script_callbacks(rom: bytes, md: capstone.Cs, spec: dict) -> set[int]:
+    """Follow configured actor bytecode, not instruction-decode its data words."""
+    if not spec:
+        return set()
+    lengths = spec["operand_bytes"]
+    code_ops = set(spec["code_pointer_opcodes"])
+    field = int(spec["pointer_field"])
+    roots = []
+    # MOVE.L #script,d16(An). Other script roots can be supplied explicitly.
+    for pc in range(0, len(rom) - 7, 2):
+        if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217c and \
+                int.from_bytes(rom[pc + 6:pc + 8], "big") == field:
+            roots.append(int.from_bytes(rom[pc + 2:pc + 6], "big"))
+    roots.extend(spec.get("entry_points", []))
+    visited, callbacks = set(), set()
+    while roots:
+        pc = roots.pop()
+        while 0x400 <= pc < len(rom) - 1 and not pc & 1 and pc not in visited:
+            visited.add(pc)
+            operation = int.from_bytes(rom[pc:pc + 2], "big")
+            if operation >= len(lengths) or lengths[operation] < 0:
+                break
+            end = pc + 2 + lengths[operation]
+            if end > len(rom):
+                break
+            target = int.from_bytes(rom[pc + 2:pc + 6], "big")
+            if operation in code_ops and 0x400 <= target < len(rom) and not target & 1:
+                if _validate_code_sequence(rom, md, target):
+                    callbacks.add(target)
+            if operation == spec["return_opcode"]:
+                break
+            if operation == spec["call_opcode"]:
+                roots.append(target)
+            pc = target if operation == spec["jump_opcode"] else end
+    return callbacks
+
+
 def _extract_trap1_tasks(rom: bytes, md: capstone.Cs) -> set[int]:
     """Extract entry points passed to TRAP #1 (thread/task spawn in Taito OS)."""
     targets = set()
@@ -407,6 +444,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
     if scan_callbacks:
         cb_seeds = _extract_lea_move_callbacks(rom, md)
         speculative_seeds.update(cb_seeds)
+    speculative_seeds.update(_extract_script_callbacks(
+        rom, md, discovery_cfg.get("actor_scripts", {})))
 
     # Combined initial worklist
     all_seeds = sorted(proven_seeds | speculative_seeds)
