@@ -41,6 +41,20 @@ class ActorDiscoveryTests(unittest.TestCase):
         self.assertTrue({0x800, 0x820} <= result.instructions.keys())
         self.assertTrue({0x480, 0x488, 0x600, 0x620}.isdisjoint(result.instructions))
 
+    def test_explicit_script_table_count_excludes_adjacent_data(self):
+        rom, config = self.fixture()
+        config["discovery"]["actor_scripts"]["pointer_tables"] = [
+            {"table": 0x480, "count": 2},
+        ]
+        rom[0x400:0x402] = bytes.fromhex("4e75")
+        struct.pack_into(">III", rom, 0x480, 0x600, 0x620, 0x640)
+        for script, callback in ((0x600, 0x800), (0x620, 0x820), (0x640, 0x840)):
+            struct.pack_into(">HIH", rom, script, 0, callback, 10)
+            rom[callback:callback + 2] = bytes.fromhex("4e75")
+        result = discover(bytes(rom), config)
+        self.assertTrue({0x800, 0x820} <= result.instructions.keys())
+        self.assertTrue({0x480, 0x600, 0x620, 0x840}.isdisjoint(result.instructions))
+
     def test_staged_jump_tables_with_backward_destinations(self):
         for dispatch in ("207b003e4e714e714ed0", "41fb003e4e714e714ef00151"):
             with self.subTest(dispatch=dispatch):

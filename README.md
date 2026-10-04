@@ -100,7 +100,9 @@ once after creating the CPU, then let `f3_dispatch` run it. Alternatively includ
   `[discovery.actor_scripts]` describes bytecode operand lengths, native callback
   commands, and script jump/call/return commands. Script roots include immediate
   stores and indexed PC-relative pointer arrays, including register-staged loads
-  and configured record strides. This avoids decoding script words as 68020 code.
+  and configured record strides. Explicit `pointer_tables` records (`table`,
+  `count`) cover script arrays passed through registers. This avoids decoding
+  script words as 68020 code.
   `inline_string_helpers` identifies routines that consume an aligned
   NUL-terminated inline string after a call.
 - Optional `[[hooks]]` entries have numeric `address` and C `symbol`; generated
