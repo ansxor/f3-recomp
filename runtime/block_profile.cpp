@@ -1,10 +1,11 @@
 #include "block_profile.hpp"
 #include "f3rt/block_profile.h"
 #include <charconv>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <fcntl.h>
@@ -40,7 +41,7 @@ void sync_file(const std::filesystem::path &path) {
 }
 namespace f3rt {
 BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesystem::path &path)
-    : output(path) {
+    : output(path.empty() ? path : std::filesystem::absolute(path)) {
     if (output.empty()) return;
 #if !defined(F3_PROFILE_INSTRUMENT) && !defined(F3_PROFILE_SLIM_ENABLED)
     throw std::runtime_error("--profile-out requires -DF3_PROFILE_INSTRUMENT=ON (or a slim build for cold-hit recording)");
@@ -60,7 +61,9 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
                 throw std::runtime_error("Invalid profile ROM size");
             crcs[region] = crc32(bytes.data(), bytes.size());
             sizes[region] = uint32_t(bytes.size());
+#if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
             counts[region].resize(bytes.size() / 2);
+#endif
         }
         if (std::filesystem::exists(output)) load();
         for (unsigned region = 0; region < 2; ++region) {
@@ -70,6 +73,7 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
             if (!inserted && entry->second != bounds)
                 throw std::runtime_error("Profile ROM bounds disagree with loaded ROM");
         }
+#if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
         for (auto row = hits.begin(); row != hits.end();) {
             const auto [region, crc, address] = row->first;
             if (crc == crcs[region]) {
@@ -77,6 +81,7 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
                 row = hits.erase(row);
             } else ++row;
         }
+#endif
         flush(); // An initial atomic file also proves the destination is writable.
 #if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
         f3_profile_main_counts = counts[0].data();
@@ -148,6 +153,7 @@ void BlockProfileSession::flush() {
     {
         std::ofstream file(temporary, std::ios::trunc);
         file << "F3-BLOCK-PROFILE 1\n" << std::setfill('0');
+        if (!file) throw std::runtime_error("Block profile open failed: " + temporary.string() + ": " + std::strerror(errno));
         for (const auto &[identity, bounds] : identities) {
             const auto [region, crc] = identity;
             file << "rom " << names[region] << ' ' << std::hex << std::setw(8) << crc << ' '
@@ -169,7 +175,7 @@ void BlockProfileSession::flush() {
             row("miss", region, crc, address, count);
         }
         file.flush();
-        if (!file) throw std::runtime_error("Block profile write failed: " + temporary.string());
+        if (!file) throw std::runtime_error("Block profile write failed: " + temporary.string() + ": " + std::strerror(errno));
     }
     sync_file(temporary);
     std::filesystem::rename(temporary, output);

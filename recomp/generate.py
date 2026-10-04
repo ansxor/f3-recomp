@@ -134,10 +134,10 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         for position, pc in enumerate(pcs):
             insn = discovery.instructions[pc]
             lines.append(f'L_{pc:06x}: {{')
+            lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
             if pc in hooks:
                 lines.extend(['    f3_cc_flush(cpu);', f'    {hooks[pc]}(cpu);',
                               f'    if (cpu->pc != 0x{pc:08x}u || cpu->stopped || cpu->halted) return;'])
-            lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
             statements = lower(insn)
             if statements is None:
                 unsupported[insn.mnemonic] += 1
