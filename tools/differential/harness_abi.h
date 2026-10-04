@@ -31,6 +31,7 @@ typedef struct DiffEnv {
     /* Log of memory writes during this instruction */
     MemWrite writes[MAX_WRITES_PER_CASE];
     size_t num_writes;
+    uint64_t cycles;
 
     /* Exception/halt recording */
     uint8_t exception_taken;

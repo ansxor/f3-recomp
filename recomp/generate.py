@@ -128,7 +128,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "fallback_mnemonics": dict(sorted(unsupported.items())),
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
         "max_block_instructions": max_block_instructions,
-        "timing": "cycle-agnostic nominal instruction costs; not cycle-exact",
+        "timing": "68EC020 reference instruction costs; IRQ delivery at native block boundaries",
     }
     (output / 'lowering.json').write_text(json.dumps(report, indent=2) + '\n')
     (output / 'coverage.json').write_text(json.dumps(discovery.report, indent=2) + '\n')

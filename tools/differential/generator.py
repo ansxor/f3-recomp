@@ -535,6 +535,9 @@ def generate_boundary_cases() -> list[RawTestCase]:
     for name, code in (("divu_zero", "82c0"), ("divs_zero", "83c0"),
                        ("divul_zero", "4c401002"), ("divsl_zero", "4c401802")):
         add_case(name, code, d=[0, 100, 23, 0, 0, 0, 0, 0], sr=0x201f)
+    for name, code in (("rol", "e1b8"), ("ror", "e0b8"), ("roxl", "e1b0"), ("roxr", "e0b0")):
+        add_case(f"{name}_count_destination_alias", code,
+                 d=[0x80000021, 0, 0, 0, 0, 0, 0, 0], sr=0x1f)
     add_case("full_negative_word_bd", "41f50520fa26")
     add_case("full_negative_word_outer", "24301b220000fff8",
              d=[0, 4, 0, 0, 0, 0, 0, 0], memory=[
