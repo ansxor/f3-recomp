@@ -1,0 +1,7 @@
+build/
+*.zip
+roms/
+games/*/generated/
+games/*/rom/
+*.bin
+.DS_Store
