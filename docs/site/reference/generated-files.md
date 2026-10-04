@@ -48,7 +48,7 @@ The `discover` command writes only `coverage.json`. The `emit` command writes al
 Each file has this layout:
 
 1. A comment: `Generated from user-supplied ROM. Do not commit.`
-2. `#include <f3rt/cpu_abi.h>` and an `#error` if `F3RT_ABI_VERSION` is not 2 (`_RUNTIME_ABI_VERSION` in `recomp/generate.py`).
+2. `#include <f3rt/cpu_abi.h>` and an `#error` if `F3RT_ABI_VERSION` is not 3 (`_RUNTIME_ABI_VERSION` in `recomp/generate.py`).
 3. `#include "recomp/cpu_ops.h"`. This header holds the helper macros and inline functions that the lowered code calls.
 4. One `extern void SYMBOL(f3_cpu *cpu);` for each hook symbol from the config.
 5. The block functions.
@@ -225,10 +225,10 @@ The frontends call `m.use_native_sound(f3_sound_blocks, f3_sound_block_count)`.
 
 | Symbol | Defined in | Used in | Notes |
 | --- | --- | --- | --- |
-| `F3RT_ABI_VERSION` (`2u`) | `include/f3rt/cpu_abi.h` | `program.h`, `blocks_NNNN.c` | The generated files stop the build with `#error` if the version differs. Change both `_RUNTIME_ABI_VERSION` in `recomp/generate.py` and the header together. |
-| `f3_generated_register` | `program.c` | `runtime/frontend.cpp`, `tools/gameplay_regression.cpp`, `tools/netplay_oracle.cpp` | Registers the block table with the CPU. |
-| `f3_sound_blocks`, `f3_sound_block_count` | `sound_program.c` | Same programs, through `Machine::use_native_sound` | Table of the sound CPU blocks. |
-| `f3_register_blocks`, `f3_dispatch`, `f3_boundary`, `f3_exception`, `f3_set_sr`, `f3_reset_devices`, `f3_fallback` | `runtime/cpu_abi.cpp` | Generated code | The runtime side of the CPU ABI. |
+| `F3RT_ABI_VERSION` (`3u`) | `include/f3rt/cpu_abi.h` | Both generated CPU programs | The generated files stop the build with `#error` if the version differs. Change `_RUNTIME_ABI_VERSION` and the header together. |
+| `f3_generated_register` | `program.c` | Frontend and native harnesses | Registers blocks and immutable exclusions with the CPU. |
+| `f3_sound_blocks`, `f3_sound_block_count`, `f3_sound_excluded_ranges`, `f3_sound_excluded_count` | `sound_program.c` | Native callers through `Machine::use_native_sound` | Compact exhaustive-complement table and exclusion span. |
+| `f3_register_blocks`, `f3_register_exclusions`, `f3_dispatch`, `f3_boundary`, `f3_exception`, `f3_set_sr`, `f3_reset_devices`, `f3_fallback` | `runtime/cpu_abi.cpp` | Generated code | The runtime side of the CPU ABI. |
 | `f3_read8/16/32`, `f3_write8/16/32` | `runtime/cpu_abi.cpp` | Generated code through `recomp/cpu_ops.h` | Memory access. |
 | `f3_cc_flush` | `recomp/cpu_ops.h` | Generated code | Turns the lazy condition codes into the status register. |
 | Hook symbols (for example `f3_landmakr_video_hook`) | `runtime/game_video.cpp` | `blocks_NNNN.c` | Named in `[[hooks]]`. The link fails if a symbol is missing. |

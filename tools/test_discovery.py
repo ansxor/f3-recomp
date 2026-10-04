@@ -162,5 +162,73 @@ class AllAlignedDiscoveryTests(unittest.TestCase):
         self.assertNotIn(0x900, result.instructions)
         self.assertNotIn(0x902, result.instructions)
 
+
+class ExclusionTests(unittest.TestCase):
+    def fixture(self, coverage="all_aligned"):
+        rom, config = AllAlignedDiscoveryTests().fixture(coverage)
+        config["exclude"] = [
+            {"start": 0x800, "end": 0x900,
+             "reason": "synthetic data", "evidence": "test-owned descriptor interval"},
+        ]
+        return rom, config
+
+    def test_half_open_interval_and_candidate_accounting(self):
+        rom, config = self.fixture()
+        rom[0x7fe:0x802] = bytes.fromhex("4e714e71")
+        rom[0x8fe:0x902] = bytes.fromhex("4e714e71")
+        result = discover(bytes(rom), config)
+        self.assertIn(0x7fe, result.instructions)
+        self.assertIn(0x900, result.instructions)
+        self.assertFalse(any(0x800 <= pc < 0x900 for pc in result.instructions))
+        self.assertFalse(any(0x800 <= pc < 0x900 for pc in result.invalid_pcs))
+        summary = result.report["summary"]
+        self.assertEqual(summary["aligned_candidate_count"],
+                         summary["aligned_decoded_count"] + summary["aligned_invalid_count"]
+                         + summary["excluded_candidate_count"])
+
+    def test_vector_hook_and_explicit_table_targets_reject_exclusions(self):
+        for source in ("vector", "hook", "targets", "table"):
+            with self.subTest(source=source):
+                rom, config = self.fixture()
+                if source == "vector":
+                    struct.pack_into(">I", rom, 4, 0x800)
+                elif source == "hook":
+                    config["hooks"] = [{"address": 0x800, "symbol": "test_hook"}]
+                else:
+                    table = {"address": 0x500}
+                    if source == "targets":
+                        table["targets"] = [0x800]
+                    else:
+                        struct.pack_into(">I", rom, 0x600, 0x800)
+                        table.update(table=0x600, count=1)
+                    config["discovery"]["jump_tables"] = [table]
+                with self.assertRaisesRegex(ValueError, "excluded PC 0x800"):
+                    discover(bytes(rom), config)
+
+    def test_unproven_direct_transfer_is_reported_for_runtime_enforcement(self):
+        rom, config = self.fixture()
+        rom[0x500:0x506] = bytes.fromhex("4ef900000800")
+        result = discover(bytes(rom), config)
+        self.assertIn({"pc": "0x000500", "target": "0x000800",
+                       "enforcement": "fatal_at_runtime"},
+                      result.report["excluded_transfers"])
+        self.assertNotIn(0x800, result.instructions)
+
+    def test_recursive_reachable_exclusion_is_not_silently_dropped(self):
+        rom, config = self.fixture("recursive")
+        rom[0x400:0x406] = bytes.fromhex("4ef900000800")
+        with self.assertRaisesRegex(ValueError, "excluded PC 0x800"):
+            discover(bytes(rom), config)
+
+    def test_overlap_odd_bounds_and_missing_evidence_reject(self):
+        rom, config = self.fixture()
+        for change in ({"start": 0x801}, {"end": 0x1002}, {"evidence": ""}):
+            with self.subTest(change=change):
+                invalid = dict(config["exclude"][0], **change)
+                with self.assertRaises(ValueError):
+                    discover(bytes(rom), {**config, "exclude": [invalid]})
+        with self.assertRaisesRegex(ValueError, "Overlapping"):
+            discover(bytes(rom), {**config, "exclude": config["exclude"] * 2})
+
 if __name__ == "__main__":
     unittest.main()

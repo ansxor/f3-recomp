@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <f3rt/cpu_abi.h>
 
 namespace f3rt {
@@ -12,8 +13,9 @@ class Machine;
 
 class SoundNative {
 public:
-    // Generated table: one entry per even ROM address, in address order.
-    SoundNative(Machine &machine, const f3_block *blocks, size_t block_count);
+    // Generated table: exact sorted complement of excluded even ROM addresses.
+    SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
+                std::span<const f3_excluded_range> excluded);
     ~SoundNative();
 
     SoundNative(const SoundNative &) = delete;
@@ -51,9 +53,11 @@ private:
     void do_reset();
     void check_interrupts();
     void dispatch_one();
+    size_t block_index(uint32_t pc) const;
 
     Machine &m_machine;
     const f3_block *m_blocks;
+    std::span<const f3_excluded_range> m_excluded;
 
     f3_cpu m_cpu{};
     bool m_needs_reset = true;

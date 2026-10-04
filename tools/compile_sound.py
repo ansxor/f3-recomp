@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import asdict
 import json
 from pathlib import Path
 import re
 import sys
 import zlib
+import tomllib
 
 import capstone as cs
 import capstone.m68k as m68k
@@ -23,6 +25,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from recomp.emitter import lower as emitter_lower, _decode_ea
+from recomp.discovery import (
+    parse_exclusions, exclusion_at, _resolve_target,
+    CALL_MNEMONICS, UNCOND_BRANCH_MNEMONICS, COND_BRANCH_MNEMONICS,
+)
 
 
 def load_68000_base_cycles() -> bytes:
@@ -257,6 +263,7 @@ def compile_sound_rom(
     output_dir: Path,
     coverage_mode: str = "all_aligned",
     blocks_per_file: int = 1024,
+    config: dict | None = None,
 ) -> dict:
     """Compile sound ROM instructions into native C sources and CMake configuration."""
     output_dir = Path(output_dir)
@@ -265,11 +272,22 @@ def compile_sound_rom(
     md = cs.Cs(cs.CS_ARCH_M68K, cs.CS_MODE_M68K_000)
     md.detail = True
 
-    # Every aligned entry in the complete loaded region, never trace-derived.
+    # Every aligned entry outside declared exclusions, never trace-derived.
     rom_base = 0xc00000
     start_off, end_off = 0, len(rom)
-
+    exclusions = parse_exclusions(config or {}, len(rom), cpu="sound", base=rom_base)
+    excluded_words = sum((region.end - region.start) // 2 for region in exclusions)
     total_words = (end_off - start_off) // 2
+    # Reset/vector addresses are code seeds, unlike apparent branch targets
+    # found by exhaustive decoding of arbitrary ROM data.
+    for offset in range(4, min(len(rom), 0x400) - 3, 4):
+        target = int.from_bytes(rom[offset:offset + 4], "big")
+        region = exclusion_at(exclusions, target)
+        if region is not None:
+            raise ValueError(
+                f"Sound vector {offset // 4} targets excluded PC 0x{target:08x} "
+                f"in [0x{region.start:08x}, 0x{region.end:08x}): {region.reason}"
+            )
 
     table = []
     shards: list[list[str]] = []
@@ -279,9 +297,13 @@ def compile_sound_rom(
     supported = Counter()
     unsupported = Counter()
     unsupported_pcs = []
+    deferred_targets = []
+    emitted_functions = 0
 
     for addr in range(start_off, end_off, 2):
         pc = rom_base + addr
+        if exclusion_at(exclusions, pc) is not None:
+            continue
         fn_name = f"f3_sound_block_{pc:06x}"
         opcode = int.from_bytes(rom[addr:addr + 2], "big")
         if opcode >> 12 in (10, 15):
@@ -304,6 +326,15 @@ def compile_sound_rom(
 
         if insns:
             insn = insns[0]
+            mnemonic = insn.mnemonic.split(".")[0].lower()
+            if mnemonic in CALL_MNEMONICS | UNCOND_BRANCH_MNEMONICS | COND_BRANCH_MNEMONICS:
+                target = _resolve_target(insn, insn.operands[-1]) if insn.operands else None
+                region = exclusion_at(exclusions, target) if target is not None else None
+                if region is not None:
+                    deferred_targets.append({
+                        "pc": pc, "target": target, "reason": region.reason,
+                        "validation": "deferred_runtime",
+                    })
             stmts = sound_lower(insn)
             if stmts is not None:
                 supported[insn.mnemonic.split(".")[0].lower()] += 1
@@ -350,6 +381,7 @@ def compile_sound_rom(
                 ]
 
         current_shard.append("\n".join(lines))
+        emitted_functions += 1
         if len(current_shard) == blocks_per_file:
             shards.append(current_shard)
             current_shard = []
@@ -375,11 +407,16 @@ def compile_sound_rom(
         "#define F3_SOUND_GENERATED_PROGRAM_H\n\n"
         "#include <stddef.h>\n"
         "#include <f3rt/cpu_abi.h>\n\n"
+        "#if F3RT_ABI_VERSION != 3u\n"
+        '#error "Generated sound program requires F3RT_ABI_VERSION 3"\n'
+        "#endif\n\n"
         "#ifdef __cplusplus\n"
         'extern "C" {\n'
         "#endif\n\n"
         "extern const f3_block f3_sound_blocks[];\n"
         "extern const size_t f3_sound_block_count;\n\n"
+        "extern const f3_excluded_range f3_sound_excluded_ranges[];\n"
+        "extern const size_t f3_sound_excluded_count;\n\n"
         "#ifdef __cplusplus\n"
         "}\n"
         "#endif\n\n"
@@ -393,15 +430,30 @@ def compile_sound_rom(
         '#include "runtime/sound_native_ops.h"\n',
         '#include "sound_program.h"\n\n',
     ]
-    for vector in (4, 10, 11):
-        program_c.append(f"static void f3_sound_vector_{vector}(f3_cpu *cpu) {{ f3_sound_exception(cpu, {vector}, cpu->pc); }}\n")
+    vector_names = sorted({name for _, name in table if name.startswith("f3_sound_vector_")})
+    for name in vector_names:
+        vector = int(name.rsplit("_", 1)[1])
+        program_c.append(f"static void {name}(f3_cpu *cpu) {{ f3_sound_exception(cpu, {vector}, cpu->pc); }}\n")
+    emitted_functions += len(vector_names)
     for name in sorted({name for _, name in table if not name.startswith("f3_sound_vector_")}):
         program_c.append(f"void {name}(f3_cpu *cpu);\n")
     program_c.append("\nconst f3_block f3_sound_blocks[] = {\n")
     for pc, name in table:
         program_c.append(f"    {{ 0x{pc:08x}u, {name} }},\n")
+    if not table:
+        program_c.append("    { 0u, 0 },\n")
     program_c.append("};\n")
-    program_c.append("const size_t f3_sound_block_count = sizeof(f3_sound_blocks) / sizeof(f3_sound_blocks[0]);\n")
+    program_c.append(f"const size_t f3_sound_block_count = {len(table)}u;\n")
+    program_c.append("\nconst f3_excluded_range f3_sound_excluded_ranges[] = {\n")
+    for region in exclusions:
+        program_c.append(
+            f"    {{ 0x{region.start:08x}u, 0x{region.end:08x}u, "
+            f"{json.dumps(region.reason, ensure_ascii=False)}, {json.dumps(region.evidence, ensure_ascii=False)} }},\n"
+        )
+    if not exclusions:
+        program_c.append("    { 0u, 0u, 0, 0 },\n")
+    program_c.append("};\n")
+    program_c.append(f"const size_t f3_sound_excluded_count = {len(exclusions)}u;\n")
 
     (output_dir / "sound_program.c").write_text("".join(program_c))
     source_names.append("sound_program.c")
@@ -418,8 +470,14 @@ def compile_sound_rom(
         "coverage_mode": coverage_mode,
         "total_words": total_words,
         "compiled_blocks": len(table),
+        "compiled_entries": len(table),
+        "emitted_functions": emitted_functions,
+        "excluded_words": excluded_words,
+        "excluded_regions": [asdict(region) for region in exclusions],
+        "deferred_excluded_targets": deferred_targets,
         "supported_instructions": sum(supported.values()),
         "unsupported_words": sum(unsupported.values()),
+        "unsupported_pcs": unsupported_pcs,
         "source_files": source_names,
         "supported_mnemonics": dict(sorted(supported.items())),
         "unsupported_mnemonics": dict(sorted(unsupported.items())),
@@ -433,6 +491,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rom-dir", required=True, type=Path, help="Directory containing Land Maker sound ROMs")
     parser.add_argument("--output", required=True, type=Path, help="Output directory for generated sources")
+    parser.add_argument("--config", required=True, type=Path, help="Game TOML containing shared exclusions")
     parser.add_argument("--blocks-per-file", type=int, default=1024, help="Number of instruction blocks per shard C file")
     parser.add_argument(
         "--coverage",
@@ -441,6 +500,8 @@ def main() -> None:
         help="Compile every aligned entry in the complete loaded sound region",
     )
     args = parser.parse_args()
+    with args.config.open("rb") as stream:
+        config = tomllib.load(stream)
 
     print(f"Loading sound ROM from {args.rom_dir}...")
     rom = load_sound_rom(args.rom_dir)
@@ -452,9 +513,11 @@ def main() -> None:
         output_dir=args.output,
         coverage_mode=args.coverage,
         blocks_per_file=args.blocks_per_file,
+        config=config,
     )
 
-    print(f"Generated {len(report['source_files'])} sources ({report['compiled_blocks']} blocks)")
+    print(f"Generated {len(report['source_files'])} sources ({report['compiled_entries']} entries, {report['emitted_functions']} functions)")
+    print(f"Excluded {report['excluded_words']} words in {len(report['excluded_regions'])} regions")
     print(f"Supported instructions: {report['supported_instructions']}")
     print(f"Actionable error stubs: {report['unsupported_words']}")
     print("Compilation completed successfully.")

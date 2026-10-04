@@ -34,6 +34,33 @@ The loader does not check unknown keys. A misspelled key is silently ignored. Ch
 
 All code addresses must be even (word-aligned) where the table below says so.
 
+## [[exclude]]
+
+Reviewed instruction-start exclusions apply to both discovery modes. Bounds are
+guest addresses, start inclusive and end exclusive; both must be even and
+inside the selected CPU ROM. Overlap is rejected. Each record requires nonempty
+`reason` and `evidence`; `cpu` defaults to `"main"` and may be `"sound"`.
+
+```toml
+[[exclude]]
+start = 0x11b362
+end = 0x1ffffe
+reason = "Trailing FF fill, preserving the checksum word"
+evidence = "Verified ROM fill; validated seeded native runs"
+```
+
+Main ROM addresses start at 0; Japan sound ROM is `0xc00000..0xc80000`.
+Data reads and extension words remain available. Vector/config/hook entries
+and explicit jump/pointer-table code targets inside an exclusion reject
+generation. Apparent direct transfers from independent all-aligned decodes
+are reported, not assumed reachable; executing any excluded target fails
+at runtime before fallback, even when diagnostic interpretation is enabled.
+
+`tools/scan_rom_exclusions.py` writes proposals and conflicting evidence,
+never game configuration. Entropy and missing fetches are not proof of data.
+See the repository's [experiment report](https://github.com/ansxor/f3-recomp/blob/main/docs/BINSIZE-EXCLUDE.md).
+
+
 ## Full example
 
 ```toml

@@ -4,7 +4,7 @@ Static coverage, decoder support, native lowering, and observed execution are se
 
 ## Coverage is not reachability
 
-`all_aligned` decodes every even ROM address. It includes overlapping starts and data that resembles instructions.
+`all_aligned` decodes every nonexcluded even ROM address. It includes overlapping starts and data that resembles instructions. Explicit exclusions are reviewed metadata, not an entropy-derived guarantee.
 
 A native count does not prove that all entries are executable code. A fallback count does not prove that the game executes those entries.
 
@@ -68,7 +68,7 @@ Generated files contain user-supplied ROM-derived information. They remain local
 
 The generator does not clean stale shards from an existing output directory. `sources.cmake` lists only the current generated source set.
 
-ABI v2 output refuses incompatible ABI headers at compile time. This does not validate a hand-edited runtime implementation against the contract.
+ABI v3 output refuses incompatible ABI headers at compile time. This does not validate a hand-edited runtime implementation against the contract.
 
 ## Evidence boundary
 

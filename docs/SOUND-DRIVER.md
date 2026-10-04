@@ -335,8 +335,10 @@ but provides 68000 instruction costs, data-dependent multiplication/division
 timing, six-byte exception frames, reset debt and immediate IRQ recognition.
 Capstone rejects a nonzero ignored upper byte on CCR/bit immediates; only that
 decoder input byte is normalized, preserving the CPU's effective operand.
-The generated table covers every even ROM address, not just PCs from a trace.
-Runtime dispatch indexes that immutable table without allocating a second map.
+The generated table covers every even ROM address outside explicit sound
+`[[exclude]]` intervals, not just PCs from a trace. Dispatch indexes the compact
+immutable complement by subtracting preceding excluded words, with no second
+map. Excluded targets fail before fetching or interpreting an instruction.
 
 This is oracle compatibility at **instruction boundaries**, not cycle-accurate
 physical bus emulation. In particular, the existing `$c17814` intra-instruction

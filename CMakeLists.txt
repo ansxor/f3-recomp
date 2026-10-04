@@ -33,6 +33,7 @@ if(F3_ROM_DIR)
         COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}/python:$ENV{PYTHONPATH}"
             ${Python3_EXECUTABLE} tools/compile_sound.py
             --rom-dir "${F3_ROM_DIR}" --output "${F3_SOUND_GENERATED_DIR}"
+            --config games/landmakrj/config.toml
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMAND_ERROR_IS_FATAL ANY)
 endif()

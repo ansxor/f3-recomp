@@ -7,11 +7,13 @@
 #include "state_io.hpp"
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 namespace f3rt {
 
-SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_count)
-    : m_machine(machine), m_blocks(blocks)
+SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
+                         std::span<const f3_excluded_range> excluded)
+    : m_machine(machine), m_blocks(blocks), m_excluded(excluded)
 {
     const auto &rom_bytes = m_machine.roms.sound;
     uint32_t crc = crc32(rom_bytes.data(), rom_bytes.size());
@@ -24,8 +26,31 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
     m_cpu.runtime = this;
     m_cpu.sr = F3_CCR_Z; // A zeroed Musashi context starts with its inverted-Z latch clear.
 
-    if (!blocks || block_count != ROM_SIZE / 2)
-        throw std::runtime_error("SoundNative requires the complete aligned ROM table");
+    uint32_t previous_end = ROM_BASE;
+    size_t excluded_words = 0;
+    for (const auto &range : m_excluded) {
+        if ((range.start | range.end) & 1u || range.start < previous_end ||
+            range.start >= range.end || range.end > ROM_BASE + ROM_SIZE ||
+            !range.reason || !*range.reason || !range.evidence || !*range.evidence)
+            throw std::runtime_error("SoundNative: invalid excluded ROM ranges");
+        excluded_words += (range.end - range.start) / 2;
+        previous_end = range.end;
+    }
+    if ((!blocks && block_count) || block_count != ROM_SIZE / 2 - excluded_words)
+        throw std::runtime_error("SoundNative requires the exact aligned ROM exclusion complement");
+    size_t index = 0;
+    uint32_t next_pc = ROM_BASE;
+    for (const auto &range : m_excluded) {
+        for (; next_pc < range.start; next_pc += 2, ++index) {
+            if (blocks[index].address != next_pc || !blocks[index].execute)
+                throw std::runtime_error("SoundNative: missing or unsorted aligned ROM entry");
+        }
+        next_pc = range.end;
+    }
+    for (; next_pc < ROM_BASE + ROM_SIZE; next_pc += 2, ++index) {
+        if (blocks[index].address != next_pc || !blocks[index].execute)
+            throw std::runtime_error("SoundNative: missing or unsorted aligned ROM entry");
+    }
 }
 
 SoundNative::~SoundNative() = default;
@@ -212,22 +237,32 @@ void SoundNative::check_interrupts() {
     }
 }
 
-void SoundNative::dispatch_one() {
-    uint32_t pc = m_cpu.pc;
-    if (pc >= ROM_BASE && pc < ROM_BASE + ROM_SIZE && !(pc & 1)) {
-        f3_block_fn fn = m_blocks[(pc - ROM_BASE) >> 1].execute;
-        if (fn) {
-            ++m_instruction_count;
-            fn(&m_cpu);
-            return;
+size_t SoundNative::block_index(uint32_t pc) const {
+    size_t removed_words = 0;
+    for (const auto &range : m_excluded) {
+        if (pc < range.start) break;
+        if (pc < range.end) {
+            char prefix[128];
+            snprintf(prefix, sizeof(prefix),
+                     "SoundNative: fatal excluded reachable PC 0x%08x in [0x%08x, 0x%08x): ",
+                     pc, range.start, range.end);
+            throw std::runtime_error(std::string(prefix) + range.reason);
         }
+        removed_words += (range.end - range.start) / 2;
     }
-    uint16_t op = read16(pc);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC: 0x%08x (opcode 0x%04x)", pc, op);
-    fprintf(stderr, "%s\n", buf);
-    m_cpu.halted = 1;
-    throw std::runtime_error(buf);
+    if (pc < ROM_BASE || pc >= ROM_BASE + ROM_SIZE || (pc & 1u)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC 0x%08x (%s)",
+                 pc, (pc & 1u) ? "odd address" : "outside sound ROM");
+        throw std::runtime_error(buf);
+    }
+    return ((pc - ROM_BASE) >> 1) - removed_words;
+}
+
+void SoundNative::dispatch_one() {
+    const size_t index = block_index(m_cpu.pc);
+    ++m_instruction_count;
+    m_blocks[index].execute(&m_cpu);
 }
 
 int SoundNative::run(int cycles) {

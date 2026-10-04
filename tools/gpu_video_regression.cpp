@@ -495,7 +495,8 @@ void verify_trail_history(Harness &h) {
     auto peer_owner = std::make_unique<f3rt::Machine>(m.roms);
     auto &peer = *peer_owner;
 #ifdef F3RT_SOUND_GENERATED
-    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count);
+    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                          {f3_sound_excluded_ranges, f3_sound_excluded_count});
 #endif
     peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.o.video);
     peer.load_state(baseline);
@@ -524,7 +525,8 @@ void verify_cpu_backend(Harness &h, std::span<const uint8_t> pre) {
     if (!f3_generated_register(&peer.cpu)) throw std::runtime_error("CPU peer registration failed");
 #endif
 #ifdef F3RT_SOUND_GENERATED
-    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count);
+    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                          {f3_sound_excluded_ranges, f3_sound_excluded_count});
 #endif
     peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.o.video);
     peer.load_state(pre);
@@ -592,7 +594,8 @@ int main(int argc, char **argv) try {
     throw std::runtime_error("GPU regression requires generated strict-native main blocks");
 #endif
 #ifdef F3RT_SOUND_GENERATED
-    m.use_native_sound(f3_sound_blocks, f3_sound_block_count);
+    m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                       {f3_sound_excluded_ranges, f3_sound_excluded_count});
 #else
     throw std::runtime_error("GPU regression requires generated native sound blocks");
 #endif

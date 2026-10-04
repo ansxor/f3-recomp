@@ -11,9 +11,10 @@ import json
 import re
 
 from .emitter import lower
+from .discovery import parse_exclusions, exclusion_at
 from .timing import BASE_CYCLES
 
-_RUNTIME_ABI_VERSION = 2
+_RUNTIME_ABI_VERSION = 3
 
 
 def generate(rom: bytes, discovery, output: Path, config: dict,
@@ -22,6 +23,9 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         raise ValueError("block and shard sizes must be positive")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
+    exclusions = parse_exclusions(config, len(rom))
+    if any(exclusion_at(exclusions, pc) is not None for pc in discovery.instructions):
+        raise ValueError("Discovery contains an excluded instruction start")
     hooks = {}
     for hook in config.get("hooks", []):
         pc, symbol = int(hook["address"]), hook["symbol"]
@@ -130,6 +134,8 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     exception_entries = Counter()
     if exhaustive:
         for pc in discovery.invalid_pcs:
+            if exclusion_at(exclusions, pc) is not None:
+                raise ValueError(f"Discovery contains an excluded invalid PC: {pc:#x}")
             opcode = int.from_bytes(rom[pc:pc + 2], "big")
             vector = (10 if opcode >> 12 == 10 else
                       11 if opcode >> 12 == 15 else
@@ -153,9 +159,22 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                     '}\n')
     program += 'static const f3_block translated_blocks[] = {\n'
     program += ''.join(f'    {{ 0x{pc:08x}u, {name} }},\n' for pc, name in table)
-    program += ('};\nint f3_generated_register(f3_cpu *cpu) {\n'
-                '    return f3_register_blocks(cpu, translated_blocks,\n'
-                '        sizeof(translated_blocks) / sizeof(translated_blocks[0]));\n}\n')
+    program += '};\n'
+    if exclusions:
+        program += 'static const f3_excluded_range excluded_ranges[] = {\n'
+        program += ''.join(
+            f'    {{ 0x{region.start:08x}u, 0x{region.end:08x}u, '
+            f'{json.dumps(region.reason)}, {json.dumps(region.evidence)} }},\n'
+            for region in exclusions)
+        program += '};\n'
+    program += ('int f3_generated_register(f3_cpu *cpu) {\n'
+                '    if (!f3_register_blocks(cpu, translated_blocks,\n'
+                '        sizeof(translated_blocks) / sizeof(translated_blocks[0]))) return 0;\n')
+    if exclusions:
+        program += ('    return f3_register_exclusions(cpu, excluded_ranges,\n'
+                    '        sizeof(excluded_ranges) / sizeof(excluded_ranges[0]));\n}\n')
+    else:
+        program += '    return f3_register_exclusions(cpu, NULL, 0);\n}\n'
     (output / 'program.c').write_text(program)
     (output / 'program.h').write_text(
         '#ifndef F3_GENERATED_PROGRAM_H\n#define F3_GENERATED_PROGRAM_H\n'
@@ -181,6 +200,12 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
         "runtime_abi_version": _RUNTIME_ABI_VERSION,
         "coverage_mode": "all_aligned" if exhaustive else "recursive",
+        "exclusions": [
+            {"start": region.start, "end": region.end,
+             "reason": region.reason, "evidence": region.evidence}
+            for region in exclusions
+        ],
+        "excluded_entries": sum((region.end - region.start) // 2 for region in exclusions),
         "max_block_instructions": max_block_instructions,
         "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
     }
