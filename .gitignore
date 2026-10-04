@@ -5,3 +5,4 @@ games/*/generated/
 games/*/rom/
 *.bin
 .DS_Store
+wt/
