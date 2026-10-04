@@ -1124,10 +1124,6 @@ def lower(insn: CsInsn) -> list[str] | None:
             if not dst_ea or not dst_ea.is_reg or dst_ea.reg_type != 'd':
                 return None
             stmts = list(dst_ea.read_stmts)
-            if mnem in ("rol", "ror", "roxl", "roxr"):
-                stmts.append(f"uint32_t rotate_count = ({cnt_s}) & 63u;")
-                cnt_s = "rotate_count"
-                cycles = f"({cycles} + rotate_count)"
             stmts.append(f"uint32_t shift_res = {fn}(cpu, {dst_ea.val_expr}, {cnt_s}, {size});")
             stmts.extend(_gen_write(dst_ea, "shift_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")

@@ -192,6 +192,17 @@ def generate_boundary_cases() -> list[RawTestCase]:
         ))
         case_id += 1
 
+    # EC020 immediate rotates have fixed opcode timing, independent of count.
+    for name, base in (("ror", 0xe018), ("rol", 0xe118),
+                       ("roxr", 0xe010), ("roxl", 0xe110)):
+        for size_bits, count in ((0, 8), (0x40, 3), (0x80, 4)):
+            cases.append(RawTestCase(
+                id=case_id, name=f"{name}_immediate_{size_bits:x}_{count}",
+                code_bytes=struct.pack(">H", base | size_bits | ((count & 7) << 9)),
+                initial_d=[0x81ff8001, 0, 0, 0, 0, 0, 0, 0], initial_sr=0x001f,
+                is_boundary=True, boundary_kind="shift_imm"))
+            case_id += 1
+
     # -------------------------------------------------------------------------
     # 3. Branch Displacements: Byte, Word, Long and All 16 Conditions
     # -------------------------------------------------------------------------
