@@ -4,6 +4,7 @@
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
 #include "game_tiles.hpp"
+#include "game_sprites.hpp"
 #include <array>
 #include <initializer_list>
 #include <iostream>
@@ -51,6 +52,37 @@ void check_game_tile_descriptors() {
     cpu.pc = 0x5a5e; scene.observe(memory, cpu);
     require(scene.supported(1) && !(scene.playfield_pixel(1, 0, 0, false, assets).flags & 0x10),
             "Complete game clear restores ownership and removes old tiles");
+}
+void check_game_sprite_descriptors() {
+    std::array<uint8_t, 36> rom{};
+    std::array<uint8_t, 0x20000> ram{};
+    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
+        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+    };
+    for (unsigned i = 0; i < 9; ++i) word(rom, i * 4 + 2, uint16_t(i + 1));
+    word(ram, 0x100, 0xfe); word(ram, 0x102, 17); // Y scale 2; X placement 239, raster scale 240.
+    word(ram, 0x104, 0); word(ram, 0x106, 104);
+    word(ram, 0x108, 0xe2); word(ram, 0x10a, 1); // Horizontally reversed grid.
+    f3rt::GameMemory memory{rom, ram};
+    f3rt::GameSprites scene;
+    f3_cpu cpu{};
+    cpu.pc = 0x41d0; scene.observe(memory, cpu);
+    cpu.pc = 0x4528; scene.observe(memory, cpu);
+    cpu.a[0] = 0; cpu.a[4] = 0x400100; cpu.d[7] = 0x00020002;
+    cpu.pc = 0x46c0; scene.observe(memory, cpu);
+    cpu.pc = 0x4480; scene.observe(memory, cpu);
+    require(scene.sprites().empty(), "Submitted game sprites are not visible before the next latch");
+    scene.latch();
+    const auto sprites = scene.sprites();
+    require(scene.supported() && sprites.size() == 9, "Scaled game grid preserves all tile descriptors");
+    for (unsigned i = 0; i < 9; ++i) {
+        const auto &sprite = sprites[i];
+        require(sprite.x == (76 - int(i / 3) * 15) * 256 && sprite.y == 128 * 256,
+                "Producer rounds each grid coordinate before upload instead of inventing fractional tile chaining");
+        require(sprite.tile == i + 1 && sprite.scale_x == 240 && sprite.scale_y == 2 &&
+                sprite.flip_x && !sprite.flip_y && sprite.palette == 0xe2,
+                "Grid geometry uses full zoom precision while raster width masks the low four zoom bits");
+    }
 }
 f3rt::RomSet fixture() {
     f3rt::RomSet r;
@@ -493,6 +525,7 @@ void check_audio_mixer() {
 }
 int main() try {
     check_game_tile_descriptors();
+    check_game_sprite_descriptors();
     check_audio_mixer();
     check_main_sound_ordering();
     check_audio_partitioning();

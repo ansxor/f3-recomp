@@ -1,5 +1,6 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
+#include "f3rt/game_video.hpp"
 #include "interpreter.hpp"
 #include "capture_io.hpp"
 #include <SDL3/SDL.h>
@@ -43,6 +44,7 @@ void key(f3rt::Machine &m, SDL_Scancode code, bool pressed) {
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
     std::string set="landmakrj";
+    std::string video_mode="fdp";
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
 #ifdef F3RT_LANDMAKR
@@ -65,6 +67,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
+        else if(arg=="--video")video_mode=value();
         else if(arg=="--headless")headless=true;
         else if(arg=="--no-audio")sound=false;
         else if(arg=="--translated")translated=true;
@@ -74,6 +77,7 @@ int main(int argc,char **argv) try {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
+                     <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: "+arg);
@@ -83,9 +87,15 @@ int main(int argc,char **argv) try {
 #ifdef F3RT_LANDMAKR
     if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
 #endif
+    if(video_mode!="fdp" && video_mode!="game" && video_mode!="compare")
+        throw std::runtime_error("--video must be fdp, game or compare");
+    if(video_mode!="fdp" && (set!="landmakrj" || !translated || allow_fallback))
+        throw std::runtime_error("Game-data video requires strict native landmakrj");
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     m.allow_main_fallback=allow_fallback;
+    if(video_mode!="fdp")
+        m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare);
     if(!eeprom.empty())m.load_eeprom(eeprom);
     if(!fallback_report.empty())m.fallback_hits.resize(0x800000);
     if(translated) {
@@ -157,6 +167,7 @@ int main(int argc,char **argv) try {
         for(size_t i=0;i<m.fallback_hits.size();++i)if(m.fallback_hits[i])report<<"0x"<<std::hex<<i*2<<std::dec<<'\t'<<m.fallback_hits[i]<<'\n';
         if(!report)throw std::runtime_error("Fallback report write failed");
     }
+    if(m.game_video)m.game_video->report(std::cout);
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.interpreter->sound_pc()
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions

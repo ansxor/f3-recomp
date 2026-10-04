@@ -88,7 +88,10 @@ void Machine::write8(uint32_t a, uint8_t v) {
         graphics[a - 0x600000] = v;
         return;
     }
-    if (a >= 0x660000 && a < 0x660020) { control[a - 0x660000] = v; return; }
+    if (a >= 0x660000 && a < 0x660020) {
+        if (game_video) game_video->observe_write(cpu.pc, a);
+        control[a - 0x660000] = v; return;
+    }
     if (a >= 0xc00000 && a < 0xc00800) { shared[a - 0xc00000] = v; return; }
     if (a >= 0xc80000 && a <= 0xc80003) { audio->set_reset(false); return; }
     if (a >= 0xc80100 && a <= 0xc80103) { audio->set_reset(true); return; }
@@ -110,7 +113,8 @@ void Machine::advance_to(uint64_t cycles) {
         audio->advance(uint32_t(end - hardware_cycles));
         hardware_cycles = end;
         if (hardware_cycles == next_vblank) {
-            video->render_frame(palette, graphics, control, pixels);
+            if (game_video) game_video->render_frame();
+            else video->render_frame(palette, graphics, control, pixels);
             pending_irqs |= 1u << 2;
             irq3_at = next_vblank + 10000;
             ++frame;

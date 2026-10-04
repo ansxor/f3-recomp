@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Bryan McPhail, ywy, 12Me21, f3rt authors
 #include "f3rt/video.hpp"
+#include "game_scene.hpp"
 
 #include <algorithm>
 #include <array>
@@ -289,6 +290,8 @@ struct Video::Impl {
     std::array<LineBuffer, NUM_PLAYFIELDS> pf_lines{};
     LineBuffer text_line{};
     LineBuffer pivot_line{};
+    std::array<SceneRow, 256> oracle_scene_rows_{};
+    bool m_scene_inspection_enabled = false;
 
     void reset() {
         sprite_count = 0;
@@ -301,6 +304,7 @@ struct Video::Impl {
         sprite_trails = false;
         sprite_extra_planes = 0;
         sprite_pen_mask = 0x0f;
+        oracle_scene_rows_.fill({});
         std::memset(control_0, 0, sizeof(control_0));
         std::memset(control_1, 0, sizeof(control_1));
         std::memset(tilemap_row_usage, 0, sizeof(tilemap_row_usage));
@@ -1023,6 +1027,57 @@ struct Video::Impl {
                 pf.reg_fx_x = pf.reg_sx + pf.rowscroll;
                 pf.reg_fx_x += 10 * (pf.x_scale - (1 << 8));
             }
+            if (m_scene_inspection_enabled) {
+                auto &oracle_row = oracle_scene_rows_[screen_y];
+                for (int i = 0; i < NUM_CLIPPLANES; ++i) {
+                    oracle_row.clips[i].left = int16_t(line_data.clip[i].l - 1);
+                    oracle_row.clips[i].right = int16_t(line_data.clip[i].r - 2);
+                }
+                for (int i = 0; i < 4; ++i) {
+                    oracle_row.blend[i] = line_data.blend[i];
+                }
+                oracle_row.background = line_data.bg_palette;
+                oracle_row.mosaic_period = line_data.x_sample;
+                oracle_row.bitmap = line_data.pivot.use_pix();
+
+                oracle_row.text.priority = line_data.pivot.prio;
+                oracle_row.text.blend_mode = line_data.pivot.blend_mode;
+                oracle_row.text.clip_enabled = line_data.pivot.clip_enable();
+                oracle_row.text.clip_inverted = line_data.pivot.clip_inv();
+                oracle_row.text.clip_inverse = line_data.pivot.clip_inv_mode();
+                oracle_row.text.enabled = line_data.pivot.layer_enable();
+                oracle_row.text.blend_select = line_data.pivot.blend_select_v;
+                oracle_row.text.mosaic = line_data.pivot.x_sample_enable;
+                oracle_row.text_x = int16_t((H_START + line_data.pivot.reg_sx) & 0x1ff);
+                oracle_row.text_y = int16_t(line_data.pivot.y_index(line_data.y));
+
+                for (int i = 0; i < NUM_SPRITEGROUPS; ++i) {
+                    oracle_row.sprites[i].priority = line_data.sp[i].prio;
+                    oracle_row.sprites[i].blend_mode = line_data.sp[i].blend_mode;
+                    oracle_row.sprites[i].clip_enabled = line_data.sp[i].clip_enable();
+                    oracle_row.sprites[i].clip_inverted = line_data.sp[i].clip_inv();
+                    oracle_row.sprites[i].clip_inverse = line_data.sp[i].clip_inv_mode();
+                    oracle_row.sprites[i].enabled = line_data.sp[i].layer_enable();
+                    oracle_row.sprites[i].blend_select = line_data.sp[i].blend_select_v;
+                    oracle_row.sprites[i].mosaic = line_data.sp[i].x_sample_enable;
+                }
+
+                for (int i = 0; i < NUM_PLAYFIELDS; ++i) {
+                    oracle_row.playfields[i].layer.priority = line_data.pf[i].prio;
+                    oracle_row.playfields[i].layer.blend_mode = line_data.pf[i].blend_mode;
+                    oracle_row.playfields[i].layer.clip_enabled = line_data.pf[i].clip_enable();
+                    oracle_row.playfields[i].layer.clip_inverted = line_data.pf[i].clip_inv();
+                    oracle_row.playfields[i].layer.clip_inverse = line_data.pf[i].clip_inv_mode();
+                    oracle_row.playfields[i].layer.enabled = line_data.pf[i].layer_enable();
+                    oracle_row.playfields[i].layer.blend_select = false;
+                    oracle_row.playfields[i].layer.mosaic = line_data.pf[i].x_sample_enable;
+
+                    oracle_row.playfields[i].source_x = line_data.pf[i].reg_fx_x + (H_START << 8);
+                    oracle_row.playfields[i].x_step = line_data.pf[i].x_scale;
+                    oracle_row.playfields[i].palette_add = line_data.pf[i].pal_add;
+                    oracle_row.playfields[i].source_y = line_data.pf[i].y_index(line_data.y);
+                }
+            }
 
             mix_pix line_buf{};
             pri_mode line_pri{};
@@ -1191,6 +1246,18 @@ VideoLine Video::inspect_playfield_line(unsigned layer, int y,
     return {line.pix, line.flags};
 }
 
+void Video::prepare_text_inspection(std::span<const uint8_t> graphics_ram) {
+    if (graphics_ram.size() < GRAPHICS_RAM_SIZE) return;
+    m_impl->decode_charram(&graphics_ram[OFFS_CHARRAM]);
+    m_impl->text_line.last_y = -1;
+}
+
+VideoLine Video::inspect_text_line(int y, std::span<const uint8_t> graphics_ram) {
+    if (graphics_ram.size() < GRAPHICS_RAM_SIZE || y < 0 || y >= 512) return {};
+    m_impl->generate_text_line(y, &graphics_ram[OFFS_TEXTRAM]);
+    return {m_impl->text_line.pix, m_impl->text_line.flags};
+}
+
 std::span<const uint16_t> Video::sprite_plane() const {
     return m_impl->sprite_framebuffer;
 }
@@ -1201,6 +1268,14 @@ bool Video::roms_loaded() const {
 
 bool Video::flipscreen() const {
     return m_impl->flipscreen;
+}
+
+const SceneRow &Video::inspect_scene_row(unsigned scanout_y) const {
+    return m_impl->oracle_scene_rows_[scanout_y & 255];
+}
+
+void Video::enable_scene_inspection(bool enable) {
+    m_impl->m_scene_inspection_enabled = enable;
 }
 
 } // namespace f3rt

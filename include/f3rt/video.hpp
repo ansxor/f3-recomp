@@ -15,6 +15,8 @@ struct VideoLine {
     std::span<const uint16_t> palette;
     std::span<const uint8_t> flags;
 };
+struct SceneRow;
+
 
 // Standalone TC0630FDP Software Renderer for Taito F3 (Land Maker)
 class Video {
@@ -66,11 +68,15 @@ public:
     // The returned line is invalidated by the next renderer/inspection call.
     VideoLine inspect_playfield_line(unsigned layer, int y,
                                      std::span<const uint8_t> graphics_ram);
+    void prepare_text_inspection(std::span<const uint8_t> graphics_ram);
+    VideoLine inspect_text_line(int y, std::span<const uint8_t> graphics_ram);
     // 432x256 indexed plane currently prepared for the next render_frame call.
     std::span<const uint16_t> sprite_plane() const;
 
     bool roms_loaded() const;
     bool flipscreen() const;
+    const SceneRow &inspect_scene_row(unsigned scanout_y) const;
+    void enable_scene_inspection(bool enable = true);
 
 private:
     struct Impl;

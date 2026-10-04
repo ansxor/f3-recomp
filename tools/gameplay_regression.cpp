@@ -166,8 +166,8 @@ int main(int argc, char **argv) try {
     auto machine = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir, set));
     auto &m = *machine;
     if (video_diff) {
-        if (!video_diff_every || !video_layer_mask || (video_layer_mask & ~15u))
-            throw std::runtime_error("Video diff requires a positive interval and PF0..PF3 mask");
+        if (!video_diff_every || !video_layer_mask || (video_layer_mask & ~511u))
+            throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
         m.game_video = std::make_unique<f3rt::GameVideo>(m);
     }
 
@@ -233,7 +233,7 @@ int main(int argc, char **argv) try {
             return 1;
         }
         if (video_diff && m.frame >= 600 && (m.frame - 600) % video_diff_every == 0) {
-            m.game_video->compare_playfields(m.frame, video_layer_mask);
+            m.game_video->compare_layers(m.frame, video_layer_mask);
         }
 
         // Drain audio output

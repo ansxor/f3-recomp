@@ -43,7 +43,8 @@ add_dependencies(f3rt_musashi f3rt_musashi_generated)
 
 file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
-    runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/audio.cpp ${AUDIO_SOURCES})
+    runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
+    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp ${AUDIO_SOURCES})
 target_include_directories(f3rt PUBLIC include PRIVATE runtime)
 target_link_libraries(f3rt PRIVATE f3rt_musashi)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
