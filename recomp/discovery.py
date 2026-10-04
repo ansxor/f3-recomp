@@ -261,7 +261,7 @@ def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op: 
     return list(set(entries))
 
 
-def _extract_script_callbacks(rom: bytes, md: capstone.Cs, spec: dict) -> set[int]:
+def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
     """Follow configured actor bytecode, not instruction-decode its data words."""
     if not spec:
         return set()
@@ -317,8 +317,9 @@ def _extract_script_callbacks(rom: bytes, md: capstone.Cs, spec: dict) -> set[in
                 break
             target = int.from_bytes(rom[pc + 2:pc + 6], "big")
             if operation in code_ops and 0x400 <= target < len(rom) and not target & 1:
-                if _validate_code_sequence(rom, md, target):
-                    callbacks.add(target)
+                # A typed bytecode operand is a callback even when its straight-line
+                # prologue exceeds the heuristic validator's instruction limit.
+                callbacks.add(target)
             if operation == spec["return_opcode"]:
                 break
             if operation == spec["call_opcode"]:
@@ -481,7 +482,7 @@ def discover(rom: bytes, config: dict) -> Discovery:
         cb_seeds = _extract_lea_move_callbacks(rom, md)
         speculative_seeds.update(cb_seeds)
     speculative_seeds.update(_extract_script_callbacks(
-        rom, md, discovery_cfg.get("actor_scripts", {})))
+        rom, discovery_cfg.get("actor_scripts", {})))
 
     # Combined initial worklist
     all_seeds = sorted(proven_seeds | speculative_seeds)
