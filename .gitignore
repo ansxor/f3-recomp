@@ -14,3 +14,7 @@ diffs/
 nvram/
 cfg/
 *.wav
+*.profile.lock
+*.profile.tmp
+*.profile.cold-hits
+f3-cold-hits.log
