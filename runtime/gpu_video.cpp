@@ -38,13 +38,14 @@ struct GpuVideo::Impl {
     bool claimed = false, linear = false, rendered = false;
     bool vsync = true;
     GameVideoOptions options{};
+    VideoScaleMode scale_mode = VideoScaleMode::Fixed;
     VideoInterpolation interpolation = VideoInterpolation::Off;
     InterpolationStats interpolation_stats{};
     std::vector<uint64_t> tile_pen_masks;
     SDL_GPUBuffer *scene_buffer = nullptr, *pf_assets = nullptr, *sp_assets = nullptr, *native_buffer = nullptr;
     SDL_GPUTexture *sprite_plane = nullptr, *surface = nullptr;
     SDL_GPUSampler *sampler = nullptr;
-    SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr;
+    SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr, *interpolation_pipeline = nullptr;
     SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr;
     std::vector<uint32_t> saved_pixels;
 
@@ -53,6 +54,7 @@ struct GpuVideo::Impl {
         SDL_WaitForGPUIdle(device);
         if (sprite_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, sprite_pipeline);
         if (scene_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, scene_pipeline);
+        if (interpolation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, interpolation_pipeline);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (sprite_plane) SDL_ReleaseGPUTexture(device, sprite_plane);
         if (surface) SDL_ReleaseGPUTexture(device, surface);
@@ -74,12 +76,12 @@ struct GpuVideo::Impl {
         info.usage = usage; info.size = size;
         return checked(SDL_CreateGPUTransferBuffer(device, &info), "Create GPU transfer buffer");
     }
-    SDL_GPUTexture *texture(SDL_GPUTextureFormat format, bool sprite = false) {
+    SDL_GPUTexture *texture(SDL_GPUTextureFormat format, GameVideoOptions geometry, bool sprite = false) {
         SDL_GPUTextureCreateInfo info{};
         info.type = SDL_GPU_TEXTURETYPE_2D; info.format = format;
         info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        bool native_plane = sprite && !options.expanded();
-        info.width = native_plane ? 432 : options.width(); info.height = native_plane ? 256 : options.height();
+        bool native_plane = sprite && !geometry.expanded();
+        info.width = native_plane ? 432 : geometry.width(); info.height = native_plane ? 256 : geometry.height();
         info.layer_count_or_depth = 1; info.num_levels = 1; info.sample_count = SDL_GPU_SAMPLECOUNT_1;
         return checked(SDL_CreateGPUTexture(device, &info), "Create GPU render texture");
     }
@@ -125,7 +127,7 @@ struct GpuVideo::Impl {
         SDL_UploadToGPUBuffer(pass, &from, &to, cycle);
     }
     void init(std::span<const uint8_t> tiles, std::span<const uint8_t> sprites) {
-        if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
+        if (!options.scale || options.scale > GameVideoOptions::max_gpu_scale || options.border > GameVideoOptions::max_border)
             throw std::runtime_error("Game GPU presentation scale/border out of range");
         if (tiles.size() < asset_bytes || sprites.size() < asset_bytes)
             throw std::runtime_error("Incomplete GPU tile/sprite assets");
@@ -139,21 +141,19 @@ struct GpuVideo::Impl {
         }
         scene_buffer = buffer(scene_bytes); native_buffer = buffer(native_bytes);
         pf_assets = buffer(asset_bytes); sp_assets = buffer(asset_bytes);
-        sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, true);
-        surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
+        surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
         SDL_GPUSamplerCreateInfo sampling{};
         sampling.min_filter = sampling.mag_filter = SDL_GPU_FILTER_NEAREST;
         sampling.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
         sampling.address_mode_u = sampling.address_mode_v = sampling.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
         sampler = checked(SDL_CreateGPUSampler(device, &sampling), "Create GPU sampler");
         sprite_pipeline = pipeline(video_shaders::sprite_vert, video_shaders::sprite_frag, SDL_GPU_TEXTUREFORMAT_R16_UINT);
-        const auto &fragment = interpolation == VideoInterpolation::Off || options.scale == 1
-            ? video_shaders::scene_frag : video_shaders::scene_interp_frag;
-        scene_pipeline = pipeline(video_shaders::fullscreen_vert, fragment, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        scene_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        if (interpolation != VideoInterpolation::Off)
+            interpolation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
         upload = transfer(asset_bytes * 2, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-        download = transfer(options.width() * options.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
-        saved_pixels.resize(size_t(options.width()) * options.height());
-        if (interpolation != VideoInterpolation::Off && options.scale > 1) tile_pen_masks.resize(32768);
+        if (interpolation != VideoInterpolation::Off) tile_pen_masks.resize(32768);
         auto *mapped = static_cast<uint32_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, false), "Map GPU asset upload"));
         // Explicit low-byte-first packing also works on big-endian hosts.
         for (Uint32 i = 0; i < asset_bytes; i += 4) {
@@ -175,6 +175,36 @@ struct GpuVideo::Impl {
         upload = nullptr;
         upload = transfer(std::max(scene_bytes, native_bytes), SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
     }
+    void set_scale(unsigned scale) {
+        if (!scale || scale > GameVideoOptions::max_gpu_scale)
+            throw std::runtime_error("GPU scale must be 1..8");
+        if (scale == options.scale) return;
+        auto geometry = options;
+        geometry.scale = scale;
+        SDL_GPUTexture *next_plane = nullptr, *next_surface = nullptr;
+        SDL_GPUTransferBuffer *next_download = nullptr;
+        std::vector<uint32_t> next_pixels;
+        try {
+            next_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, geometry, true);
+            next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
+            if (download) next_download = transfer(geometry.width() * geometry.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
+            if (!saved_pixels.empty()) next_pixels.resize(size_t(geometry.width()) * geometry.height());
+        } catch (...) {
+            if (next_plane) SDL_ReleaseGPUTexture(device, next_plane);
+            if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
+            if (next_download) SDL_ReleaseGPUTransferBuffer(device, next_download);
+            throw;
+        }
+        // SDL defers destruction until queued users finish: no GPU-idle stall.
+        SDL_ReleaseGPUTexture(device, sprite_plane);
+        SDL_ReleaseGPUTexture(device, surface);
+        if (download) SDL_ReleaseGPUTransferBuffer(device, download);
+        sprite_plane = next_plane; surface = next_surface; download = next_download;
+        saved_pixels.swap(next_pixels);
+        options = geometry;
+        rendered = false;
+        interpolation_stats = {};
+    }
     SDL_GPURenderPass *render_pass(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target) {
         SDL_GPUColorTargetInfo info{};
         info.texture = target; info.load_op = SDL_GPU_LOADOP_CLEAR; info.store_op = SDL_GPU_STOREOP_STORE;
@@ -182,6 +212,7 @@ struct GpuVideo::Impl {
         return checked(SDL_BeginGPURenderPass(command, &info, 1, nullptr), "Begin GPU render pass");
     }
     void queue_download(SDL_GPUCommandBuffer *command) {
+        if (!download) download = transfer(options.width() * options.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
         auto *copy = checked(SDL_BeginGPUCopyPass(command), "Begin GPU readback copy");
         SDL_GPUTextureRegion from{surface, 0, 0, 0, 0, 0, options.width(), options.height(), 1};
         SDL_GPUTextureTransferInfo to{download, 0, options.width(), options.height()};
@@ -237,7 +268,7 @@ struct GpuVideo::Impl {
         uniforms.sprite_count |= unsigned(interpolation) << 16;
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
         auto *pass = render_pass(command.value, surface);
-        SDL_BindGPUGraphicsPipeline(pass, scene_pipeline);
+        SDL_BindGPUGraphicsPipeline(pass, options.scale > 1 && interpolation_pipeline ? interpolation_pipeline : scene_pipeline);
         SDL_GPUTextureSamplerBinding sprite_binding{sprite_plane, sampler};
         SDL_BindGPUFragmentSamplers(pass, 0, &sprite_binding, 1);
         SDL_GPUBuffer *buffers[]{scene_buffer, pf_assets, native_buffer};
@@ -250,15 +281,12 @@ struct GpuVideo::Impl {
             if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h)) fail("Acquire GPU swapchain");
             if (swapchain) {
                 command.acquired_swapchain = true;
-                Uint32 dest_w = w, dest_h = h;
-                if (uint64_t(w) * options.height() > uint64_t(h) * options.width())
-                    dest_w = Uint32(uint64_t(h) * options.width() / options.height());
-                else dest_h = Uint32(uint64_t(w) * options.height() / options.width());
+                const auto viewport = video_blit_for_window(scale_mode, options, w, h);
                 SDL_GPUBlitInfo blit{};
-                blit.source = {surface, 0, 0, 0, 0, options.width(), options.height()};
-                blit.destination = {swapchain, 0, 0, (w - dest_w) / 2, (h - dest_h) / 2, dest_w, dest_h};
+                blit.source = {surface, 0, 0, viewport.source_x, viewport.source_y, viewport.source_width, viewport.source_height};
+                blit.destination = {swapchain, 0, 0, viewport.x, viewport.y, viewport.width, viewport.height};
                 blit.load_op = SDL_GPU_LOADOP_CLEAR; blit.clear_color = {0, 0, 0, 1};
-                blit.filter = linear ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+                blit.filter = linear && scale_mode != VideoScaleMode::AutoInteger ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
                 SDL_BlitGPUTexture(command.value, &blit);
             }
         }
@@ -279,11 +307,14 @@ GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options, std::span<const
 GpuVideo::~GpuVideo() = default;
 const char *GpuVideo::driver() const { return SDL_GetGPUDeviceDriver(impl_->device); }
 const InterpolationStats &GpuVideo::last_interpolation() const { return impl_->interpolation_stats; }
+void GpuVideo::set_scale(unsigned scale) { impl_->set_scale(scale); }
+void GpuVideo::set_scale_mode(VideoScaleMode mode) { impl_->scale_mode = mode; }
 void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask) {
     impl_->draw(scene, output, layer_mask);
 }
 void GpuVideo::save_surface(const char *path) {
     if (!impl_->rendered) throw std::runtime_error("No GPU surface has been drawn");
+    impl_->saved_pixels.resize(size_t(impl_->options.width()) * impl_->options.height());
     Command command(impl_->device);
     impl_->queue_download(command.value);
     impl_->finish_readback(command, impl_->saved_pixels);

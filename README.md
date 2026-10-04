@@ -111,7 +111,7 @@ After native pixel parity, opt into scene rerasterization and extra border:
 ```
 
 Defaults preserve native presentation: scale **1**, border **0**, filter
-**nearest**. Scale accepts 1–4; border accepts 0–160 native columns **per side**.
+**nearest**. Numeric scale accepts 1–4; border accepts 0–160 native columns **per side**.
 Border 48 gives 416×232 before internal scaling. Linear is optional final
 SDL texture filtering; source ROM artwork is unchanged. Native captures/CRCs
 remain 320×232. Unsupported enhanced frames show the exact oracle picture
@@ -126,6 +126,20 @@ native dumps, CRCs, WAVs and netplay checksums retain the CPU path.
 GPU `--surface` writes the internal-resolution GPU image (BMP or PNG);
 CPU `--surface` retains the rendered SDL window capture.
 GPU availability errors are explicit; select `--video-backend cpu` for fallback.
+
+GPU-only `--video-scale auto-integer` follows the window's physical pixel size,
+choosing the largest fitting scale (1–4), then presents at exactly that integer
+scale with nearest sampling and centered black bars. `--video-scale auto`
+chooses the ceiling of the fit ratio (1–4), then fills the aspect-preserving
+viewport with the selected nearest/linear filter. Border counts in the fit.
+Resize, fullscreen and display-density changes settle after a short debounce;
+F11 or Alt+Enter toggles fullscreen. Headless stays at startup/native scale;
+netplay requires fixed scale 1. The measured 5–8x tail costs retain the 4x cap.
+
+```sh
+./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48
+./build/landmakr --video-backend gpu --video-scale auto --video-filter linear
+```
 
 `--video-interp linear|fit` separately opts into PF2 water/puzzle-board line
 sampling on the GPU at scales above 1; default `off` retains exact CPU parity.

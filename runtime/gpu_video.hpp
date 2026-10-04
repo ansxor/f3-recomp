@@ -1,5 +1,6 @@
 #pragma once
 #include "gpu_interp.hpp"
+#include "video_scale.hpp"
 #include <SDL3/SDL.h>
 #include <memory>
 #include <span>
@@ -17,6 +18,9 @@ public:
     GpuVideo &operator=(const GpuVideo &) = delete;
     const char *driver() const;
     const InterpolationStats &last_interpolation() const;
+    // Host-only geometry. Assets, pipelines and canonical game state survive.
+    void set_scale(unsigned scale);
+    void set_scale_mode(VideoScaleMode mode);
     // Same scene pipeline for presentation and fenced diagnostic readback.
     // Optional output receives exactly width*height ARGB8888 pixels.
     // layer_mask isolates layer contributions for parity; default is all nine.

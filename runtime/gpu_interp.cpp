@@ -81,7 +81,7 @@ InterpolationStats analyze_gpu_interpolation(const GpuScene &scene, GameVideoOpt
     if (options.scale == 1) return reject(InterpolationReason::NativeScale);
     if (scene.fallback) return reject(InterpolationReason::Oracle);
     if (upload_words.size() < GpuScene::word_count || tile_pen_masks.size() < 32768 ||
-        options.scale == 0 || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
+        options.scale == 0 || options.scale > GameVideoOptions::max_gpu_scale || options.border > GameVideoOptions::max_border)
         return reject(InterpolationReason::InvalidRows);
 
     const auto &w = scene.words;

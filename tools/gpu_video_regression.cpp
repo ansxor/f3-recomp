@@ -39,6 +39,7 @@ struct Options {
     bool layers = false, bench = false;
     f3rt::VideoInterpolation interpolation = f3rt::VideoInterpolation::Off;
     std::vector<uint64_t> capture_frames;
+    std::vector<std::pair<uint64_t, unsigned>> scale_changes;
     std::array<bool, 5> injections{};
 };
 uint64_t number(const std::string &text) {
@@ -66,6 +67,15 @@ Options parse(int argc, char **argv) {
         else if (arg == "--frames") o.frames = number(value());
         else if (arg == "--every") o.every = number(value());
         else if (arg == "--capture-frame") o.capture_frames.push_back(number(value()));
+        else if (arg == "--change-scale") {
+            const auto change = value();
+            const auto colon = change.find(':');
+            if (colon == std::string::npos) throw std::runtime_error("Scale change must be FRAME:SCALE");
+            const auto frame = number(change.substr(0, colon)), scale = number(change.substr(colon + 1));
+            if (!frame || !scale || scale > f3rt::GameVideoOptions::max_gpu_scale)
+                throw std::runtime_error("Scale change needs a positive frame and scale 1..8");
+            o.scale_changes.emplace_back(frame, unsigned(scale));
+        }
         else if (arg == "--interp") {
             const auto mode = value();
             if (mode == "off") o.interpolation = f3rt::VideoInterpolation::Off;
@@ -75,7 +85,7 @@ Options parse(int argc, char **argv) {
         }
         else if (arg == "--scale") {
             auto n = number(value());
-            if (!n || n > f3rt::GameVideoOptions::max_scale) throw std::runtime_error("Scale must be 1..4");
+            if (!n || n > f3rt::GameVideoOptions::max_gpu_scale) throw std::runtime_error("Diagnostic GPU scale must be 1..8");
             o.video.scale = unsigned(n);
         } else if (arg == "--border") {
             auto n = number(value());
@@ -93,11 +103,12 @@ Options parse(int argc, char **argv) {
             if (value() != "native") throw std::runtime_error("GPU regression requires --sound-driver native");
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Strict-native Land Maker GPU parity; optional presentation-only interpolation.\n"
-                "--rom-dir DIR --seed N --frames N (4000) --scale N (1..4) --border N (0..160)\n"
+                "--rom-dir DIR --seed N --frames N (4000) --scale N (1..8 diagnostic) --border N (0..160)\n"
                 "--every N (1) --layers (all nine isolated contributions plus composite)\n"
                 "--bench (600-frame varied-scene warmup; 100 repeats on final supported snapshot)\n"
                 "--dump-dir DIR (external PNG captures) --sound-driver native\n"
                 "--interp off|linear|fit (off) --capture-frame N (repeatable; requires --dump-dir)\n"
+                "--change-scale FRAME:SCALE (repeatable; constructor/canonical scale remains 1)\n"
                 "--inject-frame N (1407) --inject-bitmap --inject-trails --inject-globalflip\n"
                 "--inject-unknown --inject-ending (induced producer boundary, NOT played ending)\n"
                 "Run each scale 1..4 with border 0 and 48 for the parity matrix.\n";
@@ -110,6 +121,12 @@ Options parse(int argc, char **argv) {
     for (const auto frame : o.capture_frames)
         if (!frame || frame > o.frames || o.dump_dir.empty())
             throw std::runtime_error("Capture frames must be inside run and require external --dump-dir");
+    std::sort(o.scale_changes.begin(), o.scale_changes.end());
+    for (size_t i = 0; i < o.scale_changes.size(); ++i) {
+        if (o.scale_changes[i].first > o.frames ||
+            (i && o.scale_changes[i].first == o.scale_changes[i - 1].first))
+            throw std::runtime_error("Scale change frames must be unique and inside run");
+    }
     return o;
 }
 void apply_inputs(f3rt::Machine &m, uint16_t word) {
@@ -237,7 +254,8 @@ void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected,
 struct Harness {
     f3rt::Machine &m;
     f3rt::GpuVideo &gpu;
-    const Options &o;
+    Options &o;
+    const f3rt::GameVideoOptions canonical_video;
     std::vector<uint32_t> cpu, device;
     std::vector<uint8_t> state_before, state_after;
     std::vector<double> cpu_frame_ms, gpu_frame_ms;
@@ -255,8 +273,11 @@ struct Harness {
     f3rt::InterpolationStats previous_interpolation{};
     bool have_interpolation = false, boundaries_checked = false;
     uint64_t sprite_checks = 0;
-    Harness(f3rt::Machine &machine, f3rt::GpuVideo &video, const Options &options)
-        : m(machine), gpu(video), o(options), cpu(size_t(o.video.width()) * o.video.height()), device(cpu.size()),
+    std::vector<double> scale_change_ms;
+    uint64_t scale_change_frames = 0;
+    Harness(f3rt::Machine &machine, f3rt::GpuVideo &video, Options &options, f3rt::GameVideoOptions canonical)
+        : m(machine), gpu(video), o(options), canonical_video(canonical),
+          cpu(size_t(o.video.width()) * o.video.height()), device(cpu.size()),
           state_before(m.state_size()), state_after(state_before.size()) {
         if (o.bench) {
             cpu_frame_ms.reserve(o.frames + 1); gpu_frame_ms.reserve(o.frames + 1);
@@ -268,6 +289,27 @@ struct Harness {
             canonical_guard = std::make_unique<f3rt::GpuScene>();
             interpolated.resize(cpu.size()); sprite_off.resize(cpu.size()); sprite_selected.resize(cpu.size());
         }
+    }
+    void set_scale(unsigned scale) {
+        m.save_state(state_before);
+        const auto start = Clock::now();
+        m.game_video->set_gpu_scale(scale);
+        gpu.set_scale(scale);
+        if (interpolated_gpu) interpolated_gpu->set_scale(scale);
+        const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+        const unsigned previous = o.video.scale;
+        o.video.scale = scale;
+        const size_t count = size_t(o.video.width()) * o.video.height();
+        cpu.resize(count); device.resize(count);
+        if (interpolated_gpu) {
+            interpolated.resize(count); sprite_off.resize(count); sprite_selected.resize(count);
+        }
+        m.save_state(state_after);
+        if (state_before != state_after)
+            throw std::runtime_error("Scale change mutated canonical state or snapshot layout");
+        if (previous != scale) { scale_change_ms.push_back(ms); ++scale_change_frames; }
+        std::cout << "SCALE frame=" << m.frame << " previous=" << previous << " selected=" << scale
+                  << " change_ms=" << ms << " canonical_bytes=unchanged\n";
     }
     void capture(const std::string &tag) {
         if (o.dump_dir.empty()) return;
@@ -429,6 +471,7 @@ struct Harness {
             << " fallback=" << fallback_samples << " injected=" << injected_samples << '\n';
         for (unsigned i = 0; i < 10; ++i)
             std::cout << "  " << names[i] << " samples=" << samples[i] << " mismatching_pixels=" << mismatches[i] << '\n';
+        std::cout << "SCALE summary changes=" << scale_change_frames << " canonical_scale=" << canonical_video.scale << '\n';
         if (interpolated_gpu) {
             std::cout << "INTERP summary mode=" << mode_name(o.interpolation) << " sprite_checks=" << sprite_checks
                 << " induced_boundaries_checked=" << boundaries_checked << '\n';
@@ -497,9 +540,12 @@ void verify_trail_history(Harness &h) {
 #ifdef F3RT_SOUND_GENERATED
     peer.use_native_sound(f3_sound_blocks, f3_sound_block_count);
 #endif
-    peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.o.video);
+    peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
     peer.load_state(baseline);
+    const unsigned original_scale = h.o.video.scale;
+    constexpr std::array<unsigned, 4> trail_scales{3, 2, 4, 1};
     for (unsigned frame = 0; frame < 4; ++frame) {
+        if (!h.o.scale_changes.empty()) h.set_scale(trail_scales[frame]);
         for (auto *machine : {&m, &peer}) {
             put16(machine->ram, 0x7a1e, 2);
             observe(*machine, 0x43e0);
@@ -507,11 +553,13 @@ void verify_trail_history(Harness &h) {
             observe(*machine, 0x43b0);
             machine->game_video->render_frame();
         }
+        h.sample("trails_history_scale", true);
     }
     const auto gpu_state = snapshot(m), cpu_state = snapshot(peer);
     size_t differences = 0;
     for (size_t i = 0; i < gpu_state.size(); ++i) differences += gpu_state[i] != cpu_state[i];
     m.load_state(baseline);
+    if (!h.o.scale_changes.empty()) h.set_scale(original_scale);
     if (m.state_crc() != baseline_crc) throw std::runtime_error("Trail branch restore changed canonical state");
     if (differences) throw std::runtime_error("Deferred GPU trail snapshots differ from CPU: " + std::to_string(differences) + " bytes");
     std::cout << "SNAPSHOT trails_history_frames=4 deferred_save=1 byte_mismatches=0 (induced branch)\n";
@@ -526,19 +574,30 @@ void verify_cpu_backend(Harness &h, std::span<const uint8_t> pre) {
 #ifdef F3RT_SOUND_GENERATED
     peer.use_native_sound(f3_sound_blocks, f3_sound_block_count);
 #endif
-    peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.o.video);
+    peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
+    const bool selected_geometry = h.canonical_video.scale != h.o.video.scale;
+    if (selected_geometry) {
+        peer.game_video->enable_gpu_presentation();
+        peer.game_video->set_gpu_scale(h.o.video.scale);
+    }
     peer.load_state(pre);
     advance(peer);
     const auto gpu_state = snapshot(h.m), cpu_state = snapshot(peer);
     size_t bytes = 0, pixels = 0;
     for (size_t i = 0; i < gpu_state.size(); ++i) bytes += gpu_state[i] != cpu_state[i];
-    const auto original_cpu = peer.game_video->presentation();
+    std::vector<uint32_t> selected_cpu;
+    if (selected_geometry) {
+        selected_cpu.resize(h.device.size());
+        peer.game_video->render_reference(selected_cpu, h.o.video);
+    }
+    const auto original_cpu = selected_geometry ? std::span<const uint32_t>(selected_cpu) : peer.game_video->presentation();
     for (size_t i = 0; i < h.device.size(); ++i) pixels += h.device[i] != original_cpu[i];
     if (bytes || pixels)
         throw std::runtime_error("Independent CPU backend differs: " + std::to_string(bytes) +
                                  " canonical bytes / " + std::to_string(pixels) + " GPU pixels");
     std::cout << "SNAPSHOT supported_cpu_backend frame=" << peer.frame
-              << " byte_mismatches=0 gpu_argb_mismatches=0\n";
+              << " byte_mismatches=0 gpu_argb_mismatches=0"
+              << " selected_geometry_reference=" << selected_geometry << '\n';
 }
 
 void timing(const char *name, std::vector<double> values) {
@@ -581,7 +640,7 @@ struct SdlLifetime {
 } // namespace
 
 int main(int argc, char **argv) try {
-    const auto o = parse(argc, argv);
+    auto o = parse(argc, argv);
     SdlLifetime sdl;
     auto owner = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(o.rom_dir, "landmakrj"));
     auto &m = *owner;
@@ -596,12 +655,15 @@ int main(int argc, char **argv) try {
 #else
     throw std::runtime_error("GPU regression requires generated native sound blocks");
 #endif
-    m.game_video = std::make_unique<f3rt::GameVideo>(m, f3rt::GameVideoMode::Game, o.video);
-    m.game_video->enable_gpu_presentation(true, true);
+    auto canonical_video = o.video;
+    if (!o.scale_changes.empty() || o.video.scale > f3rt::GameVideoOptions::max_scale) canonical_video.scale = 1;
+    m.game_video = std::make_unique<f3rt::GameVideo>(m, f3rt::GameVideoMode::Game, canonical_video);
+    m.game_video->enable_gpu_presentation();
+    m.game_video->set_gpu_scale(o.video.scale);
     f3rt::GpuVideo gpu(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles());
     if (!o.dump_dir.empty()) std::filesystem::create_directories(o.dump_dir);
     std::cout << "GPU driver=" << gpu.driver() << " seed=" << o.seed << " scale=" << o.video.scale << " border=" << o.video.border << '\n';
-    Harness h(m, gpu, o);
+    Harness h(m, gpu, o, canonical_video);
     f3rt::test::GameplaySchedule schedule(o.seed, f3rt::test::ScheduleConfig{.versus = false});
     std::array<int16_t, 8192> audio{};
     uint64_t audio_frames = 0, nonzero = 0, fallback_frames = 0, supported_frames = 0, transitions = 0;
@@ -613,6 +675,7 @@ int main(int argc, char **argv) try {
     std::vector<uint8_t> last_supported_pre;
     constexpr std::array<const char *, 5> scenarios{"bitmap", "trails", "globalflip", "unknown-producer", "ending-producer-boundary-NOT-played-ending"};
     const auto start = Clock::now();
+    size_t next_scale_change = 0;
     try {
         while (m.frame < o.frames) {
             apply_inputs(m, schedule.step(m.frame)[0]);
@@ -620,15 +683,20 @@ int main(int argc, char **argv) try {
             auto pre = (o.bench || injection_frame) ? snapshot(m) : std::vector<uint8_t>{};
             const auto native_start = Clock::now();
             advance(m);
-            const bool fallback = m.game_video->gpu_scene().fallback;
             h.native_ms = o.bench ? std::chrono::duration<double, std::milli>(Clock::now() - native_start).count() : 0;
+            bool scale_changed = false;
+            if (next_scale_change < o.scale_changes.size() && o.scale_changes[next_scale_change].first == m.frame) {
+                h.set_scale(o.scale_changes[next_scale_change++].second);
+                scale_changed = true;
+            }
+            const bool fallback = m.game_video->gpu_scene().fallback;
             if (o.bench && !fallback && m.frame > 600) native_frame_ms.push_back(h.native_ms);
             if (fallback) ++fallback_frames; else ++supported_frames;
             if (fallback != previous_fallback) ++transitions;
             previous_fallback = fallback;
             if (o.bench && !fallback) last_supported_pre = pre;
-            if ((m.frame - 1) % o.every == 0 || m.frame == o.frames || injection_frame || h.requested_capture())
-                h.sample("gameplay", false, m.frame == o.frames);
+            if ((m.frame - 1) % o.every == 0 || m.frame == o.frames || injection_frame || h.requested_capture() || scale_changed)
+                h.sample(scale_changed ? "scale_change" : "gameplay", false, m.frame == o.frames || scale_changed);
             if (injection_frame) {
                 if (fallback) throw std::runtime_error("Scheduled injection needs a supported baseline; choose --inject-frame in gameplay");
                 const auto baseline = snapshot(m);
@@ -685,6 +753,7 @@ int main(int argc, char **argv) try {
     } catch (...) { h.report(); throw; }
     h.report();
     const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+    timing("GPU_host_reference_and_resource_scale_change", h.scale_change_ms);
     const uint32_t frame_crc = f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * sizeof(uint32_t));
     std::cout << "SUCCESS seed=" << o.seed << " frames=" << m.frame << " supported_frames=" << supported_frames
         << " actual_fallback_frames=" << fallback_frames << " actual_oracle_transitions=" << transitions

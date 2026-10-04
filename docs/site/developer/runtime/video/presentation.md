@@ -8,7 +8,7 @@ Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--video-scale 1..4` | 1 | Integer internal rendering scale |
+| `--video-scale 1..4\|auto\|auto-integer` | 1 | Fixed integer scale, GPU ceil-fit/aspect blit, or GPU floor-fit/exact nearest blit |
 | `--video-border 0..160` | 0 | Additional native scene columns on each side |
 | `--video-filter nearest\|linear` | `nearest` | SDL sampling of the completed presentation texture |
 | `--video-backend cpu\|gpu` | `cpu` | CPU expanded raster or SDL3 GPU presentation |
@@ -38,11 +38,37 @@ The border shows existing off-screen scene data. Map wrapping and empty cells ca
 
 Enhancements require `--video game` or `--video compare`. Game-data modes require strict-native `landmakrj`.
 
-The frontend rejects scale zero, scale above four, border above 160, and an unknown filter. It rejects expanded output or linear filtering in `fdp` mode.
+The frontend rejects numeric scale zero/above four, border above 160, and an unknown filter. Auto modes require GPU; GPU requires game/compare. FDP rejects expanded output or linear filtering.
 
 The strict-native `landmakr` executable selects `game` unless the user selects another mode. With `--allow-fallback`, its default remains `fdp`.
 
-Netplay adds a separate restriction: `game` video at scale 1 and border 0. The current netplay validation does not require the nearest filter.
+Netplay adds a separate restriction: `game` video at fixed scale 1 and border 0; automatic modes are rejected. The current netplay validation does not require the nearest filter.
+
+## Window-following GPU scale
+
+Fit uses `SDL_GetWindowSizeInPixels`, never point dimensions. Automatic windows
+request `SDL_WINDOW_HIGH_PIXEL_DENSITY`; fixed windows retain their previous
+flags. Native width is `320 + 2*border`. Auto-integer floor-fits, clamps 1–4,
+and blits its internal texture 1:1, nearest, centered on black. If the window is
+below 1x, source cropping keeps the selected scale exact. Auto ceil-fits and
+uses the existing aspect-preserving nearest/linear blit. The cap is intentionally
+4 after measured 5–8x costs; see the [GPU evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+
+Pixel geometry is polled after native audio enqueue and before GPU draw.
+Changes debounce for 100ms quiet or 250ms maximum pending time. Unchanged scale
+does no resource work; the swapchain viewport still follows every pixel resize.
+`GpuVideo::set_scale` replaces only sprite/surface textures and any existing
+diagnostic readback storage. SDL deferred release avoids a GPU-idle wait.
+Assets, upload/storage buffers, device and both precompiled interpolation/off
+pipelines survive; tile pen masks are prepared even when startup scale is 1.
+
+`GameVideo::set_gpu_scale` selects host reference geometry independently of
+constructor-fixed canonical buffers. The fixed canonical and selected diagnostic
+sprite planes share decoded scene data; diagnostics allocate only when used and
+resize only on scale changes. Snapshot bytes/size and native trail retention
+never change. Trails remain native oracle output across a transition: no history
+clear or scale-change glitch is introduced. Headless does not change scale.
+
 
 ## Native and presentation outputs
 

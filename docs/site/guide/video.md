@@ -56,7 +56,7 @@ After the pictures match at native size, you can add three options. All three ne
 
 | Option | Range | Default | Effect |
 | --- | --- | --- | --- |
-| `--video-scale N` | 1 to 4 | 1 | Draws the scene at N times the native resolution. |
+| `--video-scale S` | 1 to 4, `auto`, `auto-integer` | 1 | Fixed internal scale, or GPU-only automatic window-pixel fit. |
 | `--video-border N` | 0 to 160 | 0 | Adds N native columns to **each** side of the picture. |
 | `--video-filter F` | `nearest` or `linear` | `nearest` | Sets the filter that SDL uses to scale the final picture to the window. |
 | `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
@@ -92,6 +92,19 @@ GPU uses Metal on macOS and SPIR-V/Vulkan on supported hosts. Both backends
 use the same integer sampling, sprite raster rules and blend ordering.
 Headless, native captures/CRCs, audio and rollback checksums remain CPU-produced.
 Use `--video-backend cpu` if GPU device creation is unavailable.
+
+`--video-scale auto-integer` selects the largest scale fitting the physical
+window pixels, including border, clamped to 1–4. The picture stays at exactly
+that integer size, nearest-filtered even if you request linear, with centered
+black bars. `--video-scale auto` uses the ceiling of the fit ratio, clamped to
+1–4, and fills the aspect-preserving viewport with the chosen filter.
+Above the 4x cap, auto scales the 4x image rather than supersampling further.
+Below the 1x footprint, auto-integer crops centrally instead of shrinking.
+
+Both modes follow resize, fullscreen and display density after 100ms quiet
+(250ms maximum live-drag delay). F11 or Alt+Enter toggles fullscreen.
+Numeric scales retain their existing behavior on either backend. Headless auto
+keeps scale 1 without opening/querying a window; online play rejects auto modes.
 The GPU port does not interpolate adjacent native line values by default.
 
 `--video-interp linear` smooths scale/scroll and valid palette-bank colors
@@ -110,10 +123,11 @@ The program checks the values:
 
 | Wrong input | Message |
 | --- | --- |
-| `--video-scale 0` or `5` | `--video-scale must be 1..4` |
+| `--video-scale 0` or `5` | `--video-scale must be 1..4, auto or auto-integer` |
 | `--video-border 161` | `--video-border must be 0..160` |
 | `--video-filter` other than the two names | `--video-filter must be nearest or linear` |
 | Scale or border with `--video fdp` | `Presentation enhancements require --video game or compare` |
+| Auto scaling with CPU backend | `--video-scale auto/auto-integer requires --video-backend gpu` |
 
 ::: warning Online play needs the native size
 Online play rejects `--video-scale` other than 1 and `--video-border` other than 0. See [Online play](/guide/netplay).

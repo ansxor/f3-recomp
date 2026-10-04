@@ -217,11 +217,17 @@ These options were introduced only after the complete seeded base-parity gate ab
 
 | Option | Default | Operation |
 | --- | --- | --- |
-| `--video-scale 1..4` | `1` | Rerasterizes scene geometry at the requested internal resolution. PF fractional X/Y sampling and sprite zoom are evaluated at the higher resolution; this is not enlargement of the finished native RGB frame. Original ROM textures/glyphs remain the artwork. |
+| `--video-scale 1..4\|auto\|auto-integer` | `1` | Rerasterizes scene geometry at the requested internal resolution. GPU auto modes follow physical window pixels (ceiling/aspect fit or floor/exact nearest integer fit), clamped to 1–4. PF fractional X/Y sampling and sprite zoom are evaluated at the higher resolution; this is not enlargement of the finished native RGB frame. Original ROM textures/glyphs remain the artwork. |
 | `--video-border 0..160` | `0` | Adds that many native scene columns on each side. `48` gives a 416×232 viewport, approximately 16:9. Native game logic and HUD layout are not widened; off-screen map content can be empty or wrapped. |
 | `--video-filter nearest\|linear` | `nearest` | Optional SDL presentation-texture filtering. Linear filters the final display texture; it does not claim higher-detail source art or alter native captures. |
 
 Options require `--video game` or `compare`. The invariant native `Machine::pixels` stays 320×232 for comparison, captures and CRCs. Presentation buffers are allocated once only when scale/border are enabled. Unsupported frames preserve the exact oracle picture, integer-scaled in the center, with black added columns; no invented ending/bitmap/flip geometry is extrapolated.
+
+GPU runtime scaling changes only host geometry/resources, retaining
+constructor-fixed canonical presentation buffers and trail history.
+Headless auto stays at scale 1; netplay requires fixed scale 1/border 0.
+Automatic policies, measured 5–8x cap decision and resize/fullscreen evidence:
+[GPU-VIDEO.md](GPU-VIDEO.md#automatic-internal-resolution-phase-6).
 
 Two independent real machines, one FDP and one `game`, ran the seed-5 input schedule for 2400 frames at scale 1 /border 48 and scale 2 /border 48, including the injected fallback above. **178,176,000 native RGB pixels per run matched**, and PC, cycles and D/A registers remained equal; CPU fallback was zero. Scale 1's native center matched in every frame. Nonblack off-screen content reached all 22,272 added pixels at frame 1407 (89,088 at 2×); 2× rerasterization differed from nearest-enlarged native RGB in 5,450,015 pixels across the run, peaking at 11,850 at frame 1409.
 

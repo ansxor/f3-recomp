@@ -5,6 +5,7 @@
 #include "interpreter.hpp"
 #include "sound_trace.hpp"
 #include "capture_io.hpp"
+#include "video_scale.hpp"
 #ifdef F3RT_GPU
 #include "gpu_video.hpp"
 #include "f3rt/video.hpp"
@@ -85,6 +86,7 @@ int main(int argc,char **argv) try {
     std::string sound_driver="oracle";
     bool sound_explicit=false;
     f3rt::GameVideoOptions video_options;
+    f3rt::VideoScaleMode video_scale_mode=f3rt::VideoScaleMode::Fixed;
     std::string video_filter="nearest";
     std::string video_backend="cpu";
     std::string video_interp="off";
@@ -116,9 +118,20 @@ int main(int argc,char **argv) try {
         else if(arg=="--surface")surface=value();
         else if(arg=="--video") { video_mode=value();video_explicit=true; }
         else if(arg=="--video-scale") {
-            const auto scale=std::stoul(value());
-            if(!scale || scale>f3rt::GameVideoOptions::max_scale)throw std::runtime_error("--video-scale must be 1..4");
-            video_options.scale=unsigned(scale);
+            const std::string scale=value();
+            if(scale=="auto" || scale=="auto-integer") {
+                video_scale_mode=scale=="auto"?f3rt::VideoScaleMode::Auto:f3rt::VideoScaleMode::AutoInteger;
+                video_options.scale=1;
+            } else {
+                size_t consumed=0;
+                unsigned long numeric=0;
+                try { numeric=std::stoul(scale,&consumed); }
+                catch(const std::exception &) { throw std::runtime_error("--video-scale must be 1..4, auto or auto-integer"); }
+                if(consumed!=scale.size() || !numeric || numeric>f3rt::GameVideoOptions::max_scale)
+                    throw std::runtime_error("--video-scale must be 1..4, auto or auto-integer");
+                video_options.scale=unsigned(numeric);
+                video_scale_mode=f3rt::VideoScaleMode::Fixed;
+            }
         }
         else if(arg=="--video-border") {
             const auto border=std::stoul(value());
@@ -151,13 +164,15 @@ int main(int argc,char **argv) try {
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
-                     <<"  [--video-scale 1..4] [--video-border 0..160] [--video-filter nearest|linear]\n"
+                     <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
                      <<"  [--video-interp off|linear|fit] (opt-in GPU PF2 water sampling; default off)\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
+                     <<"  Auto scales follow window pixels (GPU only); auto-integer uses nearest filtering. Netplay requires fixed scale 1.\n"
                      <<"  [--netplay-server HOST:PORT --netplay-room CODE --netplay-player 1|2 --netplay-delay 0..8]\n"
                      <<"  Netplay: strict native game video/sound, factory-reset EEPROM, no local-only inputs.\n"
-                     <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n";
+                     <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F1: service; F2: test; Escape: quit.\n"
+                     <<"F11 or Alt+Enter: toggle fullscreen.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: "+arg);
     }
@@ -186,6 +201,8 @@ int main(int argc,char **argv) try {
     if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
         throw std::runtime_error("Presentation enhancements require --video game or compare");
     if(video_backend!="cpu" && video_backend!="gpu")throw std::runtime_error("--video-backend must be cpu or gpu");
+    const bool automatic_scale=video_scale_mode!=f3rt::VideoScaleMode::Fixed;
+    if(automatic_scale && video_backend!="gpu")throw std::runtime_error("--video-scale auto/auto-integer requires --video-backend gpu");
     if(video_backend=="gpu" && video_mode=="fdp")throw std::runtime_error("GPU presentation requires --video game or compare");
     if(video_interp!="off" && video_interp!="linear" && video_interp!="fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
@@ -196,7 +213,7 @@ int main(int argc,char **argv) try {
     const bool netplay=net_option_seen;
     if(netplay && (net_options.server.empty() || net_options.room.empty()))
         throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
-    if(netplay && (!translated || allow_fallback || video_mode!="game" || video_options.expanded() ||
+    if(netplay && (!translated || allow_fallback || video_mode!="game" || video_options.expanded() || automatic_scale ||
                    sound_driver!="native" || !eeprom.empty() || !sound_trace_path.empty() || !fallback_report.empty()))
         throw std::runtime_error("Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled");
     if(netplay && frames>=UINT32_MAX-1024u)throw std::runtime_error("Netplay frame limit exceeds protocol range");
@@ -223,18 +240,28 @@ int main(int argc,char **argv) try {
 #endif
     }
     Sdl sdl;
+    int pixel_width=0,pixel_height=0;
     uint32_t audio_rate=m.audio->sample_rate();
     if(!headless) {
         check(SDL_Init(SDL_INIT_VIDEO|(sound?SDL_INIT_AUDIO:0)));
 #ifdef F3RT_GPU
         if(video_backend=="gpu") {
-            sdl.window=SDL_CreateWindow(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE);
+            const SDL_WindowFlags flags=SDL_WINDOW_RESIZABLE|(automatic_scale?SDL_WINDOW_HIGH_PIXEL_DENSITY:0);
+            sdl.window=SDL_CreateWindow(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,flags);
             check(sdl.window!=nullptr);
+            m.game_video->enable_gpu_presentation();
+            if(automatic_scale) {
+                int pixel_width=0,pixel_height=0;
+                check(SDL_GetWindowSizeInPixels(sdl.window,&pixel_width,&pixel_height));
+                video_options.scale=f3rt::video_scale_for_window(video_scale_mode,unsigned(std::max(pixel_width,0)),
+                                                               unsigned(std::max(pixel_height,0)),video_options.border);
+            }
+            m.game_video->set_gpu_scale(video_options.scale);
             sdl.gpu=std::make_unique<f3rt::GpuVideo>(sdl.window,video_options,m.video->playfield_tiles(),
                                                    m.video->sprite_tiles(),video_filter=="linear",throttle,
                                                    video_interp=="fit"?f3rt::VideoInterpolation::Fit:
                                                    video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off);
-            m.game_video->enable_gpu_presentation();
+            sdl.gpu->set_scale_mode(video_scale_mode);
         } else
 #endif
         {
@@ -250,8 +277,10 @@ int main(int argc,char **argv) try {
             sdl.audio=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,nullptr,nullptr);
             check(sdl.audio!=nullptr);check(SDL_ResumeAudioStreamDevice(sdl.audio));
         }
+        check(SDL_GetWindowSizeInPixels(sdl.window,&pixel_width,&pixel_height));
         std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" backend="<<video_backend
                  <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()
+                 <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
                  <<" filter="<<video_filter<<" interp="<<video_interp<<'\n';
     }
     std::unique_ptr<f3rt::WavWriter> wav;
@@ -271,6 +300,12 @@ int main(int argc,char **argv) try {
     constexpr int max_audio_queue_ms=50,max_catchup_ms=50;
     uint64_t audio_queue_drops=0,clock_resyncs=0,audio_queue_sum=0,audio_queue_samples=0,audio_queue_max=0;
     const auto start=std::chrono::steady_clock::now();
+#ifdef F3RT_GPU
+    int observed_pixel_width=pixel_width,observed_pixel_height=pixel_height;
+    bool scale_pending=false;
+    auto scale_pending_since=start,scale_last_resize=start;
+    uint64_t scale_changes=0;
+#endif
     while(!quit && ((!frames || m.frame<frames) || (transport && !transport->finished()))) {
         if(!headless) {
             SDL_Event event;
@@ -278,6 +313,13 @@ int main(int argc,char **argv) try {
                 if(event.type==SDL_EVENT_QUIT)quit=true;
                 if(event.type==SDL_EVENT_KEY_DOWN || event.type==SDL_EVENT_KEY_UP) {
                     if(event.key.scancode==SDL_SCANCODE_ESCAPE)quit=true;
+                    const bool fullscreen_key=event.key.scancode==SDL_SCANCODE_F11 ||
+                        (event.key.scancode==SDL_SCANCODE_RETURN && (event.key.mod&SDL_KMOD_ALT));
+                    if(fullscreen_key) {
+                        if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat)
+                            check(SDL_SetWindowFullscreen(sdl.window,!(SDL_GetWindowFlags(sdl.window)&SDL_WINDOW_FULLSCREEN)));
+                        continue;
+                    }
                     if(!event.key.repeat) {
                         if(netplay)netplay_key(local_word,event.key.scancode,event.type==SDL_EVENT_KEY_DOWN);
                         else key(m,event.key.scancode,event.type==SDL_EVENT_KEY_DOWN);
@@ -359,6 +401,37 @@ int main(int argc,char **argv) try {
         if(!headless && advanced) {
 #ifdef F3RT_GPU
             if(sdl.gpu) {
+                if(automatic_scale) {
+                    // Poll physical pixels, not logical resize events: display-density/fullscreen changes count too.
+                    // Debounce geometry until 100ms quiet, but never defer a live drag more than 250ms.
+                    check(SDL_GetWindowSizeInPixels(sdl.window,&pixel_width,&pixel_height));
+                    const auto now=std::chrono::steady_clock::now();
+                    if(pixel_width!=observed_pixel_width || pixel_height!=observed_pixel_height) {
+                        observed_pixel_width=pixel_width;observed_pixel_height=pixel_height;
+                        if(!scale_pending)scale_pending_since=now;
+                        scale_pending=true;scale_last_resize=now;
+                    }
+                    if(scale_pending && (now-scale_last_resize>=std::chrono::milliseconds(100) ||
+                                         now-scale_pending_since>=std::chrono::milliseconds(250))) {
+                        scale_pending=false;
+                        const unsigned target=f3rt::video_scale_for_window(video_scale_mode,
+                            unsigned(std::max(pixel_width,0)),unsigned(std::max(pixel_height,0)),video_options.border);
+                        const auto change_start=std::chrono::steady_clock::now();
+                        const unsigned previous=video_options.scale;
+                        if(target!=previous) {
+                            // Native audio is already enqueued above; neither host API waits for GPU idle.
+                            m.game_video->set_gpu_scale(target);
+                            sdl.gpu->set_scale(target);
+                            video_options.scale=target;++scale_changes;
+                        }
+                        const double change_ms=std::chrono::duration<double,std::milli>(
+                            std::chrono::steady_clock::now()-change_start).count();
+                        std::cout<<"video_scale pixels="<<pixel_width<<'x'<<pixel_height
+                                 <<" previous="<<previous<<" scale="<<target<<" changes="<<scale_changes
+                                 <<" change_ms="<<change_ms<<" debounce_ms="
+                                 <<std::chrono::duration<double,std::milli>(now-scale_pending_since).count()<<'\n';
+                    }
+                }
                 sdl.gpu->draw(m.game_video->gpu_scene());
                 if(!surface.empty() && frames && m.frame==frames)sdl.gpu->save_surface(surface.string().c_str());
             } else

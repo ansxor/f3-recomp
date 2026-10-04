@@ -43,13 +43,25 @@ void mix_pixel(inout PixelMix p, uint flags, uint color, uint select, uvec4 blen
     }
 }
 vec4 unpack_rgb(uint color) { return vec4(float((color >> 16u) & 255u),float((color >> 8u) & 255u),float(color & 255u),255.0) / 255.0; }
-// Scale is validated as 1..4. Avoid emulated variable integer division.
+// Scale is validated as 1..8; specialize non-power-of-two divisors too.
 int floor_scale(int n, int scale) {
-    return scale == 3 ? floor_divide(n, 3) : n >> (scale >> 1);
+    switch (scale) {
+    case 1: return n;
+    case 2: return n >> 1;
+    case 3: return floor_divide(n, 3);
+    case 4: return n >> 2;
+    case 5: return floor_divide(n, 5);
+    case 6: return floor_divide(n, 6);
+    case 7: return floor_divide(n, 7);
+    default: return n >> 3;
+    }
 }
 int truncate_scale(int n, int scale) {
     if (scale == 3) return n / 3;
-    int shift = scale >> 1;
+    if (scale == 5) return n / 5;
+    if (scale == 6) return n / 6;
+    if (scale == 7) return n / 7;
+    int shift = scale == 8 ? 3 : scale >> 1;
     return (n + (n < 0 ? (1 << shift) - 1 : 0)) >> shift;
 }
 #ifdef VIDEO_INTERP

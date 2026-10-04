@@ -70,7 +70,7 @@ struct SceneJob {
 
 void validate_scene(const SceneJob &job) {
     const auto options = job.options;
-    if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
+    if (!options.scale || options.scale > GameVideoOptions::max_gpu_scale || options.border > GameVideoOptions::max_border)
         throw std::runtime_error("Game presentation scale/border out of range");
     const size_t sprite_size = options.expanded() ? size_t(options.width()) * options.height() : 432 * 256;
     if (job.sprites.size() < sprite_size || job.colors.size() < 8192 ||
@@ -94,7 +94,7 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
     const auto options = job.options;
     const int scale = int(options.scale), width = int(options.width());
     const int left_edge = 46 - int(options.border), right_edge = 366 + int(options.border);
-    constexpr unsigned max_width = (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_scale;
+    constexpr unsigned max_width = (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_gpu_scale;
     std::array<PixelMix, max_width> pixels;
     for (unsigned y = begin; y < end; ++y) {
         const auto &row = lines.row(y);

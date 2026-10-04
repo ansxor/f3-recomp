@@ -107,6 +107,8 @@ flowchart LR
 | `compare_layers(frame, layer_mask)` | Diagnostic: compares layers with the oracle and throws on a difference. See [Compare mode](/developer/runtime/video/compare-mode). |
 | `report(std::ostream&)` | Prints the `VIDEO ...` summary lines. |
 | `presentation()` | Returns the presentation buffer if `options.expanded()`, else `Machine::pixels`. |
+| `enable_gpu_presentation(enabled)`, `gpu_scene()` | Enable/read the host-only scanout snapshot. Fixed canonical caches are eager only when expanded snapshots need them; CPU diagnostic storage is lazy. |
+| `set_gpu_scale(scale)`, `render_reference(output, options, mask, serial)` | Select host GPU/reference scale 1..8 and render that geometry; constructor-fixed presentation/state buffers and border do not change. Player scales remain capped at 4. |
 | `state_size()`, `save_state(dst)`, `load_state(src)` | Snapshot support. They throw `std::invalid_argument` for a wrong size and `std::logic_error` for leftover bytes. |
 
 `latch_sprites()`, `render()` and `compare_composite(frame)` are private.
@@ -116,7 +118,7 @@ flowchart LR
 | Type | Definition |
 | --- | --- |
 | `GameVideoMode` | `enum class` with `Diagnostic`, `Game`, `Compare`. |
-| `GameVideoOptions` | `scale` (default 1), `border` (default 0), constants `max_scale = 4` and `max_border = 160`. `width()` = `(320 + border * 2) * scale`. `height()` = `232 * scale`. `expanded()` is true when `scale != 1` or `border != 0`. |
+| `GameVideoOptions` | `scale` (default 1), `border` (default 0), constants `max_scale = 4`, `max_gpu_scale = 8` (diagnostic/render API only) and `max_border = 160`. `width()` = `(320 + border * 2) * scale`. `height()` = `232 * scale`. `expanded()` is true when `scale != 1` or `border != 0`. |
 
 ### The C hook
 

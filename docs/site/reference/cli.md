@@ -81,7 +81,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--dump-every` | `N` | `1` | Dump every N frames | `0` is an error. |
 | `--surface` | `BMP` or GPU `PNG` | none | Save the CPU window surface or GPU internal-resolution image at `--frames` | Window runs only. Native dumps remain CPU-produced. |
 | `--video` | `fdp`, `game` or `compare` | `fdp`. In `landmakr` strict native: `game` | Choose the video renderer | `fdp` draws from the F3 video chip memory. `game` draws from the game data. `compare` runs both and checks them. `game` and `compare` need strict native `landmakrj`. |
-| `--video-scale` | `1` to `4` | `1` | Integer scale of the internal picture | Else: `--video-scale must be 1..4`. Needs `--video game` or `compare`. |
+| `--video-scale` | `1` to `4`, `auto` or `auto-integer` | `1` | Fixed or window-pixel-following internal scale | Auto modes require GPU. `auto` ceil-fits then aspect-scales with the selected filter; `auto-integer` floor-fits then presents exact nearest integer pixels with black bars. All clamp to 1–4; border counts in the fit. Headless auto stays at scale 1. |
 | `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
 | `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
 | `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
@@ -133,6 +133,7 @@ Normal play and netplay use different key handlers (`key()` and `netplay_key()` 
 | `F1` | Port 0, bit `0x200` | Bit 9 |
 | `F2` | System input bit `0x02` | Bit 10 |
 | `Escape` | Quit | Quit |
+| `F11`, `Alt+Enter` | Toggle fullscreen | Toggle fullscreen; not sent as game input |
 
 In normal play, a pressed key clears the matching input bit, because the F3 inputs are active low. In netplay, a pressed key sets a bit in the 16-bit input word that the program sends to the peer.
 
@@ -289,13 +290,14 @@ parity comparison. Native machine/audio output remains CPU-produced.
 | `--rom-dir DIR` | Configured ROM directory | Japan 2.01J ROM set |
 | `--seed N` | `12345`, or `SEED` environment | Deterministic single-player input schedule |
 | `--frames N` | `4000` | Native frames to execute |
-| `--scale N`, `--border N` | `1`, `0` | Scale 1..4; border 0..160 |
+| `--scale N`, `--border N` | `1`, `0` | Diagnostic GPU scale 1..8; border 0..160. Player numeric/auto scales remain capped at 4. |
 | `--every N` | `1` | Sample every N frames; always sample the final frame |
 | `--layers` | Off | Compare all nine isolated supported layers plus the composite |
 | `--bench` | Off | Varied-scene timings after 600 frames; 100 serial/threaded/GPU repeats of the last supported frame |
 | `--dump-dir DIR` | None | External CPU/GPU PNGs and native BMPs |
 | `--interp off\|linear\|fit` | `off` | Second opt-in renderer; CPU parity comparison always uses the off renderer |
 | `--capture-frame N` | None | Repeatable; forces selected off/mode PNGs and complete PF2 row CSVs, even off the sampling interval; needs `--dump-dir` |
+| `--change-scale FRAME:SCALE` | None | Repeatable runtime transition; canonical constructor scale remains 1, each transition forces parity/capture and asserts unchanged snapshot bytes. Also changes scale during induced trail-history branches. |
 | `--inject-frame N` | `1407` | Supported baseline for diagnostic branches |
 | `--inject-bitmap`, `--inject-trails`, `--inject-globalflip` | Off | Induce actual unsupported-mode boundaries and verify oracle presentation/recovery |
 | `--inject-unknown`, `--inject-ending` | Off | Induce unsupported writer/ending-producer boundaries; not a played-through ending |

@@ -55,12 +55,12 @@ The code checks these rules after it parses the options. Each failure throws a `
 - `--sound-driver` must be `oracle` or `native`. `native` needs a generated sound program.
 - A `landmakr` build accepts only `--set landmakrj`.
 - `--video` must be `fdp`, `game` or `compare`. `game` and `compare` need `landmakrj`, translated mode and no fallback.
-- `--video-scale` must be 1 to 4. `--video-border` must be 0 to 160.
+- `--video-scale` must be 1 to 4, `auto` or `auto-integer`. Automatic modes require GPU; `--video-border` must be 0 to 160.
 - `--video-filter` must be `nearest` or `linear`.
 - FDP mode rejects expanded dimensions and linear filtering. Explicit scale 1, border 0, and nearest filtering remain valid.
 - `--netplay-player` must be 1 or 2. `--netplay-delay` must be 0 to 8.
 - Any `--netplay-*` option turns netplay on. Netplay needs `--netplay-server` and `--netplay-room`.
-- Netplay also needs translated mode, no fallback, `--video game` at scale 1 and border 0, the native sound driver, and no `--eeprom`, `--sound-trace` or `--fallback-report`. This keeps both peers on one deterministic path.
+- Netplay also needs translated mode, no fallback, `--video game` at fixed scale 1 and border 0 (auto modes rejected), the native sound driver, and no `--eeprom`, `--sound-trace` or `--fallback-report`. This keeps both peers on one deterministic path.
 - With netplay, `--frames` must be below `UINT32_MAX - 1024`.
 
 Unknown options throw `Unknown argument`. `--help` prints a usage text and returns 0.
@@ -76,15 +76,22 @@ The struct `Sdl` holds the window, the renderer, the texture and the audio strea
 In windowed mode (no `--headless`) the code:
 
 1. Calls `SDL_Init` with `SDL_INIT_VIDEO`, and `SDL_INIT_AUDIO` unless `--no-audio`.
-2. Creates a resizable window and renderer. The initial size is `(320 + 2 * border) * 3` by 696 pixels. That is 3 times the native 320 by 232.
-3. Sets logical presentation to `video_options.width()` by `height()` with `SDL_LOGICAL_PRESENTATION_LETTERBOX`. The picture keeps its aspect ratio when you resize the window.
-4. Creates a streaming `ARGB8888` texture of the same logical size. The scale mode is linear for `--video-filter linear`, otherwise nearest.
-5. Opens an audio stream: signed 16-bit, 2 channels, at `machine.audio->sample_rate()`. It resumes the stream at once.
-6. Prints `window_open video_driver=... renderer=... video=... internal=WxH filter=...`.
+2. Creates a resizable window initially `(320 + 2 * border) * 3` by 696 **points**. Automatic GPU windows request high pixel density and use `SDL_GetWindowSizeInPixels` to choose their startup scale.
+3. CPU: sets `SDL_LOGICAL_PRESENTATION_LETTERBOX` and creates a streaming `ARGB8888` texture, with the selected nearest/linear filter. GPU: creates the SDL3 GPU compositor and selects fixed, auto or auto-integer blit policy.
+4. Opens an audio stream: signed 16-bit, 2 channels, at `machine.audio->sample_rate()`. It resumes the stream at once.
+5. Prints `window_open video_driver=... backend=... video=... internal=WxH pixels=WxH scale=N filter=... interp=...`.
 
 The `check` helper throws an exception with `SDL_GetError()` when an SDL call fails.
 
 In headless mode the code does not initialize SDL. It still runs the audio generator, so `--wav` works.
+
+For automatic GPU scaling, physical pixel dimensions are checked after native
+audio enqueue and before presentation. Resize/fullscreen/display-density changes
+settle after 100ms quiet or 250ms maximum drag delay. A changed scale recreates
+only host reference geometry and GPU render targets/readback, not the machine,
+assets or pipelines. `video_scale` logs pixels, previous/new scale, change count,
+change milliseconds and debounce milliseconds. F11/Alt+Enter toggles fullscreen.
+The existing pre-enqueue 50ms FIFO cap and long-stall pacing resync remain active.
 
 ## The main loop
 

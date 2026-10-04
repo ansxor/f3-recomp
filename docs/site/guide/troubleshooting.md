@@ -73,7 +73,8 @@ These messages come from the option checks in `runtime/frontend.cpp`.
 | `Native sound requires a generated sound program (F3_ROM_DIR)` | The build has no generated sound code. Configure with `F3_ROM_DIR`, or use `--sound-driver oracle`. |
 | `--video must be fdp, game or compare` | Use one of the three names. |
 | `Game-data video requires strict native landmakrj` | You used `game` or `compare` with `--allow-fallback`, `--set` other than `landmakrj`, or in `f3rt-run`. Use `landmakr` without `--allow-fallback`. |
-| `--video-scale must be 1..4` | Use a value from 1 to 4. |
+| `--video-scale must be 1..4, auto or auto-integer` | Use a numeric scale 1–4 or one of the automatic GPU modes. |
+| `--video-scale auto/auto-integer requires --video-backend gpu` | Select GPU or keep a fixed numeric CPU scale. |
 | `--video-border must be 0..160` | Use a value from 0 to 160. |
 | `--video-filter must be nearest or linear` | Use one of the two names. |
 | `Presentation enhancements require --video game or compare` | You gave scale, border or a filter other than `nearest` with `--video fdp`. Use `--video game`. |

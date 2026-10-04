@@ -27,10 +27,11 @@ bool differs(ScenePixel game, ScenePixel oracle) {
 }
 struct GameVideo::Impl {
     Impl(Machine &value, GameVideoMode selected, GameVideoOptions presentation_options)
-        : machine(value), mode(selected), options(presentation_options) {}
+        : machine(value), mode(selected), options(presentation_options), gpu_scale(presentation_options.scale) {}
     Machine &machine;
     GameVideoMode mode;
     GameVideoOptions options;
+    unsigned gpu_scale;
     std::vector<uint32_t> presentation_pixels;
     std::vector<uint16_t> presentation_sprites;
     struct Fallback {
@@ -67,12 +68,17 @@ struct GameVideo::Impl {
         GameText text;
         GameLines lines;
         GameSprites sprites;
-        std::vector<uint16_t> sprite_plane;
-        bool ready = false;
+        std::vector<uint16_t> canonical_sprite_plane;
+        std::vector<uint16_t> selected_sprite_plane;
+        bool ready = false, canonical_ready = false, selected_ready = false;
         explicit Reference(GameVideoOptions options)
-            : sprite_plane(options.expanded() ? size_t(options.width()) * options.height() : 432 * 256) {}
+            : canonical_sprite_plane(plane_size(options)) {}
+        static size_t plane_size(GameVideoOptions options) {
+            return options.expanded() ? size_t(options.width()) * options.height() : 432 * 256;
+        }
     };
     std::unique_ptr<Reference> reference;
+    bool reference_selected = false;
     bool presentation_pending = false;
 
     void capture_gpu() {
@@ -80,7 +86,10 @@ struct GameVideo::Impl {
         scene.fallback = !rendered;
         if (scene.fallback)
             std::copy(machine.pixels.begin(), machine.pixels.end(), scene.native_pixels.begin());
-        if (reference) reference->ready = false;
+        if (reference) {
+            reference->ready = false;
+            reference->canonical_ready = reference->selected_ready = false;
+        }
         if (scene.fallback) return;
         auto &w = scene.words;
         for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i) {
@@ -146,7 +155,14 @@ struct GameVideo::Impl {
     }
 
     void prepare_reference() {
-        if (!reference) reference = std::make_unique<Reference>(options);
+        if (!reference) {
+            reference = std::make_unique<Reference>(options);
+            if (reference_selected && gpu_scale != options.scale) {
+                auto selected = options;
+                selected.scale = gpu_scale;
+                reference->selected_sprite_plane.resize(Reference::plane_size(selected));
+            }
+        }
         auto &ref = *reference;
         if (ref.ready) return;
         const auto &w = gpu->words;
@@ -177,14 +193,19 @@ struct GameVideo::Impl {
             s.tile = w[at + 4]; s.palette = uint8_t(w[at + 5]);
             s.flip_x = (w[at + 6] & 1) != 0; s.flip_y = (w[at + 6] & 2) != 0;
         }
-        ref.sprites.raster(machine.video->sprite_tiles(), ref.sprite_plane, options);
         ref.ready = true;
     }
 
-    void render_reference(std::span<uint32_t> output, GameVideoOptions opts, unsigned mask, bool serial) {
-        if (!gpu || opts.scale != options.scale || opts.border != options.border ||
+    void render_reference(std::span<uint32_t> output, GameVideoOptions opts, unsigned mask, bool serial,
+                          bool canonical = false) {
+        if (!gpu || opts.scale != (canonical ? options.scale : gpu_scale) || opts.border != options.border ||
             output.size() < size_t(opts.width()) * opts.height() || (mask & ~511u))
             throw std::runtime_error("Invalid GPU CPU-reference request");
+        if (!canonical && !reference_selected) {
+            reference_selected = true;
+            if (reference && opts.scale != options.scale)
+                reference->selected_sprite_plane.resize(Reference::plane_size(opts));
+        }
         if (gpu->fallback) {
             const unsigned left = opts.border * opts.scale;
             for (unsigned y = 0; y < opts.height(); ++y) for (unsigned x = 0; x < opts.width(); ++x)
@@ -194,6 +215,13 @@ struct GameVideo::Impl {
         }
         prepare_reference();
         auto &ref = *reference;
+        const bool fixed_plane = opts.scale == options.scale;
+        auto &plane = fixed_plane ? ref.canonical_sprite_plane : ref.selected_sprite_plane;
+        auto &ready = fixed_plane ? ref.canonical_ready : ref.selected_ready;
+        if (!ready) {
+            ref.sprites.raster(machine.video->sprite_tiles(), plane, opts);
+            ready = true;
+        }
         ref.lines.rows_ = gpu->reference_rows;
         for (auto &r : ref.lines.rows_) {
             for (unsigned i = 0; i < 4; ++i) {
@@ -203,7 +231,7 @@ struct GameVideo::Impl {
             r.text.enabled &= (mask & 256u) != 0;
         }
         const auto compositor = serial ? compose_game_scene_serial : compose_game_scene;
-        compositor(ref.tiles, ref.text, ref.lines, ref.sprite_plane, false,
+        compositor(ref.tiles, ref.text, ref.lines, plane, false,
                    machine.video->playfield_tiles(), std::span(gpu->words).subspan(GpuScene::palette, 8192),
                    output, opts);
     }
@@ -211,7 +239,7 @@ struct GameVideo::Impl {
     void materialize_presentation() {
         if (!presentation_pending) return;
         // Snapshot/save paths must not lazily allocate row workers.
-        render_reference(presentation_pixels, options, 511, true);
+        render_reference(presentation_pixels, options, 511, true, true);
         // Canonical snapshots retain the NEXT-frame expanded sprite plane too.
         sprites.raster(machine.video->sprite_tiles(), presentation_sprites, options);
         presentation_pending = false;
@@ -388,16 +416,33 @@ std::span<const uint32_t> GameVideo::presentation() const {
     return impl_->options.expanded() ? std::span<const uint32_t>(impl_->presentation_pixels) : impl_->machine.pixels;
 }
 
-void GameVideo::enable_gpu_presentation(bool enabled, bool retain_reference) {
+void GameVideo::enable_gpu_presentation(bool enabled) {
     if (enabled) {
         if (!impl_->gpu) impl_->gpu = std::make_unique<GpuScene>();
-        if ((retain_reference || impl_->options.expanded()) && !impl_->reference)
+        // Only expanded canonical snapshots require eager reference storage.
+        // Interactive GPU scaling never allocates an unused diagnostic plane.
+        if (impl_->options.expanded() && !impl_->reference)
             impl_->reference = std::make_unique<Impl::Reference>(impl_->options);
     } else {
         impl_->materialize_presentation();
         impl_->gpu.reset();
         impl_->reference.reset();
+        impl_->reference_selected = false;
     }
+}
+void GameVideo::set_gpu_scale(unsigned scale) {
+    if (!impl_->gpu) throw std::runtime_error("GPU presentation snapshot is not enabled");
+    if (!scale || scale > GameVideoOptions::max_gpu_scale)
+        throw std::runtime_error("Game GPU reference scale must be 1..8");
+    if (scale == impl_->gpu_scale) return;
+    auto options = impl_->options;
+    options.scale = scale;
+    if (impl_->reference && impl_->reference_selected) {
+        auto &ref = *impl_->reference;
+        ref.selected_sprite_plane.resize(scale == impl_->options.scale ? 0 : Impl::Reference::plane_size(options));
+        ref.selected_ready = false;
+    }
+    impl_->gpu_scale = scale;
 }
 const GpuScene &GameVideo::gpu_scene() const {
     if (!impl_->gpu) throw std::runtime_error("GPU presentation snapshot is not enabled");

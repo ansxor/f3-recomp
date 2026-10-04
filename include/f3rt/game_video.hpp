@@ -10,7 +10,7 @@ struct GpuScene;
 enum class GameVideoMode { Diagnostic, Game, Compare };
 
 struct GameVideoOptions {
-    static constexpr unsigned max_scale = 4, max_border = 160;
+    static constexpr unsigned max_scale = 4, max_gpu_scale = 8, max_border = 160;
     unsigned scale = 1;
     unsigned border = 0; // Additional native scene columns on EACH side.
     unsigned width() const { return (320 + border * 2) * scale; }
@@ -33,7 +33,9 @@ public:
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;
     // Host-only presentation snapshot. Native pixels/state remain CPU-produced.
-    void enable_gpu_presentation(bool enabled = true, bool retain_reference = false);
+    void enable_gpu_presentation(bool enabled = true);
+    // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
+    void set_gpu_scale(unsigned scale);
     const GpuScene &gpu_scene() const;
     void render_reference(std::span<uint32_t> output, GameVideoOptions options,
                           unsigned layer_mask = 511, bool serial = false) const;

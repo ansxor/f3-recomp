@@ -510,3 +510,184 @@ Decision: ship both as separate opt-in modes, off/CPU still defaults. The
 measured water gain is worthwhile; broad unknown-effect interpolation is not
 justified. Keep the known-family/validity guards rather than infer arbitrary
 smooth runs or claim a universally accurate fitted effect function.
+
+## Automatic internal resolution (phase 6)
+
+`--video-scale auto-integer` and `--video-scale auto` require the GPU backend.
+Fixed numeric scales retain 1–4 on both backends. The window fit uses
+**physical pixels** from `SDL_GetWindowSizeInPixels`, including the native
+border width `320 + 2*border`; automatic windows request high pixel density.
+
+- **Auto-integer:** floor the limiting width/height ratio, clamp 1–4, rasterize
+  internally at that scale and blit 1:1 with nearest sampling. Center the
+  remainder on black; `--video-filter linear` cannot make it fractional.
+- **Auto:** ceiling of the limiting ratio, clamp 1–4, rasterize at that scale,
+  then use the existing aspect-preserving nearest/linear window blit.
+  If the window exceeds 4x, the cap means this is an upscale, not supersampling.
+- Below the 1x footprint, auto-integer centrally crops rather than shrinking.
+  During debounce the old integer texture can likewise crop in a smaller
+  window; the settled scale follows the new fit.
+- F11/Alt+Enter toggles fullscreen. Pixel polling covers resize, fullscreen
+  and display-density changes without depending on event subtype ordering.
+  Changes settle after **100ms quiet / 250ms maximum live-drag delay**.
+  A same-scale resize changes the viewport, not resources.
+
+### Runtime resource and state contract
+
+`GpuVideo::set_scale` replaces only sprite/surface targets and any already-used
+readback buffer/capture storage. Device, tile/sprite assets, scene/native/upload
+buffers, sampler and pipelines survive. SDL releases old resources when queued
+users finish: **no GPU-idle wait or asset re-upload**. Both off and interpolation
+pipelines are created once, and interpolation tile pen masks are computed even
+when startup scale is 1; transitions through 1 cannot lose the effect.
+
+`GameVideo` constructor options remain the canonical CPU snapshot geometry.
+`set_gpu_scale` changes separate host/reference geometry. Canonical and selected
+diagnostic sprite planes share decoded sources; diagnostics allocate only when
+used, then resize once per scale change. Canonical materialization uses its
+fixed plane and never resizes the diagnostic plane. Snapshot size/bytes, native
+sprite lag, expanded trail retention, CRCs, cycles and audio are unaffected.
+Trails still use exact native oracle output at any GPU scale; scale changes do
+not clear their history or introduce a one-frame retention glitch.
+
+Frontend changes occur **after native audio is enqueued and before GPU draw**.
+The integrated audiosync pre-enqueue 50ms FIFO cap and 50ms late-deadline resync
+remain. Headless automatic flags use startup scale 1 without SDL initialization
+or window queries. Netplay explicitly rejects automatic modes and retains fixed
+scale 1/border 0. No native CPU/sound/snapshot schema changes.
+
+### Maximum-scale decision and frame cost
+
+Keep the production numeric/automatic cap **4**. The diagnostic/render API and
+parity harness support 1–8 solely to measure the larger targets. Measured 5x
+GPU tail already consumes most of the 16.67ms budget before native CPU and
+presentation/interpolation; 6–8x exceed it. A 4K auto window therefore scales
+the 4x image; auto-integer retains centered 4x. No implicit performance-adaptive
+mode or change to the numeric CPU flag.
+
+M5/Metal, Release, border 48, seed 5, supported water frame 1560. One process at a
+time, 100 frozen samples after five warmups. GPU includes upload/submission,
+fence wait and readback, not swapchain/vsync. Native CPU columns are separate
+960-frame post-600 samples, not a sum of percentile ranks.
+
+| Scale | Internal | GPU mean/p95/worst ms | Native CPU mean/p95/worst ms |
+|---:|---|---|---|
+| 1 | 416×232 | 1.272 / 1.701 / 3.441 | 3.425 / 3.821 / 4.441 |
+| 2 | 832×464 | 2.897 / 5.085 / 6.553 | 3.475 / 3.939 / 4.102 |
+| 3 | 1248×696 | 4.981 / 6.086 / 7.601 | 3.399 / 3.777 / 4.062 |
+| 4 | 1664×928 | 5.998 / 7.631 / 9.985 | 3.415 / 3.800 / 4.098 |
+| 5 | 2080×1160 | 8.318 / 13.044 / 14.552 | 3.415 / 3.729 / 4.321 |
+| 6 | 2496×1392 | 11.332 / 15.154 / 16.615 | 3.398 / 3.764 / 4.172 |
+| 7 | 2912×1624 | 11.248 / 17.873 / 23.675 | 3.488 / 3.988 / 4.844 |
+| 8 | 3328×1856 | 12.336 / 18.251 / 23.673 | 3.472 / 3.958 / 4.898 |
+
+All eight runs also perform CPU/GPU parity, oracle readback and an independent
+CPU replay with zero differences. Scales above 4 use a fixed scale-1 canonical
+machine and the selected host CPU-reference geometry. CPU serial/threaded and
+varied matched-budget tables remain in the logs:
+`/tmp/f3-gpuvideo/auto-scale/perf/scale{1..8}.log`.
+
+### Transition and native-invariant corpus
+
+27 runs ×4000 = **108,000 native frames**: fixed scales 1–4/borders 0/48,
+changing scales for seeds 5/6/7/41 at both borders, unchanged scale-1 baselines,
+linear/fit changes for seed 5 at both borders, and one every-frame changing run.
+The sequence is `1→3→2→4→1→3→2→4→1` at frames
+240/1400/1500/1600/2000/3000/3600/3900. Changes force comparison even off the
+sampling interval; induced bitmap/trails/flip/writer/ending branches are restored
+without native state changes. Four retained trail frames additionally change
+`3→2→4→1` and compare an independent unchanged CPU-backend snapshot.
+
+**7188 full composites**, **2160 comparisons of each of nine isolated layers**,
+zero differing pixels, zero instruction fallback. The every-frame run checks all
+4000 gameplay images plus induced branches. Off/linear/fit changing runs have
+identical final machine/audio/state CRCs, cycles, native block counts and complete
+audio counts to their same-seed/border fixed scale-1 baselines. Each individual
+scale change also asserts identical canonical snapshot bytes at the frozen frame.
+
+Fresh ordinary headless CLI with auto-integer/border 48/fit flags retains
+**250,114,560 native RGB checks, zero mismatches**, frame CRC `3359f200`,
+51,507,335 native blocks, zero fallback and byte-identical established
+1,817,655-frame WAV. CPU-only `F3RT_GPU=OFF` build, runtime device check,
+CPU window and clear automatic-mode rejection also pass.
+
+Reproduction:
+
+```sh
+./build/f3rt-gpu-regression --seed 5 --frames 4000 --border 48 --every 1 \
+  --change-scale 240:3 --change-scale 1400:2 --change-scale 1500:4 \
+  --change-scale 1600:1 --change-scale 2000:3 --change-scale 3000:2 \
+  --change-scale 3600:4 --change-scale 3900:1 \
+  --inject-frame 1501 --inject-bitmap --inject-trails --inject-globalflip \
+  --inject-unknown --inject-ending
+./build/f3rt-gpu-regression --seed 5 --frames 1560 --every 120 --scale 8 --border 48 --bench
+```
+
+Full per-run summaries/logs and scale-change captures:
+`/tmp/f3-gpuvideo/auto-scale/parity/{runs,summary}.json` and `parity/captures`.
+Ending coverage remains an induced producer boundary, not a played ending.
+
+### Physical-pixel viewport examples
+
+Values exercised by the production policy with exact-fit/one-pixel-crossing,
+undersized crop and 4K-cap boundary assertions. Rectangles are `x,y,width,height`
+in window pixels. Integer is always nearest; auto obeys the selected filter.
+
+| Border | Window pixels | Integer scale / rectangle | Auto scale / rectangle |
+|---:|---|---|---|
+| 0 | 640×480 | 2 / 0,8,640,464 | 2 / 0,8,640,464 |
+| 0 | 1280×720 | 3 / 160,12,960,696 | 4 / 143,0,993,720 |
+| 0 | 1920×1080 | 4 / 320,76,1280,928 | 4 / 215,0,1489,1080 |
+| 0 | 2560×1440 | 4 / 640,256,1280,928 | 4 / 287,0,1986,1440 |
+| 48 | 640×480 | 1 / 112,124,416,232 | 2 / 0,62,640,356 |
+| 48 | 1280×720 | 3 / 16,12,1248,696 | 4 / 0,3,1280,713 |
+| 48 | 1920×1080 | 4 / 128,76,1664,928 | 4 / 0,5,1920,1070 |
+| 48 | 2560×1440 | 4 / 448,256,1664,928 | 4 / 0,6,2560,1427 |
+
+### Actual Mac window, debounce and audio pacing
+
+The actual frontend runs through 1800 strict-native frames in each mode, with
+real SDL/Cocoa window-size calls and F11 events (no replacement renderer).
+Both select from **2x-density physical pixels**, not points: 320×240 points
+reports 640×480 pixels; 640×360 points reports 1280×720. Requested
+640×480/1280×720/1920×1080/2560×1440 pixel sizes are observed exactly.
+Fullscreen is observed at **3024×1898 pixels**, followed by restored 1920×1080.
+Water windows and fullscreen/back surfaces are captured and visually inspected.
+Integer's 4x image remains centered on black even with `--video-filter linear`;
+auto fills only the aspect viewport.
+
+Six alternating resize calls over five frames settle to the starting scale
+with **no extra resource change**. Each run has only four actual scale changes;
+live setter durations are **0.031–0.080 ms**. Fullscreen and same-scale resizes
+log re-evaluation without recreating resources.
+
+Native CPU/audio continue. Both modes retain frame CRC `fb9bec22`,
+26,271,485 native blocks, zero instruction fallback and byte-identical
+908,827-frame WAVs. Four external capture pauses plus a deliberate 250ms
+external stall exercise late-clock recovery: **9 resyncs** per mode;
+FIFO backlog drops **0 / 1**, observed queue mean **32.212 / 30.305 ms**,
+maximum **61.792 / 61.826 ms**. The cap is checked before enqueue, so the
+post-enqueue statistic can exceed 50ms by one native audio frame; no seconds-long
+backlog is retained. No auditory listening claim is made.
+
+Artifacts: `/tmp/f3-gpuvideo/auto-scale/windows/{auto-integer,auto}.log`,
+actual `*_1510`, `*_1620`, `*_1690`, `*_1730` window PNGs, internal PNGs and WAVs.
+Runtime verification is Metal on this Retina Mac. No second-monitor density
+transition or other GPU host is physically exercised; current-pixel polling
+uses the same path for those changes.
+
+Frozen native frame 1500, border 48, off shader: **25 measured transitions to
+each scale** after one warm cycle, using `1→3→2→4→1` repeatedly. Every first
+resized image is fenced/read back and compared exactly with the selected CPU
+reference; all 104 first images match and the final canonical snapshot bytes
+are unchanged. These costs include targets/readback replacement, not a native
+CPU frame, and deliberately differ from the steady frame-1560 workload above.
+
+| Target scale | Setter mean/p95/worst ms | Setter + first fenced image mean/p95/worst ms |
+|---:|---|---|
+| 3 | 0.031 / 0.041 / 0.045 | 2.926 / 4.981 / 6.248 |
+| 2 | 0.028 / 0.041 / 0.051 | 1.965 / 3.192 / 4.270 |
+| 4 | 0.037 / 0.053 / 0.068 | 4.304 / 7.608 / 8.800 |
+| 1 | 0.033 / 0.067 / 0.067 | 1.201 / 1.712 / 2.351 |
+
+Observed output: `/tmp/f3-gpuvideo/auto-scale/scale-latency.log`.

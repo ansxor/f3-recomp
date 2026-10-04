@@ -233,3 +233,18 @@ schema changes. The original `GpuScene` and lazily materialized CPU images
 remain non-interpolated. Sprite uniforms retain the original count; the
 fragment-only mode uses its otherwise-unused high 16 bits after the sprite
 pass has copied its vertex uniforms.
+
+## Runtime GPU scale
+
+`GameVideo::set_gpu_scale` and `GpuVideo::set_scale` change host geometry only.
+The `GameVideo` constructor fixes canonical presentation-buffer sizes for the
+lifetime of the machine; auto starts this configuration at scale 1. Canonical
+save/load bytes, CRCs, native sprite lag and expanded trail history are retained
+while the selected GPU scale changes. Fixed and selected CPU-reference planes
+share decoded scene sources but not scale-dependent raster storage.
+
+GPU device/assets/pipelines and immutable tile pen masks survive scale changes.
+Only render targets and already-used diagnostic readback buffers are replaced;
+SDL defers releasing queued GPU resources. Scale/interpolation/blit policy is not
+serialized. Netplay still requires fixed scale 1/border 0; no CPU ABI, machine
+state or snapshot schema cutover.
