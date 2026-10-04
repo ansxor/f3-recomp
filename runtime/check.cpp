@@ -265,6 +265,21 @@ void check_sound_cycles(f3rt::Machine &m) {
                 (reg.sr&mask)==flags && (immediate.sr&mask)==flags && (memory.sr&mask)==flags,
                 "DIVU timing preserves packed remainder/quotient, overflow destination and defined flags");
     }
+    const struct { uint16_t source;int cycles; } multiplications[]={
+        {0,38},{1,42},{0x12,46},{0x5555,70},{0x7fff,42},{0x8000,40},{0xffff,40},{0xaaaa,68}
+    };
+    for (const auto &test : multiplications) {
+        const auto reg=execute({0xc1c1},test.source,0xfffffffd);
+        const auto immediate=execute({0xc1fc,test.source},test.source,0xfffffffd);
+        const auto memory=execute({0xc1d1},test.source,0xfffffffd);
+        require(reg.cycles==test.cycles && immediate.cycles==test.cycles+4 && memory.cycles==test.cycles+4,
+                "68000 MULS.W charges every Booth transition including the positive source's final transition");
+        const int32_t product=int32_t(int16_t(test.source))*-3;
+        const uint16_t sr=0x2710|(product==0?4:product<0?8:0);
+        require(reg.d0==uint32_t(product) && immediate.d0==uint32_t(product) && memory.d0==uint32_t(product) &&
+                reg.sr==sr && immediate.sr==sr && memory.sr==sr,
+                "Signed multiply preserves the full product and X while replacing N/Z/V/C");
+    }
 }
 void check_sound_irq(f3rt::Machine &m) {
     for (unsigned vector : {15,30,64,255}) {

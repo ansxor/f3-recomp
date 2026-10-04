@@ -50,6 +50,12 @@ measured operand-dependent cost: 10 cycles on quotient overflow, otherwise
 MUL, DIVS, Group 2 exceptions and all other CPU-model timings are unchanged.
 These corrections neither change ABI 2 nor establish audio parity.
 
+The sound 68000 MULS.W timing includes the final 1-to-0 Booth transition for
+strictly positive word sources. The former shift-until-zero loop omitted it,
+undercharging these operands by two cycles. Register, memory and immediate
+forms now match executed reference microprograms. Zero/negative sources,
+MULU, products/flags and all other CPU-model timings retain their prior behavior.
+
 The DUART now models both transmitters' ready/empty transitions, one-byte
 holding registers, framed serial clocks, enable/reset commands and TX-ready
 interrupts. F3's external clocks are 1 MHz (A) and 500 kHz (B); the game's

@@ -7407,7 +7407,8 @@ M68KMAKE_OP(muls, 16, ., d)
 	uint* r_dst = &DX;
 	uint x = MAKE_INT_16(DY);
 	if(CPU_TYPE_IS_010_LESS(CPU_TYPE)) {
-		uint c = 0;
+		/* A positive 68000 source has a final 1-to-0 Booth transition after y becomes zero. */
+		uint c = CPU_TYPE_IS_000(CPU_TYPE) && x && !(x & 0x8000) ? 2 : 0;
 		for (uint y = x, f = 0; y; y>>=1) {
 			if ((y&1) != f) {
 				c += 2;
@@ -7433,7 +7434,7 @@ M68KMAKE_OP(muls, 16, ., .)
 	uint* r_dst = &DX;
 	uint x = MAKE_INT_16(M68KMAKE_GET_OPER_AY_16);
 	if(CPU_TYPE_IS_010_LESS(CPU_TYPE)) {
-		uint c = 0;
+		uint c = CPU_TYPE_IS_000(CPU_TYPE) && x && !(x & 0x8000) ? 2 : 0;
 		for (uint y = x, f = 0; y; y>>=1) {
 			if ((y&1) != f) {
 				c += 2;
