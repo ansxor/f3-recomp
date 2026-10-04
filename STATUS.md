@@ -1,8 +1,8 @@
-DONE
+IN PROGRESS
 
-# Phase 3 — Land Maker sound-driver decoding
+# Phase 4 — Land Maker 1v1 rollback netplay
 
-Worktree `wt/audio`, branch `audio`, based on `checkpoint-2-video` (`4200b04`). Local commits only; no pushes or edits to integration/other worktrees.
+Worktree `wt/netplay`, branch `netplay`, based on `checkpoint-5-sound-default`. Local commits only; no pushes or edits to integration/other worktrees. Snapshot, rollback, UDP relay, client integration and impaired-network acceptance are not yet verified. Prior phase evidence follows; it is not netplay acceptance.
 
 ## Delivered
 
