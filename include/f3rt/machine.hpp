@@ -10,6 +10,7 @@
 
 namespace f3rt {
 class Video;
+class GameVideo;
 class Audio;
 class Interpreter;
 class Eeprom;
@@ -31,6 +32,7 @@ public:
     std::array<uint32_t, 320 * 232> pixels{};
     RomSet roms;
     std::unique_ptr<Video> video;
+    std::unique_ptr<GameVideo> game_video;
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;
     std::unique_ptr<Interpreter> interpreter;

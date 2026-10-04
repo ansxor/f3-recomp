@@ -38,3 +38,32 @@ sha1 = "dbfbe38841fc2f937052353eff1202790d364b9f"
 
 [discovery]
 coverage = "all_aligned"
+
+# Observe game-owned tile block descriptors; native instructions still execute.
+[[hooks]]
+address = 0x55c2
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x5614
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x56ae
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x5a22
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x5a5e
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x5a9a
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x5af4
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9bcea
+symbol = "f3_landmakr_video_hook"
+[[hooks]]
+address = 0x9ec4e
+symbol = "f3_landmakr_video_hook"

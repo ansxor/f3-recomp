@@ -1173,6 +1173,28 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
     m_impl->has_buffered_spriteram = true;
 }
 
+std::span<const uint8_t> Video::sprite_tiles() const {
+    return m_impl->decoded_sprites;
+}
+
+std::span<const uint8_t> Video::playfield_tiles() const {
+    return m_impl->decoded_tiles;
+}
+
+VideoLine Video::inspect_playfield_line(unsigned layer, int y,
+                                      std::span<const uint8_t> graphics_ram) {
+    if (layer >= NUM_PLAYFIELDS || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
+        y < 0 || y >= 512 || m_impl->decoded_tiles.empty()) return {};
+    auto &line = m_impl->pf_lines[layer];
+    line.last_y = -1;
+    m_impl->generate_playfield_line(int(layer), y, &graphics_ram[OFFS_PF_RAM]);
+    return {line.pix, line.flags};
+}
+
+std::span<const uint16_t> Video::sprite_plane() const {
+    return m_impl->sprite_framebuffer;
+}
+
 bool Video::roms_loaded() const {
     return !m_impl->decoded_sprites.empty();
 }

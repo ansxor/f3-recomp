@@ -11,6 +11,11 @@ namespace f3rt {
 constexpr int SCREEN_WIDTH  = 320;
 constexpr int SCREEN_HEIGHT = 232;
 
+struct VideoLine {
+    std::span<const uint16_t> palette;
+    std::span<const uint8_t> flags;
+};
+
 // Standalone TC0630FDP Software Renderer for Taito F3 (Land Maker)
 class Video {
 public:
@@ -52,6 +57,17 @@ public:
 
     // Direct injection of active spriteram (for single-frame capture tests)
     void set_active_spriteram(std::span<const uint8_t> spriteram);
+
+    // Immutable decoded assets can be shared with the independent game renderer.
+    std::span<const uint8_t> sprite_tiles() const;
+    std::span<const uint8_t> playfield_tiles() const;
+
+    // Diagnostic source-layer readback; does not advance sprite/frame state.
+    // The returned line is invalidated by the next renderer/inspection call.
+    VideoLine inspect_playfield_line(unsigned layer, int y,
+                                     std::span<const uint8_t> graphics_ram);
+    // 432x256 indexed plane currently prepared for the next render_frame call.
+    std::span<const uint16_t> sprite_plane() const;
 
     bool roms_loaded() const;
     bool flipscreen() const;

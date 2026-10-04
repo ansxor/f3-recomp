@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
+#include "f3rt/game_video.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include <algorithm>
@@ -44,6 +45,7 @@ void Machine::reset() {
     reset_devices();
     audio->reset_board();
     video->reset();
+    if (game_video) game_video->reset();
     interpreter->reset_main();
 }
 uint32_t Machine::input_word(unsigned index) const {
@@ -81,7 +83,11 @@ void Machine::write8(uint32_t a, uint8_t v) {
     a &= 0xffffff;
     if (a >= 0x400000 && a < 0x440000) { ram[a & 0x1ffff] = v; return; }
     if (a >= 0x440000 && a < 0x448000) { palette[a - 0x440000] = v; return; }
-    if (a >= 0x600000 && a < 0x640000) { graphics[a - 0x600000] = v; return; }
+    if (a >= 0x600000 && a < 0x640000) {
+        if (game_video) game_video->observe_write(cpu.pc, a);
+        graphics[a - 0x600000] = v;
+        return;
+    }
     if (a >= 0x660000 && a < 0x660020) { control[a - 0x660000] = v; return; }
     if (a >= 0xc00000 && a < 0xc00800) { shared[a - 0xc00000] = v; return; }
     if (a >= 0xc80000 && a <= 0xc80003) { audio->set_reset(false); return; }

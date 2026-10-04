@@ -1,5 +1,6 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
+#include "f3rt/game_video.hpp"
 #include "interpreter.hpp"
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
@@ -92,6 +93,9 @@ int main(int argc, char **argv) try {
     uint64_t seed = 12345;
     bool seed_specified = false;
     uint64_t target_frames = 40000;
+    bool video_diff = false;
+    unsigned video_layer_mask = 1;
+    uint64_t video_diff_every = 120;
     std::filesystem::path dump_dir;
     std::filesystem::path capture_surface;
 
@@ -115,6 +119,12 @@ int main(int argc, char **argv) try {
             dump_dir = value();
         } else if (arg == "--capture-surface" || arg == "--surface") {
             capture_surface = value();
+        } else if (arg == "--video-diff") {
+            video_diff = true;
+        } else if (arg == "--video-layer-mask") {
+            video_layer_mask = unsigned(std::stoul(value(), nullptr, 0));
+        } else if (arg == "--video-diff-every") {
+            video_diff_every = std::stoull(value());
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [options]\n\n"
                       << "Deterministic strict-native seeded gameplay regression harness.\n\n"
@@ -125,6 +135,9 @@ int main(int argc, char **argv) try {
                       << "  --frames N             Number of frames to advance (default: 40000)\n"
                       << "  --dump-dir DIR         Dump final machine state using f3rt::dump_machine\n"
                       << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
+                      << "  --video-diff           Compare game-owned tilemap pixels against FDP oracle from frame 600\n"
+                      << "  --video-layer-mask N   Playfield bit mask (default: 1, PF0)\n"
+                      << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
                       << "  --help, -h             Show this help message\n";
             return 0;
         } else {
@@ -152,6 +165,11 @@ int main(int argc, char **argv) try {
 
     auto machine = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir, set));
     auto &m = *machine;
+    if (video_diff) {
+        if (!video_diff_every || !video_layer_mask || (video_layer_mask & ~15u))
+            throw std::runtime_error("Video diff requires a positive interval and PF0..PF3 mask");
+        m.game_video = std::make_unique<f3rt::GameVideo>(m);
+    }
 
     // Strict native mode: absolutely no fallback allowed
     m.allow_main_fallback = false;
@@ -214,6 +232,9 @@ int main(int argc, char **argv) try {
             print_failure_state(m, seed, f, "Fallback instruction executed under strict native mode");
             return 1;
         }
+        if (video_diff && m.frame >= 600 && (m.frame - 600) % video_diff_every == 0) {
+            m.game_video->compare_playfields(m.frame, video_layer_mask);
+        }
 
         // Drain audio output
         size_t count = 0;
@@ -241,6 +262,7 @@ int main(int argc, char **argv) try {
         }
         f3rt::write_bmp(capture_surface, m.pixels);
     }
+    if (m.game_video) m.game_video->report(std::cout);
 
     std::cout << "SUCCESS set=" << set
               << " seed=" << seed
