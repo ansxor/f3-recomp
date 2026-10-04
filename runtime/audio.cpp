@@ -591,8 +591,8 @@ size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
         float r = m_impl->m_sample_buffer[m_impl->m_rb_read_pos * 2 + 1];
         m_impl->m_rb_read_pos = (m_impl->m_rb_read_pos + 1) % Impl::RING_BUFFER_CAPACITY;
 
-        interleaved_stereo[i * 2 + 0] = clamp16(int32_t(std::clamp(l, -1.0f, 1.0f) * 32767.0f));
-        interleaved_stereo[i * 2 + 1] = clamp16(int32_t(std::clamp(r, -1.0f, 1.0f) * 32767.0f));
+        interleaved_stereo[i * 2 + 0] = clamp16(int32_t(std::clamp(l, -1.0f, 1.0f) * 32768.0f));
+        interleaved_stereo[i * 2 + 1] = clamp16(int32_t(std::clamp(r, -1.0f, 1.0f) * 32768.0f));
     }
     m_impl->m_rb_count -= frames;
     return frames;

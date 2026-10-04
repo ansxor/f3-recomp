@@ -10,12 +10,21 @@ class Eeprom {
 public:
     std::array<uint16_t, 64> words;
     Eeprom() { words.fill(0xffff); }
-    bool output() const { return data_out; }
-    void pins(uint8_t pins) {
+    // Absolute 16 MHz main-clock ticks. Programming completion is independent
+    // of serial clock edges; DO reports busy when CS is raised to poll it.
+    bool output(uint64_t now) const {
+        return selected && mode == Mode::Command && count == 0 ? now >= ready_at : data_out;
+    }
+    void reset() {
+        selected = old_clock = writable = false;
+        ready_at = 0;
+        reset_command();
+    }
+    void pins(uint8_t pins, uint64_t now) {
         const bool select = pins & 0x10, clock = pins & 0x08, bit = pins & 0x04;
         if (!select) { selected = false; old_clock = clock; reset_command(); return; }
         if (!selected) { selected = true; reset_command(); }
-        if (clock && !old_clock) edge(bit);
+        if (clock && !old_clock) edge(bit, now);
         old_clock = clock;
     }
     void load(const std::filesystem::path &path) {
@@ -38,19 +47,24 @@ private:
     bool selected = false, old_clock = false, data_out = true, writable = false;
     uint32_t shift = 0;
     unsigned count = 0, address = 0, read_bit = 0;
+    uint64_t ready_at = 0;
     void reset_command() { mode = Mode::Command; shift = count = 0; data_out = true; }
-    void edge(bool bit) {
+    void edge(bool bit, uint64_t now) {
         if (mode == Mode::Read) {
             data_out = (words[address] >> (15 - read_bit)) & 1;
             if (++read_bit == 16) { read_bit = 0; address = (address + 1) & 63; }
             return;
         }
         if (mode == Mode::Done) return;
-        if (mode == Mode::Command && !count && !bit) return;
+        if (mode == Mode::Command && !count && (!bit || now < ready_at)) return;
         shift = (shift << 1) | unsigned(bit); ++count;
         if (mode == Mode::Write || mode == Mode::WriteAll) {
             if (count == 16) {
-                if (writable) { if (mode == Mode::WriteAll) words.fill(uint16_t(shift)); else words[address] = uint16_t(shift); }
+                if (writable) {
+                    if (mode == Mode::WriteAll) words.fill(uint16_t(shift));
+                    else words[address] = uint16_t(shift);
+                    ready_at = now + (mode == Mode::WriteAll ? 128000 : 28000);
+                }
                 mode = Mode::Done; data_out = true;
             }
             return;
@@ -60,12 +74,18 @@ private:
         switch ((shift >> 6) & 3) {
         case 2: mode = Mode::Read; read_bit = 0; data_out = false; break;
         case 1: mode = Mode::Write; count = shift = 0; break;
-        case 3: if (writable) words[address] = 0xffff; mode = Mode::Done; break;
+        case 3:
+            if (writable) { words[address] = 0xffff; ready_at = now + 16000; }
+            mode = Mode::Done;
+            break;
         case 0:
             switch (address >> 4) {
             case 0: writable = false; mode = Mode::Done; break;
             case 1: mode = Mode::WriteAll; count = shift = 0; break;
-            case 2: if (writable) words.fill(0xffff); mode = Mode::Done; break;
+            case 2:
+                if (writable) { words.fill(0xffff); ready_at = now + 128000; }
+                mode = Mode::Done;
+                break;
             case 3: writable = true; mode = Mode::Done; break;
             }
         }
