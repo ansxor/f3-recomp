@@ -56,6 +56,44 @@ void check_game_tile_descriptors() {
     require(scene.supported(1) && !(scene.playfield_pixel(1, 0, 0, false, assets).flags & 0x10),
             "Complete game clear restores ownership and removes old tiles");
 }
+void check_game_tile_row_sampling() {
+    f3rt::GameTiles scene;
+    std::array<uint8_t, 64 * 256> assets{};
+    for (unsigned i = 0; i < assets.size(); ++i) assets[i] = uint8_t(i * 37 + i / 16);
+    std::array<std::array<f3rt::CanonicalGameTileCell, 2048>, 4> maps{};
+    std::vector<uint8_t> bytes(scene.state_size());
+    f3rt::StateWriter writer(bytes);
+    for (unsigned layer = 0; layer < maps.size(); ++layer) {
+        for (unsigned i = 0; i < maps[layer].size(); ++i) {
+            auto &cell = maps[layer][i];
+            cell = {uint16_t(0x8000 | (i & 63)), uint16_t(i * 31 + layer * 19),
+                    uint8_t(i & 63), uint8_t(i & 1), uint8_t((i >> 1) & 1), uint8_t((i >> 2) & 1)};
+            writer.write(cell);
+        }
+        writer.write(uint8_t(1)); writer.write(uint32_t(0));
+    }
+    f3rt::StateReader reader(bytes);
+    scene.load_state(reader);
+    for (unsigned layer = 0; layer < maps.size(); ++layer)
+        for (bool flipped : {false, true})
+            for (int y : {-513, -512, -1, 0, 15, 16, 511, 512}) {
+                auto sampler = scene.row_sampler(layer, y, flipped, assets);
+                // Repeats, reverse jumps, cell boundaries and full-map wraps.
+                for (int x : {0, 15, 16, 17, 17, 31, 32, 1023, 1024, -1, -16,
+                              -17, -1024, -1025, 511, 256, 0, 1023}) {
+                    const unsigned sx = (unsigned(x) & 1023) ^ (flipped ? 1023 : 0);
+                    const unsigned sy = (unsigned(y) & 511) ^ (flipped ? 511 : 0);
+                    const auto &cell = maps[layer][(sy / 16) * 64 + sx / 16];
+                    const unsigned tx = (sx & 15) ^ (cell.flip_x ? 15 : 0);
+                    const unsigned ty = (sy & 15) ^ (cell.flip_y ? 15 : 0);
+                    const uint8_t pen = assets[(cell.tile & 0x7fff) * 256 + ty * 16 + tx] & cell.pen_mask;
+                    const auto pixel = sampler.pixel(x);
+                    require(pixel.palette == uint16_t(cell.palette + pen) &&
+                            pixel.flags == uint8_t((pen ? 0x10 : 0) | cell.blend),
+                            "Row sampling preserves descriptor changes, masks, flips and arbitrary wrapped X jumps");
+                }
+            }
+}
 void check_game_sprite_descriptors() {
     std::array<uint8_t, 36> rom{};
     std::array<uint8_t, 0x20000> ram{};
@@ -679,6 +717,7 @@ void check_audio_mixer() {
 }
 int main() try {
     check_game_tile_descriptors();
+    check_game_tile_row_sampling();
     check_game_sprite_descriptors();
     check_game_sprite_top_edge();
     check_dsp_boundaries();

@@ -16,7 +16,7 @@ class Effects {
         float low = 0;
         explicit Line(size_t length) : samples(length) {}
         float read() const { return samples[cursor]; }
-        void put(float value) { samples[cursor] = value; cursor = (cursor + 1) % samples.size(); }
+        void put(float value) { samples[cursor] = value; if (++cursor == samples.size()) cursor = 0; }
         void clear() { std::fill(samples.begin(), samples.end(), 0); cursor = 0; low = 0; }
     };
     std::span<const uint8_t> rom_;
@@ -86,8 +86,11 @@ public:
                 auto &line = delay_[ch];
                 const float p = float(line.cursor + line.samples.size()) - length;
                 const size_t base = size_t(p); const float fraction = p - float(base);
-                echoes[ch] = line.samples[base % line.samples.size()] * (1 - fraction) +
-                    line.samples[(base + 1) % line.samples.size()] * fraction;
+                // Byte parameters bound length below the 96000-sample line;
+                // cursor + size - length is nonnegative and less than 2*size.
+                const size_t index = base >= line.samples.size() ? base - line.samples.size() : base;
+                const size_t next = index + 1 == line.samples.size() ? 0 : index + 1;
+                echoes[ch] = line.samples[index] * (1 - fraction) + line.samples[next] * fraction;
             }
             for (unsigned ch = 0; ch < 2; ++ch) {
                 const float send_delay = buses[f * 8 + 4 + ch] * input_gain[ch];

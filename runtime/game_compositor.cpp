@@ -122,11 +122,12 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
             for (unsigned index : order) {
                 const auto &state = layer(index);
                 if (!state.enabled) continue;
-                int source_y = 0;
+                GameTiles::RowSampler tile_sampler;
                 if (index < 4) {
                     const auto &pf = row.playfields[index];
                     const int fy = (int(pf.y_fraction) * scale + sub_y * pf.y_step) / scale;
-                    source_y = pf.source_y + (fy >> 8);
+                    const int source_y = pf.source_y + (fy >> 8);
+                    tile_sampler = tiles.row_sampler(index, source_y, flipped, tile_pixels);
                 }
                 // Expanded subcolumns often resolve to the same source texel.
                 // Cache only within one layer/subrow; palette offsets apply to copies.
@@ -157,13 +158,13 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                             const int x = floor_divide(pf.source_x * scale + (sample_x - 46 * scale) * pf.x_step, scale * 256);
                             if constexpr (Expanded) {
                                 if (!cached_valid || cached_x != x) {
-                                    cached_source = tiles.playfield_pixel(index, x, source_y, flipped, tile_pixels);
+                                    cached_source = tile_sampler.pixel(x);
                                     cached_x = x;
                                     cached_valid = true;
                                 }
                                 source = cached_source;
                             } else {
-                                source = tiles.playfield_pixel(index, x, source_y, flipped, tile_pixels);
+                                source = tile_sampler.pixel(x);
                             }
                             select = (source.flags & 1) != 0;
                             if (!(source.flags & 0x10) || !source.palette) continue;

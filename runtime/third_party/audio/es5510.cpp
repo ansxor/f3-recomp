@@ -43,7 +43,9 @@ inline bool isFlagSet(uint8_t ccr, uint8_t flag) {
 }
 
 inline int32_t sext24(int32_t val) {
-    return (val & 0x00800000) ? (val | ~0x00ffffff) : (val & 0x00ffffff);
+    // Mask before biasing so sign-extended serial inputs and raw GPR inputs
+    // both map to the same signed 24-bit value without a sign-dependent path.
+    return ((val & 0x00ffffff) ^ 0x00800000) - 0x00800000;
 }
 
 inline int64_t sext48(int64_t val) {
@@ -58,12 +60,15 @@ inline int32_t add(int32_t a, int32_t b, uint8_t &flags) {
     bool const overflow = (aSign == bSign) && (aSign != resultSign);
     bool const carry = (result & 0x01000000) != 0;
     bool const negative = resultSign != 0;
-    bool const lessThan = (overflow && !negative) || (!overflow && negative);
-    flags = setFlagTo(flags, FLAG_C, carry);
-    flags = setFlagTo(flags, FLAG_N, negative);
-    flags = setFlagTo(flags, FLAG_Z, (result & 0x00ffffff) == 0);
-    flags = setFlagTo(flags, FLAG_V, overflow);
-    flags = setFlagTo(flags, FLAG_LT, lessThan);
+    bool const lessThan = overflow != negative;
+    // All five arithmetic flags are replaced together; preserve the other bits
+    // without repeatedly clearing and merging the same flags byte.
+    flags = (flags & ~FLAG_MASK)
+        | (uint8_t(carry) * FLAG_C)
+        | (uint8_t(negative) * FLAG_N)
+        | (uint8_t((result & 0x00ffffff) == 0) * FLAG_Z)
+        | (uint8_t(overflow) * FLAG_V)
+        | (uint8_t(lessThan) * FLAG_LT);
     return result & 0x00ffffff;
 }
 
@@ -581,11 +586,7 @@ void ES5510::execute_run(int cycles) {
             bool skip = false;
             bool skippable = (instr & (1 << 7)) != 0;
             if (skippable) {
-                bool skipCondition = (ccr & cmr & FLAG_MASK) != 0;
-                if (isFlagSet(cmr, FLAG_NOT)) {
-                    skipCondition = !skipCondition;
-                }
-                skip = skipCondition;
+                skip = ((ccr & cmr & FLAG_MASK) != 0) != isFlagSet(cmr, FLAG_NOT);
             }
 
             // Write multiplier result N-1

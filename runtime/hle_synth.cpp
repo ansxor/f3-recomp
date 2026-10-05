@@ -103,6 +103,8 @@ struct Synth::Impl {
         Filter filter{};
         double position = 0, start = 0, end = 0, increment = 0;
         double left = 0, right = 0, target_left = 0, target_right = 0;
+        float left_gain = 0, right_gain = 0;
+        bool gain_dirty = true;
         float cancellation = 1;
         uint32_t cancellation_frames = 0;
         uint64_t serial = 0;
@@ -442,7 +444,8 @@ struct Synth::Impl {
         v.pair=uint8_t((choice+1)&3);
         v.target_left=v.left_volume;v.target_right=v.right_volume;
         if(initial){v.left=v.target_left;v.right=v.target_right;v.gain_frames=0;}
-        else v.gain_frames=volume_ramp;
+        else v.gain_frames=(v.left==v.target_left&&v.right==v.target_right)?0:volume_ramp;
+        v.gain_dirty=true;
         v.filter.targets(v.k1,v.k2,initial);
         if(!initial&&notify)emit(v,VoiceEvent::Kind::Parameters,at);
     }
@@ -676,7 +679,7 @@ struct Synth::Impl {
             while(timer<=tick){service(timer);timer+=timer_ticks;}
             float *out=output+frame*8;std::fill_n(out,8,0.f);
             for(Voice &v:voices){if(!v.active)continue;
-                if(v.gain_frames){v.left+=(v.target_left-v.left)/v.gain_frames;v.right+=(v.target_right-v.right)/v.gain_frames;--v.gain_frames;}
+                if(v.gain_frames){v.left+=(v.target_left-v.left)/v.gain_frames;v.right+=(v.target_right-v.right)/v.gain_frames;--v.gain_frames;v.gain_dirty=true;}
                 if(v.cancellation_frames){v.cancellation-=v.cancellation/v.cancellation_frames;if(!--v.cancellation_frames){stop(v,tick);continue;}}
                 if(v.sample_finished)continue;
                 if(v.position<0||v.position>=double(samples.size())){stop(v,tick);continue;}
@@ -684,8 +687,9 @@ struct Synth::Impl {
                 double first=sample(index);
                 double value=first+(sample(index+1)-first)*fraction;
                 value=v.filter.process(value)*v.cancellation/524288.0;
-                out[v.pair*2]+=float(value)*interpolated_gain(v.left);
-                out[v.pair*2+1]+=float(value)*interpolated_gain(v.right);
+                if(v.gain_dirty){v.left_gain=interpolated_gain(v.left);v.right_gain=interpolated_gain(v.right);v.gain_dirty=false;}
+                out[v.pair*2]+=float(value)*v.left_gain;
+                out[v.pair*2+1]+=float(value)*v.right_gain;
                 v.position+=v.reverse?-v.increment:v.increment;
                 double length=v.end-v.start;
                 if(!v.reverse&&v.position>v.end){

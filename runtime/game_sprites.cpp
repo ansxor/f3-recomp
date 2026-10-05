@@ -520,22 +520,33 @@ void GameSprites::raster(std::span<const uint8_t> assets, std::span<uint16_t> ou
             sprite.y + sprite.scale_y * 16 <= 24 * 256 || sprite.y > 255 * 256)
             continue;
         const auto *pixels = assets.data() + (sprite.tile & 32767) * 256;
+        struct Column { int left, right, source; };
+        std::array<Column, 16> columns;
+        unsigned column_count = 0;
+        // Column geometry and horizontal flip do not depend on the texel row.
+        for (int x = 0; x < 16; ++x) {
+            const int position_x = (sprite.x + x * sprite.scale_x) * scale + 128;
+            const int start_x = (position_x >> 8) - origin_x * scale;
+            const int end_x = ((position_x + sprite.scale_x * scale) >> 8) - origin_x * scale;
+            if (start_x == end_x || end_x <= left || start_x >= right) continue;
+            columns[column_count++] = {std::max(left, start_x), std::min(right, end_x),
+                                       x ^ (sprite.flip_x ? 15 : 0)};
+        }
+        if (!column_count) continue;
         for (int y = 0; y < 16; ++y) {
             const int position_y = (sprite.y + y * sprite.scale_y) * scale + y_bias;
             const int start_y = (position_y >> 8) - origin_y * scale;
             const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * scale) >> 8) - origin_y * scale);
             if (end_y <= top || start_y >= bottom) continue;
             const auto *row = pixels + (y ^ (sprite.flip_y ? 15 : 0)) * 16;
-            for (int x = 0; x < 16; ++x) {
-                const int position_x = (sprite.x + x * sprite.scale_x) * scale + 128;
-                const int start_x = (position_x >> 8) - origin_x * scale;
-                const int end_x = ((position_x + sprite.scale_x * scale) >> 8) - origin_x * scale;
-                if (start_x == end_x || end_x <= left || start_x >= right) continue;
-                const uint8_t pen = row[x ^ (sprite.flip_x ? 15 : 0)] & mask;
+            const int first_y = std::max(top, start_y), last_y = std::min(bottom, end_y);
+            for (unsigned x = 0; x < column_count; ++x) {
+                const auto &column = columns[x];
+                const uint8_t pen = row[column.source] & mask;
                 if (!pen) continue;
                 const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
-                for (int dy = std::max(top, start_y); dy < std::min(bottom, end_y); ++dy)
-                    for (int dx = std::max(left, start_x); dx < std::min(right, end_x); ++dx) {
+                for (int dy = first_y; dy < last_y; ++dy)
+                    for (int dx = column.left; dx < column.right; ++dx) {
                         auto &destination = output[dy * width + dx];
                         if (!destination) destination = color;
                     }

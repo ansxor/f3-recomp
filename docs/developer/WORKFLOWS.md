@@ -251,3 +251,46 @@ bounds assumptions, or GPU/HLE approximations would add memory, invalidation or
 accuracy risk without demonstrated benefit here; none was retained. These
 finite schedules preserve observed model behavior, not exhaustive game,
 physical-bus timing or physical-board waveform accuracy.
+
+### Second-pass generic candidates
+
+Starting checkpoint `5d5e6ca` preserves the first verified exact pass. Subsequent
+candidates use generic algorithms, not ROM/opcode/program special cases:
+
+- `GameTiles::RowSampler` caches one normalized map-column's descriptor and tile
+  row for a compose layer/subrow. Wrapping/reflection determines the key; arbitrary
+  X jumps, repeats, mosaics and clip gaps need no sequential-X assumption. Cache
+  lifetime ends with the subrow; it is not serialized. Reverse by restoring direct
+  sampling and removing the factory/sampler plus its compositor use together.
+- `GameSprites::raster` computes the sixteen possible clipped X columns once per
+  sprite, retaining texel-row order, transparency, priority, trails and original
+  fixed-point rounding. Reverse by moving X geometry back into the row loop.
+- ES5510 `sext24`, `add` and skip-condition calculation use equivalent mask/bias,
+  packed flag and Boolean arithmetic; operand reads and pipeline ordering stay
+  unchanged. Reverse those three helpers/expressions independently.
+- HLE synthesis caches pure encoded-gain lookup results, invalidated by every
+  gain change; equal-current/target volume does not need a zero-delta ramp.
+  HLE effects replace bounded cursor/remainder divisions with conditional wrapping.
+  Float arithmetic ordering, sample rate and effects topology are unchanged.
+  Reverse these in `hle_synth.cpp` and `hle_effects.hpp`; they are exact against the
+  existing HLE output, not a claim of accurate-engine waveform equivalence.
+
+Isolated five-pair accurate/native game measurements against this checkpoint:
+DSP arithmetic 4.33096 → 4.29656 ms (0.79% lower); sprite columns
+4.33152 → 4.24708 ms (1.95%); tile rows 4.34219 → 4.12845 ms (4.92%).
+Combined: 4.33057 → 4.03624 ms (6.80%), p95 4.50515 → 4.17643 ms.
+Three-pair controls: FDP/native 3.60966 → 3.58580 ms (0.66%);
+game/HLE 2.78614 → 2.49021 ms (10.62%). These combined binaries precede the
+separate exact HLE gain/effects candidate. All per-run observations remain in
+`build/opt/round2-benchmarks/results.json`; no outliers were removed.
+
+Generic synthetic smoke compared 2,097,152 cached/direct tile samples with an
+independent descriptor formula, including negative/extreme coordinates, tile-ID
+masking, all local/global flips, transparent/masked pens and palette/blend fields.
+288 complete sprite-plane comparisons used the original raster loop across scales
+1..8, borders 0/48/160, overlap, retained trails, fractional/offscreen positions,
+and scales from 0 through 65535. All matched. A permanent device regression covers
+row-cache boundary/wrap/reverse/repeated-coordinate transitions without ROM data.
+Native and HLE 2400-frame pixel/PCM/state CRC streams and counts matched the frozen
+checkpoint; HLE includes the later gain/effects candidate. These are fingerprint
+comparisons, not a claim of direct byte comparison of every frame.
