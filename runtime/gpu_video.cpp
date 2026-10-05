@@ -528,7 +528,7 @@ struct GpuVideo::Impl {
             }
             SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);
             SDL_BindGPUFragmentStorageBuffers(pass, 0, &sp_assets, 1);
-            SDL_DrawGPUPrimitives(pass, 256 * 6, scene.sprite_count, 0, 0);
+            SDL_DrawGPUPrimitives(pass, 6, scene.sprite_count, 0, 0);
             SDL_EndGPURenderPass(pass);
         }
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));

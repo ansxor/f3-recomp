@@ -119,7 +119,7 @@ Options parse(int argc, char **argv) {
                 "--change-scale FRAME:SCALE (repeatable; constructor/canonical scale remains 1)\n"
                 "--inject-frame N (1407) --inject-bitmap --inject-trails --inject-globalflip\n"
                 "--inject-unknown --inject-ending (induced producer boundary, NOT played ending)\n"
-                "--inject-sprite-boundaries (ROM-texel crushed overlap, mirrored zoom, nominal top cull)\n"
+                "--inject-sprite-boundaries (ROM-texel row order, flips, collapsed spans, overlap, edge clipping/cull)\n"
                 "Run each scale 1..4 with border 0 and 48 for the parity matrix.\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown argument: " + arg);
@@ -602,12 +602,166 @@ void inject(Harness &h, unsigned kind) {
     m.game_video->render_frame();
     if (!m.game_video->gpu_scene().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
 }
+// One native single-sprite (0x4688) descriptor: integral producer fields
+// relative to the (46, 24) sprite origin with scroll zero and no global flip.
+struct BoundarySprite {
+    int x = 0, y = 0;
+    unsigned sx = 256, sy = 256; // Producer scale = 256 - zoom byte.
+    bool fx = false, fy = false, via_xor = false, must_show = false;
+    uint16_t palette = 0xc0;
+};
+// CPU reference spans (GameSprites::raster) in selected output coordinates.
+// Used only to place and classify witnesses; pixels are judged by the
+// independent CPU reference and the exact CPU/GPU comparisons.
+struct BoundarySpans {
+    std::array<int, 16> x0{}, x1{}, y0{}, y1{};
+    bool culled = false;
+    std::array<bool, 4> clipped{}; // left, right, top, bottom
+};
+BoundarySpans boundary_spans(const BoundarySprite &d, f3rt::GameVideoOptions v) {
+    const int s = int(v.scale), b = int(v.border), sx = int(d.sx), sy = int(d.sy);
+    const int x = (d.x + 46) * 256, y = (d.y + 24) * 256;
+    BoundarySpans r;
+    r.culled = x + sx * 16 <= (46 - b) * 256 || x > (365 + b) * 256 || y + sy * 16 <= 24 * 256 || y > 255 * 256;
+    for (int t = 0; t < 16; ++t) {
+        const int px = (x + t * sx) * s + 128, py = (y + t * sy) * s + 255;
+        r.x0[t] = (px >> 8) - (46 - b) * s;
+        r.x1[t] = ((px + sx * s) >> 8) - (46 - b) * s;
+        r.y0[t] = (py >> 8) - 24 * s;
+        r.y1[t] = std::max(r.y0[t] + 1, ((py + sy * s) >> 8) - 24 * s);
+    }
+    r.clipped = {r.x0[0] < 0, r.x1[15] > int(v.width()), r.y0[0] < 0, r.y1[15] > int(v.height())};
+    return r;
+}
+struct BoundarySample { unsigned pen = 0, rows = 0; bool transparent_first = false, reordered = false; };
+// Pen mask 15 matches sprite command 0. Earliest opaque logical row wins.
+BoundarySample boundary_sample(const BoundarySpans &r, std::span<const uint8_t> pens, bool fx, bool fy, int px, int py) {
+    BoundarySample out;
+    int column = -1;
+    for (int t = 0; t < 16; ++t) if (r.x0[t] <= px && px < r.x1[t]) column = t;
+    if (r.culled || column < 0) return out;
+    unsigned first = 0;
+    for (int t = 0; t < 16; ++t) {
+        if (py < r.y0[t] || py >= r.y1[t]) continue;
+        const unsigned pen = pens[(t ^ (fy ? 15 : 0)) * 16 + (column ^ (fx ? 15 : 0))] & 15u;
+        if (!out.rows++) first = pen;
+        if (!out.pen) out.pen = pen;
+        else if (pen && pen != out.pen) out.reordered = true;
+    }
+    out.transparent_first = out.rows > 1 && !first && out.pen;
+    return out;
+}
+struct BoundaryStats {
+    size_t visible = 0, hidden = 0, collapsed = 0, overlapped = 0, transparent_first = 0, reordered = 0,
+        flipped = 0, shown_through = 0;
+    std::array<size_t, 4> edges{};
+};
+// Classifies every CPU-reference sprite pixel of one injected batch. Line
+// clip/enable state may hide predicted texels, but the reference must never
+// show an unpredicted sprite pixel, and within each output row every
+// (palette, pen) must map to one distinct ARGB value. That ties each witness
+// (first-opaque row order, flip, show-through) to the reference's choice.
+BoundaryStats boundary_witnesses(const std::vector<BoundarySprite> &list, std::span<const uint8_t> pens,
+        f3rt::GameVideoOptions v, std::span<const uint32_t> reference, std::span<const uint32_t> blank,
+        const std::string &tag) {
+    enum : uint8_t { overlapped = 1, transparent_first = 2, reordered = 4, flipped = 8, shown_through = 16 };
+    const int width = int(v.width()), height = int(v.height());
+    std::vector<uint16_t> key(size_t(width) * height), owner(key.size());
+    std::vector<uint8_t> flags(key.size());
+    std::vector<BoundarySpans> spans;
+    BoundaryStats stats;
+    for (size_t i = 0; i < list.size(); ++i) {
+        const auto &d = list[i];
+        const auto &r = spans.emplace_back(boundary_spans(d, v));
+        if (r.culled) throw std::runtime_error(tag + " descriptor " + std::to_string(i) + " is nominally culled");
+        for (int t = 0; t < 16; ++t) {
+            if (r.x0[t] != r.x1[t] || r.x0[t] <= 0 || r.x0[t] >= width) continue;
+            bool opaque = false;
+            for (int row = 0; row < 16; ++row) opaque |= (pens[row * 16 + (t ^ (d.fx ? 15 : 0))] & 15u) != 0;
+            stats.collapsed += opaque;
+        }
+        for (int py = std::max(0, r.y0[0]); py < std::min(height, r.y1[15]); ++py)
+            for (int px = std::max(0, r.x0[0]); px < std::min(width, r.x1[15]); ++px) {
+                const auto sample = boundary_sample(r, pens, d.fx, d.fy, px, py);
+                const size_t at = size_t(py) * width + px;
+                if (!sample.rows) continue;
+                if (sample.rows > 1 && d.sy * v.scale >= 256)
+                    throw std::runtime_error(tag + " witness model overlapped rows at or above one output pixel");
+                if (!sample.pen) {
+                    if (key[at]) flags[at] |= shown_through;
+                    continue;
+                }
+                uint8_t f = uint8_t((sample.rows > 1 ? overlapped : 0) | (sample.transparent_first ? transparent_first : 0) |
+                    (sample.reordered ? reordered : 0));
+                if ((d.fx || d.fy) && boundary_sample(r, pens, false, false, px, py).pen != sample.pen) f |= flipped;
+                key[at] = uint16_t((d.palette & 0xff) << 4 | sample.pen);
+                flags[at] = f; owner[at] = uint16_t(i);
+            }
+    }
+    std::vector<size_t> visible(list.size());
+    std::vector<std::pair<uint16_t, uint32_t>> colors;
+    for (int py = 0; py < height; ++py) {
+        colors.clear();
+        for (int px = 0; px < width; ++px) {
+            const size_t at = size_t(py) * width + px;
+            const auto where = [&] { return " x=" + std::to_string(px) + " y=" + std::to_string(py); };
+            if (!key[at]) {
+                if (reference[at] != blank[at]) throw std::runtime_error(tag + " CPU reference shows an unpredicted sprite pixel" + where());
+                continue;
+            }
+            if (reference[at] == blank[at]) { ++stats.hidden; continue; }
+            const auto known = std::find_if(colors.begin(), colors.end(), [&](const auto &c) { return c.first == key[at]; });
+            if (known == colors.end()) {
+                if (std::any_of(colors.begin(), colors.end(), [&](const auto &c) { return c.second == reference[at]; }))
+                    throw std::runtime_error(tag + " CPU reference merged distinct sprite pens" + where());
+                colors.emplace_back(key[at], reference[at]);
+            } else if (known->second != reference[at]) {
+                throw std::runtime_error(tag + " CPU reference resolved a different texel row/flip/owner" + where());
+            }
+            ++visible[owner[at]]; ++stats.visible;
+            const auto f = flags[at];
+            stats.overlapped += (f & overlapped) != 0;
+            stats.transparent_first += (f & transparent_first) != 0;
+            stats.reordered += (f & reordered) != 0;
+            stats.flipped += (f & flipped) != 0;
+            stats.shown_through += (f & shown_through) != 0;
+            const auto &clipped = spans[owner[at]].clipped;
+            stats.edges[0] += px == 0 && clipped[0];
+            stats.edges[1] += px == width - 1 && clipped[1];
+            stats.edges[2] += py == 0 && clipped[2];
+            stats.edges[3] += py == height - 1 && clipped[3];
+        }
+    }
+    for (size_t i = 0; i < list.size(); ++i)
+        if (list[i].must_show && !visible[i])
+            throw std::runtime_error(tag + " descriptor " + std::to_string(i) + " has no visible reference pixel");
+    return stats;
+}
 // Native single-sprite producer branches with actual decoded ROM texels.
 // The caller replays the original pre-scanout frame to restore host/native state.
 void verify_sprite_boundaries(Harness &h) {
     auto &m = h.m;
     const auto baseline = snapshot(m);
     const auto tiles = m.video->sprite_tiles();
+    // Fresh supported sprite list: distinguishable palettes 0xc0/0xc1 (sp3),
+    // scroll zero, and sprite command 0 (pen mask 15, no trails/global flip).
+    auto begin_list = [&] {
+        m.load_state(baseline);
+        // Make opaque ROM pens and descriptor ownership distinguishable even
+        // when gameplay has not populated these two palette banks.
+        for (unsigned bank = 0; bank < 2; ++bank)
+            for (unsigned pen = 1; pen < 16; ++pen) {
+                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
+                m.palette[at + 1] = uint8_t(bank ? 32 : 224);
+                m.palette[at + 2] = uint8_t(pen * 15);
+                m.palette[at + 3] = uint8_t(bank ? 224 : 32);
+            }
+        observe(m, 0x41d0);
+        put16(m.ram, 0x7a16, 0); put16(m.ram, 0x7a1a, 0);
+        observe(m, 0x43b0);
+        put16(m.ram, 0x7a1e, 0);
+        observe(m, 0x43e0);
+    };
     unsigned tile = 0;
     for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256); ++candidate) {
         const auto pens = tiles.subspan(candidate * 256, 256);
@@ -628,21 +782,7 @@ void verify_sprite_boundaries(Harness &h) {
         "sprite_crushed_first_opaque_overlap", "sprite_mirrored_sampled_zoom", "sprite_nominal_top_cull"};
     std::vector<uint32_t> blank(h.device.size());
     for (unsigned kind = 0; kind < tags.size(); ++kind) {
-        m.load_state(baseline);
-        // Make opaque ROM pens and descriptor ownership distinguishable even
-        // when gameplay has not populated these two palette banks.
-        for (unsigned bank = 0; bank < 2; ++bank)
-            for (unsigned pen = 1; pen < 16; ++pen) {
-                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
-                m.palette[at + 1] = uint8_t(bank ? 32 : 224);
-                m.palette[at + 2] = uint8_t(pen * 15);
-                m.palette[at + 3] = uint8_t(bank ? 224 : 32);
-            }
-        observe(m, 0x41d0);
-        put16(m.ram, 0x7a16, 0); put16(m.ram, 0x7a1a, 0);
-        observe(m, 0x43b0);
-        put16(m.ram, 0x7a1e, 0);
-        observe(m, 0x43e0);
+        begin_list();
         const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
         m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
         put16(m.ram, 0x7000, 0); put16(m.ram, 0x7002, uint16_t(tile));
@@ -679,6 +819,145 @@ void verify_sprite_boundaries(Harness &h) {
         std::cout << "SPRITE_BOUNDARY scenario=" << tags[kind] << " tile=" << tile
                   << " scale=" << h.o.video.scale << " visible_pixels=" << visible
                   << " isolated_and_composite=exact (native producer branch)\n";
+    }
+
+    // Batched consumer boundaries: spatially separated descriptors per group,
+    // one replay each. Tile: a column with two leading and one with two
+    // trailing transparent rows above/below distinct opaque pens (crushed
+    // first-opaque order under both Y flips), opaque texels on every border
+    // (one-line edge witnesses), dense, and asymmetric under both flips.
+    unsigned batch_tile = 0;
+    for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256) && !batch_tile; ++candidate) {
+        const auto pens = tiles.subspan(candidate * 256, 256);
+        auto pen = [&](unsigned row, unsigned col) { return pens[row * 16 + col] & 15u; };
+        auto distinct = [&](unsigned col, unsigned from, unsigned to) {
+            unsigned first = 0;
+            for (unsigned row = from; row < to; ++row) {
+                const unsigned p = pen(row, col);
+                if (p && !first) first = p;
+                else if (p && p != first) return true;
+            }
+            return false;
+        };
+        unsigned opaque = 0;
+        bool leading = false, trailing = false, mirror_x = true, mirror_y = true;
+        std::array<bool, 4> border{};
+        for (unsigned a = 0; a < 16; ++a) {
+            border[0] |= pen(a, 0) != 0; border[1] |= pen(a, 15) != 0;
+            border[2] |= pen(0, a) != 0; border[3] |= pen(15, a) != 0;
+            for (unsigned b = 0; b < 16; ++b) {
+                opaque += pen(a, b) != 0;
+                mirror_x &= pen(a, b) == pen(a, 15 - b);
+                mirror_y &= pen(a, b) == pen(15 - a, b);
+            }
+            leading |= !pen(0, a) && !pen(1, a) && distinct(a, 2, 16);
+            trailing |= !pen(15, a) && !pen(14, a) && distinct(a, 0, 14);
+        }
+        if (opaque >= 96 && leading && trailing && !mirror_x && !mirror_y &&
+            std::all_of(border.begin(), border.end(), [](bool b) { return b; }))
+            batch_tile = candidate;
+    }
+    if (!batch_tile) throw std::runtime_error("ROM has no sprite tile witnessing batched sprite boundaries");
+    const auto batch_pens = tiles.subspan(batch_tile * 256, 256);
+    auto emit = [&](const BoundarySprite &d) {
+        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
+        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
+        const uint16_t flips = uint16_t((d.fx ? 0x100 : 0) | (d.fy ? 0x200 : 0));
+        put16(m.ram, 0x7000, d.via_xor ? flips : 0); put16(m.ram, 0x7002, uint16_t(batch_tile));
+        put16(m.ram, 0x7010, uint16_t(256 - d.sy)); put16(m.ram, 0x7012, uint16_t(256 - d.sx));
+        put16(m.ram, 0x7014, uint16_t(d.x) & 0x0fff); put16(m.ram, 0x7016, uint16_t(d.y) & 0x0fff);
+        put16(m.ram, 0x7018, d.palette);
+        put16(m.ram, 0x701a, !d.via_xor && d.fx); put16(m.ram, 0x701c, !d.via_xor && d.fy);
+        observe(m, 0x4688);
+        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+    };
+    const unsigned s = h.o.video.scale;
+    const int L = -int(h.o.video.border), R = 320 + int(h.o.video.border);
+    // Horizontal steps below one output pixel: some texel columns collapse to zero width.
+    const unsigned wide_collapse = std::max(1u, 200 / s), narrow_collapse = std::max(1u, 72 / s);
+    // Y steps: crushed, below, at (when 256 % scale == 0), and above one output pixel.
+    std::vector<unsigned> steps{1, 7, std::max(1u, 160 / s), std::max(1u, 255 / s), 256};
+    if (256 % s == 0) steps.push_back(256 / s);
+    if (256 / s < 256) steps.push_back(256 / s + 1);
+    std::sort(steps.begin(), steps.end());
+    steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
+
+    std::vector<BoundarySprite> thresholds;
+    for (unsigned step : steps)
+        for (unsigned sx : {256u, wide_collapse, narrow_collapse})
+            for (unsigned flip = 0; flip < 4; ++flip) {
+                const int cell = int(thresholds.size());
+                thresholds.push_back({.x = 2 + cell % 16 * 20, .y = 2 + cell / 16 * 20, .sx = sx, .sy = step,
+                    .fx = (flip & 1) != 0, .fy = (flip & 2) != 0, .via_xor = (cell & 1) != 0,
+                    .must_show = sx == 256, .palette = uint16_t(0xc0 | (flip >> 1))});
+            }
+    // Later descriptors own overlap; their transparent (and crushed-away) texels
+    // must leave the earlier descriptor visible. Rows 0..2 of each earlier one stay exposed.
+    std::vector<BoundarySprite> overlaps;
+    for (unsigned step : {256u, std::max(1u, 160 / s), 1u})
+        for (unsigned sx : {256u, wide_collapse})
+            for (unsigned flip = 0; flip < 4; ++flip) {
+                const int cell = int(overlaps.size() / 2), x = 2 + cell % 13 * 24, y = 2 + cell / 13 * 24;
+                overlaps.push_back({.x = x, .y = y, .must_show = true});
+                overlaps.push_back({.x = x + 5, .y = y + 3, .sx = sx, .sy = step, .fx = (flip & 1) != 0,
+                    .fy = (flip & 2) != 0, .via_xor = flip == 3, .must_show = sx == 256, .palette = 0xc1});
+            }
+    // Every descriptor is clipped by at least one target edge (border-aware).
+    std::vector<BoundarySprite> edges;
+    auto edge = [&](int x, int y, unsigned sx, unsigned sy, bool must_show) {
+        const unsigned flip = unsigned(edges.size()) & 3;
+        edges.push_back({.x = x, .y = y, .sx = sx, .sy = sy, .fx = (flip & 1) != 0, .fy = (flip & 2) != 0,
+            .via_xor = (edges.size() & 4) != 0, .must_show = must_show, .palette = uint16_t(0xc0 | (flip & 1))});
+    };
+    const unsigned below = std::max(1u, 160 / s);
+    edge(L - 8, 30, 256, 256, true); edge(L - 15, 50, 256, 256, true); edge(L - 1, 70, wide_collapse, 256, false);
+    edge(L - 8, 90, 256, 1, true); edge(L - 15, 110, 256, below, true);
+    edge(R - 8, 30, 256, 256, true); edge(R - 1, 50, 256, 256, true); edge(R - 1, 70, wide_collapse, 256, false);
+    edge(R - 8, 90, 256, 1, true); edge(R - 1, 110, 256, below, true);
+    edge(30, -8, 256, 256, true); edge(50, -15, 256, 256, true); edge(70, -1, 256, 17, true);
+    edge(90, -2, wide_collapse, 33, false); edge(110, -4, 256, 80, false);
+    edge(30, 224, 256, 256, true); edge(50, 231, 256, 256, true); edge(70, 231, 256, 17, true);
+    edge(90, 228, narrow_collapse, 256, false); edge(110, 230, 256, 80, true);
+    edge(L - 8, -8, 256, 256, false); edge(R - 8, -8, 256, 256, false);
+    edge(L - 8, 224, 256, 256, false); edge(R - 8, 224, 256, 256, false);
+    for (const auto &d : edges) {
+        const auto clipped = boundary_spans(d, h.o.video).clipped;
+        if (std::none_of(clipped.begin(), clipped.end(), [](bool c) { return c; }))
+            throw std::runtime_error("sprite_batch_edge_clip descriptor is not clipped by the target");
+    }
+
+    const std::array<std::pair<const char *, const std::vector<BoundarySprite> *>, 3> batches{{
+        {"sprite_batch_y_threshold_flip_collapse", &thresholds},
+        {"sprite_batch_transparent_overlap", &overlaps},
+        {"sprite_batch_edge_clip", &edges}}};
+    for (const auto &[tag, list] : batches) {
+        begin_list();
+        for (const auto &d : *list) emit(d);
+        observe(m, 0x4480);
+        m.game_video->render_frame(); // Scanout precedes the native sprite latch.
+        m.game_video->render_frame(); // Present the injected, now-latched list.
+        if (m.game_video->gpu_scene().fallback)
+            throw std::runtime_error(std::string(tag) + " unexpectedly left supported native producers");
+        h.compare(7, tag, true); // Exact isolated sp3 CPU/GPU comparison.
+        blank.resize(h.device.size());
+        m.game_video->render_reference(blank, h.o.video, 0, true);
+        const auto st = boundary_witnesses(*list, batch_pens, h.o.video, h.cpu, blank, tag);
+        const bool thresholds_batch = list == &thresholds, overlap_batch = list == &overlaps;
+        const bool witnessed = st.visible && st.flipped &&
+            (thresholds_batch ? st.collapsed && st.overlapped && st.transparent_first && st.reordered
+             : overlap_batch ? st.shown_through && st.transparent_first
+             : std::all_of(st.edges.begin(), st.edges.end(), [](size_t n) { return n != 0; }));
+        if (!witnessed) throw std::runtime_error(std::string(tag) + " did not witness its consumer-visible boundaries");
+        h.capture(std::string(tag) + "_sp3");
+        h.sample(tag, true, true); // Composite (and all layers with --layers).
+        std::cout << "SPRITE_BOUNDARY scenario=" << tag << " tile=" << batch_tile << " scale=" << s
+                  << " border=" << h.o.video.border << " descriptors=" << list->size()
+                  << " visible_pixels=" << st.visible << " line_hidden=" << st.hidden
+                  << " collapsed_columns=" << st.collapsed << " overlapped=" << st.overlapped
+                  << " transparent_first=" << st.transparent_first << " reordered=" << st.reordered
+                  << " flipped=" << st.flipped << " shown_through=" << st.shown_through
+                  << " edges=" << st.edges[0] << '/' << st.edges[1] << '/' << st.edges[2] << '/' << st.edges[3]
+                  << " isolated_and_composite=exact (native producer batch)\n";
     }
 }
 // Saving after several trail frames must retain every intervening sprite list.

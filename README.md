@@ -15,8 +15,11 @@ the supported target today**, not the whole F3 library.
 The executable is named `landmakr`, but runs **`landmakrj`**. A ROM directory's
 name does not identify the revision: program chips are validated, and World ROMs
 are not silently substituted. Coverage is finite; no exhaustive campaign/ending
-or cross-platform compatibility claim. Runtime testing to date is on macOS
-arm64, with Metal for GPU presentation.
+or cross-platform compatibility claim. Runtime validation includes macOS
+arm64/Metal and focused Linux x86-64/Vulkan GPU checks on an RX 7800 XT.
+The [GPU report](docs/developer/GPU-VIDEO.md#one-quad-inverse-sprite-raster-linux-cutover)
+distinguishes tested shader revisions and hardware; performance on the
+lower-end Linux systems reporting slowdowns has not been measured here.
 
 Video implements **MAME-derived F3 rendering**, and the Land Maker game-data path
 is compared against that renderer and captured MAME output. This is not a

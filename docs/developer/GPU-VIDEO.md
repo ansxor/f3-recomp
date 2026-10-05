@@ -85,10 +85,15 @@ sprite rectangle is culled **before** raster rounding: right<=L*256,
 left>(365+B)*256, bottom<=24*256, or top>255*256 rejects it. This prevents the
 known top-edge leak. CPU visits sprites in reverse list order and writes only
 empty destination pixels; larger list indices win. Within a tile, earlier
-texel rows win when forced one-row spans overlap. GPU texel quads therefore
-draw sprites in increasing list order, texels in reverse order, discard
-transparent texels, and overwrite an integer indexed render target. This
-reproduces both precedence rules without atomics or per-fragment list scans.
+texel rows win when forced one-row spans overlap. The GPU draws one
+integer-aligned quad per sprite in increasing list order. Its fragment shader
+inverts these exact spans, skips zero-width X texels, and scans overlapping
+Y rows in logical order until the first masked opaque pen. Steps of at least
+one output pixel need only one row lookup. Transparent fragments discard;
+later sprites overwrite an integer indexed render target. This preserves both
+precedence rules without atomics or per-fragment sprite-list scans. The initial
+Metal implementation instead emitted 256 reverse-order texel quads per sprite;
+the one-quad cutover and Linux evidence are recorded below.
 
 The compositor accepts the stored sprite only for its priority group
 `(color>>10)&3`. Each group has its own row clip, mosaic, blend and priority.
@@ -123,7 +128,8 @@ normalized row tables (stable priority order and exact clip ranges), and the
 A small uniform contains scale/border/dimensions and diagnostic layer selection.
 GPU resources/transfer buffers are reused and cycled to protect in-flight data.
 
-Pass 1 draws integer-aligned sprite texel quads into an indexed texture.
+Pass 1 draws one integer-aligned quad per sprite into an indexed texture,
+resolving exact CPU texel coverage in the fragment shader.
 Pass 2 is a fullscreen fragment shader: one invocation per internal-resolution
 output sample, integer PF/text sampling and CPU mixing, no final-frame stretch.
 Pass 3 letterboxes that texture into the swapchain, with requested nearest or
@@ -1176,4 +1182,109 @@ Current integrated `f3rt-check` passes. The GPU-off Cocoa frontend also accepts
 the field-control CLI without GPU support and presents its native boot surface.
 No sprite/canonical data layout, CPU ABI, machine/audio semantics, rollback
 schema or existing MAME acceptance path changed. Metal on this Mac is exercised;
-other GPUs, another monitor and a played campaign ending remain unverified.
+other GPUs, another monitor and a played campaign ending remained unverified
+at that checkpoint.
+
+## One-quad inverse sprite raster: Linux cutover
+
+The current sprite pass replaces 256 texel quads per descriptor with one
+six-vertex quad covering their union. At 1024 sprites this reduces submitted
+vertices from 1,572,864 to 6,144, without changing assets, scene words, uniforms,
+shader resource slots, CPU rendering, snapshots, interpolation or frame pacing.
+
+For one axis, let `p = descriptor_origin * S + phase`, `k = texel_step * S`,
+and `origin` be the render-target offset in output pixels. Texel `n` starts at
+`floor((p + n*k)/256) - origin`. The vertex shader supplies
+`bias = 256*(origin+1) - p - 1`; at destination pixel `d`,
+`U = 256*d + bias` identifies the last starting texel as `U/k` for `U >= 0`.
+X spans tile exactly, so this skips collapsed zero-width columns. Y steps
+`k >= 256` need one lookup. Smaller Y steps scan only rows starting on the
+same output pixel, in logical order, until the first masked nonzero pen;
+there are at most 16 candidates. Flips change the asset fetch, not precedence.
+Nominal culling, constant X/Y phases 128/255, native-plane scissor and later
+sprite ownership are unchanged. Native producers supply positive steps 1..256.
+
+### Exercised correctness
+
+Release Linux x86-64, SDL3 Vulkan, AMD Radeon RX 7800 XT / RADV Mesa 26.2.2:
+
+- Independent forward-span/inverse-span checks covered 28,672 scale/step/phase
+  combinations, including negative fractional origins; an additional 12,288
+  Y combinations checked the uncrushed fast path.
+- A throwaway independent forward-raster smoke passed before and after the
+  cutover: 384 scenes, 18,432 descriptors, 836,001,792 exact RGB comparisons.
+  Scales 1..8, borders 0/48, all flips, masks 15/63, transparent early rows,
+  collapsed columns, descriptor overlap and all clipped edges were exercised.
+- Eleven real-ROM seed-5 runs passed all-layer/composite comparisons and
+  66 native-producer sprite boundary groups: all player scales 1..4 at borders
+  0/48, diagnostic scale 8 at borders 48/160, and a live 1→2→4→8→1→3 run.
+  Off/linear/fit and separately enabled palette interpolation were exercised.
+  New permanent batches cover one-pixel Y thresholds, X collapse, flipped
+  first-opaque selection, transparent show-through and edge clipping. The
+  existing crushed overlap, mirrored zoom and nominal top-cull cases remain.
+- The scale-4/border-48 frame-1560 independent CPU-backend check retained zero
+  snapshot-byte and GPU-pixel differences. Before/after native frame CRC
+  `a38b55e4`, audio CRC `4c7823c0`, state CRC `768cf94d`, cycles 423,453,931 and
+  native blocks 23,418,681 matched; interpreter fallback instructions were zero.
+- The actual Wayland frontend completed 1200 unthrottled frames at scale 3 /
+  border 48; its captured GPU surface was inspected. Native frame CRC
+  `e8cc7573`, cycles 325,733,798 and native blocks 19,123,943 matched the baseline.
+- A paced 600-frame Wayland automatic-integer/fit-geometry run selected scale 4
+  at 2496×1392 window pixels, completed in 10.91 seconds including startup,
+  and reported zero clock resyncs / one audio queue drop. Queue mean/max were
+  27.9792/51.1408 ms; this is not a zero-drop audio claim.
+
+Both SPIR-V shaders passed `spirv-val --target-env vulkan1.0`; offline generation
+also produced the MSL shaders. This cutover was **not runtime-tested on Metal**
+or on the lower-end Linux hardware reporting slowdowns. Independent throwaway
+sources/executables were removed after verification.
+
+### Measured cost, not a general Linux fullspeed claim
+
+The same frozen seed-5 frame 1560 at scale 4 / border 48, 100 repetitions after
+five warmups, measured whole compositor submission/fence/readback latency:
+
+| Sprite raster | Mean ms | p95 ms | Worst ms |
+| --- | ---: | ---: | ---: |
+| 256 texel quads per sprite | 1.14849 | 1.33146 | 1.38168 |
+| One inverse-sampled quad per sprite | 0.987872 | 1.07653 | 1.17336 |
+
+The observed mean reduction is 14%; these are separate runs, not hardware
+GPU timestamps. These measurements precede the subsequent upstream
+motion-interpolation merge; they are not new timings of that merged renderer.
+Synthetic opaque 1024-sprite timings were essentially unchanged
+(0.634→0.624 ms). Whole frontend startup-plus-1200-frame time was likewise about
+7 seconds before and after; the after run additionally saved a final surface.
+The desktop therefore does not establish excessive geometry as the sole cause
+of friends' slowdowns, or demonstrate a material end-to-end speedup. VSync and
+the existing frame limiter were intentionally unchanged.
+
+Reproduce the real-ROM timing/boundary check with:
+
+```sh
+cmake --build build --target landmakr f3rt-gpu-regression -j 4
+./build/f3rt-gpu-regression --seed 5 --frames 1560 --scale 4 --border 48 \
+  --every 120 --layers --inject-sprite-boundaries --bench
+```
+
+For the compact parity cases use `--frames 1440 --every 720`, select the scale
+and border, and retain `--layers --inject-sprite-boundaries`; default injection
+frame 1407 is the exercised producer boundary. Diagnostic scale 8 remains outside
+the player's scale-4 cap.
+
+### Upstream motion-interpolation integration
+
+After integrating upstream `main` at `a77d867`, both ordinary and temporal draws
+use the same six-vertex sprite pass. The merged Release build passed:
+
+- Scale-3/border-48/fit/both-fields seed-5 parity through 1440 frames, including
+  all isolated layers and all six native-producer boundary groups: zero mismatches.
+- `f3rt-motion-regression --seed 5 --frames 1600 --scale 4 --every 20 --interp fit`:
+  81 sampled frames, 20 visible ROM midpoints, 1206 accepted sprite geometry
+  draws, exact current-frame endpoints/repeated draws/native pixels/audio/state,
+  and discontinuity snapping plus replay. Half-pixel text sampling was exact.
+- CTest `motion-interpolation-guards`.
+- A real 1500-frame Wayland frontend with `--motion-interp`, scale 3 / border 48
+  and fit geometry: 6078 drawable submissions, 786 interpolated submissions,
+  zero interpreter fallback instructions. The captured player-select surface
+  was inspected. Submission counters are not physical scanout measurements.
