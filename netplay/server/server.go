@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -15,8 +16,8 @@ const (
 	FinishedRoomTimeout = 30 * time.Second
 
 	MaxTrackedIPs         = 4096
-	RateLimitTokensPerSec = 500.0
-	RateLimitBurst        = 250.0
+	RateLimitTokensPerSec = 1000.0 // Two snapshot peers may share one public IP.
+	RateLimitBurst        = 500.0
 )
 
 type ServerConfig struct {
@@ -182,6 +183,9 @@ func (s *Server) handlePacket(remoteAddr *net.UDPAddr, data []byte) {
 
 	switch hdr.Type {
 	case PktJoinReq:
+		if hdr.SessionID != 0 || hdr.SenderSlot != 0xFF {
+			return
+		}
 		s.handleJoinReq(remoteAddr, data[HeaderSize:])
 	case PktGameData:
 		s.handleGameData(remoteAddr, hdr, data)
@@ -189,6 +193,8 @@ func (s *Server) handlePacket(remoteAddr *net.UDPAddr, data []byte) {
 		s.handleHeartbeat(remoteAddr, hdr, data)
 	case PktLeave:
 		s.handleLeave(remoteAddr, hdr, data[HeaderSize:])
+	case PktSnapshotMeta, PktSnapshotChunk, PktSnapshotAck, PktSnapshotLoaded:
+		s.handleSnapshot(remoteAddr, hdr, data)
 	}
 }
 
@@ -199,7 +205,7 @@ func (s *Server) handleJoinReq(addr *net.UDPAddr, payload []byte) {
 		return
 	}
 
-	if len(req.RoomName) == 0 || len(req.RoomName) > 32 {
+	if !IsValidRoomName(req.RoomName) {
 		s.sendReject(addr, req.ClientNonce, RejectInvalidRoom, "room name must be 1 to 32 characters")
 		return
 	}
@@ -267,6 +273,10 @@ func (s *Server) handleGameData(addr *net.UDPAddr, hdr Header, data []byte) {
 		}
 	}
 
+	peerAddr, err := room.GetPeer(hdr.SenderSlot, hdr.SessionID, addr)
+	if err != nil || !room.AcceptGameData(hdr.SenderSlot) {
+		return
+	}
 	// Check if this packet carries finish info to update room state
 	if payload.Flags&FlagFinishReq != 0 {
 		bothFinished, finalFrame, finalCRC, addr0, addr1 := room.MarkFinish(hdr.SenderSlot, addr, payload.FinishFrame, payload.FinishCRC)
@@ -287,11 +297,6 @@ func (s *Server) handleGameData(addr *net.UDPAddr, hdr Header, data []byte) {
 		s.sendMatchComplete(addr, hdr.SessionID, fFrame, fCRC)
 	}
 
-	peerAddr, err := room.GetPeer(hdr.SenderSlot, hdr.SessionID, addr)
-	if err != nil {
-		return // Peer not connected or sender endpoint mismatch
-	}
-
 	// Relay packet to peer via impairment engine
 	s.impairer.Send(peerAddr, data)
 }
@@ -304,6 +309,9 @@ func (s *Server) handleHeartbeat(addr *net.UDPAddr, hdr Header, data []byte) {
 	if !exists {
 		return
 	}
+	if _, err := UnmarshalHeartbeatPayload(data[HeaderSize:]); err != nil {
+		return
+	}
 
 	peerAddr, err := room.GetPeer(hdr.SenderSlot, hdr.SessionID, addr)
 	if err != nil {
@@ -311,9 +319,22 @@ func (s *Server) handleHeartbeat(addr *net.UDPAddr, hdr Header, data []byte) {
 	}
 
 	s.impairer.Send(peerAddr, data)
+	s.repeatBarrier(room)
 }
 
 func (s *Server) handleLeave(addr *net.UDPAddr, hdr Header, payload []byte) {
+	if hdr.SessionID == 0 {
+		if hdr.SenderSlot != 0xFF || len(payload) != 65 || payload[0] != LeaveAbort {
+			return
+		}
+		nonce := binary.BigEndian.Uint64(payload[1:9])
+		s.mu.RLock()
+		for _, waiting := range s.rooms {
+			waiting.CancelWaiting(addr, nonce)
+		}
+		s.mu.RUnlock()
+		return
+	}
 	s.mu.RLock()
 	room, exists := s.sessions[hdr.SessionID]
 	s.mu.RUnlock()
@@ -335,6 +356,33 @@ func (s *Server) handleLeave(addr *net.UDPAddr, hdr Header, payload []byte) {
 		s.mu.Unlock()
 		if peerAddr != nil {
 			s.sendTerminated(peerAddr, hdr.SessionID, 0, "opponent left match")
+		}
+	}
+}
+
+func (s *Server) handleSnapshot(addr *net.UDPAddr, hdr Header, data []byte) {
+	s.mu.RLock()
+	room := s.sessions[hdr.SessionID]
+	s.mu.RUnlock()
+	if room == nil {
+		return
+	}
+	peer, err := room.GetPeer(hdr.SenderSlot, hdr.SessionID, addr)
+	if err != nil || !room.RelaySnapshot(hdr.SenderSlot, hdr.Type, data[HeaderSize:]) {
+		return
+	}
+	if hdr.Type != PktSnapshotLoaded {
+		s.impairer.Send(peer, data)
+	}
+	s.repeatBarrier(room)
+}
+
+func (s *Server) repeatBarrier(room *Room) {
+	session, receipt, addresses := room.BarrierRetries()
+	for _, addr := range addresses {
+		if addr != nil {
+			hdr := Header{Magic: Magic, Version: ProtocolVersion, Type: PktBarrierStart, SessionID: session, SenderSlot: 0xFF}
+			s.impairer.Send(addr, append(hdr.Marshal(), receipt.Marshal()...))
 		}
 	}
 }
@@ -453,7 +501,7 @@ func (s *Server) runJanitor() {
 	s.mu.Unlock()
 
 	for _, it := range items {
-		// Check client timeouts in active rooms
+		// Retire silent active/completed peers; completion verdict retries remain valid until then.
 		timedOutSlot, notifyAddr := it.room.CheckTimeouts(ClientTimeout)
 		if timedOutSlot >= 0 && notifyAddr != nil {
 			s.sendTerminated(notifyAddr, it.snap.SessionID, 0, "opponent connection timed out")
@@ -461,12 +509,7 @@ func (s *Server) runJanitor() {
 
 		// Clean up old rooms
 		s.mu.Lock()
-		if it.snap.State == RoomWaiting && now.Sub(it.snap.CreatedAt) > WaitingRoomTimeout {
-			delete(s.rooms, it.name)
-			if it.snap.SessionID != 0 {
-				delete(s.sessions, it.snap.SessionID)
-			}
-		} else if (it.snap.State == RoomFinished || it.snap.State == RoomTerminated) && now.Sub(it.snap.LastActive) > FinishedRoomTimeout {
+		if it.room.CanRemove(now) {
 			delete(s.rooms, it.name)
 			if it.snap.SessionID != 0 {
 				delete(s.sessions, it.snap.SessionID)

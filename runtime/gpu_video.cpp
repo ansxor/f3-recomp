@@ -2,6 +2,7 @@
 #include "video_shaders.hpp"
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -32,6 +33,85 @@ constexpr Uint32 asset_bytes = 32768 * 256;
 constexpr Uint32 scene_bytes = GpuScene::word_count * sizeof(uint32_t);
 constexpr Uint32 interpolation_scene_bytes = InterpolationLayout::word_count * sizeof(uint32_t);
 constexpr Uint32 native_bytes = 320 * 232 * sizeof(uint32_t);
+constexpr size_t max_user_shader_bytes = 1024 * 1024;
+
+// Validate the fixed descriptor/interface ABI before handing user SPIR-V to the
+// driver. Compilation/pipeline creation performs the remaining shader validation.
+void validate_user_spirv(const std::vector<uint32_t> &words) {
+    auto invalid = [] { throw std::runtime_error("User SPIR-V: invalid module or postprocess ABI"); };
+    if (words.size() < 5 || words[0] != 0x07230203 || words[4] != 0 ||
+        words[3] == 0 || words[3] > max_user_shader_bytes / 4) invalid();
+    struct Id {
+        uint32_t opcode = 0, a = 0, b = 0, c = 0;
+        uint32_t set = UINT32_MAX, binding = UINT32_MAX;
+        bool builtin = false, block = false, zero_offset = false;
+    };
+    std::vector<Id> ids(words[3]);
+    auto id = [&](uint32_t n) -> Id & {
+        if (!n || n >= ids.size()) invalid();
+        return ids[n];
+    };
+    bool entry = false;
+    for (size_t pos = 5; pos < words.size();) {
+        const auto *p = words.data() + pos;
+        uint32_t count = p[0] >> 16, op = p[0] & 0xffff;
+        if (!count || count > words.size() - pos) invalid();
+        auto need = [&](uint32_t n) { if (count < n) invalid(); };
+        if (op == 15) { // OpEntryPoint: Fragment main, no alternate entries.
+            need(5);
+            if (entry || p[1] != 4 || p[3] != 0x6e69616d || p[4] != 0) invalid();
+            id(p[2]); entry = true;
+        } else if (op == 71) { // OpDecorate
+            need(3); auto &v = id(p[1]);
+            if (p[2] == 33 || p[2] == 34) {
+                need(4); (p[2] == 33 ? v.binding : v.set) = p[3];
+            } else if (p[2] == 11) v.builtin = true;
+            else if (p[2] == 2) v.block = true;
+        } else if (op == 72) { // OpMemberDecorate
+            need(4);
+            if (p[3] == 35) {
+                need(5);
+                if (p[2] == 0 && p[4] == 0) id(p[1]).zero_offset = true;
+            }
+        } else if (op == 22 || op == 23 || op == 25 || op == 27 || op == 30 || op == 32 || op == 59) {
+            need(op == 22 || op == 27 || op == 30 ? 3 : 4);
+            auto &v = id(op == 59 ? p[2] : p[1]);
+            v.opcode = op;
+            v.a = op == 59 ? p[1] : p[2];
+            v.b = (count > 3) ? p[3] : 0;
+            v.c = count;
+            if (op == 25) { // Only a non-arrayed sampled 2D float image.
+                need(9);
+                if (p[3] != 1 || p[4] != 0 || p[5] != 0 || p[6] != 0 || p[7] != 1) invalid();
+            }
+        }
+        pos += count;
+    }
+    if (!entry) invalid();
+    unsigned samplers = 0, uniforms = 0;
+    for (const auto &v : ids) {
+        if (v.opcode != 59) continue;
+        const auto &pointer = id(v.a);
+        if (pointer.opcode != 32 || pointer.a != v.b) invalid();
+        const auto &type = id(pointer.b);
+        if (v.b == 0) { // UniformConstant: combined sampler, set2/binding0.
+            if (v.set != 2 || v.binding != 0 || type.opcode != 27) invalid();
+            const auto &image = id(type.a);
+            if (image.opcode != 25 || id(image.a).opcode != 22 || id(image.a).a != 32) invalid();
+            ++samplers;
+        } else if (v.b == 2) { // Uniform: one struct member, a float4 at offset zero.
+            if (v.set != 3 || v.binding != 0 || type.opcode != 30 || type.c != 3 ||
+                !type.block || !type.zero_offset) invalid();
+            const auto &vector = id(type.a);
+            if (vector.opcode != 23 || vector.b != 4 ||
+                id(vector.a).opcode != 22 || id(vector.a).a != 32) invalid();
+            ++uniforms;
+        } else if (v.b == 1) {
+            if (!v.builtin) invalid(); // Fullscreen vertex shader exports no varyings.
+        } else if (v.b != 3 && v.b != 6 && v.b != 7) invalid();
+    }
+    if (samplers != 1 || uniforms != 1) invalid();
+}
 }
 
 struct GpuVideo::Impl {
@@ -39,6 +119,8 @@ struct GpuVideo::Impl {
     SDL_Window *window = nullptr;
     bool claimed = false, linear = false, rendered = false;
     bool vsync = true;
+    GpuVideo::Overlay overlay = nullptr;
+    void *overlay_userdata = nullptr;
     GameVideoOptions options{};
     VideoScaleMode scale_mode = VideoScaleMode::Fixed;
     VideoInterpolation interpolation = VideoInterpolation::Off;
@@ -54,6 +136,11 @@ struct GpuVideo::Impl {
     SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr, *interpolation_pipeline = nullptr;
     SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr;
     std::vector<uint32_t> saved_pixels;
+    Postprocess postprocess = Postprocess::Off;
+    SDL_GPUGraphicsPipeline *post_pipeline = nullptr;
+    SDL_GPUTexture *post_surface = nullptr;
+    bool rendered_post = false;
+    Uint64 post_start = 0;
 
     ~Impl() {
         if (!device) return;
@@ -61,9 +148,11 @@ struct GpuVideo::Impl {
         if (sprite_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, sprite_pipeline);
         if (scene_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, scene_pipeline);
         if (interpolation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, interpolation_pipeline);
+        if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (sprite_plane) SDL_ReleaseGPUTexture(device, sprite_plane);
         if (surface) SDL_ReleaseGPUTexture(device, surface);
+        if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
         for (auto *buffer : {scene_buffer, pf_assets, sp_assets, native_buffer})
             if (buffer) SDL_ReleaseGPUBuffer(device, buffer);
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
@@ -126,6 +215,64 @@ struct GpuVideo::Impl {
             throw;
         }
     }
+    void set_postprocess(Postprocess preset, const std::filesystem::path &path) {
+        if (preset != Postprocess::Off && preset != Postprocess::Crt && preset != Postprocess::User)
+            throw std::runtime_error("Unknown GPU postprocess preset");
+        if (preset == Postprocess::Off) {
+            if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
+            if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
+            post_pipeline = nullptr; post_surface = nullptr;
+            postprocess = preset; rendered = false; rendered_post = false;
+            return;
+        }
+        SDL_GPUGraphicsPipeline *next_pipeline = nullptr;
+        SDL_GPUTexture *next_surface = nullptr;
+        try {
+            if (preset == Postprocess::Crt) {
+                next_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::postprocess_frag,
+                                         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+            } else {
+                const bool metal = (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_MSL) != 0;
+                if (path.extension() != (metal ? ".metal" : ".spv"))
+                    throw std::runtime_error(metal ? "Metal user shader requires a .metal file" :
+                                                   "Vulkan user shader requires a .spv file");
+                std::ifstream file(path, std::ios::binary | std::ios::ate);
+                if (!file) throw std::runtime_error("Cannot open user shader: " + path.string());
+                const auto end = file.tellg();
+                if (end <= 0 || end > std::streamoff(max_user_shader_bytes))
+                    throw std::runtime_error("User shader must be 1 byte to 1 MiB");
+                const size_t size = size_t(end);
+                // Aligned storage for SPIR-V; one trailing zero for native MSL.
+                std::vector<uint32_t> code((size + 4) / 4, 0);
+                file.seekg(0);
+                if (!file.read(reinterpret_cast<char *>(code.data()), std::streamsize(size)))
+                    throw std::runtime_error("Cannot read user shader: " + path.string());
+                if (metal) {
+                    if (std::memchr(code.data(), 0, size))
+                        throw std::runtime_error("User Metal shader contains an embedded NUL");
+                } else {
+                    if (size % 4) throw std::runtime_error("User SPIR-V size must be a multiple of four");
+                    code.resize(size / 4);
+                    validate_user_spirv(code);
+                }
+                video_shaders::Shader source{reinterpret_cast<const uint8_t *>(code.data()), size,
+                    reinterpret_cast<const char *>(code.data()), size, "f3_postprocess", 1, 0, 1};
+                next_pipeline = pipeline(video_shaders::fullscreen_vert, source, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+            }
+            if (!post_surface) next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
+        } catch (...) {
+            if (next_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, next_pipeline);
+            if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
+            throw;
+        }
+        // SDL releases are deferred until pending commands finish using resources.
+        if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
+        post_pipeline = next_pipeline;
+        if (next_surface) post_surface = next_surface;
+        postprocess = preset;
+        post_start = SDL_GetTicksNS();
+        rendered = false; rendered_post = false;
+    }
     void upload_buffer(SDL_GPUCopyPass *pass, SDL_GPUTransferBuffer *source, SDL_GPUBuffer *destination,
                        Uint32 offset, Uint32 size, bool cycle) {
         SDL_GPUTransferBufferLocation from{source, offset};
@@ -137,7 +284,7 @@ struct GpuVideo::Impl {
             throw std::runtime_error("Game GPU presentation scale/border out of range");
         if (tiles.size() < asset_bytes || sprites.size() < asset_bytes)
             throw std::runtime_error("Incomplete GPU tile/sprite assets");
-        device = checked(SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL, false, nullptr), "Create SDL GPU device");
+        device = checked(SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB, false, nullptr), "Create SDL GPU device");
         if (window) {
             if (!SDL_ClaimWindowForGPUDevice(device, window)) fail("Claim GPU window");
             claimed = true;
@@ -190,25 +337,29 @@ struct GpuVideo::Impl {
         if (scale == options.scale) return;
         auto geometry = options;
         geometry.scale = scale;
-        SDL_GPUTexture *next_plane = nullptr, *next_surface = nullptr;
+        SDL_GPUTexture *next_plane = nullptr, *next_surface = nullptr, *next_post = nullptr;
         SDL_GPUTransferBuffer *next_download = nullptr;
         std::vector<uint32_t> next_pixels;
         try {
             next_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, geometry, true);
             next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
+            if (post_surface) next_post = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
             if (download) next_download = transfer(geometry.width() * geometry.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
             if (!saved_pixels.empty()) next_pixels.resize(size_t(geometry.width()) * geometry.height());
         } catch (...) {
             if (next_plane) SDL_ReleaseGPUTexture(device, next_plane);
             if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
+            if (next_post) SDL_ReleaseGPUTexture(device, next_post);
             if (next_download) SDL_ReleaseGPUTransferBuffer(device, next_download);
             throw;
         }
         // SDL defers destruction until queued users finish: no GPU-idle stall.
         SDL_ReleaseGPUTexture(device, sprite_plane);
         SDL_ReleaseGPUTexture(device, surface);
+        if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
         if (download) SDL_ReleaseGPUTransferBuffer(device, download);
         sprite_plane = next_plane; surface = next_surface; download = next_download;
+        post_surface = next_post;
         saved_pixels.swap(next_pixels);
         options = geometry;
         rendered = false;
@@ -220,10 +371,10 @@ struct GpuVideo::Impl {
         info.clear_color = {0, 0, 0, 1}; info.cycle = true;
         return checked(SDL_BeginGPURenderPass(command, &info, 1, nullptr), "Begin GPU render pass");
     }
-    void queue_download(SDL_GPUCommandBuffer *command) {
+    void queue_download(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target) {
         if (!download) download = transfer(options.width() * options.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
         auto *copy = checked(SDL_BeginGPUCopyPass(command), "Begin GPU readback copy");
-        SDL_GPUTextureRegion from{surface, 0, 0, 0, 0, 0, options.width(), options.height(), 1};
+        SDL_GPUTextureRegion from{target, 0, 0, 0, 0, 0, options.width(), options.height(), 1};
         SDL_GPUTextureTransferInfo to{download, 0, options.width(), options.height()};
         SDL_DownloadFromGPUTexture(copy, &from, &to);
         SDL_EndGPUCopyPass(copy);
@@ -254,7 +405,7 @@ struct GpuVideo::Impl {
         std::cout << '\n';
         logged_reason = stats.reason; logged_layers = stats.layers; have_interpolation_log = true;
     }
-    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask) {
+    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
         if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
@@ -309,7 +460,22 @@ struct GpuVideo::Impl {
         SDL_BindGPUFragmentStorageBuffers(pass, 0, buffers, 3);
         SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
         SDL_EndGPURenderPass(pass);
-        if (!output.empty()) queue_download(command.value);
+        SDL_GPUTexture *present_surface = surface;
+        const bool apply_post = postprocess != Postprocess::Off &&
+            (process_diagnostic || (output.empty() && layer_mask == 511));
+        if (apply_post) {
+            const float parameters[]{float(options.width()), float(options.height()), float(options.scale),
+                float(double(SDL_GetTicksNS() - post_start) / 1.0e9)};
+            SDL_PushGPUFragmentUniformData(command.value, 0, parameters, sizeof(parameters));
+            auto *post_pass = render_pass(command.value, post_surface);
+            SDL_BindGPUGraphicsPipeline(post_pass, post_pipeline);
+            SDL_GPUTextureSamplerBinding binding{surface, sampler};
+            SDL_BindGPUFragmentSamplers(post_pass, 0, &binding, 1);
+            SDL_DrawGPUPrimitives(post_pass, 3, 1, 0, 0);
+            SDL_EndGPURenderPass(post_pass);
+            present_surface = post_surface;
+        }
+        if (!output.empty()) queue_download(command.value, present_surface);
         if (window) {
             SDL_GPUTexture *swapchain = nullptr; Uint32 w = 0, h = 0;
             if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h)) fail("Acquire GPU swapchain");
@@ -317,16 +483,18 @@ struct GpuVideo::Impl {
                 command.acquired_swapchain = true;
                 const auto viewport = video_blit_for_window(scale_mode, options, w, h);
                 SDL_GPUBlitInfo blit{};
-                blit.source = {surface, 0, 0, viewport.source_x, viewport.source_y, viewport.source_width, viewport.source_height};
+                blit.source = {present_surface, 0, 0, viewport.source_x, viewport.source_y, viewport.source_width, viewport.source_height};
                 blit.destination = {swapchain, 0, 0, viewport.x, viewport.y, viewport.width, viewport.height};
                 blit.load_op = SDL_GPU_LOADOP_CLEAR; blit.clear_color = {0, 0, 0, 1};
                 blit.filter = linear && scale_mode != VideoScaleMode::AutoInteger ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
                 SDL_BlitGPUTexture(command.value, &blit);
+                if (overlay) overlay(overlay_userdata, command.value, swapchain, w, h);
             }
         }
         if (!output.empty()) finish_readback(command, output);
         else if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU frame");
         rendered = true;
+        rendered_post = apply_post;
     }
 };
 
@@ -344,14 +512,24 @@ const char *GpuVideo::driver() const { return SDL_GetGPUDeviceDriver(impl_->devi
 const InterpolationStats &GpuVideo::last_interpolation() const { return impl_->interpolation_stats; }
 void GpuVideo::set_scale(unsigned scale) { impl_->set_scale(scale); }
 void GpuVideo::set_scale_mode(VideoScaleMode mode) { impl_->scale_mode = mode; }
-void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask) {
-    impl_->draw(scene, output, layer_mask);
+SDL_GPUDevice *GpuVideo::device() const { return impl_->device; }
+void GpuVideo::set_linear(bool linear) { impl_->linear = linear; }
+void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
+    impl_->set_postprocess(preset, path);
+}
+Postprocess GpuVideo::postprocess() const { return impl_->postprocess; }
+void GpuVideo::set_overlay(Overlay callback, void *userdata) {
+    impl_->overlay = callback;
+    impl_->overlay_userdata = userdata;
+}
+void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
+    impl_->draw(scene, output, layer_mask, process_diagnostic);
 }
 void GpuVideo::save_surface(const char *path) {
     if (!impl_->rendered) throw std::runtime_error("No GPU surface has been drawn");
     impl_->saved_pixels.resize(size_t(impl_->options.width()) * impl_->options.height());
     Command command(impl_->device);
-    impl_->queue_download(command.value);
+    impl_->queue_download(command.value, impl_->rendered_post ? impl_->post_surface : impl_->surface);
     impl_->finish_readback(command, impl_->saved_pixels);
     auto *surface = checked(SDL_CreateSurfaceFrom(int(impl_->options.width()), int(impl_->options.height()),
         SDL_PIXELFORMAT_ARGB8888, impl_->saved_pixels.data(), int(impl_->options.width() * 4)), "Create GPU capture surface");

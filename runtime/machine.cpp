@@ -243,11 +243,21 @@ size_t Machine::state_size() const {
     if (game_video) sz += game_video->state_size();
     return sz;
 }
+size_t Machine::sync_state_size() const {
+    return state_size() - (game_video ? game_video->state_size() - game_video->sync_state_size() : 0);
+}
 
 void Machine::save_state(std::span<uint8_t> dst) const {
-    if (dst.size() != state_size()) {
-        throw std::invalid_argument("Machine::save_state size mismatch: expected " +
-            std::to_string(state_size()) + ", got " + std::to_string(dst.size()));
+    save_state_impl(dst, false);
+}
+void Machine::save_sync_state(std::span<uint8_t> dst) const {
+    save_state_impl(dst, true);
+}
+void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
+    const size_t expected = sync ? sync_state_size() : state_size();
+    if (dst.size() != expected) {
+        throw std::invalid_argument("Machine snapshot save size mismatch: expected " +
+            std::to_string(expected) + ", got " + std::to_string(dst.size()));
     }
     StateWriter writer(dst);
     // 1. Native CPU
@@ -325,14 +335,24 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     {
         std::span<uint8_t> v_slice(writer.current(), video->state_size());
         video->save_state(v_slice);
+        if (sync) {
+            // FDP scanout reloads controls from Machine::control and rebuilds
+            // row usages from graphics RAM. Game mode can skip that scanout,
+            // so its stale caches must not enter the synchronization checksum.
+            constexpr size_t begin = offsetof(CanonicalVideo, control_0);
+            constexpr size_t end = offsetof(CanonicalVideo, spritelist);
+            std::fill(v_slice.begin() + begin, v_slice.begin() + end, uint8_t(0));
+        }
         writer.advance(video->state_size());
     }
 
     // 8. GameVideo (when present)
     if (game_video) {
-        std::span<uint8_t> gv_slice(writer.current(), game_video->state_size());
-        game_video->save_state(gv_slice);
-        writer.advance(game_video->state_size());
+        const size_t size = sync ? game_video->sync_state_size() : game_video->state_size();
+        std::span<uint8_t> gv_slice(writer.current(), size);
+        if (sync) game_video->save_sync_state(gv_slice);
+        else game_video->save_state(gv_slice);
+        writer.advance(size);
     }
 
     if (writer.remaining() != 0) {
@@ -341,9 +361,16 @@ void Machine::save_state(std::span<uint8_t> dst) const {
 }
 
 void Machine::load_state(std::span<const uint8_t> src) {
-    if (src.size() != state_size()) {
-        throw std::invalid_argument("Machine::load_state size mismatch: expected " +
-            std::to_string(state_size()) + ", got " + std::to_string(src.size()));
+    load_state_impl(src, false);
+}
+void Machine::load_sync_state(std::span<const uint8_t> src) {
+    load_state_impl(src, true);
+}
+void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
+    const size_t expected = sync ? sync_state_size() : state_size();
+    if (src.size() != expected) {
+        throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
+            std::to_string(expected) + ", got " + std::to_string(src.size()));
     }
     StateReader reader(src);
     // 1. Native CPU
@@ -433,9 +460,11 @@ void Machine::load_state(std::span<const uint8_t> src) {
 
     // 8. GameVideo (when present)
     if (game_video) {
-        std::span<const uint8_t> gv_slice(reader.current(), game_video->state_size());
-        game_video->load_state(gv_slice);
-        reader.skip(game_video->state_size());
+        const size_t size = sync ? game_video->sync_state_size() : game_video->state_size();
+        std::span<const uint8_t> gv_slice(reader.current(), size);
+        if (sync) game_video->load_sync_state(gv_slice);
+        else game_video->load_state(gv_slice);
+        reader.skip(size);
     }
 
     if (reader.remaining() != 0) {
@@ -450,5 +479,11 @@ uint32_t Machine::state_crc() const {
     }
     save_state(state_scratch_);
     return crc32(state_scratch_.data(), state_scratch_.size());
+}
+uint32_t Machine::sync_state_crc() const {
+    const size_t sz = sync_state_size();
+    if (sync_state_scratch_.size() != sz) sync_state_scratch_.resize(sz);
+    save_sync_state(sync_state_scratch_);
+    return crc32(sync_state_scratch_.data(), sync_state_scratch_.size());
 }
 }

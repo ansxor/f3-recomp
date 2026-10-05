@@ -21,13 +21,13 @@ Around these layers are the netplay relay server (`netplay/server/`, Go) and the
 
 ## Current status
 
-These facts come from `README.md`, `STATUS.md` and `NOTES.md`. The repository documents say so; this site does not measure them again.
+These facts come from the repository README and developer evidence; this site does not measure them again.
 
 - The execution target is *Land Maker* Japan 2.01J (`landmakrj`).
   The World set (`landmakr`) has a main ROM config and runtime loader support, but no recorded validation here.
-- The `landmakr` executable runs the main CPU only from generated code. `STATUS.md` records a 3,600-frame run with 51,507,335 native blocks and no interpreter fallback. In the same record, 25 of 25 sampled frames match MAME exactly (frames 600 to 3480, step 120).
+- The `landmakr` executable runs the main CPU only from generated code. The [ImGui/netplay evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) records a 3,600-frame unopened-menu run with 51,507,335 native blocks and no interpreter fallback, and 25 exact MAME samples (frames 600–3480, step 120).
 - The native sound driver and the interpreted sound driver write the same bus trace and the same WAV file in the seed-5 test (`README.md`).
-- One-versus-one rollback netplay is finished and tested (`STATUS.md`).
+- Versus-only rollback uses a fresh host canonical snapshot, both-loaded barrier and confirmed local return; detailed observed coverage lives in [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md).
 - Audio does not yet equal MAME audio. `NOTES.md` records a correlation of about 0.9957 for seconds 20 to 54 and says this is not waveform parity.
 
 ## Choose your path
@@ -245,7 +245,7 @@ flowchart TB
 | [Protocol](/developer/netplay/protocol) | UDP packets, validation, identity, and finish verdict. |
 | [Client transport](/developer/netplay/transport) | Handshake, reliability, queues, ping, and timeouts. |
 | [Relay server](/developer/netplay/server) | Rooms, pairing, rate limits, expiry, and impairment. |
-| [Build identity](/developer/netplay/build-identity) | Source hashes, ROM CRCs, settings, EEPROM, and initial state. |
+| [Build identity](/developer/netplay/build-identity) | ROM CRCs, build fingerprint and canonical simulation/state format. |
 | [Frontend integration](/developer/netplay/frontend-integration) | Local input, stall handling, presentation, and confirmed audio. |
 | [Oracle](/developer/netplay/oracle) | Compare two clients with a single-machine input schedule. |
 | [Limits](/developer/netplay/limits) | Bounds, unsupported modes, security scope, and protocol constraints. |
@@ -286,9 +286,9 @@ The site explains the code. The repository documents hold the long evidence. Ope
 | File | Content |
 | --- | --- |
 | [README.md](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Commands and contracts. |
-| [STATUS.md](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md) | Result of the last finished phase. |
+| [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) | Overlay, shaders, canonical handoff and observed lifecycle evidence. |
 | [NOTES.md](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) | Dated decision log. |
-| [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md) | ABI history and snapshot contract. |
+| [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | ABI history and full/local versus canonical/sync state contract. |
 | [docs/NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, measurements. |
 | [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) | Video addresses and layouts. |
 | [docs/SOUND-DRIVER.md](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Sound driver and trace format. |

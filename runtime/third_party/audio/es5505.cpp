@@ -658,6 +658,7 @@ void ES5505::save_state(StateWriter &writer) const {
 void ES5505::load_state(StateReader &reader) {
     CanonicalES5505 st;
     reader.read(st);
+    require_state(st.master_clock == m_master_clock);
     m_master_clock = st.master_clock;
     m_sample_rate = st.sample_rate;
     m_active_voices = st.active_voices;

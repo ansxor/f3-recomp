@@ -68,7 +68,7 @@ The last line of `landmakr` and `f3rt-run` looks like `set=landmakrj frames=... 
 
 ## Change the ABI
 
-The ABI is `include/f3rt/cpu_abi.h`. Generated code compiles against it. The runtime implements it. Follow the rule from the README: **the runtime owns the ABI; the recompiler consumes it. Change it only with a note in `docs/ABI-CHANGES.md` and tell the other people who work on the project.**
+The ABI is `include/f3rt/cpu_abi.h`. Generated code consumes it; the runtime implements and owns it. Record ABI changes in `docs/developer/ABI-CHANGES.md` and notify other contributors.
 
 Use these steps:
 
@@ -76,12 +76,12 @@ Use these steps:
 2. Edit `include/f3rt/cpu_abi.h` and increase `F3RT_ABI_VERSION`.
 3. Edit `_RUNTIME_ABI_VERSION` in `recomp/generate.py` to the same number. The generated files then contain a matching `#if F3RT_ABI_VERSION != N` guard.
 4. Change the implementation in `runtime/cpu_abi.cpp` and `runtime/machine.cpp`. Change `tools/compile_sound.py` and `runtime/sound_native.cpp` if the sound code uses the changed part.
-5. Update the code that copies the CPU state: `runtime/core_state.c` and the `Canonical*` records in `runtime/state_io.hpp`. Update `Machine::save_state` and `Machine::load_state`.
+5. Update CPU state export/import (`runtime/core_state.c`), packed records (`runtime/state_io.hpp`), full local save/load and canonical sync save/load/CRC. Add safe-field validation; preserve local presentation and omit expanded buffers only from sync state.
 6. Update the differential harness (`tools/differential/harness_abi.c`) if it uses the changed part.
-7. Add a section to `docs/ABI-CHANGES.md`. Say what changed and why. State what stays the same.
+7. Add a section to `docs/developer/ABI-CHANGES.md`, stating the change, reason and unchanged contracts.
 8. Rebuild everything. Run the tests from the table.
 
-Some changes do not need a new version. Version 2 notes in `docs/ABI-CHANGES.md` list timing fixes and C++-only additions (for example the snapshot methods of `Machine`). They changed no ABI field and they have a note in the file. Write a note for them too.
+Some changes need a note but no ABI version bump, such as timing fixes or C++-only snapshot APIs. The history in `docs/developer/ABI-CHANGES.md` distinguishes these from layout/version changes.
 
 Rules that must stay true:
 
@@ -172,7 +172,7 @@ These conventions come from the existing code. Follow them.
 - The standard is C++20. Runtime components use `namespace f3rt`; C ABI entry points use `extern "C"`.
 - A big component hides its data behind `struct Impl` and a `std::unique_ptr` (`Video`, `Audio`, `GameVideo`, `Transport`, `Rollback`). Such classes are not copyable.
 - Errors are exceptions: `throw std::runtime_error("clear message")`. The frontend prints `f3rt: message` and exits with code 1. Do not add silent fallbacks.
-- Save and load must not allocate. Use fixed-size `std::array` members. Serialize with `StateWriter` and `StateReader` and a packed `Canonical*` record. When you add machine state, add it to `state_size`, `save_state`, `load_state` and the inventory in `docs/ABI-CHANGES.md`.
+- Valid save/load must not allocate. Use fixed storage, bounded `StateWriter`/`StateReader` and packed records. Update both full/local and canonical/sync size/save/load paths and validators. Keep rendering/trails and hardware state in sync; omit only expanded presentation. Document representation changes in `docs/developer/ABI-CHANGES.md`.
 - Exclude diagnostic counters from the snapshot (`native_blocks`, `fallback_instructions` and similar).
 - Write addresses as lower-case hex with `0x`. Comments name the evidence: a ROM address, a MAME file and line, or a test.
 - Files derived from MAME keep their license header. They are listed in `runtime/LICENSES.txt`.
@@ -263,7 +263,7 @@ flowchart TD
 - Put literal template expressions in a fenced code block.
 - Mark each code block with a language (`sh`, `cpp`, `c`, `python`, `toml`, `text`, `go`).
 - Use `::: tip`, `::: warning` and `::: info` containers only when they help.
-- Copy a measured number only with its source, for example "measured in STATUS.md on an Apple M5".
+- Copy measurements only with a developer evidence source and observed setup; do not turn historical measurements into current guarantees.
 - Check each claim against the code. The long Markdown files in the repository can be out of date.
 
 ### Diagrams
@@ -283,8 +283,8 @@ The theme stylesheet matches Mermaid's label spacing. Do not apply the document 
 | Topic | Read |
 | --- | --- |
 | Why a recompiler decision was made | `NOTES.md` (dated entries) |
-| What the last phase proved | `STATUS.md` |
-| ABI and snapshot contract | `docs/ABI-CHANGES.md` |
+| Overlay, handoff and observed verification | `docs/developer/IMGUI-NETPLAY.md` |
+| ABI and snapshot contract | `docs/developer/ABI-CHANGES.md` |
 | Netplay protocol and limits | `docs/NETPLAY.md` |
 | Video addresses and layouts | `docs/VIDEO-HLE.md` |
 | Sound driver and trace format | `docs/SOUND-DRIVER.md` |

@@ -81,7 +81,8 @@ These messages come from the option checks in `runtime/frontend.cpp`.
 | `--netplay-player must be 1 or 2` | Use 1 or 2. |
 | `--netplay-delay must be 0..8` | Use a value from 0 to 8. |
 | `Netplay requires --netplay-server and --netplay-room` | Give both options. |
-| `Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled` | Remove `--eeprom`, `--sound-trace`, `--fallback-report`, `--allow-fallback`, scale or border, and any non-default video or sound driver. |
+| `Netplay requires --netplay-host or --netplay-join` | Choose exactly one role for CLI entry, or use F1 Host/Join. |
+| `Netplay requires strict-native main execution without sound tracing` | Use generated main execution without fallback or a sound trace. Presentation geometry and EEPROM persistence are allowed. |
 | `Netplay frame limit exceeds protocol range` | The `--frames` value is too large for netplay. |
 | `This binary was built without F3_GENERATED_DIR` | You used `--translated` with a program that has no generated code. |
 | `Generated block registration failed` | The generated code does not match the runtime. Rebuild everything. |
@@ -129,7 +130,7 @@ If SDL cannot start, the program prints the text that SDL gives. Typical causes:
 
 ## Netplay errors
 
-The messages start with `netplay`. The program shows them in a message box with the title `Netplay stopped` and on the console.
+Session failures appear in the F1 status and console and return local. A new Host/Join creates a fresh handoff rather than restarting the process.
 
 ### Before the match
 
@@ -149,15 +150,13 @@ The messages start with `netplay`. The program shows them in a message box with 
 | `netplay join rejected: requested slot already taken` | Both players asked for the same slot. |
 | `netplay join rejected: ROM CRC mismatch` | The ROM files differ between the players. |
 | `netplay join rejected: build hash mismatch` | The builds differ. Both players must build the same source with the same compiler, platform and options. |
-| `netplay join rejected: settings mismatch` | The sound driver, video selection or delay differ. |
-| `netplay join rejected: EEPROM CRC mismatch` | The EEPROM state differs. Do not use `--eeprom` in netplay. |
-| `netplay join rejected: initial state CRC mismatch` | The start state of the two machines differs. Use the same build. |
-| `netplay join rejected: delay configuration mismatch` | Use the same `--netplay-delay`. |
+| `netplay join rejected: snapshot format mismatch` | Match audio/video simulation configuration and state format. |
+| `netplay join rejected: host/join role conflict` | Choose one host and one guest; either may be P1 or P2. |
 | `netplay join rejected: invalid room name` | The relay rejected the name. Use 1 to 32 letters, digits, `_` or `-`. |
 | `netplay join rejected: rate limited` | Too many packets from your IP address. Wait and try again. |
 | `netplay join rejected: match already in progress` | The room has a running match. Use a new room name. |
 | `netplay join rejected: invalid identity payload` | The relay and the game do not agree on the packet format. Build both from the same source. |
-| `netplay delay negotiation mismatch: expected A, got B` | The relay returned another delay. Use the same `--netplay-delay` on both sides. |
+| Guest requested a different delay | This is supported: the guest adopts the host's 0–8 frame delay. |
 | `netplay handshake peer identity mismatch` | The other player's identity differs from yours. Use the same build and ROM files. |
 | `netplay invalid slot assigned: N` or `netplay invalid session id 0` | The relay sent a bad answer. Check that the relay is the one from this repository. |
 
@@ -165,8 +164,8 @@ The messages start with `netplay`. The program shows them in a message box with 
 
 | Message | Cause and action |
 | --- | --- |
-| `netplay connection timeout: peer unreachable for 8 seconds` | The network failed or the other player closed the game. Start a new match with a new room name. |
-| `netplay disconnected: REASON` | The relay ended the session. Start a new match with a new room name. |
+| `netplay connection timeout: peer unreachable for 8 seconds` | Check relay/network reachability. After local return, ready a fresh Host/Join; the same room can be reused. |
+| `netplay disconnected: REASON` | The relay ended the session. Restore/return is automatic; ready a fresh handoff. |
 | `netplay desync detected at frame N ...` or `DESYNC at frame N ...` | The two machines have different state. The message gives both CRC32 values. This is a bug or a build mismatch. Please report it with the build details of both players. |
 | `netplay finish CRC mismatch ...` | At the end of a `--frames` match, the final CRC32 values differ. |
 | `netplay input buffer overflow (peer stalled/backpressure) ...` | The other player stopped for too long. |

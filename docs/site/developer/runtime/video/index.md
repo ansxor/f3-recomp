@@ -94,6 +94,6 @@ Read the pages in this order if you are new to the code.
 4. [Presentation](/developer/runtime/video/presentation), [Compare mode](/developer/runtime/video/compare-mode) and [Parity evidence and limits](/developer/runtime/video/parity).
 5. [Extending the renderer](/developer/runtime/video/extending) when you are ready to change code.
 
-The long evidence log for the game-data renderer is in [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md). The ABI note is in [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md). For the surrounding runtime, read [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
+Game-data renderer evidence is in [VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md); snapshot/ABI changes are in [ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md). For the surrounding runtime, see [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
 
 Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp), [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).

@@ -3,7 +3,8 @@
 #include "f3rt/game_video.hpp"
 #include "f3rt/rom.hpp"
 #include "f3rt/netplay.hpp"
-#include "f3rt/netplay_transport.hpp"
+#include "f3rt/netplay_session.hpp"
+#include "eeprom.hpp"
 #include "capture_io.hpp"
 #include "sound_trace.hpp"
 #include "gameplay_inputs.hpp"
@@ -16,6 +17,7 @@
 #endif
 
 #include <algorithm>
+#include "sync_snapshot_proof.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -102,18 +104,16 @@ struct LandMakerStatus {
 
 LandMakerStatus inspect_landmaker(f3rt::Machine &m) {
     LandMakerStatus st;
-    st.ram_probe = m.read16(0x004078f6);
+    st.ram_probe = m.read16(0x00401f6e);
     st.flags_val = m.read8(0x00401f53);
 
     st.p1_active = (st.flags_val & 0x01) != 0;
     st.p2_active = (st.flags_val & 0x02) != 0;
-    // Report active-player flags, including character selection. The raw RAM
-    // probe varies across seeds and is not a verified game-mode enumeration.
-    st.is_versus = st.p1_active && st.p2_active;
+    st.is_versus = f3rt::netplay::versus_match_active(m);
     if (st.is_versus) {
-        st.versus_status = "BOTH_PLAYERS_ACTIVE";
+        st.versus_status = "VERSUS";
     } else if (st.p1_active || st.p2_active) {
-        st.versus_status = "ONE_PLAYER_ACTIVE";
+        st.versus_status = "LOCAL_OR_DEMO";
     } else {
         st.versus_status = "IDLE";
     }
@@ -145,6 +145,20 @@ void configure_machine(f3rt::Machine &m, const std::string &sound_driver,
 
     // Per contract and parent guidance: GameVideoMode::Game matching frontend
     m.game_video = std::make_unique<f3rt::GameVideo>(m, f3rt::GameVideoMode::Game, video_opts);
+}
+
+std::array<uint16_t,2> match_inputs(uint64_t seed, unsigned match, uint64_t frame) {
+    std::array<uint16_t,2> words{};
+    for(unsigned player=0;player<2;++player) {
+        uint64_t value=seed ^ (uint64_t(match+1)*0x9e3779b97f4a7c15ull) ^
+            (uint64_t(player+1)*0xd1b54a32d192ed03ull) ^ (frame/6);
+        value=(value^(value>>30))*0xbf58476d1ce4e5b9ull;
+        value=(value^(value>>27))*0x94d049bb133111ebull;
+        value^=value>>31;
+        constexpr uint16_t directions[]={0,1,2,4,8};
+        words[player]=directions[value%5] | uint16_t(((value>>8)&7)<<4);
+    }
+    return words;
 }
 
 std::vector<uint8_t> read_file_bytes(const std::filesystem::path &p) {
@@ -515,7 +529,7 @@ int run_snapshot_proof(const std::filesystem::path &romdir, const std::string &s
               << " frame_crc=0x" << final_frame_crc
               << " audio_crc=0x" << cumulative_audio_crc << std::dec
               << " audio_samples=" << total_audio_frames
-              << " ram_word_4078f6=" << lm_status.ram_probe
+              << " ram_word_401f6e=" << lm_status.ram_probe
               << " ram_flags=0x" << std::hex << int(lm_status.flags_val) << std::dec
               << " versus_status=" << lm_status.versus_status
               << " vs_active=" << int(lm_status.is_versus)
@@ -534,7 +548,7 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
                   const f3rt::GameVideoOptions &video_opts,
                   const std::filesystem::path &capture_surface,
                   const std::filesystem::path &dump_dir,
-                  uint64_t dump_every) {
+                  uint64_t dump_every, const std::filesystem::path &initial_state, unsigned match_index) {
     const bool is_vs_schedule = (schedule_type != "single");
     std::cout << "--- REFERENCE ORACLE RUN ---\n"
               << "seed=" << seed << " frames=" << target_frames
@@ -543,6 +557,12 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
 
     f3rt::Machine m(f3rt::RomSet::load(romdir, set));
     configure_machine(m, sound_driver, video_opts);
+    if(!initial_state.empty()) {
+        m.load_sync_state(read_file_bytes(initial_state));
+        if(!f3rt::netplay::versus_handoff_ready(m) || m.audio->available_frames())
+            throw std::runtime_error("Reference input is not a drained versus handoff");
+    }
+    const uint64_t origin=m.frame;
 
     f3rt::test::GameplaySchedule schedule(seed, {.versus = is_vs_schedule});
     std::array<int16_t, 8192> audio_buf{};
@@ -557,8 +577,8 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
 
     const auto start_time = std::chrono::steady_clock::now();
 
-    while (m.frame < target_frames) {
-        const uint64_t f = m.frame;
+    while (m.frame-origin < target_frames) {
+        const uint64_t f = m.frame-origin;
 
         // Check if current frame is a requested sample point for VS mode verification
         bool is_sample_point = (std::find(sample_frames.begin(), sample_frames.end(), f) != sample_frames.end());
@@ -583,7 +603,7 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
         // Inputs taking effect at simulation frame f were sampled at frame (f - delay)
         std::array<uint16_t, 2> inputs{0, 0};
         if (f >= delay) {
-            inputs = schedule.step(f - delay);
+            inputs = initial_state.empty()?schedule.step(f-delay):match_inputs(seed,match_index,f-delay);
         }
 
         f3rt::netplay::apply_inputs(m, inputs);
@@ -608,9 +628,9 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
 
     const auto elapsed = std::chrono::steady_clock::now() - start_time;
     const double elapsed_sec = std::chrono::duration<double>(elapsed).count();
-    const double fps = elapsed_sec > 0 ? double(m.frame) / elapsed_sec : 0.0;
+    const double fps = elapsed_sec > 0 ? double(m.frame-origin) / elapsed_sec : 0.0;
 
-    const uint32_t final_machine_crc = m.state_crc();
+    const uint32_t final_machine_crc = initial_state.empty()?m.state_crc():m.sync_state_crc();
     const uint32_t final_frame_crc = f3rt::crc32(
         reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * 4);
 
@@ -627,13 +647,13 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
     }
 
     std::cout << "SUCCESS mode=reference seed=" << seed
-              << " frames=" << m.frame
+              << " frames=" << m.frame-origin
               << " final_crc=0x" << std::hex << final_machine_crc
               << " frame_crc=0x" << final_frame_crc
               << " audio_crc=0x" << audio_crc << std::dec
               << " audio_samples=" << audio_frames
               << " audio_peak=" << audio_peak
-              << " ram_word_4078f6=" << lm_status.ram_probe
+              << " ram_word_401f6e=" << lm_status.ram_probe
               << " ram_flags=0x" << std::hex << int(lm_status.flags_val) << std::dec
               << " versus_status=" << lm_status.versus_status
               << " vs_active=" << int(lm_status.is_versus)
@@ -649,303 +669,213 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
 int run_client(const std::filesystem::path &romdir, const std::string &set,
                const std::string &server_addr, const std::string &room_name,
                unsigned player_slot, unsigned delay, unsigned window,
-               uint64_t seed, uint64_t target_frames,
-               const std::string &sound_driver,
-               const std::string &schedule_type,
-               const f3rt::GameVideoOptions &video_opts,
-               const std::filesystem::path &capture_surface,
-               const std::filesystem::path &dump_dir,
-               double timeout_sec, bool unthrottled,
-               uint64_t stall_at, uint32_t stall_ms,
-               uint64_t withhold_at, uint32_t withhold_ms,
-               bool corrupt_build_hash, uint64_t event_at) {
-    const bool is_vs_schedule = (schedule_type != "single");
-    std::cout << "--- HEADLESS NETPLAY CLIENT ---\n"
-              << "player=" << player_slot << " server=" << server_addr
-              << " room=" << room_name << " delay=" << delay
-              << " window=" << window << " seed=" << seed
-              << " frames=" << target_frames
-              << " sound_driver=" << sound_driver
-              << " schedule=" << (is_vs_schedule ? "versus" : "single") << '\n';
-
-    f3rt::Machine m(f3rt::RomSet::load(romdir, set));
-    configure_machine(m, sound_driver, video_opts);
-
-    auto identity = f3rt::netplay::machine_identity(m, delay);
-    if (corrupt_build_hash) {
-        std::cout << "[CLIENT] Corrupting build hash for mismatch test\n";
-        identity.build_hash[0] ^= 0xff;
+               uint64_t seed, uint64_t target_frames, const std::string &sound_driver,
+               const std::string &schedule_type, const f3rt::GameVideoOptions &video_opts,
+               const std::filesystem::path &capture_surface, const std::filesystem::path &dump_dir,
+               double timeout_sec, bool unthrottled, uint64_t stall_at, uint32_t stall_ms,
+               uint64_t withhold_at, uint32_t withhold_ms, bool corrupt_build_hash,
+               uint64_t event_at, uint64_t prelude_frames, unsigned host_player) {
+    using namespace f3rt::netplay;
+    if(schedule_type!="versus" || target_frames>=UINT32_MAX-Rollback::history_size)
+        throw std::runtime_error("Client requires versus schedule and a bounded match frame count");
+    if(host_player<1 || host_player>2)throw std::runtime_error("Host player must be 1 or 2");
+    f3rt::Machine m(f3rt::RomSet::load(romdir,set));
+    configure_machine(m,sound_driver,video_opts);
+    std::array<int16_t,8192> audio{};
+    auto discard_audio=[&]() { while(m.audio->render(audio.data(),audio.size()/2)) {} };
+    if(prelude_frames==UINT64_MAX)prelude_frames=player_slot==1?2400:3200;
+    const auto solo_inputs=[&](uint64_t f) {
+        // One start: repeated starts in the selection flow can enter versus.
+        std::array<InputWord,2> words{};
+        if(f>=1200 && f<1220)words[0]|=0x100;
+        if(f>=1280 && f<1285)words[0]|=0x80;
+        if(f>=1700 && f%60<3)words[0]|=0x10;
+        if(f>=2400)words[0]=match_inputs(seed+player_slot*101,0,f-2400)[0];
+        return words;
+    };
+    for(uint64_t f=0;f<prelude_frames;++f) {
+        apply_inputs(m,solo_inputs(f));
+        if(!m.run_frame(true) || m.fallback_instructions)throw std::runtime_error("Solo prehistory halted");
+        discard_audio();
     }
-
-    f3rt::netplay::TransportOptions topts;
-    topts.server = server_addr;
-    topts.room = room_name;
-    topts.player = player_slot; // 1 or 2
-    topts.delay = delay;
-
-    f3rt::netplay::Transport transport(topts, identity);
-
-    // Handshake wait loop
-    std::cout << "Waiting for peer to join room '" << room_name << "' on server " << server_addr << "...\n" << std::flush;
-    const auto handshake_start = std::chrono::steady_clock::now();
-    while (!transport.ready()) {
-        transport.pump(0, 0);
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - handshake_start).count() > timeout_sec) {
-            throw std::runtime_error("Handshake timeout waiting for peer in room " + room_name);
+    if(versus_match_active(m))throw std::runtime_error("Prelude unexpectedly entered versus");
+    // Different persistent bytes are intentionally irrelevant after host adoption.
+    // Change an EEPROM word after solo boot, not ROM or live game RAM.
+    if(player_slot==2)m.eeprom->words.back()^=0x0101;
+    const auto pre_crc=m.sync_state_crc();
+    const auto pre_eeprom=f3rt::crc32(reinterpret_cast<const uint8_t *>(m.eeprom->words.data()),128);
+    std::cout<<"[PREHISTORY] player="<<player_slot<<" frames="<<m.frame<<" crc="<<pre_crc
+             <<" eeprom_crc="<<pre_eeprom<<" scale="<<video_opts.scale<<" border="<<video_opts.border
+             <<" active="<<unsigned(m.ram[0x1f53]&3)<<'\n'<<std::flush;
+    auto identity=machine_identity(m);
+    if(corrupt_build_hash)identity.build_hash[0]^=0xff;
+    uint64_t total=0,total_audio=0,total_rollbacks=0,frontier_stalls=0,local_returns=0;
+    uint64_t event_rollbacks=0,event_stalls=0;
+    unsigned max_depth=0,last_depth=0,event_depth=0,natural_ends=0,matches=0;
+    uint32_t grand_audio=~0u,final_crc=0,frame_crc=0;
+    double event_stall_ms=0,last_rtt=0;
+    bool withheld=false,stalled=false;
+    const auto started=std::chrono::steady_clock::now();
+    while(total<target_frames) {
+        TransportOptions options;
+        options.server=server_addr;options.room=room_name;
+        options.player=player_slot;options.host=player_slot==host_player;options.delay=delay;
+        Session session(m,options,identity,window);
+        session.set_frame_limit(uint32_t(target_frames-total));
+        uint32_t match_audio=~0u;
+        uint64_t match_samples=0,reported=total;
+        bool saw_start=false,event_stalling=false;
+        auto progress=std::chrono::steady_clock::now(),event_begin=progress;
+        std::filesystem::path match_dir;
+        if(!dump_dir.empty()) {
+            match_dir=dump_dir/("match_"+std::to_string(matches));
+            std::filesystem::create_directories(match_dir);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    const unsigned slot = transport.slot();
-    std::cout << "[READY] Handshake complete: assigned slot=" << slot << " (Player " << (slot + 1) << ")\n" << std::flush;
-
-    f3rt::netplay::Rollback rollback(m, slot, delay, window);
-    f3rt::test::GameplaySchedule schedule(seed, {.versus = is_vs_schedule});
-
-    std::array<int16_t, 8192> audio_buf{};
-    uint64_t confirmed_audio_samples = 0;
-    uint32_t audio_crc = ~0u;
-    uint64_t frontier_stalls = 0;
-
-    const auto sim_start = std::chrono::steady_clock::now();
-    auto last_progress_time = sim_start;
-    uint32_t last_confirmed = 0;
-    bool stall_done = false;
-    bool withhold_done = false;
-
-    uint64_t event_delta_rollbacks = 0, event_delta_stalls = 0;
-    unsigned event_max_depth = 0;
-    double event_stall_ms = 0;
-    bool event_stalling = false;
-    auto event_stall_started = sim_start;
-
-    f3rt::netplay::Input in_pkt{};
-    f3rt::netplay::Checksum cs_pkt{};
-
-    // Main netplay simulation loop
-    // Guard: Advance and local sampling strictly until rollback.frame() reaches target_frames.
-    // Continue until confirmed_frame() reaches target_frames, without overshooting!
-    while (rollback.confirmed_frame() < target_frames) {
-        const uint64_t previous_rollbacks = rollback.rollback_count();
-
-        // Late input injection: withhold sending local inputs for withhold_ms
-        if (withhold_at > 0 && rollback.frame() >= withhold_at && !withhold_done) {
-            std::cout << "[WITHHOLD_BEGIN] player=" << (slot + 1) << " frame=" << rollback.frame()
-                      << " withholding inputs for " << withhold_ms << "ms\n" << std::flush;
-            auto t_wh = std::chrono::steady_clock::now();
-            while (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_wh).count() < withhold_ms) {
-                transport.pump(rollback.frame(), rollback.confirmed_frame());
-                while (transport.receive(in_pkt)) rollback.receive(in_pkt);
-                while (transport.receive_checksum(cs_pkt)) rollback.receive_checksum(cs_pkt);
-                rollback.synchronize();
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        auto drain=[&]() {
+            size_t count;
+            while((count=session.render_audio(audio.data(),audio.size()/2))) {
+                if(!saw_start)continue;
+                match_samples+=count;total_audio+=count;
+                const auto *bytes=reinterpret_cast<const uint8_t *>(audio.data());
+                match_audio=crc32_update(match_audio,bytes,count*4);
+                grand_audio=crc32_update(grand_audio,bytes,count*4);
             }
-            withhold_done = true;
-            last_progress_time = std::chrono::steady_clock::now();
-            std::cout << "[WITHHOLD_END] player=" << (slot + 1) << " resumed submitting inputs\n" << std::flush;
-        }
-
-        // 1. Submit local inputs when rollback needs them, only if frame < target_frames
-        if (rollback.frame() < target_frames && rollback.needs_local_input()) {
-            // Consistent delay semantics (Item 8):
-            // Sample input at current simulation frame (matching frontend):
-            uint16_t word = schedule.player_input(slot, rollback.frame());
-            auto inp = rollback.local_input(word);
-            transport.submit(inp);
-        }
-
-        // Induced complete stall test support (Item 4)
-        if (stall_at > 0 && rollback.frame() >= stall_at && !stall_done) {
-            std::cout << "[STALL_BEGIN] player=" << (slot + 1) << " frame=" << rollback.frame()
-                      << " pausing " << stall_ms << "ms\n" << std::flush;
-            std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
-            stall_done = true;
-            last_progress_time = std::chrono::steady_clock::now();
-            std::cout << "[STALL_END] player=" << (slot + 1) << " resumed pumping\n" << std::flush;
-        }
-
-        // 2. Pump transport network I/O
-        transport.pump(rollback.frame(), rollback.confirmed_frame());
-
-        // 3. Receive incoming inputs from peer
-        while (transport.receive(in_pkt)) {
-            rollback.receive(in_pkt);
-        }
-
-        // 4. Receive incoming checksums from peer
-        while (transport.receive_checksum(cs_pkt)) {
-            rollback.receive_checksum(cs_pkt);
-        }
-
-        // 5. Synchronize predictions/promotions
-        rollback.synchronize();
-        if (event_at && rollback.rollback_count() != previous_rollbacks) {
-            const uint32_t corrected = rollback.frame() - rollback.last_rollback_depth();
-            if (corrected >= event_at + delay && corrected < event_at + delay + window) {
-                event_delta_rollbacks += rollback.rollback_count() - previous_rollbacks;
-                event_max_depth = std::max(event_max_depth, rollback.last_rollback_depth());
+        };
+        while(session.connected()) {
+            const auto *before=session.rollback();
+            const auto old_rollbacks=before?before->rollback_count():0;
+            const uint64_t global=total+(before?before->frame():0);
+            if(before && stall_at && global>=stall_at && !stalled) {
+                std::cout<<"[STALL_BEGIN] player="<<player_slot<<" frame="<<global<<'\n'<<std::flush;
+                std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
+                stalled=true;
+                std::cout<<"[STALL_END] player="<<player_slot<<'\n'<<std::flush;
             }
-        }
-
-        // 6. Send outgoing checksums
-        while (rollback.receive_checksum_to_send(cs_pkt)) {
-            transport.checksum(cs_pkt);
-        }
-
-        // 7. Advance simulation frame if within window AND frame < target_frames
-        bool advanced = false;
-        if (rollback.frame() < target_frames) {
-            advanced = rollback.advance();
-            // Drain checksums generated by advance
-            while (rollback.receive_checksum_to_send(cs_pkt)) {
-                transport.checksum(cs_pkt);
+            if(before && withhold_at && global>=withhold_at && !withheld) {
+                std::cout<<"[WITHHOLD_BEGIN] player="<<player_slot<<" frame="<<global<<'\n'<<std::flush;
+                const auto end=std::chrono::steady_clock::now()+std::chrono::milliseconds(withhold_ms);
+                while(session.connected() && std::chrono::steady_clock::now()<end) {
+                    session.pump();drain();std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                withheld=true;
+                std::cout<<"[WITHHOLD_END] player="<<player_slot<<'\n'<<std::flush;
             }
-        }
-
-        const bool stalled_in_event = event_at && !advanced &&
-            rollback.frame() - rollback.confirmed_frame() == window &&
-            rollback.frame() >= event_at + delay &&
-            rollback.confirmed_frame() < event_at + delay + window;
-        if (stalled_in_event) {
-            const auto at = std::chrono::steady_clock::now();
-            if (!event_stalling) event_stall_started = at;
-            ++event_delta_stalls;
-            event_stall_ms = std::max(event_stall_ms,
-                std::chrono::duration<double, std::milli>(at - event_stall_started).count());
-        }
-        event_stalling = stalled_in_event;
-        // 8. Drain ALL confirmed audio with a while loop
-        size_t pcm_frames = 0;
-        while ((pcm_frames = rollback.render_audio(audio_buf.data(), audio_buf.size() / 2)) > 0) {
-            confirmed_audio_samples += pcm_frames;
-            audio_crc = crc32_update(audio_crc,
-                reinterpret_cast<const uint8_t *>(audio_buf.data()), pcm_frames * 2 * sizeof(int16_t));
-        }
-
-        if (advanced) {
-            last_progress_time = std::chrono::steady_clock::now();
-        } else {
-            ++frontier_stalls;
-            // Frontier stall or waiting for confirmed frontier: yield/sleep
-            if (!unthrottled) {
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
-            } else {
-                std::this_thread::yield();
+            session.pump();
+            const auto *rollback=session.rollback();
+            if(rollback && !saw_start) {
+                saw_start=true;progress=std::chrono::steady_clock::now();
+                std::cout<<"[HANDOFF] match="<<matches<<" player="<<player_slot
+                         <<" origin="<<rollback->origin_frame()<<" initial_crc="<<m.sync_state_crc()
+                         <<" delay="<<session.delay()<<" flags="<<unsigned(m.ram[0x1f53])
+                         <<" match_kind="<<m.read16(0x401f6e)<<'\n'<<std::flush;
+                if(options.host && !match_dir.empty()) {
+                    std::vector<uint8_t> bytes(m.sync_state_size());m.save_sync_state(bytes);
+                    std::ofstream out(match_dir/"handoff.bin",std::ios::binary);
+                    out.write(reinterpret_cast<const char *>(bytes.data()),bytes.size());
+                    if(!out)throw std::runtime_error("Cannot write handoff reference state");
+                }
             }
-        }
-
-        if (rollback.confirmed_frame() > last_confirmed) {
-            uint32_t prev_confirmed = last_confirmed;
-            last_confirmed = rollback.confirmed_frame();
-            last_progress_time = std::chrono::steady_clock::now();
-
-            // Report progress across every 1000-frame boundary without skipping jumps
-            if (last_confirmed / 1000 != prev_confirmed / 1000 || last_confirmed == target_frames) {
-                std::cout << "[PROGRESS] player=" << (slot + 1)
-                          << " frame=" << rollback.frame()
-                          << " confirmed=" << last_confirmed << "\n" << std::flush;
+            if(event_at && rollback && rollback->rollback_count()!=old_rollbacks &&
+               rollback->frame()>=rollback->last_rollback_depth()) {
+                const uint64_t corrected=total+rollback->frame()-rollback->last_rollback_depth();
+                if(corrected>=event_at+session.delay() && corrected<event_at+session.delay()+window) {
+                    event_rollbacks+=rollback->rollback_count()-old_rollbacks;
+                    event_depth=std::max(event_depth,rollback->last_rollback_depth());
+                }
             }
+            bool advanced=false;
+            if(session.connected()) {
+                std::array<InputWord,2> local{};
+                if(rollback)local[0]=match_inputs(seed,matches,rollback->frame())[session.slot()];
+                else local=solo_inputs(m.frame);
+                advanced=session.advance(local);
+            }
+            drain();
+            const bool event_full=event_at && rollback && !advanced &&
+                rollback->frame()-rollback->confirmed_frame()==window &&
+                total+rollback->frame()>=event_at+session.delay() &&
+                total+rollback->confirmed_frame()<event_at+session.delay()+window;
+            if(event_full) {
+                const auto now=std::chrono::steady_clock::now();
+                if(!event_stalling)event_begin=now;
+                ++event_stalls;
+                event_stall_ms=std::max(event_stall_ms,
+                    std::chrono::duration<double,std::milli>(now-event_begin).count());
+            }
+            event_stalling=event_full;
+            if(rollback) {
+                const auto confirmed=total+rollback->confirmed_frame();
+                if(confirmed!=reported) {
+                    progress=std::chrono::steady_clock::now();
+                    if(confirmed/1000!=reported/1000 || confirmed==target_frames)
+                        std::cout<<"[PROGRESS] player="<<player_slot<<" confirmed="<<confirmed<<'\n'<<std::flush;
+                    reported=confirmed;
+                }
+            } else if(advanced)progress=std::chrono::steady_clock::now();
+            if(!advanced) {
+                if(rollback)++frontier_stalls;
+                if(!unthrottled)std::this_thread::sleep_for(std::chrono::microseconds(200));
+                else std::this_thread::yield();
+            }
+            if(std::chrono::duration<double>(std::chrono::steady_clock::now()-progress).count()>timeout_sec)
+                session.disconnect("Oracle watchdog: no match progress");
         }
-
-        // Check stall timeout
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - last_progress_time).count() > timeout_sec) {
-            std::ostringstream ss;
-            ss << "Timeout stalled at frame=" << rollback.frame()
-               << " confirmed=" << rollback.confirmed_frame()
-               << " slot=" << slot;
-            throw std::runtime_error(ss.str());
+        drain();
+        const auto result=session.result();
+        if(result==Session::Result::Error || result==Session::Result::Disconnected) {
+            const auto reason=session.error();
+            const auto local_start=m.frame;
+            for(unsigned i=0;i<60;++i) {
+                apply_inputs(m,{match_inputs(seed+player_slot,matches,i)[0],0});
+                if(!m.run_frame(true) || m.fallback_instructions)throw std::runtime_error("Local recovery halted");
+                discard_audio();
+            }
+            std::cout<<"[LOCAL_RETURN] reason=error advanced="<<m.frame-local_start
+                     <<" fallback="<<m.fallback_instructions<<'\n'<<std::flush;
+            throw std::runtime_error(reason);
         }
-    }
-
-    // Drain any remaining confirmed audio
-    size_t pcm_frames = 0;
-    while ((pcm_frames = rollback.render_audio(audio_buf.data(), audio_buf.size() / 2)) > 0) {
-        confirmed_audio_samples += pcm_frames;
-        audio_crc = crc32_update(audio_crc,
-            reinterpret_cast<const uint8_t *>(audio_buf.data()), pcm_frames * 2 * sizeof(int16_t));
-    }
-
-    audio_crc ^= ~0u;
-
-    if (m.frame != target_frames) {
-        throw std::runtime_error("Overshoot check failed: machine frame=" +
-                                 std::to_string(m.frame) + " target=" + std::to_string(target_frames));
-    }
-
-    std::cout << "[FINISHED_SIM] Reached confirmed frame " << target_frames
-              << ". Completing finish handshake...\n" << std::flush;
-
-    // Finish handshake: exchange final state CRC
-    const uint32_t final_machine_crc = m.state_crc();
-    transport.finish(uint32_t(target_frames), final_machine_crc);
-
-    const auto finish_start = std::chrono::steady_clock::now();
-    while (!transport.finished()) {
-        transport.pump(rollback.frame(), rollback.confirmed_frame());
-        while (transport.receive(in_pkt)) rollback.receive(in_pkt);
-        while (transport.receive_checksum(cs_pkt)) rollback.receive_checksum(cs_pkt);
-        rollback.synchronize();
-        while (rollback.receive_checksum_to_send(cs_pkt)) transport.checksum(cs_pkt);
-
-        while ((pcm_frames = rollback.render_audio(audio_buf.data(), audio_buf.size() / 2)) > 0) {}
-
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - finish_start).count() > timeout_sec) {
-            throw std::runtime_error("Finish handshake timeout waiting for peer ACK");
+        const auto *rollback=session.rollback();
+        if(!rollback || !rollback->confirmed_frame() || rollback->frame()!=rollback->confirmed_frame())
+            throw std::runtime_error("Session ended without a confirmed match frontier");
+        final_crc=m.sync_state_crc();
+        frame_crc=f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4);
+        total+=rollback->confirmed_frame();total_rollbacks+=rollback->rollback_count();
+        max_depth=std::max(max_depth,rollback->maximum_rollback_depth());
+        last_depth=rollback->last_rollback_depth();last_rtt=session.rtt_ms();
+        if(result==Session::Result::MatchEnded)++natural_ends;
+        std::cout<<"MATCH match="<<matches<<" frames="<<rollback->confirmed_frame()<<" delay="<<session.delay()
+                 <<" host="<<int(options.host)<<" origin="<<rollback->origin_frame()
+                 <<" final_crc=0x"<<std::hex<<final_crc<<" frame_crc=0x"<<frame_crc
+                 <<" audio_crc=0x"<<(match_audio^~0u)<<std::dec<<" audio_samples="<<match_samples
+                 <<" natural_end="<<int(result==Session::Result::MatchEnded)<<'\n'<<std::flush;
+        if(!match_dir.empty())f3rt::dump_machine(m,match_dir);
+        if(total==target_frames && !capture_surface.empty()) {
+            if(capture_surface.has_parent_path())std::filesystem::create_directories(capture_surface.parent_path());
+            f3rt::write_bmp(capture_surface,m.pixels);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-
-    const auto elapsed = std::chrono::steady_clock::now() - sim_start;
-    const double elapsed_sec = std::chrono::duration<double>(elapsed).count();
-    const double fps = elapsed_sec > 0 ? double(rollback.frame()) / elapsed_sec : 0.0;
-
-    const uint32_t final_frame_crc = f3rt::crc32(
-        reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * 4);
-
-    auto lm_status = inspect_landmaker(m);
-
-    if (!capture_surface.empty()) {
-        if (capture_surface.has_parent_path()) {
-            std::filesystem::create_directories(capture_surface.parent_path());
+        const auto local_start=m.frame;
+        // No session.advance() or input packets here: prove both machines are local.
+        for(unsigned i=0;i<90+player_slot*17;++i) {
+            apply_inputs(m,{match_inputs(seed+player_slot,matches,i)[0],0});
+            if(!m.run_frame(true) || m.fallback_instructions)throw std::runtime_error("Post-match local play halted");
+            discard_audio();
         }
-        f3rt::write_bmp(capture_surface, m.pixels);
+        ++local_returns;
+        std::cout<<"[LOCAL_RETURN] match="<<matches<<" advanced="<<m.frame-local_start
+                 <<" crc="<<m.sync_state_crc()<<" fallback="<<m.fallback_instructions<<'\n'<<std::flush;
+        ++matches;
     }
-    if (!dump_dir.empty()) {
-        f3rt::dump_machine(m, dump_dir);
-    }
-
-    std::cout << "[EVENT_DELTA] player=" << (slot + 1)
-              << " delta_rollbacks=" << event_delta_rollbacks
-              << " max_depth=" << event_max_depth
-              << " delta_stalls=" << event_delta_stalls << "\n" << std::flush;
-
-    std::cout << "SUCCESS mode=client player=" << (slot + 1)
-              << " slot=" << slot
-              << " seed=" << seed
-              << " frames=" << rollback.confirmed_frame()
-              << " final_crc=0x" << std::hex << final_machine_crc
-              << " frame_crc=0x" << final_frame_crc
-              << " audio_crc=0x" << audio_crc << std::dec
-              << " audio_samples=" << confirmed_audio_samples
-              << " rollbacks=" << rollback.rollback_count()
-              << " max_depth=" << rollback.maximum_rollback_depth()
-              << " last_depth=" << rollback.last_rollback_depth()
-              << " frontier_stalls=" << frontier_stalls
-              << " event_delta_rollbacks=" << event_delta_rollbacks
-              << " event_max_depth=" << event_max_depth
-              << " event_delta_stalls=" << event_delta_stalls
-              << " event_stall_ms=" << event_stall_ms
-              << " rtt_ms=" << std::fixed << std::setprecision(2) << transport.rtt_ms()
-              << " ram_word_4078f6=" << lm_status.ram_probe
-              << " ram_flags=0x" << std::hex << int(lm_status.flags_val) << std::dec
-              << " versus_status=" << lm_status.versus_status
-              << " vs_active=" << int(lm_status.is_versus)
-              << " fps=" << std::fixed << std::setprecision(1) << fps
-              << '\n';
-
+    const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
+    std::cout<<"SUCCESS mode=client player="<<player_slot<<" seed="<<seed<<" frames="<<total
+             <<" final_crc=0x"<<std::hex<<final_crc<<" frame_crc=0x"<<frame_crc
+             <<" audio_crc=0x"<<(grand_audio^~0u)<<std::dec<<" audio_samples="<<total_audio
+             <<" rollbacks="<<total_rollbacks<<" max_depth="<<max_depth<<" last_depth="<<last_depth
+             <<" frontier_stalls="<<frontier_stalls<<" event_delta_rollbacks="<<event_rollbacks
+             <<" event_max_depth="<<event_depth<<" event_delta_stalls="<<event_stalls
+             <<" event_stall_ms="<<event_stall_ms<<" rtt_ms="<<last_rtt
+             <<" matches="<<matches<<" natural_ends="<<natural_ends<<" local_returns="<<local_returns
+             <<" pre_crc="<<pre_crc<<" pre_eeprom_crc="<<pre_eeprom
+             <<" fallback="<<m.fallback_instructions<<" fps="<<double(total)/seconds<<'\n';
     return 0;
 }
 
@@ -970,6 +900,9 @@ int main(int argc, char **argv) try {
     f3rt::GameVideoOptions video_opts;
     std::filesystem::path capture_surface;
     std::filesystem::path dump_dir;
+    std::filesystem::path initial_state;
+    unsigned match_index=0,host_player=1;
+    uint64_t prelude_frames=UINT64_MAX;
     uint64_t snapshot_interval = 1000;
     uint64_t snapshot_k = 0;
     uint64_t dump_every = 0;
@@ -1021,6 +954,14 @@ int main(int argc, char **argv) try {
             capture_surface = value();
         } else if (arg == "--dump-dir") {
             dump_dir = value();
+        } else if (arg == "--initial-state") {
+            initial_state=value();
+        } else if (arg == "--match-index") {
+            match_index=unsigned(std::stoul(value()));
+        } else if (arg == "--host-player") {
+            host_player=unsigned(std::stoul(value()));
+        } else if (arg == "--prelude-frames") {
+            prelude_frames=std::stoull(value());
         } else if (arg == "--dump-every") {
             dump_every = std::stoull(value());
         } else if (arg == "--snapshot-interval") {
@@ -1049,7 +990,8 @@ int main(int argc, char **argv) try {
                       << "Modes:\n"
                       << "  --mode snapshot   Snapshot save/load proof and performance benchmark\n"
                       << "  --mode reference  Single-machine reference execution with delay-adjusted stream\n"
-                      << "  --mode client     Headless netplay client using Transport and Rollback\n\n"
+                      << "  --mode client     Divergent solo histories, real snapshot handoff, versus campaigns\n"
+                      << "  --mode sync-proof Cross-presentation canonical import and exact local replay proof\n\n"
                       << "Options:\n"
                       << "  --rom-dir DIR          Path to ROM directory\n"
                       << "  --set SET              ROM set name (default: landmakrj)\n"
@@ -1065,6 +1007,10 @@ int main(int argc, char **argv) try {
                       << "  --surface FILE.bmp     Capture final frame BMP\n"
                       << "  --dump-dir DIR         Dump machine state / sample BMPs\n"
                       << "  --dump-every N         Dump frame BMP every N frames\n"
+                      << "  --initial-state FILE   Raw canonical handoff state for independent reference replay\n"
+                      << "  --match-index N        Campaign match input stream index (default 0)\n"
+                      << "  --host-player 1|2      Explicit authority, independent of slot (default 1)\n"
+                      << "  --prelude-frames N     Independent solo history before pairing (default 2400/3200)\n"
                       << "  --snapshot-interval N  Interval for snapshot proof (default: 1000)\n"
                       << "  --snapshot-k N         Resimulation depth K (default: 1, 7, 16, 31, 97)\n"
                       << "  --timeout SEC          Timeout seconds (default: 120)\n"
@@ -1091,6 +1037,21 @@ int main(int argc, char **argv) try {
         throw std::runtime_error("--frames must be positive");
     }
 
+    if(mode=="sync-proof") {
+        const auto allocation_probe=+[](bool begin)->uint64_t {
+            if(begin)g_allocation_count=0;
+            g_track_allocations=begin;
+            return g_allocation_count.load();
+        };
+        if(sound_driver=="all") {
+            for(const char *driver:{"native","oracle"}) {
+                const int result=run_sync_snapshot_proof(romdir,set,driver,seed,frames,allocation_probe);
+                if(result)return result;
+            }
+            return 0;
+        }
+        return run_sync_snapshot_proof(romdir,set,sound_driver,seed,frames,allocation_probe);
+    }
     if (mode == "snapshot" || mode == "snapshot-proof") {
         if (snapshot_interval == 0) {
             throw std::runtime_error("--snapshot-interval must be positive");
@@ -1122,7 +1083,7 @@ int main(int argc, char **argv) try {
     } else if (mode == "reference") {
         return run_reference(romdir, set, seed, frames, delay, sound_driver,
                              schedule_type, video_opts, capture_surface,
-                             dump_dir, dump_every);
+                             dump_dir, dump_every, initial_state, match_index);
     } else if (mode == "client") {
         if (player != 1 && player != 2) {
             throw std::runtime_error("Client mode requires --player 1 or --player 2");
@@ -1131,7 +1092,7 @@ int main(int argc, char **argv) try {
                           window, seed, frames, sound_driver, schedule_type,
                           video_opts, capture_surface, dump_dir, timeout_sec,
                           unthrottled, stall_at, stall_ms, withhold_at, withhold_ms,
-                          corrupt_build_hash, event_at);
+                          corrupt_build_hash, event_at, prelude_frames, host_player);
     } else {
         throw std::runtime_error("Unknown --mode: " + mode + " (expected snapshot, reference, or client)");
     }

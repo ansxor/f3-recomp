@@ -110,6 +110,7 @@ flowchart LR
 | `enable_gpu_presentation(enabled)`, `gpu_scene()` | Enable/read the host-only scanout snapshot. Fixed canonical caches are eager only when expanded snapshots need them; CPU diagnostic storage is lazy. |
 | `set_gpu_scale(scale)`, `render_reference(output, options, mask, serial)` | Select host GPU/reference scale 1..8 and render that geometry; constructor-fixed presentation/state buffers and border do not change. Player scales remain capped at 4. |
 | `state_size()`, `save_state(dst)`, `load_state(src)` | Snapshot support. They throw `std::invalid_argument` for a wrong size and `std::logic_error` for leftover bytes. |
+| `sync_state_size()`, `save_sync_state(dst)`, `load_sync_state(src)` | Canonical native rendering/trails without expanded presentation buffers; guest keeps its own geometry. |
 
 `latch_sprites()`, `render()` and `compare_composite(frame)` are private.
 
@@ -243,6 +244,9 @@ sequenceDiagram
 ## Saved state
 
 `GameVideo::Impl::save_state` writes, in this order: one byte for `rendered`, then the state of tiles, text, sprites and lines, then the native sprite plane (432 x 256 x 2 bytes), the native pixels (320 x 232 x 4 bytes), the presentation pixels and the presentation sprite plane. The sizes of the last two are zero when the picture is not expanded. The state does not include the fallback table or the compare counters (these are diagnostics). The structures use the packed `Canonical*` types in `runtime/state_io.hpp`: `CanonicalGameTileCell`, `CanonicalGameTextCell`, `CanonicalSceneSprite`, `CanonicalSceneLayer`, `CanonicalScenePlayfield`, `CanonicalSceneClip`, `CanonicalSceneRow`, `CanonicalLinePivot`, `CanonicalLineSprite`, `CanonicalLinePlayfield` and `CanonicalLineParams`. Rollback netplay saves this state every frame, so it must contain every value that affects the next picture. See [Snapshots](/developer/netplay/snapshots).
+
+Full local snapshots retain the expanded buffers for slots and rollback restore. Canonical sync state omits those two buffers only; hardware/native rendering/trail state remains. Handoff and network CRCs use canonical state, while each client's rollback ring uses full local state. Safe-field validation applies before accepting loads. See [sync proof and parser evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md).
+
 
 ## Report output
 

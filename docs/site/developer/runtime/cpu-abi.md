@@ -120,7 +120,7 @@ The runtime also clears `cc_op` when it writes SR. `f3_set_sr` does this, and `f
 
 ## ABI versions
 
-The macro `F3RT_ABI_VERSION` is `3u`. The full history is in [ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md).
+The macro `F3RT_ABI_VERSION` is `3u`. History is in [ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md).
 
 ### Version 1
 
@@ -421,4 +421,4 @@ The native sound driver reuses `f3_cpu` and `f3_block`, but not these functions.
 - [Callback implementation](https://github.com/ansxor/f3-recomp/blob/main/runtime/cpu_abi.cpp)
 - [Lazy flags and instruction helpers](https://github.com/ansxor/f3-recomp/blob/main/recomp/cpu_ops.h)
 - [Generated main-program integration](https://github.com/ansxor/f3-recomp/blob/main/recomp/generate.py)
-- [ABI change record](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md)
+- [ABI change record](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md)

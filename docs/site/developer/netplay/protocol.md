@@ -1,6 +1,6 @@
 # Wire protocol
 
-**What you will learn.** This page gives the exact UDP packet formats of netplay protocol version 1. A reader can use it to write a client or a relay that works with the existing code. The values come from `netplay/server/protocol.go` and `runtime/netplay_transport.cpp`. Both agree.
+This page describes UDP protocol **version 2**. The authoritative encoders/parsers are `netplay/server/protocol.go` and `runtime/netplay_transport.cpp`. Pairing is not gameplay readiness: snapshot transfer and the both-loaded barrier come first.
 
 ## Conventions
 
@@ -20,7 +20,7 @@ Every packet starts with a 20-byte header.
 | Offset | Size | Field | Value |
 | ---: | ---: | --- | --- |
 | 0 | 4 | `magic` | `0x46334E50` (ASCII `F3NP`) |
-| 4 | 1 | `version` | 1 |
+| 4 | 1 | `version` | 2 |
 | 5 | 1 | `type` | See the next table |
 | 6 | 2 | `flags` | Used by `GameData`. Zero in all other packets. |
 | 8 | 8 | `session_id` | Set by the relay at match start. Zero before the match. |
@@ -43,6 +43,11 @@ A receiver drops a packet that is shorter than 20 bytes, has another magic, or h
 | 8 | `Leave` | client to relay | The client leaves |
 | 9 | `MatchTerminated` | relay to client | The relay ended the match |
 | 10 | `MatchComplete` | relay to client | The final verdict of a finite match |
+| 11 | `SnapshotMeta` | host through relay | Transfer sizes and compressed/raw CRCs |
+| 12 | `SnapshotChunk` | host through relay | Bounded compressed snapshot chunks |
+| 13 | `SnapshotAck` | guest through relay | Acknowledge chunks |
+| 14 | `SnapshotLoaded` | clients to relay | Loaded canonical CRC |
+| 15 | `BarrierStart` | relay to clients | Both clients loaded; rollback can begin |
 
 ## Packet flow
 
@@ -58,7 +63,7 @@ flowchart LR
 
 The relay checks `GameData` before it forwards the datagram. It does not change a single byte. The receiving client checks the packet again.
 
-## Identity (72 bytes)
+## Identity (64 bytes)
 
 `Identity` is part of `JoinReq` and `MatchStart`. It lets the relay and the peer check that both clients run the same game.
 
@@ -72,13 +77,9 @@ The relay checks `GameData` before it forwards the datagram. It does not change 
 | 20 | 4 | `rom_crc[5]` | Sound CPU ROM |
 | 24 | 4 | `rom_crc[6]` | Sample ROM |
 | 28 | 32 | `build_hash` | SHA-256 build fingerprint (raw bytes) |
-| 60 | 4 | `settings` | Configuration word |
-| 64 | 4 | `eeprom_crc` | CRC-32 of the 128-byte EEPROM image |
-| 68 | 4 | `initial_crc` | CRC-32 of the machine snapshot at frame 0 |
+| 60 | 4 | `state_format` | Canonical representation and audio/video simulation compatibility |
 
-The `settings` word is `0x10000 | (game_video << 12) | (native_sound << 13) | delay`. Bit 16 is the schema revision. Bit 12 is 1 when GameVideo is active. Bit 13 is 1 when the native sound driver is active. The low bits hold the delay.
-
-The EEPROM image is 64 words of 16 bits, written big-endian, 128 bytes in all. The CRC function is the standard CRC-32 (polynomial `0xedb88320`, initial value and final value inverted).
+EEPROM, initial local state, presentation geometry and requested delay are not identity fields. The host supplies canonical match state after pairing.
 
 ## `JoinReq` (type 1)
 
@@ -91,11 +92,10 @@ The client sends this packet. The header has `session_id = 0`, `sender_slot = 0x
 | 9 | 1 | `delay` | Input delay, 0 to 8 |
 | 10 | 1 | `room_length` | 1 to 32 |
 | 11 | 32 | `room` | Room code: letters, digits, `_`, `-`. Zero-padded. |
-| 43 | 72 | `identity` | See above |
+| 43 | 64 | `identity` | See above |
+| 107 | 1 | `host` | 1 = host, 0 = guest |
 
-The payload has 115 bytes. The packet has 135 bytes. The relay requires at least 115 payload bytes. It accepts trailing bytes in this type. It checks declared room length as 1 to 32, then trims trailing zero bytes from that declared slice. A malformed length fails parsing with reject code 13. An empty resulting name gets code 10.
-
-The C++ sender validates the ASCII character set, slot 0 to 2 and delay 0 to 8. The current relay does not call `IsValidRoomName`. It does not enforce that character set, a non-zero nonce or the 0-to-8 delay range. Requested-slot values other than 1 or 2 follow the automatic branch.
+The payload is exactly 108 bytes (128 with header). The parser checks slot/role, room length and identity; clients validate requested delay 0–8. Exactly one host is required. Host delay is authoritative even when the guest requested a different value.
 
 ## `JoinWait` (type 2)
 
@@ -128,16 +128,14 @@ The payload has 73 bytes. The header has `sender_slot = 0xFF`. The client ignore
 | 3 | `RejectSlotTaken` | The requested slot is taken. |
 | 4 | `RejectRomCrcMismatch` | `rom_crc` differs from the first player. |
 | 5 | `RejectBuildHashMismatch` | `build_hash` differs. |
-| 6 | `RejectSettingsMismatch` | `settings` differs. |
-| 7 | `RejectEepromCrcMismatch` | `eeprom_crc` differs. |
-| 8 | `RejectInitialCrcMismatch` | `initial_crc` differs. |
-| 9 | `RejectDelayMismatch` | `delay` differs. |
+| 6 | `RejectStateFormatMismatch` | Canonical state representation differs. |
 | 10 | `RejectInvalidRoom` | The parsed room name is empty or outside the length bound. A bad declared length already fails parsing with code 13. |
 | 11 | `RejectRateLimited` | Defined. The current relay drops rate-limited packets without a reply. |
-| 12 | `RejectMatchInProgress` | The room is active or finished, and the nonce is unknown. |
-| 13 | `RejectInvalidIdentity` | The payload is malformed, or a known client changed its identity or delay. |
+| 12 | `RejectMatchInProgress` | Unknown nonce attempts to join an active match. |
+| 13 | `RejectInvalidIdentity` | Malformed payload or changed identity/role/delay in a nonce retry. |
+| 14 | `RejectRoleConflict` | Room needs one host and one guest. |
 
-The relay checks a second player in this order: delay (9), ROM CRCs (4), build hash (5), settings (6), EEPROM CRC (7), initial CRC (8), then the slot (3 or 2). When several fields differ, the first check in this order names the reason.
+The relay requires complementary roles, matching ROMs/build/state format and available slots. There are no EEPROM, initial-CRC or shared-delay rejects in version 2.
 
 ## `MatchStart` (type 5)
 
@@ -149,9 +147,17 @@ The relay sends this packet to both players when the second player joins. The he
 | 8 | 1 | `assigned_slot` |
 | 9 | 1 | `delay` |
 | 10 | 2 | reserved, zero |
-| 12 | 72 | `peer_identity` (the identity that the room stored from the first player) |
+| 12 | 64 | `peer_identity` | Room compatibility identity |
 
-The payload has 84 bytes. The client must check the nonce, the slot (0 or 1), a non-zero session ID, the delay and the identity. See [Transport](/developer/netplay/transport#the-join-handshake).
+The payload has 76 bytes. Check nonce, slot, nonzero session and identity. The returned delay is the host value. `paired()` becomes true; `ready()` remains false until the loaded barrier.
+
+## Snapshot transfer and barrier
+
+`SnapshotMeta` is five big-endian u32 values: transfer ID, raw size, compressed size, raw CRC and compressed CRC (20 bytes). Transfer ID is 1; both sizes are nonzero and capped at 16 MiB. Zlib-compressed bytes travel in 1024-byte chunks with a 32-chunk send window and acknowledgements/retries.
+
+`SnapshotLoaded` and `BarrierStart` use an 8-byte receipt: u32 transfer ID and u32 raw CRC. The guest validates/decompresses the bytes, loads canonical state and acknowledges the loaded CRC. The relay gates rollback until both loaded receipts agree. Handoff must finish within 120 seconds.
+
+Exact chunk/ACK parsing and role/endpoint bounds are in the [C++ transport](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_transport.cpp) and [Go relay](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/server.go). Checksums detect corruption, not malicious peers; see [Limits](/developer/netplay/limits).
 
 ## `GameData` (type 6)
 
@@ -283,7 +289,7 @@ The relay does these checks before it forwards a packet. A failed check drops th
 | Length of 20 to 1400 bytes | All |
 | Per-IP rate limit | All (before parsing) |
 | Magic and version | All |
-| `session_id` is known | `GameData`, `Heartbeat`, `Leave` |
+| Known session and correct transfer role/endpoint | Gameplay and snapshot transfer |
 | Payload parses: lengths, payload flags, input count ≤128, checksum count ≤32, frame-range overflow, input mask, no trailing bytes | `GameData` |
 | Sender address equals the registered address of `sender_slot` | `GameData`, `Heartbeat`, `Leave` |
 | Room is active or finished | `GameData`, `Heartbeat` |
@@ -300,7 +306,7 @@ Do not assume that all packet types have exact-length parsers. A compatible send
 
 The server first resolves the header session. It parses the entire payload before storing a finish record or forwarding. `Room.MarkFinish` checks sender slot and endpoint. `Room.GetPeer` checks room state, session, slot and endpoint. The original datagram is forwarded unchanged.
 
-The relay does **not** compare header flags to payload flags. It does not check checksum frame cadence or ACK bounds. It does not reject pre-delay input frames. These are client checks, not relay guarantees.
+Gameplay is blocked before the loaded barrier. The relay does not compare header flags to payload flags, check checksum cadence or enforce every ACK semantic bound; clients perform stronger checks.
 
 ### `GameData`: C++ client
 
@@ -322,14 +328,16 @@ The C++ common handler does not independently enforce the 1400-byte limit. Its r
 
 | Type | Actual receiver behavior |
 | --- | --- |
-| `JoinReq` | Relay requires at least 115 payload bytes; extra bytes are accepted. See room-validation differences above. |
+| `JoinReq` | Relay requires exactly 108 payload bytes, validates slot/role and declared room length. |
 | `JoinWait` | C++ uses at least 9 payload bytes and matching nonce while Connecting. It does not validate the provisional slot range here. |
 | `JoinReject` | C++ uses at least 9 payload bytes and matching nonce. It reads at most 64 message bytes. |
-| `MatchStart` | C++ requires at least 84 payload bytes, matching nonce, slot 0/1, non-zero session, equal delay and identity while Connecting. Short or wrong-nonce packets are ignored. Extra bytes and reserved values are ignored. |
+| `MatchStart` | C++ requires at least 76 payload bytes, matching nonce, slot 0/1, nonzero session and identity. Adopts host delay; pairing is not loaded readiness. |
 | `Heartbeat` | Relay endpoint-checks and forwards without calling its payload parser. C++ requires at least 16 payload bytes plus active session and opposite slot. It does not apply the `GameData` ACK upper-bound validation. |
 | `Leave` | Relay accepts a code byte when present; malformed empty payload defaults to abort. Session and endpoint checks still apply. |
 | `MatchTerminated` | C++ accepts matching session and reads optional reason text. It does not require the full 65-byte canonical payload. |
 | `MatchComplete` | C++ requires matching session and at least 8 payload bytes. It checks final frame/CRC against local finish when requested. |
+| Snapshot packets | Validate session, endpoint/role, bounded sizes/chunk ranges, transfer metadata and loaded CRC before barrier. See transfer source for exact chunk/ACK forms. |
+| Lobby `Leave` | Session 0/sender `0xff`, exact 65-byte abort payload; nonce at payload offset 1 authenticates cancellation together with endpoint (not cryptographically). |
 
 The C++ socket accepts traffic only from its connected relay endpoint. Server-origin completion and termination handlers rely on that endpoint plus session; they do not separately enforce header sender slot `0xff`. Unknown packet types are ignored. Reserved header bytes are not validated.
 
@@ -337,21 +345,23 @@ The C++ socket accepts traffic only from its connected relay endpoint. Server-or
 
 | Packet | Payload | Whole datagram |
 | --- | ---: | ---: |
-| `JoinReq` | 115 | 135 |
+| `JoinReq` | 108 | 128 |
 | `JoinWait` | 41 | 61 |
 | `JoinReject` | 73 | 93 |
-| `MatchStart` | 84 | 104 |
+| `MatchStart` | 76 | 96 |
 | `GameData` | 30 to 358 | 50 to 378 |
 | `Heartbeat` | 16 | 36 |
 | `Leave` | 65 | 85 |
 | `MatchTerminated` | 65 | 85 |
 | `MatchComplete` | 8 | 28 |
+| `SnapshotMeta` | 20 | 40 |
+| `SnapshotLoaded`, `BarrierStart` | 8 | 28 |
 
 The 358-byte payload maximum is for the standard C++ client: 128 inputs, 8 checksums and a finish record. The parser format maximum is `30 + 256 + 256 + 8 = 550` payload bytes, or 570 bytes including the header, with 32 checksum pairs.
 
 ## Versioning
 
-The header `version` is 1. The relay and the client reject other versions. A future change of any layout on this page must increase the version.
+The header version is 2; version-1 peers are incompatible. Changes to wire layout require a protocol-version change.
 
 ## Related pages
 

@@ -1,7 +1,6 @@
 #include "f3rt/netplay.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
-#include "eeprom.hpp"
 #include "netplay_build.hpp"
 #include <algorithm>
 #include <array>
@@ -39,7 +38,7 @@ void apply_inputs(Machine &m, const std::array<InputWord, 2> &words) {
     }
 }
 
-Identity machine_identity(const Machine &m, unsigned delay) {
+Identity machine_identity(const Machine &m) {
     Identity result{};
     const std::vector<uint8_t> *regions[] = {&m.roms.main, &m.roms.sprites, &m.roms.sprites_hi,
         &m.roms.tiles, &m.roms.tiles_hi, &m.roms.sound, &m.roms.samples};
@@ -49,16 +48,22 @@ Identity machine_identity(const Machine &m, unsigned delay) {
     auto nibble = [](char c) { return unsigned(c <= '9' ? c - '0' : c - 'a' + 10); };
     for (size_t i = 0; i < result.build_hash.size(); ++i)
         result.build_hash[i] = uint8_t(nibble(hash[2*i]) * 16 + nibble(hash[2*i+1]));
-    result.settings = 0x10000u | (unsigned(bool(m.game_video)) << 12) |
-        (unsigned(bool(m.sound_native)) << 13) | delay;
-    std::array<uint8_t, 128> eeprom{};
-    for (size_t i = 0; i < m.eeprom->words.size(); ++i) {
-        eeprom[2*i] = uint8_t(m.eeprom->words[i] >> 8);
-        eeprom[2*i+1] = uint8_t(m.eeprom->words[i]);
-    }
-    result.eeprom_crc = crc32(eeprom.data(), eeprom.size());
-    result.initial_crc = m.state_crc();
+    const auto bytes = m.sync_state_size();
+    if (bytes >= (1u << 24)) throw std::runtime_error("Synchronization state exceeds format limit");
+    result.state_format = uint32_t(bytes) | (1u << 24) |
+        (unsigned(bool(m.sound_native)) << 25) | (unsigned(bool(m.game_video)) << 26);
     return result;
+}
+
+bool versus_match_active(const Machine &m) {
+    // $401f6e is the versus latch. The low active-player bits alone also
+    // occur in the tutorial/demo; $401f54 is a stage selector, not a mode.
+    return m.ram[0x1f6e] == 0 && m.ram[0x1f6f] == 1 && (m.ram[0x1f53] & 3) == 3;
+}
+bool versus_handoff_ready(const Machine &m) {
+    // A frame boundary in versus character selection, before combat. One
+    // character may already be confirmed by the host's preceding local play.
+    return versus_match_active(m) && (m.ram[0x1f53] & 0xc0) != 0;
 }
 
 struct Rollback::Impl {
@@ -66,7 +71,7 @@ struct Rollback::Impl {
         uint32_t tag = empty_frame;
         std::array<InputWord, 2> actual{}, used{};
         uint8_t known = 0;
-        bool simulated = false;
+        bool simulated = false, exited_versus = false;
         uint32_t crc = 0;
     };
     struct AudioFrame {
@@ -80,6 +85,8 @@ struct Rollback::Impl {
     };
     Machine &machine;
     unsigned slot, delay, window;
+    const uint64_t origin;
+    bool stopped = false, ended = false;
     uint32_t confirmed = 0, dirty = empty_frame;
     size_t snapshot_size;
     std::vector<uint8_t> snapshots;
@@ -95,22 +102,25 @@ struct Rollback::Impl {
     unsigned last_depth = 0, max_depth = 0;
 
     Impl(Machine &m, unsigned s, unsigned d, unsigned w)
-        : machine(m), slot(s), delay(d), window(w), snapshot_size(m.state_size()) {
+        : machine(m), slot(s), delay(d), window(w), origin(m.frame), snapshot_size(m.state_size()) {
         if (s > 1 || d > 8 || w < 16 || w > max_window)
             throw std::runtime_error("Netplay requires slot 0/1, delay 0..8, rollback window 16..32");
-        if (m.frame || m.allow_main_fallback || m.fallback_instructions || m.sound_trace)
-            throw std::runtime_error("Rollback requires strict-native cold boot without sound tracing");
+        if (m.allow_main_fallback || m.fallback_instructions || m.sound_trace)
+            throw std::runtime_error("Rollback requires strict-native execution without sound tracing");
         if (m.audio->available_frames())
             throw std::runtime_error("Rollback requires an empty initial audio queue");
+        if (!versus_match_active(m))
+            throw std::runtime_error("Rollback starts only after both versus players have joined");
         snapshots.resize(snapshot_size * (w + 1));
         snapshot_tags.fill(empty_frame);
         for (unsigned f = 0; f < delay; ++f) entry(f).known = 3;
         save(0);
+        (void)machine.sync_state_crc(); // Prepare checksum scratch before simulation.
     }
     uint32_t current() const {
-        if (machine.frame >= empty_frame - history_size)
-            throw std::runtime_error("Netplay frame counter exhausted; start a new match");
-        return uint32_t(machine.frame);
+        if (machine.frame < origin || machine.frame - origin >= empty_frame - history_size)
+            throw std::runtime_error("Netplay frame counter exhausted or moved outside its timeline");
+        return uint32_t(machine.frame - origin);
     }
     Frame &entry(uint32_t f) {
         auto &e = frames[f % history_size];
@@ -144,10 +154,8 @@ struct Rollback::Impl {
         if (machine.audio->available_frames())
             throw std::runtime_error("Netplay frame audio capacity exceeded");
         save(f + 1);
-        if ((f + 1) % checksum_interval == 0) {
-            auto bytes = snapshot(f + 1);
-            e.crc = crc32(bytes.data(), bytes.size());
-        }
+        if ((f + 1) % checksum_interval == 0) e.crc = machine.sync_state_crc();
+        e.exited_versus = !versus_match_active(machine);
         e.simulated = true;
     }
     void promote() {
@@ -170,9 +178,18 @@ struct Rollback::Impl {
                     throw std::runtime_error("Checksum queue full; drain receive_checksum_to_send");
                 outgoing[(hash_write++) % outgoing.size()] = {confirmed, h.local};
             }
+            if (e.exited_versus) {
+                // Only an actual-input-confirmed exit ends a match. Discard any
+                // speculative post-match frames and their unpublished PCM.
+                machine.load_state(snapshot(confirmed));
+                dirty = empty_frame;
+                stopped = ended = true;
+                break;
+            }
         }
     }
     void synchronize() {
+        if (stopped) return;
         if (dirty != empty_frame) {
             const uint32_t end = current(), begin = dirty;
             if (begin < confirmed || snapshot_tags[begin % (window + 1)] != begin)
@@ -195,7 +212,10 @@ Rollback::Rollback(Machine &m, unsigned slot, unsigned delay, unsigned window)
 Rollback::~Rollback() = default;
 uint32_t Rollback::frame() const { return impl->current(); }
 uint32_t Rollback::confirmed_frame() const { return impl->confirmed; }
+uint64_t Rollback::origin_frame() const { return impl->origin; }
+bool Rollback::match_finished() const { return impl->ended; }
 bool Rollback::needs_local_input() const {
+    if (impl->stopped) return false;
     const auto f = frame() + impl->delay;
     const auto &e = impl->frames[f % history_size];
     return e.tag != f || !(e.known & (1u << impl->slot));
@@ -242,7 +262,7 @@ void Rollback::synchronize() { impl->synchronize(); }
 bool Rollback::advance() {
     auto &p = *impl;
     p.synchronize();
-    if (frame() - p.confirmed >= p.window) return false;
+    if (p.stopped || frame() - p.confirmed >= p.window) return false;
     const auto &e = p.entry(frame());
     if (!(e.known & (1u << p.slot))) throw std::logic_error("Local input was not scheduled before advance");
     p.step();
@@ -259,6 +279,14 @@ size_t Rollback::render_audio(int16_t *stereo, size_t max_frames) {
     const auto count = std::min(max_frames * 2, p.output_write - p.output_read);
     for (size_t i = 0; i < count; ++i) stereo[i] = p.output[(p.output_read++) % p.output.size()];
     return count / 2;
+}
+void Rollback::restore_confirmed() {
+    auto &p = *impl;
+    if (p.snapshot_tags[p.confirmed % (p.window + 1)] != p.confirmed)
+        throw std::logic_error("Confirmed state no longer retained");
+    p.machine.load_state(p.snapshot(p.confirmed));
+    p.dirty = empty_frame;
+    p.stopped = true;
 }
 uint64_t Rollback::rollback_count() const { return impl->rollbacks; }
 unsigned Rollback::last_rollback_depth() const { return impl->last_depth; }

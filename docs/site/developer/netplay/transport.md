@@ -18,8 +18,12 @@ The class is declared in `include/f3rt/netplay_transport.hpp`.
 | --- | --- |
 | `Transport(TransportOptions, Identity)` | Validates the options, opens the socket, sends the first `JoinReq`. Throws `std::invalid_argument` for a bad room name, player or delay. |
 | `pump(simulated_frame, confirmed_frame)` | Reads all pending packets. Does timeouts. Sends packets when due. Call it in every loop pass. Throws `std::runtime_error` on any fatal error. |
-| `ready()` | True after a valid `MatchStart`. |
-| `slot()` | The assigned slot, 0 or 1. Throws before `ready()`. |
+| `paired()` | Valid `MatchStart` assigned a session/slot; not gameplay readiness. |
+| `ready()` | Both-loaded barrier accepted; rollback may start. |
+| `slot()` | Assigned slot, 0 or 1, after pairing. |
+| `host()`, `delay()` | Role and negotiated host delay. |
+| `offer_snapshot`, `snapshot_available`, `snapshot`, `accept_snapshot` | Canonical transfer and loaded-CRC acknowledgement. |
+| `transfer_progress()` | Acknowledged/validated chunk fraction. |
 | `submit(Input)` | Stores a local input word for the next packets. |
 | `receive(Input&)` | Returns the next remote input in frame order, once. |
 | `checksum(Checksum)` | Queues a local checksum for sending. Compares it with received peer checksums. |
@@ -28,9 +32,9 @@ The class is declared in `include/f3rt/netplay_transport.hpp`.
 | `finished()` | True when the relay confirmed the final verdict. |
 | `rtt_ms()`, `frame_advantage()`, `status()` | Values for the title text. |
 
-`TransportOptions` has `server` (text `HOST:PORT`), `room`, `player` (0 = automatic, 1 or 2) and `delay` (default 2).
+`TransportOptions` has server, room, requested player (0 automatic, 1/2 requested), delay (default 2) and host role. Role is independent of player slot.
 
-`Identity` has the seven ROM CRCs, the build hash, the settings word, the EEPROM CRC and the initial-state CRC. `machine_identity(Machine&, delay)` in `runtime/netplay.cpp` builds it. See [Build identity](/developer/netplay/build-identity).
+`Identity` contains seven ROM CRCs, the build hash and state format. `machine_identity(const Machine &)` builds it; EEPROM, local initial state, presentation and delay are excluded. See [Build identity](/developer/netplay/build-identity).
 
 ## State machine
 
@@ -45,16 +49,16 @@ stateDiagram-v2
   Terminated --> [*]
 ```
 
-There is no way back from `Terminated`. The transport throws from `pump` and the frontend stops. To play again, the user starts a new process. See [Disconnect and restart](#disconnect-and-restart).
+A transport does not rejoin after termination. `Session` catches failures, restores confirmed state and returns local. A fresh session/transport can reuse the room without restarting the process.
 
 ## Constants
 
 | Constant | Value | Meaning |
 | --- | ---: | --- |
 | `kMagic` | `0x46334E50` | ASCII `F3NP` |
-| `kProtocolVersion` | 1 | |
+| `kProtocolVersion` | 2 | |
 | `kHeaderSize` | 20 | |
-| `kIdentitySize` | 72 | |
+| `kIdentitySize` | 64 | |
 | `kMaxPacketSize` | 1400 | Largest datagram |
 | `kInputMask` | `0x07FF` | Valid input bits |
 | `kMaxUnackedInputs` | 512 | `submit` throws when the frame exceeds effective ACK + 512; when ACK is none, the effective value is `delay` |
@@ -86,58 +90,18 @@ The constructor creates a random 64-bit **nonce** with `std::random_device` and 
 
 The handshake has these steps.
 
-1. The client sends `JoinReq` with the nonce, the requested slot, the delay, the room name and the 72-byte identity.
-2. While the state is Connecting, `pump` sends `JoinReq` again every 80 ms. The relay treats a repeated request with the same nonce as the same request.
-3. The relay answers each request with `JoinWait` while the room has one player. The client stores the slot and resets its "last server reply" timer.
-4. When the second player joins, the relay sends `MatchStart` to both players.
-5. The client accepts `MatchStart` only if all of these are true:
-   - the packet is long enough (at least 104 bytes),
-   - the nonce equals its own nonce,
-   - the slot is 0 or 1,
-   - the session ID is not zero,
-   - the delay field equals the local delay,
-   - the peer identity in the packet equals the local identity in every field.
-6. The client stores the slot and the session ID, sets `is_ready` and enters Connected.
+1. Send `JoinReq` with nonce, requested slot, requested delay, room, 64-byte identity and host/join role; retry every 80 ms while connecting.
+2. Validate the reply nonce, slot, nonzero session and compatibility identity. The relay requires one host and one guest and returns the **host** delay.
+3. `MatchStart` establishes pairing, not readiness. Local histories may continue independently.
+4. Host offers a drained canonical versus-entry snapshot. Zlib-compressed transfer is capped at 16 MiB, split into 1024-byte chunks with a 32-chunk window, checksums and retry acknowledgements.
+5. Guest validates/decompresses/loads the snapshot and acknowledges the loaded canonical CRC. Both loaded receipts must agree before `BarrierStart` sets `ready()`.
+6. Construct rollback at match-relative frame zero, retaining the host machine's absolute origin time.
 
-An unrelated nonce or a short packet is ignored. Invalid slot, zero session, delay mismatch or identity mismatch terminates the join and throws. The relay already checks identity, so the client check is a second layer.
-
-`JoinReject` throws `netplay join rejected: <reason> (<message>)`. The reasons are listed in [Wire protocol](/developer/netplay/protocol#reject-codes).
-
-After `ready()`, the frontend creates the `Rollback` object. This happens at frame 0 of the machine. Both clients start to simulate only after the handshake.
-
-```mermaid
-sequenceDiagram
-  participant A as Client A
-  participant S as Relay
-  participant B as Client B
-  Note over A,B: Each client sends its identity and a random nonce
-  A->>S: JoinReq nonce A, room, delay, identity
-  S-->>A: JoinWait with slot
-  A->>S: JoinReq again after 80 ms
-  S-->>A: JoinWait
-  B->>S: JoinReq nonce B, same room, same identity
-  Note over S: Room checks delay, ROM CRCs, build hash, settings, EEPROM CRC, initial CRC
-  S-->>B: MatchStart session ID, slot, delay, identity
-  S-->>A: MatchStart session ID, slot, delay, identity
-  Note over A,B: Both create Rollback at frame 0
-  loop every 8 to 20 ms
-    A->>S: GameData
-    S->>B: GameData forwarded unchanged
-    B->>S: GameData
-    S->>A: GameData forwarded unchanged
-  end
-  Note over A,B: Finite match only
-  A->>S: GameData with finish request and final CRC
-  B->>S: GameData with finish request and final CRC
-  S-->>A: MatchComplete frame and CRC
-  S-->>B: MatchComplete frame and CRC
-  A->>S: Leave code 1
-  B->>S: Leave code 1
-```
+Snapshot handoff must complete within 120 seconds. Pre-barrier heartbeat/transfer traffic maintains liveness. The relay does not retain an authoritative emulated state. See [wire transfer records](/developer/netplay/protocol#snapshot-transfer-and-barrier) and [Session integration](/developer/netplay/frontend-integration).
 
 ## Sending: `GameData`
 
-After the handshake, all traffic is `GameData` packets. `pump` decides when to send.
+After the loaded barrier, `GameData` carries gameplay traffic; pre-barrier traffic includes heartbeat and snapshot transfer.
 
 The relay forwards `GameData` packets without change. The peer reads them. The packet has five jobs at once.
 
@@ -240,7 +204,7 @@ The pong is sent with the next packet, not at once. The sample therefore include
 
 ## Frame advantage
 
-`frame_advantage()` returns `local simulated frame - peer simulated frame`. The peer simulated frame is the highest value that arrived in a packet. A positive value means this client runs ahead of the report from the peer. The report is already one transit time old. The frontend waits when the lead is too large. See [Frontend integration](/developer/netplay/frontend-integration#pacing).
+`frame_advantage()` is local advertised simulated frame minus the highest peer report received. It includes transit age; frontend pacing bounds lead independently from the rollback prediction window. See [frontend integration](/developer/netplay/frontend-integration).
 
 ## Ending a match
 
@@ -258,7 +222,7 @@ Only the `MatchComplete` from the relay ends the match. The `FinishAck` flag is 
 The verdict is retained in relay memory until the Finished room is more than 30 s idle. It is lost on relay restart. Repeated eligible traffic refreshes room activity. This is retryable completion, not durable result storage.
 
 
-## Disconnect and restart
+## Disconnect and local return
 
 A client leaves in three ways.
 
@@ -268,14 +232,14 @@ A client leaves in three ways.
 | Abort | The destructor sends `Leave` with code 0 (`kLeaveAbort`) for any other exit while Connected. This includes an exception. The relay sends `MatchTerminated` to the peer. The peer throws `netplay disconnected: opponent left match`. |
 | Crash or cable | The peer sends nothing. After 8 s the client throws `netplay connection timeout: peer unreachable for 8 seconds`. The relay also times out the slot after 8 s and sends `MatchTerminated` with the text `opponent connection timed out`. |
 
-The destructor sends `Leave` only while the state is Connected. An error that first sets the state to Terminated (for example a `MatchTerminated` packet) sends no `Leave`.
+The destructor sends Leave unless already Terminated. Lobby cancellation uses session 0, sender `0xff`, abort code and the client nonce in the reserved message area; the relay checks nonce and endpoint before clearing the waiting slot. Connected normal/abort Leave uses the assigned session and slot.
 
-There is **no** hot rejoin. The relay resets a terminated room when the next `JoinReq` arrives, so players can use the same room code again after a stop. Both clients must then start a new process and a new match from frame 0. A client with a new nonce cannot join a running match; the relay rejects it with code 12. See [Relay server](/developer/netplay/server).
+There is no hot rejoin into old rollback history. `Session` restores the last confirmed boundary and returns local on disconnect. Ready a fresh Host/Join for a new handoff, including in the same room. The old transport's termination does not require a new process.
 
 ## What the transport does not do
 
-- It never sends `Heartbeat` packets. It can read them. The relay forwards them. `GameData` already works as heartbeat.
-- `pump` stores `confirmed_frame` in `local_confirmed_frame`, but the current code does not use the value.
+- Pre-barrier heartbeats keep a paired transfer alive without advancing rollback.
+- Pairing and loaded readiness are separate; do not submit gameplay before the barrier.
 - It does not change the delay while the match runs.
 - It has no congestion control. It limits itself to 125 packets per second.
 

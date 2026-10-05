@@ -104,7 +104,7 @@ Below the 1x footprint, auto-integer crops centrally instead of shrinking.
 Both modes follow resize, fullscreen and display density after 100ms quiet
 (250ms maximum live-drag delay). F11 or Alt+Enter toggles fullscreen.
 Numeric scales retain their existing behavior on either backend. Headless auto
-keeps scale 1 without opening/querying a window; online play rejects auto modes.
+keeps scale 1 without opening/querying a window. Online peers can choose independent presentation modes.
 The GPU port does not interpolate adjacent native line values by default.
 
 `--video-interp linear` smooths scale/scroll and valid palette-bank colors
@@ -129,9 +129,23 @@ The program checks the values:
 | Scale or border with `--video fdp` | `Presentation enhancements require --video game or compare` |
 | Auto scaling with CPU backend | `--video-scale auto/auto-integer requires --video-backend gpu` |
 
-::: warning Online play needs the native size
-Online play rejects `--video-scale` other than 1 and `--video-border` other than 0. See [Online play](/guide/netplay).
-:::
+## F1 shaders and live controls
+
+F1 → Video applies **scale and filtering live on GPU**. CPU scale, backend, video model, border and interpolation are restart preferences. Save preferences explicitly; CLI values override them at launch.
+
+F1 → Shaders offers **Off**, **CRT** and **User**. Off is the default. Effects require the GPU backend; CPU retains the preference but does not apply it. Select a user file and press **Load / reload shader**. Failed reloads keep the last valid shader; the Active label shows what is actually running.
+
+```sh
+build/landmakr --video-backend gpu --postprocess crt
+build/landmakr --video-backend gpu --postprocess user --user-shader runtime/shaders/user_transform.metal
+# Vulkan: compile source offline, then load SPIR-V
+glslangValidator -V --target-env vulkan1.0 -o build/user_transform.spv runtime/shaders/user_transform.frag
+build/landmakr --video-backend gpu --postprocess user --user-shader build/user_transform.spv
+```
+
+The small shader ABI uses a source texture/sampler at slot 0 and a float4 containing internal width, height, scale and elapsed seconds. Metal loads `.metal` source with entry `f3_postprocess`; Vulkan loads `.spv` with entry `main` (sampled image set 2/binding 0, uniform set 3/binding 0). Use the provided examples rather than arbitrary shaders. See the [full ABI and verified limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md).
+
+Postprocessing affects GPU presentation and its screenshots, not the menu, native pixels, simulation or checksums. F12 saves a PNG alongside preferences in `screenshots/`. Scale, border, filter and shader settings can differ between [online peers](/guide/netplay).
 
 ## The video report
 

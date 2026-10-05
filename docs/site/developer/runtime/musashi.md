@@ -82,7 +82,7 @@ flowchart LR
 
 ## Changes to the vendored source
 
-The project changed Musashi to match the MAME reference. `docs/ABI-CHANGES.md` and `NOTES.md` list the changes. Keep these changes if you update Musashi.
+Musashi changes for the MAME reference are recorded in `docs/developer/ABI-CHANGES.md` and the dated decision log. Preserve them when updating the core; canonical imports also require safe-field validation.
 
 ### Main CPU (EC020 and 020)
 

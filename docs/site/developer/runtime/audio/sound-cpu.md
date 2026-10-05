@@ -141,7 +141,7 @@ The frontend help text names different defaults for `landmakr` and `f3rt-run`. T
 
 ## Why keep the oracle
 
-The oracle costs speed. The file STATUS.md reports a netplay benchmark on an Apple M5. The mean step throughput of the whole machine is 276.2 FPS with the native driver and 146.3 FPS with the oracle. The snapshot size is 4,231,509 bytes with the native driver and 4,231,724 bytes with the oracle. These numbers come from STATUS.md and can change.
+Oracle sound costs more execution time than native. Current snapshot sizes are 4,231,509 canonical bytes for native and 4,231,724 for oracle; full local expanded geometry adds buffers. See [current proof and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md), rather than treating old throughput measurements as guarantees.
 
 The oracle gives the proof. Without it, nobody can check that the generated C is right. See [sound traces](/developer/runtime/audio/tracing).
 

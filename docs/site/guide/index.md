@@ -29,7 +29,7 @@ flowchart LR
 - The authors tested the build on macOS with Apple silicon. The netplay client uses POSIX sockets. Windows is not a target of the project.
 
 ::: info Status
-The build command is smoke-tested. Whether the game is fully playable frame by frame and sound sample by sample is tracked in `STATUS.md` in the repository. A successful build does not prove this. See the [STATUS.md file](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md).
+A successful build is not gameplay, pixel or audio proof. See [developer evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) for observed native runs, captures, menu/shader exercises and versus lifecycle coverage.
 :::
 
 ## Pages in this guide
@@ -37,8 +37,8 @@ The build command is smoke-tested. Whether the game is fully playable frame by f
 | Page | Task |
 | --- | --- |
 | [Getting started](/guide/getting-started) | Install tools, prepare ROM files, build and start the game. |
-| [Controls and options](/guide/running) | Keys, EEPROM settings, headless runs, finite runs, output files. |
-| [Video and presentation](/guide/video) | Choose the renderer. Set scale, border and filter. |
+| [Controls and options](/guide/running) | F1 menu, keyboard/gamepad remaps, saved preferences, slots, screenshots and headless output. |
+| [Video and presentation](/guide/video) | Renderer, scale/border/filter, GPU postprocess and user shader examples. |
 | [Sound](/guide/sound) | Choose the sound driver. Write WAV files and sound traces. |
 | [Online play](/guide/netplay) | Start the relay server. Play a 1v1 match. |
 | [Troubleshooting](/guide/troubleshooting) | Find the cause of an error message. |

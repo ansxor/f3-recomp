@@ -45,7 +45,7 @@ The frontend and the test harness use these masks. They are the facts that the c
 | 0 | `0x04` | C | Player 1 button 3 |
 | 0 | `0x1000` | 1 | Player 1 start |
 | 0 | `0x2000` | 2 | Player 2 start |
-| 0 | `0x0200` | F1 | Service switch (player 1 slot) |
+| 0 | `0x0200` | F3 | Service switch (default P1 profile; F1 opens frontend menu) |
 
 The netplay code uses the same ports for two players. `netplay::apply_inputs` in `runtime/netplay.cpp` shifts the player 2 bits:
 
@@ -193,7 +193,7 @@ stateDiagram-v2
 - `Eeprom::reset()` clears the serial state (`selected`, `old_clock`, `writable`, `ready_at`, the command). It keeps `words`. `Machine::reset()` calls it. `reset_devices()` calls `pins(0, ...)` which only deselects.
 - `Eeprom::load(path)` reads a 128-byte file of 64 big-endian words. It does nothing if the file does not exist. It throws `Invalid EEPROM file` if the size is not 128 bytes.
 - `Eeprom::save(path)` writes the 128 bytes.
-- The frontend option `--eeprom FILE` loads at start and saves at the end of the run. Netplay does not allow it.
+- `--eeprom FILE` loads at startup and saves at normal exit. Independent EEPROM histories are allowed in netplay; the host canonical handoff supplies match state.
 - `save_state` and `load_state` write the words and the serial state as one packed record (`CanonicalEeprom`). See [Snapshots](/developer/netplay/snapshots).
 
 During the first boot the game ROM writes the whole EEPROM, including a checksum `$85ac`. The runtime does not seed the data or skip the check. `NOTES.md` records that wrong scheduling once left `$ffff` there and the game showed `PUSH TEST SWITCH`.

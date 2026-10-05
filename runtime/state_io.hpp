@@ -6,10 +6,14 @@
 #include <cstring>
 #include <span>
 #include <stdexcept>
+#include <source_location>
+#include <string>
 #include <type_traits>
 
 #include "state_oracle.h"
 namespace f3rt {
+// Validate canonical fields before device loaders can use imported indices.
+template <typename T> void validate_state_value(const T &) {}
 
 class StateWriter {
 public:
@@ -83,6 +87,7 @@ public:
             throw std::runtime_error("StateReader buffer underflow");
         }
         std::memcpy(&val, m_ptr, sizeof(T));
+        validate_state_value(val);
         m_ptr += sizeof(T);
         m_remaining -= sizeof(T);
     }
@@ -515,5 +520,100 @@ struct CanonicalGameVideoHeader {
 };
 
 #pragma pack(pop)
+inline void require_state(bool valid, std::source_location where = std::source_location::current()) {
+    if (!valid) throw std::invalid_argument(std::string("Snapshot field outside canonical representation: ") +
+        where.function_name() + ":" + std::to_string(where.line()));
+}
+template <> inline void validate_state_value(const CanonicalF3Cpu &s) {
+    require_state(s.stopped <= 1 && s.halted <= 1 && s.cc_op <= 4 &&
+                  (!s.cc_op || s.cc_width == 1 || s.cc_width == 2 || s.cc_width == 4));
+}
+template <> inline void validate_state_value(const CanonicalSoundOracle &s) {
+    // An unstarted oracle context is zero-filled. Once initialized it is the
+    // board's 68000, never a peer-selected Musashi CPU model or timing table.
+    if (s.cpu_type == 0) {
+        CanonicalSoundOracle cold{};
+        cold.sound_needs_reset = 1;
+        require_state(std::memcmp(&s, &cold, sizeof(s)) == 0);
+        return;
+    }
+    require_state(s.cpu_type == 1 && s.address_mask == 0x00ffffff && s.sr_mask == 0xa71f &&
+                  s.sound_needs_reset <= 1 && !(s.s_flag & ~4u) && !(s.m_flag & ~2u) &&
+                  !(s.t1_flag & ~0x8000u) && !(s.t0_flag & ~0x4000u) &&
+                  !(s.int_mask & ~0x700u) && !(s.int_level & ~0x700u) &&
+                  !(s.stopped & ~3u) && s.ir <= 0xffff && s.virq_state <= 0xff &&
+                  s.nmi_pending <= 1 && (s.instr_mode == 0 || s.instr_mode == 8) &&
+                  s.run_mode <= 2 && !s.has_pmmu && !s.pmmu_enabled &&
+                  (s.fpu_just_reset == 0 || s.fpu_just_reset == 1) && s.reset_cycles <= 132);
+    // m68k_set_cpu_type(M68K_CPU_TYPE_68000), including unsigned -2 encodings.
+    require_state(s.cyc_bcc_notake_b == uint32_t(-2) && s.cyc_bcc_notake_w == 2 &&
+                  s.cyc_dbcc_f_noexp == uint32_t(-2) && s.cyc_dbcc_f_exp == 2 &&
+                  s.cyc_scc_r_true == 2 && s.cyc_movem_w == 2 && s.cyc_movem_l == 3 &&
+                  s.cyc_movem_store_w == 4 && s.cyc_movem_store_l == 8 &&
+                  s.cyc_shift == 2 && s.cyc_reset == 132);
+}
+template <> inline void validate_state_value(const CanonicalSoundNative &s) {
+    validate_state_value(s.cpu);
+    require_state(s.needs_reset <= 1);
+}
+template <> inline void validate_state_value(const CanonicalEeprom &s) {
+    require_state(s.mode <= 4 && s.selected <= 1 && s.old_clock <= 1 &&
+                  s.data_out <= 1 && s.writable <= 1 && s.address < 64 &&
+                  s.read_bit < 16 && s.count <= 16);
+}
+template <> inline void validate_state_value(const CanonicalAudioCore &s) {
+    require_state(s.rb_count <= 32768 && s.gain_model <= 1 &&
+                  s.reset_asserted <= 1 && s.esp_halted <= 1 &&
+                  s.sample_accum < 16000000 && s.duart_accum < 4 &&
+                  s.cpu_accum < 16000000 && s.cpu_accum >= -16000000LL * 1024);
+}
+template <> inline void validate_state_value(const CanonicalES5505 &s) {
+    require_state(s.active_voices < 32 && s.current_page < 128 &&
+                  s.voice_index >= 0 && s.voice_index < 32 &&
+                  s.master_clock != 0 && s.sample_rate != 0 &&
+                  s.sample_rate == s.master_clock / (16 * (unsigned(s.active_voices) + 1)));
+    for (const auto &v : s.voices) require_state(v.index < 32);
+}
+template <> inline void validate_state_value(const CanonicalES5510Registers &s) {
+    require_state(s.state <= 1 && s.halt_asserted <= 1 && s.memshift >= 0 &&
+                  s.memshift <= 24 && s.dol_count >= 0 && s.dol_count <= 2 &&
+                  s.alu.op < 16 && s.alu.src <= 3 && s.alu.dst <= 3 &&
+                  s.mulacc.src <= 3 && s.mulacc.dst <= 3);
+    require_state(s.ram.io <= 1 && s.ram.cycle <= 2 &&
+                  s.ram_p.io <= 1 && s.ram_p.cycle <= 2 &&
+                  s.ram_pp.io <= 1 && s.ram_pp.cycle <= 2);
+}
+template <> inline void validate_state_value(const CanonicalMB87078 &s) {
+    for (auto index : s.gain_index) require_state(index < 67);
+}
+template <> inline void validate_state_value(const CanonicalMC68681 &s) {
+    require_state(s.ct_running <= 1 && (!s.ct_running || s.ct_remaining != 0));
+}
+template <> inline void validate_state_value(const CanonicalVideo &s) {
+    require_state(s.sprite_count <= 1024 && s.has_buffered_spriteram <= 1 &&
+                  s.flipscreen <= 1 && s.sprite_bank <= 1 && s.sprite_trails <= 1 &&
+                  s.sprite_extra_planes <= 3 && s.sprite_pen_mask <= 0x3f);
+}
+template <> inline void validate_state_value(const CanonicalGameTileCell &s) {
+    require_state(s.flip_x <= 1 && s.flip_y <= 1 && s.blend <= 1 && s.pen_mask <= 0x3f);
+}
+template <> inline void validate_state_value(const CanonicalGameTextCell &s) {
+    require_state(s.flip_x <= 1 && s.flip_y <= 1);
+}
+template <> inline void validate_state_value(const CanonicalSceneSprite &s) {
+    require_state(s.flip_x <= 1 && s.flip_y <= 1);
+}
+inline void validate_scene_layer(const CanonicalSceneLayer &s) {
+    require_state(s.priority <= 15 && s.blend_mode <= 3 &&
+                  s.clip_enabled <= 15 && s.clip_inverted <= 15 &&
+                  s.clip_inverse <= 1 && s.enabled <= 1 &&
+                  s.blend_select <= 1 && s.mosaic <= 1);
+}
+template <> inline void validate_state_value(const CanonicalSceneRow &s) {
+    for (const auto &p : s.playfields) validate_scene_layer(p.layer);
+    for (const auto &p : s.sprites) validate_scene_layer(p);
+    validate_scene_layer(s.text);
+    require_state(s.bitmap <= 1);
+}
 
 } // namespace f3rt

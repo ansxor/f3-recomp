@@ -189,15 +189,15 @@ The C CPU ABI remains version 2. The C++ `Machine` adds state snapshot methods:
 - `Machine::load_state(std::span<const uint8_t> src)`
 - `Machine::state_crc() const -> uint32_t`
 
-Snapshot storage has a fixed size for a configured machine, allocated once by
-the rollback core (preallocated >= 16 slot ring). `save_state` and `load_state`
-are allocation-free per frame. `state_crc()` computes the standard `f3rt::crc32`
-over the canonical bytes written by `save_state()`. Its scratch buffer allocates
-on the first call after configuration; rollback hashes its existing snapshots
-instead. Snapshots are same-build, host-endian in-process state, not a portable
-save-file format. Load only snapshots produced by the same machine configuration,
-at frame boundaries on the emulation thread; no device reconfiguration or SDL
-consumer may race save/load.
+Full local snapshot storage has a fixed size for a configured machine. Rollback
+preallocates `window + 1` slots (17 by default). `save_state` and `load_state`
+are allocation-free per frame. `state_crc()` computes `f3rt::crc32` over full
+local bytes and lazily allocates scratch once; netplay peer checksums now use
+`sync_state_crc()` instead. Snapshots are same-build, host-endian state, not a
+portable save-file format. Full local load requires compatible geometry;
+canonical sync load supports independent peer presentation geometry. Exact
+sizes and unsafe canonical fields are validated. Save/load must run at frame
+boundaries on the emulation thread with no racing reconfiguration or consumer.
 
 ### Canonical state byte rules
 1. No host pointers or virtual dispatch tables are written.
@@ -255,7 +255,8 @@ presentation avoids the per-frame expanded CPU raster; `presentation()` and
 `save_state()` materialize the exact CPU presentation and next sprite plane
 lazily when requested, preserving the existing canonical snapshot byte layout.
 Load invalidates GPU host caches and initially presents the restored native
-frame; the next scanout rebuilds GPU scene data. Netplay retains scale 1/border 0.
+frame; the next scanout rebuilds GPU scene data. Netplay uses canonical sync state,
+so peers may use independent presentation scale and border settings.
 
 Opt-in GPU interpolation adds only host-side `VideoInterpolation`/
 `InterpolationFields` analysis and appended per-playfield metadata in the
@@ -278,8 +279,8 @@ share decoded scene sources but not scale-dependent raster storage.
 GPU device/assets/pipelines and immutable tile pen masks survive scale changes.
 Only render targets and already-used diagnostic readback buffers are replaced;
 SDL defers releasing queued GPU resources. Scale/interpolation/blit policy is not
-serialized. Netplay still requires fixed scale 1/border 0; no CPU ABI, machine
-state or snapshot schema cutover.
+serialized. Netplay canonical sync state excludes expanded presentation buffers;
+local full snapshots retain them. GPU scale changes do not change the C CPU ABI.
 
 ### Sprite sampling verification
 
@@ -289,3 +290,40 @@ phases, producer hooks and canonical state. Diagnostic captures now include
 all nine isolated layers; native-producer boundary branches cover crushed
 opaque overlap, mirrored zoom and nominal top-edge culling. No new sprite
 mode, transform field, CPU ABI, snapshot or netplay schema is introduced.
+
+## ImGui and versus-only netplay synchronization cutover
+
+The C CPU ABI remains version 2. `Machine` adds a second snapshot surface:
+
+- `sync_state_size() const -> size_t`
+- `save_sync_state(std::span<uint8_t> dst) const`
+- `load_sync_state(std::span<const uint8_t> src)`
+- `sync_state_crc() const -> uint32_t`
+
+Full local snapshots continue to retain expanded GameVideo presentation buffers
+for offline slots and rollback. Sync snapshots omit those buffers, retain native
+render/trail/hardware state, and canonicalize derived FDP scanout controls. Sync
+load regenerates presentation under the recipient's geometry and invalidates
+host caches. Native sound/GameVideo sync bytes are 4,231,509; full local bytes
+at scale 2/border 48 are 6,547,797; oracle sound adds 215 bytes. Save/load remain
+allocation-free, with exact-sized spans and exclusive frame-boundary ownership.
+
+Canonical state crosses the network at host versus handoff. `StateReader`
+validates unsafe CPU, EEPROM, sound/device and video fields before device loaders
+use them; size/CRC alone is not validation. Imported Musashi sound state is
+restricted to valid board-68000 flags, opcode/model/timing constants and sound
+clock bounds, with process-local callbacks rebound. This does not authenticate
+the host or make UDP safe on an untrusted network.
+
+Wire protocol is now version 2. Its 64-byte identity comprises seven ROM CRCs,
+build SHA-256 and sync state-format word, not EEPROM, initial local state, delay
+or presentation settings. Exactly one host supplies a bounded compressed,
+chunked, checksummed canonical versus-entry snapshot; the relay's loaded barrier
+precedes rollback. Periodic peer CRCs use sync state while the rollback ring
+uses full local state. Confirmed natural exit/disconnect restores a retained
+confirmed boundary before local play resumes; rematches use fresh handoffs.
+
+ImGui preferences, bindings, offline slots, screenshots, GPU postprocessing and
+host output volume do not change generated CPU hooks or the C CPU ABI. Detailed
+lifecycle, validation, trust limits and observed versus-cutover evidence are in
+[IMGUI-NETPLAY.md](developer/IMGUI-NETPLAY.md).

@@ -14,7 +14,7 @@ func sampleIdentity() Identity {
 	for i := range 32 {
 		id.BuildHash[i] = byte(i * 7)
 	}
-	id.Settings, id.EepromCRC, id.InitialCRC = 0xDEADBEEF, 0xCAFEBABE, 0x12345678
+	id.StateFormat = 0xDEADBEEF
 	return id
 }
 

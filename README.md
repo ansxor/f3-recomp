@@ -59,12 +59,21 @@ and `f3rt-replay` targets are test aids. `landmakr` defaults to the native
 recompiled sound driver; `--sound-driver oracle` selects its interpreted reference.
 
 Controls: **5/6** coin, **1/2** start, **arrows** direction, **Z/X/C** buttons,
-**F1** service, **F2** test, **Escape** quit. `--eeprom build/landmakr.nv`
-persists settings. `--frames N --headless --wav build/audio.wav` supports
-finite verification runs without changing the CPU execution path.
+**F1** menu, **F3** service, **F2** test, **F12** PNG screenshot.
+**Escape** closes the menu, otherwise quits. F1 pauses solo play; network play
+continues with local gameplay input neutral. The menu provides independent P1/P2
+keyboard/gamepad remapping, offline snapshot slots 0–9, audio volume, video
+preferences and Host/Join controls. Only **Save preferences** writes the user
+config; `--config FILE` selects another file and explicit CLI flags override it.
+`--eeprom FILE` separately persists the emulated EEPROM.
 
-The build command is smoke-tested; final playable frame/audio equivalence is
-tracked in `STATUS.md`, not implied by successful compilation.
+GPU postprocessing is opt-in: `--postprocess off|crt|user`, default Off.
+`--user-shader FILE` loads Metal `.metal` source or Vulkan `.spv`; examples and
+the shader ABI are in the [video guide](docs/site/guide/video.md).
+CPU presentation explicitly requires a GPU backend for postprocessing.
+Native pixels, simulation and checksums are not transformed.
+Implementation contracts and observed evidence are in
+[docs/developer/IMGUI-NETPLAY.md](docs/developer/IMGUI-NETPLAY.md).
 
 ### Smaller full-coverage default
 
@@ -104,18 +113,21 @@ Build the dependency-free Go relay and start it on a reachable UDP port:
 build/netplay-server -addr 0.0.0.0:9000
 ```
 
-Use matching game builds and ROMs, then run on each client:
+Use matching builds and ROMs. In F1, enter the server and room, then choose
+**Host** on one client and **Join** on the other. CLI equivalents:
 
 ```sh
-build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 1 --netplay-delay 2
-build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 2 --netplay-delay 2
+build/landmakr --netplay-host --netplay-server SERVER:9000 --netplay-room example --netplay-player 1 --netplay-delay 2
+build/landmakr --netplay-join --netplay-server SERVER:9000 --netplay-room example --netplay-player 2
 ```
 
-Keys control the assigned local player: arrows, Z/X/C, either start key,
-either coin key, F1 service, F2 shared test. Coins/service/test are synchronized;
-focus loss releases inputs through the same delayed path. Both peers cold-boot
-the erased factory EEPROM; persisted settings and diagnostic execution modes
-are rejected. The title shows session state, RTT and rollback depth.
+Each player keeps an independent local history until ready. The host prepares
+2P selection through ordinary game inputs and transfers a compressed canonical
+snapshot through the relay. Its delay is authoritative; host and player slot
+are independent. Local P1 controls address the assigned network player.
+Different EEPROMs and presentation scale/border are supported. Confirmed match
+end or disconnect returns to local play; a rematch uses a fresh snapshot in
+the same room. The relay is not encrypted or an anti-cheat service.
 
 Full usage, versus entry, protocol/state inventory, exact-reference oracle,
 impairment tests and measured rollback limits: [docs/NETPLAY.md](docs/NETPLAY.md).
@@ -163,7 +175,7 @@ chooses the ceiling of the fit ratio (1–4), then fills the aspect-preserving
 viewport with the selected nearest/linear filter. Border counts in the fit.
 Resize, fullscreen and display-density changes settle after a short debounce;
 F11 or Alt+Enter toggles fullscreen. Headless stays at startup/native scale;
-netplay requires fixed scale 1. The measured 5–8x tail costs retain the 4x cap.
+netplay permits different local scales and borders. The 4x scale cap is unchanged.
 
 ```sh
 ./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48

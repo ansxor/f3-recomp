@@ -10,10 +10,10 @@
 | --- | --- |
 | Frame | One video frame of the F3 machine. `Machine::run_frame` simulates one frame and increases `Machine::frame` by one. |
 | Input word | A 16-bit value with 11 used bits. It holds the controller state of one player for one frame. |
-| Input delay (`delay`) | The number of frames between the moment of sampling and the frame that uses the input. The value is 0 to 8. Both clients must use the same value. |
+| Input delay (`delay`) | Sampling-to-use distance, 0–8 frames; negotiated from the host, default 2. |
 | Prediction | The guess for a remote input word that has not arrived. The guess is the word that the remote player used in the previous frame. |
 | Dirty frame | The earliest frame that used a prediction that proved wrong. |
-| Rollback | A `load_state` of the snapshot at the dirty frame. |
+| Rollback | A `load_state` of the full local snapshot at the dirty frame, including presentation buffers. |
 | Resimulation | Running the frames from the dirty frame up to the old current frame again. |
 | Rollback depth | The number of resimulated frames. |
 | Confirmed frame | A frame is confirmed when both actual inputs are known and the frame is simulated with them. `confirmed_frame()` is the first frame that is not confirmed. It is an exclusive bound. |
@@ -26,8 +26,11 @@ The class is declared in `include/f3rt/netplay.hpp`.
 
 | Member | Behavior |
 | --- | --- |
-| `Rollback(Machine&, slot, delay = 2, window = 16)` | Cold-boot constructor. Allocates the snapshot ring, saves the snapshot for frame 0. Throws if `slot` is above 1, `delay` is above 8, `window` is outside 16 to 32, the machine is not at frame 0, fallback is enabled, a sound trace is set, or the audio queue is not empty. |
-| `frame()` | The current simulated frame (`machine.frame`). |
+| `Rollback(Machine&, slot, delay = 2, window = 16)` | Starts from a drained canonical handoff, allocates snapshot/history/audio storage and saves match-relative frame 0. Requires valid slot, delay/window, strict-native execution and no sound trace. |
+| `frame()` | Match-relative simulated frame, not absolute `machine.frame`. |
+| `origin_frame()` | Absolute host machine frame at handoff. |
+| `match_finished()` | Real-versus predicate became inactive at a confirmed boundary. |
+| `restore_confirmed()` | Restore last confirmed state before local return. |
 | `confirmed_frame()` | The exclusive bound of confirmed frames. |
 | `needs_local_input()` | True if the local word for frame `frame() + delay` has not been sampled. |
 | `local_input(word)` | Stores the local word for frame `frame() + delay`. Returns `Input{frame, word}` for the transport. |
@@ -40,6 +43,12 @@ The class is declared in `include/f3rt/netplay.hpp`.
 | `rollback_count()`, `last_rollback_depth()`, `maximum_rollback_depth()` | Statistics. |
 
 Constants: `max_window = 32`, `history_size = 1024`, `checksum_interval = 60`, `input_mask = 0x7ff`.
+
+## Versus entry and exit
+
+For Japan 2.01J, `versus_match_active` requires word `$401f6e == 1` and `($401f53 & 3) == 3`. Handoff additionally requires `($401f53 & 0xc0) != 0`: at least one player is still selecting. Low flags alone include tutorial/demo. `$401f54` is random-stage state, not a mode discriminator; the old `$4078f6` heuristic is superseded.
+
+The machine retains absolute host time while rollback input/history frames are relative to `origin_frame`. Exit detection happens only when actual inputs confirm the boundary. Restore that boundary before returning local; speculative departure must not end the match.
 
 ## Internal data
 
@@ -243,7 +252,7 @@ Speculative audio can be wrong. If the engine played it and then rolled back, th
 - Only `promote()` copies PCM to the output queue, and only for a confirmed frame.
 - `render_audio` reads only from that queue.
 
-The result is exact audio with no duplicate and no crossfade. The price is latency. Sound plays only after both inputs of its frame are known. The caller must drain the queue in every loop pass, also during a stall, or the queue overflows (`Confirmed audio queue full`).
+The accurate/native path emits each confirmed sample once, without speculative output or crossfade, at the cost of latency. Drain the queue every pass, including stalls. Optional HLE output uses a separate non-rewound reconciliation path and is not accurate-PCM-equivalent; see [HLE audio](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
 
 Each frame has up to 4096 interleaved `int16_t` values. This is more than four times the normal amount for one frame.
 
@@ -268,9 +277,9 @@ Settings: `delay = 2`, `window = 16`. Player 0 is local.
 | --- | --- |
 | `Invalid synchronized input word` | A word has a bit outside `0x7ff`. |
 | `Netplay requires slot 0/1, delay 0..8, rollback window 16..32` | Bad constructor arguments. |
-| `Rollback requires strict-native cold boot without sound tracing` | The machine is not at frame 0, fallback is allowed, or a sound trace is active. |
-| `Rollback requires an empty initial audio queue` | The machine produced audio before the constructor. |
-| `Netplay frame counter exhausted; start a new match` | `machine.frame` is within 1024 of `UINT32_MAX`. |
+| `Rollback requires strict-native execution without sound tracing` | Fallback execution or a sound trace is active. |
+| `Rollback requires an empty initial audio queue` | Handoff PCM was not drained before construction. |
+| `Netplay frame counter exhausted; start a new match` | Match-relative frame approaches the protocol guard. |
 | `Netplay strict-native execution halted at frame N` | The CPU halted or an interpreter fallback ran. |
 | `Netplay frame audio capacity exceeded` | A frame produced more PCM than the 4096-value buffer holds. |
 | `Peer input exceeds bounded receive window` | A remote word is 512 or more frames ahead. |

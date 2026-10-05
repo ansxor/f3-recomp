@@ -20,11 +20,11 @@ features:
   - title: Static recompilation
     details: Python tools read the 68EC020 main program and the 68000 sound program. They write C functions that use the runtime ABI. Normal gameplay runs the main CPU without an instruction interpreter.
   - title: Modern runtime
-    details: The f3rt library provides memory, interrupts, video, sound and EEPROM. An SDL3 frontend shows the picture. It plays audio and reads the keyboard.
+    details: The f3rt library provides memory, interrupts, video, sound and EEPROM. The SDL3 frontend provides an F1 menu, keyboard/gamepad remapping, offline slots and screenshots.
   - title: Game-data video
     details: The runtime can build each frame from the game's own tile and sprite data. It can draw at 1x to 4x scale with extra border columns. The original FDP renderer stays available as a reference.
   - title: Rollback netplay
-    details: Two players connect through a Go UDP relay. The game predicts missing input. It restores an earlier state when predictions differ. Checksums detect differences between machines.
+    details: Two players connect through a Go UDP relay. A fresh host snapshot starts versus rollback after both clients load. Confirmed exit or disconnect returns local; presentation settings stay independent.
   - title: Tested against MAME
     details: Tools compare frames, audio and CPU state with MAME captures and with an independent Musashi 68k core. Seeded gameplay tests run the full machine without interpreter fallback.
   - title: Built to be read

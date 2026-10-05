@@ -112,30 +112,25 @@ stateDiagram-v2
   Waiting --> [*]: janitor removes room 60 s after creation
   Active --> Finished: both finish records are equal
   Active --> Terminated: Leave with abort code, or 8 s without traffic from a slot
-  Finished --> Finished: Leave with normal-finish code
-  Finished --> Terminated: Leave with abort code
-  Finished --> [*]: janitor removes room after 30 s idle
-  Terminated --> Waiting: next JoinReq resets the room
-  Terminated --> [*]: janitor removes room after 30 s idle
+  Finished --> Terminated: both normal Leaves, abort, or silent occupied slot
+  Finished --> [*]: idle cleanup after nonce tombstones expire
+  Terminated --> Waiting: fresh JoinReq resets session
+  Terminated --> [*]: idle cleanup after nonce tombstones expire
 ```
 
 ## Join logic
 
 `Room.ProcessJoin` runs under the room lock. It does the following, in this order.
 
-1. **Room is Active or Finished.** A nonce must belong to an occupied slot. The request rebinds that slot to the new source address only if identity and delay still equal the room baseline. A mismatch gets code 13. The relay sends `MatchStart` again to both recorded endpoints. An unknown or no-longer-occupied nonce gets code 12.
-2. **Room is Terminated.** The relay clears both slots and the session ID. State becomes Waiting. The join result identifies the old session for removal from the `sessions` map. The request then continues as a new first player. `CreatedAt` is not reset, so an old room that returns to Waiting can meet the creation-age cleanup bound.
-3. **Same nonce in a Waiting room.** This is a retransmission. The relay updates the address and answers `JoinWait`. This path does not revalidate a changed identity or delay; the first-player baseline remains unchanged.
-4. **One player is already in the room.** The relay checks the request against the baseline: delay (code 9), ROM CRCs (4), build hash (5), settings (6), EEPROM CRC (7), initial CRC (8).
-5. **Slot choice.** Requested slot 1 means slot 0. Requested slot 2 means slot 1. If the slot is taken, the code is 3. Automatic picks slot 0, then slot 1.
-6. **First player.** The relay stores the identity and delay as the baseline and answers `JoinWait`.
-7. **Second player.** The relay creates a session ID, sets the state to Active and sends `MatchStart` to both players.
+1. Reject retired nonces (bounded 120-second tombstones) so old retries cannot revive a completed session.
+2. In Active/Finished, only an occupied matching nonce may retry, retaining identity, role and the host's delay; a rejected unknown join does not refresh room activity.
+3. Terminated rooms reset to Waiting with cleared session/transfer/barrier/final state. Fresh nonces can reuse the room.
+4. Waiting retries validate identity and role, and host delay. A new second client must have a complementary role, matching ROMs/build/state format and an available requested slot.
+5. CLI requested slots 1/2 map to wire slots 0/1; automatic assignment picks a free slot. Host authority is independent of slot.
+6. The host request supplies the authoritative delay. The guest's requested delay need not match.
+7. Pairing allocates a session and sends `MatchStart`; it does not release gameplay. Host snapshot metadata/chunks and guest acknowledgements are bounded/endpoint checked. Both loaded CRC receipts must agree before the relay releases `BarrierStart`.
 
-The session ID comes from `crypto/rand`. Zero is replaced with 1. If the random source fails, the relay uses the time in nanoseconds.
-
-The relay does not check that the delay is in the range 0 to 8. It checks that the two players have the same value. The client checks the range.
-
-The relay also does not enforce the client room character set or requested-slot range. Its parser checks declared room length and trims trailing zero bytes. Slot values other than 1 or 2 use automatic assignment. See [Parser validation and asymmetries](/developer/netplay/protocol#parser-validation-and-asymmetries).
+The relay retries the barrier until gameplay confirms receipt. It does not emulate the game or retain snapshot bytes. The exact parser/role rules are in [protocol source](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/protocol.go) and [room source](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/room.go).
 
 
 ## Endpoint identity
@@ -182,10 +177,13 @@ The verdict remains in memory until the Finished room is more than 30 s idle. `G
 
 `Room.HandleLeave` accepts a `Leave` only if the slot is occupied, the session ID matches and the address matches. It marks the slot empty. Then:
 
-- If the room is Finished and the code is 1 (normal finish), nothing else happens. The other player is not disturbed.
-- Otherwise the room becomes Terminated. The relay removes the session ID from the map and sends `MatchTerminated` (text `opponent left match`) to the other player, if he is still in the room.
+- A normal finished Leave preserves the verdict for the remaining finisher. Once both have left, the room becomes Terminated and can accept a fresh handoff.
+- Abort terminates the session and notifies the peer. Silent occupied slots also time out in Finished, so a lost final Leave cannot permanently prevent rematch.
 
 An old session ID cannot end a new match in the same room. A `Leave` with a stale session ID does not match the room and is ignored. The test `TestStaleLeaveAfterNewSession` covers this.
+
+Lobby cancellation is a session-zero Leave authenticated by the waiting nonce and endpoint. Retired nonce tombstones last 120 seconds and prevent stale joins from reviving old sessions; they are bounded, not persistent authentication.
+
 
 ## Limits and timers
 
@@ -193,14 +191,14 @@ An old session ID cannot end a new match in the same room. A `Leave` with a stal
 | --- | ---: | --- |
 | `MaxRooms` | 1024 | A new room is refused with code 2. |
 | `MaxTrackedIPs` | 4096 | When the rate-limit table is full, the relay removes one entry before it adds a new one. |
-| `RateLimitTokensPerSec` | 500 | Token refill rate per source IP. |
-| `RateLimitBurst` | 250 | Bucket size. A packet costs one token. A packet without a token is dropped silently. |
+| `RateLimitTokensPerSec` | 1000 | Refill per source IP; snapshot peers can share an IP. |
+| `RateLimitBurst` | 500 | Bucket size; excess traffic is dropped. |
 | `MaxPacketSize` | 1400 | Larger datagrams are dropped. Datagrams under 20 bytes are dropped. |
 | `MaxInputs` | 128 | Input words per `GameData`. |
 | `MaxChecksums` | 32 | Checksum pairs per `GameData`. |
 | `ClientTimeout` | 8 s | An Active room ends when one slot sends nothing valid for 8 s. |
 | `WaitingRoomTimeout` | 60 s | The janitor removes a Waiting room 60 s after its creation. |
-| `FinishedRoomTimeout` | 30 s | The janitor removes a Finished or Terminated room 30 s after its last activity. |
+| `FinishedRoomTimeout` | 30 s idle | Finished/Terminated cleanup eligibility; bounded retired-nonce tombstones can defer removal. |
 | `MaxImpairmentQueue` | 2048 | Maximum packets in the delay queue. |
 
 The janitor runs every second. It checks all rooms, sends `MatchTerminated` (`opponent connection timed out`) for a timed-out slot, removes old rooms and removes rate-limit entries that were idle for more than 60 s.

@@ -4,11 +4,11 @@
 
 ## Definition
 
-The emulator is deterministic when one rule is true. Two machines start from the same state. They get the same input words for each frame. After the same number of frames, their complete state is byte-for-byte equal.
+Two machines with compatible simulation configuration start from the same canonical state and receive the same input words per frame. Their canonical state and native outputs must agree after the same frames. Expanded presentation buffers are local and excluded.
 
 Rollback netcode depends on this rule in two ways.
 
-- Both clients run the same frames with the same inputs. They must reach the same state without sending state to each other.
+- The host transfers canonical state once at versus handoff; thereafter both clients run the same confirmed input timeline.
 - A resimulation after a rollback must give the same result as the first run would give with the correct inputs. The first run and the resimulation use the same code.
 
 If the rule fails, the clients drift apart. The periodic checksum then reports a desync.
@@ -26,7 +26,7 @@ The table lists the usual sources. The third column shows how the code handles e
 | Uninitialized memory | A random byte in a saved record would change the checksum. | Snapshot records are 1-byte packed. Save visitors zero-initialize records or explicitly initialize all their fields. |
 | Host pointers | A pointer differs for each process. | Snapshots hold no pointer. The Musashi sound CPU callbacks are rebound when a snapshot loads. |
 | Diagnostic counters | Counters grow during a resimulation. | Counters such as `native_blocks`, `fallback_instructions` and the video fallback counters are not part of the state. |
-| Persistent EEPROM | Two players could have different saved settings. | Netplay always starts with an erased 93C46 image (64 words of `0xffff`). The frontend rejects `--eeprom`. The handshake compares the EEPROM CRC. |
+| Persistent EEPROM/local history | Players have different saved settings or solo progress. | Host canonical handoff replaces guest simulation state; EEPROM and initial local CRC are not join identity fields. |
 | Different ROMs | The games are different. | The handshake compares seven ROM region CRCs. |
 | Different build or compiler | Machine code and floating point behavior can differ. | The handshake compares a SHA-256 build hash. See [Build identity](/developer/netplay/build-identity). |
 | Network jitter and loss | Inputs arrive at different times. | Time of arrival changes only the schedule of predictions and rollbacks. It does not change the final state, because confirmed frames use only actual inputs. |
@@ -65,7 +65,7 @@ The oracle tool has a snapshot mode. It does the following for each test point `
 
 The tool counts scalar `operator new(size_t)` calls during measured save/load calls. It stops if the count is not zero. This check covers the implementation's allocation contract, not every possible C allocator or the whole replay process.
 
-The second proof is end-to-end. The oracle runs a single-machine **reference** with the same delayed inputs. It then runs two real client processes through the relay, including packet loss and reordering. Final state CRC, framebuffer CRC, confirmed audio CRC and stereo-frame count must match the reference and both clients. CRC equality is evidence, not a collision-free proof for all possible states. See [Oracle and verification](/developer/netplay/oracle).
+The end-to-end proof runs real clients through a relay from independent local histories, then compares each match against the exact saved host handoff with identical delayed inputs. Canonical state, native pixels, confirmed PCM and sample counts must match. Cross-presentation proof also exercises local full-state replay and canonical guest restore. CRC equality is evidence, not collision-free proof. See [current implementation/evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md).
 
 ## Rules for contributors
 

@@ -2,6 +2,13 @@
 
 This page explains sound generation and driver selection. It shows how to record WAV files and sound traces.
 
+## Host audio backend and volume
+
+Normal play defaults to `--audio-backend accurate`, using the native sound driver and emulated chips. Optional `--audio-backend hle` uses separate host synthesis/reconciliation; it is not an accurate-PCM-equivalent implementation. F1 exposes the available audio choices. Respect restart-required controls and use **Save preferences** explicitly; CLI values override saved settings. See [HLE design and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+
+`--volume 0..100` (default 100%) and F1 volume affect host output only, not emulated gain, snapshots or network checksums. Accurate netplay audio is confirmed-only; HLE reconciliation is non-rewound and must not be described as replaying accurate PCM. Driver/oracle diagnostics below describe the accurate simulation path.
+
+
 ## How the sound works
 
 The F3 board has a separate sound computer. It has these parts:

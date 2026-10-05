@@ -213,7 +213,7 @@ Netplay tests expose missing snapshot state and errors during replay.
 The repository keeps long evidence notes. These pages summarize them and give the source of each number.
 
 - [`NOTES.md`](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) records each investigation and its result.
-- [`STATUS.md`](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md) records the acceptance runs of the netplay phase.
+- [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) records observed overlay, canonical sync and versus lifecycle acceptance.
 - [`docs/NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md), [`docs/VIDEO-HLE.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) and [`docs/SOUND-DRIVER.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) record the per-subsystem results.
 
 Example results, as recorded in `NOTES.md`: 5,000 of 5,000 differential cases pass with no unsupported case. A 3,600-frame cold boot executes with zero interpreter fallback. All 25 sampled frames, 600 to 3480 in steps of 120, equal MAME with zero differing pixels (1,856,000 pixels). All 131,072 main-RAM bytes equal MAME at frame 600.

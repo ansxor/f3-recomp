@@ -79,6 +79,11 @@ public:
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
     uint32_t state_crc() const;
+    // Portable handoff/checksums exclude expanded host presentation buffers.
+    size_t sync_state_size() const;
+    void save_sync_state(std::span<uint8_t> dst) const;
+    void load_sync_state(std::span<const uint8_t> src);
+    uint32_t sync_state_crc() const;
 private:
     uint64_t hardware_cycles = 0;
     uint64_t next_vblank = 0, irq3_at = UINT64_MAX;
@@ -86,6 +91,9 @@ private:
     uint64_t raster_cycle(uint64_t pixels) const;
     uint32_t input_word(unsigned index) const;
     void coin_write(unsigned bank, uint8_t value);
+    void save_state_impl(std::span<uint8_t> dst, bool sync) const;
+    void load_state_impl(std::span<const uint8_t> src, bool sync);
+    mutable std::vector<uint8_t> sync_state_scratch_;
     mutable std::vector<uint8_t> state_scratch_;
 };
 }
