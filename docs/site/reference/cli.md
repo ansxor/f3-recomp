@@ -86,7 +86,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
 | `--video-interp` | `off`, `linear` or `fit` | `off` | Opt-in validated GPU line sampling on all four playfields | Non-off needs GPU; scale 1/headless stay exact. Both modes preserve native subrow-zero and unflagged samples. |
 | `--video-interp-fields` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Independent geometry sampling and same-pen RGB palette-bank blending | Palette blending invents colors; alpha/clip/mosaic/priority and column jumps stay discrete. Sprite zoom already samples ROM texels at internal scale in every mode. |
-| `--motion-interp` | none | off | Experimental temporal sprite, playfield/line and text-scroll interpolation at display refresh | Requires GPU game/compare. One native frame of positional latency; discontinuities snap. Headless remains canonical; unthrottled uses current geometry. Independent of `--video-interp`; CLI-only, not a saved preference. |
+| `--motion-interp` | none | off | Experimental temporal sprite, playfield/line and text-scroll interpolation at display refresh | Requires GPU game/compare. One native frame of positional latency; discontinuities snap. Headless remains canonical; unthrottled uses current geometry. Independent of `--video-interp`; CLI-only, not a saved preference. Two-second logs report mode/request/callback Hz, drawable submissions/s and interpolation/candidate/rejection rates. |
 | `--config` | `FILE` | SDL preferences directory `settings.cfg` | Preferences path | Loads before CLI overrides; save explicitly in F1. States/screenshots use sibling directories. |
 | `--volume` | `0` to `100` | `100` | Host output percentage | Does not alter simulation or confirmed PCM. |
 | `--postprocess` | `off`, `crt` or `user` | `off` | GPU postprocess | Inactive on CPU; affects presentation/screenshots, not native pixels or menu. |
@@ -335,9 +335,10 @@ actually accepted effect rather than a declined later scene.
 Strict-native two-machine temporal GPU proof, requiring generated main/sound
 programs and `F3RT_GPU`. One seeded machine is repeatedly presented; the other
 is not. Checks native pixels/audio/state parity, exact current-frame endpoints,
-visible intermediate ROM motion, frozen-repeat stability and discontinuity
-snapping. Guard fixtures exercise sprite identity, zoom/flip/count, large
-movement, scroll controls and wraps. Final-frame load/reexecution checks replay.
+visible intermediate ROM motion, frozen-repeat stability, moving/static/rejected
+native-pair census and discontinuity snapping. `f3rt-motion-check` separately
+exercises count shifts, identity ties, transforms, controls, wraps and bounds
+without ROMs or an SDL window. Final-frame load/reexecution checks replay.
 Even diagnostic scales also check exact horizontal/vertical half-native-pixel
 text translations through the GPU using a captured game glyph.
 
@@ -348,9 +349,22 @@ text translations through the GPU using a captured game glyph.
 
 Flags: `--rom-dir DIR` (configured ROM path), `--frames N` (4000), `--seed N`
 (12345), `--scale N` (1–8, default 1), `--every N` (1), `--interp off|linear|fit`
-(`off`), `--dump-dir DIR`, `--help`. Frames/every must be positive.
-Runs without visible paired ROM midpoint motion deliberately fail.
-PNG captures and fixed phase grids are not a physical refresh-rate measurement.
+(`off`), `--dump-dir DIR`, `--demo`, `--demo-seconds N` (30, 1–3600), `--help`.
+Frames/every must be positive. Proof runs without visible paired ROM midpoint
+motion deliberately fail. PNG captures and fixed phase grids are not a
+physical refresh-rate measurement.
+
+`--demo` instead warms up the specified seeded ROM frames, freezes the machine,
+and adds a bounded 2px/native-frame horizontal playfield pan to a host-only scene
+copy. One window shows **left native / right interpolated** through the full GPU
+shader path and one shared display tick/drawable. Periodic logs distinguish
+mode Hz, requested/observed display-link Hz and accepted drawable submissions/s;
+scanout is unknown. Escape exits. `--dump-dir` saves canonical/midpoint images
+and one actual app-owned full-window composition submitted to the drawable.
+
+```sh
+./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 --demo-seconds 30
+```
 
 ## f3rt-check
 

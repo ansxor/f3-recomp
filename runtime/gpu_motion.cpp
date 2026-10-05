@@ -51,58 +51,153 @@ void GpuMotionHistory::reset() noexcept {
 void GpuMotionHistory::capture(const GpuScene &scene, uint64_t frame) noexcept {
     if (scene.fallback || scene.sprite_count > sprites_.size()) { reset(); return; }
     paired_ = captured_ && frame_ != std::numeric_limits<uint64_t>::max() && frame == frame_ + 1;
-    const bool sprite_pair = paired_ && sprite_count_ == scene.sprite_count && pen_mask_ == scene.pen_mask;
+    pair_stats_ = {};
+    // Compact render slots are not identities: tile-zero births/deaths shift them.
+    // Match appearance groups with mutually unique nearest positions.
+    // Tile animation deliberately snaps; the render snapshot has no object ID.
+    std::array<unsigned, 1024> matches;
+    const auto current = [&](unsigned i) {
+        return scene.words.data() + GpuScene::sprites + i * GpuScene::sprite_stride;
+    };
+    const auto key = [](const auto &v) { return (uint64_t(v[4]) << 32) | v[5]; };
+    bool sprites_changed = sprite_count_ != scene.sprite_count;
+    for (unsigned i = 0; paired_ && !sprites_changed && i < scene.sprite_count; ++i)
+        sprites_changed = !std::equal(current(i), current(i) + 7, sprites_[i].words.begin());
+    if (paired_ && sprites_changed) {
+        std::array<unsigned, 1024> old_order, new_order;
+        matches.fill(1024);
+        for (unsigned i = 0; i < sprite_count_; ++i) old_order[i] = i;
+        for (unsigned i = 0; i < scene.sprite_count; ++i) new_order[i] = i;
+        std::sort(old_order.begin(), old_order.begin() + sprite_count_,
+                  [&](unsigned a, unsigned b) { return key(sprites_[a].words) < key(sprites_[b].words); });
+        std::sort(new_order.begin(), new_order.begin() + scene.sprite_count,
+                  [&](unsigned a, unsigned b) { return key(current(a)) < key(current(b)); });
+        unsigned old = 0, now = 0;
+        std::array<unsigned, 1024> old_nearest, new_nearest, old_distance, new_distance;
+        while (old < sprite_count_ && now < scene.sprite_count) {
+            const uint64_t a = key(sprites_[old_order[old]].words), b = key(current(new_order[now]));
+            if (a < b) { ++old; continue; }
+            if (b < a) { ++now; continue; }
+            unsigned old_end = old + 1, now_end = now + 1;
+            while (old_end < sprite_count_ && key(sprites_[old_order[old_end]].words) == a) ++old_end;
+            while (now_end < scene.sprite_count && key(current(new_order[now_end])) == b) ++now_end;
+            if (old_end - old == 1 && now_end - now == 1) {
+                matches[new_order[now]] = old_order[old];
+            } else {
+                for (unsigned p = old; p < old_end; ++p) {
+                    old_nearest[p] = 1024; old_distance[p] = std::numeric_limits<unsigned>::max();
+                }
+                for (unsigned n = now; n < now_end; ++n) {
+                    new_nearest[n] = 1024; new_distance[n] = std::numeric_limits<unsigned>::max();
+                    const auto v = current(new_order[n]);
+                    for (unsigned p = old; p < old_end; ++p) {
+                        const auto &previous = sprites_[old_order[p]].words;
+                        const int64_t dx = int64_t(int32_t(v[0])) - int32_t(previous[0]);
+                        const int64_t dy = int64_t(int32_t(v[1])) - int32_t(previous[1]);
+                        if (std::abs(dx) > 32 * 256 || std::abs(dy) > 32 * 256) continue;
+                        const unsigned distance = unsigned(dx * dx + dy * dy);
+                        if (distance < old_distance[p]) {
+                            old_distance[p] = distance; old_nearest[p] = n;
+                        } else if (distance == old_distance[p]) old_nearest[p] = 1024;
+                        if (distance < new_distance[n]) {
+                            new_distance[n] = distance; new_nearest[n] = p;
+                        } else if (distance == new_distance[n]) new_nearest[n] = 1024;
+                    }
+                }
+                for (unsigned n = now; n < now_end; ++n)
+                    if (new_nearest[n] != 1024 && old_nearest[new_nearest[n]] == n)
+                        matches[new_order[n]] = old_order[new_nearest[n]];
+            }
+            old = old_end; now = now_end;
+        }
+    }
+    // Compute all deltas before overwriting old compact slots.
+    std::array<int32_t, 1024> dx{}, dy{};
+    std::array<bool, 1024> eligible{};
+    const auto valid_sprite = [](const auto &v) {
+        return v[2] > 0 && v[2] <= 256 && v[3] > 0 && v[3] <= 256 &&
+            v[4] < 32768 && v[5] <= 255 && v[6] <= 3 &&
+            std::abs(int64_t(int32_t(v[0]))) <= 1024 * 256 &&
+            std::abs(int64_t(int32_t(v[1]))) <= 1024 * 256;
+    };
+    for (unsigned i = 0; paired_ && sprites_changed && i < scene.sprite_count; ++i) {
+        const auto v = current(i);
+        const unsigned match = matches[i];
+        if (match == 1024) {
+            // Identical stationary duplicates are not evidence of moving rejects.
+            if (i < sprite_count_ && std::equal(v, v + 7, sprites_[i].words.begin())) continue;
+            ++pair_stats_.rejected_sprites;
+            ++pair_stats_.sprite_identity_rejections;
+            if (scene.sprite_count != sprite_count_) ++pair_stats_.sprite_count_rejections;
+            continue;
+        }
+        const auto &previous = sprites_[match].words;
+        const bool moving = v[0] != previous[0] || v[1] != previous[1];
+        if (moving) ++pair_stats_.moving_sprites;
+        const bool transform = pen_mask_ == scene.pen_mask && valid_sprite(v) && valid_sprite(previous) &&
+            std::equal(v + 2, v + 7, previous.begin() + 2);
+        const bool jump = motion_delta(int32_t(previous[0]), int32_t(v[0])) &&
+            motion_delta(int32_t(previous[1]), int32_t(v[1]));
+        eligible[i] = transform && jump;
+        if (eligible[i]) {
+            dx[i] = int32_t(v[0]) - int32_t(previous[0]);
+            dy[i] = int32_t(v[1]) - int32_t(previous[1]);
+        } else if (moving) {
+            ++pair_stats_.rejected_sprites;
+            if (!transform) ++pair_stats_.sprite_transform_rejections;
+            else ++pair_stats_.sprite_jump_rejections;
+        }
+    }
     for (unsigned i = 0; i < scene.sprite_count; ++i) {
         auto &s = sprites_[i];
-        std::array<uint32_t, 7> now;
-        std::copy_n(scene.words.begin() + GpuScene::sprites + i * GpuScene::sprite_stride, 7, now.begin());
-        const auto valid = [](const auto &v) {
-            return v[2] > 0 && v[2] <= 256 && v[3] > 0 && v[3] <= 256 &&
-                v[4] < 32768 && v[5] <= 255 && v[6] <= 3 &&
-                std::abs(int64_t(int32_t(v[0]))) <= 1024 * 256 &&
-                std::abs(int64_t(int32_t(v[1]))) <= 1024 * 256;
-        };
-        s.eligible = sprite_pair && valid(now) && valid(s.words) &&
-            std::equal(now.begin() + 2, now.end(), s.words.begin() + 2) &&
-            motion_delta(int32_t(s.words[0]), int32_t(now[0])) &&
-            motion_delta(int32_t(s.words[1]), int32_t(now[1]));
-        s.dx = s.eligible ? int32_t(now[0]) - int32_t(s.words[0]) : 0;
-        s.dy = s.eligible ? int32_t(now[1]) - int32_t(s.words[1]) : 0;
-        s.words = now;
+        std::copy_n(current(i), 7, s.words.begin());
+        s.dx = dx[i]; s.dy = dy[i]; s.eligible = eligible[i];
     }
     for (unsigned y = 24; y < 256; ++y) {
         auto &before = rows_[y - 24];
         Row now = read_row(scene, y);
-        bool controls = paired_ && !before.bitmap && !now.bitmap && before.controls == now.controls;
-        for (unsigned channel = 0; channel < 4; ++channel)
-            controls &= ((now.controls[1] >> (channel * 8)) & 255) <= 8;
         for (unsigned i = 0; i < 5; ++i) {
-            bool eligible = controls && now.layers[i] == before.layers[i] &&
+            // Blend weights and ordering remain current discrete state. Changes
+            // to another layer do not invalidate this layer's source geometry.
+            const bool controls = paired_ && (i < 4 || (!before.bitmap && !now.bitmap)) &&
+                now.layers[i] == before.layers[i] &&
                 valid_layer(now.layers[i]) && valid_layer(before.layers[i]);
             int32_t x = 0, px = 0, phase = 0, previous_phase = 0;
+            bool valid_x = true, valid_y = true;
             if (i < 4) {
                 const unsigned at = i * 6;
-                const auto valid = [at](const Row &r) {
-                    const auto &g = r.geometry;
-                    return std::abs(int64_t(int32_t(g[at]))) <= (int64_t{1} << 24) &&
-                        g[at + 1] <= 511 && g[at + 2] > 0 && g[at + 2] <= 256 &&
-                        g[at + 3] > 0 && g[at + 3] <= 510 && g[at + 4] <= 255;
-                };
-                eligible &= valid(now) && valid(before) && now.geometry[at + 2] == before.geometry[at + 2] &&
-                    now.geometry[at + 3] == before.geometry[at + 3];
-                x = int32_t(now.geometry[at]); px = int32_t(before.geometry[at]);
-                phase = int32_t(now.geometry[at + 1] * 256 + now.geometry[at + 4]);
-                previous_phase = int32_t(before.geometry[at + 1] * 256 + before.geometry[at + 4]);
+                const auto &g = now.geometry; const auto &p = before.geometry;
+                valid_x = std::abs(int64_t(int32_t(g[at]))) <= (int64_t{1} << 24) &&
+                    std::abs(int64_t(int32_t(p[at]))) <= (int64_t{1} << 24) &&
+                    g[at + 2] > 0 && g[at + 2] <= 256 && g[at + 2] == p[at + 2];
+                valid_y = g[at + 1] <= 511 && p[at + 1] <= 511 &&
+                    g[at + 4] <= 255 && p[at + 4] <= 255 &&
+                    g[at + 3] > 0 && g[at + 3] <= 510 && g[at + 3] == p[at + 3];
+                x = int32_t(g[at]); px = int32_t(p[at]);
+                phase = int32_t(g[at + 1] * 256 + g[at + 4]);
+                previous_phase = int32_t(p[at + 1] * 256 + p[at + 4]);
             } else {
-                eligible &= now.geometry[24] <= 511 && now.geometry[25] <= 511 &&
-                    before.geometry[24] <= 511 && before.geometry[25] <= 511;
+                valid_x = now.geometry[24] <= 511 && before.geometry[24] <= 511;
+                valid_y = now.geometry[25] <= 511 && before.geometry[25] <= 511;
                 x = int32_t(now.geometry[24] * 256); px = int32_t(before.geometry[24] * 256);
                 phase = int32_t(now.geometry[25] * 256); previous_phase = int32_t(before.geometry[25] * 256);
             }
-            eligible &= motion_delta(px, x, (i < 4 ? 1024 : 512) * 256) &&
-                motion_delta(previous_phase, phase, 512 * 256);
-            now.eligible[i] = eligible;
-            if (eligible) { now.delta[i * 2] = x - px; now.delta[i * 2 + 1] = phase - previous_phase; }
+            const bool jump_x = motion_delta(px, x, (i < 4 ? 1024 : 512) * 256);
+            const bool jump_y = motion_delta(previous_phase, phase, 512 * 256);
+            now.eligible[i * 2] = controls && valid_x && jump_x;
+            now.eligible[i * 2 + 1] = controls && valid_y && jump_y;
+            if (now.eligible[i * 2]) now.delta[i * 2] = x - px;
+            if (now.eligible[i * 2 + 1]) now.delta[i * 2 + 1] = phase - previous_phase;
+            // Disabled channels and unchanged geometry are neither moving nor rejected.
+            const bool moving_x = x != px, moving_y = phase != previous_phase;
+            if (!paired_ || !(now.layers[i][0] & 64u) || (!moving_x && !moving_y)) continue;
+            if (i < 4) ++pair_stats_.moving_playfield_rows; else ++pair_stats_.moving_text_rows;
+            if ((moving_x && !now.eligible[i * 2]) || (moving_y && !now.eligible[i * 2 + 1])) {
+                ++pair_stats_.rejected_rows;
+                if (!controls) ++pair_stats_.row_control_rejections;
+                else if ((moving_x && !valid_x) || (moving_y && !valid_y)) ++pair_stats_.row_transform_rejections;
+                else ++pair_stats_.row_jump_rejections;
+            }
         }
         before = now;
     }
@@ -111,9 +206,9 @@ void GpuMotionHistory::capture(const GpuScene &scene, uint64_t frame) noexcept {
 }
 MotionInterpolationStats GpuMotionHistory::apply(const GpuScene &scene, float alpha,
                                                  std::span<uint32_t> words) const noexcept {
-    MotionInterpolationStats stats;
+    MotionInterpolationStats stats = pair_stats_;
     if (!std::isfinite(alpha) || alpha < 0 || alpha > 1 || !paired_ || scene.fallback ||
-        words.size() < GpuScene::word_count || scene.sprite_count != sprite_count_ || scene.pen_mask != pen_mask_) return stats;
+        words.size() < GpuScene::word_count || scene.sprite_count != sprite_count_ || scene.pen_mask != pen_mask_) return {};
     stats.paired = true; stats.alpha = alpha;
     for (unsigned i = 0; i < sprite_count_; ++i) {
         const auto &s = sprites_[i];
@@ -141,7 +236,7 @@ MotionInterpolationStats GpuMotionHistory::apply(const GpuScene &scene, float al
             const auto &reference = i == 4 ? scene.reference_rows[y].text : scene.reference_rows[y].playfields[i].layer;
             const uint32_t clip = reference.clip_enabled | (uint32_t(reference.clip_inverted) << 8) |
                 (uint32_t(reference.clip_inverse) << 16);
-            if (!r.eligible[i] || (!r.delta[i * 2] && !r.delta[i * 2 + 1]) ||
+            if ((!r.eligible[i * 2] && !r.eligible[i * 2 + 1]) || (!r.delta[i * 2] && !r.delta[i * 2 + 1]) ||
                 clip != layer[34] || scene.words[la] != layer[0] || scene.words[la + 1] != layer[1] ||
                 !std::equal(layer.begin() + 2, layer.begin() + 2 + layer[1] * 2, scene.words.begin() + la + 2)) continue;
             const unsigned geometry_at = i == 4 ? ra + 2 : ra + GpuScene::row_pf + i * 6;

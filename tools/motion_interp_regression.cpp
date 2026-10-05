@@ -8,9 +8,11 @@
 #include "gameplay_inputs.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -29,6 +31,8 @@ namespace {
 struct Options {
     std::filesystem::path rom_dir, dump_dir;
     uint64_t frames = 4000, seed = 12345, every = 1;
+    bool demo = false;
+    unsigned demo_seconds = 30;
     f3rt::GameVideoOptions video;
     f3rt::VideoInterpolation interp = f3rt::VideoInterpolation::Off;
 };
@@ -51,6 +55,11 @@ Options parse(int argc, char **argv) {
         else if (arg == "--frames") o.frames = number(value());
         else if (arg == "--seed") o.seed = number(value());
         else if (arg == "--every") o.every = number(value());
+        else if (arg == "--demo") o.demo = true;
+        else if (arg == "--demo-seconds") {
+            auto n = number(value()); require(n && n <= 3600, "Demo seconds must be 1..3600");
+            o.demo_seconds = unsigned(n);
+        }
         else if (arg == "--scale") {
             auto n = number(value()); require(n && n <= f3rt::GameVideoOptions::max_gpu_scale, "Scale must be 1..8");
             o.video.scale = unsigned(n);
@@ -64,7 +73,9 @@ Options parse(int argc, char **argv) {
             std::cout << "Strict-native seeded Land Maker temporal GPU proof\n"
                 "--rom-dir DIR --frames N (4000) --seed N (12345) --scale N (1..8)\n"
                 "--every N (1) --dump-dir DIR --interp off|linear|fit\n"
-                "Short runs without visible paired ROM motion intentionally fail.\n";
+                "--demo --demo-seconds N (30): one-window LEFT native / RIGHT motion comparison;\n"
+                "warms up --frames emulated frames, then pans a frozen ROM playfield render-only.\n"
+                "Short proof runs without visible paired ROM motion intentionally fail.\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown argument: " + arg);
     }
@@ -121,80 +132,6 @@ void png(const std::filesystem::path &path, std::span<const uint32_t> pixels, f3
     bool ok = SDL_SavePNG(s, path.string().c_str()); SDL_DestroySurface(s);
     require(ok, "PNG write failed: " + path.string());
 }
-// Consumer-visible helper geometry: no machine writes, mocks, or implementation
-// text assertions. Independently constructed submitted slots and packed rows.
-void boundaries() {
-    auto a = std::make_unique<f3rt::GpuScene>();
-    auto b = std::make_unique<f3rt::GpuScene>();
-    a->fallback = false; a->sprite_count = 1;
-    const unsigned sp = f3rt::GpuScene::sprites;
-    a->words[sp] = 100 * 256; a->words[sp + 1] = 80 * 256;
-    a->words[sp + 2] = a->words[sp + 3] = 256;
-    a->words[sp + 4] = 7; a->words[sp + 5] = 2;
-    auto evaluate = [&](float alpha) {
-        f3rt::GpuMotionHistory h; h.capture(*a, 10); h.capture(*b, 11);
-        std::vector<uint32_t> out(b->words.begin(), b->words.end());
-        h.apply(*b, alpha, out); return out;
-    };
-    *b = *a; b->words[sp] += 32 * 256;
-    require(evaluate(.5f)[sp] == 116 * 256, "32px sprite boundary must interpolate");
-    require(evaluate(0)[sp] == a->words[sp] && evaluate(1)[sp] == b->words[sp], "Sprite endpoints");
-    b->words[sp] += 1;
-    require(evaluate(.5f)[sp] == b->words[sp], "Over-32px sprite movement must snap");
-    for (unsigned field : {2u, 3u, 4u, 5u, 6u}) {
-        *b = *a; b->words[sp] += 4 * 256; ++b->words[sp + field];
-        require(evaluate(.5f)[sp] == b->words[sp], "Sprite identity/scale/flip change must snap");
-    }
-    *b = *a; b->words[sp] += 4 * 256; b->sprite_count = 2;
-    require(evaluate(.5f)[sp] == b->words[sp], "Submitted slot count change must snap");
-    *b = *a; b->words[sp] += 4 * 256; b->pen_mask ^= 16;
-    require(evaluate(.5f)[sp] == b->words[sp], "Pen mask change must snap");
-    *b = *a; b->words[sp] += 4 * 256;
-    require(evaluate(std::numeric_limits<float>::quiet_NaN()) == std::vector<uint32_t>(b->words.begin(), b->words.end()), "NaN alpha must be canonical");
-    // One visible playfield row, with matching layer controls and valid zoom.
-    const unsigned row = f3rt::GpuScene::rows + 24 * f3rt::GpuScene::row_stride;
-    const unsigned pf = row + f3rt::GpuScene::row_pf;
-    a->words[row + f3rt::GpuScene::row_layers + 1] = 1;
-    a->words[row + f3rt::GpuScene::row_layers + 2] = 46;
-    a->words[row + f3rt::GpuScene::row_layers + 3] = 366;
-    a->words[row + f3rt::GpuScene::row_layers] = 64;
-    a->words[pf] = 100 * 256; a->words[pf + 1] = 80;
-    a->words[pf + 2] = a->words[pf + 3] = 256;
-    *b = *a; b->words[pf] += 4 * 256; b->words[pf + 4] = 128;
-    auto out = evaluate(.5f);
-    require(out[pf] == 102 * 256 && out[pf + 1] == 80 && out[pf + 4] == 64, "PF fixed-point XY interpolation");
-    for (unsigned field : {row + 1, row + 4, row + 5, row + f3rt::GpuScene::row_layers,
-            row + f3rt::GpuScene::row_layers + 1, row + f3rt::GpuScene::row_layers + 2, pf + 2, pf + 3}) {
-        *b = *a; b->words[pf] += 4 * 256; ++b->words[field];
-        require(evaluate(.5f)[pf] == b->words[pf], "PF control/clip/order/zoom change must snap");
-    }
-    *b = *a; a->words[pf] = 1023 * 256; b->words[pf] = 1025 * 256;
-    require(evaluate(.5f)[pf] == b->words[pf], "PF raw period crossing must snap");
-    a->words[pf] = 100 * 256;
-    *b = *a; b->words[pf] += 4 * 256; b->words[pf + 5] = 64;
-    require(evaluate(.5f)[pf] == 102 * 256 && evaluate(.5f)[pf + 5] == 64,
-        "Current discrete PF palette must survive geometry interpolation");
-    b->reference_rows[24].bitmap = true;
-    require(evaluate(.5f)[pf] == b->words[pf], "Bitmap row must snap");
-    *b = *a; a->words[pf + 1] = 511; a->words[pf + 4] = 240;
-    b->words[pf + 1] = 0; b->words[pf + 4] = 16;
-    require(evaluate(.5f)[pf + 1] == 0 && evaluate(.5f)[pf + 4] == 16, "PF vertical wrap must snap");
-    // Text uses separate motion-only fixed-point coordinates. The canonical
-    // integer scroll and current glyph/cell data are never rewritten.
-    const unsigned text_layer = row + f3rt::GpuScene::row_layers + 8 * f3rt::GpuScene::layer_stride;
-    a->words[text_layer] = 64; a->words[text_layer + 1] = 1;
-    a->words[text_layer + 2] = 46; a->words[text_layer + 3] = 366;
-    a->words[row + 2] = 100; a->words[row + 3] = 80;
-    *b = *a; b->words[row + 2] = 103; b->words[row + 3] = 81;
-    out = evaluate(.5f);
-    require(out[row + 14] == 101 * 256 + 128 && out[row + 15] == 80 * 256 + 128 &&
-        out[row + 2] == 103 && out[row + 3] == 81, "Text fractional geometry and canonical scroll preservation");
-    ++b->words[text_layer + 2];
-    require(evaluate(.5f)[row + 14] == 103 * 256, "Text clipping change must snap");
-    *b = *a; a->words[row + 2] = 511; b->words[row + 2] = 0;
-    require(evaluate(.5f)[row + 14] == 0, "Text period wrap must snap");
-    std::cout << "BOUNDARIES sprite_endpoints=exact max_delta=32 identity_scale_flip_count_pen= snap pf_fraction=exact pf_controls_wrap=snap invalid_alpha=canonical\n";
-}
 void text_sampling(f3rt::GpuVideo &gpu, const f3rt::GpuScene &source, f3rt::GameVideoOptions o) {
     if (o.scale % 2) return; // Half-native-pixel translation is an integer output shift at even scales.
     auto a = std::make_unique<f3rt::GpuScene>(source);
@@ -247,10 +184,129 @@ struct SdlLifetime {
     SdlLifetime() { require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError()); }
     ~SdlLifetime() { SDL_Quit(); }
 };
+// This diagnostic deliberately separates steady geometry motion from a game's
+// stationary scenes and tile-animation identity changes. The machine is frozen.
+int comparison(const Options &o) {
+    using Clock = std::chrono::steady_clock;
+    auto owner = machine(o); auto &m = *owner;
+    f3rt::test::GameplaySchedule schedule(o.seed, f3rt::test::ScheduleConfig{.versus = false});
+    std::array<int16_t, 8192> sound{};
+    while (m.frame < o.frames) {
+        inputs(m, schedule.step(m.frame)[0]); advance(m);
+        while (m.audio->render(sound.data(), sound.size() / 2)) {}
+    }
+    const auto &base = m.game_video->gpu_scene();
+    require(!base.fallback, "Demo warmup ended in oracle fallback; use --frames 1560 --seed 5");
+    const auto before = state(m); const auto pixels = m.pixels;
+    const auto sync_crc = m.sync_state_crc();
+    struct Window {
+        SDL_Window *value;
+        ~Window() { SDL_DestroyWindow(value); }
+    } window{SDL_CreateWindow("Motion comparison — LEFT native ~59Hz | RIGHT interpolated | frozen ROM PF pan",
+        1280, 464, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY)};
+    require(window.value != nullptr, SDL_GetError());
+    f3rt::GpuVideo gpu(window.value, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
+        false, true, o.interp);
+    gpu.set_scale_mode(f3rt::VideoScaleMode::Auto);
+    auto scene = std::make_unique<f3rt::GpuScene>(base);
+    auto pan = [&](uint64_t step) {
+        // +/-64 native pixels, 2px/native frame. A bounded triangle avoids
+        // whole-map teleports; raw tilemap period crossings still snap.
+        const int phase = int(step % 128);
+        const int x = phase <= 64 ? -64 + phase * 2 : 192 - phase * 2;
+        for (unsigned y = 24; y < 256; ++y) for (unsigned pf = 0; pf < 4; ++pf) {
+            const unsigned row = f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride;
+            const unsigned at = row + f3rt::GpuScene::row_pf + pf * 6;
+            scene->words[at] = uint32_t(int32_t(base.words[at]) - x * 256);
+        }
+    };
+    if (!o.dump_dir.empty()) {
+        std::filesystem::create_directories(o.dump_dir);
+        std::vector<uint32_t> native(size_t(o.video.width()) * o.video.height()), midpoint(native.size());
+        pan(7);gpu.capture_motion(*scene, 7);pan(8);gpu.capture_motion(*scene, 8);
+        gpu.draw(*scene, native);gpu.draw_motion(*scene, .5f, midpoint);
+        require(native != midpoint, "Frozen ROM PF pan produced no visible interpolated pixels");
+        png(o.dump_dir / "demo-native.png", native, o.video);
+        png(o.dump_dir / "demo-interpolated.png", midpoint, o.video);
+        std::vector<uint32_t> both(native.size() * 2);
+        const unsigned width = o.video.width(), height = o.video.height();
+        for (unsigned y = 0; y < height; ++y) {
+            std::copy_n(native.begin() + y * width, width, both.begin() + y * width * 2);
+            std::copy_n(midpoint.begin() + y * width, width, both.begin() + y * width * 2 + width);
+        }
+        auto *surface = SDL_CreateSurfaceFrom(int(width * 2), int(height), SDL_PIXELFORMAT_ARGB8888,
+            both.data(), int(width * 8));
+        require(surface != nullptr, SDL_GetError());
+        const bool saved = SDL_SavePNG(surface, (o.dump_dir / "demo-side-by-side.png").string().c_str());
+        SDL_DestroySurface(surface);require(saved, "Comparison PNG write failed");
+        std::cout << "DEMO-IMAGE left=canonical right=alpha0.5 native_crc=0x" << std::hex << hash(native)
+            << " interpolated_crc=0x" << hash(midpoint) << std::dec << '\n';
+    }
+    gpu.reset_motion();pan(0);gpu.capture_motion(*scene, 0);
+    const auto period = std::chrono::nanoseconds(uint64_t(
+        1e9 * f3rt::Machine::frame_pixels / f3rt::Machine::pixel_clock));
+    const auto begin = Clock::now();
+    auto frame_start = begin, next_frame = begin + period, report_start = begin;
+    uint64_t step = 0, submitted = 0, interpolated = 0, moving = 0;
+    uint64_t window_submitted = 0, window_interpolated = 0, window_moving = 0;
+    float min_alpha = 1, max_alpha = 0;
+    bool quit = false;
+    bool capture_pending = !o.dump_dir.empty();
+    const std::string capture_file = capture_pending ? (o.dump_dir / "demo-window.png").string() : std::string{};
+    std::cout << "DEMO warmup_frame=" << m.frame << " seed=" << o.seed << " driver=" << gpu.driver()
+        << " left=native right=motion diagnostic_render_only_pf_pan=2px/native"
+        << " seconds=" << o.demo_seconds << '\n';
+    while (!quit && Clock::now() - begin < std::chrono::seconds(o.demo_seconds)) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+            if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_KEY_DOWN &&
+                event.key.scancode == SDL_SCANCODE_ESCAPE)) quit = true;
+        if (quit) break;
+        gpu.pace_motion();
+        const auto now = Clock::now();
+        while (now >= next_frame) {
+            pan(++step);gpu.capture_motion(*scene, step);
+            frame_start = next_frame;next_frame += period;
+        }
+        const bool capture = capture_pending && step >= 16;
+        gpu.draw_motion_comparison_timed(*scene, frame_start, period, capture ? capture_file.c_str() : nullptr);
+        const auto &stats = gpu.last_motion();
+        if (gpu.last_presented()) {
+            if (capture) capture_pending = false;
+            ++submitted;++window_submitted;
+            const bool between = stats.paired && stats.alpha > 0 && stats.alpha < 1;
+            const bool changed = stats.moving_playfield_rows != 0;
+            const bool applied = stats.playfield_rows != 0;
+            moving += between && changed;window_moving += between && changed;
+            interpolated += between && applied;window_interpolated += between && applied;
+            if (stats.paired) { min_alpha=std::min(min_alpha,stats.alpha);max_alpha=std::max(max_alpha,stats.alpha); }
+        }
+        if (Clock::now() - report_start >= std::chrono::seconds(2)) {
+            const auto end = Clock::now();
+            const double seconds = std::chrono::duration<double>(end - report_start).count();
+            std::cout << std::fixed << std::setprecision(1)
+                << "DEMO display_hz=" << gpu.display_hz() << " requested_display_hz=" << gpu.requested_display_hz()
+                << " display_callback_hz=" << gpu.display_callback_hz() << " scanout_hz=unknown"
+                << " drawable_submissions_s=" << double(window_submitted)/seconds
+                << " interpolated_pct=" << (window_submitted?100.0*double(window_interpolated)/window_submitted:0.0)
+                << " moving_interpolated_pct=" << (window_moving?100.0*double(window_interpolated)/window_moving:0.0)
+                << '\n' << std::flush;
+            report_start=end;window_submitted=window_interpolated=window_moving=0;
+        }
+    }
+    require(before == state(m) && pixels == m.pixels && sync_crc == m.sync_state_crc(),
+        "Live comparison changed frozen machine/native state");
+    std::cout << "DEMO-SUCCESS render_native_steps=" << step << " drawable_submissions=" << submitted
+        << " interpolated_submissions=" << interpolated << " moving_inbetweens=" << moving
+        << " alpha=" << min_alpha << ':' << max_alpha << " frozen_state_native_sync=exact"
+        << " emulated_frame=" << m.frame << " fallback_instructions=" << m.fallback_instructions << '\n';
+    return 0;
+}
 }
 
 int main(int argc, char **argv) try {
-    auto o = parse(argc, argv); boundaries(); SdlLifetime sdl;
+    auto o = parse(argc, argv); SdlLifetime sdl;
+    if (o.demo) return comparison(o);
     auto owner = machine(o), reference = machine(o); auto &m = *owner;
     f3rt::GpuVideo gpu(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
         false, false, o.interp);
@@ -259,6 +315,8 @@ int main(int argc, char **argv) try {
     f3rt::test::GameplaySchedule schedule(o.seed, f3rt::test::ScheduleConfig{.versus = false});
     uint64_t samples = 0, paired = 0, visible = 0, eligible = 0, supported = 0, fallback = 0, audio_samples = 0;
     uint64_t sprite_draws = 0, playfield_draws = 0, text_draws = 0;
+    uint64_t moving_samples = 0, accepted_moving_samples = 0, visible_moving_samples = 0;
+    f3rt::MotionInterpolationStats census{};
     uint32_t audio_crc = 0xffffffffu; bool dumped = false;
     std::vector<uint8_t> replay_pre, replay_post; std::vector<int16_t> replay_audio;
     std::array<uint32_t, 320 * 232> replay_pixels{};
@@ -300,6 +358,22 @@ int main(int argc, char **argv) try {
             eligible += stats.sprites + stats.playfield_rows + stats.text_rows;
             sprite_draws += stats.sprites; playfield_draws += stats.playfield_rows; text_draws += stats.text_rows;
             if (alpha == .5f && stats.paired) ++paired;
+            if (alpha == .5f && stats.paired) {
+                const bool moving = stats.moving_sprites || stats.moving_playfield_rows || stats.moving_text_rows;
+                moving_samples += moving;
+                accepted_moving_samples += moving && (stats.sprites || stats.playfield_rows || stats.text_rows);
+                visible_moving_samples += moving && out != canonical;
+                census.moving_sprites += stats.moving_sprites;
+                census.moving_playfield_rows += stats.moving_playfield_rows;
+                census.moving_text_rows += stats.moving_text_rows;
+                census.sprite_identity_rejections += stats.sprite_identity_rejections;
+                census.sprite_count_rejections += stats.sprite_count_rejections;
+                census.sprite_transform_rejections += stats.sprite_transform_rejections;
+                census.sprite_jump_rejections += stats.sprite_jump_rejections;
+                census.row_control_rejections += stats.row_control_rejections;
+                census.row_transform_rejections += stats.row_transform_rejections;
+                census.row_jump_rejections += stats.row_jump_rejections;
+            }
             gpu.draw_motion(scene, alpha, repeat);
             require(out == repeat, "Repeated frozen motion draw changed pixels");
             if (alpha > 0 && alpha < 1 && out != canonical) {
@@ -359,6 +433,18 @@ int main(int argc, char **argv) try {
         << " eligible_geometry_draws=" << eligible
         << " sprite_geometry_draws=" << sprite_draws << " playfield_row_draws=" << playfield_draws
         << " text_row_draws=" << text_draws
+        << " moving_samples=" << moving_samples << " accepted_moving_samples=" << accepted_moving_samples
+        << " visible_moving_samples=" << visible_moving_samples
+        << " sampled_moving_sprites=" << census.moving_sprites
+        << " sampled_moving_pf_rows=" << census.moving_playfield_rows
+        << " sampled_moving_text_rows=" << census.moving_text_rows
+        << " sprite_identity_rejections=" << census.sprite_identity_rejections
+        << " sprite_count_subset=" << census.sprite_count_rejections
+        << " sprite_transform_rejections=" << census.sprite_transform_rejections
+        << " sprite_jump_rejections=" << census.sprite_jump_rejections
+        << " row_control_rejections=" << census.row_control_rejections
+        << " row_transform_rejections=" << census.row_transform_rejections
+        << " row_jump_rejections=" << census.row_jump_rejections
         << " synthetic_phase_grids=halves,twelfths alpha1=exact repeated_draws=exact state_native_audio_parity=exact"
         << " reset_gap_duplicate_rollback_fallback=snap replay=exact native_blocks=" << m.native_blocks
         << " fallback_instructions=" << m.fallback_instructions << " audio_samples=" << audio_samples

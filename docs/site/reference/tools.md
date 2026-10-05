@@ -24,10 +24,11 @@ All commands run from the repository root. The examples use `build/` as the buil
 | --- | --- | --- |
 | `f3rt-gameplay-regression` | `tools/gameplay_regression.cpp` | Runs the native game for many frames with a seeded input schedule. It fails if the CPU halts or a fallback instruction runs. It can also compare the game-data renderer with the FDP renderer. |
 | `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | Full snapshot replay, canonical cross-presentation sync proof, handoff-loaded reference and real versus campaigns. |
-| `f3rt-motion-regression` | `tools/motion_interp_regression.cpp` | Strict-native two-machine state/audio/native-pixel parity, temporal GPU endpoints, visible ROM motion and history/snap boundaries. |
+| `f3rt-motion-regression` | `tools/motion_interp_regression.cpp` | Strict-native two-machine state/audio/native-pixel parity, temporal GPU endpoints, visible ROM motion and candidate/rejection census; `--demo` shows native/interpolated steady render-only motion in one window. |
 | `f3rt-sound-extract` | `tools/sound_extract.cpp` | Boots the game, freezes the main CPU, injects sound packets, and records audio and a bus trace. |
 | `f3rt-replay` | `runtime/replay.cpp` | Renders MAME captures with the f3rt video code, or renders a MAME audio trace to a WAV file. |
 | `f3rt-check` | `runtime/check.cpp` | Unit-level self-test of the runtime devices. No arguments. Runs under CTest. |
+| `f3rt-motion-check` | `runtime/motion_interp_check.cpp` | ROM/window-independent motion identity, count-shift, transform, independent-axis and discontinuity regressions. Runs under CTest. |
 | `netplay-server` | `netplay/server/*.go` | UDP relay for two players. Built with `go build`, not with CMake. |
 
 ```sh

@@ -19,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -49,6 +50,63 @@ struct Sdl {
         SDL_DestroyAudioStream(audio);SDL_DestroyTexture(texture);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
     }
 };
+#ifdef F3RT_GPU
+struct MotionReadout {
+    std::chrono::steady_clock::time_point begin;
+    uint64_t native = 0, submissions = 0, intermediate = 0, moving_inbetween = 0;
+    uint64_t moving_intermediate = 0, sampled_pairs = 0, moving_pairs = 0, resets = 0;
+    f3rt::MotionInterpolationStats census{};
+    float min_alpha = 1, max_alpha = 0;
+    void observe(const f3rt::MotionInterpolationStats &s, bool new_pair) {
+        ++submissions;
+        const bool moving = s.moving_sprites || s.moving_playfield_rows || s.moving_text_rows;
+        const bool accepted = s.sprites || s.playfield_rows || s.text_rows;
+        const bool between = s.paired && s.alpha > 0 && s.alpha < 1;
+        intermediate += between && accepted;
+        moving_inbetween += between && moving;
+        moving_intermediate += between && moving && accepted;
+        if(s.paired) { min_alpha=std::min(min_alpha,s.alpha);max_alpha=std::max(max_alpha,s.alpha); }
+        if(!new_pair)return;
+        ++sampled_pairs;moving_pairs+=moving;
+        census.sprites+=s.sprites;census.playfield_rows+=s.playfield_rows;census.text_rows+=s.text_rows;
+        census.moving_sprites+=s.moving_sprites;census.moving_playfield_rows+=s.moving_playfield_rows;
+        census.moving_text_rows+=s.moving_text_rows;census.rejected_sprites+=s.rejected_sprites;
+        census.rejected_rows+=s.rejected_rows;census.sprite_count_rejections+=s.sprite_count_rejections;
+        census.sprite_identity_rejections+=s.sprite_identity_rejections;
+        census.sprite_transform_rejections+=s.sprite_transform_rejections;
+        census.sprite_jump_rejections+=s.sprite_jump_rejections;
+        census.row_control_rejections+=s.row_control_rejections;
+        census.row_transform_rejections+=s.row_transform_rejections;
+        census.row_jump_rejections+=s.row_jump_rejections;
+    }
+    void report(const f3rt::GpuVideo &gpu) {
+        const auto now=std::chrono::steady_clock::now();
+        const double seconds=std::chrono::duration<double>(now-begin).count();
+        const auto percent=[](uint64_t n,uint64_t d) { return d?100.0*double(n)/double(d):0.0; };
+        const auto flags=std::cout.flags();const auto precision=std::cout.precision();
+        std::cout<<std::fixed<<std::setprecision(1)
+            <<"MOTION display_hz="<<gpu.display_hz()<<" requested_display_hz="<<gpu.requested_display_hz()
+            <<" display_callback_hz="<<gpu.display_callback_hz()<<" scanout_hz=unknown"
+            <<" drawable_submissions_s="<<double(submissions)/seconds<<" native_s="<<double(native)/seconds
+            <<" interpolated_pct="<<percent(intermediate,submissions)
+            <<" moving_interpolated_pct="<<percent(moving_intermediate,moving_inbetween)
+            <<" moving_inbetweens="<<moving_inbetween<<" sampled_native_pairs="<<sampled_pairs
+            <<" moving_native_pairs="<<moving_pairs<<" history_resets="<<resets
+            <<" alpha="<<min_alpha<<':'<<max_alpha<<'\n'
+            <<"MOTION-CANDIDATES moving_sprites="<<census.moving_sprites
+            <<" moving_pf_rows="<<census.moving_playfield_rows<<" moving_text_rows="<<census.moving_text_rows
+            <<" accepted_sprites="<<census.sprites<<" accepted_pf_rows="<<census.playfield_rows
+            <<" accepted_text_rows="<<census.text_rows<<" rejected_sprites="<<census.rejected_sprites
+            <<" sprite_identity="<<census.sprite_identity_rejections
+            <<" sprite_count_subset="<<census.sprite_count_rejections
+            <<" sprite_transform="<<census.sprite_transform_rejections<<" sprite_jump="<<census.sprite_jump_rejections
+            <<" rejected_rows="<<census.rejected_rows<<" row_control="<<census.row_control_rejections
+            <<" row_transform="<<census.row_transform_rejections<<" row_jump="<<census.row_jump_rejections<<'\n';
+        std::cout.flags(flags);std::cout.precision(precision);std::cout.flush();
+        *this=MotionReadout{.begin=now};
+    }
+};
+#endif
 void check(bool result) { if(!result) throw std::runtime_error(SDL_GetError()); }
 void parse_scale(const std::string &scale, f3rt::VideoScaleMode &mode, f3rt::GameVideoOptions &options) {
     if(scale=="auto" || scale=="auto-integer") {
@@ -396,6 +454,8 @@ int main(int argc,char **argv) try {
     uint64_t audio_queue_drops=0,clock_resyncs=0,audio_queue_sum=0,audio_queue_samples=0,audio_queue_max=0;
     const auto start=std::chrono::steady_clock::now();
 #ifdef F3RT_GPU
+    MotionReadout motion_readout{.begin=start};
+    bool motion_pair_pending=false;
     int observed_pixel_width=pixel_width,observed_pixel_height=pixel_height;
     bool scale_pending=false;
     auto scale_pending_since=start,scale_last_resize=start;
@@ -407,6 +467,7 @@ int main(int argc,char **argv) try {
         if(motion_presentation && sdl.gpu) {
             sdl.gpu->reset_motion();
             ++motion_history_resets;
+            ++motion_readout.resets;
         }
 #endif
         motion_capture_pending=true;
@@ -541,6 +602,10 @@ int main(int argc,char **argv) try {
             } catch(const std::exception &error) { ui_state.message=error.what(); }
         }
         if(quit)break;
+#ifdef F3RT_GPU
+        if(motion_presentation && throttle && sdl.gpu && (!sdl.ui->open() || session))
+            sdl.gpu->pace_motion();
+#endif
         bool advanced=false;
         std::array<f3rt::netplay::InputWord,2> local{};
         if(sdl.input && !sdl.ui->open())local={sdl.input->word(0),sdl.input->word(1)};
@@ -595,9 +660,11 @@ int main(int argc,char **argv) try {
         }
         executed_frames+=advanced;
 #ifdef F3RT_GPU
+        if(motion_presentation)motion_readout.native+=advanced;
         if(motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {
             sdl.gpu->capture_motion(m.game_video->gpu_scene(),m.frame);
             motion_capture_pending=false;
+            motion_pair_pending=true;
         }
 #endif
         if(advanced && !dumpdir.empty() && m.frame>=dump_start && (m.frame-dump_start)%dump_every==0)f3rt::dump_machine(m,dumpdir);
@@ -669,17 +736,20 @@ int main(int argc,char **argv) try {
                         static_cast<f3rt::FrontendUi *>(user)->render_gpu(command,texture,width,height);
                     } : nullptr,sdl.ui.get());
                 if(motion_presentation) {
-                    const float alpha=throttle && (!draw_menu || session) && !capture_final ?
-                        std::clamp(float(std::chrono::duration<double>(std::chrono::steady_clock::now()-motion_frame_start).count()/
-                                         std::chrono::duration<double>(frame_time).count()),0.0f,1.0f):1.0f;
-                    sdl.gpu->draw_motion(m.game_video->gpu_scene(),alpha);
-                    ++motion_presentations;
-                    const auto &stats=sdl.gpu->last_motion();
-                    if(stats.paired) {
-                        motion_min_alpha=std::min(motion_min_alpha,stats.alpha);
-                        motion_max_alpha=std::max(motion_max_alpha,stats.alpha);
-                        motion_intermediates+=stats.alpha>0 && stats.alpha<1 &&
-                            (stats.sprites || stats.playfield_rows || stats.text_rows);
+                    if(throttle && (!draw_menu || session) && !capture_final)
+                        sdl.gpu->draw_motion_timed(m.game_video->gpu_scene(),motion_frame_start,frame_time);
+                    else sdl.gpu->draw_motion(m.game_video->gpu_scene(),1.0f);
+                    if(sdl.gpu->last_presented()) {
+                        ++motion_presentations;
+                        const auto &stats=sdl.gpu->last_motion();
+                        motion_readout.observe(stats,motion_pair_pending);
+                        motion_pair_pending=false;
+                        if(stats.paired) {
+                            motion_min_alpha=std::min(motion_min_alpha,stats.alpha);
+                            motion_max_alpha=std::max(motion_max_alpha,stats.alpha);
+                            motion_intermediates+=stats.alpha>0 && stats.alpha<1 &&
+                                (stats.sprites || stats.playfield_rows || stats.text_rows);
+                        }
                     }
                 } else sdl.gpu->draw(m.game_video->gpu_scene());
                 if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
@@ -735,6 +805,11 @@ int main(int argc,char **argv) try {
             if(sdl.window)check(SDL_SetWindowTitle(sdl.window,("f3rt — "+set).c_str()));
             if(finite_netplay)quit=true;
         }
+#ifdef F3RT_GPU
+        if(motion_presentation && sdl.gpu &&
+           std::chrono::steady_clock::now()-motion_readout.begin>=std::chrono::seconds(2))
+            motion_readout.report(*sdl.gpu);
+#endif
         if(!advanced) {
             if(!session && !motion_presentation)next_frame=std::chrono::steady_clock::now();
             if(!motion_presentation || !throttle || draw_menu ||
@@ -759,8 +834,9 @@ int main(int argc,char **argv) try {
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
     if(motion_presentation)
-        std::cout<<"MOTION native_frames="<<executed_frames<<" presentations="<<motion_presentations
-                 <<" intermediate_presentations="<<motion_intermediates<<" history_resets="<<motion_history_resets
+        std::cout<<"MOTION-TOTAL native_frames="<<executed_frames<<" drawable_submissions="<<motion_presentations
+                 <<" interpolated_submissions="<<motion_intermediates<<" history_resets="<<motion_history_resets
+                 <<" interpolated_pct="<<(motion_presentations?100.0*double(motion_intermediates)/double(motion_presentations):0.0)
                  <<" alpha_min="<<motion_min_alpha<<" alpha_max="<<motion_max_alpha
                  <<" elapsed_seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()<<'\n';
     if(audio_backend=="hle") {

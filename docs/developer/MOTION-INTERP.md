@@ -23,6 +23,21 @@ positional latency: approximately 16.97 ms at `6671500 / (432 * 262)` =
 palette, clipping, blending and ordering remain discrete. Native scale 1 still
 quantizes to native pixels; scale 2–4 exposes fractional movement better.
 
+For a visible, repeatable A/B comparison, run from this worktree:
+
+```sh
+./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 \
+  --demo-seconds 30
+```
+
+One window: **left = native steps, right = interpolated positions**. Watch the
+purple floor and portrait/playfield edges pan horizontally. The tool cold-boots
+the real ROM, freezes the selection scene, then applies a bounded 2-pixel/native
+frame playfield pan to a host-only scene copy. This is explicitly diagnostic
+motion, not a claim that gameplay is changed or accelerated. Sprites/artwork and
+the machine remain frozen; the pan reverses smoothly at +/-64 pixels.
+Escape closes it. The two panes share one display tick and drawable submission.
+
 ## Investigation and implementation
 
 - `GameVideo::capture_gpu` exports the rendered, latched semantic scene before
@@ -51,7 +66,17 @@ GPU API:
 - `capture_motion(scene, frame)`: explicit native-frame capture, lazy allocation.
 - `reset_motion()`: discard frame pairing; retain reusable allocation.
 - `draw_motion(scene, alpha, ...)`: consume history without advancing it.
-- `last_motion()`: eligible moving sprite/PF/text counts and actual alpha.
+- `last_motion()`: accepted geometry, moving candidates, rejection census and alpha.
+- `pace_motion()`: pace before selecting the native pair; the next timed draw
+  consumes that wait rather than waiting a second display tick.
+- `draw_motion_timed(scene, frame_start, period, ...)`: acquire the swapchain
+  before sampling live alpha. Explicit-alpha `draw_motion` stays deterministic.
+- `last_presented()`: accepted non-null drawable submission, **not scanout**.
+- `display_hz()`, `requested_display_hz()`, `display_callback_hz()`: selected
+  mode, best-effort native display-link request, and observed callback cadence.
+- `draw_motion_comparison_timed(...)`: cached native/current image at left,
+  temporal image at right. Optional PNG captures the app-owned full-window
+  composition submitted to the drawable, not the desktop or physical scanout.
 
 Alpha 0 uses previous eligible positions with **current** discrete content;
 alpha 1 is pixel-exact to ordinary GPU drawing for the same spatial settings.
@@ -71,12 +96,16 @@ control/clip and palette safety checks. Alpha 1 uses the original shader path.
 ## Presentation clock and discontinuities
 
 The frontend gates solo native steps against the existing monotonic native
-frame period, but does not sleep until the next native step after each motion
-draw. SDL GPU swapchain acquisition paces repeated presentations at the display
-cadence. Alpha is elapsed monotonic time within the current native period,
-clamped to `[0,1]`. Temporal capture is tied to native advancement or an explicit
-history reset, not exposure/resize redraws. Temporal window mode requests one
-GPU frame in flight; ordinary rendering keeps its existing queue settings.
+frame period. On macOS 14+, opt-in motion creates an `NSWindow` `CADisplayLink`,
+requests the screen's maximum refresh rate, and waits its tick **before**
+testing the native-frame deadline. Waiting after that test could select an old
+pair, cross the deadline, and draw alpha 1 instead of a useful intermediate.
+The timed draw then acquires the SDL swapchain **before** sampling alpha.
+Capture remains tied to native advancement or explicit resets, not redraws.
+Other SDL platforms retain swapchain pacing; their high-refresh runtime is
+unverified here. The hidden/off-display callback wait has a monotonic 50ms bound.
+Temporal window mode requests one GPU frame in flight. Ordinary/default-off
+rendering neither creates the display link nor changes its queue settings.
 
 The network advance deadline, lead limit, input words, session pump and
 rollback execution are unchanged. Additional presentation iterations do not
@@ -94,35 +123,63 @@ synthesizing timed intermediate frames. Finite `--surface` capture also forces
 alpha 1. F12 GPU screenshots may contain the visible interpolated geometry;
 `--dump-dir` and headless/native captures remain CPU-produced.
 
+Every two seconds, `MOTION` reports selected/requested/callback display Hz,
+`drawable_submissions_s`, `native_s`, `interpolated_pct`,
+`moving_interpolated_pct`, moving native pairs and explicit history resets.
+`MOTION-CANDIDATES` gives sprite/PF/text candidates, accepted geometry and
+identity/count-subset/transform/jump/control rejection counts.
+
+- Submission rate counts only successful commands with an acquired drawable;
+  it is not a count of draw calls or GPU fence completions.
+- `interpolated_pct` divides geometry-interpolated in-between submissions by
+  all drawable submissions. Boot, static frames, pauses and alpha-1 endpoints
+  legitimately lower it.
+- `moving_interpolated_pct` divides accepted moving in-between submissions by
+  known moving in-between submissions. Unmatched identities are reported
+  separately: their movement cannot safely be inferred.
+- Candidate/rejection census is accumulated once per sampled native pair, not
+  once per repeated draw. Static unchanged geometry is not a rejection.
+  A row accepting one axis and rejecting the other appears in both counts.
+- Mode Hz and display-link callbacks are not proof of drawable scanout.
+  SDL does not expose Metal drawable-presented callbacks; `scanout_hz=unknown`
+  is intentional. A requested 120Hz with callbacks near 60Hz is a pacing/system
+  policy issue, not evidence that a geometry candidate was rejected.
+
 ## Matching and snap policy
 
 ### Sprites
 
-Match the compact submitted **slot index**, only with the same submitted count,
-pen mask, tile, palette, X/Y scale and flip bits. Require valid coordinates,
-scales and asset indices. Lerp X/Y in 24.8, nearest-rounding the fixed-point unit.
+Compact submitted slots are not object IDs: tile-zero entries are omitted, so
+insertions/removals can shift otherwise stable sprites. Match bounded
+tile/palette appearance groups, with mutually unique closest positions for
+duplicate groups. Equal-distance ties or non-mutual assignments snap, rather
+than arbitrarily selecting a neighbor. Unchanged sprite lists skip matching.
 
-Snap instead of lerp for appearance/disappearance (a count change snaps all
-sprites), slot replacement, tile/animation changes, palette changes, zoom/flip
-changes, invalid data or movement over **32 native pixels per axis per frame**.
-Raw coordinate wrap jumps also exceed the guard; no modular shortest-path lerp.
+Count changes no longer veto surviving matched sprites. Require the same pen
+mask, X/Y scales and flip bits, valid coordinates and asset indices, and at
+most **32 native pixels per axis per frame**. Lerp X/Y in 24.8, nearest-rounding
+the fixed-point unit. Unmatched births/replacements, tile-animation changes,
+palette/zoom/flip changes, invalid data and larger movement snap. Raw coordinate
+wrap jumps exceed the guard; no modular shortest-path lerp.
 
-This is not game-object tracking. Identically textured reordered slots can be
-ambiguous, and changing sprite counts deliberately sacrifices smoothing of
-otherwise stable sprites. These conservative limitations are intentional.
+This remains render-snapshot matching, not semantic game-object tracking.
+Tile-changing animation has no reliable object ID in this snapshot and remains
+discrete. Nearby indistinguishable entities can still be ambiguous; counters
+do not relabel them as known valid motion merely to improve a percentage.
 
 ### Playfields, line scroll and text scroll
 
 Check each visible row 24–255 independently, for each playfield and text layer.
-Require enabled, valid, nonmosaic controls, unchanged blend/order/mosaic and
-clip ranges/reference bits. Playfield X/Y zoom must be unchanged and valid.
-Interpolate source coordinates only; never interpolate priorities, alpha,
-palette-bank roles, tile/glyph content, clips or mosaic.
+Require that layer's enabled, valid, nonmosaic state and unchanged clip ranges/
+reference bits. Unrelated layer state and global blend/order changes do not
+veto its source motion; those compositing fields remain current and discrete.
 
-Reject deltas over 32 native pixels per axis. Reject period crossings (1024-pixel
-PF X, 512-pixel PF Y/text), rather than choosing a shortest wrapped path.
-Bitmap/invalid/disabled/control-changing rows snap independently. This also
-covers per-row line/column-derived source offsets without inventing zoom.
+X/Y eligibility is independent. Preserve the corresponding unchanged valid
+zoom, reject deltas over 32 native pixels and raw period crossings (1024-pixel
+PF X, 512-pixel PF Y/text). A Y jump/zoom can snap Y while X still interpolates.
+Bitmap mode rejects text, not unrelated valid playfield source coordinates.
+Never interpolate priorities, alpha, palette-bank roles, tiles/glyphs, clips
+or mosaic. Per-row line/column offsets use the same source-coordinate guards.
 
 ## Build provenance and commands
 
@@ -140,17 +197,18 @@ PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages \
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DF3_ROM_DIR=/Users/darien/Workspace/f3-stuff/roms/landmakr
-cmake --build build --target landmakr f3rt-motion-regression \
+cmake --build build --target landmakr f3rt-motion-regression f3rt-motion-check \
   f3rt-gpu-regression f3rt-netplay-oracle f3rt-check f3rt-state-check \
   f3rt-frontend-check f3rt-hle-check -j 8
 ctest --test-dir build --output-on-failure
 ```
 
-Build succeeds; CTest **4/4** passes (devices, HLE audio, snapshot validation,
-frontend input). Linker emits duplicate-library and Musashi common-section
-alignment warnings; no new C++ compile error/warning was observed.
+The initial `c45da19b` build passed four CTests. The follow-up adds the
+consumer-behavior `motion-interpolation-guards` test. Original measurements
+below are historical; follow-up measurements are recorded separately.
+Linker duplicate-library/Musashi alignment warnings predate this feature.
 
-## ROM invariance and intermediate-render proof
+## Initial ROM invariance proof (`c45da19b`)
 
 `tools/motion_interp_regression.cpp` cold-boots two independently seeded
 strict-native machines. One is repeatedly presented; the other is not.
@@ -158,8 +216,9 @@ Native pixels/audio are compared every frame. At sampled frames it compares
 serialized bytes/sync CRCs, current GPU endpoints, nonfinite-alpha snapping and
 repeated frozen draws. It also checks reset/gap/duplicate/backward/fallback
 recovery and actual final-frame state-load/reexecution, including native audio.
-Guard fixtures cover sprite identity/count/scale/flip/pen mask, the 32-pixel
-boundary, PF fixed-point fractions/control changes/bitmap/wraps and text scroll.
+Focused guard fixtures now live in `runtime/motion_interp_check.cpp`, including
+count shifts, duplicate identity ties, dense unambiguous duplicate movement,
+fixed-point boundaries/fractions, controls, wraps and resets.
 
 ```sh
 build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 \
@@ -215,7 +274,7 @@ the independent baseline translated by two output pixels. This exercises the
 fractional text shader path; it is an induced fixture, not observed ROM text
 animation.
 
-## Actual high-refresh frontend and canonical captures
+## Initial live-window attempt counts (`c45da19b`)
 
 ```sh
 build/landmakr --video game --video-backend gpu --video-scale 3 \
@@ -225,14 +284,15 @@ build/landmakr --video game --video-backend gpu --video-scale 3 \
   --wav build/motion-evidence/clean.wav
 ```
 
-Actual Cocoa/Metal window reports **120 Hz** display, 58.9438 Hz emulation,
-960×696 internal pixels. Observed 1800 native frames, **3664 presentations**,
-433 eligible intermediate presentations, 4 history resets, alpha range
-0.135777–1; elapsed 32.882 s. This is about 2.036 presentations/native frame.
-Whole-run average is about 111.4 presentations/s, **not an uninterrupted 120 fps
-claim**; startup/stalls and resets are included. The earlier concurrent-load
-run produced 3630 presentations in 34.6823 s with 8 resets. The app-owned final
-attract surface was inspected. No desktop screenshots are retained/committed.
+The initial Cocoa/Metal window reported a **120Hz display mode**, 58.9438Hz
+emulation and 960x696 internal pixels. It counted 1,800 native frames,
+3,664 **draw calls**, 433 eligible intermediate draws and four explicit
+history resets; alpha 0.135777–1, elapsed 32.882s. Its reported
+“presentations” were draw attempts, not confirmed drawable submissions.
+Neither callback cadence nor physical drawable scanout was measured.
+The whole-run 111.4 draw calls/s therefore cannot prove or disprove a 60Hz
+compositor cap. The concurrent-load run counted 3,630 calls in 34.6823s and
+eight resets. App-owned final images were inspected; no desktop captures remain.
 
 Headless motion-on/off runs at 1800 frames and both live runs have identical
 native result: frame CRC `f08f089c`, cycles 488,600,676, native blocks 27,238,881,
@@ -289,14 +349,171 @@ native landmakrj`.
 ## Qualified limits
 
 - Metal runtime verified; generated SPIR-V compiled, but Vulkan runtime untested.
-- Physical 120 Hz mode exercised; no physical 144 Hz+ monitor claim.
+- Built-in 120Hz ProMotion callbacks observed; drawable scanout is unavailable
+  through SDL's supported public API. No physical 144Hz+ monitor claim.
 - No interpolation of zoom, flips, artwork, opacity, palette changes, priority,
   clipping or mosaic. Safety declines may remain visibly native-rate.
-- Slot matching is conservative, not semantic game-object identity.
-- Text-scroll ROM movement was not observed in the sampled sequence.
+- Appearance/position matching is conservative, not semantic game-object identity.
+- Text-scroll movement now occurs in the follow-up ROM census; the separate
+  glyph fixture still proves exact fractional shader translation.
 - No exhaustive campaign/ending or physical-board video accuracy claim.
 - One native frame of positional latency is an intentional tradeoff, not an
   end-to-end input-latency measurement.
 - All image/audio/ROM-derived evidence stays in ignored `build/motion-evidence/`;
   only implementation, meaningful regression source and textual evidence/docs
   belong in the commit.
+
+## ProMotion visibility follow-up
+
+User observation: no perceived difference from off on the built-in 120Hz
+ProMotion panel. The earlier low intermediate count was not a useful acceptance
+metric: it mixed boot/static/endpoints with rejected moving channels.
+
+### Reproduced causes and cutover
+
+- Original sprite capture rejected every sprite when the global count changed.
+  Compact slots also shift when tile-zero entries disappear. A probe against
+  `c45da19b` rendered a surviving sprite at X=24 instead of its expected
+  midpoint X=22 after an unrelated insertion.
+- Original row capture compared global blend/order controls, and rejected both
+  axes when either zoom/jump guard failed. The baseline probe rendered PF
+  X=104 instead of midpoint X=102 after only an unrelated blend change.
+  Both probes failed before; retained guard regressions pass after the fix.
+- Merely replacing the count veto with “only one neighbor within 32 pixels”
+  still rejected dense identical sprite groups. Matching now requires a
+  mutually unique **nearest** position, preserving normal small movement while
+  still snapping equal-distance identity ties.
+- Alpha was sampled before swapchain acquisition, and the native pair was
+  selected before display pacing. Crossing a native deadline while waiting
+  could present the old pair at alpha 1. Native display-link pacing now precedes
+  the native deadline gate; swapchain acquisition precedes alpha sampling.
+- Four explicit resets across the original 1,800-frame clean run cannot explain
+  most missing motion. Boot/oracle intervals, genuinely static geometry, and
+  broad eligibility vetoes must be separated. The new readout exposes them.
+
+### Current ROM and guard evidence
+
+```sh
+ctest --test-dir build --output-on-failure
+build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 --every 20 \
+  --interp off --dump-dir build/motion-evidence/followup-off
+build/f3rt-motion-regression --frames 1560 --seed 5 --scale 4 --every 20 \
+  --interp fit --dump-dir build/motion-evidence/followup-fit
+```
+
+Release GPU and GPU-disabled native builds succeed. CTest **5/5** passes.
+The new guard test covers insertion/removal, dense duplicate motion, identity
+ties, transform/pen changes, exact 32px/+1-subunit limits, PF/text fractions,
+own-layer clips, independent-axis snaps, wraps, invalid alpha and resets.
+
+| Final proof | 4,000 frames, seed 12345, 3x/off | 1,560 frames, seed 5, 4x/fit |
+| --- | ---: | ---: |
+| Samples / paired | 201 / 190 | 79 / 68 |
+| Known moving samples | 127 | 18 |
+| Accepted / visibly different midpoints | 127 / 127 | 18 / 18 |
+| Initial visibly different midpoints | 63 | 17 |
+| Sprite/PF/text geometry across nine phase draws | 16,902 / 75,303 / 2,088 | 1,206 / 42,624 / 2,088 |
+| Sampled moving sprite/PF/text channels | 2,349 / 8,721 / 232 | 396 / 4,804 / 232 |
+| Unknown sprite identities / count-changing subset | 2,492 / 2,028 | 45 / 34 |
+| Sprite transform / jump rejections | 428 / 43 | 262 / 0 |
+| Row control / transform / jump rejections | 0 / 0 / 1,282 | 0 / 0 / 996 |
+
+These are sampled **native-pair** counts, not physical presentation counts.
+Rows accepting one axis can also report a rejected other axis. Unknown identity
+counts include births/replacements, tile-animation changes and ambiguity;
+they are not silently included as known valid movement. In the large proof,
+63 of 190 paired samples had no known moving geometry. Every one of the 127
+known-moving samples produced a visibly different midpoint, versus 63 visible
+midpoints before the fixes. Moving text is now observed in the ROM census
+(232 layer/scanline pairs), in addition to the isolated exact glyph fixture.
+
+Both proofs retain exact native pixels, serialized/sync state, native audio,
+alpha-1 endpoints, repeated draws and final-frame load/reexecution, with zero
+main-CPU fallback. Large-run native/audio/state/sync CRCs remain
+`1782af13` / `12d140ec` / `dbdd0aab` / `637802aa`; 4,039,234 signed audio samples.
+Small-run CRCs remain `a38b55e4` / `4c7823c0` / `85e52564` / `3d402d65`;
+1,575,300 signed audio samples. The 4x fractional text shader check also passes.
+
+### Actual one-window comparison
+
+```sh
+build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 \
+  --demo-seconds 12 --dump-dir build/motion-evidence/followup-demo
+```
+
+Observed Metal run: requested/mode/callback rates **120/120/120Hz**.
+After the first capture/startup interval (116.5 submissions/s), four full
+two-second intervals each submitted **120.0 drawables/s**. In-between geometry
+was applied on **100% of known moving in-between submissions**; overall
+per-interval interpolation was 91.7–93.4%.
+
+Totals: 707 render-only native steps, **1,433 drawable submissions / 1,326
+interpolated submissions (92.53%)** over 12 seconds. The frozen emulated frame
+remained 1560; serialized/native/sync state stayed exact, zero CPU fallback.
+Offscreen canonical/midpoint CRCs are `090f3c24` / `cf8c23ed`.
+The actual app-owned 2560x928 split surface `demo-window.png` was inspected:
+both panes contain the same real selection scene and distinct pan positions.
+This is not a desktop screenshot or a physical scanout measurement.
+
+A second six-second comparison exercised **4x + fit interpolation**: 353
+render-only steps, 715 drawable submissions, 660 interpolated submissions,
+and 100% interpolation of known moving in-betweens. Frozen state remained
+exact, with zero CPU fallback. Its app-owned `demo-window.png` was also
+inspected. This run overlapped the canonical GPU regression, so it is not
+an isolated performance benchmark.
+
+### Actual frontend readout and default-path checks
+
+A separate 900-frame no-input `landmakr` run used GPU compare mode,
+auto-integer scale (4x internal), and `--motion-interp`. Mode/request/callback
+rates were 120/120/120Hz; periodic drawable submissions were 118.8–120.0/s,
+native frames 58.5–59.3/s, and history resets **zero**.
+
+This run mostly displayed the static notice screen: static intervals
+correctly reported zero known moving candidates, zero rejections, and 0%
+interpolation. Two transition pairs had known moving geometry and 100%
+moving-in-between interpolation. Totals were 1,826 drawable submissions
+and just two interpolated submissions. This is evidence that static
+frames are not eligibility failures, not a steady-motion benchmark.
+
+Canonical compare mode checked 669 supported frames / 49,666,560 pixels
+with **zero mismatches**; the other 231 frames used the existing startup
+fallback. Final native rendered pixels, main RAM, graphics, palette,
+control, shared RAM, and CPU dump were byte-identical to a separate
+900-frame headless native run. Both WAVs were byte-identical with SHA-256
+`c75295d38aa2842709951d78d39ead2025c1bd6aa46eb371f18a51605b089869`.
+That attract-screen audio was silent; the seeded ROM proofs above supply
+the nonzero-audio parity evidence.
+
+The CPU-only build also completed 900 native frames with
+`frame_crc=0x9fe1b4e9`, 15,026,654 native blocks, and zero CPU fallback.
+CTest passed all five checks, including the standalone motion guards.
+The existing 1,800-frame GPU regression passed at 3x + fit with layer
+checks and bitmap/trails/global-flip/unknown-control/sprite-boundary
+injections: 1,569 supported frames, 231 expected fallback frames, zero CPU
+fallback, `frame_crc=0xfb9bec22`, and nonzero native audio. No canonical
+rendering mismatch was observed.
+
+### Pacing evidence and limits
+
+Installed SDL3: **3.4.16**. Its Metal backend waits in-flight GPU fences and
+uses `CAMetalLayer nextDrawable`/`presentDrawable`; a fence is not a display
+presentation callback. The public SDL GPU API exposes no Metal drawable
+presented-handler. We therefore report measured display-link callbacks and
+accepted drawable submissions separately, and leave scanout unknown.
+
+The supported macOS 14+ `NSWindow` display link requests
+`NSScreen.maximumFramesPerSecond` through `preferredFrameRateRange`. This is a
+best-effort request; display mode, power/thermal policy or system load can
+reduce callback cadence. The prior 60Hz-cap hypothesis is **unproven** because
+the initial run did not observe callbacks/scanout. The corrected observed
+120Hz callback/submission rates show no 60Hz cap in these exercised runs.
+Vulkan, older macOS callback pacing and physical 144Hz+ remain unverified.
+
+Sources:
+
+- [Apple: window-aligned display link](https://developer.apple.com/documentation/appkit/nswindow/displaylink(target:selector:)).
+- [SDL 3.4.16 Metal implementation](https://github.com/libsdl-org/SDL/blob/release-3.4.16/src/gpu/metal/SDL_gpu_metal.m).
+- Installed SDK declarations: `AppKit/NSWindow.h`, `AppKit/NSScreen.h`,
+  `QuartzCore/CADisplayLink.h`. No private SDL layer access or drawable theft.
+
