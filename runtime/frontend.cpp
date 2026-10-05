@@ -15,6 +15,7 @@
 #include "f3rt/video.hpp"
 #endif
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -92,6 +93,7 @@ int main(int argc,char **argv) try {
     bool net_role_seen=false;
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
+    bool motion_interp=false;
 #ifdef F3RT_LANDMAKR
     romdir=F3RT_DEFAULT_ROM_DIR;
     translated=true;
@@ -135,6 +137,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--video-backend") { video_backend=value();cli_preferences|=Backend; }
         else if(arg=="--video-interp") { video_interp=value();cli_preferences|=Interpolation; }
         else if(arg=="--video-interp-fields") { video_interp_fields=value();cli_preferences|=Fields; }
+        else if(arg=="--motion-interp")motion_interp=true;
         else if(arg=="--postprocess") { postprocess=value();cli_preferences|=PostprocessMode; }
         else if(arg=="--user-shader") { user_shader=value();cli_preferences|=UserShader; }
         else if(arg=="--netplay-server") { net_options.server=value();cli_preferences|=Server; }
@@ -171,6 +174,7 @@ int main(int argc,char **argv) try {
                      <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
                      <<"  [--video-interp off|linear|fit] (opt-in GPU line sampling; default off)\n"
                      <<"  [--video-interp-fields none|geometry|palette|geometry,palette] (default geometry; native alpha stays discrete)\n"
+                     <<"  [--motion-interp] (experimental GPU temporal motion; default off, one-frame positional latency)\n"
                      <<"  [--postprocess off|crt|user] [--user-shader FILE.metal|FILE.spv] (GPU only, default off)\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
                      <<"  Auto scales follow window pixels (GPU only); auto-integer uses nearest filtering.\n"
@@ -246,6 +250,7 @@ int main(int argc,char **argv) try {
     if(video_interp!="off" && video_interp!="linear" && video_interp!="fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
     if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --video-backend gpu");
+    if(motion_interp && video_backend!="gpu")throw std::runtime_error("--motion-interp requires --video-backend gpu");
     if(postprocess!="off" && postprocess!="crt" && postprocess!="user")
         throw std::runtime_error("--postprocess must be off, crt or user");
     if(postprocess!="off" && video_backend!="gpu")
@@ -349,6 +354,12 @@ int main(int argc,char **argv) try {
                  <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
                  <<" filter="<<video_filter<<" interp="<<video_interp
                  <<" interp_fields="<<f3rt::interpolation_fields_name(*interpolation_fields)<<'\n';
+        if(motion_interp) {
+            const auto *display=SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdl.window));
+            std::cout<<"motion_interp=on display_hz="<<(display?display->refresh_rate:0)
+                     <<" emulation_hz="<<double(f3rt::Machine::pixel_clock)/f3rt::Machine::frame_pixels
+                     <<" temporal_pacing="<<(throttle?"display":"unthrottled-current")<<'\n';
+        }
     }
     std::unique_ptr<f3rt::WavWriter> wav;
     if(!wav_path.empty())wav=std::make_unique<f3rt::WavWriter>(wav_path,audio_rate);
@@ -375,6 +386,12 @@ int main(int argc,char **argv) try {
     auto next_net_step=std::chrono::steady_clock::now();
     auto next_status=next_net_step;
     auto next_frame=std::chrono::steady_clock::now();
+    const auto frame_time=std::chrono::nanoseconds(uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
+    const bool motion_presentation=motion_interp && !headless;
+    auto motion_frame_start=next_frame;
+    bool motion_capture_pending=false;
+    uint64_t motion_presentations=0,motion_intermediates=0,motion_history_resets=0;
+    float motion_min_alpha=1,motion_max_alpha=0;
     constexpr int max_audio_queue_ms=50,max_catchup_ms=50;
     uint64_t audio_queue_drops=0,clock_resyncs=0,audio_queue_sum=0,audio_queue_samples=0,audio_queue_max=0;
     const auto start=std::chrono::steady_clock::now();
@@ -384,6 +401,17 @@ int main(int argc,char **argv) try {
     auto scale_pending_since=start,scale_last_resize=start;
     uint64_t scale_changes=0;
 #endif
+    auto reset_motion=[&]() {
+        if(!motion_presentation)return;
+#ifdef F3RT_GPU
+        if(motion_presentation && sdl.gpu) {
+            sdl.gpu->reset_motion();
+            ++motion_history_resets;
+        }
+#endif
+        motion_capture_pending=true;
+        motion_frame_start=std::chrono::steady_clock::now();
+    };
     auto connect=[&](f3rt::netplay::TransportOptions options) {
         if(session)throw std::runtime_error("Disconnect the current session first");
         session=std::make_unique<f3rt::netplay::Session>(m,options,machine_identity());
@@ -393,6 +421,7 @@ int main(int argc,char **argv) try {
         ui_state.message.clear();ui_state.desync=false;
         next_net_step=std::chrono::steady_clock::now();
         next_status=next_net_step;
+        reset_motion();
     };
     if(netplay)connect(net_options);
     while(!quit && (netplay || !frames || executed_frames<frames)) {
@@ -406,6 +435,10 @@ int main(int argc,char **argv) try {
                 const bool consumed=sdl.ui->process_event(event);
                 sdl.input->process_event(event,consumed || sdl.ui->open());
                 refresh|=was_open!=sdl.ui->open();
+                if(motion_presentation && was_open!=sdl.ui->open()) {
+                    reset_motion();
+                    if(!session)next_frame=std::chrono::steady_clock::now();
+                }
                 if(event.type==SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                     if(!consumed && event.key.scancode==SDL_SCANCODE_ESCAPE)quit=true;
                     const bool fullscreen_key=event.key.scancode==SDL_SCANCODE_F11 ||
@@ -453,6 +486,7 @@ int main(int argc,char **argv) try {
                         snapshot_video_options.scale,snapshot_video_options.border,save);
                     if(!save) {
                         sdl.input->release();refresh=true;
+                        reset_motion();
                         if(sdl.audio)check(SDL_ClearAudioStream(sdl.audio));
                         next_frame=std::chrono::steady_clock::now();
                     }
@@ -517,10 +551,13 @@ int main(int argc,char **argv) try {
             if(!was_synchronized && session->synchronized())
                 std::cout<<"netplay_ready player="<<session->slot()+1<<" delay="<<session->delay()
                          <<" origin="<<session->rollback()->origin_frame()<<'\n';
-            refresh|=session->rollback() && session->rollback()->rollback_count()!=previous_rollbacks;
+            const bool rolled_back=session->rollback() && session->rollback()->rollback_count()!=previous_rollbacks;
+            refresh|=rolled_back;
+            if(rolled_back)reset_motion();
             if(session->take_discontinuity()) {
                 if(sdl.input)sdl.input->release();
                 local={};refresh=true;
+                reset_motion();
                 if(sdl.audio && (session->phase()==f3rt::netplay::Session::Phase::Accepting ||
                     (session->rollback() && session->rollback()->frame()==0)))
                     check(SDL_ClearAudioStream(sdl.audio));
@@ -530,8 +567,10 @@ int main(int argc,char **argv) try {
                 (2000.0*f3rt::Machine::frame_pixels)+0.999):16;
             if((!throttle || now>=next_net_step) && session->frame_advantage()<=lead_limit) {
                 advanced=session->advance(local);
-                if(advanced)next_net_step=std::max(next_net_step,now)+std::chrono::nanoseconds(
-                    uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
+                if(advanced) {
+                    motion_frame_start=now;
+                    next_net_step=std::max(next_net_step,now)+frame_time;
+                }
             }
             if(now>=next_status) {
                 ui_state.status=session->status();
@@ -540,12 +579,27 @@ int main(int argc,char **argv) try {
                     std::to_string(session->rollback()?session->rollback()->last_rollback_depth():0)).c_str()));
                 next_status=now+std::chrono::milliseconds(250);
             }
-        } else if(!sdl.ui || !sdl.ui->open()) {
+        } else if((!sdl.ui || !sdl.ui->open()) &&
+                  (!motion_presentation || !throttle || std::chrono::steady_clock::now()>=next_frame)) {
             f3rt::netplay::apply_inputs(m,local);
             if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
             advanced=true;
+            if(motion_presentation && throttle) {
+                motion_frame_start=next_frame;
+                next_frame+=frame_time;
+                const auto now=std::chrono::steady_clock::now();
+                if(now-next_frame>std::chrono::milliseconds(max_catchup_ms)) {
+                    next_frame=now+frame_time;reset_motion();++clock_resyncs;
+                }
+            }
         }
         executed_frames+=advanced;
+#ifdef F3RT_GPU
+        if(motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {
+            sdl.gpu->capture_motion(m.game_video->gpu_scene(),m.frame);
+            motion_capture_pending=false;
+        }
+#endif
         if(advanced && !dumpdir.empty() && m.frame>=dump_start && (m.frame-dump_start)%dump_every==0)f3rt::dump_machine(m,dumpdir);
         size_t count;
         while((count=session?session->render_audio(samples.data(),samples.size()/2):
@@ -568,7 +622,8 @@ int main(int argc,char **argv) try {
             (finite_netplay ? session && session->synchronized() &&
                 session->result()!=f3rt::netplay::Session::Result::None : executed_frames==frames);
         const bool draw_menu=sdl.ui && sdl.ui->open();
-        if(!headless && (advanced || refresh || draw_menu || screenshot_pending || capture_final)) {
+        if(!headless && (advanced || refresh || draw_menu || screenshot_pending || capture_final ||
+                         (motion_presentation && surface_valid))) {
             std::filesystem::path screenshot;
             if(screenshot_pending) {
                 const auto stamp=std::chrono::system_clock::now().time_since_epoch().count();
@@ -613,7 +668,20 @@ int main(int argc,char **argv) try {
                     SDL_GPUTexture *texture,Uint32 width,Uint32 height) {
                         static_cast<f3rt::FrontendUi *>(user)->render_gpu(command,texture,width,height);
                     } : nullptr,sdl.ui.get());
-                sdl.gpu->draw(m.game_video->gpu_scene());
+                if(motion_presentation) {
+                    const float alpha=throttle && (!draw_menu || session) && !capture_final ?
+                        std::clamp(float(std::chrono::duration<double>(std::chrono::steady_clock::now()-motion_frame_start).count()/
+                                         std::chrono::duration<double>(frame_time).count()),0.0f,1.0f):1.0f;
+                    sdl.gpu->draw_motion(m.game_video->gpu_scene(),alpha);
+                    ++motion_presentations;
+                    const auto &stats=sdl.gpu->last_motion();
+                    if(stats.paired) {
+                        motion_min_alpha=std::min(motion_min_alpha,stats.alpha);
+                        motion_max_alpha=std::max(motion_max_alpha,stats.alpha);
+                        motion_intermediates+=stats.alpha>0 && stats.alpha<1 &&
+                            (stats.sprites || stats.playfield_rows || stats.text_rows);
+                    }
+                } else sdl.gpu->draw(m.game_video->gpu_scene());
                 if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
                 if(screenshot_pending)sdl.gpu->save_surface(screenshot.string().c_str());
             } else
@@ -636,10 +704,9 @@ int main(int argc,char **argv) try {
             surface_valid=true;
             if(capture_final)surface_saved=true;
             if(screenshot_pending) { ui_state.message="Screenshot saved to "+screenshot.string();screenshot_pending=false; }
-            if(throttle && !session && advanced) {
+            if(throttle && !session && advanced && !motion_presentation) {
                 // Pace against a rolling deadline. After a stall longer than one catch-up window, resync to now instead of
                 // running flat out to make up lost time (that burst is what delayed audio by the length of the stall).
-                const auto frame_time=std::chrono::nanoseconds(uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
                 next_frame+=frame_time;
                 const auto now=std::chrono::steady_clock::now();
                 if(now-next_frame>std::chrono::milliseconds(max_catchup_ms)) { next_frame=now;++clock_resyncs; }
@@ -664,12 +731,15 @@ int main(int argc,char **argv) try {
             ui_state.transfer_progress=0;
             if(sdl.input)sdl.input->release();
             next_frame=std::chrono::steady_clock::now();
+            reset_motion();
             if(sdl.window)check(SDL_SetWindowTitle(sdl.window,("f3rt — "+set).c_str()));
             if(finite_netplay)quit=true;
         }
         if(!advanced) {
-            if(!session)next_frame=std::chrono::steady_clock::now();
-            std::this_thread::sleep_for(std::chrono::milliseconds(session?1:8));
+            if(!session && !motion_presentation)next_frame=std::chrono::steady_clock::now();
+            if(!motion_presentation || !throttle || draw_menu ||
+               (sdl.window && (SDL_GetWindowFlags(sdl.window)&(SDL_WINDOW_MINIMIZED|SDL_WINDOW_HIDDEN))))
+                std::this_thread::sleep_for(std::chrono::milliseconds(session?1:8));
         }
     }
     if(session && session->connected())session->disconnect("Local frontend closed");
@@ -688,6 +758,11 @@ int main(int argc,char **argv) try {
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
+    if(motion_presentation)
+        std::cout<<"MOTION native_frames="<<executed_frames<<" presentations="<<motion_presentations
+                 <<" intermediate_presentations="<<motion_intermediates<<" history_resets="<<motion_history_resets
+                 <<" alpha_min="<<motion_min_alpha<<" alpha_max="<<motion_max_alpha
+                 <<" elapsed_seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()<<'\n';
     if(audio_backend=="hle") {
         const auto stats=m.audio->hle_stats();
         std::cout<<"hle_commands="<<stats.commands<<" hle_reused="<<stats.reused

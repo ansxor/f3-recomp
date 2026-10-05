@@ -126,6 +126,8 @@ struct GpuVideo::Impl {
     VideoInterpolation interpolation = VideoInterpolation::Off;
     InterpolationFields fields = InterpolationFields::Geometry;
     InterpolationStats interpolation_stats{};
+    std::unique_ptr<GpuMotionHistory> motion;
+    MotionInterpolationStats motion_stats{};
     std::array<LayerInterpolationStats, 4> logged_layers{};
     InterpolationReason logged_reason = InterpolationReason::Off;
     bool have_interpolation_log = false;
@@ -405,7 +407,8 @@ struct GpuVideo::Impl {
         std::cout << '\n';
         logged_reason = stats.reason; logged_layers = stats.layers; have_interpolation_log = true;
     }
-    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
+    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic,
+              bool temporal = false, float alpha = 1.0f) {
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
         if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
@@ -413,6 +416,7 @@ struct GpuVideo::Impl {
         const Uint32 frame_scene_bytes = active_interpolation ? interpolation_scene_bytes : scene_bytes;
         auto *mapped = static_cast<uint8_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, true), "Map GPU frame upload"));
         if (scene.fallback) {
+            if (motion) motion->reset();
             std::memcpy(mapped, scene.native_pixels.data(), native_bytes);
             interpolation_stats = {};
             if (interpolation != VideoInterpolation::Off)
@@ -420,9 +424,14 @@ struct GpuVideo::Impl {
             for (auto &layer : interpolation_stats.layers) layer.reason = interpolation_stats.reason;
         } else {
             std::memcpy(mapped, scene.words.data(), scene_bytes);
+            if (temporal && motion)
+                motion_stats = motion->apply(scene, alpha, {reinterpret_cast<uint32_t *>(mapped), GpuScene::word_count});
             if (active_interpolation)
                 interpolation_stats = analyze_gpu_interpolation(scene, options, interpolation, fields,
-                    {reinterpret_cast<uint32_t *>(mapped), InterpolationLayout::word_count}, tile_pen_masks);
+                    {reinterpret_cast<uint32_t *>(mapped), InterpolationLayout::word_count}, tile_pen_masks,
+                    temporal && motion_stats.paired && motion_stats.alpha < 1.0f ?
+                        std::span<const uint32_t>{reinterpret_cast<uint32_t *>(mapped), GpuScene::word_count} :
+                        std::span<const uint32_t>{});
             else {
                 interpolation_stats = {};
                 if (interpolation != VideoInterpolation::Off) interpolation_stats.reason = InterpolationReason::NativeScale;
@@ -437,7 +446,9 @@ struct GpuVideo::Impl {
             scene.fallback ? native_bytes : frame_scene_bytes, true);
         SDL_EndGPUCopyPass(copy);
         GpuUniforms uniforms{options.scale, options.border, options.width(), options.height(), scene.sprite_count,
-                             scene.pen_mask, unsigned(scene.fallback), layer_mask};
+                             scene.pen_mask, unsigned(scene.fallback), layer_mask & 511u};
+        if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
+            uniforms.layer_mask |= motion_layer_mask;
         if (!scene.fallback) {
             SDL_PushGPUVertexUniformData(command.value, 0, &uniforms, sizeof(uniforms));
             auto *pass = render_pass(command.value, sprite_plane);
@@ -524,6 +535,24 @@ void GpuVideo::set_overlay(Overlay callback, void *userdata) {
 }
 void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
     impl_->draw(scene, output, layer_mask, process_diagnostic);
+}
+void GpuVideo::capture_motion(const GpuScene &scene, uint64_t frame) {
+    if (!impl_->motion) {
+        if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))
+            fail("Set temporal GPU queue depth");
+        impl_->motion = std::make_unique<GpuMotionHistory>();
+    }
+    impl_->motion->capture(scene, frame);
+}
+void GpuVideo::reset_motion() {
+    if (impl_->motion) impl_->motion->reset();
+    impl_->motion_stats = {};
+}
+const MotionInterpolationStats &GpuVideo::last_motion() const { return impl_->motion_stats; }
+void GpuVideo::draw_motion(const GpuScene &scene, float alpha, std::span<uint32_t> output,
+                           unsigned layer_mask, bool process_diagnostic) {
+    impl_->motion_stats = {};
+    impl_->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
 }
 void GpuVideo::save_surface(const char *path) {
     if (!impl_->rendered) throw std::runtime_error("No GPU surface has been drawn");

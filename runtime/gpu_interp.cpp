@@ -111,7 +111,7 @@ bool safe_palette(const GpuScene &scene, const Row &a, const Row &b, unsigned pf
 
 InterpolationStats analyze_gpu_interpolation(const GpuScene &scene, GameVideoOptions options,
     VideoInterpolation mode, InterpolationFields fields, std::span<uint32_t> upload_words,
-    std::span<const uint64_t> tile_pen_masks) noexcept {
+    std::span<const uint64_t> tile_pen_masks, std::span<const uint32_t> effective_words) noexcept {
     const auto clear_end = std::min(upload_words.size(), size_t(InterpolationLayout::word_count));
     if (clear_end > InterpolationLayout::base)
         std::fill(upload_words.begin() + InterpolationLayout::base, upload_words.begin() + clear_end, 0u);
@@ -138,7 +138,8 @@ InterpolationStats analyze_gpu_interpolation(const GpuScene &scene, GameVideoOpt
         for (unsigned y = first_row; y < end_row; ++y) {
             auto &r = rows[y];
             const unsigned pa = pf_at(y, pf);
-            const auto &w = scene.words;
+            const std::span<const uint32_t> w = effective_words.size() >= GpuScene::word_count ?
+                effective_words : std::span<const uint32_t>{scene.words};
             r = {int32_t(w[pa]), int(w[pa + 2]), int(w[pa + 1] * 256 + w[pa + 4]),
                  int(w[pa + 3]), int(w[pa + 5]), valid_row(scene, y, pf, options)};
             if (!r.valid && ((w[layer_at(y, pf)] & 64u) || scene.reference_rows[y].playfields[pf].layer.enabled))

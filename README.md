@@ -82,6 +82,7 @@ geometry. Arcade EEPROM persistence is separate: use `--eeprom FILE`.
 | `--video-filter nearest\|linear` | `nearest`; final presentation filtering. |
 | `--video-interp off\|linear\|fit` | `off`; optional GPU line sampling above native scale. |
 | `--video-interp-fields none\|geometry\|palette\|geometry,palette` | `geometry`; palette blending is separately opt-in. |
+| `--motion-interp` | Off; experimental GPU temporal sprite/scroll interpolation, with one native frame of positional latency. CLI-only; see [design and evidence](docs/developer/MOTION-INTERP.md). |
 | `--audio-backend accurate\|hle` | `accurate` (emulated sound devices) is the default. `hle` opts into approximate ROM-data synthesis; see the [sound guide](docs/site/guide/sound.md). |
 | `--sound-driver native\|oracle` | For `accurate` audio only: `native` for a ROM-generated build; `oracle` interprets the sound ROM. Both use emulated sound devices; native is not HLE. |
 | `--eeprom FILE` | No persistence unless supplied. |

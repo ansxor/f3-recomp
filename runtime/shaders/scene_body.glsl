@@ -180,6 +180,11 @@ void main() {
             } else {
                 int x = floor_scale(int(scene.words[row + 2u]) * s + q - 46 * s, s) & 511;
                 int y = int(scene.words[row + 3u]) & 511;
+                // Motion-only 24.8 text scroll; floor sampling matches native at integer endpoints.
+                if ((params.controls.w & 0x80000000u) != 0u) {
+                    x = floor_scale((int(scene.words[row + 14u]) * s + (q - 46 * s) * 256) >> 8, s) & 511;
+                    y = (floor_scale(int(scene.words[row + 15u]) * s + sub_y * 256, s) >> 8) & 511;
+                }
                 uint cell = scene.words[TEXT_CELLS + uint(y / 8 * 64 + x / 8)];
                 uint tx = uint(x & 7) ^ ((cell & (1u << 16u)) != 0u ? 7u : 0u);
                 uint ty = uint(y & 7) ^ ((cell & (1u << 17u)) != 0u ? 7u : 0u);

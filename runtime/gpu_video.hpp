@@ -1,5 +1,6 @@
 #pragma once
 #include "gpu_interp.hpp"
+#include "gpu_motion.hpp"
 #include "video_scale.hpp"
 #include <SDL3/SDL.h>
 #include <filesystem>
@@ -40,6 +41,12 @@ public:
     // explicitly true. Optional output receives width*height ARGB8888 pixels.
     void draw(const GpuScene &scene, std::span<uint32_t> output = {}, unsigned layer_mask = 511,
               bool process_diagnostic = false);
+    // Explicit opt-in; completed emulated frames are captured, never draws.
+    void capture_motion(const GpuScene &scene, uint64_t frame);
+    void reset_motion();
+    void draw_motion(const GpuScene &scene, float alpha, std::span<uint32_t> output = {},
+                     unsigned layer_mask = 511, bool process_diagnostic = false);
+    const MotionInterpolationStats &last_motion() const;
     // Saves the last rendered game image, including active postprocessing, but
     // excluding the crisp swapchain overlay. A preset/scale change needs a draw.
     void save_surface(const char *path);

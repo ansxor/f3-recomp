@@ -62,6 +62,7 @@ After the pictures match at native size, you can add three options. All three ne
 | `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
 | `--video-interp I` | `off`, `linear` or `fit` | `off` | Opt-in GPU interpolation for recognized playfield line effects. |
 | `--video-interp-fields F` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Choose geometry smoothing, same-pen RGB palette blending, both or neither. |
+| `--motion-interp` | No argument | off | Experimental GPU temporal sprite/scroll interpolation at display refresh. |
 
 Example:
 
@@ -131,6 +132,30 @@ The program checks the values:
 | `--video-filter` other than the two names | `--video-filter must be nearest or linear` |
 | Scale or border with `--video fdp` | `Presentation enhancements require --video game or compare` |
 | Auto scaling with CPU backend | `--video-scale auto/auto-integer requires --video-backend gpu` |
+
+## Temporal motion interpolation
+
+```sh
+./build/landmakr --video-backend gpu --video-scale auto-integer --motion-interp
+```
+
+`--motion-interp` interpolates positions between consecutive emulated frames,
+not adjacent scanlines or finished images. GPU presentation can draw multiple
+times per native frame on a high-refresh display. It adds one native frame of
+positional latency; artwork, animation frames, palette and layer controls stay
+discrete. Scale 2–4 exposes subpixel motion better than native scale 1.
+
+Sprite matching uses the submitted slot, count, tile, palette, zoom and flip
+state. Changed identity, appearance/disappearance, zoom/flip changes, movement
+over 32 native pixels per axis and wraps snap instead of interpolating.
+Playfield/line and text-scroll rows also require unchanged valid controls.
+State loads, rollback corrections, pause/resume and long stalls reset history.
+
+This experimental flag is GPU-only and CLI-only, default off. CPU/headless
+pixels, captures, replay state and netplay checksums remain native.
+`--unthrottled` presents current geometry rather than synthesizing intermediate
+timed frames. `--video-interp linear|fit` remains an independent spatial option
+and can be combined with it. See [design and measured limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/MOTION-INTERP.md).
 
 ## F1 shaders and live controls
 

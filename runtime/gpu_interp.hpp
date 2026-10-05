@@ -53,6 +53,7 @@ inline constexpr uint32_t interpolation_palette = 8;
 inline constexpr unsigned interpolation_palette_stride_shift = 16;
 InterpolationStats analyze_gpu_interpolation(const GpuScene &scene, GameVideoOptions options,
     VideoInterpolation mode, InterpolationFields fields, std::span<uint32_t> upload_words,
-    std::span<const uint64_t> tile_pen_masks) noexcept;
+    std::span<const uint64_t> tile_pen_masks,
+    std::span<const uint32_t> effective_words = {}) noexcept;
 const char *interpolation_reason_name(InterpolationReason reason) noexcept;
 } // namespace f3rt
