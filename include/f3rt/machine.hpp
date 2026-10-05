@@ -50,6 +50,16 @@ public:
     uint8_t pending_irqs = 0;
     const f3_block *blocks = nullptr;
     size_t block_count = 0;
+    // Derived from the validated immutable registration, never serialized.
+    // A 4 KiB ROM page has at most 2048 distinct aligned entries. Dense runs
+    // use arithmetic lookup; sparse runs search only their own page.
+    struct NativePage {
+        const f3_block *first = nullptr;
+        uint16_t count = 0;
+        bool dense = false;
+        uint32_t address = 0;
+    };
+    std::array<NativePage, 0x200000 / 0x1000> native_pages{};
     std::span<const f3_excluded_range> excluded_code;
     uint64_t native_blocks = 0, fallback_instructions = 0;
     bool allow_main_fallback = true; // Native game target disables this; diagnostics opt in.

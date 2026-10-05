@@ -216,13 +216,15 @@ struct Audio::Impl {
             // Stop at each sample or CPU deadline, retaining fractional clocks
             // and complete-instruction overrun across arbitrary caller chunks.
             uint32_t step = main_cycles;
-            const uint32_t rate = m_es5505.sample_rate();
-            if (m_sample_accum + uint64_t(step) * rate >= 16000000ULL)
-                step = uint32_t((16000000ULL - m_sample_accum + rate - 1) / rate);
             if (!m_reset_asserted && m_cpu_runner) {
                 const uint32_t until_cpu = uint32_t((16000000LL - m_cpu_accum + 15238089LL) / 15238090LL);
                 step = std::min(step, until_cpu);
             }
+            const uint32_t rate = m_es5505.sample_rate();
+            // CPU deadlines are normally much nearer. Bound the candidate first
+            // so the variable-rate division is needed only at a sample edge.
+            if (m_sample_accum + uint64_t(step) * rate >= 16000000ULL)
+                step = uint32_t((16000000ULL - m_sample_accum + rate - 1) / rate);
             main_cycles -= step;
             advance_slice(step);
         }

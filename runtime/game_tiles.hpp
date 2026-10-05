@@ -14,7 +14,16 @@ public:
     bool supported(unsigned layer) const { return valid_[layer]; }
     uint32_t unsupported_pc(unsigned layer) const { return unsupported_[layer]; }
     ScenePixel playfield_pixel(unsigned layer, int x, int y, bool flipped,
-                               std::span<const uint8_t> tiles) const;
+                               std::span<const uint8_t> tiles) const {
+        x &= 1023;
+        y &= 511;
+        if (flipped) { x = 1023 - x; y = 511 - y; }
+        const auto &cell = maps_[layer][(y / 16) * 64 + x / 16];
+        const unsigned tx = (x & 15) ^ (cell.flip_x ? 15 : 0);
+        const unsigned ty = (y & 15) ^ (cell.flip_y ? 15 : 0);
+        const uint8_t pen = tiles[(cell.tile & 0x7fff) * 256 + ty * 16 + tx] & cell.pen_mask;
+        return {uint16_t(cell.palette + pen), uint8_t((pen ? 0x10 : 0) | unsigned(cell.blend))};
+    }
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
     void load_state(StateReader &reader);

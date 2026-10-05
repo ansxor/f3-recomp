@@ -78,6 +78,20 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
             [](const f3_block &block, uint32_t pc) { return block.address < pc; }) : nullptr;
         if (entry && entry != blocks + count && entry->address < range.end) return 0;
     }
+    // Commit only after all validation succeeds: failed re-registration must
+    // leave both the original table and its derived lookup unchanged.
+    size_t index = 0;
+    for (size_t page = 0; page < m.native_pages.size(); ++page) {
+        const size_t first = index;
+        const uint32_t end = uint32_t((page + 1) * 0x1000);
+        while (index < count && blocks[index].address < end) ++index;
+        auto &lookup = m.native_pages[page];
+        lookup.first = count ? blocks + first : nullptr;
+        lookup.count = uint16_t(index - first);
+        lookup.address = index != first ? blocks[first].address : 0;
+        lookup.dense = index != first &&
+            blocks[index - 1].address - lookup.address == 2 * (index - first - 1);
+    }
     m.blocks = blocks;
     m.block_count = count;
     return 1;
@@ -106,13 +120,24 @@ int f3_dispatch(f3_cpu *cpu) {
     auto &m = machine(cpu);
     // Trace must execute instruction by instruction; never defer T0/T1 in a block.
     if (!(cpu->sr & 0xc000) && cpu->pc < 0x200000 && m.block_count) {
-        const f3_block *end = m.blocks + m.block_count;
-        const auto *block = std::lower_bound(m.blocks, end, cpu->pc,
-            [](const f3_block &entry, uint32_t pc) { return entry.address < pc; });
-        if (block != end && block->address == cpu->pc) {
-            ++m.native_blocks;
-            block->execute(cpu);
-            return !cpu->halted;
+        const auto &page = m.native_pages[cpu->pc >> 12];
+        if (page.count) {
+            const f3_block *block = nullptr;
+            if (page.dense) {
+                const uint32_t offset = cpu->pc - page.address;
+                if (!(offset & 1) && offset < 2u * page.count)
+                    block = page.first + (offset >> 1);
+            } else {
+                const f3_block *end = page.first + page.count;
+                const auto *entry = std::lower_bound(page.first, end, cpu->pc,
+                    [](const f3_block &entry, uint32_t pc) { return entry.address < pc; });
+                if (entry != end && entry->address == cpu->pc) block = entry;
+            }
+            if (block) {
+                ++m.native_blocks;
+                block->execute(cpu);
+                return !cpu->halted;
+            }
         }
     }
 #ifdef F3_PROFILE_SLIM_ENABLED

@@ -3,6 +3,8 @@
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
+#include "third_party/audio/es5510.hpp"
+#include "state_io.hpp"
 #include "game_tiles.hpp"
 #include "game_sprites.hpp"
 #include <algorithm>
@@ -139,6 +141,85 @@ void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) 
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
+void native_other(f3_cpu *cpu) { cpu->d[0]=17;cpu->pc+=2;cpu->cycles+=4; }
+void check_native_lookup() {
+    auto m=std::make_unique<f3rt::Machine>(fixture());
+    auto &cpu=m->cpu;
+    m->allow_main_fallback=false;
+    const auto hit=[&](uint32_t pc,uint32_t value) {
+        cpu.pc=pc;cpu.sr=0x2700;cpu.d[0]=0;
+        const auto count=m->native_blocks;
+        require(f3_dispatch(&cpu) && cpu.pc==pc+2 && cpu.d[0]==value && m->native_blocks==count+1,
+                "Indexed dispatch executes the correct registered entry");
+    };
+    const auto miss=[&](uint32_t pc) {
+        cpu.pc=pc;cpu.sr=0x2700;
+        const auto count=m->native_blocks;
+        bool rejected=false;
+        try { f3_dispatch(&cpu); }
+        catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("Untranslated")!=std::string::npos; }
+        require(rejected && cpu.pc==pc && m->native_blocks==count && !m->fallback_instructions,
+                "Page gaps, odd PCs and aliases must not execute a nearby entry");
+    };
+    const f3_block sparse[]={{0x100,native},{0x104,native_other},{0xffe,native},
+                            {0x1000,native_other},{0x1ffffe,native},{0x200000,native_other}};
+    require(f3_register_blocks(&cpu,sparse,std::size(sparse)),"Sparse ROM table registers");
+    hit(0x100,99);hit(0x104,17);hit(0xffe,99);hit(0x1000,17);hit(0x1ffffe,99);
+    for(uint32_t pc : {0x101u,0x102u,0xffcu,0x1002u,0x1100u,0x1ffffcu,0x200000u,0xff000100u}) miss(pc);
+    const f3_block duplicate[]={{0x100,native},{0x100,native_other}};
+    const f3_block unsorted[]={{0x104,native},{0x100,native}};
+    const f3_block odd[]={{0x101,native}}, missing[]={{0x100,nullptr}};
+    require(!f3_register_blocks(&cpu,duplicate,2) && !f3_register_blocks(&cpu,unsorted,2) &&
+            !f3_register_blocks(&cpu,odd,1) && !f3_register_blocks(&cpu,missing,1),
+            "Invalid replacement tables are rejected atomically");
+    hit(0x104,17);
+    const f3_block dense[]={{0x200,native},{0x202,native_other},{0x204,native}};
+    require(f3_register_blocks(&cpu,dense,3),"Dense partial page replaces sparse table");
+    hit(0x200,99);hit(0x202,17);hit(0x204,99);
+    miss(0x100);miss(0x1fe);miss(0x201);miss(0x206);
+    m->reset();hit(0x202,17);
+    std::vector<uint8_t> saved(m->state_size());m->save_state(saved);
+    hit(0x204,99);m->load_state(saved);hit(0x202,17);
+    cpu.pc=0x202;cpu.sr=0xa700;
+    bool traced=false;
+    try { f3_dispatch(&cpu); } catch(const std::runtime_error &) { traced=true; }
+    require(traced && cpu.pc==0x202,"Trace mode still rejects block execution in strict-native mode");
+    require(f3_register_blocks(&cpu,nullptr,0),"Empty table replaces indexed registration");
+    miss(0x202);
+}
+void check_wide_bus_boundaries() {
+    auto wide=std::make_unique<f3rt::Machine>(fixture());
+    auto bytes=std::make_unique<f3rt::Machine>(fixture());
+    const auto seed=[](auto &region) {
+        for(size_t i=0;i<region.size();++i) region[i]=uint8_t(i*37+11);
+    };
+    for(auto *m : {wide.get(),bytes.get()}) {
+        seed(m->roms.main);seed(m->ram);seed(m->palette);seed(m->graphics);seed(m->shared);
+    }
+    for(uint32_t boundary : {0u,0x200000u,0x400000u,0x420000u,0x440000u,0x448000u,
+                            0x4a0004u,0x4a0013u,0x4c0000u,0x600000u,0x640000u,0x660000u,
+                            0xc00000u,0xc00800u,0xc80000u,0xc80100u,0x1000000u}) {
+        for(uint32_t alias : {0u,0x5a000000u}) for(unsigned delta=0;delta<7;++delta) {
+            const uint32_t a=boundary-3+delta+alias;
+            const uint16_t expected16=uint16_t(uint16_t(bytes->read8(a))<<8 | bytes->read8(a+1));
+            uint32_t expected32=0;
+            for(unsigned i=0;i<4;++i) expected32=(expected32<<8)|bytes->read8(a+i);
+            require(wide->read16(a)==expected16 && wide->read32(a)==expected32,
+                    "Wide reads preserve byte order across regions, mirrors and address rollover");
+            wide->write16(a,0xa1b2);bytes->write8(a,0xa1);bytes->write8(a+1,0xb2);
+            wide->write32(a,0x31415926);
+            for(unsigned i=0;i<4;++i) bytes->write8(a+i,uint8_t(0x31415926u>>(24-i*8)));
+            require(wide->ram==bytes->ram && wide->palette==bytes->palette &&
+                    wide->graphics==bytes->graphics && wide->shared==bytes->shared &&
+                    wide->control==bytes->control && wide->coin_count==bytes->coin_count &&
+                    wide->coin_word==bytes->coin_word && wide->timer_control==bytes->timer_control,
+                    "Wide writes preserve ordered byte effects at memory and MMIO boundaries");
+        }
+    }
+    std::vector<uint8_t> a(wide->state_size()),b(bytes->state_size());
+    wide->save_state(a);bytes->save_state(b);
+    require(a==b,"Wide access preserves complete device state, including reset and EEPROM side effects");
+}
 void check_main_sound_ordering() {
     const auto sound_machine=[] {
         auto roms=fixture();
@@ -525,6 +606,42 @@ void check_rotate_cycles(f3rt::Machine &m) {
     execute(0xe898,0); // ROR.L #4,D0, used by the ROM's early boot path.
     require(m.cpu.d[0]==0x81234567 && (m.cpu.sr&0x1f)==0x19,"ROR.L result, carry and preserved extend flag");
 }
+void check_dsp_boundaries() {
+    f3rt::ES5510 dsp;
+    std::vector<uint8_t> saved(dsp.state_size());
+    const auto capture=[&] {
+        f3rt::StateWriter writer(saved);dsp.save_state(writer);
+        f3rt::CanonicalES5510Registers state{};
+        f3rt::StateReader reader(saved);reader.read(state);return state;
+    };
+    const auto restore=[&](const f3rt::CanonicalES5510Registers &state) {
+        f3rt::StateWriter writer(saved);writer.write(state);
+        f3rt::StateReader reader(saved);dsp.load_state(reader);
+    };
+    for(bool halted : {false,true}) for(int end : {-1,0,1,159}) {
+        dsp.reset();
+        if(end>=0) dsp.instr_at(end)=0xf000;
+        auto state=capture();state.state=halted?1:0;restore(state);
+        dsp.run_once();state=capture();
+        const unsigned expected=end<0?(halted?200:201):end==0?(halted?1:161):unsigned(end+1);
+        require(state.pc==expected && state.state==(end<0?0:1) && state.halt_asserted,
+                "DSP END and safety budget preserve wake-up and first-cycle HALT ordering");
+    }
+    for(unsigned pc : {159u,160u,255u}) {
+        dsp.reset();auto state=capture();state.pc=uint8_t(pc);restore(state);
+        dsp.run_once();state=capture();
+        require(state.pc==uint8_t(pc+201) && state.state==0,
+                "DSP no-END safety cutoff preserves the 8-bit PC wrap above the instruction store");
+    }
+    for(int address : {-1,0,16,17,33,34,127}) {
+        dsp.reset();dsp.instr_at(1)=0xf000;
+        auto state=capture();state.pc=1;state.dbase=address;
+        state.dlength=16;state.memincrement=1;state.memshift=0;state.memmask=0xffffff;
+        restore(state);dsp.run_once();state=capture();
+        require(state.ram_p.address==((address%17)&0xffffff),
+                "DSP delay addressing preserves signed remainder and zero, one and multiple wraps");
+    }
+}
 void check_audio_mixer() {
     f3rt::Audio audio;
     const std::array<uint8_t,4> rom{0x40,0,0x40,0};
@@ -564,7 +681,10 @@ int main() try {
     check_game_tile_descriptors();
     check_game_sprite_descriptors();
     check_game_sprite_top_edge();
+    check_dsp_boundaries();
     check_audio_mixer();
+    check_native_lookup();
+    check_wide_bus_boundaries();
     check_main_sound_ordering();
     check_audio_partitioning();
     f3rt::Audio clock_audio;

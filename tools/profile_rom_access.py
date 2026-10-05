@@ -47,7 +47,7 @@ def instrument_generated(text: str, rom: bytes, sound: bool) -> str:
     else:
         text = re.sub(r"(L_([0-9a-f]+): \{)",
                       lambda m: m[1] + f"\n    f3_profile_fetch(0, 0x{m[2]}u, {size_at(int(m[2], 16))});", text)
-        text = re.sub(r"(static void f3_rom_exception_\d+\(f3_cpu \*cpu\) \{)",
+        text = re.sub(r"(void f3_rom_exception_\d+\(f3_cpu \*cpu\) \{)",
                       r"\1\n    f3_profile_fetch(0, cpu->pc, 2);", text)
     return '#include "profile_hooks.h"\n' + text
 
@@ -83,7 +83,7 @@ def build_profile(build: Path, output: Path, config: Path, rom_dir: Path, jobs: 
     for row in database:
         source = Path(row["file"])
         sound = source.name.startswith("sound_") and source.suffix == ".c"
-        main = (source.name.startswith("blocks_") or source.name == "program.c") and source.suffix == ".c"
+        main = (source.name.startswith(("blocks_", "exceptions_")) or source.name == "program.c") and source.suffix == ".c"
         runtime = source in (ROOT / "runtime/machine.cpp", ROOT / "runtime/sound_native.cpp")
         harness = source == ROOT / "tools/gameplay_regression.cpp"
         if not (main or sound or runtime or harness):
@@ -103,7 +103,21 @@ def build_profile(build: Path, output: Path, config: Path, rom_dir: Path, jobs: 
                 replacement = opener + "\n    f3_profile_data(1, address & 0xffffffu, width, m_cpu.pc);"
             if text.count(opener) != 1:
                 raise ValueError(f"Cannot identify profiling callback in {source}")
-            private.write_text('#include "profile_hooks.h"\n' + text.replace(opener, replacement))
+            text = text.replace(opener, replacement)
+            if source.name == "machine.cpp":
+                # Fast wide reads bypass read8; record only their contiguous span.
+                # Boundary/MMIO fallbacks retain the original per-byte callbacks.
+                for width in (2, 4):
+                    pattern = (rf"(if \(const auto \*p = direct_bytes<{width}, false>\(\*this, a\)\))"
+                               r"\s+return ([^;]+);")
+                    def fast_read(match):
+                        return (match[1] + " {\n"
+                                f"        f3_profile_data(0, a & 0xffffffu, {width}, cpu.pc);\n"
+                                f"        return {match[2]};\n    }}")
+                    text, count = re.subn(pattern, fast_read, text)
+                    if count != 1:
+                        raise ValueError(f"Cannot identify {width}-byte profiling callback in {source}")
+            private.write_text('#include "profile_hooks.h"\n' + text)
         else:
             private = source
             args.append("-Dmain=f3_gameplay_main")

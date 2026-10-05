@@ -12,6 +12,32 @@
 #include <sstream>
 
 namespace f3rt {
+namespace {
+// Decode once only when every byte is contiguous and has no observable bus
+// side effect. All boundary/mirror-wrap cases retain ordered byte accesses.
+template<unsigned Width, bool Write>
+uint8_t *direct_bytes(Machine &m, uint32_t a) {
+    a &= 0xffffff;
+    if constexpr (!Write) {
+        if (a <= 0x200000 - Width) return m.roms.main.data() + a;
+    }
+    if (a - 0x400000 < 0x40000) {
+        const uint32_t offset = a & 0x1ffff;
+        if (offset <= m.ram.size() - Width) return m.ram.data() + offset;
+    }
+    if (a - 0x440000 <= m.palette.size() - Width)
+        return m.palette.data() + (a - 0x440000);
+    if (a - 0x600000 <= m.graphics.size() - Width) {
+        if constexpr (!Write) return m.graphics.data() + (a - 0x600000);
+        else if (!m.game_video) return m.graphics.data() + (a - 0x600000);
+    }
+    if constexpr (!Write) {
+        if (a - 0xc00000 <= m.shared.size() - Width)
+            return m.shared.data() + (a - 0xc00000);
+    }
+    return nullptr;
+}
+}
 Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Video>()),
     audio(std::make_unique<Audio>()), eeprom(std::make_unique<Eeprom>()) {
     if (roms.main.size() != 0x200000) throw std::runtime_error("Main ROM must be 2 MiB");
@@ -90,8 +116,16 @@ uint8_t Machine::read8(uint32_t a) {
     if (a >= 0xc00000 && a < 0xc00800) return shared[a - 0xc00000];
     return 0xff; // MAME unmapped bus value, not physical-board mirror speculation.
 }
-uint16_t Machine::read16(uint32_t a) { return uint16_t(uint16_t(read8(a)) << 8 | read8(a + 1)); }
-uint32_t Machine::read32(uint32_t a) { return uint32_t(read16(a)) << 16 | read16(a + 2); }
+uint16_t Machine::read16(uint32_t a) {
+    if (const auto *p = direct_bytes<2, false>(*this, a))
+        return uint16_t(uint16_t(p[0]) << 8 | p[1]);
+    return uint16_t(uint16_t(read8(a)) << 8 | read8(a + 1));
+}
+uint32_t Machine::read32(uint32_t a) {
+    if (const auto *p = direct_bytes<4, false>(*this, a))
+        return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
+    return uint32_t(read16(a)) << 16 | read16(a + 2);
+}
 void Machine::coin_write(unsigned bank, uint8_t value) {
     const uint8_t old = uint8_t(coin_word[bank] >> 8);
     coin_word[bank] = uint16_t(value << 8) | (coin_word[bank] & 0xff);
@@ -131,8 +165,26 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if (a == 0x4c0001) timer_control = uint16_t((timer_control & 0xff00) | v);
     // MAME records this timer control but does not assert timer IRQ5.
 }
-void Machine::write16(uint32_t a, uint16_t v) { write8(a, uint8_t(v >> 8)); write8(a + 1, uint8_t(v)); }
-void Machine::write32(uint32_t a, uint32_t v) { write16(a, uint16_t(v >> 16)); write16(a + 2, uint16_t(v)); }
+void Machine::write16(uint32_t a, uint16_t v) {
+    if (auto *p = direct_bytes<2, true>(*this, a)) {
+        p[0] = uint8_t(v >> 8);
+        p[1] = uint8_t(v);
+        return;
+    }
+    write8(a, uint8_t(v >> 8));
+    write8(a + 1, uint8_t(v));
+}
+void Machine::write32(uint32_t a, uint32_t v) {
+    if (auto *p = direct_bytes<4, true>(*this, a)) {
+        p[0] = uint8_t(v >> 24);
+        p[1] = uint8_t(v >> 16);
+        p[2] = uint8_t(v >> 8);
+        p[3] = uint8_t(v);
+        return;
+    }
+    write16(a, uint16_t(v >> 16));
+    write16(a + 2, uint16_t(v));
+}
 void Machine::advance_to(uint64_t cycles) {
     if (cycles < hardware_cycles) throw std::runtime_error("CPU cycle clock moved backwards");
     while (hardware_cycles < cycles) {

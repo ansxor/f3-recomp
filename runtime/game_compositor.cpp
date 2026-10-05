@@ -43,6 +43,10 @@ void mix(PixelMix &pixel, const SceneLayer &layer, uint16_t color, bool select,
     }
 }
 uint32_t rgb(const PixelMix &pixel, std::span<const uint32_t> palette) {
+    if (pixel.source_weight == 8 && pixel.destination_weight == 0)
+        return 0xff000000u | palette[pixel.source & 8191];
+    if (pixel.source_weight == 0 && pixel.destination_weight == 8)
+        return 0xff000000u | palette[pixel.destination & 8191];
     const uint32_t source = palette[pixel.source & 8191];
     const uint32_t destination = palette[pixel.destination & 8191];
     uint32_t color = 0xff000000;
@@ -82,7 +86,11 @@ void validate_scene(const SceneJob &job) {
             throw std::runtime_error("Game scene bitmap pivot is unsupported");
 }
 
+// Scale zero is the fixed native frame; 1..8 retain expanded border geometry.
+// Constant divisors avoid per-texel integer division at every supported scale.
+template<unsigned Scale>
 void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
+    constexpr bool Expanded = Scale != 0;
     const auto &tiles = job.tiles;
     const auto &text = job.text;
     const auto &lines = job.lines;
@@ -92,9 +100,12 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
     const auto colors = job.colors;
     const auto output = job.output;
     const auto options = job.options;
-    const int scale = int(options.scale), width = int(options.width());
-    const int left_edge = 46 - int(options.border), right_edge = 366 + int(options.border);
-    constexpr unsigned max_width = (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_gpu_scale;
+    constexpr int scale = Expanded ? int(Scale) : 1;
+    const int width = Expanded ? int(options.width()) : 320;
+    const int left_edge = Expanded ? 46 - int(options.border) : 46;
+    const int right_edge = Expanded ? 366 + int(options.border) : 366;
+    constexpr unsigned max_width = Expanded
+        ? (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_gpu_scale : 320;
     std::array<PixelMix, max_width> pixels;
     for (unsigned y = begin; y < end; ++y) {
         const auto &row = lines.row(y);
@@ -111,6 +122,17 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
             for (unsigned index : order) {
                 const auto &state = layer(index);
                 if (!state.enabled) continue;
+                int source_y = 0;
+                if (index < 4) {
+                    const auto &pf = row.playfields[index];
+                    const int fy = (int(pf.y_fraction) * scale + sub_y * pf.y_step) / scale;
+                    source_y = pf.source_y + (fy >> 8);
+                }
+                // Expanded subcolumns often resolve to the same source texel.
+                // Cache only within one layer/subrow; palette offsets apply to copies.
+                ScenePixel cached_source{};
+                int cached_x = 0;
+                bool cached_valid = false;
                 const auto &ranges = clips[index];
                 for (unsigned r = 0; r < ranges.count; ++r) {
                     const int left = (std::max<int>(left_edge, ranges.ranges[r].left) - left_edge) * scale;
@@ -121,8 +143,9 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                         int sample_x = output_x + left_edge * scale;
                         if (state.mosaic && row.mosaic_period > 1) {
                             const int hardware_x = left_edge + output_x / scale;
-                            int count = hardware_x + 68;
-                            count = (count % 432 + 432) % 432;
+                            // Validated border bounds keep this phase in [-46, 593].
+                            const int phase = hardware_x + 68;
+                            const int count = phase < 0 ? phase + 432 : phase >= 432 ? phase - 432 : phase;
                             sample_x = (hardware_x - count % row.mosaic_period) * scale;
                         }
                         ScenePixel source;
@@ -132,13 +155,21 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                             // Divide only after combining the native phase and output
                             // subpixel. This samples geometry, not an enlarged RGB frame.
                             const int x = floor_divide(pf.source_x * scale + (sample_x - 46 * scale) * pf.x_step, scale * 256);
-                            const int fy = (int(pf.y_fraction) * scale + sub_y * pf.y_step) / scale;
-                            source = tiles.playfield_pixel(index, x, pf.source_y + (fy >> 8), flipped, tile_pixels);
+                            if constexpr (Expanded) {
+                                if (!cached_valid || cached_x != x) {
+                                    cached_source = tiles.playfield_pixel(index, x, source_y, flipped, tile_pixels);
+                                    cached_x = x;
+                                    cached_valid = true;
+                                }
+                                source = cached_source;
+                            } else {
+                                source = tiles.playfield_pixel(index, x, source_y, flipped, tile_pixels);
+                            }
                             select = (source.flags & 1) != 0;
                             if (!(source.flags & 0x10) || !source.palette) continue;
                             source.palette = uint16_t(source.palette + pf.palette_add);
                         } else if (index < 8) {
-                            if (options.expanded()) {
+                            if constexpr (Expanded) {
                                 const int source_x = sample_x - left_edge * scale;
                                 if (source_x < 0 || source_x >= width) continue;
                                 source.palette = sprites[output_y * width + source_x];
@@ -149,7 +180,16 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                             if (!source.palette || ((source.palette >> 10) & 3) != index - 4) continue;
                         } else {
                             const int x = floor_divide(row.text_x * scale + sample_x - 46 * scale, scale);
-                            source = text.pixel(x, row.text_y, flipped);
+                            if constexpr (Expanded) {
+                                if (!cached_valid || cached_x != x) {
+                                    cached_source = text.pixel(x, row.text_y, flipped);
+                                    cached_x = x;
+                                    cached_valid = true;
+                                }
+                                source = cached_source;
+                            } else {
+                                source = text.pixel(x, row.text_y, flipped);
+                            }
                             if (!(source.flags & 0x10)) continue;
                         }
                         mix(pixel, state, source.palette, select, row.blend);
@@ -159,6 +199,16 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
             for (int x = 0; x < width; ++x) output[output_y * width + x] = rgb(pixels[x], colors);
         }
     }
+}
+
+void compose_expanded_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
+    using Kernel = void (*)(const SceneJob &, unsigned, unsigned) noexcept;
+    static constexpr std::array<Kernel, 8> kernels{
+        compose_rows<1>, compose_rows<2>, compose_rows<3>, compose_rows<4>,
+        compose_rows<5>, compose_rows<6>, compose_rows<7>, compose_rows<8>
+    };
+    static_assert(kernels.size() == GameVideoOptions::max_gpu_scale);
+    kernels[job.options.scale - 1](job, begin, end);
 }
 
 // Three persistent workers plus the caller leave room for emulation/audio on
@@ -200,7 +250,7 @@ public:
 private:
     void compose_part(const SceneJob &job, unsigned part) const noexcept {
         const unsigned participants = count_ + 1;
-        compose_rows(job, 24 + 232 * part / participants,
+        compose_expanded_rows(job, 24 + 232 * part / participants,
                      24 + 232 * (part + 1) / participants);
     }
     void work(unsigned part) {
@@ -244,8 +294,8 @@ void compose_game_scene(const GameTiles &tiles, const GameText &text, const Game
     const SceneJob job{tiles, text, lines, sprites, flipped, tile_pixels, colors, output, options};
     validate_scene(job);
     if (!options.expanded()) {
-        // Dispatch is not worthwhile for the strict-native 320x232 frame.
-        compose_rows(job, 24, 256);
+        // Constant native geometry also removes per-pixel variable division.
+        compose_rows<0>(job, 24, 256);
     } else {
         static RowWorkers workers;
         workers.compose(job);
@@ -258,6 +308,7 @@ void compose_game_scene_serial(const GameTiles &tiles, const GameText &text, con
                                std::span<uint32_t> output, GameVideoOptions options) {
     const SceneJob job{tiles, text, lines, sprites, flipped, tile_pixels, colors, output, options};
     validate_scene(job);
-    compose_rows(job, 24, 256);
+    if (options.expanded()) compose_expanded_rows(job, 24, 256);
+    else compose_rows<0>(job, 24, 256);
 }
 } // namespace f3rt

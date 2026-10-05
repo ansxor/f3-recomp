@@ -199,17 +199,6 @@ bool GameText::supported() const {
     return true;
 }
 
-ScenePixel GameText::pixel(int x, int y, bool flipped) const {
-    x &= 511;
-    y &= 511;
-    if (flipped) { x = 511 - x; y = 511 - y; }
-    const auto &cell = cells_[(y / 8) * 64 + x / 8];
-    const unsigned tx = (x & 7) ^ (cell.flip_x ? 7 : 0);
-    const unsigned ty = (y & 7) ^ (cell.flip_y ? 7 : 0);
-    const uint8_t pen = glyphs_[cell.tile * 64 + ty * 8 + tx];
-    return {uint16_t(cell.palette * 16 + pen), uint8_t(pen ? 0x10 : 0)};
-}
-
 size_t GameText::state_size() const {
     return sizeof(CanonicalGameTextCell) * 4096 +
            256 * 64 +

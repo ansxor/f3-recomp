@@ -19,6 +19,7 @@ they are not a support promise or a requirement to run the game.
 ## Measurement archive
 
 - [Validation scope](VALIDATION.md): the historical combined-build checkpoint, host limits and references to detailed evidence.
+- [Exact runtime optimization measurements](WORKFLOWS.md#exact-runtime-optimization-measurements): retained changes, reversal scope, paired timings and profiling limits.
 - [Combined binary-size measurements](BINSIZE-COMBINED.md): full-coverage optimization tiers, profile provenance and observed gates.
 - [Exclusion experiment](BINSIZE-EXCLUDE.md): reviewed intervals and the failed broader candidate.
 - [Profile experiment](BINSIZE-PROFILE.md): retained cold-code tiers versus the rejected slim general-play build.

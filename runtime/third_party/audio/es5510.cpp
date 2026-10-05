@@ -113,25 +113,6 @@ int8_t countLowOnes(int32_t x) {
 
 constexpr int OP_CMP = 4;
 
-const ES5510::AluOp ALU_OPS[16] = {
-    { 2, "ADD" },
-    { 2, "SUB" },
-    { 2, "ADDU" },
-    { 2, "SUBU" },
-    { 2, "CMP" },
-    { 2, "AND" },
-    { 2, "OR" },
-    { 2, "XOR" },
-    { 1, "ABS" },
-    { 1, "MOV" },
-    { 1, "ASL2" },
-    { 1, "ASL8" },
-    { 1, "LS15" },
-    { 1, "DIFF" },
-    { 1, "ASR" },
-    { 0, "END" }
-};
-
 const ES5510::OpSelect OPERAND_SELECT[16] = {
     { ES5510::SRC_DST_REG,   ES5510::SRC_DST_REG,   ES5510::SRC_DST_REG,   ES5510::SRC_DST_REG },
     { ES5510::SRC_DST_REG,   ES5510::SRC_DST_REG,   ES5510::SRC_DST_REG,   ES5510::SRC_DST_DELAY },
@@ -540,6 +521,7 @@ void ES5510::execute_run(int cycles) {
         if (state == STATE_HALTED) {
             if (halt_asserted) {
                 host_control &= ~0x04;
+                break;
             } else {
                 state = STATE_RUNNING;
                 host_control |= 0x04;
@@ -549,7 +531,10 @@ void ES5510::execute_run(int cycles) {
             ram_pp = ram_p;
             ram_p = ram;
 
-            uint64_t instr = m_instr[pc % 160];
+            // pc is an 8-bit canonical register, so one subtraction implements
+            // modulo 160 without changing its observable 255 -> 0 wrap.
+            const unsigned instr_index = pc < 160 ? pc : pc - 160;
+            const uint64_t instr = m_instr[instr_index];
 
             if (ram_pp.cycle != RAM_CYCLE_WRITE) {
                 if (ram_pp.io) {
@@ -559,16 +544,24 @@ void ES5510::execute_run(int cycles) {
                 }
             }
 
-            RamControl ramControl = RAM_CONTROL[(instr >> 3) & 0x07];
+            const RamControl &ramControl = RAM_CONTROL[(instr >> 3) & 0x07];
             ram.cycle = ramControl.cycle;
             ram.io = ramControl.access == RAM_CONTROL_IO;
 
-            int32_t offset = m_gpr[pc % 160];
+            const int32_t offset = m_gpr[instr_index];
             switch (ramControl.access) {
             case RAM_CONTROL_DELAY: {
-                int32_t modulo = dlength + memincrement;
-                int32_t base_plus_offset = dbase + offset;
-                int32_t mod_result = (modulo > 0) ? (base_plus_offset % modulo) : 0;
+                const int32_t modulo = dlength + memincrement;
+                int32_t mod_result = 0;
+                if (modulo > 0) {
+                    mod_result = dbase + offset;
+                    // Normal delay addresses need at most one wrap. Keep the
+                    // signed remainder for negative or more distant offsets.
+                    if (mod_result >= modulo)
+                        mod_result -= modulo;
+                    if (uint32_t(mod_result) >= uint32_t(modulo))
+                        mod_result %= modulo;
+                }
                 ram.address = (mod_result & memmask) >> memshift;
                 break;
             }
@@ -669,8 +662,8 @@ void ES5510::execute_run(int cycles) {
             if (alu.op == 0x0f) { // END
                 alu_operation_end();
             } else {
-                AluOp aluOp = ALU_OPS[alu.op];
-                if (aluOp.operands == 1) {
+                // Opcodes 0..7 are binary; 8..14 are unary (END handled above).
+                if (alu.op >= 8) {
                     if (alu.src == SRC_DST_REG) {
                         alu.bValue = read_reg(alu.bReg);
                     } else {
@@ -709,10 +702,10 @@ void ES5510::run_once() {
     set_HALT(false);
     execute_run(1);
     set_HALT(true);
-    int safety = 200;
-    while (state != STATE_HALTED && safety-- > 0) {
-        execute_run(1);
-    }
+    // Keep the wake-up/first cycle above separate: HALT is released only for
+    // that cycle. The remaining budget stops at END or after 200 instructions.
+    if (state != STATE_HALTED)
+        execute_run(200);
 }
 
 size_t ES5510::state_size() const {

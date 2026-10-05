@@ -14,7 +14,16 @@ public:
     void observe_write(uint32_t pc, uint32_t address);
     bool supported() const;
     uint32_t unsupported_pc() const { return unsupported_pc_; }
-    ScenePixel pixel(int x, int y, bool flipped) const;
+    ScenePixel pixel(int x, int y, bool flipped) const {
+        x &= 511;
+        y &= 511;
+        if (flipped) { x = 511 - x; y = 511 - y; }
+        const auto &cell = cells_[(y / 8) * 64 + x / 8];
+        const unsigned tx = (x & 7) ^ (cell.flip_x ? 7 : 0);
+        const unsigned ty = (y & 7) ^ (cell.flip_y ? 7 : 0);
+        const uint8_t pen = glyphs_[cell.tile * 64 + ty * 8 + tx];
+        return {uint16_t(cell.palette * 16 + pen), uint8_t(pen ? 0x10 : 0)};
+    }
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
     void load_state(StateReader &reader);

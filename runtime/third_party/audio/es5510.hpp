@@ -46,11 +46,6 @@ public:
         RAM_CYCLE_DUMP_FIFO = 2
     };
 
-    struct AluOp {
-        int operands;
-        const char *opcode;
-    };
-
     struct OpSelect {
         OpSrcDst alu_src;
         OpSrcDst alu_dst;
