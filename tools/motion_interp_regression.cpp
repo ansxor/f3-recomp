@@ -19,6 +19,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #ifdef F3RT_GENERATED
 #include "program.h"
@@ -246,7 +247,9 @@ int comparison(const Options &o) {
     const auto period = std::chrono::nanoseconds(uint64_t(
         1e9 * f3rt::Machine::frame_pixels / f3rt::Machine::pixel_clock));
     const auto begin = Clock::now();
-    auto frame_start = begin, next_frame = begin + period, report_start = begin;
+    auto frame_start = begin, next_frame = begin + period, report_start = begin, next_present = begin;
+    const double display_hz = gpu.display_hz();
+    auto present_period = display_hz > 0 ? std::chrono::nanoseconds(uint64_t(1e9 / display_hz)) : period;
     uint64_t step = 0, submitted = 0, interpolated = 0, moving = 0;
     uint64_t window_submitted = 0, window_interpolated = 0, window_moving = 0;
     float min_alpha = 1, max_alpha = 0;
@@ -258,15 +261,25 @@ int comparison(const Options &o) {
         << " seconds=" << o.demo_seconds << '\n';
     while (!quit && Clock::now() - begin < std::chrono::seconds(o.demo_seconds)) {
         SDL_Event event;
-        while (SDL_PollEvent(&event))
+        while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_KEY_DOWN &&
                 event.key.scancode == SDL_SCANCODE_ESCAPE)) quit = true;
+            if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || event.type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED) {
+                const double hz = gpu.display_hz();
+                present_period = hz > 0 ? std::chrono::nanoseconds(uint64_t(1e9 / hz)) : period;
+                next_present = Clock::now();
+            }
+        }
         if (quit) break;
-        gpu.pace_motion();
+        const bool display_paced = gpu.pace_motion();
         const auto now = Clock::now();
         while (now >= next_frame) {
             pan(++step);gpu.capture_motion(*scene, step);
             frame_start = next_frame;next_frame += period;
+        }
+        if (!display_paced && now < next_present) {
+            std::this_thread::sleep_until(std::min(next_frame, next_present));
+            continue;
         }
         const bool capture = capture_pending && step >= 16;
         gpu.draw_motion_comparison_timed(*scene, frame_start, period, capture ? capture_file.c_str() : nullptr);
@@ -292,6 +305,12 @@ int comparison(const Options &o) {
                 << " moving_interpolated_pct=" << (window_moving?100.0*double(window_interpolated)/window_moving:0.0)
                 << '\n' << std::flush;
             report_start=end;window_submitted=window_interpolated=window_moving=0;
+        }
+        if (!display_paced) {
+            next_present += present_period;
+            const auto end = Clock::now();
+            if (next_present <= end) next_present = end + present_period;
+            std::this_thread::sleep_until(std::min(next_frame, next_present));
         }
     }
     require(before == state(m) && pixels == m.pixels && sync_crc == m.sync_state_crc(),

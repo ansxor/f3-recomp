@@ -68,9 +68,12 @@ GPU API:
 - `draw_motion(scene, alpha, ...)`: consume history without advancing it.
 - `last_motion()`: accepted geometry, moving candidates, rejection census and alpha.
 - `pace_motion()`: pace before selecting the native pair; the next timed draw
-  consumes that wait rather than waiting a second display tick.
-- `draw_motion_timed(scene, frame_start, period, ...)`: acquire the swapchain
-  before sampling live alpha. Explicit-alpha `draw_motion` stays deterministic.
+  consumes that wait rather than waiting a second display tick. Returns false
+  when no native pacer is active; the caller then schedules display deadlines.
+- `present_motion(scene, frame_start, period, wait=false)`: acquire before
+  sampling live alpha; skip busy GPU frames before uploads/rendering. Returns
+  whether a drawable was submitted. Explicit captures can request a wait;
+  explicit-alpha `draw_motion` stays deterministic.
 - `last_presented()`: accepted non-null drawable submission, **not scanout**.
 - `display_hz()`, `requested_display_hz()`, `display_callback_hz()`: selected
   mode, best-effort native display-link request, and observed callback cadence.
@@ -102,10 +105,17 @@ testing the native-frame deadline. Waiting after that test could select an old
 pair, cross the deadline, and draw alpha 1 instead of a useful intermediate.
 The timed draw then acquires the SDL swapchain **before** sampling alpha.
 Capture remains tied to native advancement or explicit resets, not redraws.
-Other SDL platforms retain swapchain pacing; their high-refresh runtime is
-unverified here. The hidden/off-display callback wait has a monotonic 50ms bound.
+Without an active native display pacer, the frontend and frozen comparison demo
+use a rolling display-mode deadline. The frontend wakes at the earlier display
+or native-simulation deadline, so a slow display does not throttle PCM production.
+Paced live draws prefer mailbox presentation and skip busy in-flight GPU frames before
+uploads; explicit captures still wait and render the requested frame. See the
+[Linux display-backpressure reproduction](GPU-VIDEO.md#linux-presentation-backpressure-and-audio)
+for hardware-qualified evidence and FIFO/driver-stall limits. The macOS
+hidden/off-display callback wait retains its monotonic 50ms bound.
 Temporal window mode requests one GPU frame in flight. Ordinary/default-off
-rendering neither creates the display link nor changes its queue settings.
+mode does not create a display link and retains SDL's default allowed frames in
+flight; both modes share the mailbox presentation preference.
 
 The network advance deadline, lead limit, input words, session pump and
 rollback execution are unchanged. Additional presentation iterations do not
@@ -508,7 +518,9 @@ best-effort request; display mode, power/thermal policy or system load can
 reduce callback cadence. The prior 60Hz-cap hypothesis is **unproven** because
 the initial run did not observe callbacks/scanout. The corrected observed
 120Hz callback/submission rates show no 60Hz cap in these exercised runs.
-Vulkan, older macOS callback pacing and physical 144Hz+ remain unverified.
+These measurements are macOS-specific; Linux Vulkan pacing evidence is recorded
+in the [GPU report](GPU-VIDEO.md#linux-presentation-backpressure-and-audio).
+Older macOS callback pacing and physical 144Hz+ scanout remain unverified.
 
 Sources:
 
