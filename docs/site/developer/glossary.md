@@ -48,7 +48,7 @@ See [Discovery](/developer/recompiler/discovery).
 
 **confirmed frame** — A frame for which the program has the real input of both players. `Rollback::confirmed_frame()` is the first frame that is not confirmed.
 
-**confirmed-only audio** — The netplay audio rule. The program plays only the audio of confirmed frames. Audio from a guessed frame is replaced during a rollback. This adds latency but never repeats sound. See [Rollback](/developer/netplay/rollback).
+**confirmed-only audio** — The default accurate backend's netplay rule: publish only PCM from confirmed frames and replace speculative PCM during rollback. HLE instead drains an independent speculative worker stream, reconciles commands without restoring the worker, and excludes PCM from peer comparison. See [Rollback](/developer/netplay/rollback) and the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
 
 **coverage** — The report of what the recompiler found. The file is `coverage.json`. It lists decoded instructions, rejected words and unresolved transfers. It is not proof that unknown bytes are data.
 

@@ -237,7 +237,7 @@ See [Debugging a desync](/developer/netplay/debugging) for the next steps after 
 
 ## Confirmed-only audio
 
-Speculative audio can be wrong. If the engine played it and then rolled back, the player would hear a wrong sound and then a corrected sound. The engine avoids this.
+With the default accurate backend, speculative audio is retained until confirmation. This avoids playing a wrong sound and then a corrected sound.
 
 - Each simulated frame writes its PCM to `audio[f % (window + 1)]`. A resimulation replaces the PCM of that frame.
 - Only `promote()` copies PCM to the output queue, and only for a confirmed frame.
@@ -249,6 +249,17 @@ Each frame has up to 4096 interleaved `int16_t` values. This is more than four t
 
 The 4096-value per-frame buffer holds 2048 stereo frames. The confirmed queue holds 139,264 values, or 69,632 stereo frames. These are sample-storage bounds, not a fixed number of F3 frames. If device audio remains after a frame drain, the core throws instead of truncating PCM.
 
+
+## Opt-in non-rollback HLE audio
+
+`--audio-backend hle` uses the same canonical main-CPU rollback, but excludes
+worker voices/effects/PCM from snapshots. Commands are recorded per input
+frame and reconciled after resimulation. Exact packet/program matches within
+two frames retain their instance; missing direct SFX fade over 240 samples
+(5 ms at 48 kHz). Music and already rendered audio never rewind.
+`render_audio` drains the speculative HLE stream instead of the confirmation
+queue. Peers may hear different corrected histories while state CRCs agree;
+the backend is part of the handshake.
 
 ## A worked example
 

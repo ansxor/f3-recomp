@@ -14,7 +14,7 @@ The F3 board has a separate sound computer. It has these parts:
 
 The main CPU sends commands to the sound CPU through a mailbox in shared memory. The sound driver reads the commands and programs the ES5505 voices.
 
-The runtime uses MAME-derived sound-device implementations, validated against reference output rather than physical hardware. It has two ways to execute the sound ROM; **native sound is not HLE**:
+The default `--audio-backend accurate` uses MAME-derived sound-device implementations, validated against reference output rather than physical hardware. It has two ways to execute the sound ROM; **native sound is not HLE**:
 
 | Driver | Name in the option | What it is |
 | --- | --- | --- |
@@ -35,9 +35,20 @@ flowchart LR
     A --> WAV["WAV file (optional)"]
 ```
 
+## Opt-in HLE audio
+
+`--audio-backend hle` opts into approximate audio on a separate 48 kHz worker.
+It reads Land Maker's music/instrument data and sample ROM directly, without
+executing the sound CPU or ES5505/ES5510 programs. Do not combine it with
+`--sound-driver` or `--sound-trace`.
+
+Accurate (emulated) audio remains the default. In netplay, both peers must
+select the same backend; HLE audio is not rewound during rollback.
+See [HLE evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+
 ## Choose the sound driver
 
-Use `--sound-driver native` or `--sound-driver oracle`.
+With the accurate backend, use `--sound-driver native` or `--sound-driver oracle`.
 
 | Situation | Driver |
 | --- | --- |
@@ -61,7 +72,7 @@ Add `--no-audio` to skip the sound device. The machine still makes the samples. 
 
 ## Record a WAV file
 
-Use `--wav FILE` to record 16-bit stereo PCM. The ES5505 audio core sets the sample rate. Offline runs record generated audio; netplay records confirmed audio.
+Use `--wav FILE` to record 16-bit stereo PCM. Accurate audio uses the ES5505 audio core's sample rate; HLE uses 48 kHz. Offline runs record generated audio; netplay records confirmed accurate audio or the HLE worker's speculative output.
 
 ```sh
 ./build/landmakr --headless --frames 3600 --wav build/audio.wav
@@ -133,6 +144,8 @@ build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
 | `--wav FILE` | none | Write a WAV file. |
 | `--wav-window full\|event` | `full` | `full` records from cold boot. `event` records from the event time. |
 | `--sound-driver oracle\|native` | `oracle` | Driver to use. |
+| `--audio-backend accurate\|hle` | `accurate` | Choose board emulation or the independent HLE engine. |
+| `--hle-events FILE` | none | HLE voice-event CSV; requires HLE. |
 
 A packet is a hex string. The first byte is the total packet size, including the size byte and the opcode byte. For example, `038001` has size 3, opcode `0x80` and parameter `0x01`. The program adds no hidden setup packets.
 
@@ -140,5 +153,5 @@ The default of 900 boot frames is after the output-gain writes of the game. A sm
 
 ## Next steps
 
-- [Online play](/guide/netplay) uses the native driver only.
+- [Online play](/guide/netplay) uses the native sound driver by default, or opt-in HLE audio.
 - The sound compiler: [Developer: sound compiler](/developer/recompiler/sound-compiler).

@@ -11,6 +11,7 @@ they are not a support promise or a requirement to run the game.
 - [CPU ABI changes](ABI-CHANGES.md): current ABI 3 and earlier interface history.
 - [Game scope and porting audit](../site/developer/porting.md): generic F3 pieces, Land Maker assumptions and deferred refactors.
 - [Sound-driver investigation](../SOUND-DRIVER.md): ROM-specific driver semantics and native/oracle comparison.
+- [Opt-in HLE audio](HLE-AUDIO.md): ROM-data synthesis, non-rewound rollback policy, tolerance-based comparisons and known limits.
 - [Netplay design](../NETPLAY.md): snapshot, protocol and rollback contracts.
 
 ## Measurement archive

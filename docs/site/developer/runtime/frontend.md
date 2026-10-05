@@ -19,6 +19,8 @@ Compile definitions select their different defaults.
 
 When `F3_SOUND_GENERATED_DIR` is set, CMake adds `F3RT_SOUND_GENERATED` to both targets. The frontend then includes `sound_program.h`, and the sound driver defaults to `native` unless `--sound-driver` is given.
 
+`--audio-backend accurate|hle` selects the audio implementation; `accurate` is always the default. `--sound-driver` selects native or interpreted sound-CPU execution only within accurate audio. HLE runs a ROM-derived sequencer and 48 kHz PCM synth on its own worker, without executing the sound CPU or ES chips.
+
 The generated header `program.h` gives `f3_generated_register`. If the binary has no generated code and you ask for `--translated`, the program throws `This binary was built without F3_GENERATED_DIR`.
 
 ## Startup
@@ -29,11 +31,14 @@ flowchart TD
   B --> C["RomSet::load(romdir, set)"]
   C --> D["make Machine"]
   D --> E["optional SoundTrace"]
-  E --> F{"sound_driver native"}
-  F -- yes --> G["use_native_sound(f3_sound_blocks, f3_sound_block_count)"]
-  F -- no --> H["oracle interpreter stays"]
+  E --> F{"audio backend"}
+  F -- hle --> W["set_backend(Hle): independent worker"]
+  F -- accurate --> S{"sound_driver native"}
+  S -- yes --> G["use_native_sound(f3_sound_blocks, f3_sound_block_count)"]
+  S -- no --> H["oracle interpreter stays"]
   G --> I["allow_main_fallback = allow_fallback"]
   H --> I
+  W --> I
   I --> J{"video mode not fdp"}
   J -- yes --> K["make GameVideo"]
   J -- no --> L["EEPROM load"]
@@ -52,7 +57,7 @@ The code checks these rules after it parses the options. Each failure throws a `
 
 - `--rom-dir` must be given (or built in), and `--dump-every` must not be 0.
 - `--headless` needs `--frames`.
-- `--sound-driver` must be `oracle` or `native`. `native` needs a generated sound program.
+- `--audio-backend` must be `accurate` (default) or `hle`. HLE rejects explicit `--sound-driver` and `--sound-trace`. Under accurate, `--sound-driver` must be `oracle` or `native`; native needs a generated sound program.
 - A `landmakr` build accepts only `--set landmakrj`.
 - `--video` must be `fdp`, `game` or `compare`. `game` and `compare` need `landmakrj`, translated mode and no fallback.
 - `--video-scale` must be 1 to 4, `auto` or `auto-integer`. Automatic modes require GPU; `--video-border` must be 0 to 160.
@@ -61,7 +66,7 @@ The code checks these rules after it parses the options. Each failure throws a `
 - `--video-interp` must be `off`, `linear` or `fit`; non-off requires GPU. `--video-interp-fields` must be `none`, `geometry`, `palette` or `geometry,palette` (default `geometry`); alpha remains discrete.
 - `--netplay-player` must be 1 or 2. `--netplay-delay` must be 0 to 8.
 - Any `--netplay-*` option turns netplay on. Netplay needs `--netplay-server` and `--netplay-room`.
-- Netplay also needs translated mode, no fallback, `--video game` at fixed scale 1 and border 0 (auto modes rejected), the native sound driver, and no `--eeprom`, `--sound-trace` or `--fallback-report`. This keeps both peers on one deterministic path.
+- Netplay also needs translated mode, no fallback, `--video game` at fixed scale 1 and border 0 (auto modes rejected), either accurate/native audio or HLE, and no `--eeprom`, `--sound-trace` or `--fallback-report`. Both peers must select the same backend; native main execution still requires zero fallback.
 - With netplay, `--frames` must be below `UINT32_MAX - 1024`.
 
 Unknown options throw `Unknown argument`. `--help` prints a usage text and returns 0.
@@ -213,7 +218,7 @@ Key facts about the code:
   Without throttle, the lead limit is 16 frames.
   `--unthrottled` bypasses the `next_net_step` time gate, not the frame-lead limit.
 - The time for the next frame is `next_net_step`. After each step it moves by one frame time.
-- The audio comes from `rollback->render_audio`, not from `Machine::audio->render`. It gives only confirmed audio.
+- The audio comes from `rollback->render_audio`, not directly from `Machine::audio->render`. Accurate publishes only confirmed PCM. HLE drains its independent speculative stream and reconciles rollback commands without restoring the worker. Main-side command state is deterministic and serialized, but worker state and intentionally history-dependent PCM are excluded from snapshots and peer checksums. See the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract). Optional `--wav FILE` records the selected backend's output, not a cross-peer PCM parity guarantee for HLE.
 - After both peers' inputs confirm the requested frame count, the frontend sends `finish(frames, m.state_crc())`.
   The loop continues until the transport reports completion.
   The transport compares the final CRCs.
@@ -234,7 +239,7 @@ After the loop ends, the code does this:
 5. Calls `sound_trace->finish(m)` if tracing is enabled.
 6. Prints one summary line.
 
-The summary line has these `key=value` fields: `set`, `frames`, `pc`, `sound_pc`, `sound_driver`, `frame_crc`, `cycles`, `native_blocks`, `fallback_instructions`, `audio_frames`, `audio_peak`, `nonzero_samples`. The `frame_crc` is the CRC32 of `m.pixels`. Scripts and tests use this line to check a run. See [Testing](/developer/testing/).
+The summary line has these `key=value` fields: `set`, `frames`, `pc`, `sound_pc`, `audio_backend`, `sound_driver`, `frame_crc`, `cycles`, `native_blocks`, `fallback_instructions`, `audio_frames`, `audio_peak`, `nonzero_samples`. HLE reports `sound_driver=none` and a separate worker-statistics line. The `frame_crc` is the CRC32 of `m.pixels`. Scripts and tests use this line to check a run. See [Testing](/developer/testing/).
 
 ## Key points
 

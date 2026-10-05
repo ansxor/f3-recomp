@@ -5,6 +5,27 @@ force at that checkpoint, including later features originally added under ABI 2.
 Scheduling costs and device models follow reference-emulator behavior; this
 interface history is not a physical bus-cycle accuracy claim.
 
+## Opt-in HLE audio — CPU ABI 3 unchanged
+
+`Audio::set_backend(Backend::Hle)` selects the ROM-data sequencer and mixer
+after ROM/shared-memory configuration and before execution. The default
+`Backend::Accurate` preserves the sound CPU/device snapshot format.
+HLE uses 48 kHz output and does not execute a sound CPU. `Machine::sound_pc()`
+returns zero and HLE snapshots omit both native and interpreted sound CPUs.
+
+The HLE audio record is 1632 explicitly serialized bytes: main clock,
+packet count/hash, consumer/reset state and per-track direct-program context.
+Worker sequencer/voices/effects/PCM and output-side command identities are
+excluded. Machine frame stepping brackets packet attribution with
+`begin_frame`/`finish_frame`, including instructions that cross vblank.
+Rollback callers bracket restore/resimulation with `begin_rollback(begin,end)`
+and `end_rollback`; restoration alone never rewinds HLE audio.
+
+Netplay settings bit14 identifies HLE. Accurate confirmed-only PCM remains
+unchanged; HLE publishes its speculative stream and reconciles missing direct
+notes by instance. No generated CPU layout, timing, instruction-start table
+or CPU ABI version changes. See [HLE-AUDIO.md](HLE-AUDIO.md).
+
 ## Version 3 — explicit ROM instruction-start exclusions
 
 `f3_excluded_range` and `f3_register_exclusions` register immutable, sorted,

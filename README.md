@@ -73,7 +73,8 @@ the assigned local player. Settings persist only when `--eeprom FILE` is supplie
 | `--video-filter nearest\|linear` | `nearest`; final presentation filtering. |
 | `--video-interp off\|linear\|fit` | `off`; optional GPU line sampling above native scale. |
 | `--video-interp-fields none\|geometry\|palette\|geometry,palette` | `geometry`; palette blending is separately opt-in. |
-| `--sound-driver native\|oracle` | `native` for a ROM-generated build; `oracle` interprets the sound ROM. Both use emulated sound devices; native is not HLE. |
+| `--audio-backend accurate\|hle` | `accurate` (emulated sound devices) is the default. `hle` opts into approximate ROM-data synthesis; see the [sound guide](docs/site/guide/sound.md). |
+| `--sound-driver native\|oracle` | For `accurate` audio only: `native` for a ROM-generated build; `oracle` interprets the sound ROM. Both use emulated sound devices; native is not HLE. |
 | `--eeprom FILE` | No persistence unless supplied. |
 | `--frames N --headless` | Finite non-windowed run; headless requires a frame limit. |
 | `--wav FILE`, `--no-audio` | Save PCM or disable live playback. |
@@ -115,9 +116,10 @@ On the two clients:
 Insert a coin and press start on each client; use the game's normal challenge
 flow to enter versus play. Keys address the assigned local player. Both peers
 cold-boot factory EEPROM; persistence, CPU fallback, oracle sound and diagnostic
-traces are rejected. Confirmed-only audio adds latency to avoid repeating
-speculative sound. The relay is not encrypted or an anti-cheat service; use a
-trusted network/server. See the [netplay guide](docs/site/guide/netplay.md).
+traces are rejected. Default emulated audio publishes only confirmed sound;
+opt-in HLE reconciles speculative sound without rewinding music. Both peers
+must select the same audio backend. The relay is not encrypted or an anti-cheat
+service; use a trusted network/server. See the [netplay guide](docs/site/guide/netplay.md).
 
 ## Land Maker-specific versus generic F3
 

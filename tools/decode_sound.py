@@ -195,6 +195,9 @@ class Decoder:
             self.note_sources[address] = source
             yield base | dict(event="note_source", **source)
             return
+        if kind == 11:
+            yield base | dict(event="note_release", origin=self.note_sources.get(address))
+            return
         if kind == 5:
             yield base | dict(event="end")
             return
@@ -287,7 +290,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
     parser.add_argument("--output", type=Path, required=True, help="JSONL, gzip when ending .gz")
-    parser.add_argument("--notes-only", action="store_true", help="Only voice starts, commands and reset/end events")
+    parser.add_argument("--notes-only", action="store_true", help="Voice starts, note ownership/releases, command lifecycle and reset/end events")
     parser.add_argument("--commands-only", action="store_true", help="Only submitted/consumed command packets")
     args = parser.parse_args()
     decoder = Decoder()
@@ -301,7 +304,8 @@ def main():
                 if args.commands_only:
                     include = event["event"] in selected
                 else:
-                    include = not args.notes_only or event["event"] in selected + ("voice_start", "board_reset", "end")
+                    include = not args.notes_only or event["event"] in selected + (
+                        "command_dispatch", "note_source", "note_release", "voice_start", "board_reset", "end")
                 if include:
                     output.write(json.dumps(event, separators=(",", ":")) + "\n")
     print(json.dumps(dict(counts), sort_keys=True))

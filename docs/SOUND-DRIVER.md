@@ -178,15 +178,15 @@ from every command. Multi-byte operands are big-endian.
 | 8d | 6 | sequence, track, program-hi, program-lo | `$c130da` → `$c11dce`: select track instrument/program |
 | 8e | 6 | sequence, track, key, velocity | `$c130ea`: allocate sustained note, duration `$7fff` |
 | 8f | 5 | sequence, track, key | `$c1313c`: unlink matching note and release through `$c141ce` |
-| 90 | 6 | sequence, track, key, value | `$c13146`: matching-note continuation stores value at A3+6; not exercised in seed 5 |
+| 90 | 6 | sequence, track, key, value | `$c13146`: matching path writes to ROM `$c1314e` through popped return-PC A3; ignored |
 
 `$c13072` finds a live track by its logical ID; an absent track produces no
 note. It reads four argument bytes even for five-byte packets; handlers that
 do not need the final operand ignore it. The fade handler reads four operands
 despite accepting length seven; do not invent a meaning for its final byte.
-The musical names of the channel fields for 87/8a/8b and the intended use of
-90 are not established by this capture. Their addresses and stores are
-documented instead of guessed MIDI-controller names.
+87/8a/8b alter balance/volume fields. The apparent 90 continuation store does
+not target the note node: `$c1310e` pops the return PC into A3 and jumps to it.
+See [HLE-AUDIO.md](developer/HLE-AUDIO.md) for direct ROM decoding and effects measurements.
 
 Sequence bit 7 is **not** a universal ignored flag: `$c12c30/$c12cb8/$c12cea`
 implement extra selection/state behavior. `$c12de6` also follows linked
@@ -232,13 +232,14 @@ Voice record fields established by initialization and live snapshots:
 `+0/+2` next/previous list links; `+4..+7` effective key/channel/layer tags;
 `+$0c` flags (high byte) and OTIS voice (low byte); `+$0e` owning note node;
 `+$10` channel pointer; `+$16` patch pointer; `+$1a` selected sample-split pointer
-(ROM lookup or the RAM override at `$d840`);
+(ROM lookup, copied sample-ROM metadata in RAM, or explicit override at `$d840`);
 `+$24/+$26` rotating update-list links; `+$8c` channel's embedded descriptor
 pointer; `+$a2` sample-bank selector. JSON distinguishes `patch_descriptor`,
 `sample_descriptor` and `channel_descriptor`; these are not interchangeable.
 The `driver.key/tag5/tag6/tag7` fields preserve raw allocation tags; use
 `driver.origin.note` for the command/sequence key. Descriptor pointers are
-not necessarily ROM addresses: the captured direct SFX uses a RAM split.
+not necessarily ROM addresses: the captured direct SFX uses sample-ROM
+metadata copied to RAM, not evidence of an active `$d840` override.
 
 The sample-split record has tuning at +0, packed address/control longwords at
 +2/+6/+10, cutoff key at +5, loop-mode byte at +9. `$c17cfa` selects the first

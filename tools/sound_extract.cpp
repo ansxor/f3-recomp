@@ -3,6 +3,7 @@
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
 #include "sound_trace.hpp"
+#include "hle_events.hpp"
 
 #ifdef F3RT_SOUND_GENERATED
 #include "sound_program.h"
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -166,6 +168,8 @@ void print_help(const char *prog) {
               << "  --sound-driver oracle|native\n"
               << "                         oracle: interpreted 68000 sound CPU (default)\n"
               << "                         native: statically compiled 68000 driver via f3_sound_blocks\n"
+              << "  --audio-backend accurate|hle (default accurate; HLE uses no sound CPU)\n"
+              << "  --hle-events FILE      Save HLE voice start/release/stop/parameter/cancel CSV\n"
               << "  --help, -h             Show this help message\n\n"
               << "Driver Startup Behavior and Initialization:\n"
               << "  During boot, the interpreted main CPU runs through the sound reset handshake.\n"
@@ -186,6 +190,9 @@ int main(int argc, char **argv) try {
 
     std::string set = "landmakrj";
     std::string sound_driver = "oracle";
+    std::string audio_backend = "accurate";
+    bool sound_explicit = false;
+    std::filesystem::path hle_events_path;
     std::filesystem::path sound_trace_path;
     std::filesystem::path wav_path;
     std::string wav_window = "full";
@@ -238,10 +245,15 @@ int main(int argc, char **argv) try {
                 throw std::runtime_error("--wav-window must be 'full' or 'event'");
             }
         } else if (arg == "--sound-driver") {
+            sound_explicit = true;
             sound_driver = value();
             if (sound_driver != "oracle" && sound_driver != "native") {
                 throw std::runtime_error("Invalid --sound-driver '" + sound_driver + "': must be 'oracle' or 'native'");
             }
+        } else if (arg == "--audio-backend") {
+            audio_backend = value();
+        } else if (arg == "--hle-events") {
+            hle_events_path = value();
         } else if (arg == "--help" || arg == "-h") {
             print_help(argv[0]);
             return 0;
@@ -253,6 +265,12 @@ int main(int argc, char **argv) try {
     if (romdir.empty()) {
         throw std::runtime_error("ROM directory must be specified via --rom-dir or compiled F3RT_DEFAULT_ROM_DIR");
     }
+    if (audio_backend != "accurate" && audio_backend != "hle")
+        throw std::runtime_error("--audio-backend must be accurate or hle");
+    if (audio_backend == "hle" && (sound_explicit || !sound_trace_path.empty()))
+        throw std::runtime_error("HLE does not execute a sound driver or emit CPU bus traces");
+    if (audio_backend != "hle" && !hle_events_path.empty())
+        throw std::runtime_error("--hle-events requires --audio-backend hle");
 
     // Sort scheduled packets stably by scheduled timestamp
     std::stable_sort(scheduled.begin(), scheduled.end(), [](const ScheduledPacket &a, const ScheduledPacket &b) {
@@ -274,7 +292,22 @@ int main(int argc, char **argv) try {
     auto &m = *machine;
 
     // Attach native sound driver before audio clock advances if requested
-    if (sound_driver == "native") {
+    if (audio_backend == "hle") {
+        m.audio->set_backend(f3rt::Audio::Backend::Hle);
+        if (!hle_events_path.empty()) {
+            auto events = std::make_shared<std::ofstream>(hle_events_path);
+            if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
+            *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse\n";
+            m.audio->set_hle_observer([events](const f3rt::hle::VoiceEvent &e) {
+                *events << unsigned(e.kind) << ',' << e.instance << ',' << e.tick << ','
+                        << unsigned(e.sequence) << ',' << unsigned(e.track) << ',' << unsigned(e.key) << ','
+                        << unsigned(e.layer) << ',' << unsigned(e.output_pair) << ','
+                        << e.sample_start << ',' << e.sample_end << ',' << e.frequency << ','
+                        << e.left_volume << ',' << e.right_volume << ',' << e.k1 << ',' << e.k2 << ','
+                        << e.loop << ',' << e.reverse << '\n';
+            });
+        }
+    } else if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
                            {f3_sound_excluded_ranges, f3_sound_excluded_count});
@@ -413,7 +446,7 @@ int main(int argc, char **argv) try {
     const auto elapsed = std::chrono::steady_clock::now() - start_time;
     const double elapsed_sec = std::chrono::duration<double>(elapsed).count();
 
-    std::cout << "SUCCESS driver=" << sound_driver
+    std::cout << "SUCCESS backend=" << audio_backend << " driver=" << (audio_backend == "hle" ? "none" : sound_driver)
               << " set=" << set
               << " packets=" << packets_published
               << " duration=" << std::fixed << std::setprecision(3) << duration_seconds << "s"

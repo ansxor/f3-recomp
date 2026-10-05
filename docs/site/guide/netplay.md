@@ -111,7 +111,7 @@ Any `--netplay-*` option turns netplay on. Then `--netplay-server` and `--netpla
 Netplay needs the strict native game. The program stops at the start with an error if one of these rules is broken:
 
 - Video mode must be `game`, with scale 1 and border 0.
-- Sound driver must be `native`.
+- Use the default accurate audio with the `native` sound driver, or opt into `--audio-backend hle` without an explicit `--sound-driver`. Both peers must select the same audio backend.
 - Do not use `--allow-fallback`.
 - Do not use `--eeprom`, `--sound-trace` or `--fallback-report`.
 
@@ -179,7 +179,7 @@ Both players must give the same value. If the values differ, the relay rejects t
 | The shared test switch. | The window, filter and sound device. |
 | A CRC32 of the full machine state every 60 confirmed frames. | Local files such as `--wav` output. |
 
-Audio is released only after frames are confirmed, so predicted frames do not play sound twice. Confirmation adds audio latency; it is not a physical-hardware accuracy guarantee.
+Accurate audio is released only after frames are confirmed, so predicted frames do not play sound twice. Confirmation adds audio latency; it is not a physical-hardware accuracy guarantee. Opt-in [HLE audio](/guide/sound#opt-in-hle-audio) is approximate and runs on a separate worker that is not rewound during rollback.
 
 ## Limits
 

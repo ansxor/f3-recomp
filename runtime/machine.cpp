@@ -29,6 +29,8 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
 Machine::~Machine() = default;
 void Machine::use_native_sound(const f3_block *program, size_t count,
                                std::span<const f3_excluded_range> excluded) {
+    if (audio->backend() == Audio::Backend::Hle)
+        throw std::runtime_error("HLE audio does not execute a native sound driver");
     if (!audio->is_reset() || audio->clock_ticks())
         throw std::runtime_error("Select the native sound driver before machine execution");
     sound_native = std::make_unique<SoundNative>(*this, program, count, excluded);
@@ -39,6 +41,7 @@ void Machine::use_native_sound(const f3_block *program, size_t count,
     sound_native->reset(true);
 }
 uint32_t Machine::sound_pc() const {
+    if (audio->backend() == Audio::Backend::Hle) return 0;
     return sound_native ? sound_native->pc() : interpreter->sound_pc();
 }
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
@@ -112,7 +115,9 @@ void Machine::write8(uint32_t a, uint8_t v) {
     }
     if (a >= 0xc00000 && a < 0xc00800) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
-        shared[a - 0xc00000] = v; return;
+        shared[a - 0xc00000] = v;
+        audio->shared_write(a - 0xc00000, frame);
+        return;
     }
     if ((a >= 0xc80000 && a <= 0xc80003) || (a >= 0xc80100 && a <= 0xc80103)) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
@@ -210,14 +215,18 @@ int Machine::fallback() {
 }
 bool Machine::run_frame(bool translated) {
     const uint64_t target = frame + 1;
+    audio->begin_frame(frame);
     while (frame < target && !cpu.halted) {
-        if (translated) { if (!f3_dispatch(&cpu)) return false; }
+        if (translated) {
+            if (!f3_dispatch(&cpu)) { audio->finish_frame(frame); return false; }
+        }
         else if (!boundary()) {
             // Reference execution must hand MMIO/IRQ changes back at every
             // instruction boundary. Coarse slices alter the ROM boot checks.
             interpreter->run_main(1);
         }
     }
+    audio->finish_frame(frame);
     return !cpu.halted;
 }
 void Machine::load_eeprom(const std::filesystem::path &p) { eeprom->load(p); }
@@ -238,8 +247,10 @@ size_t Machine::state_size() const {
                 eeprom->state_size() +
                 audio->state_size() +
                 video->state_size();
-    if (sound_native) sz += sound_native->state_size();
-    else sz += interpreter->sound_state_size();
+    if (audio->backend() != Audio::Backend::Hle) {
+        if (sound_native) sz += sound_native->state_size();
+        else sz += interpreter->sound_state_size();
+    }
     if (game_video) sz += game_video->state_size();
     return sz;
 }
@@ -315,10 +326,9 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     }
 
     // 6. Sound CPU
-    if (sound_native) {
-        sound_native->save_state(writer);
-    } else {
-        interpreter->save_sound_state(writer);
+    if (audio->backend() != Audio::Backend::Hle) {
+        if (sound_native) sound_native->save_state(writer);
+        else interpreter->save_sound_state(writer);
     }
 
     // 7. Video (always FDP)
@@ -413,10 +423,9 @@ void Machine::load_state(std::span<const uint8_t> src) {
     }
 
     // 6. Sound CPU
-    if (sound_native) {
-        sound_native->load_state(reader);
-    } else {
-        interpreter->load_sound_state(reader);
+    if (audio->backend() != Audio::Backend::Hle) {
+        if (sound_native) sound_native->load_state(reader);
+        else interpreter->load_sound_state(reader);
     }
 
     // Also sync main interpreter context so Musashi is ready for any fallback

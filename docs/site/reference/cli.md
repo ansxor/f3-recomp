@@ -34,12 +34,14 @@ Both programs use `runtime/frontend.cpp`. `landmakr` is the supported Japan play
 | `--allow-fallback` default | Off (strict native) | On (the CPU may use the interpreter for untranslated code) |
 | `--set` | Must be `landmakrj`. Other values stop with `This generated executable requires landmakrj`. | `landmakrj` or `landmakr` |
 | `--video` default | `game` when strict native and you did not pass `--video` | `fdp` |
-| `--sound-driver` default | `native` if the build has the generated sound program, else `oracle` | The same rule. |
+| `--sound-driver` default (accurate audio) | `native` if the build has the generated sound program, else `oracle` | The same rule. |
 | Linked generated program | Always (`F3RT_GENERATED`) | Only when `F3_GENERATED_DIR` is set |
 
 ::: info
 The `--help` text says that the sound driver default is "native in landmakr; oracle in f3rt-run". The code is different. The default is `native` in every build that defines `F3RT_SOUND_GENERATED`. The code in `runtime/frontend.cpp` is the source of truth.
 :::
+
+Audio defaults to `--audio-backend accurate`, preserving these sound-driver defaults. Opt-in `--audio-backend hle` provides approximate audio using a ROM sequencer and PCM synthesizer on its own non-rolled-back worker at 48 kHz; it executes neither the sound CPU nor the ES chips.
 
 ### What changes with --allow-fallback
 
@@ -66,9 +68,10 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--allow-fallback` | none | `landmakr`: off. `f3rt-run`: on | Let the interpreter run untranslated instructions | Diagnostic only. See the table above. |
 | `--unthrottled` | none | throttled | Run as fast as possible | Without it, the program waits so that the game runs at the real frame rate. In netplay, it also removes the frame pacing and sets the lead limit to 16 frames. |
 | `--eeprom` | `FILE` | none | EEPROM file | The program loads the file at start if it exists, and writes it at exit. The file must be exactly 128 bytes (else `Invalid EEPROM file`). Netplay rejects this flag. |
-| `--wav` | `FILE` | none | Write the generated audio to a 16-bit stereo WAV file | The sample rate is the rate of the audio core. |
-| `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Netplay rejects this flag. Decode the trace with `tools/decode_sound.py`. |
-| `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. |
+| `--wav` | `FILE` | none | Write the generated audio to a 16-bit stereo WAV file | Accurate audio uses the audio core's rate; HLE uses 48 kHz. Netplay records confirmed accurate audio or speculative HLE worker output. |
+| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose emulated devices or the approximate ROM sequencer/PCM synthesizer | Opt-in HLE runs at 48 kHz without sound CPU or ES chip execution. Explicit `--sound-driver` and `--sound-trace` are rejected with HLE. |
+| `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Accurate audio only; netplay also rejects this flag. Decode the trace with `tools/decode_sound.py`. |
+| `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution for accurate audio, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. HLE rejects an explicit driver selection. |
 | `--profile-out` | `FILE` | none | Merge versioned main/sound entry counts, atomically flush every 30 seconds and on exit | Requires `F3_PROFILE_INSTRUMENT=ON` and strict native main/sound execution. Relative destinations are fixed against the startup working directory, including after later cwd changes. Slim builds also accept it for immediate `miss` records; cold aborts always append a durable `.cold-hits` log (or `f3-cold-hits.log` without this flag). Concurrent writers must use separate paths and merge later. |
 | `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used the fallback | Netplay rejects this flag. |
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
@@ -96,7 +99,7 @@ The program checks these rules in this order.
 
 1. `--rom-dir` must be set, and `--dump-every` must not be `0`.
 2. `--headless` needs `--frames`.
-3. The sound driver must be `oracle` or `native`.
+3. The sound driver must be `oracle` or `native`, and the audio backend must be `accurate` or `hle`. HLE rejects explicit `--sound-driver` and sound tracing.
 4. In `landmakr`, `--set` must be `landmakrj`.
 5. The video mode must be `fdp`, `game` or `compare`.
 6. `game` and `compare` need `--set landmakrj`, native execution and no `--allow-fallback`.
@@ -112,11 +115,11 @@ Netplay starts when you pass at least one `--netplay-*` flag. The program then r
 
 - Native execution (`--translated` or the `landmakr` default) and no `--allow-fallback`.
 - `--video game` with scale 1 and border 0.
-- `--sound-driver native`.
+- `--audio-backend accurate` with `--sound-driver native`, or `--audio-backend hle` without an explicit sound driver.
 - No `--eeprom`, no `--sound-trace` and no `--fallback-report`.
 - If `--frames` is set, it must be less than 4294966271 (`UINT32_MAX - 1024`).
 
-If one condition fails, the program stops with `Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled`. In netplay mode, the program starts with a factory-reset EEPROM.
+If one condition fails, the program stops with `Netplay requires strict-native game video and native/HLE audio at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled`. In netplay mode, the program starts with a factory-reset EEPROM.
 
 ### Keyboard controls
 
@@ -139,7 +142,7 @@ When the window loses focus, the program releases all keys.
 
 ### Output lines
 
-At exit, the program prints one line that starts with `set=`. The line contains `frames`, `pc`, `sound_pc`, `sound_driver`, `frame_crc`, `cycles`, `native_blocks`, `fallback_instructions`, `audio_frames`, `audio_peak` and `nonzero_samples`. Scripts can parse this line. With a window, the program first prints a `window_open` line. In netplay mode, the program prints `netplay_ready` when the rollback engine starts, and `netplay_confirmed=` at exit.
+At exit, the program prints one line that starts with `set=`. The line contains `frames`, `pc`, `sound_pc`, `audio_backend`, `sound_driver`, `frame_crc`, `cycles`, `native_blocks`, `fallback_instructions`, `audio_frames`, `audio_peak` and `nonzero_samples`. HLE reports `sound_driver=none` and an additional line with `hle_commands`, `hle_reused`, `hle_cancelled` and `hle_rendered_frames`. Scripts can parse these lines. With a window, the program first prints a `window_open` line. In netplay mode, the program prints `netplay_ready` when the rollback engine starts, and `netplay_confirmed=` at exit.
 
 ### Examples
 
@@ -196,8 +199,9 @@ This program runs the strict native game for many frames with a seeded input sch
 | `--frames` | `N` | `40000` | Number of frames to run | `0` is an error: `--frames must be positive`. |
 | `--dump-dir` | `DIR` | none | Write the final machine state, or the state at the first video difference | Same file set as `--dump-dir` in the frontend. |
 | `--capture-surface` | `BMP` | none | Save the final frame as a BMP file | `--surface` is an alias. The program creates missing parent directories. |
-| `--sound-trace` | `FILE` | none | Record the sound CPU and mailbox bus events | |
-| `--sound-driver` | `oracle` or `native` | `oracle` | Sound CPU implementation | Unlike the frontend, the default does not change when the sound program is generated. `native` needs `F3RT_SOUND_GENERATED`. |
+| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose emulated devices or approximate threaded HLE audio | HLE rejects explicit `--sound-driver`, `--sound-trace` and `--profile-out`. |
+| `--sound-trace` | `FILE` | none | Record the sound CPU and mailbox bus events | Accurate audio only. |
+| `--sound-driver` | `oracle` or `native` | `oracle` | Sound CPU implementation for accurate audio | Unlike the frontend, the default does not change when the sound program is generated. `native` needs `F3RT_SOUND_GENERATED`. HLE rejects explicit driver selection. |
 | `--wav` | `FILE` | none | Save the audio | |
 | `--profile-out` | `FILE` | none | Merge actual generated main/sound entry counts, with periodic and exit flush | Requires instrumentation and `--sound-driver native`; one file per concurrent collector. |
 | `--video-diff` | none | off | Compare the game-data renderer with the FDP renderer | Starts at frame 600. |
@@ -213,7 +217,7 @@ The input schedule uses the shared constants in `tools/gameplay_inputs.hpp` (`f3
 
 ## f3rt-sound-extract
 
-This program freezes the main CPU after boot. It then injects sound packets into the sound driver and records the audio. Source: `tools/sound_extract.cpp`. It is always built. Native sound needs the generated sound program.
+This program freezes the main CPU after boot. It then injects sound packets through the mailbox and records the selected audio backend. Source: `tools/sound_extract.cpp`. It is always built. Accurate audio defaults to the oracle sound driver; native sound needs the generated sound program. HLE uses the ROM sequencer and PCM synthesizer without executing a sound CPU.
 
 | Flag | Argument | Default | Meaning | Notes |
 | --- | --- | --- | --- | --- |
@@ -222,14 +226,16 @@ This program freezes the main CPU after boot. It then injects sound packets into
 | `--packet` | `HEX` | none | A packet to inject at the start of the event (time 0) | You can repeat the flag. White space in the string is ignored. The string must have an even length. Byte 0 must equal the packet size. The minimum size is 2 bytes. |
 | `--at` | `SECONDS:HEX` | none | A packet to inject at a time after the event start | You can repeat the flag. The time must be 0 or more. All packets must be earlier than `--seconds`. |
 | `--seconds` | `DURATION` | `5.0` | Time to advance the audio after the event start | Must be a positive number. |
-| `--boot-frames` | `N` | `900` | Number of interpreted boot frames before the main CPU freezes | Must be a positive integer. The sound CPU must be out of reset after boot. Else: `Sound CPU is still held in reset; increase --boot-frames`. |
-| `--sound-trace` | `FILE` | none | Record a bus trace from cold boot | |
+| `--boot-frames` | `N` | `900` | Number of interpreted boot frames before the main CPU freezes | Must be a positive integer. The sound reset line must be released after boot. Else: `Sound CPU is still held in reset; increase --boot-frames`. |
+| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose emulated devices or approximate threaded HLE audio | HLE rejects explicit `--sound-driver` and `--sound-trace`. |
+| `--hle-events` | `FILE` | none | Save HLE voice start/release/stop/parameter/cancel events as CSV | Requires `--audio-backend hle`; not an F3SND2 CPU bus trace. |
+| `--sound-trace` | `FILE` | none | Record a bus trace from cold boot | Accurate audio only. |
 | `--wav` | `FILE` | none | Write the audio as a 16-bit stereo WAV | |
 | `--wav-window` | `full` or `event` | `full` | What the WAV contains | `full`: boot plus extraction. `event`: only the time after the event start. |
-| `--sound-driver` | `oracle` or `native` | `oracle` | Sound CPU implementation | |
+| `--sound-driver` | `oracle` or `native` | `oracle` | Sound CPU implementation for accurate audio | HLE rejects explicit driver selection. |
 | `--help`, `-h` | none | | Print usage | |
 
-The program writes packets into the mailbox ring buffer at main address `0xc00000` (1024 bytes). It stops with `Mailbox full at scheduled tick; space commands farther apart` if there is no room. On success, it prints `SUCCESS driver=... packets=...`.
+The program writes packets into the mailbox ring buffer at main address `0xc00000` (1024 bytes). It stops with `Mailbox full at scheduled tick; space commands farther apart` if there is no room. On success, it prints `SUCCESS backend=... driver=... set=... packets=...`.
 
 ```sh
 ./build/f3rt-sound-extract --sound-driver native --packet 038001 --seconds 3 --wav-window event --wav note.wav
@@ -247,7 +253,9 @@ This program proves that snapshots and netplay give the same result as a single 
 | `--seed` | `N` | `12345` | Input schedule seed | |
 | `--frames` | `N` | `20000` | Number of frames | `0` is an error. |
 | `--schedule` | `versus` or `single` | `versus` | Input schedule type | |
-| `--sound-driver` | `native`, `oracle` or `all` | `native` | Sound CPU implementation | `all` runs `native` and then `oracle`. It is for `snapshot` mode. |
+| `--sound-driver` | `native`, `oracle` or `all` | `native` | Sound CPU implementation for accurate audio | `all` runs `native` and then `oracle`. It is for `snapshot` mode. HLE rejects explicit driver selection. |
+| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose audio backend | HLE is supported in `reference` and `client`, not `snapshot`/`snapshot-proof`; explicit `--sound-driver` is rejected with HLE. |
+| `--wav` | `FILE` | none | Record client output PCM as a WAV | `client` mode only. HLE captures speculative worker output, not rolled-back PCM. |
 | `--player` | `1` or `2` | none | Player slot | Required in `client` mode. |
 | `--server` | `HOST:PORT` | `127.0.0.1:9000` | Relay server | `client` mode. |
 | `--room` | `NAME` | `oracle_room` | Relay room | `client` mode. |
@@ -271,6 +279,8 @@ This program proves that snapshots and netplay give the same result as a single 
 | `--help`, `-h` | none | | Print usage | |
 
 `client` mode stops with `Client mode requires --player 1 or --player 2` if the player is wrong. See [Tools](/reference/tools) for the script that runs the full test suite.
+
+Snapshot PCM equality is an accurate-audio proof only. HLE keeps deterministic main-side command state in snapshots but does not restore its audio worker or rewind music. Use HLE reference/client modes to check game-state convergence and capture client audio; do not expect byte-identical rolled-back HLE WAVs.
 
 ## f3rt-gpu-regression
 

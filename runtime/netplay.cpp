@@ -50,7 +50,8 @@ Identity machine_identity(const Machine &m, unsigned delay) {
     for (size_t i = 0; i < result.build_hash.size(); ++i)
         result.build_hash[i] = uint8_t(nibble(hash[2*i]) * 16 + nibble(hash[2*i+1]));
     result.settings = 0x10000u | (unsigned(bool(m.game_video)) << 12) |
-        (unsigned(bool(m.sound_native)) << 13) | delay;
+        (unsigned(bool(m.sound_native)) << 13) |
+        (unsigned(m.audio->backend() == Audio::Backend::Hle) << 14) | delay;
     std::array<uint8_t, 128> eeprom{};
     for (size_t i = 0; i < m.eeprom->words.size(); ++i) {
         eeprom[2*i] = uint8_t(m.eeprom->words[i] >> 8);
@@ -140,9 +141,12 @@ struct Rollback::Impl {
             throw std::runtime_error("Netplay strict-native execution halted at frame " + std::to_string(f));
         auto &pcm = audio[f % (window + 1)];
         pcm.tag = f;
-        pcm.count = machine.audio->render(pcm.samples.data(), pcm.samples.size() / 2) * 2;
-        if (machine.audio->available_frames())
-            throw std::runtime_error("Netplay frame audio capacity exceeded");
+        pcm.count = 0;
+        if (machine.audio->backend() != Audio::Backend::Hle) {
+            pcm.count = machine.audio->render(pcm.samples.data(), pcm.samples.size() / 2) * 2;
+            if (machine.audio->available_frames())
+                throw std::runtime_error("Netplay frame audio capacity exceeded");
+        }
         save(f + 1);
         if ((f + 1) % checksum_interval == 0) {
             auto bytes = snapshot(f + 1);
@@ -177,14 +181,16 @@ struct Rollback::Impl {
             const uint32_t end = current(), begin = dirty;
             if (begin < confirmed || snapshot_tags[begin % (window + 1)] != begin)
                 throw std::logic_error("Rollback exceeded retained snapshot window");
+            machine.audio->begin_rollback(begin, end);
             machine.load_state(snapshot(begin));
             last_depth = end - begin;
             max_depth = std::max(max_depth, last_depth);
             ++rollbacks;
             dirty = empty_frame;
-            // Device render/mix runs normally to preserve all retained state;
-            // only promote() exposes confirmed PCM. No host presentation here.
+            // Accurate devices rerun and replace speculative PCM. HLE only
+            // journals commands here; its worker and rendered PCM never rewind.
             while (current() < end) step();
+            machine.audio->end_rollback();
         }
         promote();
     }
@@ -256,6 +262,8 @@ bool Rollback::receive_checksum_to_send(Checksum &value) {
 }
 size_t Rollback::render_audio(int16_t *stereo, size_t max_frames) {
     auto &p = *impl;
+    if (p.machine.audio->backend() == Audio::Backend::Hle)
+        return p.machine.audio->render(stereo, max_frames);
     const auto count = std::min(max_frames * 2, p.output_write - p.output_read);
     for (size_t i = 0; i < count; ++i) stereo[i] = p.output[(p.output_read++) % p.output.size()];
     return count / 2;

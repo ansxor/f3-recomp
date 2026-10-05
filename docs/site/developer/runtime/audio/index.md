@@ -13,6 +13,14 @@ physical sound-board output. The registers, mixing, and clocks below describe th
 implementation; see [audio comparison](/developer/testing/audio-compare) for measured
 compatibility and remaining waveform differences.
 
+These device pages describe the default `--audio-backend accurate` path.
+Opt-in `--audio-backend hle` bypasses sound CPU/device execution and runs
+ROM-data sequencing, sample mixing and approximate effects on an independent
+48 kHz worker that is not rewound during rollback. Accurate publishes only
+confirmed PCM in netplay; HLE drains its speculative worker stream instead.
+See [the sound guide](/guide/sound#opt-in-hle-audio) and
+[HLE implementation evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+
 Sources: [audio.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
 
 ## Words used on these pages

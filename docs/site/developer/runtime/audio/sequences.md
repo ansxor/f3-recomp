@@ -165,7 +165,7 @@ Mailbox `0x8f` unlinks a matching note and releases it through `0xc141ce`. A sof
 | `+0x0e` | Owning note node. |
 | `+0x10` | Channel pointer. |
 | `+0x16` | Patch pointer. |
-| `+0x1a` | Selected sample-split pointer. It can point to ROM or a RAM override. |
+| `+0x1a` | Selected sample-split pointer. RAM descriptors include decompressed sample-bank metadata; they do not establish a runtime override. |
 | `+0x24`, `+0x26` | Rotating update-list links. |
 | `+0x8c` | Channel's embedded descriptor pointer. |
 | `+0x97` | Saved allocation priority class. |
@@ -190,6 +190,8 @@ Routine `0xc1807e` shifts the bank selector right once. It places the old low bi
 Routine `0xc180b2` writes the board bank at `0x300001 + 2*voice`.
 
 Use decoded `start_word`, `end_word` and `sample_word` to index sample ROM. Do not index it with the raw descriptor's flag-bearing byte.
+
+The metadata observed around sound RAM `0x711a` is decompressed sample-bank data copied from ROM. It is not a runtime sample override at `0xd840`. See the [ROM-derived HLE data description](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#rom-derived-protocol-and-data).
 
 [The OTIS page](/developer/runtime/audio/es5505) explains address fractions, interpolation and per-voice banks.
 

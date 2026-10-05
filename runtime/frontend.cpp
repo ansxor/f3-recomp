@@ -86,6 +86,7 @@ int main(int argc,char **argv) try {
     std::string video_mode="fdp";
     bool video_explicit=false;
     std::string sound_driver="oracle";
+    std::string audio_backend="accurate";
     bool sound_explicit=false;
     f3rt::GameVideoOptions video_options;
     f3rt::VideoScaleMode video_scale_mode=f3rt::VideoScaleMode::Fixed;
@@ -118,6 +119,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
         else if(arg=="--sound-driver") { sound_driver=value();sound_explicit=true; }
+        else if(arg=="--audio-backend")audio_backend=value();
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
         else if(arg=="--video") { video_mode=value();video_explicit=true; }
@@ -169,6 +171,7 @@ int main(int argc,char **argv) try {
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
+                     <<"  [--audio-backend accurate|hle] (default accurate; HLE runs on its own thread at 48 kHz)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
@@ -192,6 +195,10 @@ int main(int argc,char **argv) try {
 #endif
     if(sound_driver!="oracle" && sound_driver!="native")
         throw std::runtime_error("--sound-driver must be oracle or native");
+    if(audio_backend!="accurate" && audio_backend!="hle")
+        throw std::runtime_error("--audio-backend must be accurate or hle");
+    if(audio_backend=="hle" && (sound_explicit || !sound_trace_path.empty()))
+        throw std::runtime_error("HLE does not execute a sound driver; --sound-driver/--sound-trace require accurate audio");
 #ifdef F3RT_LANDMAKR
     if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
 #endif
@@ -223,10 +230,10 @@ int main(int argc,char **argv) try {
     if(netplay && (net_options.server.empty() || net_options.room.empty()))
         throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
     if(netplay && (!translated || allow_fallback || video_mode!="game" || video_options.expanded() || automatic_scale ||
-                   sound_driver!="native" || !eeprom.empty() || !sound_trace_path.empty() || !fallback_report.empty()))
-        throw std::runtime_error("Netplay requires strict-native game video/native sound at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled");
+                   (audio_backend=="accurate" && sound_driver!="native") || !eeprom.empty() || !sound_trace_path.empty() || !fallback_report.empty()))
+        throw std::runtime_error("Netplay requires strict-native game video and native/HLE audio at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled");
 #ifdef F3_PROFILE_SLIM_ENABLED
-    if(allow_fallback || !translated || sound_driver!="native")
+    if(allow_fallback || !translated || (audio_backend=="accurate" && sound_driver!="native"))
         throw std::runtime_error("Profile-slim requires strict native main and sound CPUs; no interpreter fallback");
 #endif
 #ifdef F3_PROFILE_INSTRUMENT
@@ -238,7 +245,8 @@ int main(int argc,char **argv) try {
     auto &m=*machine;
     f3rt::BlockProfileSession profile(m.roms,profile_path);
     if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
-    if(sound_driver=="native") {
+    if(audio_backend=="hle")m.audio->set_backend(f3rt::Audio::Backend::Hle);
+    else if(sound_driver=="native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks,f3_sound_block_count,
                            {f3_sound_excluded_ranges,f3_sound_excluded_count});
@@ -493,10 +501,15 @@ int main(int argc,char **argv) try {
     if(m.sound_trace)m.sound_trace->finish(m);
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
-             <<" sound_driver="<<sound_driver
+             <<" audio_backend="<<audio_backend<<" sound_driver="<<(audio_backend=="hle"?"none":sound_driver)
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
+    if(audio_backend=="hle") {
+        const auto stats=m.audio->hle_stats();
+        std::cout<<"hle_commands="<<stats.commands<<" hle_reused="<<stats.reused
+                 <<" hle_cancelled="<<stats.cancelled<<" hle_rendered_frames="<<stats.rendered_frames<<'\n';
+    }
     if(audio_queue_samples)std::cerr<<"f3rt: pacing clock_resyncs="<<clock_resyncs<<" audio_queue_drops="<<audio_queue_drops
         <<" queued_ms mean="<<1000.0*double(audio_queue_sum)/double(audio_queue_samples)/(4.0*audio_rate)
         <<" max="<<1000.0*double(audio_queue_max)/(4.0*audio_rate)<<'\n';

@@ -121,10 +121,11 @@ flowchart TB
         FDP["Video: FDP software renderer"]
     end
     subgraph AUD["Audio"]
-        AU["Audio: sound board"]
+        AU["Audio: accurate sound board (default)"]
         SN["SoundNative: compiled sound driver"]
         SI["Interpreter sound 68000: oracle"]
         CH["ES5505, ES5510, MC68681, MB87078"]
+        HW["HLE: ROM sequencer and PCM worker (opt-in)"]
     end
     FE --> RF
     NP -->|"run_frame, save_state, load_state"| RF
@@ -149,6 +150,7 @@ flowchart TB
     AU --> CH
     AU --> SN
     AU -.-> SI
+    AU -.->|"HLE backend instead of CPU/chips"| HW
 ```
 
 The table gives one line for each component.
@@ -163,8 +165,8 @@ The table gives one line for each component.
 | Bus | `Machine::read8`, `Machine::write8` | Maps addresses to ROM, RAM, palette, graphics RAM, control registers, inputs, EEPROM, sound mailbox. |
 | FDP renderer | `Video` | Draws a frame from the emulated FDP RAM. It is the video oracle. |
 | Game-data renderer | `GameVideo` | Builds supported scenes from game data. Unsupported frames use the FDP renderer, which reads FDP RAM. |
-| Audio | `Audio` | Runs the sound CPU, the DUART, the ES5505 and ES5510 chips, and the volume chip. Makes PCM samples. |
-| Sound CPU | `SoundNative` or `Interpreter` | Runs the sound program. `SoundNative` is compiled C. `Interpreter` is Musashi. |
+| Audio | `Audio` | Default `accurate` backend runs the sound CPU, DUART, ES5505, ES5510 and volume chip. Opt-in `hle` uses a ROM-derived sequencer and 48 kHz PCM worker without executing the sound CPU or chips. |
+| Sound CPU | `SoundNative` or `Interpreter` | Accurate backend only. Runs the sound program as compiled C or Musashi. |
 | Input | `Machine::inputs`, `system_inputs`, `coin_word` | Holds active-low port values and coin counters. |
 | EEPROM | `Eeprom` (`runtime/eeprom.hpp`) | 93C46 settings memory. It has a busy interval after each write. |
 | Netplay | `Rollback`, `Transport` | Optional. Runs the machine in a rollback loop. |
@@ -345,14 +347,14 @@ A run counts as native only if the fallback instruction counter (`Machine::fallb
 
 ## Determinism
 
-Three features need the machine to be **deterministic**: rollback netplay, snapshot tests, and comparison with the oracles. Given the same ROM, the same build and the same input for each frame, the machine must produce the same state and the same audio.
+Three features need the machine to be **deterministic**: rollback netplay, snapshot tests, and comparison with the oracles. Given the same ROM, build and applied input stream, canonical game state must agree. The default accurate backend also produces reproducible PCM. HLE worker PCM intentionally depends on speculative command history and is not compared across peers.
 
 The project uses these rules:
 
-- **Integer time.** All simulation time is a count of 16 MHz cycles. The code in the machine, the renderers and the audio does not read the wall clock or a random source.
-- **Fixed scheduling.** Sound execution stops at the next sample time or the next sound-CPU instruction time. The result does not depend on how the main CPU splits its blocks. `Audio::advance` does this.
-- **Pointer-free state.** `Machine::save_state` writes packed `Canonical*` records (`runtime/state_io.hpp`). They have no host pointers and no padding.
-- **Host time stays outside.** The frontend uses the wall clock only to pace frames. The transport uses it for timeouts and ping.
+- **Integer time.** Canonical simulation time is a count of 16 MHz cycles; main-side HLE command consumption is deterministic.
+- **Fixed scheduling (accurate).** Sound execution stops at the next sample time or sound-CPU instruction time. `Audio::advance` makes it independent of main-CPU block splits.
+- **Pointer-free state.** `Machine::save_state` writes packed `Canonical*` records (`runtime/state_io.hpp`) without host pointers or padding. HLE snapshots retain main-side mailbox/command state, not worker queues, voices, effects or PCM.
+- **Host time stays outside canonical state.** The frontend uses it to pace frames; transport uses it for timeouts and ping. The independent HLE worker is not rolled back. See the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
 - **Build identity.** Players must have matching source, generated code, compiler, and platform identity. The handshake rejects unequal hashes.
 
 See [Snapshots and determinism](/developer/netplay/snapshots) for the full list.
@@ -370,7 +372,7 @@ flowchart LR
         RA["Rollback"]
         MA["Machine"]
         TA["Transport"]
-        OA["Confirmed PCM"]
+        OA["PCM: confirmed accurate / speculative HLE"]
         PX["Current simulated pixels"]
     end
     subgraph Relay["Relay server (Go)"]
@@ -393,7 +395,7 @@ flowchart LR
     TA -->|"receive"| RA
 ```
 
-A rollback happens in this order:
+For the default accurate backend, a rollback happens in this order:
 
 ```mermaid
 sequenceDiagram
@@ -417,7 +419,7 @@ Four facts to remember:
 - **Delay frames.** A local key press at frame `f` applies at frame `f + delay`. The default delay is 2.
 - **Prediction.** For a missing remote input, `Rollback` repeats the last input that it used.
 - **Window.** The default window is 16 frames. `advance()` returns false when the simulated frame is 16 or more frames ahead of the confirmed frame.
-- **Confirmed-only audio.** Speculative audio is replaced during a correction. Only audio from confirmed frames goes to the speaker. This adds latency but avoids doubled sound.
+- **Backend-specific audio.** Accurate replaces speculative PCM and publishes only confirmed frames. HLE drains an independent speculative worker stream and reconciles commands across rollback without rewinding music. Worker state and PCM are excluded from canonical state and peer checksums; see the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
 
 The [Netplay overview](/developer/netplay/) and its sub-pages give the details.
 

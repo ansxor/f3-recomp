@@ -92,9 +92,11 @@ add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp 
     runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
     runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/netplay.cpp
+    runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
     runtime/netplay_transport.cpp ${AUDIO_SOURCES})
 target_include_directories(f3rt PUBLIC include PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(f3rt PRIVATE f3rt_musashi)
+find_package(Threads REQUIRED)
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
@@ -118,6 +120,9 @@ endif()
 add_executable(f3rt-sound-extract tools/sound_extract.cpp)
 target_include_directories(f3rt-sound-extract PRIVATE runtime)
 target_link_libraries(f3rt-sound-extract PRIVATE f3rt)
+add_executable(f3rt-hle-check tools/hle_audio_check.cpp)
+target_include_directories(f3rt-hle-check PRIVATE runtime)
+target_link_libraries(f3rt-hle-check PRIVATE f3rt)
 if(F3_GENERATED_DIR)
     add_subdirectory(recomp)
     add_executable(f3rt-gameplay-regression tools/gameplay_regression.cpp)
@@ -192,6 +197,9 @@ if(BUILD_TESTING)
     add_executable(f3rt-check runtime/check.cpp)
     target_link_libraries(f3rt-check PRIVATE f3rt)
     add_test(NAME runtime-devices COMMAND f3rt-check)
+    if(F3_ROM_DIR)
+        add_test(NAME hle-audio COMMAND f3rt-hle-check "${F3_ROM_DIR}")
+    endif()
 endif()
 
 # Content identity, not a branch name or dirty-tree-blind git revision. Different

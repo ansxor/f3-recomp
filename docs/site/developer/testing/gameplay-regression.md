@@ -15,6 +15,8 @@ The test has two goals:
 
 The test is a regression gate. It does not compare the picture or the sound with an oracle by default. It checks that a long run completes without a CPU halt, an execution error or a fallback. The optional `--video-diff` flag adds a picture comparison (see below).
 
+Audio defaults to `--audio-backend accurate` with the oracle sound driver. Opt-in `--audio-backend hle` runs the direct ROM sequencer and PCM synthesizer at 48 kHz on a separate non-rolled-back worker, without sound CPU or ES chip execution. It does not change strict native main execution or the zero-fallback gate. HLE rejects explicit `--sound-driver`, `--sound-trace` and `--profile-out`.
+
 ::: warning
 A passing seed is a sample of gameplay. It is not a proof that every game state works. `docs/developer/DECISIONS.md` states the same limit.
 :::
@@ -77,7 +79,7 @@ The seven keys map to the machine inputs as follows. The directions use input po
 
 ```mermaid
 flowchart TD
-    A["Load ROM set landmakrj: RomSet::load"] --> B["Machine, optional sound trace, optional native sound"]
+    A["Load ROM set landmakrj: RomSet::load"] --> B["Machine, accurate (oracle/native) or HLE audio"]
     B --> C["allow_main_fallback = false"]
     C --> D["f3_generated_register: install recompiled blocks"]
     D --> E{"Frames left to run ?"}
@@ -132,7 +134,7 @@ Setup errors and video mismatches print `REGRESSION ERROR: <message>`. Both form
 A passing run prints one line:
 
 ```text
-SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... sound_driver=oracle
+SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... audio_backend=accurate sound_driver=oracle
   frame_crc=0x... cycles=... native_blocks=... fallback_instructions=0
   audio_frames=... audio_peak=... nonzero_samples=... fps=...
 ```
@@ -149,15 +151,17 @@ SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... sound_driver=or
 | `--frames N` | 40000 | Frames to run. Must be positive. |
 | `--dump-dir DIR` | none | Write a state dump (see below). |
 | `--surface BMP`, `--capture-surface BMP` | none | Write the last frame as a 320 by 232 BMP. |
-| `--sound-trace FILE` | none | Record sound bus events. See [Sound tools](/developer/testing/sound-tools). |
-| `--sound-driver MODE` | `oracle` | `oracle` runs the interpreted sound driver. `native` runs the recompiled driver. `native` needs a build with a generated sound program. |
+| `--audio-backend accurate\|hle` | `accurate` | Chip-accurate audio or the threaded HLE ROM sequencer/PCM synthesizer at 48 kHz. |
+| `--sound-trace FILE` | none | Record accurate-audio sound bus events. Rejected with HLE. See [Sound tools](/developer/testing/sound-tools). |
+| `--sound-driver MODE` | `oracle` | Accurate-audio driver: `oracle` runs the interpreted sound driver; `native` runs the recompiled driver and needs generated sound code. Explicit selection is rejected with HLE. |
+| `--profile-out FILE` | none | Merge generated main/sound entry counts in an instrumented build. Requires accurate audio and `--sound-driver native`; rejected with HLE. |
 | `--wav FILE` | none | Write all audio to a WAV file. |
 | `--video-diff` | off | Compare the game-data renderer with the FDP renderer. |
 | `--video-layer-mask N` | 511 | Select the layers to compare. Hexadecimal input works. |
 | `--video-diff-every N` | 120 | Sample interval in frames. |
 | `--help`, `-h` | | Print the help text. |
 
-Note that the default sound driver of this executable is `oracle`. The `landmakr` game executable uses `native` by default when it has the generated sound program.
+The accurate-audio default sound driver of this executable is `oracle`. The `landmakr` game executable uses `native` by default when it has the generated sound program. HLE success output reports `audio_backend=hle sound_driver=none`; audio counters are observations, not an oracle comparison.
 
 ## The Python runner
 
@@ -174,7 +178,7 @@ Note that the default sound driver of this executable is `oracle`. The `landmakr
 | `--video-layer-mask N` | 511 | Must be 1 to 511. |
 | `--video-diff-every N` | 120 | Must be positive. |
 
-The script prints `seeds=N failures=[...] elapsed_seconds=...` and exits 1 if any seed failed. The runner has no option for `--dump-dir`, `--sound-driver`, `--sound-trace` or `--wav`. Call the executable directly to use them.
+The script prints `seeds=N failures=[...] elapsed_seconds=...` and exits 1 if any seed failed. The runner has no option for `--dump-dir`, `--audio-backend`, `--sound-driver`, `--sound-trace`, `--profile-out` or `--wav`. Call the executable directly to use them.
 
 ```sh
 python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
@@ -257,4 +261,4 @@ The schedule is also the input source for the sound and netplay gates:
 - The test samples the game. It does not enumerate states.
 - Without `--video-diff` the test does not look at the picture. A wrong picture can pass.
 - The ROM set must be `landmakrj`. The recompiled blocks belong to this set only.
-- The default sound driver is the interpreted one. Pass `--sound-driver native` to test the recompiled driver in the same run.
+- With default accurate audio, the sound driver is interpreted. Pass `--sound-driver native` to test the recompiled driver in the same run. HLE tests command-driven audio without executing either driver; it does not establish accurate PCM or bus parity.

@@ -107,6 +107,8 @@ int main(int argc, char **argv) try {
     std::filesystem::path sound_trace_path, wav_path, profile_path;
 
     std::string sound_driver = "oracle";
+    std::string audio_backend = "accurate";
+    bool sound_explicit = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto value = [&]() -> const char * {
@@ -132,7 +134,10 @@ int main(int argc, char **argv) try {
         } else if (arg == "--profile-out") {
             profile_path = value();
         } else if (arg == "--sound-driver") {
+            sound_explicit = true;
             sound_driver = value();
+        } else if (arg == "--audio-backend") {
+            audio_backend = value();
         } else if (arg == "--wav") {
             wav_path = value();
         } else if (arg == "--video-diff") {
@@ -153,6 +158,7 @@ int main(int argc, char **argv) try {
                       << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
                       << "  --sound-trace FILE     Record sound CPU and main mailbox bus events\n"
                       << "  --sound-driver MODE    oracle (default) or native (generated driver)\n"
+                      << "  --audio-backend MODE   accurate (default) or threaded hle\n"
                       << "  --wav FILE             Save audio\n"
                       << "  --profile-out FILE     Merge main/sound entry counts (instrumented build; flush every 30s and at exit)\n"
                       << "  --video-diff           Compare game-owned layers and final RGB against FDP from frame 600\n"
@@ -184,6 +190,10 @@ int main(int argc, char **argv) try {
     }
     if (sound_driver != "oracle" && sound_driver != "native")
         throw std::runtime_error("--sound-driver must be oracle or native");
+    if (audio_backend != "accurate" && audio_backend != "hle")
+        throw std::runtime_error("--audio-backend must be accurate or hle");
+    if (audio_backend == "hle" && (sound_explicit || !sound_trace_path.empty() || !profile_path.empty()))
+        throw std::runtime_error("HLE does not execute/profile/trace a sound driver");
     if (!profile_path.empty() && sound_driver != "native")
         throw std::runtime_error("Profiling requires --sound-driver native");
 
@@ -191,7 +201,8 @@ int main(int argc, char **argv) try {
     auto &m = *machine;
     f3rt::BlockProfileSession profile(m.roms, profile_path);
     if (!sound_trace_path.empty()) m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
-    if (sound_driver == "native") {
+    if (audio_backend == "hle") m.audio->set_backend(f3rt::Audio::Backend::Hle);
+    else if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
                            {f3_sound_excluded_ranges, f3_sound_excluded_count});
@@ -312,7 +323,7 @@ int main(int argc, char **argv) try {
               << " frames=" << m.frame
               << " pc=0x" << std::hex << m.cpu.pc
               << " sound_pc=0x" << m.sound_pc()
-              << " sound_driver=" << sound_driver
+              << " audio_backend=" << audio_backend << " sound_driver=" << (audio_backend == "hle" ? "none" : sound_driver)
               << " frame_crc=0x" << frame_crc << std::dec
               << " cycles=" << m.cpu.cycles
               << " native_blocks=" << m.native_blocks

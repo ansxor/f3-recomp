@@ -7,10 +7,26 @@
 #include <span>
 
 namespace f3rt {
+namespace hle { struct VoiceEvent; }
 
 class Audio {
 public:
     enum class GainModel { MameRouting, SingleStage };
+    enum class Backend { Accurate, Hle };
+    struct HleStats {
+        uint64_t commands = 0, reused = 0, cancelled = 0, rendered_frames = 0;
+    };
+    // Select once, after ROM loading and before machine execution.
+    void set_backend(Backend backend);
+    Backend backend() const;
+    void shared_write(uint32_t offset, uint64_t frame);
+    void begin_frame(uint64_t frame);
+    void finish_frame(uint64_t frame);
+    void begin_rollback(uint64_t begin, uint64_t end);
+    void end_rollback();
+    HleStats hle_stats() const;
+    // Diagnostic callback executes on the worker, never on the main CPU.
+    void set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer);
     Audio();
     ~Audio();
 
@@ -59,7 +75,7 @@ public:
     uint64_t generated_frames() const;
 
     // Audio output stream: interleaved stereo (Left, Right)
-    // Sample rate is fixed to ES5505 native output rate (~29762 Hz, or resampled)
+    // Accurate: ES5505 native rate; HLE: 48000 Hz.
     uint32_t sample_rate() const;
     size_t available_frames() const;
     size_t render(int16_t *interleaved_stereo, size_t max_frames);
