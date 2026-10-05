@@ -57,8 +57,8 @@ inline uint64_t get_address_acc_res(uint64_t val, int bias = 0) {
     return (shift >= 0) ? (val >> shift) : (val << (-shift));
 }
 
-inline uint64_t get_integer_addr(uint64_t accum, int32_t bias = 0) {
-    return ((accum + (uint64_t(bias) << ADDRESS_FRAC_BIT)) & ADDRESS_ACC_MASK) >> ADDRESS_FRAC_BIT;
+inline uint64_t get_integer_addr(uint64_t accum) {
+    return (accum & ADDRESS_ACC_MASK) >> ADDRESS_FRAC_BIT;
 }
 
 inline int32_t apply_lowpass(int32_t out, int32_t cutoff, int32_t in) {
@@ -265,34 +265,25 @@ void ES5505::generate_pcm(Voice *voice, int32_t *dest) {
     uint64_t accum = voice->accum & ADDRESS_ACC_MASK;
 
     if (!(voice->control & CONTROL_STOPMASK)) {
-        if (!(voice->control & CONTROL_DIR)) {
-            // Forward
-            int32_t val1 = int16_t(read_sample(voice, get_integer_addr(accum)));
-            int32_t val2 = int16_t(read_sample(voice, get_integer_addr(accum, 1)));
+        const bool reverse = (voice->control & CONTROL_DIR) != 0;
+        const uint32_t word_addr = uint32_t(accum >> ADDRESS_FRAC_BIT);
+        // Wrap the adjacent word in the accumulator's address space before banking.
+        const uint32_t next_word_addr = (word_addr + 1) & (ADDRESS_ACC_MASK >> ADDRESS_FRAC_BIT);
+        int32_t val1 = int16_t(read_sample(voice, word_addr));
+        int32_t val2 = int16_t(read_sample(voice, next_word_addr));
 
-            val1 = interpolate(val1, val2, accum);
-            accum = (accum + freqcount) & ADDRESS_ACC_MASK;
+        val1 = interpolate(val1, val2, accum);
+        accum = (reverse ? accum - freqcount : accum + freqcount) & ADDRESS_ACC_MASK;
 
-            apply_filters(voice, val1);
+        apply_filters(voice, val1);
 
-            dest[0] += (int64_t(val1) * m_volume_lookup[voice->lvol & 0xff]) >> 11;
-            dest[1] += (int64_t(val1) * m_volume_lookup[voice->rvol & 0xff]) >> 11;
+        dest[0] += (int64_t(val1) * m_volume_lookup[voice->lvol & 0xff]) >> 11;
+        dest[1] += (int64_t(val1) * m_volume_lookup[voice->rvol & 0xff]) >> 11;
 
-            check_for_end_forward(voice, accum);
-        } else {
-            // Backward
-            int32_t val1 = int16_t(read_sample(voice, get_integer_addr(accum)));
-            int32_t val2 = int16_t(read_sample(voice, get_integer_addr(accum, 1)));
-
-            val1 = interpolate(val1, val2, accum);
-            accum = (accum - freqcount) & ADDRESS_ACC_MASK;
-
-            apply_filters(voice, val1);
-
-            dest[0] += (int64_t(val1) * m_volume_lookup[voice->lvol & 0xff]) >> 11;
-            dest[1] += (int64_t(val1) * m_volume_lookup[voice->rvol & 0xff]) >> 11;
-
+        if (reverse) {
             check_for_end_reverse(voice, accum);
+        } else {
+            check_for_end_forward(voice, accum);
         }
     }
 

@@ -415,3 +415,54 @@ no stable whole-runtime gain justified replacing the simpler loop. Records:
 required DSP/sound CPU execution, scheduling, dispatch and exact sprite work;
 no additional instruction/timing bypass or speculative state cache was retained.
 
+### Final native-audio pass
+
+Starting from `287ce51`, two source-only changes preserve the current device
+model, operation order, API and canonical state layout:
+
+- ES5510 `execute_run` uses `[[gnu::flatten]]` to inline its per-instruction
+  helpers. The emitted kernel has no ALU/register-helper calls or stack-canary
+  reference. Object text grows from 18,446 to 25,519 bytes; no decode cache,
+  allocations, pipeline-field omissions or instruction specialization is added.
+- ES5505 `generate_pcm` shares the forward/reverse sample-read, interpolation,
+  filtering and stereo-mix path. Only accumulator update and end-check selection
+  depend on direction. Adjacent word addressing wraps at 20 bits before banking;
+  stopped-voice masking, filter arithmetic, voice/IRQ order and callbacks remain.
+  This is a source simplification, not a separately demonstrated speedup.
+
+Five alternating runs per binary, CPU 2, seed 5, 3600 frames, measuring frames
+1200–3599: isolated DSP inlining lowers median frame mean from 2.55417 to
+2.40381 ms (5.89%) in native GPU semantic export. This excludes GPU drawing and
+native pixel observations. Every run matches state CRC/size, cycles, blocks and
+PCM counts. Isolated PCM deduplication differs by only 0.08%, within variation.
+Unsigned CPU-deadline division, outlined PCM generation and their combination
+were rejected (respectively 0.72%, 0.02% and 0.19% slower median frame means).
+The additional oracle sprite-column experiment was stopped and removed when
+wrap-up was requested; no partial benchmark result is treated as evidence.
+
+For both retained changes, Callgrind seed 89 / ROI 1200–1319 gives
+4,060,011,974 → 3,869,289,331 instructions (4.70% lower), data references 8.21%
+lower, I1 misses 4.11% lower and branch mispredicts 2.15% lower. Simulated D1
+misses increase 4.11%; the 128 MiB simulated LL is not the host's 96 MiB L3.
+Both runs finish at state CRC `4b0f7960` with identical counts, despite the same
+startup `brk segment overflow` warning. Records: `build/opt/round3/isolated-results.json`
+and `build/opt/round3/callgrind-comparison.json`.
+
+An independent old-object/current-object device smoke compares 12,288 synthetic
+OTIS states × four frames and 2048 generic DSP programs × three samples. Direct
+PCM/serial, complete pipeline/DRAM/canonical bytes and ordered IRQ events match.
+It covers all voice counts, directions/loop/stop/filter modes, absent and wrapped
+ROMs/banks, fractional addresses, volumes, all ALU/operand/RAM modes, special
+registers, skip/HALT/END/PC wrap and reset/load transitions. CTest passes 5/5.
+Actual native gameplay seed 89 / 1560 frames matches WAV and BMP bytes directly
+(787,650 audio frames, native CRC `6ddd781b`); the capture was visually inspected.
+Vulkan seed 5 / 1501 frames has ten exact composite samples, ten deferred-state
+boundaries and exact induced trails/unknown-producer fallback recovery.
+Memcheck completed the retained `f3rt-check` device/boundary suite with zero
+errors, zero suppressions, 617 allocations/frees and no live bytes or leaks.
+It used the same isolated matching glibc/debug loader, without altering the host
+or original executable. Record: `build/opt/round3/runtime-memcheck.log`.
+The complete synthetic corpus passed natively; its full Memcheck run exceeded
+180 seconds and is not a completed corpus-wide memory-check claim. Raw
+observations and binaries remain under `build/opt/round3/`.
+

@@ -521,7 +521,10 @@ int32_t ES5510::alu_operation(uint8_t op, int32_t a, int32_t b, uint8_t &flags) 
     }
 }
 
-void ES5510::execute_run(int cycles) {
+// Every per-instruction helper lives in this translation unit. Flattening
+// keeps the ALU flags and register write-back values out of call ABI spills;
+// it only changes code placement, never operation order or arithmetic.
+[[gnu::flatten]] void ES5510::execute_run(int cycles) {
     while (cycles > 0) {
         if (state == STATE_HALTED) {
             if (halt_asserted) {
