@@ -12,10 +12,12 @@
 #include <sstream>
 
 namespace f3rt {
-Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Video>()),
+Machine::Machine(RomSet set) : pixels(320 * set.video.visible_height),
+    roms(std::move(set)), video(std::make_unique<Video>()),
     audio(std::make_unique<Audio>()), eeprom(std::make_unique<Eeprom>()) {
-    if (roms.main.size() != 0x200000) throw std::runtime_error("Main ROM must be 2 MiB");
-    if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi))
+    if (roms.main.size() < 0x400 || roms.main.size() > 0x200000 || roms.main.size() % 4)
+        throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
+    if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Invalid video ROM regions");
     audio->set_shared_ram(shared.data(), shared.size());
     audio->load_sound_rom(roms.sound);
@@ -24,16 +26,27 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
     audio->set_cpu_runner([this](int cycles) { return interpreter->run_audio(cycles); });
     audio->set_reset_callback([this](bool asserted) { interpreter->audio_reset(asserted); });
     audio->set_irq_callback([this](bool asserted) { interpreter->audio_irq(asserted); });
+    if (!roms.factory_eeprom.empty()) {
+        if (roms.factory_eeprom.size() != eeprom->words.size() * 2)
+            throw std::runtime_error("Factory EEPROM ROM must be exactly 128 bytes");
+        // Seed once: resets preserve guest settings, and explicit EEPROM loads override these words.
+        for (size_t i = 0; i < eeprom->words.size(); ++i)
+            eeprom->words[i] = uint16_t(uint16_t(roms.factory_eeprom[2 * i]) << 8 |
+                                        roms.factory_eeprom[2 * i + 1]);
+    }
+    // Analog ports start at counter zero; resets preserve the serialized counters.
+    if (roms.name == "arkretrnj" || roms.name == "puchicarj")
+        inputs[2] = inputs[3] = 0xffff0000;
     reset();
 }
 Machine::~Machine() = default;
 void Machine::use_native_sound(const f3_block *program, size_t count,
-                               std::span<const f3_excluded_range> excluded) {
+                               std::span<const f3_excluded_range> excluded, uint32_t expected_crc) {
     if (audio->backend() == Audio::Backend::Hle)
         throw std::runtime_error("HLE audio does not execute a native sound driver");
     if (!audio->is_reset() || audio->clock_ticks())
         throw std::runtime_error("Select the native sound driver before machine execution");
-    sound_native = std::make_unique<SoundNative>(*this, program, count, excluded);
+    sound_native = std::make_unique<SoundNative>(*this, program, count, excluded, expected_crc);
     audio->set_cpu_runner([this](int cycles) { return sound_native->run(cycles); });
     audio->set_reset_callback([this](bool asserted) { sound_native->reset(asserted); });
     // Native SR/IRQ recognition reads the DUART's current line directly.
@@ -82,7 +95,7 @@ uint32_t Machine::input_word(unsigned index) const {
 }
 uint8_t Machine::read8(uint32_t a) {
     a &= 0xffffff;
-    if (a < 0x200000) return roms.main[a];
+    if (a < 0x200000) return a < roms.main.size() ? roms.main[a] : 0xff;
     if (a >= 0x400000 && a < 0x440000) return ram[a & 0x1ffff];
     if (a >= 0x440000 && a < 0x448000) return palette[a - 0x440000];
     if (a >= 0x4a0000 && a < 0x4a0020) return uint8_t(input_word((a - 0x4a0000) / 4) >> (24 - 8 * (a & 3)));
@@ -323,7 +336,7 @@ void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
     writer.write_span(std::span<const uint8_t, 0x40000>(graphics));
     writer.write_span(std::span<const uint8_t, 0x20>(control));
     writer.write_span(std::span<const uint8_t, 0x800>(shared));
-    writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
+    writer.write_span(std::span<const uint32_t>(pixels));
 
     // 4. EEPROM
     eeprom->save_state(writer);
@@ -437,7 +450,7 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
     reader.read_span(std::span<uint8_t, 0x40000>(graphics));
     reader.read_span(std::span<uint8_t, 0x20>(control));
     reader.read_span(std::span<uint8_t, 0x800>(shared));
-    reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
+    reader.read_span(std::span<uint32_t>(pixels));
 
     // 4. EEPROM
     eeprom->load_state(reader);

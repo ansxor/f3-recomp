@@ -32,21 +32,22 @@ void callbacks() {
 void trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
     if (!active_machine->sound_trace) return;
     const uint32_t pc=m68k_get_reg(nullptr, M68K_REG_PPC);
-    if (write && width==1 && pc==0xc130f0 &&
+    const bool land_maker=active_machine->roms.name=="landmakrj" || active_machine->roms.name=="landmakr";
+    if (land_maker && write && width==1 && pc==0xc130f0 &&
         address==((m68k_get_reg(nullptr,M68K_REG_A4)+0x14u)&0xffffffu))
         active_machine->sound_trace->record(*active_machine, f3rt::SoundTrace::DirectNote,
                                             pc,address,value,width);
-    if (write && width==2 && pc==0xc140e4 &&
+    if (land_maker && write && width==2 && pc==0xc140e4 &&
         address==((m68k_get_reg(nullptr,M68K_REG_A1)+0x24u)&0xffffffu))
         active_machine->sound_trace->note_context(*active_machine, pc,
             m68k_get_reg(nullptr,M68K_REG_A5),m68k_get_reg(nullptr,M68K_REG_A1),
             m68k_get_reg(nullptr,M68K_REG_A6),m68k_get_reg(nullptr,M68K_REG_A4));
-    if (write && width==2 && pc==0xc141d6 &&
+    if (land_maker && write && width==2 && pc==0xc141d6 &&
         address==((m68k_get_reg(nullptr,M68K_REG_A5)+2u)&0xffffffu))
         active_machine->sound_trace->record(*active_machine, f3rt::SoundTrace::NoteRelease,
             pc,m68k_get_reg(nullptr,M68K_REG_A5)&0xffffu,value,width);
     // PPC can name the interrupted instruction during IRQ stack writes.
-    if (write && width==2 &&
+    if (land_maker && write && width==2 &&
         (((pc==0xc17e62 || pc==0xc17806) && address==0x20001e) ||
          (pc==0xc17632 && address==((m68k_get_reg(nullptr,M68K_REG_A4)+0xau)&0xffffffu))))
         active_machine->sound_trace->voice_context(*active_machine, pc, m68k_get_reg(nullptr, M68K_REG_A4));

@@ -29,9 +29,10 @@ inline void write_argb(const std::filesystem::path &path, std::span<const uint32
 }
 inline void write_bmp(const std::filesystem::path &path, std::span<const uint32_t> pixels) {
     std::ofstream f(path, std::ios::binary);
-    f.write("BM",2); le32(f,54+320*232*4); le32(f,0); le32(f,54);
-    le32(f,40); le32(f,320); le32(f,uint32_t(-232)); le16(f,1); le16(f,32);
-    le32(f,0); le32(f,320*232*4); le32(f,2835); le32(f,2835); le32(f,0); le32(f,0);
+    const uint32_t height=uint32_t(pixels.size()/320), bytes=uint32_t(pixels.size()*4);
+    f.write("BM",2); le32(f,54+bytes); le32(f,0); le32(f,54);
+    le32(f,40); le32(f,320); le32(f,0u-height); le16(f,1); le16(f,32);
+    le32(f,0); le32(f,bytes); le32(f,2835); le32(f,2835); le32(f,0); le32(f,0);
     for (auto p : pixels) le32(f,p);
     if (!f) throw std::runtime_error("BMP write failed: " + path.string());
 }

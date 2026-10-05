@@ -1,0 +1,159 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp
+# Supplied physical chips match ROM_START(arkretrnj) by full size/CRC/SHA1.
+[game]
+name = "Arkanoid Returns (Ver 2.02J 1997/02/10)"
+id = "arkretrnj"
+platform = "taito_f3"
+
+[rom]
+# Populated main CPU image (MAME reserves 0x200000 bytes).
+size = 1048576
+interleave = 4
+
+[[rom.lanes]]
+file = "e36-11.20"
+offset = 0
+size = 262144
+crc = "b50cfb92"
+sha1 = "dac69fc9ef03315b11bb94d19e3dfdc8867b08ed"
+
+[[rom.lanes]]
+file = "e36-10.19"
+offset = 1
+size = 262144
+crc = "c940dba1"
+sha1 = "ec87c9e4250f8b2f15094681a4783bca8c68f576"
+
+[[rom.lanes]]
+file = "e36-09.18"
+offset = 2
+size = 262144
+crc = "f16985e0"
+sha1 = "a74cfee8f958e7a32354d4353eeb199a7fb1ce64"
+
+[[rom.lanes]]
+file = "e36-08.17"
+offset = 3
+size = 262144
+crc = "aa699e1b"
+sha1 = "6bde0759940e0f238e4fa5bd228115574ff927d8"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 524288
+fill = 0
+
+[[sprites.lanes]]
+file = "e36-03.12"
+offset = 0
+size = 262144
+crc = "1ea8558b"
+sha1 = "b8ea4d6e1fb551b3c47f336a5e60ec33f7be525f"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e36-02.8"
+offset = 1
+size = 262144
+crc = "694eda31"
+sha1 = "1a6f85057395052571491f85c633d5632ab64865"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 262144
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "e36-01.4"
+offset = 0
+size = 262144
+crc = "54b9b2cd"
+sha1 = "55ae964ea1d2cc40a6578c5339754a270096f01f"
+stride = 1
+group = 1
+
+[tiles]
+size = 1048576
+fill = 0
+
+[[tiles.lanes]]
+file = "e36-07.47"
+offset = 0
+size = 524288
+crc = "266bf1c1"
+sha1 = "489549478d7016400af2e643d4b98bf605237d34"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e36-06.45"
+offset = 2
+size = 524288
+crc = "110ab729"
+sha1 = "0ccc0a5abbcfd79a069daf5162cd344a5fb225d5"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 524288
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e36-05.43"
+offset = 0
+size = 524288
+crc = "db18bce2"
+sha1 = "b6653facc7f5c624f5710a51f2b2abfe640177e2"
+stride = 1
+group = 1
+
+[sound]
+# Mapped sound program at 0xc00000; omit unused MAME 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "e36-12.32"
+offset = 0
+size = 262144
+crc = "3bae39be"
+sha1 = "777142ecc24799b934ed51ac4cd8700bb6da7e3c"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e36-13.33"
+offset = 1
+size = 262144
+crc = "94448e82"
+sha1 = "d7766490318623be770545918391c5e6144dd619"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE: high-byte chips, zero low bytes and unpopulated banks.
+size = 4194304
+fill = 0
+
+[[samples.lanes]]
+file = "e36-04.38"
+offset = 0
+size = 2097152
+crc = "2250959b"
+sha1 = "06943f1b72bdf325485356a01278d88aeae93d87"
+stride = 2
+group = 1
+
+[video]
+# Pinned f3_config_table: sprite lag 1; extend is the initial PF geometry.
+# f3 standard: y=24..255, 320x232.
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 24
+visible_height = 232

@@ -1,5 +1,8 @@
 #include "f3rt/machine.hpp"
+#include "f3rt/input.hpp"
+#include "f3rt/netplay.hpp"
 #include "f3rt/audio.hpp"
+#include "f3rt/video.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
@@ -7,12 +10,207 @@
 #include "game_sprites.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <filesystem>
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 
 namespace {
 void require(bool ok,const char *why) { if(!ok)throw std::runtime_error(why); }
+void check_game_rom_video() {
+    const auto word=[](auto &bytes, size_t at, uint16_t value) {
+        bytes[at]=uint8_t(value>>8); bytes[at+1]=uint8_t(value);
+    };
+    const auto color=[](auto &bytes, size_t at, uint32_t value) {
+        for(unsigned i=0;i<4;++i)bytes[at+i]=uint8_t(value>>(24-8*i));
+    };
+    std::vector<uint8_t> sprites(256,0x21), tiles(128,0x43);
+    f3rt::Video video;
+    f3rt::VideoConfig config{90,2,31,224};
+    require(video.load_roms(sprites,{},tiles,{},config), "4-bpp ROMs need no fabricated high planes");
+    require(video.sprite_tiles()[256]==1 && video.sprite_tiles()[257]==2 &&
+            video.playfield_tiles()[0]==3 && video.playfield_tiles()[1]==4,
+            "Absent high planes preserve packed low pens across independent ROM geometries");
+    std::array<uint8_t,0x8000> palette{};
+    std::array<uint8_t,0x40000> graphics{};
+    std::array<uint8_t,0x20> control{};
+    std::vector<uint32_t> pixels(320*224);
+    color(palette,4,0x00112233);color(palette,8,0x00445566);
+    word(graphics,0x20400+31*2,12);word(graphics,0x26600+31*2,1);
+    word(graphics,0x26400+31*2,0x6000);
+    word(graphics,0x20400+32*2,8);word(graphics,0x26600+32*2,2);
+    word(graphics,0,1);word(graphics,4,46);word(graphics,6,31);
+    word(graphics,8,1);word(graphics,16+12,0x8001);
+    video.render_frame(palette,graphics,control,pixels);
+    require(pixels[0]==0xff112233 && pixels[320]==0xff445566,
+            "RayForce's first visible scanline is 31, not Land Maker's 24");
+    require(video.sprite_plane()[31*432+46]==0, "Lag 2 delays a newly parsed sprite list");
+    std::vector<uint8_t> snapshot(video.state_size());video.save_state(snapshot);
+    word(graphics,4,50);
+    video.render_frame(palette,graphics,control,pixels);
+    require(video.sprite_plane()[31*432+46]==0x1011 && video.sprite_plane()[31*432+50]==0x1011,
+            "Lag 2 draws the previous parsed position, not current sprite RAM");
+    video.render_frame(palette,graphics,control,pixels);
+    require(video.sprite_plane()[31*432+46]==0 && video.sprite_plane()[31*432+50]==0x1011,
+            "Lag 2 advances the captured list on the next frame");
+    video.load_state(snapshot);video.render_frame(palette,graphics,control,pixels);
+    require(video.sprite_plane()[31*432+46]==0x1011,
+            "Snapshots preserve the delayed parsed list, not only the framebuffer");
+
+    config={0,1,32,224};
+    require(video.load_roms(sprites,{},tiles,{},config), "Riding Fight geometry loads");
+    video.reset();graphics.fill(0);palette.fill(0);
+    color(palette,0,0x00abcdee);color(palette,4,0x0000abc8);
+    color(palette,8,0x0000abc4);color(palette,12,0x0000abc2);
+    color(palette,16,0x0000fffe);color(palette,20,0x00abcdef);
+    const auto line=[&](unsigned y,uint16_t latch,uint16_t mode,uint16_t background) {
+        word(graphics,0x20400+y*2,latch);
+        word(graphics,0x26400+y*2,mode);
+        word(graphics,0x26600+y*2,background);
+    };
+    line(32,12,0x2000,1);line(33,8,0x6000,2);line(34,12,0x6000,3);
+    line(35,0x48,0x6000,4);word(graphics,0x26c00+35*2,0x2000);
+    line(36,8,0,0);line(37,8,0,5);line(38,12,0,1);
+    video.render_frame(palette,graphics,control,pixels);
+    require(pixels[0]==0xffa8b0c0, "15-bit palette includes red bit 3, without 5-to-8-bit replication");
+    require(pixels[320]==0xffa0b8c0, "Unlatched mode changes are ignored while green bit 2 is preserved");
+    require(pixels[640]==0xff00abc2, "FDA bit 14 switches to full 24-bit color on the next latched line");
+    require(pixels[960]==0xfff8f8f8, "Alternate-bank latches restore 15-bit mode with a maximum channel of 248");
+    require(pixels[1280]==0xffc8d8e8 && pixels[1600]==0xffc8d8e8,
+            "15-bit color includes blue bit 1 and ignores upper bits and unused bit 0");
+    require(pixels[1920]==0xff545860 && pixels[1921]==0xffa8b0c0,
+            "FDA forward blur averages with the unfiltered preceding pixel, starting from black");
+
+    sprites.assign(0x800000,0);tiles.assign(0x200000,0);
+    std::vector<uint8_t> high(0x400000,0);
+    sprites[0x400000]=0x65;high[0x200000]=3;
+    require(video.load_roms(sprites,high,tiles,{},config), "Command War's second sprite bank loads");
+    require(video.sprite_tiles()[32768*256]==0x35 && video.sprite_tiles()[32768*256+1]==6,
+            "Command War's bank-1 pens include its own high planes, without wrapping to bank 0");
+}
+void check_fdp_geometry() {
+    const auto word=[](auto &bytes,size_t at,uint16_t value) {
+        bytes[at]=uint8_t(value>>8);bytes[at+1]=uint8_t(value);
+    };
+    std::vector<uint8_t> sprites(3*128),tiles(5*128);
+    for(unsigned tile=0;tile<3;++tile)
+        std::fill_n(sprites.begin()+tile*128,128,uint8_t((tile+1)*0x11));
+    for(unsigned tile=0;tile<5;++tile)
+        std::fill_n(tiles.begin()+tile*128,128,uint8_t((tile+1)*0x11));
+    f3rt::Video video;
+    f3rt::VideoConfig config{0,0,0,256,false};
+    require(video.load_roms(sprites,{},tiles,{},config),"Independent non-power-of-two FDP assets load");
+    std::array<uint8_t,0x40000> graphics{};
+    std::array<uint8_t,0x8000> palette{};
+    std::array<uint8_t,0x20> control{};
+    std::vector<uint32_t> pixels(320*256+1,0xdeadbeef);
+    for(unsigned map=0;map<8;++map)
+        for(unsigned cell=0;cell<1024;++cell)
+            word(graphics,0x10000+map*0x1000+cell*4+2,uint16_t(map+5));
+    auto line=video.inspect_playfield_line(4,511,graphics);
+    require(line.palette.size()==512 && line.palette[0]==5 && line.palette[511]==5,
+            "Nonextended alternate map 4 uses its own 32-column base and count-correct tile wrapping");
+    line=video.inspect_playfield_line(7,0,graphics);
+    require(line.palette[0]==3,"Last nonextended physical map remains independently addressable");
+    // Latch PF2 to ordinary map 2, then alternate map 4, then ordinary again.
+    // Only the alternate map has a nonblank row: usage must follow selection too.
+    for(unsigned cell=0;cell<1024;++cell) word(graphics,0x12000+cell*4+2,0);
+    for(unsigned y=0;y<3;++y) {
+        word(graphics,0x20000+y*2,4);
+        word(graphics,0x24400+y*2,y==1?0x200:0);
+    }
+    word(graphics,0x20400,6);word(graphics,0x26200,0xff00);word(graphics,0x26400,0x6000);
+    word(graphics,0x20e00,4);word(graphics,0x2b400,0x2001);
+    palette[5*4+1]=0x12;palette[5*4+2]=0x34;palette[5*4+3]=0x56;
+    video.render_frame(palette,graphics,control,pixels);
+    require(pixels[0]==0xff000000 && pixels[320]==0xff123456 && pixels[640]==0xff000000,
+            "Latched alternate-map selection changes visible pixels and row-usage gating per scanline");
+    require(pixels[320*256]==0xdeadbeef,"Full-height crop writes exactly 256 rows");
+    word(graphics,0x20e00,12);word(graphics,0x2b400,0);word(graphics,0x2b600,0x2001);
+    word(graphics,0x20000,8);word(graphics,0x24600,0x200);
+    palette[4+1]=0x65;palette[4+2]=0x43;palette[4+3]=0x21;
+    video.render_frame(palette,graphics,control,pixels);
+    require(pixels[0]==0xff654321,"PF3 alternate selection reads map 5 rather than map 4 or 7");
+    graphics.fill(0);
+    word(graphics,0,5);word(graphics,4,46);word(graphics,6,0);
+    word(graphics,16+12,0x8001);
+    video.render_frame(palette,graphics,control,pixels);
+    require(video.sprite_plane()[46]==0x1003,"Non-power-of-two sprite code wraps by count at scanout row zero");
+    config={0,0,255,1,false};
+    require(video.load_roms(sprites,{},tiles,{},config),"Bottom-only crop loads");
+    video.reset();graphics.fill(0);word(graphics,0,4);word(graphics,4,365);word(graphics,6,255);
+    word(graphics,16+12,0x8001);
+    pixels.assign(321,0xdeadbeef);video.render_frame(palette,graphics,control,pixels);
+    require(video.sprite_plane()[255*432+365]==0x1002 && video.sprite_plane()[254*432+365]==0,
+            "Bottom/right crop includes its final pixel without painting outside vertical bounds");
+    require(pixels[320]==0xdeadbeef,"One-row crop preserves the output boundary sentinel");
+    config={0,0,24,232,true};
+    require(video.load_roms(sprites,{},tiles,{},config),"Extended geometry accepts independent counts");
+    graphics.fill(0);word(graphics,0x10000+63*4+2,9);
+    word(graphics,0x10000+64*4+2,7);
+    line=video.inspect_playfield_line(0,0,graphics);
+    require(line.palette.size()==1024 && line.palette[1008]==5,"Extended map spans all 64 columns");
+    line=video.inspect_playfield_line(0,16,graphics);
+    require(line.palette[0]==3,"Extended row stride is 64 descriptors, not 32");
+    require(!config.extended_alt_maps && video.inspect_playfield_line(4,0,graphics).palette.empty(),
+            "Ordinary extended profiles retain four physical maps by default");
+
+    config={0,0,0,256,true,true};
+    require(video.load_roms(sprites,{},tiles,{},config),"Extended alternate-map layout loads");
+    // Restore the full-height destination after the one-row crop above.
+    // Native scanout rejects an output span smaller than the configured crop.
+    pixels.assign(320*256+1,0xdeadbeef);
+    graphics.fill(0);control.fill(0);palette.fill(0);
+    // Native 64-column maps occupy 0x18000/0x1a000, not the 32-column bases.
+    for(unsigned map=4;map<6;++map)
+        for(unsigned cell=0;cell<2048;++cell)
+            word(graphics,0x10000+map*0x2000+cell*4+2,uint16_t(map+5));
+    word(graphics,0x1a000+63*4+2,7);
+    word(graphics,0x1a000+64*4+2,8);
+    word(graphics,0x1a000+(31*64+63)*4+2,9);
+    line=video.inspect_playfield_line(5,0,graphics);
+    require(line.palette.size()==1024 && line.palette[0]==1 && line.palette[1008]==3,
+            "Extended map 5 has its own native 64-column base and count wrapping");
+    line=video.inspect_playfield_line(5,16,graphics);
+    require(line.palette[0]==4,"Extended alternate row stride stays 64 columns");
+    line=video.inspect_playfield_line(5,511,graphics);
+    require(line.palette[1023]==5,"Extended alternate final row/column stays within PF RAM");
+    require(video.inspect_playfield_line(6,0,graphics).palette.empty(),
+            "Extended alternates stop at map 5 before text/character RAM, never alias pivot RAM");
+    for(unsigned pen=1;pen<=5;++pen) palette[pen*4+3]=uint8_t(pen*0x11);
+    // PF2 and PF3 each switch normal -> alternate -> retained alternate -> normal.
+    for(unsigned pf=2;pf<=3;++pf) {
+        word(graphics,0x20e00,uint16_t(1u<<pf));
+        word(graphics,0x2b400,pf==2?0x2001:0);
+        word(graphics,0x2b600,pf==3?0x2001:0);
+        for(unsigned y=0;y<4;++y) {
+            word(graphics,0x20000+y*2,y==2?0:uint16_t(1u<<pf));
+            word(graphics,0x24000+pf*0x200+y*2,y==1?0x200:0);
+        }
+        word(graphics,0x20400,6);word(graphics,0x26200,0xff00);word(graphics,0x26400,0x6000);
+        video.render_frame(palette,graphics,control,pixels);
+        const uint32_t alternate=pf==2?0xff000055:0xff000011;
+        require(pixels[0]==0xff000000 && pixels[320]==alternate &&
+                pixels[640]==alternate && pixels[960]==0xff000000,
+                "Extended PF2/PF3 selection and row usage follow per-line latches including retention and return");
+        config.extended_alt_maps=false;
+        require(video.load_roms(sprites,{},tiles,{},config),"Default extended layout reloads");
+        video.render_frame(palette,graphics,control,pixels);
+        require(pixels[320]==0xff000000,"JP/default extended mode ignores alternate selector bit");
+        config.extended_alt_maps=true;
+        require(video.load_roms(sprites,{},tiles,{},config),"Extended alternate layout reloads");
+    }
+    // Unit scale, x=1016 and y=511: wrap to column zero at x=8, then row zero.
+    word(control,6,uint16_t((1016-28)*64));
+    word(control,14,uint16_t(-128));
+    word(graphics,0x20800,8);word(graphics,0x28600,0);
+    word(graphics,0x20000,8);word(graphics,0x24600,0x3ff);
+    word(graphics,0x20002,8);word(graphics,0x24602,0x200);
+    video.render_frame(palette,graphics,control,pixels);
+    require(pixels[0]==0xff000055 && pixels[8]==0xff000011 && pixels[320]==0xff000033,
+            "Extended alternate scanout wraps x at 1024 and y at 512 without a 32-column mask");
+}
 void check_game_tile_descriptors() {
     std::array<uint8_t, 32> rom{};
     std::array<uint8_t, 0x20000> ram{};
@@ -132,12 +330,215 @@ f3rt::RomSet fixture() {
     r.samples[0x2468a]=0x45;r.samples[0x2468b]=0x67; // OTIS word 0x12345, above old truncated mask
     return r;
 }
+void check_local_inputs() {
+    using Words = std::array<f3rt::LocalInputWord, f3rt::local_player_count>;
+    constexpr uint32_t ports[] = {0x4a0002, 0x4a0006, 0x4a0012, 0x4a0016};
+    constexpr uint16_t button_masks[4][4] = {
+        {0x0001, 0x0002, 0x0004, 0x0008}, {0x0010, 0x0020, 0x0040, 0x0080},
+        {0x0100, 0x0200, 0x0400, 0x0800}, {0x1000, 0x2000, 0x4000, 0x8000}};
+    constexpr uint16_t direction_masks[4][4] = {
+        {0x0001, 0x0002, 0x0004, 0x0008}, {0x0010, 0x0020, 0x0040, 0x0080},
+        {0x0001, 0x0002, 0x0004, 0x0008}, {0x0010, 0x0020, 0x0040, 0x0080}};
+    constexpr uint16_t start_masks[] = {0x1000, 0x2000, 0x4000, 0x8000};
+    constexpr uint8_t coin_masks[] = {0x10, 0x20, 0x40, 0x80};
+    constexpr uint16_t service_masks[] = {0x200, 0x400, 0x800, 0};
+    for (bool kaiser : {false, true}) {
+        auto roms = fixture();
+        roms.name = kaiser ? "kaiserknj" : "landmakrj";
+        auto m = std::make_unique<f3rt::Machine>(std::move(roms));
+        m->write16(0x4a0004, 0x0ba6);
+        m->write16(0x4a0014, 0x0975);
+        const auto expect = [&](const std::array<uint16_t, 4> &low, uint8_t system) {
+            for (unsigned port = 0; port < low.size(); ++port)
+                require(m->read16(ports[port]) == low[port],
+                        "Local controls reach only their physical active-low MMIO lines");
+            require((m->read8(0x4a0000) & 0xfe) == system &&
+                    (m->read8(0x4a0001) & 0xfe) == system,
+                    "Coins and test reach both system-byte MMIO lanes without pinning EEPROM DO");
+            require(m->read16(0x4a0004) == 0x0ba6 && m->read16(0x4a0014) == 0x0975,
+                    "Applying controls preserves both readable coin-counter banks");
+        };
+        const unsigned players = kaiser ? 2 : f3rt::local_player_count;
+        for (unsigned slot = 0; slot < players; ++slot) {
+            for (unsigned bit = 0; bit < f3rt::local_control_count; ++bit) {
+                Words words{};
+                words[slot] = f3rt::LocalInputWord(1u << bit);
+                std::array<uint16_t, 4> low{0xffff, 0xffff, 0xffff, 0xffff};
+                uint8_t system = 0xfe;
+                if (bit < 4) low[slot < 2 ? 1 : 3] &= uint16_t(~direction_masks[slot][bit]);
+                else if (bit < 7) low[slot < 2 ? 0 : 2] &= uint16_t(~button_masks[slot][bit - 4]);
+                else if (bit == 7) low[0] &= uint16_t(~start_masks[slot]);
+                else if (bit == 8) system &= uint8_t(~coin_masks[slot]);
+                else if (bit == 9) low[0] &= uint16_t(~service_masks[slot]);
+                else if (bit == 10) system &= uint8_t(~2u);
+                else if (kaiser) {
+                    constexpr uint16_t extra_masks[2][3] = {{1, 2, 4}, {0x100, 0x200, 0x400}};
+                    low[slot == 0 ? 3 : 2] &= uint16_t(~extra_masks[slot][bit - 11]);
+                } else if (bit == 11) low[slot < 2 ? 0 : 2] &= uint16_t(~button_masks[slot][3]);
+                f3rt::apply_local_inputs(*m, words);
+                expect(low, system);
+                if (!kaiser && slot < 2 && bit < 11) {
+                    std::array<f3rt::netplay::InputWord, 2> online{};
+                    online[slot] = words[slot];
+                    f3rt::netplay::apply_inputs(*m, online);
+                    expect(low, system);
+                }
+            }
+        }
+        if (kaiser) {
+            f3rt::apply_local_inputs(*m, {0, 0, f3rt::local_input_mask, f3rt::local_input_mask});
+            expect({0xffff, 0xffff, 0xffff, 0xffff}, 0xfe);
+            f3rt::apply_local_inputs(*m, {f3rt::local_input_mask, f3rt::local_input_mask, 0, 0});
+            expect({uint16_t(~(0x0007u | 0x0070u | 0x1000u | 0x2000u | 0x0200u | 0x0400u)),
+                    0xff00, 0xf8ff, 0xfff8}, uint8_t(0xfe & ~0x32u));
+        } else {
+            f3rt::apply_local_inputs(*m, {0, 0, f3rt::local_input_mask, f3rt::local_input_mask});
+            f3rt::netplay::apply_inputs(*m, {});
+            expect({0xffff, 0xffff, 0xffff, 0xffff}, 0xfe);
+            for (unsigned slot = 0; slot < 2; ++slot) {
+                for (unsigned bit = 11; bit < 16; ++bit) {
+                    f3rt::apply_local_inputs(*m, {0x800, 0x100, 0x80, 0x10});
+                    const auto before = m->inputs;
+                    const uint8_t before_system = m->system_inputs;
+                    std::array<f3rt::netplay::InputWord, 2> online{0x10, 0x20};
+                    online[slot] = f3rt::netplay::InputWord(1u << bit);
+                    bool rejected = false;
+                    try { f3rt::netplay::apply_inputs(*m, online); }
+                    catch (const std::runtime_error &) { rejected = true; }
+                    require(rejected && m->inputs == before && m->system_inputs == before_system,
+                            "Network words reject every bit above the original eleven before applying either player");
+                }
+            }
+        }
+        f3rt::apply_local_inputs(*m, {});
+        expect({0xffff, 0xffff, 0xffff, 0xffff}, 0xfe);
+    }
+}
+void check_dial_inputs() {
+    using Words = std::array<f3rt::LocalInputWord, f3rt::local_player_count>;
+    for (const char *name : {"arkretrnj", "puchicarj"}) {
+        auto roms = fixture();
+        roms.name = name;
+        auto m = std::make_unique<f3rt::Machine>(std::move(roms));
+        const auto expect = [&](uint32_t first, uint32_t second) {
+            require(m->read32(0x4a0008) == first && m->read32(0x4a000c) == second,
+                    "Both twelve-bit dial counters expose the native big-endian nibble-packed MMIO words");
+        };
+        expect(0xffff0000, 0xffff0000);
+        f3rt::apply_local_inputs(*m, {4, 8, 0, 0});
+        expect(0xffffe0ff, 0xffff2000);
+        require(m->read8(0x4a000a) == 0xe0 && m->read8(0x4a000b) == 0xff &&
+                m->read16(0x4a000e) == 0x2000 && m->read16(0x4a0006) == 0xff7b,
+                "Dial arrows also reach each player's real native joystick bits and byte lanes");
+        f3rt::apply_local_inputs(*m, {});
+        expect(0xffffe0ff, 0xffff2000);
+        require(m->read16(0x4a0006) == 0xffff,
+                "Neutral input releases joystick lines without clearing dial history");
+        f3rt::apply_local_inputs(*m, {0xc, 0xc, 0, 0});
+        expect(0xffffe0ff, 0xffff2000);
+        require(m->read16(0x4a0006) == 0xff33,
+                "Opposite arrows cancel counter motion while preserving native joystick inputs");
+        f3rt::apply_local_inputs(*m, {8, 4, 0, 0});
+        expect(0xffff0000, 0xffff0000);
+        for (unsigned frame = 0; frame < 8; ++frame)
+            f3rt::apply_local_inputs(*m, {8, 4, 0, 0});
+        expect(0xffff0001, 0xffff00ff);
+        f3rt::apply_local_inputs(*m, {0, 0, 4, 8});
+        expect(0xffff0001, 0xffff00ff);
+        m->reset();
+        expect(0xffff0001, 0xffff00ff);
+        f3rt::apply_local_inputs(*m, {});
+        expect(0xffff0001, 0xffff00ff);
+
+        const std::array<Words, 5> continuation{{
+            Words{8, 0, 0, 0}, Words{0, 4, 0, 0}, Words{0xc, 8, 0, 0},
+            Words{4, 8, 0, 0}, Words{}}};
+        const auto replay = [&] {
+            for (const auto &words : continuation) {
+                f3rt::apply_local_inputs(*m, words);
+                require(m->run_frame(), "Dial snapshot continuation executes a logical machine frame");
+            }
+            expect(0xffff0001, 0xffff20ff);
+            return m->sync_state_crc();
+        };
+        std::vector<uint8_t> full(m->state_size()), sync(m->sync_state_size());
+        m->save_state(full);
+        m->save_sync_state(sync);
+        const uint32_t expected_crc = replay();
+        m->load_state(full);
+        expect(0xffff0001, 0xffff00ff);
+        require(replay() == expected_crc,
+                "Full snapshots restore dial history and replay identical serialized machine continuation");
+        m->load_sync_state(sync);
+        expect(0xffff0001, 0xffff00ff);
+        require(replay() == expected_crc,
+                "Portable snapshots restore dial history without any frontend counter cache");
+    }
+}
 void send_bit(f3rt::Eeprom &e,bool bit,uint64_t now) { uint8_t pins=0x10|(bit?4:0);e.pins(pins,now);e.pins(pins|8,now); }
 void command(f3rt::Eeprom &e,unsigned word,uint64_t now) { e.pins(0,now);for(int bit=8;bit>=0;--bit)send_bit(e,(word>>bit)&1,now); }
 void serial_write(f3rt::Eeprom &e,unsigned address,uint16_t value,uint64_t now) {
     command(e,0x140|address,now);for(int bit=15;bit>=0;--bit)send_bit(e,(value>>bit)&1,now);e.pins(0,now);
 }
 uint16_t read_word(f3rt::Eeprom &e,uint64_t now) { uint16_t value=0;for(int i=0;i<16;++i) { send_bit(e,false,now);value=uint16_t((value<<1)|e.output(now)); }return value; }
+void send_bit(f3rt::Machine &m,bool bit) {
+    const uint8_t pins=0x10|(bit?4:0);
+    m.write8(0x4a0013,pins);m.write8(0x4a0013,pins|8);
+}
+void command(f3rt::Machine &m,unsigned word) {
+    m.write8(0x4a0013,0);for(int bit=8;bit>=0;--bit)send_bit(m,(word>>bit)&1);
+}
+void serial_write(f3rt::Machine &m,unsigned address,uint16_t value) {
+    command(m,0x140|address);
+    for(int bit=15;bit>=0;--bit)send_bit(m,(value>>bit)&1);
+    m.write8(0x4a0013,0);
+}
+uint16_t read_word(f3rt::Machine &m) {
+    uint16_t value=0;
+    for(int i=0;i<16;++i) {
+        send_bit(m,false);value=uint16_t((value<<1)|(m.read8(0x4a0000)&1));
+    }
+    return value;
+}
+void check_factory_eeprom() {
+    auto roms=fixture();
+    roms.factory_eeprom.assign(128,0xff);
+    roms.factory_eeprom[0]=0x12;roms.factory_eeprom[1]=0x34;
+    roms.factory_eeprom[2]=0x89;roms.factory_eeprom[3]=0xab;
+    roms.factory_eeprom[126]=0xfe;roms.factory_eeprom[127]=0xdc;
+    auto m=std::make_unique<f3rt::Machine>(std::move(roms));
+    command(*m,0x1bf);
+    require(!(m->read8(0x4a0000)&1),"Factory EEPROM read exposes the serial dummy bit through the input port");
+    require(read_word(*m)==0xfedc && read_word(*m)==0x1234 && read_word(*m)==0x89ab,
+            "Factory EEPROM seeds all addresses big-endian before initial reset, including serial wrap");
+    command(*m,0x130);m->write8(0x4a0013,0); // EWEN
+    serial_write(*m,0,0xa65c);m->cpu.cycles+=28000;
+    m->reset();command(*m,0x180);
+    require(read_word(*m)==0xa65c && read_word(*m)==0x89ab,
+            "Machine reset preserves guest EEPROM writes instead of reseeding factory defaults");
+
+    struct TemporaryImage {
+        std::filesystem::path path;
+        ~TemporaryImage() { std::error_code error;std::filesystem::remove(path,error); }
+    } image{std::filesystem::temp_directory_path()/
+        ("f3rt-check-eeprom-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".nv")};
+    f3rt::Eeprom user;
+    user.words.fill(0x579b);user.words[0]=0xc318;user.words[63]=0x2468;
+    user.save(image.path); // Only this explicitly chosen temporary user path is written.
+    m->load_eeprom(image.path);m->reset();command(*m,0x1bf);
+    require(read_word(*m)==0x2468 && read_word(*m)==0xc318 && read_word(*m)==0x579b,
+            "Explicit user EEPROM image overrides factory and prior guest contents across reset");
+    command(*m,0x130);m->write8(0x4a0013,0);
+    serial_write(*m,0,0xd42e);m->cpu.cycles+=28000;
+    m->reset();command(*m,0x180);
+    require(read_word(*m)==0xd42e,"Loaded user EEPROM remains writable and persists through reset");
+    roms=std::move(m->roms);m.reset();
+    auto factory_machine=std::make_unique<f3rt::Machine>(std::move(roms));
+    command(*factory_machine,0x1bf);
+    require(read_word(*factory_machine)==0xfedc && read_word(*factory_machine)==0x1234 &&
+            read_word(*factory_machine)==0x89ab,
+            "A new machine consumes the unchanged ROM seed after user-image load and guest writes");
+}
 void native(f3_cpu *cpu) { cpu->d[0]=99;cpu->pc+=2;cpu->cycles+=4; }
 void check_main_sound_ordering() {
     const auto sound_machine=[] {
@@ -561,10 +962,15 @@ void check_audio_mixer() {
 }
 }
 int main() try {
+    check_game_rom_video();
+    check_fdp_geometry();
     check_game_tile_descriptors();
     check_game_sprite_descriptors();
     check_game_sprite_top_edge();
     check_audio_mixer();
+    check_local_inputs();
+    check_dial_inputs();
+    check_factory_eeprom();
     check_main_sound_ordering();
     check_audio_partitioning();
     f3rt::Audio clock_audio;
@@ -582,6 +988,19 @@ int main() try {
     require(clock_audio.render(clock_samples.data(),clock_samples.size()/2)==2,
             "Board reset preserves queued audio and fractional sample-clock phase");
     auto m=std::make_unique<f3rt::Machine>(fixture());
+    const uint32_t main_crc=f3rt::crc32(m->roms.main.data(),m->roms.main.size());
+    require(f3_validate_main_rom(&m->cpu,m->roms.main.size(),main_crc),
+            "Native main image binding accepts the loaded revision");
+    m->roms.main[0x104]=1;
+    bool mismatched=false;
+    try { f3_validate_main_rom(&m->cpu,m->roms.main.size(),main_crc); }
+    catch(const std::runtime_error &) { mismatched=true; }
+    require(mismatched && !m->blocks,"Wrong native image is rejected before dispatch registration");
+    m->roms.main[0x104]=0;
+    mismatched=false;
+    try { f3_validate_main_rom(&m->cpu,0x100000,main_crc); }
+    catch(const std::runtime_error &) { mismatched=true; }
+    require(mismatched,"Native image length is bound even when its CRC matches");
     require(m->cpu.cycles==4 && m->cpu.pc==0x100 && m->cpu.d[0]==0,
             "Cold reset charges four cycles without executing the first opcode");
     require(m->cpu.dispatch_deadline==0,"Reset requires a fresh scheduling boundary");

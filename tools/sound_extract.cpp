@@ -155,7 +155,7 @@ void print_help(const char *prog) {
               << "Standalone sound extraction and stimulus injection tool for Land Maker (Taito F3).\n\n"
               << "Options:\n"
               << "  --rom-dir DIR          Path to ROM directory (default: F3RT_DEFAULT_ROM_DIR if defined)\n"
-              << "  --set SET              ROM set name (default: landmakrj)\n"
+              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
               << "  --packet HEX           Inject length-prefixed packet at event origin (can be repeated)\n"
               << "  --at SECONDS:HEX       Schedule packet injection at SECONDS from event origin (can be repeated)\n"
               << "  --seconds DURATION     Duration in seconds to advance audio after event origin (default: 5.0)\n"
@@ -188,7 +188,7 @@ int main(int argc, char **argv) try {
     romdir = F3RT_DEFAULT_ROM_DIR;
 #endif
 
-    std::string set = "landmakrj";
+    std::string set = F3RT_DEFAULT_SET;
     std::string sound_driver = "oracle";
     std::string audio_backend = "accurate";
     bool sound_explicit = false;
@@ -267,6 +267,8 @@ int main(int argc, char **argv) try {
     }
     if (audio_backend != "accurate" && audio_backend != "hle")
         throw std::runtime_error("--audio-backend must be accurate or hle");
+    if (audio_backend == "hle" && set != "landmakrj")
+        throw std::runtime_error("HLE audio requires landmakrj");
     if (audio_backend == "hle" && (sound_explicit || !sound_trace_path.empty()))
         throw std::runtime_error("HLE does not execute a sound driver or emit CPU bus traces");
     if (audio_backend != "hle" && !hle_events_path.empty())
@@ -310,7 +312,7 @@ int main(int argc, char **argv) try {
     } else if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                           {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
         throw std::runtime_error("Native sound driver (--sound-driver native) requested, but binary was built without F3RT_SOUND_GENERATED");
 #endif

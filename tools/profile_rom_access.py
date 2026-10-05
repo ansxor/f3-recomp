@@ -67,7 +67,7 @@ def build_profile(build: Path, output: Path, config: Path, rom_dir: Path, jobs: 
     main_rom, game_config = load_rom(config, rom_dir)
     if game_config["game"]["id"] != "landmakrj":
         raise ValueError("Native access profiling supports only the verified landmakrj runtime/build")
-    sound_rom = load_sound_rom(rom_dir)
+    sound_rom = load_sound_rom(rom_dir, game_config)
     sources = output / "sources"
     objects = output / "objects"
     sources.mkdir(parents=True, exist_ok=True)

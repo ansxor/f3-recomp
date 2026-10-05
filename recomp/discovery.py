@@ -75,6 +75,8 @@ class Discovery:
     aligned_decoded_count: int = 0
     aligned_invalid_count: int = 0
     invalid_pcs: list[int] = field(default_factory=list)
+    # Recursive graphics analysis needs the resolved table edges as well as PCs.
+    branch_targets: dict[int, list[int]] = field(default_factory=dict)
 
 def _parse_int_address(val: int | str) -> int:
     """Parse address given as integer or hex/decimal string."""
@@ -520,12 +522,15 @@ def _extract_vector_seeds(rom: bytes) -> set[int]:
     return seeds
 
 
-def discover(rom: bytes, config: dict) -> Discovery:
+def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     """Discover instructions, basic blocks, and functions from reset/exception vectors and metadata.
 
     Supports configurable explicit entry points, hook PCs, and jump tables from config dict,
     while performing conservative automatic jump-table and task-trap scanning.
-    Produces a JSON-serializable whole-image coverage report.
+    Produces a JSON-serializable whole-image coverage report. Optional
+    instruction_decoder(md, rom, pc) may return an instruction-like platform
+    exception record, or None to use Capstone; it is invoked only on rooted
+    recursive paths, never during all-aligned decoding.
     """
     md = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
     if len(rom) < 1024:
@@ -679,7 +684,8 @@ def discover(rom: bytes, config: dict) -> Discovery:
             chunk = rom[cur_pc:min(cur_pc + 24, len(rom))]
             if len(chunk) < 24:
                 chunk = chunk.ljust(24, b"\0")
-            dis = list(md.disasm(chunk, cur_pc, count=1))
+            override = instruction_decoder(md, rom, cur_pc) if instruction_decoder is not None else None
+            dis = [override] if override is not None else list(md.disasm(chunk, cur_pc, count=1))
             if (
                 not dis
                 or dis[0].id == 0
@@ -989,4 +995,5 @@ def discover(rom: bytes, config: dict) -> Discovery:
         aligned_decoded_count=aligned_decoded_count,
         aligned_invalid_count=aligned_invalid_count,
         invalid_pcs=sorted(invalid_pcs),
+        branch_targets=branch_targets,
     )

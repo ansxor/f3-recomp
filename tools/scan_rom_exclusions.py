@@ -346,10 +346,8 @@ def main() -> None:
         rom, config = load_rom(args.config, args.rom_dir)
     else:
         config = tomllib.loads(args.config.read_text("utf-8"))
-        if config.get("game", {}).get("id") != "landmakrj":
-            parser.error("Sound ROM metadata is known only for landmakrj; refusing set substitution")
         from tools.compile_sound import load_sound_rom
-        rom = load_sound_rom(args.rom_dir)
+        rom = load_sound_rom(args.rom_dir, config)
     profile = json.loads(args.profile.read_text("utf-8")) if args.profile else None
     report = scan_rom(rom, config, args.cpu, profile)
     args.output.parent.mkdir(parents=True, exist_ok=True)

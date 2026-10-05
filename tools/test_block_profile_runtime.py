@@ -48,8 +48,12 @@ int main(int argc, char **argv) {
 }
 ''')
             binary = root / "profile-regression"
+            subprocess.run(["python3", str(ROOT / "tools/compile_roms.py"), "--configs",
+                            *map(str, sorted((ROOT / "games").glob("*/config.toml"))),
+                            "--output", str(root / "rom_manifest.hpp")], check=True, cwd=ROOT)
             subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
                             "-DF3_PROFILE_INSTRUMENT=1", "-I", str(ROOT / "include"), "-I", str(ROOT / "runtime"),
+                            "-I", str(root),
                             str(driver), str(ROOT / "runtime/block_profile.cpp"), str(ROOT / "runtime/rom.cpp"),
                             "-o", str(binary)], check=True)
             subprocess.run([str(binary), str(root)], check=True)

@@ -185,7 +185,7 @@ sequenceDiagram
 
 | Binary | `allow_fallback` default | Effect |
 | --- | --- | --- |
-| `landmakr` (built with `F3RT_LANDMAKR`) | `false` | Strict native. An untranslated instruction is a fatal error. |
+| Selected title executable (built with `F3RT_GAME`) | `false` | Strict native. An untranslated instruction is a fatal error. |
 | `f3rt-run` | `true` | Fallback is allowed. |
 
 The option `--allow-fallback` sets it to true for any binary. The help text calls it "diagnostic only". The option `--fallback-report FILE` allocates `fallback_hits` with `0x800000` entries (one for each even address in 16 MiB). At the end of the run the frontend writes a TSV with the columns `pc` and `count`. Use it to find instructions that the recompiler did not cover.

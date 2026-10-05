@@ -1,0 +1,173 @@
+# Pinned manifest: https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp
+# ROM_START(arabianmj); physical bytes identified by size, CRC32 and SHA1.
+[game]
+name = "Arabian Magic (Ver 1.0J 1992/07/06)"
+id = "arabianmj"
+platform = "taito_f3"
+
+[rom]
+# Populated physical CPU bytes only; MAME reserves 0x200000.
+# MAME's unpopulated upper 0x100000 needs zero padding only when supplying an
+# oracle 0x200000 image; it is not an invented chip or compiled code.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "d29-23.ic40"
+offset = 0x0
+size = 0x40000
+crc = "89a0c706"
+sha1 = "d0df02be2b63566ec776bb13947f975062766a01"
+
+[[rom.lanes]]
+file = "d29-22.ic38"
+offset = 0x1
+size = 0x40000
+crc = "4afc22a4"
+sha1 = "9579d134a1e4b0c86af9b41d136acfe6cc7f6624"
+
+[[rom.lanes]]
+file = "d29-21.ic36"
+offset = 0x2
+size = 0x40000
+crc = "ac32eb38"
+sha1 = "19d8d965497e41a7a2f490a197322da7fd1fa40a"
+
+[[rom.lanes]]
+file = "d29-20.ic34"
+offset = 0x3
+size = 0x40000
+crc = "57b833c1"
+sha1 = "69beff431e400db17ca1983a7a4d6684a1ea701c"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 0x200000
+fill = 0
+
+[[sprites.lanes]]
+file = "d29-03.ic66"
+offset = 0x0
+size = 0x100000
+crc = "aeaff456"
+sha1 = "e70d0089e69d33d213be8195c31891f38fbcb53a"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d29-04.ic67"
+offset = 0x1
+size = 0x100000
+crc = "01711cfe"
+sha1 = "26da4cc9dcb8d38bdf8c93015f77e58ffc9d1ba9"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 0x100000
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d29-05.ic68"
+offset = 0x0
+size = 0x100000
+crc = "9b5f7a17"
+sha1 = "89d9faedc7b55df6237f2c2ebb43de7de685cb66"
+stride = 1
+group = 1
+
+[tiles]
+size = 0x100000
+fill = 0
+
+[[tiles.lanes]]
+file = "d29-06.ic49"
+offset = 0x0
+size = 0x80000
+crc = "eea07bf3"
+sha1 = "7860a2c0c592af000b56e59bd39d67b086fe3606"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d29-07.ic50"
+offset = 0x2
+size = 0x80000
+crc = "db3c094d"
+sha1 = "5b60f0fa1054bf93ce51d310376b1abdb3022541"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 0x80000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "d29-08.ic51"
+offset = 0x0
+size = 0x80000
+crc = "d7562851"
+sha1 = "91d86e75ba7a590ca298b932b4cf8fa9228f115e"
+stride = 1
+group = 1
+
+[sound]
+# MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
+size = 0x40000
+fill = 0
+base = 0xc00000
+# Repeat the physical 256 KiB image in the 512 KiB CPU window.
+mirror_size = 0x80000
+
+[[sound.lanes]]
+file = "d29-18.ic5"
+offset = 0x0
+size = 0x20000
+crc = "d97780df"
+sha1 = "d0f9d2fd7ce13f620bb44083bf012f67dda4b10b"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d29-19.ic6"
+offset = 0x1
+size = 0x20000
+crc = "b1ad365c"
+sha1 = "1cd26d8feaaa06b50dfee32e9b7950b8ee92ac55"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE/ERASE00: odd (low) bytes remain zero.
+# 0x400000..0x5fffff remains zero (unpopulated).
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "d29-01.ic17"
+offset = 0x0
+size = 0x200000
+crc = "545ac4b3"
+sha1 = "f89513fca8a03cab11160aa1f0a9c3adbc8bda08"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d29-02.ic18"
+offset = 0x600000
+size = 0x100000
+crc = "ed894fe1"
+sha1 = "5bf2fb6abdcf25bc525a2c3b29dbf7aca0b18fea"
+stride = 2
+group = 1
+
+[video]
+# Geometry/lag: pinned taito_f3_v.cpp::f3_config_table; f3_224a/b in driver.
+# Native visible crop x=46..365, y=31..254 (320x224).
+rotation = 0
+sprite_lag = 2
+extend = false
+visible_y = 31
+visible_height = 224

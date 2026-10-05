@@ -1,0 +1,205 @@
+# Pinned manifest: https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp
+# ROM_START(gseekerj); physical bytes identified by size, CRC32 and SHA1.
+[game]
+name = "Grid Seeker: Project Storm Hammer (Ver 1.3J)"
+id = "gseekerj"
+platform = "taito_f3"
+
+[rom]
+# Populated physical CPU bytes only; MAME reserves 0x200000.
+# MAME's unpopulated upper 0x100000 needs zero padding only when supplying an
+# oracle 0x200000 image; it is not an invented chip or compiled code.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "d40_12.rom"
+offset = 0x0
+size = 0x40000
+crc = "884055fb"
+sha1 = "a91c3dcd635a3e22fbec94c9fc46d3c29fde5e71"
+
+[[rom.lanes]]
+file = "d40_11.rom"
+offset = 0x1
+size = 0x40000
+crc = "85e701d2"
+sha1 = "da0bc34a2c64d2db2fe143ad5a77bf667de5b015"
+
+[[rom.lanes]]
+file = "d40_10.rom"
+offset = 0x2
+size = 0x40000
+crc = "1e659ac5"
+sha1 = "cd435d361c4353b361ef975f208d81369d5d079f"
+
+[[rom.lanes]]
+file = "d40-09.34"
+offset = 0x3
+size = 0x40000
+crc = "37a90af5"
+sha1 = "1f3401148375c9ca638ca6db6098ea4acf7d63a6"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+# Preserve MAME load order: masks 03/04 are faulty; patches 15/16 overwrite
+# the lower half. File 04 first half goes to upper ODD lane; CONTINUE second
+# half goes to lower EVEN lane before patch 15 replaces it.
+size = 0x200000
+fill = 0
+
+[[sprites.lanes]]
+file = "d40_03.rom"
+offset = 0x0
+size = 0x100000
+crc = "bcd70efc"
+sha1 = "c65f934022d84e29cfd396cf70b6c1afdf90500b"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d40_04.rom"
+offset = 0x100001
+size = 0x100000
+crc = "cd2ac666"
+sha1 = "abf09979f1fe8575323b95b95688628ce4fc2350"
+stride = 2
+group = 1
+source_offset = 0x0
+length = 0x80000
+
+[[sprites.lanes]]
+file = "d40_04.rom"
+offset = 0x0
+size = 0x100000
+crc = "cd2ac666"
+sha1 = "abf09979f1fe8575323b95b95688628ce4fc2350"
+stride = 2
+group = 1
+source_offset = 0x80000
+length = 0x80000
+
+[[sprites.lanes]]
+file = "d40_15.rom"
+offset = 0x0
+size = 0x80000
+crc = "50555125"
+sha1 = "587cdfb2e027c1d96ecc46d2612956deca5fd36f"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d40_16.rom"
+offset = 0x1
+size = 0x80000
+crc = "3f9bbe1e"
+sha1 = "6d9b2d2d893257ad096c276eff4077f60a81921f"
+stride = 2
+group = 1
+
+[sprites_hi]
+# Physically absent high-plane chips; MAME EMPTY_HIDATA is a zero placeholder.
+size = 0x0
+fill = 0
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "d40_05.rom"
+offset = 0x0
+size = 0x100000
+crc = "be6eec8f"
+sha1 = "725e5e09f6ee60bd4c38fa223c4dea202c56f75f"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d40_06.rom"
+offset = 0x2
+size = 0x100000
+crc = "a822abe4"
+sha1 = "1a0dd9dcb8e24daab6eb1661307ef0e10f7e4d4e"
+stride = 4
+group = 2
+
+[tiles_hi]
+# Physically absent high-plane chips; MAME EMPTY_HIDATA is a zero placeholder.
+size = 0x0
+fill = 0
+
+[sound]
+# MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
+size = 0x40000
+fill = 0
+base = 0xc00000
+# Repeat the physical 256 KiB image in the 512 KiB CPU window.
+mirror_size = 0x80000
+
+[[sound.lanes]]
+file = "d40_07.rom"
+offset = 0x0
+size = 0x20000
+crc = "7e9b26c2"
+sha1 = "d88ad39a9d70b4a5bd3f83e0d4d0725f659f1d2a"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d40_08.rom"
+offset = 0x1
+size = 0x20000
+crc = "9c926a28"
+sha1 = "9d9ee75eb895edc381c3ab4df5af941f84cd2073"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE/ERASE00: odd (low) bytes remain zero.
+# 0x400000..0x5fffff remains zero (unpopulated).
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "d40_01.rom"
+offset = 0x0
+size = 0x200000
+crc = "ee312e95"
+sha1 = "885553950c2b2195d664639bf7e0d1ffa3e8346a"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d40_02.rom"
+offset = 0x600000
+size = 0x100000
+crc = "ed894fe1"
+sha1 = "5bf2fb6abdcf25bc525a2c3b29dbf7aca0b18fea"
+stride = 2
+group = 1
+
+[eeprom]
+# Hash-listed MAME factory defaults; immutable ROM asset, not a save path.
+size = 0x80
+fill = 255
+
+[[eeprom.lanes]]
+file = "gseeker.nv"
+offset = 0x0
+size = 0x80
+crc = "3e24cc80"
+sha1 = "42173cf6aa40bb5015d01f62312fc2ff8d81fb65"
+stride = 1
+group = 1
+
+[video]
+# Geometry/lag: pinned taito_f3_v.cpp::f3_config_table; f3_224a/b in driver.
+# Native visible crop x=46..365, y=32..255 (320x224).
+rotation = 90
+sprite_lag = 1
+extend = false
+visible_y = 32
+visible_height = 224

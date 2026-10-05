@@ -31,7 +31,7 @@ public:
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
     std::array<uint8_t, 0x800> shared{};
-    std::array<uint32_t, 320 * 232> pixels{};
+    std::vector<uint32_t> pixels;
     RomSet roms;
     std::unique_ptr<Video> video;
     std::unique_ptr<GameVideo> game_video;
@@ -60,7 +60,7 @@ public:
     void reset_devices();
     // Select before advancing the machine. The interpreted driver is the default.
     void use_native_sound(const f3_block *program, size_t count,
-                          std::span<const f3_excluded_range> excluded);
+                          std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
     uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);

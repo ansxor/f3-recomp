@@ -2,6 +2,8 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/block_profile.h"
 #include <algorithm>
+#include <cstdio>
+#include <stdexcept>
 
 namespace {
 f3rt::Machine &machine(f3_cpu *cpu) { return *static_cast<f3rt::Machine *>(cpu->runtime); }
@@ -67,6 +69,19 @@ void f3_reset_devices(f3_cpu *cpu) {
     m.reset_devices();
 }
 int f3_boundary(f3_cpu *cpu) { return machine(cpu).boundary(); }
+int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc) {
+    if (!cpu || !cpu->runtime) return 0;
+    const auto &rom = machine(cpu).roms.main;
+    const uint32_t actual = f3rt::crc32(rom.data(), rom.size());
+    if (rom.size() != size || actual != crc) {
+        char message[160];
+        std::snprintf(message, sizeof(message),
+                      "Generated main ROM mismatch: loaded %zu bytes / %08x, expected %zu / %08x",
+                      rom.size(), actual, size, crc);
+        throw std::runtime_error(message);
+    }
+    return 1;
+}
 int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
     if (!cpu || !cpu->runtime || (count && !blocks)) return 0;
     for (size_t i = 0; i < count; ++i)

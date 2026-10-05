@@ -205,7 +205,7 @@ int main(int argc, char **argv) try {
     else if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                           {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
         throw std::runtime_error("Native sound requires a generated sound program (F3_ROM_DIR)");
 #endif

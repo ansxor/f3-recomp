@@ -125,7 +125,7 @@ classDiagram
 | Copy constructor and copy assignment | Deleted. Device callbacks and shared-memory pointers refer to this specific machine. |
 | `reset()` | Power-on reset of the whole machine. See [Scheduling](/developer/runtime/scheduling#power-on-reset). |
 | `reset_devices()` | Device part of a reset. Used by the RESET instruction and the watchdog. |
-| `use_native_sound(program, count)` | Selects the native sound driver. Call it before any execution. |
+| `use_native_sound(program, count, excluded, expected_crc)` | Selects the native sound driver. Call it before any execution. |
 | `sound_pc()` | PC of the sound CPU. |
 | `run_frame(translated)` | Runs until one more vblank has happened. Returns false if the CPU halted. |
 | `advance_to(cycles)` | Brings all devices to the given time. |

@@ -1,0 +1,157 @@
+# Exact supplied chip identities match mamedev/mame cfc4760a3be9c5a79846b19b6a573cb38459fa7e.
+# Source: src/mame/taito/taito_f3.cpp ROM_START(pbobble2j) and GAME crop.
+[game]
+name = "Puzzle Bobble 2 (Ver 2.2J 1995/07/20)"
+id = "pbobble2j"
+platform = "taito_f3"
+
+[rom]
+# Physical populated program image; no unpopulated MAME allocation prefix/tail.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "e10-11.20"
+offset = 0x0
+size = 0x40000
+crc = "b82f81da"
+sha1 = "2cd0fb321c853497058545525f430b52c0788fb1"
+
+[[rom.lanes]]
+file = "e10-10.19"
+offset = 0x1
+size = 0x40000
+crc = "f432267a"
+sha1 = "f9778fc627773e4e254faa0ce10e68407251ce95"
+
+[[rom.lanes]]
+file = "e10-09.18"
+offset = 0x2
+size = 0x40000
+crc = "e0b1b599"
+sha1 = "99ef34b014db7c52f2ced05b2b90099a9c873259"
+
+[[rom.lanes]]
+file = "e10-08.17"
+offset = 0x3
+size = 0x40000
+crc = "4ccec344"
+sha1 = "dfb30d149dde6d8e1a117bf0bafb85178540aa58"
+
+[sprites]
+size = 0x200000
+fill = 0
+
+[[sprites.lanes]]
+file = "e10-02.rom"
+offset = 0x0
+size = 0x100000
+crc = "c0564490"
+sha1 = "cbe9f880192c08f4d1db21d5ba14073b97e5f1d3"
+stride = 0x2
+group = 0x1
+
+[[sprites.lanes]]
+file = "e10-01.rom"
+offset = 0x1
+size = 0x100000
+crc = "8c26ff49"
+sha1 = "cbb514c061106003d2ae2b6c43958b24feaad656"
+stride = 0x2
+group = 0x1
+
+[sprites_hi]
+# Physically absent high planes; MAME zero placeholder is not a chip.
+size = 0x0
+fill = 0
+lanes = []
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "e10-07.rom"
+offset = 0x0
+size = 0x100000
+crc = "dcb3c29b"
+sha1 = "b80c3a8ce53d696c57675e654c9927ef8687759e"
+stride = 0x4
+group = 0x2
+
+[[tiles.lanes]]
+file = "e10-06.rom"
+offset = 0x2
+size = 0x100000
+crc = "1b0f20e2"
+sha1 = "66b44d059c2896abac2f0e7fc932489dee440ba0"
+stride = 0x4
+group = 0x2
+
+[tiles_hi]
+size = 0x100000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e10-05.rom"
+offset = 0x0
+size = 0x100000
+crc = "81266151"
+sha1 = "aa3b144f32995425db97efce440e234a3c7a6715"
+
+[sound]
+# Full two physical 256 KiB sound chips; omit unused MAME 1 MiB prefix.
+base = 0xc00000
+size = 0x80000
+fill = 0
+
+[[sound.lanes]]
+file = "e10-12.32"
+offset = 0x0
+size = 0x40000
+crc = "b92dc8ad"
+sha1 = "0c1428d313507b1ae5a2af3b2fbaaa5650135e1e"
+stride = 0x2
+group = 0x1
+
+[[sound.lanes]]
+file = "e10-13.33"
+offset = 0x1
+size = 0x40000
+crc = "87842c13"
+sha1 = "d15b47c7430e677ae172f86fd5be595e4fe72e42"
+stride = 0x2
+group = 0x1
+
+[samples]
+# ROM_REGION16_BE / ROMREGION_ERASE00: low byte of every sample word is zero.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "e10-04.rom"
+offset = 0x0
+size = 0x200000
+crc = "5c0862a6"
+sha1 = "f916f63b8629239e3221e1e231e1b39962ef38ba"
+stride = 0x2
+group = 0x1
+
+[[samples.lanes]]
+file = "e10-03.rom"
+offset = 0x400000
+size = 0x200000
+crc = "46d68ac8"
+sha1 = "ad014e9f0d458308014959ca6823077f581ab088"
+stride = 0x2
+group = 0x1
+
+[discovery]
+coverage = "all_aligned"
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = false
+visible_y = 24
+visible_height = 232

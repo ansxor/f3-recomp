@@ -1,0 +1,170 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp
+# Supplied physical chips match ROM_START(pbobble4j) by full size/CRC/SHA1.
+[game]
+name = "Puzzle Bobble 4 (Ver 2.04J 1997/12/19)"
+id = "pbobble4j"
+platform = "taito_f3"
+
+[rom]
+# Populated main CPU image (MAME reserves 0x200000 bytes).
+size = 2097152
+interleave = 4
+
+[[rom.lanes]]
+file = "e49-12.20"
+offset = 0
+size = 524288
+crc = "fffea203"
+sha1 = "6351209c78099f270c8d8c8aa4a2dd9ce126c4ed"
+
+[[rom.lanes]]
+file = "e49-11.19"
+offset = 1
+size = 524288
+crc = "bf69a087"
+sha1 = "2acbdb7faf5bdb1d9b5b9506c0b6f02fedcbd6a5"
+
+[[rom.lanes]]
+file = "e49-10.18"
+offset = 2
+size = 524288
+crc = "0307460b"
+sha1 = "7ad9c6e5d319d6727444ffd14a87c6885445cee0"
+
+[[rom.lanes]]
+file = "e49-09.17"
+offset = 3
+size = 524288
+crc = "e40c7708"
+sha1 = "0a8e973bb1d8c6dea9124d2742d354c6f20c08ee"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 2097152
+fill = 0
+
+[[sprites.lanes]]
+file = "e49-02"
+offset = 0
+size = 1048576
+crc = "c7d2f40b"
+sha1 = "cc6813189d6b31d7db099e49443af395f137462c"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e49-01"
+offset = 1
+size = 1048576
+crc = "a3dd5f85"
+sha1 = "2b305fdc18806bb5d7c3de0ac6a6eb07f98b4d3d"
+stride = 2
+group = 1
+
+[sprites_hi]
+# No physical high-plane chips; decoder supplies zero additional planes.
+size = 0
+fill = 0
+lanes = []
+
+[tiles]
+size = 2097152
+fill = 0
+
+[[tiles.lanes]]
+file = "e49-08"
+offset = 0
+size = 1048576
+crc = "87408106"
+sha1 = "6577568ab4b92d6a81f43cf9ea2f0e30e17e2742"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e49-07"
+offset = 2
+size = 1048576
+crc = "1e1e8e1c"
+sha1 = "9c3b994064c6af62b6a24cab85089a74fd92cf7f"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 1048576
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e49-06"
+offset = 0
+size = 1048576
+crc = "ec85f7ce"
+sha1 = "9fead68c38fc9ca84d34d70343b13665978c362b"
+stride = 1
+group = 1
+
+[sound]
+# Mapped sound program at 0xc00000; omit unused MAME 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "e49-13.32"
+offset = 0
+size = 262144
+crc = "83536f7f"
+sha1 = "2252cee00ae260954cc76d92af8eb2a87d23cbfb"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e49-14.33"
+offset = 1
+size = 262144
+crc = "19815bdb"
+sha1 = "38ad682236c7df0710055dd8dbdec30d5da0839d"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE: high-byte chips, zero low bytes and unpopulated banks.
+size = 16777216
+fill = 0
+
+[[samples.lanes]]
+file = "e49-03"
+offset = 4194304
+size = 2097152
+crc = "f64303e0"
+sha1 = "4d5df77047522419d21ff36402076e9b7c5acff8"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e49-04"
+offset = 8388608
+size = 2097152
+crc = "09be229c"
+sha1 = "a3a88969b34628d2bf3163bdf85d520feac9a7ac"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e49-05"
+offset = 12582912
+size = 2097152
+crc = "5ce90ee2"
+sha1 = "afafc1f64ecf2dbd94a9f7871a26150ac2d22be5"
+stride = 2
+group = 1
+
+[video]
+# Pinned f3_config_table: sprite lag 1; extend is the initial PF geometry.
+# f3 standard: y=24..255, 320x232.
+rotation = 0
+sprite_lag = 1
+extend = false
+visible_y = 24
+visible_height = 232

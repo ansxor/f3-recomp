@@ -1,0 +1,198 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp
+# Supplied bytes match ROM_START(rayforce): RayForce Ver 2.3A 1994/01/20.
+[game]
+name = "RayForce (Ver 2.3A 1994/01/20)"
+id = "rayforce"
+platform = "taito_f3"
+
+[rom]
+# Actual populated CPU image; MAME reserves a larger 0x200000 address region.
+size = 1048576
+interleave = 4
+
+[[rom.lanes]]
+file = "d66-18.ic24"
+offset = 0
+size = 262144
+crc = "8418513e"
+sha1 = "a071647268fad08802b88fb6d795612218b7ddef"
+
+[[rom.lanes]]
+file = "d66-19.ic26"
+offset = 1
+size = 262144
+crc = "95731473"
+sha1 = "ab79821cd6098a4db84ebc9a499c29b1525510a5"
+
+[[rom.lanes]]
+file = "d66-21.ic37"
+offset = 2
+size = 262144
+crc = "bd0d60f2"
+sha1 = "609ed2b04cb9efc4b370dcbdf22fd168318989be"
+
+[[rom.lanes]]
+file = "d66-25.ic35"
+offset = 3
+size = 262144
+crc = "e08653ee"
+sha1 = "03ae4e457369a4b29cd7d52408e28725e41ee244"
+
+[discovery]
+coverage = "all_aligned"
+# Immutable source bindings, not inferred hardware-packet callbacks:
+# reset $628/$62c installs task 0 from $1746; $4380/$4384 installs task 4
+# ($1756 -> $28d2e), and $4368/$436c installs task 10 ($176e -> $25d8a).
+# $294ec..$2ee72 stage 20-byte source records with literal compiler pointers;
+# $2910e/$29168/$291f4 restore their D4,D5,D2,D3,D6,A1 register ABI.
+# $27568/$27582, $27bde/$27be2 and $28a6e/$28a72 register the three
+# source-record effects through $29454. Preserve native all-aligned coverage.
+entry_points = [
+    0x44d8, 0x28d2e, 0x25d8a, 0x275a0, 0x27be8, 0x28a78,
+    0x323f6, 0x32404, 0x32422, 0x32446, 0x3247c, 0x324dc,
+    0x32542, 0x3257e, 0x325e4, 0x32652, 0x32686, 0x326e4,
+]
+# Every site extracts tagged descriptor-pointer bits 30..31 via ROL.L #4
+# and ANDI.W #$000c. The same four immutable long pointers at $32748
+# select no flip / Y flip / X flip / XY flip. Nested dimension tables lack
+# a source-code bounds clamp and are deliberately not promoted here.
+jump_tables = [
+    { address = 0x32472, table = 0x32748, count = 4 },
+    { address = 0x324d4, table = 0x32748, count = 4 },
+    { address = 0x3253a, table = 0x32748, count = 4 },
+    { address = 0x32576, table = 0x32748, count = 4 },
+    { address = 0x325dc, table = 0x32748, count = 4 },
+    { address = 0x32648, table = 0x32748, count = 4 },
+    { address = 0x3267e, table = 0x32748, count = 4 },
+    { address = 0x326dc, table = 0x32748, count = 4 },
+    { address = 0x32740, table = 0x32748, count = 4 },
+]
+
+[sprites]
+size = 2097152
+fill = 0
+
+[[sprites.lanes]]
+file = "d66-03.ic45"
+offset = 0
+size = 1048576
+crc = "e7a4a491"
+sha1 = "87837e8dd1c9a1db5e540b678233634bd52328f0"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d66-04.ic46"
+offset = 1
+size = 1048576
+crc = "c1c7aaa7"
+sha1 = "f929516cf50d82b2d1d1b4c49a0eb1dea819aae1"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 1048576
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d66-05.ic47"
+offset = 0
+size = 1048576
+crc = "a3cefe04"
+sha1 = "dd4f47a814853f4512ce25c5f25121c53ee4ada1"
+stride = 1
+group = 1
+
+[tiles]
+size = 2097152
+fill = 0
+
+[[tiles.lanes]]
+file = "d66-06.ic48"
+offset = 0
+size = 1048576
+crc = "b3d8126d"
+sha1 = "3cbb44f396973c36abdf3fdf391becb22bb6d661"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d66-07.ic49"
+offset = 2
+size = 1048576
+crc = "a6da9be7"
+sha1 = "b528505ab925db75acf31bfbed2035cbe36e7a74"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 1048576
+fill = 0
+
+[[tiles_hi.lanes]]
+# This supplied filename matches RayForce's MAME definition. Its bytes match
+# Gunlock's d66-08.ic50: this is tile high-plane data, not the IC49 low lane.
+file = "d66-08.ic49"
+offset = 0
+size = 1048576
+crc = "9959f30b"
+sha1 = "64bf2bf995c283c00d968e3c078b824de4084d3d"
+stride = 1
+group = 1
+
+[sound]
+# Only the mapped program: omit MAME's unused 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "d66-23.ic10"
+offset = 0
+size = 262144
+crc = "57fb7c49"
+sha1 = "f8709fd1e9ea7cee10ee2288d13339f675a7d3ae"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d66-22.ic23"
+offset = 1
+size = 262144
+crc = "83dd7f9b"
+sha1 = "dae21f64232d3e268f22b5e9899e0b726fdc9a9f"
+stride = 2
+group = 1
+
+[samples]
+# MAME ROM_REGION16_BE: samples occupy the high byte; low bytes stay zero.
+size = 8388608
+fill = 0
+
+[[samples.lanes]]
+file = "d66-01.ic2"
+offset = 0
+size = 2097152
+crc = "58c92efa"
+sha1 = "bb207b35b8f9538362bb99a9ec8df206694f00ce"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d66-02.ic3"
+offset = 4194304
+size = 2097152
+crc = "dcdafaab"
+sha1 = "c981c7e54a2a9aaa85bb758691858495d623b029"
+stride = 2
+group = 1
+
+[video]
+# f3_224a: native visible area x=46..365, y=31..254 (320x224).
+# GUNLOCK's initial extended playfields are 1024x512. Plane masks are
+# software-controlled in the pinned driver, not game-specific constants.
+rotation = 90
+sprite_lag = 2
+extend = true
+visible_y = 31
+visible_height = 224

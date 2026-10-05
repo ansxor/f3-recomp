@@ -1,0 +1,162 @@
+# Exact supplied chip identities match mamedev/mame cfc4760a3be9c5a79846b19b6a573cb38459fa7e.
+# Source: src/mame/taito/taito_f3.cpp ROM_START(bubsymphj) and GAME crop.
+[game]
+name = "Bubble Symphony (Ver 2.5J 1994/10/05)"
+id = "bubsymphj"
+platform = "taito_f3"
+
+[rom]
+# Physical populated program image; no unpopulated MAME allocation prefix/tail.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "d90-12"
+offset = 0x0
+size = 0x40000
+crc = "9e523996"
+sha1 = "c49a426f9865f96e8021c8ed9a6ac094c5e586b1"
+
+[[rom.lanes]]
+file = "d90-11"
+offset = 0x1
+size = 0x40000
+crc = "edfdbb7f"
+sha1 = "698ad631d5b13661645f2c5ccd3e4fbf0248053c"
+
+[[rom.lanes]]
+file = "d90-10"
+offset = 0x2
+size = 0x40000
+crc = "8e957d3d"
+sha1 = "5db31e5788483b802592e1092bf98df51ff4b70e"
+
+[[rom.lanes]]
+file = "d90-09"
+offset = 0x3
+size = 0x40000
+crc = "3f2090b7"
+sha1 = "2a95c8c8dc23b618c0ce65497391d464494f4d6a"
+
+[sprites]
+size = 0x200000
+fill = 0
+
+[[sprites.lanes]]
+file = "d90-03"
+offset = 0x0
+size = 0x100000
+crc = "6fa894a1"
+sha1 = "7c33e6d41e8928029b92d66557a3712b51c49c67"
+stride = 0x2
+group = 0x1
+
+[[sprites.lanes]]
+file = "d90-02"
+offset = 0x1
+size = 0x100000
+crc = "5ab04ca2"
+sha1 = "6d87e7ca3167ff81a041cfedbbed84d51da997de"
+stride = 0x2
+group = 0x1
+
+[sprites_hi]
+size = 0x100000
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d90-01"
+offset = 0x0
+size = 0x100000
+crc = "8aedb9e5"
+sha1 = "fb49330f7985a829c9544ecfd0bc672494f29cf6"
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "d90-08"
+offset = 0x0
+size = 0x100000
+crc = "25a4fb2c"
+sha1 = "c8bf6fe2291c05386b32cd26bfcb379da756d7b5"
+stride = 0x4
+group = 0x2
+
+[[tiles.lanes]]
+file = "d90-07"
+offset = 0x2
+size = 0x100000
+crc = "b436b42d"
+sha1 = "559827120273733147b260e0723054d926dbea5e"
+stride = 0x4
+group = 0x2
+
+[tiles_hi]
+size = 0x100000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "d90-06"
+offset = 0x0
+size = 0x100000
+crc = "166a72b8"
+sha1 = "7f70b8c960794322e1dc88e6600a2d13d948d873"
+
+[sound]
+# Full two physical 256 KiB sound chips; omit unused MAME 1 MiB prefix.
+base = 0xc00000
+size = 0x80000
+fill = 0
+
+[[sound.lanes]]
+file = "d90-13.ic32"
+offset = 0x0
+size = 0x40000
+crc = "6762bd90"
+sha1 = "771db0382bc8dab2caf13d0fc20648366c685829"
+stride = 0x2
+group = 0x1
+
+[[sound.lanes]]
+file = "d90-14.ic33"
+offset = 0x1
+size = 0x40000
+crc = "8e33357e"
+sha1 = "68b81693c22e6357e37244f2a416818a81338138"
+stride = 0x2
+group = 0x1
+
+[samples]
+# ROM_REGION16_BE / ROMREGION_ERASE00: low byte of every sample word is zero.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "d90-04"
+offset = 0x0
+size = 0x200000
+crc = "feee5fda"
+sha1 = "b89354013ec4d34bcd51ecded412effa66dd2f2f"
+stride = 0x2
+group = 0x1
+
+[[samples.lanes]]
+file = "d90-05"
+offset = 0x400000
+size = 0x200000
+crc = "c192331f"
+sha1 = "ebab05b3681c70b373bc06c1826be1cc397d3af7"
+stride = 0x2
+group = 0x1
+
+[discovery]
+coverage = "all_aligned"
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 31
+visible_height = 224

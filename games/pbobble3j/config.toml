@@ -1,0 +1,167 @@
+# Exact supplied chip identities match mamedev/mame cfc4760a3be9c5a79846b19b6a573cb38459fa7e.
+# Source: src/mame/taito/taito_f3.cpp ROM_START(pbobble3j) and GAME crop.
+[game]
+name = "Puzzle Bobble 3 (Ver 2.1J 1996/09/27)"
+id = "pbobble3j"
+platform = "taito_f3"
+
+[rom]
+# Physical populated program image; no unpopulated MAME allocation prefix/tail.
+size = 0x200000
+interleave = 4
+
+[[rom.lanes]]
+file = "e29-12.ic20"
+offset = 0x0
+size = 0x80000
+crc = "9eb19a00"
+sha1 = "5a6417e4377070f9f01110dc6d513d0de01cff1e"
+
+[[rom.lanes]]
+file = "e29-11.ic19"
+offset = 0x1
+size = 0x80000
+crc = "e54ada97"
+sha1 = "325e2bc7156656cc262989910dde07a1746cf790"
+
+[[rom.lanes]]
+file = "e29-10.ic18"
+offset = 0x2
+size = 0x80000
+crc = "1502a122"
+sha1 = "cb981a4578aa30276c491a0ef47f5e05c05d8b28"
+
+[[rom.lanes]]
+file = "e29-09.ic17"
+offset = 0x3
+size = 0x80000
+crc = "44ccf2f6"
+sha1 = "60877525feaa992b1b374acfb5c16439e5f32161"
+
+[sprites]
+size = 0x200000
+fill = 0
+
+[[sprites.lanes]]
+file = "e29-02.ic8"
+offset = 0x0
+size = 0x100000
+crc = "437391d3"
+sha1 = "b3cc64c68553d37e0bd09e0dece14901d8df5866"
+stride = 0x2
+group = 0x1
+
+[[sprites.lanes]]
+file = "e29-01.ic12"
+offset = 0x1
+size = 0x100000
+crc = "52547c77"
+sha1 = "d0cc8b8915cec1506c9733a1ce1638038ea93d25"
+stride = 0x2
+group = 0x1
+
+[sprites_hi]
+# Physically absent high planes; MAME zero placeholder is not a chip.
+size = 0x0
+fill = 0
+lanes = []
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "e29-08.ic47"
+offset = 0x0
+size = 0x100000
+crc = "7040a3d5"
+sha1 = "ea284ec530aac20348f84122e38a508bbc283f44"
+stride = 0x4
+group = 0x2
+
+[[tiles.lanes]]
+file = "e29-07.ic45"
+offset = 0x2
+size = 0x100000
+crc = "fca2ea9b"
+sha1 = "a87ebedd0d16657288df434a70b8933fafe0ca25"
+stride = 0x4
+group = 0x2
+
+[tiles_hi]
+size = 0x100000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e29-06.ic43"
+offset = 0x0
+size = 0x100000
+crc = "c16184f8"
+sha1 = "ded417d9d116b5a2f7518fa404bc2dda1c6a6366"
+
+[sound]
+# Full two physical 256 KiB sound chips; omit unused MAME 1 MiB prefix.
+base = 0xc00000
+size = 0x80000
+fill = 0
+
+[[sound.lanes]]
+file = "e29-13.ic32"
+offset = 0x0
+size = 0x40000
+crc = "1ef551ef"
+sha1 = "527defe8f35314304adb4b483285b08cd6ebe865"
+stride = 0x2
+group = 0x1
+
+[[sound.lanes]]
+file = "e29-14.ic33"
+offset = 0x1
+size = 0x40000
+crc = "7ee7e688"
+sha1 = "d65aa9c449e1d64f10d1be9727a9d93ab1571e65"
+stride = 0x2
+group = 0x1
+
+[samples]
+# ROM_REGION16_BE / ROMREGION_ERASE00: low byte of every sample word is zero.
+# 0x000000..0x3fffff is an empty zero sample bank.
+size = 0x1000000
+fill = 0
+
+[[samples.lanes]]
+file = "e29-03.ic38"
+offset = 0x400000
+size = 0x200000
+crc = "a4371658"
+sha1 = "26510a3f6de97f49b10dfc5cb9b7da947a44bfcb"
+stride = 0x2
+group = 0x1
+
+[[samples.lanes]]
+file = "e29-04.ic39"
+offset = 0x800000
+size = 0x200000
+crc = "d1f42457"
+sha1 = "2c77be6365deb5ef215da0c66da23b415623bdb1"
+stride = 0x2
+group = 0x1
+
+[[samples.lanes]]
+file = "e29-05.ic41"
+offset = 0xc00000
+size = 0x200000
+crc = "e33c1234"
+sha1 = "84c336ed6fd8723e824889fe7b52c284be659e62"
+stride = 0x2
+group = 0x1
+
+[discovery]
+coverage = "all_aligned"
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = false
+visible_y = 24
+visible_height = 232

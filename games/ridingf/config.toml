@@ -1,0 +1,180 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, taito_f3.cpp: ridingf.
+# All supplied files match this Ver 1.0O set by size, CRC32 and SHA1.
+[game]
+name = "Riding Fight (Ver 1.0O)"
+id = "ridingf"
+platform = "taito_f3"
+
+[rom]
+# Actual populated CPU image: four 256 KiB lanes, not MAME's 2 MiB allocation.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "d34-12.40"
+offset = 0
+size = 0x40000
+crc = "e67e69d4"
+sha1 = "9960629a7576f6a1d8a0e17c1bfc202ceee9e824"
+
+[[rom.lanes]]
+file = "d34-11.38"
+offset = 1
+size = 0x40000
+crc = "7d240a88"
+sha1 = "3410d3f66e868f2696dbd95adbbd393596d34351"
+
+[[rom.lanes]]
+file = "d34-10.36"
+offset = 2
+size = 0x40000
+crc = "8aa3f4ac"
+sha1 = "ba3c1274dcaccf4ba97ff224cb453eb1ead510ed"
+
+[[rom.lanes]]
+# The supplied/MAME World filename uses an underscore; preserve it verbatim.
+file = "d34_14.34"
+offset = 3
+size = 0x40000
+crc = "e000198e"
+sha1 = "3c9fdd40ade7b02021d23b7ce63a28d80bb6e8e0"
+
+[discovery]
+coverage = "all_aligned"
+# ROM vector $6c -> $7c8e; $7ca8 JSR $2e18; $2e58 JSR $e4ee.
+# Active object bit 6 selects projection; bit 5 additionally orders $ee9e
+# before $ed94, then $e5fe BSR $e71a. A6 is the original 0x80-byte slot,
+# never a decoded hardware packet. Keep native all-aligned coverage.
+entry_points = [0xe4ee, 0xe71a, 0xed94, 0xee9e]
+# These five sites mask flip flags to two bits and multiply by four
+# before loading one of exactly four immutable pointers. $ee7c chooses
+# descriptor traversal start; $ee8c chooses row traversal step. The sixth
+# composite-row site $ed32 XORs an unmasked descriptor byte after masking
+# the object: do not promote its table without proving the live asset set.
+# Fade tables at $1359e/$135c6 have no bounded index clamp: not promoted.
+jump_tables = [
+    { address = 0xe854, table = 0xee7c, count = 4 },
+    { address = 0xe90c, table = 0xee8c, count = 4 },
+    { address = 0xea56, table = 0xee7c, count = 4 },
+    { address = 0xeb0e, table = 0xee8c, count = 4 },
+    { address = 0xec5a, table = 0xee7c, count = 4 },
+]
+
+[sprites]
+# 32768 packed 16x16 4bpp sprites; no additional planes are populated.
+size = 0x400000
+fill = 0
+
+[[sprites.lanes]]
+file = "d34-01.66"
+offset = 0
+size = 0x200000
+crc = "7974e6aa"
+sha1 = "f3f697d0e2f52011046aa2db2df25a4b55a631d5"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d34-02.67"
+offset = 1
+size = 0x200000
+crc = "f4422370"
+sha1 = "27ba051e0dc27b39652ff1d940a2dd29965c6528"
+stride = 2
+group = 1
+
+[sprites_hi]
+# MAME's EMPTY_SPRITE_HIDATA is a zero placeholder, not a missing ROM.
+size = 0
+fill = 0
+
+[tiles]
+# 8192 packed 16x16 4bpp tiles, loaded as two 32-bit word lanes.
+size = 0x100000
+fill = 0
+
+[[tiles.lanes]]
+file = "d34-05.49"
+offset = 0
+size = 0x80000
+crc = "72e3ee4b"
+sha1 = "2b69487338c18ced7a2ac4f280e8e22aa7209eb3"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d34-06.50"
+offset = 2
+size = 0x80000
+crc = "edc9b9f3"
+sha1 = "c57bec1c8882d95388c3fae7cb5a321bdb202737"
+stride = 4
+group = 2
+
+[tiles_hi]
+# MAME's EMPTY_TILEMAP_HIDATA likewise means physically absent high planes.
+size = 0
+fill = 0
+
+[sound]
+# Two 128 KiB banks repeat in the upper half of the 512 KiB CPU window.
+mirror_size = 0x80000
+# Only the mapped 68000 program; MAME's unused 0x100000 prefix is omitted.
+size = 0x40000
+fill = 0
+base = 0xc00000
+
+[[sound.lanes]]
+file = "d34-07.5"
+offset = 0
+size = 0x20000
+crc = "67239e2b"
+sha1 = "8e0268fab53d26cde5c1928326c4787533dc6ffe"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d34-08.6"
+offset = 1
+size = 0x20000
+crc = "2cf20323"
+sha1 = "b2bbac3714ecfd75506ae000c7eec603dfe3e13d"
+stride = 2
+group = 1
+
+[samples]
+# MAME ROM_REGION16_BE/ERASE00: high bytes only; 0x400000..0x5fffff empty.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "d34-03.17"
+offset = 0
+size = 0x200000
+crc = "e534ef74"
+sha1 = "532d00e927d3704e7557abd59e35de8b7661c8fa"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d34-04.18"
+offset = 0x600000
+size = 0x100000
+crc = "ed894fe1"
+sha1 = "5bf2fb6abdcf25bc525a2c3b29dbf7aca0b18fea"
+stride = 2
+group = 1
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 32
+visible_height = 224
+# No static per-game pen masks in this MAME revision: masks are command/tile
+# controlled, but absent high planes limit both decoded sources to 4bpp.
+# f3_224b: visible x=46..365, y=32..255; extended playfields and sprite trails.
+# FDA palette mode is selected per line by $6400 bit 14 (active low).
+# 15-bit RRRRGGGGBBBBRGBx preserves low R/G/B bits 3/2/1, unlike legacy 12-bit decoding.
+# Reference: y-ack/mame fdp-collapse 28e411d4f760df3d55fae070a2f6424f89966a2f,
+# src/mame/taito/taito_f3_v.cpp::palette_24bit_w and tc0630fdp.cpp::read_line_ram.

@@ -1,0 +1,290 @@
+# Pinned manifest: https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp
+# ROM_START(kaiserknj); physical bytes identified by size, CRC32 and SHA1.
+[game]
+name = "Kaiser Knuckle (Ver 2.1J 1994/07/29)"
+id = "kaiserknj"
+platform = "taito_f3"
+
+[rom]
+# Populated physical CPU bytes only; MAME reserves 0x200000.
+# All of the 0x200000 main address allocation is physically populated.
+size = 0x200000
+interleave = 4
+
+[[rom.lanes]]
+file = "d84-25.20"
+offset = 0x0
+size = 0x80000
+crc = "2840893f"
+sha1 = "079dece4667b029189622476cc618b88e57243a6"
+
+[[rom.lanes]]
+file = "d84-24.19"
+offset = 0x1
+size = 0x80000
+crc = "bf20c755"
+sha1 = "9f6edfe9bb40051e8a93d06a391c993ed7288db6"
+
+[[rom.lanes]]
+file = "d84-23.18"
+offset = 0x2
+size = 0x80000
+crc = "39f12a9b"
+sha1 = "4b3fe9b8b0abb46feacd11ffb6b505568f892483"
+
+[[rom.lanes]]
+file = "d84-22.17"
+offset = 0x3
+size = 0x80000
+crc = "762f9056"
+sha1 = "c39854d865210d05fe745493098ef5990327c56e"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 0xd00000
+fill = 0
+
+[[sprites.lanes]]
+file = "d84-03.rom"
+offset = 0x0
+size = 0x200000
+crc = "d786f552"
+sha1 = "f73146892f714b5706d568fc8a135fddaa656570"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-04.rom"
+offset = 0x1
+size = 0x200000
+crc = "d1f32b5d"
+sha1 = "35289cce64fdbb8d966dd1d5307b5393be5e7799"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-06.rom"
+offset = 0x400000
+size = 0x200000
+crc = "fa924dab"
+sha1 = "28a8c3cd701f8df0c53069bb576bb2a820f3a331"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-07.rom"
+offset = 0x400001
+size = 0x200000
+crc = "54517a6b"
+sha1 = "6e2c213c7ec1a3b78ad7e71db2326602557fd0f8"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-09.rom"
+offset = 0x800000
+size = 0x200000
+crc = "faa78d98"
+sha1 = "da3a2c5a45dd169743f113aa08e574f732e1f0fd"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-10.rom"
+offset = 0x800001
+size = 0x200000
+crc = "b84b7320"
+sha1 = "f5de0d6da50d8ed753607b51e46bc9a4572ef431"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-19.rom"
+offset = 0xc00000
+size = 0x80000
+crc = "6ddf77e5"
+sha1 = "a1323acaed37fce62a19e63a0800d9d1dc2cfff7"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d84-20.rom"
+offset = 0xc00001
+size = 0x80000
+crc = "f85041e5"
+sha1 = "6b2814514338f550d6aa14dbe39e848e8e64edee"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 0x680000
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d84-05.rom"
+offset = 0x0
+size = 0x200000
+crc = "31a3c75d"
+sha1 = "1a16ccb6a0a03ab715e5b016ab3b1b2cd0f1ae41"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "d84-08.rom"
+offset = 0x200000
+size = 0x200000
+crc = "07347bf1"
+sha1 = "34bd359933acdec7fd1ce047092a30d1177afc2c"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "d84-11.rom"
+offset = 0x400000
+size = 0x200000
+crc = "a062c1d4"
+sha1 = "158912aa3dd75c3961bf738f9ac9034f0b005b60"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "d84-21.rom"
+offset = 0x600000
+size = 0x80000
+crc = "89f68b66"
+sha1 = "95916f02f71357324effe59da4f847f2f30ea34a"
+stride = 1
+group = 1
+
+[tiles]
+size = 0x600000
+fill = 0
+
+[[tiles.lanes]]
+file = "d84-12.rom"
+offset = 0x0
+size = 0x200000
+crc = "66a7a9aa"
+sha1 = "a7d21f8b6370d16de3c1569019f2ad71d36e7a61"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d84-13.rom"
+offset = 0x2
+size = 0x200000
+crc = "ae125516"
+sha1 = "d54e76e398ab0b0fb82f3154ba54fc823ff49a1a"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d84-16.rom"
+offset = 0x400000
+size = 0x100000
+crc = "bcff9b2d"
+sha1 = "0ca50ec809564eddf0ba7448a8fae9087d3b600b"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d84-17.rom"
+offset = 0x400002
+size = 0x100000
+crc = "0be37cc3"
+sha1 = "b10c10b93858cad0c962ef614cfd6daea712ef6b"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 0x300000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "d84-14.rom"
+offset = 0x0
+size = 0x200000
+crc = "2b2e693e"
+sha1 = "03eb37fa7dc68d54bf0f1800b8c0b581c344a40f"
+stride = 1
+group = 1
+
+[[tiles_hi.lanes]]
+file = "d84-18.rom"
+offset = 0x200000
+size = 0x100000
+crc = "e812bcc5"
+sha1 = "3574e4a99232d9fc7989ec5d1e8fe76b4b30784a"
+stride = 1
+group = 1
+
+[sound]
+# MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
+size = 0x80000
+fill = 0
+base = 0xc00000
+
+[[sound.lanes]]
+file = "d84-26.32"
+offset = 0x0
+size = 0x40000
+crc = "4f5b8563"
+sha1 = "1d4e06cbea7bc73a99d6e30be714fff420151bbc"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d84-27.33"
+offset = 0x1
+size = 0x40000
+crc = "fb0cb1ba"
+sha1 = "16a79b53651a6131f7636db19738b456b7c28bff"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE/ERASE00: odd (low) bytes remain zero.
+# 0..0x3fffff and 0xc00000..0xdfffff remain zero (unpopulated).
+size = 0x1000000
+fill = 0
+
+[[samples.lanes]]
+file = "d84-01.rom"
+offset = 0x400000
+size = 0x200000
+crc = "9ad22149"
+sha1 = "48055822e0cea228cdecf3d05ac24e50979b6f4d"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d84-02.rom"
+offset = 0x800000
+size = 0x200000
+crc = "9e1827e4"
+sha1 = "1840881b0f8f7b6225e6ffa12a8d4b463554988e"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d84-15.rom"
+offset = 0xe00000
+size = 0x100000
+crc = "31ceb152"
+sha1 = "d9d0bc631a6a726376f566a49605b50485ac7bf4"
+stride = 2
+group = 1
+
+[video]
+# Geometry/lag: pinned taito_f3_v.cpp::f3_config_table; f3_224a/b in driver.
+# Native visible crop x=46..365, y=31..254 (320x224).
+rotation = 0
+sprite_lag = 2
+extend = false
+visible_y = 31
+visible_height = 224
+
+# kn six-button input layout and graphics-address alias evidence are cataloged
+# in local://f3-graphics-early.json; they are not fabricated ROM lanes.

@@ -8,7 +8,7 @@ This page lists the project commands and their arguments. The tables give defaul
 - Frontend options with missing values report `Missing value for ...`. Unknown frontend options report `Unknown argument: ...`.
 - Other programs have their own error messages. For example, `f3rt-replay` reports usage for unknown options and missing values.
 - C++ numeric options use conversions such as `stoull`. Invalid text raises a conversion error. These conversions can accept a numeric prefix with trailing text.
-- The ROM directory must contain the Land Maker ROM files. See [Game config](/reference/game-config) for the file names.
+- The ROM directory must contain the selected title's manifest chips. See [Game config](/reference/game-config); main and sound image CRC guards reject mismatched generated code.
 - Build targets and their default values come from CMake. See [Build options](/reference/build-options).
 
 | Program | Source | Exit code on error |
@@ -24,23 +24,28 @@ This page lists the project commands and their arguments. The tables give defaul
 
 ## landmakr and f3rt-run
 
-Both programs use `runtime/frontend.cpp`. `landmakr` is the supported Japan player build, available with generated code. `f3rt-run` is a diagnostic frontend; its ability to load the World ROM set does not make World a supported port.
+All title executables use `runtime/frontend.cpp`: `F3_GAME` selects `landmakr`
+(for either LM config), `rayforce`, `commandw` or `ridingf`. The selected title
+build defaults to strict-native main and generated native sound with accurate
+devices. `landmakr` defaults to Japan; World remains config-only/unverified.
+`f3rt-run` is diagnostic. New titles require FDP/accurate audio: game-data,
+HLE, enhanced GPU/motion semantics and netplay remain Japan-only.
+See [porting](/developer/porting) for exact revisions and finite evidence.
 
 ### Differences between the two builds
 
-| Item | `landmakr` (`F3RT_LANDMAKR`) | `f3rt-run` |
+| Item | Selected title (`F3RT_GAME`) | `f3rt-run` |
 | --- | --- | --- |
-| `--rom-dir` default | The value of `F3_ROM_DIR` at configure time (`F3RT_DEFAULT_ROM_DIR`) | None. The flag is required. |
-| Native execution (`--translated`) | On by default | Off. Pass `--translated` to use the recompiled code. |
-| `--allow-fallback` default | Off (strict native) | On (the CPU may use the interpreter for untranslated code) |
-| `--set` | Must be `landmakrj`. Other values stop with `This generated executable requires landmakrj`. | `landmakrj` or `landmakr` |
-| `--video` default | `game` when strict native and you did not pass `--video` | `fdp` |
-| `--sound-driver` default (accurate audio) | `native` if the build has the generated sound program, else `oracle` | The same rule. |
-| Linked generated program | Always (`F3RT_GENERATED`) | Only when `F3_GENERATED_DIR` is set |
+| `--rom-dir` default | Configured `F3_ROM_DIR` | Required explicitly |
+| Native execution | On | Off; pass `--translated` with linked main code |
+| `--allow-fallback` | Off | On, diagnostic interpretation |
+| `--set` | Must match selected `F3_GAME` | Defaults to selected `F3_GAME`; manifests accept all five sets, but native code must match the loaded image |
+| Video default | `game` for strict-native Japan; `fdp` for other titles | `fdp` |
+| Accurate sound driver default | `native` with generated sound, otherwise `oracle` | Same rule |
+| Generated main | Always | Only with `F3_GENERATED_DIR` |
 
-::: info
-The `--help` text says that the sound driver default is "native in landmakr; oracle in f3rt-run". The code is different. The default is `native` in every build that defines `F3RT_SOUND_GENERATED`. The code in `runtime/frontend.cpp` is the source of truth.
-:::
+Accepted sets are `landmakrj`, `landmakr`, `rayforce`, `commandw`, `ridingf`.
+A set flag is not a way to run another revision through mismatched native code.
 
 Audio defaults to `--audio-backend accurate`, preserving these sound-driver defaults. Opt-in `--audio-backend hle` provides approximate audio using a ROM sequencer and PCM synthesizer on its own non-rolled-back worker at 48 kHz; it executes neither the sound CPU nor the ES chips.
 
@@ -61,7 +66,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | Flag | Argument | Default | Meaning | Notes |
 | --- | --- | --- | --- | --- |
 | `--rom-dir` | `DIR` | `landmakr`: `F3RT_DEFAULT_ROM_DIR`. `f3rt-run`: none | Directory that holds the ROM files | An omitted or empty directory fails validation: `--rom-dir required; --dump-every must be positive`. A missing argument reports `Missing value for --rom-dir`. |
-| `--set` | `landmakrj` or `landmakr` | `landmakrj` | ROM set to load | Other values stop with `Unsupported ROM set`. The ROM loader checks the CRC32 of every file. |
+| `--set` | `landmakrj`, `landmakr`, `rayforce`, `commandw`, `ridingf` | Selected `F3_GAME` | ROM set to load | Title binaries require their selected set; loaded main/sound CRCs must match generated code. |
 | `--frames` | `N` | `0` | Stop after N video frames | `0` means no limit. A window run stops when you close the window or press Escape. |
 | `--headless` | none | off | Do not open a window and do not open audio | Requires `--frames`. Without it: `Headless execution requires --frames`. |
 | `--no-audio` | none | audio on | Do not open the audio device | The audio is still generated. `--wav` still receives the samples. |
@@ -99,7 +104,10 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--netplay-delay` | `0` to `8` | `2` | Host input delay in frames | The guest adopts the host value, not its own requested value. |
 | `--help` | none | | Print usage and exit with code 0 | |
 
-The window title is `f3rt — SET`. The window size is `(320 + 2 × border) × 3` by `696` pixels at start, and you can resize it.
+Window geometry follows the selected crop/rotation. Japan starts at
+`(320 + 2 × border) × 3` by 696 pixels; RayForce's rotated 224×320 picture
+starts at 672×960. Command War/Riding Fight use unrotated 320×224 board crops.
+Windows are resizable; native FDP scaling/enhanced eligibility is unchanged.
 
 ### Rules that the program checks after reading the flags
 
@@ -108,7 +116,7 @@ The program checks these rules in this order.
 1. `--rom-dir` must be set, and `--dump-every` must not be `0`.
 2. `--headless` needs `--frames`.
 3. The sound driver must be `oracle` or `native`, and the audio backend must be `accurate` or `hle`. HLE rejects explicit `--sound-driver` and sound tracing.
-4. In `landmakr`, `--set` must be `landmakrj`.
+4. In a title executable, `--set` must match the selected `F3_GAME`. HLE is Japan-only.
 5. The video mode must be `fdp`, `game` or `compare`.
 6. `game` and `compare` need `--set landmakrj`, native execution and no `--allow-fallback`.
 7. The video filter must be `nearest` or `linear`.
@@ -145,8 +153,12 @@ At exit, the program prints one line that starts with `set=`. The line contains 
 ### Examples
 
 ```sh
-# Play the game (player build)
+# Play Japan (default player build)
 ./build/landmakr
+
+# Selected RayForce build; substitute commandw/ridingf for those title builds
+./build/rayforce/rayforce --headless --frames 3600
+./build/rayforce/rayforce --frames 3600 --surface build/rayforce-surface.bmp
 
 # Run 600 frames without a window and write a WAV file
 ./build/f3rt-run --rom-dir roms/landmakrj --translated --headless --frames 600 --wav out.wav
@@ -404,7 +416,8 @@ This script compiles the sound CPU ROM to C. CMake runs it when `F3_ROM_DIR` is 
 
 | Flag | Argument | Default | Meaning | Notes |
 | --- | --- | --- | --- | --- |
-| `--rom-dir` | `DIR` | none | Directory with the sound ROM chips | Required. Looks for `e61-14.32` and `e61-15.33` (or `sound.bin`). The CRC32 of the combined image must be `5a7e9117`. |
+| `--rom-dir` | `DIR` | none | Directory with the sound ROM chips | Required. Loads and validates the selected config sound lanes, padding and mirroring; no `sound.bin` fallback. |
+| `--config` | `TOML` | Japan config | Selected sound manifest and exclusions | Pass the matching game config explicitly for another title. |
 | `--output` | `DIR` | none | Output directory | Required. |
 | `--blocks-per-file` | `N` | `1024` | Number of block functions in each C file | |
 | `--coverage` | `all_aligned` | `all_aligned` | Coverage mode | The only allowed value. The script compiles every even address of the sound ROM. |
@@ -412,7 +425,7 @@ This script compiles the sound CPU ROM to C. CMake runs it when `F3_ROM_DIR` is 
 | `--profile-slim` | `PROFILE` | none | Emit only profiled sound statements and a sparse sorted table | Requires paired slim runtime; no interpreter fallback for omitted entries. |
 
 ```sh
-python3 tools/compile_sound.py --rom-dir roms/landmakrj --output build/generated/sound-landmakrj
+python3 tools/compile_sound.py --config games/landmakrj/config.toml --rom-dir roms/landmakrj --output build/generated/sound-landmakrj
 ```
 
 ## tools/block_profile.py

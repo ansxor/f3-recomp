@@ -200,17 +200,17 @@ extern const f3_block f3_sound_blocks[];
 extern const size_t f3_sound_block_count;
 ```
 
-The frontends call `m.use_native_sound(f3_sound_blocks, f3_sound_block_count)`.
+The generated header also declares `f3_sound_rom_crc32`, `f3_sound_excluded_ranges` and `f3_sound_excluded_count`. Frontends call `m.use_native_sound(f3_sound_blocks, f3_sound_block_count, {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32)`.
 
 ### Sound input check
 
-`load_sound_rom()` reads `e61-14.32` and `e61-15.33`. It pads a 128 KiB chip to 256 KiB with `0xFF`, and interleaves the two chips byte by byte. If the chips are missing, it reads `sound.bin`. The CRC32 of the result must be `5a7e9117`. Else: `Sound ROM CRC mismatch`.
+`load_sound_rom()` uses the selected `[sound]` manifest through `recomp/roms.py`: chip size/CRC32/SHA-1, explicit lane geometry and validated LM short dumps. Command War/Riding Fight mirror their physical 256 KiB bank into 512 KiB; RayForce is physical/mapped 512 KiB. No `sound.bin` fallback exists. The generated per-game CRC binds the runtime image.
 
 ### Sound coverage.json
 
 | Field | Meaning |
 | --- | --- |
-| `rom_crc32` | `5a7e9117`. |
+| `rom_crc32` | CRC32 of the selected mapped sound image. |
 | `coverage_mode` | `all_aligned`. |
 | `total_words` | Number of 16-bit words in the ROM. |
 | `compiled_blocks` | Number of entries in the address table. It includes the exception vector entries. |

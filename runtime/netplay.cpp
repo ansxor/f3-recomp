@@ -1,4 +1,5 @@
 #include "f3rt/netplay.hpp"
+#include "f3rt/input.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "netplay_build.hpp"
@@ -23,19 +24,8 @@ void validate_word(InputWord word) {
 }
 
 void apply_inputs(Machine &m, const std::array<InputWord, 2> &words) {
-    m.inputs.fill(0xffffffff);
-    m.system_inputs = 0xff;
-    for (unsigned slot = 0; slot < words.size(); ++slot) {
-        const auto word = words[slot];
-        validate_word(word);
-        const unsigned shift = slot * 4;
-        m.set_input(1, uint32_t(word & 0xf) << shift, true);
-        m.set_input(0, uint32_t((word >> 4) & 7) << shift, true);
-        m.set_input(0, 0x1000u << slot, word & 0x80);
-        m.set_input(0, 0x200u << slot, word & 0x200);
-        if (word & 0x100) m.system_inputs &= uint8_t(~(0x10u << slot));
-        if (word & 0x400) m.system_inputs &= uint8_t(~2u);
-    }
+    for (InputWord word : words) validate_word(word);
+    apply_local_inputs(m, {words[0], words[1], 0, 0});
 }
 
 Identity machine_identity(const Machine &m) {

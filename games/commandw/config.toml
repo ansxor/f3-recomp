@@ -1,0 +1,341 @@
+# Supplied ROMs match MAME commandw at cfc4760a3be9c5a79846b19b6a573cb38459fa7e.
+# https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp#L976-L1009
+[game]
+name = "Command War - Super Special Battle & War Game (Ver 0.0J, prototype)"
+id = "commandw"
+platform = "taito_f3"
+
+[rom]
+# Actual populated image, not MAME's 0x200000 allocation.
+size = 0x100000
+interleave = 4
+
+[[rom.lanes]]
+file = "cw_mpr3.bin"
+offset = 0
+size = 0x40000
+crc = "636944fc"
+sha1 = "47deffed68ac179f27bfdb21ed62d6555a4b8988"
+
+[[rom.lanes]]
+file = "cw_mpr2.bin"
+offset = 1
+size = 0x40000
+crc = "1151a42b"
+sha1 = "e938913ecd3211a8fb4041ec5a5694cd9df9be69"
+
+[[rom.lanes]]
+file = "cw_mpr1.bin"
+offset = 2
+size = 0x40000
+crc = "93669389"
+sha1 = "11336a15900c4f419f3af5c423fbc502f4db616b"
+
+[[rom.lanes]]
+file = "cw_mpr0.bin"
+offset = 3
+size = 0x40000
+crc = "0468df52"
+sha1 = "0da923aa779b541e700c5249272e9c59ab59e863"
+
+[discovery]
+coverage = "all_aligned"
+# Reset 0x628 clears task ID at A5-0x7a72; 0x69b0/0x69b6 trap #1
+# starts ID 0. Handler 0x6472/0x6478 reads its PC from 0x3080 = 0x3084.
+# Rooted trap #13 sites push the literal first longword below. Vector 0xb4
+# points to 0x6542; 0x6580/0x6584 installs that longword as saved task PC.
+# Sites: 30ae,3d22,312a,2556,256e,258e,25a6,25be,3310,508a,50de,
+# 23f2c,275e,23fde,23ff6,2400e,24026,241e4,24590,2d7fa.
+entry_points = [0x3084, 0x3d08, 0x6b12, 0x2494, 0x33a98, 0x24296,
+                0x2fcc4, 0x26262, 0x993a, 0x5032, 0x23e28, 0xab5a,
+                0x25326, 0x23e80, 0x3038c, 0x25430, 0x30c94, 0x2a334,
+                0x2c42a, 0x24c96, 0x2d82a]
+# Sprite compiler dispatch: index is (object byte[0] & 3)*4.
+# A0 tile cursor setup and next-row stepping are distinct four-entry tables.
+[[discovery.jump_tables]]
+address = 0x9c76
+table = 0xa30e
+count = 4
+[[discovery.jump_tables]]
+address = 0x9d2a
+table = 0xa31e
+count = 4
+[[discovery.jump_tables]]
+address = 0x9e80
+table = 0xa30e
+count = 4
+[[discovery.jump_tables]]
+address = 0x9f2c
+table = 0xa31e
+count = 4
+[[discovery.jump_tables]]
+address = 0xa094
+table = 0xa30e
+count = 4
+# Composite row dispatch additionally XORs component flags. All ROM
+# composites in the 0x1800-entry descriptor table 0x5a02c..0x6002c have
+# flags 0..3; six RAM descriptors have cleared first bytes (simple grids).
+[[discovery.jump_tables]]
+address = 0xa180
+table = 0xa31e
+count = 4
+
+[sprites]
+size = 0x800000
+fill = 0
+
+[[sprites.lanes]]
+file = "cw_objl0.bin"
+offset = 0x000000
+size = 0x200000
+crc = "9822102e"
+sha1 = "c4e80ab4d54c39676ee6e557a03828250077765b"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "cw_objm0.bin"
+offset = 0x000001
+size = 0x200000
+crc = "f7687684"
+sha1 = "0bed6362dee96083e2e8b6448c9f7bfa5166bfb7"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "cw_objl1.bin"
+offset = 0x400000
+size = 0x200000
+crc = "ca3ad7f6"
+sha1 = "849fbb89f0b132c83db5b7d699078da3cc10baf6"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "cw_objm1.bin"
+offset = 0x400001
+size = 0x200000
+crc = "504b1bf5"
+sha1 = "7b8ff7834907a9cdab5416bf713487bf71b9070e"
+stride = 2
+group = 1
+
+[sprites_hi]
+# Two contiguous high-plane banks, each corresponding to a 4 MiB low bank.
+size = 0x400000
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "cw_objh0.bin"
+offset = 0x000000
+size = 0x200000
+crc = "83d7e0ae"
+sha1 = "774a07d0cadc2c8f5ec155270bf927e4462654e2"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "cw_objh1.bin"
+offset = 0x200000
+size = 0x200000
+crc = "324f5832"
+sha1 = "ff91243c5d09c4c46904640fe278a7485db70577"
+stride = 1
+group = 1
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "cw_scr_l.bin"
+offset = 0
+size = 0x100000
+crc = "4d202323"
+sha1 = "0150bcba6d2bf2c3cde88bb519f57f3b58314244"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "cw_scr_m.bin"
+offset = 2
+size = 0x100000
+crc = "537b1c7d"
+sha1 = "bc61aa61891366cbea4b8ecb820d93e28d01f8d2"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 0x100000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "cw_scr_h.bin"
+offset = 0
+size = 0x100000
+crc = "001f85dd"
+sha1 = "2532377c0b54bc964ea4e74911ff62fea2d53975"
+stride = 1
+group = 1
+
+[sound]
+# Two 128 KiB banks repeat in the upper half of the 512 KiB CPU window.
+mirror_size = 0x80000
+# MAME's unused 0x100000-byte prefix is not part of the mapped image.
+size = 0x40000
+fill = 0
+base = 0xc00000
+
+[[sound.lanes]]
+file = "cw_spr1.bin"
+offset = 0
+size = 0x20000
+crc = "c8f81c25"
+sha1 = "1c914053826587cc2d5d2c0220a3e29a641fe6f9"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "cw_spr0.bin"
+offset = 1
+size = 0x20000
+crc = "2aaa9dfb"
+sha1 = "6d4c36ff54a84035c0ddf40e4f3eafd2adc15a5e"
+stride = 2
+group = 1
+
+[samples]
+# ES5505 big-endian words: ROM bytes occupy even addresses, odd bytes stay zero.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "cw_pcm_0.bin"
+offset = 0x000000
+size = 0x200000
+crc = "a1e26629"
+sha1 = "0c5899a767f66f67a5d59b8d287d74b54f8c3727"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "cw_pcm_1.bin"
+offset = 0x400000
+size = 0x200000
+crc = "39fc6cf4"
+sha1 = "d43ef294af62765bfec089fac1d67ad81e1b06da"
+stride = 2
+group = 1
+
+[video]
+# MAME f3_224b: visible x=46..365, y=32..255; extended playfields enabled.
+# https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3_v.cpp#L319-L325
+# Both high planes are present; sprite commands and tile attributes select 4/5/6bpp.
+# No fixed per-game pen masks exist in the pinned driver.
+rotation = 0
+sprite_lag = 1
+extend = true
+# User-requested per-scanline half-map selection follows the ROM's 0x4868
+# 64-column format: normal PF3 at 0x616000, half at 0x61a000, clear at 0x618000.
+# Its first 144 line words are 0x3200 (selector 0x0200); this is a source/layout
+# contract, not a claim that pinned MAME enables alternates in extended mode.
+extended_alt_maps = true
+visible_y = 32
+visible_height = 224
+
+# Asset-research inputs consumed by tools/discover_prescaled_tiles.py; not a
+# renderer profile or hardware alt-selection override. Header ABI at 0x4868
+# is byte DBRA maxima + row-major u16 tile IDs, not the GameTiles hook ABI.
+[prescaled_tiles]
+descriptor_format = "byte_dbra_u16be"
+# 0x263b4..0x26430 places all 24 normal/12 alternate 4x4 descriptors.
+# Exhaustive six-plane pixel research proves X2/Y1 for this complete grid.
+[[prescaled_tiles.pairs]]
+name = "overlay"
+scale_x = 2
+scale_y = 1
+pen_mask = 63
+evidence_pcs = [0x263b4, 0x263d4, 0x263f4, 0x26414, 0x26510]
+condition = "signed byte[A5-0x704f] <= 0; positive state replaces normal tiles at 0x2643c"
+normal = { table = 0x2652e, records = 24, columns = 6, origin_pixels = [0, 0], destinations = [0x616000, 0x617000] }
+half = { table = 0x265be, records = 12, columns = 3, origin_pixels = [112, 0], destinations = [0x61a01c, 0x61b01c] }
+
+# 0x26336..0x263a6 repeats these 4x4 descriptors over sixteen by eight
+# placements. Pixel research proves actual periods normal64x64, half32x64.
+[[prescaled_tiles.pairs]]
+name = "repeated_base"
+scale_x = 2
+scale_y = 1
+pen_mask = 63
+evidence_pcs = [0x26348, 0x26382, 0x26360, 0x26368, 0x2639a, 0x263a2]
+condition = "word[A5-0x750c] == 2 and word[A5-0x72da] == 0"
+normal = { descriptor = 0x89588, columns = 1, attribute = 0x12, origin_pixels = [0, 0], destinations = [0x616000], repeat_descriptors = [16, 8] }
+half = { descriptor = 0x897a8, columns = 1, attribute = 0x12, origin_pixels = [0, 0], destinations = [0x61a000], repeat_descriptors = [16, 8] }
+
+# 0x278c0..0x2794a uploads all 64 records per selection twice. Every half
+# tile has an exact X2/Y1 adjacent-full-tile pixel alias, but the whole-map
+# coordinate transform is NOT exact for every selection; report contexts.
+[[prescaled_tiles.pairs]]
+name = "dual_nonpositive"
+scale_x = 2
+scale_y = 1
+pen_mask = 63
+evidence_pcs = [0x278ca, 0x278d8, 0x278f4, 0x2790c, 0x2791a, 0x27936]
+condition = "signed byte[A5-0x704f] <= 0; selection=word[A5-0x750c]*3+word[A5-0x72da]"
+normal = { pointer_table = 0x27ad8, selections = 9, records = 64, columns = 8, origin_pixels = [32, 0], destinations = [0x616008, 0x616088], duplicate_x_pixels = 512 }
+half = { pointer_table = 0x27b20, selections = 9, records = 64, columns = 8, origin_pixels = [0, 0], destinations = [0x61a000, 0x61a080], duplicate_x_pixels = 512 }
+
+# 0x2796e..0x27a22 repeats two rows four times, restoring the source cursor
+# before each two-row pass. Different placement origin from the previous pair.
+[[prescaled_tiles.pairs]]
+name = "dual_positive"
+scale_x = 2
+scale_y = 1
+pen_mask = 63
+evidence_pcs = [0x2796e, 0x27978, 0x279a0, 0x279c8, 0x279d2, 0x279fa]
+condition = "signed byte[A5-0x704f] > 0; same nine selection records"
+normal = { pointer_table = 0x27ab4, selections = 9, records = 16, columns = 8, origin_pixels = [32, 0], destinations = [0x616008, 0x616088], duplicate_x_pixels = 512, repeat_rows = 4 }
+half = { pointer_table = 0x27afc, selections = 9, records = 16, columns = 8, origin_pixels = [32, 0], destinations = [0x61a008, 0x61a088], duplicate_x_pixels = 512, repeat_rows = 4 }
+
+# 0x2780c..0x278be independently selects these PF0/PF1 three-row tables.
+# They are source contexts, not assumed normal/half variants of each other.
+[[prescaled_tiles.maps]]
+name = "pf0_positive"
+pointer_table = 0x27a24
+selections = 9
+records = 24
+columns = 8
+origin_pixels = [0, 64]
+destinations = [0x610400, 0x610480]
+condition = "signed byte[A5-0x704f] > 0"
+evidence_pcs = [0x27820, 0x2783a, 0x27856]
+[[prescaled_tiles.maps]]
+name = "pf0_nonpositive"
+pointer_table = 0x27a48
+selections = 9
+records = 24
+columns = 8
+origin_pixels = [0, 64]
+destinations = [0x610400, 0x610480]
+condition = "signed byte[A5-0x704f] <= 0"
+evidence_pcs = [0x2782e, 0x2783a, 0x27856]
+[[prescaled_tiles.maps]]
+name = "pf1_positive"
+pointer_table = 0x27a6c
+selections = 9
+records = 24
+columns = 8
+origin_pixels = [0, 64]
+destinations = [0x612400, 0x612480]
+condition = "signed byte[A5-0x704f] > 0"
+evidence_pcs = [0x2786e, 0x2788a, 0x278a6]
+[[prescaled_tiles.maps]]
+name = "pf1_nonpositive"
+pointer_table = 0x27a90
+selections = 9
+records = 24
+columns = 8
+origin_pixels = [0, 64]
+destinations = [0x612400, 0x612480]
+condition = "signed byte[A5-0x704f] <= 0"
+evidence_pcs = [0x2787c, 0x2788a, 0x278a6]

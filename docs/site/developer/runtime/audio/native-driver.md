@@ -81,7 +81,7 @@ The functions with the prefix `f3_sound_` that need the runtime are implemented 
 
 The constructor performs two validation checks and initializes its CPU state:
 
-1. The runtime sound ROM must have CRC32 `0x5a7e9117`. A mismatch throws an unsupported-ROM error.
+1. The loaded sound image CRC32 must match the selected generated program's `f3_sound_rom_crc32`, passed as the expected CRC. A mismatch rejects the binding; this is not a hardcoded Japan identity. Command War/Riding Fight map their 256 KiB physical bank twice into 512 KiB; RayForce uses a physical 512 KiB image. Their native runs do not establish full audio parity; Command War/Riding Fight parity remains under investigation.
 2. Ordinary/tier tables contain exactly the sorted every-even ROM exclusion complement; with no exclusions the count is 262,144. Explicit slim tables are nonempty sorted subsets of that complement. Both modes validate even, nonoverlapping exclusion metadata and reject entries in excluded ranges.
 3. The CPU's `runtime` pointer identifies this `SoundNative`. Initial SR is `F3_CCR_Z`, matching the zeroed oracle's inverted-Z latch.
 
@@ -200,9 +200,21 @@ This is compatibility at **instruction boundaries**, not cycle-accurate bus timi
 
 `save_state` writes a `CanonicalSoundNative` structure: registers, SR, stack pointers, lazy-flag fields, cycle counter, `dispatch_deadline`, `needs_reset` and `reset_cycles`. `load_state` reads it and sets `runtime` to itself. The instruction counter `m_instruction_count` is not part of the state.
 
+## New-title audio investigation
+
+Command War/Riding Fight checks must compare native and oracle sound on the same
+main-CPU state. Investigation isolated Command War's EEPROM validation/initial
+sound-volume divergence to main-CPU `CMPM.B` lowering, not sound ROM mirroring:
+incorrect main initialization left the volume bytes zero instead of 31. Keep
+native main initialization in the parity diagnosis; do not treat a sound CPU
+comparison with different boot states as proof of a sound-driver defect. The
+main-lowering correction and post-fix audio evidence are tracked by the bring-up
+work; no full-campaign or general waveform parity claim is made here.
+
 ## Selecting the native driver
 
-`Machine::use_native_sound(program, count)`:
+`Machine::use_native_sound(program, count, excluded, expected_crc)` receives the
+block table/count, exclusion span and selected generated image CRC:
 
 1. Checks that no time has passed (reset line asserted and clock 0).
 2. Makes the `SoundNative`.
