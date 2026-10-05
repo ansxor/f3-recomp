@@ -265,6 +265,36 @@ Actual frontend flag smoke also passes: full tiers with `--allow-fallback`
 complete 600 native frames with zero fallback; slim with that flag exits 1
 before starting emulation, retaining its strict-only policy.
 
+## Foreground human run
+
+Only after `binsize-combined-2-gated`, launched this actual combined executable
+without a frame/time limit:
+
+```sh
+./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48
+```
+
+Cwd: `wt/binsize-combined`; pid 20834. **423.092 s (7m03s)**,
+**24,886 frames**, normal exit **0**. No collector early-stop, automated game
+inputs, forced quit or synthetic Escape. Initial windowed Cocoa/GPU presentation:
+internal **1664×928**, pixels **2496×1392**, scale **4**, nearest, interpolation
+off. Later window pixels **3024×1686**, scale stayed 4.
+
+The first AppKit activation capture still showed the terminal. System Events
+then foregrounded the game; `human-combined-focused.png` was inspected and shows
+the real game surface. This is not the profiling experiment's unseen unattended
+window. Run counters: **334,119,851 native blocks**, **0 CPU fallback**,
+cycles **6,755,175,389**, **12,565,048 audio frames**, frame CRC `7a829644`,
+**0 abort/crash logs**. Pacing: 2 clock resyncs, 0 audio queue drops, queue
+mean/max **30.1716 / 55.0721 ms**.
+
+Normal frontend quit is observed; Escape versus window-close and actual match
+count are not independently logged. No human-played ending or completed-match
+count is claimed. The noninstrumented run does not change the frozen profile.
+Command/start/end/duration, output and visibility proof remain ignored under
+`build/combined-evidence/human-{combined.json,combined.log,visibility.json,gate.json}`
+and `human-combined-focused.png`. Local checkpoint: `binsize-combined-3-human`.
+
 ## Evidence and limits
 
 Ignored `build/combined-evidence/` holds commands, durations, exit codes, logs,

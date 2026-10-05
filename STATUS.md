@@ -1,4 +1,4 @@
-BLOCKED: all combined automated gates pass; foreground human window/normal Escape exit pending. Limits: landmakrj only, finite exclusion/profile coverage, Metal only; slim remains rejected for general play.
+DONE: combined full-coverage default passes all automated gates and the foreground human window exits normally. Limits: landmakrj/Metal only, finite exclusion coverage, human match/ending count unconfirmed; slim remains rejected for general play.
 
 # Combined binary-size cutover
 
@@ -36,18 +36,23 @@ GPU matrix: seeds 5/6/7/41 × scales 1–4 × borders 0/48 × 4,000 frames, plus
 
 ## Human validation
 
-The requested unbounded, windowed command will run only after the gated checkpoint:
+After `binsize-combined-2-gated`, opened the requested unbounded, initially windowed build:
 
 ```sh
 ./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48
 ```
 
-No automated match inputs or collector early-stop. Command, actual duration, normal exit/abort/crash evidence and visibility will be recorded here after the user closes the foreground window.
+Actual duration **423.092 s (7m03s)**, **24,886 frames**, pid 20834, exit **0**. Command cwd was this worktree. No frame/time limit, automated game inputs or collector early-stop. Cocoa/GPU startup: internal **1664×928**, window pixels **2496×1392**, scale **4**, nearest, interpolation off; later window pixels **3024×1686**, scale remained 4. System Events foregrounding and the actual game surface were verified after the initial AppKit activation capture still showed the terminal.
+
+Human-run counters: **334,119,851 native blocks**, **0 CPU fallback**, cycles **6,755,175,389**, **12,565,048 audio frames**, frame CRC `7a829644`; **0 abort/crash logs**. Pacing: **2 clock resyncs**, **0 audio queue drops**, queue mean/max **30.1716 / 55.0721 ms**. Normal frontend quit observed; Escape versus window-close event and number of human-played matches were not separately logged, so neither a match count nor a campaign ending is claimed. No forced quit or synthetic Escape was sent.
+
+Exact run/visibility/output: ignored `build/combined-evidence/human-combined.json`, `human-combined.log`, `human-visibility.json`, `human-gate.json`, and the inspected foreground capture `human-combined-focused.png`.
 
 ## Checkpoints and evidence
 
 - `binsize-combined-1-merged`: semantic merge builds/basic native checks passed.
-- `binsize-combined-2-gated`: all automated gates above; human run is the remaining admission step.
+- `binsize-combined-2-gated`: all automated gates passed before opening the human window.
+- `binsize-combined-3-human`: foreground combined GPU/auto-integer/border-48 run exited normally; command/duration/counters above.
 - Full evidence: ignored `build/combined-evidence/automated-gates.json`, `profile-audit.json`, `sizes.json`, `attract-gates.json`, `heldout-gates.json`, `gpu/results.json`, `netplay/results.json`, exact command logs and per-seed hashes/state dumps. Original baseline artifacts unchanged. Verified duplicate candidate WAVs and throwaway probe sources/binaries removed; no user/shared artifacts deleted.
 - No pushes; no ROMs, binaries, generated C or captures committed. README/site build sections and all BINSIZE reports updated.
 
