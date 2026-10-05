@@ -319,9 +319,15 @@ struct GpuVideo::Impl {
         if (window) {
             if (!SDL_ClaimWindowForGPUDevice(device, window)) fail("Claim GPU window");
             claimed = true;
-            if (!vsync && SDL_WindowSupportsGPUPresentMode(device, window, SDL_GPU_PRESENTMODE_IMMEDIATE) &&
-                !SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE))
-                fail("Set unthrottled GPU presentation");
+            // FIFO can make a slow display throttle native simulation/audio.
+            // Mailbox remains tear-free without queuing obsolete display frames.
+            const auto mode = !vsync && SDL_WindowSupportsGPUPresentMode(device, window, SDL_GPU_PRESENTMODE_IMMEDIATE)
+                ? SDL_GPU_PRESENTMODE_IMMEDIATE
+                : SDL_WindowSupportsGPUPresentMode(device, window, SDL_GPU_PRESENTMODE_MAILBOX)
+                    ? SDL_GPU_PRESENTMODE_MAILBOX : SDL_GPU_PRESENTMODE_VSYNC;
+            if (mode != SDL_GPU_PRESENTMODE_VSYNC &&
+                !SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+                fail("Set GPU presentation mode");
         }
         scene_buffer = buffer(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes);
         native_buffer = buffer(native_bytes);
@@ -439,11 +445,14 @@ struct GpuVideo::Impl {
         std::cout << '\n';
         logged_reason = stats.reason; logged_layers = stats.layers; have_interpolation_log = true;
     }
+    enum class Presentation { Wait, SkipBusy, Offscreen };
     void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic,
               bool temporal = false, float alpha = 1.0f,
               const std::chrono::steady_clock::time_point *frame_start = nullptr,
-              std::chrono::nanoseconds period = {}, bool no_present = false, bool comparison = false,
-              const char *capture_path = nullptr) {
+              std::chrono::nanoseconds period = {}, Presentation presentation = Presentation::Wait,
+              bool comparison = false, const char *capture_path = nullptr) {
+        const bool no_present = presentation == Presentation::Offscreen;
+        const bool skip_busy = presentation == Presentation::SkipBusy;
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
         if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
@@ -452,7 +461,7 @@ struct GpuVideo::Impl {
         if (comparison && !comparison_native_valid) {
             // Cache only the current canonical scene, never temporally modified
             // words. This offscreen pass does not acquire or pace a swapchain.
-            draw(scene, {}, layer_mask, process_diagnostic, false, 1.0f, nullptr, {}, true);
+            draw(scene, {}, layer_mask, process_diagnostic, false, 1.0f, nullptr, {}, Presentation::Offscreen);
             if (!comparison_native)
                 comparison_native = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
             Command cache(device);
@@ -469,11 +478,18 @@ struct GpuVideo::Impl {
         Command command(device);
         SDL_GPUTexture *swapchain = nullptr;
         Uint32 w = 0, h = 0;
+        if (skip_busy) {
+            if (!window) return;
+            if (!SDL_AcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
+                fail("Try acquiring GPU swapchain");
+            if (!swapchain) return; // Command cancels; no uploads/resource cycling.
+            command.acquired_swapchain = true;
+        }
         if (frame_start) {
 #ifdef __APPLE__
-            if (vsync && !pace_prepared) wait_macos_motion_pacing(motion_pacing);
+            if (vsync && !pace_prepared && !skip_busy) wait_macos_motion_pacing(motion_pacing);
 #endif
-            if (window && !no_present) {
+            if (window && !no_present && !skip_busy) {
                 if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
                     fail("Acquire timed GPU swapchain");
                 command.acquired_swapchain = swapchain != nullptr;
@@ -558,7 +574,7 @@ struct GpuVideo::Impl {
         if (!output.empty()) queue_download(command.value, present_surface);
         WindowCapture capture(device);
         if (window && !no_present) {
-            if (!frame_start &&
+            if (!frame_start && !skip_busy &&
                 !SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
                 fail("Acquire GPU swapchain");
             if (swapchain) {
@@ -663,6 +679,10 @@ void GpuVideo::set_overlay(Overlay callback, void *userdata) {
 void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
     impl_->draw(scene, output, layer_mask, process_diagnostic);
 }
+bool GpuVideo::present(const GpuScene &scene) {
+    impl_->draw(scene, {}, 511, false, false, 1.0f, nullptr, {}, Impl::Presentation::SkipBusy);
+    return impl_->last_presented;
+}
 void GpuVideo::capture_motion(const GpuScene &scene, uint64_t frame) {
     if (!impl_->motion) {
         if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))
@@ -683,30 +703,32 @@ void GpuVideo::reset_motion() {
     impl_->motion_pace_prepared = false;
 }
 const MotionInterpolationStats &GpuVideo::last_motion() const { return impl_->motion_stats; }
-void GpuVideo::pace_motion() {
+bool GpuVideo::pace_motion() {
 #ifdef __APPLE__
     if (impl_->motion_pacing && impl_->vsync && !impl_->motion_pace_prepared) {
         wait_macos_motion_pacing(impl_->motion_pacing);
         impl_->motion_pace_prepared = true;
     }
 #endif
+    return impl_->motion_pace_prepared;
 }
 void GpuVideo::draw_motion(const GpuScene &scene, float alpha, std::span<uint32_t> output,
                            unsigned layer_mask, bool process_diagnostic) {
     impl_->motion_stats = {};
     impl_->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
 }
-void GpuVideo::draw_motion_timed(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
-                                 std::chrono::nanoseconds period, std::span<uint32_t> output,
-                                 unsigned layer_mask, bool process_diagnostic) {
+bool GpuVideo::present_motion(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
+                              std::chrono::nanoseconds period, bool wait) {
     impl_->motion_stats = {};
-    impl_->draw(scene, output, layer_mask, process_diagnostic, true, 1.0f, &frame_start, period);
+    impl_->draw(scene, {}, 511, false, true, 1.0f, &frame_start, period,
+                wait ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy);
+    return impl_->last_presented;
 }
 void GpuVideo::draw_motion_comparison_timed(const GpuScene &scene,
                                            std::chrono::steady_clock::time_point frame_start,
                                            std::chrono::nanoseconds period, const char *capture_path) {
     impl_->motion_stats = {};
-    impl_->draw(scene, {}, 511, false, true, 1.0f, &frame_start, period, false, true, capture_path);
+    impl_->draw(scene, {}, 511, false, true, 1.0f, &frame_start, period, Impl::Presentation::Wait, true, capture_path);
 }
 bool GpuVideo::last_presented() const { return impl_->last_presented; }
 double GpuVideo::display_hz() const {

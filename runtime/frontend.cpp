@@ -456,6 +456,9 @@ int main(int argc,char **argv) try {
 #ifdef F3RT_GPU
     MotionReadout motion_readout{.begin=start};
     bool motion_pair_pending=false;
+    auto next_motion_present=next_frame;
+    const double display_hz=motion_presentation && sdl.gpu?sdl.gpu->display_hz():0;
+    auto motion_present_period=display_hz>0?std::chrono::nanoseconds(uint64_t(1e9/display_hz)):frame_time;
     int observed_pixel_width=pixel_width,observed_pixel_height=pixel_height;
     bool scale_pending=false;
     auto scale_pending_since=start,scale_last_resize=start;
@@ -511,6 +514,14 @@ int main(int argc,char **argv) try {
                 }
                 if(event.type==SDL_EVENT_WINDOW_EXPOSED || event.type==SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
                     refresh=true;
+#ifdef F3RT_GPU
+                if(motion_presentation && sdl.gpu && (event.type==SDL_EVENT_WINDOW_DISPLAY_CHANGED ||
+                    event.type==SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED)) {
+                    const double hz=sdl.gpu->display_hz();
+                    motion_present_period=hz>0?std::chrono::nanoseconds(uint64_t(1e9/hz)):frame_time;
+                    next_motion_present=std::chrono::steady_clock::now();
+                }
+#endif
             }
             ui_state.connected=bool(session);
             ui_state.transferring=session && (session->phase()==f3rt::netplay::Session::Phase::Sending ||
@@ -603,8 +614,8 @@ int main(int argc,char **argv) try {
         }
         if(quit)break;
 #ifdef F3RT_GPU
-        if(motion_presentation && throttle && sdl.gpu && (!sdl.ui->open() || session))
-            sdl.gpu->pace_motion();
+        const bool motion_display_paced=motion_presentation && throttle && sdl.gpu &&
+            (!sdl.ui->open() || session) && sdl.gpu->pace_motion();
 #endif
         bool advanced=false;
         std::array<f3rt::netplay::InputWord,2> local{};
@@ -736,10 +747,23 @@ int main(int argc,char **argv) try {
                         static_cast<f3rt::FrontendUi *>(user)->render_gpu(command,texture,width,height);
                     } : nullptr,sdl.ui.get());
                 if(motion_presentation) {
-                    if(throttle && (!draw_menu || session) && !capture_final)
-                        sdl.gpu->draw_motion_timed(m.game_video->gpu_scene(),motion_frame_start,frame_time);
-                    else sdl.gpu->draw_motion(m.game_video->gpu_scene(),1.0f);
-                    if(sdl.gpu->last_presented()) {
+                    bool presented=false;
+                    const bool due=motion_display_paced || std::chrono::steady_clock::now()>=next_motion_present;
+                    if(!throttle || due || capture_final || screenshot_pending) {
+                        if(throttle && (!draw_menu || session) && !capture_final)
+                            presented=sdl.gpu->present_motion(m.game_video->gpu_scene(),motion_frame_start,
+                                                              frame_time,screenshot_pending);
+                        else {
+                            sdl.gpu->draw_motion(m.game_video->gpu_scene(),1.0f);
+                            presented=sdl.gpu->last_presented();
+                        }
+                        if(throttle && !motion_display_paced) {
+                            next_motion_present+=motion_present_period;
+                            const auto now=std::chrono::steady_clock::now();
+                            if(next_motion_present<=now)next_motion_present=now+motion_present_period;
+                        }
+                    }
+                    if(presented) {
                         ++motion_presentations;
                         const auto &stats=sdl.gpu->last_motion();
                         motion_readout.observe(stats,motion_pair_pending);
@@ -751,7 +775,9 @@ int main(int argc,char **argv) try {
                                 (stats.sprites || stats.playfield_rows || stats.text_rows);
                         }
                     }
-                } else sdl.gpu->draw(m.game_video->gpu_scene());
+                } else if(capture_final || screenshot_pending || !throttle)
+                    sdl.gpu->draw(m.game_video->gpu_scene());
+                else sdl.gpu->present(m.game_video->gpu_scene());
                 if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
                 if(screenshot_pending)sdl.gpu->save_surface(screenshot.string().c_str());
             } else
@@ -816,6 +842,16 @@ int main(int argc,char **argv) try {
                (sdl.window && (SDL_GetWindowFlags(sdl.window)&(SDL_WINDOW_MINIMIZED|SDL_WINDOW_HIDDEN))))
                 std::this_thread::sleep_for(std::chrono::milliseconds(session?1:8));
         }
+#ifdef F3RT_GPU
+        if(motion_presentation && throttle && sdl.gpu && !motion_display_paced) {
+            // Presentation may be slower than native simulation. Wake for the
+            // earlier deadline so a drawable cannot hold up the next PCM chunk.
+            const auto now=std::chrono::steady_clock::now();
+            auto native_deadline=draw_menu && !session?next_motion_present:session?next_net_step:next_frame;
+            if(session && native_deadline<=now)native_deadline=now+std::chrono::milliseconds(1);
+            std::this_thread::sleep_until(std::min(next_motion_present,native_deadline));
+        }
+#endif
     }
     if(session && session->connected())session->disconnect("Local frontend closed");
     if(!eeprom.empty())m.save_eeprom(eeprom);

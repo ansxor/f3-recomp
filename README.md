@@ -18,8 +18,10 @@ are not silently substituted. Coverage is finite; no exhaustive campaign/ending
 or cross-platform compatibility claim. Runtime validation includes macOS
 arm64/Metal and focused Linux x86-64/Vulkan GPU checks on an RX 7800 XT.
 The [GPU report](docs/developer/GPU-VIDEO.md#one-quad-inverse-sprite-raster-linux-cutover)
-distinguishes tested shader revisions and hardware; performance on the
-lower-end Linux systems reporting slowdowns has not been measured here.
+distinguishes tested shader revisions and hardware. A
+[30Hz Linux display-backpressure reproduction and pacing fix](docs/developer/GPU-VIDEO.md#linux-presentation-backpressure-and-audio)
+retains native-rate audio without tying emulation to display refresh;
+performance on the lower-end Linux systems reporting slowdowns remains unmeasured.
 
 Video implements **MAME-derived F3 rendering**, and the Land Maker game-data path
 is compared against that renderer and captured MAME output. This is not a

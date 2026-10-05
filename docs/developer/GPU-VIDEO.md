@@ -1187,7 +1187,7 @@ at that checkpoint.
 
 ## One-quad inverse sprite raster: Linux cutover
 
-The current sprite pass replaces 256 texel quads per descriptor with one
+The sprite-only cutover replaced 256 texel quads per descriptor with one
 six-vertex quad covering their union. At 1024 sprites this reduces submitted
 vertices from 1,572,864 to 6,144, without changing assets, scene words, uniforms,
 shader resource slots, CPU rendering, snapshots, interpolation or frame pacing.
@@ -1256,8 +1256,9 @@ Synthetic opaque 1024-sprite timings were essentially unchanged
 (0.634→0.624 ms). Whole frontend startup-plus-1200-frame time was likewise about
 7 seconds before and after; the after run additionally saved a final surface.
 The desktop therefore does not establish excessive geometry as the sole cause
-of friends' slowdowns, or demonstrate a material end-to-end speedup. VSync and
-the existing frame limiter were intentionally unchanged.
+of friends' slowdowns, or demonstrate a material end-to-end speedup. Those sprite-only
+measurements left VSync and the existing frame limiter unchanged; the later
+presentation/audio pacing fix is recorded below.
 
 Reproduce the real-ROM timing/boundary check with:
 
@@ -1288,3 +1289,126 @@ use the same six-vertex sprite pass. The merged Release build passed:
   and fit geometry: 6078 drawable submissions, 786 interpolated submissions,
   zero interpreter fallback instructions. The captured player-select surface
   was inspected. Submission counters are not physical scanout measurements.
+
+## Linux presentation backpressure and audio
+
+Sprite geometry was not the only bottleneck. Ordinary GPU presentation used
+FIFO/VSync and `SDL_WaitAndAcquireGPUSwapchainTexture` on the same thread that
+advances native simulation and produces PCM. A slow display could therefore
+throttle emulation even when the shaders finished well within a native frame.
+Zero `audio_queue_drops` means the backlog cap never cleared the stream;
+it does not rule out audio starvation.
+`clock_resyncs` counts native-clock lateness beyond the existing 50ms window.
+
+Presentation now prefers tear-free **mailbox** when supported; unthrottled mode
+still prefers immediate presentation. FIFO remains the compatibility fallback.
+The paced frontend uses `GpuVideo::present` / `present_motion`: acquire before
+uploads, skip a busy in-flight frame, and cancel its empty command buffer.
+Rejected draws do not cycle upload/render resources, enqueue GPU work, or change
+native simulation, audio generation, scene/history capture or snapshots.
+Explicit screenshots/final surfaces and offscreen diagnostics still render and
+wait; they cannot silently capture an older surface after a skipped draw.
+
+Without a native display pacer, motion mode schedules display submissions against
+a rolling display-mode deadline and sleeps until the earlier display/native
+simulation deadline. This preserves native-rate PCM on a slower display without
+busy-spinning on a rejected drawable. Paused motion menus also observe the
+display deadline rather than rendering on every UI poll. Display changes refresh
+the interval.
+The standalone frozen motion-comparison demo uses the same deadline fallback;
+macOS retains its native display-link pacing.
+
+`SDL_AcquireGPUSwapchainTexture` alone is insufficient to remove display pacing:
+[SDL 3.4.16's Vulkan implementation](https://github.com/libsdl-org/SDL/blob/release-3.4.16/src/gpu/vulkan/SDL_gpu_vulkan.c#L10210-L10246)
+checks the oldest in-flight GPU fence without waiting, but subsequently calls
+`vkAcquireNextImageKHR` with an unlimited timeout. Mailbox avoids FIFO display
+backlog in addition to skipping busy GPU frames. Drivers without mailbox support,
+other driver/WSI stalls, and the friends' lower-end hardware remain unverified.
+This is not a universal nonblocking-driver or 60fps-rendering guarantee.
+
+### Controlled live reproduction
+
+Release Linux x86-64, SDL 3.4.16 Vulkan, RX 7800 XT / RADV Mesa 26.2.2,
+Gamescope 3.16.28 nested on GNOME Wayland. A 30Hz nested compositor reproduced
+lateness at **scale 1**, without an artificial delay or heavier sprite shader.
+A 600-frame CPU control had zero clock resyncs; the GPU run had 103, with zero
+queue drops. Both retained the same native frame CRC/cycles/audio sample count.
+
+Matched 1200-frame GPU runs used a temporary SDL interposer only to time actual
+acquisition/audio calls and mute host output; it did not delay calls or fake
+backpressure. Generated PCM remained nonzero and byte-identical before/after.
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Clock resyncs | 176 | 0 |
+| Audio queue drops | 0 | 0 |
+| Post-enqueue queue mean / maximum (ms) | 23.9338 / 51.1408 | 28.1283 / 41.0940 |
+| PCM enqueue interval mean / maximum (ms), after 20-frame warmup | 26.9091 / 65.8424 | 16.9691 / 22.9815 |
+| PCM enqueue intervals above 25ms, after warmup | 471 | 0 |
+
+All 1200 native frames retained CRC `e8cc7573`, 325,733,798 CPU cycles,
+19,123,943 native blocks, zero interpreter fallback instructions, 605,885 audio
+frames, peak 158 and 131,670 nonzero samples. WAVs were byte-identical. Final
+320x232 GPU captures were visually inspected and every RGBA pixel matched.
+Timing samples above precede the explicit final capture; submission/acquisition
+measurements are not scanout or an auditory listening claim. Nested Wayland
+teardown warnings occurred in both versions and were not a shutdown validation.
+
+Reproduce the display-backpressure scenario (muted playback):
+
+```sh
+gamescope --backend wayland --expose-wayland -r 30 -o 30 \
+  -w 960 -h 696 -W 960 -H 696 -- \
+  env SDL_VIDEODRIVER=wayland ./build/landmakr \
+  --config /tmp/f3-pacing.conf --video game --video-backend gpu \
+  --video-scale 1 --video-border 0 --video-interp off \
+  --postprocess off --volume 0 --frames 1200
+```
+
+Repeat with `--video-backend cpu` for the control, or add `--motion-interp`
+to exercise the independent display/native deadlines.
+
+Additional live checks on the same GPU:
+
+- 1200-frame motion mode at 30Hz: 612 drawable submissions in 20.361s while
+  native simulation remained about 58.94Hz; zero resyncs/drops/history resets.
+  PCM enqueue mean/max 16.9691/20.7001ms, zero intervals above 25ms after warmup;
+  queue mean/max 27.8063/41.2957ms. WAV bytes and native CRC/cycles/blocks matched
+  ordinary mode. Submission counts are not physical scanout.
+- A temporary real SPIR-V postprocess workload at scale 3 / border 48 exercised
+  two busy-acquisition rejections, without faking SDL results. All 1200 native
+  frames and WAV bytes remained exact, with zero clock resyncs; PCM enqueue
+  mean/max 16.9691/20.4616ms and zero intervals above 25ms after warmup. One
+  backlog drop occurred, queue mean/max 29.9934/66.3284ms. The final capture
+  explicitly waited and completed. This exercises rejection/capture behavior,
+  not sustained underpowered-GPU performance.
+- Motion mode with the same real postprocess workload at reported 240Hz:
+  2701 of 3909 acquisition attempts returned no drawable, while 1200 native
+  frames completed in 20.3851s with zero resyncs/history resets. PCM enqueue
+  mean/max 16.9690/20.5992ms, zero intervals above 25ms after warmup; one backlog
+  drop, queue mean/max 28.1195/51.1408ms. Native counters and WAV bytes matched
+  ordinary mode. The forced final alpha-1 capture matched every RGBA pixel of
+  the ordinary-workload 1248x696 capture, despite the rejected temporal draws.
+- Actual X11 motion/fit/auto-integer UI: F1 pause/resume, resize and F11 enter/leave;
+  scales 3→1→3→2, 1200 native frames, exact native counters and WAV bytes. Menu
+  redraws stayed at display cadence after applying its deadline guard; captured
+  menu/final game surfaces were inspected. This interaction/capture run recorded
+  one clock resync and zero queue drops (27.636/41.7997ms mean/max). Its enqueue
+  intervals include the intentional 1.595s pause and are not steady-state audio
+  performance evidence. Gamescope's WSI bypass was disabled for X11 window
+  capture; unsupported Wayland screencopy was not used as visual proof.
+- Existing scale-3/border-48/fit/both-fields GPU parity through frame 1440, with
+  all isolated layers and native sprite boundaries, passed with zero mismatches.
+  Scale-4 fit motion regression through 1600 frames passed 81 samples, 70 pairs,
+  20 visible intermediate frames, exact endpoints/repeats/native audio/state,
+  discontinuity snapping and replay. CTest `motion-interpolation-guards` passed.
+- Live frozen comparison on the reported 240Hz Wayland display mode: 235 native
+  render-only pan steps and 939 drawable submissions in four seconds, including
+  937 interpolated submissions; frozen native/state/sync bytes remained exact.
+  The full-window left-native/right-motion capture was inspected. The measured
+  first reporting window was 229.8 submissions/s; this is not a 240Hz scanout
+  claim or fullspeed proof for lower-end GPUs.
+
+Temporary instrumentation/workload/interaction sources are not permanent tests;
+the reproduction depends on real GPU/display/audio services and is not an
+isolated, deterministic full-suite-safe regression.

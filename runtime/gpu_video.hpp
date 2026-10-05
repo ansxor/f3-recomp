@@ -42,6 +42,9 @@ public:
     // explicitly true. Optional output receives width*height ARGB8888 pixels.
     void draw(const GpuScene &scene, std::span<uint32_t> output = {}, unsigned layer_mask = 511,
               bool process_diagnostic = false);
+    // Skip busy in-flight frames before uploading/rendering. No fence wait or
+    // readback; draw() still waits for explicit captures and diagnostics.
+    bool present(const GpuScene &scene);
     // Explicit opt-in; completed emulated frames are captured, never draws.
     void capture_motion(const GpuScene &scene, uint64_t frame);
     void reset_motion();
@@ -50,12 +53,12 @@ public:
     const MotionInterpolationStats &last_motion() const;
     // Pace before testing the native-frame deadline so the selected pair is
     // current at this display tick. Next presenting draw consumes this wait.
-    // No-op without active native motion pacing; timed draws also self-pace.
-    void pace_motion();
-    // Live alpha is sampled after display pacing and swapchain acquisition.
-    void draw_motion_timed(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
-                           std::chrono::nanoseconds period, std::span<uint32_t> output = {},
-                           unsigned layer_mask = 511, bool process_diagnostic = false);
+    // Returns false without an active native pacer; caller must use deadlines.
+    bool pace_motion();
+    // Sample live alpha after acquisition. Caller owns display pacing; busy
+    // GPU frames are skipped unless an explicit capture requests a wait.
+    bool present_motion(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
+                        std::chrono::nanoseconds period, bool wait = false);
     // Diagnostic single-window comparison: left native/current, right temporal.
     // Capture each changed input scene first; the native pane is cached until
     // capture_motion, reset_motion, scale or postprocess changes.
