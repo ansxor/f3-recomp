@@ -235,12 +235,42 @@ for different CPU state representations: `bcdefd0a` / `bc62613f`; both frame CRC
 State sizes: native 4,231,509 / oracle 4,231,724 bytes.
 This is the existing save/load oracle, not a new impaired-network campaign.
 
+## GPU presentation gates
+
+Actual Metal harness: **35/35 SUCCESS**, each scenario executed once.
+The off matrix is seeds **5/6/7/41 × scales 1–4 × borders 0/48 × 4,000 frames**,
+`--every 30 --layers`. Added seed-5 scale-4/border-48 linear and fit geometry
+cases, each 4,000 frames, plus a 1,600-frame fit case with all six induced
+boundary types at frame 1,080 and scheduled changes at
+300:2 / 600:4 / 900:1 / 1200:3 / 1500:4.
+
+Totals: **137,600 native frames**, **1,866,161,068 native blocks**,
+**0 CPU fallback**, **4,669 composite / 39,747 isolated-layer checks**,
+**0 mismatching pixels**. 129,515 supported frames; 8,085 explicit
+presentation-oracle frames, 253 sampled fallback images and 105 actual
+oracle transitions. These do not enable CPU instruction fallback.
+Native audio frames summed: 69,474,824. Same-seed 4,000-frame cases preserve
+native cycles/blocks/frame CRC/audio CRC/count/peak/nonzero samples.
+
+Six induced scenarios / 18 sample groups; three native sprite-boundary branches;
+21 interpolation boundary checks, 349 isolated sprite checks; **9 actual scale
+changes** (5 scheduled + 4 retained-trail branch changes). Canonical snapshots,
+restore/replay, native/unflagged/text/sprite and independent trail history
+invariants pass. Command wall total **817.445 s**, not an isolated render
+performance benchmark. Comparisons are sampled; the ending producer is induced,
+not a played ending. No other-GPU or visual human judgment claim.
+Exact commands/counters: ignored `build/combined-evidence/gpu/results.json`.
+
+Actual frontend flag smoke also passes: full tiers with `--allow-fallback`
+complete 600 native frames with zero fallback; slim with that flag exits 1
+before starting emulation, retaining its strict-only policy.
+
 ## Evidence and limits
 
 Ignored `build/combined-evidence/` holds commands, durations, exit codes, logs,
 `profile-audit.json`, `sizes.json`, regional reports, effective tier flags,
 MAME captures, attract-gate JSON, eight per-seed gate JSONs/hashes, runtime
-exclusion/cold-hit probe logs and `netplay/results.json`.
+exclusion/cold-hit probe logs, `gpu/results.json` and `netplay/results.json`.
 
 Only Japanese Land Maker and this Darwin arm64/Metal environment are validated.
 Finite profiles and seeded gates are not all-state proof of every exclusion,
