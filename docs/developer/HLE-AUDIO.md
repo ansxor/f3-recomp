@@ -329,3 +329,60 @@ rendered opt-in HLE guide, explicit emulated default, and relocated developer
 evidence link. This merge check does not replace the broader historical
 sequencer, performance and impaired-netplay measurements above.
 
+## Native-rate experiment: evaluated, not enabled
+
+A private end-to-end HLE29761 build was compared with exact HLE48k and the accurate
+interpreted sound oracle. Production defaults and settings are unchanged:
+accurate/native remains the player default; opt-in HLE still renders at 48 kHz.
+No new public rate setting or approximation was retained.
+
+The experiment preserves all voices/layers and ROM parameter calculations. It
+scales the existing gain/filter/cancellation ramps and effect line lengths to
+29,761 Hz, converts per-sample damping, and uses the existing stereo playback
+resampling path. It does not add a second service clock: the synth's existing
+1 kHz service meets different PCM deadlines. Those differences count as error,
+not exact equivalence.
+
+Five alternating 6000-frame GPU scene-export pairs on CPU 2 gave
+0.927248 → 0.832771 ms/frame (10.19% lower) and 8.94% less aggregate user CPU.
+Canonical size/CRC, main cycles and block counts matched. A CPUs 2/3 run gave
+15.88% lower wall time and 11.98% lower user CPU, but thread migration was not
+controlled, so it is not a dedicated-worker result. Raw records:
+`build/hle-native-rate/performance/results.json`.
+
+The 93 real extractor recordings cover all 27 ordinary sequence starts (4 s),
+sequence 8 plus its volume variant (8 s), direct SFX (4 s), and selected
+arrangement 7 (17 s), each at both HLE rates and the oracle. Seven ordinary starts
+were silent in all three, leaving 24 non-silent clips. Fixed-lag comparisons use
+`scipy.signal.resample_poly` with its default Kaiser beta 5 filter, 20 ms Hann
+spectral windows through 14.88 kHz, and an FFT-resampler cross-check. No listening
+was performed.
+
+- Native-rate HLE versus resampled HLE48k: median waveform SNR 19.7 dB, median
+  spectral log-distance 4.3 dB; this is not a waveform-identical substitute.
+- Against the oracle, spectral distance improved in 24/24 non-silent clips;
+  direct SFX SNR improved 22.0 → 31.1 dB. Music waveform SNR declined by a median
+  0.034 dB, worst 0.38 dB. Both music waveforms remain largely phase-incoherent
+  with the oracle, so spectral/envelope evidence carries that comparison.
+- Near-Nyquist energy is closer to the oracle. This also reproduces chip
+  interpolation images/aliasing; it is not proof of perceptually better audio.
+- Sequence event identity/order and non-Stop ticks matched across 148,911 rows,
+  but 148 loop-direction (`reverse`) fields changed. Stop deltas ranged from
+  −437 to +683 main ticks (at most 0.043 ms).
+- The physically aligned all-program/high-key/polyphony corpus retained all
+  259,485 events and identical Start/Parameters/Release/Cancel ticks. It changed
+  176 loop-direction fields across 22 cases; only Stops reordered, in two
+  program-98/polyphony-32 cases. Cancellation Stops arrived at most 0.021 ms
+  earlier. Twenty program-70 one-shot Stops arrived 0.042–0.056 ms earlier,
+  beyond one native sample in those cases. Six pre-existing sample-directory
+  rejections remained unchanged; no new rejection was introduced.
+
+Claude Opus 5.5's hypothesis/measurement review supports an explicitly chosen,
+documented native-rate option, not an exact replacement or silent default
+change. This pass keeps the default and existing PCM stable. Evidence and raw
+WAV/event recordings remain under `build/hle-native-rate/evidence/`; reports
+include `summary.json`, `recommendation.json` and
+`corpus-events-29761-vs-48k.json`. Results cover one available ROM set and finite
+windows, not subjective listening, other games, or impaired native-rate netplay.
+
+

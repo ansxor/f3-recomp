@@ -382,3 +382,36 @@ cases (programs 81/82, key 39, each polyphony) retained the same external-direct
 error; they are not successful synthesis cases. Evidence:
 `build/hle-native-rate/corpus/` and `build/opt/round2-hle-bench/results.json`.
 
+`e5a87e5` checkpoints the exact deferred-native/accessor cutover and durable
+regressions. Final CTest passed 5/5. Targeted Memcheck loaded a ready real snapshot,
+executed 40 supported unobserved scanouts and ten pending-frame/mutation/fallback/
+backend/scale/reset/load/trail boundaries: native/expanded/canonical/sync bytes
+matched, zero errors and zero bytes live at exit (174 allocations/frees). It used
+an isolated matching glibc/debug loader because the host loader lacks Valgrind's
+required redirect symbol. Raw result: `build/opt/lazy-targeted-memcheck.log`.
+The earlier full 1800-frame Memcheck attempt exceeded its command deadline;
+this is targeted retention-path coverage, not a completed full-run Memcheck.
+
+The merged temporal GPU regression also completed seed 5 / scale 2 / 4000 frames:
+46 samples, 43 paired scenes, 30 visible intermediate/midpoint frames, exact
+alpha-1/repeated draws, canonical/native/audio parity, and exact reset/gap/
+duplicate/rollback/fallback replay. Captured midpoint output was visually
+inspected. Reproduce with `build/opt/f3rt-motion-regression --rom-dir
+roms/landmakrj --frames 4000 --seed 5 --scale 2 --every 90 --interp off`;
+PNG evidence remains in `build/opt/lazy-motion-proof/`.
+
+Two final generic exact candidates were measured and rejected rather than retained:
+
+| Candidate | Exact control | Candidate | Decision |
+| --- | ---: | ---: | --- |
+| ES5510 fixed decoded-instruction cache | 2.54036 ms | 2.57105 ms | 1.21% slower; all five pairs regressed |
+| HLE filter stage/mode specialization | 0.953972 ms | 0.953158 ms | 0.09% median change, within run variation |
+
+The decode cache required another 1920 bytes and mutable-program/reference
+invalidation; the existing device checks passed, but that complexity did not buy
+speed. Specialized filtering preserved the full all-program float/event corpus;
+no stable whole-runtime gain justified replacing the simpler loop. Records:
+`build/opt/final-candidates/results.json`. Remaining sampled native work is mainly
+required DSP/sound CPU execution, scheduling, dispatch and exact sprite work;
+no additional instruction/timing bypass or speculative state cache was retained.
+
