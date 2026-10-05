@@ -129,11 +129,13 @@ The native driver is not a rewrite of the music logic. It runs the same 68000 pr
 | `landmakr`, `f3rt-run` | Native, if the build made the sound program (`F3RT_SOUND_GENERATED`). Otherwise oracle. | `--sound-driver oracle` or `--sound-driver native` |
 | `f3rt-gameplay-regression` | Oracle | `--sound-driver native` |
 | `f3rt-sound-extract` | Oracle | `--sound-driver native` |
-| Netplay | Native only | Netplay refuses the oracle. |
+| Netplay | Native accurate audio | Oracle sound is refused; both peers may instead opt into `--audio-backend hle`. |
 
 The code in `frontend.cpp` sets the default to `native` when the macro `F3RT_SOUND_GENERATED` exists and the user gave no `--sound-driver`. A request for `native` in a build without the macro stops with the error "Native sound requires a generated sound program (F3_ROM_DIR)". `Machine::use_native_sound` must run before the machine executes. It throws "Select the native sound driver before machine execution" if the reset line is released or the audio clock has started.
 
 See the [command-line reference](/reference/cli) for all options.
+`--audio-backend hle` bypasses sound CPU execution entirely. The driver
+selection table applies to the default accurate backend, not HLE.
 
 The frontend help text names different defaults for `landmakr` and `f3rt-run`. The implemented generated-build rule selects native for both.
 

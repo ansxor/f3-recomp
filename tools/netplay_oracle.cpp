@@ -7,6 +7,7 @@
 #include "capture_io.hpp"
 #include "sound_trace.hpp"
 #include "gameplay_inputs.hpp"
+#include "hle_events.hpp"
 
 #ifdef F3RT_GENERATED
 #include "program.h"
@@ -121,7 +122,8 @@ LandMakerStatus inspect_landmaker(f3rt::Machine &m) {
 }
 
 void configure_machine(f3rt::Machine &m, const std::string &sound_driver,
-                       const f3rt::GameVideoOptions &video_opts) {
+                       const f3rt::GameVideoOptions &video_opts,
+                       f3rt::Audio::Backend backend = f3rt::Audio::Backend::Accurate) {
     m.allow_main_fallback = false;
 
 #ifdef F3RT_GENERATED
@@ -132,7 +134,8 @@ void configure_machine(f3rt::Machine &m, const std::string &sound_driver,
     throw std::runtime_error("netplay_oracle requires compiled generated blocks (F3RT_GENERATED)");
 #endif
 
-    if (sound_driver == "native") {
+    if (backend == f3rt::Audio::Backend::Hle) m.audio->set_backend(backend);
+    else if (sound_driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
                            {f3_sound_excluded_ranges, f3_sound_excluded_count});
@@ -534,15 +537,16 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
                   const f3rt::GameVideoOptions &video_opts,
                   const std::filesystem::path &capture_surface,
                   const std::filesystem::path &dump_dir,
-                  uint64_t dump_every) {
+                  uint64_t dump_every, f3rt::Audio::Backend backend) {
     const bool is_vs_schedule = (schedule_type != "single");
     std::cout << "--- REFERENCE ORACLE RUN ---\n"
               << "seed=" << seed << " frames=" << target_frames
-              << " delay=" << delay << " sound_driver=" << sound_driver
+              << " delay=" << delay << " audio_backend=" << (backend == f3rt::Audio::Backend::Hle ? "hle" : "accurate")
+              << " sound_driver=" << (backend == f3rt::Audio::Backend::Hle ? "none" : sound_driver)
               << " schedule=" << (is_vs_schedule ? "versus" : "single") << '\n';
 
     f3rt::Machine m(f3rt::RomSet::load(romdir, set));
-    configure_machine(m, sound_driver, video_opts);
+    configure_machine(m, sound_driver, video_opts, backend);
 
     f3rt::test::GameplaySchedule schedule(seed, {.versus = is_vs_schedule});
     std::array<int16_t, 8192> audio_buf{};
@@ -658,18 +662,45 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
                double timeout_sec, bool unthrottled,
                uint64_t stall_at, uint32_t stall_ms,
                uint64_t withhold_at, uint32_t withhold_ms,
-               bool corrupt_build_hash, uint64_t event_at) {
+               bool corrupt_build_hash, uint64_t event_at, f3rt::Audio::Backend backend,
+               const std::filesystem::path &wav_path) {
     const bool is_vs_schedule = (schedule_type != "single");
     std::cout << "--- HEADLESS NETPLAY CLIENT ---\n"
               << "player=" << player_slot << " server=" << server_addr
               << " room=" << room_name << " delay=" << delay
               << " window=" << window << " seed=" << seed
               << " frames=" << target_frames
-              << " sound_driver=" << sound_driver
+              << " audio_backend=" << (backend == f3rt::Audio::Backend::Hle ? "hle" : "accurate")
+              << " sound_driver=" << (backend == f3rt::Audio::Backend::Hle ? "none" : sound_driver)
               << " schedule=" << (is_vs_schedule ? "versus" : "single") << '\n';
 
     f3rt::Machine m(f3rt::RomSet::load(romdir, set));
-    configure_machine(m, sound_driver, video_opts);
+    configure_machine(m, sound_driver, video_opts, backend);
+    std::unique_ptr<f3rt::WavWriter> wav;
+    if (!wav_path.empty()) wav = std::make_unique<f3rt::WavWriter>(wav_path, m.audio->sample_rate());
+    struct CancelObservation {
+        struct Voice { uint64_t instance = 0, tick = 0; uint8_t layer = 0; };
+        std::array<Voice, 32> fading{};
+        uint64_t voices = 0, stopped = 0, max_ticks = 0;
+    };
+    auto cancellation = std::make_shared<CancelObservation>();
+    if (backend == f3rt::Audio::Backend::Hle)
+        m.audio->set_hle_observer([cancellation](const f3rt::hle::VoiceEvent &event) {
+            using Kind = f3rt::hle::VoiceEvent::Kind;
+            if (event.kind == Kind::Cancel) {
+                ++cancellation->voices;
+                for (auto &voice : cancellation->fading) if (!voice.instance) {
+                    voice = {event.instance, event.tick, event.layer}; break;
+                }
+            } else if (event.kind == Kind::Stop) {
+                for (auto &voice : cancellation->fading)
+                    if (voice.instance == event.instance && voice.layer == event.layer) {
+                        ++cancellation->stopped;
+                        cancellation->max_ticks = std::max(cancellation->max_ticks, event.tick - voice.tick);
+                        voice = {}; break;
+                    }
+            }
+        });
 
     auto identity = f3rt::netplay::machine_identity(m, delay);
     if (corrupt_build_hash) {
@@ -818,6 +849,7 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
         // 8. Drain ALL confirmed audio with a while loop
         size_t pcm_frames = 0;
         while ((pcm_frames = rollback.render_audio(audio_buf.data(), audio_buf.size() / 2)) > 0) {
+            if (wav) wav->append(std::span(audio_buf.data(), pcm_frames * 2));
             confirmed_audio_samples += pcm_frames;
             audio_crc = crc32_update(audio_crc,
                 reinterpret_cast<const uint8_t *>(audio_buf.data()), pcm_frames * 2 * sizeof(int16_t));
@@ -862,6 +894,7 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
     // Drain any remaining confirmed audio
     size_t pcm_frames = 0;
     while ((pcm_frames = rollback.render_audio(audio_buf.data(), audio_buf.size() / 2)) > 0) {
+        if (wav) wav->append(std::span(audio_buf.data(), pcm_frames * 2));
         confirmed_audio_samples += pcm_frames;
         audio_crc = crc32_update(audio_crc,
             reinterpret_cast<const uint8_t *>(audio_buf.data()), pcm_frames * 2 * sizeof(int16_t));
@@ -922,6 +955,7 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
               << " max_depth=" << event_max_depth
               << " delta_stalls=" << event_delta_stalls << "\n" << std::flush;
 
+    const auto hle = m.audio->hle_stats();
     std::cout << "SUCCESS mode=client player=" << (slot + 1)
               << " slot=" << slot
               << " seed=" << seed
@@ -933,6 +967,11 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
               << " rollbacks=" << rollback.rollback_count()
               << " max_depth=" << rollback.maximum_rollback_depth()
               << " last_depth=" << rollback.last_rollback_depth()
+              << " hle_commands=" << hle.commands << " hle_reused=" << hle.reused
+              << " hle_cancelled=" << hle.cancelled
+              << " hle_cancelled_voices=" << cancellation->voices
+              << " hle_cancel_stops=" << cancellation->stopped
+              << " hle_max_cancel_ticks=" << cancellation->max_ticks
               << " frontier_stalls=" << frontier_stalls
               << " event_delta_rollbacks=" << event_delta_rollbacks
               << " event_max_depth=" << event_max_depth
@@ -967,6 +1006,9 @@ int main(int argc, char **argv) try {
     uint64_t seed = 12345;
     uint64_t frames = 20000;
     std::string sound_driver = "native";
+    std::string audio_backend = "accurate";
+    bool sound_explicit = false;
+    std::filesystem::path wav_path;
     f3rt::GameVideoOptions video_opts;
     std::filesystem::path capture_surface;
     std::filesystem::path dump_dir;
@@ -1010,7 +1052,12 @@ int main(int argc, char **argv) try {
         } else if (arg == "--frames") {
             frames = std::stoull(value());
         } else if (arg == "--sound-driver") {
+            sound_explicit = true;
             sound_driver = value();
+        } else if (arg == "--audio-backend") {
+            audio_backend = value();
+        } else if (arg == "--wav") {
+            wav_path = value();
         } else if (arg == "--schedule") {
             schedule_type = value();
         } else if (arg == "--video-scale") {
@@ -1061,6 +1108,8 @@ int main(int argc, char **argv) try {
                       << "  --delay N              Input delay frames (default: 2)\n"
                       << "  --window N             Rollback prediction window (default: 16)\n"
                       << "  --sound-driver MODE    native (default), oracle, or all (snapshot mode)\n"
+                      << "  --audio-backend MODE   accurate (default) or hle (reference/client modes)\n"
+                      << "  --wav FILE             Record client output PCM (speculative when HLE)\n"
                       << "  --schedule MODE        versus (default) or single\n"
                       << "  --surface FILE.bmp     Capture final frame BMP\n"
                       << "  --dump-dir DIR         Dump machine state / sample BMPs\n"
@@ -1090,8 +1139,15 @@ int main(int argc, char **argv) try {
     if (frames == 0) {
         throw std::runtime_error("--frames must be positive");
     }
+    if (audio_backend != "accurate" && audio_backend != "hle")
+        throw std::runtime_error("--audio-backend must be accurate or hle");
+    if (audio_backend == "hle" && sound_explicit)
+        throw std::runtime_error("HLE does not execute --sound-driver");
+    const auto backend = audio_backend == "hle" ? f3rt::Audio::Backend::Hle : f3rt::Audio::Backend::Accurate;
 
     if (mode == "snapshot" || mode == "snapshot-proof") {
+        if (backend == f3rt::Audio::Backend::Hle)
+            throw std::runtime_error("HLE audio is never restored: use client/reference modes, not the accurate-PCM snapshot proof");
         if (snapshot_interval == 0) {
             throw std::runtime_error("--snapshot-interval must be positive");
         }
@@ -1122,7 +1178,7 @@ int main(int argc, char **argv) try {
     } else if (mode == "reference") {
         return run_reference(romdir, set, seed, frames, delay, sound_driver,
                              schedule_type, video_opts, capture_surface,
-                             dump_dir, dump_every);
+                             dump_dir, dump_every, backend);
     } else if (mode == "client") {
         if (player != 1 && player != 2) {
             throw std::runtime_error("Client mode requires --player 1 or --player 2");
@@ -1131,7 +1187,7 @@ int main(int argc, char **argv) try {
                           window, seed, frames, sound_driver, schedule_type,
                           video_opts, capture_surface, dump_dir, timeout_sec,
                           unthrottled, stall_at, stall_ms, withhold_at, withhold_ms,
-                          corrupt_build_hash, event_at);
+                          corrupt_build_hash, event_at, backend, wav_path);
     } else {
         throw std::runtime_error("Unknown --mode: " + mode + " (expected snapshot, reference, or client)");
     }

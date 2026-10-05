@@ -103,11 +103,11 @@ The table lists the commands that the Land Maker sound driver accepts. The sourc
 | `0x8d` | 6 | sequence, track, program high, program low | Select the instrument (program) for a track. (`$c130da`) |
 | `0x8e` | 6 | sequence, track, key, velocity | Start a sustained note with duration `$7fff`. (`$c130ea`) |
 | `0x8f` | 5 | sequence, track, key | Release the matching note. (`$c1313c`) |
-| `0x90` | 6 | sequence, track, key, value | Store a matching-note continuation value at `A3+6`. The documented seed-5 run does not exercise it. (`$c13146`) |
+| `0x90` | 6 | sequence, track, key, value | Matching path attempts a write to ROM `0xc1314e` through return-PC A3; the bus ignores it. It does not override note RAM or pressure. (`0xc13146`) |
 
 Two limits apply to this table:
 
-- The names of the channel fields for `0x87`, `0x8a` and `0x8b`, and the use of `0x90`, are not known from the captured runs. The document gives addresses instead of guessed names.
+- The channel-field names for `0x87`, `0x8a` and `0x8b` are not inferred from captured runs. Command `0x90`'s ignored-ROM-write behavior is established from the driver code, not an audible effect in the captured run.
 - Bit 7 of the sequence number is not always ignored. Some routines use it as extra state. The decoder uses ordinary sequence numbers only. If it cannot find the origin of a note, it writes `null`.
 
 The high-command handler table is at `0xc1323e`. Its accepted-length table is at `0xc13260`.

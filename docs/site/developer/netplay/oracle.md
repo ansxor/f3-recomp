@@ -8,7 +8,9 @@ The tools are [tools/netplay_oracle.cpp](https://github.com/ansxor/f3-recomp/blo
 
 An oracle is a reference result. The network oracle runs the same strict-native machine once with both actual input streams and no prediction. It compares two real rollback clients with that reference.
 
-The reference does not prove that the emulator matches original hardware. It proves that rollback and network timing do not change the reference result. Separate interpreter, sound and video parity tools address emulation accuracy.
+The reference does not prove that the emulator matches original hardware. It checks that rollback and network timing do not change canonical game state and pixels; the accurate backend also checks PCM. Separate interpreter, sound and video parity tools address emulation accuracy.
+
+Audio defaults to `--audio-backend accurate`. Reference and client modes also support opt-in `--audio-backend hle`; both peers must choose the same backend. Accurate compares confirmed PCM as well as game state and pixels. HLE compares canonical game state and pixels, not worker state or PCM: its independent worker intentionally follows speculative command history. See the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/HLE-AUDIO.md#runtime-and-rollback-contract).
 
 ```mermaid
 flowchart TB
@@ -17,14 +19,14 @@ flowchart TB
   I --> B["Client 2: Transport and Rollback"]
   A <-->|"Real UDP datagrams"| S["Actual Go relay, clean or impaired"]
   B <-->|"Real UDP datagrams"| S
-  R --> C["Compare frame count, state CRC, pixel CRC, PCM CRC and stereo-frame count"]
+  R --> C["Compare frames, state and pixels; accurate also compares PCM"]
   A --> C
   B --> C
 ```
 
 ## Build prerequisites
 
-Use a build with generated Land Maker main-CPU blocks. Native sound requires generated sound blocks too. The oracle accepts only `landmakrj`. It disables main-CPU fallback and uses `GameVideoMode::Game`.
+Use a build with generated Land Maker main-CPU blocks. Accurate/native sound requires generated sound blocks too; HLE does not execute them. The oracle accepts only `landmakrj`. It disables main-CPU fallback and uses `GameVideoMode::Game`.
 
 From the repository root, build the required targets:
 
@@ -40,9 +42,9 @@ Set the ROM path for your checkout. ROMs and generated output are local build in
 
 | Mode | Purpose |
 | --- | --- |
-| `snapshot` | Save, replay, restore and replay again. Check outputs and save/load allocation counts. Also report performance. `snapshot-proof` is an accepted alias. |
-| `reference` | Run both actual controller streams on one machine, with the requested input delay. This is the default mode. |
-| `client` | Join the real relay. Run one assigned player with `Transport` and `Rollback`. Wait for the server completion verdict. |
+| `snapshot` | Accurate only: save, replay, restore and replay again. Check outputs and save/load allocation counts. Also report performance. `snapshot-proof` is an accepted alias. |
+| `reference` | Accurate or HLE: run both actual controller streams on one machine, with the requested input delay. This is the default mode. |
+| `client` | Accurate/native or HLE: join the real relay. Run one assigned player with `Transport` and `Rollback`. Wait for the server completion verdict. |
 
 The tool returns 0 on success. A caught failure prints `ORACLE ERROR: ...` on stderr and returns 1.
 
@@ -60,7 +62,9 @@ The tool returns 0 on success. A caught failure prints `ORACLE ERROR: ...` on st
 | `--player 1\|2` | 0 | Required in client mode |
 | `--delay N` | 2 | Reference and client input delay |
 | `--window N` | 16 | Client rollback window; constructor accepts 16 to 32 |
-| `--sound-driver MODE` | `native` | `native`, `oracle`; `all` runs both in snapshot mode |
+| `--audio-backend MODE` | `accurate` | `accurate` or `hle`; HLE supports reference/client, not snapshot proof, and rejects explicit `--sound-driver` |
+| `--sound-driver MODE` | `native` | Accurate only: `native`, `oracle`; `all` runs both in snapshot mode |
+| `--wav FILE` | none | Optional client output capture: confirmed accurate PCM or speculative HLE PCM |
 | `--schedule MODE` | `versus` | `single` disables player 2 activity; other strings select versus in the current implementation |
 | `--video-scale N`, `--video-border N` | 1, 0 | Configure GameVideo; useful for snapshot coverage, not supported player netplay modes |
 | `--surface FILE.bmp` | none | Final native framebuffer BMP; `--capture-surface` is an alias |
@@ -77,7 +81,7 @@ The tool returns 0 on success. A caught failure prints `ORACLE ERROR: ...` on st
 
 ## Snapshot proof
 
-Run the native and interpreted-sound snapshot proof:
+Run the accurate backend's native and interpreted-sound snapshot proof. HLE rejects this mode because its worker is not restored:
 
 ```sh
 build/f3rt-netplay-oracle --mode snapshot --frames 6000 --seed 1 --sound-driver all
@@ -118,7 +122,7 @@ Step measurements start at frame 1200. They include machine execution, rendering
 
 At simulation frame `f`, the reference uses neutral inputs if `f < delay`. Otherwise it applies `schedule.step(f - delay)`. A client samples at frame `f` and assigns the word to `f + delay`. These two rules produce the same applied stream.
 
-Clients stop stepping exactly at the target. They continue receiving until the target is confirmed. They drain all confirmed audio, compute the final state CRC and call `Transport::finish`. They pump until the retained server verdict matches that frame and CRC. This prevents an apparent pass that exits with speculative state.
+Clients stop stepping exactly at the target. They continue receiving until the target is confirmed. Accurate drains all confirmed audio; HLE drains its independent speculative stream. Clients compute the final canonical state CRC and call `Transport::finish`. They pump until the retained server verdict matches that frame and CRC. This prevents an apparent pass that exits with speculative game state.
 
 The client timeout is not a whole-match duration limit. In the simulation loop it measures time since progress. The tool also has handshake and finish watchdogs. Transport has its own 10-second no-server-reply, 120-second room-wait and 8-second peer-silence limits.
 
@@ -152,6 +156,8 @@ python3 tools/run_netplay_oracle.py --suite impaired --frames 20000 --seeds 1 2 
 
 The runner launches the actual Go server and two separate C++ client processes. It picks a free loopback UDP port and waits for `Relay Server listening on` in the server output. It does not replace the network with an in-process mock.
 
+The Python runner below exercises the default accurate backend; it does not expose an HLE backend option. Use the C++ reference/client modes for HLE scenarios. Optional client WAV captures are listening/inspection artifacts, not HLE peer-parity inputs.
+
 | Runner option | Default |
 | --- | --- |
 | `--oracle-bin` | `build/f3rt-netplay-oracle` |
@@ -169,7 +175,7 @@ Snapshot runs use `min(frames, 6000)` and interval 1000. `--sound-driver all` ru
 
 ### Acceptance rules
 
-The runner parses fields from `SUCCESS` lines. Baseline and impaired matches require:
+The runner parses fields from `SUCCESS` lines. Its accurate-backend baseline and impaired matches require:
 
 1. Both client processes exit successfully.
 2. The reference and both clients report exactly the requested frame count.
@@ -197,7 +203,7 @@ Event rollback attribution uses corrections in `[event_at + delay, event_at + de
 
 The following is recorded in [STATUS.md](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md). It is historical evidence, not a result from reading this page.
 
-- Eight impaired seeds × 20,000 frames match reference state, framebuffer, PCM CRC and sample count. The seeds are 1, 2, 3, 5, 8, 13, 21 and 34. Runs record 877 to 988 rollbacks per client, including depth 16.
+- With the accurate backend, eight impaired seeds × 20,000 frames match reference state, framebuffer, PCM CRC and sample count. The seeds are 1, 2, 3, 5, 8, 13, 21 and 34. Runs record 877 to 988 rollbacks per client, including depth 16.
 - Four clean-network seeds × 20,000 frames pass.
 - 240 varied snapshot checks cover four seeds, both sound drivers, N = 0, 1000, 2000, 3000, 4000, 5000 and all five default depths.
 - 120 dense snapshot/performance checks cover both sound drivers every 100 frames through 5900. Fifteen expanded-presentation checks cover scale 2, border 48 through frame 2200.
@@ -220,7 +226,7 @@ The final impaired results are recorded in [docs/NETPLAY.md](https://github.com/
 | 21 | `7d7d98da` | `0b76f433` |
 | 34 | `b6288683` | `8fde76c0` |
 
-These values belong to that recorded build and configuration. A compatible source change can intentionally change a result and the build fingerprint. Keep the three-way parity contract; do not treat historical CRCs as universal ROM truth.
+These values belong to that recorded accurate-backend build and configuration. A compatible source change can intentionally change a result and the build fingerprint. Keep the three-way state/pixel parity contract and, for accurate, PCM parity; do not treat historical CRCs as universal ROM truth or require HLE PCM equality.
 
 
 ## Verification limits

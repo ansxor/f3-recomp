@@ -8,6 +8,7 @@
 #include "third_party/audio/mb87078.hpp"
 #include "third_party/audio/mc68681.hpp"
 #include "state_io.hpp"
+#include "hle_audio.hpp"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,7 @@ struct Audio::Impl {
     std::vector<uint8_t> m_work_ram;
     std::vector<uint8_t> m_sound_rom;
     std::vector<uint16_t> m_sample_words;
+    std::unique_ptr<hle::AudioEngine> m_hle;
     uint32_t m_bank_mask;
 
     uint8_t *m_shared_ram;
@@ -596,7 +598,38 @@ Audio::~Audio() = default;
 Audio::Audio(Audio &&) noexcept = default;
 Audio &Audio::operator=(Audio &&) noexcept = default;
 
+void Audio::set_backend(Backend backend) {
+    if (clock_ticks() || !is_reset())
+        throw std::runtime_error("Select audio backend before machine execution");
+    if (backend == Backend::Hle && !m_impl->m_hle)
+        m_impl->m_hle = std::make_unique<hle::AudioEngine>(
+            m_impl->m_sound_rom, m_impl->m_sample_words, m_impl->m_shared_ram);
+    else if (backend == Backend::Accurate) m_impl->m_hle.reset();
+}
+Audio::Backend Audio::backend() const { return m_impl->m_hle ? Backend::Hle : Backend::Accurate; }
+void Audio::shared_write(uint32_t offset, uint64_t frame) {
+    if (m_impl->m_hle) m_impl->m_hle->shared_write(offset, frame);
+}
+void Audio::begin_frame(uint64_t frame) {
+    if (m_impl->m_hle) m_impl->m_hle->begin_frame(frame);
+}
+void Audio::finish_frame(uint64_t frame) {
+    if (m_impl->m_hle) m_impl->m_hle->finish_frame(frame);
+}
+void Audio::begin_rollback(uint64_t begin, uint64_t end) {
+    if (m_impl->m_hle) m_impl->m_hle->begin_rollback(begin, end);
+}
+void Audio::end_rollback() { if (m_impl->m_hle) m_impl->m_hle->end_rollback(); }
+Audio::HleStats Audio::hle_stats() const {
+    return m_impl->m_hle ? m_impl->m_hle->stats() : HleStats{};
+}
+void Audio::set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer) {
+    if (!m_impl->m_hle) throw std::logic_error("HLE observer requires HLE backend");
+    m_impl->m_hle->set_observer(std::move(observer));
+}
+
 void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
+    if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");
     m_impl->m_sound_rom.assign(sound_rom.begin(), sound_rom.end());
     if (m_impl->m_sound_rom.size() >= 8) {
         std::memcpy(m_impl->m_work_ram.data(), m_impl->m_sound_rom.data(), 8);
@@ -604,6 +637,7 @@ void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
 }
 
 void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
+    if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");
     size_t word_count = sample_rom.size() / 2;
     m_impl->m_sample_words.resize(word_count);
     for (size_t i = 0; i < word_count; i++) {
@@ -614,6 +648,7 @@ void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
 }
 
 void Audio::set_shared_ram(uint8_t *shared_ram, size_t size) {
+    if (m_impl->m_hle) throw std::logic_error("Configure shared RAM before selecting HLE audio");
     m_impl->m_shared_ram = shared_ram;
     m_impl->m_shared_ram_size = size;
 }
@@ -623,17 +658,20 @@ void Audio::set_cpu_runner(std::function<int(int cycles)> runner) {
 }
 
 void Audio::set_reset(bool asserted) {
+    if (m_impl->m_hle) { m_impl->m_hle->set_reset(asserted); return; }
     m_impl->set_reset(asserted);
 }
 
 void Audio::reset_board() {
+    if (m_impl->m_hle) { m_impl->m_hle->set_reset(true); return; }
     m_impl->reset_board();
 }
 
-uint64_t Audio::clock_ticks() const { return m_impl->m_clock_ticks; }
-uint64_t Audio::generated_frames() const { return m_impl->m_generated_frames; }
+uint64_t Audio::clock_ticks() const { return m_impl->m_hle ? m_impl->m_hle->clock() : m_impl->m_clock_ticks; }
+uint64_t Audio::generated_frames() const { return m_impl->m_hle ? m_impl->m_hle->generated() : m_impl->m_generated_frames; }
 
 bool Audio::is_reset() const {
+    if (m_impl->m_hle) return m_impl->m_hle->is_reset();
     return m_impl->m_reset_asserted;
 }
 
@@ -685,24 +723,29 @@ uint8_t Audio::irq_ack(int level) {
 }
 
 void Audio::advance(uint32_t main_cycles) {
+    if (m_impl->m_hle) { m_impl->m_hle->advance(main_cycles); return; }
     m_impl->advance(main_cycles);
 }
 
 uint32_t Audio::sample_rate() const {
+    if (m_impl->m_hle) return hle::sample_rate;
     return m_impl->m_es5505.sample_rate();
 }
 
 void Audio::set_gain_model(GainModel model) {
+    if (m_impl->m_hle) { m_impl->m_hle->set_gain_model(model); return; }
     m_impl->m_gain_model = model;
     m_impl->update_gains();
 }
 
 size_t Audio::available_frames() const {
+    if (m_impl->m_hle) return m_impl->m_hle->available();
     std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
     return m_impl->m_rb_count;
 }
 
 size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
+    if (m_impl->m_hle) return m_impl->m_hle->render(interleaved_stereo, max_frames);
     std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
     size_t frames = std::min(max_frames, m_impl->m_rb_count);
     for (size_t i = 0; i < frames; i++) {
@@ -718,6 +761,7 @@ size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
 }
 
 size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
+    if (m_impl->m_hle) return m_impl->m_hle->render(interleaved_stereo, max_frames);
     std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
     size_t frames = std::min(max_frames, m_impl->m_rb_count);
     for (size_t i = 0; i < frames; i++) {
@@ -730,10 +774,12 @@ size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
 }
 
 size_t Audio::state_size() const {
+    if (m_impl->m_hle) return hle::AudioEngine::state_bytes;
     return m_impl->state_size();
 }
 
 void Audio::save_state(std::span<uint8_t> dst) const {
+    if (m_impl->m_hle) { m_impl->m_hle->save(dst); return; }
     if (dst.size() != state_size()) {
         throw std::invalid_argument("Audio::save_state size mismatch");
     }
@@ -745,6 +791,7 @@ void Audio::save_state(std::span<uint8_t> dst) const {
 }
 
 void Audio::load_state(std::span<const uint8_t> src) {
+    if (m_impl->m_hle) { m_impl->m_hle->load(src); return; }
     if (src.size() != state_size()) {
         throw std::invalid_argument("Audio::load_state size mismatch");
     }

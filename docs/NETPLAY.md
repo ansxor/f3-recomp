@@ -1,6 +1,6 @@
 # Land Maker 1v1 rollback netplay
 
-Target: Japanese Land Maker 2.01J (`landmakrj`), strict statically recompiled main CPU and native sound driver. Netplay is opt-in. Offline defaults and the native 320×232 renderer are unchanged. This is a two-player input relay, not a server-side emulator, streaming service, or state-transfer protocol.
+Target: Japanese Land Maker 2.01J (`landmakrj`), strict statically recompiled main CPU and native sound driver by default. `--audio-backend hle` opts both peers into independent speculative HLE audio; see [HLE-AUDIO.md](HLE-AUDIO.md). Netplay is opt-in. Offline defaults and the native 320×232 renderer are unchanged. This is a two-player input relay, not a server-side emulator, streaming service, or state-transfer protocol.
 
 ## Build and play
 
@@ -61,13 +61,25 @@ Included:
 
 Excluded: immutable ROM/dispatch tables, pointers/callbacks, native-block/fallback/video diagnostic counters, trace sinks, SDL textures/audio queues, sockets and host clocks. Diagnostic counters intentionally count resimulation work; they are not machine state.
 
+With HLE selected, the sound CPU/device/PCM records above are replaced by
+deterministic main-side mailbox bookkeeping. The sequencer, voices, effects
+and output PCM remain on the worker and are not saved or restored. Renderer,
+main CPU, inputs, EEPROM and shared RAM retain the same snapshot contract.
+
 ## Rollback, audio and time
 
 `runtime/netplay.cpp` contains the SDL-independent core. Simulation frame `f` consumes one word per player; local sampling at `f` is assigned to `f + delay`. The initial delay frames are neutral and known. Missing remote words repeat the most recent used word. A changed late word marks the earliest dirty frame; synchronization reloads that frame's pre-step snapshot and resimulates through the previous frontier. A repeated equal word does not cause rollback. Conflicting actual inputs are errors.
 
 The confirmed frontier is exclusive: all frames below it have both actual inputs. Prediction never exceeds the configured window; an older-than-retained correction is an error, never a guessed recovery. A stalled peer therefore freezes at a bounded frontier and can resume without losing history. Input history is a fixed 1024-frame ring, separately tagged by absolute frame.
 
-Resimulation runs the real CPUs, renderers and sound devices. It does **not** publish SDL frames, WAV samples or external trace records a second time. Per-frame speculative PCM is retained and replaced during correction; only confirmed PCM enters the bounded host-output queue. This trades audio latency for exact output: no duplicated speculative sound or heuristic crossfade. A consumer must drain that queue; overflow is explicit. Finite runs stop simulation at the requested frame, wait for confirmation, exchange final CRCs and await the server's persistent completion verdict.
+With accurate audio, resimulation runs the real CPUs, renderers and sound devices. It does **not** publish SDL frames, WAV samples or external trace records a second time. Per-frame speculative PCM is retained and replaced during correction; only confirmed PCM enters the bounded host-output queue. This trades audio latency for exact output: no duplicated speculative sound or heuristic crossfade. A consumer must drain that queue; overflow is explicit. Finite runs stop simulation at the requested frame, wait for confirmation, exchange final CRCs and await the server's persistent completion verdict.
+
+With HLE audio, correction brackets main resimulation with command-ledger
+reconciliation. Missing speculative direct SFX fade over 5 ms; matching
+commands have two-frame leeway. Music and rendered PCM are never rewound.
+The host drains speculative audio rather than the accurate confirmation
+queue. HLE PCM may differ across peers; canonical game state must still
+match. The backend is part of the handshake settings.
 
 CRC32 covers the full canonical machine snapshot after every 60 confirmed frames. It excludes host output and diagnostics but includes device queues/state. Mismatch stops with frame/local/remote CRC diagnostics. Inputs and checksum delivery are independently acknowledged.
 
@@ -93,7 +105,7 @@ Types: 1 JoinReq, 2 JoinWait, 4 JoinReject, 5 MatchStart, 6 GameData, 7 Heartbea
 
 JoinReq payload: nonce `u64`, requested slot `u8` (0 auto, 1/2 player), delay `u8`, room length `u8`, zero-padded room `[32]`, identity `[72]`. MatchStart echoes nonce, gives slot and delay, two reserved bytes, and peer identity. The session ID is in the header. Retransmitted joins are idempotent; MatchStart verifies nonce and identity before the client leaves frame zero.
 
-Identity: seven `u32` ROM-region CRCs (main, sprites, sprite high planes, tiles, tile high planes, sound, samples), build SHA-256 `[32]`, settings `u32`, EEPROM CRC `u32`, initial-state CRC `u32`. Settings encode schema revision, native sound/GameVideo selection and delay. The build hash covers runtime/ABI/lifter/game configuration, generated main/sound C, compiler/platform and configured flags; it refreshes when source dependencies change. It is deliberately conservative: different builds are rejected rather than claimed cross-platform deterministic. The server distinguishes ROM, build, settings, EEPROM, initial-state and delay mismatches.
+Identity: seven `u32` ROM-region CRCs (main, sprites, sprite high planes, tiles, tile high planes, sound, samples), build SHA-256 `[32]`, settings `u32`, EEPROM CRC `u32`, initial-state CRC `u32`. Settings encode schema revision, native sound/GameVideo/HLE selection and delay. The build hash covers runtime/ABI/lifter/game configuration, generated main/sound C, compiler/platform and configured flags; it refreshes when source dependencies change. It is deliberately conservative: different builds are rejected rather than claimed cross-platform deterministic. The server distinguishes ROM, build, settings, EEPROM, initial-state and delay mismatches.
 
 GameData payload, in order:
 

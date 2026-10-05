@@ -8,7 +8,7 @@ The internals of the sound driver are in [Audio and sound CPU](/developer/runtim
 
 ## The idea: two drivers, one trace
 
-The sound CPU of the F3 board is a 68000 that runs a driver program from the sound ROM. The project has two ways to run this driver:
+With the default `--audio-backend accurate`, the sound CPU of the F3 board is a 68000 that runs a driver program from the sound ROM. The project has two ways to run this driver:
 
 | Name | Option | How it runs |
 | --- | --- | --- |
@@ -16,6 +16,8 @@ The sound CPU of the F3 board is a 68000 that runs a driver program from the sou
 | Native driver | `--sound-driver native` | C code made from the driver ROM by `tools/compile_sound.py` runs the driver. No interpreter is used. |
 
 Both drivers must make the same bus accesses at the same times. A **sound trace** records these accesses. If two traces are equal, the drivers are equal at the bus level. This is a stricter test than comparing the audio output.
+
+The frontend, gameplay harness, `f3rt-sound-extract` and `f3rt-netplay-oracle` also accept opt-in `--audio-backend hle`. HLE runs a direct ROM sequencer and PCM synthesizer at 48 kHz on its own non-rolled-back worker; it executes neither the sound CPU nor the ES chips. Explicit `--sound-driver` is rejected with HLE. The trace comparison below remains an accurate-driver check, not an HLE parity claim.
 
 ```mermaid
 flowchart LR
@@ -74,7 +76,7 @@ A trace holds ROM-derived data. Keep traces under the ignored folder `build/`. D
 
 ## Record a trace
 
-The gameplay harness, the `landmakr` and `f3rt-run` programs and `f3rt-sound-extract` accept `--sound-trace FILE`. The frontend refuses `--sound-trace` together with netplay.
+The gameplay harness, the `landmakr` and `f3rt-run` programs and `f3rt-sound-extract` accept `--sound-trace FILE` with accurate audio. They reject sound tracing with HLE. The frontend also refuses `--sound-trace` together with netplay.
 
 ```sh
 build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver oracle \
@@ -194,11 +196,11 @@ build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
 
 ### How it works
 
-1. It creates the `Machine`. If you pass `--sound-driver native`, it attaches the native driver. It opens the trace and the WAV file.
-2. **Boot.** It runs the main CPU with the interpreter (`run_frame(false)`) for `--boot-frames` frames (default 900, about 15.3 seconds). The game starts the sound system and writes its own gain commands. If the sound CPU is still in reset after the boot, the program stops with an error.
+1. It creates the `Machine` and selects accurate audio (the default) or HLE. With accurate audio, `--sound-driver native` attaches the native driver; otherwise the oracle driver is used. HLE instead selects the ROM sequencer/PCM worker. It opens the requested backend-specific events and WAV file.
+2. **Boot.** It runs the main CPU with the interpreter (`run_frame(false)`) for `--boot-frames` frames (default 900, about 15.3 seconds). The game starts the sound system and writes its own gain commands. If the sound reset line is still asserted after boot, the program stops with an error.
 3. **Freeze.** It stops the main CPU. It runs the sound system until the command ring has no pending packet, within one second of main clock time. The time of this moment is the **event origin**. The program prints it.
 4. **Inject.** It advances only the audio side in slices of at most 1000 ticks. It writes each scheduled packet into the real ring buffer with `publish_packet()`: it copies the bytes, then writes the new doubled producer pointer to `0xc00480` and `0xc00481`. No hidden setup packet is added.
-5. **Drain and finish.** It renders audio at least every 16000 ticks, writes the `End` record and prints a `SUCCESS` line with `packets`, `audio_frames`, `audio_peak`, `nonzero_samples` and `sound_pc`.
+5. **Drain and finish.** It renders audio at least every 16000 ticks, writes the `End` record if an accurate trace is open, and prints a `SUCCESS` line with `packets`, `audio_frames`, `audio_peak`, `nonzero_samples` and `sound_pc`.
 
 Errors stop the run: a packet that does not fit in the ring, a packet time at or after `--seconds`, a malformed hex string, and a sound CPU that is still in reset.
 
@@ -212,10 +214,12 @@ Errors stop the run: a packet that does not fit in the ring, a packet time at or
 | `--at SECONDS:HEX` | none | Inject a packet at a time after the event origin. |
 | `--seconds N` | 5.0 | Length of the run after the event origin. |
 | `--boot-frames N` | 900 | Interpreted boot frames before the freeze. |
-| `--sound-trace FILE` | none | Write a trace from cold boot. |
+| `--audio-backend accurate\|hle` | `accurate` | Chip-accurate audio or the threaded HLE ROM sequencer/PCM synthesizer at 48 kHz. |
+| `--sound-trace FILE` | none | Write an accurate-audio bus trace from cold boot. Rejected with HLE. |
+| `--hle-events FILE` | none | Write HLE voice start/release/stop/parameter/cancel CSV. Requires HLE; not an F3SND2 trace. |
 | `--wav FILE` | none | Write the audio. |
 | `--wav-window full\|event` | `full` | `full` records from cold boot. `event` records only from the event origin. |
-| `--sound-driver oracle\|native` | `oracle` | Driver to use. |
+| `--sound-driver oracle\|native` | `oracle` | Accurate-audio driver to use. Explicit selection is rejected with HLE. |
 
 A packet is a hexadecimal string. The first byte is the total size of the packet. Example: `038108` has size 3, opcode `0x81` and parameter `0x08`. Packets with equal times keep the order of the arguments.
 
@@ -223,9 +227,19 @@ A packet is a hexadecimal string. The first byte is the total size of the packet
 The default 900 boot frames include the gain commands that the game writes at about 13.23 seconds. A smaller `--boot-frames` value can leave the startup attenuation in place and give very quiet output.
 :::
 
+For HLE extraction, omit the driver and sound trace options:
+
+```sh
+build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+  --audio-backend hle --packet 038108 --packet 04860874 --seconds 5 \
+  --wav-window event --hle-events build/music-hle.csv --wav build/music-hle.wav
+```
+
+The HLE CSV reports voice events, not sound-CPU bus accesses. Do not feed it to `decode_sound.py` or `compare_sound.py`. For rollback client capture, `f3rt-netplay-oracle --mode client --audio-backend hle --wav FILE` records speculative worker output. HLE snapshot mode is rejected: rolled-back PCM equality is an accurate-only proof.
+
 ### Verification use
 
-Run the same packets with both drivers. Compare the traces with `compare_sound.py` and the WAV files with `cmp`.
+With accurate audio, run the same packets with both drivers. Compare the traces with `compare_sound.py` and the WAV files with `cmp`.
 
 ```sh
 for d in oracle native; do

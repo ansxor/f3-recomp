@@ -9,7 +9,8 @@ class Machine;
 class SoundTrace {
 public:
     enum Kind : uint8_t { MainWrite=1, SoundRead=2, SoundWrite=3, Reset=4, End=5,
-                          VoiceContext=6, RamSnapshot=7, NoteContext=8, DirectNote=9, NoteEvent=10 };
+                          VoiceContext=6, RamSnapshot=7, NoteContext=8, DirectNote=9, NoteEvent=10,
+                          NoteRelease=11 };
     explicit SoundTrace(const std::filesystem::path &path);
     void record(const Machine &machine, Kind kind, uint32_t pc, uint32_t address,
                 uint32_t value, uint8_t width);

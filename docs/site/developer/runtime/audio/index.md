@@ -6,6 +6,12 @@ The sound CPU reads those commands and programs the devices. `f3rt::Audio` owns 
 
 The sound CPU has two backends: the interpreted oracle and the statically recompiled native driver.
 
+These device pages describe the default `--audio-backend accurate` path.
+Opt-in `--audio-backend hle` bypasses sound CPU/device execution and runs
+ROM-data sequencing, sample mixing and approximate effects on a non-rollback
+48 kHz thread. See [the sound guide](/guide/sound#opt-in-hle-audio) and
+[HLE implementation evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/HLE-AUDIO.md).
+
 Sources: [audio.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
 
 ## Words used on these pages

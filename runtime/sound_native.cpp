@@ -115,6 +115,10 @@ void SoundNative::trace_sound(uint32_t address, uint32_t value, uint8_t width, b
         address == ((m_cpu.a[1] + 0x24u) & 0xffffffu))
         m_machine.sound_trace->note_context(m_machine, pc,
             m_cpu.a[5], m_cpu.a[1], m_cpu.a[6], m_cpu.a[4]);
+    if (write && width == 2 && pc == 0xc141d6 &&
+        address == ((m_cpu.a[5] + 2u) & 0xffffffu))
+        m_machine.sound_trace->record(m_machine, SoundTrace::NoteRelease,
+            pc, m_cpu.a[5] & 0xffffu, value, width);
     if (write && width == 2 && pc == 0xc17632 &&
         address == ((m_cpu.a[4] + 0xau) & 0xffffffu))
         m_machine.sound_trace->voice_context(m_machine, pc, m_cpu.a[4]);

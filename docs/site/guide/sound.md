@@ -14,7 +14,7 @@ The F3 board has a separate sound computer. It has these parts:
 
 The main CPU sends commands to the sound CPU through a mailbox in shared memory. The sound driver reads the commands and programs the ES5505 voices.
 
-The runtime emulates the chips. The runtime has two ways to run the sound driver:
+The default `--audio-backend accurate` emulates the chips. It has two ways to run the sound driver:
 
 | Driver | Name in the option | What it is |
 | --- | --- | --- |
@@ -34,6 +34,20 @@ flowchart LR
     A --> SDL["SDL3 audio"]
     A --> WAV["WAV file (optional)"]
 ```
+
+## Opt-in HLE audio
+
+`--audio-backend hle` selects a separate 48 kHz audio thread. It decodes the
+Land Maker music/instrument data and plays sample ROM directly; it does not
+execute either sound CPU implementation or the ES5505/ES5510 programs.
+Effects and modern filter/envelope ramps approximate the accurate output.
+Do not combine it with `--sound-driver` or `--sound-trace`.
+
+In netplay, both peers must opt in. HLE audio is never rewound: matching
+commands have two-frame leeway and missing speculative SFX fade over 5 ms.
+Music follows new commands without unplaying previous notes. Accurate audio
+remains the default and the comparison oracle.
+See [HLE evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/HLE-AUDIO.md).
 
 ## Choose the sound driver
 
@@ -133,6 +147,8 @@ build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
 | `--wav FILE` | none | Write a WAV file. |
 | `--wav-window full\|event` | `full` | `full` records from cold boot. `event` records from the event time. |
 | `--sound-driver oracle\|native` | `oracle` | Driver to use. |
+| `--audio-backend accurate\|hle` | `accurate` | Choose board emulation or the independent HLE engine. |
+| `--hle-events FILE` | none | HLE voice-event CSV; requires HLE. |
 
 A packet is a hex string. The first byte is the total packet size, including the size byte and the opcode byte. For example, `038001` has size 3, opcode `0x80` and parameter `0x01`. The program adds no hidden setup packets.
 

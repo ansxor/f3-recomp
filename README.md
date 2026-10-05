@@ -57,6 +57,9 @@ instruction. `--allow-fallback` explicitly opts into diagnostic interpretation;
 that mode does **not** satisfy native-game acceptance. The separate `f3rt-run`
 and `f3rt-replay` targets are test aids. `landmakr` defaults to the native
 recompiled sound driver; `--sound-driver oracle` selects its interpreted reference.
+`--audio-backend hle` opts into a separate 48 kHz sequencer/sample mixer without
+executing the sound CPU or ES5505/ES5510 programs. Accurate audio remains the
+default. HLE effects and ramps are approximations; see [docs/HLE-AUDIO.md](docs/HLE-AUDIO.md).
 
 Controls: **5/6** coin, **1/2** start, **arrows** direction, **Z/X/C** buttons,
 **F1** service, **F2** test, **Escape** quit. `--eeprom build/landmakr.nv`
@@ -120,8 +123,10 @@ are rejected. The title shows session state, RTT and rollback depth.
 Full usage, versus entry, protocol/state inventory, exact-reference oracle,
 impairment tests and measured rollback limits: [docs/NETPLAY.md](docs/NETPLAY.md).
 The default history retains 16 rollback frames, not a promise that replaying
-all 16 fits a 60 Hz display interval. Confirmed-only audio avoids duplicated
-speculative output at the cost of additional audio latency.
+all 16 fits a 60 Hz display interval. Default accurate audio publishes only
+confirmed PCM. Opt-in HLE instead reconciles speculative commands and fades
+missing SFX without rewinding its audio thread. Both peers must select the
+same backend.
 
 ### Game-data video and presentation
 
@@ -249,6 +254,13 @@ earlier `--boot-frames` values can retain startup attenuation. No hidden setup
 packets are injected. Full traces retain boot; `--wav-window event` trims only
 the WAV. See [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md) for SFX, timing, ROM
 evidence and non-exhaustive native-mode limits.
+
+For HLE extraction, replace `--sound-driver native` with `--audio-backend hle`
+and replace `--sound-trace` with `--hle-events build/events.csv`. The latter
+records voice starts/releases/stops, pitch, volume, sample intervals and
+rollback cancellation rather than CPU bus activity. ROM-data decoders are
+`tools/hle_sequence.py` and `tools/hle_instruments.py`; their outputs also
+belong under ignored `build/`.
 
 
 

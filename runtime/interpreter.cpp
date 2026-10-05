@@ -41,6 +41,10 @@ void trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
         active_machine->sound_trace->note_context(*active_machine, pc,
             m68k_get_reg(nullptr,M68K_REG_A5),m68k_get_reg(nullptr,M68K_REG_A1),
             m68k_get_reg(nullptr,M68K_REG_A6),m68k_get_reg(nullptr,M68K_REG_A4));
+    if (write && width==2 && pc==0xc141d6 &&
+        address==((m68k_get_reg(nullptr,M68K_REG_A5)+2u)&0xffffffu))
+        active_machine->sound_trace->record(*active_machine, f3rt::SoundTrace::NoteRelease,
+            pc,m68k_get_reg(nullptr,M68K_REG_A5)&0xffffu,value,width);
     // PPC can name the interrupted instruction during IRQ stack writes.
     if (write && width==2 &&
         (((pc==0xc17e62 || pc==0xc17806) && address==0x20001e) ||
