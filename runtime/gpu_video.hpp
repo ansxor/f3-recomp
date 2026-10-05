@@ -1,7 +1,9 @@
 #pragma once
 #include "gpu_interp.hpp"
+#include "gpu_motion.hpp"
 #include "video_scale.hpp"
 #include <SDL3/SDL.h>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -40,6 +42,33 @@ public:
     // explicitly true. Optional output receives width*height ARGB8888 pixels.
     void draw(const GpuScene &scene, std::span<uint32_t> output = {}, unsigned layer_mask = 511,
               bool process_diagnostic = false);
+    // Explicit opt-in; completed emulated frames are captured, never draws.
+    void capture_motion(const GpuScene &scene, uint64_t frame);
+    void reset_motion();
+    void draw_motion(const GpuScene &scene, float alpha, std::span<uint32_t> output = {},
+                     unsigned layer_mask = 511, bool process_diagnostic = false);
+    const MotionInterpolationStats &last_motion() const;
+    // Pace before testing the native-frame deadline so the selected pair is
+    // current at this display tick. Next presenting draw consumes this wait.
+    // No-op without active native motion pacing; timed draws also self-pace.
+    void pace_motion();
+    // Live alpha is sampled after display pacing and swapchain acquisition.
+    void draw_motion_timed(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
+                           std::chrono::nanoseconds period, std::span<uint32_t> output = {},
+                           unsigned layer_mask = 511, bool process_diagnostic = false);
+    // Diagnostic single-window comparison: left native/current, right temporal.
+    // Capture each changed input scene first; the native pane is cached until
+    // capture_motion, reset_motion, scale or postprocess changes.
+    // Optional one-shot PNG of the full-window composition submitted to the
+    // drawable, including overlay. Null adds no readback/allocation/fence wait.
+    void draw_motion_comparison_timed(const GpuScene &scene,
+                                     std::chrono::steady_clock::time_point frame_start,
+                                     std::chrono::nanoseconds period, const char *capture_path = nullptr);
+    // Accepted non-null swapchain submission in the last draw, not scanout.
+    bool last_presented() const;
+    double display_hz() const; // SDL current display mode, not observed cadence.
+    double display_callback_hz() const; // Observed macOS vsync callback cadence.
+    double requested_display_hz() const; // Best-effort display-link request.
     // Saves the last rendered game image, including active postprocessing, but
     // excluding the crisp swapchain overlay. A preset/scale change needs a draw.
     void save_surface(const char *path);

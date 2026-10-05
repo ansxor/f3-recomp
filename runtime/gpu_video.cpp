@@ -1,5 +1,8 @@
 #include "gpu_video.hpp"
 #include "video_shaders.hpp"
+#ifdef __APPLE__
+#include "gpu_pacing_macos.hpp"
+#endif
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -28,6 +31,21 @@ struct Command {
         }
     }
     SDL_GPUCommandBuffer *take() { auto *result = value; value = nullptr; return result; }
+};
+struct WindowCapture {
+    SDL_GPUDevice *device;
+    SDL_GPUTexture *texture = nullptr;
+    SDL_GPUTransferBuffer *download = nullptr;
+    SDL_GPUFence *fence = nullptr;
+    bool mapped = false;
+    SDL_PixelFormat pixel_format = SDL_PIXELFORMAT_UNKNOWN;
+    explicit WindowCapture(SDL_GPUDevice *value) : device(value) {}
+    ~WindowCapture() {
+        if (mapped) SDL_UnmapGPUTransferBuffer(device, download);
+        if (fence) SDL_ReleaseGPUFence(device, fence);
+        if (download) SDL_ReleaseGPUTransferBuffer(device, download);
+        if (texture) SDL_ReleaseGPUTexture(device, texture);
+    }
 };
 constexpr Uint32 asset_bytes = 32768 * 256;
 constexpr Uint32 scene_bytes = GpuScene::word_count * sizeof(uint32_t);
@@ -119,6 +137,11 @@ struct GpuVideo::Impl {
     SDL_Window *window = nullptr;
     bool claimed = false, linear = false, rendered = false;
     bool vsync = true;
+    bool last_presented = false;
+    bool motion_pace_prepared = false;
+#ifdef __APPLE__
+    void *motion_pacing = nullptr;
+#endif
     GpuVideo::Overlay overlay = nullptr;
     void *overlay_userdata = nullptr;
     GameVideoOptions options{};
@@ -126,6 +149,8 @@ struct GpuVideo::Impl {
     VideoInterpolation interpolation = VideoInterpolation::Off;
     InterpolationFields fields = InterpolationFields::Geometry;
     InterpolationStats interpolation_stats{};
+    std::unique_ptr<GpuMotionHistory> motion;
+    MotionInterpolationStats motion_stats{};
     std::array<LayerInterpolationStats, 4> logged_layers{};
     InterpolationReason logged_reason = InterpolationReason::Off;
     bool have_interpolation_log = false;
@@ -139,10 +164,15 @@ struct GpuVideo::Impl {
     Postprocess postprocess = Postprocess::Off;
     SDL_GPUGraphicsPipeline *post_pipeline = nullptr;
     SDL_GPUTexture *post_surface = nullptr;
+    SDL_GPUTexture *comparison_native = nullptr;
+    bool comparison_native_valid = false;
     bool rendered_post = false;
     Uint64 post_start = 0;
 
     ~Impl() {
+#ifdef __APPLE__
+        destroy_macos_motion_pacing(motion_pacing);
+#endif
         if (!device) return;
         SDL_WaitForGPUIdle(device);
         if (sprite_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, sprite_pipeline);
@@ -153,6 +183,7 @@ struct GpuVideo::Impl {
         if (sprite_plane) SDL_ReleaseGPUTexture(device, sprite_plane);
         if (surface) SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
+        if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
         for (auto *buffer : {scene_buffer, pf_assets, sp_assets, native_buffer})
             if (buffer) SDL_ReleaseGPUBuffer(device, buffer);
         if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
@@ -357,6 +388,9 @@ struct GpuVideo::Impl {
         SDL_ReleaseGPUTexture(device, sprite_plane);
         SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
+        if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
+        comparison_native = nullptr;
+        comparison_native_valid = false;
         if (download) SDL_ReleaseGPUTransferBuffer(device, download);
         sprite_plane = next_plane; surface = next_surface; download = next_download;
         post_surface = next_post;
@@ -405,14 +439,54 @@ struct GpuVideo::Impl {
         std::cout << '\n';
         logged_reason = stats.reason; logged_layers = stats.layers; have_interpolation_log = true;
     }
-    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
+    void draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic,
+              bool temporal = false, float alpha = 1.0f,
+              const std::chrono::steady_clock::time_point *frame_start = nullptr,
+              std::chrono::nanoseconds period = {}, bool no_present = false, bool comparison = false,
+              const char *capture_path = nullptr) {
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
         if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
+        [[maybe_unused]] const bool pace_prepared = !no_present && motion_pace_prepared;
+        if (!no_present) motion_pace_prepared = false;
+        if (comparison && !comparison_native_valid) {
+            // Cache only the current canonical scene, never temporally modified
+            // words. This offscreen pass does not acquire or pace a swapchain.
+            draw(scene, {}, layer_mask, process_diagnostic, false, 1.0f, nullptr, {}, true);
+            if (!comparison_native)
+                comparison_native = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
+            Command cache(device);
+            SDL_GPUBlitInfo blit{};
+            blit.source = {rendered_post ? post_surface : surface, 0, 0, 0, 0, options.width(), options.height()};
+            blit.destination = {comparison_native, 0, 0, 0, 0, options.width(), options.height()};
+            blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+            blit.filter = SDL_GPU_FILTER_NEAREST;
+            SDL_BlitGPUTexture(cache.value, &blit);
+            if (!SDL_SubmitGPUCommandBuffer(cache.take())) fail("Submit native comparison cache");
+            comparison_native_valid = true;
+        }
+        last_presented = false;
+        Command command(device);
+        SDL_GPUTexture *swapchain = nullptr;
+        Uint32 w = 0, h = 0;
+        if (frame_start) {
+#ifdef __APPLE__
+            if (vsync && !pace_prepared) wait_macos_motion_pacing(motion_pacing);
+#endif
+            if (window && !no_present) {
+                if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
+                    fail("Acquire timed GPU swapchain");
+                command.acquired_swapchain = swapchain != nullptr;
+            }
+            alpha = period.count() > 0 ? std::clamp(float(
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - *frame_start).count() /
+                std::chrono::duration<double>(period).count()), 0.0f, 1.0f) : 1.0f;
+        }
         const bool active_interpolation = interpolation != VideoInterpolation::Off && options.scale > 1;
         const Uint32 frame_scene_bytes = active_interpolation ? interpolation_scene_bytes : scene_bytes;
         auto *mapped = static_cast<uint8_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, true), "Map GPU frame upload"));
         if (scene.fallback) {
+            if (motion) motion->reset();
             std::memcpy(mapped, scene.native_pixels.data(), native_bytes);
             interpolation_stats = {};
             if (interpolation != VideoInterpolation::Off)
@@ -420,9 +494,14 @@ struct GpuVideo::Impl {
             for (auto &layer : interpolation_stats.layers) layer.reason = interpolation_stats.reason;
         } else {
             std::memcpy(mapped, scene.words.data(), scene_bytes);
+            if (temporal && motion)
+                motion_stats = motion->apply(scene, alpha, {reinterpret_cast<uint32_t *>(mapped), GpuScene::word_count});
             if (active_interpolation)
                 interpolation_stats = analyze_gpu_interpolation(scene, options, interpolation, fields,
-                    {reinterpret_cast<uint32_t *>(mapped), InterpolationLayout::word_count}, tile_pen_masks);
+                    {reinterpret_cast<uint32_t *>(mapped), InterpolationLayout::word_count}, tile_pen_masks,
+                    temporal && motion_stats.paired && motion_stats.alpha < 1.0f ?
+                        std::span<const uint32_t>{reinterpret_cast<uint32_t *>(mapped), GpuScene::word_count} :
+                        std::span<const uint32_t>{});
             else {
                 interpolation_stats = {};
                 if (interpolation != VideoInterpolation::Off) interpolation_stats.reason = InterpolationReason::NativeScale;
@@ -431,13 +510,14 @@ struct GpuVideo::Impl {
         }
         SDL_UnmapGPUTransferBuffer(device, upload);
         report_interpolation();
-        Command command(device);
         auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU frame copy");
         upload_buffer(copy, upload, scene.fallback ? native_buffer : scene_buffer, 0,
             scene.fallback ? native_bytes : frame_scene_bytes, true);
         SDL_EndGPUCopyPass(copy);
         GpuUniforms uniforms{options.scale, options.border, options.width(), options.height(), scene.sprite_count,
-                             scene.pen_mask, unsigned(scene.fallback), layer_mask};
+                             scene.pen_mask, unsigned(scene.fallback), layer_mask & 511u};
+        if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
+            uniforms.layer_mask |= motion_layer_mask;
         if (!scene.fallback) {
             SDL_PushGPUVertexUniformData(command.value, 0, &uniforms, sizeof(uniforms));
             auto *pass = render_pass(command.value, sprite_plane);
@@ -476,23 +556,80 @@ struct GpuVideo::Impl {
             present_surface = post_surface;
         }
         if (!output.empty()) queue_download(command.value, present_surface);
-        if (window) {
-            SDL_GPUTexture *swapchain = nullptr; Uint32 w = 0, h = 0;
-            if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h)) fail("Acquire GPU swapchain");
+        WindowCapture capture(device);
+        if (window && !no_present) {
+            if (!frame_start &&
+                !SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
+                fail("Acquire GPU swapchain");
             if (swapchain) {
                 command.acquired_swapchain = true;
-                const auto viewport = video_blit_for_window(scale_mode, options, w, h);
-                SDL_GPUBlitInfo blit{};
-                blit.source = {present_surface, 0, 0, viewport.source_x, viewport.source_y, viewport.source_width, viewport.source_height};
-                blit.destination = {swapchain, 0, 0, viewport.x, viewport.y, viewport.width, viewport.height};
-                blit.load_op = SDL_GPU_LOADOP_CLEAR; blit.clear_color = {0, 0, 0, 1};
-                blit.filter = linear && scale_mode != VideoScaleMode::AutoInteger ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
-                SDL_BlitGPUTexture(command.value, &blit);
-                if (overlay) overlay(overlay_userdata, command.value, swapchain, w, h);
+                SDL_GPUTexture *composition = swapchain;
+                if (capture_path) {
+                    const auto format = SDL_GetGPUSwapchainTextureFormat(device, window);
+                    if (format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM)
+                        capture.pixel_format = SDL_PIXELFORMAT_ARGB8888;
+                    else if (format == SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)
+                        capture.pixel_format = SDL_PIXELFORMAT_ABGR8888;
+                    else throw std::runtime_error("Window capture requires an 8-bit SDR swapchain");
+                    SDL_GPUTextureCreateInfo info{};
+                    info.type = SDL_GPU_TEXTURETYPE_2D;
+                    info.format = format;
+                    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+                    info.width = w; info.height = h; info.layer_count_or_depth = 1; info.num_levels = 1;
+                    capture.texture = checked(SDL_CreateGPUTexture(device, &info), "Create window capture composition");
+                    composition = capture.texture;
+                    const uint64_t bytes = uint64_t(w) * h * 4;
+                    if (bytes > UINT32_MAX) throw std::runtime_error("Window capture exceeds GPU transfer size");
+                    capture.download = transfer(Uint32(bytes), SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
+                }
+                const unsigned panes = comparison && w >= 2 ? 2 : 1;
+                for (unsigned pane = 0; pane < panes; ++pane) {
+                    const Uint32 offset = panes == 2 && pane == 1 ? w / 2 : 0;
+                    const Uint32 pane_width = panes == 1 ? w : (pane == 0 ? w / 2 : w - w / 2);
+                    const auto viewport = video_blit_for_window(scale_mode, options, pane_width, h);
+                    SDL_GPUBlitInfo blit{};
+                    blit.source = {panes == 2 && pane == 0 ? comparison_native : present_surface, 0, 0,
+                        viewport.source_x, viewport.source_y, viewport.source_width, viewport.source_height};
+                    blit.destination = {composition, 0, 0, offset + viewport.x, viewport.y, viewport.width, viewport.height};
+                    blit.load_op = pane == 0 ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+                    blit.clear_color = {0, 0, 0, 1};
+                    blit.filter = linear && scale_mode != VideoScaleMode::AutoInteger ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+                    SDL_BlitGPUTexture(command.value, &blit);
+                }
+                if (overlay) overlay(overlay_userdata, command.value, composition, w, h);
+                if (capture.texture) {
+                    // Download the exact full-window composition submitted to
+                    // the drawable. Do not assume the backend's swapchain
+                    // permits readback or reconfigure its native layer.
+                    SDL_GPUBlitInfo final_blit{};
+                    final_blit.source = {composition, 0, 0, 0, 0, w, h};
+                    final_blit.destination = {swapchain, 0, 0, 0, 0, w, h};
+                    final_blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+                    final_blit.filter = SDL_GPU_FILTER_NEAREST;
+                    SDL_BlitGPUTexture(command.value, &final_blit);
+                    auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin window capture download");
+                    SDL_GPUTextureRegion from{composition, 0, 0, 0, 0, 0, w, h, 1};
+                    SDL_GPUTextureTransferInfo to{capture.download, 0, w, h};
+                    SDL_DownloadFromGPUTexture(copy, &from, &to);
+                    SDL_EndGPUCopyPass(copy);
+                }
             }
         }
-        if (!output.empty()) finish_readback(command, output);
-        else if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU frame");
+        if (capture.texture) {
+            capture.fence = checked(SDL_SubmitGPUCommandBufferAndAcquireFence(command.take()), "Submit window capture");
+            last_presented = command.acquired_swapchain;
+            if (!SDL_WaitForGPUFences(device, true, &capture.fence, 1)) fail("Wait for window capture");
+            auto *pixels = checked(SDL_MapGPUTransferBuffer(device, capture.download, false), "Map window capture");
+            capture.mapped = true;
+            std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> image(
+                checked(SDL_CreateSurfaceFrom(int(w), int(h), capture.pixel_format, pixels, int(w * 4)),
+                        "Create window capture image"), SDL_DestroySurface);
+            if (!SDL_SavePNG(image.get(), capture_path)) fail("Save window capture PNG");
+        } else {
+            if (!output.empty()) finish_readback(command, output);
+            else if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU frame");
+            last_presented = command.acquired_swapchain;
+        }
         rendered = true;
         rendered_post = apply_post;
     }
@@ -516,6 +653,7 @@ SDL_GPUDevice *GpuVideo::device() const { return impl_->device; }
 void GpuVideo::set_linear(bool linear) { impl_->linear = linear; }
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
     impl_->set_postprocess(preset, path);
+    impl_->comparison_native_valid = false;
 }
 Postprocess GpuVideo::postprocess() const { return impl_->postprocess; }
 void GpuVideo::set_overlay(Overlay callback, void *userdata) {
@@ -524,6 +662,71 @@ void GpuVideo::set_overlay(Overlay callback, void *userdata) {
 }
 void GpuVideo::draw(const GpuScene &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
     impl_->draw(scene, output, layer_mask, process_diagnostic);
+}
+void GpuVideo::capture_motion(const GpuScene &scene, uint64_t frame) {
+    if (!impl_->motion) {
+        if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))
+            fail("Set temporal GPU queue depth");
+        impl_->motion = std::make_unique<GpuMotionHistory>();
+#ifdef __APPLE__
+        if (impl_->window && impl_->vsync)
+            impl_->motion_pacing = create_macos_motion_pacing(impl_->window);
+#endif
+    }
+    impl_->motion->capture(scene, frame);
+    impl_->comparison_native_valid = false;
+}
+void GpuVideo::reset_motion() {
+    if (impl_->motion) impl_->motion->reset();
+    impl_->motion_stats = {};
+    impl_->comparison_native_valid = false;
+    impl_->motion_pace_prepared = false;
+}
+const MotionInterpolationStats &GpuVideo::last_motion() const { return impl_->motion_stats; }
+void GpuVideo::pace_motion() {
+#ifdef __APPLE__
+    if (impl_->motion_pacing && impl_->vsync && !impl_->motion_pace_prepared) {
+        wait_macos_motion_pacing(impl_->motion_pacing);
+        impl_->motion_pace_prepared = true;
+    }
+#endif
+}
+void GpuVideo::draw_motion(const GpuScene &scene, float alpha, std::span<uint32_t> output,
+                           unsigned layer_mask, bool process_diagnostic) {
+    impl_->motion_stats = {};
+    impl_->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
+}
+void GpuVideo::draw_motion_timed(const GpuScene &scene, std::chrono::steady_clock::time_point frame_start,
+                                 std::chrono::nanoseconds period, std::span<uint32_t> output,
+                                 unsigned layer_mask, bool process_diagnostic) {
+    impl_->motion_stats = {};
+    impl_->draw(scene, output, layer_mask, process_diagnostic, true, 1.0f, &frame_start, period);
+}
+void GpuVideo::draw_motion_comparison_timed(const GpuScene &scene,
+                                           std::chrono::steady_clock::time_point frame_start,
+                                           std::chrono::nanoseconds period, const char *capture_path) {
+    impl_->motion_stats = {};
+    impl_->draw(scene, {}, 511, false, true, 1.0f, &frame_start, period, false, true, capture_path);
+}
+bool GpuVideo::last_presented() const { return impl_->last_presented; }
+double GpuVideo::display_hz() const {
+    if (!impl_->window) return 0;
+    const auto *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(impl_->window));
+    return mode ? mode->refresh_rate : 0;
+}
+double GpuVideo::display_callback_hz() const {
+#ifdef __APPLE__
+    return macos_motion_callback_hz(impl_->motion_pacing);
+#else
+    return 0;
+#endif
+}
+double GpuVideo::requested_display_hz() const {
+#ifdef __APPLE__
+    return macos_motion_requested_hz(impl_->motion_pacing);
+#else
+    return 0;
+#endif
 }
 void GpuVideo::save_surface(const char *path) {
     if (!impl_->rendered) throw std::runtime_error("No GPU surface has been drawn");

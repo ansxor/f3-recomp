@@ -62,6 +62,7 @@ After the pictures match at native size, you can add three options. All three ne
 | `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
 | `--video-interp I` | `off`, `linear` or `fit` | `off` | Opt-in GPU interpolation for recognized playfield line effects. |
 | `--video-interp-fields F` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Choose geometry smoothing, same-pen RGB palette blending, both or neither. |
+| `--motion-interp` | No argument | off | Experimental GPU temporal sprite/scroll interpolation at display refresh. |
 
 Example:
 
@@ -131,6 +132,50 @@ The program checks the values:
 | `--video-filter` other than the two names | `--video-filter must be nearest or linear` |
 | Scale or border with `--video fdp` | `Presentation enhancements require --video game or compare` |
 | Auto scaling with CPU backend | `--video-scale auto/auto-integer requires --video-backend gpu` |
+
+## Temporal motion interpolation
+
+```sh
+./build/landmakr --video-backend gpu --video-scale auto-integer --motion-interp
+```
+
+`--motion-interp` interpolates positions between consecutive emulated frames,
+not adjacent scanlines or finished images. GPU presentation can draw multiple
+times per native frame on a high-refresh display. It adds one native frame of
+positional latency; artwork, animation frames, palette and layer controls stay
+discrete. Scale 2–4 exposes subpixel motion better than native scale 1.
+
+Sprite matching follows tile/palette appearance groups and mutually unique
+closest positions, so count changes do not reject surviving sprites.
+Ambiguous identity ties, changed artwork, zoom/flip changes, movement over
+32 native pixels per axis and wraps still snap. Playfield/line and text scroll
+check their own layer controls; each axis can interpolate independently.
+State loads, rollback corrections, pause/resume and long stalls reset history.
+
+This experimental flag is GPU-only and CLI-only, default off. CPU/headless
+pixels, captures, replay state and netplay checksums remain native.
+`--unthrottled` presents current geometry rather than synthesizing intermediate
+timed frames. `--video-interp linear|fit` remains an independent spatial option
+and can be combined with it. See [design and measured limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/MOTION-INTERP.md).
+
+Every two seconds the console reports `MOTION` display mode/request/callback Hz,
+`drawable_submissions_s`, `interpolated_pct` and `moving_interpolated_pct`, plus
+candidate/rejection counts. macOS 14+ requests the window's maximum display
+rate and paces before choosing the native pair. Callback/submission rates are
+not physical scanout measurements. Static screens legitimately show little
+interpolation even with 120Hz callbacks.
+
+For a repeatable side-by-side test:
+
+```sh
+./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 --demo-seconds 30
+```
+
+Left: native-rate steps. Right: interpolated positions. Watch the purple floor
+and playfield edges pan; Escape closes the window. This deliberately applies
+steady render-only motion to a frozen real-ROM scene, not to emulation state.
+Optional `--dump-dir DIR` saves only app-owned comparison images.
+
 
 ## F1 shaders and live controls
 

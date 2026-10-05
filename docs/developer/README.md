@@ -14,6 +14,7 @@ they are not a support promise or a requirement to run the game.
 - [Opt-in HLE audio](HLE-AUDIO.md): ROM-data synthesis, non-rewound rollback policy, tolerance-based comparisons and known limits.
 - [Netplay usage and contracts](../NETPLAY.md): versus-only lifecycle and player workflow.
 - [ImGui/netplay implementation and evidence](IMGUI-NETPLAY.md): overlay, shaders, canonical host handoff, lifecycle campaigns and observed limits.
+- [Experimental motion interpolation](MOTION-INTERP.md): render-only GPU geometry history, presentation timing, snap rules and ROM verification.
 
 ## Measurement archive
 
