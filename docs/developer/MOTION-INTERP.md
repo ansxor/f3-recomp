@@ -186,7 +186,7 @@ or mosaic. Per-row line/column offsets use the same source-coordinate guards.
 Worktree `wt/motion-interp`, branch `motion-interp`, based on integration
 `6aae6f6`. Release build with AppleClang 21.0.0.21000101. Full-coverage native
 profile tiers; no slim mode and no CPU fallback opt-in. ROM directory:
-`/Users/darien/Workspace/f3-stuff/roms/landmakr`, validated as Japanese ROMs
+`/path/to/roms/landmakr`, validated as Japanese ROMs
 (the directory name is not a revision). Generated sound ROM CRC: `5a7e9117`.
 Generated main/sound code and all captures stay under ignored `build/`.
 
@@ -196,7 +196,7 @@ Run from the new worktree:
 PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages \
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DF3_ROM_DIR=/Users/darien/Workspace/f3-stuff/roms/landmakr
+  -DF3_ROM_DIR=/path/to/roms/landmakr
 cmake --build build --target landmakr f3rt-motion-regression f3rt-motion-check \
   f3rt-gpu-regression f3rt-netplay-oracle f3rt-check f3rt-state-check \
   f3rt-frontend-check f3rt-hle-check -j 8
@@ -319,7 +319,7 @@ build/f3rt-gpu-regression --frames 1800 --seed 5 --scale 3 --border 48 \
 
 go build -C netplay/server -o ../../build/netplay-server .
 python3 tools/run_netplay_oracle.py --suite impaired --seeds 5 --frames 4000 \
-  --sound-driver native --rom-dir /Users/darien/Workspace/f3-stuff/roms/landmakr \
+  --sound-driver native --rom-dir /path/to/roms/landmakr \
   --log-dir build/motion-evidence/netplay
 ```
 
