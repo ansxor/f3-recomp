@@ -19,6 +19,7 @@ Install these tools before you build.
 | Python | 3.11 or newer | Run the recompiler. It reads TOML with the standard `tomllib` module. |
 | Capstone | exactly 5.0.9 | Decode 68k instructions. It is pinned in `recomp/requirements.txt`. |
 | Go | 1.22 or newer | Build the relay server. Only needed for [online play](/guide/netplay). |
+| Shader tools | `glslangValidator` and `spirv-cross` | Required by the default GPU-enabled build; omit with `-DF3RT_GPU=OFF` for CPU-only presentation. |
 
 The netplay client uses POSIX sockets. The authors tested on macOS (Apple silicon). Other systems are untested.
 
@@ -92,7 +93,7 @@ An explicit `-DF3_PROFILE_TIERS=/path/to/profile` replaces the frozen corpus.
 
 
 ::: tip Use a Release build
-Use the `Release` build type. The authors measured only Release builds. Netplay also compares the build type between the two players.
+Use the `Release` build type for gameplay. Netplay compares the build type between players.
 :::
 
 ### What the build does
@@ -115,7 +116,7 @@ flowchart TD
 2. CMake runs `python3 tools/compile_sound.py`. The tool verifies the sound ROM and writes C into `build/generated/sound-landmakrj`.
 3. Ninja compiles the runtime library `f3rt`, the generated code and the frontend. It links them into `build/landmakr`.
 
-Generated C remains large: the measured combined build contains 175,404,686 bytes across main and sound sources. Its arm64 executable is 31,525,032 bytes. These are one Release build's measurements, not cross-platform size guarantees. Change `-j 4` to match your CPU.
+Generated C is large. Allow enough disk space and adjust `-j 4` to match your computer's memory and CPU. Historical size measurements are in the [combined build report](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/BINSIZE-COMBINED.md).
 
 The generated directories are in `build/`, which Git ignores. Do not commit them.
 
@@ -136,7 +137,7 @@ The program opens a window and starts the game. The game uses the ROM directory 
 Press `5` to insert a coin. Press `1` to start. The next page lists all keys: [Controls and options](/guide/running).
 
 ::: info The first seconds are quiet
-At the start the game shows its own boot sequence. In a 700-frame test run in the author's build, the audio peak was 0. The README of the repository says that the game sets its output gain at about 13.23 seconds. This is normal.
+The game runs its own boot sequence and sets output gain later in startup. Brief recordings can be silent; wait through startup before diagnosing missing audio.
 :::
 
 ## Check that the build works without a window

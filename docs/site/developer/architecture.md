@@ -14,6 +14,12 @@ The loaded main ROM region has 2 MiB of instructions and data.
 An interpreter decodes instructions while the game runs. f3-recomp generates C before execution.
 A C compiler turns that C into native code for the host computer. This method is **static recompilation**.
 
+The exercised configuration is Land Maker Japan 2.01J. Its fixed ROM layout and
+game-data hooks should not be read as universal F3 support. Video and sound devices
+follow MAME-derived reference models; CPU-path and output comparisons establish
+recorded software compatibility, not measured physical-chip correctness.
+Native sound translates CPU instructions and is distinct from HLE.
+
 The project copies the design of two N64 projects:
 
 | N64 project | Role there | Role here |
@@ -314,7 +320,7 @@ The project uses these reference paths:
 
 The oracles are not just test code. The `Interpreter` is part of the runtime and also acts as the fallback for an instruction with no native translation. The `Video` renderer is still the video output for frames that `GameVideo` cannot yet draw.
 
-`NOTES.md` gives the project's evidence order:
+`docs/developer/DECISIONS.md` gives the project's evidence order:
 game ROM behavior and observed MAME output, primary hardware sources, work-in-progress notes, then MAME source code.
 MAME output is the comparison target. It is not proof of physical hardware behavior.
 
@@ -420,7 +426,7 @@ The [Netplay overview](/developer/netplay/) and its sub-pages give the details.
 The ABI is the set of C declarations in `include/f3rt/cpu_abi.h`, plus the struct `f3_cpu`. The generated code and the runtime both depend on it.
 
 The **runtime owns the ABI**. The recompiler consumes it.
-The README requires a note in `docs/ABI-CHANGES.md` for an ABI change.
+The README requires a note in `docs/developer/ABI-CHANGES.md` for an ABI change.
 The current `F3RT_ABI_VERSION` is 3.
 The main recompiler adds this guard to generated C and `program.h`:
 

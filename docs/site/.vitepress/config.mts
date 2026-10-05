@@ -7,7 +7,7 @@ export default withMermaid(
   defineConfig({
     title: 'f3-recomp',
     description:
-      'Static recompilation and modern runtime for Taito F3 arcade games, starting with Land Maker.',
+      'Land Maker Japan static recompiler, SDL3 runtime and optional rollback netplay.',
     base: '/f3-recomp/',
     cleanUrls: true,
     lastUpdated: true,
@@ -22,14 +22,14 @@ export default withMermaid(
       sidebar: {
         '/guide/': [
           {
-            text: 'User Guide',
+            text: 'Guide',
             items: [
-              { text: 'What is f3-recomp?', link: '/guide/' },
+              { text: 'Overview and scope', link: '/guide/' },
               { text: 'Getting started', link: '/guide/getting-started' },
               { text: 'Controls and options', link: '/guide/running' },
               { text: 'Video and presentation', link: '/guide/video' },
               { text: 'Sound', link: '/guide/sound' },
-              { text: 'Online play (netplay)', link: '/guide/netplay' },
+              { text: 'Online play', link: '/guide/netplay' },
               { text: 'Troubleshooting', link: '/guide/troubleshooting' },
             ],
           },
@@ -39,8 +39,8 @@ export default withMermaid(
             text: 'Reference',
             items: [
               { text: 'Command-line reference', link: '/reference/cli' },
-              { text: 'Build options (CMake)', link: '/reference/build-options' },
-              { text: 'Per-game config (TOML)', link: '/reference/game-config' },
+              { text: 'Build options', link: '/reference/build-options' },
+              { text: 'Game configuration', link: '/reference/game-config' },
               { text: 'Generated files', link: '/reference/generated-files' },
               { text: 'Tools and scripts', link: '/reference/tools' },
             ],
@@ -52,6 +52,9 @@ export default withMermaid(
             items: [
               { text: 'Developer overview', link: '/developer/' },
               { text: 'Architecture', link: '/developer/architecture' },
+              { text: 'Porting and game-specific code', link: '/developer/porting' },
+              { text: 'Validation evidence', link: '/developer/evidence' },
+              { text: 'Historical user-doc examples', link: '/developer/user-doc-evidence' },
               { text: 'Repository tour', link: '/developer/repository' },
               { text: 'Build pipeline', link: '/developer/build-pipeline' },
               { text: 'Glossary', link: '/developer/glossary' },

@@ -80,7 +80,7 @@ These are reference scheduling costs. They are not a bus-cycle-accurate model of
 
 ## MAME corrections
 
-[Project notes](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) record corrections found through observed native/MAME comparisons.
+[Project notes](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) record corrections found through observed native/MAME comparisons.
 
 MOVEM store timing uses three cycles per register, not upstream Musashi's four. Load timing remains four.
 

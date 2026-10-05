@@ -12,7 +12,7 @@ MAME is an independent emulator of the Taito F3 board. The project uses it as a 
 - **RAM.** The video RAM, palette RAM, main RAM and shared RAM at known frames.
 - **Audio.** The sound-ROM bus writes and the final WAV that MAME produces.
 
-MAME is a reference, not the truth. The team ranks the evidence in this order: ROM behavior and observed output, primary hardware evidence, work-in-progress notes, and then emulator source. `NOTES.md` records each place where the project and MAME differ.
+MAME is a reference, not the truth. The team ranks the evidence in this order: ROM behavior and observed output, primary hardware evidence, work-in-progress notes, and then emulator source. `docs/developer/DECISIONS.md` records each place where the project and MAME differ.
 
 The scripts in `tools/mame/` do not contain ROM data. The captures do contain game data. Keep them under the ignored folder `captures/` or `build/`.
 

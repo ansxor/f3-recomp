@@ -6,6 +6,13 @@ The sound CPU reads those commands and programs the devices. `f3rt::Audio` owns 
 
 The sound CPU has two backends: the interpreted oracle and the statically recompiled native driver.
 
+Both paths execute the sound ROM against MAME-derived device models. Native sound
+is static CPU translation, not HLE. Oracle/native trace or WAV equality establishes
+agreement between those paths on recorded inputs, not equality with MAME audio or
+physical sound-board output. The registers, mixing, and clocks below describe the
+implementation; see [audio comparison](/developer/testing/audio-compare) for measured
+compatibility and remaining waveform differences.
+
 Sources: [audio.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
 
 ## Words used on these pages

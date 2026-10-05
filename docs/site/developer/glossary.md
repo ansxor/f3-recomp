@@ -100,7 +100,7 @@ It does not classify every decoder rejection as illegal.
 
 **fallback** — See *CPU fallback* and *video fallback*.
 
-**FDP (TC0630FDP)** — The F3 video chip. It draws four tile playfields, a text layer and sprites. The class `Video` (in `runtime/video.cpp`) is a software model of it. See [FDP renderer](/developer/runtime/video/fdp).
+**FDP (TC0630FDP)** — The F3 video chip. It draws four tile playfields, a text layer and sprites. `Video` (in `runtime/video.cpp`) is a MAME-derived software model; internal parity is not physical-chip verification. See [FDP renderer](/developer/runtime/video/fdp).
 
 **frame advantage** — In netplay, the local simulated frame minus the peer's last reported frame. `Transport::frame_advantage()` returns it. The frontend waits if it is too large.
 
@@ -165,7 +165,7 @@ Sound generated code reports an unsupported PC instead.
 **N64Recomp and N64ModernRuntime** — Nintendo 64 projects that separate static translation from the hardware runtime.
 f3-recomp follows this separation. See [Architecture](/developer/architecture).
 
-**native** — Code that runs as compiled C instead of through an interpreter. "Native main CPU" means the generated blocks. "Native sound" means `SoundNative`.
+**native** — Code that runs as compiled C instead of through an interpreter. "Native main CPU" means the generated blocks. "Native sound" means `SoundNative`, which translates the sound ROM's CPU instructions while retaining emulated devices; it is not HLE.
 
 ## O
 
@@ -178,7 +178,7 @@ A disagreement needs investigation; it does not prove which side is wrong.
 ## P
 
 **PCM** — Pulse-code modulation: digital audio samples.
-The runtime emits signed 16-bit stereo samples at 48 kHz.
+The runtime generates signed 16-bit stereo samples at the emulated ES5505 rate (29761 Hz with 32 active voices); host playback can resample them.
 See [Audio timing](/developer/runtime/audio/timing).
 
 **playfield (PF)** — One of the four tile layers of the FDP. The code names them PF0 to PF3.
@@ -259,7 +259,7 @@ See [Video hardware](/developer/runtime/video/hardware).
 
 **window (rollback)** — The largest number of frames that the simulation may run ahead of the confirmed frame. The default is 16. The maximum is 32 (`Rollback::max_window`).
 
-**worktree (`wt/`)** — A Git worktree of an earlier development phase. The folder is ignored. Do not read it as current code.
+**worktree (`wt/`)** — A local Git worktree. The folder is ignored and is not part of the distributed source tree.
 
 ## X
 

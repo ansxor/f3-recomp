@@ -255,6 +255,6 @@ VIDEO game_frames=5769 oracle_fallback_frames=231
 VIDEO fallback=lines producer_pc=0x1003a frames=229 first=... last=...
 ```
 
-The `domain` is `1024x512-indexed-texture` for playfields, `320x232-next-sprite-plane` for sprite groups and `512x512-indexed-texture` for text. The numbers above are examples taken from [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) and not output of a run on your machine. The frontend prints the report when a run ends.
+The `domain` is `1024x512-indexed-texture` for playfields, `320x232-next-sprite-plane` for sprite groups and `512x512-indexed-texture` for text. The numbers above are examples taken from [docs/developer/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) and not output of a run on your machine. The frontend prints the report when a run ends.
 
 Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp) and [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp).

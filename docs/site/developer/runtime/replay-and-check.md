@@ -38,7 +38,7 @@ The tool tests the FDP software renderer (`Video`) against MAME pictures. It doe
 6. Compare each pixel with the reference on the three color channels. The alpha byte is ignored. Count the pixels that differ, the largest channel error and the mean channel error.
 7. Print one line for each frame, then `frames=N total_mismatched_pixels=M`.
 
-The exit code is 1 if any pixel differs and 0 if all pixels are equal. The expected result for the project captures is zero differences. `NOTES.md` records that the replay matched all 25 wide-attract captures exactly (1 856 000 of 1 856 000 pixels).
+The exit code is 1 if any pixel differs and 0 if all pixels are equal. The expected result for the project captures is zero differences. `docs/developer/DECISIONS.md` records that the replay matched all 25 wide-attract captures exactly (1 856 000 of 1 856 000 pixels).
 
 The capture files come from `tools/mame/capture.lua`. See [MAME comparison](/developer/testing/mame). Note that `spriteram_active.bin` and `reference.argb` come only from MAME. `dump_machine` in `capture_io.hpp` does not write them.
 
@@ -77,7 +77,7 @@ Successful audio replay returns 0; it does not compare the WAV against MAME itse
 `F3AUD2` is the MAME trace. `F3SND2` is the runtime trace from `SoundTrace`. The two formats are different. See [Support files](/developer/runtime/support#sound-trace).
 :::
 
-The script `tools/compare_audio.py` compares the WAV file with a MAME recording. `NOTES.md` records that the replay of a 62-second baseline gave a correlation of 0.999978 with MAME after a one-sample latency fix. Treat this as a device-level result. It does not prove that the integrated game audio matches.
+The script `tools/compare_audio.py` compares the WAV file with a MAME recording. `docs/developer/DECISIONS.md` records that the replay of a 62-second baseline gave a correlation of 0.999978 with MAME after a one-sample latency fix. Treat this as a device-level result. It does not prove that the integrated game audio matches.
 
 ## f3rt-check
 

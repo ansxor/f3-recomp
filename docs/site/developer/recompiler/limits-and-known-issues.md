@@ -58,7 +58,7 @@ Native blocks yield at instruction boundaries. An instruction can overshoot a de
 
 Matching instruction state under synchronized reference time does not prove free-running timing. Matching video frames does not prove audio waveform equivalence.
 
-[NOTES.md](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) records these distinctions and revision-specific native measurements.
+[docs/developer/DECISIONS.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) records these distinctions and revision-specific native measurements.
 
 ## Build and output boundary
 

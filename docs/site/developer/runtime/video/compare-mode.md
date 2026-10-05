@@ -117,7 +117,7 @@ The default interval is 120 and the default mask is 511. A positive interval is 
   --video-diff --video-layer-mask 256
 ```
 
-These are usage commands, not executions from this documentation task. The wrapper [run_gameplay_regression.py](https://github.com/ansxor/f3-recomp/blob/main/tools/run_gameplay_regression.py) forwards the same video options.
+The wrapper [run_gameplay_regression.py](https://github.com/ansxor/f3-recomp/blob/main/tools/run_gameplay_regression.py) forwards the same video options.
 
 ## Report fields
 
@@ -140,7 +140,7 @@ Fallback records group the first failed component and producer PC. Each record i
 
 A passing subset proves only the selected source domain. A passing sampled full mask proves the complete scene at those sampled frames.
 
-A passing frontend compare proves current native RGB on all supported frames in that input sequence. It does not prove every producer, ending, orientation, or physical-chip clipping combination.
+A passing frontend compare establishes native RGB equality with the internal MAME-derived FDP oracle on supported frames in that input sequence. It does not prove every producer, ending, orientation, or physical-chip clipping combination.
 
 Use the fallback report with the parity result. A run that silently relies on many oracle frames is not evidence of full game reconstruction.
 

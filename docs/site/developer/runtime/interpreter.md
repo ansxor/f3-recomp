@@ -97,7 +97,7 @@ Musashi is built with `M68K_EMULATE_INT_ACK=1`. The function `callbacks()` insta
 
 Main-CPU interrupts do not enter through Musashi. `run_main` calls `m68k_set_irq(0)` before it runs. The runtime delivers IRQ2 and IRQ3 in `Machine::boundary`, so native and interpreted execution use the same code. This is the rule "main IRQs enter via the shared ABI boundary".
 
-For the sound CPU, `run_audio` calls `m68k_set_irq(audio->irq_level())` before each slice. The IRQ callback `audio_irq` also changes the level at once, while the sound CPU runs. This matters because the DUART can lower its IRQ during `m68k_execute`. If the runtime waited for the next slice, the CPU would take a second, false interrupt after RTE. `NOTES.md` records that this caused sound ROM error `$91`.
+For the sound CPU, `run_audio` calls `m68k_set_irq(audio->irq_level())` before each slice. The IRQ callback `audio_irq` also changes the level at once, while the sound CPU runs. This matters because the DUART can lower its IRQ during `m68k_execute`. If the runtime waited for the next slice, the CPU would take a second, false interrupt after RTE. `docs/developer/DECISIONS.md` records that this caused sound ROM error `$91`.
 
 `reset_devices()` in `interpreter.cpp` runs on the guest RESET instruction. It calls `Machine::reset_devices()` only if the main bus is active. A RESET in the sound program does nothing.
 
@@ -192,11 +192,11 @@ The option `--allow-fallback` sets it to true for any binary. The help text call
 
 A check in `f3rt-check` proves the rejection. With `allow_main_fallback = false`, `f3_fallback` throws a message that contains the PC, and it does not change registers or count an instruction.
 
-Strict native mode is the acceptance criterion. `NOTES.md` records runs with "zero fallback instructions" in 3 600-frame cold boots and 8 400-frame play tests.
+Strict native mode is the acceptance criterion. `docs/developer/DECISIONS.md` records runs with "zero fallback instructions" in 3 600-frame cold boots and 8 400-frame play tests.
 
 ### The interpreter-only frame
 
-`Machine::run_frame(false)` does not use `f3_dispatch`. Its loop calls `boundary()`, and when the result is 0 it calls `interpreter->run_main(1)`. The code comment explains: "Reference execution must hand MMIO/IRQ changes back at every instruction boundary. Coarse slices alter the ROM boot checks." A slice of 512 cycles left the EEPROM checksum at `$ffff` and the game showed `PUSH TEST SWITCH`, as `NOTES.md` records.
+`Machine::run_frame(false)` does not use `f3_dispatch`. Its loop calls `boundary()`, and when the result is 0 it calls `interpreter->run_main(1)`. The code comment explains: "Reference execution must hand MMIO/IRQ changes back at every instruction boundary. Coarse slices alter the ROM boot checks." A slice of 512 cycles left the EEPROM checksum at `$ffff` and the game showed `PUSH TEST SWITCH`, as `docs/developer/DECISIONS.md` records.
 
 ## run_audio
 

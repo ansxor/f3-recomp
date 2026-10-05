@@ -1,5 +1,10 @@
 # GPU presentation compositor
 
+This developer report preserves successive presentation checkpoints. The FDP
+reference and the CPU compositor are MAME-derived compatibility targets, not
+chip-verified TC0630FDP models. Tables apply to the named macOS/Metal host and
+revision; interpolation is an optional presentation change, not hardware fidelity.
+
 ## Scope and checkpoints
 
 Presentation only. Native `Machine::pixels`, strict-native execution, captures,
@@ -801,7 +806,7 @@ Measured zero-gain and zoomed-sprite baseline:
 | `$fe620/$fefe6/$ff0fa` | Ending bitmap/slides | Audited producers explicitly unsupported by semantic lines; exact oracle fallback, no interpolation. Not exercised as a played ending. |
 
 `runtime/game_lines.cpp` is the literal semantic producer and normalizer;
-`docs/VIDEO-HLE.md` and site developer `lines.md` document the source addresses.
+[game-data video investigation](VIDEO-HLE.md) and site developer `lines.md` document the source addresses.
 Preparation preserves current-row Y phase and advances the accumulator by that
 row's Y step. A source-Y discontinuity relative to this advance identifies the
 column-offset boundary; a texture wrap alone does not.

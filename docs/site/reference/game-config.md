@@ -2,21 +2,16 @@
 
 This page describes each key in the per-game TOML file. The recompiler uses it to load ROMs, find code and insert hooks.
 
-**What you will learn:**
-
-- Which sections and keys the file can contain.
-- The type, default and validation rule of each key.
-- Which error message each rule gives.
-- How the two shipped configs differ.
-
 ## Where the files are
 
 | File | Game | State |
 | --- | --- | --- |
-| `games/landmakrj/config.toml` | Land Maker (Japan), set `landmakrj` | The build uses this file. It selects `all_aligned` coverage and defines 69 video hooks. |
-| `games/landmakr/config.toml` | Land Maker (World), set `landmakr` | Config only. Lanes are listed, but the file has no Japan-specific addresses and uses the default `recursive` coverage. |
+| `games/landmakrj/config.toml` | Land Maker Japan 2.01J, set `landmakrj` | Supported player build; selects `all_aligned` coverage and Land Maker-specific video hooks. Finite validation only. |
+| `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but no Japan-specific hooks are supplied and discovery uses the default `recursive` coverage. |
 
 The top-level `CMakeLists.txt` uses `games/landmakrj/config.toml` only. You pass a config file to the recompiler with `--config`. See [CLI reference](/reference/cli#python3-m-recomp).
+
+No other F3 game is implemented. A config alone is not a port: see the [portability audit](/developer/porting) for the runtime assumptions and per-game work.
 
 The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]` and `[[hooks]]`. The emit step (`generate()` in `recomp/generate.py`) reads `[[hooks]]` and `[discovery] coverage` again.
 
@@ -58,7 +53,7 @@ at runtime before fallback, even when diagnostic interpretation is enabled.
 
 `tools/scan_rom_exclusions.py` writes proposals and conflicting evidence,
 never game configuration. Entropy and missing fetches are not proof of data.
-See the repository's [experiment report](https://github.com/ansxor/f3-recomp/blob/main/docs/BINSIZE-EXCLUDE.md).
+See the repository's [experiment report](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/BINSIZE-EXCLUDE.md).
 
 
 ## Full example

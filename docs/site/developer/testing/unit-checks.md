@@ -77,7 +77,7 @@ The file has more than 150 `require()` calls. Most checks use a **fixture**: `fi
 
 Some checks run the same input on the interpreter (`m->interpreter->run_main(1)`) and on the ABI function (`f3_exception`). They require both to agree. This protects the rule that the native path and the reference path have the same timing.
 
-`NOTES.md` records that several of these checks failed before the fix that they protect, and pass after it. Examples are the pending-IRQ-at-STOP check and the DC-voice sound check.
+`docs/developer/DECISIONS.md` records that several of these checks failed before the fix that they protect, and pass after it. Examples are the pending-IRQ-at-STOP check and the DC-voice sound check.
 
 ### What `f3rt-check` does not prove
 
@@ -150,7 +150,7 @@ The Go tests live in `netplay/server/`. They need Go 1.22 or newer and nothing e
 | `impairment_test.go` | Delay, loss and duplication in the impairment layer, and deadline ordering in the heap. |
 | `server_test.go` | Room match and data flow, identity mismatch (every field), room capacity and slot conflict, recovery of a lost completion verdict after one peer leaves, stale leave after a new session, endpoint spoofing, protocol mismatch, nonce migration. |
 
-A run on the documented source passed. See [Relay server](/developer/netplay/server) and [Wire protocol](/developer/netplay/protocol) for the rules that these tests protect.
+See [Relay server](/developer/netplay/server) and [Wire protocol](/developer/netplay/protocol) for the rules that these tests protect. A previous passing run does not establish the result on a changed build.
 
 ## Where the other tests are
 

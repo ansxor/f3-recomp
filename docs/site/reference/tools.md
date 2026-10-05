@@ -2,12 +2,6 @@
 
 This catalog covers `tools/` and related runtime and netplay programs. Each entry explains its purpose and gives a command example.
 
-**What you will learn:**
-
-- Which tool to use for a given task.
-- The command line for each tool.
-- Where to find the full list of flags and the internal design.
-
 For all flags, see the [CLI reference](/reference/cli). For how the tests work inside, see [Testing](/developer/testing/).
 
 All commands run from the repository root. The examples use `build/` as the build directory and `roms/landmakrj` as the ROM directory. Change these paths for your setup.
@@ -69,7 +63,7 @@ The test files use `unittest`. They import `recomp` and `decode_sound`. Run them
 PYTHONPATH=.:tools python3 -m unittest discover -s tools -p "test_*.py"
 ```
 
-`[INFERENCE]` The command comes from the imports in the test files. The repository does not document one. Install `capstone` first.
+Install the pinned Capstone dependency first. These are developer checks, not a replacement for exercising the player build.
 
 ## C++ and CMake helpers in tools/
 

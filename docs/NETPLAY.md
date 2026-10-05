@@ -1,6 +1,6 @@
 # Land Maker 1v1 rollback netplay
 
-Target: Japanese Land Maker 2.01J (`landmakrj`), strict statically recompiled main CPU and native sound driver. Netplay is opt-in. Offline defaults and the native 320×232 renderer are unchanged. This is a two-player input relay, not a server-side emulator, streaming service, or state-transfer protocol.
+Target: Japanese Land Maker 2.01J (`landmakrj`), strict statically recompiled main CPU and native sound-ROM execution through emulated devices. Netplay is opt-in. Offline defaults and the native 320×232 renderer are unchanged. This is a two-player input relay, not a server-side emulator, streaming service, or state-transfer protocol.
 
 ## Build and play
 
@@ -47,7 +47,7 @@ Insert a coin on each client, then press each local start. The opponent joins th
 
 Native sound + native-sized game video is **4,231,509 bytes** per snapshot; oracle sound is **4,231,724 bytes**. The default prediction window is 16 frames with **17 preallocated full snapshots**, approximately 68.6 MiB for the native snapshot ring. The headless core accepts windows up to 32. No compressed/delta-state dependency chain is involved.
 
-Canonical records are packed, explicitly initialized, pointer-free, host-endian state for the **same configured build**, not a portable file format. Load only internally generated states: the Machine API checks size, not arbitrary snapshot contents, and rollback never accepts state bytes over the network. See [ABI-CHANGES.md](ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory) and `runtime/state_io.hpp` for the field inventory.
+Canonical records are packed, explicitly initialized, pointer-free, host-endian state for the **same configured build**, not a portable file format. Load only internally generated states: the Machine API checks size, not arbitrary snapshot contents, and rollback never accepts state bytes over the network. See [CPU ABI history](developer/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory) and `runtime/state_io.hpp` for the field inventory.
 
 Included:
 

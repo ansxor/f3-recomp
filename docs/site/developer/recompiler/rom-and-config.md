@@ -6,7 +6,7 @@ The code is the function `load_rom` in [`recomp/discovery.py`](https://github.co
 
 ## Why the recompiler checks the ROM so strictly
 
-The recompiler bakes ROM addresses into C code. A wrong ROM would give wrong code with no visible error. Two Land Maker versions exist: World (`landmakr`) and Japan (`landmakrj`). The ROM lanes of the two versions have different names and hashes. `NOTES.md` records that the first supplied ROM set was the Japan set, and that nobody must treat it as the World set. For this reason `load_rom` checks the size, the CRC32 and the SHA-1 of every file. It never replaces a missing file with another file.
+The recompiler bakes ROM addresses into C code. A wrong ROM would give wrong code with no visible error. Two Land Maker versions exist: World (`landmakr`) and Japan (`landmakrj`). The ROM lanes of the two versions have different names and hashes. `docs/developer/DECISIONS.md` records that the first supplied ROM set was the Japan set, and that nobody must treat it as the World set. For this reason `load_rom` checks the size, the CRC32 and the SHA-1 of every file. It never replaces a missing file with another file.
 
 ## The command line
 
@@ -98,7 +98,7 @@ The values come from [`games/landmakrj/config.toml`](https://github.com/ansxor/f
 | 2 | `e61-11.18` | `279a0ee4` |
 | 3 | `e61-10.17` | `daabf2b2` |
 
-The World config, [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml), lists `e61-19.20`, `e61-18.19`, `e61-17.18` and `e61-16.17`. `NOTES.md` states that World is configuration only and that it was never tested. A run with World config and the Japan files stops with `Missing ROM lane file 'e61-19.20' ...`.
+The World config, [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml), lists `e61-19.20`, `e61-18.19`, `e61-17.18` and `e61-16.17`. `docs/developer/DECISIONS.md` states that World is configuration only and that it was never tested. A run with World config and the Japan files stops with `Missing ROM lane file 'e61-19.20' ...`.
 
 ## Errors from `load_rom`
 
@@ -171,7 +171,7 @@ An address can be an integer or a string. A string that starts with `0x` is hexa
 | `[[hooks]]` | 69 entries, all with symbol `f3_landmakr_video_hook` | none |
 | `entry_points` | not set | empty list |
 
-The Japan config has no `entry_points`, `jump_tables` or `actor_scripts`. `NOTES.md` explains why. Exhaustive decoding replaced all observed-address metadata.
+The Japan config has no `entry_points`, `jump_tables` or `actor_scripts`. `docs/developer/DECISIONS.md` explains why. Exhaustive decoding replaced all observed-address metadata.
 
 The hook function `f3_landmakr_video_hook` is in [`runtime/game_video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp). It calls `GameVideo::observe()`.
 

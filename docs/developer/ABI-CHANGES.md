@@ -1,5 +1,10 @@
 # CPU ABI changes
 
+Current generated programs require **ABI 3**. Older sections record the ABI in
+force at that checkpoint, including later features originally added under ABI 2.
+Scheduling costs and device models follow reference-emulator behavior; this
+interface history is not a physical bus-cycle accuracy claim.
+
 ## Version 3 — explicit ROM instruction-start exclusions
 
 `f3_excluded_range` and `f3_register_exclusions` register immutable, sorted,

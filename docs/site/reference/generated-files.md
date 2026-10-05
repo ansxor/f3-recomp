@@ -2,13 +2,6 @@
 
 This page lists the files that the main and sound recompilers write. It explains their contents, required C symbols and Git ignore rules.
 
-**What you will learn:**
-
-- Which files the recompiler writes, and what each file is for.
-- The fields of `coverage.json`, `lowering.json` and the sound `coverage.json`.
-- The naming rules for generated functions and files.
-- Which symbols the generated code and the runtime must agree on.
-
 ## Overview
 
 The two tools write to two separate directories. CMake picks default directories when you set `F3_ROM_DIR`.
@@ -133,7 +126,7 @@ set(F3_GENERATED_SOURCES
 
 ### program.bin
 
-The file is the combined ROM image (the size from `[rom] size`) after the lanes are interleaved. A comment in `recomp/generate.py` says that the runtime loader uses it. No C++ or Python code in the repository reads `program.bin`. The runtime loads the ROM from the chip files with `RomSet::load()`. `[INFERENCE]` from a search of the repository; the file seems to be only a copy for debugging.
+The file is a copy of the interleaved ROM image (the size from `[rom] size`). The runtime loads the individual chip files with `RomSet::load()`; `program.bin` is not the player executable or a substitute for its ROM directory.
 
 ### coverage.json
 
@@ -156,7 +149,7 @@ The discovery step writes this file. `emit` writes it again with the same conten
 The `summary` object has these fields: `rom_size_bytes`, `total_instructions`, `total_blocks`, `total_functions`, `potential_entries`, `code_bytes`, `coverage_pct`, `aligned_candidate_count`, `aligned_decoded_count`, `aligned_invalid_count`, `invalid_pcs_count`, `proven_seeds_count`, `speculative_seeds_count` and `unresolved_branches_count`.
 
 ::: info
-In `all_aligned` mode, `coverage_pct` is about 50%. This is expected. Every even address is a candidate, and about half of them are data or overlap other code. The number is not a measure of how much of the game runs natively. In a local build of this repository, the Japan ROM gave 464523 decoded instructions and 584053 addresses that did not decode.
+In `all_aligned` mode, every even address is a candidate. Candidates can be data or overlap other code, so `coverage_pct` is a discovery statistic, not a measure of how much gameplay executes natively.
 :::
 
 ### lowering.json
@@ -176,7 +169,7 @@ The emit step writes this report. The command also prints it, without the fields
 | `fallback_mnemonics` | object | Count for each untranslated mnemonic. |
 | `fallback_pcs` | array of integers | Addresses of the fallback instructions. |
 | `source_files` | array of strings | C files, including `program.c`. |
-| `runtime_abi_version` | integer | `2`. |
+| `runtime_abi_version` | integer | `3`. Must match `F3RT_ABI_VERSION`. |
 | `coverage_mode` | string | `all_aligned` or `recursive`. |
 | `max_block_instructions` | integer | The value that you passed (default 32). |
 | `timing` | string | A fixed note: `68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries`. |

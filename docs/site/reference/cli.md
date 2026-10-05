@@ -2,12 +2,6 @@
 
 This page lists the project commands and their arguments. The tables give defaults, value limits and error behavior.
 
-**What you will learn:**
-
-- Which flags `landmakr` and `f3rt-run` accept, and how the two programs differ.
-- Which flags the test and analysis programs accept.
-- Which flags the Python tools and the netplay relay server accept.
-
 ## General rules
 
 - The C++ parsers use separate arguments: `--flag value`, not `--flag=value`.
@@ -29,7 +23,7 @@ This page lists the project commands and their arguments. The tables give defaul
 
 ## landmakr and f3rt-run
 
-Both programs use `runtime/frontend.cpp`. `f3rt-run` is the general frontend. `landmakr` is the player build, available with `F3_GENERATED_DIR`. Its `F3RT_LANDMAKR` definition changes the defaults.
+Both programs use `runtime/frontend.cpp`. `landmakr` is the supported Japan player build, available with generated code. `f3rt-run` is a diagnostic frontend; its ability to load the World ROM set does not make World a supported port.
 
 ### Differences between the two builds
 
@@ -54,7 +48,7 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | Effect of `--allow-fallback` | Detail |
 | --- | --- |
 | Machine setting | Sets `Machine::allow_main_fallback` to true. Without it, an untranslated instruction stops the program with `Untranslated main CPU instruction at PC ...`. |
-| Default video in `landmakr` | The default stays `fdp`. The game-data renderer needs the strict native path. |
+| Default video in `landmakr` | Becomes `fdp` unless you explicitly choose another mode. The game-data renderer needs the strict native path. |
 | `--video game` or `--video compare` | Rejected with `Game-data video requires strict native landmakrj`. |
 | Netplay | Rejected. See the netplay rules below. |
 | Counting | The program counts fallback instructions. `--fallback-report` writes the count for each address. |
@@ -74,14 +68,14 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--eeprom` | `FILE` | none | EEPROM file | The program loads the file at start if it exists, and writes it at exit. The file must be exactly 128 bytes (else `Invalid EEPROM file`). Netplay rejects this flag. |
 | `--wav` | `FILE` | none | Write the generated audio to a 16-bit stereo WAV file | The sample rate is the rate of the audio core. |
 | `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Netplay rejects this flag. Decode the trace with `tools/decode_sound.py`. |
-| `--sound-driver` | `oracle` or `native` | See the table above | Choose the sound CPU implementation | `oracle` runs the interpreted 68000 sound driver. `native` runs the recompiled driver. `native` needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. |
+| `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. |
 | `--profile-out` | `FILE` | none | Merge versioned main/sound entry counts, atomically flush every 30 seconds and on exit | Requires `F3_PROFILE_INSTRUMENT=ON` and strict native main/sound execution. Relative destinations are fixed against the startup working directory, including after later cwd changes. Slim builds also accept it for immediate `miss` records; cold aborts always append a durable `.cold-hits` log (or `f3-cold-hits.log` without this flag). Concurrent writers must use separate paths and merge later. |
 | `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used the fallback | Netplay rejects this flag. |
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
 | `--dump-start` | `N` | `1` | First frame to dump | |
 | `--dump-every` | `N` | `1` | Dump every N frames | `0` is an error. |
 | `--surface` | `BMP` or GPU `PNG` | none | Save the CPU window surface or GPU internal-resolution image at `--frames` | Window runs only. Native dumps remain CPU-produced. |
-| `--video` | `fdp`, `game` or `compare` | `fdp`. In `landmakr` strict native: `game` | Choose the video renderer | `fdp` draws from the F3 video chip memory. `game` draws from the game data. `compare` runs both and checks them. `game` and `compare` need strict native `landmakrj`. |
+| `--video` | `fdp`, `game` or `compare` | `fdp`. In `landmakr` strict native: `game` | Choose the video renderer | `fdp` is the MAME-derived video-memory reference, not physical-chip verification. `game` reads Land Maker scene data. `compare` checks supported game-renderer frames against the reference. `game` and `compare` need strict native `landmakrj`. |
 | `--video-scale` | `1` to `4`, `auto` or `auto-integer` | `1` | Fixed or window-pixel-following internal scale | Auto modes require GPU. `auto` ceil-fits then aspect-scales with the selected filter; `auto-integer` floor-fits then presents exact nearest integer pixels with black bars. All clamp to 1–4; border counts in the fit. Headless auto stays at scale 1. |
 | `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
 | `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
@@ -108,6 +102,7 @@ The program checks these rules in this order.
 6. `game` and `compare` need `--set landmakrj`, native execution and no `--allow-fallback`.
 7. The video filter must be `nearest` or `linear`.
 8. In `fdp` mode, a scale other than 1, a border other than 0, or the filter `linear` is an error: `Presentation enhancements require --video game or compare`.
+   GPU presentation also requires `game` or `compare`; automatic scale modes require GPU. Non-off interpolation requires GPU, and interpolation fields must be one of the listed values.
 9. In netplay mode, the server and the room must be set.
 10. Instrumented collection requires strict native main and sound CPUs. Profile-slim rejects interpreter execution, `--allow-fallback` and oracle sound.
 

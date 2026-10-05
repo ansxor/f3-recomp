@@ -12,18 +12,20 @@ ROM behavior and observed output outrank hardware notes and MAME source. The
 notes in `~/Workspace/taito-f3/{audiocpu,otis-bank,duart,sound-address}.txt` are
 WIP board observations, not a complete driver specification. `audiocpu.txt`
 is a pin list, not evidence for an 8 MHz clock. This runtime retains its
-15,238,090 Hz interpreted sound CPU, 4 MHz DUART and 16 MHz main timebase.
+15,238,090 Hz sound CPU model, 4 MHz DUART and 16 MHz main timebase.
 Neither instruction-atomic bus accesses nor those timings are claimed to be
 physical-bus measurements.
 
-ES5505/ES5510 stay emulated. The interpreted driver remains the reference oracle;
-SDL3 remains the playback backend. Observation does not affect device scheduling,
-change a register write, or perform additional reads of side-effectful devices.
+ES5505/ES5510 and the board devices use MAME-derived emulation, not
+physical-board waveform verification. Native sound executes the statically
+recompiled ROM driver; it is not HLE. The interpreted driver remains the reference
+oracle, and SDL3 remains the playback backend. Observation does not affect device
+scheduling, change a register write, or perform additional side-effectful reads.
 
 ## Capturing and decoding the oracle
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver oracle \
   --sound-trace build/seed5.sound --wav build/seed5.wav
 python3 tools/decode_sound.py build/seed5.sound \
   --output build/seed5-writes.jsonl.gz
@@ -33,7 +35,7 @@ python3 tools/decode_sound.py build/seed5.sound --notes-only \
 
 The frontend accepts the same `--sound-trace FILE` option, including independent
 main-CPU interpretation with `f3rt-run`. Seeded gameplay uses the established
-coin/start/64-bit LCG schedule; the sound CPU is interpreted in both cases.
+coin/start/64-bit LCG schedule; the explicit `oracle` command above interprets sound.
 All captures and extracted game data remain ignored, not committed.
 
 The binary header is eight bytes `F3SND2\0\0`. Records are 32 bytes,

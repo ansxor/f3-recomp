@@ -161,7 +161,7 @@ for f in mainram palette graphics control shared; do
 done
 ```
 
-`NOTES.md` records these results for a 3,600-frame cold boot: all 131,072 main-RAM bytes equal MAME at frame 600. For later sampled frames, the RNG seed at `$400826` equals MAME, but the notes also say that idle RNG iterations can diverge in later frames when the timing differs. Treat byte equality at later frames as a strong signal, not as a required result.
+`docs/developer/DECISIONS.md` records these results for a 3,600-frame cold boot: all 131,072 main-RAM bytes equal MAME at frame 600. For later sampled frames, the RNG seed at `$400826` equals MAME, but the notes also say that idle RNG iterations can diverge in later frames when the timing differs. Treat byte equality at later frames as a strong signal, not as a required result.
 
 ## Native versus interpreter
 
@@ -171,7 +171,7 @@ The Musashi interpreter and the recompiled code must give the same picture and t
 2. Run `landmakr` or `f3rt-run --translated` with the same frame count.
 3. Compare the dump folders with `compare_frames.py`. Compare the WAV files with `cmp`.
 
-`NOTES.md` records byte-identical native and interpreter WAV files for a 3,600-frame attract run. See [Sound tools](/developer/testing/sound-tools).
+`docs/developer/DECISIONS.md` records byte-identical native and interpreter WAV files for a 3,600-frame attract run. See [Sound tools](/developer/testing/sound-tools).
 
 ## Typical failure causes
 

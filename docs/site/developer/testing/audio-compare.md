@@ -117,10 +117,10 @@ The metrics are evidence. They are not an automatic pass or fail result. The pro
 
 These values come from the repository notes. They show typical results. They are not thresholds that the tool enforces.
 
-- **Device replay at the native rate.** For device-math comparison, record a second MAME baseline with `-samplerate 29761`. Then MAME does not resample and the replay uses the same rate. Over seconds 18 to 54, both channels correlated at 0.999978 after a one-sample latency correction. The RMS error was about 1.3 LSB and the channel peaks were equal (1239 and 1264). Source: `tools/mame/README.md` and `NOTES.md`.
-- **Whole-game audio.** For a 3,600-frame native attract run, `NOTES.md` records a lag of −1 sample over seconds 20 to 54, correlation 0.9957 and 0.9952, and RMS error 18.7 and 19.5 LSB. The notes state that this is a compatibility baseline. It is not waveform equality with MAME or with the real board.
+- **Device replay at the native rate.** For device-math comparison, record a second MAME baseline with `-samplerate 29761`. Then MAME does not resample and the replay uses the same rate. Over seconds 18 to 54, both channels correlated at 0.999978 after a one-sample latency correction. The RMS error was about 1.3 LSB and the channel peaks were equal (1239 and 1264). Source: `tools/mame/README.md` and `docs/developer/DECISIONS.md`.
+- **Whole-game audio.** For a 3,600-frame native attract run, `docs/developer/DECISIONS.md` records a lag of −1 sample over seconds 20 to 54, correlation 0.9957 and 0.9952, and RMS error 18.7 and 19.5 LSB. The notes state that this is a compatibility baseline. It is not waveform equality with MAME or with the real board.
 
-Earlier runs in `NOTES.md` show how the metric tracks fixes: a timing bug in the sound CPU lowered the correlation to about 0.84, and later fixes raised it step by step.
+Earlier runs in `docs/developer/DECISIONS.md` show how the metric tracks fixes: a timing bug in the sound CPU lowered the correlation to about 0.84, and later fixes raised it step by step.
 
 ## Related gates
 

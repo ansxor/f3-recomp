@@ -95,7 +95,7 @@ A correction outside retained history is an error. It is not replaced by a fabri
 
 ## Performance is not window size
 
-[STATUS.md](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md) records these native timings on Apple M5, Darwin arm64, Release:
+[docs/developer/VALIDATION.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md) records these native timings on Apple M5, Darwin arm64, Release:
 
 | Operation | Mean | p95 | Maximum |
 | --- | ---: | ---: | ---: |

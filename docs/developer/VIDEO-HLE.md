@@ -6,11 +6,18 @@ Target: supplied **Japan 2.01J (`landmakrj`)** program, based on `checkpoint-1-c
 
 The game renderer observes native display-building routines. Hooks do not replace instructions, advance guest time, change registers or write guest memory. `GameMemory` permits only program-ROM and main-work-RAM reads; it deliberately cannot read FDP memory. Game tile blocks become semantic cells (tile, palette, pen mask, flips and blend selector), rather than a second byte-for-byte graphics-RAM image. A graphics-write observer checks **only producer PC and destination address** to detect missing hooks; it never supplies write values to the scene.
 
-`runtime/video.cpp` remains the independent FDP oracle. Immutable decoded ROM textures are shared to avoid a duplicate 16 MiB asset decode. Oracle layer readback is diagnostic only; it does not advance sprite latches. The incremental proof below starts with complete logical PF0 texture planes and then establishes nine-layer and final composited-frame parity.
+`runtime/video.cpp` remains the independent **MAME-derived FDP reference**.
+Its output is a software compatibility target, not verified physical TC0630FDP
+behavior. Immutable decoded ROM textures are shared to avoid a duplicate 16 MiB
+asset decode. Oracle layer readback is diagnostic only; it does not advance sprite
+latches. The incremental evidence below starts with complete logical PF0 texture
+planes and then establishes nine-layer and final composited-frame comparisons.
 
-Color indices resolve through the shared FDA palette RAM; this is a color asset, not FDP geometry. The game compositor takes semantic maps, decoded glyph pens, semantic sprite geometry and semantic row descriptions. Its normal path never reads FDP tile/sprite/line memory. Runtime mode `fdp` remains the default; `game` composes the supported scene and maintains only the oracle sprite latch for exact fallback, while `compare` renders both and rejects any supported-frame RGB difference. A fallback report names the component, producer PC, count and first/last affected frame; it is not CPU interpreter fallback.
+Color indices resolve through the shared FDA palette RAM; this is a color asset, not FDP geometry. The game compositor takes semantic maps, decoded glyph pens, semantic sprite geometry and semantic row descriptions. Its normal path never reads FDP tile/sprite/line memory. Strict-native `landmakr` defaults to `game`; `fdp` is the diagnostic/fallback-execution default. `compare` renders both and rejects any supported-frame RGB difference. A fallback report names the component, producer PC, count and first/last affected frame; it is not CPU interpreter fallback.
 
-Evidence priority follows `CONTEXT.md`: actual game ROM behavior and observed Land Maker output, primary hardware sources, work-in-progress notes, then MAME source.
+Game-ROM behavior and captured MAME output establish the compatibility target.
+Hardware notes can inform investigation, but neither MAME source nor matching
+frames proves physical-chip correctness.
 
 References:
 

@@ -2,19 +2,12 @@
 
 This page lists CMake options, cache variables, targets and compile definitions. It also explains the netplay build identity.
 
-**What you will learn:**
-
-- Which cache variables you can set, and what each one does.
-- Which targets CMake builds, and which libraries each target links.
-- Which compile definitions change the behavior of a program.
-- How the build makes the hash that netplay peers compare.
-
 ## Requirements
 
 - CMake 3.24 or newer (top-level `CMakeLists.txt`).
 - A C11 and C++20 compiler.
 - SDL3 with CMake config files, only if `F3RT_SDL` is on.
-- Python 3 with `capstone` 5.0.9, only if `F3_ROM_DIR` is set. The file `recomp/requirements.txt` pins the version.
+- Python 3.11 or newer with `capstone` 5.0.9, only if `F3_ROM_DIR` is set. The file `recomp/requirements.txt` pins the package version.
 - Go, only to build the relay server. CMake does not build the relay server.
 - `glslangValidator`, `spirv-cross` and Python 3 for offline SPIR-V/MSL shader generation when `F3RT_GPU` and `F3RT_SDL` are on.
 
@@ -58,9 +51,9 @@ inventories and `tools/block_profile.py report` distinguish executable entry
 addresses from packed host functions. A gameplay profile is evidence of observed
 execution, not proof that the remaining code can never execute.
 
-The six `landmakrj` main/sound exclusions in `config.toml` apply before tier
-assignment in every ROM-generated mode. Default tiers retain 336,775 main and
-61,997 sound entries (30,146 / 7,519 hot); slim retains only the hot subset.
+The `landmakrj` main/sound exclusions in `config.toml` apply before tier
+assignment in every ROM-generated mode. Full tiers retain unobserved entries;
+slim removes them and is not suitable for general play.
 Hits or misses inside an excluded interval fail configuration with CPU/address/
 range diagnostics. Changing compilation tiers does not relax ABI 3 exclusion
 errors or permit fallback for excluded aliases.
@@ -74,10 +67,9 @@ cmake -S . -B build/slim -DF3_ROM_DIR=/path/to/roms/landmakr \
   -DCMAKE_BUILD_TYPE=Release -DF3_PROFILE_SLIM="$PWD/profiles/landmakrj.profile"
 ```
 
-The frozen corpus includes seeded and user-confirmed partial campaign data,
-not held-out gate seeds. Full tiers keep unobserved code; slim is rejected for
-general play. Historical and combined measurements:
-[BINSIZE-COMBINED.md](https://github.com/ansxor/f3-recomp/blob/main/docs/BINSIZE-COMBINED.md).
+Profiles describe observed execution, not unreachable-code proofs. Corpus
+history, retained-entry counts and size measurements are in the
+[combined build report](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/BINSIZE-COMBINED.md).
 
 
 ### What happens at configure time with F3_ROM_DIR
@@ -148,7 +140,7 @@ Source files use these definitions to turn code on or off.
 
 ## Generated header: netplay_build.hpp
 
-The build writes `BUILD_DIR/netplay_build.hpp`. It has one line of content: `#define F3_NETPLAY_BUILD_HASH "<sha256>"`. The netplay code puts this hash in the handshake. Two players can only play together if their hashes are equal. The reason: the game is deterministic only if both players run the same code with the same compiler settings.
+The build writes `BUILD_DIR/netplay_build.hpp`, defining `F3_NETPLAY_BUILD_HASH` as a SHA-256 string. The handshake conservatively requires matching hashes, including compiler/settings identity; equal hashes are a compatibility requirement, not proof of deterministic execution or cross-platform equivalence.
 
 ### Inputs of the hash
 

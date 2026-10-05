@@ -24,13 +24,15 @@ flowchart LR
 
 - It does **not** include ROM files. No game data is in the repository. You must supply your own legally obtained `landmakr` ROM set.
 - It does **not** support other F3 games. The only tested game is Land Maker Japan 2.01J (`landmakrj`).
-- The World set (`landmakr`) has a config file in `games/landmakr/config.toml`. It is **untested**. Its program ROM files (`e61-19.20` to `e61-16.17`) were not available to the authors. The `landmakr` program rejects any set other than `landmakrj`.
+- The World set (`landmakr`) has a config and ROM-loader entry, but is **untested** and is not a supported player build. The `landmakr` executable rejects any set other than `landmakrj`.
 - The relay server does not authenticate players and does not encrypt traffic. See [Online play](/guide/netplay).
 - The authors tested the build on macOS with Apple silicon. The netplay client uses POSIX sockets. Windows is not a target of the project.
 
-::: info Status
-The build command is smoke-tested. Whether the game is fully playable frame by frame and sound sample by sample is tracked in `STATUS.md` in the repository. A successful build does not prove this. See the [STATUS.md file](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md).
-:::
+## Scope and accuracy
+
+Japan support is based on finite captures and seeded gameplay, not exhaustive coverage of every game state. Video is MAME-derived and reference-output matched, not verified against physical TC0630FDP hardware. Sound devices are also MAME-derived; native sound executes the recompiled sound ROM rather than replacing it with high-level sound commands.
+
+See [Developer evidence](/developer/evidence) for validation limits and [Porting another game](/developer/porting) for shared versus Land Maker-specific code.
 
 ## Pages in this guide
 

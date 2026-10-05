@@ -4,6 +4,11 @@
 
 The repository has five main parts. The `recomp/` folder holds the recompiler. The `runtime/` folder holds the runtime library. The `include/f3rt/` folder holds the ABI between them. The `netplay/server/` folder holds the relay server. The `tools/` folder holds test and analysis tools. The tables describe source responsibilities, not file sizes. Generated files and local dependency caches have separate roles.
 
+The exercised game is Land Maker Japan 2.01J. The World configuration is untested;
+shared F3 models are not a claim of other-game support. Video and audio devices
+are MAME-derived reference models, not physical-chip-verified implementations.
+See the [evidence index](/developer/evidence) for recorded comparisons and limits.
+
 ## How the directories relate
 
 The diagram shows which directory produces or uses which other directory.
@@ -73,9 +78,9 @@ Each table lists one directory. The link on each file name opens the file on Git
 | File | Purpose |
 | --- | --- |
 | [`CMakeLists.txt`](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt) | Top-level build. Runs the recompiler at configure time. Builds Musashi, `f3rt`, the frontends and the test tools. Writes the netplay build ID. |
-| [`README.md`](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Project overview, build and run commands, and a short description of each test. |
-| [`STATUS.md`](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md) | Status of the last finished phase (netplay), with measured evidence. |
-| [`NOTES.md`](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) | Long dated log of recompiler and timing decisions. It is the evidence trail. |
+| [`README.md`](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Project identity, support scope, build and run commands, defaults, and credits. |
+| [`docs/developer/VALIDATION.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md) | Retained validation scenarios, measurements, and limits. |
+| [`docs/developer/DECISIONS.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) | Technical rationale and observed compatibility evidence. |
 | [`.gitignore`](https://github.com/ansxor/f3-recomp/blob/main/.gitignore) | Ignores `build/`, `roms/`, `games/*/generated/`, `wt/`, `*.bin`, `*.wav` and captures. |
 
 ### recomp/ (ROM to C recompiler, Python)
@@ -253,10 +258,11 @@ These files form the `f3rt` library core and the frontend.
 | --- | --- |
 | [`games/landmakrj/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/config.toml) | Land Maker Japan: ROM lanes, `all_aligned` discovery and the video hook list. This is the execution target. |
 | [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml) | Land Maker World: ROM lanes only. It is untested. |
-| [`docs/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md) | History of ABI versions and the snapshot contract. |
+| [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | History of ABI versions and the snapshot contract. |
 | [`docs/NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, determinism and measurements. |
-| [`docs/VIDEO-HLE.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) | Game-data video addresses, layouts and parity evidence. |
+| [`docs/developer/VIDEO-HLE.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) | Game-data video addresses, layouts and parity evidence. |
 | [`docs/SOUND-DRIVER.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Sound driver evidence, trace format and native driver. |
+| [`docs/developer/`](https://github.com/ansxor/f3-recomp/tree/main/docs/developer) | Canonical validation, decisions, ABI history, video evidence, and binary-size measurements. See the [evidence index](/developer/evidence). |
 
 ### Documentation site and publishing
 
@@ -293,7 +299,7 @@ The `.gitignore` file hides these items. You will see some of them in your own c
 | `build/python/` | Optional folder for the Capstone Python package (`pip install --target build/python`). The CMake configure step adds it to `PYTHONPATH`. |
 | `roms/` | ROM sets. The project never contains ROMs. The README uses `../roms/landmakr` as an example path outside the repository. |
 | `games/*/generated/` | Optional output folder for a manual `python3 -m recomp emit` run. |
-| `wt/` | Git worktrees from earlier development phases. Ignore this folder. |
+| `wt/` | Local Git worktrees. Ignored and not part of the distributed source tree. |
 | `games/*/rom/` | Optional local ROM input directory. |
 | `captures/`, `diffs/`, `nvram/`, `cfg/` | Local capture, comparison, and emulator working data. |
 | `__pycache__/`, `*.pyc`, `.venv/` | Python caches and local virtual environments. |

@@ -19,16 +19,21 @@ The project has three layers:
 
 Around these layers are the netplay relay server (`netplay/server/`, Go) and the test tools (`tools/`).
 
-## Current status
+## Support and evidence
 
-These facts come from `README.md`, `STATUS.md` and `NOTES.md`. The repository documents say so; this site does not measure them again.
+The exercised target is *Land Maker* Japan 2.01J (`landmakrj`). The World set
+(`landmakr`) has a configuration but has not been validated; no other game has
+a configuration in this tree. Shared CPU and device models do not by themselves
+make another F3 game supported.
 
-- The execution target is *Land Maker* Japan 2.01J (`landmakrj`).
-  The World set (`landmakr`) has a main ROM config and runtime loader support, but no recorded validation here.
-- The `landmakr` executable runs the main CPU only from generated code. `STATUS.md` records a 3,600-frame run with 51,507,335 native blocks and no interpreter fallback. In the same record, 25 of 25 sampled frames match MAME exactly (frames 600 to 3480, step 120).
-- The native sound driver and the interpreted sound driver write the same bus trace and the same WAV file in the seed-5 test (`README.md`).
-- One-versus-one rollback netplay is finished and tested (`STATUS.md`).
-- Audio does not yet equal MAME audio. `NOTES.md` records a correlation of about 0.9957 for seconds 20 to 54 and says this is not waveform parity.
+Video follows a MAME-derived FDP model and recorded reference-output comparisons,
+not measurements of a physical TC0630FDP. Sound uses MAME-derived devices with
+native or interpreter sound-CPU execution. Native sound is not HLE, and agreement
+between those CPU paths does not establish waveform equality with MAME or a board.
+
+See the [evidence index](/developer/evidence) for retained measurements and their
+limits. The testing pages describe how to reproduce comparisons; their historical
+results are not a claim that every game state has been exercised.
 
 ## Choose your path
 
@@ -42,6 +47,9 @@ Pick the goal that fits you. Read the pages in the order shown.
 4. [Glossary](/developer/glossary) explains the terms.
 
 ### I want to add a game
+
+Read the [portability audit](/developer/porting) first: it lists the actual
+Land Maker dependencies and conservative new-game bring-up work.
 
 1. [Contributing: Add a game](/developer/contributing) lists the steps and the Land Maker-specific places.
 2. [ROM loading and config](/developer/recompiler/rom-and-config) explains the config file and lane interleave.
@@ -279,21 +287,12 @@ Developers also use these pages.
 | [Generated files](/reference/generated-files) | Files that the compilers write. |
 | [Tools and scripts](/reference/tools) | Programs in `tools/`. |
 
-## Evidence documents in the repository
+## Evidence documents
 
-The site explains the code. The repository documents hold the long evidence. Open them when you need a measurement or an address.
+The [evidence index](/developer/evidence) links canonical measurements, technical
+decisions, ABI history, and subsystem records. Detailed logs live in
+`docs/developer/`, rather than the project overview. Use the testing pages for
+tool behavior and reproduction commands.
 
-| File | Content |
-| --- | --- |
-| [README.md](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Commands and contracts. |
-| [STATUS.md](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md) | Result of the last finished phase. |
-| [NOTES.md](https://github.com/ansxor/f3-recomp/blob/main/NOTES.md) | Dated decision log. |
-| [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md) | ABI history and snapshot contract. |
-| [docs/NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, measurements. |
-| [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) | Video addresses and layouts. |
-| [docs/SOUND-DRIVER.md](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Sound driver and trace format. |
-| [tools/mame/README.md](https://github.com/ansxor/f3-recomp/blob/main/tools/mame/README.md) | MAME capture protocol. |
-
-::: warning The long documents can be out of date
-The documents in the repository were written while the code changed. When a document and the code disagree, the code is right. Report the difference.
-:::
+Historical measurements describe their recorded build and scenario. Check the
+implementation before relying on a revision-sensitive detail.

@@ -69,7 +69,7 @@ The local function `chip(dir, name, size, crc, short_crc)` opens a file. It thro
 
 ### Short sound chips
 
-The two sound program chips can be half size (0x20000 bytes). Then the loader checks a second CRC: `b905f4a7` for `e61-14.32` and `87909869` for `e61-15.33`. It pads the data with `0xff` to the full size. It checks the full CRC again. Otherwise it throws `Padded sound ROM CRC mismatch`. Both forms load to identical data. `NOTES.md` says that the padded chips equal the current MAME dumps.
+The two sound program chips can be half size (0x20000 bytes). Then the loader checks a second CRC: `b905f4a7` for `e61-14.32` and `87909869` for `e61-15.33`. It pads the data with `0xff` to the full size. It checks the full CRC again. Otherwise it throws `Padded sound ROM CRC mismatch`. Both forms load to identical data. `docs/developer/DECISIONS.md` says that the padded chips equal the current MAME dumps.
 
 ### crc32
 

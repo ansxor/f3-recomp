@@ -195,7 +195,7 @@ Event rollback attribution uses corrections in `[event_at + delay, event_at + de
 
 ## Recorded acceptance evidence
 
-The following is recorded in [STATUS.md](https://github.com/ansxor/f3-recomp/blob/main/STATUS.md). It is historical evidence, not a result from reading this page.
+The following is recorded in [docs/developer/VALIDATION.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md). It is historical evidence, not a result from reading this page.
 
 - Eight impaired seeds × 20,000 frames match reference state, framebuffer, PCM CRC and sample count. The seeds are 1, 2, 3, 5, 8, 13, 21 and 34. Runs record 877 to 988 rollbacks per client, including depth 16.
 - Four clean-network seeds × 20,000 frames pass.

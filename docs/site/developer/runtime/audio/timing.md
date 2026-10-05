@@ -14,6 +14,11 @@ The runtime solves this with one counter. `Audio` counts main-clock ticks in `m_
 
 The table lists every rate that the audio code uses.
 
+These are configured reference-model rates, not oscillator measurements from a
+physical board. Integer-clock and partitioning checks establish scheduling
+invariants within the model, not physical sound-board timing or waveform equality.
+See [audio comparison](/developer/testing/audio-compare).
+
 | Clock | Value | Where the code uses it |
 |---|---|---|
 | Main clock | 16,000,000 Hz | Unit of device time (`Machine::main_clock`). |

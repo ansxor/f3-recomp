@@ -82,7 +82,7 @@ flowchart LR
 
 ## Changes to the vendored source
 
-The project changed Musashi to match the MAME reference. `docs/ABI-CHANGES.md` and `NOTES.md` list the changes. Keep these changes if you update Musashi.
+The project changed Musashi to match the MAME reference. `docs/developer/ABI-CHANGES.md` and `docs/developer/DECISIONS.md` list the changes. Keep these changes if you update Musashi.
 
 ### Main CPU (EC020 and 020)
 

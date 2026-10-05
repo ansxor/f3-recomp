@@ -131,7 +131,7 @@ The scaled master helper reads X zoom at `A3+0x10` and Y zoom at `A3+0x12`. The 
 
 It adds center offsets `(columns * zoom_x + 8) / 32` and `(rows * zoom_y + 8) / 16`. The placement fraction is the high byte of `A5.W`.
 
-It applies the same integer-origin quantization and X raster mask as the scaled queue grid. The [evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) records the ROM trace behind these rules.
+It applies the same integer-origin quantization and X raster mask as the scaled queue grid. The [evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) records the ROM trace behind these rules.
 
 ## Latch transform
 

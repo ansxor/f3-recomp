@@ -6,7 +6,7 @@ Default ROM-generated `landmakrj`: the six reviewed config exclusions plus
 **full-coverage hot `-O2` / cold `-Oz` tiers** (`-Os` outside Clang).
 No additional removal, cold stubs or interpreter coverage workaround.
 `F3_PROFILE_SLIM` remains explicit cold removal, rejected for general play.
-Current automated/human admission is recorded in [STATUS.md](../STATUS.md).
+The combined-build checkpoint is summarized in [validation scope](VALIDATION.md).
 
 Integration/GPU/automatic-scale/audio-stall behavior is retained. Main and sound
 require **ABI 3**, not profile experiment B's historical ABI 2. CPU layout,

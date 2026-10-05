@@ -1,8 +1,11 @@
 # F3 video hardware for newcomers
 
-**What you will learn:** the parts of the Taito F3 video hardware that the renderers copy: the RAM areas, the four playfields, the text layer, the sprites, the line RAM, the palette, the control registers, zoom and scroll effects, and blending.
-
-This page describes the hardware as the code in `runtime/video.cpp` implements it. The code is the source of truth. Where a statement is about the real chip and not about the code, the page says so.
+This page describes the video memory, registers, geometry, and effects modeled
+by the renderers. `runtime/video.cpp` follows a MAME-derived TC0630FDP implementation.
+The tables document that software model, not measured physical-chip behavior.
+ROM observations and MAME captures can support specific exercised cases; they
+do not independently verify the chip. Explicit hardware evidence is identified
+separately where available.
 
 ## The big picture
 
@@ -119,7 +122,7 @@ A unity zoom is `x_scale` = 256 and `y_scale` = 256. A smaller `x_scale` moves l
 The renderer has **no rotation matrix**. It has only the per-line values above. A "rotation-like" effect is a sequence of per-line zoom, row scroll and column scroll values.
 :::
 
-The hardware reads two bytes of the zoom word in an unusual way. The high byte of a zoom word gives `x_scale` as 256 minus the byte. The low byte gives `y_scale` as the byte x 2. The Y part of zoom word `i` goes to playfield `{0, 3, 2, 1}[i]`. The code array is named `FIX_Y`. Word 1 therefore sets the Y step of PF3, and word 3 sets the Y step of PF1. The game-data renderer copies this mapping.
+The model reads two bytes of the zoom word in an unusual way. The high byte gives `x_scale` as 256 minus the byte. The low byte gives `y_scale` as the byte x 2. The Y part of zoom word `i` goes to playfield `{0, 3, 2, 1}[i]`. The code array is named `FIX_Y`. Word 1 therefore sets the Y step of PF3, and word 3 sets the Y step of PF1. The game-data renderer copies this reference mapping.
 
 ## The text layer
 

@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: f3-recomp
-  text: Taito F3 static recompiler and modern runtime
-  tagline: Turn the Land Maker arcade ROM into native C code. Run it with a new runtime. Play 1v1 rollback netplay online.
+  text: Land Maker static recompiler
+  tagline: Native CPU execution, an SDL3 runtime and optional two-player rollback netplay for Land Maker Japan 2.01J.
   actions:
     - theme: brand
       text: User guide
@@ -25,21 +25,27 @@ features:
     details: The runtime can build each frame from the game's own tile and sprite data. It can draw at 1x to 4x scale with extra border columns. The original FDP renderer stays available as a reference.
   - title: Rollback netplay
     details: Two players connect through a Go UDP relay. The game predicts missing input. It restores an earlier state when predictions differ. Checksums detect differences between machines.
-  - title: Tested against MAME
-    details: Tools compare frames, audio and CPU state with MAME captures and with an independent Musashi 68k core. Seeded gameplay tests run the full machine without interpreter fallback.
-  - title: Built to be read
-    details: The Developer section explains every subsystem, from the recompiler to the netplay protocol. Each page gives the real function, file and constant names.
+  - title: Reference-based validation
+    details: Video and sound devices are derived from MAME. Finite captures and seeded runs compare output with MAME and CPU execution with Musashi; this is not physical-board verification.
+  - title: Developer documentation
+    details: Explore the runtime, recompiler, netplay protocol and the Land Maker-specific work needed before another F3 game can be supported.
 ---
 
 ## What this project is
 
-f3-recomp is a static recompiler for Taito F3 arcade games. It follows the design of N64Recomp. The target game is **Land Maker Japan 2.01J** (`landmakrj`).
+f3-recomp statically recompiles the main and sound CPU programs of **Land Maker Japan 2.01J** (`landmakrj`) to C and runs them with a new runtime. Its design is inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp). Taito F3 is the underlying platform, not a claim of support for its full game library.
 
 The repository does **not** contain any ROM data. You must supply your own legally obtained `landmakr` ROM files. The build reads them on your computer and writes C code into your build directory.
 
-::: warning Scope
-Only `landmakrj` is tested. The World set `landmakr` has a config file but is untested. Its program ROM files were not available to the authors.
-:::
+## Game support
+
+| Game | Status |
+| --- | --- |
+| Land Maker Japan 2.01J (`landmakrj`) | Supported player build; exercised by finite reference captures, seeded gameplay and netplay checks. Coverage is not exhaustive. |
+| Land Maker World (`landmakr`) | Config and ROM-loader entry only; untested and rejected by the generated `landmakr` player build. |
+| Other Taito F3 games | Not implemented. |
+
+The [portability audit](/developer/porting) distinguishes shared platform code from Land Maker-specific assumptions. For historical validation results and their limits, see [Developer evidence](/developer/evidence).
 
 ## Where to go next
 
@@ -49,3 +55,12 @@ Only `landmakrj` is tested. The World set `landmakr` has a config file but is un
 | Play with a friend online | [Online play](/guide/netplay) |
 | Look up a command-line option | [Command-line reference](/reference/cli) |
 | Understand how the code works | [Developer overview](/developer/) |
+
+## Credits and licensing
+
+- [MAME](https://github.com/mamedev/mame): individually BSD-3-Clause video and sound-device algorithms adapted for this runtime; author credits and the pinned revision are in [runtime/LICENSES.txt](https://github.com/ansxor/f3-recomp/blob/main/runtime/LICENSES.txt).
+- [Musashi](https://github.com/kstenerud/Musashi): the reference 68k CPU core, with its MIT-style notice and separate SoftFloat Release 2b terms retained in the source.
+- [SDL3](https://github.com/libsdl-org/SDL): window, input, audio and GPU presentation; zlib-licensed system dependency.
+- [Capstone](https://github.com/capstone-engine/capstone): instruction decoding for recompilation.
+
+The repository has no project-wide license grant. Dependency notices apply to their respective components, not to the entire project or to ROM data. Supply your own legally obtained ROMs; no game assets are distributed.

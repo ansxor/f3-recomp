@@ -30,7 +30,7 @@ Protocol version 2 pairs state sampled on frame callback N with `screen:pixels()
 
 Land Maker's baseline MAME renderer uses one-frame sprite buffering: current palette/playfield/text/line RAM is combined with sprites built from frame N-1. `spriteram_active.bin` preserves that prior sprite RAM separately. Control-register taps are retained strongly and reinstalled on soft reset.
 
-Observed verification: 25 phase-correct captures, frames 600–3480 at step 120, replay with **zero RGB mismatches across all 1,856,000 pixels**. An additional 34 consecutive animated frames established the one-callback pixel delay. This validates renderer output, not native game execution or hardware truth. ROM behavior/observed output outrank primary hardware evidence, WIP notes, then emulator source; discrepancies are tracked in `NOTES.md`.
+Observed verification: 25 phase-correct captures, frames 600–3480 at step 120, replay with **zero RGB mismatches across all 1,856,000 pixels**. An additional 34 consecutive animated frames established the one-callback pixel delay. This validates comparison against captured MAME output, not native game execution or physical-chip behavior. Discrepancies and superseded observations are archived in [historical development notes](../../docs/developer/DECISIONS.md).
 
 ---
 

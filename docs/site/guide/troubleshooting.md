@@ -54,7 +54,7 @@ The recompiler also has messages about the config file, for example `Config ... 
 
 | Symptom | Cause and action |
 | --- | --- |
-| The build takes very long and uses much disk space | This is normal. The generated C code is large (about 260 MB for the main CPU in the author's build). Use `-DCMAKE_BUILD_TYPE=Release` and a suitable `-j` value. |
+| The build takes very long and uses much disk space | Generated C is large. Use `-DCMAKE_BUILD_TYPE=Release` and reduce parallel jobs if memory is limited. |
 | The compiler stops on warnings in `f3_recompiled` | The generated code is built with `-Wall -Wextra -Werror` on GCC and Clang. Report this as a bug with your compiler version. |
 
 ## Program start: options
@@ -122,7 +122,7 @@ If SDL cannot start, the program prints the text that SDL gives. Typical causes:
 | `CPU halted at N` | The main CPU stopped. Please report the number. |
 | `SoundNative: fatal unsupported reachable PC: 0x... (opcode 0x...)` | The native sound driver reached code that it does not cover. Please report it. Try `--sound-driver oracle` to continue. |
 | `Game composite frame N: ... RGB pixel mismatches` | In `--video compare` mode the two renderers disagree. See [Video and presentation](/guide/video#what-an-error-means-in-compare-mode). |
-| The game is slow | Check that you configured `-DCMAKE_BUILD_TYPE=Release`. The authors measured only Release builds. |
+| The game is slow | Check that you configured `-DCMAKE_BUILD_TYPE=Release`. Try CPU presentation if GPU device or driver behavior is problematic. |
 | No sound at the start | The game sets the output gain at about 13 seconds. Wait. Check that you did not give `--no-audio`. |
 | The settings are lost | Add `--eeprom FILE`. See [Controls and options](/guide/running#settings-and-the-eeprom). |
 | The keys do not work | The window must have focus. Netplay uses the same keys, but they control your assigned player. |

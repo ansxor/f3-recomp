@@ -14,7 +14,7 @@ The F3 board has a separate sound computer. It has these parts:
 
 The main CPU sends commands to the sound CPU through a mailbox in shared memory. The sound driver reads the commands and programs the ES5505 voices.
 
-The runtime emulates the chips. The runtime has two ways to run the sound driver:
+The runtime uses MAME-derived sound-device implementations, validated against reference output rather than physical hardware. It has two ways to execute the sound ROM; **native sound is not HLE**:
 
 | Driver | Name in the option | What it is |
 | --- | --- | --- |
@@ -47,10 +47,10 @@ Use `--sound-driver native` or `--sound-driver oracle`.
 | The program has no generated sound code and you give `--sound-driver native` | Error: `Native sound requires a generated sound program (F3_ROM_DIR)` |
 | You give another value | Error: `--sound-driver must be oracle or native` |
 
-The native driver is tested against the oracle. A seeded test of 6000 frames matches the oracle in all 12,258,121 trace records and in the complete WAV bytes (from the repository README). Read the [sound documentation](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) for the limits of the native driver.
+Finite seeded runs compare native sound bus traces and WAV output with the oracle. These checks do not establish correctness for every reachable game state. See [Developer evidence](/developer/evidence) and the [sound-driver document](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) for coverage and limits.
 
 ::: info Why two drivers
-The oracle is the check for the native driver. Use the oracle if you suspect a sound bug in the native driver. Use the native driver for normal play. The oracle is slower. In the netplay measurements of the repository, the native step is about 276 frames per second and the oracle step is about 146 frames per second (Apple M5, from `docs/NETPLAY.md`).
+Use the oracle to investigate a suspected native sound CPU bug. Use the native driver for normal play and netplay. Both execute the same ROM and feed the same emulated sound devices.
 :::
 
 The native driver needs exactly the sound ROM with CRC32 `5a7e9117`. For another ROM the program stops with `SoundNative: unsupported sound ROM CRC 0x... (expected 0x5a7e9117)`.

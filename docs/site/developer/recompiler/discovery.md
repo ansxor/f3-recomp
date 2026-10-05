@@ -50,9 +50,9 @@ Any other decode is a *decode failure*. Discovery stores the PC in `invalid_pcs`
 
 ### Why `all_aligned` exists
 
-Early builds used `recursive` mode. The game kept reaching code that discovery had not found. Each time, the project added more metadata: traced PCs, script tables, callbacks. `NOTES.md` shows the cycle. One run missed 1,265,436 executed instructions. Computed jumps, odd-address script pointers and long straight-line routines do not follow any fixed rule.
+Early builds used `recursive` mode. The game kept reaching code that discovery had not found. Each time, the project added more metadata: traced PCs, script tables, callbacks. `docs/developer/DECISIONS.md` shows the cycle. One run missed 1,265,436 executed instructions. Computed jumps, odd-address script pointers and long straight-line routines do not follow any fixed rule.
 
-The project then switched to `all_aligned` for Japan and removed the observed-PC metadata. This mode does not need a proof that an address is code. It decodes everything. `NOTES.md` states the cost: the binary grew from 7,294,872 to 64,950,520 bytes in one Release build on an Apple Silicon machine. That is the price of the over-approximation.
+The project then switched to `all_aligned` for Japan and removed the observed-PC metadata. This mode does not need a proof that an address is code. It decodes everything. `docs/developer/DECISIONS.md` states the cost: the binary grew from 7,294,872 to 64,950,520 bytes in one Release build on an Apple Silicon machine. That is the price of the over-approximation.
 
 ::: info
 A decoded address is not always real code. The report says so in `coverage_basis`: *"includes overlapping starts and data, not a reachability classification."*
@@ -297,7 +297,7 @@ The result is the dictionary `Discovery.blocks`, which maps a leader to its list
 
 In `recursive` mode `invalid_pcs` holds the PCs of the `decode_failure` entries.
 
-`NOTES.md` records these results for earlier `recursive` runs. After script-aware discovery: 37,659 instructions, 138,528 bytes (6.606 %), and 86 unresolved transfers. In the final `recursive` run before the switch: 43,986 instructions, 163,286 bytes (7.786 %), 2,040 function candidates and 94 unresolved transfers. For `all_aligned`: 464,523 decoded starts from 1,048,576 aligned candidates. The report states that unresolved transfers and these counts do not prove which bytes are data.
+`docs/developer/DECISIONS.md` records these results for earlier `recursive` runs. After script-aware discovery: 37,659 instructions, 138,528 bytes (6.606 %), and 86 unresolved transfers. In the final `recursive` run before the switch: 43,986 instructions, 163,286 bytes (7.786 %), 2,040 function candidates and 94 unresolved transfers. For `all_aligned`: 464,523 decoded starts from 1,048,576 aligned candidates. The report states that unresolved transfers and these counts do not prove which bytes are data.
 
 ## Limits of discovery
 

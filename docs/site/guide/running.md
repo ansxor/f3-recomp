@@ -21,6 +21,7 @@ The window must have focus. The keys control player 1.
 | `F1` | Service switch |
 | `F2` | Test switch |
 | `Escape` | Quit |
+| `F11` or `Alt+Enter` | Toggle fullscreen |
 
 Each key acts as a switch. The input is active while you hold the key. Release the key to release the switch.
 
@@ -89,9 +90,9 @@ A headless run without netplay does not wait. It runs as fast as the computer al
 | `--no-audio` | Do not open the sound device. The machine still creates the sound samples. |
 | `--unthrottled` | With a window, do not wait between frames. The game runs faster than real time. |
 | `--wav FILE` | Write all sound samples to a 16-bit stereo WAV file. |
-| `--surface FILE.bmp` | With a window and `--frames`, save a screenshot of the window after the last frame. |
+| `--surface FILE` | With a window and `--frames`, save a CPU window BMP or GPU internal-resolution PNG after the last frame. |
 
-The game runs at the native frame rate of the board. The pixel clock is 6,671,500 Hz and a frame has 432 by 262 pixels. This gives about 58.94 frames per second. The program does not use 60 Hz.
+The runtime uses MAME-derived frame timing: a 6,671,500 Hz pixel clock and 432×262 total raster, about 58.94 frames per second. It does not substitute a 60 Hz clock or claim physically measured board timing.
 
 ## Save frame data for tests
 
@@ -109,11 +110,7 @@ These dumps are not complete inputs for `f3rt-replay`. Replay also needs the act
 
 ## The summary line
 
-At the end of every run the program prints one summary line. Here is an example from a headless run of 120 frames in the author's build:
-
-```text
-set=landmakrj frames=120 pc=0x1136 sound_pc=0xc108ea sound_driver=native frame_crc=0x2493e2ff cycles=32573410 native_blocks=1853837 fallback_instructions=0 audio_frames=60588 audio_peak=0 nonzero_samples=0
-```
+At the end of every run the program prints a summary beginning with `set=`. Values depend on the build, inputs and run length; they are diagnostics, not a universal expected-output checkpoint.
 
 | Field | Meaning |
 | --- | --- |

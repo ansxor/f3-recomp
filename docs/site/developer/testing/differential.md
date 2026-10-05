@@ -220,7 +220,7 @@ PYTHONPATH=build/python python3 tools/differential/run.py \
 
 The same command works as `python3 -m tools.differential` from the repository root. Install Capstone with `pip install -r recomp/requirements.txt` (into `build/python` with `--target`, or into any environment on `PYTHONPATH`).
 
-The repository notes record a run of 5,000 deterministic cases with no failures and no unsupported case (`NOTES.md`). A fresh run of the same command on the documented source reported 5,000 supported cases and 5,000 passes. The run takes a few seconds.
+The retained run in `docs/developer/DECISIONS.md` records 5,000 deterministic cases with 5,000 passes and no unsupported case. This is evidence for that recorded build and case set, not a current execution result.
 
 ## How to reproduce and fix a failure
 
@@ -250,4 +250,4 @@ The script writes the file `recomp/68020_cycles.csv` by default. `recomp/timing.
 - The harness checks one instruction, or a short sequence, in a fixed memory map. It does not check control flow between blocks or the discovery of code.
 - It does not run RESET or STOP, because these need the device model.
 - The harness version of the runtime ABI is a copy. A bug in `runtime/cpu_abi.cpp` is not found here. `f3rt-check` and the gameplay gates cover it (see [Unit checks](/developer/testing/unit-checks)).
-- Both sides agree with each other, not with the real chip. Musashi is the accepted model. Where MAME differs from Musashi, the team patches Musashi and records the reason in `NOTES.md`.
+- Both sides agree with each other, not with the real chip. Musashi is the accepted model. Where MAME differs from Musashi, the team patches Musashi and records the reason in `docs/developer/DECISIONS.md`.

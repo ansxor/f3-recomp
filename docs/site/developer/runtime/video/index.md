@@ -8,13 +8,16 @@ The runtime has two independent renderers for the Taito F3 picture. Both produce
 
 | Renderer | Class | Input | Role |
 | --- | --- | --- | --- |
-| FDP renderer | `f3rt::Video` | The hardware RAM that the game wrote: sprite RAM, playfield RAM, text RAM, character RAM, line RAM, pivot RAM, palette RAM and control registers | The **oracle**. It copies what the TC0630FDP chip does. It is the reference for every parity test. |
+| FDP renderer | `f3rt::Video` | The emulated video RAM that the game wrote: sprite RAM, playfield RAM, text RAM, character RAM, line RAM, pivot RAM, palette RAM and control registers | The internal **oracle**: a MAME-derived TC0630FDP model used as the game-data renderer's reference, not physical-chip verification. |
 | Game-data renderer | `f3rt::GameVideo` | The data that the game builds before it writes the hardware RAM: tile-block descriptors, text strings, sprite queues and line-effect tables. The runtime reads this data from the game ROM and the main work RAM. | The **default renderer** of the `landmakr` program. It rebuilds the scene and draws it. It can also draw at a higher resolution with extra border columns. |
 
 The abbreviation **FDP** means the TC0630FDP video chip of the Taito F3 board. The oracle name comes from its job: `GameVideo` must give the same pixels as `Video` for every frame that `GameVideo` supports.
 
+Internal pixel parity and matching sampled MAME output are separate evidence.
+Neither proves unexercised chip behavior or support for every F3 game.
+
 ::: info
-Why two renderers? A recompiled game runs as native code, so the runtime can see the game data before the game writes it to the chip. The game-data renderer uses this fact to draw the scene at any resolution. The FDP renderer stays in the program to prove that the new renderer is correct, and to draw the frames that the new renderer does not support.
+Why two renderers? A recompiled game runs as native code, so the runtime can inspect game data before it writes emulated video RAM. The game-data renderer rerasterizes supported scenes at higher resolutions. The FDP renderer remains the internal reference for comparison and draws unsupported frames.
 :::
 
 ## Where the renderers run
@@ -88,12 +91,12 @@ The visible window is columns 46 to 365 and lines 24 to 255 of the scanout space
 
 Read the pages in this order if you are new to the code.
 
-1. [F3 video hardware](/developer/runtime/video/hardware). It explains the chip features that the renderers copy.
+1. [F3 video hardware](/developer/runtime/video/hardware). It explains the modeled memory layout and effects, with the limits of physical-hardware evidence.
 2. [FDP renderer](/developer/runtime/video/fdp), then [FDP sprites](/developer/runtime/video/fdp-sprites) and [FDP mixing](/developer/runtime/video/fdp-mixing).
 3. [GameVideo](/developer/runtime/video/game-hle), [Producer hooks](/developer/runtime/video/producers) and the per-layer pages.
 4. [Presentation](/developer/runtime/video/presentation), [Compare mode](/developer/runtime/video/compare-mode) and [Parity evidence and limits](/developer/runtime/video/parity).
 5. [Extending the renderer](/developer/runtime/video/extending) when you are ready to change code.
 
-The long evidence log for the game-data renderer is in [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md). The ABI note is in [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md). For the surrounding runtime, read [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
+The long evidence log for the game-data renderer is in [docs/developer/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md). The ABI note is in [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md). For the surrounding runtime, read [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
 
 Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp), [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).

@@ -4,6 +4,9 @@
 
 The code is in `runtime/video.cpp`. The sprite RAM format is in [F3 video hardware](/developer/runtime/video/hardware).
 
+The sprite rules below describe the MAME-derived FDP model. Matching game-data
+sprite output is internal parity, not independent physical-chip verification.
+
 ## The sprite plane
 
 The sprite plane is a 432x256 array of `uint16_t` (`sprite_framebuffer`). One entry is a palette index:

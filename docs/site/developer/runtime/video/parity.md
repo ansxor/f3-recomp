@@ -2,7 +2,7 @@
 
 The game renderer has exact native parity in the retained normal-orientation scenarios. This evidence does not claim complete game or physical-chip coverage.
 
-All measured results on this page come from [docs/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md). This documentation task does not rerun those scenarios.
+All measured results on this page are retained records from [docs/developer/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md), tied to the recorded builds and scenarios.
 
 ## Evidence boundary
 
@@ -20,7 +20,7 @@ flowchart TD
     S --> T["Indexed full-texture and sprite-plane comparison"]
     T --> R["Normalized visible-row comparison"]
     R --> C["Native composite RGB comparison"]
-    C --> M["Fresh game captures against retained MAME frames"]
+    C --> M["Recorded game captures against retained MAME frames"]
     C --> P["Expanded presentation with unchanged native output"]
 ```
 
@@ -72,9 +72,9 @@ The 40,000-frame seeded runs retain the same 231 startup renderer fallbacks. Thi
 
 ## Independent capture compatibility
 
-Fresh oracle attract captures compare exactly with 25 retained MAME frames. The comparison covers 1,856,000 RGB pixels, with zero mismatches and zero maximum channel error.
+The recorded oracle attract captures compare exactly with 25 retained MAME frames. The comparison covers 1,856,000 RGB pixels, with zero mismatches and zero maximum channel error.
 
-Fresh `--video game` attract captures also match all 25 retained frames. All samples occur after the last startup fallback.
+The recorded `--video game` attract captures also match all 25 retained frames. All samples occur after the last startup fallback.
 
 Both modes record native CRC `0xb490d7d9` at frame 3480. They execute 49,866,062 native blocks with zero CPU fallback.
 

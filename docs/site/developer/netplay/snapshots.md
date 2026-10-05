@@ -8,7 +8,7 @@ A rollback goes back in time. The engine must put the whole machine in the exact
 
 A snapshot must be complete. If one field is missing, that field keeps its newer value after the restore. The resimulation then starts from a wrong state. The two clients no longer agree.
 
-A snapshot must also be fast and must not allocate memory. The engine saves one snapshot for every simulated frame. On Apple M5 in Release mode, STATUS.md reports a mean save time of 113.0 microseconds and a mean load time of 99.8 microseconds for the native configuration.
+A snapshot must also be fast and must not allocate memory. The engine saves one snapshot for every simulated frame. On Apple M5 in Release mode, docs/developer/VALIDATION.md reports a mean save time of 113.0 microseconds and a mean load time of 99.8 microseconds for the native configuration.
 
 ## The four functions
 
@@ -77,7 +77,7 @@ void save_state(StateWriter &writer) const {
 
 ## Layout and size
 
-`Machine::save_state` writes eight sections in a fixed order. The table shows the layout for the netplay configuration: native sound driver and GameVideo at scale 1 with border 0. The offsets and sizes come from the `sizeof` values of the `Canonical*` records and from `Machine::state_size()`. The total matches the 4,231,509 bytes in STATUS.md.
+`Machine::save_state` writes eight sections in a fixed order. The table shows the layout for the netplay configuration: native sound driver and GameVideo at scale 1 with border 0. The offsets and sizes come from the `sizeof` values of the `Canonical*` records and from `Machine::state_size()`. The total matches the 4,231,509 bytes in docs/developer/VALIDATION.md.
 
 | # | Section | Offset | Bytes | Content |
 | --- | --- | ---: | ---: | --- |
@@ -283,7 +283,7 @@ Follow this checklist when you add a field to any device.
 4. Update the matching `state_size()` function. For a plain `sizeof(Record)` size this is automatic.
 5. Reset any derived cache in `load_state`.
 6. Run the oracle snapshot suite. It compares two runs from the same snapshot. A missing field shows as a mismatch in state CRC, RAM, pixels, PCM or the sound trace. See [Oracle and verification](/developer/netplay/oracle).
-7. Update the inventory in [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
+7. Update the inventory in [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
 
 The build hash changes when you change the source. Old and new builds cannot join the same match.
 
@@ -308,5 +308,5 @@ The build hash changes when you change the source. Old and new builds cannot joi
 - [Machine traversal and size](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp).
 - [Musashi canonical C record](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_oracle.h).
 - [Musashi value bridge](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c).
-- [ABI state inventory](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
+- [ABI state inventory](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
 

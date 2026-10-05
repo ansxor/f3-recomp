@@ -16,7 +16,7 @@ The test has two goals:
 The test is a regression gate. It does not compare the picture or the sound with an oracle by default. It checks that a long run completes without a CPU halt, an execution error or a fallback. The optional `--video-diff` flag adds a picture comparison (see below).
 
 ::: warning
-A passing seed is a sample of gameplay. It is not a proof that every game state works. `NOTES.md` states the same limit.
+A passing seed is a sample of gameplay. It is not a proof that every game state works. `docs/developer/DECISIONS.md` states the same limit.
 :::
 
 ## Files and targets
@@ -181,7 +181,7 @@ python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
   --frames 40000 --seeds 1 2 3 4 5 6 7 8
 ```
 
-Seeds 1 to 16 with 40,000 frames each are recorded as passing with zero fallback in `NOTES.md`. Two concurrent eight-seed batches took about 1,920 seconds each (also in `NOTES.md`). Plan for long runs.
+Seeds 1 to 16 with 40,000 frames each are recorded as passing with zero fallback in `docs/developer/DECISIONS.md`. Two concurrent eight-seed batches took about 1,920 seconds each (also in `docs/developer/DECISIONS.md`). Plan for long runs.
 
 ## Video comparison: `--video-diff`
 
@@ -232,7 +232,7 @@ VIDEO fallback=<component> producer_pc=0x... frames=... first=... last=...
 
 The `fallback` lines list the components for which the game renderer gave up on some frames and the FDP picture was used.
 
-`docs/VIDEO-HLE.md` records measured results. Example: seed 5 with 6,000 frames compares 46 samples per layer with zero mismatches (24,117,248 indexed pixels per playfield). See [Game-data video HLE](/developer/runtime/video/game-hle) for how the renderer works.
+`docs/developer/VIDEO-HLE.md` records measured results. Example: seed 5 with 6,000 frames compares 46 samples per layer with zero mismatches (24,117,248 indexed pixels per playfield). See [Game-data video HLE](/developer/runtime/video/game-hle) for how the renderer works.
 
 ```sh
 build/f3rt-gameplay-regression --seed 5 --frames 6000 --video-diff \

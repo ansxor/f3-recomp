@@ -103,7 +103,7 @@ The rollback core and the transport do not know each other. The frontend moves d
 | `tools/netplay_build_id.cmake`, `CMakeLists.txt` | Build fingerprint generator |
 | `docs/NETPLAY.md` | Original design and evidence document |
 
-The full documents are on GitHub: [docs/NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) and [docs/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/ABI-CHANGES.md).
+The full documents are on GitHub: [docs/NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) and [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md).
 
 ## A connection in short
 

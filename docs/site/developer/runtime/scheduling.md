@@ -28,6 +28,9 @@ It does not check the target against `cpu.cycles`; callers must maintain the CPU
 
 The constants are in `include/f3rt/machine.hpp`:
 
+These constants and instruction-boundary events describe the MAME-derived
+reference schedule, not a physical board's measured bus cycles or oscillator rates.
+
 | Constant | Value | Meaning |
 | --- | --- | --- |
 | `main_clock` | 16 000 000 | Main CPU clock in Hz. |
@@ -52,7 +55,7 @@ The scheduler calculates each event from the frame number.
 It does not accumulate a rounded fixed interval.
 
 ::: info
-Raster time zero is the VBSTART beam epoch of the MAME reference screen. It is not scanline zero. So the first vblank interrupt comes one full frame (262 lines) after reset. An earlier version started at line 256 and the interrupt came about 6 216 cycles too early. The note is in `NOTES.md` under "Runtime decisions".
+Raster time zero is the VBSTART beam epoch of the MAME reference screen. It is not scanline zero. So the first vblank interrupt comes one full frame (262 lines) after reset. An earlier version started at line 256 and the interrupt came about 6 216 cycles too early. The note is in `docs/developer/DECISIONS.md` under "Runtime decisions".
 :::
 
 ## advance_to: running the devices

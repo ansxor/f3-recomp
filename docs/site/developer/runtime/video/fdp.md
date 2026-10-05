@@ -2,15 +2,15 @@
 
 **What you will learn:** how `f3rt::Video` turns the hardware RAM into a 320x232 picture, what every public function does, what each internal structure holds, and which rules you must keep when you change it.
 
-The files are `include/f3rt/video.hpp` and `runtime/video.cpp`. The renderer is a software copy of the TC0630FDP. Read [F3 video hardware](/developer/runtime/video/hardware) first.
+The files are `include/f3rt/video.hpp` and `runtime/video.cpp`. The renderer is a MAME-derived software model of the TC0630FDP, not a chip-verified copy. Read [F3 video hardware](/developer/runtime/video/hardware) first.
 
 ::: info
-**Why this renderer must stay unchanged.** `Video` is the oracle. Every parity test compares the game-data renderer with it. If you change its output, you change the reference. Change `video.cpp` only to fix a proven difference from the real game output (for example a MAME capture). See [Parity evidence and limits](/developer/runtime/video/parity).
+**Reference ownership.** `Video` is the internal oracle for game-data renderer comparisons. Matching it establishes agreement with this implementation, not physical-chip correctness. Changes to the oracle need independent evidence, such as a recorded MAME capture or a documented hardware measurement. See [Parity evidence and limits](/developer/runtime/video/parity).
 :::
 
 ## Design
 
-The renderer draws **line by line**, like the real chip. It does not build a full-screen buffer for each layer. It has three reasons for this:
+The renderer draws **line by line**, following the retained MAME-derived model. It does not build a full-screen buffer for each layer. It has three reasons for this:
 
 1. The line RAM can change every setting on every line. A per-line loop handles all cases with one code path.
 2. Playfield lines are 1024 pixels wide. The renderer builds only the lines it needs.

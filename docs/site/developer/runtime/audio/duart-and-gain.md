@@ -4,6 +4,10 @@ The DUART supplies driver timing and DSP control. The MB87078 sets channel atten
 
 Sources: [mc68681.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mc68681.cpp), [mb87078.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mb87078.cpp), and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
 
+The device descriptions document the MAME-derived runtime models and their board
+wiring. Configured clocks, pin behavior, and gain stages are not physical-board
+measurements; successful comparisons establish the recorded reference compatibility.
+
 ## The MC68681 DUART
 
 DUART means dual universal asynchronous receiver/transmitter. The Motorola MC68681 has two serial ports, a counter/timer, input pins and output pins. The F3 sound board does not use the serial ports for communication. It uses the chip for three jobs:
@@ -169,7 +173,7 @@ Reads return the corresponding latch. Snapshots retain indices, channel latches 
 
 ## The mixer gain
 
-`Audio::Impl::update_gains` converts the physical gain of the chip into two multipliers for each side: `m_otis_gain` and `m_output_gain`. It runs when the volume chip calls back, when the model changes, and after a state load.
+`Audio::Impl::update_gains` converts the chip model's gain value into two multipliers for each side: `m_otis_gain` and `m_output_gain`. It runs when the volume chip calls back, when the model changes, and after a state load.
 
 ```cpp
 const float route = float(int(physical * 100.0f + 0.5f)) / 32.0f;
@@ -184,7 +188,7 @@ The enum `Audio::GainModel` has two values.
 | `MameRouting` (default) | `0.18 * route` | `route` | The volume applies twice: before the ESP input and after the pump. This matches the output that the MAME baseline gives. |
 | `SingleStage` | `0.18` | `physical` | One analog stage after the ESP. The header says this is an unverified experiment. |
 
-`route` is the physical gain as a percentage, rounded to an integer, divided by 32. At 0 dB the percentage is 100 and `route` is 3.125.
+`route` is the modeled gain as a percentage, rounded to an integer, divided by 32. At 0 dB the percentage is 100 and `route` is 3.125.
 
 The final mix, from `generate_one_frame`:
 

@@ -8,8 +8,8 @@ The F3 board draws its picture with a custom chip, the FDP. The game writes tile
 
 The runtime has two ways to make the same picture:
 
-- **FDP renderer.** The runtime emulates the chip. It reads the video RAM that the game wrote and draws the picture. The authors call this renderer the *oracle*. It is the reference.
-- **Game-data renderer.** Runtime hooks observe the game code that builds the scene. The renderer reads tile blocks, sprite lists and line data from ROM and work RAM. It uses scene geometry to draw at higher resolutions and with extra border columns.
+- **FDP renderer.** A MAME-derived implementation reads the video RAM written by the game. It is called the *oracle* because it is the reference for the game-data renderer, not because it has been verified against physical TC0630FDP hardware.
+- **Land Maker game-data renderer.** Hooks observe the game code that builds the scene. The renderer reads tile blocks, sprite lists and line data from ROM and work RAM, then uses scene geometry for higher resolutions and extra border columns.
 
 ```mermaid
 flowchart LR
@@ -37,13 +37,13 @@ The modes `game` and `compare` need the strict native `landmakrj` run. If you ad
 
 ### When the game-data renderer uses the oracle
 
-The game-data renderer cannot draw every frame. For a frame that it does not support, it shows the picture of the FDP renderer instead. This is a per-frame decision. The result is still the correct picture.
+The game-data renderer cannot draw every frame. Unsupported frames use the MAME-derived FDP reference instead. Matching this reference is not a claim of exhaustive game coverage or physical-board accuracy.
 
-The known cases, from the [video documentation](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md):
+Known fallback cases are described in the [video documentation](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md):
 
 | Case | What happens |
 | --- | --- |
-| The first frames after power-on | The oracle draws the first 231 measured frames, up to frame 418. The game has not yet set up all its data. |
+| Startup | The oracle draws until the game has initialized the required scene data. |
 | Ending transitions | The oracle draws until the game sets up its line data again. |
 | Bitmap pivot layer | The oracle draws the frame. |
 | Screen flip and sprite trails | The oracle draws the frame while the command is active. |
@@ -60,7 +60,8 @@ After the pictures match at native size, you can add three options. All three ne
 | `--video-border N` | 0 to 160 | 0 | Adds N native columns to **each** side of the picture. |
 | `--video-filter F` | `nearest` or `linear` | `nearest` | Sets the filter that SDL uses to scale the final picture to the window. |
 | `--video-backend B` | `cpu` or `gpu` | `cpu` | CPU row workers or SDL3 GPU internal-resolution compositing. |
-| `--video-interp I` | `off`, `linear` or `fit` | `off` | Opt-in GPU line sampling for validated PF2 water/puzzle-board effects. |
+| `--video-interp I` | `off`, `linear` or `fit` | `off` | Opt-in GPU interpolation for recognized playfield line effects. |
+| `--video-interp-fields F` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Choose geometry smoothing, same-pen RGB palette blending, both or neither. |
 
 Example:
 
@@ -86,7 +87,7 @@ Important facts:
 - **Border shows more of the map.** The game does not know about the extra columns. Game logic and the on-screen display keep their native layout. The extra columns can be empty or show wrapped map data.
 - **Linear filtering** changes only how SDL scales the final picture. It does not add detail.
 - **Native data stays native.** The frame CRC, the dumps and the compare mode always use the 320 × 232 picture.
-- **Unsupported frames stay exact.** When the oracle draws a frame in expanded mode, the program shows the exact oracle picture in the center with black columns at the sides. It does not invent new geometry.
+- **Unsupported frames use the reference.** In expanded mode, the reference picture is centered with black columns at the sides. The renderer does not invent geometry for these frames.
 
 GPU uses Metal on macOS and SPIR-V/Vulkan on supported hosts. Both backends
 use the same integer sampling, sprite raster rules and blend ordering.
@@ -107,17 +108,19 @@ Numeric scales retain their existing behavior on either backend. Headless auto
 keeps scale 1 without opening/querying a window; online play rejects auto modes.
 The GPU port does not interpolate adjacent native line values by default.
 
-`--video-interp linear` smooths scale/scroll and valid palette-bank colors
-between adjacent water rows. `--video-interp fit` uses a guarded smooth model
-across the effect. They require `--video-backend gpu` and take effect only
-above scale 1. This is independent of `--video-filter linear`, which only
-filters the finished window image.
+`--video-interp linear` samples between adjacent valid playfield rows.
+`--video-interp fit` uses a guarded smooth model across a recognized effect.
+Both require `--video-backend gpu` and apply above scale 1; native captures
+and sprites do not change. Geometry sampling is enabled by default when
+interpolation is selected. `--video-interp-fields palette` additionally permits
+same-pen RGB palette-bank blending, which invents intermediate colors.
+Discrete clipping, priority, mosaic and uncertain transitions are not smoothed.
 
-Both modes keep the water boundary and discrete palette transition intact.
-Sprites and native captures do not change. Unknown effects, invalid/disabled
-rows, jumps and uncertain fits use the non-interpolated picture instead.
-The measured gain is smoother water perspective, not new texture detail;
-see [GPU measurements](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+Unknown effects, invalid or disabled rows, jumps and uncertain fits use the
+non-interpolated picture. This is distinct from `--video-filter linear`, which
+only filters the finished window image. See [GPU presentation and historical
+measurements](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md)
+for implementation limits.
 
 The program checks the values:
 
@@ -135,15 +138,7 @@ Online play rejects `--video-scale` other than 1 and `--video-border` other than
 
 ## The video report
 
-When the game-data renderer was on, the program prints `VIDEO` lines at the end of the run. Here is an example from a headless `--video compare` run of 700 frames in the author's build:
-
-```text
-VIDEO layer=composite domain=320x232-RGB sampled_frames=469 compared_pixels=34818560 pixel_mismatches=0
-VIDEO game_frames=469 oracle_fallback_frames=231
-VIDEO fallback=lines producer_pc=0x1003a frames=229 first=1 last=417
-VIDEO fallback=text producer_pc=0x0 frames=1 first=115 last=115
-VIDEO fallback=sprites producer_pc=0x10412 frames=1 first=418 last=418
-```
+When the game-data renderer is enabled, the program prints `VIDEO` diagnostic lines at exit. They summarize renderer use and, in compare mode, reference differences. Their counts depend on the run; historical examples belong in [developer evidence](/developer/user-doc-evidence).
 
 | Line | Meaning |
 | --- | --- |

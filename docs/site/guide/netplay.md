@@ -115,7 +115,7 @@ Netplay needs the strict native game. The program stops at the start with an err
 - Do not use `--allow-fallback`.
 - Do not use `--eeprom`, `--sound-trace` or `--fallback-report`.
 
-You may still use `--video-filter linear`, because the filter only changes how SDL shows the picture. The program checks only scale and border for netplay. This filter case is not tested by the authors.
+`--video-filter linear` is permitted because it changes window presentation, not synchronized state. Automatic scaling is rejected; use fixed scale 1 and border 0.
 
 ## Step 4: Play
 
@@ -166,7 +166,7 @@ The delay is the number of frames between your key press and the moment the game
 | Delay | Effect |
 | --- | --- |
 | Low (0 or 1) | The game feels responsive. On a slow network, rollbacks are frequent and deep. |
-| Default (2) | The authors tested this value most. |
+| Default (2) | A starting point; adjust both clients together to suit the connection. |
 | High (up to 8) | Fewer rollbacks. The input feels late. |
 
 Both players must give the same value. If the values differ, the relay rejects the second player with `delay configuration mismatch`.
@@ -179,14 +179,14 @@ Both players must give the same value. If the values differ, the relay rejects t
 | The shared test switch. | The window, filter and sound device. |
 | A CRC32 of the full machine state every 60 confirmed frames. | Local files such as `--wav` output. |
 
-The game plays sound only after the frames are confirmed. A rolled back frame never makes a sound twice. This gives exact sound but adds some audio latency.
+Audio is released only after frames are confirmed, so predicted frames do not play sound twice. Confirmation adds audio latency; it is not a physical-hardware accuracy guarantee.
 
 ## Limits
 
 - **Two players only.** There are no spectators and no accounts.
 - **No reconnect.** If a player is silent for 8 seconds, or leaves, the relay ends the session. Both players must start a new session with a new room name.
 - **No encryption and no authentication.** Room names are routing labels, not passwords. Use a network that you trust.
-- **Rollback cost.** The game keeps 16 frames of history. This does not mean that a 16-frame correction fits in one display frame. In measurements in `docs/NETPLAY.md` on Apple M5, the native driver can replay about 3 frames within the 16.667 ms budget on average. A longer correction takes more than one display frame. The game then stalls for a short time, but it does not drop frames or sound.
+- **Rollback cost.** The game retains 16 frames of history, but replaying a deep correction can exceed a display interval and cause a visible stall. History capacity is not a real-time performance guarantee. Historical measurements are in the [developer limits](/developer/netplay/limits).
 - **Same build only.** A different compiler, platform or source gives a different build hash. The relay rejects it.
 - **One platform tested.** The authors tested on macOS. Windows is not supported.
 - **Relay limits.** The relay holds at most 1024 rooms. It accepts 500 packets per second from each IP address (burst 250). A game stops with an error after 10 seconds without any reply from the relay.
@@ -220,17 +220,7 @@ build/landmakr --headless --frames 300 --netplay-server 127.0.0.1:9000 --netplay
 build/landmakr --headless --frames 300 --netplay-server 127.0.0.1:9000 --netplay-room smoke --netplay-player 2
 ```
 
-Run each command in its own terminal. Start the two commands within 120 seconds of each other. Here is the last part of the output from the author's run:
-
-```text
-netplay_ready player=1 delay=2
-VIDEO game_frames=185 oracle_fallback_frames=115
-...
-netplay_confirmed=300 state_crc=3254973699 rollbacks=0 max_rollback_depth=0
-set=landmakrj frames=300 pc=0x1016e sound_pc=0xc18f82 sound_driver=native frame_crc=0x2493e2ff ...
-```
-
-Both games printed the same `state_crc` value. Different values mean that the games are not the same.
+Run each command in its own terminal and start both within 120 seconds. Each prints `netplay_ready` when connected and `netplay_confirmed=` at exit. A finite match compares final state checksums through the relay; disagreement stops it with an error. These commands check connectivity and a finite run, not a full online gameplay campaign.
 
 ## If the match does not start
 

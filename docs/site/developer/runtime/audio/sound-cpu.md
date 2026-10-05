@@ -16,6 +16,11 @@ The sound board has a Motorola 68000. It runs a program from the sound ROM at `0
 
 The repository does not contain the game ROM or its disassembly. The facts about the driver in these pages come from `docs/SOUND-DRIVER.md`. That document records what the project measured with traces. Treat the ROM addresses in it as evidence from one ROM set: Land Maker Japan, with the sound program CRC32 `5a7e9117`.
 
+Both CPU backends use the same emulated devices. The interpreter is an execution
+reference, not a measured physical 68000. Native compilation preserves the ROM
+driver rather than replacing it with HLE. Instruction-boundary comparisons do not
+establish physical bus timing or coverage of every driver path.
+
 ## Loading the sound ROM
 
 `RomSet::load` in `runtime/rom.cpp` builds the sound program. The 68000 is big-endian and has a 16-bit data bus. The ROM board uses two 8-bit chips:
@@ -141,7 +146,7 @@ The frontend help text names different defaults for `landmakr` and `f3rt-run`. T
 
 ## Why keep the oracle
 
-The oracle costs speed. The file STATUS.md reports a netplay benchmark on an Apple M5. The mean step throughput of the whole machine is 276.2 FPS with the native driver and 146.3 FPS with the oracle. The snapshot size is 4,231,509 bytes with the native driver and 4,231,724 bytes with the oracle. These numbers come from STATUS.md and can change.
+The oracle costs speed. The file docs/developer/VALIDATION.md reports a netplay benchmark on an Apple M5. The mean step throughput of the whole machine is 276.2 FPS with the native driver and 146.3 FPS with the oracle. The snapshot size is 4,231,509 bytes with the native driver and 4,231,724 bytes with the oracle. These numbers come from docs/developer/VALIDATION.md and can change.
 
 The oracle gives the proof. Without it, nobody can check that the generated C is right. See [sound traces](/developer/runtime/audio/tracing).
 

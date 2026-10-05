@@ -4,6 +4,9 @@
 
 The code is in `runtime/video.cpp`. Hardware background is in [F3 video hardware](/developer/runtime/video/hardware).
 
+The mixing rules describe the MAME-derived model. Captured-reference agreement
+does not verify every physical-chip priority, clipping, or blending combination.
+
 ## Per-pixel state
 
 For each line the renderer keeps two small tables with one entry for each of the 432 columns.

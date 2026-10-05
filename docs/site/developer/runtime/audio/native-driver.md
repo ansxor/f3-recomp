@@ -2,6 +2,10 @@
 
 `SoundNative` runs generated sound instructions. It supplies the bus, exceptions, interrupts, reset and `STOP` behavior that generated arithmetic cannot provide alone.
 
+This is static translation of the sound ROM, not HLE. It retains the emulated
+sound devices. Agreement with the interpreter at instruction boundaries does not
+verify physical CPU bus timing or sound-board output.
+
 Sources: [sound_native.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.hpp), [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp), and [sound_native_ops.h](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native_ops.h).
 
 The compiler is described on [another page](/developer/recompiler/sound-compiler). This page covers the run-time half: `runtime/sound_native.hpp`, `runtime/sound_native.cpp` and `runtime/sound_native_ops.h`.
@@ -190,7 +194,7 @@ The native backend aims to perform the same bus operations at the same device ti
 | Bus access at the instruction boundary, not at a cycle inside an instruction. | Each block function does its reads and writes in one call. |
 | `PC` points to the current instruction during its bus accesses. | The generated code sets `cpu->pc` after the access. |
 
-The project says this is compatibility at **instruction boundaries**, not cycle-accurate bus timing. One known case is kept as it is: the instruction at `$c17814` does a read-modify-write on an OTIS register. Its position relative to a sample edge differs from a real bus. The native driver reproduces the oracle value on purpose. See `docs/SOUND-DRIVER.md`.
+This is compatibility at **instruction boundaries**, not cycle-accurate bus timing. For example, `$c17814` performs an OTIS read-modify-write whose sample-edge placement follows the oracle's instruction-boundary execution rather than a modeled physical bus transaction. The native driver deliberately reproduces the oracle value. This is not a measured real-bus discrepancy. See `docs/SOUND-DRIVER.md`.
 
 ## State
 

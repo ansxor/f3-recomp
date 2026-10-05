@@ -53,7 +53,7 @@ flags. Native width is `320 + 2*border`. Auto-integer floor-fits, clamps 1–4,
 and blits its internal texture 1:1, nearest, centered on black. If the window is
 below 1x, source cropping keeps the selected scale exact. Auto ceil-fits and
 uses the existing aspect-preserving nearest/linear blit. The cap is intentionally
-4 after measured 5–8x costs; see the [GPU evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+4 after measured 5–8x costs; see the [GPU evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md).
 
 Pixel geometry is polled after native audio enqueue and before GPU draw.
 Changes debounce for 100ms quiet or 250ms maximum pending time. Unchanged scale
@@ -100,7 +100,7 @@ sprite list; ROM pens are uploaded once. An indexed sprite pass precedes a
 per-output-sample fragment compositor. The CPU still makes native pixels.
 Expanded CPU presentation is materialized lazily for `presentation()`/save,
 so canonical snapshots remain byte-compatible. GPU caches/resources are not
-machine state. See [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+machine state. See [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md).
 
 ## What rerasterization changes
 
@@ -146,7 +146,7 @@ CPU buffers do not change. Sprite ROM sampling already runs on the selected
 output grid in off/linear/fit; these line modes do not change sprite coverage.
 
 Boundary measurements, false-positive limits, guard fixtures, captures and
-timings: [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/GPU-VIDEO.md).
+timings: [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md).
 
 
 ## Unsupported frames
@@ -198,7 +198,7 @@ Native dumps also contain palette, graphics, controls, main RAM, shared RAM, and
 
 ## Example commands
 
-These commands describe usage. They are not new verification results from this documentation task.
+These commands illustrate presentation options; recorded verification is linked above.
 
 ```sh
 ./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter nearest

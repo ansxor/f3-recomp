@@ -222,4 +222,4 @@ Snapshots include all raw `LineParams`, normalized rows, both control arrays, th
 
 The full-mask diagnostic invokes row comparison before layer and RGB checks. See [Compare mode](/developer/runtime/video/compare-mode).
 
-The missing PF3-to-PF1 Y mapping caused the first row failure. A hook before the column-scroll task wake caused another failure. The [evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/VIDEO-HLE.md) records both corrections.
+The missing PF3-to-PF1 Y mapping caused the first row failure. A hook before the column-scroll task wake caused another failure. The [evidence log](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) records both corrections.

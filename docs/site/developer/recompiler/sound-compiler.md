@@ -2,7 +2,7 @@
 
 `tools/compile_sound.py` compiles the Land Maker Japan sound ROM into C. The generated code executes the original 68000 driver.
 
-It does not convert the driver into a note player. The ROM's tasks, mailbox parser, allocation, sequencer and DSP worker remain compiled instructions.
+It is not HLE and does not convert the driver into a note player. The ROM's tasks, mailbox parser, allocation, sequencer and DSP worker remain compiled instructions. The runtime retains MAME-derived devices; native/interpreter agreement is not physical-board verification.
 
 ## Source map
 

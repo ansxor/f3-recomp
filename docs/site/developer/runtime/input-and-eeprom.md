@@ -122,7 +122,7 @@ Busy polling needs no further clock edges.
 | Erase one word | 16 000 | 1000 microseconds |
 | Write all, erase all | 128 000 | 8000 microseconds |
 
-`NOTES.md` says these values match the observed baseline model. It also says that EEPROM busy timing removed a seven-frame lead in the cold boot.
+`docs/developer/DECISIONS.md` says these values match the observed baseline model. It also says that EEPROM busy timing removed a seven-frame lead in the cold boot.
 
 ### The protocol
 
@@ -196,7 +196,7 @@ stateDiagram-v2
 - The frontend option `--eeprom FILE` loads at start and saves at the end of the run. Netplay does not allow it.
 - `save_state` and `load_state` write the words and the serial state as one packed record (`CanonicalEeprom`). See [Snapshots](/developer/netplay/snapshots).
 
-During the first boot the game ROM writes the whole EEPROM, including a checksum `$85ac`. The runtime does not seed the data or skip the check. `NOTES.md` records that wrong scheduling once left `$ffff` there and the game showed `PUSH TEST SWITCH`.
+During the first boot the game ROM writes the whole EEPROM, including a checksum `$85ac`. The runtime does not seed the data or skip the check. `docs/developer/DECISIONS.md` records that wrong scheduling once left `$ffff` there and the game showed `PUSH TEST SWITCH`.
 
 ## Tests
 

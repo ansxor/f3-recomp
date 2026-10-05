@@ -45,7 +45,7 @@ The extraction tool reserves one byte to distinguish full from empty. Its `avail
 This is the tool's injection policy. It is not a new hardware capacity limit.
 
 ::: warning
-An older note in the project said the ring had 2048 command bytes. `NOTES.md` corrects this: the ring has 1024 bytes with doubled indices.
+An older note in the project said the ring had 2048 command bytes. `docs/developer/DECISIONS.md` corrects this: the ring has 1024 bytes with doubled indices.
 :::
 
 ## Packet format

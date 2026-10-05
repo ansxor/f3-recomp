@@ -8,8 +8,8 @@ It also explains local documentation work and GitHub Pages publishing.
 
 The project is built on evidence. Read these rules before you change behavior.
 
-1. **Measure first.** Each timing or behavior change in `NOTES.md` names a measurement: a MAME trace, a ROM address, an instruction count or a test. Do the same. Add a dated entry to `NOTES.md` when you make a decision that others must know.
-2. **Follow the order of trust.** The real game ROM behavior and the observed MAME output come first. Primary hardware sources come second. Work-in-progress notes come third. MAME source code comes last. Neither the notes nor the MAME source is hardware truth.
+1. **Record evidence.** Describe the ROM set, build, scenario, reference, and limits of a behavior or timing change. Keep durable rationale in `docs/developer/DECISIONS.md` and measurements in the relevant evidence document; do not add project-progress logs to overview pages.
+2. **Separate models from hardware evidence.** ROM observations and captured MAME output support specific compatibility claims. MAME source explains the reference model; neither it nor agreement between software paths establishes physical-chip correctness. Identify primary hardware evidence separately.
 3. **Do not hide gaps.** The code reports unsupported cases and does not guess. Examples: unresolved transfers stay in `coverage.json`, unknown display writers make `GameVideo` fall back to the FDP renderer, and an untranslated instruction stops the strict-native build.
 4. **Do not fit the output.** The project adds no delay, offset or waveform correction to match a reference. If a result differs, find the cause.
 5. **Stay deterministic.** No wall clock, random source or host pointer may change the machine state.
@@ -68,7 +68,7 @@ The last line of `landmakr` and `f3rt-run` looks like `set=landmakrj frames=... 
 
 ## Change the ABI
 
-The ABI is `include/f3rt/cpu_abi.h`. Generated code compiles against it. The runtime implements it. Follow the rule from the README: **the runtime owns the ABI; the recompiler consumes it. Change it only with a note in `docs/ABI-CHANGES.md` and tell the other people who work on the project.**
+The ABI is `include/f3rt/cpu_abi.h`. Generated code compiles against it. The runtime implements it. Follow the rule from the README: **the runtime owns the ABI; the recompiler consumes it. Change it only with a note in `docs/developer/ABI-CHANGES.md` and tell the other people who work on the project.**
 
 Use these steps:
 
@@ -78,10 +78,10 @@ Use these steps:
 4. Change the implementation in `runtime/cpu_abi.cpp` and `runtime/machine.cpp`. Change `tools/compile_sound.py` and `runtime/sound_native.cpp` if the sound code uses the changed part.
 5. Update the code that copies the CPU state: `runtime/core_state.c` and the `Canonical*` records in `runtime/state_io.hpp`. Update `Machine::save_state` and `Machine::load_state`.
 6. Update the differential harness (`tools/differential/harness_abi.c`) if it uses the changed part.
-7. Add a section to `docs/ABI-CHANGES.md`. Say what changed and why. State what stays the same.
+7. Add a section to `docs/developer/ABI-CHANGES.md`. Say what changed and why. State what stays the same.
 8. Rebuild everything. Run the tests from the table.
 
-Some changes do not need a new version. Version 2 notes in `docs/ABI-CHANGES.md` list timing fixes and C++-only additions (for example the snapshot methods of `Machine`). They changed no ABI field and they have a note in the file. Write a note for them too.
+Some changes do not need a new version. Version 2 notes in `docs/developer/ABI-CHANGES.md` list timing fixes and C++-only additions (for example the snapshot methods of `Machine`). They changed no ABI field and they have a note in the file. Write a note for them too.
 
 Rules that must stay true:
 
@@ -172,7 +172,7 @@ These conventions come from the existing code. Follow them.
 - The standard is C++20. Runtime components use `namespace f3rt`; C ABI entry points use `extern "C"`.
 - A big component hides its data behind `struct Impl` and a `std::unique_ptr` (`Video`, `Audio`, `GameVideo`, `Transport`, `Rollback`). Such classes are not copyable.
 - Errors are exceptions: `throw std::runtime_error("clear message")`. The frontend prints `f3rt: message` and exits with code 1. Do not add silent fallbacks.
-- Save and load must not allocate. Use fixed-size `std::array` members. Serialize with `StateWriter` and `StateReader` and a packed `Canonical*` record. When you add machine state, add it to `state_size`, `save_state`, `load_state` and the inventory in `docs/ABI-CHANGES.md`.
+- Save and load must not allocate. Use fixed-size `std::array` members. Serialize with `StateWriter` and `StateReader` and a packed `Canonical*` record. When you add machine state, add it to `state_size`, `save_state`, `load_state` and the inventory in `docs/developer/ABI-CHANGES.md`.
 - Exclude diagnostic counters from the snapshot (`native_blocks`, `fallback_instructions` and similar).
 - Write addresses as lower-case hex with `0x`. Comments name the evidence: a ROM address, a MAME file and line, or a test.
 - Files derived from MAME keep their license header. They are listed in `runtime/LICENSES.txt`.
@@ -263,7 +263,7 @@ flowchart TD
 - Put literal template expressions in a fenced code block.
 - Mark each code block with a language (`sh`, `cpp`, `c`, `python`, `toml`, `text`, `go`).
 - Use `::: tip`, `::: warning` and `::: info` containers only when they help.
-- Copy a measured number only with its source, for example "measured in STATUS.md on an Apple M5".
+- Copy a measured number only with its source, for example "measured in docs/developer/VALIDATION.md on an Apple M5".
 - Check each claim against the code. The long Markdown files in the repository can be out of date.
 
 ### Diagrams
@@ -276,16 +276,15 @@ The theme stylesheet matches Mermaid's label spacing. Do not apply the document 
 - Wrap each node label that has punctuation or parentheses in double quotes: `node["Machine::boundary (deadline)"]`.
 - Avoid angle brackets in labels. Quote labels with punctuation, and use short text.
 - A diagram must match the code. Name real functions and files.
-- Every page that explains a structure or a flow needs at least one diagram.
 
-## Where to ask for background
+## Evidence and technical background
 
 | Topic | Read |
 | --- | --- |
-| Why a recompiler decision was made | `NOTES.md` (dated entries) |
-| What the last phase proved | `STATUS.md` |
-| ABI and snapshot contract | `docs/ABI-CHANGES.md` |
+| Why a recompiler decision was made | `docs/developer/DECISIONS.md` (dated entries) |
+| Recorded validation scenarios and limits | `docs/developer/VALIDATION.md` |
+| ABI and snapshot contract | `docs/developer/ABI-CHANGES.md` |
 | Netplay protocol and limits | `docs/NETPLAY.md` |
-| Video addresses and layouts | `docs/VIDEO-HLE.md` |
+| Video addresses and layouts | `docs/developer/VIDEO-HLE.md` |
 | Sound driver and trace format | `docs/SOUND-DRIVER.md` |
 | MAME capture protocol | `tools/mame/README.md` |

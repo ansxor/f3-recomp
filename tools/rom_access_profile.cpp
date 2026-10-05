@@ -34,7 +34,7 @@ void intervals(std::ostream &out, const uint8_t *bytes, size_t size,
             out << "{\"start\":" << base + start << ",\"end\":" << base + i
                 << ",\"reason\":\"Observed tile-descriptor data\",\"evidence\":"
                    "\"Native ROM reads by documented tile-copy/erase helpers "
-                   "0x55c2/0x5614/0x56ae (docs/VIDEO-HLE.md); "
+                   "0x55c2/0x5614/0x56ae (docs/developer/VIDEO-HLE.md); "
                    "sampled gameplay evidence, not a universal no-execution proof\"}";
         } else {
             out << '[' << base + start << ',' << base + i << ']';
