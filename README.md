@@ -1,8 +1,8 @@
 # f3-recomp
 
 Static recompilation of Taito F3 game programs into native C, with an SDL3 runtime
-for video, sound, input and optional rollback netplay. **Land Maker Japan 2.01J is
-the supported target today**, not the whole F3 library.
+for video, sound, input and optional rollback netplay. **Support is revision-specific**,
+not a claim of compatibility with the whole F3 library.
 
 ## Game support
 
@@ -10,9 +10,20 @@ the supported target today**, not the whole F3 library.
 | --- | --- |
 | Land Maker Japan 2.01J (`landmakrj`) | Native main and sound CPU execution; attract mode, coin/start/controls and sampled gameplay exercised. Optional enhanced presentation and two-player netplay. |
 | Land Maker World (`landmakr`) | ROM configuration only. No tested native build or gameplay support. |
-| Other Taito F3 games | Not implemented. Shared F3 components are a starting point, not a compatibility claim. |
+| RayForce America Ver 2.3A (1994/01/20), `rayforce` | Native main/sound build; 3600 strict-native frames, zero main fallback. ROT90 display 224×320. |
+| Command War 0.0J prototype, `commandw` | Native main/sound build; 1800 strict-native frames, zero main fallback. Upstream imperfect-graphics limitation. |
+| Riding Fight World 1.0O, `ridingf` | Native main/sound build; 1800 strict-native frames, zero main fallback. Absent upper planes and sprite trails. |
+| Other Taito F3 games | Not implemented; shared components are not a compatibility claim. |
 
-The executable is named `landmakr`, but runs **`landmakrj`**. A ROM directory's
+The new titles use FDP video and accurate sound only. Command War/Riding Fight
+native audio parity is under investigation; no full-campaign claim is made.
+Runtime CTest passed 4/4 and ROM placement/corruption plus existing codegen
+fixtures passed 14/14. RayForce's Wayland attract window reported internal
+224×320, output 672×960, with local capture `build/rayforce-surface.bmp`.
+See [porting evidence and pinned sources](docs/site/developer/porting.md).
+
+`F3_GAME` defaults to `landmakrj`; both LM selections name their executable
+`landmakr`, while new title executables use their set names. A ROM directory's
 name does not identify the revision: program chips are validated, and World ROMs
 are not silently substituted. Coverage is finite; no exhaustive campaign/ending
 or cross-platform compatibility claim. Runtime validation includes macOS
@@ -49,8 +60,22 @@ cmake --build build --target landmakr -j 4
 ./build/landmakr
 ```
 
-`F3_ROM_DIR` generates both CPU programs and becomes the executable's default
-ROM path. Generated code and ROM-derived files stay under ignored `build/`.
+For another exercised title, use a separate directory and its own ROM set:
+
+```sh
+python3 -m pip install --target build/rayforce/python -r recomp/requirements.txt
+cmake -S . -B build/rayforce -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DF3_GAME=rayforce -DF3_ROM_DIR=/path/to/roms/rayforce -DF3RT_GPU=OFF
+cmake --build build/rayforce --target rayforce -j 4
+./build/rayforce/rayforce --headless --frames 3600
+```
+
+Substitute `commandw` or `ridingf` in those paths/options/target to run them.
+Python 3.11 is always needed for ROM metadata generation; Capstone is needed
+only for CPU recompilation. `F3_ROM_DIR` is for the selected title, generates
+both CPU programs, and becomes the executable's default ROM path. Generated
+outputs use `generated/SET` and `generated/sound-SET`; loaded main and sound
+images must match the generated per-game CRC guards. Generated code and ROM-derived files stay under ignored `build/`.
 Use `-DF3RT_GPU=OFF` to build without the shader tools; runtime presentation
 still defaults to CPU even in a GPU-capable build. The default full-coverage
 profile changes compile optimization tiers, not availability of cold code.
@@ -100,7 +125,7 @@ The main CPU rejects untranslated instructions by default. `--allow-fallback`
 is a diagnostic mode, not the supported native-game path. Unsupported
 game-data video frames use the retained FDP renderer; that does not enable CPU
 interpreter fallback. Enhanced presentation rerasterizes scene geometry using
-original ROM artwork, not newly generated detail; native captures stay 320×232.
+original ROM artwork, not newly generated detail; Land Maker Japan native captures stay 320×232; new titles follow their configured crop/rotation.
 
 Example opt-in presentation:
 
@@ -112,7 +137,7 @@ Example opt-in presentation:
 cover all flags. See the [video guide](docs/site/guide/video.md) and
 [sound guide](docs/site/guide/sound.md) for constraints.
 
-## Netplay quickstart
+## Netplay quickstart (Land Maker Japan only)
 
 Netplay is opt-in, two-player versus rollback with a UDP relay. Use matching
 builds, ROMs and audio backend, plus a trusted reachable relay; EEPROM/solo
@@ -146,9 +171,15 @@ See the [netplay guide](docs/site/guide/netplay.md) and
 
 The 68020 lifter, C CPU ABI, F3 memory/scheduling/device runtime and FDP renderer
 are reusable components. ROM manifests, discovery metadata, exclusions and
-execution profiles are per-game. The current build target, ROM loader, sound
-compiler assumptions, producer hooks and game-data scene decoders still contain
-Land Maker-specific choices. Another F3 game needs more than a new TOML file.
+execution profiles are per-game. Build selection, ROM region manifests and generated main/sound CRC binding are
+per-game. Producer hooks and game-data scene decoders remain Japan-specific.
+Game-data video, HLE audio, GPU enhanced/motion semantics and netplay are
+Land Maker Japan-only. The other 19 supported ROM sets (manifests, input,
+factory EEPROM, native boot, FDP video, accurate sound) use the FDP renderer;
+per-game graphics hooks are **incomplete**. `tools/discover_graphics.py` and
+`tools/discover_prescaled_tiles.py` catalog candidate routines and assets only;
+no game-data/GPU adapter exists for them. Another F3 game still requires
+evidence beyond a TOML file.
 
 The [portability audit](docs/site/developer/porting.md) maps these boundaries,
 lists bring-up requirements and records refactor candidates without changing

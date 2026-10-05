@@ -33,18 +33,27 @@ The [Build options](/reference/build-options) reference page lists every option.
 | Option | Default | Effect |
 | --- | --- | --- |
 | `F3RT_SDL` | `ON` | Builds the SDL3 frontends (`f3rt-run`, `landmakr`). |
-| `F3_ROM_DIR` | empty | A directory with the Land Maker Japan ROM files. A value turns on automatic generation of both the main and the sound C code. |
-| `F3_GENERATED_DIR` | empty (set to `build/generated/landmakrj` when `F3_ROM_DIR` is set) | A directory with already generated main CPU C code. |
-| `F3_SOUND_GENERATED_DIR` | empty (set to `build/generated/sound-landmakrj` when `F3_ROM_DIR` is set) | A directory with already generated sound driver C code. |
-| `F3_PROFILE_DEFAULT_TIERS` | `ON` | ROM generation uses the frozen full-coverage profile unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
+| `F3_ROM_DIR` | empty | A directory with the selected title's ROM files (`F3_GAME`, default `landmakrj`). A value turns on automatic generation of both the main and the sound C code. |
+| `F3_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/SET` when `F3_ROM_DIR` is set) | A directory with already generated main CPU C code. |
+| `F3_SOUND_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/sound-SET` when `F3_ROM_DIR` is set) | A directory with already generated sound driver C code. |
+| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Japan ROM generation uses the frozen full-coverage profile unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
 | `F3_PROFILE_TIERS` | empty cache; frozen profile selected automatically | Explicit CRC-keyed profile override: hot units `-O2`, cold units `-Oz`/`-Os`. |
 | `F3_PROFILE_SLIM` | empty | Explicit removal of unprofiled code, never enabled automatically. |
 
 For pre-generated code, leave `F3_ROM_DIR` empty and set the generated directory paths.
-CMake then uses those files without running Python.
+CMake uses those CPU files without recompilation; Python 3.11 still generates ROM manifest metadata. Capstone is needed only for recompilation.
 If `F3_ROM_DIR` is set, CMake runs both generators even when output paths are supplied.
 
 ## Pipeline
+
+The examples and counts below illustrate the Japan default. For another title,
+select `-DF3_GAME=SET`; automatic commands use `games/SET/config.toml` and
+`BUILD_DIR/generated/SET`, `BUILD_DIR/generated/sound-SET`. The title target is
+`landmakr` for both LM selections, otherwise the set name. Japan's frozen tiers,
+producer hooks and gameplay/netplay/GPU campaigns are not generic title support.
+Every configure also generates `rom_manifest.hpp` with `tools/compile_roms.py`
+and `recomp/roms.py`; those tools and all game configs are tracked dependencies.
+See [build options](/reference/build-options) for per-title reproducible commands.
 
 The flowchart shows the steps in order. Rounded boxes are CMake steps. Plain boxes are files.
 
@@ -78,7 +87,7 @@ python3 -m recomp emit \
 
 The working directory is the repository root. `PYTHONPATH` starts with `build/python`. If the command fails, the configure step fails.
 
-`CMakeLists.txt` also registers `recomp/*.py`, `recomp/*.csv` (with `CONFIGURE_DEPENDS`) and `games/landmakrj/config.toml` as configure dependencies. When one of them changes, the next `cmake --build` runs the configure step again. The configure step runs the recompiler again.
+`CMakeLists.txt` also registers `recomp/*.py`, `recomp/*.csv` (with `CONFIGURE_DEPENDS`) and the selected `games/SET/config.toml` as configure dependencies. When one of them changes, the next `cmake --build` runs the configure step again. The configure step runs the recompiler again.
 
 The selected `--profile-tiers` or explicit `--profile-slim` argument is passed
 to both generators. Exclusion-filtered entries are the partition input:
@@ -98,14 +107,14 @@ The command writes these files (see `recomp/generate.py`):
 | `sources.cmake` | Sets `F3_GENERATED_SOURCES` to the list of C files. |
 | `coverage.json` | What discovery found, including decoder rejections and unresolved transfers. |
 | `lowering.json` | How many instructions lowered natively, and which did not. |
-| `program.bin` | The 2 MiB interleaved ROM image. |
+| `program.bin` | The selected interleaved ROM image (may be 1 MiB or 2 MiB). |
 
 The [Generated files](/reference/generated-files) page describes these files in detail.
 
 ### Step 2: generate the sound driver code
 
-CMake runs `tools/compile_sound.py --config games/landmakrj/config.toml` after main CPU generation.
-The sound compiler verifies the interleaved region CRC32 (`5a7e9117`).
+CMake runs `tools/compile_sound.py --config games/SET/config.toml` after main CPU generation, using `F3_GAME`.
+Shared manifest loading validates chips and generates the selected mapped image CRC; runtime sound binds to that CRC.
 It independently decodes each nonexcluded even offset in the 512 KiB sound region.
 Native lowerings, exception entries, and explicit unsupported stubs share the dispatch table.
 Aligned coverage does not mean that all bytes contain reachable instructions.
@@ -151,7 +160,7 @@ The `landmakr` target and `f3rt-run` use the same source file. The compile defin
 | Definition | Set on | Effect in `frontend.cpp` |
 | --- | --- | --- |
 | `F3RT_GENERATED=1` | `f3rt-run` (with generated code), `landmakr`, `f3rt-gameplay-regression`, `f3rt-netplay-oracle` | Includes `program.h` and allows `f3_generated_register`. |
-| `F3RT_LANDMAKR=1` | `landmakr` | Sets the ROM directory default and `translated = true`. Turns off CPU fallback. Makes `game` the default video mode. Requires `--set landmakrj`. |
+| `F3RT_GAME=1` | Selected title target | Defaults strict native execution, configured ROM directory and selected `F3RT_DEFAULT_SET`. Japan defaults to game-data video; other titles use FDP. Set must match the selected game. |
 | `F3RT_DEFAULT_ROM_DIR="..."` | `landmakr`, tools, regression targets | The default for `--rom-dir`. It is the value of `F3_ROM_DIR`. |
 | `F3RT_SOUND_GENERATED=1` | All executables that link `f3_sound_recompiled` | Includes `sound_program.h`. Makes `native` the default sound driver. |
 

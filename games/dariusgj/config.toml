@@ -1,0 +1,190 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp.
+# Supplied program and asset chips match ROM_START(dariusgj) by size/CRC/SHA1.
+[game]
+name = "Darius Gaiden - Silver Hawk (Ver 2.5J 1994/09/19)"
+id = "dariusgj"
+platform = "taito_f3"
+
+[rom]
+# Populated program image; MAME reserves a 0x200000 CPU region.
+size = 2097152
+interleave = 4
+
+[[rom.lanes]]
+file = "d87-12.bin"
+offset = 0
+size = 524288
+crc = "de78f328"
+sha1 = "126464a826685f5bfab6cc099448ce4df207a407"
+
+[[rom.lanes]]
+file = "d87-11.bin"
+offset = 1
+size = 524288
+crc = "f7bed18e"
+sha1 = "db7d92680f9f406a5295ee85ce110c1a56ed386f"
+
+[[rom.lanes]]
+file = "d87-10.bin"
+offset = 2
+size = 524288
+crc = "4149f66f"
+sha1 = "57d36a62d490d9e53b6b80a92ea0e8c41d61799f"
+
+[[rom.lanes]]
+file = "d87-09.bin"
+offset = 3
+size = 524288
+crc = "6170382d"
+sha1 = "85b0f9a3400884e1c073d5bdcdf7318377650eed"
+
+[sprites]
+size = 4194304
+fill = 0
+
+[[sprites.lanes]]
+file = "d87-03.bin"
+offset = 0
+size = 2097152
+crc = "4be1666e"
+sha1 = "35ba7bcf29ec7a8f8b6944ee3544693d4df1bfc2"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d87-04.bin"
+offset = 1
+size = 2097152
+crc = "2616002c"
+sha1 = "003f98b740a697274385b8da03c78f3c6f7b5e89"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 2097152
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d87-05.bin"
+offset = 0
+size = 2097152
+crc = "4e5891a9"
+sha1 = "fd08d848079841c9237fa359a850980fd00114d8"
+stride = 1
+group = 1
+
+[tiles]
+size = 4194304
+fill = 0
+
+[[tiles.lanes]]
+file = "d87-06.bin"
+offset = 0
+size = 2097152
+crc = "3b97a07c"
+sha1 = "72cdeffedeab0c1bd0e47f03172085390a2be393"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d87-17.bin"
+offset = 2
+size = 2097152
+crc = "e601d63e"
+sha1 = "256a6aeb5633fe1db407fad567169a9d0c911219"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 2097152
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "d87-08.bin"
+offset = 0
+size = 2097152
+crc = "76d23602"
+sha1 = "ca53ea6641182c44a4038bbeaa5effb1687f1980"
+stride = 1
+group = 1
+
+[sound]
+# Mapped program only; omit the unused MAME 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "d87-13.bin"
+offset = 0
+size = 262144
+crc = "15b1fff4"
+sha1 = "28692b731ae98a47c2c5e11a8a71b61a813d9a64"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d87-14.bin"
+offset = 1
+size = 262144
+crc = "eecda29a"
+sha1 = "6eb238e47bc7bf635ffbdbb25fb06a37db980ef8"
+stride = 2
+group = 1
+
+[samples]
+# Samples populate even (high) bytes; all odd bytes remain zero.
+size = 8388608
+fill = 0
+
+[[samples.lanes]]
+file = "d87-01.bin"
+offset = 0
+size = 2097152
+crc = "3848a110"
+sha1 = "802e91695a526f665c7fd261f0a7639a0b883c9e"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d87-02.bin"
+offset = 4194304
+size = 2097152
+crc = "9250abae"
+sha1 = "07cae8edbc3cca0a95022d9b40a5c18a55350b67"
+stride = 2
+group = 1
+
+[discovery]
+coverage = "all_aligned"
+
+# Rooted object compiler $1282 indexes four flip handlers through $12b8.
+[[discovery.jump_tables]]
+address = 0x12b6
+table = 0x12b8
+count = 4
+
+# Rooted RLE PF compiler $53b2 calls relative flip handlers at $53dc.
+# ROM $5352 stores signed offsets $0008,$0018,$002e,$0044.
+[[discovery.jump_tables]]
+address = 0x53dc
+targets = [0x535a, 0x536a, 0x5380, 0x5396]
+
+# RLE dispatch $544e uses relative token offsets from $543a;
+# zero-token literal entry is selected separately at $53e4.
+[[discovery.jump_tables]]
+address = 0x544e
+targets = [0x5452, 0x5464, 0x547a, 0x5492]
+
+# RLE loop resumes the current command body through A2 at $5410.
+[[discovery.jump_tables]]
+address = 0x5410
+targets = [0x542a, 0x5456, 0x546c, 0x5482, 0x549a]
+
+[video]
+# f3: native visible x=46..365, y=24..255 (320x232).
+rotation = 0
+sprite_lag = 2
+extend = false
+visible_y = 24
+visible_height = 232

@@ -75,7 +75,7 @@ int main(int argc, char **argv) try {
     auto roms=f3rt::RomSet::load(romdir);
     if (!audio_trace.empty()) return replay_audio(roms, audio_trace, output);
     f3rt::Video video;
-    if(!video.load_roms(roms.sprites,roms.sprites_hi,roms.tiles,roms.tiles_hi)) throw std::runtime_error("Video ROM decode failed");
+    if(!video.load_roms(roms.sprites,roms.sprites_hi,roms.tiles,roms.tiles_hi,roms.video)) throw std::runtime_error("Video ROM decode failed");
     std::vector<std::filesystem::path> frames;
     if(std::filesystem::exists(captures/"graphics.bin")) frames.push_back(captures);
     else for(const auto &entry:std::filesystem::directory_iterator(captures))

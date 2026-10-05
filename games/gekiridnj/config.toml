@@ -1,0 +1,176 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp.
+# Supplied program and asset chips match ROM_START(gekiridnj) by size/CRC/SHA1.
+[game]
+name = "Gekirindan (Ver 2.3J 1995/09/21)"
+id = "gekiridnj"
+platform = "taito_f3"
+
+[rom]
+# Populated program image; MAME reserves a 0x200000 CPU region.
+size = 1048576
+interleave = 4
+
+[[rom.lanes]]
+file = "e11-12.ic20"
+offset = 0
+size = 262144
+crc = "6a7aaacf"
+sha1 = "a8114c84e76c75c908a61d985d96aa4eb9a0ac5a"
+
+[[rom.lanes]]
+file = "e11-11.ic19"
+offset = 1
+size = 262144
+crc = "2284a08e"
+sha1 = "3dcb91be0d3491ad5e77efd30bacd506dad0f848"
+
+[[rom.lanes]]
+file = "e11-10.ic18"
+offset = 2
+size = 262144
+crc = "8795e6ba"
+sha1 = "9128c29fdce3276f55aad47451e4a507470c8b9f"
+
+[[rom.lanes]]
+file = "e11-09.ic17"
+offset = 3
+size = 262144
+crc = "b4e17ef4"
+sha1 = "ab06ab68aaa487cc3046a15fef3dde8581197391"
+
+[sprites]
+size = 4194304
+fill = 0
+
+[[sprites.lanes]]
+file = "e11-03.ic12"
+offset = 0
+size = 2097152
+crc = "f73877c5"
+sha1 = "1f6b7c0b8a0aaab3e5427d21de7fad3d3cbf737a"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e11-02.ic8"
+offset = 1
+size = 2097152
+crc = "5722a83b"
+sha1 = "823c20a33016a5506ca5415ec615c3d2546ca9ab"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 2097152
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "e11-01.ic4"
+offset = 0
+size = 2097152
+crc = "c2cd1069"
+sha1 = "9744dd3d8a6d9200cea4429dafce5620b60e2960"
+stride = 1
+group = 1
+
+[tiles]
+size = 4194304
+fill = 0
+
+[[tiles.lanes]]
+file = "e11-08.ic47"
+offset = 0
+size = 2097152
+crc = "907f69d3"
+sha1 = "0899ed58edcae22144625c349c9d2fe4d46d11e3"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e11-07.ic45"
+offset = 2
+size = 2097152
+crc = "ef018607"
+sha1 = "61b602b13754c3be21caf76acbfc10c87518ba47"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 2097152
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e11-06.ic43"
+offset = 0
+size = 2097152
+crc = "200ce305"
+sha1 = "c80a0b96510913a6411e6763fb72bf413fb792da"
+stride = 1
+group = 1
+
+[sound]
+# Mapped program only; omit the unused MAME 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "e11-13.ic32"
+offset = 0
+size = 262144
+crc = "f5c5486a"
+sha1 = "4091f3ddb1e6cbc9dc89485e1e784a4b6fa191b7"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e11-14.ic33"
+offset = 1
+size = 262144
+crc = "7fa10f96"
+sha1 = "50efefd890535e952022a494c5b4e9b33bb90fad"
+stride = 2
+group = 1
+
+[samples]
+# Samples populate even (high) bytes; all odd bytes remain zero.
+size = 8388608
+fill = 0
+
+[[samples.lanes]]
+file = "e11-04.ic38"
+offset = 0
+size = 2097152
+crc = "e0ff4fb1"
+sha1 = "81e186e3a692af1da316b8085a729c4f103d9a52"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e11-05.ic41"
+offset = 4194304
+size = 2097152
+crc = "a4d08cf1"
+sha1 = "ae2cabef7b7bcb8a788988c73d7af6fa4bb2c444"
+stride = 2
+group = 1
+
+[discovery]
+coverage = "all_aligned"
+# Rooted $a1fdc LEA $a248a,A4; $a1fee JSR (A4) consumes A6 records
+# at $418836 with $16-byte stride. The dormant $127a template is not a root.
+entry_points = [0xa248a]
+
+# Rooted PF helper $4f6e selects four flip routines through $4fb8.
+[[discovery.jump_tables]]
+address = 0x4f96
+table = 0x4fb8
+count = 4
+
+[video]
+# f3: native visible x=46..365, y=24..255 (320x232).
+rotation = 270
+sprite_lag = 1
+extend = false
+visible_y = 24
+visible_height = 232

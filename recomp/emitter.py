@@ -1132,8 +1132,26 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
 
+    # Capstone describes CMPM's postincrement operands as registers. Decode
+    # the primary word instead, reading/incrementing the source before the
+    # destination so an aliased address register consumes consecutive values.
+    if mnem == 'cmpm':
+        source, destination = opcode & 7, (opcode >> 9) & 7
+        source_step = 2 if source == 7 and size == 1 else size
+        destination_step = 2 if destination == 7 and size == 1 else size
+        return [
+            f"uint32_t cmp_src = f3_read{size * 8}(cpu, cpu->a[{source}]);",
+            f"cpu->a[{source}] += {source_step}u;",
+            f"uint32_t cmp_dst = f3_read{size * 8}(cpu, cpu->a[{destination}]);",
+            f"cpu->a[{destination}] += {destination_step}u;",
+            f"uint32_t cmp_res = (cmp_dst - cmp_src) & 0x{MASK_MAP[size]:x}u;",
+            f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = cmp_src; cpu->cc_dst = cmp_dst; cpu->cc_result = cmp_res; cpu->cc_width = {size};",
+            f"cpu->pc = 0x{next_pc:08x}u;",
+            f"cpu->cycles += {cycles};",
+        ]
+
     # 17. CMP, CMPA, CMPI
-    if mnem in ('cmp', 'cmpa', 'cmpi', 'cmpm'):
+    if mnem in ('cmp', 'cmpa', 'cmpi'):
         if len(ops) < 2:
             return None
         is_cmpa = (mnem == 'cmpa') or (ops[1].type == m68k.M68K_OP_REG and m68k.M68K_REG_A0 <= ops[1].reg <= m68k.M68K_REG_A7)

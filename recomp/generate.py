@@ -226,6 +226,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             for region in exclusions)
         program += '};\n'
     program += ('int f3_generated_register(f3_cpu *cpu) {\n'
+                f'    if (!f3_validate_main_rom(cpu, {len(rom)}u, 0x{zlib.crc32(rom):08x}u)) return 0;\n'
                 '    if (!f3_register_blocks(cpu, translated_blocks,\n'
                 '        sizeof(translated_blocks) / sizeof(translated_blocks[0]))) return 0;\n')
     if exclusions:

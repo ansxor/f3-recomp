@@ -40,7 +40,7 @@ void configure(Machine &m, const std::string &driver,
     if (driver == "native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                           {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
         throw std::runtime_error("sync-proof requires generated native sound");
 #endif
@@ -89,7 +89,7 @@ void equal_sync(Machine &host, Machine &guest, Bytes &a, Bytes &b,
 
 struct ReplayFrame {
     std::vector<int16_t> pcm;
-    std::array<uint32_t, 320 * 232> pixels;
+    std::vector<uint32_t> pixels;
     std::vector<uint32_t> presentation;
     std::vector<uint32_t> gpu_reference;
     Bytes local_checkpoint;

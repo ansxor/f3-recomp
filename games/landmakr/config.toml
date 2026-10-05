@@ -42,3 +42,140 @@ entry_points = []
 scan_jump_tables = true
 scan_task_traps = true
 scan_callbacks = true
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 24
+visible_height = 232
+
+[sprites]
+size = 4194304
+fill = 0
+
+[[sprites.lanes]]
+file = "e61-03.12"
+offset = 0
+size = 2097152
+crc = "e8abfc46"
+sha1 = "fbde006f9822af3ed8debec525270d329981ea21"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e61-02.08"
+offset = 1
+size = 2097152
+crc = "1dc4a164"
+sha1 = "33b412d9653099aaff8ed5e62d1ba4fc30aa9058"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 2097152
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "e61-01.04"
+offset = 0
+size = 2097152
+crc = "6cdd8311"
+sha1 = "7810a5a81f3b5a730d2088c79b12fffd77659b5b"
+stride = 1
+group = 1
+
+[tiles]
+size = 4194304
+fill = 0
+
+[[tiles.lanes]]
+file = "e61-09.47"
+offset = 0
+size = 2097152
+crc = "6ba29987"
+sha1 = "b63c12523e19da66b3ca07c3548ac81bf57b59a1"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e61-08.45"
+offset = 2
+size = 2097152
+crc = "76c98e14"
+sha1 = "c021c325ab4ae410fa54e2eab61d34318867432b"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 2097152
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e61-07.43"
+offset = 0
+size = 2097152
+crc = "4a57965d"
+sha1 = "8e80788e0f47fb242da9af3aa19077dc0ec829b8"
+stride = 1
+group = 1
+
+[sound]
+size = 524288
+fill = 255
+
+[[sound.lanes]]
+file = "e61-14.32"
+short_size = 131072
+short_crc = "b905f4a7"
+short_sha1 = "613b954e3e129fd44b4ce64958f16e5636012d6e"
+offset = 0
+size = 262144
+crc = "18961bbb"
+sha1 = "df054def35a49c0754356c15ec15336cbf28b063"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e61-15.33"
+short_size = 131072
+short_crc = "87909869"
+short_sha1 = "7b90c23899a673966cac3352d375d17b83e66596"
+offset = 1
+size = 262144
+crc = "2c64557a"
+sha1 = "768007162d5d2cbe650c735bc1af2c10ed13b046"
+stride = 2
+group = 1
+
+[samples]
+size = 16777216
+fill = 0
+
+[[samples.lanes]]
+file = "e61-04.38"
+offset = 4194304
+size = 2097152
+crc = "c27aec0c"
+sha1 = "e95da2db07a20a53662ebd45c033966e8a22a15a"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e61-05.39"
+offset = 8388608
+size = 2097152
+crc = "83920d9d"
+sha1 = "019e39ae85d1129f6d3b8460c4b1bd925f868ee2"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e61-06.40"
+offset = 12582912
+size = 2097152
+crc = "2e717bfe"
+sha1 = "1be54cd2ec65d8fd49a5c09b5d27791fd7a320d4"
+stride = 2
+group = 1
+

@@ -1,0 +1,176 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp.
+# Supplied program and asset chips match ROM_START(elvactrj) by size/CRC/SHA1.
+[game]
+name = "Elevator Action Returns (Ver 2.2J 1995/02/20)"
+id = "elvactrj"
+platform = "taito_f3"
+
+[rom]
+# Populated program image; MAME reserves a 0x200000 CPU region.
+size = 2097152
+interleave = 4
+
+[[rom.lanes]]
+file = "e02-12.20"
+offset = 0
+size = 524288
+crc = "ea5f5a32"
+sha1 = "4f30c56fbf068fee6d3afb2479043c7e89f6c055"
+
+[[rom.lanes]]
+file = "e02-11.19"
+offset = 1
+size = 524288
+crc = "bcced8ff"
+sha1 = "09c38c78300ba9d710b4e46ca71014bbc5ac46b4"
+
+[[rom.lanes]]
+file = "e02-10.18"
+offset = 2
+size = 524288
+crc = "72f1b952"
+sha1 = "9fc41ecfbee3581d9e92ff3a2ab6e4b93567e31d"
+
+[[rom.lanes]]
+file = "e02-09.17"
+offset = 3
+size = 524288
+crc = "23997907"
+sha1 = "e5b0b9069b29cf08e1a782c73f42137aec198f7f"
+
+[sprites]
+size = 4194304
+fill = 0
+
+[[sprites.lanes]]
+file = "e02-03.12"
+offset = 0
+size = 2097152
+crc = "c884ebb5"
+sha1 = "49009056bfdc564eac0ae6b7b49f070f05dc4ee3"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e02-02.8"
+offset = 1
+size = 2097152
+crc = "c8e06cfb"
+sha1 = "071d095a4930ce18a782c577811b553a9705fbd7"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 2097152
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "e02-01.4"
+offset = 0
+size = 2097152
+crc = "2ba94726"
+sha1 = "3e9cdd076338e0e5358571ce4f97576f1a6a12a7"
+stride = 1
+group = 1
+
+[tiles]
+size = 4194304
+fill = 0
+
+[[tiles.lanes]]
+file = "e02-08.47"
+offset = 0
+size = 2097152
+crc = "29c9bd02"
+sha1 = "a5b552ae7ac15f514ee6105410ec3e6e34ea0adb"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e02-07.45"
+offset = 2
+size = 2097152
+crc = "5eeee925"
+sha1 = "d302da28df8ac6d406ef45f1d282ee22ce243857"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 2097152
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e02-06.43"
+offset = 0
+size = 2097152
+crc = "4c8726e9"
+sha1 = "8ce2320a087f43c49428a39dafffec8c40d61b03"
+stride = 1
+group = 1
+
+[sound]
+# Mapped program only; omit the unused MAME 0x100000 prefix.
+size = 524288
+fill = 0
+base = 12582912
+
+[[sound.lanes]]
+file = "e02-13.32"
+offset = 0
+size = 262144
+crc = "80932702"
+sha1 = "c468234d03aa31b2aa0c3bd6bec32034216c2ae4"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e02-14.33"
+offset = 1
+size = 262144
+crc = "706671a5"
+sha1 = "1ac90647d617e73f12a67274a025ae43a6b3a316"
+stride = 2
+group = 1
+
+[samples]
+# Samples populate even (high) bytes; all odd bytes remain zero.
+size = 8388608
+fill = 0
+
+[[samples.lanes]]
+file = "e02-04.38"
+offset = 0
+size = 2097152
+crc = "b74307af"
+sha1 = "deb42415049efa2df70e7b25ba8b1b716aa227f1"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e02-05.39"
+offset = 4194304
+size = 2097152
+crc = "eb729855"
+sha1 = "85253efe794e8b5ffaf16bcb1123bca831e776a5"
+stride = 2
+group = 1
+
+[discovery]
+coverage = "all_aligned"
+# Boot code $104da PEA $5100, $104e0 TRAP #1 starts the sprite task.
+# This task calls $5190's eight-queue source compiler, then submits at $50e8.
+entry_points = [0x5100]
+
+# Rooted rectangle helper $6866 selects four flip routines via $68b0.
+[[discovery.jump_tables]]
+address = 0x688e
+table = 0x68b0
+count = 4
+
+[video]
+# f3: native visible x=46..365, y=24..255 (320x232).
+rotation = 0
+sprite_lag = 2
+extend = true
+visible_y = 24
+visible_height = 232

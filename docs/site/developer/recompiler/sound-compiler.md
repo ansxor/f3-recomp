@@ -1,6 +1,6 @@
 # The sound-CPU compiler
 
-`tools/compile_sound.py` compiles the Land Maker Japan sound ROM into C. The generated code executes the original 68000 driver.
+`tools/compile_sound.py` compiles the selected manifest's sound ROM into C. The generated code executes the original 68000 driver.
 
 It is not HLE and does not convert the driver into a note player. The ROM's tasks, mailbox parser, allocation, sequencer and DSP worker remain compiled instructions. The runtime retains MAME-derived devices; native/interpreter agreement is not physical-board verification.
 
@@ -21,7 +21,7 @@ The [main recompiler](/developer/recompiler/) has a discovery phase. This sound 
 
 ```mermaid
 flowchart TD
-    R["Two sound chips or sound.bin"] --> V["Interleave, pad and validate CRC32"]
+    R["Selected manifest sound chips"] --> V["Interleave, pad and validate CRC32"]
     V --> W["Visit every nonexcluded even ROM address"]
     W --> T{"Opcode class?"}
     T -->|"A-line, F-line or illegal"| E["Shared exception function"]
@@ -50,22 +50,22 @@ python3 tools/compile_sound.py --rom-dir /path/to/roms/landmakr \
   --config games/landmakrj/config.toml --output build/generated/sound-landmakrj
 ```
 
-`load_sound_rom` first looks for both chip files:
+`load_sound_rom` consumes `[sound]` and its chip lanes from `--config` through
+`recomp/roms.py`. Files must match configured size, CRC32 and SHA-1; there is no
+`sound.bin` fallback. LM short dump variants explicitly declare `short_size`,
+`short_crc`, `short_sha1`; they are validated before FF padding and checked
+against the full padded identity afterward.
 
-| File | Lane |
-|---|---|
-| `e61-14.32` | High byte, even interleaved offsets. |
-| `e61-15.33` | Low byte, odd interleaved offsets. |
+Command War/Riding Fight have physical `sound.size = 0x40000` and
+`mirror_size = 0x80000`: the first bank repeats into the upper half. RayForce
+has physical/mapped size `0x80000`. The compiled image CRC is emitted as
+`f3_sound_rom_crc32`, not pinned to Japan's image.
 
-A `0x20000`-byte chip receives `0xff` padding to `0x40000` bytes. Other chip sizes must already equal `0x40000`.
-
-The compiler interleaves them into `0x80000` bytes. If both files are not present, it accepts `sound.bin` instead.
-
-It then requires CRC32 `0x5a7e9117`. This compiler targets that program, not arbitrary F3 sound ROMs.
-
-The chip path enforces sizes explicitly. The `sound.bin` path relies on the CRC check and has no separate size check.
-
-`SoundNative` independently checks the loaded runtime ROM CRC and validates the exact every-even exclusion complement, including sorted entries and nonoverlapping exclusion metadata.
+`SoundNative` compares the loaded runtime image with that generated CRC and
+validates the exact every-even exclusion complement, including sorted entries
+and nonoverlapping exclusion metadata. Native/oracle audio parity for Command
+War and Riding Fight remains under investigation; native execution is not proof
+of waveform parity.
 
 Keep ROM-derived generated files in ignored build directories. Do not commit them.
 
@@ -217,7 +217,8 @@ See [build options](/reference/build-options) and [the build pipeline](/develope
 Programs built with `F3RT_SOUND_GENERATED` include the ABI-guarded
 `sound_program.h`. They pass its table/count and
 `{f3_sound_excluded_ranges,f3_sound_excluded_count}` span to
-`Machine::use_native_sound` before execution.
+`Machine::use_native_sound`, plus `f3_sound_rom_crc32` as the expected image
+CRC, before execution.
 
 Dispatch computes `(pc - 0xc00000)/2`, subtracting the word counts of
 preceding excluded intervals. A target inside an exclusion throws before

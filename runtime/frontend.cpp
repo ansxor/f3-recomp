@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/game_video.hpp"
+#include "f3rt/input.hpp"
 #include "f3rt/netplay_session.hpp"
 #include "frontend_ui.hpp"
 #include "frontend_state.hpp"
@@ -133,7 +134,7 @@ enum Preference : uint32_t {
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
     std::filesystem::path sound_trace_path,profile_path,config_path;
-    std::string set="landmakrj";
+    std::string set=F3RT_DEFAULT_SET;
     std::string video_mode="fdp";
     std::string sound_driver="oracle";
     std::string audio_backend="accurate";
@@ -152,7 +153,7 @@ int main(int argc,char **argv) try {
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
     bool motion_interp=false;
-#ifdef F3RT_LANDMAKR
+#ifdef F3RT_GAME
     romdir=F3RT_DEFAULT_ROM_DIR;
     translated=true;
     bool allow_fallback=false;
@@ -220,12 +221,12 @@ int main(int argc,char **argv) try {
         else if(arg=="--allow-fallback")allow_fallback=true;
         else if(arg=="--unthrottled")throttle=false;
         else if(arg=="--help") {
-            std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr] [--frames N] [--headless] [--no-audio]\n"
+            std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr|rayforce|commandw|ridingf] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--config FILE] [--volume 0..100] (user preferences load first; CLI overrides)\n"
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
-                     <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in landmakr; oracle in f3rt-run)\n"
+                     <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in game executables; oracle in f3rt-run)\n"
                      <<"  [--audio-backend accurate|hle] (default accurate; HLE runs on its own thread at 48 kHz)\n"
                      <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
@@ -239,7 +240,9 @@ int main(int argc,char **argv) try {
                      <<"  [--netplay-host|--netplay-join --netplay-server HOST:PORT --netplay-room CODE]\n"
                      <<"  [--netplay-player 1|2 --netplay-delay 0..8] (host delay; independent local histories)\n"
                      <<"  Netplay starts at 2P selection using a host snapshot; match end/disconnect returns to solo.\n"
-                     <<"Arrows: move; Z/X/C: buttons; 1/2: start; 5/6: coin; F3: service; F2: test.\n"
+                     <<"Arrows: move/dial; Z/X/C: buttons 1/2/3; A/S/D: buttons 4/5/6.\n"
+                     <<"1/2/3/4: local player start; 5/6/7/8: coin; F3: service; F2: test.\n"
+                     <<"Players 3/4 and buttons 4/5/6 are offline only; other P3/P4 controls default to unbound.\n"
                      <<"F1: menu (pauses solo); F12: screenshot; Escape: close menu or quit.\n"
                      <<"F11 or Alt+Enter: toggle fullscreen. Menu includes persisted keyboard/gamepad remapping.\n";
             return 0;
@@ -248,14 +251,14 @@ int main(int argc,char **argv) try {
     if(romdir.empty() || !dump_every)throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if(headless && !frames)throw std::runtime_error("Headless execution requires --frames");
     f3rt::FrontendSettings settings;
-#if defined(F3RT_SOUND_GENERATED) && defined(F3RT_LANDMAKR)
+#if defined(F3RT_SOUND_GENERATED) && defined(F3RT_GAME)
     settings.audio_backend=f3rt::AudioBackend::Native;
 #endif
-#ifdef F3RT_LANDMAKR
-    if(translated && !allow_fallback)settings.video_mode="game";
+#ifdef F3RT_GAME
+    if(set=="landmakrj" && translated && !allow_fallback)settings.video_mode="game";
 #endif
     const auto default_audio_backend=settings.audio_backend;
-    if(config_path.empty())config_path=f3rt::default_config_path();
+    if(config_path.empty())config_path=f3rt::default_config_path(set);
     std::string settings_error;
     if(!config_path.empty() && !f3rt::load_frontend_settings(config_path.string(),settings,settings_error))
         std::cerr<<"f3rt: ignoring config "<<config_path<<": "<<settings_error<<'\n';
@@ -289,10 +292,12 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("--sound-driver must be oracle or native");
     if(audio_backend!="accurate" && audio_backend!="hle")
         throw std::runtime_error("--audio-backend must be accurate or hle");
+    if(audio_backend=="hle" && set!="landmakrj")
+        throw std::runtime_error("HLE audio requires landmakrj");
     if(audio_backend=="hle" && ((cli_preferences&SoundDriver) || !sound_trace_path.empty()))
         throw std::runtime_error("HLE does not execute a sound driver; --sound-driver/--sound-trace require accurate audio");
-#ifdef F3RT_LANDMAKR
-    if(set!="landmakrj")throw std::runtime_error("This generated executable requires landmakrj");
+#ifdef F3RT_GAME
+    if(set!=F3RT_DEFAULT_SET)throw std::runtime_error("This generated executable requires " F3RT_DEFAULT_SET);
 #endif
     if(video_mode!="fdp" && video_mode!="game" && video_mode!="compare")
         throw std::runtime_error("--video must be fdp, game or compare");
@@ -319,6 +324,7 @@ int main(int argc,char **argv) try {
     if(video_backend=="gpu" && !headless)throw std::runtime_error("GPU presentation requires F3RT_GPU build support");
 #endif
     const bool netplay=net_role_seen;
+    if(netplay && set!="landmakrj")throw std::runtime_error("Netplay requires landmakrj");
     if(netplay && (net_options.server.empty() || net_options.room.empty()))
         throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
     if(netplay && (!translated || allow_fallback || !sound_trace_path.empty()))
@@ -340,7 +346,7 @@ int main(int argc,char **argv) try {
     else if(sound_driver=="native") {
 #ifdef F3RT_SOUND_GENERATED
         m.use_native_sound(f3_sound_blocks,f3_sound_block_count,
-                           {f3_sound_excluded_ranges,f3_sound_excluded_count});
+                           {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
         throw std::runtime_error("Native sound requires a generated sound program (F3_ROM_DIR)");
 #endif
@@ -349,6 +355,15 @@ int main(int argc,char **argv) try {
     if(video_mode!="fdp")
         m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
     const auto snapshot_video_options=video_options;
+    const unsigned frame_width=video_options.width();
+    const unsigned frame_height=m.game_video?video_options.height():m.roms.video.visible_height;
+    const unsigned rotation=m.roms.video.rotation;
+    const bool portrait=rotation==90 || rotation==270;
+    const unsigned display_width=portrait?frame_height:frame_width;
+    const unsigned display_height=portrait?frame_width:frame_height;
+    const SDL_FRect rotated_rect{(float(display_width)-frame_width)/2,
+                                (float(display_height)-frame_height)/2,
+                                float(frame_width),float(frame_height)};
     if(!eeprom.empty())m.load_eeprom(eeprom);
     if(!fallback_report.empty())m.fallback_hits.resize(0x800000);
     if(translated) {
@@ -387,9 +402,9 @@ int main(int argc,char **argv) try {
         } else
 #endif
         {
-            check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),int((320+video_options.border*2)*3),696,SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
-            check(SDL_SetRenderLogicalPresentation(sdl.renderer,int(video_options.width()),int(video_options.height()),SDL_LOGICAL_PRESENTATION_LETTERBOX));
-            sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,int(video_options.width()),int(video_options.height()));
+            check(SDL_CreateWindowAndRenderer(("f3rt — "+set).c_str(),int(display_width*3),int(display_height*3),SDL_WINDOW_RESIZABLE,&sdl.window,&sdl.renderer));
+            check(SDL_SetRenderLogicalPresentation(sdl.renderer,int(display_width),int(display_height),SDL_LOGICAL_PRESENTATION_LETTERBOX));
+            sdl.texture=SDL_CreateTexture(sdl.renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,int(frame_width),int(frame_height));
             check(sdl.texture!=nullptr);
             check(SDL_SetTextureScaleMode(sdl.texture,video_filter=="linear"?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST));
         }
@@ -408,7 +423,7 @@ int main(int argc,char **argv) try {
 #endif
         sdl.ui=std::make_unique<f3rt::FrontendUi>(sdl.window,sdl.renderer,ui_device,settings,*sdl.input);
         std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" backend="<<video_backend
-                 <<" video="<<video_mode<<" internal="<<video_options.width()<<'x'<<video_options.height()
+                 <<" video="<<video_mode<<" internal="<<display_width<<'x'<<display_height
                  <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
                  <<" filter="<<video_filter<<" interp="<<video_interp
                  <<" interp_fields="<<f3rt::interpolation_fields_name(*interpolation_fields)<<'\n';
@@ -477,6 +492,7 @@ int main(int argc,char **argv) try {
         motion_frame_start=std::chrono::steady_clock::now();
     };
     auto connect=[&](f3rt::netplay::TransportOptions options) {
+        if(set!="landmakrj")throw std::runtime_error("Netplay requires landmakrj");
         if(session)throw std::runtime_error("Disconnect the current session first");
         session=std::make_unique<f3rt::netplay::Session>(m,options,machine_identity());
         if(finite_netplay)session->set_frame_limit(uint32_t(frames));
@@ -618,8 +634,9 @@ int main(int argc,char **argv) try {
             (!sdl.ui->open() || session) && sdl.gpu->pace_motion();
 #endif
         bool advanced=false;
-        std::array<f3rt::netplay::InputWord,2> local{};
-        if(sdl.input && !sdl.ui->open())local={sdl.input->word(0),sdl.input->word(1)};
+        std::array<f3rt::LocalInputWord,f3rt::local_player_count> local{};
+        if(sdl.input && !sdl.ui->open())
+            for(unsigned p=0;p<local.size();++p)local[p]=sdl.input->word(p);
         if(session) {
             const auto previous_rollbacks=session->rollback()?session->rollback()->rollback_count():0;
             const bool was_synchronized=session->synchronized();
@@ -642,7 +659,10 @@ int main(int argc,char **argv) try {
             const int lead_limit=throttle?2+int(session->rtt_ms()*f3rt::Machine::pixel_clock/
                 (2000.0*f3rt::Machine::frame_pixels)+0.999):16;
             if((!throttle || now>=next_net_step) && session->frame_advantage()<=lead_limit) {
-                advanced=session->advance(local);
+                const std::array<f3rt::netplay::InputWord,2> network_local{
+                    f3rt::netplay::InputWord(local[0]&f3rt::netplay::input_mask),
+                    f3rt::netplay::InputWord(local[1]&f3rt::netplay::input_mask)};
+                advanced=session->advance(network_local);
                 if(advanced) {
                     motion_frame_start=now;
                     next_net_step=std::max(next_net_step,now)+frame_time;
@@ -657,7 +677,7 @@ int main(int argc,char **argv) try {
             }
         } else if((!sdl.ui || !sdl.ui->open()) &&
                   (!motion_presentation || !throttle || std::chrono::steady_clock::now()>=next_frame)) {
-            f3rt::netplay::apply_inputs(m,local);
+            f3rt::apply_local_inputs(m,local);
             if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
             advanced=true;
             if(motion_presentation && throttle) {
@@ -786,7 +806,10 @@ int main(int argc,char **argv) try {
                 const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.native_pixels());
                 if(advanced || refresh || !surface_valid)
                     check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
-                check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
+                check(SDL_RenderClear(sdl.renderer));
+                if(rotation)check(SDL_RenderTextureRotated(sdl.renderer,sdl.texture,nullptr,&rotated_rect,
+                                                          rotation,nullptr,SDL_FLIP_NONE));
+                else check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
                 if(capture_final || screenshot_pending) {
                     SDL_Surface *shot=SDL_RenderReadPixels(sdl.renderer,nullptr);
                     check(shot!=nullptr);

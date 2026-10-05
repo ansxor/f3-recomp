@@ -7,6 +7,9 @@ Standalone hardware implementations derived from MAME BSD-3-Clause files:
   third_party/audio/mb87078.*: Fabio Priuli, Philip Bennett, hap
 Reference source: https://github.com/mamedev/mame, revision
 cfc4760a3be9c5a79846b19b6a573cb38459fa7e, local source headers retain authors.
+FDA 15-bit palette interpretation, per-line selection and forward blur also
+follow https://github.com/y-ack/mame/tree/fdp-collapse, revision
+28e411d4f760df3d55fae070a2f6424f89966a2f (taito_f3_v.cpp and tc0630fdp.cpp).
 Only individually BSD-licensed hardware algorithms were adapted. The MAME
 framework, executable, and GPL-only source are not linked into f3rt.
 

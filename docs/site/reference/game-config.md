@@ -9,9 +9,12 @@ This page describes each key in the per-game TOML file. The recompiler uses it t
 | `games/landmakrj/config.toml` | Land Maker Japan 2.01J, set `landmakrj` | Supported player build; selects `all_aligned` coverage and Land Maker-specific video hooks. Finite validation only. |
 | `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but no Japan-specific hooks are supplied and discovery uses the default `recursive` coverage. |
 
-The top-level `CMakeLists.txt` uses `games/landmakrj/config.toml` only. You pass a config file to the recompiler with `--config`. See [CLI reference](/reference/cli#python3-m-recomp).
-
-No other F3 game is implemented. A config alone is not a port: see the [portability audit](/developer/porting) for the runtime assumptions and per-game work.
+`F3_GAME` selects `games/SET/config.toml`; default `landmakrj`, with `landmakr`,
+`rayforce`, `commandw`, `ridingf` also accepted. The three new titles have native
+main/sound bring-up with FDP video and accurate sound, not LM enhanced paths.
+Their exact revisions and finite evidence are in [porting](/developer/porting).
+You can also pass `--config` directly to the compiler; a config alone is not proof
+of a complete port.
 
 The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]` and `[[hooks]]`. The emit step (`generate()` in `recomp/generate.py`) reads `[[hooks]]` and `[discovery] coverage` again.
 
@@ -122,7 +125,7 @@ Rules for the whole lane set:
 - The offsets must cover `0` to `interleave - 1` with no gap. Else: `ROM lane configuration must cover every byte of the image.`
 - The loader never replaces a missing file with another ROM set.
 
-In the shipped configs, `size` is `2097152` (2 MiB) and each lane file has `524288` bytes.
+In the two Land Maker configs, `size` is `2097152` (2 MiB) and each lane file has `524288` bytes; other titles use their own sizes.
 
 | Lane offset | `landmakrj` file | `landmakr` file |
 | --- | --- | --- |
@@ -131,9 +134,38 @@ In the shipped configs, `size` is `2097152` (2 MiB) and each lane file has `5242
 | 2 | `e61-11.18` | `e61-17.18` |
 | 3 | `e61-10.17` | `e61-16.17` |
 
-::: info
-The runtime does not read this file. `RomSet::load()` in `runtime/rom.cpp` has its own table of file names and CRC32 values for both sets. It also loads the sprite, tile, sound and sample ROMs, which this config does not describe.
-:::
+## Additional regions and video metadata
+
+`tools/compile_roms.py` generates runtime metadata from these configs using
+`recomp/roms.py`; the sound compiler consumes the same manifest. Optional region
+tables are `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples`.
+Each has explicit `size`, `fill` (0 or 255) and lanes with `file`, `size`, `crc`
+(CRC32), `sha1`, `offset`, `stride`, `group`. Every source group of consecutive
+bytes is placed at the next destination stride; bounds and hashes are validated.
+Riding Fight's absent upper planes use size-zero regions, not fake files.
+
+LM sound lanes can declare validated `short_size`, `short_crc`, `short_sha1`:
+validate the short dump, FF-pad to lane size, then validate the full identity.
+Command War/Riding Fight use physical `sound.size = 0x40000` with
+`mirror_size = 0x80000`, repeating the first bank into the upper half.
+RayForce sound is physical/mapped `0x80000`. No `sound.bin` fallback exists.
+Main images may be 1 MiB; unpopulated main-map bytes read `0xff`.
+
+`[video]` provides `rotation`, `sprite_lag`, `visible_y`, `visible_height` and
+`extend = true` for extended sprite addressing. RayForce America 2.3A
+(1994/01/20) uses board 320×224, y 31, ROT90 display 224×320, lag 2.
+Command War 0.0J prototype and Riding Fight World 1.0O use 320×224, y 32,
+lag 1. Command War retains upstream's imperfect-graphics source limitation;
+Riding Fight uses sprite trails.
+
+Palette precision is dynamic FDA state, not a config key. Latched line RAM
+`$6400` bit 14 is active-low 15-bit selection versus 24-bit. The 15-bit format
+`RRRRGGGGBBBBRGBx` uses fifth bits 3/2/1 and channel quantization
+`nibble * 16 + fifthbit * 8`. Bit 13 is active-low blur. Pen masks come from
+tile attributes/sprite commands, not per-game constants. Pinned
+[manifest source](https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp)
+and [FDA research](https://github.com/y-ack/mame/blob/28e411d4f760df3d55fae070a2f6424f89966a2f/src/mame/taito/tc0630fdp.cpp)
+are described in [porting](/developer/porting).
 
 ## [discovery]
 
@@ -212,8 +244,8 @@ Behavior and limits:
 
 ## What the config does not contain
 
-- Memory map, video and sound ROM files: the runtime has these fixed in `runtime/rom.cpp`.
-- Timing tables: they are the CSV files `recomp/68000_cycles.csv` and `recomp/68020_cycles.csv`. See [Generated files](/reference/generated-files).
-- The sound CPU: `tools/compile_sound.py` does not use a TOML config. Its options are on the command line.
+- The board memory map and device implementations remain runtime code.
+- Timing tables are `recomp/68000_cycles.csv` and `recomp/68020_cycles.csv`; see [Generated files](/reference/generated-files).
+- Sound compiler options remain CLI arguments, but sound ROM placement, hashes, mirroring and exclusions come from the selected TOML.
 
 For how discovery and emit use these keys, read [Discovery](/developer/recompiler/discovery) and [ROM and config](/developer/recompiler/rom-and-config).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Land Maker Japan 68000 sound driver native compiler.
+"""Taito F3 68000 sound driver native compiler.
 
 Compiles sound ROM instructions into statically compiled native C blocks
 with pinned 68000 instruction-boundary timing.
@@ -16,19 +16,18 @@ import sys
 import zlib
 import tomllib
 
-import capstone as cs
-import capstone.m68k as m68k
-
 # Ensure project root is in sys.path to access recomp package
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from recomp.emitter import lower as emitter_lower, _decode_ea
 from recomp.discovery import (
     parse_exclusions, exclusion_at, _resolve_target,
     CALL_MNEMONICS, UNCOND_BRANCH_MNEMONICS, COND_BRANCH_MNEMONICS,
 )
+from recomp.emitter import lower as emitter_lower, _decode_ea
+import capstone as cs
+import capstone.m68k as m68k
 
 
 def load_68000_base_cycles() -> bytes:
@@ -225,36 +224,13 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
     return remapped
 
 
-def load_sound_rom(rom_dir: Path) -> bytes:
-    """Load and validate the 512KiB interleaved sound ROM from rom_dir."""
-    rom_dir = Path(rom_dir)
-    p14 = rom_dir / "e61-14.32"
-    p15 = rom_dir / "e61-15.33"
+def load_sound_rom(rom_dir: Path, config: dict) -> bytes:
+    """Validate chips and assemble the mapped 512 KiB sound CPU window."""
+    from recomp.roms import load_region
 
-    if p14.exists() and p15.exists():
-        d14 = bytearray(p14.read_bytes())
-        d15 = bytearray(p15.read_bytes())
-        if len(d14) == 0x20000:
-            d14.extend(b"\xff" * 0x20000)
-        if len(d15) == 0x20000:
-            d15.extend(b"\xff" * 0x20000)
-        if len(d14) != 0x40000 or len(d15) != 0x40000:
-            raise ValueError(f"Unexpected ROM chip sizes: {len(d14)} / {len(d15)}")
-        interleaved = bytearray(0x80000)
-        for i in range(0x40000):
-            interleaved[i * 2] = d14[i]
-            interleaved[i * 2 + 1] = d15[i]
-        rom = bytes(interleaved)
-    elif (rom_dir / "sound.bin").exists():
-        rom = (rom_dir / "sound.bin").read_bytes()
-    else:
-        raise FileNotFoundError(f"Sound ROM chips e61-14.32 / e61-15.33 not found in {rom_dir}")
-
-    crc = zlib.crc32(rom) & 0xffffffff
-    expected_crc = 0x5a7e9117
-    if crc != expected_crc:
-        raise ValueError(f"Sound ROM CRC mismatch: got 0x{crc:08x}, expected 0x{expected_crc:08x}")
-
+    rom = load_region(config, "sound", rom_dir)
+    if len(rom) != 0x80000:
+        raise ValueError("Sound manifest must cover the 512 KiB CPU window")
     return rom
 
 
@@ -440,7 +416,8 @@ def compile_sound_rom(
         'extern "C" {\n'
         "#endif\n\n"
         "extern const f3_block f3_sound_blocks[];\n"
-        "extern const size_t f3_sound_block_count;\n\n"
+        "extern const size_t f3_sound_block_count;\n"
+        "extern const uint32_t f3_sound_rom_crc32;\n\n"
         "extern const f3_excluded_range f3_sound_excluded_ranges[];\n"
         "extern const size_t f3_sound_excluded_count;\n\n"
         "#ifdef __cplusplus\n"
@@ -484,6 +461,7 @@ def compile_sound_rom(
             tier_sources[tier].append(filename)
     for name in sorted({name for _, name in table if not name.startswith("f3_sound_vector_")}):
         program_c.append(f"void {name}(f3_cpu *cpu);\n")
+    program_c.append(f"const uint32_t f3_sound_rom_crc32 = 0x{zlib.crc32(rom):08x}u;\n")
     program_c.append("\nconst f3_block f3_sound_blocks[] = {\n")
     for pc, name in table:
         program_c.append(f"    {{ 0x{pc:08x}u, {name} }},\n")
@@ -560,9 +538,9 @@ def compile_sound_rom(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rom-dir", required=True, type=Path, help="Directory containing Land Maker sound ROMs")
+    parser.add_argument("--rom-dir", required=True, type=Path, help="Directory containing the selected game ROMs")
     parser.add_argument("--output", required=True, type=Path, help="Output directory for generated sources")
-    parser.add_argument("--config", required=True, type=Path, help="Game TOML containing shared exclusions")
+    parser.add_argument("--config", required=True, type=Path, help="Game ROM manifest and instruction exclusions")
     parser.add_argument("--blocks-per-file", type=int, default=1024, help="Number of instruction blocks per shard C file")
     profile = parser.add_mutually_exclusive_group()
     profile.add_argument("--profile-tiers", type=Path, help="Profile for hot/cold full-coverage generation")
@@ -578,8 +556,8 @@ def main() -> None:
         config = tomllib.load(stream)
 
     print(f"Loading sound ROM from {args.rom_dir}...")
-    rom = load_sound_rom(args.rom_dir)
-    print("Validated Land Maker Japan sound ROM (512KiB, CRC: 5a7e9117)")
+    rom = load_sound_rom(args.rom_dir, config)
+    print(f"Validated {config['game']['id']} sound ROM ({len(rom)} bytes, CRC: {zlib.crc32(rom):08x})")
 
     print(f"Compiling sound model (coverage: {args.coverage}) to {args.output}...")
     report = compile_sound_rom(

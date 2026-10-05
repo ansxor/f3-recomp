@@ -1,0 +1,198 @@
+# Pinned manifest: https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp
+# ROM_START(dungeonm); physical bytes identified by size, CRC32 and SHA1.
+[game]
+name = "Dungeon Magic (Ver 2.1O 1994/02/18)"
+id = "dungeonm"
+platform = "taito_f3"
+
+[rom]
+# Populated physical CPU bytes only; MAME reserves 0x200000.
+# All of the 0x200000 main address allocation is physically populated.
+size = 0x200000
+interleave = 4
+
+[[rom.lanes]]
+file = "d69-20.bin"
+offset = 0x0
+size = 0x80000
+crc = "33650fe4"
+sha1 = "df8b775749b1f0f02d0df6141597cc49fb3ae227"
+
+[[rom.lanes]]
+file = "d69-13.bin"
+offset = 0x1
+size = 0x80000
+crc = "dec2ec17"
+sha1 = "8472a5aaea9e4e4fb5f7f4b5eda356b590d1541d"
+
+[[rom.lanes]]
+file = "d69-15.bin"
+offset = 0x2
+size = 0x80000
+crc = "323e1955"
+sha1 = "d76582d1ff5a9aa87a498fea3280bc3c25ee9ec0"
+
+[[rom.lanes]]
+file = "d69-22.bin"
+offset = 0x3
+size = 0x80000
+crc = "f99e175d"
+sha1 = "8f5f4710d72faed978e68e6e36703f47e8bab06f"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 0x600000
+fill = 0
+
+[[sprites.lanes]]
+file = "d69-06.bin"
+offset = 0x0
+size = 0x200000
+crc = "cb4aac81"
+sha1 = "15d315c6b9695cc2fe07defc67c7a4fb26de1950"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d69-07.bin"
+offset = 0x1
+size = 0x200000
+crc = "b749f984"
+sha1 = "39fd662bdc42e812519181a640a83e29e300826a"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d69-09.bin"
+offset = 0x400000
+size = 0x100000
+crc = "a96c19b8"
+sha1 = "7872b4dd9d51877bed709fec393413e41d6b954f"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "d69-10.bin"
+offset = 0x400001
+size = 0x100000
+crc = "36aa80c6"
+sha1 = "aeb5f7632810564426761b5798539bf4c4a0c64c"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 0x300000
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "d69-08.bin"
+offset = 0x0
+size = 0x200000
+crc = "5b68d7d8"
+sha1 = "f2ee3dd7100a3c9d8f402fe36dae2bc66cb17be3"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "d69-11.bin"
+offset = 0x200000
+size = 0x100000
+crc = "c11adf92"
+sha1 = "ee9ce49a43b419c4f44ac1aea8d0a12d7b289244"
+stride = 1
+group = 1
+
+[tiles]
+size = 0x400000
+fill = 0
+
+[[tiles.lanes]]
+file = "d69-03.bin"
+offset = 0x0
+size = 0x200000
+crc = "6999c86f"
+sha1 = "8a91930edfc0b5d23e59f8c3b43131db6edb4d37"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "d69-04.bin"
+offset = 0x2
+size = 0x200000
+crc = "cc91dcb7"
+sha1 = "97f510b1e1a3adf49efe82babdd7abce3756ce4b"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 0x200000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "d69-05.bin"
+offset = 0x0
+size = 0x200000
+crc = "f9f5433c"
+sha1 = "d3de66385d883c72967c44bc29983d7a79f665d1"
+stride = 1
+group = 1
+
+[sound]
+# MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
+size = 0x40000
+fill = 0
+base = 0xc00000
+# Repeat the physical 256 KiB image in the 512 KiB CPU window.
+mirror_size = 0x80000
+
+[[sound.lanes]]
+file = "d69-18.bin"
+offset = 0x0
+size = 0x20000
+crc = "04600d7b"
+sha1 = "666cfab09b61fd6e0bc4ff277018ebf1cda01b0e"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "d69-19.bin"
+offset = 0x1
+size = 0x20000
+crc = "1484e853"
+sha1 = "4459c18ba005786483c652857e527c6093efb036"
+stride = 2
+group = 1
+
+[samples]
+# ROM_REGION16_BE/ERASE00: odd (low) bytes remain zero.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "d69-01.bin"
+offset = 0x0
+size = 0x200000
+crc = "9ac93ac2"
+sha1 = "1c44f6ba95505f85b0c8a90395f09d2a49da3553"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "d69-02.bin"
+offset = 0x400000
+size = 0x200000
+crc = "dce28dd7"
+sha1 = "eacfc98349b0608fc1a944c11f0483fb6caa4445"
+stride = 2
+group = 1
+
+[video]
+# Geometry/lag: pinned taito_f3_v.cpp::f3_config_table; f3_224a/b in driver.
+# Native visible crop x=46..365, y=31..254 (320x224).
+rotation = 0
+sprite_lag = 2
+extend = true
+visible_y = 31
+visible_height = 224

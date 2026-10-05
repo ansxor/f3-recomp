@@ -498,6 +498,21 @@ def generate_boundary_cases() -> list[RawTestCase]:
             initial_a=list(a or SAFE_A_REGS), initial_sr=sr,
             initial_mem=list(memory), is_boundary=True, boundary_kind="operand_aliasing"))
 
+    # CMPM operands are Capstone REGs with postincrement modes, not CMPA.
+    # EEPROM signature validation depends on the reads and both increments.
+    for width, size_bits in ((1, 0), (2, 0x40), (4, 0x80)):
+        mask, sign = (1 << (width * 8)) - 1, 1 << (width * 8 - 1)
+        for source, destination in ((0, 0), (1, 0), (mask, 1),
+                                    (sign - 1, sign), (sign, sign - 1)):
+            for form, opcode, source_address, destination_address in (
+                    ("distinct", 0xb10a, TEST_A2, TEST_A0),
+                    ("alias", 0xb108, TEST_A0, TEST_A0 + width),
+                    ("stack_alias", 0xbf0f, TEST_SP, TEST_SP + (2 if width == 1 else width))):
+                add_case(f"cmpm_{width}_{form}_{source:x}_{destination:x}",
+                         struct.pack(">H", opcode | size_bits).hex(), sr=0x1f,
+                         memory=[MemInitItem(source_address, source.to_bytes(width, "big")),
+                                 MemInitItem(destination_address, destination.to_bytes(width, "big"))])
+
     add_case("move_a0_predec_alias", "2108")
     add_case("move_a0_postinc_alias", "20c8")
     add_case("jsr_stack_target", "4e97")

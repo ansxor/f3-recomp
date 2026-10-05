@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Bryan McPhail, ywy, 12Me21, f3rt authors
 #include "f3rt/video.hpp"
+#include "f3rt/rom.hpp"
 #include "state_io.hpp"
 #include "game_scene.hpp"
 
@@ -19,8 +20,6 @@ namespace {
 constexpr int H_TOTAL = 432;
 constexpr int H_VIS   = 320;
 constexpr int H_START = 46;
-constexpr int V_VIS   = 232;
-constexpr int V_START = 24;
 
 constexpr int NUM_PLAYFIELDS   = 4;
 constexpr int NUM_SPRITEGROUPS = 4;
@@ -188,7 +187,8 @@ struct f3_line_inf {
     clip_plane_inf clip[NUM_CLIPPLANES]{};
     uint8_t blend[4]{};
     uint8_t x_sample = 16;
-    uint8_t fx_6400 = 0;
+    bool palette_15bit = true;
+    bool blur = true;
     uint16_t bg_palette = 0;
     pivot_inf pivot;
     sprite_inf sp[NUM_SPRITEGROUPS];
@@ -259,8 +259,15 @@ clip_ranges calc_clip(const clip_plane_inf clip[NUM_CLIPPLANES], const mixable &
 } // namespace
 
 struct Video::Impl {
-    std::vector<uint8_t> decoded_sprites; // 32768 * 256 bytes
-    std::vector<uint8_t> decoded_tiles;   // 32768 * 256 bytes
+    VideoConfig config;
+    uint32_t sprite_tile_mask = 0, playfield_tile_mask = 0;
+    uint32_t sprite_tile_count = 0, playfield_tile_count = 0;
+
+    static uint32_t wrap_tile(uint32_t code, uint32_t count, uint32_t mask) {
+        return mask ? code & mask : (count == 1 ? 0 : code % count);
+    }
+    std::vector<uint8_t> decoded_sprites;
+    std::vector<uint8_t> decoded_tiles;
     std::array<uint8_t, 256 * 64> decoded_chars{};   // 256 tiles x 64 pixels (4bpp)
     std::array<uint8_t, 2048 * 64> decoded_pivot{}; // 2048 tiles x 64 pixels (4bpp)
 
@@ -288,7 +295,7 @@ struct Video::Impl {
         std::array<uint16_t, 1024> pix{};
         std::array<uint8_t, 1024> flags{};
     };
-    std::array<LineBuffer, NUM_PLAYFIELDS> pf_lines{};
+    std::array<LineBuffer, 8> pf_lines{};
     LineBuffer text_line{};
     LineBuffer pivot_line{};
     std::array<SceneRow, 256> oracle_scene_rows_{};
@@ -397,51 +404,56 @@ struct Video::Impl {
                      std::span<const uint8_t> sprites_hi,
                      std::span<const uint8_t> tilemap,
                      std::span<const uint8_t> tilemap_hi) {
-        if (sprites.size() < 0x400000 || sprites_hi.size() < 0x200000 ||
-            tilemap.size() < 0x400000 || tilemap_hi.size() < 0x200000) {
+        if (sprites.empty() || tilemap.empty() || sprites.size() % 128 || tilemap.size() % 128 ||
+            (!sprites_hi.empty() && sprites_hi.size() != sprites.size() / 2) ||
+            (!tilemap_hi.empty() && tilemap_hi.size() != tilemap.size() / 2))
             return false;
-        }
 
-        constexpr size_t TOTAL_TILES = 32768;
-        decoded_sprites.resize(TOTAL_TILES * 256);
-        decoded_tiles.resize(TOTAL_TILES * 256);
+        const size_t sprite_tiles = sprites.size() / 128;
+        const size_t playfield_tiles = tilemap.size() / 128;
+        sprite_tile_count = uint32_t(sprite_tiles);
+        playfield_tile_count = uint32_t(playfield_tiles);
+        sprite_tile_mask = (sprite_tiles & (sprite_tiles - 1)) ? 0 : uint32_t(sprite_tiles - 1);
+        playfield_tile_mask = (playfield_tiles & (playfield_tiles - 1)) ? 0 : uint32_t(playfield_tiles - 1);
+        decoded_sprites.resize(sprite_tiles * 256);
+        decoded_tiles.resize(playfield_tiles * 256);
 
         // Decode 16x16 6bpp sprites: low 4 bpp packed LSB, high 2 bpp
-        for (size_t c = 0; c < TOTAL_TILES; ++c) {
+        for (size_t c = 0; c < sprite_tiles; ++c) {
             const uint8_t *lo_tile = &sprites[c * 128];
-            const uint8_t *hi_tile = &sprites_hi[c * 64];
+            const uint8_t *hi_tile = sprites_hi.empty() ? nullptr : &sprites_hi[c * 64];
             uint8_t *dest = &decoded_sprites[c * 256];
 
             for (int y = 0; y < 16; ++y) {
                 const uint8_t *lo_row = &lo_tile[y * 8];
-                const uint8_t *hi_row = &hi_tile[y * 4];
+                const uint8_t *hi_row = hi_tile ? &hi_tile[y * 4] : nullptr;
                 uint8_t *dest_row = &dest[y * 16];
 
                 for (int x = 0; x < 16; ++x) {
                     uint8_t lo = (x & 1) ? (lo_row[x >> 1] >> 4) : (lo_row[x >> 1] & 0x0f);
-                    uint8_t hi = ((hi_row[x >> 2] >> (2 * (x & 3))) & 0x03) << 4;
+                    uint8_t hi = hi_row ? ((hi_row[x >> 2] >> (2 * (x & 3))) & 0x03) << 4 : 0;
                     dest_row[x] = lo | hi;
                 }
             }
         }
 
         // Decode 16x16 6bpp tilemaps: low 4 bpp packed LSB, high 2 bpp
-        for (size_t c = 0; c < TOTAL_TILES; ++c) {
+        for (size_t c = 0; c < playfield_tiles; ++c) {
             const uint8_t *lo_tile = &tilemap[c * 128];
-            const uint8_t *hi_tile = &tilemap_hi[c * 64];
+            const uint8_t *hi_tile = tilemap_hi.empty() ? nullptr : &tilemap_hi[c * 64];
             uint8_t *dest = &decoded_tiles[c * 256];
 
             for (int y = 0; y < 16; ++y) {
                 const uint8_t *lo_row = &lo_tile[y * 8];
-                const uint8_t *hi_row = &hi_tile[y * 4];
+                const uint8_t *hi_row = hi_tile ? &hi_tile[y * 4] : nullptr;
                 uint8_t *dest_row = &dest[y * 16];
 
                 for (int x = 0; x < 16; ++x) {
                     uint8_t lo = (x & 1) ? (lo_row[x >> 1] >> 4) : (lo_row[x >> 1] & 0x0f);
-                    uint8_t hi;
-                    if (x < 8) {
+                    uint8_t hi = 0;
+                    if (hi_row && x < 8) {
                         hi = (((hi_row[1] >> x) & 1) << 5) | (((hi_row[0] >> x) & 1) << 4);
-                    } else {
+                    } else if (hi_row) {
                         hi = (((hi_row[3] >> (x - 8)) & 1) << 5) | (((hi_row[2] >> (x - 8)) & 1) << 4);
                     }
                     dest_row[x] = lo | hi;
@@ -476,16 +488,22 @@ struct Video::Impl {
         }
     }
 
+    unsigned physical_map_count() const {
+        return config.extend ? (config.extended_alt_maps ? 6 : 4) : 8;
+    }
+
     void update_row_usages(const uint8_t *pf_ram, const uint8_t *textram) {
         std::memset(tilemap_row_usage, 0, sizeof(tilemap_row_usage));
         std::memset(textram_row_usage, 0, sizeof(textram_row_usage));
 
-        // Extend mode: 4 playfields of 64x32 tiles (2 words per tile)
-        for (int offset = 1; offset < 0x4000; offset += 2) {
+        // Four/six 64x32 maps or eight 32x32 maps, two words per tile.
+        // Six extended maps fill PF RAM exactly, stopping before text RAM.
+        const int words = int(physical_map_count()) * (config.extend ? 0x1000 : 0x800);
+        for (int offset = 1; offset < words; offset += 2) {
             uint16_t tile = read_be16(&pf_ram[offset * 2]);
             if (tile != 0) {
-                int row  = (offset >> 7) & 0x1f;
-                int tmap = offset >> 12;
+                int row  = (offset >> (config.extend ? 7 : 6)) & 0x1f;
+                int tmap = offset >> (config.extend ? 12 : 11);
                 if (tmap < 8)
                     tilemap_row_usage[row][tmap]++;
             }
@@ -587,9 +605,10 @@ struct Video::Impl {
             int32_t tx = flipscreen ? ((512 << 8) - x.block_scale * 16 - x.pos) : x.pos;
             int32_t ty = flipscreen ? ((256 << 8) - y.block_scale * 16 - y.pos) : y.pos;
 
-            // Visibility culling: screen active rect is [46..365] x [24..255]
-            if (tx + x.block_scale * 16 <= (46 << 8) || tx > (365 << 8) ||
-                ty + y.block_scale * 16 <= (24 << 8) || ty > (255 << 8))
+            // Cull against the configured scanout crop, not Land Maker's top edge.
+            if (tx + x.block_scale * 16 <= (H_START << 8) || tx > ((H_START + H_VIS - 1) << 8) ||
+                ty + y.block_scale * 16 <= (int(config.visible_y) << 8) ||
+                ty > ((int(config.visible_y + config.visible_height) - 1) << 8))
                 continue;
 
             bool flip_x = (spritecont & 0x01) != 0;
@@ -614,7 +633,7 @@ struct Video::Impl {
         if (decoded_sprites.empty())
             return;
 
-        const uint8_t *code_base = &decoded_sprites[(sprite.code % 32768) * 256];
+        const uint8_t *code_base = &decoded_sprites[wrap_tile(sprite.code, sprite_tile_count, sprite_tile_mask) * 256];
         const uint8_t flipx = sprite.flip_x ? 0x0f : 0;
         const uint8_t flipy = sprite.flip_y ? 0x0f : 0;
 
@@ -625,7 +644,7 @@ struct Video::Impl {
         for (uint8_t y = 0; y < 16; ++y) {
             const int dy = dy8 >> 8;
             dy8 += sprite.scale_y;
-            if (dy < V_START || dy >= (V_START + V_VIS))
+            if (dy < int(config.visible_y) || dy >= int(config.visible_y + config.visible_height))
                 continue;
 
             uint16_t *dest = &sprite_framebuffer[dy * H_TOTAL];
@@ -678,7 +697,7 @@ struct Video::Impl {
             if (uint32_t where = latched_addr(0, i)) {
                 uint16_t colscroll = read_be16(&lineram[where]);
                 line.pf[i].colscroll = colscroll & 0x1ff;
-                line.pf[i].alt_tilemap = false; // extend mode always false
+                line.pf[i].alt_tilemap = (!config.extend || config.extended_alt_maps) && (colscroll & 0x200);
                 line.clip[2 * (i - 2) + 0].set_upper((colscroll >> 12) & 1, (colscroll >> 13) & 1);
                 line.clip[2 * (i - 2) + 1].set_upper((colscroll >> 14) & 1, (colscroll >> 15) & 1);
             }
@@ -718,7 +737,8 @@ struct Video::Impl {
                 sp.x_sample_enable = (x_mosaic & 0x100) != 0;
             }
             line.pivot.x_sample_enable = (x_mosaic & 0x200) != 0;
-            line.fx_6400 = (x_mosaic >> 8) & 0xfc;
+            line.palette_15bit = (x_mosaic & 0x4000) == 0;
+            line.blur = (x_mosaic & 0x2000) == 0;
         }
         if (uint32_t where = latched_addr(2, 3)) {
             line.bg_palette = read_be16(&lineram[where]);
@@ -814,14 +834,15 @@ struct Video::Impl {
             return;
         cache.last_y = y;
 
-        const uint32_t layer_base = pf_num * 0x2000;
+        const int columns = config.extend ? 64 : 32;
+        const uint32_t layer_base = pf_num * (config.extend ? 0x2000 : 0x1000);
         const int tile_row = (y / 16) & 31;
         const int in_y = y % 16;
 
-        for (int tile_col = 0; tile_col < 64; ++tile_col) {
-            int effective_col = flipscreen ? (63 - tile_col) : tile_col;
+        for (int tile_col = 0; tile_col < columns; ++tile_col) {
+            int effective_col = flipscreen ? (columns - 1 - tile_col) : tile_col;
             int effective_row = flipscreen ? (31 - tile_row) : tile_row;
-            uint32_t tile_idx = effective_row * 64 + effective_col;
+            uint32_t tile_idx = effective_row * columns + effective_col;
 
             uint16_t attr = read_be16(&pf_ram[layer_base + tile_idx * 4]);
             uint16_t code = read_be16(&pf_ram[layer_base + tile_idx * 4 + 2]);
@@ -839,7 +860,7 @@ struct Video::Impl {
             uint8_t pen_mask = ((extra_planes & ~palette_code) << 4) | 0x0f;
             uint16_t palette_base = palette_code * 16;
 
-            const uint8_t *tile_gfx = &decoded_tiles[(code % 32768) * 256];
+            const uint8_t *tile_gfx = &decoded_tiles[wrap_tile(code, playfield_tile_count, playfield_tile_mask) * 256];
             int src_y = flip_y ? (15 - in_y) : in_y;
 
             for (int in_x = 0; in_x < 16; ++in_x) {
@@ -942,7 +963,7 @@ struct Video::Impl {
     }
     bool is_used(const playfield_inf &layer, int y) const {
         const int y_adj = flipscreen ? 0x1ff - layer.y_index(y) : layer.y_index(y);
-        return tilemap_row_usage[y_adj >> 4][layer.index] > 0;
+        return tilemap_row_usage[y_adj >> 4][layer.index + 2 * layer.alt_tilemap] > 0;
     }
 
     template<typename LayerType>
@@ -1021,13 +1042,24 @@ struct Video::Impl {
         }
     }
 
-    void render_line(uint32_t *dst, const mix_pix &z, const uint8_t *palette_ram) {
+    template<bool palette15>
+    void render_line(uint32_t *dst, const mix_pix &z, const uint8_t *palette_ram, bool blur) {
         for (unsigned int x = H_START; x < H_START + H_VIS; ++x) {
             uint32_t s_pal = z.src_pal[x] & 0x1fff;
             uint32_t d_pal = z.dst_pal[x] & 0x1fff;
 
             uint32_t s_col = read_be32(&palette_ram[s_pal * 4]);
             uint32_t d_col = read_be32(&palette_ram[d_pal * 4]);
+            if constexpr (palette15) {
+                // FDA: RRRRGGGGBBBBRGBx; five-bit channels are shifted, not replicated.
+                const auto color15 = [](uint32_t color) {
+                    return ((color & 0xf000u) << 8) | ((color & 8u) << 16) |
+                           ((color & 0x0f00u) << 4) | ((color & 4u) << 9) |
+                           (color & 0x00f0u) | ((color & 2u) << 2);
+                };
+                s_col = color15(s_col);
+                d_col = color15(d_col);
+            }
 
             uint16_t r1 = (s_col >> 16) & 0xff;
             uint16_t g1 = (s_col >> 8) & 0xff;
@@ -1059,6 +1091,16 @@ struct Video::Impl {
 
             dst[x - H_START] = 0xff000000 | (uint32_t(r1) << 16) | (uint32_t(g1) << 8) | uint32_t(b1);
         }
+        if (blur) {
+            uint32_t previous = 0;
+            for (int x = 0; x < H_VIS; ++x) {
+                const uint32_t color = dst[x];
+                const uint32_t rb = (((color & 0x00ff00ffu) + (previous & 0x00ff00ffu)) >> 1) & 0x00ff00ffu;
+                const uint32_t g = (((color & 0x0000ff00u) + (previous & 0x0000ff00u)) >> 1) & 0x0000ff00u;
+                dst[x] = 0xff000000u | rb | g;
+                previous = color;
+            }
+        }
     }
 
     void scanline_draw(std::span<const uint8_t> palette_ram,
@@ -1084,7 +1126,7 @@ struct Video::Impl {
         for (int pf = 0; pf < NUM_PLAYFIELDS; ++pf) {
             get_pf_scroll(pf, line_data.pf[pf].reg_sx, line_data.pf[pf].reg_sy);
             line_data.pf[pf].reg_fx_y = line_data.pf[pf].reg_sy;
-            line_data.pf[pf].width_mask = 0x3ff; // extend = 1
+            line_data.pf[pf].width_mask = config.extend ? 0x3ff : 0x1ff;
             line_data.pf[pf].index = pf;
         }
 
@@ -1187,7 +1229,7 @@ struct Video::Impl {
                 layers[j] = layer;
             }
 
-            if (screen_y >= V_START && screen_y < (V_START + V_VIS)) {
+            if (screen_y >= config.visible_y && screen_y < config.visible_y + config.visible_height) {
                 for (auto *layer : layers) {
                     if (layer == &line_data.pivot) {
                         if (line_data.pivot.layer_enable() && is_used(line_data.pivot, screen_y)) {
@@ -1222,17 +1264,19 @@ struct Video::Impl {
                         if (pf.layer_enable() && is_used(pf, screen_y)) {
                             auto clip_ranges = calc_clip(line_data.clip, pf);
                             int line_y = pf.y_index(line_data.y);
-                            generate_playfield_line(pf.index, line_y, pf_ram);
+                            const int map = pf.index + 2 * pf.alt_tilemap;
+                            generate_playfield_line(map, line_y, pf_ram);
                             for (const auto &clip : clip_ranges) {
                                 mix_line_layer(pf, line_buf, line_pri, line_data, clip,
-                                               pf_lines[pf.index].pix.data(), pf_lines[pf.index].flags.data());
+                                               pf_lines[map].pix.data(), pf_lines[map].flags.data());
                             }
                         }
                     }
                 }
 
-                uint32_t *dst = &output_argb[(screen_y - V_START) * SCREEN_WIDTH];
-                render_line(dst, line_buf, palette_ram.data());
+                uint32_t *dst = &output_argb[(screen_y - config.visible_y) * SCREEN_WIDTH];
+                if (line_data.palette_15bit) render_line<true>(dst, line_buf, palette_ram.data(), line_data.blur);
+                else render_line<false>(dst, line_buf, palette_ram.data(), line_data.blur);
             }
 
             if (screen_y != 0) {
@@ -1256,7 +1300,11 @@ void Video::reset() {
 bool Video::load_roms(std::span<const uint8_t> sprites,
                       std::span<const uint8_t> sprites_hi,
                       std::span<const uint8_t> tilemap,
-                      std::span<const uint8_t> tilemap_hi) {
+                      std::span<const uint8_t> tilemap_hi,
+                      const VideoConfig &config) {
+    if (config.sprite_lag > 2 || !config.visible_height || config.visible_y >= 256 ||
+        config.visible_height > 256 - config.visible_y) return false;
+    m_impl->config = config;
     return m_impl->decode_roms(sprites, sprites_hi, tilemap, tilemap_hi);
 }
 
@@ -1284,7 +1332,7 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
                          std::span<const uint8_t> control_regs,
                          std::span<uint32_t> output_argb) {
     if (palette_ram.size() < 0x8000 || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
-        control_regs.size() < 0x20 || output_argb.size() < (SCREEN_WIDTH * SCREEN_HEIGHT)) {
+        control_regs.size() < 0x20 || output_argb.size() < SCREEN_WIDTH * m_impl->config.visible_height) {
         return;
     }
 
@@ -1296,15 +1344,21 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
         m_impl->control_1[i] = read_be16(&control_regs[16 + i * 2]);
     }
 
-    // Land Maker has sprite_lag = 1:
-    // 1. scanline_draw() renders screen using current sprite_framebuffer
-    //    (which holds sprites buffered from prior frame)
+    // Lag 2 (RayForce): compose old framebuffer, draw old parsed list, parse new list.
+    // Lag 1: compose old framebuffer, parse and draw current list.
+    // Lag 0: parse and draw before composing.
+    if (m_impl->config.sprite_lag == 0) {
+        m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
+        m_impl->draw_sprites();
+    }
     m_impl->scanline_draw(palette_ram, graphics_ram, output_argb);
-
-    // 2. Unless active spriteram was explicitly injected for a static single-frame test,
-    //    buffer current spriteram and draw sprites into sprite_framebuffer for the next frame
-    m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
-    m_impl->draw_sprites();
+    if (m_impl->config.sprite_lag == 2) {
+        m_impl->draw_sprites();
+        m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
+    } else if (m_impl->config.sprite_lag == 1) {
+        m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
+        m_impl->draw_sprites();
+    }
     std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM], 0x10000);
     m_impl->has_buffered_spriteram = true;
 }
@@ -1319,12 +1373,14 @@ std::span<const uint8_t> Video::playfield_tiles() const {
 
 VideoLine Video::inspect_playfield_line(unsigned layer, int y,
                                       std::span<const uint8_t> graphics_ram) {
-    if (layer >= NUM_PLAYFIELDS || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
+    if (layer >= m_impl->physical_map_count() || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
         y < 0 || y >= 512 || m_impl->decoded_tiles.empty()) return {};
     auto &line = m_impl->pf_lines[layer];
     line.last_y = -1;
     m_impl->generate_playfield_line(int(layer), y, &graphics_ram[OFFS_PF_RAM]);
-    return {line.pix, line.flags};
+    const size_t width = m_impl->config.extend ? 1024 : 512;
+    return {std::span<const uint16_t>(line.pix.data(), width),
+            std::span<const uint8_t>(line.flags.data(), width)};
 }
 
 void Video::prepare_text_inspection(std::span<const uint8_t> graphics_ram) {

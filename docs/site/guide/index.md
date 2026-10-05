@@ -22,9 +22,10 @@ flowchart LR
 
 ## What the project does not do
 
-- It does **not** include ROM files. No game data is in the repository. You must supply your own legally obtained `landmakr` ROM set.
-- It does **not** support other F3 games. The only tested game is Land Maker Japan 2.01J (`landmakrj`).
-- The World set (`landmakr`) has a config and ROM-loader entry, but is **untested** and is not a supported player build. The `landmakr` executable rejects any set other than `landmakrj`.
+- It does **not** include ROM files. Supply your own legally obtained chips for the selected exact revision.
+- Support is bounded: Land Maker Japan 2.01J plus native FDP/accurate-sound bring-up for RayForce America 2.3A, Command War 0.0J prototype and Riding Fight World 1.0O. See [porting](/developer/porting) for durations, source limitations and audio investigation; no arbitrary F3 or full-campaign claim.
+- World Land Maker remains config-only/unverified. `F3_GAME` selects the build and matching runtime set; both LM targets are named `landmakr`, while new targets use their set names.
+- Game-data video, HLE audio, enhanced GPU/motion and netplay remain Japan-only.
 - The relay server does not authenticate players and does not encrypt traffic. See [Online play](/guide/netplay).
 - The authors tested the build on macOS with Apple silicon. The netplay client uses POSIX sockets. Windows is not a target of the project.
 

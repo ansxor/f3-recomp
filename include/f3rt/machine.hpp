@@ -33,10 +33,10 @@ public:
     std::array<uint8_t, 0x800> shared{};
 private:
     friend class GameVideo;
-    mutable std::array<uint32_t, 320 * 232> pixels_{};
+    mutable std::vector<uint32_t> pixels_;
 public:
     // Observing native scanout materializes a retained GPU-presented frame.
-    const std::array<uint32_t, 320 * 232> &native_pixels() const;
+    const std::vector<uint32_t> &native_pixels() const;
     RomSet roms;
     std::unique_ptr<Video> video;
     std::unique_ptr<GameVideo> game_video;
@@ -75,7 +75,7 @@ public:
     void reset_devices();
     // Select before advancing the machine. The interpreted driver is the default.
     void use_native_sound(const f3_block *program, size_t count,
-                          std::span<const f3_excluded_range> excluded);
+                          std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
     uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);

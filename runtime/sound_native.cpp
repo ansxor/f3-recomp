@@ -14,17 +14,18 @@
 namespace f3rt {
 
 SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
-                         std::span<const f3_excluded_range> excluded)
+                         std::span<const f3_excluded_range> excluded, uint32_t expected_crc)
     : m_machine(machine), m_blocks(blocks), m_excluded(excluded)
 #ifdef F3_PROFILE_SLIM_ENABLED
     , m_block_count(block_count)
 #endif
 {
     const auto &rom_bytes = m_machine.roms.sound;
-    uint32_t crc = crc32(rom_bytes.data(), rom_bytes.size());
-    if (crc != 0x5a7e9117u) {
+    m_rom_crc = crc32(rom_bytes.data(), rom_bytes.size());
+    if (rom_bytes.size() != ROM_SIZE || m_rom_crc != expected_crc) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "SoundNative: unsupported sound ROM CRC 0x%08x (expected 0x5a7e9117)", crc);
+        snprintf(buf, sizeof(buf), "SoundNative: sound ROM mismatch: size %zu, CRC 0x%08x (expected %u, 0x%08x)",
+                 rom_bytes.size(), m_rom_crc, ROM_SIZE, expected_crc);
         throw std::runtime_error(buf);
     }
 
@@ -108,22 +109,22 @@ void SoundNative::trace_sound(uint32_t address, uint32_t value, uint8_t width, b
     if (!m_machine.sound_trace) return;
     address &= 0xffffffu; // The 68000 exposes a 24-bit physical bus.
     const uint32_t pc = m_cpu.pc;
-    if (write && width == 1 && pc == 0xc130f0 &&
+    if (m_rom_crc == 0x5a7e9117u && write && width == 1 && pc == 0xc130f0 &&
         address == ((m_cpu.a[4] + 0x14u) & 0xffffffu))
         m_machine.sound_trace->record(m_machine, SoundTrace::DirectNote, pc, address, value, width);
-    if (write && width == 2 && pc == 0xc140e4 &&
+    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc140e4 &&
         address == ((m_cpu.a[1] + 0x24u) & 0xffffffu))
         m_machine.sound_trace->note_context(m_machine, pc,
             m_cpu.a[5], m_cpu.a[1], m_cpu.a[6], m_cpu.a[4]);
-    if (write && width == 2 && pc == 0xc141d6 &&
+    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc141d6 &&
         address == ((m_cpu.a[5] + 2u) & 0xffffffu))
         m_machine.sound_trace->record(m_machine, SoundTrace::NoteRelease,
             pc, m_cpu.a[5] & 0xffffu, value, width);
-    if (write && width == 2 && pc == 0xc17632 &&
+    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc17632 &&
         address == ((m_cpu.a[4] + 0xau) & 0xffffffu))
         m_machine.sound_trace->voice_context(m_machine, pc, m_cpu.a[4]);
     if (address < 0x140000 || address >= 0x340004) return;
-    if (write && width == 2 && address == 0x20001e &&
+    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && address == 0x20001e &&
         (pc == 0xc17e62 || pc == 0xc17806))
         m_machine.sound_trace->voice_context(m_machine, pc, m_cpu.a[4]);
     m_machine.sound_trace->record(m_machine,
@@ -304,7 +305,7 @@ void SoundNative::dispatch_one() {
     const size_t index = block_index(m_cpu.pc);
 #ifdef F3_PROFILE_SLIM_ENABLED
     if (index == m_block_count)
-        f3_profile_cold_abort(F3_PROFILE_SOUND, 0x5a7e9117u, m_cpu.pc);
+        f3_profile_cold_abort(F3_PROFILE_SOUND, m_rom_crc, m_cpu.pc);
 #endif
     ++m_instruction_count;
     m_blocks[index].execute(&m_cpu);

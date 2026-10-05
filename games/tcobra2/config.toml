@@ -1,0 +1,201 @@
+# MAME cfc4760a3be9c5a79846b19b6a573cb38459fa7e, src/mame/taito/taito_f3.cpp.
+# Supplied program and asset chips match ROM_START(tcobra2) by size/CRC/SHA1.
+[game]
+name = "Twin Cobra II (Ver 2.1O 1995/11/30)"
+id = "tcobra2"
+platform = "taito_f3"
+
+[rom]
+# Populated program image; MAME reserves a 0x200000 CPU region.
+size = 1048576
+interleave = 4
+
+[[rom.lanes]]
+file = "e15-14.ic20"
+offset = 0
+size = 262144
+crc = "b527b733"
+sha1 = "19efd647ea9c277b306714fe79ebf40d5f9d2187"
+
+[[rom.lanes]]
+file = "e15-13.ic19"
+offset = 1
+size = 262144
+crc = "0f03daf7"
+sha1 = "de5aee5a339224dfe5e03a02d3ef5ffd5a39211e"
+
+[[rom.lanes]]
+file = "e15-12.ic18"
+offset = 2
+size = 262144
+crc = "59d832f2"
+sha1 = "27019b4121b1f8b0b9e141234192b3da1a4af718"
+
+[[rom.lanes]]
+file = "e15-18.ic17"
+offset = 3
+size = 262144
+crc = "4908c3aa"
+sha1 = "9b0230e6bafd0533ecbe89bc18fae6f3425ea1a3"
+
+[sprites]
+size = 6291456
+fill = 0
+
+[[sprites.lanes]]
+file = "e15-04.ic12"
+offset = 0
+size = 2097152
+crc = "6ea8d9bd"
+sha1 = "c31644e89752325ba2f174b60e31bd9659479391"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e15-02.ic8"
+offset = 1
+size = 2097152
+crc = "bf1232aa"
+sha1 = "1381bae2a18ed62f4ca28bcdaf07debfc9bf21af"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e15-03.ic11"
+offset = 4194304
+size = 1048576
+crc = "be45a52f"
+sha1 = "5d9735a774233b43003057cbab6ae7d6e0195dd2"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e15-01.ic7"
+offset = 4194305
+size = 1048576
+crc = "85421aac"
+sha1 = "327e72f0107e024ec9fc9dc20d381e2e20f36248"
+stride = 2
+group = 1
+
+[sprites_hi]
+# No physical high-plane chips; MAME EMPTY_*_HIDATA is decoded zero fill.
+size = 0
+fill = 0
+lanes = []
+
+[tiles]
+size = 6291456
+fill = 0
+
+[[tiles.lanes]]
+file = "e15-10.ic47"
+offset = 0
+size = 2097152
+crc = "d8c96b00"
+sha1 = "9cd275abb66b3475433ea2649dc872d7d35eb5b8"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e15-08.ic45"
+offset = 2
+size = 2097152
+crc = "4bdb2bf3"
+sha1 = "1146b7a5d9f26d3173a7c64768e55d53a0ab7b8e"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e15-09.ic46"
+offset = 4194304
+size = 1048576
+crc = "07c29f60"
+sha1 = "3ca0f632e7047cc50ee3ce24cd6c0c8c7252a278"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e15-07.ic44"
+offset = 4194306
+size = 1048576
+crc = "8164f7ee"
+sha1 = "4550521f820e93ec08b86d148135966d016cbf22"
+stride = 4
+group = 2
+
+[tiles_hi]
+# No physical high-plane chips; MAME EMPTY_*_HIDATA is decoded zero fill.
+size = 0
+fill = 0
+lanes = []
+
+[sound]
+# Mapped program only; omit the unused MAME 0x100000 prefix.
+size = 262144
+fill = 0
+base = 12582912
+# Physical 256KiB program repeats across the mapped 512KiB window.
+mirror_size = 524288
+
+[[sound.lanes]]
+file = "e15-15.ic32"
+offset = 0
+size = 131072
+crc = "22126dfb"
+sha1 = "a1af17e5c3440f1bab50d79f92c251f1a4536ca0"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e15-16.ic33"
+offset = 1
+size = 131072
+crc = "f8b58ea0"
+sha1 = "c9e196620765efc4c7b535793a5d1f586698ce55"
+stride = 2
+group = 1
+
+[samples]
+# Samples populate even (high) bytes; all odd bytes remain zero.
+size = 8388608
+fill = 0
+
+[[samples.lanes]]
+file = "e15-05.ic38"
+offset = 0
+size = 2097152
+crc = "3e5da5f6"
+sha1 = "da6fc8b26cd02c45cfc0f1aa5292614e4d28cae4"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e15-06.ic41"
+offset = 4194304
+size = 2097152
+crc = "b182a3e1"
+sha1 = "db8569b069911bb84900b2aa5168c45ba3e985c7"
+stride = 2
+group = 1
+
+[discovery]
+coverage = "all_aligned"
+# Reset RAM tests return through A2: LEA continuation at $a5a,$a76,...
+# followed by BRA $ca0/$cd6; both test bodies end JMP (A2).
+entry_points = [0xa64, 0xa80, 0xa9c, 0xab8, 0xad4, 0xaf0, 0xb0c, 0xb28, 0xb44, 0xb60, 0xb7c]
+
+# Rooted scheduler: $6ce LSL.W #3,D0; $6e6 LEA $75e,A0;
+# $6ec JSR (A0,D0.W); $6fc CMPI.W #$57,D0, then counter reset.
+# This is executable 8-byte code slots, NOT a table of 32-bit pointers.
+[[discovery.jump_tables]]
+address = 0x6ec
+targets = [0x75e, 0x766, 0x76e, 0x776, 0x77e, 0x786, 0x78e, 0x796, 0x79e, 0x7a6, 0x7ae, 0x7b6, 0x7be, 0x7c6, 0x7ce, 0x7d6, 0x7de, 0x7e6, 0x7ee, 0x7f6, 0x7fe, 0x806, 0x80e, 0x816, 0x81e, 0x826, 0x82e, 0x836, 0x83e, 0x846, 0x84e, 0x856, 0x85e, 0x866, 0x86e, 0x876, 0x87e, 0x886, 0x88e, 0x896, 0x89e, 0x8a6, 0x8ae, 0x8b6, 0x8be, 0x8c6, 0x8ce, 0x8d6, 0x8de, 0x8e6, 0x8ee, 0x8f6, 0x8fe, 0x906, 0x90e, 0x916, 0x91e, 0x926, 0x92e, 0x936, 0x93e, 0x946, 0x94e, 0x956, 0x95e, 0x966, 0x96e, 0x976, 0x97e, 0x986, 0x98e, 0x996, 0x99e, 0x9a6, 0x9ae, 0x9b6, 0x9be, 0x9c6, 0x9ce, 0x9d6, 0x9de, 0x9e6, 0x9ee, 0x9f6, 0x9fe, 0xa06, 0xa0e]
+
+[video]
+# f3: native visible x=46..365, y=24..255 (320x232).
+rotation = 270
+sprite_lag = 0
+extend = false
+visible_y = 24
+visible_height = 232

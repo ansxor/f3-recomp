@@ -93,7 +93,7 @@ std::unique_ptr<f3rt::Machine> machine(const Options &o) {
 #endif
 #ifdef F3RT_SOUND_GENERATED
     m->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-        {f3_sound_excluded_ranges, f3_sound_excluded_count});
+        {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
     throw std::runtime_error("Requires generated native sound blocks");
 #endif
@@ -338,7 +338,7 @@ int main(int argc, char **argv) try {
     f3rt::MotionInterpolationStats census{};
     uint32_t audio_crc = 0xffffffffu; bool dumped = false;
     std::vector<uint8_t> replay_pre, replay_post; std::vector<int16_t> replay_audio;
-    std::array<uint32_t, 320 * 232> replay_pixels{};
+    std::vector<uint32_t> replay_pixels;
     uint32_t replay_sync_crc = 0;
     uint64_t half_visible = 0;
     std::cout << "driver=" << gpu.driver() << " seed=" << o.seed << " scale=" << o.video.scale << '\n';

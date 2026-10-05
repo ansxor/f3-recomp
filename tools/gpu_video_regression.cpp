@@ -969,7 +969,7 @@ void verify_trail_history(Harness &h) {
     auto &peer = *peer_owner;
 #ifdef F3RT_SOUND_GENERATED
     peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                          {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                          {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #endif
     peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
     peer.load_state(baseline);
@@ -1008,7 +1008,7 @@ void verify_deferred_native(Harness &h) {
     for (auto *m : {&eager, &lazy}) {
 #ifdef F3RT_SOUND_GENERATED
         m->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                            {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                            {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #endif
         m->game_video = std::make_unique<f3rt::GameVideo>(*m, f3rt::GameVideoMode::Game, h.canonical_video);
     }
@@ -1186,7 +1186,7 @@ void verify_cpu_backend(Harness &h, std::span<const uint8_t> pre) {
 #endif
 #ifdef F3RT_SOUND_GENERATED
     peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                          {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                          {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #endif
     peer.game_video = std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
     const bool selected_geometry = h.canonical_video.scale != h.o.video.scale;
@@ -1266,7 +1266,7 @@ int main(int argc, char **argv) try {
 #endif
 #ifdef F3RT_SOUND_GENERATED
     m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                       {f3_sound_excluded_ranges, f3_sound_excluded_count});
+                       {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
 #else
     throw std::runtime_error("GPU regression requires generated native sound blocks");
 #endif

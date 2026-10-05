@@ -139,10 +139,10 @@ The toolchain has Land Maker-specific contracts. Review each part below before a
 3. **Emit.** Use `emit` instead of `discover`. Inspect `lowering.json` separately from the coverage report.
    Independent aligned decodes include data and overlapping candidates.
    Unsupported candidates can remain, but strict-native execution must never reach an unsupported lowering.
-4. **Runtime ROM loader.** `RomSet::load` in `runtime/rom.cpp` accepts only the sets `landmakrj` and `landmakr`. The chip names, sizes and CRC32 values of all regions (sprites, tiles, sound, samples) are in that function. A new game needs its own table.
-5. **Sound.** `tools/compile_sound.py` checks the sound ROM CRC32 `5a7e9117`. A new sound ROM needs a new check, and a review of the sound memory map in `runtime/audio.cpp`.
-6. **Top-level CMake.** `CMakeLists.txt` names `games/landmakrj/config.toml` and the output folder `generated/landmakrj`. Add your game there.
-7. **Frontend.** `runtime/frontend.cpp` has the macro `F3RT_LANDMAKR` and checks `set!="landmakrj"`. Add a similar target.
+4. **Runtime manifest.** Add all region chip sizes/hashes/placement to the selected TOML; `tools/compile_roms.py` and `recomp/roms.py` generate shared runtime metadata. Empty upper planes are not fake files.
+5. **Sound.** Compile the selected `[sound]` region with validated padding/mirroring, retaining generated image CRC binding. Review its memory map and native/oracle timing/audio evidence independently.
+6. **Top-level CMake.** Select the title through `F3_GAME`; generated directories use `generated/SET` and `generated/sound-SET`. Extend the accepted selection list for a genuinely new title.
+7. **Frontend.** `F3RT_GAME` marks strict-native title targets; default set and generated main/sound CRC guards must agree. Enhanced/game-data/HLE/netplay eligibility remains Japan-only.
 8. **Game-specific video.** `GameVideo` and its hooks are specific to Land Maker. A new game can use the FDP renderer (`--video fdp`) and needs no game-data HLE.
 
 ::: info World set

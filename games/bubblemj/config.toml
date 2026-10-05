@@ -1,0 +1,172 @@
+# Exact supplied chip identities match mamedev/mame cfc4760a3be9c5a79846b19b6a573cb38459fa7e.
+# Source: src/mame/taito/taito_f3.cpp ROM_START(bubblemj) and GAME crop.
+[game]
+name = "Bubble Memories: The Story Of Bubble Bobble III (Ver 2.3J 1996/02/07)"
+id = "bubblemj"
+platform = "taito_f3"
+
+[rom]
+# Physical populated program image; no unpopulated MAME allocation prefix/tail.
+size = 0x200000
+interleave = 4
+
+[[rom.lanes]]
+file = "e21-11.20"
+offset = 0x0
+size = 0x80000
+crc = "df0eeae4"
+sha1 = "4cc8d350da881947c1b9c4e0b8fbe220494f6c38"
+
+[[rom.lanes]]
+file = "e21-10.19"
+offset = 0x1
+size = 0x80000
+crc = "cdfb58f6"
+sha1 = "70d2b8228ab4ddd572fe2ee53c1b7205b66ef6a3"
+
+[[rom.lanes]]
+file = "e21-09.18"
+offset = 0x2
+size = 0x80000
+crc = "6c305f17"
+sha1 = "c4118722d697ccf54b43626a47673892a6c2caaf"
+
+[[rom.lanes]]
+file = "e21-08.17"
+offset = 0x3
+size = 0x80000
+crc = "27381ae2"
+sha1 = "29b5d4bafa4ac02d35cb3ed7b7461e749ef2d6d6"
+
+[sprites]
+size = 0x400000
+fill = 0
+
+[[sprites.lanes]]
+file = "e21-02.rom"
+offset = 0x0
+size = 0x200000
+crc = "b7cb9232"
+sha1 = "ba71cb98d49eadebb26d9f53bbaec1dc211077f5"
+stride = 0x2
+group = 0x1
+
+[[sprites.lanes]]
+file = "e21-01.rom"
+offset = 0x1
+size = 0x200000
+crc = "a11f2f99"
+sha1 = "293c5996600cad05bf98f936f5f820d93d546099"
+stride = 0x2
+group = 0x1
+
+[sprites_hi]
+# Physically absent high planes; MAME zero placeholder is not a chip.
+size = 0x0
+fill = 0
+lanes = []
+
+[tiles]
+size = 0x200000
+fill = 0
+
+[[tiles.lanes]]
+file = "e21-07.rom"
+offset = 0x0
+size = 0x100000
+crc = "7789bf7c"
+sha1 = "bc8ef1696adac99a1fabae9b79afcd3461cf323b"
+stride = 0x4
+group = 0x2
+
+[[tiles.lanes]]
+file = "e21-06.rom"
+offset = 0x2
+size = 0x100000
+crc = "997fc0d7"
+sha1 = "58a546f739072fedebfe7c972fe85f72107726b2"
+stride = 0x4
+group = 0x2
+
+[tiles_hi]
+size = 0x100000
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e21-05.rom"
+offset = 0x0
+size = 0x100000
+crc = "07eab58f"
+sha1 = "ae2d7b839b39d88d11652df74804a39230674467"
+
+[sound]
+# Full two physical 256 KiB sound chips; omit unused MAME 1 MiB prefix.
+base = 0xc00000
+size = 0x80000
+fill = 0
+
+[[sound.lanes]]
+file = "e21-12.32"
+offset = 0x0
+size = 0x40000
+crc = "34093de1"
+sha1 = "d69d6b5f10b8fe86f727d739ed5aecceb15e01f7"
+stride = 0x2
+group = 0x1
+
+[[sound.lanes]]
+file = "e21-13.33"
+offset = 0x1
+size = 0x40000
+crc = "9e9ec437"
+sha1 = "b0265b688846c642d240b2f3677d2330d31eaa87"
+stride = 0x2
+group = 0x1
+
+[samples]
+# ROM_REGION16_BE / ROMREGION_ERASE00: low byte of every sample word is zero.
+size = 0x800000
+fill = 0
+
+[[samples.lanes]]
+file = "e21-03.rom"
+offset = 0x0
+size = 0x200000
+crc = "54c5f83d"
+sha1 = "10a993199c8d5a1361bd29a4b92c404451c6da01"
+stride = 0x2
+group = 0x1
+
+[[samples.lanes]]
+file = "e21-04.rom"
+offset = 0x400000
+size = 0x200000
+crc = "e5af2a2d"
+sha1 = "62a49504decc7160b710260218920d2d6d2af8f0"
+stride = 0x2
+group = 0x1
+
+[eeprom]
+# Hash-listed MAME factory defaults; immutable ROM asset, not a save path.
+size = 0x80
+fill = 255
+
+[[eeprom.lanes]]
+file = "bubblemj.nv"
+offset = 0x0
+size = 0x80
+crc = "cb4ef35c"
+sha1 = "e0202b775d2494b77b1c08bafbfd239e40555dc6"
+stride = 1
+group = 1
+
+[discovery]
+coverage = "all_aligned"
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 31
+visible_height = 224
+

@@ -15,7 +15,7 @@ class SoundNative {
 public:
     // Exact exclusion complement, or sorted nonexcluded retained entries in slim builds.
     SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
-                std::span<const f3_excluded_range> excluded);
+                std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
     ~SoundNative();
 
     SoundNative(const SoundNative &) = delete;
@@ -62,6 +62,7 @@ private:
     size_t m_block_count;
 #endif
 
+    uint32_t m_rom_crc;
     f3_cpu m_cpu{};
     bool m_needs_reset = true;
     int m_reset_cycles = 0;
