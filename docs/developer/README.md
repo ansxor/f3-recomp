@@ -12,7 +12,8 @@ they are not a support promise or a requirement to run the game.
 - [Game scope and porting audit](../site/developer/porting.md): generic F3 pieces, Land Maker assumptions and deferred refactors.
 - [Sound-driver investigation](../SOUND-DRIVER.md): ROM-specific driver semantics and native/oracle comparison.
 - [Opt-in HLE audio](HLE-AUDIO.md): ROM-data synthesis, non-rewound rollback policy, tolerance-based comparisons and known limits.
-- [Netplay design](../NETPLAY.md): snapshot, protocol and rollback contracts.
+- [Netplay usage and contracts](../NETPLAY.md): versus-only lifecycle and player workflow.
+- [ImGui/netplay implementation and evidence](IMGUI-NETPLAY.md): overlay, shaders, canonical host handoff, lifecycle campaigns and observed limits.
 
 ## Measurement archive
 

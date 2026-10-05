@@ -217,6 +217,10 @@ and subsystem records. Those documents retain measured results and their scenari
 This section describes the tools and comparison boundaries rather than duplicating
 their measurement logs.
 
+[IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
+records overlay, canonical sync and versus-only lifecycle evidence separately
+from the historical pre-cutover validation.
+
 ## Pages in this section
 
 - [Differential instruction harness](/developer/testing/differential)

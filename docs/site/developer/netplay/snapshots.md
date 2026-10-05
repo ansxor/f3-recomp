@@ -8,11 +8,11 @@ A rollback goes back in time. The engine must put the whole machine in the exact
 
 A snapshot must be complete. If one field is missing, that field keeps its newer value after the restore. The resimulation then starts from a wrong state. The two clients no longer agree.
 
-A snapshot must also be fast and must not allocate memory. The engine saves one snapshot for every simulated frame. On Apple M5 in Release mode, docs/developer/VALIDATION.md reports a mean save time of 113.0 microseconds and a mean load time of 99.8 microseconds for the native configuration.
+Save/load must be fast and allocation-free on the valid path. Current cross-presentation and parser evidence is in [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md); timing measurements are not latency guarantees.
 
-## The four functions
+## Full local and canonical sync APIs
 
-`Machine` has four snapshot functions. They are declared in `include/f3rt/machine.hpp`.
+`Machine` exposes two representations in `include/f3rt/machine.hpp`. Full local APIs preserve expanded presentation buffers for offline slots/local replay. Canonical sync APIs omit those buffers while retaining hardware, native pixels, rendering/trails and audio simulation state.
 
 | Function | Behavior |
 | --- | --- |
@@ -20,19 +20,23 @@ A snapshot must also be fast and must not allocate memory. The engine saves one 
 | `void save_state(std::span<uint8_t> dst) const` | Writes the snapshot to `dst`. `dst` must have exactly `state_size()` bytes. Throws `std::invalid_argument` for another size. |
 | `void load_state(std::span<const uint8_t> src)` | Restores the snapshot from `src`. `src` must have exactly `state_size()` bytes. |
 | `uint32_t state_crc() const` | Saves a snapshot into an internal scratch buffer and returns its CRC-32. |
+| `sync_state_size()` | Exact canonical sync size, independent of expanded geometry. |
+| `save_sync_state(dst)` | Save exact-size canonical state for handoff and network checksums; rollback's restore ring uses full local state. |
+| `load_sync_state(src)` | Restore canonical state into the recipient's own presentation geometry. |
+| `sync_state_crc()` | CRC of canonical sync bytes. |
 
 Rules for the callers:
 
 - Call these functions only at a frame boundary.
 - Call them only from the emulation thread. No other thread may use the machine at the same time.
 - Configure the sound driver and the video mode **before** the first call. The size depends on them.
-- Use `load_state` only on bytes that the same build wrote. The function checks the size. It does not check the content.
+- Use compatible build/ROM/simulation bytes. Full local state also requires compatible presentation geometry. Loading validates unsafe fields, not just byte count.
 
-`save_state` and `load_state` allocate no memory. `state_crc()` allocates its scratch buffer one time, at the first call. The rollback engine does not use `state_crc()` per frame. It computes the CRC of a snapshot that it already saved.
+Full/local and canonical/sync save/load allocate no memory on the valid path. CRC scratch is prepared before stepping. Rollback hashes canonical sync bytes, not expanded full local output. Construction and capture tooling are outside this contract.
 
 The API does not check thread ownership or frame-boundary timing at runtime. These are caller obligations. The audio visitor takes its device mutex, but that lock does not make the whole machine snapshot atomic. A host consumer must not race save/load or drain the device queue while rollback owns it.
 
-The format has no magic, version header, section lengths, portable byte order or embedded checksum. Load modifies the machine as it reads; it is not a transactional untrusted-file import. Exact size alone does not prove compatible configuration or valid field contents. Some device loads clamp counts, but they do not validate every enum, index or latch.
+The raw representation is not a portable cross-build file format. Size and validated fields do not supply cryptographic trust. Host handoff additionally checks transfer metadata, decompression and CRC, then validates a drained real-versus boundary before acceptance. Caller frame-boundary/thread ownership remains required.
 
 
 ## Reader and writer
@@ -77,7 +81,7 @@ void save_state(StateWriter &writer) const {
 
 ## Layout and size
 
-`Machine::save_state` writes eight sections in a fixed order. The table shows the layout for the netplay configuration: native sound driver and GameVideo at scale 1 with border 0. The offsets and sizes come from the `sizeof` values of the `Canonical*` records and from `Machine::state_size()`. The total matches the 4,231,509 bytes in docs/developer/VALIDATION.md.
+The table below describes the native-sound, unexpanded baseline layout (4,231,509 bytes), shared by full local and canonical sync representations at that geometry. Expanded full local state adds presentation buffers; canonical sync state does not. Do not use these baseline offsets as a portable or schema-versioned save-file interface.
 
 | # | Section | Offset | Bytes | Content |
 | --- | --- | ---: | ---: | --- |
@@ -97,7 +101,7 @@ void save_state(StateWriter &writer) const {
 | | **Total** | | **4,231,509** | |
 
 ::: tip
-With the oracle (interpreted) sound driver, section 6 is the 355-byte `f3rt_sound_oracle_state` record. The total is then 4,231,724 bytes. With GameVideo scale 2 and border 48, the presentation buffers add bytes. NETPLAY.md reports 6,547,797 bytes for that case. The frontend does not allow it in netplay.
+Oracle sound adds 215 bytes (355-byte sound record, total 4,231,724 canonical bytes). At 2x/border 48, full native local state is 6,547,797 bytes; canonical sync remains 4,231,509. Expanded presentation is supported in player netplay and retained locally, not transferred or hashed.
 :::
 
 ### Section 1 and 2: CPU and clocks
@@ -242,7 +246,7 @@ Scalar cycle adjustments are saved. Host cycle-table pointers are not. Callback 
 | Each `CanonicalSceneLayer` | `priority`, `blend_mode`, `clip_enabled`, `clip_inverted`, `clip_inverse`, `enabled`, `blend_select`, `mosaic` |
 | Each `CanonicalSceneClip` | `left`, `right` |
 | GameLines remainder | `control_0[8]`, `control_1[8]`, `flipscreen` u16, supported byte, unsupported PC |
-| GameVideo remainder | Rendered byte; 432 × 256 u16 sprite plane; 320 × 232 u32 native pixels; both configured presentation buffers |
+| GameVideo remainder | Rendered byte; 432 × 256 u16 sprite plane; 320 × 232 u32 native pixels; configured presentation buffers only in full local state |
 
 Unsupported-state markers affect renderer behavior and are saved. Fallback diagnostic counters are not. Keep those two categories separate.
 
@@ -283,17 +287,13 @@ Follow this checklist when you add a field to any device.
 4. Update the matching `state_size()` function. For a plain `sizeof(Record)` size this is automatic.
 5. Reset any derived cache in `load_state`.
 6. Run the oracle snapshot suite. It compares two runs from the same snapshot. A missing field shows as a mismatch in state CRC, RAM, pixels, PCM or the sound trace. See [Oracle and verification](/developer/netplay/oracle).
-7. Update the inventory in [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
+7. Update [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md), including both representations and validation.
 
 The build hash changes when you change the source. Old and new builds cannot join the same match.
 
 ## The canonical state CRC
 
-`Machine::state_crc()` returns `f3rt::crc32` of the snapshot bytes. `crc32` is the standard CRC-32 (reflected polynomial `0xedb88320`, initial value all ones, final complement) in `runtime/rom.cpp`. The same function makes:
-
-- the `initial_crc` field of the handshake identity (CRC of the machine after construction, before frame 0 runs),
-- the checksums that the clients exchange every 60 confirmed frames,
-- the final CRC of a finite match.
+`Machine::state_crc()` hashes full local bytes; `sync_state_crc()` hashes canonical sync bytes using standard CRC-32 (`0xedb88320`, all-ones initialization, final complement). Network handoff, every-60-confirmed-frame checksums and final verdicts use canonical sync CRCs. There is no initial-state CRC in join identity.
 
 ## Related pages
 
@@ -308,5 +308,5 @@ The build hash changes when you change the source. Old and new builds cannot joi
 - [Machine traversal and size](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp).
 - [Musashi canonical C record](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_oracle.h).
 - [Musashi value bridge](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c).
-- [ABI state inventory](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md#machine-snapshot-contract-and-canonical-state-inventory).
+- [ABI state inventory](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md).
 

@@ -9,10 +9,10 @@ import (
 
 const (
 	Magic           uint32 = 0x46334E50 // 'F', '3', 'N', 'P'
-	ProtocolVersion uint8  = 1
+	ProtocolVersion uint8  = 2
 
 	HeaderSize   = 20
-	IdentitySize = 72 // 7*4 + 32 + 4 + 4 + 4
+	IdentitySize = 64 // ROM CRCs (28), build hash (32), state format (4)
 
 	MaxPacketSize = 1400
 	MaxInputs     = 128
@@ -33,23 +33,26 @@ const (
 	PktLeave           uint8 = 8
 	PktMatchTerminated uint8 = 9
 	PktMatchComplete   uint8 = 10
+	PktSnapshotMeta    uint8 = 11
+	PktSnapshotChunk   uint8 = 12
+	PktSnapshotAck     uint8 = 13
+	PktSnapshotLoaded  uint8 = 14
+	PktBarrierStart    uint8 = 15
 )
 
 // Reject Reasons
 const (
-	RejectProtocolMismatch   uint8 = 1
-	RejectRoomFull           uint8 = 2
-	RejectSlotTaken          uint8 = 3
-	RejectRomCrcMismatch     uint8 = 4
-	RejectBuildHashMismatch  uint8 = 5
-	RejectSettingsMismatch   uint8 = 6
-	RejectEepromCrcMismatch  uint8 = 7
-	RejectInitialCrcMismatch uint8 = 8
-	RejectDelayMismatch      uint8 = 9
-	RejectInvalidRoom        uint8 = 10
-	RejectRateLimited        uint8 = 11
-	RejectMatchInProgress    uint8 = 12
-	RejectInvalidIdentity    uint8 = 13
+	RejectProtocolMismatch    uint8 = 1
+	RejectRoomFull            uint8 = 2
+	RejectSlotTaken           uint8 = 3
+	RejectRomCrcMismatch      uint8 = 4
+	RejectBuildHashMismatch   uint8 = 5
+	RejectStateFormatMismatch uint8 = 6
+	RejectInvalidRoom         uint8 = 10
+	RejectRateLimited         uint8 = 11
+	RejectMatchInProgress     uint8 = 12
+	RejectInvalidIdentity     uint8 = 13
+	RejectRoleConflict        uint8 = 14
 )
 
 // GameData Flags
@@ -70,14 +73,10 @@ func RejectReasonString(code uint8) string {
 		return "ROM CRC mismatch"
 	case RejectBuildHashMismatch:
 		return "build hash mismatch"
-	case RejectSettingsMismatch:
-		return "settings mismatch"
-	case RejectEepromCrcMismatch:
-		return "EEPROM CRC mismatch"
-	case RejectInitialCrcMismatch:
-		return "initial state CRC mismatch"
-	case RejectDelayMismatch:
-		return "delay configuration mismatch"
+	case RejectStateFormatMismatch:
+		return "snapshot state format mismatch"
+	case RejectRoleConflict:
+		return "room requires one host and one guest"
 	case RejectInvalidRoom:
 		return "invalid room name"
 	case RejectRateLimited:
@@ -93,30 +92,13 @@ func RejectReasonString(code uint8) string {
 
 // Identity matches the C++ struct f3rt::netplay::Identity
 type Identity struct {
-	RomCRC     [7]uint32
-	BuildHash  [32]uint8
-	Settings   uint32
-	EepromCRC  uint32
-	InitialCRC uint32
+	RomCRC      [7]uint32
+	BuildHash   [32]uint8
+	StateFormat uint32
 }
 
 func (id Identity) Equal(other Identity) bool {
-	if id.RomCRC != other.RomCRC {
-		return false
-	}
-	if id.BuildHash != other.BuildHash {
-		return false
-	}
-	if id.Settings != other.Settings {
-		return false
-	}
-	if id.EepromCRC != other.EepromCRC {
-		return false
-	}
-	if id.InitialCRC != other.InitialCRC {
-		return false
-	}
-	return true
+	return id == other
 }
 
 func (id Identity) Marshal() []byte {
@@ -125,9 +107,7 @@ func (id Identity) Marshal() []byte {
 		binary.BigEndian.PutUint32(buf[i*4:(i+1)*4], id.RomCRC[i])
 	}
 	copy(buf[28:60], id.BuildHash[:])
-	binary.BigEndian.PutUint32(buf[60:64], id.Settings)
-	binary.BigEndian.PutUint32(buf[64:68], id.EepromCRC)
-	binary.BigEndian.PutUint32(buf[68:72], id.InitialCRC)
+	binary.BigEndian.PutUint32(buf[60:64], id.StateFormat)
 	return buf
 }
 
@@ -140,9 +120,7 @@ func UnmarshalIdentity(data []byte) (Identity, error) {
 		id.RomCRC[i] = binary.BigEndian.Uint32(data[i*4 : (i+1)*4])
 	}
 	copy(id.BuildHash[:], data[28:60])
-	id.Settings = binary.BigEndian.Uint32(data[60:64])
-	id.EepromCRC = binary.BigEndian.Uint32(data[64:68])
-	id.InitialCRC = binary.BigEndian.Uint32(data[68:72])
+	id.StateFormat = binary.BigEndian.Uint32(data[60:64])
 	return id, nil
 }
 
@@ -197,10 +175,11 @@ type JoinReqPayload struct {
 	Delay         uint8
 	RoomName      string
 	Identity      Identity
+	Host          bool
 }
 
 func (p JoinReqPayload) Marshal() []byte {
-	buf := make([]byte, 8+1+1+1+32+IdentitySize)
+	buf := make([]byte, 108)
 	binary.BigEndian.PutUint64(buf[0:8], p.ClientNonce)
 	buf[8] = p.RequestedSlot
 	buf[9] = p.Delay
@@ -211,18 +190,24 @@ func (p JoinReqPayload) Marshal() []byte {
 	buf[10] = uint8(len(roomBytes))
 	copy(buf[11:11+len(roomBytes)], roomBytes)
 	copy(buf[43:43+IdentitySize], p.Identity.Marshal())
+	if p.Host {
+		buf[107] = 1
+	}
 	return buf
 }
 
 func UnmarshalJoinReqPayload(data []byte) (JoinReqPayload, error) {
 	var p JoinReqPayload
-	expectedLen := 8 + 1 + 1 + 1 + 32 + IdentitySize
-	if len(data) < expectedLen {
-		return p, errors.New("join req payload truncated")
+	if len(data) != 108 {
+		return p, errors.New("join req payload must be 108 bytes")
 	}
 	p.ClientNonce = binary.BigEndian.Uint64(data[0:8])
 	p.RequestedSlot = data[8]
 	p.Delay = data[9]
+	if p.RequestedSlot > 2 || data[107] > 1 {
+		return p, errors.New("invalid slot or host role")
+	}
+	p.Host = data[107] == 1
 	rLen := int(data[10])
 	if rLen == 0 || rLen > 32 {
 		return p, errors.New("invalid room name length: must be between 1 and 32 characters")
@@ -624,4 +609,68 @@ func IsValidRoomName(name string) bool {
 		}
 	}
 	return true
+}
+
+const (
+	SnapshotTransferID uint32 = 1
+	MaxSnapshotSize    uint32 = 16 * 1024 * 1024
+	SnapshotChunkSize  uint32 = 1024
+)
+
+// SnapshotMetaPayload bounds the relay without retaining snapshot bytes.
+type SnapshotMetaPayload struct {
+	TransferID     uint32
+	RawSize        uint32
+	CompressedSize uint32
+	RawCRC         uint32
+	CompressedCRC  uint32
+}
+
+func (p SnapshotMetaPayload) Marshal() []byte {
+	buf := make([]byte, 20)
+	binary.BigEndian.PutUint32(buf[0:4], p.TransferID)
+	binary.BigEndian.PutUint32(buf[4:8], p.RawSize)
+	binary.BigEndian.PutUint32(buf[8:12], p.CompressedSize)
+	binary.BigEndian.PutUint32(buf[12:16], p.RawCRC)
+	binary.BigEndian.PutUint32(buf[16:20], p.CompressedCRC)
+	return buf
+}
+
+func UnmarshalSnapshotMetaPayload(data []byte) (SnapshotMetaPayload, error) {
+	var p SnapshotMetaPayload
+	if len(data) != 20 {
+		return p, errors.New("snapshot metadata must be 20 bytes")
+	}
+	p.TransferID = binary.BigEndian.Uint32(data[0:4])
+	p.RawSize = binary.BigEndian.Uint32(data[4:8])
+	p.CompressedSize = binary.BigEndian.Uint32(data[8:12])
+	p.RawCRC = binary.BigEndian.Uint32(data[12:16])
+	p.CompressedCRC = binary.BigEndian.Uint32(data[16:20])
+	if p.TransferID != SnapshotTransferID || p.RawSize == 0 || p.RawSize > MaxSnapshotSize || p.CompressedSize == 0 || p.CompressedSize > MaxSnapshotSize {
+		return p, errors.New("invalid snapshot transfer or sizes")
+	}
+	return p, nil
+}
+
+// SnapshotReceiptPayload is used for Loaded and BarrierStart.
+type SnapshotReceiptPayload struct {
+	TransferID uint32
+	RawCRC     uint32
+}
+
+func (p SnapshotReceiptPayload) Marshal() []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint32(buf[0:4], p.TransferID)
+	binary.BigEndian.PutUint32(buf[4:8], p.RawCRC)
+	return buf
+}
+
+func UnmarshalSnapshotReceiptPayload(data []byte) (SnapshotReceiptPayload, error) {
+	if len(data) != 8 {
+		return SnapshotReceiptPayload{}, errors.New("snapshot receipt must be 8 bytes")
+	}
+	return SnapshotReceiptPayload{
+		TransferID: binary.BigEndian.Uint32(data[0:4]),
+		RawCRC:     binary.BigEndian.Uint32(data[4:8]),
+	}, nil
 }

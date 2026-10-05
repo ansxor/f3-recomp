@@ -67,13 +67,13 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--translated` | none | `landmakr`: on. `f3rt-run`: off | Run the recompiled native code | Needs a build with a generated program. Else: `This binary was built without F3_GENERATED_DIR`. |
 | `--allow-fallback` | none | `landmakr`: off. `f3rt-run`: on | Let the interpreter run untranslated instructions | Diagnostic only. See the table above. |
 | `--unthrottled` | none | throttled | Run as fast as possible | Without it, the program waits so that the game runs at the real frame rate. In netplay, it also removes the frame pacing and sets the lead limit to 16 frames. |
-| `--eeprom` | `FILE` | none | EEPROM file | The program loads the file at start if it exists, and writes it at exit. The file must be exactly 128 bytes (else `Invalid EEPROM file`). Netplay rejects this flag. |
+| `--eeprom` | `FILE` | none | EEPROM file | Loads at start if present and writes at normal exit; exactly 128 bytes required. Independent EEPROM histories are supported in netplay. |
 | `--wav` | `FILE` | none | Write the generated audio to a 16-bit stereo WAV file | Accurate audio uses the audio core's rate; HLE uses 48 kHz. Netplay records confirmed accurate audio or speculative HLE worker output. |
-| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose emulated devices or the approximate ROM sequencer/PCM synthesizer | Opt-in HLE runs at 48 kHz without sound CPU or ES chip execution. Explicit `--sound-driver` and `--sound-trace` are rejected with HLE. |
-| `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Accurate audio only; netplay also rejects this flag. Decode the trace with `tools/decode_sound.py`. |
-| `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution for accurate audio, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Else: `Native sound requires a generated sound program (F3_ROM_DIR)`. HLE rejects an explicit driver selection. |
+| `--audio-backend` | `accurate` or `hle` | `accurate` | Choose emulated devices or the approximate ROM sequencer/PCM synthesizer | Opt-in HLE runs at 48 kHz without sound CPU or ES chip execution. Explicit `--sound-driver` and `--sound-trace` are rejected with HLE. CLI audio selections override saved backend preferences. |
+| `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Accurate audio only; netplay rejects this flag. Decode the trace with `tools/decode_sound.py`. |
+| `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution for accurate audio, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Explicit selection chooses accurate audio unless an incompatible explicit HLE selection was also given. |
 | `--profile-out` | `FILE` | none | Merge versioned main/sound entry counts, atomically flush every 30 seconds and on exit | Requires `F3_PROFILE_INSTRUMENT=ON` and strict native main/sound execution. Relative destinations are fixed against the startup working directory, including after later cwd changes. Slim builds also accept it for immediate `miss` records; cold aborts always append a durable `.cold-hits` log (or `f3-cold-hits.log` without this flag). Concurrent writers must use separate paths and merge later. |
-| `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used the fallback | Netplay rejects this flag. |
+| `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used fallback | Diagnostic reporting does not permit interpreter fallback in netplay. |
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
 | `--dump-start` | `N` | `1` | First frame to dump | |
 | `--dump-every` | `N` | `1` | Dump every N frames | `0` is an error. |
@@ -85,10 +85,16 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
 | `--video-interp` | `off`, `linear` or `fit` | `off` | Opt-in validated GPU line sampling on all four playfields | Non-off needs GPU; scale 1/headless stay exact. Both modes preserve native subrow-zero and unflagged samples. |
 | `--video-interp-fields` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Independent geometry sampling and same-pen RGB palette-bank blending | Palette blending invents colors; alpha/clip/mosaic/priority and column jumps stay discrete. Sprite zoom already samples ROM texels at internal scale in every mode. |
-| `--netplay-server` | `HOST:PORT` | none | Address of the relay server | Any `--netplay-*` flag turns netplay on. |
-| `--netplay-room` | `CODE` | none | Room name on the relay server | Required in netplay mode. The transport rejects an empty room. |
-| `--netplay-player` | `1` or `2` | automatic | Player slot | Else: `--netplay-player must be 1 or 2`. If you omit it, the transport option stays `0` (automatic). |
-| `--netplay-delay` | `0` to `8` | `2` | Input delay in frames | Else: `--netplay-delay must be 0..8`. |
+| `--config` | `FILE` | SDL preferences directory `settings.cfg` | Preferences path | Loads before CLI overrides; save explicitly in F1. States/screenshots use sibling directories. |
+| `--volume` | `0` to `100` | `100` | Host output percentage | Does not alter simulation or confirmed PCM. |
+| `--postprocess` | `off`, `crt` or `user` | `off` | GPU postprocess | Inactive on CPU; affects presentation/screenshots, not native pixels or menu. |
+| `--user-shader` | `FILE.metal` or `FILE.spv` | none | User postprocess file | Metal entry `f3_postprocess`; Vulkan entry `main`. See [shader ABI/examples](/guide/video#f1-shaders-and-live-controls). |
+| `--netplay-host` | none | off | Ready as canonical snapshot host | Exactly one host per room; independent of slot. |
+| `--netplay-join` | none | off | Ready as guest | Loads host handoff before rollback begins. |
+| `--netplay-server` | `HOST:PORT` | `127.0.0.1:9000` | Relay address preference | CLI network entry requires a role and a nonempty room. |
+| `--netplay-room` | `CODE` | empty | Room preference | 1–32 letters, digits, `_` or `-`. |
+| `--netplay-player` | `1` or `2` | automatic | Requested player slot | Hosting and player assignment are independent. |
+| `--netplay-delay` | `0` to `8` | `2` | Host input delay in frames | The guest adopts the host value, not its own requested value. |
 | `--help` | none | | Print usage and exit with code 0 | |
 
 The window title is `f3rt — SET`. The window size is `(320 + 2 × border) × 3` by `696` pixels at start, and you can resize it.
@@ -111,34 +117,24 @@ The program checks these rules in this order.
 
 ### Netplay mode rules
 
-Netplay starts when you pass at least one `--netplay-*` flag. The program then requires all of these conditions:
+CLI netplay entry requires `--netplay-host` or `--netplay-join`, a server and a room. Main execution must be strict native without fallback or sound tracing. If `--frames` is set, it must be less than `UINT32_MAX - 1024`.
 
-- Native execution (`--translated` or the `landmakr` default) and no `--allow-fallback`.
-- `--video game` with scale 1 and border 0.
-- `--audio-backend accurate` with `--sound-driver native`, or `--audio-backend hle` without an explicit sound driver.
-- No `--eeprom`, no `--sound-trace` and no `--fallback-report`.
-- If `--frames` is set, it must be less than 4294966271 (`UINT32_MAX - 1024`).
-
-If one condition fails, the program stops with `Netplay requires strict-native game video and native/HLE audio at scale 1, border 0; EEPROM persistence and diagnostic traces are disabled`. In netplay mode, the program starts with a factory-reset EEPROM.
+The host prepares ordinary versus selection and sends a fresh canonical snapshot. Both-loaded acknowledgement gates rollback. EEPROM history, initial local state, requested delay, scale and border need not match. ROMs, build hash and audio/video simulation state format must match. A confirmed versus exit/disconnect returns local; a fresh Host/Join can reuse the room without restarting. Both peers must use the same audio backend; accurate/native remains the default, while HLE reconciles independently without rewinding music. See [Online play](/guide/netplay).
 
 ### Keyboard controls
 
-Normal play and netplay use different key handlers (`key()` and `netplay_key()` in `runtime/frontend.cpp`).
+| Key | Default action |
+| --- | --- |
+| Arrows, `Z`/`X`/`C` | P1 directions and buttons |
+| `1`, `5` | P1 start and coin |
+| `2`, `6` | P2 start and coin (its only default bindings) |
+| `F3`, `F2` | P1 service and test |
+| `F1` | Menu; pauses solo, not network simulation |
+| `F12` | PNG screenshot |
+| `Escape` | Close menu, otherwise quit |
+| `F11`, `Alt+Enter` | Fullscreen |
 
-| Key | Normal play (`key()`) | Netplay (`netplay_key()`) |
-| --- | --- | --- |
-| Up, Down, Left, Right | Machine input port 1, bits `1`, `2`, `4`, `8` | Bits 0 to 3 of the local input word |
-| `Z`, `X`, `C` | Machine input port 0, bits `1`, `2`, `4` | Bits 4 to 6 |
-| `1`, `2` | Port 0, bits `0x1000`, `0x2000` | Both set bit 7 |
-| `5`, `6` | System input bits `0x10`, `0x20` | Both set bit 8 |
-| `F1` | Port 0, bit `0x200` | Bit 9 |
-| `F2` | System input bit `0x02` | Bit 10 |
-| `Escape` | Quit | Quit |
-| `F11`, `Alt+Enter` | Toggle fullscreen | Toggle fullscreen; not sent as game input |
-
-In normal play, a pressed key clears the matching input bit, because the F3 inputs are active low. In netplay, a pressed key sets a bit in the 16-bit input word that the program sends to the peer.
-
-When the window loses focus, the program releases all keys.
+F1 remaps both offline keyboard/gamepad profiles. There are no default gamepad bindings. Netplay uses local P1 for the assigned player. Menu capture/focus loss neutralizes held input; while the network menu is open local P1 is neutral. Save preferences explicitly. Offline strict-native slots 0–9 require matching build, ROMs and presentation geometry.
 
 ### Output lines
 
@@ -243,11 +239,11 @@ The program writes packets into the mailbox ring buffer at main address `0xc0000
 
 ## f3rt-netplay-oracle
 
-This program proves that snapshots and netplay give the same result as a single local machine. It has three modes. Source: `tools/netplay_oracle.cpp`. It needs a build with `F3_GENERATED_DIR`. Only the `landmakrj` set is valid.
+This program checks full snapshots, canonical cross-presentation import and real versus handoff campaigns against per-match references. Source: `tools/netplay_oracle.cpp`; requires generated `landmakrj` code. See [oracle guide](/developer/netplay/oracle).
 
 | Flag | Argument | Default | Meaning | Notes |
 | --- | --- | --- | --- | --- |
-| `--mode` | `snapshot`, `reference` or `client` | `reference` | Run mode | `snapshot-proof` is an alias of `snapshot`. Other values stop with `Unknown --mode`. |
+| `--mode` | `snapshot`, `sync-proof`, `reference` or `client` | `reference` | Run mode | `snapshot-proof` aliases `snapshot`. |
 | `--rom-dir` | `DIR` | `F3RT_DEFAULT_ROM_DIR` | ROM directory | Required if the build has no default. |
 | `--set` | `NAME` | `landmakrj` | ROM set | Other values stop: `netplay_oracle requires landmakrj ROM set`. |
 | `--seed` | `N` | `12345` | Input schedule seed | |
@@ -259,6 +255,10 @@ This program proves that snapshots and netplay give the same result as a single 
 | `--player` | `1` or `2` | none | Player slot | Required in `client` mode. |
 | `--server` | `HOST:PORT` | `127.0.0.1:9000` | Relay server | `client` mode. |
 | `--room` | `NAME` | `oracle_room` | Relay room | `client` mode. |
+| `--host-player` | `1` or `2` | `1` | Canonical authority | Independent of client slot. |
+| `--prelude-frames` | `N` | P1 2400 / P2 3200 | Local solo history before pairing | Genuine one-start prehistory. |
+| `--initial-state` | `FILE` | none | Canonical handoff for reference replay | Use the actual host `handoff.bin`. |
+| `--match-index` | `N` | `0` | Campaign input stream index | Match the handoff's campaign index. |
 | `--delay` | `N` | `2` | Input delay in frames | `reference` and `client` modes. |
 | `--window` | `N` | `16` | Rollback prediction window in frames | `client` mode. |
 | `--timeout` | `SEC` | `120` | Time limit in seconds | `client` mode. |
@@ -451,19 +451,19 @@ Exit code: `1` if any seed failed, else `0`.
 
 ### tools/run_netplay_oracle.py
 
-This script starts the relay server and two oracle clients, and checks that the results match a reference run.
+Starts a relay and two independently booted/local-history clients. Each match is compared with a reference loaded from its actual host handoff, including natural end/local return/rematch.
 
 | Flag | Argument | Default | Meaning | Notes |
 | --- | --- | --- | --- | --- |
 | `--oracle-bin` | `PATH` | `build/f3rt-netplay-oracle` | Oracle program | If missing, the script tries `build/native/f3rt-netplay-oracle` and `build/f3rt-netplay-oracle`. |
 | `--server-bin` | `PATH` | `build/netplay-server` | Relay server program | |
 | `--rom-dir` | `DIR` | none | ROM directory | If omitted, the binary uses its built-in default. |
-| `--seeds` | `N [N ...]` | `1 2 3 5` | Seeds to run | |
+| `--seeds` | `N [N ...]` | `1 2 3 5 8 13 21 34` | Seeds to run | |
 | `--frames` | `N` | `20000` | Frames per seed | The snapshot suite uses `min(frames, 6000)`. |
 | `--delay` | `N` | `2` | Input delay | |
 | `--window` | `N` | `16` | Rollback window | |
 | `--sound-driver` | `oracle`, `native` or `all` | `native` | Sound CPU implementation | With `all`, snapshot tests run both drivers and netplay runs `native`. |
-| `--suite` | `all`, `snapshot`, `baseline`, `impaired` or `cases` | `all` | Test group to run | `cases` runs the late input, long stall, build mismatch and disconnect tests. |
+| `--suite` | `all`, `snapshot`, `baseline`, `impaired` or `cases` | `all` | Test group | Cases cover late input, long stall, geometry/requested-delay independence, host-P2, build mismatch and disconnect. |
 | `--dump-captures-dir` | `DIR` | none | Save frame captures | |
 | `--log-dir` | `DIR` | `build/netplay_logs` | Directory for the logs | |
 

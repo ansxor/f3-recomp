@@ -38,6 +38,8 @@ struct Message {
 struct AudioEngine::Impl : VoiceSink {
     uint8_t *shared;
     uint64_t clock = 0, command_count = 0, command_hash = 0, serial = 0;
+    // Playback is monotonic even when a slot or host snapshot changes emulated time.
+    uint64_t clock_epoch = 0, playback_epoch = 0;
     uint16_t consumer = 0;
     bool held = true, replaying = false;
     uint64_t rollback_begin = 0, rollback_end = 0;
@@ -90,7 +92,10 @@ struct AudioEngine::Impl : VoiceSink {
         std::unique_lock lock(mutex);
         completed.wait(lock, [&] { return pushed - popped < queue_size || failure; });
         if (failure) std::rethrow_exception(failure);
-        queue[pushed++ % queue_size] = m;
+        auto &queued = queue[pushed++ % queue_size];
+        queued = m;
+        queued.tick = m.tick >= clock_epoch ? playback_epoch + (m.tick - clock_epoch) :
+            playback_epoch - std::min(playback_epoch, clock_epoch - m.tick);
         wake.notify_one();
     }
     void submit(uint64_t tick) {
@@ -370,10 +375,25 @@ void AudioEngine::save(std::span<uint8_t> dst) const {
 }
 void AudioEngine::load(std::span<const uint8_t> src) {
     if (src.size() != state_bytes) throw std::invalid_argument("HLE state size mismatch");
+    const uint16_t consumer = uint16_t(uint16_t(src[24]) << 8 | src[25]);
+    if ((consumer & ~0x7feu) || src[26] > 1 ||
+        std::any_of(src.begin() + 27, src.begin() + 32, [](uint8_t byte) { return byte != 0; }))
+        throw std::invalid_argument("Invalid HLE mailbox state");
     uint64_t words[3]{};
     for (size_t w = 0; w < 3; ++w) for (unsigned b = 0; b < 8; ++b) words[w] = words[w] << 8 | src[w * 8 + b];
+    if (!impl_->replaying) {
+        impl_->flush();
+        impl_->clock_epoch = words[0];
+        impl_->playback_epoch = impl_->worker_tick;
+        impl_->submitted_tick = words[0];
+        for (auto &frame : impl_->journal) { frame.tag = UINT64_MAX; frame.count = 0; }
+        impl_->previous_count = impl_->pending_count = 0;
+        impl_->frame_override = UINT64_MAX;
+        std::lock_guard lock(impl_->pcm_mutex);
+        impl_->pcm_read = impl_->pcm_write;
+    }
     impl_->clock = words[0]; impl_->command_count = words[1]; impl_->command_hash = words[2];
-    impl_->consumer = uint16_t(uint16_t(src[24]) << 8 | src[25]); impl_->held = src[26] != 0;
+    impl_->consumer = consumer; impl_->held = src[26] != 0;
     for (size_t i = 0; i < impl_->programs.size(); ++i)
         impl_->programs[i] = uint16_t(uint16_t(src[32 + i * 2]) << 8 | src[33 + i * 2]);
 }

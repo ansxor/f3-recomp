@@ -28,7 +28,7 @@ Keep stderr from both clients and the relay start configuration. Keep the reques
 | `netplay room wait timeout` | The total room wait exceeds the transport limit. Start a new attempt with a second player. |
 | `requested slot already taken` | Use different requested players or automatic assignment. |
 | `match already in progress` | A new nonce cannot join an active or finished room. Start a new room or wait for expiry. |
-| ROM, build, settings, EEPROM or initial CRC reject | Compare the matching identity field. Read [Build identity](/developer/netplay/build-identity#mismatch-diagnosis). |
+| ROM/build/state-format or role reject | Match simulation identity and choose one host/one guest. EEPROM/local history/presentation need not match. See [identity diagnosis](/developer/netplay/build-identity#mismatch-diagnosis). |
 
 A join may be retried after packet loss. The client nonce makes these retries idempotent. The relay returns `MatchStart` again for a valid occupied nonce in an active room.
 
@@ -36,7 +36,7 @@ A join may be retried after packet loss. The client nonce makes these retries id
 
 | Error family | Meaning |
 | --- | --- |
-| `DESYNC at frame N: local CRC L remote CRC R` | Rollback compares the full confirmed snapshot after N frames. Values are decimal. |
+| `DESYNC at frame N: local CRC L remote CRC R` | Rollback compares canonical sync CRCs after N confirmed match-relative frames. Values are decimal. |
 | `netplay desync detected at frame N` | Transport compares a received checksum with the local one. CRCs are hexadecimal. |
 | `netplay finish CRC mismatch` | Finite end-state frame or CRC differs from the peer or server verdict. |
 | `Peer changed previously received input` / `netplay input mutation detected` | A frame has two different actual controller words. Fix the sender; this is not prediction correction. |
@@ -45,14 +45,14 @@ A join may be retried after packet loss. The client nonce makes these retries id
 | `Confirmed audio queue full` | The frontend does not drain confirmed PCM during running or stalls. |
 | `Checksum queue full` | The frontend does not drain core outgoing checksums. |
 | `Rollback exceeded retained snapshot window` | A core invariant fails. Do not restore an arbitrary older state. |
-| Peer silence or `MatchTerminated` | The peer stops sending accepted traffic or leaves. Cold-start a new match. |
+| Peer silence or `MatchTerminated` | Session restores confirmed state and returns local. Ready a fresh Host/Join; same room allowed. |
 
 Checksum frame N describes the state **before simulation frame N**, after N earlier frames run. It is not the input applied at frame N. Regular checks occur every 60 confirmed frames. A divergence can begin earlier than the first reported checksum.
 
 ## Find the first difference
 
-1. Reproduce with the same build, ROM regions, delay and actual input schedule.
-2. Compare the single-machine reference with both clients. Use the [Oracle](/developer/netplay/oracle#python-runner).
+1. Reproduce with matching build/ROM/simulation format, the actual negotiated host delay and input schedule.
+2. Replay from the exact host `handoff.bin` for that match, with its match-index stream; compare to both clients. See [Oracle](/developer/netplay/oracle).
 3. Determine whether the failure needs rollback. A clean-network reference difference suggests configuration or simulation divergence. A replay-only difference suggests missing state, a derived cache or an output-side effect.
 4. Run snapshot proof before the failing frame. Select a small interval and an explicit replay depth:
 

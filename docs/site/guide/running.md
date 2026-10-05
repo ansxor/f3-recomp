@@ -6,7 +6,7 @@ For a table of every option, read the [command-line reference](/reference/cli). 
 
 ## Keys
 
-The window must have focus. The keys control player 1.
+The window must have focus. These are the default keyboard bindings; F1 lets you remap both offline player profiles.
 
 | Key | Action |
 | --- | --- |
@@ -18,18 +18,30 @@ The window must have focus. The keys control player 1.
 | `6` | Coin slot 2 |
 | `1` | Start 1 |
 | `2` | Start 2 |
-| `F1` | Service switch |
-| `F2` | Test switch |
-| `Escape` | Quit |
+| `F3` | P1 service switch |
+| `F2` | P1 test switch |
+| `F1` | Open/close the menu |
+| `F12` | Save a PNG screenshot |
+| `Escape` | Close the menu, or quit when it is closed |
 | `F11` or `Alt+Enter` | Toggle fullscreen |
 
 Each key acts as a switch. The input is active while you hold the key. Release the key to release the switch.
 
 When the window loses focus, the program releases all keys. It does this so that no key stays pressed.
 
-::: info Online play uses a different key map
-In [online play](/guide/netplay) the keys control the player that the server assigned to you. Both coin keys insert a coin for you. Both start keys press your start button.
-:::
+P2 has only `2` (start) and `6` (coin) by default. Bind its directions/buttons in F1 for offline two-player play. There are no default gamepad bindings; select the device and capture buttons or axis directions in the menu.
+
+In [online play](/guide/netplay), your local P1 profile controls your assigned player slot, including start and coin.
+
+## F1 menu, preferences and slots
+
+The menu pauses solo play. Network simulation continues while it is open, with local P1 input neutral. Closing the menu or losing focus releases captured/held input; release a held control before pressing it again.
+
+Use **Save preferences** explicitly to persist settings and remaps. Preferences load before CLI arguments, so explicit flags win. `--config FILE` selects a different preferences file; the default is `settings.cfg` under `SDL_GetPrefPath("f3-recomp", "f3rt")`. `states/` and `screenshots/` live alongside it. Volume is host output only (`--volume 0..100`, default 100%).
+
+The menu offers save/load slots **0–9** for offline strict-native play. A slot requires a compatible build, ROMs and presentation geometry. Slots are unavailable during network play; they are not portable canonical netplay snapshots. F12 writes a PNG into `screenshots/`; GPU postprocess captures include the effect, not the menu.
+
+Only controls labeled live by the UI take effect immediately. Respect restart-required labels rather than assuming every saved preference reconfigures the running machine.
 
 ## The window
 
@@ -63,13 +75,11 @@ A normal end is the `Escape` key, a closed window, or the end of a `--frames` li
 
 The file has 128 bytes. It stores the 64 words as big-endian 16-bit values. A new file is all `0xff` until the game writes to it.
 
-::: warning Netplay does not use `--eeprom`
-Online play rejects `--eeprom`. Both players always start with an erased EEPROM so that both machines are the same.
-:::
+In netplay, the host's canonical handoff state becomes the match state. Independent EEPROM files and solo histories are supported; EEPROM equality is not a join requirement.
 
 ## Service and test mode
 
-The `F1` key presses the service switch. The `F2` key presses the test switch. The game defines the effect of both switches. This page does not describe the game menus.
+`F3` presses service and `F2` presses test in the default P1 profile. F1 is the frontend menu, not the game's service switch. The game defines the effect of service and test.
 
 ## Run without a window
 

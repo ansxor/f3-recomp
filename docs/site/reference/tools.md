@@ -23,7 +23,7 @@ All commands run from the repository root. The examples use `build/` as the buil
 | Program | Source | What it does |
 | --- | --- | --- |
 | `f3rt-gameplay-regression` | `tools/gameplay_regression.cpp` | Runs the native game for many frames with a seeded input schedule. It fails if the CPU halts or a fallback instruction runs. It can also compare the game-data renderer with the FDP renderer. |
-| `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | Has three modes: a snapshot proof, a single-machine reference run, and a headless netplay client. It prints CRC values that the test script compares. |
+| `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | Full snapshot replay, canonical cross-presentation sync proof, handoff-loaded reference and real versus campaigns. |
 | `f3rt-sound-extract` | `tools/sound_extract.cpp` | Boots the game, freezes the main CPU, injects sound packets, and records audio and a bus trace. |
 | `f3rt-replay` | `runtime/replay.cpp` | Renders MAME captures with the f3rt video code, or renders a MAME audio trace to a WAV file. |
 | `f3rt-check` | `runtime/check.cpp` | Unit-level self-test of the runtime devices. No arguments. Runs under CTest. |
@@ -45,7 +45,7 @@ python3 tools/run_gameplay_regression.py --rom-dir roms/landmakrj
 | Script | What it does | How to run it |
 | --- | --- | --- |
 | `run_gameplay_regression.py` | Runs `f3rt-gameplay-regression` for each seed (default seeds 1 to 8) and reports the failed seeds. | `python3 tools/run_gameplay_regression.py --rom-dir DIR` |
-| `run_netplay_oracle.py` | Starts the relay server and two oracle clients. Checks that the final state CRC, the frame CRC and the audio CRC equal those of a reference run. Test groups: snapshot proof, baseline, impaired network (80 ms round trip, 20 ms jitter, 3% loss, 3% reorder), and edge cases (late input, long stall, build hash mismatch, disconnect). | `python3 tools/run_netplay_oracle.py --suite all` |
+| `run_netplay_oracle.py` | Runs real relay campaigns from independent solo histories, compares each match to its host handoff reference, and checks natural return/rematch. Suites: snapshots, baseline, impaired (including transfer chunks), and cases (late input, stall, geometry/delay independence, host-P2, mismatch, disconnect). | `python3 tools/run_netplay_oracle.py --suite all` |
 | `compile_sound.py` | Compiles the sound CPU ROM to C. CMake runs it for you. | `python3 tools/compile_sound.py --rom-dir DIR --output DIR` |
 | `compare_frames.py` | Compares two frames, or two directories of frames. Reports mismatch count, maximum error, mean error, RMSE and PSNR. Can write diff images. It uses only the Python standard library. | `python3 tools/compare_frames.py REFERENCE ACTUAL --json` |
 | `compare_audio.py` | Compares two WAV files after one fixed delay correction. Reports metrics for the whole range and for windows. It needs NumPy and SciPy. The metrics are evidence and not a pass or fail verdict. | `python3 tools/compare_audio.py ref.wav test.wav --json report.json` |

@@ -4,6 +4,10 @@ Implementation evidence from `hle-audio` commit `5e8c775`, measured on macOS
 arm64 with Land Maker Japan 2.01J. Historical captures remain in that worktree;
 they are not bundled downloads or a whole-F3 compatibility claim.
 
+Current F1 selection, adopted-clock regressions, and impaired versus handoff,
+natural-exit/rematch evidence are recorded in
+[merged integration verification](IMGUI-NETPLAY.md#merged-integration-verification).
+
 ## ROM-derived protocol and data
 
 The accurate native/interpreted sound path remains the default and oracle.
@@ -125,6 +129,13 @@ No sound-CPU, chip state, worker queue, voice, host instance ID or PCM enters
 an HLE snapshot or peer checksum. Worker failures propagate to the caller.
 All queues and voice/note pools are bounded; exhaustion fails explicitly.
 
+Canonical HLE loads validate mailbox offsets, flags and command context, not
+just serialized byte count. On non-rollback state adoption (host handoff,
+confirmed local return or local restore), the main-side clock is rebased to
+the worker's monotonic output timeline. Existing local music, voices and
+effects continue: this is not exact playback restoration or an HLE PCM
+snapshot. Main-side canonical state remains the peer-comparison boundary.
+
 The output-side command ledger retains 64 frames, up to 256 packets/frame.
 Rollback copies the affected ledger, restores only main-side state and
 records resimulated commands without stepping/restarting the worker. At the
@@ -143,11 +154,14 @@ audio. HLE netplay instead drains the independent speculative stream; peers
 may hear different corrected histories while their canonical game state
 must agree. The handshake includes backend selection. A snapshot restore
 alone is not an audio rollback transaction: callers must bracket correction
-with `begin_rollback(begin,end)` and `end_rollback()`; the netplay core does so.
+with `begin_rollback(begin,end)` and `end_rollback()`. The range uses absolute
+machine frames, including the host handoff origin, not match-relative network
+frames. The netplay core supplies that range; ordinary correction restores
+main-side state without rebasing or rewinding playback.
 Headless extraction synchronizes with the worker when draining PCM, making
 offline output independent of scheduling without involving audio in gameplay.
 
-## Verification and tolerances
+## Historical verification and tolerances
 
 Acceptance is correct note/SFX identity and timing, close pitch/level/envelopes,
 and useful listening captures, not waveform parity. The observations below

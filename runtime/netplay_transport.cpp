@@ -13,14 +13,17 @@
 #include <unistd.h>
 #include <array>
 
+#include <algorithm>
+#include <vector>
+#include <zlib.h>
 namespace f3rt::netplay {
 
 namespace {
 
 constexpr uint32_t kMagic = 0x46334E50; // 'F', '3', 'N', 'P'
-constexpr uint8_t kProtocolVersion = 1;
+constexpr uint8_t kProtocolVersion = 2;
 constexpr size_t kHeaderSize = 20;
-constexpr size_t kIdentitySize = 72;
+constexpr size_t kIdentitySize = 64;
 constexpr size_t kMaxPacketSize = 1400;
 constexpr uint16_t kInputMask = 0x07FF;
 constexpr size_t kMaxUnackedInputs = 512;
@@ -28,6 +31,9 @@ constexpr size_t kInputRingCapacity = 2048;
 constexpr size_t kChecksumRingCapacity = 512;
 constexpr size_t kPingTableCapacity = 64;
 constexpr int64_t kMinSendIntervalMs = 8; // Pace outgoing transmissions (max 125 pps)
+constexpr size_t kSnapshotCap = 16 * 1024 * 1024;
+constexpr size_t kChunkSize = 1024;
+constexpr size_t kTransferWindow = 32;
 
 // Packet Types
 constexpr uint8_t kPktJoinReq = 1;
@@ -39,6 +45,11 @@ constexpr uint8_t kPktHeartbeat = 7;
 constexpr uint8_t kPktLeave = 8;
 constexpr uint8_t kPktMatchTerminated = 9;
 constexpr uint8_t kPktMatchComplete = 10; // Server-origin persistent match completion verdict
+constexpr uint8_t kPktSnapshotMeta = 11;
+constexpr uint8_t kPktSnapshotChunk = 12;
+constexpr uint8_t kPktSnapshotAck = 13;
+constexpr uint8_t kPktSnapshotLoaded = 14;
+constexpr uint8_t kPktBarrierStart = 15;
 
 // Flags
 constexpr uint16_t kFlagFinishReq = 1 << 0;
@@ -91,10 +102,8 @@ std::string reject_reason_to_string(uint8_t code) {
         case 3: return "requested slot already taken";
         case 4: return "ROM CRC mismatch";
         case 5: return "build hash mismatch";
-        case 6: return "settings mismatch";
-        case 7: return "EEPROM CRC mismatch";
-        case 8: return "initial state CRC mismatch";
-        case 9: return "delay configuration mismatch";
+        case 6: return "snapshot format mismatch";
+        case 14: return "host/join role conflict";
         case 10: return "invalid room name";
         case 11: return "rate limited";
         case 12: return "match already in progress";
@@ -123,6 +132,17 @@ struct Transport::Impl {
     unsigned assigned_slot = 0;
     bool is_ready = false;
     bool is_finished = false;
+    std::vector<uint8_t> compressed_snapshot;
+    std::vector<uint8_t> raw_snapshot;
+    std::vector<uint8_t> chunk_seen;
+    std::vector<std::chrono::steady_clock::time_point> chunk_sent;
+    uint32_t transfer_id = 0;
+    uint32_t raw_size = 0;
+    uint32_t raw_crc = 0;
+    uint32_t compressed_crc = 0;
+    size_t chunks_done = 0;
+    bool snapshot_validated = false;
+    bool snapshot_accepted = false;
 
     // Server-origin verified match completion state
     bool server_match_completed = false;
@@ -136,6 +156,10 @@ struct Transport::Impl {
     TimePoint last_send_time;
     TimePoint last_recv_time;
     TimePoint last_server_reply_time;
+    TimePoint last_transfer_send{};
+    TimePoint last_heartbeat_send{};
+    TimePoint last_chunk_send{};
+    size_t chunk_frontier = 0;
 
     // Ping / RTT tracking (fixed ring buffer, zero dynamic allocation)
     struct PingEntry {
@@ -251,7 +275,7 @@ struct Transport::Impl {
 
     ~Impl() {
         if (sock_fd >= 0) {
-            if (state == State::Connected && session_id != 0) {
+            if (state != State::Terminated) {
                 // If finished cleanly, inform server with LeaveNormalFinished so peer is not interrupted!
                 uint8_t leave_code = is_finished ? kLeaveNormalFinished : kLeaveAbort;
                 send_leave(leave_code);
@@ -314,7 +338,7 @@ struct Transport::Impl {
     }
 
     void send_join_req() {
-        size_t total_len = kHeaderSize + 8 + 1 + 1 + 1 + 32 + kIdentitySize;
+        size_t total_len = kHeaderSize + 8 + 1 + 1 + 1 + 32 + kIdentitySize + 1;
 
         // Header
         write_u32_be(&packet_buf[0], kMagic);
@@ -347,11 +371,143 @@ struct Transport::Impl {
         off += 28;
         std::memcpy(&packet_buf[off], identity.build_hash.data(), 32);
         off += 32;
-        write_u32_be(&packet_buf[off], identity.settings); off += 4;
-        write_u32_be(&packet_buf[off], identity.eeprom_crc); off += 4;
-        write_u32_be(&packet_buf[off], identity.initial_crc); off += 4;
+        write_u32_be(&packet_buf[off], identity.state_format); off += 4;
+        packet_buf[off++] = opts.host ? 1 : 0;
 
         send_raw(total_len);
+    }
+    void transfer_header(uint8_t type) {
+        write_u32_be(packet_buf.data(), kMagic);
+        packet_buf[4] = kProtocolVersion;
+        packet_buf[5] = type;
+        write_u16_be(&packet_buf[6], 0);
+        write_u64_be(&packet_buf[8], session_id);
+        packet_buf[16] = static_cast<uint8_t>(assigned_slot);
+        packet_buf[17] = packet_buf[18] = packet_buf[19] = 0;
+    }
+
+    void send_transfer_pair(uint8_t type, uint32_t value) {
+        transfer_header(type);
+        write_u32_be(&packet_buf[kHeaderSize], transfer_id);
+        write_u32_be(&packet_buf[kHeaderSize + 4], value);
+        send_raw(kHeaderSize + 8);
+    }
+
+    void send_transfer() {
+        const auto now = Clock::now();
+        if (now - last_heartbeat_send >= std::chrono::milliseconds(100)) {
+            transfer_header(kPktHeartbeat);
+            std::memset(&packet_buf[kHeaderSize], 0, 16);
+            write_u32_be(&packet_buf[kHeaderSize + 12], 0xFFFFFFFF);
+            send_raw(kHeaderSize + 16);
+            last_heartbeat_send = now;
+        }
+        if (!transfer_id) return;
+        if (now - last_transfer_send >= std::chrono::milliseconds(80)) {
+            if (opts.host) {
+                transfer_header(kPktSnapshotMeta);
+                write_u32_be(&packet_buf[kHeaderSize], transfer_id);
+                write_u32_be(&packet_buf[kHeaderSize + 4], raw_size);
+                write_u32_be(&packet_buf[kHeaderSize + 8], static_cast<uint32_t>(compressed_snapshot.size()));
+                write_u32_be(&packet_buf[kHeaderSize + 12], raw_crc);
+                write_u32_be(&packet_buf[kHeaderSize + 16], compressed_crc);
+                send_raw(kHeaderSize + 20);
+            } else if (snapshot_accepted) {
+                send_transfer_pair(kPktSnapshotLoaded, raw_crc);
+            }
+            last_transfer_send = now;
+        }
+        if (!opts.host || now - last_chunk_send < std::chrono::milliseconds(8)) return;
+        last_chunk_send = now;
+        size_t sent = 0;
+        size_t window = 0;
+        for (size_t i = chunk_frontier; i < chunk_seen.size() && window < kTransferWindow && sent < 3; ++i) {
+            if (chunk_seen[i]) continue;
+            ++window;
+            if (now - chunk_sent[i] < std::chrono::milliseconds(150)) continue;
+            const size_t offset = i * kChunkSize;
+            const size_t count = std::min(kChunkSize, compressed_snapshot.size() - offset);
+            transfer_header(kPktSnapshotChunk);
+            write_u32_be(&packet_buf[kHeaderSize], transfer_id);
+            write_u32_be(&packet_buf[kHeaderSize + 4], static_cast<uint32_t>(i));
+            std::memcpy(&packet_buf[kHeaderSize + 8], compressed_snapshot.data() + offset, count);
+            send_raw(kHeaderSize + 8 + count);
+            chunk_sent[i] = now;
+            ++sent;
+        }
+    }
+
+    void handle_transfer(uint8_t type, uint8_t sender, const uint8_t* p, size_t len) {
+        if (type == kPktBarrierStart) {
+            if (sender != 0xFF || len != 8 || !snapshot_accepted ||
+                read_u32_be(p) != transfer_id || read_u32_be(p + 4) != raw_crc) return;
+            is_ready = true;
+            last_recv_time = Clock::now();
+            return;
+        }
+        if (sender != 1 - assigned_slot) return;
+        if (type == kPktSnapshotMeta) {
+            if (opts.host || len != 20 || read_u32_be(p) != 1) return;
+            const uint32_t raw = read_u32_be(p + 4);
+            const uint32_t compressed = read_u32_be(p + 8);
+            if (!raw || raw > kSnapshotCap || !compressed || compressed > kSnapshotCap) {
+                throw std::runtime_error("netplay snapshot exceeds transfer bounds");
+            }
+            if (transfer_id) {
+                if (raw != raw_size || compressed != compressed_snapshot.size() ||
+                    read_u32_be(p + 12) != raw_crc || read_u32_be(p + 16) != compressed_crc)
+                    throw std::runtime_error("netplay snapshot metadata mutation");
+            } else {
+                transfer_id = 1;
+                raw_size = raw;
+                raw_crc = read_u32_be(p + 12);
+                compressed_crc = read_u32_be(p + 16);
+                compressed_snapshot.resize(compressed);
+                chunk_seen.resize((compressed + kChunkSize - 1) / kChunkSize);
+            }
+            last_recv_time = Clock::now();
+            return;
+        }
+        if (!transfer_id || len < 8 || read_u32_be(p) != transfer_id) return;
+        const uint32_t index = read_u32_be(p + 4);
+        if (type == kPktSnapshotAck) {
+            if (!opts.host || len != 8 || index >= chunk_seen.size() || chunk_sent[index] == TimePoint{}) return;
+            if (!chunk_seen[index]) { chunk_seen[index] = 1; ++chunks_done; }
+            while (chunk_frontier < chunk_seen.size() && chunk_seen[chunk_frontier]) ++chunk_frontier;
+            last_recv_time = Clock::now();
+            return;
+        }
+        if (type != kPktSnapshotChunk || opts.host || index >= chunk_seen.size()) return;
+        const size_t offset = size_t(index) * kChunkSize;
+        const size_t count = std::min(kChunkSize, compressed_snapshot.size() - offset);
+        if (len != 8 + count) return;
+        if (chunk_seen[index]) {
+            if (std::memcmp(compressed_snapshot.data() + offset, p + 8, count))
+                throw std::runtime_error("netplay snapshot chunk mutation");
+        } else {
+            std::memcpy(compressed_snapshot.data() + offset, p + 8, count);
+            chunk_seen[index] = 1;
+            ++chunks_done;
+        }
+        send_transfer_pair(kPktSnapshotAck, index);
+        last_recv_time = Clock::now();
+        if (chunks_done != chunk_seen.size() || snapshot_validated) return;
+        if (crc32(0, compressed_snapshot.data(), static_cast<uInt>(compressed_snapshot.size())) != compressed_crc)
+            throw std::runtime_error("netplay compressed snapshot CRC mismatch");
+        raw_snapshot.resize(raw_size);
+        z_stream stream{};
+        stream.next_in = compressed_snapshot.data();
+        stream.avail_in = static_cast<uInt>(compressed_snapshot.size());
+        stream.next_out = raw_snapshot.data();
+        stream.avail_out = raw_size;
+        if (inflateInit(&stream) != Z_OK) throw std::runtime_error("netplay snapshot inflate initialization failed");
+        const int result = inflate(&stream, Z_FINISH);
+        const bool valid = result == Z_STREAM_END && stream.total_out == raw_size &&
+                           stream.total_in == compressed_snapshot.size();
+        inflateEnd(&stream);
+        if (!valid || crc32(0, raw_snapshot.data(), raw_size) != raw_crc)
+            throw std::runtime_error("netplay snapshot decompression/CRC mismatch");
+        snapshot_validated = true;
     }
 
     void send_game_data() {
@@ -455,11 +611,12 @@ struct Transport::Impl {
         packet_buf[5] = kPktLeave;
         write_u16_be(&packet_buf[6], 0);
         write_u64_be(&packet_buf[8], session_id);
-        packet_buf[16] = static_cast<uint8_t>(assigned_slot);
+        packet_buf[16] = session_id ? static_cast<uint8_t>(assigned_slot) : 0xFF;
         packet_buf[17] = packet_buf[18] = packet_buf[19] = 0;
 
         packet_buf[kHeaderSize] = leave_code;
         std::memset(&packet_buf[kHeaderSize + 1], 0, 64);
+        if (session_id == 0) write_u64_be(&packet_buf[kHeaderSize + 1], client_nonce);
         send_raw(kHeaderSize + 65);
     }
 
@@ -528,11 +685,12 @@ struct Transport::Impl {
                     }
 
                     uint8_t negotiated_delay = data[kHeaderSize + 9];
-                    if (negotiated_delay != opts.delay) {
-                        state = State::Terminated;
-                        throw std::runtime_error("netplay delay negotiation mismatch: expected " +
-                                                 std::to_string(opts.delay) + ", got " + std::to_string(negotiated_delay));
+                    if (negotiated_delay > 8 || (opts.host && negotiated_delay != opts.delay)) {
+                        throw std::runtime_error("netplay invalid negotiated host delay");
                     }
+                    opts.delay = negotiated_delay;
+                    next_expected_receive_frame = opts.delay;
+                    peer_ack_frame = opts.delay ? opts.delay - 1 : 0xFFFFFFFF;
 
                     // Validate peer identity from payload
                     size_t id_off = kHeaderSize + 8 + 1 + 1 + 2;
@@ -543,15 +701,11 @@ struct Transport::Impl {
                     id_off += 28;
                     std::memcpy(peer_id.build_hash.data(), &data[id_off], 32);
                     id_off += 32;
-                    peer_id.settings = read_u32_be(&data[id_off]); id_off += 4;
-                    peer_id.eeprom_crc = read_u32_be(&data[id_off]); id_off += 4;
-                    peer_id.initial_crc = read_u32_be(&data[id_off]); id_off += 4;
+                    peer_id.state_format = read_u32_be(&data[id_off]);
 
                     if (peer_id.rom_crc != identity.rom_crc ||
                         peer_id.build_hash != identity.build_hash ||
-                        peer_id.settings != identity.settings ||
-                        peer_id.eeprom_crc != identity.eeprom_crc ||
-                        peer_id.initial_crc != identity.initial_crc) {
+                        peer_id.state_format != identity.state_format) {
                         state = State::Terminated;
                         throw std::runtime_error("netplay handshake peer identity mismatch");
                     }
@@ -559,15 +713,24 @@ struct Transport::Impl {
                     assigned_slot = slot_val;
                     session_id = sess;
                     state = State::Connected;
-                    is_ready = true;
+                    is_ready = false;
                     last_recv_time = Clock::now();
+                    start_time = last_recv_time;
                 }
                 break;
             }
+            case kPktSnapshotMeta:
+            case kPktSnapshotChunk:
+            case kPktSnapshotAck:
+            case kPktSnapshotLoaded:
+            case kPktBarrierStart:
+                if (state != State::Connected || sess != session_id || flags != 0) return;
+                handle_transfer(type, slot, data + kHeaderSize, len - kHeaderSize);
+                break;
 
             case kPktGameData: {
                 // Must match active session and be from opposite slot
-                if (state != State::Connected || sess != session_id) return;
+                if (state != State::Connected || sess != session_id || !is_ready) return;
                 if (slot != (1 - assigned_slot)) return;
 
                 // Validate and process without updating liveness if malformed
@@ -918,6 +1081,14 @@ void Transport::pump(uint32_t simulated_frame, uint32_t confirmed_frame) {
             impl->state = Impl::State::Terminated;
             throw std::runtime_error("netplay connection timeout: peer unreachable for 8 seconds");
         }
+        if (!impl->is_ready) {
+            if (now - impl->start_time > std::chrono::seconds(120)) {
+                impl->state = Impl::State::Terminated;
+                throw std::runtime_error("netplay snapshot/start barrier timeout");
+            }
+            impl->send_transfer();
+            return;
+        }
 
         // Send rate pacing: limit outgoing transmissions to >= 8ms (bounded real-time <= 125 pps)
         auto since_last_send = std::chrono::duration_cast<std::chrono::milliseconds>(now - impl->last_send_time).count();
@@ -943,18 +1114,69 @@ void Transport::pump(uint32_t simulated_frame, uint32_t confirmed_frame) {
 }
 
 bool Transport::ready() const {
-    return impl && impl->is_ready;
+    return impl && impl->state == Impl::State::Connected && impl->is_ready;
+}
+bool Transport::paired() const {
+    return impl && impl->state == Impl::State::Connected;
+}
+
+bool Transport::host() const { return impl && impl->opts.host; }
+unsigned Transport::delay() const { return impl ? impl->opts.delay : 0; }
+
+double Transport::transfer_progress() const {
+    if (!impl || impl->chunk_seen.empty()) return 0.0;
+    return double(impl->chunks_done) / double(impl->chunk_seen.size());
+}
+
+void Transport::offer_snapshot(std::span<const uint8_t> bytes) {
+    if (!paired() || !host() || impl->transfer_id || ready())
+        throw std::runtime_error("netplay snapshot offer requires a paired host without an existing offer");
+    if (bytes.empty() || bytes.size() > kSnapshotCap)
+        throw std::runtime_error("netplay snapshot exceeds raw size bounds");
+    uLongf capacity = compressBound(static_cast<uLong>(bytes.size()));
+    capacity = std::min<uLongf>(capacity, kSnapshotCap);
+    impl->compressed_snapshot.resize(capacity);
+    if (compress2(impl->compressed_snapshot.data(), &capacity, bytes.data(),
+                  static_cast<uLong>(bytes.size()), Z_BEST_SPEED) != Z_OK)
+        throw std::runtime_error("netplay snapshot compression failed or exceeded size bounds");
+    impl->compressed_snapshot.resize(capacity);
+    impl->raw_size = static_cast<uint32_t>(bytes.size());
+    impl->raw_crc = static_cast<uint32_t>(crc32(0, bytes.data(), impl->raw_size));
+    impl->compressed_crc = static_cast<uint32_t>(crc32(0, impl->compressed_snapshot.data(), static_cast<uInt>(capacity)));
+    impl->chunk_seen.resize((capacity + kChunkSize - 1) / kChunkSize);
+    impl->chunk_sent.resize(impl->chunk_seen.size());
+    impl->snapshot_accepted = true;
+    impl->transfer_id = 1;
+    impl->send_transfer();
+}
+
+bool Transport::snapshot_available() const {
+    return impl && !host() && impl->snapshot_validated;
+}
+
+std::span<const uint8_t> Transport::snapshot() const {
+    if (!snapshot_available()) return {};
+    return impl->raw_snapshot;
+}
+
+uint32_t Transport::snapshot_crc() const { return impl ? impl->raw_crc : 0; }
+
+void Transport::accept_snapshot(uint32_t loaded_crc) {
+    if (!snapshot_available() || ready() || loaded_crc != impl->raw_crc)
+        throw std::runtime_error("netplay loaded snapshot CRC mismatch or invalid acceptance state");
+    impl->snapshot_accepted = true;
+    impl->send_transfer_pair(kPktSnapshotLoaded, loaded_crc);
 }
 
 unsigned Transport::slot() const {
-    if (!impl || !impl->is_ready) {
-        throw std::runtime_error("netplay transport not ready");
+    if (!paired()) {
+        throw std::runtime_error("netplay transport not paired");
     }
     return impl->assigned_slot;
 }
 
 void Transport::submit(Input input) {
-    if (!impl) return;
+    if (!ready()) throw std::runtime_error("netplay input submission before start barrier");
 
     if (input.word & ~kInputMask) {
         throw std::runtime_error("netplay submit rejected unknown input bits: 0x" + Impl::to_hex(input.word));
@@ -997,7 +1219,9 @@ bool Transport::receive(Input& input) {
 }
 
 void Transport::checksum(Checksum cs) {
-    if (!impl) return;
+    if (!ready()) throw std::runtime_error("netplay checksum submission before start barrier");
+    if (impl->out_cs_count == kChecksumRingCapacity)
+        throw std::runtime_error("netplay checksum buffer overflow (peer stalled)");
 
     size_t idx = cs.frame % kChecksumRingCapacity;
     impl->local_checksums[idx] = {cs.frame, cs.crc};
@@ -1038,7 +1262,7 @@ bool Transport::receive_checksum(Checksum& cs) {
 }
 
 void Transport::finish(uint32_t frame, uint32_t crc) {
-    if (!impl) return;
+    if (!ready()) throw std::runtime_error("netplay finish requested before start barrier");
 
     impl->finish_requested = true;
     impl->local_finish_frame = frame;
@@ -1077,7 +1301,9 @@ std::string Transport::status() const {
     if (impl->state == Impl::State::Connecting) {
         ss << "connecting room=" << impl->opts.room;
     } else if (impl->state == Impl::State::Connected) {
-        ss << "ready slot=" << impl->assigned_slot
+        ss << (impl->is_ready ? "ready" : !impl->transfer_id ? "paired" :
+               impl->snapshot_accepted ? "waiting for start" : "transferring snapshot")
+           << " slot=" << impl->assigned_slot
            << " rtt=" << impl->smoothed_rtt_ms << "ms"
            << " adv=" << frame_advantage()
            << " sim=" << impl->local_simulated_frame

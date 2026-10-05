@@ -87,16 +87,17 @@ target_compile_definitions(f3rt_musashi PRIVATE M68K_EMULATE_030=0 M68K_EMULATE_
 add_custom_target(f3rt_musashi_generated DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.h)
 add_dependencies(f3rt_musashi f3rt_musashi_generated)
 
+find_package(ZLIB REQUIRED)
 file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
     runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/netplay.cpp
     runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
-    runtime/netplay_transport.cpp ${AUDIO_SOURCES})
+    runtime/netplay_transport.cpp runtime/netplay_session.cpp ${AUDIO_SOURCES})
 target_include_directories(f3rt PUBLIC include PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads)
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
@@ -132,7 +133,7 @@ if(F3_GENERATED_DIR)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-gameplay-regression PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    add_executable(f3rt-netplay-oracle tools/netplay_oracle.cpp)
+    add_executable(f3rt-netplay-oracle tools/netplay_oracle.cpp tools/sync_snapshot_proof.cpp)
     target_link_libraries(f3rt-netplay-oracle PRIVATE f3rt f3_recompiled)
     target_include_directories(f3rt-netplay-oracle PRIVATE runtime tools)
     target_compile_definitions(f3rt-netplay-oracle PRIVATE
@@ -140,17 +141,28 @@ if(F3_GENERATED_DIR)
 endif()
 if(F3RT_SDL)
     find_package(SDL3 CONFIG REQUIRED)
+    set(IMGUI "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/imgui")
+    add_library(f3rt-ui STATIC runtime/frontend_settings.cpp runtime/frontend_ui.cpp
+        ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
+        ${IMGUI}/backends/imgui_impl_sdl3.cpp ${IMGUI}/backends/imgui_impl_sdlrenderer3.cpp)
+    target_include_directories(f3rt-ui PUBLIC runtime PRIVATE ${IMGUI} ${IMGUI}/backends)
+    target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3)
+    if(F3_SOUND_GENERATED_DIR)
+        target_compile_definitions(f3rt-ui PRIVATE F3RT_SOUND_GENERATED=1)
+    endif()
     add_executable(f3rt-run runtime/frontend.cpp)
-    target_link_libraries(f3rt-run PRIVATE f3rt SDL3::SDL3)
+    target_link_libraries(f3rt-run PRIVATE f3rt f3rt-ui SDL3::SDL3)
     if(F3_GENERATED_DIR)
         target_link_libraries(f3rt-run PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-run PRIVATE F3RT_GENERATED=1)
         add_executable(landmakr runtime/frontend.cpp)
-        target_link_libraries(landmakr PRIVATE f3rt f3_recompiled SDL3::SDL3)
+        target_link_libraries(landmakr PRIVATE f3rt f3_recompiled f3rt-ui SDL3::SDL3)
         target_compile_definitions(landmakr PRIVATE
             F3RT_GENERATED=1 F3RT_LANDMAKR=1 F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
     if(F3RT_GPU)
+        target_sources(f3rt-ui PRIVATE ${IMGUI}/backends/imgui_impl_sdlgpu3.cpp)
+        target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         find_program(F3_GLSLANG glslangValidator REQUIRED)
         find_program(F3_SPIRV_CROSS spirv-cross REQUIRED)
@@ -163,6 +175,7 @@ if(F3RT_SDL)
                 runtime/shaders/fullscreen.vert runtime/shaders/sprite.vert
                 runtime/shaders/sprite.frag runtime/shaders/scene.frag
                 runtime/shaders/scene_interp.frag runtime/shaders/scene_body.glsl
+                runtime/shaders/postprocess.frag
             VERBATIM)
         add_library(f3rt-gpu STATIC runtime/gpu_video.cpp runtime/gpu_interp.cpp "${VIDEO_SHADER_HEADER}")
         target_include_directories(f3rt-gpu PUBLIC include runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -199,6 +212,14 @@ if(BUILD_TESTING)
     add_test(NAME runtime-devices COMMAND f3rt-check)
     if(F3_ROM_DIR)
         add_test(NAME hle-audio COMMAND f3rt-hle-check "${F3_ROM_DIR}")
+    endif()
+    add_executable(f3rt-state-check runtime/state_check.cpp)
+    target_link_libraries(f3rt-state-check PRIVATE f3rt)
+    add_test(NAME snapshot-validation COMMAND f3rt-state-check)
+    if(TARGET f3rt-ui)
+        add_executable(f3rt-frontend-check runtime/frontend_check.cpp)
+        target_link_libraries(f3rt-frontend-check PRIVATE f3rt-ui)
+        add_test(NAME frontend-input COMMAND f3rt-frontend-check)
     endif()
 endif()
 

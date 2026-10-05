@@ -59,9 +59,18 @@ See [build options](docs/site/reference/build-options.md).
 ```
 
 Controls: **arrows** move, **Z/X/C** buttons, **5/6** coin, **1/2** start,
-**F1** service, **F2** test, **Escape** quit. **F11** or **Alt+Enter** toggles
-fullscreen. Offline keyboard movement/buttons address P1; netplay maps them to
-the assigned local player. Settings persist only when `--eeprom FILE` is supplied.
+**F3** service, **F2** test, **F1** menu, **F12** PNG screenshot.
+**Escape** closes the menu or quits; **F11** or **Alt+Enter** toggles fullscreen.
+F1 remaps independent offline P1/P2 keyboard and gamepad profiles; P2 defaults
+only to start/coin, and gamepads have no default bindings. Netplay uses your
+local P1 profile for the assigned player. The menu pauses solo play; network
+simulation continues with local game input neutral.
+
+Use **Save preferences** explicitly. `--config FILE` overrides the default
+`settings.cfg` under SDL's user preferences directory; `states/` and
+`screenshots/` live alongside it. CLI options override saved preferences.
+Offline strict-native slots **0–9** require compatible build, ROMs and snapshot
+geometry. Arcade EEPROM persistence is separate: use `--eeprom FILE`.
 
 | Option | Default / purpose |
 | --- | --- |
@@ -78,6 +87,8 @@ the assigned local player. Settings persist only when `--eeprom FILE` is supplie
 | `--eeprom FILE` | No persistence unless supplied. |
 | `--frames N --headless` | Finite non-windowed run; headless requires a frame limit. |
 | `--wav FILE`, `--no-audio` | Save PCM or disable live playback. |
+| `--volume 0..100` | `100`; host output only. |
+| `--postprocess off\|crt\|user`, `--user-shader FILE` | GPU-only effects; Off by default. Failed live shader reload retains the last good shader. |
 
 The main CPU rejects untranslated instructions by default. `--allow-fallback`
 is a diagnostic mode, not the supported native-game path. Unsupported
@@ -97,9 +108,9 @@ cover all flags. See the [video guide](docs/site/guide/video.md) and
 
 ## Netplay quickstart
 
-Netplay is opt-in, two-player rollback with a UDP input relay. Use matching
-builds and ROMs, a reachable relay, fixed scale **1** and border **0**. Go 1.22+
-is required for the relay:
+Netplay is opt-in, two-player versus rollback with a UDP relay. Use matching
+builds, ROMs and audio backend, plus a trusted reachable relay; EEPROM/solo
+history and presentation settings may differ. Go 1.22+ is required for the relay:
 
 ```sh
 (cd netplay/server && go build -o ../../build/netplay-server .)
@@ -109,17 +120,21 @@ is required for the relay:
 On the two clients:
 
 ```sh
-./build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 1 --netplay-delay 2
-./build/landmakr --netplay-server SERVER:9000 --netplay-room example --netplay-player 2 --netplay-delay 2
+./build/landmakr --netplay-host --netplay-server SERVER:9000 --netplay-room example --netplay-player 1 --netplay-delay 2
+./build/landmakr --netplay-join --netplay-server SERVER:9000 --netplay-room example --netplay-player 2
 ```
 
-Insert a coin and press start on each client; use the game's normal challenge
-flow to enter versus play. Keys address the assigned local player. Both peers
-cold-boot factory EEPROM; persistence, CPU fallback, oracle sound and diagnostic
-traces are rejected. Default emulated audio publishes only confirmed sound;
-opt-in HLE reconciles speculative sound without rewinding music. Both peers
-must select the same audio backend. The relay is not encrypted or an anti-cheat
-service; use a trusted network/server. See the [netplay guide](docs/site/guide/netplay.md).
+Or choose **F1 → Netplay → Host/Join**. Exactly one host prepares versus through
+ordinary game inputs and sends a fresh canonical snapshot; both clients must
+load it before rollback starts. Hosting is independent of player slot, and the
+host's delay is authoritative. A confirmed natural versus exit or disconnect
+returns to local play; Host/Join again makes a fresh handoff for a rematch.
+Strict native main execution is required; interpreter fallback and sound traces
+are unsupported. Accurate/native audio publishes only confirmed sound; opt-in
+HLE reconciles speculative sound without rewinding music and is not accurate-PCM
+equivalent. The relay is neither encrypted nor an anti-cheat service.
+See the [netplay guide](docs/site/guide/netplay.md) and
+[developer evidence](docs/developer/IMGUI-NETPLAY.md).
 
 ## Land Maker-specific versus generic F3
 

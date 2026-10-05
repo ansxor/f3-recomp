@@ -35,6 +35,10 @@ See the [evidence index](/developer/evidence) for retained measurements and thei
 limits. The testing pages describe how to reproduce comparisons; their historical
 results are not a claim that every game state has been exercised.
 
+Versus-only rollback uses a fresh host canonical snapshot, a both-loaded barrier
+and confirmed local return. [ImGui/netplay evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
+records observed overlay, shader, snapshot and lifecycle coverage.
+
 ## Choose your path
 
 Pick the goal that fits you. Read the pages in the order shown.
@@ -253,7 +257,7 @@ flowchart TB
 | [Protocol](/developer/netplay/protocol) | UDP packets, validation, identity, and finish verdict. |
 | [Client transport](/developer/netplay/transport) | Handshake, reliability, queues, ping, and timeouts. |
 | [Relay server](/developer/netplay/server) | Rooms, pairing, rate limits, expiry, and impairment. |
-| [Build identity](/developer/netplay/build-identity) | Source hashes, ROM CRCs, settings, EEPROM, and initial state. |
+| [Build identity](/developer/netplay/build-identity) | ROM CRCs, build fingerprint and canonical simulation/state format. |
 | [Frontend integration](/developer/netplay/frontend-integration) | Local input, stall handling, presentation, and confirmed audio. |
 | [Oracle](/developer/netplay/oracle) | Compare two clients with a single-machine input schedule. |
 | [Limits](/developer/netplay/limits) | Bounds, unsupported modes, security scope, and protocol constraints. |
@@ -293,6 +297,11 @@ The [evidence index](/developer/evidence) links canonical measurements, technica
 decisions, ABI history, and subsystem records. Detailed logs live in
 `docs/developer/`, rather than the project overview. Use the testing pages for
 tool behavior and reproduction commands.
+
+See [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
+for the overlay and versus-only cutover, and
+[HLE-AUDIO.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md)
+for the separate non-rewound audio policy.
 
 Historical measurements describe their recorded build and scenario. Check the
 implementation before relying on a revision-sensitive detail.

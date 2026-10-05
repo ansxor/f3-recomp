@@ -203,8 +203,8 @@ The details:
 
 The script runs at build time, not at configure time. A change in a runtime file therefore refreshes the hash without a new discovery run.
 
-`Identity` also contains seven ROM region CRC32 values, a settings word, an EEPROM CRC, and an initial state CRC.
-`machine_identity` stores video mode, sound mode, and delay in the settings word.
+`Identity` also contains seven loaded ROM region CRC32 values and canonical state format, covering audio/video simulation compatibility.
+EEPROM, initial local state, requested delay and presentation are excluded; the host transfers canonical state after pairing.
 The handshake also checks the protocol version.
 See [Wire protocol](/developer/netplay/protocol).
 

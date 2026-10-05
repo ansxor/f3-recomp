@@ -30,17 +30,17 @@ flowchart LR
 
 ## Scope and accuracy
 
-Japan support is based on finite captures and seeded gameplay, not exhaustive coverage of every game state. Video is MAME-derived and reference-output matched, not verified against physical TC0630FDP hardware. Sound devices are also MAME-derived; native sound executes the recompiled sound ROM rather than replacing it with high-level sound commands.
+Japan support is based on finite captures and seeded gameplay, not exhaustive coverage of every game state. Video is MAME-derived and reference-output matched, not verified against physical TC0630FDP hardware. Sound devices are also MAME-derived; native sound executes the recompiled sound ROM rather than replacing it with high-level sound commands. Optional HLE audio is approximate, not accurate-PCM equivalent.
 
-See [Developer evidence](/developer/evidence) for validation limits and [Porting another game](/developer/porting) for shared versus Land Maker-specific code.
+See [Developer evidence](/developer/evidence) for validation limits, the [ImGui and netplay evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) for menu/shader and versus lifecycle coverage, and [Porting another game](/developer/porting) for shared versus Land Maker-specific code.
 
 ## Pages in this guide
 
 | Page | Task |
 | --- | --- |
 | [Getting started](/guide/getting-started) | Install tools, prepare ROM files, build and start the game. |
-| [Controls and options](/guide/running) | Keys, EEPROM settings, headless runs, finite runs, output files. |
-| [Video and presentation](/guide/video) | Choose the renderer. Set scale, border and filter. |
+| [Controls and options](/guide/running) | F1 menu, keyboard/gamepad remaps, saved preferences, slots, screenshots and headless output. |
+| [Video and presentation](/guide/video) | Renderer, scale/border/filter, GPU postprocess and user shader examples. |
 | [Sound](/guide/sound) | Choose the sound driver. Write WAV files and sound traces. |
 | [Online play](/guide/netplay) | Start the relay server. Play a 1v1 match. |
 | [Troubleshooting](/guide/troubleshooting) | Find the cause of an error message. |

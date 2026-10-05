@@ -63,9 +63,10 @@ Open these files first. Then follow the subsystem pages.
 | Game-data video | `include/f3rt/game_video.hpp` | `runtime/game_video.cpp`, `runtime/game_scene.hpp` | [Game-data HLE](/developer/runtime/video/game-hle) |
 | Audio | `include/f3rt/audio.hpp` | `runtime/audio.cpp` | [Audio](/developer/runtime/audio/) |
 | Interpreter | `runtime/interpreter.cpp` | `runtime/core_state.c` | [Interpreter](/developer/runtime/interpreter) |
-| Snapshots | `runtime/state_io.hpp` | `Machine::save_state` in `runtime/machine.cpp` | [Snapshots](/developer/netplay/snapshots) |
+| Snapshots | `runtime/state_io.hpp` | Full/local and canonical/sync APIs in `runtime/machine.cpp` | [Snapshots](/developer/netplay/snapshots) |
 | Rollback | `include/f3rt/netplay.hpp` | `runtime/netplay.cpp` | [Rollback](/developer/netplay/rollback) |
 | Transport | `include/f3rt/netplay_transport.hpp` | `runtime/netplay_transport.cpp` | [Client transport](/developer/netplay/transport) |
+| Session lifecycle | `include/f3rt/netplay_session.hpp` | `runtime/netplay_session.cpp` | [Frontend integration](/developer/netplay/frontend-integration) |
 | Relay server | `netplay/server/main.go` | `server.go`, `room.go`, `protocol.go` | [Relay server](/developer/netplay/server) |
 | Tests | `runtime/check.cpp` | `tools/gameplay_regression.cpp` | [Testing](/developer/testing/) |
 
@@ -81,6 +82,7 @@ Each table lists one directory. The link on each file name opens the file on Git
 | [`README.md`](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Project identity, support scope, build and run commands, defaults, and credits. |
 | [`docs/developer/VALIDATION.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md) | Retained validation scenarios, measurements, and limits. |
 | [`docs/developer/DECISIONS.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) | Technical rationale and observed compatibility evidence. |
+| [`docs/developer/IMGUI-NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) | Overlay, shader ABI, canonical versus handoff and observed verification. |
 | [`.gitignore`](https://github.com/ansxor/f3-recomp/blob/main/.gitignore) | Ignores `build/`, `roms/`, `games/*/generated/`, `wt/`, `*.bin`, `*.wav` and captures. |
 
 ### recomp/ (ROM to C recompiler, Python)
@@ -129,6 +131,8 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/rom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/rom.cpp) | `RomSet::load` and `crc32`. Checks the size and CRC32 of every ROM chip. |
 | [`runtime/eeprom.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/eeprom.hpp) | 93C46 EEPROM (64 words of 16 bits) with busy timing, load and save. |
 | [`runtime/frontend.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp) | SDL3 program. Parses all command-line options, drives the frame loop, audio, window, and netplay. |
+| [`runtime/frontend_ui.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend_ui.cpp) | Dear ImGui overlay: preferences, slots, input capture, shader controls and netplay actions. |
+| [`runtime/frontend_settings.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend_settings.cpp) | Preference persistence and two independent keyboard/gamepad input profiles. |
 
 ### runtime/ video
 
@@ -164,7 +168,8 @@ These files form the `f3rt` library core and the frontend.
 | File | Purpose |
 | --- | --- |
 | [`runtime/netplay.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay.cpp) | SDL-independent rollback core (`Rollback`), `apply_inputs`, `machine_identity`. |
-| [`runtime/netplay_transport.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_transport.cpp) | Client UDP transport: handshake, input and checksum exchange, ping, finish verdict. |
+| [`runtime/netplay_transport.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_transport.cpp) | Protocol-v2 pairing, compressed canonical transfer/barrier, inputs/checksums, ping and finish verdict. |
+| [`runtime/netplay_session.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_session.cpp) | Local/lobby/preparation/handoff/versus/local-return lifecycle, including fresh rematches. |
 | [`runtime/capture_io.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp) | Helpers that dump frames, RAM and CPU state to files, and the `WavWriter`. |
 | [`runtime/replay.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/replay.cpp) | `f3rt-replay`: renders MAME captures with the FDP renderer, or replays a MAME audio trace to a WAV file. |
 | [`runtime/check.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp) | `f3rt-check`: unit checks for devices, timing, EEPROM, DUART, mixer and game-video descriptors. |
@@ -258,7 +263,7 @@ These files form the `f3rt` library core and the frontend.
 | --- | --- |
 | [`games/landmakrj/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/config.toml) | Land Maker Japan: ROM lanes, `all_aligned` discovery and the video hook list. This is the execution target. |
 | [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml) | Land Maker World: ROM lanes only. It is untested. |
-| [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | History of ABI versions and the snapshot contract. |
+| [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | ABI history and full/local versus canonical/sync snapshot contracts. |
 | [`docs/NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, determinism and measurements. |
 | [`docs/developer/VIDEO-HLE.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) | Game-data video addresses, layouts and parity evidence. |
 | [`docs/SOUND-DRIVER.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Sound driver evidence, trace format and native driver. |

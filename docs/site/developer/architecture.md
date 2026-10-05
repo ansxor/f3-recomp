@@ -128,7 +128,7 @@ flowchart TB
         HW["HLE: ROM sequencer and PCM worker (opt-in)"]
     end
     FE --> RF
-    NP -->|"run_frame, save_state, load_state"| RF
+    NP -->|"run_frame, full local snapshots, canonical sync CRC"| RF
     FE --> NP
     RF --> DISP
     DISP --> BND
@@ -353,7 +353,7 @@ The project uses these rules:
 
 - **Integer time.** Canonical simulation time is a count of 16 MHz cycles; main-side HLE command consumption is deterministic.
 - **Fixed scheduling (accurate).** Sound execution stops at the next sample time or sound-CPU instruction time. `Audio::advance` makes it independent of main-CPU block splits.
-- **Pointer-free state.** `Machine::save_state` writes packed `Canonical*` records (`runtime/state_io.hpp`) without host pointers or padding. HLE snapshots retain main-side mailbox/command state, not worker queues, voices, effects or PCM.
+- **Pointer-free state.** Packed `Canonical*` records (`runtime/state_io.hpp`) contain no host pointers or padding. Full local APIs retain expanded presentation; canonical sync APIs omit it but retain native rendering/trails and hardware state. HLE snapshots retain main-side mailbox/command state, not worker queues, voices, effects or PCM.
 - **Host time stays outside canonical state.** The frontend uses it to pace frames; transport uses it for timeouts and ping. The independent HLE worker is not rolled back. See the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
 - **Build identity.** Players must have matching source, generated code, compiler, and platform identity. The handshake rejects unequal hashes.
 
@@ -361,7 +361,7 @@ See [Snapshots and determinism](/developer/netplay/snapshots) for the full list.
 
 ## How netplay wraps the machine
 
-Netplay does not change the machine. It wraps it. `Rollback` (in `runtime/netplay.cpp`) owns the loop that calls `Machine::run_frame(true)`. It keeps a snapshot of the machine at the start of each frame in the window. If a late remote input differs from the guess, it loads the old snapshot and runs the frames again.
+`Session` (`runtime/netplay_session.cpp`) wraps local play, lobby, automatic ordinary-input host preparation, canonical snapshot transfer, both-loaded barrier and confirmed local return. Independent histories/EEPROM and presentation settings are supported. `Rollback` starts only after handoff, with match-relative history and host absolute origin; natural exit is detected at a confirmed boundary.
 
 `Transport` (in `runtime/netplay_transport.cpp`) sends the local input to the relay server by UDP. The Go relay server (`netplay/server/`) forwards packets between exactly two players. It does not run the game.
 
@@ -388,7 +388,7 @@ flowchart LR
     RA <-->|"save_state, load_state, run_frame"| MA
     RA -->|"render_audio"| OA
     MA --> PX
-    TA <-->|"UDP: inputs, checksums, ping"| RS
+    TA <-->|"UDP: handoff/barrier, inputs, checksums, ping"| RS
     RS <-->|"UDP"| TB
     TB <--> RB
     RB <--> MB
@@ -405,7 +405,7 @@ sequenceDiagram
     T->>R: receive(Input for frame f)
     Note over R: The guess for frame f was wrong. dirty = f
     R->>R: synchronize()
-    R->>M: load_state(snapshot of frame f)
+    R->>M: load_state(full local snapshot of frame f)
     loop frame f up to the current frame
         R->>M: apply_inputs, run_frame(true)
         R->>R: render audio into a per-frame buffer, save snapshot
@@ -428,7 +428,7 @@ The [Netplay overview](/developer/netplay/) and its sub-pages give the details.
 The ABI is the set of C declarations in `include/f3rt/cpu_abi.h`, plus the struct `f3_cpu`. The generated code and the runtime both depend on it.
 
 The **runtime owns the ABI**. The recompiler consumes it.
-The README requires a note in `docs/developer/ABI-CHANGES.md` for an ABI change.
+The README requires an ABI-change note in `docs/developer/ABI-CHANGES.md`.
 The current `F3RT_ABI_VERSION` is 3.
 The main recompiler adds this guard to generated C and `program.h`:
 

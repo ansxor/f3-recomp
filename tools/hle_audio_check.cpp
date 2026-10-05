@@ -66,6 +66,41 @@ int main(int argc, char **argv) try {
     if (argc != 2) throw std::runtime_error("usage: f3rt-hle-check ROM_DIRECTORY");
     const auto rom = f3rt::RomSet::load(argv[1], "landmakrj");
     using Kind = f3rt::hle::VoiceEvent::Kind;
+    for (bool host_ahead : {false, true}) {
+        Fixture host(rom), guest(rom);
+        for (uint64_t frame = 2; frame <= 22; ++frame)
+            (host_ahead ? host : guest).step(frame);
+        guest.load(host.save());
+        guest.packet({6, 0x8e, 1, 1, 39, 104}, 100);
+        const auto samples = guest.step(101);
+        require(samples.size() == 1600, "adopted clock stalled or burst HLE playback");
+        require(std::any_of(samples.begin(), samples.end(), [](int16_t v) { return v != 0; }),
+                "adopted state lost future HLE commands");
+        const auto before = guest.save();
+        guest.packet({6, 0x8e, 1, 1, 40, 104}, 101);
+        guest.step(102);
+        const auto starts = guest.count(Kind::Start);
+        const auto generated = guest.audio.generated_frames();
+        guest.audio.begin_rollback(101, 102);
+        guest.load(before);
+        guest.packet({6, 0x8e, 1, 1, 40, 104}, 101);
+        guest.step(102);
+        guest.audio.end_rollback();
+        require(guest.audio.available_frames() == 0 && guest.audio.generated_frames() == generated &&
+                guest.count(Kind::Start) == starts && guest.audio.hle_stats().reused == 1,
+                "rollback after clock adoption duplicated playback");
+    }
+    {
+        Fixture f(rom);
+        const auto before = f.save();
+        for (const auto &change : std::array<std::array<uint8_t, 2>, 4>{{{24, 255}, {25, 1}, {26, 2}, {27, 1}}}) {
+            auto invalid = before;
+            invalid[change[0]] = change[1];
+            bool rejected = false;
+            try { f.load(invalid); } catch (const std::invalid_argument &) { rejected = true; }
+            require(rejected && f.save() == before, "unsafe HLE mailbox state was accepted or mutated state");
+        }
+    }
     {
         Fixture f(rom);
         f.packet({3, 0x80, 2}, 1);
@@ -176,6 +211,6 @@ int main(int argc, char **argv) try {
         require(f.audio.hle_stats().reused == 0 && f.audio.hle_stats().cancelled == 1,
                 "equal-key packet incorrectly reused a different instrument");
     }
-    std::cout << "HLE checks passed: ROM sample/pitch/volume, worker isolation, canonical state, replay identity, cancellation, 1/2-frame leeway, instrument identity\n";
+    std::cout << "HLE checks passed: ROM sample/pitch/volume, worker isolation, canonical state, replay identity, cancellation, 1/2-frame leeway, instrument identity, clock adoption, mailbox validation\n";
     return 0;
 } catch (const std::exception &e) { std::cerr << "HLE check: " << e.what() << '\n'; return 1; }

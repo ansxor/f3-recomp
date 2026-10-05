@@ -126,7 +126,7 @@ These numbers come from `docs/developer/DECISIONS.md` in the repository. They de
 - 460,668 of those decoded entries lower to native C. The other decoded entries use `f3_fallback` when executed.
 - 568,753 more entries point to shared exception handlers (illegal, A-line, F-line).
 - The result is 17,534 native blocks (one per 64-byte page that holds code).
-- The strict native run of the game executes with zero fallback instructions. `docs/developer/VALIDATION.md` records the run details.
+- The strict native game run executes with zero fallback instructions; [developer evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) records the observed run, not a universal compatibility promise.
 
 These counts include data that looks like code. They do not prove that all those instructions can run. See [Limits and known issues](/developer/recompiler/limits-and-known-issues).
 

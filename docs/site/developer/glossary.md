@@ -40,7 +40,7 @@ See [Discovery](/developer/recompiler/discovery).
 
 ## C
 
-**canonical state** — The exact set of bytes that `Machine::save_state` writes. The structs are in `runtime/state_io.hpp` and have the prefix `Canonical`. They contain no pointers and no padding. See [Snapshots](/developer/netplay/snapshots).
+**canonical state** — Bytes from `Machine::save_sync_state` for handoff and network CRCs: hardware, native rendering/trails and audio simulation, without expanded presentation buffers. Full local `save_state` retains those buffers for rollback/slots/replay. See [Snapshots](/developer/netplay/snapshots).
 
 **Capstone** — A disassembler library. The Python recompiler uses version 5.0.9 to decode 68020 instructions. Some Capstone fields are wrong for some addressing modes. The code works around them. See [Code emission](/developer/recompiler/emission).
 
@@ -124,7 +124,7 @@ See [Game-data HLE](/developer/runtime/video/game-hle).
 
 **IACK (interrupt acknowledge)** — The bus cycle in which the CPU reads the interrupt vector. For the sound CPU, `Audio::irq_ack` supplies a vector from the DUART.
 
-**identity** — The struct `Identity` in `netplay_transport.hpp`. It has the ROM CRC32 values, the build hash, a settings word, the EEPROM CRC and the initial state CRC. Both players must send the same identity.
+**identity** — `Identity` in `netplay_transport.hpp`: seven ROM CRCs, build hash and canonical state format. EEPROM, initial local state, delay and presentation are not identity fields; the host supplies match state at handoff.
 
 **input word** — A 16-bit value (`InputWord`) with 11 active-high bits for one netplay player. Bits 0 to 3 are up, down, left, right. Bits 4 to 6 are buttons 1 to 3. Bit 7 is start, bit 8 coin, bit 9 service, bit 10 test.
 
@@ -215,7 +215,7 @@ See [Scene model](/developer/runtime/video/scene).
 
 **slot** — A netplay player position. It is 0 or 1 in the code and 1 or 2 on the command line.
 
-**snapshot** — A saved copy of the full machine state. `Machine::save_state` writes it. `Machine::load_state` restores it. A snapshot is valid only for the same build. See [Snapshots](/developer/netplay/snapshots).
+**snapshot** — A frame-boundary machine copy. Full local APIs retain presentation for rollback, slots and replay; canonical sync APIs omit expanded buffers for handoff and network checksums. See [Snapshots](/developer/netplay/snapshots).
 
 **sound driver** — The program that runs on the sound CPU. It reads commands from the mailbox and controls the ES5505. The project runs it natively (`SoundNative`) or in the interpreter (oracle). See [Sound-CPU compiler](/developer/recompiler/sound-compiler).
 

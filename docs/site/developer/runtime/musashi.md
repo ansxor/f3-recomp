@@ -83,6 +83,7 @@ flowchart LR
 ## Changes to the vendored source
 
 The project changed Musashi to match the MAME reference. `docs/developer/ABI-CHANGES.md` and `docs/developer/DECISIONS.md` list the changes. Keep these changes if you update Musashi.
+Canonical imports also require safe-field validation.
 
 ### Main CPU (EC020 and 020)
 

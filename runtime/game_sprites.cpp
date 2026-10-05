@@ -591,7 +591,8 @@ void GameSprites::save_state(StateWriter &writer) const {
 void GameSprites::load_state(StateReader &reader) {
     uint32_t c;
     reader.read(c);
-    staging_count_ = std::min(size_t(c), kMaxSprites);
+    if (c > kMaxSprites) throw std::invalid_argument("Snapshot staging sprite count out of range");
+    staging_count_ = c;
     for (size_t i = 0; i < kMaxSprites; ++i) {
         CanonicalSceneSprite ss;
         reader.read(ss);
@@ -602,7 +603,8 @@ void GameSprites::load_state(StateReader &reader) {
         s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
     }
     reader.read(c);
-    submitted_count_ = std::min(size_t(c), kMaxSprites);
+    if (c > kMaxSprites) throw std::invalid_argument("Snapshot submitted sprite count out of range");
+    submitted_count_ = c;
     for (size_t i = 0; i < kMaxSprites; ++i) {
         CanonicalSceneSprite ss;
         reader.read(ss);
@@ -613,7 +615,8 @@ void GameSprites::load_state(StateReader &reader) {
         s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
     }
     reader.read(c);
-    current_count_ = std::min(size_t(c), kMaxSprites);
+    if (c > kMaxSprites) throw std::invalid_argument("Snapshot current sprite count out of range");
+    current_count_ = c;
     for (size_t i = 0; i < kMaxSprites; ++i) {
         CanonicalSceneSprite ss;
         reader.read(ss);

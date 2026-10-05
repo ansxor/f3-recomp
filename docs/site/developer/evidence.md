@@ -33,6 +33,8 @@ pixel match, correlation metric, and listening observation answer different ques
 | [Profile experiments](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/BINSIZE-PROFILE.md) | Profiling and tier/slim measurements; experimental builds are not general-play support. |
 | [Sound driver](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Driver traces, mailbox format, native execution, and audio compatibility limits. |
 | [Netplay](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Protocol, supported frontend contract, and recorded network scenarios. |
+| [ImGui/netplay cutover](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) | Overlay/shader verification, canonical sync proofs and versus-only relay campaigns. |
+| [HLE audio](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md) | ROM-derived synthesis, adopted-state clock policy, non-rewound reconciliation and historical tolerances. |
 | [Historical user-document examples](/developer/user-doc-evidence) | Unique retained examples removed from user-facing pages, not current defaults or results. |
 
 ## Reproduce and interpret

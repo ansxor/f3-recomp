@@ -18,6 +18,13 @@ const (
 	RoomTerminated
 )
 
+const RetiredNonceLifetime = 120 * time.Second
+
+type retiredNonce struct {
+	Nonce uint64
+	Until time.Time
+}
+
 type ClientSlot struct {
 	Occupied    bool
 	Addr        *net.UDPAddr
@@ -26,19 +33,24 @@ type ClientSlot struct {
 	Finished    bool
 	FinishFrame uint32
 	FinishCRC   uint32
+	Host        bool
 }
 
 type Room struct {
 	mu sync.RWMutex
 
-	Name       string
-	State      RoomState
-	SessionID  uint64
-	Delay      uint8
-	Identity   Identity
-	Clients    [2]ClientSlot
-	FinalFrame uint32
-	FinalCRC   uint32
+	Name             string
+	State            RoomState
+	SessionID        uint64
+	Delay            uint8
+	Identity         Identity
+	Clients          [2]ClientSlot
+	FinalFrame       uint32
+	FinalCRC         uint32
+	SnapshotMeta     *SnapshotMetaPayload
+	BarrierReleased  bool
+	BarrierConfirmed [2]bool
+	Retired          [64]retiredNonce
 
 	CreatedAt  time.Time
 	LastActive time.Time
@@ -87,15 +99,22 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 	defer r.mu.Unlock()
 
 	now := time.Now()
-	r.LastActive = now
+	for i := range r.Retired {
+		if !r.Retired[i].Until.After(now) {
+			r.Retired[i] = retiredNonce{}
+		} else if r.Retired[i].Nonce == req.ClientNonce {
+			return JoinResult{RejectCode: RejectInvalidIdentity}
+		}
+	}
 
 	if r.State == RoomActive || r.State == RoomFinished {
 		for i := range 2 {
 			if r.Clients[i].Occupied && r.Clients[i].Nonce == req.ClientNonce {
-				// Revalidate identity and delay
-				if !req.Identity.Equal(r.Identity) || req.Delay != r.Delay {
+				// Retries must retain role and the host's negotiated delay.
+				if !req.Identity.Equal(r.Identity) || req.Host != r.Clients[i].Host || (req.Host && req.Delay != r.Delay) {
 					return JoinResult{RejectCode: RejectInvalidIdentity}
 				}
+				r.LastActive = now
 				r.Clients[i].Addr = addr
 				r.Clients[i].LastActive = now
 				peerSlot := 1 - i
@@ -123,6 +142,10 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 		r.Clients[0] = ClientSlot{}
 		r.Clients[1] = ClientSlot{}
 		r.SessionID = 0
+		r.SnapshotMeta = nil
+		r.BarrierReleased = false
+		r.BarrierConfirmed = [2]bool{}
+		r.FinalFrame, r.FinalCRC = 0, 0
 	}
 
 	// In RoomWaiting:
@@ -132,6 +155,10 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 			occupiedCount++
 			// Check if client is retransmitting JoinReq while waiting
 			if r.Clients[i].Nonce == req.ClientNonce {
+				if !req.Identity.Equal(r.Identity) || req.Host != r.Clients[i].Host || (req.Host && req.Delay != r.Delay) {
+					return JoinResult{RejectCode: RejectInvalidIdentity}
+				}
+				r.LastActive = now
 				r.Clients[i].Addr = addr
 				r.Clients[i].LastActive = now
 				return JoinResult{
@@ -147,11 +174,23 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 	if occupiedCount >= 2 {
 		return JoinResult{RejectCode: RejectRoomFull}
 	}
+	// Reserve two tombstone positions for the occupants of this session.
+	retiredCount := 0
+	for _, retired := range r.Retired {
+		if retired.Until.After(now) {
+			retiredCount++
+		}
+	}
+	if retiredCount >= len(r.Retired)-2 {
+		return JoinResult{RejectCode: RejectRateLimited}
+	}
 
-	// If room has 1 client already, validate identity and delay
+	// Pair only compatible builds with complementary roles.
 	if occupiedCount == 1 {
-		if req.Delay != r.Delay {
-			return JoinResult{RejectCode: RejectDelayMismatch}
+		for i := range 2 {
+			if r.Clients[i].Occupied && r.Clients[i].Host == req.Host {
+				return JoinResult{RejectCode: RejectRoleConflict}
+			}
 		}
 		if req.Identity.RomCRC != r.Identity.RomCRC {
 			return JoinResult{RejectCode: RejectRomCrcMismatch}
@@ -159,14 +198,8 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 		if req.Identity.BuildHash != r.Identity.BuildHash {
 			return JoinResult{RejectCode: RejectBuildHashMismatch}
 		}
-		if req.Identity.Settings != r.Identity.Settings {
-			return JoinResult{RejectCode: RejectSettingsMismatch}
-		}
-		if req.Identity.EepromCRC != r.Identity.EepromCRC {
-			return JoinResult{RejectCode: RejectEepromCrcMismatch}
-		}
-		if req.Identity.InitialCRC != r.Identity.InitialCRC {
-			return JoinResult{RejectCode: RejectInitialCrcMismatch}
+		if req.Identity.StateFormat != r.Identity.StateFormat {
+			return JoinResult{RejectCode: RejectStateFormatMismatch}
 		}
 	}
 
@@ -195,17 +228,25 @@ func (r *Room) ProcessJoin(addr *net.UDPAddr, req JoinReqPayload) JoinResult {
 	}
 
 	// Assign slot
+	r.LastActive = now
 	r.Clients[targetSlot] = ClientSlot{
 		Occupied:   true,
 		Addr:       addr,
 		Nonce:      req.ClientNonce,
 		LastActive: now,
+		Host:       req.Host,
 	}
 
+	if req.Host {
+		r.Delay = req.Delay
+	}
 	if occupiedCount == 0 {
+		r.CreatedAt = now
 		// First player in room sets the room baseline
 		r.Identity = req.Identity
-		r.Delay = req.Delay
+		if req.Host {
+			r.Delay = req.Delay
+		}
 		return JoinResult{
 			RejectCode:   0,
 			AssignedSlot: uint8(targetSlot),
@@ -250,7 +291,7 @@ func (r *Room) GetPeer(slot uint8, sessionID uint64, addr *net.UDPAddr) (*net.UD
 	if slot > 1 {
 		return nil, errors.New("invalid slot index")
 	}
-	if r.Clients[slot].Addr == nil || r.Clients[slot].Addr.String() != addr.String() {
+	if !r.Clients[slot].Occupied || r.Clients[slot].Addr == nil || r.Clients[slot].Addr.String() != addr.String() {
 		return nil, errors.New("sender endpoint mismatch for slot (anti-spoofing)")
 	}
 
@@ -275,7 +316,7 @@ func (r *Room) MarkFinish(slot uint8, addr *net.UDPAddr, frame uint32, crc uint3
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if slot > 1 {
+	if slot > 1 || !r.BarrierReleased || !r.Clients[slot].Occupied {
 		return false, 0, 0, nil, nil
 	}
 	// Anti-spoofing: sender endpoint must match registered slot endpoint
@@ -359,13 +400,19 @@ func (r *Room) HandleLeave(slot uint8, sessionID uint64, addr *net.UDPAddr, leav
 	}
 
 	r.Clients[slot].Occupied = false
+	r.retireNonce(r.Clients[slot].Nonce, time.Now())
 
 	if r.State == RoomFinished && leaveCode == LeaveNormalFinished {
 		// Graceful exit after successful completion does NOT terminate the match or the other peer!
+		if !r.Clients[0].Occupied && !r.Clients[1].Occupied {
+			r.State = RoomTerminated
+			return nil, true
+		}
 		return nil, false
 	}
 
 	r.State = RoomTerminated
+	r.retireNonce(r.Clients[1-slot].Nonce, time.Now())
 	peerSlot := 1 - slot
 	if r.Clients[peerSlot].Occupied && r.Clients[peerSlot].Addr != nil {
 		return r.Clients[peerSlot].Addr, true
@@ -382,12 +429,12 @@ func (r *Room) IsFinished() (bool, uint32, uint32) {
 	return false, 0, 0
 }
 
-// CheckTimeouts checks if any client in an active room has timed out
+// CheckTimeouts retires silent active or completed sessions, including lost final Leave packets.
 func (r *Room) CheckTimeouts(clientTimeout time.Duration) (timedOutSlot int, notifyAddr *net.UDPAddr) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.State != RoomActive {
+	if r.State != RoomActive && r.State != RoomFinished {
 		return -1, nil
 	}
 
@@ -396,6 +443,8 @@ func (r *Room) CheckTimeouts(clientTimeout time.Duration) (timedOutSlot int, not
 		if r.Clients[i].Occupied {
 			if now.Sub(r.Clients[i].LastActive) > clientTimeout {
 				r.State = RoomTerminated
+				r.retireNonce(r.Clients[0].Nonce, now)
+				r.retireNonce(r.Clients[1].Nonce, now)
 				peerSlot := 1 - i
 				if r.Clients[peerSlot].Occupied {
 					return i, r.Clients[peerSlot].Addr
@@ -405,4 +454,145 @@ func (r *Room) CheckTimeouts(clientTimeout time.Duration) (timedOutSlot int, not
 		}
 	}
 	return -1, nil
+}
+
+// RelaySnapshot validates authority and bounds before forwarding. Identical
+// metadata retries are accepted; a transfer cannot be replaced within a session.
+func (r *Room) RelaySnapshot(slot uint8, packetType uint8, payload []byte) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.State != RoomActive || slot > 1 || !r.Clients[slot].Occupied {
+		return false
+	}
+	host := r.Clients[slot].Host
+	switch packetType {
+	case PktSnapshotMeta:
+		if !host {
+			return false
+		}
+		meta, err := UnmarshalSnapshotMetaPayload(payload)
+		if err != nil || (r.SnapshotMeta != nil && *r.SnapshotMeta != meta) {
+			return false
+		}
+		if r.SnapshotMeta == nil {
+			r.SnapshotMeta = &meta
+		}
+		return true
+	case PktSnapshotChunk, PktSnapshotAck:
+		if (packetType == PktSnapshotChunk) != host || r.SnapshotMeta == nil || len(payload) < 8 {
+			return false
+		}
+		transferID := binary.BigEndian.Uint32(payload[0:4])
+		index := binary.BigEndian.Uint32(payload[4:8])
+		meta := r.SnapshotMeta
+		count := (meta.CompressedSize + SnapshotChunkSize - 1) / SnapshotChunkSize
+		if transferID != meta.TransferID || index >= count {
+			return false
+		}
+		if packetType == PktSnapshotAck {
+			return len(payload) == 8
+		}
+		size := min(SnapshotChunkSize, meta.CompressedSize-index*SnapshotChunkSize)
+		return len(payload) == 8+int(size)
+	case PktSnapshotLoaded:
+		if host || r.SnapshotMeta == nil {
+			return false
+		}
+		loaded, err := UnmarshalSnapshotReceiptPayload(payload)
+		if err != nil || loaded.TransferID != r.SnapshotMeta.TransferID || loaded.RawCRC != r.SnapshotMeta.RawCRC {
+			return false
+		}
+		r.BarrierReleased = true
+		return true
+	}
+	return false
+}
+
+// BarrierRetries returns only peers whose game traffic has not yet proved they
+// received start. Heartbeats also run before start and cannot acknowledge it.
+func (r *Room) BarrierRetries() (uint64, SnapshotReceiptPayload, [2]*net.UDPAddr) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var addresses [2]*net.UDPAddr
+	var receipt SnapshotReceiptPayload
+	if r.BarrierReleased && r.SnapshotMeta != nil && r.State == RoomActive {
+		receipt = SnapshotReceiptPayload{TransferID: r.SnapshotMeta.TransferID, RawCRC: r.SnapshotMeta.RawCRC}
+		for i := range 2 {
+			if r.Clients[i].Occupied && !r.BarrierConfirmed[i] {
+				addresses[i] = r.Clients[i].Addr
+			}
+		}
+	}
+	return r.SessionID, receipt, addresses
+}
+
+func (r *Room) AcceptGameData(slot uint8) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.BarrierReleased || slot > 1 || !r.Clients[slot].Occupied {
+		return false
+	}
+	r.BarrierConfirmed[slot] = true
+	return true
+}
+
+// CancelWaiting authenticates session-zero cancellation by nonce and endpoint.
+func (r *Room) CancelWaiting(addr *net.UDPAddr, nonce uint64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.State != RoomWaiting {
+		return false
+	}
+	for i := range 2 {
+		client := &r.Clients[i]
+		if client.Occupied && client.Nonce == nonce && client.Addr != nil && client.Addr.String() == addr.String() {
+			r.retireNonce(client.Nonce, time.Now())
+			*client = ClientSlot{}
+			r.Identity = Identity{}
+			r.Delay = 0
+			r.LastActive = time.Now()
+			return true
+		}
+	}
+	return false
+}
+
+// Caller holds r.mu. Capacity is reserved before admitting new occupants.
+func (r *Room) retireNonce(nonce uint64, now time.Time) {
+	for i := range r.Retired {
+		entry := &r.Retired[i]
+		if entry.Nonce == nonce && entry.Until.After(now) {
+			return
+		}
+	}
+	for i := range r.Retired {
+		if !r.Retired[i].Until.After(now) {
+			r.Retired[i] = retiredNonce{Nonce: nonce, Until: now.Add(RetiredNonceLifetime)}
+			return
+		}
+	}
+}
+
+// Preserve bounded tombstones beyond normal room expiry.
+func (r *Room) CanRemove(now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	eligible := (r.State == RoomWaiting && now.Sub(r.CreatedAt) > WaitingRoomTimeout) ||
+		((r.State == RoomFinished || r.State == RoomTerminated) && now.Sub(r.LastActive) > FinishedRoomTimeout)
+	if !eligible {
+		return false
+	}
+	for i := range 2 {
+		if r.Clients[i].Occupied {
+			r.retireNonce(r.Clients[i].Nonce, now)
+			r.Clients[i].Occupied = false
+			r.State = RoomTerminated
+		}
+	}
+	for _, entry := range r.Retired {
+		if entry.Until.After(now) {
+			return false
+		}
+	}
+	return true
 }

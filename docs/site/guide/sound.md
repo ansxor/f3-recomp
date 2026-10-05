@@ -2,6 +2,13 @@
 
 This page explains sound generation and driver selection. It shows how to record WAV files and sound traces.
 
+## Host audio backend and volume
+
+Normal play defaults to `--audio-backend accurate`, using the native sound driver and emulated chips. Optional `--audio-backend hle` uses separate host synthesis/reconciliation; it is not an accurate-PCM-equivalent implementation. F1 exposes the available audio choices. Respect restart-required controls and use **Save preferences** explicitly; CLI values override saved settings. See [HLE design and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+
+`--volume 0..100` (default 100%) and F1 volume affect host output only, not emulated gain, snapshots or network checksums. Accurate netplay audio is confirmed-only; HLE reconciliation is non-rewound and must not be described as replaying accurate PCM. Driver/oracle diagnostics below describe the accurate simulation path.
+
+
 ## How the sound works
 
 The F3 board has a separate sound computer. It has these parts:
@@ -44,6 +51,9 @@ executing the sound CPU or ES5505/ES5510 programs. Do not combine it with
 
 Accurate (emulated) audio remains the default. In netplay, both peers must
 select the same backend; HLE audio is not rewound during rollback.
+Explicit `--audio-backend` selections override the saved backend. An explicit
+`--sound-driver native|oracle` selects accurate audio over a saved HLE preference;
+explicit HLE together with an explicit sound driver remains an error.
 See [HLE evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
 
 ## Choose the sound driver
@@ -58,7 +68,7 @@ With the accurate backend, use `--sound-driver native` or `--sound-driver oracle
 | The program has no generated sound code and you give `--sound-driver native` | Error: `Native sound requires a generated sound program (F3_ROM_DIR)` |
 | You give another value | Error: `--sound-driver must be oracle or native` |
 
-Finite seeded runs compare native sound bus traces and WAV output with the oracle. These checks do not establish correctness for every reachable game state. See [Developer evidence](/developer/evidence) and the [sound-driver document](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) for coverage and limits.
+Finite seeded runs compare native sound bus traces and WAV output with the oracle. These checks do not establish correctness for every reachable game state. See [Developer evidence](/developer/evidence) and the [sound-driver document](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/SOUND-DRIVER.md) for coverage and limits.
 
 ::: info Why two drivers
 Use the oracle to investigate a suspected native sound CPU bug. Use the native driver for normal play and netplay. Both execute the same ROM and feed the same emulated sound devices.
@@ -149,7 +159,7 @@ build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
 
 A packet is a hex string. The first byte is the total packet size, including the size byte and the opcode byte. For example, `038001` has size 3, opcode `0x80` and parameter `0x01`. The program adds no hidden setup packets.
 
-The default of 900 boot frames is after the output-gain writes of the game. A smaller number can leave the sound attenuated. For packet meanings and timing, read the [sound documentation](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md).
+The default of 900 boot frames is after the output-gain writes of the game. A smaller number can leave the sound attenuated. For packet meanings and timing, read the [sound documentation](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/SOUND-DRIVER.md).
 
 ## Next steps
 

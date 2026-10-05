@@ -2,19 +2,15 @@
 """Automated real-server F3 netplay oracle and snapshot proof test runner.
 
 Executes and verifies:
-1. Snapshot save/load proof & performance benchmark across seeds, drivers (oracle & native),
-   cold boot (N=0) and mid-game frames, with varied K depths (1, 7, 16, 31, 97).
-2. Two-client real-server rollback netplay vs. reference machine (>=20,000 frames per seed),
-   verifying non-empty identical state CRC, framebuffer CRC, and confirmed audio PCM CRC/count.
-3. Impaired network simulation (80ms RTT, 20ms jitter, 3% loss, 3% reorder, >=20,000 frames/seed),
-   verifying rollbacks and non-empty matching state CRC and audio CRC.
-4. Edge cases:
-   - Distinct late-input scenario (120ms withheld input at frame 1500), asserting actual
-     rollbacks/max_depth > 0, and comparing against reference state and audio PCM/count.
-   - Long stall scenario (1000ms complete pause at frame 1500), asserting peer frontier stalls
-     and recovery to matching state and audio PCM/count.
-   - Strict build hash handshake mismatch rejection with explicit error code 5.
-   - Clean peer disconnect detection triggered after observed midgame progress (confirmed >= 800).
+1. Full rollback snapshots and canonical host snapshots across sound drivers,
+   boot/gameplay boundaries, different presentation settings, and replay depths.
+2. Divergent solo histories and EEPROMs converging through the real relay's host
+   snapshot barrier; both peers' state, native framebuffer, and confirmed PCM
+   agree with an independent reference loaded from that exact handoff.
+3. Baseline and impaired (80ms RTT, 20ms jitter, 3% loss/reorder) campaigns,
+   natural versus exits, local advancement, and fresh snapshots in the same room.
+4. Late inputs, bounded-window stalls, presentation/host-slot independence,
+   explicit incompatible-build rejection, and local recovery after peer death.
 """
 from __future__ import annotations
 
@@ -334,374 +330,173 @@ def test_snapshot_proof(oracle_bin: Path, rom_dir: Optional[Path], seeds: List[i
     return all_ok
 
 
-def test_baseline_matches(oracle_bin: Path, server_bin: Path, rom_dir: Optional[Path],
-                          seeds: List[int], frames: int, delay: int, window: int,
-                          sound_driver: str, capture_dir: Optional[Path],
-                          log_dir: Path) -> bool:
-    print("\n========================================================")
-    print(f"TEST SUITE: Real-Server 2-Client Netplay vs. Reference ({frames} frames/seed)")
-    print("========================================================")
+def records(stdout: str, prefix: str) -> List[Dict[str, str]]:
+    return [dict(word.split("=", 1) for word in line.split()[1:] if "=" in word)
+            for line in stdout.splitlines() if line.startswith(prefix + " ")]
+
+
+def verify_campaign(oracle_bin: Path, rom_dir: Optional[Path], seed: int, frames: int,
+                    driver: str, out1: str, out2: str, host_dump: Path,
+                    log_dir: Path, label: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Replay each actual host handoff independently, never a cold-boot substitute."""
+    clients = [parse_oracle_output(out1), parse_oracle_output(out2)]
+    first, second = clients
+    for key in ("frames", "final_crc", "frame_crc", "audio_crc", "audio_samples",
+                "matches", "natural_ends", "local_returns"):
+        assert key in first and first[key] == second.get(key), f"{label}: peer {key} mismatch"
+    assert int(first["frames"]) == frames, f"{label}: wrong aggregate frame count"
+    assert first["pre_crc"] != second["pre_crc"], f"{label}: prehistories did not diverge"
+    assert first["pre_eeprom_crc"] != second["pre_eeprom_crc"], f"{label}: EEPROMs did not diverge"
+    assert all(c["fallback"] == "0" for c in clients), f"{label}: native fallback"
+    matches = [records(out1, "MATCH"), records(out2, "MATCH")]
+    handoffs = [records(out1, "[HANDOFF]"), records(out2, "[HANDOFF]")]
+    returns = [records(out1, "[LOCAL_RETURN]"), records(out2, "[LOCAL_RETURN]")]
+    count = int(first["matches"])
+    assert count == int(first["local_returns"]), f"{label}: session did not return locally"
+    assert all(len(rows) == count for rows in matches + handoffs + returns), f"{label}: missing lifecycle transitions"
+    assert sum(int(m["frames"]) for m in matches[0]) == frames
+    if frames >= 20000:
+        assert int(first["natural_ends"]) > 0, f"{label}: no natural match exit exercised"
+    previous_end = 0
+    for index, (m1, m2, h1, h2, r1, r2) in enumerate(zip(*matches, *handoffs, *returns)):
+        assert m1["match"] == m2["match"] == str(index)
+        assert m1["natural_end"] == m2["natural_end"]
+        assert h1["initial_crc"] == h2["initial_crc"], f"{label}: adoption CRC mismatch"
+        assert h1["origin"] == h2["origin"] == m1["origin"] == m2["origin"]
+        assert int(h1["origin"]) > previous_end, f"{label}: stale rematch snapshot"
+        assert all(int(h["flags"]) & 3 == 3 and int(h["flags"]) & 0xc0
+                   and h["match_kind"] == "1" for h in (h1, h2))
+        assert h1["delay"] == h2["delay"] == m1["delay"] == m2["delay"]
+        assert r1["crc"] != r2["crc"], f"{label}: local post-match histories stayed locked"
+        assert r1["fallback"] == r2["fallback"] == "0"
+        previous_end = int(h1["origin"]) + int(m1["frames"])
+        cmd = [str(oracle_bin), "--mode", "reference", "--seed", str(seed),
+               "--frames", m1["frames"], "--delay", m1["delay"], "--sound-driver", driver,
+               "--match-index", str(index), "--initial-state", str(host_dump / f"match_{index}" / "handoff.bin")]
+        if rom_dir:
+            cmd += ["--rom-dir", str(rom_dir)]
+        reference = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        (log_dir / f"reference_{label}_m{index}.log").write_text(reference.stdout + "\nSTDERR:\n" + reference.stderr)
+        assert reference.returncode == 0, f"{label}: reference failed: {reference.stderr}"
+        assert_parity_match(m1, m2, parse_oracle_output(reference.stdout), int(m1["frames"]), f"{label}/match{index}")
+    print(f"PASS {label}: frames={frames} matches={count} natural_ends={first['natural_ends']} "
+          f"state={first['final_crc']} audio={first['audio_crc']} samples={first['audio_samples']} "
+          f"rollbacks={first['rollbacks']}/{second['rollbacks']} depth={first['max_depth']}/{second['max_depth']}")
+    return first, second
+
+
+def campaign_pair(oracle_bin: Path, server_bin: Path, rom_dir: Optional[Path],
+                  seed: int, frames: int, delay: int, window: int, driver: str,
+                  capture_dir: Optional[Path], log_dir: Path, label: str,
+                  impaired: bool = False, extras1=None, extras2=None, host_player: int = 1):
+    port = find_free_udp_port()
+    server = GoServerProcess(server_bin, port, rtt="80ms" if impaired else "",
+                             jitter="20ms" if impaired else "", loss=0.03 if impaired else 0,
+                             reorder=0.03 if impaired else 0, seed=seed,
+                             log_path=log_dir / f"server_{label}.log")
+    server.start()
+    dumps = [(capture_dir or log_dir) / label / f"c{i}" for i in (1, 2)]
+    try:
+        rc1, out1, err1, rc2, out2, err2 = run_match_pair(
+            oracle_bin, f"127.0.0.1:{port}", label[:30], seed, frames, delay, window,
+            driver, rom_dir, c1_dump=dumps[0], c2_dump=dumps[1],
+            c1_extra_args=extras1, c2_extra_args=extras2, timeout_sec=max(180, frames / 30 + 120))
+        (log_dir / f"c1_{label}.log").write_text(out1 + "\nSTDERR:\n" + err1)
+        (log_dir / f"c2_{label}.log").write_text(out2 + "\nSTDERR:\n" + err2)
+        assert rc1 == rc2 == 0, f"{label}: clients {rc1}/{rc2}\n{err1}\n{err2}"
+        c1, c2 = verify_campaign(oracle_bin, rom_dir, seed, frames, driver, out1, out2,
+                                 dumps[host_player - 1], log_dir, label)
+        if impaired:
+            assert int(c1["rollbacks"]) + int(c2["rollbacks"]) > 0, "Impairment induced no corrections"
+        return c1, c2, out1, out2
+    finally:
+        server.stop()
+
+
+def test_campaigns(oracle_bin: Path, server_bin: Path, rom_dir: Optional[Path],
+                   seeds: List[int], frames: int, delay: int, window: int,
+                   sound_driver: str, capture_dir: Optional[Path], log_dir: Path,
+                   impaired: bool = False) -> bool:
+    label = "impaired" if impaired else "baseline"
+    print(f"\nTEST SUITE: {label}: divergent solo/EEPROM -> host handoff -> versus -> local/rematch")
+    if impaired:
+        print("Relay impairment: 80ms RTT, 20ms jitter, 3% loss, 3% reorder, including snapshot chunks")
     all_ok = True
-    active_driver = "native" if sound_driver == "all" else sound_driver
-
     for seed in seeds:
-        print(f"\n--- Baseline Match: seed={seed} frames={frames} delay={delay} window={window} driver={active_driver} ---")
-        port = find_free_udp_port()
-        room = f"baseline_s{seed}_{int(time.time())}"
-        server_log = log_dir / f"server_baseline_s{seed}.log"
-        server = GoServerProcess(server_bin, port, log_path=server_log)
-        server.start()
-
         try:
-            # 1. Reference Machine Run
-            ref_dump = (capture_dir / f"ref_seed_{seed}") if capture_dir else None
-            ref_cmd = [
-                str(oracle_bin), "--mode", "reference",
-                "--seed", str(seed), "--frames", str(frames),
-                "--delay", str(delay), "--sound-driver", active_driver,
-            ]
-            if rom_dir: ref_cmd += ["--rom-dir", str(rom_dir)]
-            if ref_dump:
-                ref_dump.mkdir(parents=True, exist_ok=True)
-                ref_cmd += ["--dump-dir", str(ref_dump), "--surface", str(ref_dump / "surface.bmp")]
-
-            t_ref0 = time.monotonic()
-            ref_proc = subprocess.run(ref_cmd, capture_output=True, text=True)
-            ref_elapsed = time.monotonic() - t_ref0
-            print(ref_proc.stdout)
-
-            if ref_proc.returncode != 0:
-                print(f"FAILED: reference run for seed {seed} failed with code {ref_proc.returncode}")
-                if ref_proc.stderr: print("STDERR:", ref_proc.stderr)
-                all_ok = False
-                continue
-
-            ref_parsed = parse_oracle_output(ref_proc.stdout)
-
-            # 2. Real Two-Client Match
-            c1_dump = (capture_dir / f"c1_seed_{seed}") if capture_dir else None
-            c2_dump = (capture_dir / f"c2_seed_{seed}") if capture_dir else None
-
-            t_match0 = time.monotonic()
-            rc1, out1, err1, rc2, out2, err2 = run_match_pair(
-                oracle_bin, f"127.0.0.1:{port}", room, seed, frames, delay, window,
-                active_driver, rom_dir, c1_dump=c1_dump, c2_dump=c2_dump
-            )
-            match_elapsed = time.monotonic() - t_match0
-
-            (log_dir / f"c1_baseline_s{seed}.log").write_text(out1 + "\nSTDERR:\n" + err1)
-            (log_dir / f"c2_baseline_s{seed}.log").write_text(out2 + "\nSTDERR:\n" + err2)
-
-            if rc1 != 0 or rc2 != 0:
-                print(f"FAILED: client exit error: rc1={rc1} rc2={rc2}")
-                if err1: print("C1 STDERR:", err1)
-                if err2: print("C2 STDERR:", err2)
-                all_ok = False
-                continue
-
-            c1_parsed = parse_oracle_output(out1)
-            c2_parsed = parse_oracle_output(out2)
-
-            try:
-                assert_parity_match(c1_parsed, c2_parsed, ref_parsed, frames, f"seed={seed}")
-                print(f"EXACT PARITY MATCH: seed={seed} final_crc=0x{c1_parsed.get('final_crc')} "
-                      f"frame_crc=0x{c1_parsed.get('frame_crc')} audio_crc=0x{c1_parsed.get('audio_crc')} "
-                      f"samples={c1_parsed.get('audio_samples')} rollbacks(c1={c1_parsed.get('rollbacks')}, "
-                      f"c2={c2_parsed.get('rollbacks')}) max_depth={c1_parsed.get('max_depth')} "
-                      f"vs_status={c1_parsed.get('versus_status')} elapsed={match_elapsed:.1f}s")
-            except AssertionError as ae:
-                print(f"FAILED PARITY: {ae}")
-                all_ok = False
-
-        finally:
-            server.stop()
-
-    return all_ok
-
-
-def test_impaired_network(oracle_bin: Path, server_bin: Path, rom_dir: Optional[Path],
-                          seeds: List[int], frames: int, delay: int, window: int,
-                          sound_driver: str, capture_dir: Optional[Path],
-                          log_dir: Path) -> bool:
-    print("\n========================================================")
-    print(f"TEST SUITE: Impaired Network (80ms RTT, 20ms jitter, 3% loss, 3% reorder)")
-    print(f"  Frames: {frames} per seed | All seeds: {seeds}")
-    print("========================================================")
-    all_ok = True
-    active_driver = "native" if sound_driver == "all" else sound_driver
-
-    for seed in seeds:
-        print(f"\n--- Impaired Run: seed={seed} frames={frames} delay={delay} window={window} ---")
-        port = find_free_udp_port()
-        room = f"impaired_s{seed}_{int(time.time())}"
-        server_log = log_dir / f"server_impaired_s{seed}.log"
-        # Real Go server configured with mandatory impairment
-        server = GoServerProcess(server_bin, port, rtt="80ms", jitter="20ms",
-                                 loss=0.03, reorder=0.03, seed=seed, log_path=server_log)
-        server.start()
-
-        try:
-            # 1. Reference Run for ground truth CRC
-            ref_cmd = [
-                str(oracle_bin), "--mode", "reference",
-                "--seed", str(seed), "--frames", str(frames),
-                "--delay", str(delay), "--sound-driver", active_driver,
-            ]
-            if rom_dir: ref_cmd += ["--rom-dir", str(rom_dir)]
-            ref_proc = subprocess.run(ref_cmd, capture_output=True, text=True)
-            if ref_proc.returncode != 0:
-                print("FAILED: reference run failed:", ref_proc.stderr)
-                all_ok = False
-                continue
-
-            ref_parsed = parse_oracle_output(ref_proc.stdout)
-
-            # 2. Impaired Clients Run
-            t_match0 = time.monotonic()
-            rc1, out1, err1, rc2, out2, err2 = run_match_pair(
-                oracle_bin, f"127.0.0.1:{port}", room, seed, frames, delay, window,
-                active_driver, rom_dir, timeout_sec=500.0
-            )
-            match_elapsed = time.monotonic() - t_match0
-
-            (log_dir / f"c1_impaired_s{seed}.log").write_text(out1 + "\nSTDERR:\n" + err1)
-            (log_dir / f"c2_impaired_s{seed}.log").write_text(out2 + "\nSTDERR:\n" + err2)
-
-            if rc1 != 0 or rc2 != 0:
-                print(f"FAILED: impaired clients exited with error: rc1={rc1} rc2={rc2}")
-                if err1: print("C1 STDERR:", err1)
-                if err2: print("C2 STDERR:", err2)
-                all_ok = False
-                continue
-
-            c1_parsed = parse_oracle_output(out1)
-            c2_parsed = parse_oracle_output(out2)
-
-            # Assert rollbacks actually occurred under network impairment
-            r1 = int(c1_parsed.get("rollbacks", 0))
-            r2 = int(c2_parsed.get("rollbacks", 0))
-            if r1 == 0 and r2 == 0:
-                print("FAILED: Impairment did not induce rollbacks (r1=0, r2=0)")
-                all_ok = False
-                continue
-
-            try:
-                assert_parity_match(c1_parsed, c2_parsed, ref_parsed, frames, f"impaired seed={seed}")
-                print(f"PASS IMPAIRMENT: seed={seed} final_crc=0x{c1_parsed.get('final_crc')} "
-                      f"audio_crc=0x{c1_parsed.get('audio_crc')} rollbacks(c1={r1}, c2={r2}) "
-                      f"max_depth={c1_parsed.get('max_depth')} rtt_ms={c1_parsed.get('rtt_ms')} "
-                      f"elapsed={match_elapsed:.1f}s")
-            except AssertionError as ae:
-                print(f"FAILED IMPAIRMENT PARITY: {ae}")
-                all_ok = False
-
-        finally:
-            server.stop()
-
+            campaign_pair(oracle_bin, server_bin, rom_dir, seed, frames, delay, window,
+                          "native" if sound_driver == "all" else sound_driver,
+                          capture_dir, log_dir, f"{label}_s{seed}", impaired)
+        except (AssertionError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"FAILED {label} seed={seed}: {error}")
+            all_ok = False
     return all_ok
 
 
 def test_edge_cases(oracle_bin: Path, server_bin: Path, rom_dir: Optional[Path],
                     log_dir: Path) -> bool:
-    print("\n========================================================")
-    print("TEST SUITE: Edge Cases (Late Input, Long Stall, Mismatch, Disconnect)")
-    print("========================================================")
+    print("\nTEST SUITE: late inputs, long stalls, presentation/host-slot independence, rejection, disconnect")
     all_ok = True
-
-    # Case A1: Distinct Late-Input Scenario (120ms withheld inputs at frame 1500)
-    print("\n--- Edge Case A1: Late Input (120ms withheld inputs at frame 1500) ---")
-    port = find_free_udp_port()
-    room = f"late_input_case_{int(time.time())}"
-    server = GoServerProcess(server_bin, port, log_path=log_dir / "server_late_input.log")
-    server.start()
-    try:
-        # Reference run for 3000 frames
-        ref_cmd = [
-            str(oracle_bin), "--mode", "reference", "--seed", "12345",
-            "--frames", "3000", "--delay", "2"
-        ]
-        if rom_dir: ref_cmd += ["--rom-dir", str(rom_dir)]
-        ref_proc = subprocess.run(ref_cmd, capture_output=True, text=True)
-        ref_parsed = parse_oracle_output(ref_proc.stdout)
-
-        # Client 1 withholds inputs for 120ms at frame 1500, forcing peer to rollback and resimulate
-        rc1, out1, err1, rc2, out2, err2 = run_match_pair(
-            oracle_bin, f"127.0.0.1:{port}", room, seed=12345, frames=3000,
-            delay=2, window=16, sound_driver="native", rom_dir=rom_dir,
-            c1_extra_args=["--withhold-input-at", "1500", "--withhold-input-ms", "120"],
-            c2_extra_args=["--observe-event-at", "1500"], timeout_sec=60.0
-        )
-        (log_dir / "c1_late_input.log").write_text(out1 + "\nSTDERR:\n" + err1)
-        (log_dir / "c2_late_input.log").write_text(out2 + "\nSTDERR:\n" + err2)
-
-        if rc1 != 0 or rc2 != 0:
-            print(f"FAILED LATE INPUT: Client exit error: rc1={rc1} rc2={rc2}\n{err1}\n{err2}")
-            all_ok = False
-        else:
-            c1_parsed = parse_oracle_output(out1)
-            c2_parsed = parse_oracle_output(out2)
-            c1_injected = ("[WITHHOLD_BEGIN]" in out1) and ("[WITHHOLD_END]" in out1)
-            c2_event_rollbacks = int(c2_parsed.get("event_delta_rollbacks", 0))
-            c2_event_depth = int(c2_parsed.get("event_max_depth", 0))
-
-            if not c1_injected:
-                print("FAILED LATE INPUT: Client 1 withhold injection did not execute")
-                all_ok = False
-            elif c2_event_rollbacks == 0 or c2_event_depth == 0 or float(c2_parsed.get("event_stall_ms", 0)) < 20:
-                print(f"FAILED LATE INPUT: No correction/full-window stall attributable to withheld input: {c2_parsed}")
-                all_ok = False
-            else:
-                try:
-                    assert_parity_match(c1_parsed, c2_parsed, ref_parsed, 3000, "late_input")
-                    print(f"PASS LATE INPUT: Peer successfully rolled back (delta_rollbacks={c2_event_rollbacks}, "
-                          f"max_depth={c2_event_depth}) and resimulated to match reference CRC 0x{c1_parsed.get('final_crc')} "
-                          f"and audio CRC 0x{c1_parsed.get('audio_crc')}")
-                except AssertionError as ae:
-                    print(f"FAILED LATE INPUT PARITY: {ae}")
-                    all_ok = False
-    finally:
-        server.stop()
-
-    # Case A2: Recoverable Long Stall (1000ms complete pause at frame 1500)
-    print("\n--- Edge Case A2: Recoverable Long Stall (1000ms pause at frame 1500) ---")
-    port = find_free_udp_port()
-    room = f"stall_case_{int(time.time())}"
-    server = GoServerProcess(server_bin, port, log_path=log_dir / "server_stall.log")
-    server.start()
-    try:
-        ref_cmd = [
-            str(oracle_bin), "--mode", "reference", "--seed", "12345",
-            "--frames", "3000", "--delay", "2"
-        ]
-        if rom_dir: ref_cmd += ["--rom-dir", str(rom_dir)]
-        ref_proc = subprocess.run(ref_cmd, capture_output=True, text=True)
-        ref_parsed = parse_oracle_output(ref_proc.stdout)
-
-        # Client 1 completely pauses pumping for 1000ms at frame 1500 (>16 frames)
-        rc1, out1, err1, rc2, out2, err2 = run_match_pair(
-            oracle_bin, f"127.0.0.1:{port}", room, seed=12345, frames=3000,
-            delay=2, window=16, sound_driver="native", rom_dir=rom_dir,
-            c1_extra_args=["--stall-at", "1500", "--stall-ms", "1000"],
-            c2_extra_args=["--observe-event-at", "1500"], timeout_sec=60.0
-        )
-        (log_dir / "c1_stall.log").write_text(out1 + "\nSTDERR:\n" + err1)
-        (log_dir / "c2_stall.log").write_text(out2 + "\nSTDERR:\n" + err2)
-
-        if rc1 != 0 or rc2 != 0:
-            print(f"FAILED LONG STALL: Client exit error: rc1={rc1} rc2={rc2}\n{err1}\n{err2}")
-            all_ok = False
-        else:
-            c1_parsed = parse_oracle_output(out1)
-            c2_parsed = parse_oracle_output(out2)
-            c1_injected = ("[STALL_BEGIN]" in out1) and ("[STALL_END]" in out1)
-            c2_event_stalls = int(c2_parsed.get("event_delta_stalls", 0))
-
-            if not c1_injected:
-                print("FAILED LONG STALL: Client 1 stall injection did not execute")
-                all_ok = False
-            elif c2_event_stalls == 0 or float(c2_parsed.get("event_stall_ms", 0)) < 200:
-                print(f"FAILED LONG STALL: No sustained full-window stall attributable to paused peer: {c2_parsed}")
-                all_ok = False
-            else:
-                try:
-                    assert_parity_match(c1_parsed, c2_parsed, ref_parsed, 3000, "long_stall")
-                    print(f"PASS LONG STALL: Peer hit frontier stall (delta_stalls={c2_event_stalls}) and recovered to "
-                          f"match reference CRC 0x{c1_parsed.get('final_crc')} and audio CRC 0x{c1_parsed.get('audio_crc')}")
-                except AssertionError as ae:
-                    print(f"FAILED LONG STALL PARITY: {ae}")
-                    all_ok = False
-    finally:
-        server.stop()
-
-    # Case B: Strict Build Hash Mismatch Rejection
-    print("\n--- Edge Case B: Strict Build Hash Handshake Rejection ---")
-    port = find_free_udp_port()
-    room = f"mismatch_case_{int(time.time())}"
-    server = GoServerProcess(server_bin, port, log_path=log_dir / "server_mismatch.log")
-    server.start()
-    try:
-        # Client 1 joins normally; Client 2 joins with corrupt build hash
-        c1_cmd = [
-            str(oracle_bin), "--mode", "client", "--player", "1",
-            "--server", f"127.0.0.1:{port}", "--room", room,
-            "--frames", "1000", "--timeout", "5",
-        ]
-        c2_cmd = [
-            str(oracle_bin), "--mode", "client", "--player", "2",
-            "--server", f"127.0.0.1:{port}", "--room", room,
-            "--frames", "1000", "--timeout", "5",
-            "--corrupt-build-hash",
-        ]
-        if rom_dir:
-            c1_cmd += ["--rom-dir", str(rom_dir)]
-            c2_cmd += ["--rom-dir", str(rom_dir)]
-
-        p1 = subprocess.Popen(c1_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        time.sleep(0.3)
-        p2 = subprocess.Popen(c2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
+    for name, extras1, extras2, host_player in [
+        ("late", ["--withhold-input-at", "1500", "--withhold-input-ms", "120"],
+         ["--observe-event-at", "1500"], 1),
+        ("stall", ["--stall-at", "1500", "--stall-ms", "1000"],
+         ["--observe-event-at", "1500"], 1),
+        ("presentation", [], ["--video-scale", "2", "--video-border", "48", "--delay", "8"], 1),
+        ("host_p2", ["--host-player", "2", "--delay", "8"], ["--host-player", "2"], 2),
+    ]:
         try:
-            out2, err2 = p2.communicate(timeout=6.0)
-        finally:
-            p2.kill()
-            p1.terminate()
-            p1.kill()
-
-        out1, err1 = p1.communicate(timeout=2.0)
-
-        # Must report explicit build hash rejection (lowercase normalized, nonzero exit)
-        combined_c2 = (err2 + "\n" + out2).lower()
-        rejected_explicitly = (p2.returncode != 0) and ("build hash mismatch" in combined_c2)
-        timed_out = ("handshake timeout" in combined_c2)
-
-        if rejected_explicitly and not timed_out:
-            print("PASS BUILD MISMATCH: Server/transport cleanly rejected mismatched build hash.")
-        else:
-            print(f"FAILED BUILD MISMATCH: Expected explicit build hash mismatch rejection, got rc={p2.returncode} err:\n{err2}\nout:\n{out2}")
+            c1, c2, out1, out2 = campaign_pair(
+                oracle_bin, server_bin, rom_dir, 12345, 3000, 2, 16, "native",
+                None, log_dir, name, extras1=extras1, extras2=extras2, host_player=host_player)
+            if name == "late":
+                assert "[WITHHOLD_BEGIN]" in out1 and "[WITHHOLD_END]" in out1
+                assert int(c2["event_delta_rollbacks"]) > 0 and int(c2["event_max_depth"]) > 0
+                assert float(c2["event_stall_ms"]) >= 20, "No bounded-window stall during withheld input"
+            elif name == "stall":
+                assert "[STALL_BEGIN]" in out1 and "[STALL_END]" in out1
+                assert int(c2["event_delta_stalls"]) > 0 and float(c2["event_stall_ms"]) >= 200
+            elif name in ("presentation", "host_p2"):
+                assert all(h["delay"] == "2" for h in records(out1, "[HANDOFF]") + records(out2, "[HANDOFF]"))
+        except (AssertionError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"FAILED {name}: {error}")
             all_ok = False
-    finally:
-        server.stop()
 
-    # Case C: Disconnect Detection after Observed Midgame Progress
-    print("\n--- Edge Case C: Disconnect Detection after Observed Midgame Progress ---")
-    port = find_free_udp_port()
-    room = f"disconnect_case_{int(time.time())}"
-    server = GoServerProcess(server_bin, port, log_path=log_dir / "server_disconnect.log")
-    server.start()
-    try:
-        killed_peer = threading.Event()
-
+    for name in ("mismatch", "disconnect"):
+        port = find_free_udp_port()
+        server = GoServerProcess(server_bin, port, log_path=log_dir / f"server_{name}.log")
+        server.start()
+        killed = threading.Event()
         def on_progress(confirmed, proc1, proc2):
-            # Wait until mid-game progress is confirmed (>= 800 frames) before killing peer
-            if confirmed >= 800 and not killed_peer.is_set():
-                killed_peer.set()
-                print(f"  [DISCONNECT TRIGGER] Observed confirmed frame {confirmed}, killing Client 2...")
+            if confirmed >= 800 and not killed.is_set():
+                killed.set()
                 proc2.kill()
-
-        rc1, out1, err1, rc2, out2, err2 = run_match_pair(
-            oracle_bin, f"127.0.0.1:{port}", room, seed=12345, frames=5000,
-            delay=2, window=16, sound_driver="native", rom_dir=rom_dir,
-            c1_extra_args=["--timeout", "20"], c2_extra_args=["--timeout", "20"],
-            on_c1_progress=on_progress, timeout_sec=30.0
-        )
-
-        c1_combined = (err1 + "\n" + out1).lower()
-        detected_transport_disconnect = (rc1 != 0) and any(
-            phrase in c1_combined for phrase in [
-                "peer disconnected", "peer timeout", "connection timeout",
-                "match terminated", "peer left"
-            ]
-        )
-        is_oracle_watchdog = "timeout stalled" in c1_combined
-
-        if detected_transport_disconnect and not is_oracle_watchdog and killed_peer.is_set():
-            print("PASS DISCONNECT: Client 1 cleanly detected peer departure via network transport timeout.")
-        else:
-            print(f"FAILED DISCONNECT: detected={detected_transport_disconnect}, oracle_watchdog={is_oracle_watchdog}, rc1={rc1}, err1={err1}")
+        try:
+            common = ["--timeout", "12"]
+            if name == "mismatch":
+                common += ["--prelude-frames", "0"]
+            rc1, out1, err1, rc2, out2, err2 = run_match_pair(
+                oracle_bin, f"127.0.0.1:{port}", name, 12345, 5000, 2, 16,
+                "native", rom_dir, c1_extra_args=common,
+                c2_extra_args=common + (["--corrupt-build-hash"] if name == "mismatch" else []),
+                on_c1_progress=on_progress if name == "disconnect" else None, timeout_sec=90)
+            (log_dir / f"c1_{name}.log").write_text(out1 + "\nSTDERR:\n" + err1)
+            (log_dir / f"c2_{name}.log").write_text(out2 + "\nSTDERR:\n" + err2)
+            if name == "mismatch":
+                assert rc2 != 0 and "build hash mismatch" in (out2 + err2).lower()
+            else:
+                diagnostic = (out1 + err1).lower()
+                assert killed.is_set() and rc1 != 0
+                assert any(text in diagnostic for text in ("peer timeout", "connection timeout", "peer disconnected", "opponent"))
+                assert "oracle watchdog" not in diagnostic
+                recovered = records(out1, "[LOCAL_RETURN]")
+                assert recovered[-1]["advanced"] == "60" and recovered[-1]["fallback"] == "0"
+            print(f"PASS {name}: explicit network result; strict-native local recovery")
+        except (AssertionError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"FAILED {name}: {error}")
             all_ok = False
-    finally:
-        server.stop()
-
+        finally:
+            server.stop()
     return all_ok
 
 
@@ -714,7 +509,7 @@ def main() -> int:
     parser.add_argument("--oracle-bin", type=Path, default=Path("build/f3rt-netplay-oracle"))
     parser.add_argument("--server-bin", type=Path, default=Path("build/netplay-server"))
     parser.add_argument("--rom-dir", type=Path)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 5])
+    parser.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 5, 8, 13, 21, 34])
     parser.add_argument("--frames", type=int, default=20000)
     parser.add_argument("--delay", type=int, default=2)
     parser.add_argument("--window", type=int, default=16)
@@ -757,11 +552,24 @@ def main() -> int:
                                  sound_driver=args.sound_driver,
                                  capture_dir=args.dump_captures_dir,
                                  log_dir=log_dir)
+        for seed in args.seeds:
+            for driver in (["native", "oracle"] if args.sound_driver == "all" else [args.sound_driver]):
+                cmd = [str(oracle_bin), "--mode", "sync-proof", "--seed", str(seed),
+                       "--frames", str(max(2400, min(args.frames, 6000))), "--sound-driver", driver]
+                if args.rom_dir:
+                    cmd += ["--rom-dir", str(args.rom_dir)]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                (log_dir / f"sync_proof_{driver}_s{seed}.log").write_text(
+                    result.stdout + "\nSTDERR:\n" + result.stderr)
+                print(result.stdout)
+                if result.returncode:
+                    print(result.stderr, file=sys.stderr)
+                    ok = False
         results.append(("snapshot_proof", ok))
 
     # 2. Baseline real-server match (full frames, all seeds)
     if args.suite in ["all", "baseline"]:
-        ok = test_baseline_matches(oracle_bin, server_bin, args.rom_dir,
+        ok = test_campaigns(oracle_bin, server_bin, args.rom_dir,
                                    args.seeds, args.frames, args.delay,
                                    args.window, args.sound_driver,
                                    args.dump_captures_dir, log_dir)
@@ -769,10 +577,10 @@ def main() -> int:
 
     # 3. Impairment tests (full frames, all seeds)
     if args.suite in ["all", "impaired"]:
-        ok = test_impaired_network(oracle_bin, server_bin, args.rom_dir,
-                                   args.seeds, args.frames, args.delay,
-                                   args.window, args.sound_driver,
-                                   args.dump_captures_dir, log_dir)
+        ok = test_campaigns(oracle_bin, server_bin, args.rom_dir,
+                            args.seeds, args.frames, args.delay,
+                            args.window, args.sound_driver,
+                            args.dump_captures_dir, log_dir, impaired=True)
         results.append(("impaired_network", ok))
 
     # 4. Edge cases

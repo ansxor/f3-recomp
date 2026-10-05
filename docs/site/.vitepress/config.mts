@@ -141,6 +141,7 @@ export default withMermaid(
             collapsed: true,
             items: [
               { text: 'Overview', link: '/developer/netplay/' },
+              { text: 'ImGui / versus evidence', link: 'https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md' },
               { text: 'Snapshots', link: '/developer/netplay/snapshots' },
               { text: 'Determinism rules', link: '/developer/netplay/determinism' },
               { text: 'Rollback engine', link: '/developer/netplay/rollback' },

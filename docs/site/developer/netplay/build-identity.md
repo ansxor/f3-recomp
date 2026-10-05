@@ -1,50 +1,26 @@
 # Build identity
 
-**What you will learn.** Learn what two clients compare before frame 0. Learn how CMake makes the build fingerprint. Use this page when a join fails or when you change simulation code.
-
-Read [Determinism rules](/developer/netplay/determinism) first. For byte offsets, read [Wire protocol](/developer/netplay/protocol#identity-72-bytes).
+The join identity checks simulation compatibility before handoff, not equality of local histories. See [Determinism rules](/developer/netplay/determinism) and [Wire protocol](/developer/netplay/protocol).
 
 ## Why identity matters
 
-Rollback sends inputs, not machine state. Equal inputs produce equal results only when both clients start with compatible code, data and state. The handshake refuses a mismatch before the game runs.
+Rollback exchanges inputs after the host transfers canonical state. Compatible code/data and the loaded host boundary are both required.
 
 Identity is a compatibility check. It is not proof that a remote client is honest. CRC-32 is not a security hash. The relay cannot verify the state that a client claims.
 
 ## The identity record
 
-`machine_identity(const Machine &, unsigned delay)` creates `Identity` in `runtime/netplay.cpp`. Its wire form has 72 bytes.
+`machine_identity(const Machine &)` creates `Identity` in `runtime/netplay.cpp`. Its wire form is 64 bytes.
 
-| Field | Size | Source of value |
+| Field | Size | Source |
 | --- | ---: | --- |
-| `rom_crc` | 7 × 4 bytes | CRC-32 of loaded regions, in order: `main`, `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples` |
-| `build_hash` | 32 bytes | Raw SHA-256 bytes decoded from `F3_NETPLAY_BUILD_HASH` |
-| `settings` | 4 bytes | `0x10000u \| (bool(game_video) << 12) \| (bool(sound_native) << 13) \| delay` |
-| `eeprom_crc` | 4 bytes | CRC-32 of 64 EEPROM words, each encoded high byte first |
-| `initial_crc` | 4 bytes | `Machine::state_crc()` after configuration, before frame 0 |
+| `rom_crc` | 7 × 4 bytes | Loaded regions: `main`, `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples` |
+| `build_hash` | 32 bytes | SHA-256 bytes from `F3_NETPLAY_BUILD_HASH` |
+| `state_format` | 4 bytes | Canonical representation and audio/video simulation compatibility |
 
-The ROM CRCs describe the loaded regions. They are not CRCs of ZIP files or individual ROM filenames. The settings value marks schema revision 1 with `0x10000`. Bit 12 records GameVideo presence. Bit 13 records native sound presence. The delay is included without a separate mask. Normal callers validate delay as 0 to 8.
+EEPROM, initial-state CRC, presentation geometry and input delay are not identity fields. Join carries host/join role and requested delay separately; exactly one host is required and the host delay is authoritative. The host's fresh handoff snapshot replaces the guest's local state. Independent solo histories, EEPROM files and presentation settings are allowed.
 
-The initial CRC covers the canonical machine snapshot. It does not include ROM bytes, host pointers, sockets or diagnostic counters. The separate ROM CRCs cover the ROM data.
-
-`JoinReq` also carries delay outside the identity record. The relay compares that field first. `MatchStart` returns the room baseline identity and delay. The client compares them again before it sets `ready()`.
-
-## Cold boot and forbidden modes
-
-The frontend builds identity after it selects the sound driver, enables GameVideo and registers generated main-CPU blocks. It does not run a frame while it waits for a match.
-
-Both clients start with the erased 93C46 image: 64 words of `0xffff`. The game performs normal factory initialization. Netplay does not patch RAM, inject credits or load a boot snapshot.
-
-The frontend requires these modes:
-
-- Strict generated main CPU, with no interpreter fallback.
-- GameVideo in `game` mode.
-- Native sound CPU.
-- Video scale 1 and border 0.
-- No EEPROM persistence, sound trace or fallback report.
-
-These restrictions avoid configuration paths outside the supported handshake contract. The core constructor separately checks frame 0, disabled fallback, no earlier fallback instructions, no sound trace and an empty audio queue. The headless oracle can test oracle sound and expanded snapshots. That does not make these modes supported in the player frontend.
-
-See [Frontend integration](/developer/netplay/frontend-integration#configuration-gate) for the exact option checks.
+Main execution remains strict native without fallback or sound tracing. A same-build match does not imply that arbitrary saves or third-party clients are safe or compatible.
 
 ## Fingerprint pipeline
 
@@ -113,17 +89,15 @@ When you add a new code or data directory that affects simulation, extend the id
 
 ## Mismatch diagnosis
 
-The relay uses the first player as the baseline. For the second player, it checks delay, ROM CRCs, build hash, settings, EEPROM CRC and initial CRC in that order. It then checks slot availability.
+The relay requires complementary host/join roles, matching ROM CRCs/build hash/state format and an available requested slot. Host delay is authoritative.
 
 | Reject | Action |
 | --- | --- |
-| Delay mismatch, code 9 | Set the same `--netplay-delay` on both clients. |
 | ROM CRC mismatch, code 4 | Use the same supported loaded ROM set. |
-| Build hash mismatch, code 5 | Use matching platform, compiler, flags, source and generated output. Rebuild both clients. |
-| Settings mismatch, code 6 | Check the renderer, sound driver and delay. |
-| EEPROM CRC mismatch, code 7 | Start with the same erased image. Do not add persistence to frontend netplay. |
-| Initial CRC mismatch, code 8 | Compare configuration and cold-boot snapshot bytes. Do not bypass the check. |
-| Invalid identity, code 13 | Check malformed payloads or changed identity during a known-nonce join retry. |
+| Build hash mismatch, code 5 | Match platform, compiler, flags, source and generated output. |
+| Snapshot format mismatch, code 6 | Match audio/video simulation configuration and state format. |
+| Host/join role conflict, code 14 | Choose one host and one guest. |
+| Invalid identity, code 13 | Check malformed payloads or changed identity in a nonce retry. |
 
 Read [Debugging a desync](/developer/netplay/debugging) to distinguish a handshake failure from a later state divergence.
 
