@@ -32,7 +32,7 @@ public:
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;
-    // Host-only presentation snapshot. Native pixels/state remain CPU-produced.
+    // Host-only presentation snapshot. Native observations remain CPU-produced.
     void enable_gpu_presentation(bool enabled = true);
     // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
     void set_gpu_scale(unsigned scale);
@@ -46,6 +46,8 @@ public:
     void save_sync_state(std::span<uint8_t> dst) const;
     void load_sync_state(std::span<const uint8_t> src);
 private:
+    friend class Machine;
+    void materialize_native() const;
     void latch_sprites();
     void render();
     void compare_composite(uint64_t frame);

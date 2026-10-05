@@ -198,7 +198,7 @@ int comparison(const Options &o) {
     }
     const auto &base = m.game_video->gpu_scene();
     require(!base.fallback, "Demo warmup ended in oracle fallback; use --frames 1560 --seed 5");
-    const auto before = state(m); const auto pixels = m.pixels;
+    const auto before = state(m); const auto pixels = m.native_pixels();
     const auto sync_crc = m.sync_state_crc();
     struct Window {
         SDL_Window *value;
@@ -313,7 +313,7 @@ int comparison(const Options &o) {
             std::this_thread::sleep_until(std::min(next_frame, next_present));
         }
     }
-    require(before == state(m) && pixels == m.pixels && sync_crc == m.sync_state_crc(),
+    require(before == state(m) && pixels == m.native_pixels() && sync_crc == m.sync_state_crc(),
         "Live comparison changed frozen machine/native state");
     std::cout << "DEMO-SUCCESS render_native_steps=" << step << " drawable_submissions=" << submitted
         << " interpolated_submissions=" << interpolated << " moving_inbetweens=" << moving
@@ -356,9 +356,9 @@ int main(int argc, char **argv) try {
             audio_crc ^= uint8_t(uint16_t(sample) >> shift);
             for (unsigned bit = 0; bit < 8; ++bit) audio_crc = (audio_crc >> 1) ^ ((audio_crc & 1) ? 0xedb88320u : 0u);
         }
-        require(m.pixels == reference->pixels, "Native pixel parity frame " + std::to_string(m.frame));
+        require(m.native_pixels() == reference->native_pixels(), "Native pixel parity frame " + std::to_string(m.frame));
         if ((m.frame - 1) % o.every != 0 && m.frame != o.frames) continue;
-        ++samples; const auto before = state(m); const auto pixels = m.pixels;
+        ++samples; const auto before = state(m); const auto pixels = m.native_pixels();
         require(before == state(*reference), "Seeded canonical state parity frame " + std::to_string(m.frame));
         require(m.sync_state_crc() == reference->sync_state_crc(), "Seeded sync state parity");
         gpu.draw(scene, canonical);
@@ -410,11 +410,11 @@ int main(int argc, char **argv) try {
                 }
                 png(o.dump_dir / ("frame_" + std::to_string(m.frame) + "_canonical.png"), canonical, o.video);
                 dumped = true;
-                png(o.dump_dir / ("frame_" + std::to_string(m.frame) + "_native.png"), m.pixels, f3rt::GameVideoOptions{});
+                png(o.dump_dir / ("frame_" + std::to_string(m.frame) + "_native.png"), m.native_pixels(), f3rt::GameVideoOptions{});
             }
         }
         visible += frame_visible;
-        require(before == state(m) && pixels == m.pixels, "GPU presentations mutated serialized state/native pixels");
+        require(before == state(m) && pixels == m.native_pixels(), "GPU presentations mutated serialized state/native pixels");
         if (m.frame == o.frames) {
             replay_post = before; replay_audio = sound; replay_pixels = pixels;
             replay_sync_crc = m.sync_state_crc();
@@ -426,7 +426,7 @@ int main(int argc, char **argv) try {
             gpu.draw_motion(final_scene, float(phase) / 2, out);
             png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_phase_" + std::to_string(phase) + ".png"), out, o.video);
         }
-        png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_native.png"), m.pixels, f3rt::GameVideoOptions{});
+        png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_native.png"), m.native_pixels(), f3rt::GameVideoOptions{});
     }
     require(paired && visible && half_visible && eligible, "No visible paired ROM midpoint motion; use a longer seeded gameplay run");
     const auto &scene = m.game_video->gpu_scene();
@@ -443,7 +443,7 @@ int main(int argc, char **argv) try {
     gpu.capture_motion(*fallback_scene, m.frame); gpu.capture_motion(scene, m.frame + 1); snap("fallback recovery");
     m.load_state(replay_pre); gpu.reset_motion(); advance(m);
     require(audio(m) == replay_audio, "Rollback replay native audio mismatch");
-    require(state(m) == replay_post && m.pixels == replay_pixels, "Rollback replay canonical state/native pixels mismatch");
+    require(state(m) == replay_post && m.native_pixels() == replay_pixels, "Rollback replay canonical state/native pixels mismatch");
     require(m.sync_state_crc() == replay_sync_crc, "Rollback replay sync state mismatch");
     gpu.capture_motion(m.game_video->gpu_scene(), m.frame); snap("state-load replay");
     std::cout << "SUCCESS frames=" << m.frame << " seed=" << o.seed << " samples=" << samples
@@ -467,7 +467,7 @@ int main(int argc, char **argv) try {
         << " synthetic_phase_grids=halves,twelfths alpha1=exact repeated_draws=exact state_native_audio_parity=exact"
         << " reset_gap_duplicate_rollback_fallback=snap replay=exact native_blocks=" << m.native_blocks
         << " fallback_instructions=" << m.fallback_instructions << " audio_samples=" << audio_samples
-        << " audio_crc=0x" << std::hex << (audio_crc ^ 0xffffffffu) << " native_crc=0x" << hash(m.pixels)
+        << " audio_crc=0x" << std::hex << (audio_crc ^ 0xffffffffu) << " native_crc=0x" << hash(m.native_pixels())
         << " state_crc=0x" << m.state_crc() << " sync_state_crc=0x" << m.sync_state_crc() << std::dec << '\n';
     return 0;
 } catch (const std::exception &e) {

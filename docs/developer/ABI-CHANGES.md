@@ -203,9 +203,12 @@ not changes to generated register layouts, bus callbacks or CPU timing.
 `GameVideo::presentation()` returns a read-only span of that frame's pixels;
 its contents change at the next render/reset. Default dimensions are 320×232;
 optional dimensions are `(320 + 2*border)*scale` by `232*scale`.
-`Machine::pixels` always remains the native 320×232 image, including when
-presentation enhancements are enabled. This avoids changing capture, CRC or
-CPU/device interfaces to accommodate optional display resolution.
+`Machine::native_pixels() const` returns a const reference to the native
+`std::array<uint32_t, 320 * 232>`. Raw storage is private; observing it completes
+any retained GPU-presented scanout through the CPU compositor. Captures, CRCs and
+snapshots use this accessor without changing dimensions, CPU ABI or device timing.
+Call the accessor for each observation after advancing; a previously retained
+reference does not itself request materialization of a later GPU scanout.
 
 ## Machine snapshot contract and canonical state inventory
 
@@ -276,10 +279,17 @@ GPU resources, packed shader data and CPU diagnostic caches are not serialized.
 `render_reference` rerenders that snapshot through the retained CPU compositor,
 with optional isolated layer masks and serial dispatch for parity/measurement.
 
-Native `Machine::pixels` is still CPU-produced every frame. Expanded GPU
-presentation avoids the per-frame expanded CPU raster; `presentation()` and
-`save_state()` materialize the exact CPU presentation and next sprite plane
-lazily when requested, preserving the existing canonical snapshot byte layout.
+Supported GPU `Game` frames defer native CPU composition until an observer
+requests `Machine::native_pixels()`, native presentation, comparison or a snapshot.
+Reconstruction uses the immutable captured maps/glyphs/rows/palette and a retained
+current-frame native sprite plane, never live state or the next latched list.
+Two preallocated 432×256 indexed planes add 221,184 bytes; only the original
+next-frame plane is serialized. Pending flags, indices and reference caches are
+derived and unsaved. Root saves materialize before writing their native pixels.
+Unsupported successors preserve the preceding game composite before replacing
+Machine scanout with the oracle. CPU presentation and Diagnostic/Compare remain
+eager. Expanded GPU presentation is also materialized on demand; canonical and
+sync byte sizes/order remain unchanged.
 Load invalidates GPU host caches and initially presents the restored native
 frame; the next scanout rebuilds GPU scene data. Netplay uses canonical sync state,
 so peers may use independent presentation scale and border settings.

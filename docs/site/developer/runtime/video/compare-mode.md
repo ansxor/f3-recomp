@@ -23,7 +23,7 @@ All game-data modes require native producer hooks. Frontend compare rejects fall
 ```mermaid
 flowchart TD
     R["GameVideo::render_frame"] --> G["Reconstruct and compose game scene"]
-    G --> O["Render independent oracle into Machine::pixels"]
+    G --> O["Render independent oracle into native scanout storage"]
     O --> S{"Game scene supported?"}
     S -- "yes" --> C["Compare all 320x232 native ARGB values"]
     S -- "no" --> F["Record renderer fallback; skip RGB comparison"]
@@ -56,7 +56,7 @@ Examples: mask 15 selects all PF maps. Mask 240 selects all sprite groups. Mask 
 
 Only mask 511 invokes `GameLines::compare_rows` and `compare_composite`. A subset does not prove scrolling, mixing, or final RGB.
 
-The caller must first advance a frame with the oracle in `Diagnostic` or `Compare` mode. In `Game` mode, `Machine::pixels` is game output on supported frames. It is not an independent composite reference.
+The caller must first advance a frame with the oracle in `Diagnostic` or `Compare` mode. In `Game` mode, `Machine::native_pixels()` is game output on supported frames. It is not an independent composite reference.
 
 ## Comparison domains
 

@@ -131,7 +131,7 @@ Check unsupported-to-supported recovery at the intended initialization point. Ch
 
 The oracle must retain its sprite lag while the game renderer is active. Do not remove `Video::vblank` from supported `Game` frames.
 
-Keep `Machine::pixels` at 320x232. Expanded output must sample scene geometry separately. Unsupported expanded frames must use centered oracle pixels with black side columns.
+Keep `Machine::native_pixels()` at 320x232. Expanded output must sample scene geometry separately. Unsupported expanded frames must use centered oracle pixels with black side columns.
 
 Check scale and border at native and expanded settings. Inspect the actual SDL surface when changing frontend sampling or display behavior.
 

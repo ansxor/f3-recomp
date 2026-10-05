@@ -228,7 +228,7 @@ These options were introduced only after the complete seeded base-parity gate ab
 | `--video-border 0..160` | `0` | Adds that many native scene columns on each side. `48` gives a 416×232 viewport, approximately 16:9. Native game logic and HUD layout are not widened; off-screen map content can be empty or wrapped. |
 | `--video-filter nearest\|linear` | `nearest` | Optional SDL presentation-texture filtering. Linear filters the final display texture; it does not claim higher-detail source art or alter native captures. |
 
-Options require `--video game` or `compare`. The invariant native `Machine::pixels` stays 320×232 for comparison, captures and CRCs. Presentation buffers are allocated once only when scale/border are enabled. Unsupported frames preserve the exact oracle picture, integer-scaled in the center, with black added columns; no invented ending/bitmap/flip geometry is extrapolated.
+Options require `--video game` or `compare`. The invariant native `Machine::native_pixels()` stays 320×232 for comparison, captures and CRCs. Presentation buffers are allocated once only when scale/border are enabled. Unsupported frames preserve the exact oracle picture, integer-scaled in the center, with black added columns; no invented ending/bitmap/flip geometry is extrapolated.
 
 GPU runtime scaling changes only host geometry/resources, retaining
 constructor-fixed canonical presentation buffers and trail history.

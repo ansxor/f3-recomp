@@ -53,6 +53,10 @@ Machine::Machine(RomSet set) : roms(std::move(set)), video(std::make_unique<Vide
     reset();
 }
 Machine::~Machine() = default;
+const std::array<uint32_t, 320 * 232> &Machine::native_pixels() const {
+    if (game_video) game_video->materialize_native();
+    return pixels_;
+}
 void Machine::use_native_sound(const f3_block *program, size_t count,
                                std::span<const f3_excluded_range> excluded) {
     if (audio->backend() == Audio::Backend::Hle)
@@ -82,6 +86,7 @@ void Machine::reset_devices() {
     watchdog_at = cpu.cycles + 3ull * main_clock;
 }
 void Machine::reset() {
+    native_pixels();
     cpu = {};
     cpu.runtime = this;
     eeprom->reset();
@@ -194,7 +199,7 @@ void Machine::advance_to(uint64_t cycles) {
         hardware_cycles = end;
         if (hardware_cycles == next_vblank) {
             if (game_video) game_video->render_frame();
-            else video->render_frame(palette, graphics, control, pixels);
+            else video->render_frame(palette, graphics, control, pixels_);
             pending_irqs |= 1u << 2;
             irq3_at = next_vblank + 10000;
             ++frame;
@@ -295,7 +300,7 @@ size_t Machine::state_size() const {
                 graphics.size() +
                 control.size() +
                 shared.size() +
-                sizeof(uint32_t) * pixels.size() +
+                sizeof(uint32_t) * pixels_.size() +
                 eeprom->state_size() +
                 audio->state_size() +
                 video->state_size();
@@ -375,7 +380,7 @@ void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
     writer.write_span(std::span<const uint8_t, 0x40000>(graphics));
     writer.write_span(std::span<const uint8_t, 0x20>(control));
     writer.write_span(std::span<const uint8_t, 0x800>(shared));
-    writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
+    writer.write_span(std::span<const uint32_t, 320 * 232>(native_pixels()));
 
     // 4. EEPROM
     eeprom->save_state(writer);
@@ -434,6 +439,7 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
         throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
             std::to_string(expected) + ", got " + std::to_string(src.size()));
     }
+    native_pixels();
     StateReader reader(src);
     // 1. Native CPU
     CanonicalF3Cpu cpu_st;
@@ -489,7 +495,7 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
     reader.read_span(std::span<uint8_t, 0x40000>(graphics));
     reader.read_span(std::span<uint8_t, 0x20>(control));
     reader.read_span(std::span<uint8_t, 0x800>(shared));
-    reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
+    reader.read_span(std::span<uint32_t, 320 * 232>(pixels_));
 
     // 4. EEPROM
     eeprom->load_state(reader);

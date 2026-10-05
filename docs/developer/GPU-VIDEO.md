@@ -7,12 +7,20 @@ revision; interpolation is an optional presentation change, not hardware fidelit
 
 ## Scope and checkpoints
 
-Presentation only. Native `Machine::pixels`, strict-native execution, captures,
+Presentation only. Native `Machine::native_pixels()`, strict-native execution, captures,
 frame/replay CRCs, audio and rollback snapshots remain CPU-produced. FDP oracle
 fallback remains available. The CPU path is retained and row-parallelized before
 the GPU port. Checkpoints are distinct commits/tags:
 `gpuvideo-1-threaded-cpu`, `gpuvideo-2-gpu-parity`, `gpuvideo-3-interp`.
 Interpolation is not part of the parity contract or parity checkpoint.
+
+Supported GPU `Game` frames may defer native CPU composition until
+`Machine::native_pixels()` or a snapshot/capture observes it. The immutable
+scanout and retained current-frame sprite plane reproduce the same CPU pixels;
+CPU presentation, Diagnostic/Compare and unsupported oracle fallback remain
+unchanged. This is avoided work, not lower-resolution or approximate rendering.
+Measurement and observation-boundary evidence:
+[WORKFLOWS.md](WORKFLOWS.md#upstream-integration-and-deferred-native-composition).
 
 ## CPU sampling contract (read before shader implementation)
 

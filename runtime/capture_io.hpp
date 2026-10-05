@@ -48,8 +48,8 @@ inline void dump_machine(const Machine &m, const std::filesystem::path &root) {
     write_bytes(dir/"control.bin",m.control);
     write_bytes(dir/"mainram.bin",m.ram);
     write_bytes(dir/"shared.bin",m.shared);
-    write_argb(dir/"rendered.argb",m.pixels);
-    write_bmp(dir/"rendered.bmp",m.pixels);
+    write_argb(dir/"rendered.argb",m.native_pixels());
+    write_bmp(dir/"rendered.bmp",m.native_pixels());
     std::ofstream state(dir/"cpu.json");
     state << "{\"frame\":" << m.frame << ",\"cycles\":" << m.cpu.cycles
           << ",\"pc\":" << m.cpu.pc << ",\"sr\":" << m.cpu.sr << ",\"d\":[";

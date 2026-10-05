@@ -313,7 +313,7 @@ int run_snapshot_proof(const std::filesystem::path &romdir, const std::string &s
                 const auto pass1_graphics = m.graphics;
                 const auto pass1_control = m.control;
                 const auto pass1_shared = m.shared;
-                const auto pass1_pixels = m.pixels;
+                const auto pass1_pixels = m.native_pixels();
                 const auto pass1_sound_bytes = read_file_bytes(p1_sound_path);
 
                 // 3. Load state back to frame f and assert zero heap allocation
@@ -400,7 +400,7 @@ int run_snapshot_proof(const std::filesystem::path &romdir, const std::string &s
                 if (pass1_shared != m.shared) {
                     throw std::runtime_error("Byte Sound Shared RAM mismatch after resimulation");
                 }
-                if (pass1_pixels != m.pixels) {
+                if (pass1_pixels != m.native_pixels()) {
                     throw std::runtime_error("Byte Framebuffer pixels mismatch after resimulation");
                 }
                 if (pass1_audio != pass2_audio) {
@@ -480,7 +480,7 @@ int run_snapshot_proof(const std::filesystem::path &romdir, const std::string &s
 
     const uint32_t final_machine_crc = m.state_crc();
     const uint32_t final_frame_crc = f3rt::crc32(
-        reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * 4);
+        reinterpret_cast<const uint8_t *>(m.native_pixels().data()), m.native_pixels().size() * 4);
 
     auto lm_status = inspect_landmaker(m);
 
@@ -488,7 +488,7 @@ int run_snapshot_proof(const std::filesystem::path &romdir, const std::string &s
         if (capture_surface.has_parent_path()) {
             std::filesystem::create_directories(capture_surface.parent_path());
         }
-        f3rt::write_bmp(capture_surface, m.pixels);
+        f3rt::write_bmp(capture_surface, m.native_pixels());
     }
     if (!dump_dir.empty()) {
         f3rt::dump_machine(m, dump_dir);
@@ -600,7 +600,7 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
             if (!dump_dir.empty()) {
                 std::ostringstream ss;
                 ss << "frame_" << std::setw(5) << std::setfill('0') << f << ".bmp";
-                f3rt::write_bmp(dump_dir / ss.str(), m.pixels);
+                f3rt::write_bmp(dump_dir / ss.str(), m.native_pixels());
             }
         }
 
@@ -637,7 +637,7 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
 
     const uint32_t final_machine_crc = initial_state.empty()?m.state_crc():m.sync_state_crc();
     const uint32_t final_frame_crc = f3rt::crc32(
-        reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * 4);
+        reinterpret_cast<const uint8_t *>(m.native_pixels().data()), m.native_pixels().size() * 4);
 
     auto lm_status = inspect_landmaker(m);
 
@@ -645,7 +645,7 @@ int run_reference(const std::filesystem::path &romdir, const std::string &set,
         if (capture_surface.has_parent_path()) {
             std::filesystem::create_directories(capture_surface.parent_path());
         }
-        f3rt::write_bmp(capture_surface, m.pixels);
+        f3rt::write_bmp(capture_surface, m.native_pixels());
     }
     if (!dump_dir.empty()) {
         f3rt::dump_machine(m, dump_dir);
@@ -870,7 +870,7 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
         if(!rollback || !rollback->confirmed_frame() || rollback->frame()!=rollback->confirmed_frame())
             throw std::runtime_error("Session ended without a confirmed match frontier");
         final_crc=m.sync_state_crc();
-        frame_crc=f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4);
+        frame_crc=f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),m.native_pixels().size()*4);
         total+=rollback->confirmed_frame();total_rollbacks+=rollback->rollback_count();
         max_depth=std::max(max_depth,rollback->maximum_rollback_depth());
         last_depth=rollback->last_rollback_depth();last_rtt=session.rtt_ms();
@@ -883,7 +883,7 @@ int run_client(const std::filesystem::path &romdir, const std::string &set,
         if(!match_dir.empty())f3rt::dump_machine(m,match_dir);
         if(total==target_frames && !capture_surface.empty()) {
             if(capture_surface.has_parent_path())std::filesystem::create_directories(capture_surface.parent_path());
-            f3rt::write_bmp(capture_surface,m.pixels);
+            f3rt::write_bmp(capture_surface,m.native_pixels());
         }
         const auto local_start=m.frame;
         // No session.advance() or input packets here: prove both machines are local.

@@ -294,3 +294,91 @@ row-cache boundary/wrap/reverse/repeated-coordinate transitions without ROM data
 Native and HLE 2400-frame pixel/PCM/state CRC streams and counts matched the frozen
 checkpoint; HLE includes the later gain/effects candidate. These are fingerprint
 comparisons, not a claim of direct byte comparison of every frame.
+
+### Upstream integration and deferred native composition
+
+`3ce8ee7` checkpoints the generic second pass. `bcfc122` merges upstream
+`eb31e0f` (GPU presentation/native audio pacing decoupling) without conflicts.
+For upstream comparison, core/frontend/GPU libraries were built from that exact
+revision in an isolated worktree with the same compiler/flags and frozen generated
+CPU archives. No profile-slim or firmware-specific specialization was introduced.
+
+Five alternating pairs, CPU 2, seed 5, 3600 frames; means cover frames 1200–3599.
+Setup, hashes, final snapshots, disk output and window/GPU draws are outside the
+per-frame measurement. GPU rows measure strict native execution, audio drain and
+semantic scene export with no native CPU pixel observer, **not GPU presentation**.
+
+| Path | Upstream main mean | Merged exact mean | Lower frame time |
+| --- | ---: | ---: | ---: |
+| CPU Game / native audio | 5.88735 ms | 4.01973 ms | 31.72% |
+| FDP / native audio | 3.81136 ms | 3.57673 ms | 6.16% |
+| CPU Game / HLE48k | 4.23925 ms | 2.44628 ms | 42.29% |
+| GPU scene export / native audio | 5.92308 ms | 2.55565 ms | 56.85% |
+| GPU scene export / HLE48k | 4.28661 ms | 0.958188 ms | 77.65% |
+
+The GPU rows use scale 3/border 48. Against the already optimized eager control,
+deferred composition alone gives 4.06496 → 2.55565 ms (37.13%) for native audio
+and 2.49053 → 0.958188 ms (61.53%) for HLE. Their p95 values are
+4.18493 → 2.65824 ms and 2.63511 → 1.06032 ms. Every run matched main-machine
+blocks/cycles, generated PCM counts, canonical size and final state CRC.
+Raw paired records: `build/opt/main-comparison/results.json` and
+`build/opt/lazy-benchmarks/results.json`.
+
+Only supported GPU `Game` frames defer native composition. `native_pixels()`
+reconstructs captured maps/glyphs/rows/palette with the retained current sprite
+plane; it does not read the now-latched sprite list or live palette. Two fixed
+native planes cost another 221,184 bytes; only the original next-frame plane is
+serialized. CPU presentation and Diagnostic/Compare stay eager. Observations,
+canonical/sync saves and backend/scale/load/reset transitions preserve the same
+native output and state layout. Reverse this checkpoint as a unit: restore eager
+native composition and the original public pixel field together with every caller.
+
+Direct-byte smoke: 14,600 frames over four input seeds plus expanded presentation,
+477 irregular native/state observations and 147 mutation/transition branches.
+Native/expanded pixels, complete canonical/sync bytes and PCM matched an independent
+CPU-eager peer. All GPU scales 1–8 matched the CPU reference; scale 3 additionally
+exercised all nine layers, bitmap/trails/global flip/unknown/ending-producer guards,
+sprite boundaries and runtime scale 1/8/3 changes. Ending coverage is induced,
+not a played ending. Durable `verify_deferred_native` covers ten first-observer and
+pending-frame boundaries, with independent visible sprite-lag witnesses:
+
+```sh
+taskset -c 4-7 build/opt/f3rt-gpu-regression --rom-dir roms/landmakrj \
+  --seed 5 --frames 1501 --every 1500 --scale 3 --border 48 \
+  --inject-frame 1501 --inject-trails --inject-unknown
+taskset -c 4-7 build/opt/f3rt-netplay-oracle --rom-dir roms/landmakrj \
+  --mode sync-proof --sound-driver native --frames 2400 --seed 89
+```
+
+The sync proof passed 786 checks, 372 paired frames and 372 exact local replays,
+comparing 375,648 PCM samples; save/load allocations were zero. An actual Wayland/
+Vulkan frontend under a nested 30 Hz Gamescope compositor ran 1200 frames on the
+pre-main, upstream-main and merged-lazy executables. Clock resyncs were 108/0/0;
+audio queue drops were zero for all three. Captured BMPs and WAVs were directly
+byte-identical, native CRC `e8cc7573`, and the merged GPU surface was visually
+inspected. These are real presentation observations, separate from the export
+microbenchmark; native internal resolution was 320×232 and the window was 960×696. Evidence:
+`build/opt/live-pacing/`.
+
+Native GPU-export Callgrind ROI 1200–1319, with cache/branch simulation:
+main 9,227,738,049 → exact 4,053,181,051 instructions (56.08% lower), data references
+51.95% lower, D1 misses 31.14% lower, branch mispredicts 12.12% lower.
+Raw files: `build/main-compare/native-gpu.callgrind-01`,
+`build/opt/lazy-native.callgrind-01`, `build/opt/lazy-profile-comparison.json`.
+Both completed with equal canonical state despite Valgrind's startup brk-segment
+warning. The simulated LL cache is 128 MiB, not a claim about the host's 96 MiB L3.
+Final `perf` on seed 89 collected 63,373 samples with zero lost samples:
+ES5510 23.68%, audio scheduling 14.74%, main dispatch 8.88%, sprite raster 3.73%,
+IRQ getter 3.72%. It includes startup, unlike the Callgrind ROI.
+
+Separate exact HLE gain/effect refinements give 2.48744 → 2.44426 ms (1.74%) in
+Game and 2.04674 → 1.99845 ms (2.36%) in FDP, five pairs each. Direct WAV/event
+comparison matched. A generic all-program corpus covered 100 programs, seven
+keys (30–108) and polyphony 1/8/32: 2100 cases, 1758 voice-allocating cases,
+31,618 Starts and 259,485 ordered events. Before/after gain/effect float PCM
+(40,204,800 eight-bus values), all event fields/order and 1,310,400 stereo effect
+frames across 13 presets/ring wraps matched byte-for-byte. Six existing rejected
+cases (programs 81/82, key 39, each polyphony) retained the same external-directory
+error; they are not successful synthesis cases. Evidence:
+`build/hle-native-rate/corpus/` and `build/opt/round2-hle-bench/results.json`.
+

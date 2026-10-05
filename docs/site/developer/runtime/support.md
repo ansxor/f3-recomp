@@ -123,7 +123,7 @@ The frontend calls `dump_machine` for `--dump-dir`. It creates `root/frame_NNNN/
 | `control.bin` | `Machine::control`, 32 bytes. |
 | `mainram.bin` | `Machine::ram`, 128 KiB. |
 | `shared.bin` | `Machine::shared`, 2 KiB. |
-| `rendered.argb` | `Machine::pixels` as raw ARGB. |
+| `rendered.argb` | `Machine::native_pixels()` as raw ARGB. |
 | `rendered.bmp` | The same image as BMP. |
 | `cpu.json` | One JSON object: `frame`, `cycles`, `pc`, `sr`, `d` (8 values), `a` (8 values). |
 

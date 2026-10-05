@@ -32,7 +32,7 @@ flowchart TD
     C -- "no" --> D["Video::render_frame"]
     C -- "yes" --> E["GameVideo::render_frame"]
     E --> D
-    D --> F["Machine::pixels, 320x232"]
+    D --> F["Machine::native_pixels(), 320x232"]
     E --> G["GameVideo presentation buffer"]
     F --> H["raise IRQ2, increment frame"]
     G --> H
@@ -44,7 +44,7 @@ In `game` mode, `GameVideo::render_frame` calls `Video::render_frame` only when 
 
 The frontend selects the renderer with `--video`. The table shows the three user modes and one internal mode.
 
-| Mode | `GameVideoMode` | Who sets it | Output in `Machine::pixels` |
+| Mode | `GameVideoMode` | Who sets it | Output in `Machine::native_pixels()` |
 | --- | --- | --- | --- |
 | `fdp` | none (`game_video` is null) | `--video fdp` | Oracle picture |
 | `game` | `Game` | `--video game` | Game-data picture for supported frames. Oracle picture for other frames. |

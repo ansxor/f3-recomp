@@ -83,7 +83,7 @@ void equal_sync(Machine &host, Machine &guest, Bytes &a, Bytes &b,
     guest.save_sync_state(b);
     require(a == b, where + " canonical bytes differ");
     require(host.sync_state_crc() == guest.sync_state_crc(), where + " canonical CRC differs");
-    require(host.pixels == guest.pixels, where + " native pixels differ");
+    require(host.native_pixels() == guest.native_pixels(), where + " native pixels differ");
 }
 
 
@@ -178,7 +178,7 @@ int run_sync_snapshot_proof(const std::filesystem::path &romdir,
                 ++checks;
             }
             guest.save_state(guest_local);
-            const auto base_pixels = guest.pixels;
+            const auto base_pixels = guest.native_pixels();
             const auto base_view = guest.game_video->presentation();
             const std::vector<uint32_t> base_presentation(base_view.begin(), base_view.end());
             const auto base_crc = guest.state_crc();
@@ -195,7 +195,7 @@ int run_sync_snapshot_proof(const std::filesystem::path &romdir,
                 equal_sync(host, guest, host_sync, guest_sync, where + " K=" + std::to_string(k + 1));
                 ReplayFrame record;
                 record.pcm = std::move(guest_pcm);
-                record.pixels = guest.pixels;
+                record.pixels = guest.native_pixels();
                 const auto view = guest.game_video->presentation();
                 record.presentation.assign(view.begin(), view.end());
                 if (k == 0 || k == 6 || k == replay_frames - 1) {
@@ -223,7 +223,7 @@ int run_sync_snapshot_proof(const std::filesystem::path &romdir,
             require(local_check == guest_local && guest.state_crc() == base_crc,
                     where + " exact local immediate bytes/CRC differ");
             const auto restored_view = guest.game_video->presentation();
-            require(guest.pixels == base_pixels &&
+            require(guest.native_pixels() == base_pixels &&
                     std::equal(restored_view.begin(), restored_view.end(), base_presentation.begin(), base_presentation.end()),
                     where + " exact local retained presentation differs");
             ++checks;
@@ -233,7 +233,7 @@ int run_sync_snapshot_proof(const std::filesystem::path &romdir,
                 const auto &record = reference[k];
                 require(drain(guest) == record.pcm, where + " local replay PCM differs K=" + std::to_string(k + 1));
                 const auto view = guest.game_video->presentation();
-                require(guest.pixels == record.pixels &&
+                require(guest.native_pixels() == record.pixels &&
                         std::equal(view.begin(), view.end(), record.presentation.begin(), record.presentation.end()),
                         where + " local replay pixels/presentation differ K=" + std::to_string(k + 1));
                 if (!record.gpu_reference.empty()) {

@@ -77,9 +77,9 @@ clear or scale-change glitch is introduced. Headless does not change scale.
 
 ```mermaid
 flowchart TD
-    SC["Supported semantic scene"] --> N["Compose native output: 320x232"]
+    SC["Supported semantic scene"] --> N["Compose native output: 320x232; GPU Game on observation"]
     SC --> E["Rerasterize expanded sprites and scene"]
-    N --> M["Machine::pixels"]
+    N --> M["Machine::native_pixels()"]
     M --> CAP["Native dumps, CRCs, comparisons"]
     E --> P["presentation_pixels"]
     P --> SDL["SDL texture sampling: nearest or linear"]
@@ -88,9 +88,15 @@ flowchart TD
     SDL --> W["Letterboxed window surface"]
 ```
 
-`Machine::pixels` is always a 320x232 array. In supported `game` frames it holds game-composed native pixels. In `compare` it holds oracle pixels.
+`Machine::native_pixels()` returns a const reference to the 320x232 native array.
+In supported GPU `game` frames, the first observation materializes the retained
+scanout through the exact CPU compositor. Unobserved supported predecessors may
+be discarded; unsupported successors preserve their retained game composite.
+Captured maps, glyphs, palette, rows and the current sprite plane isolate the
+result from later live writes and the next latch. CPU presentation stays eager.
+In `compare`, the accessor returns oracle pixels.
 
-`GameVideo::presentation()` returns `Machine::pixels` when options are not expanded. Otherwise it returns the separate presentation buffer.
+`GameVideo::presentation()` returns `Machine::native_pixels()` when options are not expanded. Otherwise it returns the separate presentation buffer.
 
 The constructor allocates expanded ARGB and indexed-sprite buffers once. Each contains `width * height` entries. Native buffers remain available alongside them.
 
@@ -195,10 +201,10 @@ Normal GPU presentation has no expanded RGB upload or readback.
 
 | Output | Pixel source | Dimensions |
 | --- | --- | --- |
-| `--dump-dir`: `rendered.argb` and `rendered.bmp` | `Machine::pixels` | Always 320x232 |
+| `--dump-dir`: `rendered.argb` and `rendered.bmp` | `Machine::native_pixels()` | Always 320x232 |
 | Frontend `frame_crc` | Raw native pixel array | Always 320x232 |
 | Frontend `--surface FILE` | CPU `SDL_RenderReadPixels`; GPU fenced texture readback | CPU window surface; GPU internal-resolution image |
-| Gameplay regression `--surface FILE` | `write_bmp(m.pixels)` | Always 320x232 |
+| Gameplay regression `--surface FILE` | `write_bmp(m.native_pixels())` | Always 320x232 |
 
 The same option name has different capture semantics across backends/programs.
 CPU frontend captures include actual window mapping/filtering; GPU captures

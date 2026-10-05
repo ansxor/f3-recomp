@@ -59,7 +59,11 @@ struct GameVideo::Impl {
     GameText text;
     GameSprites sprites;
     GameLines lines;
-    std::array<uint16_t, 432 * 256> sprite_plane{};
+    // Only sprite_planes[next_plane] is canonical state. The other plane
+    // retains the pending frame while latch_sprites prepares its successor.
+    std::array<std::array<uint16_t, 432 * 256>, 2> sprite_planes{};
+    unsigned next_plane = 0, native_plane = 0;
+    bool native_pending = false;
     std::array<uint32_t, 320 * 232> pixels{};
     bool rendered = false;
     std::unique_ptr<GpuScene> gpu;
@@ -72,7 +76,7 @@ struct GameVideo::Impl {
         std::vector<uint16_t> selected_sprite_plane;
         bool ready = false, canonical_ready = false, selected_ready = false;
         explicit Reference(GameVideoOptions options)
-            : canonical_sprite_plane(plane_size(options)) {}
+            : canonical_sprite_plane(options.expanded() ? plane_size(options) : 0) {}
         static size_t plane_size(GameVideoOptions options) {
             return options.expanded() ? size_t(options.width()) * options.height() : 432 * 256;
         }
@@ -85,7 +89,7 @@ struct GameVideo::Impl {
         auto &scene = *gpu;
         scene.fallback = !rendered;
         if (scene.fallback)
-            std::copy(machine.pixels.begin(), machine.pixels.end(), scene.native_pixels.begin());
+            std::copy(machine.pixels_.begin(), machine.pixels_.end(), scene.native_pixels.begin());
         if (reference) {
             reference->ready = false;
             reference->canonical_ready = reference->selected_ready = false;
@@ -219,6 +223,7 @@ struct GameVideo::Impl {
         auto &plane = fixed_plane ? ref.canonical_sprite_plane : ref.selected_sprite_plane;
         auto &ready = fixed_plane ? ref.canonical_ready : ref.selected_ready;
         if (!ready) {
+            if (plane.empty()) plane.resize(Reference::plane_size(opts));
             ref.sprites.raster(machine.video->sprite_tiles(), plane, opts);
             ready = true;
         }
@@ -236,6 +241,19 @@ struct GameVideo::Impl {
                    output, opts);
     }
 
+    void materialize_native() {
+        if (!native_pending) return;
+        prepare_reference();
+        auto &ref = *reference;
+        ref.lines.rows_ = gpu->reference_rows;
+        // Neither live maps/palette nor the now-latched sprite list describe
+        // this frame. Use the immutable capture and retained native plane.
+        compose_game_scene_serial(ref.tiles, ref.text, ref.lines, sprite_planes[native_plane], false,
+                                  machine.video->playfield_tiles(),
+                                  std::span(gpu->words).subspan(GpuScene::palette, 8192), pixels);
+        std::copy(pixels.begin(), pixels.end(), machine.pixels_.begin());
+        native_pending = false;
+    }
     void materialize_presentation() {
         if (!presentation_pending) return;
         // Snapshot/save paths must not lazily allocate row workers.
@@ -268,7 +286,7 @@ struct GameVideo::Impl {
         text.save_state(writer);
         sprites.save_state(writer);
         lines.save_state(writer);
-        writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_plane));
+        writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_planes[next_plane]));
         writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
         if (!sync) {
             writer.write_span(std::span<const uint32_t>(presentation_pixels));
@@ -283,7 +301,9 @@ struct GameVideo::Impl {
         text.load_state(reader);
         sprites.load_state(reader);
         lines.load_state(reader);
-        reader.read_span(std::span<uint16_t, 432 * 256>(sprite_plane));
+        native_pending = false;
+        next_plane = native_plane = 0;
+        reader.read_span(std::span<uint16_t, 432 * 256>(sprite_planes[next_plane]));
         reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
         if (!sync) {
             reader.read_span(std::span<uint32_t>(presentation_pixels));
@@ -300,14 +320,14 @@ struct GameVideo::Impl {
             for (unsigned y = 0; y < options.height(); ++y)
                 for (unsigned x = 0; x < 320 * scale; ++x) {
                     const size_t at = size_t(y) * width + options.border * scale + x;
-                    presentation_pixels[at] = machine.pixels[(y / scale) * 320 + x / scale];
-                    presentation_sprites[at] = sprite_plane[(y / scale + 24) * 432 + x / scale + 46];
+                    presentation_pixels[at] = machine.pixels_[(y / scale) * 320 + x / scale];
+                    presentation_sprites[at] = sprite_planes[next_plane][(y / scale + 24) * 432 + x / scale + 46];
                 }
         }
         presentation_pending = false;
         if (gpu) {
             gpu->fallback = true;
-            std::copy(machine.pixels.begin(), machine.pixels.end(), gpu->native_pixels.begin());
+            std::copy(machine.pixels_.begin(), machine.pixels_.end(), gpu->native_pixels.begin());
         }
         if (reference) {
             reference->ready = false;
@@ -332,11 +352,15 @@ GameVideo::GameVideo(Machine &machine, GameVideoMode mode, GameVideoOptions opti
 }
 GameVideo::~GameVideo() = default;
 void GameVideo::reset() {
+    impl_->materialize_native();
+    impl_->materialize_presentation();
     impl_->tiles.reset();
     impl_->text.reset();
     impl_->sprites.reset();
     impl_->lines.reset();
-    impl_->sprite_plane.fill(0);
+    for (auto &plane : impl_->sprite_planes) plane.fill(0);
+    impl_->next_plane = impl_->native_plane = 0;
+    impl_->native_pending = false;
     std::fill(impl_->presentation_sprites.begin(), impl_->presentation_sprites.end(), 0);
     std::fill(impl_->presentation_pixels.begin(), impl_->presentation_pixels.end(), 0xff000000);
     impl_->presentation_pending = false;
@@ -377,8 +401,12 @@ void GameVideo::latch_sprites() {
         // first trail list. Reconstructing only the final list loses history.
         state.sprites.raster(assets, state.presentation_sprites, state.options);
     }
+    // A trail latch updates the prior plane in place. Finish its pending
+    // composite first rather than copying a full plane just to preserve it.
+    if (state.native_pending && state.sprites.reg_trails_) state.materialize_native();
     state.sprites.latch();
-    state.sprites.raster(assets, state.sprite_plane);
+    if (state.native_pending) state.next_plane ^= 1;
+    state.sprites.raster(assets, state.sprite_planes[state.next_plane]);
     if (state.options.expanded() && (!state.gpu || state.sprites.trails()))
         state.sprites.raster(assets, state.presentation_sprites, state.options);
 }
@@ -388,12 +416,16 @@ void GameVideo::render_frame() {
     auto &m = state.machine;
     render();
     if (state.rendered && state.mode == GameVideoMode::Game) {
-        std::copy(state.pixels.begin(), state.pixels.end(), m.pixels.begin());
+        if (!state.gpu)
+            std::copy(state.pixels.begin(), state.pixels.end(), m.pixels_.begin());
         // Keep only the oracle's sprite lag current, so an unsupported future
         // frame can use its exact visible result without rerunning the CPU.
         m.video->vblank(m.graphics);
     } else {
-        m.video->render_frame(m.palette, m.graphics, m.control, m.pixels);
+        // The game composite is retained across oracle fallback frames, even
+        // though Machine scanout now comes from the oracle.
+        state.materialize_native();
+        m.video->render_frame(m.palette, m.graphics, m.control, m.pixels_);
         if (state.rendered && state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
     }
     if (!state.rendered && state.options.expanded() && !state.gpu) {
@@ -403,10 +435,14 @@ void GameVideo::render_frame() {
         const unsigned scale = state.options.scale, width = state.options.width();
         for (unsigned y = 0; y < state.options.height(); ++y)
             for (unsigned x = 0; x < 320 * scale; ++x)
-                state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels[(y / scale) * 320 + x / scale];
+                state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels_[(y / scale) * 320 + x / scale];
     }
     if (state.gpu) {
+        // Only a supported successor may discard an unobserved composite.
+        state.native_pending = false;
         state.capture_gpu();
+        state.native_pending = state.rendered && state.mode == GameVideoMode::Game;
+        state.native_plane = state.next_plane;
         state.presentation_pending = state.options.expanded();
     }
     latch_sprites();
@@ -430,35 +466,41 @@ void GameVideo::render() {
     state.lines.prepare(state.sprites.flipped());
     for (unsigned y = 24; y < 256; ++y)
         if (state.lines.row(y).bitmap) { state.fallback("bitmap-pivot", 0); return; }
-    std::array<uint32_t, 8192> colors;
-    const auto &palette = state.machine.palette;
-    for (unsigned i = 0; i < colors.size(); ++i)
-        colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) | palette[i * 4 + 3];
-    compose_game_scene(state.tiles, state.text, state.lines, state.sprite_plane,
-                       state.sprites.flipped(), state.machine.video->playfield_tiles(),
-                       colors, state.pixels);
-    if (state.options.expanded() && !state.gpu)
-        compose_game_scene(state.tiles, state.text, state.lines, state.presentation_sprites,
+    if (state.mode != GameVideoMode::Game || !state.gpu) {
+        std::array<uint32_t, 8192> colors;
+        const auto &palette = state.machine.palette;
+        for (unsigned i = 0; i < colors.size(); ++i)
+            colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) | palette[i * 4 + 3];
+        compose_game_scene(state.tiles, state.text, state.lines, state.sprite_planes[state.next_plane],
                            state.sprites.flipped(), state.machine.video->playfield_tiles(),
-                           colors, state.presentation_pixels, state.options);
+                           colors, state.pixels);
+        if (state.options.expanded() && !state.gpu)
+            compose_game_scene(state.tiles, state.text, state.lines, state.presentation_sprites,
+                               state.sprites.flipped(), state.machine.video->playfield_tiles(),
+                               colors, state.presentation_pixels, state.options);
+    }
     state.rendered = true;
     ++state.rendered_frames;
 }
 
+void GameVideo::materialize_native() const {
+    impl_->materialize_native();
+}
 std::span<const uint32_t> GameVideo::presentation() const {
     impl_->materialize_presentation();
-    return impl_->options.expanded() ? std::span<const uint32_t>(impl_->presentation_pixels) : impl_->machine.pixels;
+    return impl_->options.expanded() ? std::span<const uint32_t>(impl_->presentation_pixels) :
+                                     std::span<const uint32_t>(impl_->machine.native_pixels());
 }
 
 void GameVideo::enable_gpu_presentation(bool enabled) {
+    impl_->materialize_native();
+    impl_->materialize_presentation();
     if (enabled) {
         if (!impl_->gpu) impl_->gpu = std::make_unique<GpuScene>();
-        // Only expanded canonical snapshots require eager reference storage.
-        // Interactive GPU scaling never allocates an unused diagnostic plane.
-        if (impl_->options.expanded() && !impl_->reference)
+        // Native and expanded snapshot observations must not allocate.
+        if ((impl_->options.expanded() || impl_->mode == GameVideoMode::Game) && !impl_->reference)
             impl_->reference = std::make_unique<Impl::Reference>(impl_->options);
     } else {
-        impl_->materialize_presentation();
         impl_->gpu.reset();
         impl_->reference.reset();
         impl_->reference_selected = false;
@@ -469,6 +511,8 @@ void GameVideo::set_gpu_scale(unsigned scale) {
     if (!scale || scale > GameVideoOptions::max_gpu_scale)
         throw std::runtime_error("Game GPU reference scale must be 1..8");
     if (scale == impl_->gpu_scale) return;
+    impl_->materialize_native();
+    impl_->materialize_presentation();
     auto options = impl_->options;
     options.scale = scale;
     if (impl_->reference && impl_->reference_selected) {
@@ -518,7 +562,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
                 if (layer < 4 || layer == 8) expected = {oracle.palette[x], oracle.flags[x]};
                 else {
                     const unsigned offset = (y + 24) * 432 + x + 46;
-                    const uint16_t actual = impl_->sprite_plane[offset];
+                    const uint16_t actual = impl_->sprite_planes[impl_->next_plane][offset];
                     const uint16_t reference = m.video->sprite_plane()[offset];
                     game = {actual, uint8_t(actual && ((actual >> 10) & 3) == layer - 4 ? 0x10 : 0)};
                     expected = {reference, uint8_t(reference && ((reference >> 10) & 3) == layer - 4 ? 0x10 : 0)};
@@ -554,6 +598,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
 }
 
 void GameVideo::compare_composite(uint64_t frame) {
+    impl_->materialize_native();
     if (!impl_->rendered) {
         std::ostringstream error;
         error << "Game composite unsupported at frame " << frame << " line producer PC 0x"
@@ -562,7 +607,7 @@ void GameVideo::compare_composite(uint64_t frame) {
     }
     uint64_t count = 0;
     unsigned first = 0;
-    const auto &oracle = impl_->machine.pixels;
+    const auto &oracle = impl_->machine.pixels_;
     for (unsigned i = 0; i < impl_->pixels.size(); ++i) {
         if (impl_->pixels[i] == oracle[i]) continue;
         if (!count) first = i;
@@ -607,6 +652,7 @@ void GameVideo::save_state(std::span<uint8_t> dst) const {
     if (dst.size() != state_size()) {
         throw std::invalid_argument("GameVideo::save_state size mismatch");
     }
+    impl_->materialize_native();
     impl_->materialize_presentation();
     StateWriter writer(dst);
     impl_->save_state(writer);
@@ -618,12 +664,14 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
     if (src.size() != state_size()) {
         throw std::invalid_argument("GameVideo::load_state size mismatch");
     }
+    impl_->materialize_native();
+    impl_->materialize_presentation();
     StateReader reader(src);
     impl_->load_state(reader);
     impl_->presentation_pending = false;
     if (impl_->gpu) {
         impl_->gpu->fallback = true;
-        std::copy(impl_->machine.pixels.begin(), impl_->machine.pixels.end(), impl_->gpu->native_pixels.begin());
+        std::copy(impl_->machine.pixels_.begin(), impl_->machine.pixels_.end(), impl_->gpu->native_pixels.begin());
         if (impl_->reference) impl_->reference->ready = false;
     }
     if (reader.remaining() != 0) {
@@ -636,6 +684,7 @@ size_t GameVideo::sync_state_size() const {
 void GameVideo::save_sync_state(std::span<uint8_t> dst) const {
     if (dst.size() != sync_state_size())
         throw std::invalid_argument("GameVideo::save_sync_state size mismatch");
+    impl_->materialize_native();
     StateWriter writer(dst);
     impl_->save_state(writer, true);
     if (writer.remaining()) throw std::logic_error("GameVideo sync snapshot unwritten bytes");
@@ -643,6 +692,8 @@ void GameVideo::save_sync_state(std::span<uint8_t> dst) const {
 void GameVideo::load_sync_state(std::span<const uint8_t> src) {
     if (src.size() != sync_state_size())
         throw std::invalid_argument("GameVideo::load_sync_state size mismatch");
+    impl_->materialize_native();
+    impl_->materialize_presentation();
     StateReader reader(src);
     impl_->load_state(reader, true);
     if (reader.remaining()) throw std::logic_error("GameVideo sync snapshot unread bytes");

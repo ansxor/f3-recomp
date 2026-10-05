@@ -355,7 +355,7 @@ struct Harness {
         const auto stem = "frame_" + std::to_string(m.frame) + "_s" + std::to_string(o.video.scale) + "_b" + std::to_string(o.video.border) + "_" + tag;
         capture_png(o.dump_dir / (stem + "_cpu.png"), cpu, o.video);
         capture_png(o.dump_dir / (stem + "_gpu.png"), device, o.video);
-        f3rt::write_bmp(o.dump_dir / (stem + "_native.bmp"), m.pixels);
+        f3rt::write_bmp(o.dump_dir / (stem + "_native.bmp"), m.native_pixels());
     }
     void compare(unsigned index, const std::string &tag, bool injected) {
         const unsigned mask = index == 9 ? 511 : 1u << index;
@@ -384,7 +384,7 @@ struct Harness {
             for (unsigned y = 0; y < o.video.height(); ++y)
                 for (unsigned x = 0; x < o.video.width(); ++x) {
                     const uint32_t expected = x < left || x >= left + 320 * o.video.scale
-                        ? 0xff000000u : m.pixels[(y / o.video.scale) * 320 + (x - left) / o.video.scale];
+                        ? 0xff000000u : m.native_pixels()[(y / o.video.scale) * 320 + (x - left) / o.video.scale];
                     if (cpu[size_t(y) * o.video.width() + x] != expected)
                         throw std::runtime_error("CPU fallback reference disagrees with actual native oracle at frame " +
                             std::to_string(m.frame) + " x=" + std::to_string(x) + " y=" + std::to_string(y));
@@ -995,6 +995,188 @@ void verify_trail_history(Harness &h) {
     if (differences) throw std::runtime_error("Deferred GPU trail snapshots differ from CPU: " + std::to_string(differences) + " bytes");
     std::cout << "SNAPSHOT trails_history_frames=4 deferred_save=1 byte_mismatches=0 (induced branch)\n";
 }
+// Real supported producer captures, with no native/save observation between
+// scanouts. Separate peers keep gameplay, harness samples and diagnostics intact.
+void verify_deferred_native(Harness &h) {
+    const auto baseline = snapshot(h.m);
+    const auto baseline_blocks = h.m.native_blocks, baseline_fallbacks = h.m.fallback_instructions;
+    std::vector<uint8_t> baseline_sync(h.m.sync_state_size());
+    h.m.save_sync_state(baseline_sync);
+    auto eager_owner = std::make_unique<f3rt::Machine>(h.m.roms);
+    auto lazy_owner = std::make_unique<f3rt::Machine>(h.m.roms);
+    auto &eager = *eager_owner, &lazy = *lazy_owner;
+    for (auto *m : {&eager, &lazy}) {
+#ifdef F3RT_SOUND_GENERATED
+        m->use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                            {f3_sound_excluded_ranges, f3_sound_excluded_count});
+#endif
+        m->game_video = std::make_unique<f3rt::GameVideo>(*m, f3rt::GameVideoMode::Game, h.canonical_video);
+    }
+    // The independent control stays CPU-eager for the entire proof.
+    lazy.game_video->enable_gpu_presentation();
+    const auto tiles = h.m.video->sprite_tiles();
+    unsigned tile = 0;
+    for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256); ++candidate) {
+        const auto pens = tiles.subspan(candidate * 256, 256);
+        unsigned opaque = 0;
+        bool asymmetric = false;
+        for (unsigned y = 0; y < 16; ++y)
+            for (unsigned x = 0; x < 16; ++x) {
+                opaque += (pens[y * 16 + x] & 15) != 0;
+                asymmetric |= (pens[y * 16 + x] & 15) != (pens[(15 - y) * 16 + x] & 15);
+            }
+        if (opaque >= 96 && asymmetric) { tile = candidate; break; }
+    }
+    if (!tile) throw std::runtime_error("Deferred native proof needs a visible asymmetric ROM sprite");
+    auto descriptor = [](unsigned frame) {
+        return BoundarySprite{.x = int(40 + frame * 56), .y = 56,
+            .fx = (frame & 1) != 0, .fy = (frame & 2) != 0,
+            .must_show = true, .palette = uint16_t(0xc0 | (frame & 1))};
+    };
+    auto capture = [&](f3rt::Machine &m, unsigned frame) {
+        // Distinct, nonsaturating colors make both stale palettes and descriptor
+        // ownership visible, even when gameplay has not filled these banks.
+        for (unsigned color = 0; color < 8192; ++color) {
+            m.palette[color * 4 + 1] = uint8_t(20 + frame * 12);
+            m.palette[color * 4 + 2] = uint8_t(30 + frame * 16);
+            m.palette[color * 4 + 3] = uint8_t(40 + frame * 11);
+        }
+        for (unsigned bank = 0; bank < 2; ++bank)
+            for (unsigned pen = 1; pen < 16; ++pen) {
+                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
+                m.palette[at + 1] = uint8_t(bank ? 32 : 200);
+                m.palette[at + 2] = uint8_t(64 + frame * 16);
+                m.palette[at + 3] = uint8_t(pen * 11);
+            }
+        const auto d = descriptor(frame);
+        observe(m, 0x4528); // Clear staging, not the currently latched list.
+        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
+        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
+        put16(m.ram, 0x7000, 0); put16(m.ram, 0x7002, uint16_t(tile));
+        put16(m.ram, 0x7010, 0); put16(m.ram, 0x7012, 0);
+        put16(m.ram, 0x7014, uint16_t(d.x)); put16(m.ram, 0x7016, uint16_t(d.y));
+        put16(m.ram, 0x7018, d.palette);
+        put16(m.ram, 0x701a, d.fx); put16(m.ram, 0x701c, d.fy);
+        observe(m, 0x4688); observe(m, 0x4480);
+        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+        m.game_video->render_frame(); // Capture frame N, then latch list N for N+1.
+    };
+    auto mutate_live = [](f3rt::Machine &m) {
+        for (auto &byte : m.palette) byte ^= 0xff;
+        for (size_t i = 0; i < m.graphics.size(); ++i) m.graphics[i] ^= uint8_t(0x5b + i * 17);
+    };
+    // All save destinations are allocated once; each observer is exercised first
+    // on a fresh pending capture, rather than after an earlier save flushed it.
+    std::vector<uint8_t> eager_state(baseline.size()), lazy_state(baseline.size());
+    std::vector<uint8_t> eager_sync(baseline_sync.size()), lazy_sync(baseline_sync.size());
+    auto exact_bytes = [](const auto &a, const auto &b, const char *tag, const char *kind) {
+        const auto mismatch = std::mismatch(a.begin(), a.end(), b.begin(), b.end());
+        if (mismatch.first != a.end())
+            throw std::runtime_error(std::string("Deferred native ") + tag + " differs in " + kind +
+                                     " at byte " + std::to_string(mismatch.first - a.begin()));
+    };
+    auto compare = [&](const char *tag) {
+        require_exact(eager.native_pixels(), lazy.native_pixels(), std::string("Deferred native ") + tag);
+        eager.save_state(eager_state); lazy.save_state(lazy_state);
+        exact_bytes(eager_state, lazy_state, tag, "canonical state");
+        eager.save_sync_state(eager_sync); lazy.save_sync_state(lazy_sync);
+        exact_bytes(eager_sync, lazy_sync, tag, "sync state");
+    };
+    auto native_video = h.canonical_video;
+    native_video.scale = 1;
+    std::vector<uint32_t> sprite(size_t(native_video.width()) * native_video.height()), blank(sprite.size());
+    const std::vector<BoundarySprite> visible_list{descriptor(2)};
+    constexpr std::array tags{"pixels_first", "canonical_save_first", "sync_save_first",
+        "unsupported_successor", "scale_pending", "disable_enable_pending", "enable_pending",
+        "canonical_load_pending", "sync_load_pending", "reset_pending"};
+    size_t visible_pixels = 0, composite_pixels = 0;
+    for (unsigned kind = 0; kind < tags.size(); ++kind) {
+        lazy.game_video->enable_gpu_presentation();
+        lazy.game_video->set_gpu_scale(h.o.video.scale);
+        for (auto *m : {&eager, &lazy}) {
+            m->load_state(baseline);
+            observe(*m, 0x41d0);
+            put16(m->ram, 0x7a16, 0); put16(m->ram, 0x7a1a, 0); observe(*m, 0x43b0);
+            put16(m->ram, 0x7a1e, 0); observe(*m, 0x43e0);
+        }
+        for (unsigned frame = 0; frame < 4; ++frame) {
+            capture(eager, frame); capture(lazy, frame);
+            if (lazy.game_video->gpu_scene().fallback)
+                throw std::runtime_error(std::string("Deferred native ") + tags[kind] + " left supported producers");
+        }
+        // No pixels, CRCs, saves or references have observed these four frames.
+        // Frame 3 must use palette 3 and list 2, NOT live memory or next list 3.
+        mutate_live(eager); mutate_live(lazy);
+        if (kind == 1) {
+            eager.save_state(eager_state); lazy.save_state(lazy_state);
+            exact_bytes(eager_state, lazy_state, tags[kind], "first canonical save");
+        } else if (kind == 2) {
+            eager.save_sync_state(eager_sync); lazy.save_sync_state(lazy_sync);
+            exact_bytes(eager_sync, lazy_sync, tags[kind], "first sync save");
+        } else if (kind == 3) {
+            for (auto *m : {&eager, &lazy}) {
+                m->game_video->observe_write(0xdead00, 0x610000);
+                m->game_video->render_frame();
+            }
+            if (!lazy.game_video->gpu_scene().fallback)
+                throw std::runtime_error("Deferred native unsupported successor did not reach the oracle");
+        } else if (kind == 4) {
+            lazy.game_video->set_gpu_scale(h.o.video.scale == 1 ? 3 : 1);
+        } else if (kind == 5) {
+            lazy.game_video->enable_gpu_presentation(false);
+            compare("disable_pending");
+            lazy.game_video->enable_gpu_presentation();
+        } else if (kind == 6) {
+            lazy.game_video->enable_gpu_presentation();
+        } else if (kind == 7 || kind == 8) {
+            for (auto *m : {&eager, &lazy}) {
+                if (kind == 7) m->load_state(baseline);
+                else m->load_sync_state(baseline_sync);
+            }
+        } else if (kind == 9) {
+            eager.reset(); lazy.reset();
+        }
+        compare(tags[kind]);
+        if (kind == 0) {
+            // Independent ROM/position witnesses prove that the deferred frame
+            // visibly contains list 2, not the now-latched list 3 or a blank plane.
+            lazy.game_video->set_gpu_scale(1);
+            lazy.game_video->render_reference(sprite, native_video, 1u << 7, true);
+            lazy.game_video->render_reference(blank, native_video, 0, true);
+            visible_pixels = boundary_witnesses(visible_list, tiles.subspan(tile * 256, 256),
+                native_video, sprite, blank, "deferred_native_sprite_lag").visible;
+            lazy.game_video->render_reference(sprite, native_video, 511, true);
+            lazy.game_video->render_reference(blank, native_video, 511u ^ (1u << 7), true);
+            const auto &pixels = eager.native_pixels();
+            for (unsigned y = 0; y < 232; ++y)
+                for (unsigned x = 0; x < 320; ++x) {
+                    const size_t at = size_t(y) * native_video.width() + native_video.border + x;
+                    if (pixels[y * 320 + x] != sprite[at])
+                        throw std::runtime_error("Deferred native composite witness differs from the eager consumer");
+                    composite_pixels += sprite[at] != blank[at];
+                }
+            if (!visible_pixels || !composite_pixels)
+                throw std::runtime_error("Deferred native fixture has no visible isolated/composite sprite witness");
+        }
+        if (kind == 7 || kind == 8) {
+            // A subsequent real capture must not resurrect the discarded branch
+            // after either kind of snapshot import.
+            capture(eager, 4); capture(lazy, 4);
+            if (lazy.game_video->gpu_scene().fallback)
+                throw std::runtime_error("Deferred native snapshot recovery left supported producers");
+            mutate_live(eager); mutate_live(lazy);
+            compare("load_supported_successor");
+        }
+    }
+    h.m.save_state(lazy_state);
+    exact_bytes(baseline, lazy_state, "branch restore", "gameplay state");
+    if (h.m.native_blocks != baseline_blocks || h.m.fallback_instructions != baseline_fallbacks)
+        throw std::runtime_error("Deferred native branch changed gameplay diagnostic counters");
+    std::cout << "SNAPSHOT deferred_native_supported_frames=4 cases=" << tags.size()
+              << " live_palette_graphics_mutation=1 sprite_lag_visible_pixels=" << visible_pixels
+              << " composite_sprite_pixels=" << composite_pixels
+              << " native_canonical_sync_mismatches=0 gameplay_and_diagnostics=unchanged (independent branches)\n";
+}
 void verify_cpu_backend(Harness &h, std::span<const uint8_t> pre) {
     auto peer_owner = std::make_unique<f3rt::Machine>(h.m.roms);
     auto &peer = *peer_owner;
@@ -1135,6 +1317,7 @@ int main(int argc, char **argv) try {
                 const auto baseline = snapshot(m);
                 const uint32_t baseline_crc = m.state_crc();
                 const auto baseline_blocks = m.native_blocks;
+                if (o.injections[1] || o.injections[3]) verify_deferred_native(h);
                 if (o.injections[1]) {
                     verify_trail_history(h);
                     m.load_state(pre); advance(m);
@@ -1192,7 +1375,7 @@ int main(int argc, char **argv) try {
     h.report();
     const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
     timing("GPU_host_reference_and_resource_scale_change", h.scale_change_ms);
-    const uint32_t frame_crc = f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * sizeof(uint32_t));
+    const uint32_t frame_crc = f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()), m.native_pixels().size() * sizeof(uint32_t));
     std::cout << "SUCCESS seed=" << o.seed << " frames=" << m.frame << " supported_frames=" << supported_frames
         << " actual_fallback_frames=" << fallback_frames << " actual_oracle_transitions=" << transitions
         << " native_blocks=" << m.native_blocks << " fallback_instructions=" << m.fallback_instructions

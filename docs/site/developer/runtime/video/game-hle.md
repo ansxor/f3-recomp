@@ -106,8 +106,8 @@ flowchart LR
 | `render_frame()` | Called at VBSTART by `Machine::advance_to`. See the frame decision below. |
 | `compare_layers(frame, layer_mask)` | Diagnostic: compares layers with the oracle and throws on a difference. See [Compare mode](/developer/runtime/video/compare-mode). |
 | `report(std::ostream&)` | Prints the `VIDEO ...` summary lines. |
-| `presentation()` | Returns the presentation buffer if `options.expanded()`, else `Machine::pixels`. |
-| `enable_gpu_presentation(enabled)`, `gpu_scene()` | Enable/read the host-only scanout snapshot. Fixed canonical caches are eager only when expanded snapshots need them; CPU diagnostic storage is lazy. |
+| `presentation()` | Returns the presentation buffer if `options.expanded()`, else `Machine::native_pixels()`. |
+| `enable_gpu_presentation(enabled)`, `gpu_scene()` | Enable/read the host-only scanout snapshot. Native/expanded reconstruction caches are preallocated when GPU Game snapshots need them; CPU diagnostic raster storage stays lazy. |
 | `set_gpu_scale(scale)`, `render_reference(output, options, mask, serial)` | Select host GPU/reference scale 1..8 and render that geometry; constructor-fixed presentation/state buffers and border do not change. Player scales remain capped at 4. |
 | `state_size()`, `save_state(dst)`, `load_state(src)` | Snapshot support. They throw `std::invalid_argument` for a wrong size and `std::logic_error` for leftover bytes. |
 | `sync_state_size()`, `save_sync_state(dst)`, `load_sync_state(src)` | Canonical native rendering/trails without expanded presentation buffers; guest keeps its own geometry. |
@@ -146,20 +146,31 @@ The recompiler writes this call into the generated block for every address in a 
 | 6 | `tiles.supported(layer)` for layers 0 to 3 | `pf0` to `pf3` | `tiles.unsupported_pc(layer)` |
 | 7 | After `lines.prepare(false)`, no row from 24 to 255 has `bitmap` set | `bitmap-pivot` | 0 |
 
-If all tests pass, `render()` builds the 8192-entry color table from `Machine::palette` (bytes 1, 2 and 3 of each entry are R, G and B) and calls `compose_game_scene` into the native `pixels` buffer. If the options expand the picture, it calls `compose_game_scene` again into `presentation_pixels`. It then sets `rendered` to true and counts the frame.
+If all tests pass, CPU presentation builds the 8192-entry color table from
+`Machine::palette` (bytes 1, 2 and 3 are R, G and B) and composes native `pixels`,
+plus `presentation_pixels` when expanded. Supported GPU `Game` frames instead
+retain immutable scene data and the current native sprite plane; the first
+native observation composes that exact frame. Diagnostic/Compare stay eager.
+Both paths set `rendered` and count the frame at the same beam boundary.
 
 After `render()`, `render_frame` acts as follows:
 
 | `rendered` | Mode | Action |
 | --- | --- | --- |
-| true | `Game` | Copy `pixels` to `Machine::pixels`. Call `Video::vblank` so that the oracle sprite plane stays current. |
-| true | `Compare` | Run `Video::render_frame` into `Machine::pixels`, then call `compare_composite`. |
+| true | `Game` | CPU: copy `pixels` to private native scanout. GPU: retain exact scanout until observed. Both call `Video::vblank` to keep oracle sprite lag current. |
+| true | `Compare` | Run `Video::render_frame` into private native scanout, then call `compare_composite`. |
 | true | `Diagnostic` | Run `Video::render_frame`. No comparison. |
-| false | any | Run `Video::render_frame` into `Machine::pixels`. |
+| false | any | Materialize any retained preceding game composite, then render the oracle into private native scanout. |
 
 If the options expand the picture and `rendered` is false, the function fills the presentation buffer with black and copies the native oracle picture into the center, enlarged by the integer `scale` (nearest neighbor), with `border * scale` black columns on each side. No border content is invented. In every case the function ends with `latch_sprites()`.
 
-`latch_sprites()` calls `GameSprites::latch()`, rasters the sprites into the native 432x256 plane and, if the options expand the picture, rasters them again into the higher-resolution plane `presentation_sprites`. The plane is for the **next** frame. This is the same one-frame lag as the oracle.
+`latch_sprites()` calls `GameSprites::latch()` and rasters the **next** native
+432x256 plane, preserving the oracle's one-frame lag. GPU retention alternates
+two preallocated native planes while an unobserved composite needs the current
+one; only the original next plane is canonical. Entering trails first finishes
+any retained composite, then updates the trail plane in place. CPU expanded
+presentation also rasters `presentation_sprites`; GPU expanded reconstruction is
+on demand except when trail history must be retained.
 
 ::: warning
 In `Game` mode the oracle still keeps its sprite lag current through `Video::vblank`. This is what makes a fallback frame exact: the oracle has the right sprite plane for the frame that follows a game-data frame. Do not remove the `vblank` call.
@@ -230,9 +241,9 @@ sequenceDiagram
         M->>GV: observe_write(pc, address)
     end
     M->>GV: render_frame() at VBSTART
-    GV->>GV: render(): seven tests, then compose_game_scene
+    GV->>GV: render(): seven tests; compose eagerly or retain GPU scanout
     alt rendered
-        GV->>M: copy pixels to Machine::pixels
+        GV->>M: eager native pixels or exact retained frame
         GV->>FDP: vblank(graphics) keeps the sprite lag
     else not rendered
         GV->>FDP: render_frame(palette, graphics, control, pixels)

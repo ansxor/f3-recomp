@@ -31,7 +31,12 @@ public:
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
     std::array<uint8_t, 0x800> shared{};
-    std::array<uint32_t, 320 * 232> pixels{};
+private:
+    friend class GameVideo;
+    mutable std::array<uint32_t, 320 * 232> pixels_{};
+public:
+    // Observing native scanout materializes a retained GPU-presented frame.
+    const std::array<uint32_t, 320 * 232> &native_pixels() const;
     RomSet roms;
     std::unique_ptr<Video> video;
     std::unique_ptr<GameVideo> game_video;

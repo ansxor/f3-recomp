@@ -783,7 +783,7 @@ int main(int argc,char **argv) try {
             } else
 #endif
             {
-                const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.pixels);
+                const auto pixels=m.game_video?m.game_video->presentation():std::span<const uint32_t>(m.native_pixels());
                 if(advanced || refresh || !surface_valid)
                     check(SDL_UpdateTexture(sdl.texture,nullptr,pixels.data(),int(video_options.width()*4)));
                 check(SDL_RenderClear(sdl.renderer));check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
@@ -866,7 +866,7 @@ int main(int argc,char **argv) try {
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
              <<" audio_backend="<<audio_backend<<" sound_driver="<<(audio_backend=="hle"?"none":sound_driver)
-             <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()),m.pixels.size()*4)<<std::dec
+             <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),m.native_pixels().size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
     if(motion_presentation)

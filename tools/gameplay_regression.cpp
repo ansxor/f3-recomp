@@ -304,7 +304,7 @@ int main(int argc, char **argv) try {
     const double elapsed_sec = std::chrono::duration<double>(elapsed).count();
     const double fps = elapsed_sec > 0 ? double(m.frame) / elapsed_sec : 0.0;
 
-    const uint32_t frame_crc = f3rt::crc32(reinterpret_cast<const uint8_t *>(m.pixels.data()), m.pixels.size() * 4);
+    const uint32_t frame_crc = f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()), m.native_pixels().size() * 4);
 
     if (!dump_dir.empty()) {
         f3rt::dump_machine(m, dump_dir);
@@ -313,7 +313,7 @@ int main(int argc, char **argv) try {
         if (capture_surface.has_parent_path()) {
             std::filesystem::create_directories(capture_surface.parent_path());
         }
-        f3rt::write_bmp(capture_surface, m.pixels);
+        f3rt::write_bmp(capture_surface, m.native_pixels());
     }
     if (m.game_video) m.game_video->report(std::cout);
     if (m.sound_trace) m.sound_trace->finish(m);
