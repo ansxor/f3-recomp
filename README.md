@@ -39,19 +39,16 @@ Run with `--help` for all command-line options, or see the [CLI reference](docs/
 
 - **Video**: MAME-derived F3 renderer with optional GPU-accelerated presentation
 - **Audio**: Accurate emulated sound devices (ES5505/ES5510); optional HLE mode
-- **Save states**: Strict-native slots 0–9
-- **Netplay**: Two-player rollback netplay via UDP relay (Land Maker Japan only) — see the [netplay guide](docs/site/guide/netplay.md)
+- **Netplay**: Two-player rollback netplay via UDP relay (Land Maker only) — see the [netplay guide](docs/site/guide/netplay.md)
 
 ## Supported Games
 
-Support is revision-specific. The following ROM sets have tested native builds:
+The following ROM sets have tested native builds:
 
 - **Land Maker** (Japan 2.01J, `landmakrj`) — Full native execution, enhanced GPU presentation, 2-player netplay
 - **RayForce** (America 2.3A, `rayforce`) — Native execution, 224×320 display
 - **Command War** (0.0J prototype, `commandw`) — Native execution (some graphics limitations)
 - **Riding Fight** (World 1.0O, `ridingf`) — Native execution (missing upper planes/sprite trails)
-
-Other F3 games are not yet supported.
 
 ## Documentation
 
