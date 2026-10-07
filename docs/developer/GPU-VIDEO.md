@@ -24,8 +24,8 @@ Measurement and observation-boundary evidence:
 
 ## CPU sampling contract (read before shader implementation)
 
-Sources: `runtime/game_compositor.cpp`, `game_tiles.cpp`, `game_lines.cpp`,
-`game_sprites.cpp`, `game_text.cpp` and [VIDEO-HLE.md](VIDEO-HLE.md).
+Sources: `runtime/renderer/game/compositor.cpp`, `tiles.cpp`, `lines.cpp`,
+`sprites.cpp`, `text.cpp` and [VIDEO-HLE.md](VIDEO-HLE.md).
 Let S be internal scale, B native border, W=(320+2B)S,
 L=46-B, output column u, native scanout row y=24+floor(v/S),
 and sub-row t=v mod S. All layers use **that native row's** controls;
@@ -129,10 +129,17 @@ Use SDL3 GPU, Metal on this Mac and SPIR-V/Vulkan on supported hosts, not raw
 Metal/GL. GLSL shaders are compiled offline to SPIR-V and translated to MSL;
 only shader **source** and build tools are committed, never compiled binaries.
 
-Immutable packed-byte PF and sprite graphics are uploaded once. Each frame
-uploads semantic PF cells, text cells/decoded glyph pens, RGB palette,
-normalized row tables (stable priority order and exact clip ranges), and the
-**rendered** sprite list/pen mask. Semantic data avoids a second FDP-RAM reader.
+Immutable packed-byte PF and sprite graphics are uploaded once. `GameVideo`
+keeps one typed `CapturedFrame` (tiles, text, scene rows, palette colors, the
+**rendered** sprite list/pen mask) overwritten at each VBSTART; the CPU
+compositor reads it directly and `GpuVideo` encodes it once per present
+(`runtime/renderer/gpu/encode.cpp`, the only writer of scene words) straight
+into the mapped upload buffer. Each frame therefore uploads semantic PF cells,
+text cells/raw glyph RAM, RGB palette, normalized row tables (stable priority
+order and exact clip ranges) and the sprite list. The buffer layout is defined
+once, in `runtime/renderer/gpu/scene_layout.h`, which the encoder and the
+shaders (`#include "../gpu/scene_layout.h"`) share. Semantic data avoids a
+second FDP-RAM reader.
 A small uniform contains scale/border/dimensions and diagnostic layer selection.
 GPU resources/transfer buffers are reused and cycled to protect in-flight data.
 
@@ -358,7 +365,7 @@ Palette bands are `(add, length)`: `(640,4), (576,4), (512,4), (448,6),
 Screen row 151 has scale 256 but palette add 0; row 152 also has scale 256
 but palette add 640. Thus scale-only value-run detection gives the wrong start.
 
-`game_lines.cpp` already reconstructs the actual `0x9d66a` palette table,
+`lines.cpp` already reconstructs the actual `0x9d66a` palette table,
 `0x9d72a` scale/centering function, and `0x9d7b6` phase. Its non-flipped origin
 152 matches the captured water boundary exactly. It does **not** expose an
 active-effect descriptor or raw per-field line-enable bits in `SceneRow`.
@@ -816,7 +823,7 @@ Measured zero-gain and zoomed-sprite baseline:
 | `$98dba..$9ad3e`, `$8cfba/$8cfe0` | Alpha, mix and sprite priorities | Uniform row blocks, frame-time fades and saved-alpha restore. Field variation across block borders is not an alpha gradient. |
 | `$fe620/$fefe6/$ff0fa` | Ending bitmap/slides | Audited producers explicitly unsupported by semantic lines; exact oracle fallback, no interpolation. Not exercised as a played ending. |
 
-`runtime/game_lines.cpp` is the literal semantic producer and normalizer;
+`runtime/renderer/game/lines.cpp` is the literal semantic producer and normalizer;
 [game-data video investigation](VIDEO-HLE.md) and site developer `lines.md` document the source addresses.
 Preparation preserves current-row Y phase and advances the accumulator by that
 row's Y step. A source-Y discontinuity relative to this advance identifies the
@@ -891,11 +898,13 @@ Evidence: `/tmp/f3-gpuvideo/general/survey-data/seed5/frame1500.before.state.{of
 ## General line sampling implementation (Phase 7)
 
 The water-only recognizer and absolute fitted source/palette curves are
-removed. `runtime/gpu_interp.cpp` analyzes all four playfields independently,
+removed. `runtime/renderer/gpu/interp.cpp` analyzes all four playfields independently,
 over the complete visible scanout. This is host presentation analysis:
 no raw FDP reads, game-producer changes, serialized fields or CPU rendering
 changes. The uploaded scene retains its canonical words and appends 13 words
-per row/playfield: flags plus four triples of local polynomial increments.
+per row/playfield (`analyze_gpu_interpolation` returns typed
+`InterpolationCoefficients`; `encode()` writes them): flags plus four triples of local
+polynomial increments.
 Both the storage buffer and cycled staging upload include the entire appended
 region; interpolation-off retains the original smaller allocation.
 

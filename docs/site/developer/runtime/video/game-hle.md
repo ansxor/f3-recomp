@@ -3,7 +3,7 @@
 `GameVideo` reconstructs the scene by decoding FDP video RAM at VBSTART. This
 page covers its API, frame selection, oracle fallback and saved state.
 
-The files are `include/f3rt/game_video.hpp` and `runtime/game_video.cpp`. The
+The files are `include/f3rt/game_video.hpp` and `runtime/renderer/game/video.cpp`. The
 target is the Japan program `landmakrj` (version 2.01J). All addresses in these
 pages are addresses in that program.
 
@@ -21,17 +21,18 @@ rasterization and extra horizontal columns.
 
 ::: info
 **Per-game scene file.** A game provides `games/<game>/video/` (Land Maker uses a
-single `video.cpp`). It defines the component `decode(const VideoRam&)` decoders
+single `video.cpp`). It defines the sprites `decode(const VideoRam&)` decoder
 and, when `F3RT_VIDEO_WRITE_LOG` is on, `observe_game_video_write` with every
-component's store-PC list.
-Generic decode helpers live in `runtime/video_decode.{hpp,cpp}`. CMake compiles
+component's store-PC list. The shared tiles, text and line decoders live in
+`runtime/renderer/game/tiles.cpp`, `runtime/renderer/game/text.cpp` and `runtime/renderer/game/lines.cpp`; generic decode
+helpers live in `runtime/renderer/decode.{hpp,cpp}`. CMake compiles
 the folder and defines `F3RT_GAME_VIDEO`; games without it can still run but
 cannot select `game` or `compare`. There are no recompiler hooks.
 :::
 
 ## Boundary rules
 
-1. **Video RAM is the source of truth.** `VideoRam` (in `runtime/game_scene.hpp`)
+1. **Video RAM is the source of truth.** `VideoRam` (in `runtime/renderer/game/scene.hpp`)
    is a big-endian view of `graphics` (0x40000 bytes at 0x600000) and `control`
    (0x20 bytes at 0x660000).
 2. **Write logging is opt-in and uses only the PC and the address.** In a
@@ -119,7 +120,7 @@ flowchart LR
 | `compare_layers(frame, layer_mask)` | Diagnostic: compares layers with the oracle and throws on a difference. See [Compare mode](/developer/runtime/video/compare-mode). |
 | `report(std::ostream&)` | Prints the `VIDEO ...` summary lines. |
 | `presentation()` | Returns the presentation buffer if `options.expanded()`, else `Machine::native_pixels()`. |
-| `enable_gpu_presentation(enabled)`, `gpu_scene()` | Enable/read the host-only scanout snapshot. |
+| `enable_gpu_presentation(enabled)`, `captured_frame()` | Enable/read the host-only `CapturedFrame` scanout snapshot (typed tiles, text, rows, colors, sprite list; overwritten once per VBSTART capture). |
 | `set_gpu_scale(scale)`, `render_reference(output, options, mask, serial)` | Select host GPU/reference scale 1..8 and render that geometry; constructor-fixed presentation/state buffers and border do not change. |
 | `state_size()`, `save_state(dst)`, `load_state(src)` | Snapshot support. They throw `std::invalid_argument` for a wrong size and `std::logic_error` for leftover bytes. |
 | `sync_state_size()`, `save_sync_state(dst)`, `load_sync_state(src)` | Canonical native rendering/trails without expanded presentation buffers. |
@@ -265,4 +266,4 @@ The `domain` is `1024x512-indexed-texture` for playfields, `320x232-next-sprite-
 for sprite groups and `512x512-indexed-texture` for text. The frontend prints the
 report when a run ends.
 
-Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp) and [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp).
+Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp) and [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp).

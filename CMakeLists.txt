@@ -125,7 +125,7 @@ if(GAME_VIDEO_SOURCES)
     set(F3RT_GAME_VIDEO_SOURCES ${GAME_VIDEO_SOURCES})
 else()
     # Games without a scene still link GameVideo (never instantiated for them).
-    set(F3RT_GAME_VIDEO_SOURCES runtime/game_video_generic.cpp)
+    set(F3RT_GAME_VIDEO_SOURCES runtime/renderer/game/video_generic.cpp)
 endif()
 # A game opts into fast boot by providing games/<game>/boot/.
 file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
@@ -136,9 +136,9 @@ else()
     set(F3RT_GAME_BOOT_SOURCES runtime/game_boot_generic.cpp)
 endif()
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
-    runtime/video.cpp runtime/game_video.cpp runtime/game_video_log.cpp runtime/video_decode.cpp
-    runtime/game_tiles.cpp runtime/game_text.cpp
-    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} runtime/audio.cpp
+    runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
+    runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
+    runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/input.cpp runtime/netplay.cpp
     runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
     runtime/netplay_transport.cpp runtime/netplay_session.cpp ${AUDIO_SOURCES})
@@ -230,19 +230,19 @@ if(F3RT_SDL)
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
         add_custom_command(OUTPUT "${VIDEO_SHADER_HEADER}"
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tools/compile_video_shaders.py"
-                --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/shaders"
+                --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
                 --output "${VIDEO_SHADER_HEADER}" --glslang "${F3_GLSLANG}" --spirv-cross "${F3_SPIRV_CROSS}"
-            DEPENDS tools/compile_video_shaders.py runtime/shaders/scene.glsl
-                runtime/shaders/fullscreen.vert runtime/shaders/sprite.vert
-                runtime/shaders/sprite.frag runtime/shaders/scene.frag
-                runtime/shaders/scene_interp.frag runtime/shaders/scene_body.glsl
-                runtime/shaders/postprocess.frag
+            DEPENDS tools/compile_video_shaders.py runtime/renderer/shaders/scene.glsl
+                runtime/renderer/shaders/fullscreen.vert runtime/renderer/shaders/sprite.vert
+                runtime/renderer/shaders/sprite.frag runtime/renderer/shaders/scene.frag
+                runtime/renderer/shaders/scene_interp.frag runtime/renderer/shaders/scene_body.glsl
+                runtime/renderer/shaders/postprocess.frag runtime/renderer/gpu/scene_layout.h
             VERBATIM)
-        add_library(f3rt-gpu STATIC runtime/gpu_video.cpp runtime/gpu_interp.cpp runtime/gpu_motion.cpp "${VIDEO_SHADER_HEADER}")
+        add_library(f3rt-gpu STATIC runtime/renderer/gpu/video.cpp runtime/renderer/gpu/encode.cpp runtime/renderer/gpu/interp.cpp runtime/renderer/gpu/motion.cpp "${VIDEO_SHADER_HEADER}")
         if(APPLE)
             enable_language(OBJCXX)
-            target_sources(f3rt-gpu PRIVATE runtime/gpu_pacing_macos.mm)
-            set_source_files_properties(runtime/gpu_pacing_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+            target_sources(f3rt-gpu PRIVATE runtime/renderer/gpu/pacing_macos.mm)
+            set_source_files_properties(runtime/renderer/gpu/pacing_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
             target_link_libraries(f3rt-gpu PRIVATE "-framework AppKit" "-framework QuartzCore")
         endif()
         target_include_directories(f3rt-gpu PUBLIC include runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -278,11 +278,13 @@ add_executable(f3rt-replay runtime/replay.cpp)
 target_link_libraries(f3rt-replay PRIVATE f3rt)
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(f3rt-motion-check runtime/motion_interp_check.cpp runtime/gpu_motion.cpp)
+    add_executable(f3rt-motion-check runtime/motion_interp_check.cpp runtime/renderer/gpu/motion.cpp
+        runtime/renderer/game/text.cpp runtime/renderer/game/tiles.cpp)
     target_include_directories(f3rt-motion-check PRIVATE include runtime)
     add_test(NAME motion-interpolation-guards COMMAND f3rt-motion-check)
     add_executable(f3rt-check runtime/check.cpp)
     target_link_libraries(f3rt-check PRIVATE f3rt)
+    target_include_directories(f3rt-check PRIVATE runtime)
     add_test(NAME runtime-devices COMMAND f3rt-check)
     if(F3_ROM_DIR AND F3_GAME STREQUAL "landmakrj")
         add_test(NAME hle-audio COMMAND f3rt-hle-check "${F3_ROM_DIR}")

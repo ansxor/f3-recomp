@@ -49,7 +49,7 @@ def decode_tile(low, high, tile_id):
         raise ValueError(f"Tile {tile_id:#x} outside low-plane image")
     if high and (tile_id + 1) * 64 > len(high):
         raise ValueError(f"Tile {tile_id:#x} outside high-plane image")
-    # Same layout as runtime/video.cpp::decode_roms (tilemaps, not sprites).
+    # Same layout as runtime/renderer/fdp/video.cpp::decode_roms (tilemaps, not sprites).
     pixels = bytearray(256)
     for y in range(16):
         for x in range(16):

@@ -2,7 +2,7 @@
 
 **What you will learn:** how `f3rt::Video` turns the hardware RAM into a 320x232 picture, what every public function does, what each internal structure holds, and which rules you must keep when you change it.
 
-The files are `include/f3rt/video.hpp` and `runtime/video.cpp`. The renderer is a MAME-derived software model of the TC0630FDP, not a chip-verified copy. Read [F3 video hardware](/developer/runtime/video/hardware) first.
+The files are `include/f3rt/video.hpp` and `runtime/renderer/fdp/video.cpp`. The renderer is a MAME-derived software model of the TC0630FDP, not a chip-verified copy. Read [F3 video hardware](/developer/runtime/video/hardware) first.
 
 ::: info
 **Reference ownership.** `Video` is the internal oracle for game-data renderer comparisons. Matching it establishes agreement with this implementation, not physical-chip correctness. Changes to the oracle need independent evidence, such as a recorded MAME capture or a documented hardware measurement. See [Parity evidence and limits](/developer/runtime/video/parity).
@@ -187,4 +187,4 @@ When `enable_scene_inspection(true)` is on, `scanline_draw` also fills one `Scen
 - Lines 0 to 23 must run the line loop even though the code does not draw them.
 - `inspect_*` functions must not change sprite or frame state.
 
-Sources: [video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/video.hpp) and [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp).
+Sources: [video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/video.hpp) and [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp).

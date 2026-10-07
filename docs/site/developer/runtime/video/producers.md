@@ -31,7 +31,7 @@ addresses outside every range. It then checks that component's **list of known
 store PCs**. If the PC is on the list, the log returns. If it is not, it calls
 `log_unknown_video_write(layer, pc, address, frame)`.
 
-`log_unknown_video_write` (`runtime/game_video_log.hpp`) is host-only and is
+`log_unknown_video_write` (`runtime/renderer/game/video_log.hpp`) is host-only and is
 never part of machine, snapshot or netplay state. It prints the **first**
 occurrence of each `(layer, pc)` to stderr, so a run collects every unmodeled
 routine once:
@@ -105,5 +105,5 @@ See [Extending the renderer](/developer/runtime/video/extending) to add a decode
 or a known store-PC range.
 
 Sources: [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp),
-[game_video_log.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video_log.hpp)
+[video_log.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video_log.hpp)
 and the per-game `games/landmakrj/video/video.cpp`.

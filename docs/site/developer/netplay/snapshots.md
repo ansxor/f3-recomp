@@ -183,12 +183,12 @@ This table lists every visitor in the snapshot traversal. The load traversal fol
 | `MB87078`, `runtime/third_party/audio/mb87078.cpp` | `CanonicalMB87078` | Recompute channel gains |
 | `SoundNative`, `runtime/sound_native.cpp` | `CanonicalSoundNative` | Rebind sound CPU runtime owner and clear `cc_pad` |
 | `Interpreter`, `runtime/interpreter.cpp`, `runtime/core_state.c` | `f3rt_sound_oracle_state` | Import value fields; rebind active sound context callbacks when reset is not pending |
-| `Video::Impl`, `runtime/video.cpp` | `CanonicalVideo`, buffered sprite RAM, sprite plane, priority usage | Invalidate playfield/text/pivot line caches and clear derived oracle scene rows |
-| `GameVideo::Impl`, `runtime/game_video.cpp` | Rendered byte, four game visitors, sprite plane, native and presentation pixel buffers | Restore all retained buffers, not an approximate image |
-| `GameTiles`, `runtime/game_tiles.cpp` | Four tile maps and per-layer metadata | Restore validity and unsupported-state markers |
-| `GameText`, `runtime/game_text.cpp` | Text cells, glyphs, row usage, references and metadata | Restore the retained text map |
-| `GameSprites`, `runtime/game_sprites.cpp` | Staging, submitted and current sprite lists and metadata | Restore lists and registers; clamp counts to capacity |
-| `GameLines`, `runtime/game_lines.cpp` | Line parameters, scene rows, control registers and metadata | Restore retained rows and unsupported-state markers |
+| `Video::Impl`, `runtime/renderer/fdp/video.cpp` | `CanonicalVideo`, buffered sprite RAM, sprite plane, priority usage | Invalidate playfield/text/pivot line caches and clear derived oracle scene rows |
+| `GameVideo::Impl`, `runtime/renderer/game/video.cpp` | Rendered byte, four game visitors, sprite plane, native and presentation pixel buffers | Restore all retained buffers, not an approximate image |
+| `GameTiles`, `runtime/renderer/game/tiles.cpp` | Four tile maps and per-layer metadata | Restore validity and unsupported-state markers |
+| `GameText`, `runtime/renderer/game/text.cpp` | Text cells, glyphs, row usage, references and metadata | Restore the retained text map |
+| `GameSprites`, `runtime/renderer/game/sprites.cpp` | Staging, submitted and current sprite lists and metadata | Restore lists and registers; clamp counts to capacity |
+| `GameLines`, `runtime/renderer/game/lines.cpp` | Line parameters, scene rows, control registers and metadata | Restore retained rows and unsupported-state markers |
 
 Immutable ROM bytes, decoded graphics, dispatch tables and callback targets remain owned by the configured machine. The snapshot does not rebuild or serialize their host addresses.
 

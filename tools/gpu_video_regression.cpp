@@ -3,8 +3,8 @@
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/rom.hpp"
-#include "gpu_video.hpp"
-#include "gpu_interp.hpp"
+#include "renderer/gpu/video.hpp"
+#include "renderer/gpu/interp.hpp"
 #include "capture_io.hpp"
 #include "gameplay_inputs.hpp"
 #include <algorithm>
@@ -31,7 +31,12 @@
 
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr std::array<const char *, 10> names{"pf0", "pf1", "pf2", "pf3", "sp0", "sp1", "sp2", "sp3", "text", "composite"};
+constexpr std::array<const char *, f3rt::layer_count + 1> names = [] {
+    std::array<const char *, f3rt::layer_count + 1> result{};
+    for (unsigned i = 0; i < f3rt::layer_count; ++i) result[i] = f3rt::layer_info[i].name;
+    result[f3rt::layer_count] = "composite";
+    return result;
+}();
 struct Options {
     std::filesystem::path rom_dir, dump_dir;
     uint64_t seed = 12345, frames = 4000, every = 1, inject_frame = 1407;
@@ -177,22 +182,19 @@ void require_exact(std::span<const uint32_t> a, std::span<const uint32_t> b, con
 // decode line RAM before the first playfield is turned on), so the caller retries
 // on a later sample instead of failing on an empty boot scene.
 bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3rt::GpuVideo &geometry,
-        const f3rt::GpuScene &scene, f3rt::GameVideoOptions options, uint64_t frame,
+        const f3rt::CapturedFrame &scene, f3rt::GameVideoOptions options, uint64_t frame,
         std::span<const uint8_t> tiles) {
-    auto base = std::make_unique<f3rt::GpuScene>(scene);
-    auto copy = std::make_unique<f3rt::GpuScene>(scene);
+    auto base = std::make_unique<f3rt::CapturedFrame>(scene);
+    auto copy = std::make_unique<f3rt::CapturedFrame>(scene);
     unsigned plane = 0, anchor = 256;
     for (unsigned pf = 0; pf < 4 && anchor == 256; ++pf)
         for (unsigned y = 24; y < 256; ++y) {
-            const auto &p = scene.reference_rows[y].playfields[pf];
-            if (p.layer.enabled && !p.layer.mosaic && !scene.reference_rows[y].bitmap) {
+            const auto &p = scene.rows[y].playfields[pf];
+            if (p.layer.enabled && !p.layer.mosaic && !scene.rows[y].bitmap) {
                 plane = pf; anchor = y; break;
             }
         }
     if (anchor == 256) return false;
-    auto row = [](unsigned y) { return f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride; };
-    auto pf = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_pf + plane * 6; };
-    auto control = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_layers + plane * f3rt::GpuScene::layer_stride; };
     unsigned tile = 0;
     for (; tile < 32768; ++tile) {
         bool varying = false;
@@ -205,21 +207,17 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
     if (tile == 32768) throw std::runtime_error("No horizontally varying ROM tile for visible guard fixture");
     for (unsigned cell = 0; cell < 2048; ++cell) {
         // Raw cell: palette 0, extra planes 3 (pen mask 63), no flips/blend.
-        const unsigned at = f3rt::GpuScene::pf_cells + (plane * 2048 + cell) * 2;
-        base->words[at] = (0x0C00u << 16) | (tile & 65535u);
+        base->tiles.cells(plane)[cell] = (0x0C00u << 16) | (tile & 65535u);
     }
     for (unsigned y = 0; y < 256; ++y) {
-        base->reference_rows[y] = scene.reference_rows[anchor];
-        std::copy_n(scene.words.begin() + row(anchor), f3rt::GpuScene::row_stride, base->words.begin() + row(y));
-        auto &p = base->reference_rows[y].playfields[plane];
+        base->rows[y] = scene.rows[anchor];
+        auto &p = base->rows[y].playfields[plane];
         p.source_x = int32_t(y * 256); p.source_y = int32_t(y);
         p.x_step = 128; p.y_step = 256; p.y_fraction = 0; p.palette_add = uint16_t(y / 8 * 64);
-        const std::array<uint32_t, 6> w{uint32_t(p.source_x), uint32_t(p.source_y), 128, 256, 0, p.palette_add};
-        std::copy(w.begin(), w.end(), base->words.begin() + pf(y));
     }
     for (unsigned i = 0; i < 8192; ++i) {
         const unsigned channel = 16 + (i % 64) * 2 + (i / 64) % 32;
-        base->words[f3rt::GpuScene::palette + i] = channel * 0x010101;
+        base->colors[i] = channel * 0x010101;
     }
     std::vector<uint32_t> reference(size_t(options.width()) * options.height()), result(reference.size()),
         geometry_result(reference.size());
@@ -238,30 +236,24 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
         "hard-source-jump", "hard-control-jump", "column-phase-jump", "unsafe-palette-safe-geometry"};
     for (unsigned kind = 0; kind < labels.size(); ++kind) {
         *copy = *base;
-        auto &p = copy->reference_rows[80].playfields[plane];
-        if (kind == 0) { p.layer.enabled = false; copy->words[control(80)] &= ~(1u << 6); }
-        else if (kind < 3) {
-            p.x_step = kind == 1 ? 0 : int32_t(0x7fffffff); copy->words[pf(80) + 2] = uint32_t(p.x_step);
-        } else if (kind == 3) {
-            for (unsigned y = 80; y < 256; ++y) {
-                copy->reference_rows[y].playfields[plane].source_x += 16384; copy->words[pf(y)] += 16384;
-            }
-        } else if (kind == 4) { p.layer.priority ^= 1; copy->words[control(80)] ^= 1; }
+        auto &p = copy->rows[80].playfields[plane];
+        if (kind == 0) p.layer.enabled = false;
+        else if (kind < 3) p.x_step = kind == 1 ? 0 : int32_t(0x7fffffff);
+        else if (kind == 3) {
+            for (unsigned y = 80; y < 256; ++y) copy->rows[y].playfields[plane].source_x += 16384;
+        } else if (kind == 4) p.layer.priority ^= 1;
         else if (kind == 5) {
             unsigned phase = 0;
             for (unsigned y = 0; y < 256; ++y) {
-                auto &v = copy->reference_rows[y].playfields[plane];
+                auto &v = copy->rows[y].playfields[plane];
                 v.y_step = int32_t(64 + y); v.source_y = int32_t((phase >> 8) & 511); v.y_fraction = uint8_t(phase);
-                copy->words[pf(y) + 1] = uint32_t(v.source_y);
-                copy->words[pf(y) + 3] = uint32_t(v.y_step);
-                copy->words[pf(y) + 4] = v.y_fraction;
                 phase += unsigned(v.y_step);
             }
-            p.source_y += 32; copy->words[pf(80) + 1] += 32;
+            p.source_y += 32;
         } else {
             for (unsigned i = 0; i < 8192; ++i) {
                 const unsigned channel = (((i / 64) & 1) ? 180 : 20) + i % 64;
-                copy->words[f3rt::GpuScene::palette + i] = channel * 0x010101;
+                copy->colors[i] = channel * 0x010101;
             }
         }
         off.draw(*copy, reference, 1u << plane); selected.draw(*copy, result, 1u << plane);
@@ -305,7 +297,7 @@ struct Harness {
     uint64_t sampled_frames = 0, fallback_samples = 0, supported_samples = 0;
     uint64_t injected_samples = 0, captures = 0;
     std::unique_ptr<f3rt::GpuVideo> interpolated_gpu;
-    std::unique_ptr<f3rt::GpuScene> canonical_guard;
+    std::unique_ptr<f3rt::CapturedFrame> canonical_guard;
     std::vector<uint32_t> interpolated, sprite_off, sprite_selected;
     std::vector<double> interpolation_ms;
     std::array<uint64_t, size_t(f3rt::InterpolationReason::Applied) + 1> interpolation_reasons{};
@@ -327,7 +319,7 @@ struct Harness {
         if (o.interpolation != f3rt::VideoInterpolation::Off) {
             interpolated_gpu = std::make_unique<f3rt::GpuVideo>(nullptr, o.video,
                 m.video->playfield_tiles(), m.video->sprite_tiles(), false, true, o.interpolation, o.fields);
-            canonical_guard = std::make_unique<f3rt::GpuScene>();
+            canonical_guard = std::make_unique<f3rt::CapturedFrame>();
             interpolated.resize(cpu.size()); sprite_off.resize(cpu.size()); sprite_selected.resize(cpu.size());
         }
     }
@@ -360,7 +352,7 @@ struct Harness {
         f3rt::write_bmp(o.dump_dir / (stem + "_native.bmp"), m.native_pixels());
     }
     void compare(unsigned index, const std::string &tag, bool injected) {
-        const unsigned mask = index == 9 ? 511 : 1u << index;
+        const unsigned mask = index == f3rt::layer_count ? f3rt::all_layers : 1u << index;
         m.save_state(state_before);
         const auto cpu_start = Clock::now();
         m.game_video->render_reference(cpu, o.video, mask);
@@ -368,9 +360,9 @@ struct Harness {
         m.save_state(state_after);
         if (state_after != state_before) throw std::runtime_error("CPU reference mutated native state at frame " + std::to_string(m.frame));
         const auto gpu_start = Clock::now();
-        gpu.draw(m.game_video->gpu_scene(), device, mask);
+        gpu.draw(m.game_video->captured_frame(), device, mask);
         const double gpu_ms = std::chrono::duration<double, std::milli>(Clock::now() - gpu_start).count();
-        if (o.bench && m.frame > 600 && index == 9 && !injected && !m.game_video->gpu_scene().fallback) {
+        if (o.bench && m.frame > 600 && index == 9 && !injected && !m.game_video->captured_frame().fallback) {
             cpu_frame_ms.push_back(cpu_ms); gpu_frame_ms.push_back(gpu_ms);
             if (native_ms > 0) {
                 cpu_budget_ms.push_back(native_ms + cpu_ms);
@@ -379,7 +371,7 @@ struct Harness {
         }
         m.save_state(state_after);
         if (state_after != state_before) throw std::runtime_error("GPU presentation mutated native state at frame " + std::to_string(m.frame));
-        if (index == 9 && m.game_video->gpu_scene().fallback) {
+        if (index == 9 && m.game_video->captured_frame().fallback) {
             // Independently check the fallback contract, not just two implementations
             // that might both expand an incoherent or incorrectly bordered snapshot.
             const unsigned left = o.video.border * o.video.scale;
@@ -401,7 +393,7 @@ struct Harness {
         ++samples[index]; mismatches[index] += count;
         if (count) {
             std::cerr << "FIRST MISMATCH seed=" << o.seed << " frame=" << m.frame << " layer=" << names[index]
-                << " scenario=" << tag << " injected=" << injected << " fallback=" << m.game_video->gpu_scene().fallback
+                << " scenario=" << tag << " injected=" << injected << " fallback=" << m.game_video->captured_frame().fallback
                 << " count=" << count << " x=" << first % o.video.width() << " y=" << first / o.video.width()
                 << " cpu_argb=0x" << std::hex << std::setw(8) << std::setfill('0') << cpu[first]
                 << " gpu_argb=0x" << std::setw(8) << device[first] << std::dec << std::setfill(' ') << '\n';
@@ -413,7 +405,7 @@ struct Harness {
         return std::find(o.capture_frames.begin(), o.capture_frames.end(), m.frame) != o.capture_frames.end();
     }
     void capture_interpolation() {
-        const auto &scene = m.game_video->gpu_scene();
+        const auto &scene = m.game_video->captured_frame();
         const auto stem = "frame_" + std::to_string(m.frame) + "_s" + std::to_string(o.video.scale) +
             "_b" + std::to_string(o.video.border);
         capture_png(o.dump_dir / (stem + "_off.png"), device, o.video);
@@ -433,7 +425,7 @@ struct Harness {
         }
         for (unsigned pf = 0; pf < 4; ++pf) {
             for (unsigned y = 0; y < 256; ++y) {
-                const auto &r = scene.reference_rows[y];
+                const auto &r = scene.rows[y];
                 const auto &p = r.playfields[pf];
                 csv << m.frame << ',' << pf << ',' << y << ',' << int(y) - 24 << ',' << unsigned(stats.row_fields[pf][y])
                     << ',' << p.layer.enabled << ',' << r.bitmap << ',' << p.layer.mosaic << ',' << p.source_x
@@ -446,8 +438,8 @@ struct Harness {
     }
     void check_interpolation(const std::string &tag, bool injected) {
         if (!interpolated_gpu) return;
-        const auto &scene = m.game_video->gpu_scene();
-        std::memcpy(canonical_guard.get(), &scene, sizeof(scene));
+        const auto &scene = m.game_video->captured_frame();
+        std::memcpy(static_cast<void *>(canonical_guard.get()), &scene, sizeof(scene));
         m.save_state(state_before);
         const auto crc = m.state_crc();
         const auto start = Clock::now();
@@ -522,14 +514,14 @@ struct Harness {
     void sample(const std::string &tag = "gameplay", bool injected = false, bool force_capture = false) {
         ++sampled_frames;
         if (injected) ++injected_samples;
-        if (m.game_video->gpu_scene().fallback) ++fallback_samples;
+        if (m.game_video->captured_frame().fallback) ++fallback_samples;
         else ++supported_samples;
-        if (o.layers && !m.game_video->gpu_scene().fallback)
+        if (o.layers && !m.game_video->captured_frame().fallback)
             for (unsigned i = 0; i < 9; ++i) compare(i, tag, injected);
         compare(9, tag, injected);
         check_interpolation(tag, injected);
         if (!injected && requested_capture()) capture_interpolation();
-        if (force_capture || (captures < 3 && !m.game_video->gpu_scene().fallback)) { capture(tag); ++captures; }
+        if (force_capture || (captures < 3 && !m.game_video->captured_frame().fallback)) { capture(tag); ++captures; }
     }
     void report() const {
         std::cout << "PARITY sampled_frames=" << sampled_frames << " supported=" << supported_samples
@@ -561,7 +553,7 @@ struct Harness {
 void put16(std::span<uint8_t> bytes, size_t offset, uint16_t value) {
     bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
 }
-// One sprite display-list descriptor decoded by runtime/video_decode.cpp. `x`/`y`
+// One sprite display-list descriptor decoded by runtime/renderer/decode.cpp. `x`/`y`
 // are native scanout coordinates (0,0 = the first visible pixel); the encoder adds
 // the 46/24 scanout origin. Scale is 1..256 with 256 = 1:1.
 struct SpriteEntry {
@@ -626,7 +618,7 @@ void inject(Harness &h, unsigned kind) {
         m.game_video->render_frame(); // Latch command; current scanout remains old.
     }
     m.game_video->render_frame();
-    if (!m.game_video->gpu_scene().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
+    if (!m.game_video->captured_frame().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
 }
 // One native sprite descriptor: integral fields relative to the (46, 24)
 // sprite origin with scroll zero and no global flip.
@@ -823,7 +815,7 @@ void verify_sprite_boundaries(Harness &h) {
         write_sprite_list(m, entries);
         m.game_video->render_frame(); // Scanout precedes the native sprite latch.
         m.game_video->render_frame(); // Present the injected, now-latched list.
-        if (m.game_video->gpu_scene().fallback)
+        if (m.game_video->captured_frame().fallback)
             throw std::runtime_error(std::string(tags[kind]) + " unexpectedly left supported native producers");
         // Compare the isolated consumer even without --layers, then composite
         // and the existing exact whole-sprite line-mode comparisons.
@@ -947,7 +939,7 @@ void verify_sprite_boundaries(Harness &h) {
         write_sprite_list(m, entries);
         m.game_video->render_frame(); // Scanout precedes the native sprite latch.
         m.game_video->render_frame(); // Present the injected, now-latched list.
-        if (m.game_video->gpu_scene().fallback)
+        if (m.game_video->captured_frame().fallback)
             throw std::runtime_error(std::string(tag) + " unexpectedly left supported native producers");
         h.compare(7, tag, true); // Exact isolated sp3 CPU/GPU comparison.
         blank.resize(h.device.size());
@@ -1100,7 +1092,7 @@ void verify_deferred_native(Harness &h) {
             m->load_state(baseline);
         for (unsigned frame = 0; frame < 4; ++frame) {
             capture(eager, frame); capture(lazy, frame);
-            if (lazy.game_video->gpu_scene().fallback)
+            if (lazy.game_video->captured_frame().fallback)
                 throw std::runtime_error(std::string("Deferred native ") + tags[kind] + " left supported producers");
         }
         // No pixels, CRCs, saves or references have observed these four frames.
@@ -1120,7 +1112,7 @@ void verify_deferred_native(Harness &h) {
                 m->game_video->render_frame(); // Latch the trails command.
                 m->game_video->render_frame(); // Render the oracle fallback.
             }
-            if (!lazy.game_video->gpu_scene().fallback)
+            if (!lazy.game_video->captured_frame().fallback)
                 throw std::runtime_error("Deferred native fallback successor did not reach the oracle");
         } else if (kind == 4) {
             lazy.game_video->set_gpu_scale(h.o.video.scale == 1 ? 3 : 1);
@@ -1147,8 +1139,8 @@ void verify_deferred_native(Harness &h) {
             lazy.game_video->render_reference(blank, native_video, 0, true);
             visible_pixels = boundary_witnesses(visible_list, tiles.subspan(tile * 256, 256),
                 native_video, sprite, blank, "deferred_native_sprite_lag").visible;
-            lazy.game_video->render_reference(sprite, native_video, 511, true);
-            lazy.game_video->render_reference(blank, native_video, 511u ^ (1u << 7), true);
+            lazy.game_video->render_reference(sprite, native_video, f3rt::all_layers, true);
+            lazy.game_video->render_reference(blank, native_video, f3rt::all_layers ^ f3rt::layer_bit(f3rt::LayerId::Sp3), true);
             const auto &pixels = eager.native_pixels();
             for (unsigned y = 0; y < 232; ++y)
                 for (unsigned x = 0; x < 320; ++x) {
@@ -1164,7 +1156,7 @@ void verify_deferred_native(Harness &h) {
             // A subsequent real capture must not resurrect the discarded branch
             // after either kind of snapshot import.
             capture(eager, 4); capture(lazy, 4);
-            if (lazy.game_video->gpu_scene().fallback)
+            if (lazy.game_video->captured_frame().fallback)
                 throw std::runtime_error("Deferred native snapshot recovery left supported producers");
             mutate_live(eager); mutate_live(lazy);
             compare("load_supported_successor");
@@ -1234,9 +1226,9 @@ void benchmark(Harness &h) {
     for (unsigned i = 0; i < repeats + 5; ++i) {
         for (unsigned mode = 0; mode < (h.interpolated_gpu ? 4u : 3u); ++mode) {
             const auto start = Clock::now();
-            if (mode < 2) h.m.game_video->render_reference(h.cpu, h.o.video, 511, mode == 0);
-            else if (mode == 2) h.gpu.draw(h.m.game_video->gpu_scene(), h.device);
-            else h.interpolated_gpu->draw(h.m.game_video->gpu_scene(), h.interpolated);
+            if (mode < 2) h.m.game_video->render_reference(h.cpu, h.o.video, f3rt::all_layers, mode == 0);
+            else if (mode == 2) h.gpu.draw(h.m.game_video->captured_frame(), h.device);
+            else h.interpolated_gpu->draw(h.m.game_video->captured_frame(), h.interpolated);
             const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
             if (i >= 5) times[mode].push_back(elapsed);
         }
@@ -1306,7 +1298,7 @@ int main(int argc, char **argv) try {
                 h.set_scale(o.scale_changes[next_scale_change++].second);
                 scale_changed = true;
             }
-            const bool fallback = m.game_video->gpu_scene().fallback;
+            const bool fallback = m.game_video->captured_frame().fallback;
             if (o.bench && !fallback && m.frame > 600) native_frame_ms.push_back(h.native_ms);
             if (fallback) ++fallback_frames; else ++supported_frames;
             if (fallback != previous_fallback) ++transitions;
@@ -1335,7 +1327,7 @@ int main(int argc, char **argv) try {
                     // Restore pre-scanout and execute the original frame, rebuilding
                     // host snapshots with the correct sprite lag and producer state.
                     m.load_state(pre); advance(m);
-                    if (m.game_video->gpu_scene().fallback || m.state_crc() != baseline_crc)
+                    if (m.game_video->captured_frame().fallback || m.state_crc() != baseline_crc)
                         throw std::runtime_error("Oracle-to-supported recovery changed baseline native state");
                     h.sample(std::string(scenarios[kind]) + "_restored", true);
                     std::cout << "INJECTED scenario=" << scenarios[kind] << " frame=" << m.frame
@@ -1359,7 +1351,7 @@ int main(int argc, char **argv) try {
             const auto final_crc = m.state_crc();
             const auto final_blocks = m.native_blocks;
             m.load_state(last_supported_pre); advance(m);
-            if (m.game_video->gpu_scene().fallback) throw std::runtime_error("Supported benchmark replay became fallback");
+            if (m.game_video->captured_frame().fallback) throw std::runtime_error("Supported benchmark replay became fallback");
             h.native_ms = 0; // Frozen-snapshot repetitions are not native frame budgets.
             benchmark(h);
             timing("CPU_native_emulation_plus_native_compositor_and_scene_export", native_frame_ms);

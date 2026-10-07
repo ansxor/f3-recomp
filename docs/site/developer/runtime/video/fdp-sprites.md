@@ -2,7 +2,7 @@
 
 **What you will learn:** how `Video::Impl::get_sprite_info` reads the sprite RAM, how `draw_gfx_sprite` draws a tile into the sprite plane, and which rules the game-data renderer must copy.
 
-The code is in `runtime/video.cpp`. The sprite RAM format is in [F3 video hardware](/developer/runtime/video/hardware).
+The code is in `runtime/renderer/fdp/video.cpp`. The sprite RAM format is in [F3 video hardware](/developer/runtime/video/hardware).
 
 The sprite rules below describe the MAME-derived FDP model. Matching game-data
 sprite output is internal parity, not independent physical-chip verification.
@@ -87,4 +87,4 @@ sequenceDiagram
 
 The rules about integer tile origins and about the masked X zoom belong to the game's own sprite compiler, not to the FDP. They are in [Sprites](/developer/runtime/video/sprites).
 
-Source: [runtime/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp).
+Source: [runtime/renderer/fdp/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp).

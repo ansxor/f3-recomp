@@ -8,7 +8,7 @@ All measured results on this page are retained records from [docs/developer/VIDE
 
 The target is Japan 2.01J, `landmakrj`. Program addresses are specific to that ROM revision. Generated C, ROMs, and capture artifacts remain untracked.
 
-The independent oracle is `runtime/video.cpp`. The game scene comes from the FDP video RAM that producer routines wrote; the decoders read only that RAM.
+The independent oracle is `runtime/renderer/fdp/video.cpp`. The game scene comes from the FDP video RAM that producer routines wrote; the decoders read only that RAM.
 
 Shared decoded ROM textures and palette colors are assets. They do not supply scene positions, map cells, sprite records, or line settings.
 

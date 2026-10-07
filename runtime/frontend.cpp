@@ -9,11 +9,11 @@
 #include "interpreter.hpp"
 #include "sound_trace.hpp"
 #include "capture_io.hpp"
-#include "video_scale.hpp"
-#include "gpu_interp.hpp"
+#include "renderer/scale.hpp"
+#include "renderer/gpu/interp.hpp"
 #include "block_profile.hpp"
 #ifdef F3RT_GPU
-#include "gpu_video.hpp"
+#include "renderer/gpu/video.hpp"
 #include "f3rt/video.hpp"
 #endif
 #include <SDL3/SDL.h>
@@ -792,7 +792,7 @@ int main(int argc,char **argv) try {
 #ifdef F3RT_GPU
         if(motion_presentation)motion_readout.native+=advanced;
         if(motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {
-            sdl.gpu->capture_motion(m.game_video->gpu_scene(),m.frame);
+            sdl.gpu->capture_motion(m.game_video->captured_frame(),m.frame);
             motion_capture_pending=false;
             motion_pair_pending=true;
         }
@@ -870,10 +870,10 @@ int main(int argc,char **argv) try {
                     const bool due=motion_display_paced || std::chrono::steady_clock::now()>=next_motion_present;
                     if(!throttle || due || capture_final || screenshot_pending) {
                         if(throttle && (!draw_menu || session) && !capture_final)
-                            presented=sdl.gpu->present_motion(m.game_video->gpu_scene(),motion_frame_start,
+                            presented=sdl.gpu->present_motion(m.game_video->captured_frame(),motion_frame_start,
                                                               frame_time,screenshot_pending);
                         else {
-                            sdl.gpu->draw_motion(m.game_video->gpu_scene(),1.0f);
+                            sdl.gpu->draw_motion(m.game_video->captured_frame(),1.0f);
                             presented=sdl.gpu->last_presented();
                         }
                         if(throttle && !motion_display_paced) {
@@ -895,8 +895,8 @@ int main(int argc,char **argv) try {
                         }
                     }
                 } else if(capture_final || screenshot_pending || !throttle)
-                    sdl.gpu->draw(m.game_video->gpu_scene());
-                else sdl.gpu->present(m.game_video->gpu_scene());
+                    sdl.gpu->draw(m.game_video->captured_frame());
+                else sdl.gpu->present(m.game_video->captured_frame());
                 if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
                 if(screenshot_pending)sdl.gpu->save_surface(screenshot.string().c_str());
             } else

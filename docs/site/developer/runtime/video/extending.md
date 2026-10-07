@@ -28,16 +28,18 @@ palette indices, blend selectors, or transparent coverage.
 
 | Operation | Owner |
 | --- | --- |
-| PF cells, text cells/glyphs, sprite display list, line parameters | per-game `games/<game>/video/` (Land Maker: `video.cpp`) |
-| Generic char-RAM unpack, sprite display-list walk | `runtime/video_decode.{hpp,cpp}` |
+| PF cells, text cells/glyphs | shared `GameTiles::decode` / `GameText::decode` in `runtime/renderer/game/tiles.cpp` / `runtime/renderer/game/text.cpp` |
+| Sprite display list | per-game `games/<game>/video/` (Land Maker: `video.cpp`) |
+| Line parameters | shared `GameLines::decode` in `runtime/renderer/game/lines.cpp` |
+| Generic char-RAM unpack, sprite display-list walk | `runtime/renderer/decode.{hpp,cpp}` |
 | Sampling / mixing | `GameTiles::RowSampler`, `GameText::pixel`, `GameSprites::raster`, `GameLines::prepare`, `compose_game_scene` |
 
 The decoders read the same video RAM through shared helpers:
 `Video::get_sprite_info` and `Video::decode_charram` call `decode_sprite_list`
-and `decode_charram_tile`. The line-RAM walk is the exception: `GameLines::decode` holds
-a separate copy of `Video::read_line_ram`. Keep both paths in step: when `Video`
-changes a decode rule, update the shared helper, the per-game decoder, or the
-line-RAM copy.
+and `decode_charram_tile`. The shared line-RAM walk in `runtime/renderer/game/lines.cpp`
+is the exception: `GameLines::decode` holds a separate copy of
+`Video::read_line_ram`. Keep both paths in step: when `Video` changes a decode
+rule, update the shared helper, the per-game decoder, or the shared line-RAM copy.
 
 ## Add a store PC
 

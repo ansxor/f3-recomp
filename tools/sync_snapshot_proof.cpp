@@ -5,7 +5,6 @@
 #include "f3rt/netplay.hpp"
 #include "eeprom.hpp"
 #include "gameplay_inputs.hpp"
-#include "gpu_scene.hpp"
 #ifdef F3RT_GENERATED
 #include "program.h"
 #endif

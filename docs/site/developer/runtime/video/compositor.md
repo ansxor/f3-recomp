@@ -2,28 +2,46 @@
 
 `compose_game_scene` combines semantic layers into ARGB8888 pixels. Its inputs contain no FDP RAM and no oracle inspection state.
 
-Sources: [game_compositor.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.hpp) and [game_compositor.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.cpp).
+Sources: [compositor.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/compositor.hpp) and [compositor.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/compositor.cpp).
 
 ## Function contract
 
 ```cpp
+struct FrameScene {
+    const GameTiles &tiles;
+    const GameText &text;
+    std::span<const SceneRow, 256> rows;
+    std::span<const uint8_t> tile_pixels;
+    std::span<const uint32_t> colors;
+    uint32_t layer_mask = all_layers;
+    bool flipped = false;
+};
+
+struct SceneTarget {
+    std::span<const uint16_t> sprites;
+    std::span<uint32_t> output;
+    GameVideoOptions geometry{};
+};
+
+enum class ComposeMode { Parallel, Serial };
+
 void compose_game_scene(
-    const GameTiles &tiles,
-    const GameText &text,
-    const GameLines &lines,
-    std::span<const uint16_t> sprites,
-    bool flipped,
-    std::span<const uint8_t> tile_pixels,
-    std::span<const uint32_t> colors,
-    std::span<uint32_t> output,
-    GameVideoOptions options = {});
+    const FrameScene &scene,
+    const SceneTarget &target,
+    ComposeMode mode = ComposeMode::Parallel);
 ```
 
-The tile and text objects supply indexed source pixels. `lines` supplies prepared `SceneRow` values. `sprites` supplies the already latched indexed plane.
+The scene says what to draw; the target says where. `FrameScene` holds only views, which must outlive the call and stay immutable until it returns. With GPU presentation enabled the views come from the one `CapturedFrame` (`CapturedFrame::scene()`, `runtime/renderer/game/captured_frame.hpp`) that `GameVideo` overwrites at VBSTART; reference-scale sprite planes are rastered from its sprite list with `raster_sprites()`. The tile and text objects supply indexed source pixels. `rows` supplies prepared `SceneRow` values, normally from `GameLines::rows()`. `flipped` is the global screen orientation used by tile and text sampling.
 
 `tile_pixels` contains shared decoded playfield ROM assets. `colors` contains at least 8192 RGB palette entries. The compositor sets output alpha to `0xff`.
 
-Scale must be 1–4, and border must be 0–160. Invalid options throw `std::runtime_error`.
+`layer_mask` selects layers by `layer_bit`. A layer outside the mask is treated as disabled, exactly as if its row had `enabled` cleared. The rows are never modified, so one scene can be composed repeatedly with different masks.
+
+`SceneTarget::sprites` supplies the already latched indexed plane. It belongs to the target because it is rasterized at the target geometry: the native plane is 432x256, and an expanded plane is `width() * height()`. `output` receives the pixels. Default `geometry` is the native frame.
+
+`ComposeMode::Parallel` runs native frames on the caller and expanded frames on the persistent row workers. `ComposeMode::Serial` runs the same row kernel on the caller without worker dispatch, for measurement and reference use. Neither mode changes emulated state, and concurrent calls need disjoint output storage.
+
+Scale must be 1–4, and border must be 0–160. Invalid geometry throws `std::runtime_error`.
 
 Native sprite input requires at least `432 * 256` entries. Expanded sprite input requires at least `width() * height()` entries. Output also requires that expanded size.
 
@@ -34,7 +52,7 @@ Incomplete buffers throw. The function also throws if a row selects bitmap pivot
 ```mermaid
 flowchart TD
     R["SceneRow for scanout row 24 through 255"] --> O["Stable priority sort of nine layers"]
-    O --> CL["Calibrated clip ranges per enabled layer"]
+    O --> CL["Calibrated clip ranges per active layer"]
     CL --> S["For each output subrow: initialize background"]
     S --> L["Visit layers from highest priority to lowest"]
     L --> M["Apply mosaic and sample indexed source"]
@@ -184,7 +202,7 @@ Each result is written as `0xff000000 | R << 16 | G << 8 | B`.
 
 ## Native parity and expanded output
 
-`GameVideo` first calls this function with default options into a 320x232 buffer. Supported expanded frames call it again with presentation options.
+`GameVideo` first composes the scene into a 320x232 buffer with the default target geometry. Supported expanded frames compose the same `FrameScene` again with a second target that carries the presentation geometry and its own sprite plane.
 
 The native buffer remains the comparison, capture, and CRC contract. The expanded buffer samples scene geometry at different positions. It is not nearest enlargement of that buffer.
 

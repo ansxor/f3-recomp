@@ -177,7 +177,7 @@ The Musashi interpreter and the recompiled code must give the same picture and t
 
 | Symptom | Likely cause |
 | --- | --- |
-| `f3rt-replay` shows mismatches | A bug in `runtime/video.cpp`. The CPU is not involved. |
+| `f3rt-replay` shows mismatches | A bug in `runtime/renderer/fdp/video.cpp`. The CPU is not involved. |
 | Native frames differ by a small shift of animation | A timing error. Check IRQ timing, `dispatch_deadline` and instruction cycle costs. See [Flags, timing and deadlines](/developer/recompiler/flags-and-timing). |
 | Native frames differ everywhere after some frame | Code ran wrongly. Run the [gameplay regression](/developer/testing/gameplay-regression) to find a fallback. |
 | Pictures match but `cmp` fails on `mainram.bin` | A timing difference that does not yet show on screen. Compare `cpu.json` and the RNG seed. |

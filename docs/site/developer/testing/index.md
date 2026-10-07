@@ -30,7 +30,7 @@ Each check compares a specific component with a reference. Some components need 
 | --- | --- | --- |
 | Lowered C for one 68EC020 instruction | Musashi 68EC020 core | D0-D7, A0-A7, PC, SR, cycles, bus writes, memory |
 | Whole recompiled main program | MAME frames and RAM, and the Musashi interpreter | RGB pixels, main RAM, WAV output |
-| FDP video renderer (`runtime/video.cpp`) | MAME frames | RGB pixels from captured video RAM |
+| FDP video renderer (`runtime/renderer/fdp/video.cpp`) | MAME frames | RGB pixels from captured video RAM |
 | Game-data video (`--video game`) | The FDP renderer | Indexed layer pixels and final RGB |
 | Recompiled sound driver (`--sound-driver native`) | Interpreted sound driver (`--sound-driver oracle`) | Every sound-bus record, then the WAV bytes |
 | ES5505, ES5510, MB87078 device models | MAME audio write trace | PCM waveform metrics |
@@ -107,8 +107,8 @@ Use this table to choose gates. Run every gate in the row.
 | `recomp/timing.py`, `recomp/*_cycles.csv` | Differential harness (it compares cycles), `f3rt-check`, MAME frame comparison |
 | `recomp/discovery.py`, `recomp/generate.py`, `games/*/config.toml` | Python unit tests, gameplay regression (it rejects any fallback), MAME frame comparison |
 | `runtime/machine.cpp`, `runtime/cpu_abi.cpp`, `runtime/interpreter.cpp` | `f3rt-check`, gameplay regression, MAME frame comparison, sound trace comparison |
-| `runtime/video.cpp` | `f3rt-replay` video mode, MAME frame comparison |
-| `runtime/game_*.cpp` | `f3rt-check`, gameplay regression with `--video-diff`, MAME frame comparison |
+| `runtime/renderer/fdp/video.cpp` | `f3rt-replay` video mode, MAME frame comparison |
+| `runtime/renderer/game/*.cpp` | `f3rt-check`, gameplay regression with `--video-diff`, MAME frame comparison |
 | `runtime/audio.cpp`, `runtime/third_party/audio/*` | `f3rt-check`, audio trace replay, sound trace comparison |
 | `tools/compile_sound.py`, `runtime/sound_native.cpp` | Sound trace comparison and WAV comparison |
 | `runtime/netplay*.cpp`, `runtime/state_io.*`, snapshot code | Netplay oracle (snapshot suite first), gameplay regression |

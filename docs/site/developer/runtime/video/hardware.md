@@ -1,7 +1,7 @@
 # F3 video hardware for newcomers
 
 This page describes the video memory, registers, geometry, and effects modeled
-by the renderers. `runtime/video.cpp` follows a MAME-derived TC0630FDP implementation.
+by the renderers. `runtime/renderer/fdp/video.cpp` follows a MAME-derived TC0630FDP implementation.
 The tables document that software model, not measured physical-chip behavior.
 ROM observations and MAME captures can support specific exercised cases; they
 do not independently verify the chip. Explicit hardware evidence is identified
@@ -206,7 +206,7 @@ The section base is `0x4000 + 0x1000 * section`. The sections hold this data:
 
 ### The mix word
 
-Each layer has a 16-bit **mix word** on each line. `mixable::set_mix` in `video.cpp` and `set_mix` in `game_lines.hpp` decode it the same way:
+Each layer has a 16-bit **mix word** on each line. `mixable::set_mix` in `video.cpp` and `set_mix` in `renderer/game/lines.hpp` decode it the same way:
 
 | Bits | Meaning |
 | --- | --- |
@@ -223,7 +223,7 @@ For playfields and for the text layer, a layer is on when bit 13 is set and the 
 
 There are four **clip planes**. Each plane is a pair of left and right columns for each line. A layer can use any combination of the planes. The layer then shows only inside (or, when inverted, outside) those columns. A water surface and a text box both use this feature.
 
-`calc_clip` in `video.cpp` and `clip_ranges` in `game_compositor.cpp` turn the enabled planes into up to 16 column ranges. The code applies the calibration `left - 1` and `right - 2` to the raw values. [FDP mixing](/developer/runtime/video/fdp-mixing) shows the algorithm.
+`calc_clip` in `video.cpp` and `clip_ranges` in `renderer/game/compositor.cpp` turn the enabled planes into up to 16 column ranges. The code applies the calibration `left - 1` and `right - 2` to the raw values. [FDP mixing](/developer/runtime/video/fdp-mixing) shows the algorithm.
 
 ::: warning
 The rule that combines several **inverted** planes follows the MAME rule `max(range.left, endpoint)`. Another set of hardware notes proposes a different rule. The code keeps the MAME rule, and the project has not proved it for every case on real hardware. The game uses only the cases that the parity runs cover.
@@ -272,4 +272,4 @@ Both renderers start from this list and sort it with a stable insertion sort. Th
 - [Scene types](/developer/runtime/video/scene) for the same data in the game-data renderer.
 - [Glossary](/developer/glossary) for other project terms.
 
-Sources: [video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/video.hpp) and [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp).
+Sources: [video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/video.hpp) and [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp).

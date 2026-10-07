@@ -3,8 +3,8 @@
 `GameSprites` decodes the hardware sprite display list from video RAM at VBSTART.
 It preserves tile geometry and the one-frame sprite lag.
 
-Sources: [game_sprites.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.hpp),
-[game_sprites.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.cpp)
+Sources: [sprites.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/sprites.hpp),
+[sprites.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/sprites.cpp)
 and [games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).
 
 ## Three descriptor batches
@@ -50,7 +50,7 @@ The asset span comes from `Video::sprite_tiles()`.
 
 ## Display-list walk
 
-`decode` calls `decode_sprite_list` (`runtime/video_decode.cpp`), which is shared
+`decode` calls `decode_sprite_list` (`runtime/renderer/decode.cpp`), which is shared
 with `Video::get_sprite_info`:
 
 - 1024 entries of 16 bytes (words `w0`..`w6` at +0..+12);

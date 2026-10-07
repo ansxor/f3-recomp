@@ -100,7 +100,7 @@ It does not classify every decoder rejection as illegal.
 
 **fallback** — See *CPU fallback* and *video fallback*.
 
-**FDP (TC0630FDP)** — The F3 video chip. It draws four tile playfields, a text layer and sprites. `Video` (in `runtime/video.cpp`) is a MAME-derived software model; internal parity is not physical-chip verification. See [FDP renderer](/developer/runtime/video/fdp).
+**FDP (TC0630FDP)** — The F3 video chip. It draws four tile playfields, a text layer and sprites. `Video` (in `runtime/renderer/fdp/video.cpp`) is a MAME-derived software model; internal parity is not physical-chip verification. See [FDP renderer](/developer/runtime/video/fdp).
 
 **frame advantage** — In netplay, the local simulated frame minus the peer's last reported frame. `Transport::frame_advantage()` returns it. The frontend waits if it is too large.
 

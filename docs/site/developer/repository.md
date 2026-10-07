@@ -59,8 +59,8 @@ Open these files first. Then follow the subsystem pages.
 | Discovery | `recomp/discovery.py` (`discover`) | `games/landmakrj/config.toml` | [Discovery](/developer/recompiler/discovery) |
 | Timing and flags | `recomp/timing.py` | `recomp/cpu_ops.h` (`f3_cc_flush`) | [Flags and timing](/developer/recompiler/flags-and-timing) |
 | Sound compiler | `tools/compile_sound.py` | `runtime/sound_native.cpp` | [Sound compiler](/developer/recompiler/sound-compiler) |
-| FDP renderer | `include/f3rt/video.hpp` | `runtime/video.cpp` | [FDP](/developer/runtime/video/fdp) |
-| Game-data video | `include/f3rt/game_video.hpp` | `runtime/game_video.cpp`, `runtime/game_scene.hpp` | [Game-data HLE](/developer/runtime/video/game-hle) |
+| FDP renderer | `include/f3rt/video.hpp` | `runtime/renderer/fdp/video.cpp` | [FDP](/developer/runtime/video/fdp) |
+| Game-data video | `include/f3rt/game_video.hpp` | `runtime/renderer/game/video.cpp`, `runtime/renderer/game/scene.hpp` | [Game-data HLE](/developer/runtime/video/game-hle) |
 | Audio | `include/f3rt/audio.hpp` | `runtime/audio.cpp` | [Audio](/developer/runtime/audio/) |
 | Interpreter | `runtime/interpreter.cpp` | `runtime/core_state.c` | [Interpreter](/developer/runtime/interpreter) |
 | Snapshots | `runtime/state_io.hpp` | Full/local and canonical/sync APIs in `runtime/machine.cpp` | [Snapshots](/developer/netplay/snapshots) |
@@ -138,21 +138,21 @@ These files form the `f3rt` library core and the frontend.
 
 | File | Purpose |
 | --- | --- |
-| [`runtime/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp) | FDP software renderer (`Video`). It reads the emulated FDP RAM. It is the oracle for the game-data renderer. |
-| [`runtime/game_video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp) | `GameVideo`: decodes the scene from video RAM at VBSTART, decides when to fall back to `Video`. |
-| [`runtime/video_decode.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video_decode.cpp) | Generic VRAM decode: char-RAM tile unpack and sprite display-list walk. |
-| [`games/landmakrj/video/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp) | Per-game `decode` for tiles, text, sprites and lines (and debug `observe_game_video_write`). |
-| [`runtime/game_scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp) | Shared scene types: `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
-| [`runtime/game_tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (per-game `decode` in `games/<id>/video/`). |
-| [`runtime/game_tiles.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.hpp) | `GameTiles` declaration. |
-| [`runtime/game_text.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) | Text layer decoded from the video-RAM text map and glyph RAM. |
-| [`runtime/game_text.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.hpp) | `GameText` declaration. |
-| [`runtime/game_sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.cpp) | Sprite latch and rasterizer; the display list is decoded from video RAM. |
-| [`runtime/game_sprites.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.hpp) | `GameSprites` declaration. |
-| [`runtime/game_lines.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.cpp) | Line RAM decode (scroll, zoom, clip and mix per scanline) and row normalization. |
-| [`runtime/game_lines.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.hpp) | `GameLines` declaration. |
-| [`runtime/game_compositor.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.cpp) | `compose_game_scene`: mixes layers into final pixels, at native or enlarged size. |
-| [`runtime/game_compositor.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.hpp) | Declaration of `compose_game_scene`. |
+| [`runtime/renderer/fdp/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp) | FDP software renderer (`Video`). It reads the emulated FDP RAM. It is the oracle for the game-data renderer. |
+| [`runtime/renderer/game/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp) | `GameVideo`: decodes the scene from video RAM at VBSTART, decides when to fall back to `Video`. |
+| [`runtime/renderer/decode.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/decode.cpp) | Generic VRAM decode: char-RAM tile unpack and sprite display-list walk. |
+| [`games/landmakrj/video/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp) | Per-game `decode` for sprites (and debug `observe_game_video_write`). |
+| [`runtime/renderer/game/scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/scene.hpp) | Shared scene types: `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
+| [`runtime/renderer/game/tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (shared `decode`). |
+| [`runtime/renderer/game/tiles.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.hpp) | `GameTiles` declaration. |
+| [`runtime/renderer/game/text.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/text.cpp) | Text layer decoded from the video-RAM text map and glyph RAM. |
+| [`runtime/renderer/game/text.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/text.hpp) | `GameText` declaration. |
+| [`runtime/renderer/game/sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/sprites.cpp) | Sprite latch and rasterizer; the display list is decoded from video RAM. |
+| [`runtime/renderer/game/sprites.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/sprites.hpp) | `GameSprites` declaration. |
+| [`runtime/renderer/game/lines.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/lines.cpp) | Line RAM decode (scroll, zoom, clip and mix per scanline) and row normalization. |
+| [`runtime/renderer/game/lines.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/lines.hpp) | `GameLines` declaration. |
+| [`runtime/renderer/game/compositor.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/compositor.cpp) | `compose_game_scene`: mixes layers into final pixels, at native or enlarged size. |
+| [`runtime/renderer/game/compositor.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/compositor.hpp) | Declaration of `compose_game_scene`. |
 
 ### runtime/ audio
 

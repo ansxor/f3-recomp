@@ -88,14 +88,14 @@ Its callback contract is described on the [CPU ABI page](/developer/runtime/cpu-
 
 | Files | Responsibility |
 | --- | --- |
-| `include/f3rt/video.hpp`, `runtime/video.cpp` | Standalone FDP renderer, decoded assets, inspection, sprite buffering, and snapshots. |
-| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | Game renderer options, VRAM decode at VBSTART, frame assembly, comparison, and presentation. |
-| `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | Game playfield descriptors and tile rendering. |
-| `runtime/game_text.hpp`, `runtime/game_text.cpp` | Game text descriptors and RAM character rendering. |
-| `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | Game sprite descriptors, chains, placement, scaling, and rasterization. |
-| `runtime/game_lines.hpp`, `runtime/game_lines.cpp` | Game line effects, row controls, clipping, and scene-row state. |
-| `runtime/game_scene.hpp` | Shared scene cells, sprites, rows, and layer data. |
-| `runtime/game_compositor.hpp`, `runtime/game_compositor.cpp` | Final game-layer composition and expanded presentation. |
+| `include/f3rt/video.hpp`, `runtime/renderer/fdp/video.cpp` | Standalone FDP renderer, decoded assets, inspection, sprite buffering, and snapshots. |
+| `include/f3rt/game_video.hpp`, `runtime/renderer/game/video.cpp` | Game renderer options, VRAM decode at VBSTART, frame assembly, comparison, and presentation. |
+| `runtime/renderer/game/tiles.hpp`, `runtime/renderer/game/tiles.cpp` | Game playfield descriptors and tile rendering. |
+| `runtime/renderer/game/text.hpp`, `runtime/renderer/game/text.cpp` | Game text descriptors and RAM character rendering. |
+| `runtime/renderer/game/sprites.hpp`, `runtime/renderer/game/sprites.cpp` | Game sprite descriptors, chains, placement, scaling, and rasterization. |
+| `runtime/renderer/game/lines.hpp`, `runtime/renderer/game/lines.cpp` | Game line effects, row controls, clipping, and scene-row state. |
+| `runtime/renderer/game/scene.hpp` | Shared scene cells, sprites, rows, and layer data. |
+| `runtime/renderer/game/compositor.hpp`, `runtime/renderer/game/compositor.cpp` | Final game-layer composition and expanded presentation. |
 
 Read the [video entry page](/developer/runtime/video/) before these implementation pages.
 The FDP renderer remains present when `GameVideo` exists.

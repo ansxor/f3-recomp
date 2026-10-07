@@ -2,7 +2,7 @@
 
 The game renderer uses semantic values, not a second image of FDP RAM. This page defines the shared types and coordinate rules.
 
-Source: [runtime/game_scene.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp). The oracle also uses `SceneRow` for diagnostic inspection.
+Source: [runtime/renderer/game/scene.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/scene.hpp). The oracle also uses `SceneRow` for diagnostic inspection.
 
 ## Data boundary: VideoRam
 
@@ -20,6 +20,12 @@ Video RAM is the source of truth. The decoders read it directly; a store from an
 unknown PC never invalidates a component, it is only logged in a
 `F3RT_VIDEO_WRITE_LOG` build. See
 [Video write logging](/developer/runtime/video/producers).
+
+### Component lifecycle concepts
+
+`runtime/renderer/game/scene.hpp` defines two C++20 concepts that describe what a layer component must provide. `SceneSource` requires `reset()` and `decode(const VideoRam &)`; the component is rebuilt from video RAM at VBSTART. `Snapshotable` requires `state_size()`, `save_state(StateWriter &)` and `load_state(StateReader &)`; it is for state that is serialized into machine and netplay snapshots. `GameTiles` and `GameText` satisfy `SceneSource` only, because video RAM fully determines them. `GameSprites` and `GameLines` satisfy both. Each component header ends with a `static_assert` of its conformance, and `GameVideo` resets, decodes and serializes its components through concept-constrained helpers in the order tiles, text, sprites, lines (snapshots: sprites, then lines).
+
+A new component must satisfy `SceneSource`, and also `Snapshotable` if it holds state that cannot be derived from video RAM. Add it to `sources()` (and `stateful()` when applicable) in `runtime/renderer/game/video.cpp`; the snapshot field order is part of the save format.
 
 ## Coordinate domains
 
@@ -131,6 +137,14 @@ The endpoints already contain the oracle calibration: raw left minus one and raw
 `GameLines` holds 256 rows. `row(scanout_y)` masks its index with 255. The compositor draws rows 24 through 255.
 
 The oracle stores the same description when scene inspection is enabled. This common diagnostic format does not share rendering logic or hardware geometry with the game renderer.
+
+### Layer identifiers
+
+`LayerId` names the nine scene layers: `Pf0`..`Pf3` are 0..3, `Sp0`..`Sp3` are 4..7, and `Text` is 8. `kind(id)` returns a `LayerKind` (`Playfield`, `Sprite` or `Text`), `sub_index(id)` gives the index within that kind, and `sprite_layer(plane_value)` extracts the sprite layer from bits 10-11 of an indexed sprite-plane value. `SceneRow::layer(id)` returns the `SceneLayer` for any identifier.
+
+`layer_info` holds each layer's name, indexed-domain size and report domain string. `layer_bit(id)` is the layer's bit in a layer mask, and `all_layers` (511) selects all nine. Public signatures still take a plain `unsigned layer_mask`. `scrolled_layers` lists the five layers with scroll geometry: the four playfields and text.
+
+The numeric values are fixed. They are encoded into the GPU scene words (the row order list and the layer blocks, offsets in `runtime/renderer/gpu/scene_layout.h`, shared by the encoder and the shaders), mirrored by `LAYER_*` constants in `runtime/renderer/shaders/scene.glsl`, and exposed by the `--video-layer-mask` option. Change the enum, the shader constants and the GPU layout together or not at all.
 
 ## Persistence and ownership
 

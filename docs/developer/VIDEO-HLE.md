@@ -8,7 +8,7 @@ remain untracked.
 
 The game scene is no longer reconstructed by observing game code and work RAM
 through recompiler hooks. At every **VBSTART**, `GameVideo` builds a
-[`VideoRam`](../../../runtime/game_scene.hpp) view of the FDP video RAM that the
+[`VideoRam`](../../../runtime/renderer/game/scene.hpp) view of the FDP video RAM that the
 standalone renderer already reads:
 
 - `graphics` — 0x40000 bytes at `$600000` (sprites `$00000`, playfield maps
@@ -28,13 +28,13 @@ lines.decode(vram);     // 256 per-scanline line parameters
 render();               // compose from the previously latched sprite plane
 ```
 
-`runtime/video.cpp` remains the independent **MAME-derived FDP reference**
+`runtime/renderer/fdp/video.cpp` remains the independent **MAME-derived FDP reference**
 (`inspect_scene_row`, `inspect_playfield_line`, `sprite_plane`, …). Its output is
 a software compatibility target, not verified physical TC0630FDP behavior. The
 game decoders read the same video RAM through shared decode primitives
 (`Video::decode_charram` and `Video::get_sprite_info` call
 `decode_charram_tile` / `decode_sprite_list`). The line-RAM walk in
-`games/landmakrj/video/video.cpp` is still a separate copy of
+`runtime/renderer/game/lines.cpp` is shared by all games, but remains a separate copy of
 `Video::read_line_ram`.
 
 The one-frame FDP sprite lag is preserved: `render()` composes using the
@@ -53,24 +53,23 @@ rejects any supported-frame difference.
 
 Each game opts into the de-HLE'd scene by providing a `games/<game>/video/`
 folder. `landmakrj` provides a single file, `games/landmakrj/video/video.cpp`,
-that defines:
+that defines the following. `GameTiles::decode` and `GameText::decode` are raw
+copies shared in `runtime/renderer/game/tiles.cpp` and `runtime/renderer/game/text.cpp`:
 
 | Symbol | Purpose |
 | --- | --- |
-| `GameTiles::decode` | Raw 4-byte playfield cells |
-| `GameText::decode` | Text map + glyph RAM |
 | `GameSprites::decode` | Sprite display list |
-| `GameLines::decode` | Line RAM + control |
 | `observe_game_video_write` | Debug store-PC check for every component |
 
-The runtime keeps the generic parts: `runtime/video_decode.{hpp,cpp}` holds the
-shared char-RAM tile unpack and the sprite display-list walk, and the component
+The runtime keeps the generic parts: `runtime/renderer/game/lines.cpp` defines the
+shared `GameLines::decode`, `runtime/renderer/decode.{hpp,cpp}` holds the shared
+char-RAM tile unpack and the sprite display-list walk, and the component
 classes hold sampling (`GameTiles::RowSampler`, `GameText::pixel`,
 `GameSprites::raster`, `GameLines::prepare`) and state serialization. The debug
 `observe_game_video_write` entry point exists only when `F3RT_VIDEO_WRITE_LOG` is enabled
 (see [Unsupported stores and fallbacks](#unsupported-stores-and-fallbacks)). CMake
 compiles `games/${F3_GAME}/video/*.cpp` and defines `F3RT_GAME_VIDEO`; games
-without the folder still link (`runtime/game_video_generic.cpp`) but cannot
+without the folder still link (`runtime/renderer/game/video_generic.cpp`) but cannot
 select `--video game|compare`.
 
 ## Decoded layouts
@@ -99,7 +98,7 @@ extra pen planes (bits 8–9), trails (bit 1) and bank (bit 0). Positions, zoom 
 flips come from video RAM, not from work-RAM scroll mirrors.
 
 **Lines** decode all 256 scanlines from line RAM + control registers in
-`games/landmakrj/video/video.cpp`, a separate copy of `Video::read_line_ram`:
+`runtime/renderer/game/lines.cpp`, a shared decoder that mirrors `Video::read_line_ram`:
 the `$4000`..`$b000` sections, subsection latch carry-forward, clip planes,
 blend/alpha, mosaic, pivot and sprite mixing, PF zoom/palette-add/rowscroll/mix.
 

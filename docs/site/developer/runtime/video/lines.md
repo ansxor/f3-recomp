@@ -3,9 +3,8 @@
 `GameLines` decodes the 256 per-scanline parameters from line RAM and the FDP
 control registers at VBSTART, then normalizes them into `SceneRow` values.
 
-Sources: [game_lines.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.hpp),
-[game_lines.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.cpp)
-and [games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).
+Sources: [lines.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/lines.hpp)
+and [lines.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/lines.cpp).
 
 ## Two representations
 
@@ -14,7 +13,7 @@ values, plus two arrays of eight control words read from video RAM.
 
 ```mermaid
 flowchart LR
-    LR["Line RAM (0x620000, 0x10000 bytes)"] --> O["decode(vram): read_line_ram per scanline"]
+    LR["Line RAM (0x620000, 0x10000 bytes)"] --> O["decode(vram): shared line-RAM walk"]
     CT["Control registers (0x660000)"] --> O
     O --> L["256 LineParams"]
     L --> P["prepare: scanout coordinates and layer state"]
@@ -23,8 +22,9 @@ flowchart LR
     R --> D["compare_rows: independent oracle inspection"]
 ```
 
-`decode` is a separate copy of `Video::read_line_ram` in `runtime/video.cpp`
-(the reference renderer), not a shared helper. Because a subsection is only
+The shared `decode` in `runtime/renderer/game/lines.cpp` mirrors `Video::read_line_ram`
+in `runtime/renderer/fdp/video.cpp` (the reference renderer), but remains a separate
+implementation. Because a subsection is only
 present when its latch bit is set, fields carry forward between scanlines;
 `decode` walks all 256 lines in order into one persistent `LineParams` scratch
 and stores the result per line.

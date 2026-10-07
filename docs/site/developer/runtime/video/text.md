@@ -4,7 +4,8 @@
 from video RAM at VBSTART, and how its optional debug write log reports
 unmodeled writers.
 
-The files are `runtime/game_text.hpp`, `runtime/game_text.cpp` and
+The files are `runtime/renderer/game/text.hpp` and `runtime/renderer/game/text.cpp` (including the
+shared `decode`). The Land Maker store-PC list is in
 `games/landmakrj/video/video.cpp`.
 
 ## What the class holds
@@ -32,10 +33,10 @@ The text-map word (graphics offset `0x1c000`, one 16-bit word per cell):
 
 Character RAM (graphics offset `0x1e000`, 256 glyphs of 32 bytes, 8x8 4bpp):
 pixel `(x, y)` of a glyph is the nibble `(x & 1)` of byte `y * 4 + (3 - x / 2)`,
-matching `decode_charram_tile` (`runtime/video_decode.hpp`) and the FDP renderer.
+matching `decode_charram_tile` (`runtime/renderer/decode.hpp`) and the FDP renderer.
 
-The same layout is decoded in `runtime/shaders/scene_body.glsl` from the GPU
-`TEXT_CELLS`/`GLYPHS` regions (see `runtime/shaders/scene.glsl`).
+The same layout is decoded in `runtime/renderer/shaders/scene_body.glsl` from the GPU
+`TEXT_CELLS`/`GLYPHS` regions (see `runtime/renderer/shaders/scene.glsl`).
 
 ## Decode
 
@@ -78,8 +79,9 @@ Like the playfield tiles, text is rebuilt from the serialized video RAM at the
 next VBSTART, so the raw snapshot is not part of canonical `GameVideo` state.
 `load_state` restores the already-composited `pixels` and clears the pending
 native frame, and `decode()` runs at VBSTART before anything reads `GameText`.
-The GPU reference path (`runtime/game_video.cpp`) rebuilds `GameText` from the
-packed `TEXT_CELLS` / `GLYPHS` words.
+`GameVideo` copies the decoded `GameText` into the `CapturedFrame` at VBSTART; the CPU
+reference path reads that copy, and `encode()` (`runtime/renderer/gpu/encode.cpp`) packs it
+into the `TEXT_CELLS` / `GLYPHS` words of the GPU upload.
 
 ## Invariants
 
@@ -97,6 +99,6 @@ flip bits and glyph nibble order. The text-layer comparison of the gameplay
 regression (layer mask 256) is the full proof. See
 [Parity evidence and limits](/developer/runtime/video/parity).
 
-Sources: [game_text.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.hpp),
-[game_text.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) and
+Sources: [text.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/text.hpp),
+[text.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/text.cpp) and
 [games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).

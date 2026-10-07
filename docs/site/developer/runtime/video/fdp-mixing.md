@@ -2,7 +2,7 @@
 
 **What you will learn:** how `calc_clip` builds the column ranges of a layer, how `mix_line_layer` decides which layer owns a pixel, and how `render_line` blends the result. The game compositor repeats this logic, so this page is also the specification for `compose_game_scene`.
 
-The code is in `runtime/video.cpp`. Hardware background is in [F3 video hardware](/developer/runtime/video/hardware).
+The code is in `runtime/renderer/fdp/video.cpp`. Hardware background is in [F3 video hardware](/developer/runtime/video/hardware).
 
 The mixing rules describe the MAME-derived model. Captured-reference agreement
 does not verify every physical-chip priority, clipping, or blending combination.
@@ -29,7 +29,7 @@ Input: the four `clip_plane_inf` values of the line and one layer. Output: a `cl
 5. A plane in `normal_planes` intersects every range with the calibrated half-open window. The range survives only when the endpoints are ordered and the overlap test passes. Pixel iteration excludes the right endpoint.
 6. A plane in `invert_planes` with `clip_l <= clip_r` **cuts out** the window. For each current range the code makes two candidates: the part left of the window, `[46, clip_l]`, and the part right of it, `[clip_r, 366]`. It folds every current range into each candidate with `candidate.l = max(range.l, candidate.l)` and `candidate.r = max(range.l, candidate.r)`. The code drops the candidate if `l >= r`.
 
-Step 6 follows the rule of the pinned MAME source. Another set of hardware notes proposes a different rule. The project has not proved either rule for all combinations of inverted planes, and the game uses only a few. Do not "improve" this code without a hardware reference; both renderers must change together. The same algorithm exists as `clip_ranges()` in `runtime/game_compositor.cpp`.
+Step 6 follows the rule of the pinned MAME source. Another set of hardware notes proposes a different rule. The project has not proved either rule for all combinations of inverted planes, and the game uses only a few. Do not "improve" this code without a hardware reference; both renderers must change together. The same algorithm exists as `clip_ranges()` in `runtime/renderer/game/compositor.cpp`.
 
 ## The mixing function (`mix_line_layer`)
 
@@ -87,4 +87,4 @@ Take a column where PF1 is opaque with priority 3 and SP0 is a normal blend with
 - Use `min(8, 15 - nibble)` to get a blend weight.
 - Use the same clip algorithm, including the calibration `left - 1` and `right - 2`.
 
-Source: [runtime/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp). The independent [game compositor](/developer/runtime/video/compositor) uses the same measured rules.
+Source: [runtime/renderer/fdp/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp). The independent [game compositor](/developer/runtime/video/compositor) uses the same measured rules.

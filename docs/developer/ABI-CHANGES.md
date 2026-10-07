@@ -9,7 +9,7 @@ interface history is not a physical bus-cycle accuracy claim.
 
 `GameVideo` no longer observes game code/work RAM through `[[hooks]]`. At each
 VBSTART it decodes the playfield, text, sprite and scanline layers directly from
-FDP video RAM (`runtime/game_scene.hpp VideoRam`) and renders from it. The hook
+FDP video RAM (`runtime/renderer/game/scene.hpp VideoRam`) and renders from it. The hook
 symbol `f3_landmakr_video_hook`, the `GameMemory` work-RAM reader and the
 component "poisoning" validity flags are gone. In debug builds configured with
 `F3RT_VIDEO_WRITE_LOG` (`OFF` by default), stores from PCs outside a component's
@@ -306,11 +306,13 @@ boundaries on the emulation thread with no racing reconfiguration or consumer.
 
 The C CPU ABI remains version 2; generated hooks, lazy flags, bus callbacks
 and scheduler are unchanged. `GameVideo::enable_gpu_presentation` enables a
-host-only scanout snapshot exported by `gpu_scene()`. It captures semantic
-cells, normalized rows and the **rendered** sprite list before the next latch.
-GPU resources, packed shader data and CPU diagnostic caches are not serialized.
-`render_reference` rerenders that snapshot through the retained CPU compositor,
-with optional isolated layer masks and serial dispatch for parity/measurement.
+host-only scanout snapshot exported by `captured_frame()` (a typed `CapturedFrame`
+value: tiles, text, scene rows, palette colors and the **rendered** sprite list,
+captured before the next latch). GPU resources, encoded shader words and CPU
+diagnostic caches are not serialized. `render_reference` rerenders that snapshot
+through the retained CPU compositor, with optional isolated layer masks and serial
+dispatch for parity/measurement; `GpuVideo` encodes the same value into GPU words
+per present.
 
 Supported GPU `Game` frames defer native CPU composition until an observer
 requests `Machine::native_pixels()`, native presentation, comparison or a snapshot.
@@ -332,7 +334,7 @@ Opt-in GPU interpolation adds only host-side `VideoInterpolation`/
 **upload copy**. Each row/playfield has flags and four triples of anchored
 local polynomial increments (source X, X zoom, vertical phase, palette add).
 No `SceneRow`, `GameLines`, machine-state, snapshot, CPU ABI or netplay schema
-changes. Original `GpuScene` and lazily materialized CPU images remain
+changes. The captured frame and lazily materialized CPU images remain
 non-interpolated. Both interpolation modes preserve native subrow-zero samples;
 alpha and discrete clip/mosaic/priority/column boundaries remain native.
 

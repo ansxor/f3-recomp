@@ -2,7 +2,7 @@
 
 The runtime has two different comparison paths. Frontend `--video compare` checks final native RGB every supported frame. `compare_layers` checks source layers at selected frames.
 
-Sources: [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp), [gameplay_regression.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), [gameplay_regression.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
 
 ## Modes are not interchangeable
 

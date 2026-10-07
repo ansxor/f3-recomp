@@ -3,8 +3,8 @@
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/rom.hpp"
-#include "gpu_video.hpp"
-#include "gpu_motion.hpp"
+#include "renderer/gpu/video.hpp"
+#include "renderer/gpu/motion.hpp"
 #include "gameplay_inputs.hpp"
 #include <algorithm>
 #include <array>
@@ -133,41 +133,37 @@ void png(const std::filesystem::path &path, std::span<const uint32_t> pixels, f3
     bool ok = SDL_SavePNG(s, path.string().c_str()); SDL_DestroySurface(s);
     require(ok, "PNG write failed: " + path.string());
 }
-void text_sampling(f3rt::GpuVideo &gpu, const f3rt::GpuScene &source, f3rt::GameVideoOptions o) {
+void text_sampling(f3rt::GpuVideo &gpu, const f3rt::CapturedFrame &source, f3rt::GameVideoOptions o) {
     if (o.scale % 2) return; // Half-native-pixel translation is an integer output shift at even scales.
-    auto a = std::make_unique<f3rt::GpuScene>(source);
-    uint32_t cell = 0; bool found = false;
+    auto a = std::make_unique<f3rt::CapturedFrame>(source);
+    uint16_t cell = 0; bool found = false;
     for (unsigned i = 0; i < 4096 && !found; ++i) {
-        cell = source.words[f3rt::GpuScene::text_cells + i];
-        const unsigned glyph = f3rt::GpuScene::glyphs + (cell & 255u) * 16;
-        for (unsigned p = 0; p < 64; ++p) {
-            const unsigned pen = (source.words[glyph + p / 4] >> ((p % 4) * 8)) & 255u;
-            if (pen && source.words[f3rt::GpuScene::palette + ((((cell >> 8) & 255u) * 16 + pen) & 8191u)]) {
-                found = true; break;
-            }
+        cell = source.text.map()[i];
+        // Visible texel of this captured cell: opaque pen with a non-black palette color.
+        const int cell_x = int(i % 64) * 8, cell_y = int(i / 64) * 8;
+        for (unsigned p = 0; p < 64 && !found; ++p) {
+            const auto pixel = source.text.pixel(cell_x + int(p % 8), cell_y + int(p / 8), false);
+            found = (pixel.flags & 0x10) && source.colors[pixel.palette & 8191u];
         }
     }
     require(found, "Text pixel proof needs a visible captured ROM glyph");
     a->fallback = false; a->sprite_count = 0;
-    a->words[f3rt::GpuScene::palette] = 0;
-    std::fill_n(a->words.begin() + f3rt::GpuScene::text_cells, 4096, cell);
-    std::fill(a->words.begin() + f3rt::GpuScene::rows, a->words.end(), 0u);
-    a->reference_rows = {};
+    a->colors[0] = 0;
+    std::fill(a->text.map().begin(), a->text.map().end(), cell);
+    a->rows = {};
     for (unsigned y = 24; y < 256; ++y) {
-        const unsigned row = f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride;
-        a->words[row + 3] = y - 24; a->words[row + 4] = 0x08080808u;
-        for (unsigned i = 0; i < 9; ++i) a->words[row + 5 + i] = i;
-        const unsigned layer = row + f3rt::GpuScene::row_layers + 8 * f3rt::GpuScene::layer_stride;
-        a->words[layer] = 64u | 16u | 7u; a->words[layer + 1] = 1;
-        a->words[layer + 2] = 46; a->words[layer + 3] = 366;
+        auto &row = a->rows[y];
+        row.text_y = int16_t(y - 24); row.blend = {8, 8, 8, 8};
+        auto &layer = row.text;
+        layer.enabled = true; layer.blend_mode = 1; layer.priority = 7;
+        layer.clip_enabled = 1; layer.clip_inverse = true; row.clips[0] = {46, 366};
     }
-    auto b = std::make_unique<f3rt::GpuScene>();
+    auto b = std::make_unique<f3rt::CapturedFrame>();
     std::vector<uint32_t> before(size_t(o.width()) * o.height()), after(before.size()), middle(before.size());
     gpu.draw(*a, before, 256);
     for (unsigned axis = 0; axis < 2; ++axis) {
         *b = *a;
-        for (unsigned y = 24; y < 256; ++y)
-            ++b->words[f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride + 2 + axis];
+        for (unsigned y = 24; y < 256; ++y) ++(axis ? b->rows[y].text_y : b->rows[y].text_x);
         gpu.reset_motion(); gpu.capture_motion(*a, 100); gpu.capture_motion(*b, 101);
         gpu.draw(*b, after, 256); gpu.draw_motion(*b, .5f, middle, 256);
         require(gpu.last_motion().text_rows == 232 && middle != before && middle != after,
@@ -196,7 +192,7 @@ int comparison(const Options &o) {
         inputs(m, schedule.step(m.frame)[0]); advance(m);
         while (m.audio->render(sound.data(), sound.size() / 2)) {}
     }
-    const auto &base = m.game_video->gpu_scene();
+    const auto &base = m.game_video->captured_frame();
     require(!base.fallback, "Demo warmup ended in oracle fallback; use --frames 1560 --seed 5");
     const auto before = state(m); const auto pixels = m.native_pixels();
     const auto sync_crc = m.sync_state_crc();
@@ -209,16 +205,14 @@ int comparison(const Options &o) {
     f3rt::GpuVideo gpu(window.value, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
         false, true, o.interp);
     gpu.set_scale_mode(f3rt::VideoScaleMode::Auto);
-    auto scene = std::make_unique<f3rt::GpuScene>(base);
+    auto scene = std::make_unique<f3rt::CapturedFrame>(base);
     auto pan = [&](uint64_t step) {
         // +/-64 native pixels, 2px/native frame. A bounded triangle avoids
         // whole-map teleports; raw tilemap period crossings still snap.
         const int phase = int(step % 128);
         const int x = phase <= 64 ? -64 + phase * 2 : 192 - phase * 2;
         for (unsigned y = 24; y < 256; ++y) for (unsigned pf = 0; pf < 4; ++pf) {
-            const unsigned row = f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride;
-            const unsigned at = row + f3rt::GpuScene::row_pf + pf * 6;
-            scene->words[at] = uint32_t(int32_t(base.words[at]) - x * 256);
+            scene->rows[y].playfields[pf].source_x = base.rows[y].playfields[pf].source_x - x * 256;
         }
     };
     if (!o.dump_dir.empty()) {
@@ -346,7 +340,7 @@ int main(int argc, char **argv) try {
         auto word = schedule.step(m.frame)[0]; inputs(m, word); inputs(*reference, word);
         if (m.frame + 1 == o.frames) replay_pre = state(m);
         advance(m); advance(*reference);
-        const auto &scene = m.game_video->gpu_scene();
+        const auto &scene = m.game_video->captured_frame();
         if (scene.fallback) ++fallback; else ++supported;
         gpu.capture_motion(scene, m.frame);
         auto sound = audio(m), sound_reference = audio(*reference);
@@ -421,7 +415,7 @@ int main(int argc, char **argv) try {
         }
     }
     if (!o.dump_dir.empty()) {
-        const auto &final_scene = m.game_video->gpu_scene();
+        const auto &final_scene = m.game_video->captured_frame();
         for (unsigned phase = 0; phase < 3; ++phase) {
             gpu.draw_motion(final_scene, float(phase) / 2, out);
             png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_phase_" + std::to_string(phase) + ".png"), out, o.video);
@@ -429,7 +423,7 @@ int main(int argc, char **argv) try {
         png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_native.png"), m.native_pixels(), f3rt::GameVideoOptions{});
     }
     require(paired && visible && half_visible && eligible, "No visible paired ROM midpoint motion; use a longer seeded gameplay run");
-    const auto &scene = m.game_video->gpu_scene();
+    const auto &scene = m.game_video->captured_frame();
     text_sampling(gpu, scene, o.video);
     auto snap = [&](const std::string &label) {
         gpu.draw(scene, canonical); gpu.draw_motion(scene, .5f, out);
@@ -439,13 +433,13 @@ int main(int argc, char **argv) try {
     gpu.capture_motion(scene, m.frame + 2); snap("gap");
     gpu.capture_motion(scene, m.frame + 2); snap("duplicate frame");
     gpu.capture_motion(scene, m.frame - 1); snap("rollback identity");
-    auto fallback_scene = std::make_unique<f3rt::GpuScene>(scene); fallback_scene->fallback = true;
+    auto fallback_scene = std::make_unique<f3rt::CapturedFrame>(scene); fallback_scene->fallback = true;
     gpu.capture_motion(*fallback_scene, m.frame); gpu.capture_motion(scene, m.frame + 1); snap("fallback recovery");
     m.load_state(replay_pre); gpu.reset_motion(); advance(m);
     require(audio(m) == replay_audio, "Rollback replay native audio mismatch");
     require(state(m) == replay_post && m.native_pixels() == replay_pixels, "Rollback replay canonical state/native pixels mismatch");
     require(m.sync_state_crc() == replay_sync_crc, "Rollback replay sync state mismatch");
-    gpu.capture_motion(m.game_video->gpu_scene(), m.frame); snap("state-load replay");
+    gpu.capture_motion(m.game_video->captured_frame(), m.frame); snap("state-load replay");
     std::cout << "SUCCESS frames=" << m.frame << " seed=" << o.seed << " samples=" << samples
         << " supported=" << supported << " fallback=" << fallback << " paired=" << paired
         << " visible_intermediate_frames=" << visible << " visible_midpoint_frames=" << half_visible

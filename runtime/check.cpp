@@ -8,10 +8,10 @@
 #include "third_party/audio/mc68681.hpp"
 #include "third_party/audio/es5510.hpp"
 #include "state_io.hpp"
-#include "game_tiles.hpp"
-#include "game_text.hpp"
-#include "game_sprites.hpp"
-#include "game_lines.hpp"
+#include "renderer/game/tiles.hpp"
+#include "renderer/game/text.hpp"
+#include "renderer/game/sprites.hpp"
+#include "renderer/game/lines.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>

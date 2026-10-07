@@ -2,7 +2,7 @@
 
 The game renderer separates native output from optional presentation output. Native captures remain 320x232. Enhanced output rerasterizes supported scene geometry.
 
-Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp), [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
 
 ## Options and dimensions
 
@@ -116,7 +116,7 @@ F1 → Video applies GPU scale/filtering live; CPU scale, renderer/model, border
 
 The final GPU postprocess pass offers Off (default), CRT and User. CPU leaves the preference inactive. F1 → Shaders loads/reloads a user file; a failed reload retains the last valid shader. The pass transforms presentation/captures, not native rendering, simulation, canonical CRCs or ImGui.
 
-Metal accepts `.metal` source with entry `f3_postprocess`, source texture/sampler index 0 and a float4 width/height/scale/elapsed-seconds uniform. Vulkan accepts `.spv` entry `main`; GLSL examples use sampled image set 2/binding 0 and uniform set 3/binding 0. Examples live at `runtime/shaders/user_transform.metal` and `user_transform.frag`; compile the latter offline before loading it. [Shader commands](/guide/video#f1-shaders-and-live-controls) and the [complete ABI/evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) give the supported interface and limits.
+Metal accepts `.metal` source with entry `f3_postprocess`, source texture/sampler index 0 and a float4 width/height/scale/elapsed-seconds uniform. Vulkan accepts `.spv` entry `main`; GLSL examples use sampled image set 2/binding 0 and uniform set 3/binding 0. Examples live at `runtime/renderer/shaders/user_transform.metal` and `user_transform.frag`; compile the latter offline before loading it. [Shader commands](/guide/video#f1-shaders-and-live-controls) and the [complete ABI/evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) give the supported interface and limits.
 
 
 ## What rerasterization changes
@@ -158,8 +158,8 @@ discrete without disabling valid geometry. Blended RGB can be absent from the
 native palette. Alpha, clip, mosaic, priority and column offsets stay discrete:
 the survey found held blocks/jumps, not smooth per-line ramps.
 
-Only the upload copy gains appended per-field metadata; canonical scene and
-CPU buffers do not change. Sprite ROM sampling already runs on the selected
+Only the encoded upload gains appended per-field metadata (typed `InterpolationCoefficients`
+written by `encode()`); the `CapturedFrame` and CPU buffers do not change. Sprite ROM sampling already runs on the selected
 output grid in off/linear/fit; these line modes do not change sprite coverage.
 
 Boundary measurements, false-positive limits, guard fixtures, captures and

@@ -153,7 +153,7 @@ The next table lists all targets. A target exists only when its condition is tru
 | `f3rt-check` | executable | `BUILD_TESTING` (CTest) | `runtime/check.cpp` | `f3rt` |
 | `f3rt_musashi_generated` | custom target | always | Depends on the generated `m68kops.h` | Orders Musashi header generation. |
 
-The library `f3rt` compiles with `-Wall -Wextra -Wpedantic`. It contains `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `video.cpp`, the `game_*.cpp` files, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` and the ES5505, ES5510, MC68681 and MB87078 chip files.
+The library `f3rt` compiles with `-Wall -Wextra -Wpedantic`. It contains `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `renderer/fdp/video.cpp`, the `renderer/game/*.cpp` files, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` and the ES5505, ES5510, MC68681 and MB87078 chip files.
 
 The `landmakr` target and `f3rt-run` use the same source file. The compile definitions make the difference:
 

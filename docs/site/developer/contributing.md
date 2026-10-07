@@ -100,7 +100,7 @@ the instruction address (or a tight range) to the component's known list in
 stderr by `log_unknown_video_write`, but it still decodes correctly next frame.
 
 **A feature not decoded yet.** Extend a per-game decoder's `decode(vram)`, or the
-shared primitive in `runtime/video_decode.cpp`, then add the store PCs. Follow
+shared primitive in `runtime/renderer/decode.cpp`, then add the store PCs. Follow
 [Extending the renderer](/developer/runtime/video/extending).
 
 Do not add `[[hooks]]` entries: hook support was removed from the recompiler. The
@@ -111,7 +111,7 @@ An unknown display-memory writer is only logged, and only under
 `F3RT_VIDEO_WRITE_LOG`; it never invalidates a component. Genuine unsupported
 features (`flipped-screen`, `sprite-trails`, `bitmap-pivot`) use the FDP renderer
 for that frame and log once through `log_unsupported_video`.
-See `is_covered_write` in the `game_*.cpp` files.
+See `is_covered_write` in the `renderer/game/*.cpp` files.
 
 ## Add a game
 

@@ -184,9 +184,9 @@ F1 → Shaders offers **Off**, **CRT** and **User**. Off is the default. Effects
 
 ```sh
 build/landmakr --video-backend gpu --postprocess crt
-build/landmakr --video-backend gpu --postprocess user --user-shader runtime/shaders/user_transform.metal
+build/landmakr --video-backend gpu --postprocess user --user-shader runtime/renderer/shaders/user_transform.metal
 # Vulkan: compile source offline, then load SPIR-V
-glslangValidator -V --target-env vulkan1.0 -o build/user_transform.spv runtime/shaders/user_transform.frag
+glslangValidator -V --target-env vulkan1.0 -o build/user_transform.spv runtime/renderer/shaders/user_transform.frag
 build/landmakr --video-backend gpu --postprocess user --user-shader build/user_transform.spv
 ```
 

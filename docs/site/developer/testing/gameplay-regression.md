@@ -209,7 +209,7 @@ The run needs `interval > 0` and a nonzero mask that uses only bits 0 to 8. Othe
 
 ### What counts as a difference
 
-The function `differs()` in `runtime/game_video.cpp` decides. A pixel is *visible* when flag bit `0x10` is set.
+The function `differs()` in `runtime/renderer/game/video.cpp` decides. A pixel is *visible* when flag bit `0x10` is set.
 
 - If one side is visible and the other is not, the pixels differ.
 - If both are visible, the palette index and all flags must be equal.

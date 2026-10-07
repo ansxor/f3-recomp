@@ -6,7 +6,7 @@
 
 namespace f3rt {
 class Machine;
-struct GpuScene;
+struct CapturedFrame;
 enum class GameVideoMode { Diagnostic, Game, Compare };
 
 struct GameVideoOptions {
@@ -39,7 +39,8 @@ public:
     void enable_gpu_presentation(bool enabled = true);
     // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
     void set_gpu_scale(unsigned scale);
-    const GpuScene &gpu_scene() const;
+    // The one scanout snapshot, overwritten at each VBSTART capture.
+    const CapturedFrame &captured_frame() const;
     void render_reference(std::span<uint32_t> output, GameVideoOptions options,
                           unsigned layer_mask = 511, bool serial = false) const;
     size_t state_size() const;

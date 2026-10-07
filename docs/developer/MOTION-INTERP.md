@@ -40,25 +40,35 @@ Escape closes it. The two panes share one display tick and drawable submission.
 
 ## Investigation and implementation
 
-- `GameVideo::capture_gpu` exports the rendered, latched semantic scene before
-  the next sprite latch. `GpuScene` is already host-only and is not serialized.
-  CPU native composition and diagnostic/reference rendering remain separate.
+- `GameVideo` overwrites its single typed `CapturedFrame`
+  (`runtime/renderer/game/captured_frame.hpp`) with the rendered, latched
+  semantic scene before the next sprite latch (`GameVideo::captured_frame()`).
+  It is host-only and is not serialized. The CPU compositor reads it directly;
+  `GpuVideo` encodes it into GPU words per present (`runtime/renderer/gpu/encode.cpp`,
+  the only writer of scene words; offsets live in `runtime/renderer/gpu/scene_layout.h`).
 - Existing `--video-interp off|linear|fit` is **spatial** sampling between
-  playfield scanlines above native scale. `gpu_interp.cpp` validates controls
+  playfield scanlines above native scale. `interp.cpp` validates controls
   and builds appended coefficients; it does not keep consecutive frame history.
-- `gpu_video.cpp` uploads packed scene words, rasterizes ROM sprite texels,
+- `video.cpp` encodes the captured frame into the mapped upload buffer, rasterizes ROM sprite texels,
   composes playfields/text and presents through SDL GPU. Its original `draw`
   remains the canonical GPU diagnostic path.
 - The CPU backend produces completed pixel images, including lazy expanded
   diagnostic images. Rebuilding every CPU scene at display frequency would
   duplicate that compositor path. This experiment therefore supports GPU only.
 
-New `runtime/gpu_motion.hpp/.cpp` stores a fixed-capacity geometry/control
-snapshot and precomputed deltas. The previous coordinate is recoverable as
-`current - delta`; full previous images, tilemaps, reference scenes and native
-pixels are not copied into temporal history. Eligibility is calculated once
-per completed emulated frame. `apply` modifies the already-mapped GPU upload,
-not the canonical `GpuScene`; repeated presentations allocate no motion storage.
+New `runtime/renderer/gpu/motion.hpp/.cpp` stores a fixed-capacity geometry/control
+snapshot (typed `SceneRow`/`SceneSprite` copies) and precomputed deltas. The
+previous coordinate is recoverable as `current - delta`; full previous images,
+tilemaps, reference scenes and native pixels are not copied into temporal
+history. Eligibility is calculated once per completed emulated frame by
+`capture(const CapturedFrame &, frame)`. Per present, `apply(frame, alpha)`
+returns a typed `MotionResult`: the stats plus a `MotionState` holding the
+motion-effective per-sprite x/y, per-row per-playfield source X and Y phase, and
+per-row text X/Y in 24.8 (text scroll lives here because `SceneRow` only has
+integer text scroll). The captured frame is never modified; the order per present
+is `apply` -> `analyze_gpu_interpolation(..., const MotionState *, ...)` ->
+`encode(frame, options, motion, coefficients, mapped_words)`. Repeated
+presentations allocate no motion storage.
 The off path never allocates temporal history.
 
 GPU API:
@@ -89,11 +99,12 @@ motion marker.
 
 Playfield X is already 24.8. Y interpolates the combined
 `source_y * 256 + y_fraction`, preserving existing X/Y zoom. Text scroll uses
-motion-only 24.8 values in spare packed row words 14/15, selected by an internal
+motion-only 24.8 values (`MotionState::Row::text_x/text_y`, encoded into spare
+row words `F3_ROW_MOTION_TEXT_X/Y`), selected by an internal
 uniform marker; canonical integer text fields and word offsets do not change.
 Fractional text sampling evaluates output-grid positions; integer endpoints
-retain the native replication rule. Spatial interpolation analyzes effective
-upload geometry when temporal motion is active, while retaining the original
+retain the native replication rule. Spatial interpolation analyzes the
+`MotionState` geometry when temporal motion is active, while retaining the original
 control/clip and palette safety checks. Alpha 1 uses the original shader path.
 
 ## Presentation clock and discontinuities

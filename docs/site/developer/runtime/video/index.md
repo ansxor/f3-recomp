@@ -59,24 +59,24 @@ The table lists every file of the video system and the page that explains it.
 
 | File | Contents | Page |
 | --- | --- | --- |
-| `include/f3rt/video.hpp`, `runtime/video.cpp` | `Video`: the FDP renderer and its inspection functions | [FDP renderer](/developer/runtime/video/fdp) |
-| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`; the VBSTART decode and frame selection | [GameVideo](/developer/runtime/video/game-hle) |
-| `runtime/game_scene.hpp` | `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
-| `runtime/video_decode.hpp`, `runtime/video_decode.cpp` | Generic char-RAM tile unpack and sprite display-list walk | [Sprites](/developer/runtime/video/sprites) |
-| `games/landmakrj/video/video.cpp` | Per-game `decode` decoders (and debug `observe_game_video_write`) | [Video write logging](/developer/runtime/video/producers) |
-| `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | `GameTiles`: four raw playfield cell maps | [Playfield tiles](/developer/runtime/video/tiles) |
-| `runtime/game_text.hpp`, `runtime/game_text.cpp` | `GameText`: text map and glyphs | [Text layer](/developer/runtime/video/text) |
-| `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |
-| `runtime/game_lines.hpp`, `runtime/game_lines.cpp` | `GameLines`: per-line effects and `SceneRow` generation | [Line effects](/developer/runtime/video/lines) |
-| `runtime/game_compositor.hpp`, `runtime/game_compositor.cpp` | `compose_game_scene` | [Compositor](/developer/runtime/video/compositor) |
-| `runtime/game_video_log.hpp`, `runtime/game_video_log.cpp` | `log_unsupported_video` (fallback kinds) and `log_unknown_video_write` (opt-in store PCs) | [Video write logging](/developer/runtime/video/producers) |
+| `include/f3rt/video.hpp`, `runtime/renderer/fdp/video.cpp` | `Video`: the FDP renderer and its inspection functions | [FDP renderer](/developer/runtime/video/fdp) |
+| `include/f3rt/game_video.hpp`, `runtime/renderer/game/video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`; the VBSTART decode and frame selection | [GameVideo](/developer/runtime/video/game-hle) |
+| `runtime/renderer/game/scene.hpp` | `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
+| `runtime/renderer/decode.hpp`, `runtime/renderer/decode.cpp` | Generic char-RAM tile unpack and sprite display-list walk | [Sprites](/developer/runtime/video/sprites) |
+| `games/landmakrj/video/video.cpp` | Per-game sprites `decode` decoder (and debug `observe_game_video_write`) | [Video write logging](/developer/runtime/video/producers) |
+| `runtime/renderer/game/tiles.hpp`, `runtime/renderer/game/tiles.cpp` | `GameTiles`: four raw playfield cell maps | [Playfield tiles](/developer/runtime/video/tiles) |
+| `runtime/renderer/game/text.hpp`, `runtime/renderer/game/text.cpp` | `GameText`: text map and glyphs | [Text layer](/developer/runtime/video/text) |
+| `runtime/renderer/game/sprites.hpp`, `runtime/renderer/game/sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |
+| `runtime/renderer/game/lines.hpp`, `runtime/renderer/game/lines.cpp` | `GameLines`: per-line effects and `SceneRow` generation | [Line effects](/developer/runtime/video/lines) |
+| `runtime/renderer/game/compositor.hpp`, `runtime/renderer/game/compositor.cpp` | `compose_game_scene` | [Compositor](/developer/runtime/video/compositor) |
+| `runtime/renderer/game/video_log.hpp`, `runtime/renderer/game/video_log.cpp` | `log_unsupported_video` (fallback kinds) and `log_unknown_video_write` (opt-in store PCs) | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/state_io.hpp` | `Canonical*` structs that save the video state | [GameVideo](/developer/runtime/video/game-hle) |
 | `runtime/check.cpp` | Unit checks for tile, sprite and edge rules | [Extending the renderer](/developer/runtime/video/extending) |
 | `tools/gameplay_regression.cpp` | The `--video-diff` harness | [Compare mode](/developer/runtime/video/compare-mode) |
 
 ## Key numbers
 
-These constants appear in many places. All come from `include/f3rt/video.hpp` and `runtime/video.cpp`.
+These constants appear in many places. All come from `include/f3rt/video.hpp` and `runtime/renderer/fdp/video.cpp`.
 
 | Name | Value | Meaning |
 | --- | --- | --- |
@@ -101,4 +101,4 @@ Read the pages in this order if you are new to the code.
 
 The long evidence log for the game-data renderer is in [docs/developer/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md). The ABI note is in [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md). For the surrounding runtime, read [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
 
-Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp), [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).

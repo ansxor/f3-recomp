@@ -4,9 +4,9 @@
 FDP video RAM at VBSTART, the raw cell bit layout, how unknown writer PCs are
 reported, and how a pixel is sampled on both the CPU and the GPU.
 
-The generic class is `runtime/game_tiles.hpp` and `runtime/game_tiles.cpp`. The
-Land Maker decoder (`decode`, plus the debug store-PC list used by
-`observe_game_video_write`) is in `games/landmakrj/video/video.cpp`, linked only
+The class and its shared `decode` are in `runtime/renderer/game/tiles.hpp` and
+`runtime/renderer/game/tiles.cpp`. The Land Maker debug store-PC list used by
+`observe_game_video_write` is in `games/landmakrj/video/video.cpp`, linked only
 for the configured `F3_GAME`.
 
 ## What the class holds
@@ -46,7 +46,7 @@ rule as `Video::generate_playfield_line` and the GPU shader (`scene_body.glsl`).
 | Function | What it does |
 | --- | --- |
 | `reset()` | Clears all maps (called at machine reset before the first decode). |
-| `decode(vram)` | Copies the four raw layers from video RAM. Defined per game. |
+| `decode(vram)` | Copies the four raw layers from video RAM. Shared, defined in `runtime/renderer/game/tiles.cpp`. |
 | `playfield_pixel(layer, x, y, flipped, tiles)` | Returns a `ScenePixel` for texture position (x, y). |
 
 There is **no snapshot state**. The maps are derived from the serialized video
@@ -92,12 +92,13 @@ The CPU and the GPU decode the identical raw words.
    `tiles` span is `Video::playfield_tiles()`.
 6. Return `palette = palette_base + pen` and `flags = (pen ? 0x10 : 0) | blend`.
 
-The GPU path packs the raw cells verbatim into `GpuScene::pf_cells` (one word
-per cell in the two-word slot) in `GameVideo::Impl::capture_gpu`; `scene_body.glsl`
+`GameVideo` copies the decoded `GameTiles` verbatim into the `CapturedFrame`
+(`runtime/renderer/game/captured_frame.hpp`) at VBSTART. The CPU reference
+renderer reads that copy directly; `encode()` in `runtime/renderer/gpu/encode.cpp`
+writes the raw cells into the `F3_SCENE_PF_CELLS` region (one word per cell in the
+two-word slot, layout in `scene_layout.h`) of the GPU upload, and `scene_body.glsl`
 decodes `attributes`, `code`, flips, pen mask and blend with the same formulas.
-`GpuScene::reference_rows`-based CPU reference rendering re-reads the raw words
-into a reconstruction `GameTiles`, so `--video compare` still compares video-RAM
-decode against the FDP renderer.
+`--video compare` still compares video-RAM decode against the FDP renderer.
 
 ## Unit check
 
@@ -119,6 +120,6 @@ decode against the FDP renderer.
 - A new tile producer needs only its store PCs added to `tiles_covered_write`;
   the decode itself needs no change because it reads video RAM.
 
-Sources: [game_tiles.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.hpp),
-[game_tiles.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) and
+Sources: [tiles.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.hpp),
+[tiles.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.cpp) and
 [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).
