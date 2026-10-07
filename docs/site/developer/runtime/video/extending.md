@@ -28,21 +28,22 @@ palette indices, blend selectors, or transparent coverage.
 
 | Operation | Owner |
 | --- | --- |
-| PF cells, text cells/glyphs, sprite display list, line parameters | per-game `games/<game>/video/{tiles,text,sprites,lines}.cpp` |
+| PF cells, text cells/glyphs, sprite display list, line parameters | per-game `games/<game>/video/` (Land Maker: `video.cpp`) |
 | Generic char-RAM unpack, sprite display-list walk | `runtime/video_decode.{hpp,cpp}` |
 | Sampling / mixing | `GameTiles::RowSampler`, `GameText::pixel`, `GameSprites::raster`, `GameLines::prepare`, `compose_game_scene` |
 
 The decoders read the same video RAM through shared helpers:
 `Video::get_sprite_info` and `Video::decode_charram` call `decode_sprite_list`
-and `decode_charram_tile`. The line-RAM walk is the exception: `lines.cpp` holds
+and `decode_charram_tile`. The line-RAM walk is the exception: `GameLines::decode` holds
 a separate copy of `Video::read_line_ram`. Keep both paths in step: when `Video`
 changes a decode rule, update the shared helper, the per-game decoder, or the
 line-RAM copy.
 
 ## Add a store PC
 
-Add the instruction address (or a tight range) to the component's known list in
-`games/<game>/video/<component>.cpp`. These lists are used only by the opt-in
+Add the instruction address (or a tight range) to the component's known list
+(`tiles_covered_write`, `text_covered_write`, `sprites_covered_write` or
+`lines_covered_write`) in `games/<game>/video/video.cpp`. These lists are used only by the opt-in
 `F3RT_VIDEO_WRITE_LOG` path; the log receives only the PC and address. Do not
 list a whole unrelated routine family to silence a report.
 

@@ -63,7 +63,7 @@ The table lists every file of the video system and the page that explains it.
 | `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`; the VBSTART decode and frame selection | [GameVideo](/developer/runtime/video/game-hle) |
 | `runtime/game_scene.hpp` | `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
 | `runtime/video_decode.hpp`, `runtime/video_decode.cpp` | Generic char-RAM tile unpack and sprite display-list walk | [Sprites](/developer/runtime/video/sprites) |
-| `games/landmakrj/video/{tiles,text,sprites,lines}.cpp` | Per-game `decode` decoders (and debug `observe_write`) | [Video write logging](/developer/runtime/video/producers) |
+| `games/landmakrj/video/video.cpp` | Per-game `decode` decoders (and debug `observe_game_video_write`) | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | `GameTiles`: four raw playfield cell maps | [Playfield tiles](/developer/runtime/video/tiles) |
 | `runtime/game_text.hpp`, `runtime/game_text.cpp` | `GameText`: text map and glyphs | [Text layer](/developer/runtime/video/text) |
 | `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |

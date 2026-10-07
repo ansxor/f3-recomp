@@ -141,9 +141,9 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp) | FDP software renderer (`Video`). It reads the emulated FDP RAM. It is the oracle for the game-data renderer. |
 | [`runtime/game_video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp) | `GameVideo`: decodes the scene from video RAM at VBSTART, decides when to fall back to `Video`. |
 | [`runtime/video_decode.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video_decode.cpp) | Generic VRAM decode: char-RAM tile unpack and sprite display-list walk. |
-| [`games/landmakrj/video/`](https://github.com/ansxor/f3-recomp/tree/main/games/landmakrj/video) | Per-game `decode` for tiles, text, sprites and lines (and debug `observe_write`). |
+| [`games/landmakrj/video/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp) | Per-game `decode` for tiles, text, sprites and lines (and debug `observe_game_video_write`). |
 | [`runtime/game_scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp) | Shared scene types: `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
-| [`runtime/game_tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (per-game `decode` in `games/<id>/video/tiles.cpp`). |
+| [`runtime/game_tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (per-game `decode` in `games/<id>/video/`). |
 | [`runtime/game_tiles.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.hpp) | `GameTiles` declaration. |
 | [`runtime/game_text.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) | Text layer decoded from the video-RAM text map and glyph RAM. |
 | [`runtime/game_text.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.hpp) | `GameText` declaration. |

@@ -13,5 +13,8 @@ void log_unsupported_video(const char *component, const char *kind, uint64_t fra
 // store from each PC outside a component's known producer list, to find game
 // routines that are not yet documented.
 void log_unknown_video_write(const char *layer, uint32_t pc, uint32_t address, uint64_t frame);
+// Checks a graphics/control store against the game's known producer PCs for
+// every scene component and logs unknown writers. Defined per game.
+void observe_game_video_write(uint32_t pc, uint32_t address, uint64_t frame);
 #endif
 } // namespace f3rt

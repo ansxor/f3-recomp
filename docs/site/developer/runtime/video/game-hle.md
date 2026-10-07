@@ -20,9 +20,10 @@ geometry and per-line settings. The scene then supports higher-resolution
 rasterization and extra horizontal columns.
 
 ::: info
-**Per-game scene files.** A game provides `games/<game>/video/` with one file per
-component. Those files define the component `decode(const VideoRam&)` decoders
-and, when `F3RT_VIDEO_WRITE_LOG` is on, the `observe_write` store-PC list.
+**Per-game scene file.** A game provides `games/<game>/video/` (Land Maker uses a
+single `video.cpp`). It defines the component `decode(const VideoRam&)` decoders
+and, when `F3RT_VIDEO_WRITE_LOG` is on, `observe_game_video_write` with every
+component's store-PC list.
 Generic decode helpers live in `runtime/video_decode.{hpp,cpp}`. CMake compiles
 the folder and defines `F3RT_GAME_VIDEO`; games without it can still run but
 cannot select `game` or `compare`. There are no recompiler hooks.
@@ -36,8 +37,9 @@ cannot select `game` or `compare`. There are no recompiler hooks.
 2. **Write logging is opt-in and uses only the PC and the address.** In a
    `F3RT_VIDEO_WRITE_LOG` build, `Machine::write8` calls
    `GameVideo::observe_write(pc, address)` for each byte written to 0x600000 to
-   0x63ffff and 0x660000 to 0x66001f. It never receives the value. Each
-   component returns for the store PCs it knows; any other PC calls
+   0x63ffff and 0x660000 to 0x66001f. It never receives the value. It calls the
+   per-game `observe_game_video_write`, which returns for the store PCs the
+   addressed component knows; any other PC calls
    `log_unknown_video_write(layer, pc, address, frame)`, which prints the first
    occurrence of each `(layer, pc)` to stderr. With the option off no write is
    observed, and either way a write from an unknown PC does not invalidate
@@ -112,7 +114,7 @@ flowchart LR
 | --- | --- |
 | `GameVideo(Machine&, GameVideoMode mode = Diagnostic, GameVideoOptions options = {})` | Stores the machine, mode and options. It throws `std::runtime_error` if `scale` is 0 or above 4, or `border` is above 160. When the options expand the picture, it allocates `presentation_pixels` (ARGB) and `presentation_sprites` (`uint16_t`), each of `width() * height()` entries. It calls `Video::enable_scene_inspection(mode != Game)` and `reset()`. |
 | `reset()` | Resets the four scene objects, the sprite plane, the presentation buffers (black), the counters and the fallback list. `Machine::reset` calls it. |
-| `observe_write(pc, address)` | Only compiled with `F3RT_VIDEO_WRITE_LOG`. Forwards the store to all four components with `frame = machine.frame + 1`. Each component's known-PC list decides whether to log. |
+| `observe_write(pc, address)` | Only compiled with `F3RT_VIDEO_WRITE_LOG`. Calls the per-game `observe_game_video_write(pc, address, frame)` with `frame = machine.frame + 1`; the addressed component's known-PC list decides whether to log. |
 | `render_frame()` | Called at VBSTART by `Machine::advance_to`. Builds `VideoRam{machine.graphics, machine.control, machine.frame + 1}`, calls `decode(vram)` on tiles/text/sprites/lines, then `render()`, then `latch_sprites()`. See the frame decision below. |
 | `compare_layers(frame, layer_mask)` | Diagnostic: compares layers with the oracle and throws on a difference. See [Compare mode](/developer/runtime/video/compare-mode). |
 | `report(std::ostream&)` | Prints the `VIDEO ...` summary lines. |

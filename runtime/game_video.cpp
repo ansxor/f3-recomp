@@ -369,11 +369,7 @@ void GameVideo::reset() {
 }
 #ifdef F3RT_VIDEO_WRITE_LOG
 void GameVideo::observe_write(uint32_t pc, uint32_t address) {
-    const uint64_t frame = impl_->machine.frame + 1;
-    impl_->tiles.observe_write(pc, address, frame);
-    impl_->text.observe_write(pc, address, frame);
-    impl_->sprites.observe_write(pc, address, frame);
-    impl_->lines.observe_write(pc, address, frame);
+    observe_game_video_write(pc, address, impl_->machine.frame + 1);
 }
 #endif
 

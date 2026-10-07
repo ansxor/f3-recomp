@@ -5,8 +5,9 @@ FDP video RAM at VBSTART, the raw cell bit layout, how unknown writer PCs are
 reported, and how a pixel is sampled on both the CPU and the GPU.
 
 The generic class is `runtime/game_tiles.hpp` and `runtime/game_tiles.cpp`. The
-Land Maker decoder (`decode`, plus a debug `observe_write`) is
-`games/landmakrj/video/tiles.cpp`, linked only for the configured `F3_GAME`.
+Land Maker decoder (`decode`, plus the debug store-PC list used by
+`observe_game_video_write`) is in `games/landmakrj/video/video.cpp`, linked only
+for the configured `F3_GAME`.
 
 ## What the class holds
 
@@ -46,7 +47,6 @@ rule as `Video::generate_playfield_line` and the GPU shader (`scene_body.glsl`).
 | --- | --- |
 | `reset()` | Clears all maps (called at machine reset before the first decode). |
 | `decode(vram)` | Copies the four raw layers from video RAM. Defined per game. |
-| `observe_write(pc, address, frame)` | Only with `F3RT_VIDEO_WRITE_LOG`: known tile store PCs are accepted; an unknown writer logs its PC once. Defined per game. |
 | `playfield_pixel(layer, x, y, flipped, tiles)` | Returns a `ScenePixel` for texture position (x, y). |
 
 There is **no snapshot state**. The maps are derived from the serialized video
@@ -58,7 +58,7 @@ RAM and rebuilt at VBSTART, so they are not part of `GameVideo` canonical state.
 4-byte cell per 16x16 tile, for all four layers. Video RAM is the source of
 truth.
 
-In a `F3RT_VIDEO_WRITE_LOG` build, `observe_write` receives only the store PC and
+In a `F3RT_VIDEO_WRITE_LOG` build, `observe_game_video_write` receives only the store PC and
 destination address. Land Maker's tile-block copy/erase loops and per-layer clear
 stores are accepted:
 
@@ -116,9 +116,9 @@ decode against the FDP renderer.
 - Video RAM is the source of truth; decode it at VBSTART, never from work RAM.
 - The pen-mask rule `& ~attributes` uses the whole attribute.
 - The per-game `decode` snapshot must remain a copy; it may not alias live VRAM.
-- A new tile producer needs only its store PCs added to the debug `observe_write`
-  list; the decode itself needs no change because it reads video RAM.
+- A new tile producer needs only its store PCs added to `tiles_covered_write`;
+  the decode itself needs no change because it reads video RAM.
 
 Sources: [game_tiles.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.hpp),
 [game_tiles.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) and
-[tiles.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/tiles.cpp).
+[video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).

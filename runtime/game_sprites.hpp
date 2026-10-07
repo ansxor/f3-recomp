@@ -15,11 +15,8 @@ public:
 
     void reset();
     // Decode the sprite display list from VRAM (0x00000, 0x10000 bytes) into the
-    // next submission. Defined per game under games/<game>/video/sprites.cpp.
+    // next submission. Defined per game under games/<game>/video/.
     void decode(const VideoRam &vram);
-#ifdef F3RT_VIDEO_WRITE_LOG
-    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
-#endif
     void latch();
     void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
                 GameVideoOptions options = {}) const;

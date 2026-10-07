@@ -34,7 +34,7 @@ a software compatibility target, not verified physical TC0630FDP behavior. The
 game decoders read the same video RAM through shared decode primitives
 (`Video::decode_charram` and `Video::get_sprite_info` call
 `decode_charram_tile` / `decode_sprite_list`). The line-RAM walk in
-`games/landmakrj/video/lines.cpp` is still a separate copy of
+`games/landmakrj/video/video.cpp` is still a separate copy of
 `Video::read_line_ram`.
 
 The one-frame FDP sprite lag is preserved: `render()` composes using the
@@ -52,20 +52,22 @@ rejects any supported-frame difference.
 ## Per-game scene code
 
 Each game opts into the de-HLE'd scene by providing a `games/<game>/video/`
-folder. `landmakrj` provides one file per component:
+folder. `landmakrj` provides a single file, `games/landmakrj/video/video.cpp`,
+that defines:
 
-| File | Defines |
+| Symbol | Purpose |
 | --- | --- |
-| `games/landmakrj/video/tiles.cpp` | `GameTiles::decode` (raw 4-byte cells) / `observe_write` |
-| `games/landmakrj/video/text.cpp` | `GameText::decode` (map + glyph RAM) / `observe_write` |
-| `games/landmakrj/video/sprites.cpp` | `GameSprites::decode` (display list) / `observe_write` |
-| `games/landmakrj/video/lines.cpp` | `GameLines::decode` (line RAM + control) / `observe_write` |
+| `GameTiles::decode` | Raw 4-byte playfield cells |
+| `GameText::decode` | Text map + glyph RAM |
+| `GameSprites::decode` | Sprite display list |
+| `GameLines::decode` | Line RAM + control |
+| `observe_game_video_write` | Debug store-PC check for every component |
 
 The runtime keeps the generic parts: `runtime/video_decode.{hpp,cpp}` holds the
 shared char-RAM tile unpack and the sprite display-list walk, and the component
 classes hold sampling (`GameTiles::RowSampler`, `GameText::pixel`,
 `GameSprites::raster`, `GameLines::prepare`) and state serialization. The debug
-`observe_write` entry points exist only when `F3RT_VIDEO_WRITE_LOG` is enabled
+`observe_game_video_write` entry point exists only when `F3RT_VIDEO_WRITE_LOG` is enabled
 (see [Unsupported stores and fallbacks](#unsupported-stores-and-fallbacks)). CMake
 compiles `games/${F3_GAME}/video/*.cpp` and defines `F3RT_GAME_VIDEO`; games
 without the folder still link (`runtime/game_video_generic.cpp`) but cannot
@@ -97,7 +99,7 @@ extra pen planes (bits 8–9), trails (bit 1) and bank (bit 0). Positions, zoom 
 flips come from video RAM, not from work-RAM scroll mirrors.
 
 **Lines** decode all 256 scanlines from line RAM + control registers in
-`games/landmakrj/video/lines.cpp`, a separate copy of `Video::read_line_ram`:
+`games/landmakrj/video/video.cpp`, a separate copy of `Video::read_line_ram`:
 the `$4000`..`$b000` sections, subsection latch carry-forward, clip planes,
 blend/alpha, mosaic, pivot and sprite mixing, PF zoom/palette-add/rowscroll/mix.
 
@@ -105,9 +107,10 @@ blend/alpha, mosaic, pivot and sprite mixing, PF zoom/palette-add/rowscroll/mix.
 
 Store logging is opt-in. Only a build configured with `F3RT_VIDEO_WRITE_LOG`
 (`OFF` by default; defined publicly on `f3rt`) makes `Machine::write8` call
-`GameVideo::observe_write(pc, address)` for graphics and control writes. Each
-component's `observe_write` returns for the store PCs it knows and otherwise
-calls `log_unknown_video_write(layer, pc, address, frame)`, which prints the
+`GameVideo::observe_write(pc, address)` for graphics and control writes. It
+calls the per-game `observe_game_video_write(pc, address, frame)`, which picks
+the component by address, returns for the store PCs that component knows and
+otherwise calls `log_unknown_video_write(layer, pc, address, frame)`, which prints the
 first occurrence of each `(layer, pc)` to stderr so unmodeled routines can be
 collected for future implementation. With the option `OFF` there is no write
 observation at all and the graphics path keeps its fast `direct_bytes` copy. A

@@ -24,10 +24,11 @@ Nothing observes writes in a normal build. Configure with
 - every byte write to 0x600000 to 0x63ffff (graphics RAM);
 - every byte write to 0x660000 to 0x66001f (control registers).
 
-`GameVideo::observe_write` forwards the call to all four components with
-`frame = machine.frame + 1`. Each component returns immediately if the address is
-outside its range. Otherwise it checks its **list of known store PCs**. If the
-PC is on the list, the log returns. If it is not, it calls
+`GameVideo::observe_write` calls the per-game
+`observe_game_video_write(pc, address, frame)` with `frame = machine.frame + 1`.
+It selects the component whose address range contains the store and ignores
+addresses outside every range. It then checks that component's **list of known
+store PCs**. If the PC is on the list, the log returns. If it is not, it calls
 `log_unknown_video_write(layer, pc, address, frame)`.
 
 `log_unknown_video_write` (`runtime/game_video_log.hpp`) is host-only and is
@@ -53,14 +54,15 @@ instruction body `cpu->pc` still holds the instruction's own address, so
 
 ## Known store PCs
 
-Each per-game `games/<game>/video/*.cpp` file owns its list. For `landmakrj`:
+The per-game `games/<game>/video/` file owns every list. For `landmakrj`, all of
+them are in `games/landmakrj/video/video.cpp`:
 
 | Component | Address range watched | Known producer PCs |
 | --- | --- | --- |
-| Tiles | 0x610000 to 0x617fff | `games/landmakrj/video/tiles.cpp` |
-| Text | 0x61c000 to 0x61ffff | `games/landmakrj/video/text.cpp` (map and glyph writers, listed in the file) |
-| Sprites | 0x600000 to 0x60ffff | `games/landmakrj/video/sprites.cpp` ranges 0x41d0 to 0x4380 (init/clear), 0x43b0 to 0x43de (scroll), 0x43e0 to 0x43fe (command), 0x4422 to 0x447e (list terminator), 0x4688 to 0x480a (single/grid), 0x480c to 0x4a36 (scaled), 0xa8f38 to 0xa93a2 (object helpers) |
-| Lines | 0x620000 to 0x62ffff and 0x660000 to 0x66003f | `games/landmakrj/video/lines.cpp` ranges, for example 0x00136e to 0x00145e (register uploader), 0x005d30 to 0x005d6c (profile init), 0x09d684 to 0x09d6a0 (board gradient) |
+| Tiles | 0x610000 to 0x617fff | `tiles_covered_write` |
+| Text | 0x61c000 to 0x61ffff | `text_covered_write` (map and glyph writers) |
+| Sprites | 0x600000 to 0x60ffff | `sprites_covered_write` ranges 0x41d0 to 0x4380 (init/clear), 0x43b0 to 0x43de (scroll), 0x43e0 to 0x43fe (command), 0x4422 to 0x447e (list terminator), 0x4688 to 0x480a (single/grid), 0x480c to 0x4a36 (scaled), 0xa8f38 to 0xa93a2 (object helpers) |
+| Lines | 0x620000 to 0x62ffff and 0x660000 to 0x66003f | `lines_covered_write` ranges, for example 0x00136e to 0x00145e (register uploader), 0x005d30 to 0x005d6c (profile init), 0x09d684 to 0x09d6a0 (board gradient) |
 
 Notes:
 
@@ -104,4 +106,4 @@ or a known store-PC range.
 
 Sources: [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp),
 [game_video_log.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video_log.hpp)
-and the per-game `games/landmakrj/video/*.cpp` files.
+and the per-game `games/landmakrj/video/video.cpp`.

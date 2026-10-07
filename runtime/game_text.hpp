@@ -20,11 +20,8 @@ public:
     GameText() { reset(); }
     void reset();
     // Copy the raw text map and glyph RAM from VRAM at VBSTART. Defined per
-    // game under games/<game>/video/text.cpp.
+    // game under games/<game>/video/.
     void decode(const VideoRam &vram);
-#ifdef F3RT_VIDEO_WRITE_LOG
-    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
-#endif
 
     // Raw text-map word bit layout (shared with the GPU decode in
     // runtime/shaders/scene_body.glsl):

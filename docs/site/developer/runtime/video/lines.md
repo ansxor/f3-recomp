@@ -5,7 +5,7 @@ control registers at VBSTART, then normalizes them into `SceneRow` values.
 
 Sources: [game_lines.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.hpp),
 [game_lines.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.cpp)
-and [games/landmakrj/video/lines.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/lines.cpp).
+and [games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).
 
 ## Two representations
 
@@ -35,7 +35,6 @@ and stores the result per line.
 | --- | --- |
 | `reset()` | Resets line values, rows and control words. |
 | `decode(vram)` | Decodes line RAM + control into `LineParams`. |
-| `observe_write(pc, address, frame)` | Only with `F3RT_VIDEO_WRITE_LOG`: logs store PCs outside the known list in the line RAM / control range. |
 | `prepare(flipped)` | Normalizes every scanout row from the decoded state. |
 | `row(scanout_y)` | Returns `rows_[scanout_y & 255]`. |
 | `compare_rows(oracle, frame)` | Prepares rows and compares the visible normalized descriptions. |
@@ -82,10 +81,11 @@ priority.
 
 ## Write log
 
-`observe_write(pc, address, frame)` is compiled only with `F3RT_VIDEO_WRITE_LOG`.
-It watches `0x620000..0x62ffff` (line RAM) and `0x660000..0x66003f` (control).
-If `pc` is one of the known ranges in `games/landmakrj/video/lines.cpp`, it
-returns. Otherwise it calls `log_unknown_video_write("lines", pc, address,
+With `F3RT_VIDEO_WRITE_LOG`, the per-game `observe_game_video_write` watches
+`0x620000..0x62ffff` (line RAM) and `0x660000..0x66003f` (control) for lines.
+If `pc` is one of the known ranges in `lines_covered_write`
+(`games/landmakrj/video/video.cpp`), it returns. Otherwise it calls
+`log_unknown_video_write("lines", pc, address,
 frame)`. No state is invalidated; the next VBSTART decodes the write. See
 [Video write logging](/developer/runtime/video/producers).
 

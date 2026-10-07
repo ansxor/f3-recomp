@@ -5,7 +5,7 @@ from video RAM at VBSTART, and how its optional debug write log reports
 unmodeled writers.
 
 The files are `runtime/game_text.hpp`, `runtime/game_text.cpp` and
-`games/landmakrj/video/text.cpp`.
+`games/landmakrj/video/video.cpp`.
 
 ## What the class holds
 
@@ -49,9 +49,9 @@ decoder always produces a complete texture from the current bytes.
 
 ## Write log
 
-`observe_write(pc, address, frame)` is compiled only with `F3RT_VIDEO_WRITE_LOG`.
-It watches `0x61c000..0x61ffff` (map and glyph RAM). If `pc` is one of the known
-store PCs listed in `games/landmakrj/video/text.cpp`, it returns. Otherwise it
+With `F3RT_VIDEO_WRITE_LOG`, the per-game `observe_game_video_write` watches
+`0x61c000..0x61ffff` (map and glyph RAM) for text. If `pc` is one of the known
+store PCs in `text_covered_write` (`games/landmakrj/video/video.cpp`), it returns. Otherwise it
 calls `log_unknown_video_write("text", pc, address, frame)`. The store still
 happens, and the next VBSTART snapshots it; no state is invalidated. See
 [Video write logging](/developer/runtime/video/producers).
@@ -99,4 +99,4 @@ regression (layer mask 256) is the full proof. See
 
 Sources: [game_text.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.hpp),
 [game_text.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) and
-[games/landmakrj/video/text.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/text.cpp).
+[games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).

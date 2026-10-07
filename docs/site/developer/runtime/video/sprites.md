@@ -5,7 +5,7 @@ It preserves tile geometry and the one-frame sprite lag.
 
 Sources: [game_sprites.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.hpp),
 [game_sprites.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.cpp)
-and [games/landmakrj/video/sprites.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/sprites.cpp).
+and [games/landmakrj/video/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp).
 
 ## Three descriptor batches
 
@@ -40,7 +40,6 @@ inspect the plane for the next frame.
 | --- | --- |
 | `reset()` | Clears counts and command state. |
 | `decode(vram)` | Walks the sprite display list and fills the submission. |
-| `observe_write(pc, address, frame)` | Only with `F3RT_VIDEO_WRITE_LOG`: logs store PCs outside the known list in `0x600000..0x60ffff`. |
 | `latch()` | Copies submitted descriptors; mirrors them only for flipscreen. |
 | `raster(assets, output, options)` | Draws current descriptors into an indexed sprite plane. |
 | `sprites()` | Returns a read-only span of current descriptors. |

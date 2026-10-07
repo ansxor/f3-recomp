@@ -15,11 +15,8 @@ public:
 
     void reset();
     // Decode the per-scanline line RAM plus the control registers from VRAM.
-    // Defined per game under games/<game>/video/lines.cpp.
+    // Defined per game under games/<game>/video/.
     void decode(const VideoRam &vram);
-#ifdef F3RT_VIDEO_WRITE_LOG
-    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
-#endif
     void prepare(bool flipped);
     const SceneRow &row(unsigned scanout_y) const { return rows_[scanout_y & 255]; }
     void compare_rows(const Video &oracle, uint64_t frame);

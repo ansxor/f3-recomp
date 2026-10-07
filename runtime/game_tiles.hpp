@@ -60,10 +60,6 @@ public:
     void reset();
     // Copy the four raw PF layers from video RAM at VBSTART. Defined per game.
     void decode(const VideoRam &vram);
-#ifdef F3RT_VIDEO_WRITE_LOG
-    // Debug builds: log stores from PCs outside the game's known list. Defined per game.
-    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
-#endif
     RowSampler row_sampler(unsigned layer, int y, bool flipped,
                            std::span<const uint8_t> tiles) const {
         const unsigned wrapped_y = (unsigned(y) & 511) ^ (flipped ? 511 : 0);
