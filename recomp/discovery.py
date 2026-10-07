@@ -77,6 +77,10 @@ class Discovery:
     invalid_pcs: list[int] = field(default_factory=list)
     # Recursive graphics analysis needs the resolved table edges as well as PCs.
     branch_targets: dict[int, list[int]] = field(default_factory=dict)
+    # Candidate targets for computed (indirect) jmp/jsr, used only by codegen to
+    # emit guarded dispatcher-less chains. Never merged into branch_targets:
+    # graphics/CFG consumers must keep the proven edge set.
+    indirect_targets: dict[int, list[int]] = field(default_factory=dict)
 
 def _parse_int_address(val: int | str) -> int:
     """Parse address given as integer or hex/decimal string."""
@@ -356,6 +360,49 @@ def _scan_register_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> 
     return _scan_absolute_table(rom, md, table)
 
 
+_DIRECT_TRANSFER_MODES = (M68K_AM_ABSOLUTE_DATA_SHORT, M68K_AM_ABSOLUTE_DATA_LONG,
+                          M68K_AM_PCI_DISP)
+
+
+def _computed_transfer(insn: capstone.CsInsn) -> bool:
+    """True for jmp/jsr whose destination is not encoded in the instruction."""
+    if insn.mnemonic.split(".")[0] not in ("jmp", "jsr"):
+        return False
+    try:
+        ops = insn.operands
+    except Exception:
+        return False
+    return bool(ops) and ops[-1].address_mode not in _DIRECT_TRANSFER_MODES
+
+
+def _scan_computed_targets(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn,
+                           op: capstone.m68k.M68KOp) -> list[int]:
+    """Candidate targets for a computed jmp/jsr, trying every table scanner."""
+    scanned = _scan_register_table(rom, md, insn)
+    if scanned:
+        return scanned
+    if op.address_mode in (M68K_AM_PCI_INDEX_8_BIT_DISP, M68K_AM_PCI_INDEX_BASE_DISP):
+        return _scan_pci_index_table(rom, md, insn, op)
+    if op.address_mode in (M68K_AM_PC_MEMI_PRE_INDEX, M68K_AM_PC_MEMI_POST_INDEX):
+        return _scan_pc_memi_table(rom, md, insn)
+    return []
+
+
+def _candidate_targets(rom: bytes, instructions: dict[int, capstone.CsInsn],
+                       exclusions: list[ExcludeRegion], scanned: list[int]) -> list[int]:
+    """Keep even in-ROM targets that are decoded entries outside exclusions."""
+    targets = []
+    for target in sorted(set(scanned)):
+        if target < 0 or target >= len(rom) or target & 1:
+            continue
+        if target not in instructions:
+            continue
+        if exclusion_at(exclusions, target) is not None:
+            continue
+        targets.append(target)
+    return targets
+
+
 def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
     """Follow configured actor bytecode, not instruction-decode its data words."""
     if not spec:
@@ -615,6 +662,8 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     instructions: dict[int, CsInsn] = {}
     functions: set[int] = set(all_seeds)
     branch_targets: dict[int, list[int]] = {}
+    indirect_targets: dict[int, list[int]] = {}
+    exhaustive_candidates: dict[int, list[int]] = {}
     unresolved_branches: list[dict] = []
     excluded_transfers: list[dict] = []
 
@@ -655,6 +704,13 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                         elif base in CALL_MNEMONICS:
                             functions.add(target)
                     else:
+                        if insn.operands and _computed_transfer(insn):
+                            # Speculative codegen-only candidates: resolved after
+                            # every entry is decoded, and never recorded as a
+                            # proven branch/function edge.
+                            scanned = _scan_computed_targets(rom, md, insn, insn.operands[-1])
+                            if scanned:
+                                exhaustive_candidates[pc] = scanned
                         unresolved_branches.append({
                             "pc": f"0x{pc:06x}", "mnemonic": insn.mnemonic,
                             "op_str": insn.op_str, "reason": "indirect_transfer",
@@ -847,6 +903,29 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
 
             else:
                 cur_pc += insn.size
+
+    # Codegen-only candidates for computed jmp/jsr. In exhaustive mode they come
+    # from reviewed config tables, else from scanning every decoded computed
+    # transfer, and are deliberately kept out of branch_targets/functions/
+    # worklist/unresolved_branches so the recursive edge semantics consumed by
+    # graphics analysis are unchanged.
+    if exhaustive:
+        for pc in exhaustive_candidates.keys() | explicit_jump_tables.keys():
+            insn = instructions.get(pc)
+            if insn is None or not _computed_transfer(insn):
+                continue
+            scanned = explicit_jump_tables.get(pc) or exhaustive_candidates.get(pc, [])
+            targets = _candidate_targets(rom, instructions, exclusions, scanned)
+            if targets:
+                indirect_targets[pc] = targets
+    else:
+        for pc, scanned in branch_targets.items():
+            insn = instructions.get(pc)
+            if insn is not None and _computed_transfer(insn):
+                targets = _candidate_targets(rom, instructions, exclusions, scanned)
+                if targets:
+                    indirect_targets[pc] = targets
+
     # Form clean basic blocks with splitting at all entry leaders
     all_pcs = sorted(instructions.keys())
     pc_set = set(all_pcs)
@@ -956,6 +1035,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
             "proven_seeds_count": len(proven_seeds),
             "speculative_seeds_count": len(speculative_seeds),
             "unresolved_branches_count": len(unresolved_branches),
+            "indirect_targets_resolved_count": len(indirect_targets),
         },
         "aligned_candidate_count": aligned_candidate_count,
         "aligned_decoded_count": aligned_decoded_count,
@@ -987,4 +1067,5 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         aligned_invalid_count=aligned_invalid_count,
         invalid_pcs=sorted(invalid_pcs),
         branch_targets=branch_targets,
+        indirect_targets=indirect_targets,
     )

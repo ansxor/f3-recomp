@@ -8,6 +8,26 @@
 extern "C" {
 #endif
 
+/* Enter another generated block function without returning to the runtime
+ * dispatcher. The caller must have already proven the pending dispatch would
+ * be a no-op (see docs/developer/DECISIONS.md): pc names a table entry, the
+ * CPU is running, trace bits are clear, and cpu->cycles < dispatch_deadline.
+ *
+ * The expansion must stay a tail call: the block functions are mutually
+ * recursive, so a plain (non-tail) call would grow the host stack without
+ * bound. __attribute__((musttail)) guarantees it where available; otherwise
+ * the transfer degrades to a plain return, which re-enters the dispatcher and
+ * is merely slower.
+ */
+#if defined(__has_attribute)
+#  if __has_attribute(musttail)
+#    define F3_CHAIN(target, cpu) __attribute__((musttail)) return target(cpu)
+#  endif
+#endif
+#ifndef F3_CHAIN
+#  define F3_CHAIN(target, cpu) return
+#endif
+
 /* Condition Code Operations for Lazy Evaluation */
 enum {
     F3_CC_OP_NONE  = 0,

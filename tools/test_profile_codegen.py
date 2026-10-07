@@ -192,7 +192,9 @@ int main(void) {
     assert(n==(SLIM ? 2u : 5u));
     for(size_t i=0;i<n;++i) {
         assert(blocks[i].address==expected[i]);
-        cpu.pc=blocks[i].address; cpu.dispatch_deadline=UINT64_MAX; exception=0;
+        /* Deadline already reached: each entry yields after one instruction,
+           so block chaining (covered by tools/test_generate.py) stays out. */
+        cpu.pc=blocks[i].address; cpu.dispatch_deadline=cpu.cycles; exception=0;
         blocks[i].execute(&cpu);
         if(expected[i]>=6) assert(exception==(expected[i]==10 ? 11u : 10u));
         else assert(cpu.pc==expected[i]+2);

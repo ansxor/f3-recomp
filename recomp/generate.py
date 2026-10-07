@@ -10,7 +10,7 @@ from pathlib import Path
 import json
 import zlib
 
-from .emitter import lower
+from .emitter import lower, static_flow
 from .discovery import parse_exclusions, exclusion_at
 from .timing import BASE_CYCLES
 
@@ -113,21 +113,34 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                 '#include "recomp/cpu_ops.h"\n')
     table = []
     declarations = []
+    pc_to_name = {}
+    plan = []
+    for tier, pcs in emission_blocks:
+        name = f'f3_native_{pcs[0]:06x}'
+        plan.append((tier, name, pcs))
+        declarations.append(f'extern void {name}(f3_cpu *cpu);\n')
+        table.extend((pc, name) for pc in pcs)
+        for pc in pcs:
+            pc_to_name[pc] = name
     source_names = []
     tier_sources = {"hot": [], "cold": []}
     supported, unsupported = Counter(), Counter()
     unsupported_pcs = []
     shards = {"hot": [], "cold": []}
-    remaining = Counter(tier for tier, _ in emission_blocks)
-    for tier, pcs in emission_blocks:
-        name = f'f3_native_{pcs[0]:06x}'
-        declarations.append(f'extern void {name}(f3_cpu *cpu);\n')
-        table.extend((pc, name) for pc in pcs)
-        block_pcs = set(pcs)
+    shard_calls = {"hot": set(), "cold": set()}
+    # Codegen-only resolved targets for computed jmp/jsr; absent on hand-built
+    # discovery objects, where no indirect chain is emitted.
+    indirect_targets = getattr(discovery, "indirect_targets", None) or {}
+    indirect_case_cap = 256
+    indirect_sites = {"hot": 0, "cold": 0}
+    indirect_cases = {"hot": 0, "cold": 0}
+    indirect_capped = []
+    remaining = Counter(tier for tier, _, _ in plan)
+    for tier, name, pcs in plan:
         lines = [f'void {name}(f3_cpu *cpu) {{', '    switch (cpu->pc) {']
         lines.extend(f'    case 0x{pc:08x}u: goto L_{pc:06x};' for pc in pcs)
         lines.extend(['    default: return;', '    }'])
-        for position, pc in enumerate(pcs):
+        for pc in pcs:
             insn = discovery.instructions[pc]
             lines.append(f'L_{pc:06x}: {{')
             lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
@@ -141,18 +154,75 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             else:
                 supported[insn.mnemonic] += 1
                 lines.extend('    ' + statement for statement in statements)
-                if exhaustive or profile_path is not None:
-                    next_pc = pc + insn.size
-                    if next_pc in block_pcs:
-                        lines.append(f'    if (cpu->pc != 0x{next_pc:08x}u || cpu->stopped || cpu->halted || cpu->cycles >= cpu->dispatch_deadline) {{ f3_cc_flush(cpu); return; }}')
-                        lines.append(f'    goto L_{next_pc:06x};')
-                    else:
-                        lines.extend(['    f3_cc_flush(cpu);', '    return;'])
-                elif position + 1 < len(pcs):
-                    next_pc = pcs[position + 1]
-                    # Yield at the first instruction boundary reaching a runtime
-                    # event, and never fall through after a control transfer.
-                    lines.append(f'    if (cpu->pc != 0x{next_pc:08x}u || cpu->stopped || cpu->halted || cpu->cycles >= cpu->dispatch_deadline) {{ f3_cc_flush(cpu); return; }}')
+                # Chain into a statically known successor instead of returning
+                # to the dispatcher. One guard per successor proves the pending
+                # boundary() would only republish the same deadline; anything
+                # else (deadline reached, STOP/halt, trace bits, redirected pc,
+                # untranslated target) falls back to the runtime unchanged.
+                if statements[-1].strip() != 'return;':
+                    fallthrough = pc + insn.size
+                    flow = static_flow(insn)
+                    successors = {}
+                    if flow.falls_through:
+                        # A sequential successor inside this function is what
+                        # the old fallthrough check reached directly; only a
+                        # cross-function transfer went through the dispatcher.
+                        successors[fallthrough] = pc_to_name.get(fallthrough) != name
+                    for target in flow.targets:
+                        successors[target] = (target != fallthrough or
+                                              pc_to_name.get(fallthrough) != name)
+                    for target, dispatched in successors.items():
+                        owner = pc_to_name.get(target)
+                        if owner is None or target >= 0x200000:
+                            continue
+                        guard = (f'cpu->pc == 0x{target:08x}u && !cpu->stopped && '
+                                 '!cpu->halted && ')
+                        if dispatched:
+                            # f3_dispatch refuses native blocks while trace bits
+                            # are set; a chained transfer must refuse them too.
+                            guard += '!(cpu->sr & 0xc000u) && '
+                        guard += 'cpu->cycles < cpu->dispatch_deadline'
+                        if owner == name:
+                            lines.append(f'    if ({guard}) goto L_{target:06x};')
+                        else:
+                            shard_calls[tier].add(owner)
+                            lines.append(f'    if ({guard}) {{ f3_cc_flush(cpu); '
+                                         f'F3_CHAIN({owner}, cpu); }}')
+                    candidates = indirect_targets.get(pc)
+                    if candidates:
+                        # A computed jmp/jsr always went through f3_dispatch, so
+                        # the whole guard (trace bits included) must hold before
+                        # chaining; every unmatched pc still returns there.
+                        cases = []
+                        for target in sorted(set(candidates)):
+                            owner = pc_to_name.get(target)
+                            if owner is None or target >= 0x200000:
+                                continue
+                            cases.append((target, owner))
+                        if len(cases) > indirect_case_cap:
+                            indirect_capped.append(
+                                {"tier": tier, "pc": f"0x{pc:06x}", "cases": len(cases)})
+                            cases = cases[:indirect_case_cap]
+                        if cases:
+                            indirect_sites[tier] += 1
+                            indirect_cases[tier] += len(cases)
+                            lines.append('    if (!cpu->stopped && !cpu->halted && '
+                                         '!(cpu->sr & 0xc000u) && '
+                                         'cpu->cycles < cpu->dispatch_deadline) {')
+                            lines.append('        switch (cpu->pc) {')
+                            for target, owner in cases:
+                                if owner == name:
+                                    lines.append(f'        case 0x{target:08x}u: '
+                                                 f'goto L_{target:06x};')
+                                else:
+                                    shard_calls[tier].add(owner)
+                                    lines.append(f'        case 0x{target:08x}u: '
+                                                 f'f3_cc_flush(cpu); '
+                                                 f'F3_CHAIN({owner}, cpu);')
+                            lines.append('        default: break;')
+                            lines.append('        }')
+                            lines.append('    }')
+                    lines.extend(['    f3_cc_flush(cpu);', '    return;'])
             lines.append('}')
         lines.extend(['    f3_cc_flush(cpu);', '}\n'])
         shard = shards[tier]
@@ -161,10 +231,15 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         if len(shard) == blocks_per_file or remaining[tier] == 0:
             filename = (f'blocks_{len(source_names):04d}.c' if profile_path is None else
                         f'blocks_{tier}_{len(tier_sources[tier]):04d}.c')
-            (output / filename).write_text(preamble + '\n'.join(shard))
+            # Other generated blocks reached by a chain may live in a later
+            # file (or a different tier), so declare them before the bodies.
+            externs = ''.join(f'extern void {callee}(f3_cpu *cpu);\n'
+                              for callee in sorted(shard_calls[tier]))
+            (output / filename).write_text(preamble + externs + '\n'.join(shard))
             source_names.append(filename)
             tier_sources[tier].append(filename)
             shards[tier] = []
+            shard_calls[tier] = set()
 
     exception_entries = Counter()
     for pc, vector in rom_exceptions.items():
@@ -269,6 +344,11 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "hot_entries": len(hot),
         "cold_entries": len(original_entries) - len(hot),
         "max_block_instructions": max_block_instructions,
+        "indirect_chain_sites": indirect_sites["hot"] + indirect_sites["cold"],
+        "indirect_chain_cases": indirect_cases["hot"] + indirect_cases["cold"],
+        "indirect_chain_hot": {"sites": indirect_sites["hot"], "cases": indirect_cases["hot"]},
+        "indirect_chain_cold": {"sites": indirect_sites["cold"], "cases": indirect_cases["cold"]},
+        "indirect_chain_capped_sites": indirect_capped,
         "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
     }
     (output / 'lowering.json').write_text(json.dumps(report, indent=2) + '\n')

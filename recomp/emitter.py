@@ -347,6 +347,66 @@ def _gen_write(ea: _EA, res_expr: str, size: int) -> list[str]:
     return stmts
 
 
+class StaticFlow:
+    """Successor PCs an instruction can reach, for block chaining.
+
+    ``targets`` lists non-sequential successors (branch/jump destinations) that
+    are statically known from the opcode. ``falls_through`` reports whether the
+    sequential next instruction is also a possible successor. An indirect
+    transfer reports neither, which keeps it out of any chain.
+    """
+
+    __slots__ = ("targets", "falls_through")
+
+    def __init__(self, targets=(), falls_through=True):
+        self.targets = tuple(int(target) & 0xffffffff for target in targets)
+        self.falls_through = falls_through
+
+
+def _static_ea_target(insn: CsInsn, op) -> int | None:
+    """Absolute or non-indexed PC-relative EA value, or None if computed."""
+    am = op.address_mode
+    if am == m68k.M68K_AM_ABSOLUTE_DATA_SHORT:
+        raw = op.imm & 0xffff
+        return (raw - 0x10000 if raw & 0x8000 else raw) & 0xffffffff
+    if am == m68k.M68K_AM_ABSOLUTE_DATA_LONG:
+        return op.imm & 0xffffffff
+    if am == m68k.M68K_AM_PCI_DISP:
+        return (_pc_base(insn) + op.mem.disp) & 0xffffffff
+    return None
+
+
+def static_flow(insn: CsInsn) -> StaticFlow:
+    """Statically known successors of insn, mirroring lower()'s taxonomies."""
+    mnem = _get_base_mnemonic(insn)
+    try:
+        ops = insn.operands
+    except Exception:
+        return StaticFlow()
+    if mnem in ('bra', 'bsr'):
+        if ops and ops[0].type == m68k.M68K_OP_BR_DISP:
+            return StaticFlow(((insn.address + 2 + ops[0].br_disp.disp) & 0xffffffff,), False)
+        return StaticFlow((), False)
+    if mnem.startswith('b') and mnem[1:] in COND_MAP:
+        if ops and ops[0].type == m68k.M68K_OP_BR_DISP:
+            return StaticFlow(((insn.address + 2 + ops[0].br_disp.disp) & 0xffffffff,), True)
+        return StaticFlow((), True)
+    if mnem.startswith('db'):
+        cond_name = mnem[2:]
+        if cond_name in COND_MAP and len(ops) >= 2 and ops[1].type == m68k.M68K_OP_BR_DISP:
+            return StaticFlow(((insn.address + 2 + ops[1].br_disp.disp) & 0xffffffff,), True)
+        return StaticFlow((), True)
+    if mnem in ('jmp', 'jsr'):
+        if ops:
+            target = _static_ea_target(insn, ops[0])
+            if target is not None:
+                return StaticFlow((target,), False)
+        return StaticFlow((), False)
+    if mnem in ('rts', 'rtd', 'rtr', 'rte'):
+        return StaticFlow((), False)
+    return StaticFlow()
+
+
 def lower(insn: CsInsn) -> list[str] | None:
     """Lower a single Capstone CsInsn into equivalent C statements.
 

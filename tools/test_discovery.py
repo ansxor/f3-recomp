@@ -71,6 +71,9 @@ class ActorDiscoveryTests(unittest.TestCase):
                 result = discover(bytes(rom), config)
                 self.assertTrue({0x400, 0x420, 0x422} <= result.instructions.keys())
                 self.assertNotIn(0x540, result.instructions)
+                # Recursive table resolutions feed codegen as candidates only.
+                self.assertEqual(result.indirect_targets.get(0x508), [0x400, 0x420])
+                self.assertEqual(result.branch_targets.get(0x508), [0x400, 0x420])
 
     def test_signed_full_extension_table_displacement(self):
         rom, config = self.fixture()
@@ -148,6 +151,40 @@ class AllAlignedDiscoveryTests(unittest.TestCase):
         # Odd entry points in config must raise ValueError
         with self.assertRaises(ValueError):
             discover(bytes(rom), {"discovery": {"entry_points": [0x401]}})
+
+    def test_computed_jump_table_targets_are_codegen_only(self):
+        rom, config = self.fixture("all_aligned")
+        # MOVE.W $50a(pc,d0.w),D0 ; JMP $50a(pc,d0.w): 16-bit offsets relative to
+        # the table itself (0x50a -> 0x510, 0x512, and the table base 0x50a).
+        rom[0x500:0x504] = bytes.fromhex("303b0008")
+        rom[0x504:0x508] = bytes.fromhex("4efb0004")
+        rom[0x508:0x50a] = bytes.fromhex("4e71")
+        struct.pack_into(">hhh", rom, 0x50a, 6, 8, 0)
+        rom[0x510:0x514] = bytes.fromhex("4e714e75")
+        # A direct JMP must keep its proven edge and never become a candidate.
+        rom[0x600:0x606] = bytes.fromhex("4ef900000800")
+        rom[0x800:0x802] = bytes.fromhex("4e75")
+        result = discover(bytes(rom), config)
+        self.assertEqual(result.indirect_targets.get(0x504), [0x50a, 0x510, 0x512])
+        self.assertNotIn(0x504, result.branch_targets)
+        self.assertNotIn(0x504, result.functions)
+        self.assertTrue(any(branch["pc"] == "0x000504" and
+                            branch["reason"] == "indirect_transfer"
+                            for branch in result.report["unresolved_branches"]))
+        self.assertEqual(result.branch_targets.get(0x600), [0x800])
+        self.assertNotIn(0x600, result.indirect_targets)
+        self.assertEqual(result.report["summary"]["indirect_targets_resolved_count"], 1)
+
+    def test_exhaustive_explicit_jump_table_overrides_scanner(self):
+        rom, config = self.fixture("all_aligned")
+        # JMP (A0): no scanner can resolve it; the reviewed config table must.
+        rom[0x700:0x702] = bytes.fromhex("4ed0")
+        rom[0x720:0x722] = bytes.fromhex("4e75")
+        rom[0x740:0x742] = bytes.fromhex("4e75")
+        config["discovery"]["jump_tables"] = [{"address": 0x700, "targets": [0x740, 0x720]}]
+        result = discover(bytes(rom), config)
+        self.assertEqual(result.indirect_targets.get(0x700), [0x720, 0x740])
+        self.assertNotIn(0x700, result.branch_targets)
 
     def test_recursive_behavior_retained(self):
         rom, config = self.fixture("recursive")
