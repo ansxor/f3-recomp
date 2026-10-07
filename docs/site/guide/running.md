@@ -77,6 +77,31 @@ The file has 128 bytes. It stores the 64 words as big-endian 16-bit values. A ne
 
 In netplay, the host's canonical handoff state becomes the match state. Independent EEPROM files and solo histories are supported; EEPROM equality is not a join requirement.
 
+## Fast boot
+
+A window launch runs the power-on self-test and boot waits at full speed by default, without drawing the frames and with the sound samples discarded. The machine executes the same frames as an ordinary power-on. Fast boot is host-side only: it does not patch the ROM, change the CPU start, or write game RAM.
+
+Fast boot does not alter emulation: with the same build, ROMs, EEPROM contents and inputs, `frame_crc` is the same with fast boot on or off. Because fast boot also loads the initialised EEPROM below, compare against an ordinary run given that file with `--eeprom`. Builds whose game provides no boot signal never fast boot.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--fast-boot on\|off` | `on` for a window | Run the boot frames without presentation. `--fast-boot off` restores the ordinary throttled boot. |
+| `--boot-cache on\|off` | `off` | Also store the post-boot state and skip the boot frames on later launches. |
+
+The F1 menu adds **Fast boot** and **Boot state cache** in the Save states panel. They take effect on the next launch and are written only by **Save preferences**. Explicit CLI flags override the saved values.
+
+Fast boot is used only when nothing needs the per-frame output. A headless run ignores it unless you pass `--fast-boot on` explicitly, and it is disabled whenever `--wav`, `--dump-dir`, `--sound-trace`, `--profile-out` or `--fallback-report` is given. Online play always runs the ordinary boot.
+
+Fast boot prints one `fast_boot frames=N ms=T source=turbo|cache eeprom=generated|loaded|none` line before the summary.
+
+### Initialised EEPROM
+
+When fast boot is active and no `--eeprom` file is given, the program keeps an initialised 128-byte EEPROM at `eeprom/landmakrj-init.bin` beside the config file (the same base as `states/`). It records the game's own factory defaults, captured when boot completes and before any input. The first fast-boot launch that reaches boot completion writes it; a launch that quits or stops earlier writes nothing. Later launches load it, which skips the game's blank-EEPROM initialisation reboot (about 300 frames), so boot completes at frame 478 instead of 781.
+
+### Boot state cache
+
+With **Boot state cache** on (or `--boot-cache on`), the program also stores the post-boot machine state at `boot/landmakrj.state` beside the config file. A later launch loads it and skips the boot frames entirely. The cache is accepted only when the build, ROMs, state format and presentation geometry match; otherwise it is ignored, the boot runs normally, and the cache is rewritten. The state is captured at boot completion, before any input, so it is deterministic.
+
 ## Service and test mode
 
 `F3` presses service and `F2` presses test in the default P1 profile. F1 is the frontend menu, not the game's service switch. The game defines the effect of service and test.
@@ -139,7 +164,7 @@ At the end of every run the program prints a summary beginning with `set=`. Valu
 
 The `frame_crc` value is useful to check that two runs give the same picture. Two runs with the same ROM, build and inputs give the same value.
 
-Before this line the program can print `VIDEO` lines. They describe the game-data renderer. See [Video and presentation](/guide/video#the-video-report). In online play the program also prints a `netplay_confirmed` line. See [Online play](/guide/netplay).
+Before this line the program can print a `fast_boot` line (see [Fast boot](#fast-boot)) and `VIDEO` lines. The `VIDEO` lines describe the game-data renderer. See [Video and presentation](/guide/video#the-video-report). In online play the program also prints a `netplay_confirmed` line. See [Online play](/guide/netplay).
 
 ## Choose the ROM set and directory
 

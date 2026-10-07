@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/game_video.hpp"
+#include "f3rt/game_boot.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/netplay_session.hpp"
 #include "frontend_ui.hpp"
@@ -128,7 +129,8 @@ enum Preference : uint32_t {
     VideoMode=1u<<0, Backend=1u<<1, Scale=1u<<2, Border=1u<<3, Filter=1u<<4,
     Interpolation=1u<<5, Fields=1u<<6, SoundDriver=1u<<7, Volume=1u<<8,
     Server=1u<<9, Room=1u<<10, Slot=1u<<11, Delay=1u<<12,
-    PostprocessMode=1u<<13, UserShader=1u<<14, SoundBackend=1u<<15
+    PostprocessMode=1u<<13, UserShader=1u<<14, SoundBackend=1u<<15,
+    FastBoot=1u<<16, BootCache=1u<<17
 };
 }
 int main(int argc,char **argv) try {
@@ -153,6 +155,7 @@ int main(int argc,char **argv) try {
     uint64_t frames=0,dump_start=1,dump_every=1;
     bool headless=false,sound=true,translated=false,throttle=true;
     bool motion_interp=false;
+    bool fast_boot=true,boot_cache=false;
 #ifdef F3RT_GAME
     romdir=F3RT_DEFAULT_ROM_DIR;
     translated=true;
@@ -170,6 +173,8 @@ int main(int argc,char **argv) try {
         else if(arg=="--dump-start")dump_start=std::stoull(value());
         else if(arg=="--dump-every")dump_every=std::stoull(value());
         else if(arg=="--eeprom")eeprom=value();
+        else if(arg=="--fast-boot") { const std::string v=value();if(v=="on")fast_boot=true;else if(v=="off")fast_boot=false;else throw std::runtime_error("--fast-boot must be on or off");cli_preferences|=FastBoot; }
+        else if(arg=="--boot-cache") { const std::string v=value();if(v=="on")boot_cache=true;else if(v=="off")boot_cache=false;else throw std::runtime_error("--boot-cache must be on or off");cli_preferences|=BootCache; }
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
@@ -223,6 +228,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--help") {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr|rayforce|commandw|ridingf] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
+                     <<"  [--fast-boot on|off] [--boot-cache on|off] (host-only boot shortcut; default fast boot on, cache off)\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--config FILE] [--volume 0..100] (user preferences load first; CLI overrides)\n"
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
@@ -279,6 +285,8 @@ int main(int argc,char **argv) try {
     preference(net_options.room,settings.room,Room);
     preference(net_options.player,settings.requested_slot,Slot);
     preference(net_options.delay,settings.delay,Delay);
+    preference(fast_boot,settings.fast_boot,FastBoot);
+    preference(boot_cache,settings.boot_cache,BootCache);
     if(!(cli_preferences&SoundDriver))
         sound_driver=f3rt::audio_backend_name(settings.audio_backend==f3rt::AudioBackend::Hle?
             default_audio_backend:settings.audio_backend);
@@ -510,6 +518,90 @@ int main(int argc,char **argv) try {
         next_status=next_net_step;
         reset_motion();
     };
+    // Fast boot: run the power-on frames unthrottled with no presentation and discarded
+    // audio, from a locally generated initialised EEPROM and optionally a cached
+    // post-boot state. Host-side only; the emulated machine executes the same frames.
+    const f3rt::GameBoot *boot=f3rt::game_boot();
+    const bool explicit_fast_boot=(cli_preferences&FastBoot)!=0 && fast_boot;
+    const bool fast_boot_active=boot && !netplay &&
+        ((!headless && settings.fast_boot) || explicit_fast_boot) &&
+        wav_path.empty() && dumpdir.empty() && sound_trace_path.empty() &&
+        profile_path.empty() && fallback_report.empty();
+    std::filesystem::path config_dir;
+    if(!config_path.empty())config_dir=std::filesystem::absolute(config_path).parent_path();
+    bool eeprom_enabled=false,eeprom_loaded=false,eeprom_generated=false;
+    std::filesystem::path eeprom_init_path;
+    if(fast_boot_active && eeprom.empty() && m.roms.factory_eeprom.empty() && !config_dir.empty()) {
+        eeprom_enabled=true;
+        eeprom_init_path=config_dir/"eeprom"/(set+"-init.bin");
+        if(std::filesystem::exists(eeprom_init_path)) {
+            try { m.load_eeprom(eeprom_init_path);eeprom_loaded=true; }
+            catch(const std::exception &error) { std::cerr<<"f3rt: ignoring initialised EEPROM "<<eeprom_init_path<<": "<<error.what()<<'\n'; }
+        }
+    }
+    std::filesystem::path boot_state_path;
+    bool cache_loaded=false;
+    if(fast_boot_active && settings.boot_cache && eeprom.empty() && !config_dir.empty()) {
+        boot_state_path=config_dir/"boot"/(set+".state");
+        if(std::filesystem::exists(boot_state_path)) {
+            try {
+                f3rt::frontend_state_slot(m,machine_identity(),boot_state_path,
+                    snapshot_video_options.scale,snapshot_video_options.border,false);
+                cache_loaded=true;
+            } catch(const std::exception &error) {
+                std::cerr<<"f3rt: boot cache unusable, using turbo boot: "<<error.what()<<'\n';
+            }
+        }
+    }
+    if(cache_loaded) {
+        if(sdl.input)sdl.input->release();
+        reset_motion();
+        if(sdl.audio)check(SDL_ClearAudioStream(sdl.audio));
+        next_frame=std::chrono::steady_clock::now();
+        executed_frames=m.frame;
+    }
+    const char *boot_source=cache_loaded?"cache":"turbo";
+    uint64_t turbo_frames=0;
+    double turbo_ms=0;
+    bool turbo_complete=false;
+    if(fast_boot_active && !cache_loaded) {
+        const auto turbo_start=std::chrono::steady_clock::now();
+        while(!quit && (frames==0 || executed_frames<frames) && turbo_frames<boot->frame_limit) {
+            if(boot->complete(m)) { turbo_complete=true;break; }
+            f3rt::apply_local_inputs(m,{});
+            if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
+            ++executed_frames;++turbo_frames;
+            size_t count;
+            while((count=m.audio->render(samples.data(),samples.size()/2))!=0) {
+                audio_frames+=count;
+                for(size_t i=0;i<count*2;++i) { audio_peak=std::max(audio_peak,std::abs(int(samples[i])));nonzero_samples+=samples[i]!=0; }
+            }
+            if(!headless && turbo_frames%30==0) {
+                SDL_PumpEvents();
+                SDL_Event event;
+                while(SDL_PollEvent(&event))if(event.type==SDL_EVENT_QUIT)quit=true;
+            }
+        }
+        turbo_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-turbo_start).count();
+        if(!turbo_complete && turbo_frames>=boot->frame_limit)
+            std::cerr<<"f3rt: fast boot reached the "<<boot->frame_limit<<"-frame limit without a completion signal; continuing normally\n";
+    }
+    // Only a completed boot has written the game's defaults; a quit or frame limit mid-boot must not persist.
+    if(fast_boot_active && eeprom_enabled && !eeprom_loaded && turbo_complete) {
+        std::error_code ec;
+        std::filesystem::create_directories(eeprom_init_path.parent_path(),ec);
+        m.save_eeprom(eeprom_init_path);
+        eeprom_generated=true;
+    }
+    if(fast_boot_active && settings.boot_cache && eeprom.empty() && !config_dir.empty() && !cache_loaded && turbo_complete) {
+        try {
+            f3rt::frontend_state_slot(m,machine_identity(),boot_state_path,
+                snapshot_video_options.scale,snapshot_video_options.border,true);
+        } catch(const std::exception &error) { std::cerr<<"f3rt: cannot write boot cache "<<boot_state_path<<": "<<error.what()<<'\n'; }
+    }
+    if(fast_boot_active)
+        std::cout<<"fast_boot frames="<<turbo_frames<<" ms="<<turbo_ms<<" source="<<boot_source
+                 <<" eeprom="<<(!eeprom_enabled?"none":eeprom_generated?"generated":eeprom_loaded?"loaded":"none")<<'\n';
     if(netplay)connect(net_options);
     while(!quit && (netplay || !frames || executed_frames<frames)) {
         profile.tick();

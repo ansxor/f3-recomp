@@ -118,7 +118,12 @@ void FrontendUi::draw(const FrontendUiState &state){
             if(ImGui::BeginTabItem("Save states")){
                 int slot=int(p.save_slot);if(ImGui::SliderInt("Slot",&slot,0,9))p.save_slot=slot;
                 ImGui::BeginDisabled(state.connected||state.transferring);if(ImGui::Button("Save"))p.action(UiActionKind::SaveState,p.save_slot);ImGui::SameLine();if(ImGui::Button("Load"))p.action(UiActionKind::LoadState,p.save_slot);ImGui::EndDisabled();if(state.connected||state.transferring)ImGui::TextUnformatted("Save/load unavailable during network sessions or transfer.");
-                if(ImGui::Button("Screenshot (F12)"))p.action(UiActionKind::Screenshot);ImGui::EndTabItem();
+                if(ImGui::Button("Screenshot (F12)"))p.action(UiActionKind::Screenshot);
+                ImGui::SeparatorText("Startup");
+                changed|=ImGui::Checkbox("Fast boot (next launch)",&s.fast_boot);
+                changed|=ImGui::Checkbox("Boot state cache (next launch)",&s.boot_cache);
+                ImGui::TextWrapped("Fast boot runs the power-on frames without presentation and uses a locally generated initialised EEPROM. The boot cache stores that post-boot state so later launches skip it. Both are host-side only and never change emulation. Saved with Save preferences.");
+                ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Input")){
                 const std::array<const char*,local_control_count> names={"Up","Down","Left","Right","Button 1","Button 2","Button 3","Start","Coin","Service","Test","Button 4","Button 5","Button 6"};

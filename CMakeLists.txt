@@ -127,10 +127,18 @@ else()
     # Games without a scene still link GameVideo (never instantiated for them).
     set(F3RT_GAME_VIDEO_SOURCES runtime/game_video_generic.cpp)
 endif()
+# A game opts into fast boot by providing games/<game>/boot/.
+file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
+if(GAME_BOOT_SOURCES)
+    set(F3RT_GAME_BOOT_SOURCES ${GAME_BOOT_SOURCES})
+else()
+    # Games with no boot predicate never turbo-boot; the entry point still resolves.
+    set(F3RT_GAME_BOOT_SOURCES runtime/game_boot_generic.cpp)
+endif()
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/video.cpp runtime/game_video.cpp runtime/game_video_log.cpp runtime/video_decode.cpp
     runtime/game_tiles.cpp runtime/game_text.cpp
-    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} runtime/audio.cpp
+    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/input.cpp runtime/netplay.cpp
     runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
     runtime/netplay_transport.cpp runtime/netplay_session.cpp ${AUDIO_SOURCES})

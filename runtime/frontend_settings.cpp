@@ -71,6 +71,10 @@ bool load_frontend_settings(const std::string &path,FrontendSettings &settings,s
         else if(k=="server")s.server=v;else if(k=="room")s.room=v;
         else if(k=="audio") {if(v=="native")s.audio_backend=AudioBackend::Native;else if(v=="oracle")s.audio_backend=AudioBackend::Oracle;else if(v=="hle")s.audio_backend=AudioBackend::Hle;else {error="Unknown audio backend";return false;}}
         else if(k=="volume") { std::istringstream in(v);in>>s.volume;if(!in || in.peek()!=EOF){error="Invalid volume";return false;} }
+        else if(k=="fast_boot" || k=="boot_cache") {
+            if(v!="on" && v!="off"){error="Invalid fast boot setting";return false;}
+            (k=="fast_boot"?s.fast_boot:s.boot_cache)=v=="on";
+        }
         else if(k=="border" || k=="slot" || k=="delay") {if(!integer(v,n) || n<0){error="Invalid numeric setting";return false;}if(k=="border")s.border=n;else if(k=="slot")s.requested_slot=n;else s.delay=n;}
         else if(k.size()==7 && k.substr(0,6)=="device" && k[6]>='0' && unsigned(k[6]-'0')<s.profiles.size()) {if(!integer(v,n)){error="Invalid device slot";return false;}s.profiles[k[6]-'0'].device_slot=n;}
         else if(k.starts_with("binding")) {
@@ -92,6 +96,7 @@ bool save_frontend_settings(const std::string &path,const FrontendSettings &s,st
     std::ofstream out(tmp,std::ios::binary|std::ios::trunc);if(!out){error="Cannot create config temporary file";return false;}
     out<<"# f3rt settings, Dear ImGui frontend\nvideo="<<s.video_mode<<"\nbackend="<<s.video_backend<<"\nscale="<<s.video_scale<<"\nborder="<<s.border<<"\nfilter="<<s.filter<<"\ninterpolation="<<s.interpolation<<"\nfields="<<s.interpolation_fields<<"\naudio="<<audio_backend_name(s.audio_backend)<<"\nvolume="<<s.volume<<"\nserver="<<s.server<<"\nroom="<<s.room<<"\nslot="<<s.requested_slot<<"\ndelay="<<s.delay<<'\n';
     out<<"postprocess="<<s.postprocess<<"\nuser_shader="<<s.user_shader<<'\n';
+    out<<"fast_boot="<<(s.fast_boot?"on":"off")<<"\nboot_cache="<<(s.boot_cache?"on":"off")<<'\n';
     for(unsigned p=0;p<s.profiles.size();++p) {out<<"device"<<p<<'='<<s.profiles[p].device_slot<<'\n';for(unsigned c=0;c<local_control_count;++c){const auto &b=s.profiles[p].controls[c];out<<"binding"<<p<<'.'<<c<<'='<<int(b.key)<<' '<<b.button<<' '<<b.axis<<' '<<b.direction<<'\n';}}
     out.close();if(!out){error="Cannot write config";std::filesystem::remove(tmp,ec);return false;}
     std::filesystem::rename(tmp,target,ec);if(ec){error=ec.message();std::filesystem::remove(tmp,ec);return false;}return true;
