@@ -206,11 +206,10 @@ preceding expanded plane on entering retention and keeps rasterizing while
 trails are latched. The same regression now has **zero differing bytes**.
 Trail frames remain exact native oracle presentation, not unsupported HLE.
 
-Seed 5 through 3600 frames additionally induced actual bitmap, trails, flip,
-unknown-writer and ending-producer fallback boundaries at frame 3404, restoring
-and replaying the original native frame after each branch. All five fallback
+Seed 5 through 3600 frames additionally induced actual bitmap, trails and flip
+fallback boundaries at frame 3404, restoring
+and replaying the original native frame after each branch. All three fallback
 images and supported recoveries match CPU output; canonical restore is exact.
-The ending case is an **induced producer boundary, not a played-through ending**.
 The original 231 startup fallback frames remain unchanged.
 Isolated-layer counts exclude fallback images, since fallback bypasses masks.
 
@@ -488,9 +487,8 @@ comparison. Off/linear/fit captures are in
 `/tmp/f3-gpuvideo/interpolation/other-line-effect`. No generic effect coverage
 or interpolation on genuinely discrete unrelated profiles is claimed.
 
-The 4000-frame fit run also exercises induced bitmap, trails, flip, unknown
-writer and ending-producer fallback/recovery, keeping canonical bytes exact;
-ending remains an **induced boundary, not a played-through ending**.
+The 4000-frame fit run also exercises induced bitmap, trails and flip
+fallback/recovery, keeping canonical bytes exact.
 A fresh headless `--video compare --video-backend gpu --video-interp fit`
 3600-frame run retains 250,114,560 native RGB comparisons with zero differences,
 frame CRC `3359f200`, 51,507,335 native blocks and zero instruction fallback.
@@ -641,8 +639,7 @@ Reproduction:
   --change-scale 240:3 --change-scale 1400:2 --change-scale 1500:4 \
   --change-scale 1600:1 --change-scale 2000:3 --change-scale 3000:2 \
   --change-scale 3600:4 --change-scale 3900:1 \
-  --inject-frame 1501 --inject-bitmap --inject-trails --inject-globalflip \
-  --inject-unknown --inject-ending
+  --inject-frame 1501 --inject-bitmap --inject-trails --inject-globalflip
 ./build/f3rt-gpu-regression --seed 5 --frames 1560 --every 120 --scale 8 --border 48 --bench
 ```
 
@@ -990,9 +987,8 @@ For each seed, native cycles, native block count, audio frame count, audio CRC
 and final native RGB CRC match across every field/mode/scale. Canonical
 snapshots match for the same constructor geometry; runtime scale transitions
 leave those constructor-fixed bytes unchanged. Each case independently
-replays the final frame on the ordinary CPU backend. Bitmap, trails, global
-flip, unknown writers and ending-producer fallback/recovery are induced.
-These are branch proofs, not a played campaign ending. No CPU fallback.
+replays the final frame on the ordinary CPU backend. Bitmap, trails and global
+flip fallback/recovery are induced. These are branch proofs. No CPU fallback.
 
 Fresh 3600-frame headless `compare`, GPU/fit/combined flags and automatic scale
 retain 250,114,560 exact native RGB comparisons and byte-identical WAV against

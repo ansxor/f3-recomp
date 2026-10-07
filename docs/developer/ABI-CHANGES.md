@@ -5,6 +5,39 @@ force at that checkpoint, including later features originally added under ABI 2.
 Scheduling costs and device models follow reference-emulator behavior; this
 interface history is not a physical bus-cycle accuracy claim.
 
+## Video-RAM scene decode — canonical snapshot format reduced
+
+`GameVideo` no longer observes game code/work RAM through `[[hooks]]`. At each
+VBSTART it decodes the playfield, text, sprite and scanline layers directly from
+FDP video RAM (`runtime/game_scene.hpp VideoRam`) and renders from it. The hook
+symbol `f3_landmakr_video_hook`, the `GameMemory` work-RAM reader and the
+component "poisoning" validity flags are gone. In debug builds configured with
+`F3RT_VIDEO_WRITE_LOG` (`OFF` by default), stores from PCs outside a component's
+known list are reported once per layer/PC by `log_unknown_video_write`; otherwise
+no write is observed at all. The only remaining FDP-oracle fallbacks are
+flipped-screen, sprite-trails and bitmap-pivot, each reported once per
+component/kind by `log_unsupported_video` (stderr).
+
+Because the scene is derived from video RAM (already serialized as part of
+`Machine`), the canonical GameVideo snapshot loses everything derived or
+hook-only:
+
+- playfield tile payload and its validity/unsupported bookkeeping (rebuilt from
+  the serialized playfield maps at VBSTART);
+- text map validity, glyph-completeness references and unsupported PC (like the
+  playfield tiles, text is rebuilt from the serialized video RAM at the next
+  VBSTART; its raw VBSTART snapshot is not serialized);
+- sprite `supported`/`unsupported_pc` and the work-RAM scroll mirrors (sprite
+  staging/submitted/current lists and the command flags remain);
+- line control-register mirrors and the line unsupported PC (line params + rows
+  remain).
+
+`CanonicalGameVideoHeader` (runtime/state_io.hpp) is reduced to the fixed
+sprite header fields. The netplay state-format word is the recomputed sync-state
+byte size, so netplay peers built from different revisions correctly reject
+pairing. No CPU instruction layout, timing or ABI version changes; generated
+main/sound programs are unaffected.
+
 ## Opt-in HLE audio — CPU ABI 3 unchanged
 
 `Audio::set_backend(Backend::Hle)` selects the ROM-data sequencer and mixer

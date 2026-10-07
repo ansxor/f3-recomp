@@ -139,15 +139,17 @@ These files form the `f3rt` library core and the frontend.
 | File | Purpose |
 | --- | --- |
 | [`runtime/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video.cpp) | FDP software renderer (`Video`). It reads the emulated FDP RAM. It is the oracle for the game-data renderer. |
-| [`runtime/game_video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp) | `GameVideo`: gathers the game scene, decides when to fall back to `Video`, and defines `f3_landmakr_video_hook`. |
-| [`runtime/game_scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp) | Shared scene types: `GameMemory`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
-| [`runtime/game_tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) | Playfield tile maps rebuilt from the game tile-block routines. |
+| [`runtime/game_video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_video.cpp) | `GameVideo`: decodes the scene from video RAM at VBSTART, decides when to fall back to `Video`. |
+| [`runtime/video_decode.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/video_decode.cpp) | Generic VRAM decode: char-RAM tile unpack and sprite display-list walk. |
+| [`games/landmakrj/video/`](https://github.com/ansxor/f3-recomp/tree/main/games/landmakrj/video) | Per-game `decode` for tiles, text, sprites and lines (and debug `observe_write`). |
+| [`runtime/game_scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp) | Shared scene types: `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
+| [`runtime/game_tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (per-game `decode` in `games/<id>/video/tiles.cpp`). |
 | [`runtime/game_tiles.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_tiles.hpp) | `GameTiles` declaration. |
-| [`runtime/game_text.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) | Text layer rebuilt from the game string, rectangle and glyph routines. |
+| [`runtime/game_text.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.cpp) | Text layer decoded from the video-RAM text map and glyph RAM. |
 | [`runtime/game_text.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_text.hpp) | `GameText` declaration. |
-| [`runtime/game_sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.cpp) | Sprite lists rebuilt from the game sprite routines, and the sprite rasterizer. |
+| [`runtime/game_sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.cpp) | Sprite latch and rasterizer; the display list is decoded from video RAM. |
 | [`runtime/game_sprites.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_sprites.hpp) | `GameSprites` declaration. |
-| [`runtime/game_lines.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.cpp) | Line RAM data (scroll, zoom, clip and mix per scanline) rebuilt from the game routines. |
+| [`runtime/game_lines.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.cpp) | Line RAM decode (scroll, zoom, clip and mix per scanline) and row normalization. |
 | [`runtime/game_lines.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_lines.hpp) | `GameLines` declaration. |
 | [`runtime/game_compositor.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.cpp) | `compose_game_scene`: mixes layers into final pixels, at native or enlarged size. |
 | [`runtime/game_compositor.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_compositor.hpp) | Declaration of `compose_game_scene`. |
@@ -261,7 +263,7 @@ These files form the `f3rt` library core and the frontend.
 
 | File | Purpose |
 | --- | --- |
-| [`games/landmakrj/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/config.toml) | Land Maker Japan: ROM lanes, `all_aligned` discovery and the video hook list. This is the execution target. |
+| [`games/landmakrj/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/config.toml) | Land Maker Japan: ROM lanes, `all_aligned` discovery and the video entry-point seeds. This is the execution target. |
 | [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml) | Land Maker World: ROM lanes only. It is untested. |
 | [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | ABI history and full/local versus canonical/sync snapshot contracts. |
 | [`docs/NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, determinism and measurements. |
@@ -285,7 +287,7 @@ These files form the `f3rt` library core and the frontend.
 | `docs/site/developer/` | Architecture and source tour, with subsystem explanations below. |
 | `docs/site/developer/recompiler/` | ROM loading, discovery, emission, flags, timing, and sound compilation. |
 | `docs/site/developer/runtime/` | CPU ABI, machine, bus, scheduling, frontend, interpreter, snapshots, and support. |
-| `docs/site/developer/runtime/video/` | Hardware renderer, game-data producers, scenes, composition, and presentation. |
+| `docs/site/developer/runtime/video/` | Hardware renderer, game-data renderer, scenes, composition, and presentation. |
 | `docs/site/developer/runtime/audio/` | Sound CPUs, mailbox, timing, chips, native driver, and PCM output. |
 | `docs/site/developer/netplay/` | Rollback, state identity, transport, relay, determinism, and limits. |
 | `docs/site/developer/testing/` | Unit checks, differential cases, captures, comparisons, gameplay, sound, and netplay oracles. |

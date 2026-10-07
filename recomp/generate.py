@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 import json
-import re
 import zlib
 
 from .emitter import lower
@@ -36,17 +35,6 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                 raise ValueError(
                     f"Discovery contains an excluded {kind}: {pc:#x} in "
                     f"[{region.start:#x}, {region.end:#x}): {region.reason}")
-    hooks = {}
-    for hook in config.get("hooks", []):
-        pc, symbol = int(hook["address"]), hook["symbol"]
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", symbol):
-            raise ValueError(f"invalid hook C identifier: {symbol!r}")
-        if pc not in discovery.instructions:
-            raise ValueError(f"hook address is not discovered code: {pc:#x}")
-        if pc in hooks:
-            raise ValueError(f"duplicate hook at {pc:#x}")
-        hooks[pc] = symbol
-
     exhaustive = config.get("discovery", {}).get("coverage") == "all_aligned"
     if exhaustive:
         # Independent decodes overlap: an extension word can also be a computed
@@ -123,8 +111,6 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                 '#include <f3rt/cpu_abi.h>\n' + abi_guard +
                 '#include <f3rt/block_profile.h>\n'
                 '#include "recomp/cpu_ops.h"\n')
-    hook_declarations = ''.join(f'extern void {name}(f3_cpu *cpu);\n'
-                                for name in sorted(set(hooks.values())))
     table = []
     declarations = []
     source_names = []
@@ -145,9 +131,6 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             insn = discovery.instructions[pc]
             lines.append(f'L_{pc:06x}: {{')
             lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
-            if pc in hooks:
-                lines.extend(['    f3_cc_flush(cpu);', f'    {hooks[pc]}(cpu);',
-                              f'    if (cpu->pc != 0x{pc:08x}u || cpu->stopped || cpu->halted) return;'])
             statements = lower(insn)
             if statements is None:
                 unsupported[insn.mnemonic] += 1
@@ -178,7 +161,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         if len(shard) == blocks_per_file or remaining[tier] == 0:
             filename = (f'blocks_{len(source_names):04d}.c' if profile_path is None else
                         f'blocks_{tier}_{len(tier_sources[tier]):04d}.c')
-            (output / filename).write_text(preamble + hook_declarations + '\n'.join(shard))
+            (output / filename).write_text(preamble + '\n'.join(shard))
             source_names.append(filename)
             tier_sources[tier].append(filename)
             shards[tier] = []

@@ -1,6 +1,5 @@
 #pragma once
 #include "game_scene.hpp"
-#include "f3rt/cpu_abi.h"
 #include "f3rt/game_video.hpp"
 #include <array>
 #include <cstdint>
@@ -15,7 +14,12 @@ public:
     GameSprites() { reset(); }
 
     void reset();
-    void observe(GameMemory &memory, const f3_cpu &cpu);
+    // Decode the sprite display list from VRAM (0x00000, 0x10000 bytes) into the
+    // next submission. Defined per game under games/<game>/video/sprites.cpp.
+    void decode(const VideoRam &vram);
+#ifdef F3RT_VIDEO_WRITE_LOG
+    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
+#endif
     void latch();
     void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
                 GameVideoOptions options = {}) const;
@@ -23,9 +27,6 @@ public:
     bool flipped() const;
     uint8_t pen_mask() const;
     bool trails() const;
-    bool supported() const;
-    uint32_t unsupported_pc() const;
-    void observe_write(uint32_t pc, uint32_t address);
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
     void load_state(StateReader &reader);
@@ -46,29 +47,10 @@ private:
     uint8_t current_pen_mask_ = 15;
     bool current_trails_ = false;
 
-    int16_t reg_scroll_x_ = 0;
-    int16_t reg_scroll_y_ = 0;
     bool reg_flipped_ = false;
     uint8_t reg_pen_mask_ = 15;
     bool reg_trails_ = false;
-
-    bool supported_ = false;
-    uint32_t unsupported_pc_ = 0;
-
-    void parse_single(GameMemory &memory, const f3_cpu &cpu);
-    void parse_grid(GameMemory &memory, const f3_cpu &cpu);
-    void parse_obj_grid(GameMemory &memory, const f3_cpu &cpu);
-    void parse_obj_3tile(GameMemory &memory, const f3_cpu &cpu);
-    void parse_obj_4tile(GameMemory &memory, const f3_cpu &cpu);
-    void parse_obj_scaled(GameMemory &memory, const f3_cpu &cpu);
-    void submit(GameMemory &memory, const f3_cpu &cpu);
-
-    void emit_sprite(uint32_t tile, int32_t x_24_8, int32_t y_24_8,
-                     uint16_t scale_x, uint16_t scale_y,
-                     uint8_t palette, bool flip_x, bool flip_y,
-                     uint32_t caller_pc);
-
-    static bool is_covered_write(uint32_t pc);
+    bool reg_bank_ = false;
 };
 
 } // namespace f3rt

@@ -31,7 +31,7 @@ The configure step runs the recompiler and the sound compiler. Both read your RO
 
 The recompiler checks only the four program files. The other 11 ROM files are checked when you start the program. See [Program start](#program-start-rom-files).
 
-The recompiler also has messages about the config file, for example `Config ... is missing [rom] section.`, `Unknown discovery coverage mode`, `Hook address must be word-aligned (even)` and `hook address is not discovered code`. They appear only if you edit `games/landmakrj/config.toml`. Restore the original file.
+The recompiler also has messages about the config file, for example `Config ... is missing [rom] section.`, `Unknown discovery coverage mode` and `Entry point must be word-aligned (even)`. They appear only if you edit `games/landmakrj/config.toml`. Restore the original file. (Code hooks were removed; `[[hooks]]` is no longer a valid key.)
 
 ### Sound compiler messages
 

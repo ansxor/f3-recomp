@@ -7,6 +7,7 @@
 #include "game_lines.hpp"
 #include "game_compositor.hpp"
 #include "game_clip.hpp"
+#include "game_video_log.hpp"
 #include "gpu_scene.hpp"
 #include "state_io.hpp"
 #include <algorithm>
@@ -35,25 +36,26 @@ struct GameVideo::Impl {
     std::vector<uint32_t> presentation_pixels;
     std::vector<uint16_t> presentation_sprites;
     struct Fallback {
-        const char *component = nullptr;
-        uint32_t pc = 0;
+        const char *reason = nullptr;
         uint64_t frames = 0, first = 0, last = 0;
     };
     std::array<Fallback, 32> fallbacks{};
     unsigned fallback_count = 0;
     uint64_t rendered_frames = 0, fallback_frames = 0;
-    void fallback(const char *component, uint32_t pc) {
+    // `component`/`reason` are string literals; repeats are counted, logged once.
+    void fallback(const char *component, const char *reason) {
         const uint64_t frame = machine.frame + 1;
+        log_unsupported_video(component, reason, frame);
         ++fallback_frames;
         for (unsigned i = 0; i < fallback_count; ++i) {
             auto &entry = fallbacks[i];
-            if (entry.component != component || entry.pc != pc) continue;
+            if (entry.reason != reason) continue;
             ++entry.frames;
             entry.last = frame;
             return;
         }
         if (fallback_count == fallbacks.size()) throw std::runtime_error("Game video fallback reason capacity exceeded");
-        fallbacks[fallback_count++] = {component, pc, 1, frame, frame};
+        fallbacks[fallback_count++] = {reason, 1, frame, frame};
     }
     GameTiles tiles;
     GameText text;
@@ -97,19 +99,21 @@ struct GameVideo::Impl {
         if (scene.fallback) return;
         auto &w = scene.words;
         for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i) {
-            const auto &c = tiles.maps_[l][i];
+            // Raw 4-byte video-RAM cell (attributes<<16 | code); the shader
+            // decodes it exactly like GameTiles::RowSampler. Word 1 is unused.
             const unsigned at = GpuScene::pf_cells + (l * 2048 + i) * 2;
-            w[at] = c.tile;
-            w[at + 1] = c.palette | (uint32_t(c.pen_mask) << 16) |
-                (uint32_t(c.flip_x) << 24) | (uint32_t(c.flip_y) << 25) | (uint32_t(c.blend) << 26);
+            w[at] = tiles.maps_[l][i];
         }
         for (unsigned i = 0; i < 4096; ++i) {
-            const auto &c = text.cells_[i];
-            w[GpuScene::text_cells + i] = c.tile | (uint32_t(c.palette) << 8) |
-                (uint32_t(c.flip_x) << 16) | (uint32_t(c.flip_y) << 17);
-            const auto *pens = text.glyphs_.data() + i * 4;
-            w[GpuScene::glyphs + i] = pens[0] | (uint32_t(pens[1]) << 8) |
-                (uint32_t(pens[2]) << 16) | (uint32_t(pens[3]) << 24);
+            // Raw big-endian text-map word; the shader decodes it exactly like
+            // GameText::pixel (see runtime/game_text.hpp for the bit layout).
+            w[GpuScene::text_cells + i] = text.map_[i];
+            // Raw glyph RAM, byte-packed four bytes per word; the shader indexes
+            // it as bytes, so only the first 2048 words of the region are used.
+            w[GpuScene::glyphs + i] = uint32_t(text.glyph_ram_[i * 4]) |
+                (uint32_t(text.glyph_ram_[i * 4 + 1]) << 8) |
+                (uint32_t(text.glyph_ram_[i * 4 + 2]) << 16) |
+                (uint32_t(text.glyph_ram_[i * 4 + 3]) << 24);
         }
         for (unsigned i = 0; i < 8192; ++i)
             w[GpuScene::palette + i] = (uint32_t(machine.palette[i * 4 + 1]) << 16) |
@@ -170,21 +174,13 @@ struct GameVideo::Impl {
         auto &ref = *reference;
         if (ref.ready) return;
         const auto &w = gpu->words;
-        for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i) {
-            auto &c = ref.tiles.maps_[l][i];
-            const unsigned at = GpuScene::pf_cells + (l * 2048 + i) * 2;
-            const auto a = w[at + 1];
-            c.tile = uint16_t(w[at]); c.palette = uint16_t(a); c.pen_mask = uint8_t(a >> 16);
-            c.flip_x = (a & (1u << 24)) != 0; c.flip_y = (a & (1u << 25)) != 0;
-            c.blend = (a & (1u << 26)) != 0;
-        }
-        for (unsigned i = 0; i < 4096; ++i) {
-            const auto a = w[GpuScene::text_cells + i];
-            auto &c = ref.text.cells_[i];
-            c.tile = uint8_t(a); c.palette = uint8_t(a >> 8);
-            c.flip_x = (a & (1u << 16)) != 0; c.flip_y = (a & (1u << 17)) != 0;
-            for (unsigned b = 0; b < 4; ++b) ref.text.glyphs_[i * 4 + b] = uint8_t(w[GpuScene::glyphs + i] >> (b * 8));
-        }
+        for (unsigned l = 0; l < 4; ++l) for (unsigned i = 0; i < 2048; ++i)
+            ref.tiles.maps_[l][i] = w[GpuScene::pf_cells + (l * 2048 + i) * 2];
+        for (unsigned i = 0; i < 4096; ++i)
+            ref.text.map_[i] = uint16_t(w[GpuScene::text_cells + i]);
+        for (unsigned i = 0; i < 2048; ++i)
+            for (unsigned b = 0; b < 4; ++b)
+                ref.text.glyph_ram_[i * 4 + b] = uint8_t(w[GpuScene::glyphs + i] >> (b * 8));
         ref.sprites.current_count_ = gpu->sprite_count;
         ref.sprites.current_flipped_ = false;
         ref.sprites.current_trails_ = false;
@@ -265,9 +261,9 @@ struct GameVideo::Impl {
     uint64_t composite_frames = 0, composite_mismatches = 0;
     std::array<uint64_t, 9> frames{}, mismatches{};
     size_t state_size() const {
+        // Playfield tiles and text are derived from serialized video RAM, so
+        // they are not part of snapshot state; decode() rebuilds them at VBSTART.
         return 1 +
-               tiles.state_size() +
-               text.state_size() +
                sprites.state_size() +
                lines.state_size() +
                sizeof(uint16_t) * 432 * 256 +
@@ -282,8 +278,6 @@ struct GameVideo::Impl {
     void save_state(StateWriter &writer, bool sync = false) const {
         uint8_t r = rendered ? 1 : 0;
         writer.write(r);
-        tiles.save_state(writer);
-        text.save_state(writer);
         sprites.save_state(writer);
         lines.save_state(writer);
         writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_planes[next_plane]));
@@ -297,8 +291,6 @@ struct GameVideo::Impl {
         uint8_t r;
         reader.read(r);
         rendered = r != 0;
-        tiles.load_state(reader);
-        text.load_state(reader);
         sprites.load_state(reader);
         lines.load_state(reader);
         native_pending = false;
@@ -375,23 +367,15 @@ void GameVideo::reset() {
     impl_->fallback_count = 0;
     impl_->rendered_frames = impl_->fallback_frames = 0;
 }
-void GameVideo::observe() {
-    auto &m = impl_->machine;
-    GameMemory memory{m.roms.main, m.ram};
-    impl_->tiles.observe(memory, m.cpu);
-    memory.supported = true;
-    impl_->text.observe(memory, m.cpu);
-    memory.supported = true;
-    impl_->sprites.observe(memory, m.cpu);
-    memory.supported = true;
-    impl_->lines.observe(memory, m.cpu);
-}
+#ifdef F3RT_VIDEO_WRITE_LOG
 void GameVideo::observe_write(uint32_t pc, uint32_t address) {
-    impl_->tiles.observe_write(pc, address);
-    impl_->text.observe_write(pc, address);
-    impl_->sprites.observe_write(pc, address);
-    impl_->lines.observe_write(pc, address);
+    const uint64_t frame = impl_->machine.frame + 1;
+    impl_->tiles.observe_write(pc, address, frame);
+    impl_->text.observe_write(pc, address, frame);
+    impl_->sprites.observe_write(pc, address, frame);
+    impl_->lines.observe_write(pc, address, frame);
 }
+#endif
 
 void GameVideo::latch_sprites() {
     auto &state = *impl_;
@@ -414,6 +398,15 @@ void GameVideo::latch_sprites() {
 void GameVideo::render_frame() {
     auto &state = *impl_;
     auto &m = state.machine;
+    // VBSTART: video RAM is the source of truth. Decode this frame's playfield,
+    // text, sprite (next submission) and scanline layers from it before rendering.
+    // Render below still uses the previously latched sprite plane, preserving the
+    // one-frame FDP sprite lag.
+    const VideoRam vram{m.graphics, m.control, m.frame + 1};
+    state.tiles.decode(vram);
+    state.text.decode(vram);
+    state.sprites.decode(vram);
+    state.lines.decode(vram);
     render();
     if (state.rendered && state.mode == GameVideoMode::Game) {
         if (!state.gpu)
@@ -451,21 +444,13 @@ void GameVideo::render_frame() {
 void GameVideo::render() {
     auto &state = *impl_;
     state.rendered = false;
-    if (!state.lines.supported()) { state.fallback("lines", state.lines.unsupported_pc()); return; }
-    if (!state.text.supported()) { state.fallback("text", state.text.unsupported_pc()); return; }
-    if (!state.sprites.supported()) { state.fallback("sprites", state.sprites.unsupported_pc()); return; }
-    // Descriptor decoding retains these command bits, but their complete
-    // scanout behavior is outside the measured normal-orientation contract.
-    if (state.sprites.flipped()) { state.fallback("flipped-screen", 0x43e0); return; }
-    if (state.sprites.trails()) { state.fallback("sprite-trails", 0x43e0); return; }
-    for (unsigned layer = 0; layer < 4; ++layer) {
-        if (state.tiles.supported(layer)) continue;
-        state.fallback(layer_names[layer], state.tiles.unsupported_pc(layer));
-        return;
-    }
+    // Every layer decodes from video RAM, so only these features the scene
+    // renderer does not draw force the FDP oracle fallback.
+    if (state.sprites.flipped()) { state.fallback("sprites", "flipped-screen"); return; }
+    if (state.sprites.trails()) { state.fallback("sprites", "sprite-trails"); return; }
     state.lines.prepare(state.sprites.flipped());
     for (unsigned y = 24; y < 256; ++y)
-        if (state.lines.row(y).bitmap) { state.fallback("bitmap-pivot", 0); return; }
+        if (state.lines.row(y).bitmap) { state.fallback("text", "bitmap-pivot"); return; }
     if (state.mode != GameVideoMode::Game || !state.gpu) {
         std::array<uint32_t, 8192> colors;
         const auto &palette = state.machine.palette;
@@ -539,14 +524,8 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
     if (layer_mask == 511) impl_->lines.compare_rows(*m.video, frame);
     for (unsigned layer = 0; layer < 9; ++layer) {
         if (!(layer_mask & (1u << layer))) continue;
-        const bool supported = layer < 4 ? impl_->tiles.supported(layer) : layer < 8 ? impl_->sprites.supported() : impl_->text.supported();
-        if (!supported) {
-            const uint32_t pc = layer < 4 ? impl_->tiles.unsupported_pc(layer) : layer < 8 ? impl_->sprites.unsupported_pc() : impl_->text.unsupported_pc();
-            std::ostringstream error;
-            error << "Game " << layer_names[layer] << " unsupported producer at frame " << frame
-                  << " PC 0x" << std::hex << pc;
-            throw std::runtime_error(error.str());
-        }
+        // Every layer is decoded from video RAM at VBSTART; nothing is
+        // unsupported by producer identity.
         uint64_t count = 0;
         int first_x = -1, first_y = -1;
         ScenePixel first_game{}, first_oracle{};
@@ -601,8 +580,7 @@ void GameVideo::compare_composite(uint64_t frame) {
     impl_->materialize_native();
     if (!impl_->rendered) {
         std::ostringstream error;
-        error << "Game composite unsupported at frame " << frame << " line producer PC 0x"
-              << std::hex << impl_->lines.unsupported_pc();
+        error << "Game composite fallback at frame " << frame;
         throw std::runtime_error(error.str());
     }
     uint64_t count = 0;
@@ -641,8 +619,8 @@ void GameVideo::report(std::ostream &output) const {
     output << "VIDEO game_frames=" << impl_->rendered_frames << " oracle_fallback_frames=" << impl_->fallback_frames << '\n';
     for (unsigned i = 0; i < impl_->fallback_count; ++i) {
         const auto &entry = impl_->fallbacks[i];
-        output << "VIDEO fallback=" << entry.component << " producer_pc=0x" << std::hex << entry.pc << std::dec
-               << " frames=" << entry.frames << " first=" << entry.first << " last=" << entry.last << '\n';
+        output << "VIDEO fallback=" << entry.reason << " frames=" << entry.frames
+               << " first=" << entry.first << " last=" << entry.last << '\n';
     }
 }
 size_t GameVideo::state_size() const {
@@ -700,8 +678,3 @@ void GameVideo::load_sync_state(std::span<const uint8_t> src) {
     impl_->reseed_presentation();
 }
 } // namespace f3rt
-
-extern "C" void f3_landmakr_video_hook(f3_cpu *cpu) {
-    auto &machine = *static_cast<f3rt::Machine *>(cpu->runtime);
-    if (machine.game_video) machine.game_video->observe();
-}

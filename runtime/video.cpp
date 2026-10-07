@@ -4,6 +4,7 @@
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
 #include "game_scene.hpp"
+#include "video_decode.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,10 +40,6 @@ inline uint16_t read_be16(const uint8_t *p) {
 
 inline uint32_t read_be32(const uint8_t *p) {
     return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
-}
-
-inline int16_t sext12(uint16_t v) {
-    return (v & 0x800) ? int16_t(v | 0xf000) : int16_t(v & 0xfff);
 }
 
 inline int mosaic(int x, uint8_t sample) {
@@ -465,15 +462,8 @@ struct Video::Impl {
     }
 
     void decode_charram(const uint8_t *charram) {
-        for (int c = 0; c < 256; ++c) {
-            const uint8_t *tile_src = &charram[c * 32];
-            uint8_t *dest = &decoded_chars[c * 64];
-            for (int y = 0; y < 8; ++y) {
-                const uint8_t *row = &tile_src[y * 4];
-                for (int x = 0; x < 8; ++x)
-                    dest[y * 8 + x] = (row[3 - x / 2] >> ((x & 1) * 4)) & 0x0f;
-            }
-        }
+        for (int c = 0; c < 256; ++c)
+            decode_charram_tile(&charram[c * 32], &decoded_chars[c * 64]);
     }
 
     void decode_pivot_ram(const uint8_t *pivot_ram) {
@@ -520,113 +510,19 @@ struct Video::Impl {
     }
 
     void get_sprite_info(const uint8_t *spriteram_base) {
-        struct sprite_axis {
-            int32_t block_scale = 1 << 8;
-            int32_t pos = 0, block_pos = 0;
-            int16_t global = 0, subglobal = 0;
-
-            void update(uint8_t scroll, uint16_t posw, bool multi, uint8_t block_ctrl, uint8_t new_zoom) {
-                int16_t new_pos = sext12(posw);
-                if (scroll & 0x01) subglobal = new_pos;
-                if (scroll & 0x02) global = new_pos;
-                if (!(scroll & 0x08)) {
-                    new_pos += global;
-                    if (!(scroll & 0x04))
-                        new_pos += subglobal;
-                }
-
-                switch (block_ctrl) {
-                case 0b00:
-                    if (!multi) {
-                        block_pos = int32_t(new_pos) << 8;
-                        block_scale = 0x100 - new_zoom;
-                    }
-                    [[fallthrough]];
-                case 0b10:
-                    pos = block_pos;
-                    break;
-                case 0b11:
-                    pos += block_scale * 16;
-                    break;
-                }
-            }
-        };
-
-        sprite_axis x, y;
-        uint8_t color = 0;
-        bool multi = false;
-        sprite_count = 0;
-
-        int total_sprites = 0;
-        for (int offs = 0; offs < 0x400 && total_sprites < 0x400; ++offs) {
-            total_sprites++;
-            const uint32_t bank_offset = sprite_bank ? 0x8000 : 0x0000;
-            const uint8_t *spr = &spriteram_base[bank_offset + offs * 16];
-
-            uint16_t w0 = read_be16(&spr[0]);
-            uint16_t w1 = read_be16(&spr[2]);
-            uint16_t w2 = read_be16(&spr[4]);
-            uint16_t w3 = read_be16(&spr[6]);
-            uint16_t w4 = read_be16(&spr[8]);
-            uint16_t w5 = read_be16(&spr[10]);
-            uint16_t w6 = read_be16(&spr[12]);
-
-            // Special command bit in word 3
-            if (w3 & 0x8000) {
-                flipscreen = (w5 & 0x2000) != 0;
-                sprite_extra_planes = (w5 >> 8) & 3;
-                sprite_pen_mask = (sprite_extra_planes << 4) | 0x0f;
-                sprite_trails = (w5 & 0x0002) != 0;
-                sprite_bank = (w5 & 0x0001) != 0;
-            }
-
-            // Sprite list jump bit in word 6
-            if (w6 & 0x8000) {
-                int new_offs = w6 & 0x03ff;
-                if (new_offs == offs)
-                    break;
-                offs = new_offs - 1;
-            }
-
-            uint8_t spritecont = w4 >> 8;
-            bool lock = (spritecont & 0x04) != 0;
-            if (!lock)
-                color = w4 & 0xff;
-
-            uint8_t scroll_mode = (w2 >> 12) & 0x0f;
-            x.update(scroll_mode, w2 & 0x0fff, multi, (spritecont >> 6) & 3, w1 & 0xff);
-            y.update(scroll_mode, w3 & 0x0fff, multi, (spritecont >> 4) & 3, w1 >> 8);
-            multi = (spritecont & 0x08) != 0;
-
-            int tile = w0 | ((w5 & 0x0001) << 16);
-            if (!tile)
-                continue;
-
-            int32_t tx = flipscreen ? ((512 << 8) - x.block_scale * 16 - x.pos) : x.pos;
-            int32_t ty = flipscreen ? ((256 << 8) - y.block_scale * 16 - y.pos) : y.pos;
-
-            // Cull against the configured scanout crop, not Land Maker's top edge.
-            if (tx + x.block_scale * 16 <= (H_START << 8) || tx > ((H_START + H_VIS - 1) << 8) ||
-                ty + y.block_scale * 16 <= (int(config.visible_y) << 8) ||
-                ty > ((int(config.visible_y + config.visible_height) - 1) << 8))
-                continue;
-
-            bool flip_x = (spritecont & 0x01) != 0;
-            bool flip_y = (spritecont & 0x02) != 0;
-
-            if (sprite_count < spritelist.size()) {
-                auto &s = spritelist[sprite_count++];
-                s.x = tx;
-                s.y = ty;
-                s.flip_x = flipscreen ? !flip_x : flip_x;
-                s.flip_y = flipscreen ? !flip_y : flip_y;
-                s.code = tile;
-                s.color = color;
-                s.scale_x = x.block_scale;
-                s.scale_y = y.block_scale;
-                s.pri = (color >> 6) & 3;
-            }
+        SpriteRamState state{flipscreen, sprite_bank, sprite_trails, sprite_extra_planes, sprite_pen_mask};
+        std::array<DecodedSpriteEntry, 1024> decoded;
+        sprite_count = decode_sprite_list(spriteram_base, int(config.visible_y), int(config.visible_height),
+                                          decoded, state, true);
+        for (size_t i = 0; i < sprite_count; ++i) {
+            const auto &d = decoded[i];
+            spritelist[i] = {int(d.tile), d.color, d.flip_x, d.flip_y, d.x, d.y, d.scale_x, d.scale_y, d.pri};
         }
+        flipscreen = state.flipscreen;
+        sprite_bank = state.bank;
+        sprite_trails = state.trails;
+        sprite_extra_planes = state.extra_planes;
+        sprite_pen_mask = state.pen_mask;
     }
 
     void draw_gfx_sprite(const tempsprite &sprite) {

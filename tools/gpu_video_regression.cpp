@@ -41,7 +41,7 @@ struct Options {
     f3rt::InterpolationFields fields = f3rt::InterpolationFields::Geometry;
     std::vector<uint64_t> capture_frames;
     std::vector<std::pair<uint64_t, unsigned>> scale_changes;
-    std::array<bool, 6> injections{};
+    std::array<bool, 4> injections{};
 };
 uint64_t number(const std::string &text) {
     if (text.empty() || text.front() == '-') throw std::runtime_error("Expected unsigned integer: " + text);
@@ -103,9 +103,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--inject-bitmap") o.injections[0] = true;
         else if (arg == "--inject-trails") o.injections[1] = true;
         else if (arg == "--inject-globalflip") o.injections[2] = true;
-        else if (arg == "--inject-unknown") o.injections[3] = true;
-        else if (arg == "--inject-ending") o.injections[4] = true;
-        else if (arg == "--inject-sprite-boundaries") o.injections[5] = true;
+        else if (arg == "--inject-sprite-boundaries") o.injections[3] = true;
         else if (arg == "--sound-driver") {
             if (value() != "native") throw std::runtime_error("GPU regression requires --sound-driver native");
         } else if (arg == "--help" || arg == "-h") {
@@ -118,7 +116,6 @@ Options parse(int argc, char **argv) {
                 "--interp-fields none|geometry|palette|geometry,palette (geometry; native alpha stays discrete)\n"
                 "--change-scale FRAME:SCALE (repeatable; constructor/canonical scale remains 1)\n"
                 "--inject-frame N (1407) --inject-bitmap --inject-trails --inject-globalflip\n"
-                "--inject-unknown --inject-ending (induced producer boundary, NOT played ending)\n"
                 "--inject-sprite-boundaries (ROM-texel row order, flips, collapsed spans, overlap, edge clipping/cull)\n"
                 "Run each scale 1..4 with border 0 and 48 for the parity matrix.\n";
             std::exit(0);
@@ -176,7 +173,10 @@ void require_exact(std::span<const uint32_t> a, std::span<const uint32_t> b, con
         if (a[i] != b[i]) throw std::runtime_error(context + " differs at pixel " + std::to_string(i));
 }
 // Deterministic scene-copy boundaries with visible ROM texels, not machine mutations.
-void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3rt::GpuVideo &geometry,
+// Returns false while the live scene has no enabled playfield row yet (boot frames
+// decode line RAM before the first playfield is turned on), so the caller retries
+// on a later sample instead of failing on an empty boot scene.
+bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3rt::GpuVideo &geometry,
         const f3rt::GpuScene &scene, f3rt::GameVideoOptions options, uint64_t frame,
         std::span<const uint8_t> tiles) {
     auto base = std::make_unique<f3rt::GpuScene>(scene);
@@ -189,7 +189,7 @@ void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
                 plane = pf; anchor = y; break;
             }
         }
-    if (anchor == 256) throw std::runtime_error("No valid playfield fixture template");
+    if (anchor == 256) return false;
     auto row = [](unsigned y) { return f3rt::GpuScene::rows + y * f3rt::GpuScene::row_stride; };
     auto pf = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_pf + plane * 6; };
     auto control = [&](unsigned y) { return row(y) + f3rt::GpuScene::row_layers + plane * f3rt::GpuScene::layer_stride; };
@@ -204,8 +204,9 @@ void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
     }
     if (tile == 32768) throw std::runtime_error("No horizontally varying ROM tile for visible guard fixture");
     for (unsigned cell = 0; cell < 2048; ++cell) {
+        // Raw cell: palette 0, extra planes 3 (pen mask 63), no flips/blend.
         const unsigned at = f3rt::GpuScene::pf_cells + (plane * 2048 + cell) * 2;
-        base->words[at] = tile; base->words[at + 1] = 63u << 16;
+        base->words[at] = (0x0C00u << 16) | (tile & 65535u);
     }
     for (unsigned y = 0; y < 256; ++y) {
         base->reference_rows[y] = scene.reference_rows[anchor];
@@ -288,6 +289,7 @@ void interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
         std::cout << "INTERP induced_boundary=" << labels[kind] << " frame=" << frame
             << " pf=" << plane << " native_and_unflagged=exact\n";
     }
+    return true;
 }
 struct Harness {
     f3rt::Machine &m;
@@ -493,8 +495,8 @@ struct Harness {
                 false, true, o.interpolation, f3rt::InterpolationFields::All);
             f3rt::GpuVideo geometry(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
                 false, true, o.interpolation, f3rt::InterpolationFields::Geometry);
-            interpolation_boundaries(gpu, guards, geometry, scene, o.video, m.frame, m.video->playfield_tiles());
-            boundaries_checked = true;
+            boundaries_checked = interpolation_boundaries(gpu, guards, geometry, scene, o.video, m.frame,
+                m.video->playfield_tiles());
         }
         m.save_state(state_after);
         if (state_before != state_after || crc != m.state_crc() ||
@@ -556,35 +558,62 @@ struct Harness {
         }
     }
 };
-void observe(f3rt::Machine &m, uint32_t pc) {
-    const auto old = m.cpu.pc;
-    m.cpu.pc = pc;
-    m.game_video->observe();
-    m.cpu.pc = old;
-}
 void put16(std::span<uint8_t> bytes, size_t offset, uint16_t value) {
     bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+}
+// One sprite display-list descriptor decoded by runtime/video_decode.cpp. `x`/`y`
+// are native scanout coordinates (0,0 = the first visible pixel); the encoder adds
+// the 46/24 scanout origin. Scale is 1..256 with 256 = 1:1.
+struct SpriteEntry {
+    uint32_t tile = 0;
+    int x = 0, y = 0;
+    unsigned scale_x = 256, scale_y = 256;
+    bool flip_x = false, flip_y = false;
+    uint8_t color = 0; // Low 6 bits palette, high 2 bits priority group.
+};
+// 16-byte display-list entry in hardware byte order (big-endian words 0..6).
+void put_sprite_entry(std::span<uint8_t> graphics, size_t offset, const SpriteEntry &s, uint16_t command) {
+    put16(graphics, offset + 0, uint16_t(s.tile));
+    put16(graphics, offset + 2, uint16_t(((256 - s.scale_y) & 0xff) << 8 | ((256 - s.scale_x) & 0xff)));
+    // Scroll mode 8 keeps each descriptor absolute (the block accumulator ignores
+    // the persistent global/subglobal scroll words).
+    put16(graphics, offset + 4, uint16_t(0x8000 | ((s.x + 46) & 0x0fff)));
+    put16(graphics, offset + 6, uint16_t(command ? (0x8000 | ((s.y + 24) & 0x0fff)) : ((s.y + 24) & 0x0fff)));
+    put16(graphics, offset + 8, uint16_t((unsigned(s.flip_x ? 1 : 0) | unsigned(s.flip_y ? 2 : 0)) << 8 | s.color));
+    // Word 5 carries the command bits (flipscreen/trails/bank) and the tile high bit.
+    put16(graphics, offset + 10, uint16_t(command ? command : ((s.tile >> 16) & 1)));
+    put16(graphics, offset + 12, 0);
+}
+// Replace both sprite-RAM banks with a fresh display list: a leading command entry
+// that resets the retained sprite state, the descriptors, and a self-jump
+// terminator. The game writes the same RAM, so this is the same data path.
+void write_sprite_list(f3rt::Machine &m, std::span<const SpriteEntry> list, uint16_t command = 0) {
+    std::fill(m.graphics.begin(), m.graphics.begin() + 0x10000, 0);
+    for (size_t bank : {size_t(0), size_t(0x8000)}) {
+        size_t entry = 0;
+        put_sprite_entry(m.graphics, bank + entry * 16, SpriteEntry{}, command);
+        ++entry;
+        for (const auto &s : list) {
+            put_sprite_entry(m.graphics, bank + entry * 16, s, 0);
+            ++entry;
+        }
+        put16(m.graphics, bank + entry * 16 + 12, uint16_t(0x8000 | entry));
+    }
 }
 void inject(Harness &h, unsigned kind) {
     auto &m = h.m;
     if (kind == 0) {
-        // The known default-profile producer reads the actual ROM profile.
-        // Temporarily give it bitmap mode, and upload the same control to FDP.
-        constexpr size_t profile = 0x5d74 + 16;
-        const uint8_t old = m.roms.main.at(profile);
-        m.roms.main[profile] |= 0x20;
-        observe(m, 0x5cd8);
-        m.roms.main[profile] = old;
+        // Line RAM bitmap pivot: latch section-2 sub-0 for the visible rows and
+        // set the pivot control bits the decoder reads as bitmap mode.
         for (unsigned y = 24; y < 256; ++y) {
             put16(m.graphics, 0x20400 + y * 2, 1);
             put16(m.graphics, 0x26000 + y * 2, 0x2000);
         }
-    } else if (kind == 1 || kind == 2) {
-        const uint16_t command = kind == 1 ? 2 : 0x2000;
-        put16(m.ram, 0x7a1e, command);
-        observe(m, 0x43e0);
-        // Feed the same actual command to the oracle's sprite descriptor reader.
-        // Both banks are covered because the active bank is retained hardware state.
+    } else {
+        // Sprite command entry: word 3 bit 15 marks it, word 5 carries trails
+        // (bit 1) or flipscreen (bit 13). Both banks are patched because the
+        // active bank is retained hardware state.
+        const uint16_t command = kind == 1 ? 0x0002 : 0x2000;
         for (size_t bank : {size_t(0), size_t(0x8000)}) {
             put16(m.graphics, bank + 6, 0x8000);
             put16(m.graphics, bank + 10, command);
@@ -595,21 +624,22 @@ void inject(Harness &h, unsigned kind) {
             }
         }
         m.game_video->render_frame(); // Latch command; current scanout remains old.
-    } else {
-        // Genuine PC/address ownership guard, not a synthetic scene fallback bit.
-        m.game_video->observe_write(kind == 4 ? 0xfe620 : 0xdead00, kind == 4 ? 0x626000 : 0x610000);
     }
     m.game_video->render_frame();
     if (!m.game_video->gpu_scene().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
 }
-// One native single-sprite (0x4688) descriptor: integral producer fields
-// relative to the (46, 24) sprite origin with scroll zero and no global flip.
+// One native sprite descriptor: integral fields relative to the (46, 24)
+// sprite origin with scroll zero and no global flip.
 struct BoundarySprite {
     int x = 0, y = 0;
     unsigned sx = 256, sy = 256; // Producer scale = 256 - zoom byte.
-    bool fx = false, fy = false, via_xor = false, must_show = false;
+    bool fx = false, fy = false, must_show = false;
     uint16_t palette = 0xc0;
 };
+SpriteEntry to_entry(const BoundarySprite &d, uint32_t tile) {
+    return {.tile = tile, .x = d.x, .y = d.y, .scale_x = d.sx, .scale_y = d.sy,
+        .flip_x = d.fx, .flip_y = d.fy, .color = uint8_t(d.palette)};
+}
 // CPU reference spans (GameSprites::raster) in selected output coordinates.
 // Used only to place and classify witnesses; pixels are judged by the
 // independent CPU reference and the exact CPU/GPU comparisons.
@@ -756,11 +786,6 @@ void verify_sprite_boundaries(Harness &h) {
                 m.palette[at + 2] = uint8_t(pen * 15);
                 m.palette[at + 3] = uint8_t(bank ? 224 : 32);
             }
-        observe(m, 0x41d0);
-        put16(m.ram, 0x7a16, 0); put16(m.ram, 0x7a1a, 0);
-        observe(m, 0x43b0);
-        put16(m.ram, 0x7a1e, 0);
-        observe(m, 0x43e0);
     };
     unsigned tile = 0;
     for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256); ++candidate) {
@@ -783,25 +808,19 @@ void verify_sprite_boundaries(Harness &h) {
     std::vector<uint32_t> blank(h.device.size());
     for (unsigned kind = 0; kind < tags.size(); ++kind) {
         begin_list();
-        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
-        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
-        put16(m.ram, 0x7000, 0); put16(m.ram, 0x7002, uint16_t(tile));
-        put16(m.ram, 0x7010, kind == 0 ? 255 : kind == 1 ? 83 : 240);
-        put16(m.ram, 0x7012, kind == 1 ? 112 : 0);
-        put16(m.ram, 0x7014, 80);
-        put16(m.ram, 0x7016, kind == 2 ? 0x0fff : 56);
-        put16(m.ram, 0x7018, 0xc0);
-        put16(m.ram, 0x701a, kind == 1 ? 1 : 0);
-        put16(m.ram, 0x701c, kind == 1 ? 1 : 0);
-        observe(m, 0x4688);
+        std::vector<SpriteEntry> entries;
         if (kind == 0) {
-            // Later descriptor owns overlap; its earliest opaque ROM row must
-            // win when the 16 texel rows crush onto one output row.
-            put16(m.ram, 0x7018, 0xc1);
-            observe(m, 0x4688);
+            // The later descriptor owns the overlap; its crushed earliest opaque
+            // ROM row must win when 16 texel rows land on one output row.
+            entries.push_back(to_entry({.x = 40, .y = 40, .palette = 0xc0}, tile));
+            entries.push_back(to_entry({.x = 42, .y = 41, .sy = 2, .palette = 0xc1}, tile));
+        } else if (kind == 1) {
+            entries.push_back(to_entry({.x = 120, .y = 60, .sx = 83, .sy = 112,
+                .fx = true, .fy = true, .palette = 0xc0}, tile));
+        } else {
+            entries.push_back(to_entry({.x = 60, .y = -40, .palette = 0xc0}, tile));
         }
-        observe(m, 0x4480);
-        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+        write_sprite_list(m, entries);
         m.game_video->render_frame(); // Scanout precedes the native sprite latch.
         m.game_video->render_frame(); // Present the injected, now-latched list.
         if (m.game_video->gpu_scene().fallback)
@@ -859,17 +878,8 @@ void verify_sprite_boundaries(Harness &h) {
     }
     if (!batch_tile) throw std::runtime_error("ROM has no sprite tile witnessing batched sprite boundaries");
     const auto batch_pens = tiles.subspan(batch_tile * 256, 256);
-    auto emit = [&](const BoundarySprite &d) {
-        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
-        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
-        const uint16_t flips = uint16_t((d.fx ? 0x100 : 0) | (d.fy ? 0x200 : 0));
-        put16(m.ram, 0x7000, d.via_xor ? flips : 0); put16(m.ram, 0x7002, uint16_t(batch_tile));
-        put16(m.ram, 0x7010, uint16_t(256 - d.sy)); put16(m.ram, 0x7012, uint16_t(256 - d.sx));
-        put16(m.ram, 0x7014, uint16_t(d.x) & 0x0fff); put16(m.ram, 0x7016, uint16_t(d.y) & 0x0fff);
-        put16(m.ram, 0x7018, d.palette);
-        put16(m.ram, 0x701a, !d.via_xor && d.fx); put16(m.ram, 0x701c, !d.via_xor && d.fy);
-        observe(m, 0x4688);
-        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+    auto emit = [&](std::vector<SpriteEntry> &entries, const BoundarySprite &d) {
+        entries.push_back(to_entry(d, batch_tile));
     };
     const unsigned s = h.o.video.scale;
     const int L = -int(h.o.video.border), R = 320 + int(h.o.video.border);
@@ -888,7 +898,7 @@ void verify_sprite_boundaries(Harness &h) {
             for (unsigned flip = 0; flip < 4; ++flip) {
                 const int cell = int(thresholds.size());
                 thresholds.push_back({.x = 2 + cell % 16 * 20, .y = 2 + cell / 16 * 20, .sx = sx, .sy = step,
-                    .fx = (flip & 1) != 0, .fy = (flip & 2) != 0, .via_xor = (cell & 1) != 0,
+                    .fx = (flip & 1) != 0, .fy = (flip & 2) != 0,
                     .must_show = sx == 256, .palette = uint16_t(0xc0 | (flip >> 1))});
             }
     // Later descriptors own overlap; their transparent (and crushed-away) texels
@@ -900,14 +910,14 @@ void verify_sprite_boundaries(Harness &h) {
                 const int cell = int(overlaps.size() / 2), x = 2 + cell % 13 * 24, y = 2 + cell / 13 * 24;
                 overlaps.push_back({.x = x, .y = y, .must_show = true});
                 overlaps.push_back({.x = x + 5, .y = y + 3, .sx = sx, .sy = step, .fx = (flip & 1) != 0,
-                    .fy = (flip & 2) != 0, .via_xor = flip == 3, .must_show = sx == 256, .palette = 0xc1});
+                    .fy = (flip & 2) != 0, .must_show = sx == 256, .palette = 0xc1});
             }
     // Every descriptor is clipped by at least one target edge (border-aware).
     std::vector<BoundarySprite> edges;
     auto edge = [&](int x, int y, unsigned sx, unsigned sy, bool must_show) {
         const unsigned flip = unsigned(edges.size()) & 3;
         edges.push_back({.x = x, .y = y, .sx = sx, .sy = sy, .fx = (flip & 1) != 0, .fy = (flip & 2) != 0,
-            .via_xor = (edges.size() & 4) != 0, .must_show = must_show, .palette = uint16_t(0xc0 | (flip & 1))});
+            .must_show = must_show, .palette = uint16_t(0xc0 | (flip & 1))});
     };
     const unsigned below = std::max(1u, 160 / s);
     edge(L - 8, 30, 256, 256, true); edge(L - 15, 50, 256, 256, true); edge(L - 1, 70, wide_collapse, 256, false);
@@ -932,8 +942,9 @@ void verify_sprite_boundaries(Harness &h) {
         {"sprite_batch_edge_clip", &edges}}};
     for (const auto &[tag, list] : batches) {
         begin_list();
-        for (const auto &d : *list) emit(d);
-        observe(m, 0x4480);
+        std::vector<SpriteEntry> entries;
+        for (const auto &d : *list) emit(entries, d);
+        write_sprite_list(m, entries);
         m.game_video->render_frame(); // Scanout precedes the native sprite latch.
         m.game_video->render_frame(); // Present the injected, now-latched list.
         if (m.game_video->gpu_scene().fallback)
@@ -978,10 +989,10 @@ void verify_trail_history(Harness &h) {
     for (unsigned frame = 0; frame < 4; ++frame) {
         if (!h.o.scale_changes.empty()) h.set_scale(trail_scales[frame]);
         for (auto *machine : {&m, &peer}) {
-            put16(machine->ram, 0x7a1e, 2);
-            observe(*machine, 0x43e0);
-            put16(machine->ram, 0x7a16, uint16_t(frame * 9));
-            observe(*machine, 0x43b0);
+            // Trails command entry (word 3 bit 15, word 5 bit 1) plus a moving
+            // sprite, so each trailed list differs and history must be retained.
+            const SpriteEntry s{.tile = 1, .x = 40, .y = int(40 + frame * 8), .color = uint8_t(0xc0 | frame)};
+            write_sprite_list(*machine, std::span<const SpriteEntry>(&s, 1), 0x0002);
             machine->game_video->render_frame();
         }
         h.sample("trails_history_scale", true);
@@ -1049,16 +1060,8 @@ void verify_deferred_native(Harness &h) {
                 m.palette[at + 3] = uint8_t(pen * 11);
             }
         const auto d = descriptor(frame);
-        observe(m, 0x4528); // Clear staging, not the currently latched list.
-        const auto old_a0 = m.cpu.a[0], old_a4 = m.cpu.a[4];
-        m.cpu.a[0] = 0x407000; m.cpu.a[4] = 0x407010;
-        put16(m.ram, 0x7000, 0); put16(m.ram, 0x7002, uint16_t(tile));
-        put16(m.ram, 0x7010, 0); put16(m.ram, 0x7012, 0);
-        put16(m.ram, 0x7014, uint16_t(d.x)); put16(m.ram, 0x7016, uint16_t(d.y));
-        put16(m.ram, 0x7018, d.palette);
-        put16(m.ram, 0x701a, d.fx); put16(m.ram, 0x701c, d.fy);
-        observe(m, 0x4688); observe(m, 0x4480);
-        m.cpu.a[0] = old_a0; m.cpu.a[4] = old_a4;
+        const SpriteEntry s = to_entry(d, tile);
+        write_sprite_list(m, std::span<const SpriteEntry>(&s, 1));
         m.game_video->render_frame(); // Capture frame N, then latch list N for N+1.
     };
     auto mutate_live = [](f3rt::Machine &m) {
@@ -1087,18 +1090,14 @@ void verify_deferred_native(Harness &h) {
     std::vector<uint32_t> sprite(size_t(native_video.width()) * native_video.height()), blank(sprite.size());
     const std::vector<BoundarySprite> visible_list{descriptor(2)};
     constexpr std::array tags{"pixels_first", "canonical_save_first", "sync_save_first",
-        "unsupported_successor", "scale_pending", "disable_enable_pending", "enable_pending",
+        "fallback_successor", "scale_pending", "disable_enable_pending", "enable_pending",
         "canonical_load_pending", "sync_load_pending", "reset_pending"};
     size_t visible_pixels = 0, composite_pixels = 0;
     for (unsigned kind = 0; kind < tags.size(); ++kind) {
         lazy.game_video->enable_gpu_presentation();
         lazy.game_video->set_gpu_scale(h.o.video.scale);
-        for (auto *m : {&eager, &lazy}) {
+        for (auto *m : {&eager, &lazy})
             m->load_state(baseline);
-            observe(*m, 0x41d0);
-            put16(m->ram, 0x7a16, 0); put16(m->ram, 0x7a1a, 0); observe(*m, 0x43b0);
-            put16(m->ram, 0x7a1e, 0); observe(*m, 0x43e0);
-        }
         for (unsigned frame = 0; frame < 4; ++frame) {
             capture(eager, frame); capture(lazy, frame);
             if (lazy.game_video->gpu_scene().fallback)
@@ -1114,12 +1113,15 @@ void verify_deferred_native(Harness &h) {
             eager.save_sync_state(eager_sync); lazy.save_sync_state(lazy_sync);
             exact_bytes(eager_sync, lazy_sync, tags[kind], "first sync save");
         } else if (kind == 3) {
+            // A trails command entry is the remaining genuine oracle fallback:
+            // the deferred capture must survive it without consulting live RAM.
             for (auto *m : {&eager, &lazy}) {
-                m->game_video->observe_write(0xdead00, 0x610000);
-                m->game_video->render_frame();
+                write_sprite_list(*m, {}, 0x0002);
+                m->game_video->render_frame(); // Latch the trails command.
+                m->game_video->render_frame(); // Render the oracle fallback.
             }
             if (!lazy.game_video->gpu_scene().fallback)
-                throw std::runtime_error("Deferred native unsupported successor did not reach the oracle");
+                throw std::runtime_error("Deferred native fallback successor did not reach the oracle");
         } else if (kind == 4) {
             lazy.game_video->set_gpu_scale(h.o.video.scale == 1 ? 3 : 1);
         } else if (kind == 5) {
@@ -1288,7 +1290,7 @@ int main(int argc, char **argv) try {
     std::vector<double> native_frame_ms;
     if (o.bench) native_frame_ms.reserve(o.frames);
     std::vector<uint8_t> last_supported_pre;
-    constexpr std::array<const char *, 6> scenarios{"bitmap", "trails", "globalflip", "unknown-producer", "ending-producer-boundary-NOT-played-ending", "sprite-boundaries"};
+    constexpr std::array<const char *, 4> scenarios{"bitmap", "trails", "globalflip", "sprite-boundaries"};
     const auto start = Clock::now();
     size_t next_scale_change = 0;
     try {
@@ -1317,7 +1319,7 @@ int main(int argc, char **argv) try {
                 const auto baseline = snapshot(m);
                 const uint32_t baseline_crc = m.state_crc();
                 const auto baseline_blocks = m.native_blocks;
-                if (o.injections[1] || o.injections[3]) verify_deferred_native(h);
+                if (o.injections[1]) verify_deferred_native(h);
                 if (o.injections[1]) {
                     verify_trail_history(h);
                     m.load_state(pre); advance(m);
@@ -1325,7 +1327,7 @@ int main(int argc, char **argv) try {
                 }
                 for (unsigned kind = 0; kind < scenarios.size(); ++kind) if (o.injections[kind]) {
                     m.load_state(baseline);
-                    if (kind == 5) verify_sprite_boundaries(h);
+                    if (kind == 3) verify_sprite_boundaries(h);
                     else {
                         inject(h, kind);
                         h.sample(scenarios[kind], true, true);
@@ -1337,7 +1339,7 @@ int main(int argc, char **argv) try {
                         throw std::runtime_error("Oracle-to-supported recovery changed baseline native state");
                     h.sample(std::string(scenarios[kind]) + "_restored", true);
                     std::cout << "INJECTED scenario=" << scenarios[kind] << " frame=" << m.frame
-                              << (kind == 5 ? " supported_branch_and_recovery=exact" : " fallback_and_recovery=exact")
+                              << (kind == 3 ? " supported_branch_and_recovery=exact" : " fallback_and_recovery=exact")
                               << " (branch only)\n";
                 }
                 m.native_blocks = baseline_blocks; // Diagnostic replays are not gameplay execution.

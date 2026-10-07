@@ -1,7 +1,7 @@
 # Contributing
 
 **What you will learn:** set up a work environment and select checks for your change.
-This page covers ABI changes, hooks, games, command-line flags, and code conventions.
+This page covers ABI changes, scene decoders, games, command-line flags, and code conventions.
 It also explains local documentation work and GitHub Pages publishing.
 
 ## Principles
@@ -89,45 +89,28 @@ Rules that must stay true:
 - `f3_exception` owns the full cycle charge of an exception. Generated code must not add the normal instruction cost on that path.
 - Never add host pointers to the state that `save_state` writes.
 
-## Add a hook
+## Add a scene decoder or a store-PC entry
 
-A hook lets the runtime observe the machine just before one ROM instruction. `GameVideo` uses hooks to learn what the game draws.
+`GameVideo` decodes the scene from FDP video RAM at VBSTART; there are no code
+hooks. Adding support usually means one of two things.
 
-1. Find the address of the instruction in the ROM. Use the disassembly and the notes in [Game-data HLE](/developer/runtime/video/game-hle).
-2. Add an entry to `games/landmakrj/config.toml`:
+**A store of already-decoded video RAM.** In a `F3RT_VIDEO_WRITE_LOG` build, add
+the instruction address (or a tight range) to the component's known list in
+`games/<game>/video/<component>.cpp`. Until then the store is logged once to
+stderr by `log_unknown_video_write`, but it still decodes correctly next frame.
 
-   ```toml
-   [[hooks]]
-   address = 0x5b80
-   symbol = "f3_landmakr_video_hook"
-   ```
+**A feature not decoded yet.** Extend a per-game decoder's `decode(vram)`, or the
+shared primitive in `runtime/video_decode.cpp`, then add the store PCs. Follow
+[Extending the renderer](/developer/runtime/video/extending).
 
-3. Keep the address even and select a discovered instruction start.
-   - The generator rejects an address absent from `discovery.instructions`.
-   - The symbol must be a valid C identifier.
-   - Each address can have only one hook.
-4. Implement the symbol if it does not exist. It has the signature `extern "C" void symbol(f3_cpu *cpu)`. Put it in the runtime library. The existing hook is at the end of `runtime/game_video.cpp`.
-5. Run the configure step again. The file `config.toml` is a configure dependency, so `cmake --build` does this for you.
+Do not add `[[hooks]]` entries: hook support was removed from the recompiler. The
+old hook PCs are ordinary `[discovery] entry_points` in the game configuration
+when they are needed as proven seeds.
 
-What the generated code does around a hook:
-
-```c
-L_005b80: {
-    f3_cc_flush(cpu);
-    f3_landmakr_video_hook(cpu);
-    if (cpu->pc != 0x00005b80u || cpu->stopped || cpu->halted) return;
-    /* ...the lowered instruction follows... */
-```
-
-The hook sees the canonical SR because of `f3_cc_flush`. A hook that changes `cpu->pc` or stops the CPU cancels the instruction. A hook that only observes (as `f3_landmakr_video_hook` does) lets the instruction run.
-
-::: warning Hooks do not make the game faster or slower
-A hook must not change guest time (`cpu->cycles`) unless you have evidence that the real hardware does so. The game-video hooks only read.
-:::
-
-An unknown display-memory writer marks the affected `GameVideo` component unsupported.
-The frame then uses the FDP renderer.
-Extend a producer's accepted write-PC range only after its output matches the oracle.
+An unknown display-memory writer is only logged, and only under
+`F3RT_VIDEO_WRITE_LOG`; it never invalidates a component. Genuine unsupported
+features (`flipped-screen`, `sprite-trails`, `bitmap-pivot`) use the FDP renderer
+for that frame and log once through `log_unsupported_video`.
 See `is_covered_write` in the `game_*.cpp` files.
 
 ## Add a game
@@ -143,7 +126,7 @@ The toolchain has Land Maker-specific contracts. Review each part below before a
 5. **Sound.** Compile the selected `[sound]` region with validated padding/mirroring, retaining generated image CRC binding. Review its memory map and native/oracle timing/audio evidence independently.
 6. **Top-level CMake.** Select the title through `F3_GAME`; generated directories use `generated/SET` and `generated/sound-SET`. Extend the accepted selection list for a genuinely new title.
 7. **Frontend.** `F3RT_GAME` marks strict-native title targets; default set and generated main/sound CRC guards must agree. Enhanced/game-data/HLE/netplay eligibility remains Japan-only.
-8. **Game-specific video.** `GameVideo` and its hooks are specific to Land Maker. A new game can use the FDP renderer (`--video fdp`) and needs no game-data HLE.
+8. **Game-specific video.** `GameVideo` and its `games/<game>/video/` decoders are specific to Land Maker. A new game can use the FDP renderer (`--video fdp`) and needs no game-data scene.
 
 ::: info World set
 `games/landmakr/config.toml` describes the World main ROM lanes.

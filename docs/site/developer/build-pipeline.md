@@ -50,7 +50,7 @@ The examples and counts below illustrate the Japan default. For another title,
 select `-DF3_GAME=SET`; automatic commands use `games/SET/config.toml` and
 `BUILD_DIR/generated/SET`, `BUILD_DIR/generated/sound-SET`. The title target is
 `landmakr` for both LM selections, otherwise the set name. Japan's frozen tiers,
-producer hooks and gameplay/netplay/GPU campaigns are not generic title support.
+per-game scene decoders and gameplay/netplay/GPU campaigns are not generic title support.
 Every configure also generates `rom_manifest.hpp` with `tools/compile_roms.py`
 and `recomp/roms.py`; those tools and all game configs are tracked dependencies.
 See [build options](/reference/build-options) for per-title reproducible commands.

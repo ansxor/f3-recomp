@@ -89,7 +89,7 @@ Its callback contract is described on the [CPU ABI page](/developer/runtime/cpu-
 | Files | Responsibility |
 | --- | --- |
 | `include/f3rt/video.hpp`, `runtime/video.cpp` | Standalone FDP renderer, decoded assets, inspection, sprite buffering, and snapshots. |
-| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | Game renderer options, producer observation, frame assembly, comparison, and presentation. |
+| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | Game renderer options, VRAM decode at VBSTART, frame assembly, comparison, and presentation. |
 | `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | Game playfield descriptors and tile rendering. |
 | `runtime/game_text.hpp`, `runtime/game_text.cpp` | Game text descriptors and RAM character rendering. |
 | `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | Game sprite descriptors, chains, placement, scaling, and rasterization. |

@@ -1,6 +1,5 @@
 #pragma once
 #include "game_scene.hpp"
-#include "f3rt/cpu_abi.h"
 #include <array>
 #include <cstdint>
 #include <span>
@@ -10,18 +9,19 @@ class StateWriter;
 class StateReader;
 class Video;
 
-
 class GameLines {
 public:
     GameLines() { reset(); }
 
     void reset();
-    void observe(GameMemory &memory, const f3_cpu &cpu);
+    // Decode the per-scanline line RAM plus the control registers from VRAM.
+    // Defined per game under games/<game>/video/lines.cpp.
+    void decode(const VideoRam &vram);
+#ifdef F3RT_VIDEO_WRITE_LOG
+    void observe_write(uint32_t pc, uint32_t address, uint64_t frame);
+#endif
     void prepare(bool flipped);
     const SceneRow &row(unsigned scanout_y) const { return rows_[scanout_y & 255]; }
-    bool supported() const { return supported_; }
-    uint32_t unsupported_pc() const { return unsupported_pc_; }
-    void observe_write(uint32_t pc, uint32_t address);
     void compare_rows(const Video &oracle, uint64_t frame);
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
@@ -116,11 +116,7 @@ private:
 
     std::array<uint16_t, 8> control_0_{};
     std::array<uint16_t, 8> control_1_{};
-    uint16_t flipscreen_ = 0;
-    bool supported_ = false;
-    uint32_t unsupported_pc_ = 0;
 
-    void load_default_profile(GameMemory &memory);
     void get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const;
 };
 

@@ -118,9 +118,19 @@ add_dependencies(f3rt_musashi f3rt_musashi_generated)
 
 find_package(ZLIB REQUIRED)
 file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
+# A game opts into the de-HLE'd GameVideo scene by providing games/<game>/video/.
+file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
+if(GAME_VIDEO_SOURCES)
+    set(F3RT_GAME_VIDEO ON)
+    set(F3RT_GAME_VIDEO_SOURCES ${GAME_VIDEO_SOURCES})
+else()
+    # Games without a scene still link GameVideo (never instantiated for them).
+    set(F3RT_GAME_VIDEO_SOURCES runtime/game_video_generic.cpp)
+endif()
 add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
-    runtime/video.cpp runtime/game_video.cpp runtime/game_tiles.cpp runtime/game_text.cpp
-    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp runtime/audio.cpp
+    runtime/video.cpp runtime/game_video.cpp runtime/game_video_log.cpp runtime/video_decode.cpp
+    runtime/game_tiles.cpp runtime/game_text.cpp
+    runtime/game_sprites.cpp runtime/game_lines.cpp runtime/game_compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/input.cpp runtime/netplay.cpp
     runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
     runtime/netplay_transport.cpp runtime/netplay_session.cpp ${AUDIO_SOURCES})
@@ -130,6 +140,14 @@ target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB)
 # Musashi calls the runtime bus; static consumers need both archives rescanned.
 target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
+if(F3RT_GAME_VIDEO)
+    # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
+    target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
+endif()
+option(F3RT_VIDEO_WRITE_LOG "Debug: log video RAM stores from game routines outside the known producer lists" OFF)
+if(F3RT_VIDEO_WRITE_LOG)
+    target_compile_definitions(f3rt PUBLIC F3RT_VIDEO_WRITE_LOG=1)
+endif()
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
 endif()

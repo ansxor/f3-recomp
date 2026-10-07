@@ -89,7 +89,7 @@ decode C: 0x504 RTS                    (inside the immediate of A)
 
 The test `test_overlapping_starts` in `tools/test_discovery.py` uses these exact bytes. It checks that 0x500, 0x502 and 0x504 are all decoded.
 
-All nonexcluded even addresses are independently decoded. Seed scans (`TRAP #1`, callbacks, scripts) are off in this mode. Vector/config/hook seeds and explicit jump-table targets inside exclusions reject generation; arbitrary apparent direct transfers into exclusions are reported for fatal runtime enforcement, because exhaustive data decodes also invent branches.
+All nonexcluded even addresses are independently decoded. Seed scans (`TRAP #1`, callbacks, scripts) are off in this mode. Vector/config seeds and explicit jump-table targets inside exclusions reject generation; arbitrary apparent direct transfers into exclusions are reported for fatal runtime enforcement, because exhaustive data decodes also invent branches.
 
 The mode still collects:
 
@@ -123,7 +123,6 @@ A *seed* is a guest address where discovery starts to decode. There are two clas
 | --- | --- | --- |
 | Proven | Reset PC (vector 1) and all other vectors 2 to 255 that point into `0x400 .. len` at an even address. | `_extract_vector_seeds` |
 | Proven | `entry_points` from the config. | `discover` |
-| Proven | The `address` of each `[[hooks]]` entry. | `discover` |
 | Speculative | Targets of `PEA` or `MOVE #imm` right before `TRAP #1`. | `_extract_trap1_tasks` |
 | Speculative | `LEA d16(PC),An` followed by `MOVE.L An,<ea>` or `JMP <ea>`, if the target looks like code. | `_extract_lea_move_callbacks` |
 | Speculative | Callback pointers in actor scripts. | `_extract_script_callbacks` |

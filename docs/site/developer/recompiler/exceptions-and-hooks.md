@@ -71,19 +71,14 @@ Format one restores SR and continues the loop on the resulting stack. Formats ze
 
 Formats greater than two raise format error. Bus-fault and coprocessor frames are outside this runtime exception model.
 
-## Hooks
+## Hooks (retired)
 
-`[[hooks]]` entries provide `address` and `symbol`. The generator requires a discovered instruction address and a valid C identifier.
-
-Duplicate addresses fail generation. Reused symbols produce one external declaration per symbol in each shard.
-
-Before the instruction label executes, generated code flushes flags and calls `symbol(cpu)`. The hook has the ABI `void symbol(f3_cpu *cpu)`.
-
-If the hook changes PC, stops the CPU, or halts it, the block returns without executing that instruction.
-
-If PC remains at the hook address and execution remains active, the original instruction executes. Hooks are not automatic instruction replacements.
-
-A hook owns its intentional state and cycle changes. The generator does not add a separate hook timing charge.
+The recompiler previously supported `[[hooks]]` entries that inserted a C call
+before a ROM instruction. Hook support was removed: `recomp/generate.py` and
+`recomp/discovery.py` no longer read a `hooks` key, and no game config declares
+one. The video scene decodes FDP video RAM at VBSTART instead. Addresses that
+were hook seeds are ordinary `[discovery] entry_points` when they are still
+needed as proven seeds.
 
 ## Fallback
 

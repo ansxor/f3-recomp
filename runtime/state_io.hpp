@@ -383,22 +383,6 @@ struct CanonicalVideo {
     CanonicalTempsprite spritelist[1024];
 };
 
-struct CanonicalGameTileCell {
-    uint16_t tile;
-    uint16_t palette;
-    uint8_t pen_mask;
-    uint8_t flip_x;
-    uint8_t flip_y;
-    uint8_t blend;
-};
-
-struct CanonicalGameTextCell {
-    uint8_t tile;
-    uint8_t palette;
-    uint8_t flip_x;
-    uint8_t flip_y;
-};
-
 struct CanonicalSceneSprite {
     int32_t x, y;
     uint16_t scale_x, scale_y;
@@ -493,30 +477,25 @@ struct CanonicalLineParams {
     CanonicalLinePlayfield pf[4];
 };
 
+// GameVideo snapshot is now a fixed header plus the per-component payloads
+// written by the component save_state functions. Playfield/text/sprite/line
+// producers decode from video RAM at VBSTART, so the retired hook bookkeeping
+// (tile validity, text references, per-component unsupported PCs, line control
+// mirrors), the playfield tile payload and the text raw snapshot are gone: both
+// are rebuilt from the serialized video RAM at the next VBSTART. GameLines
+// still serializes its decoded line params + rows.
 struct CanonicalGameVideoHeader {
     uint8_t rendered;
-    uint8_t tile_valid[4];
-    uint32_t tile_unsupported[4];
-    uint8_t text_map_valid;
-    uint32_t text_unsupported_pc;
     uint32_t sprite_staging_count;
     uint32_t sprite_submitted_count;
     uint32_t sprite_current_count;
     uint8_t sprite_current_flipped;
     uint8_t sprite_current_pen_mask;
     uint8_t sprite_current_trails;
-    int16_t sprite_reg_scroll_x;
-    int16_t sprite_reg_scroll_y;
     uint8_t sprite_reg_flipped;
     uint8_t sprite_reg_pen_mask;
     uint8_t sprite_reg_trails;
-    uint8_t sprite_supported;
-    uint32_t sprite_unsupported_pc;
-    uint16_t lines_control_0[8];
-    uint16_t lines_control_1[8];
-    uint16_t lines_flipscreen;
-    uint8_t lines_supported;
-    uint32_t lines_unsupported_pc;
+    uint8_t sprite_reg_bank;
 };
 
 #pragma pack(pop)
@@ -593,12 +572,6 @@ template <> inline void validate_state_value(const CanonicalVideo &s) {
     require_state(s.sprite_count <= 1024 && s.has_buffered_spriteram <= 1 &&
                   s.flipscreen <= 1 && s.sprite_bank <= 1 && s.sprite_trails <= 1 &&
                   s.sprite_extra_planes <= 3 && s.sprite_pen_mask <= 0x3f);
-}
-template <> inline void validate_state_value(const CanonicalGameTileCell &s) {
-    require_state(s.flip_x <= 1 && s.flip_y <= 1 && s.blend <= 1 && s.pen_mask <= 0x3f);
-}
-template <> inline void validate_state_value(const CanonicalGameTextCell &s) {
-    require_state(s.flip_x <= 1 && s.flip_y <= 1);
 }
 template <> inline void validate_state_value(const CanonicalSceneSprite &s) {
     require_state(s.flip_x <= 1 && s.flip_y <= 1);

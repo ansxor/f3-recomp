@@ -8,7 +8,7 @@ All measured results on this page are retained records from [docs/developer/VIDE
 
 The target is Japan 2.01J, `landmakrj`. Program addresses are specific to that ROM revision. Generated C, ROMs, and capture artifacts remain untracked.
 
-The independent oracle is `runtime/video.cpp`. Game producers read program ROM and main work RAM. They cannot read FDP geometry.
+The independent oracle is `runtime/video.cpp`. The game scene comes from the FDP video RAM that producer routines wrote; the decoders read only that RAM.
 
 Shared decoded ROM textures and palette colors are assets. They do not supply scene positions, map cells, sprite records, or line settings.
 
@@ -53,13 +53,20 @@ The continuous seed-5 run compares 1,783,103,488 texels per PF, 252,490,240 pixe
 
 Recorded CPU fallback is zero in these runs. Renderer fallback is separate.
 
-### Startup fallback
+### Startup and fallback
 
-The 6000-frame full-mask run reconstructs 5769 frames and delegates 231 frames to the oracle. The last fallback is frame 418.
+In the final design the VRAM decoders always produce a complete scene from the
+current bytes, so startup frames are drawn by the game renderer. A run shaped
+`f3rt-gameplay-regression --frames 6000 --video-diff --video-diff-every 60`
+reports `pixel_mismatches=0` for all nine layers and the composite over 91
+sampled frames, with `VIDEO game_frames=6000 oracle_fallback_frames=0` and a
+frame CRC identical to the pre-change baseline. Earlier retained runs recorded
+startup oracle fallbacks from line/POST ownership; those results predate the
+VRAM-owned decode and are not reproduced by the final build.
 
-The recorded startup causes are line initialization/POST for 229 frames, incomplete glyph initialization for one frame, and sprite POST for one frame.
-
-The 40,000-frame seeded runs retain the same 231 startup renderer fallbacks. This is evidence for those input sequences, not a universal startup guarantee.
+The only remaining renderer fallbacks are `flipped-screen`, `sprite-trails` and
+`bitmap-pivot`. This is evidence for the stated input sequence, not a universal
+startup guarantee.
 
 ### Recorded final CRCs
 
@@ -84,24 +91,28 @@ This capture evidence checks the retained oracle independently from the new comp
 
 | Failure | Cause and retained correction |
 | --- | --- |
-| PF0 unknown writer at frame 1320, PC `0x9ec66` | Missing selection side-strip producer; added semantic fill hook. |
+| PF0 unknown writer at frame 1320, PC `0x9ec66` | Missing selection side-strip producer; covered once its store PCs were modeled (decoded from video RAM now). |
 | PF1 unaligned destination at frame 1560 | Printed disassembly omitted the indexed `*4` scale; raw instruction bytes determine mirrored destination adjustment. |
 | 545 sprite-group pixels at frame 1080 | Scaled compiler uploads integer tile origins; fractional intermediate origins were incorrect. |
 | PF1 row mismatch at frame 600 | Missing cross-PF Y mapping: PF3 zoom low byte controls PF1 Y step. |
-| PF2 row mismatch at frame 1440 | Missing upper-half column scroll and a hook before the task wake. |
+| PF2 row mismatch at frame 1440 | Missing upper-half column scroll and a producer observed before its task wake (now decoded from line RAM). |
 | Top-edge sprite leak at frame 3404; two composite pixels at frame 21960 | Nominal fixed-point cull must occur before the `+255` vertical raster phase. |
 
 These fixes follow producer or oracle behavior. They do not special-case frame numbers or pixel coordinates.
 
 Permanent checks retain tile reversal, sprite quantization, and the top-edge cull. Runtime parity then checks their real consumer-visible effect.
 
-## Fallback transition evidence
+## Write-log injection and fallback transitions
 
-A two-machine smoke compares strict-native FDP and game rendering through 2400 frames. It injects an unknown PF0 writer at frame 2392.
+Write logging and renderer fallback are separate. A store from an unknown PC is
+only reported by `log_unknown_video_write`, and only in a `F3RT_VIDEO_WRITE_LOG`
+build; it never invalidates a layer and never forces a fallback. A two-machine
+smoke that injects an unknown PF0 writer keeps both native images equal across
+all frames.
 
-Both native images remain equal across all frames. Exactly the final eight frames use reported producer `0x222220` fallback.
-
-This proves entry into fallback after sustained game rendering. The oracle sprite latch stays current while game composition is active.
+Renderer fallback is entered only by the three supported-feature tests
+(`flipped-screen`, `sprite-trails`, `bitmap-pivot`). The oracle sprite latch stays
+current while game composition is active.
 
 ## Expanded presentation evidence
 
@@ -138,12 +149,12 @@ Mosaic state is decoded and compared. No nontrivial mosaic animation is claimed 
 
 | Case | Current behavior |
 | --- | --- |
-| Incomplete initial ownership or POST | Oracle frame until known initialization establishes ownership |
-| Ending transitions at `0xfe620`, `0xfefe6`, `0xff0fa` | Explicit line invalidation; oracle until known profile reset |
+| Startup frames | Drawn by the game renderer: the decoders build a complete scene from the current video RAM |
+| Ending transitions at `0xfe620`, `0xfefe6`, `0xff0fa` | Bitmap pivot selects bitmap geometry on a visible row; whole-frame `bitmap-pivot` fallback |
 | Bitmap pivot | Whole-frame `bitmap-pivot` fallback |
 | Global screen flip | Whole-frame `flipped-screen` fallback, despite decoded command and descriptor fields |
 | Retained sprite framebuffer | Whole-frame `sprite-trails` fallback |
-| Unknown producer, invalid descriptor source, or unaligned PF destination | Component invalidation; no hardware-value readback |
+| Store from an unknown PC | Logged once by `log_unknown_video_write` under `F3RT_VIDEO_WRITE_LOG`; nothing invalidated, no hardware-value readback |
 | Sprite grid above 32x32 or batch above 1024 | Component rejection, not accepted truncation |
 
 Expanded unsupported frames show the exact integer-scaled oracle image in the center with black added columns. They do not invent geometry.

@@ -95,40 +95,6 @@ int main(void) {
 '''
                     execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + driver)
 
-    def test_redirecting_hook_entry_is_recorded_before_guest_instruction_is_skipped(self):
-        rom = bytes(0x400) + bytes.fromhex("7001")
-        decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
-        decoder.detail = True
-        instructions = {insn.address: insn for insn in decoder.disasm(rom[0x400:], 0x400)}
-        discovery = SimpleNamespace(instructions=instructions, blocks={}, invalid_pcs=[], report={})
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory)
-            report = generate(rom, discovery, output, {
-                "discovery": {"coverage": "all_aligned"},
-                "hooks": [{"address": 0x400, "symbol": "redirect_hook"}],
-            })
-            execute(output, report, r'''
-#include <assert.h>
-#include "program.h"
-#include <f3rt/block_profile.h>
-uint64_t counts[0x1000];
-uint64_t *f3_profile_main_counts = counts;
-uint64_t *f3_profile_sound_counts;
-static const f3_block *blocks;
-int f3_register_blocks(f3_cpu *cpu, const f3_block *table, size_t count) {
-    (void)cpu; (void)count; blocks=table; return 1;
-}
-void redirect_hook(f3_cpu *cpu) { cpu->pc=0x600; }
-int main(void) {
-    f3_cpu cpu={0}; f3_generated_register(&cpu);
-    cpu.pc=0x400; cpu.dispatch_deadline=UINT64_MAX;
-    blocks[0].execute(&cpu);
-    assert(cpu.pc==0x600 && cpu.d[0]==0 && cpu.cycles==0);
-    assert(counts[0x400/2]==1);
-    return 0;
-}
-''')
-
     def test_main_shared_exception_entries_remain_counted_once_in_each_mode(self):
         rom = bytes.fromhex("a000f0007100")
         crc = zlib.crc32(rom)

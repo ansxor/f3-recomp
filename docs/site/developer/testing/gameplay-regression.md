@@ -107,7 +107,7 @@ The test exits with code 1 and prints a failure when any of these happens:
 | `m.fallback_instructions` is greater than zero. | After `run_frame()` |
 | Recompiled blocks fail to register (`f3_generated_register` returns false). | Before the loop |
 | A bad option, a missing ROM directory, or `--set` other than `landmakrj`. | Option parsing |
-| A video mismatch or an unsupported video producer (with `--video-diff`). | `compare_layers()` |
+| A video mismatch (with `--video-diff`). | `compare_layers()` |
 
 The test does not check the audio. It counts samples and the peak level and prints them. A silent run does not fail.
 
@@ -189,7 +189,7 @@ Seeds 1 to 16 with 40,000 frames each are recorded as passing with zero fallback
 
 ## Video comparison: `--video-diff`
 
-`--video-diff` creates a `GameVideo` in `Diagnostic` mode. The machine still produces the FDP picture. The game-data renderer runs next to it and observes the same writes. At each sample frame the test calls `GameVideo::compare_layers(frame, mask)`.
+`--video-diff` creates a `GameVideo` in `Diagnostic` mode. The machine still produces the FDP picture. The game-data renderer decodes the same video RAM at each VBSTART. At each sample frame the test calls `GameVideo::compare_layers(frame, mask)`.
 
 Samples start at frame 600. A frame is a sample when `frame >= 600` and `(frame - 600) % interval == 0`. The default interval is 120.
 
@@ -219,9 +219,9 @@ This rule is stricter than an RGB comparison for visible pixels. It compares pal
 
 ### What the test rejects
 
-- An **unsupported producer**. The game renderer tracks which ROM routine wrote each layer. If a routine is not modeled, the layer is marked unsupported. The comparison then fails with `Game <layer> unsupported producer at frame N PC 0x...`. The test does not count this as a match.
-- **Pixel mismatches**. The error shows the layer, the frame, the count, the first differing pixel and both values. For sprite layers it also lists nearby sprite descriptors.
+- **Pixel mismatches**. The error shows the layer, the frame, the count, the first differing pixel and both values (`Game <layer> frame N: ... indexed pixel mismatches`). For sprite layers it also lists nearby sprite descriptors.
 - A **row or composite mismatch** (with mask 511).
+- A **fallback frame** in a full-mask sample. `compare_composite` throws if `rendered` is false, and `report()` records the reason.
 
 ### Report lines
 
@@ -231,12 +231,12 @@ At the end of the run, `GameVideo::report()` prints one line per compared layer.
 VIDEO layer=pf0 domain=1024x512-indexed-texture sampled_frames=46 compared_pixels=24117248 pixel_mismatches=0
 VIDEO layer=composite domain=320x232-RGB sampled_frames=46 compared_pixels=3415040 pixel_mismatches=0
 VIDEO game_frames=... oracle_fallback_frames=...
-VIDEO fallback=<component> producer_pc=0x... frames=... first=... last=...
+VIDEO fallback=<reason> frames=... first=... last=...
 ```
 
-The `fallback` lines list the components for which the game renderer gave up on some frames and the FDP picture was used.
+The `fallback` lines list the reasons for which the game renderer gave up on some frames and the FDP picture was used.
 
-`docs/developer/VIDEO-HLE.md` records measured results. Example: seed 5 with 6,000 frames compares 46 samples per layer with zero mismatches (24,117,248 indexed pixels per playfield). See [Game-data video HLE](/developer/runtime/video/game-hle) for how the renderer works.
+`docs/developer/VIDEO-HLE.md` records measured results. Example: seed 5 with 6,000 frames and `--video-diff-every 60` compares 91 samples per layer with zero mismatches, plus `VIDEO game_frames=6000 oracle_fallback_frames=0`, identical to the pre-change frame CRC. See [Game-data video HLE](/developer/runtime/video/game-hle) for how the renderer works.
 
 ```sh
 build/f3rt-gameplay-regression --seed 5 --frames 6000 --video-diff \

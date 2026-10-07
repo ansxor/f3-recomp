@@ -9,7 +9,7 @@ The runtime has two independent renderers for the Taito F3 picture. Both produce
 | Renderer | Class | Input | Role |
 | --- | --- | --- | --- |
 | FDP renderer | `f3rt::Video` | The emulated video RAM that the game wrote: sprite RAM, playfield RAM, text RAM, character RAM, line RAM, pivot RAM, palette RAM and control registers | The internal **oracle**: a MAME-derived TC0630FDP model used as the game-data renderer's reference, not physical-chip verification. |
-| Game-data renderer | `f3rt::GameVideo` | The data that the game builds before it writes the hardware RAM: tile-block descriptors, text strings, sprite queues and line-effect tables. The runtime reads this data from the game ROM and the main work RAM. | The **default renderer** of the `landmakr` program. It rebuilds the scene and draws it. It can also draw at a higher resolution with extra border columns. |
+| Game-data renderer | `f3rt::GameVideo` | The same FDP video RAM (`graphics` at 0x600000, `control` at 0x660000), decoded into scene structures at VBSTART. | The **default renderer** of a game that provides `games/<game>/video/`. It rebuilds the scene and draws it. It can also draw at a higher resolution with extra border columns. |
 
 The abbreviation **FDP** means the TC0630FDP video chip of the Taito F3 board. The oracle name comes from its job: `GameVideo` must give the same pixels as `Video` for every frame that `GameVideo` supports.
 
@@ -17,7 +17,7 @@ Internal pixel parity and matching sampled MAME output are separate evidence.
 Neither proves unexercised chip behavior or support for every F3 game.
 
 ::: info
-Why two renderers? A recompiled game runs as native code, so the runtime can inspect game data before it writes emulated video RAM. The game-data renderer rerasterizes supported scenes at higher resolutions. The FDP renderer remains the internal reference for comparison and draws unsupported frames.
+Why two renderers? The game-data renderer decodes the same video RAM into scene structures, so it can rerasterize supported scenes at higher resolutions and add border columns. The FDP renderer remains the internal reference for comparison and draws fallback frames.
 :::
 
 ## Where the renderers run
@@ -51,7 +51,7 @@ The frontend selects the renderer with `--video`. The table shows the three user
 | `compare` | `Compare` | `--video compare` | Always the oracle picture. The runtime also checks that the game-data picture is equal on each supported frame. |
 | none | `Diagnostic` | The gameplay regression tool | Always the oracle picture. The tool calls `compare_layers` at chosen frames. |
 
-The strict-native `landmakr` program uses `game` by default. With `--allow-fallback`, `landmakr` uses `fdp`, because fallback execution has no producer hooks. The generic `f3rt-run` program always starts with fallback allowed, so it supports only `fdp`. Game-data video needs strict-native `landmakrj`. Read [Presentation](/developer/runtime/video/presentation) for scale, border and filter options and [Compare mode](/developer/runtime/video/compare-mode) for the checking tools. The user view of the same options is in the [video guide](/guide/video).
+Game-data video is compiled only for games with a `games/<game>/video/` folder (`F3RT_GAME_VIDEO`; today `landmakrj`). The strict-native `landmakr` program then uses `game` by default; with `--allow-fallback` it uses `fdp`, because game-data video requires strict native execution. A build without the folder supports only `fdp` and rejects `--video game|compare`. Read [Presentation](/developer/runtime/video/presentation) for scale, border and filter options and [Compare mode](/developer/runtime/video/compare-mode) for the checking tools. The user view of the same options is in the [video guide](/guide/video).
 
 ## Source file map
 
@@ -60,14 +60,16 @@ The table lists every file of the video system and the page that explains it.
 | File | Contents | Page |
 | --- | --- | --- |
 | `include/f3rt/video.hpp`, `runtime/video.cpp` | `Video`: the FDP renderer and its inspection functions | [FDP renderer](/developer/runtime/video/fdp) |
-| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`, the C hook `f3_landmakr_video_hook` | [GameVideo](/developer/runtime/video/game-hle) |
-| `runtime/game_scene.hpp` | `GameMemory`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
-| `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | `GameTiles`: four playfield tile maps | [Playfield tiles](/developer/runtime/video/tiles) |
+| `include/f3rt/game_video.hpp`, `runtime/game_video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`; the VBSTART decode and frame selection | [GameVideo](/developer/runtime/video/game-hle) |
+| `runtime/game_scene.hpp` | `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
+| `runtime/video_decode.hpp`, `runtime/video_decode.cpp` | Generic char-RAM tile unpack and sprite display-list walk | [Sprites](/developer/runtime/video/sprites) |
+| `games/landmakrj/video/{tiles,text,sprites,lines}.cpp` | Per-game `decode` decoders (and debug `observe_write`) | [Video write logging](/developer/runtime/video/producers) |
+| `runtime/game_tiles.hpp`, `runtime/game_tiles.cpp` | `GameTiles`: four raw playfield cell maps | [Playfield tiles](/developer/runtime/video/tiles) |
 | `runtime/game_text.hpp`, `runtime/game_text.cpp` | `GameText`: text map and glyphs | [Text layer](/developer/runtime/video/text) |
-| `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | `GameSprites`: sprite queues, latch and raster | [Sprites](/developer/runtime/video/sprites) |
+| `runtime/game_sprites.hpp`, `runtime/game_sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |
 | `runtime/game_lines.hpp`, `runtime/game_lines.cpp` | `GameLines`: per-line effects and `SceneRow` generation | [Line effects](/developer/runtime/video/lines) |
 | `runtime/game_compositor.hpp`, `runtime/game_compositor.cpp` | `compose_game_scene` | [Compositor](/developer/runtime/video/compositor) |
-| `games/landmakrj/config.toml` | The 69 `[[hooks]]` entries | [Producer hooks](/developer/runtime/video/producers) |
+| `runtime/game_video_log.hpp`, `runtime/game_video_log.cpp` | `log_unsupported_video` (fallback kinds) and `log_unknown_video_write` (opt-in store PCs) | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/state_io.hpp` | `Canonical*` structs that save the video state | [GameVideo](/developer/runtime/video/game-hle) |
 | `runtime/check.cpp` | Unit checks for tile, sprite and edge rules | [Extending the renderer](/developer/runtime/video/extending) |
 | `tools/gameplay_regression.cpp` | The `--video-diff` harness | [Compare mode](/developer/runtime/video/compare-mode) |
@@ -93,7 +95,7 @@ Read the pages in this order if you are new to the code.
 
 1. [F3 video hardware](/developer/runtime/video/hardware). It explains the modeled memory layout and effects, with the limits of physical-hardware evidence.
 2. [FDP renderer](/developer/runtime/video/fdp), then [FDP sprites](/developer/runtime/video/fdp-sprites) and [FDP mixing](/developer/runtime/video/fdp-mixing).
-3. [GameVideo](/developer/runtime/video/game-hle), [Producer hooks](/developer/runtime/video/producers) and the per-layer pages.
+3. [GameVideo](/developer/runtime/video/game-hle), [Video write logging](/developer/runtime/video/producers) and the per-layer pages.
 4. [Presentation](/developer/runtime/video/presentation), [Compare mode](/developer/runtime/video/compare-mode) and [Parity evidence and limits](/developer/runtime/video/parity).
 5. [Extending the renderer](/developer/runtime/video/extending) when you are ready to change code.
 

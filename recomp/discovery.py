@@ -525,7 +525,7 @@ def _extract_vector_seeds(rom: bytes) -> set[int]:
 def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     """Discover instructions, basic blocks, and functions from reset/exception vectors and metadata.
 
-    Supports configurable explicit entry points, hook PCs, and jump tables from config dict,
+    Supports configurable explicit entry points and jump tables from config dict,
     while performing conservative automatic jump-table and task-trap scanning.
     Produces a JSON-serializable whole-image coverage report. Optional
     instruction_decoder(md, rom, pc) may return an instruction-like platform
@@ -566,16 +566,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         if 0 <= addr < len(rom):
             proven_seeds.add(addr)
 
-    # 3. Hook PCs from config.get("hooks", [])
-    for hook in config.get("hooks", []):
-        if isinstance(hook, dict) and "address" in hook:
-            addr = _parse_int_address(hook["address"])
-            if addr % 2 != 0:
-                raise ValueError(f"Hook address must be word-aligned (even): {addr:#x}")
-            if 0 <= addr < len(rom):
-                proven_seeds.add(addr)
-
-    # 4. Explicit jump tables from config
+    # 3. Explicit jump tables from config
     explicit_jump_tables: dict[int, list[int]] = {}
     for jt in discovery_cfg.get("jump_tables", []):
         if isinstance(jt, dict) and "address" in jt:

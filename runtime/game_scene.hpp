@@ -5,28 +5,17 @@
 
 namespace f3rt {
 
-// Display producers may read game code/assets and work RAM, never FDP RAM.
-// An unsupported source invalidates its component; callers must use the oracle.
-struct GameMemory {
-    std::span<const uint8_t> rom;
-    std::span<const uint8_t> ram;
-    bool supported = true;
-
-    uint8_t u8(uint32_t address) {
-        address &= 0xffffff;
-        if (address < rom.size()) return rom[address];
-        if (address >= 0x400000 && address < 0x440000 && ram.size() == 0x20000)
-            return ram[address & 0x1ffff];
-        supported = false;
-        return 0;
+// Video RAM as seen at VBSTART. Offsets match Machine::graphics (0x600000) and
+// Machine::control (0x660000); data is big-endian as stored by the 68020.
+struct VideoRam {
+    std::span<const uint8_t> graphics; // 0x40000 bytes
+    std::span<const uint8_t> control;  // 0x20 bytes
+    uint64_t frame = 0;                // Machine::frame + 1; diagnostics only
+    uint16_t u16(uint32_t offset) const {
+        return uint16_t(uint16_t(graphics[offset]) << 8 | graphics[offset + 1]);
     }
-    uint16_t u16(uint32_t address) {
-        const uint16_t high = u8(address);
-        return uint16_t((high << 8) | u8(address + 1));
-    }
-    uint32_t u32(uint32_t address) {
-        const uint32_t high = u16(address);
-        return (high << 16) | u16(address + 2);
+    uint16_t control_u16(unsigned index) const {
+        return uint16_t(uint16_t(control[index * 2]) << 8 | control[index * 2 + 1]);
     }
 };
 

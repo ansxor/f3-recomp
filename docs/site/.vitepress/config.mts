@@ -106,7 +106,7 @@ export default withMermaid(
               { text: 'FDP sprites', link: '/developer/runtime/video/fdp-sprites' },
               { text: 'FDP mixing', link: '/developer/runtime/video/fdp-mixing' },
               { text: 'Game-data renderer', link: '/developer/runtime/video/game-hle' },
-              { text: 'Producer hooks and guards', link: '/developer/runtime/video/producers' },
+              { text: 'Video write logging', link: '/developer/runtime/video/producers' },
               { text: 'Scene and coordinates', link: '/developer/runtime/video/scene' },
               { text: 'Playfield tiles', link: '/developer/runtime/video/tiles' },
               { text: 'Text layer', link: '/developer/runtime/video/text' },

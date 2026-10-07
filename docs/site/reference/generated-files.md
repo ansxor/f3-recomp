@@ -45,8 +45,7 @@ Each file has this layout:
 1. A comment: `Generated from user-supplied ROM. Do not commit.`
 2. `#include <f3rt/cpu_abi.h>` and an `#error` if `F3RT_ABI_VERSION` is not 3 (`_RUNTIME_ABI_VERSION` in `recomp/generate.py`).
 3. `#include "recomp/cpu_ops.h"`. This header holds the helper macros and inline functions that the lowered code calls.
-4. One `extern void SYMBOL(f3_cpu *cpu);` for each hook symbol from the config.
-5. The block functions.
+4. The block functions.
 
 Each block function has the name `f3_native_XXXXXX`. `XXXXXX` is the 6-digit lowercase hexadecimal address of the first instruction in the block. The function looks like this:
 
@@ -74,11 +73,10 @@ Rules that the emitter follows:
 
 - **Entry by `switch`.** The runtime sets `cpu->pc` to any registered address inside the block. The `switch` jumps to the matching label `L_XXXXXX`. This lets the program enter the middle of a block.
 - **Yield at each boundary.** After each instruction, the code checks the next address, the stop and halt flags, and `dispatch_deadline`. If one check says stop, the function flushes the condition codes with `f3_cc_flush` and returns. The runtime then handles events such as interrupts.
-- **Hooks.** For an address that has a hook, the emitter writes `f3_cc_flush(cpu);`, then `SYMBOL(cpu);`, then a check that returns if `cpu->pc` changed or the CPU stopped or halted.
 - **Untranslated instructions.** If `lower()` cannot translate an instruction, the emitter writes `f3_cc_flush(cpu); if (!f3_fallback(cpu)) cpu->halted = 1; return;`. These are the *fallback* instructions. In `lowering.json`, they appear as `fallback_instructions`.
 - **Packing in `all_aligned` mode.** The emitter groups decoded addresses into pages of `max_block_instructions × 2` bytes. A block is one page. Two decoded instructions can overlap, so the emitter packs by address and not by instruction boundary. The code at the end of an instruction jumps to the next label only if that address is in the same block.
 - **Packing in `recursive` mode.** The emitter uses the blocks from discovery. It cuts a block when it reaches `max_block_instructions`, or at a gap, or at an address that is already placed. It puts addresses that no block holds into blocks of one instruction.
-- **Profile instrumentation.** `F3_PROFILE_HIT_MAIN(address)` runs at every actual label, including fallthrough and entries whose hook redirects or stops execution. Shared exception handlers count `cpu->pc`. The macros compile away in ordinary builds.
+- **Profile instrumentation.** `F3_PROFILE_HIT_MAIN(address)` runs at every actual label, including fallthrough entries. Shared exception handlers count `cpu->pc`. The macros compile away in ordinary builds.
 - **Profile tiers.** Existing pages split into hot/cold subsets. A successor in a different subset flushes flags and returns to dispatch; every entry remains registered. Shared exception vectors have separate hot/cold source files; a vector is hot if any profile-hit entry uses it. `sources.cmake` exports separate hot/cold lists in addition to the complete source list.
 - **Profile slim.** Only profile-hit addresses retain executable statements and dispatch entries. Removed successors return to dispatch, where the runtime aborts and records the missing address instead of interpreting it.
 
@@ -141,7 +139,7 @@ The discovery step writes this file. `emit` writes it again with the same conten
 | `aligned_decoded_count` | integer | Number of decoded instructions. |
 | `aligned_invalid_count` | integer | Number of addresses that did not decode. |
 | `invalid_pcs` | array of strings | Addresses that did not decode, as `0x%06x`. In `recursive` mode, these are the decode failures of the walk. |
-| `proven_seeds` | array of strings | Seeds from the vector table, `entry_points` and hooks. |
+| `proven_seeds` | array of strings | Seeds from the vector table and `entry_points`. |
 | `speculative_seeds` | array of strings | Seeds from the scanners. |
 | `unresolved_branches` | array of objects | Branches that the tool could not resolve. Each has `pc`, `mnemonic`, `op_str` and `reason` (`indirect_transfer` or `decode_failure`). |
 | `bank_summary` | array of objects | One object for each 64 KiB bank: `bank`, `range`, `instruction_count`, `code_bytes`, `classification` (`contains_decoded_code` or `unreached_or_data`). |
@@ -230,7 +228,6 @@ The generated header also declares `f3_sound_rom_crc32`, `f3_sound_excluded_rang
 | `f3_register_blocks`, `f3_register_exclusions`, `f3_dispatch`, `f3_boundary`, `f3_exception`, `f3_set_sr`, `f3_reset_devices`, `f3_fallback` | `runtime/cpu_abi.cpp` | Generated code | The runtime side of the CPU ABI. |
 | `f3_read8/16/32`, `f3_write8/16/32` | `runtime/cpu_abi.cpp` | Generated code through `recomp/cpu_ops.h` | Memory access. |
 | `f3_cc_flush` | `recomp/cpu_ops.h` | Generated code | Turns the lazy condition codes into the status register. |
-| Hook symbols (for example `f3_landmakr_video_hook`) | `runtime/game_video.cpp` | `blocks_NNNN.c` | Named in `[[hooks]]`. The link fails if a symbol is missing. |
 | `f3_sound_exception`, `f3_sound_unsupported_pc` | `runtime/sound_native.cpp` | `sound_blocks_NNNN.c`, `sound_program.c` | Sound CPU exception and error stub handlers. |
 | `F3_NETPLAY_BUILD_HASH` | `BUILD_DIR/netplay_build.hpp` | `runtime/netplay.cpp` | See [Build options](/reference/build-options#generated-header-netplay-build-hpp). |
 

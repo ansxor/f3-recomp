@@ -254,8 +254,8 @@ int main(int argc,char **argv) try {
 #if defined(F3RT_SOUND_GENERATED) && defined(F3RT_GAME)
     settings.audio_backend=f3rt::AudioBackend::Native;
 #endif
-#ifdef F3RT_GAME
-    if(set=="landmakrj" && translated && !allow_fallback)settings.video_mode="game";
+#ifdef F3RT_GAME_VIDEO
+    if(translated && !allow_fallback)settings.video_mode="game";
 #endif
     const auto default_audio_backend=settings.audio_backend;
     if(config_path.empty())config_path=f3rt::default_config_path(set);
@@ -301,8 +301,13 @@ int main(int argc,char **argv) try {
 #endif
     if(video_mode!="fdp" && video_mode!="game" && video_mode!="compare")
         throw std::runtime_error("--video must be fdp, game or compare");
-    if(video_mode!="fdp" && (set!="landmakrj" || !translated || allow_fallback))
-        throw std::runtime_error("Game-data video requires strict native landmakrj");
+#ifndef F3RT_GAME_VIDEO
+    if(video_mode!="fdp")
+        throw std::runtime_error("Game-data video is unavailable for this game");
+#else
+    if(video_mode!="fdp" && (!translated || allow_fallback))
+        throw std::runtime_error("Game-data video requires strict native execution");
+#endif
     if(video_filter!="nearest" && video_filter!="linear")throw std::runtime_error("--video-filter must be nearest or linear");
     if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
         throw std::runtime_error("Presentation enhancements require --video game or compare");
@@ -352,8 +357,10 @@ int main(int argc,char **argv) try {
 #endif
     }
     m.allow_main_fallback=allow_fallback;
+#ifdef F3RT_GAME_VIDEO
     if(video_mode!="fdp")
         m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
+#endif
     const auto snapshot_video_options=video_options;
     const unsigned frame_width=video_options.width();
     const unsigned frame_height=m.game_video?video_options.height():m.roms.video.visible_height;

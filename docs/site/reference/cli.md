@@ -323,7 +323,7 @@ parity comparison. Native machine/audio output remains CPU-produced.
 | `--change-scale FRAME:SCALE` | None | Repeatable runtime transition; canonical constructor scale remains 1, each transition forces parity/capture and asserts unchanged snapshot bytes. Also changes scale during induced trail-history branches. |
 | `--inject-frame N` | `1407` | Supported baseline for diagnostic branches |
 | `--inject-bitmap`, `--inject-trails`, `--inject-globalflip` | Off | Induce actual unsupported-mode boundaries and verify oracle presentation/recovery |
-| `--inject-unknown`, `--inject-ending` | Off | Induce unsupported writer/ending-producer boundaries; not a played-through ending |
+| `--inject-sprite-boundaries` | Off | Inject sprite-RAM display lists to witness ROM-texel row order, flips, collapsed spans, overlap and edge clipping/cull |
 | `--sound-driver native` | Native | Only native sound is accepted |
 
 GPU timings include upload, submission, fence wait and readback. Normal window

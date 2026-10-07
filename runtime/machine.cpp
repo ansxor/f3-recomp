@@ -13,6 +13,30 @@
 
 namespace f3rt {
 namespace {
+// Main 68020 bus map (Taito F3). *_END bounds are exclusive.
+constexpr uint32_t ROM_END = 0x200000;              // program ROM window, 2 MiB
+constexpr uint32_t RAM_BASE = 0x400000;             // work RAM
+constexpr uint32_t RAM_END = 0x440000;              // 128 KiB RAM mirrored across 256 KiB
+constexpr uint32_t RAM_MIRROR_MASK = 0x1ffff;
+constexpr uint32_t PALETTE_BASE = 0x440000;         // palette RAM
+constexpr uint32_t PALETTE_END = 0x448000;
+constexpr uint32_t IO_BASE = 0x4a0000;              // TC0640FIO: inputs on read, below on write
+constexpr uint32_t IO_END = 0x4a0020;
+constexpr uint32_t WATCHDOG = 0x4a0000;             // 4 bytes; any write kicks the watchdog
+constexpr uint32_t COIN_BANK0 = 0x4a0004;           // lockout/counter byte; +1 is the word's low byte
+constexpr uint32_t COIN_BANK1 = 0x4a0014;
+constexpr uint32_t EEPROM_PINS = 0x4a0013;          // serial EEPROM clock/data/select
+constexpr uint32_t TIMER_CONTROL = 0x4c0000;        // 16-bit, big-endian
+// Graphics RAM sub-regions: video.cpp OFFS_* (sprites, playfields, text, glyphs, line, pivot).
+constexpr uint32_t GRAPHICS_BASE = 0x600000;
+constexpr uint32_t GRAPHICS_END = 0x640000;
+constexpr uint32_t CONTROL_BASE = 0x660000;         // PF0-3 X/Y scroll, then pivot/text regs
+constexpr uint32_t CONTROL_END = 0x660020;
+constexpr uint32_t SHARED_BASE = 0xc00000;          // RAM shared with the sound CPU
+constexpr uint32_t SHARED_END = 0xc00800;
+constexpr uint32_t SOUND_RESET_RELEASE = 0xc80000;  // 4 bytes; write releases sound CPU reset
+constexpr uint32_t SOUND_RESET_ASSERT = 0xc80100;   // 4 bytes; write holds sound CPU in reset
+
 // Decode once only when every byte is contiguous and has no observable bus
 // side effect. All boundary/mirror-wrap cases retain ordered byte accesses.
 template<unsigned Width, bool Write>
@@ -21,19 +45,22 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
     if constexpr (!Write) {
         if (a <= m.roms.main.size() - Width) return m.roms.main.data() + a;
     }
-    if (a - 0x400000 < 0x40000) {
-        const uint32_t offset = a & 0x1ffff;
+    if (a - RAM_BASE < RAM_END - RAM_BASE) {
+        const uint32_t offset = a & RAM_MIRROR_MASK;
         if (offset <= m.ram.size() - Width) return m.ram.data() + offset;
     }
-    if (a - 0x440000 <= m.palette.size() - Width)
-        return m.palette.data() + (a - 0x440000);
-    if (a - 0x600000 <= m.graphics.size() - Width) {
-        if constexpr (!Write) return m.graphics.data() + (a - 0x600000);
-        else if (!m.game_video) return m.graphics.data() + (a - 0x600000);
+    if (a - PALETTE_BASE <= m.palette.size() - Width)
+        return m.palette.data() + (a - PALETTE_BASE);
+    if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
+#ifdef F3RT_VIDEO_WRITE_LOG
+        // Debug write logging must see every graphics store byte by byte.
+        if constexpr (Write) if (m.game_video) return nullptr;
+#endif
+        return m.graphics.data() + (a - GRAPHICS_BASE);
     }
     if constexpr (!Write) {
-        if (a - 0xc00000 <= m.shared.size() - Width)
-            return m.shared.data() + (a - 0xc00000);
+        if (a - SHARED_BASE <= m.shared.size() - Width)
+            return m.shared.data() + (a - SHARED_BASE);
     }
     return nullptr;
 }
@@ -41,7 +68,7 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
 Machine::Machine(RomSet set) : pixels_(320 * set.video.visible_height),
     roms(std::move(set)), video(std::make_unique<Video>()),
     audio(std::make_unique<Audio>()), eeprom(std::make_unique<Eeprom>()) {
-    if (roms.main.size() < 0x400 || roms.main.size() > 0x200000 || roms.main.size() % 4)
+    if (roms.main.size() < 0x400 || roms.main.size() > ROM_END || roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
     if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Invalid video ROM regions");
@@ -126,12 +153,12 @@ uint32_t Machine::input_word(unsigned index) const {
 }
 uint8_t Machine::read8(uint32_t a) {
     a &= 0xffffff;
-    if (a < 0x200000) return a < roms.main.size() ? roms.main[a] : 0xff;
-    if (a >= 0x400000 && a < 0x440000) return ram[a & 0x1ffff];
-    if (a >= 0x440000 && a < 0x448000) return palette[a - 0x440000];
-    if (a >= 0x4a0000 && a < 0x4a0020) return uint8_t(input_word((a - 0x4a0000) / 4) >> (24 - 8 * (a & 3)));
-    if (a >= 0x600000 && a < 0x640000) return graphics[a - 0x600000];
-    if (a >= 0xc00000 && a < 0xc00800) return shared[a - 0xc00000];
+    if (a < ROM_END) return a < roms.main.size() ? roms.main[a] : 0xff;
+    if (a >= RAM_BASE && a < RAM_END) return ram[a & RAM_MIRROR_MASK];
+    if (a >= PALETTE_BASE && a < PALETTE_END) return palette[a - PALETTE_BASE];
+    if (a >= IO_BASE && a < IO_END) return uint8_t(input_word((a - IO_BASE) / 4) >> (24 - 8 * (a & 3)));
+    if (a >= GRAPHICS_BASE && a < GRAPHICS_END) return graphics[a - GRAPHICS_BASE];
+    if (a >= SHARED_BASE && a < SHARED_END) return shared[a - SHARED_BASE];
     return 0xff; // MAME unmapped bus value, not physical-board mirror speculation.
 }
 uint16_t Machine::read16(uint32_t a) {
@@ -152,35 +179,45 @@ void Machine::coin_write(unsigned bank, uint8_t value) {
         if ((value & (4u << i)) && !(old & (4u << i))) ++coin_count[bank * 2 + i];
     }
 }
+// Unlisted addresses, including ROM, ignore writes.
 void Machine::write8(uint32_t a, uint8_t v) {
     a &= 0xffffff;
-    if (a >= 0x400000 && a < 0x440000) { ram[a & 0x1ffff] = v; return; }
-    if (a >= 0x440000 && a < 0x448000) { palette[a - 0x440000] = v; return; }
-    if (a >= 0x600000 && a < 0x640000) {
+    if (a >= RAM_BASE && a < RAM_END) { ram[a & RAM_MIRROR_MASK] = v; return; }
+    if (a >= PALETTE_BASE && a < PALETTE_END) { palette[a - PALETTE_BASE] = v; return; }
+    // Debug builds (F3RT_VIDEO_WRITE_LOG) log stores from undocumented game routines.
+    // TODO: maybe we add hooks for giving stable identities to sprites for things
+    // like motion interp?
+    if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
+#ifdef F3RT_VIDEO_WRITE_LOG
         if (game_video) game_video->observe_write(cpu.pc, a);
-        graphics[a - 0x600000] = v;
+#endif
+        graphics[a - GRAPHICS_BASE] = v;
         return;
     }
-    if (a >= 0x660000 && a < 0x660020) {
+    if (a >= CONTROL_BASE && a < CONTROL_END) {
+#ifdef F3RT_VIDEO_WRITE_LOG
         if (game_video) game_video->observe_write(cpu.pc, a);
-        control[a - 0x660000] = v; return;
+#endif
+        control[a - CONTROL_BASE] = v; return;
     }
-    if (a >= 0xc00000 && a < 0xc00800) {
+    if (a >= SHARED_BASE && a < SHARED_END) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
-        shared[a - 0xc00000] = v;
-        audio->shared_write(a - 0xc00000, frame);
+        shared[a - SHARED_BASE] = v;
+        audio->shared_write(a - SHARED_BASE, frame);
         return;
     }
-    if ((a >= 0xc80000 && a <= 0xc80003) || (a >= 0xc80100 && a <= 0xc80103)) {
+    if ((a >= SOUND_RESET_RELEASE && a < SOUND_RESET_RELEASE + 4) ||
+        (a >= SOUND_RESET_ASSERT && a < SOUND_RESET_ASSERT + 4)) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
-        audio->set_reset(a >= 0xc80100); return;
+        audio->set_reset(a >= SOUND_RESET_ASSERT); return;
     }
-    if (a >= 0x4a0000 && a <= 0x4a0003) { watchdog_at = cpu.cycles + 3ull * main_clock; return; }
-    if (a == 0x4a0004 || a == 0x4a0014) { coin_write(a == 0x4a0014, v); return; }
-    if (a == 0x4a0005 || a == 0x4a0015) { auto &word = coin_word[a == 0x4a0015]; word = uint16_t((word & 0xff00) | v); return; }
-    if (a == 0x4a0013) { eeprom->pins(v, cpu.cycles); return; }
-    if (a == 0x4c0000) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
-    if (a == 0x4c0001) timer_control = uint16_t((timer_control & 0xff00) | v);
+    // Watchdog deadline: 3 seconds.
+    if (a >= WATCHDOG && a < WATCHDOG + 4) { watchdog_at = cpu.cycles + 3ull * main_clock; return; }
+    if (a == COIN_BANK0 || a == COIN_BANK1) { coin_write(a == COIN_BANK1, v); return; }
+    if (a == COIN_BANK0 + 1 || a == COIN_BANK1 + 1) { auto &word = coin_word[a == COIN_BANK1 + 1]; word = uint16_t((word & 0xff00) | v); return; }
+    if (a == EEPROM_PINS) { eeprom->pins(v, cpu.cycles); return; }
+    if (a == TIMER_CONTROL) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
+    if (a == TIMER_CONTROL + 1) timer_control = uint16_t((timer_control & 0xff00) | v);
     // MAME records this timer control but does not assert timer IRQ5.
 }
 void Machine::write16(uint32_t a, uint16_t v) {

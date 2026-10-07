@@ -1,13 +1,13 @@
 # Game config reference
 
-This page describes each key in the per-game TOML file. The recompiler uses it to load ROMs, find code and insert hooks.
+This page describes each key in the per-game TOML file. The recompiler uses it to load ROMs and find code.
 
 ## Where the files are
 
 | File | Game | State |
 | --- | --- | --- |
-| `games/landmakrj/config.toml` | Land Maker Japan 2.01J, set `landmakrj` | Supported player build; selects `all_aligned` coverage and Land Maker-specific video hooks. Finite validation only. |
-| `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but no Japan-specific hooks are supplied and discovery uses the default `recursive` coverage. |
+| `games/landmakrj/config.toml` | Land Maker Japan 2.01J, set `landmakrj` | Supported player build; selects `all_aligned` coverage and (via `games/landmakrj/video/`) Land Maker-specific VRAM scene decoders. Finite validation only. |
+| `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but there is no `games/landmakr/video/` folder and discovery uses the default `recursive` coverage. |
 
 `F3_GAME` selects `games/SET/config.toml`; default `landmakrj`, with `landmakr`,
 `rayforce`, `commandw`, `ridingf` also accepted. The three new titles have native
@@ -16,7 +16,7 @@ Their exact revisions and finite evidence are in [porting](/developer/porting).
 You can also pass `--config` directly to the compiler; a config alone is not proof
 of a complete port.
 
-The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]` and `[[hooks]]`. The emit step (`generate()` in `recomp/generate.py`) reads `[[hooks]]` and `[discovery] coverage` again.
+The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]`. The emit step (`generate()` in `recomp/generate.py`) reads `[discovery] coverage` again.
 
 ::: info
 The loader does not check unknown keys. A misspelled key is silently ignored. Check the spelling of every key.
@@ -26,7 +26,7 @@ The loader does not check unknown keys. A misspelled key is silently ignored. Ch
 
 | Format | Where | Rule |
 | --- | --- | --- |
-| Address | `entry_points`, `jump_tables`, `inline_string_helpers`, actor script addresses, hook `address` | An integer or a string. The parser strips whitespace. Strings with `0x` or `0X` use base 16; other strings use base 10. Python `int()` accepts signs and underscores. Invalid strings raise its conversion error. Other types raise `Invalid address value`. |
+| Address | `entry_points`, `jump_tables`, `inline_string_helpers`, actor script addresses | An integer or a string. The parser strips whitespace. Strings with `0x` or `0X` use base 16; other strings use base 10. Python `int()` accepts signs and underscores. Invalid strings raise its conversion error. Other types raise `Invalid address value`. |
 | CRC32 | lane `crc` | A hexadecimal string of 8 digits. The check ignores case. |
 | SHA-1 | lane `sha1` | A hexadecimal string of 40 digits. The check ignores case. |
 
@@ -48,7 +48,7 @@ evidence = "Verified ROM fill; validated seeded native runs"
 ```
 
 Main ROM addresses start at 0; Japan sound ROM is `0xc00000..0xc80000`.
-Data reads and extension words remain available. Vector/config/hook entries
+Data reads and extension words remain available. Vector/config entries
 and explicit jump/pointer-table code targets inside an exclusion reject
 generation. Apparent direct transfers from independent all-aligned decodes
 are reported, not assumed reachable; executing any excluded target fails
@@ -81,10 +81,7 @@ sha1 = "2dadac6873f2491ee77703f07f00dde2aa909355"
 
 [discovery]
 coverage = "all_aligned"
-
-[[hooks]]
-address = 0x55c2
-symbol = "f3_landmakr_video_hook"
+entry_points = [0x55c2, 0x56ae]
 ```
 
 ## [game]
@@ -186,7 +183,7 @@ This section is optional. It controls how `discover()` finds code. Without it, a
 
 | Mode | What it does | When to use it |
 | --- | --- | --- |
-| `recursive` | Starts at the 68020 vector table, the `entry_points`, the hook addresses, and the seeds from the scanners. It follows branches and calls. | A game without a full list of code addresses. A scan cannot prove that skipped bytes are data. |
+| `recursive` | Starts at the 68020 vector table, the `entry_points`, and the seeds from the scanners. It follows branches and calls. | A game without a full list of code addresses. A scan cannot prove that skipped bytes are data. |
 | `all_aligned` | Decodes each even ROM address independently. It records failed decodes in `invalid_pcs`. The emitter registers decoded addresses, including overlapping starts. | Land Maker Japan. This avoids missing valid ROM targets because recursive discovery did not reach them. |
 
 Registration does not prove that every computed jump succeeds. Odd addresses, invalid decodes, RAM targets and unsupported instructions still need runtime handling.
@@ -195,7 +192,7 @@ In `all_aligned` mode, the addresses that are already decoded are not decoded ag
 
 ### Seeds
 
-The recompiler builds the start list in this order: the 68020 vector table, `entry_points`, hook addresses (from `[[hooks]]`), `trap #1` task targets, validated callbacks and actor script callbacks. The first three are *proven* seeds. The others are *speculative* seeds. Both lists appear in `coverage.json`.
+The recompiler builds the start list in this order: the 68020 vector table, `entry_points`, `trap #1` task targets, validated callbacks and actor script callbacks. The first two are *proven* seeds. The others are *speculative* seeds. Both lists appear in `coverage.json`.
 
 ### [[discovery.jump_tables]]
 
@@ -223,24 +220,6 @@ This table describes a bytecode that the game uses for actor scripts. The recomp
 | `pointer_table_strides` | array of integers | no | `[4]` | Strides to try when reading a script pointer table. |
 | `entry_points` | array of addresses | no | `[]` | Extra script start addresses. |
 | `pointer_tables` | array of tables | no | `[]` | Tables of script pointers. Each table has `table` (address) and `count` (integer). A missing key raises `KeyError`. |
-
-## [[hooks]]
-
-A hook calls a C function of the runtime before a chosen instruction runs. The shipped Japan config has 69 hooks. All of them use the symbol `f3_landmakr_video_hook`. The comment in the config says that the hooks observe game-owned tile block descriptors, and that the native instructions still execute.
-
-| Key | Type | Required | Default | Validation | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `address` | address | yes | none | Must be even (`Hook address must be word-aligned`). At emit, the address must be a decoded instruction (`hook address is not discovered code`). Each address can appear once (`duplicate hook`). | Address of the instruction that gets the hook. |
-| `symbol` | string | yes | none | Must match `[A-Za-z_][A-Za-z_0-9]*` (`invalid hook C identifier`). | Name of the C function. |
-
-Behavior and limits:
-
-- The emitter declares `extern void SYMBOL(f3_cpu *cpu);` in each generated C file.
-- Before the instruction, the generated code calls `f3_cc_flush(cpu)` and then `SYMBOL(cpu)`.
-- After the call, the generated block returns at once if `cpu->pc` changed, or if `cpu->stopped` or `cpu->halted` is set. Otherwise the instruction runs.
-- A hook address is also a discovery seed.
-- The program that links the generated code must define the symbol. The runtime defines `f3_landmakr_video_hook` in `runtime/game_video.cpp`.
-- The emitter uses `int(hook["address"])`, without an explicit base. Prefer TOML integers such as `0x55c2`. Quoted decimal strings work. Quoted hexadecimal strings work during discovery but fail during emission.
 
 ## What the config does not contain
 

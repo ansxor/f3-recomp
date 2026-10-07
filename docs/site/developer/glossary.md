@@ -106,8 +106,8 @@ It does not classify every decoder rejection as illegal.
 
 ## G
 
-**game-data HLE** — `GameVideo` builds supported scenes from game structures in ROM and work RAM.
-Its producers do not read FDP RAM. Unsupported frames use the FDP renderer.
+**game-data HLE** — `GameVideo` rebuilds supported scenes from the FDP video RAM that the game already wrote.
+Unsupported frames (flipped screen, sprite trails, bitmap pivot) use the FDP renderer.
 See [Game-data HLE](/developer/runtime/video/game-hle).
 
 **GameVideo** — The class that does game-data HLE. Its modes are `Diagnostic`, `Game` and `Compare` (`GameVideoMode`).
@@ -116,7 +116,7 @@ See [Game-data HLE](/developer/runtime/video/game-hle).
 
 ## H
 
-**hook** — An entry `[[hooks]]` in a game config, with a ROM `address` and a C `symbol`. The generated code calls `void symbol(f3_cpu *)` before the instruction at that address. The hook can read the CPU state. If the hook changes the PC or stops the CPU, the instruction does not run. The Land Maker hook is `f3_landmakr_video_hook` in `runtime/game_video.cpp`. It has many addresses in `games/landmakrj/config.toml`.
+**hook** — *Retired.* A recompiler feature that called a C function before a ROM instruction. The video scene no longer uses hooks; `GameVideo` decodes FDP video RAM at VBSTART instead. Hook support was removed from `recomp/`.
 
 **HLE (high-level emulation)** — A method that imitates what software does instead of what hardware does. Here it means game-data HLE for video. See *game-data HLE*.
 
@@ -187,7 +187,9 @@ See [Audio timing](/developer/runtime/audio/timing).
 
 **producer** — A game routine that builds display data.
 Examples include tile blocks, sprite lists, text strings, and line profiles.
-`GameVideo` observes producers through hooks and write notifications.
+`GameVideo` does not observe producers; it decodes their output from FDP video RAM
+at VBSTART. In a `F3RT_VIDEO_WRITE_LOG` debug build it also logs producer store PCs
+that are not in a component's known list.
 
 ## R
 
@@ -247,7 +249,7 @@ Strict-native execution therefore rejects this path.
 
 **vector table** — The table of 256 long addresses that the `VBR` register points to. Entry 0 is the initial stack. Entry 1 is the reset PC.
 
-**video fallback** — `GameVideo` draws a frame with the FDP renderer because it cannot yet reproduce a producer. The program counts these frames and prints them at the end of a run.
+**video fallback** — `GameVideo` draws a frame with the FDP renderer because a supported-feature test failed (flipped screen, sprite trails, bitmap pivot). The program counts these frames and prints them at the end of a run.
 
 **visible area** — The native output crop: 320 by 232 pixels.
 It differs from the 432 by 262 raster timing geometry and the 432 by 256 scene scanout space.

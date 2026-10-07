@@ -337,15 +337,14 @@ Direct-byte smoke: 14,600 frames over four input seeds plus expanded presentatio
 477 irregular native/state observations and 147 mutation/transition branches.
 Native/expanded pixels, complete canonical/sync bytes and PCM matched an independent
 CPU-eager peer. All GPU scales 1–8 matched the CPU reference; scale 3 additionally
-exercised all nine layers, bitmap/trails/global flip/unknown/ending-producer guards,
-sprite boundaries and runtime scale 1/8/3 changes. Ending coverage is induced,
-not a played ending. Durable `verify_deferred_native` covers ten first-observer and
+exercised all nine layers, bitmap/trails/global flip guards,
+sprite boundaries and runtime scale 1/8/3 changes. Durable `verify_deferred_native` covers ten first-observer and
 pending-frame boundaries, with independent visible sprite-lag witnesses:
 
 ```sh
 taskset -c 4-7 build/opt/f3rt-gpu-regression --rom-dir roms/landmakrj \
   --seed 5 --frames 1501 --every 1500 --scale 3 --border 48 \
-  --inject-frame 1501 --inject-trails --inject-unknown
+  --inject-frame 1501 --inject-trails
 taskset -c 4-7 build/opt/f3rt-netplay-oracle --rom-dir roms/landmakrj \
   --mode sync-proof --sound-driver native --frames 2400 --seed 89
 ```
@@ -457,7 +456,7 @@ registers, skip/HALT/END/PC wrap and reset/load transitions. CTest passes 5/5.
 Actual native gameplay seed 89 / 1560 frames matches WAV and BMP bytes directly
 (787,650 audio frames, native CRC `6ddd781b`); the capture was visually inspected.
 Vulkan seed 5 / 1501 frames has ten exact composite samples, ten deferred-state
-boundaries and exact induced trails/unknown-producer fallback recovery.
+boundaries and exact induced trails fallback recovery.
 Memcheck completed the retained `f3rt-check` device/boundary suite with zero
 errors, zero suppressions, 617 allocations/frees and no live bytes or leaks.
 It used the same isolated matching glibc/debug loader, without altering the host

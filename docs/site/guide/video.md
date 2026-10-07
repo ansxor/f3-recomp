@@ -9,13 +9,13 @@ The F3 board draws its picture with a custom chip, the FDP. The game writes tile
 The runtime has two ways to make the same picture:
 
 - **FDP renderer.** A MAME-derived implementation reads the video RAM written by the game. It is called the *oracle* because it is the reference for the game-data renderer, not because it has been verified against physical TC0630FDP hardware.
-- **Land Maker game-data renderer.** Hooks observe the game code that builds the scene. The renderer reads tile blocks, sprite lists and line data from ROM and work RAM, then uses scene geometry for higher resolutions and extra border columns.
+- **Land Maker game-data renderer.** At VBSTART it decodes the same video RAM into scene geometry, then uses that geometry for higher resolutions and extra border columns.
 
 ```mermaid
 flowchart LR
     G["Game code"] -->|writes| V["Video RAM"]
     V --> F["FDP renderer (oracle)"]
-    G -->|"hooks and descriptors"| D["Game-data renderer"]
+    V -->|"decode at VBSTART"| D["Game-data renderer"]
     F --> P["320 x 232 native picture"]
     D --> P
     D --> X["Scaled picture with border"]
@@ -43,11 +43,10 @@ Known fallback cases are described in the [video documentation](https://github.c
 
 | Case | What happens |
 | --- | --- |
-| Startup | The oracle draws until the game has initialized the required scene data. |
-| Ending transitions | The oracle draws until the game sets up its line data again. |
-| Bitmap pivot layer | The oracle draws the frame. |
+| Startup | The game renderer draws it: the decoders build a complete scene from the current video RAM. |
+| Bitmap pivot layer (including ending transitions) | The oracle draws the frame. |
 | Screen flip and sprite trails | The oracle draws the frame while the command is active. |
-| Unknown video writer or unsupported descriptor | The oracle draws the affected part until the game sets up its data again. |
+| Unknown video writer | Nothing changes in a normal build. A debug build with `F3RT_VIDEO_WRITE_LOG` logs the store PC once. |
 | Very large sprite groups | The renderer rejects groups above 32 by 32 tiles or above 1024 sprites per batch. |
 
 ## Set scale, border and filter
@@ -203,7 +202,7 @@ When the game-data renderer is enabled, the program prints `VIDEO` diagnostic li
 | --- | --- |
 | `VIDEO layer=composite ...` | Only in `compare` mode. Number of frames and pixels that the program compared, and the number of mismatches. |
 | `VIDEO game_frames=A oracle_fallback_frames=B` | A frames came from the game-data renderer. B frames came from the oracle. |
-| `VIDEO fallback=COMPONENT producer_pc=PC frames=N first=F last=L` | The oracle drew N frames because of COMPONENT. PC is the main CPU address of the game code that caused it. F and L are the first and last frame. |
+| `VIDEO fallback=REASON frames=N first=F last=L` | The oracle drew N frames because of REASON (`flipped-screen`, `sprite-trails` or `bitmap-pivot`). F and L are the first and last frame. |
 
 ## What an error means in `compare` mode
 

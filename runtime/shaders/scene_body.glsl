@@ -152,13 +152,18 @@ void main() {
                     y = (int(floor(interpolated_field(metadata + 7u, phase, fraction))) >> 8) & 511;
                 }
 #endif
+                // Raw 4-byte PF cell (bit layout shared with GameTiles::RowSampler,
+                // see runtime/game_tiles.hpp): attributes<<16 | code.
                 uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * 64 + x / 16)) * 2u;
-                uint attr = scene.words[cell + 1u];
-                uint tx = uint(x & 15) ^ ((attr & (1u << 24u)) != 0u ? 15u : 0u);
-                uint ty = uint(y & 15) ^ ((attr & (1u << 25u)) != 0u ? 15u : 0u);
-                uint offset = (scene.words[cell] & 32767u) * 256u + ty * 16u + tx;
-                uint pen = byte_pen(assets.words[offset >> 2u],offset) & ((attr >> 16u) & 255u);
-                color = ((attr & 65535u) + pen) & 65535u;
+                uint packed = scene.words[cell];
+                uint attr = packed >> 16u;
+                uint code = packed & 65535u;
+                uint tx = uint(x & 15) ^ ((attr & 0x4000u) != 0u ? 15u : 0u);
+                uint ty = uint(y & 15) ^ ((attr & 0x8000u) != 0u ? 15u : 0u);
+                uint offset = (code & 32767u) * 256u + ty * 16u + tx;
+                uint pen = byte_pen(assets.words[offset >> 2u],offset) &
+                    ((((attr >> 10u) & 3u & ~attr) << 4u) | 15u);
+                color = ((attr & 511u) * 16u + pen) & 65535u;
                 if (pen == 0u || color == 0u) continue;
 #ifdef VIDEO_INTERP
                 if (sub_y != 0 && (interp_flags & 8u) != 0u) {
@@ -170,7 +175,7 @@ void main() {
                 }
 #endif
                 color = (color + scene.words[pf + 5u]) & 65535u;
-                select = (attr >> 26u) & 1u;
+                select = (attr >> 9u) & 1u;
             } else if (index < 8u) {
                 bool native_plane = s == 1 && params.dimensions.y == 0u;
                 int x = native_plane ? q : q - left * s;
@@ -185,13 +190,19 @@ void main() {
                     x = floor_scale((int(scene.words[row + 14u]) * s + (q - 46 * s) * 256) >> 8, s) & 511;
                     y = (floor_scale(int(scene.words[row + 15u]) * s + sub_y * 256, s) >> 8) & 511;
                 }
+                // Raw big-endian text-map word (bit layout shared with
+                // GameText::pixel, see runtime/game_text.hpp): bits 0-7 glyph,
+                // bit 8 flip X, bits 9-14 palette code, bit 15 flip Y.
                 uint cell = scene.words[TEXT_CELLS + uint(y / 8 * 64 + x / 8)];
-                uint tx = uint(x & 7) ^ ((cell & (1u << 16u)) != 0u ? 7u : 0u);
-                uint ty = uint(y & 7) ^ ((cell & (1u << 17u)) != 0u ? 7u : 0u);
-                uint offset = (cell & 255u) * 64u + ty * 8u + tx;
-                uint pen = byte_pen(scene.words[GLYPHS + (offset >> 2u)],offset);
+                uint tx = uint(x & 7) ^ ((cell & 0x0100u) != 0u ? 7u : 0u);
+                uint ty = uint(y & 7) ^ ((cell & 0x8000u) != 0u ? 7u : 0u);
+                // Raw glyph RAM byte-packed at GLYPHS: pixel (tx, ty) is nibble
+                // (tx & 1) of byte ty*4 + (3 - tx/2).
+                uint glyph_byte = (cell & 255u) * 32u + ty * 4u + (3u - tx / 2u);
+                uint pen = (byte_pen(scene.words[GLYPHS + (glyph_byte >> 2u)], glyph_byte) >>
+                    ((tx & 1u) * 4u)) & 15u;
                 if (pen == 0u) continue;
-                color = ((cell >> 8u) & 255u) * 16u + pen;
+                color = ((cell >> 9u) & 63u) * 16u + pen;
             }
             mix_pixel(pixel,flags,color,select,blend
 #ifdef VIDEO_INTERP

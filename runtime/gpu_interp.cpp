@@ -89,11 +89,14 @@ bool safe_palette(const GpuScene &scene, const Row &a, const Row &b, unsigned pf
     for (int cy = y0; cy <= y1; ++cy) {
         for (int64_t cx = floor_divide(x0 - 256, 16 * 256); cx <= floor_divide(x1 + 256, 16 * 256); ++cx) {
             const unsigned cell = (unsigned(cy) & 31) * 64 + (unsigned(cx) & 63);
+            // Raw 4-byte PF cell (attributes<<16 | code); see runtime/game_tiles.hpp.
             const unsigned at = GpuScene::pf_cells + (pf * 2048 + cell) * 2;
             const auto &w = scene.words;
-            const unsigned base = w[at + 1] & 65535, mask = (w[at + 1] >> 16) & 255;
-            if (base >= 8192 || (base & 15) || mask > 63 || w[at] > 65535) return false;
-            uint64_t pens = masks[w[at] & 32767];
+            const unsigned attr = w[at] >> 16, code = w[at] & 65535;
+            const unsigned base = (attr & 511u) * 16u;
+            const unsigned mask = (((attr >> 10u) & 3u & ~attr) << 4u) | 15u;
+            if (base >= 8192 || mask > 63) return false;
+            uint64_t pens = masks[code & 32767];
             while (pens) {
                 const unsigned pen = unsigned(std::countr_zero(pens)) & mask;
                 pens &= pens - 1;

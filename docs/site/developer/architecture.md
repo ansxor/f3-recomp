@@ -15,7 +15,7 @@ An interpreter decodes instructions while the game runs. f3-recomp generates C b
 A C compiler turns that C into native code for the host computer. This method is **static recompilation**.
 
 The exercised configuration is Land Maker Japan 2.01J. Its fixed ROM layout and
-game-data hooks should not be read as universal F3 support. Video and sound devices
+game scene decoders should not be read as universal F3 support. Video and sound devices
 follow MAME-derived reference models; CPU-path and output comparisons establish
 recorded software compatibility, not measured physical-chip correctness.
 Native sound translates CPU instructions and is distinct from HLE.
@@ -141,8 +141,8 @@ flowchart TB
     BUS --> IN
     BUS --> EE
     BUS -->|"sound mailbox: shared RAM at 0xc00000"| AU
-    BUS -->|"write notifications"| GV
-    GEN -->|"hook at chosen PCs"| GV
+    BUS -->|"write notifications (F3RT_VIDEO_WRITE_LOG only)"| GV
+    BUS -->|"video RAM"| GV
     SCH -->|"at vblank"| GV
     SCH -->|"at vblank, or fallback"| FDP
     GV -.->|"unsupported frame"| FDP
@@ -341,7 +341,7 @@ The generation report separates these cases from native instructions and excepti
 | `landmakr` with `--allow-fallback` | Generated code | Interpreter runs one instruction. Diagnostic only. | `fdp` | `native` |
 | `f3rt-run` | Interpreter (reference) unless `--translated` | Not applicable in the reference loop. | `fdp` | `native` if the build made the sound code, else `oracle` |
 
-The two fallback ideas are different. **CPU fallback** is the interpreter. **Video fallback** is `GameVideo` drawing a frame with `Video` when a producer is not yet supported. Video fallback never enables CPU fallback. Netplay allows video fallback and does not allow CPU fallback.
+The two fallback ideas are different. **CPU fallback** is the interpreter. **Video fallback** is `GameVideo` drawing a frame with `Video` when a supported-feature test fails (flipped screen, sprite trails, bitmap pivot). Video fallback never enables CPU fallback. Netplay allows video fallback and does not allow CPU fallback.
 
 A run counts as native only if the fallback instruction counter (`Machine::fallback_instructions`) stays at zero. The frontend prints this counter at the end of every run.
 

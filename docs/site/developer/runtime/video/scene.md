@@ -4,23 +4,22 @@ The game renderer uses semantic values, not a second image of FDP RAM. This page
 
 Source: [runtime/game_scene.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/game_scene.hpp). The oracle also uses `SceneRow` for diagnostic inspection.
 
-## Data boundary: GameMemory
+## Data boundary: VideoRam
 
-`GameMemory` holds three fields: `rom`, `ram`, and `supported`. The first two are read-only byte spans. `supported` starts as `true`.
+`VideoRam` is a read-only big-endian view of FDP video RAM at VBSTART:
 
-| Function | Operation |
+| Field | Operation |
 | --- | --- |
-| `u8(address)` | Masks the address with `0xffffff`, then reads program ROM or mirrored main RAM. |
-| `u16(address)` | Reads two bytes, high byte first. |
-| `u32(address)` | Reads two words, high word first. |
+| `graphics` | 0x40000 bytes at 0x600000 (sprites, playfield maps, text map, glyph RAM, line RAM, pivot RAM) |
+| `control` | 0x20 bytes at 0x660000 (PF0..PF3 X/Y scroll, then pivot/text registers) |
+| `frame` | `Machine::frame + 1`, diagnostics only |
+| `u16(offset)` | Big-endian word at a `graphics` offset |
+| `control_u16(index)` | Big-endian control word 0..15 |
 
-An address below `rom.size()` selects program ROM. Addresses from `0x400000` through `0x43ffff` select main RAM, if `ram.size()` equals `0x20000`. The RAM index is `address & 0x1ffff`.
-
-Any other byte read returns zero and sets `supported` to `false`. The flag stays false until the caller resets it. A multi-byte read checks each byte through `u8`.
-
-The zero return is not a valid approximation. The component must reject the result and use oracle fallback. `GameVideo::observe` resets the flag between component calls. A failed tile read therefore does not invalidate an unrelated text hook.
-
-Destination addresses can identify scene cells. They do not give permission to read graphics RAM. See [Producer hooks](/developer/runtime/video/producers).
+Video RAM is the source of truth. The decoders read it directly; a store from an
+unknown PC never invalidates a component, it is only logged in a
+`F3RT_VIDEO_WRITE_LOG` build. See
+[Video write logging](/developer/runtime/video/producers).
 
 ## Coordinate domains
 
@@ -71,7 +70,7 @@ The sprite plane uses a separate packed `uint16_t` value. Zero means transparent
 
 A tile contains 16x16 texels. Its nominal width is `16 * scale_x / 256` native pixels. The raster applies native sampling phases after the geometric cull.
 
-Global scroll and orientation enter these descriptors at the sprite latch. The staging descriptors do not already contain the scanout origin. See [Sprites](/developer/runtime/video/sprites).
+Decoded descriptors already carry scanout-space 24.8 positions. The latch does not add an origin; it only mirrors the descriptors when screen flip is active. See [Sprites](/developer/runtime/video/sprites).
 
 ## SceneLayer
 
@@ -137,6 +136,10 @@ The oracle stores the same description when scene inspection is enabled. This co
 
 The scene structures are C++ values, not a wire format. Snapshot code packs their fields into `CanonicalScene*` structures in `runtime/state_io.hpp`.
 
-`GameLines` saves both its producer state and normalized rows. `GameSprites` saves staging, submitted, and current descriptors. Tile and text classes save their semantic maps and support state.
+`GameLines` saves its decoded line parameters and normalized rows. `GameSprites`
+saves staging, submitted, and current descriptors plus the command flags.
+Playfield tiles and text are derived from the serialized video RAM and rebuilt by
+`decode` at VBSTART, so `GameTiles` and `GameText` save nothing; `load_state`
+restores the composited pixels (see [ABI changes](/developer/abi-changes)).
 
 The compositor owns no persistent scene state. `GameVideo` owns the native and expanded output buffers. Read [GameVideo](/developer/runtime/video/game-hle) for the complete snapshot order.

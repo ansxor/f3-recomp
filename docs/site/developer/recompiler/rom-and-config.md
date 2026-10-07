@@ -29,9 +29,9 @@ LM sound's accepted short dumps additionally specify `short_size`, `short_crc`, 
 
 Command War/Riding Fight specify physical `sound.size = 0x40000` and `mirror_size = 0x80000`: the physical bank repeats in the upper half of the mapped sound image. RayForce is physically and logically `0x80000`. The sound compiler consumes this same manifest; there is no `sound.bin` fallback.
 
-## Discovery, hooks and exclusions
+## Discovery and exclusions
 
-`[discovery]` controls recursive or `all_aligned` coverage, configured entries, jump tables and scanners. All-aligned candidates include data and overlapping starts; registration is not proof of reachability. `[[hooks]]` gives an even instruction `address` and C `symbol`, adds a proven seed and emits a call after flag flushing before the original instruction. Japan's `f3_landmakr_video_hook` observes Japan-specific producers; the new titles do not inherit it.
+`[discovery]` controls recursive or `all_aligned` coverage, configured entries, jump tables and scanners. All-aligned candidates include data and overlapping starts; registration is not proof of reachability. `entry_points` lists even instruction addresses that become proven seeds. Code hooks (`[[hooks]]`) were removed from the recompiler and are no longer accepted.
 
 `[[exclude]]` uses even half-open bounds, CPU (`main` by default or `sound`), reason and evidence. It removes instruction starts, not data bytes. Excluded execution fails even with diagnostic fallback; profiles must match the selected image and exclusions.
 

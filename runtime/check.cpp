@@ -9,7 +9,9 @@
 #include "third_party/audio/es5510.hpp"
 #include "state_io.hpp"
 #include "game_tiles.hpp"
+#include "game_text.hpp"
 #include "game_sprites.hpp"
+#include "game_lines.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -213,151 +215,167 @@ void check_fdp_geometry() {
     require(pixels[0]==0xff000055 && pixels[8]==0xff000011 && pixels[320]==0xff000033,
             "Extended alternate scanout wraps x at 1024 and y at 512 without a 32-column mask");
 }
-void check_game_tile_descriptors() {
-    std::array<uint8_t, 32> rom{};
-    std::array<uint8_t, 0x20000> ram{};
-    std::array<uint8_t, 4 * 256> assets{};
-    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
-        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+void check_game_tile_observation() {
+    // Raw PF snapshot: layer 1 cells at graphics 0x12000, 4 bytes each with the
+    // attributes word first (big-endian), the tile code second.
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
+    const auto store = [&](unsigned cell, uint16_t attributes, uint16_t code) {
+        const unsigned at = 0x12000 + cell * 4;
+        graphics[at] = uint8_t(attributes >> 8); graphics[at + 1] = uint8_t(attributes);
+        graphics[at + 2] = uint8_t(code >> 8); graphics[at + 3] = uint8_t(code);
     };
-    const auto longword = [&](auto &bytes, unsigned offset, uint32_t value) {
-        word(bytes, offset, uint16_t(value >> 16)); word(bytes, offset + 2, uint16_t(value));
-    };
-    word(rom, 0, 1); word(rom, 2, 3);
-    for (unsigned tile = 1; tile <= 3; ++tile) {
-        longword(rom, tile * 4, 0x02010000u | tile);
-        for (unsigned y = 0; y < 16; ++y)
-            for (unsigned x = 0; x < 16; ++x)
-                assets[tile * 256 + y * 16 + x] = uint8_t(tile + (x == 0 ? 8 : 0));
-    }
-    f3rt::GameMemory memory{rom, ram};
+    store(0, uint16_t(3 | 0x200), 5);              // palette 3, blend
+    store(1, uint16_t(4 | (1 << 10) | 0x4000), 6); // palette 4, extra plane, flip X
+    store(2, uint16_t(5 | (1 << 10)), 7);          // palette low bit set: extra plane masked
+    store(3, uint16_t(6 | 0x8000), 8);             // palette 6, flip Y
+    std::array<uint8_t, 16 * 256> assets{};
+    for (unsigned i = 0; i < assets.size(); ++i) assets[i] = uint8_t(i * 5 + 1);
+
     f3rt::GameTiles scene;
-    f3_cpu cpu{};
-    cpu.pc = 0x5a5e; scene.observe(memory, cpu);
-    cpu.a[7] = 0x400100;
-    longword(ram, 0x104, 0); // Descriptor in the independent game ROM fixture.
-    longword(ram, 0x108, 0x612000);
-    word(ram, 0x10c, 2); // Palette XOR: source row 1 becomes row 3.
-    longword(ram, 0x10e, 0x40000000); // Horizontal descriptor reversal.
-    cpu.pc = 0x55c2; scene.observe(memory, cpu);
-    require(scene.supported(1), "Three-column reversed game descriptor stays cell-aligned");
-    const auto left = scene.playfield_pixel(1, 0, 0, false, assets);
-    const auto last = scene.playfield_pixel(1, 47, 0, false, assets);
-    require(left.palette == 51 && last.palette == 57 && left.flags == 0x11,
-            "Game rectangle reverses cell order and texels while XORing palette and preserving blend");
-    require(!(scene.playfield_pixel(1, 48, 0, false, assets).flags & 0x10),
-            "Reversed rectangle does not paint the cell beyond its width");
-    scene.observe_write(0x1234, 0x612000);
-    require(!scene.supported(1) && scene.unsupported_pc(1) == 0x1234,
-            "Unmodeled playfield mutation cannot silently retain a valid game scene");
-    cpu.pc = 0x5a5e; scene.observe(memory, cpu);
-    require(scene.supported(1) && !(scene.playfield_pixel(1, 0, 0, false, assets).flags & 0x10),
-            "Complete game clear restores ownership and removes old tiles");
+    f3rt::VideoRam vram{graphics, control, 0};
+    scene.decode(vram);
+
+    const auto plain = scene.playfield_pixel(1, 0, 0, false, assets);
+    require(plain.palette == 48 + (assets[5 * 256] & 15) && plain.flags == 0x11,
+            "Raw cell decodes palette base, pen mask and blend selector");
+    // Flip X: output texel 0 reads source column 15 and output texel 15 reads 0.
+    const auto flip0 = scene.playfield_pixel(1, 16, 0, false, assets);
+    const auto flip15 = scene.playfield_pixel(1, 31, 0, false, assets);
+    require(flip0.palette == 64 + (assets[6 * 256 + 15] & 31) &&
+            flip15.palette == 64 + (assets[6 * 256] & 31),
+            "Raw cell flip X mirrors the texel column and applies the extra-plane mask");
+    // Palette bit 0 set clears the matching extra plane: mask 15, not 31.
+    const auto masked = scene.playfield_pixel(1, 32, 0, false, assets);
+    require(masked.palette == 80 + (assets[7 * 256] & 15),
+            "Extra pen plane is masked off when the palette's low bit is set");
+    // Flip Y: output row 0 reads source row 15.
+    const auto flip_y = scene.playfield_pixel(1, 48, 0, false, assets);
+    require(flip_y.palette == 96 + (assets[8 * 256 + 15 * 16] & 15) && flip_y.flags == 0x10,
+            "Raw cell flip Y mirrors the texel row");
 }
 void check_game_tile_row_sampling() {
-    f3rt::GameTiles scene;
+    // Fill all four layers with raw VRAM cells, then sample with wrapping,
+    // repeats, reverse jumps and global screen flip.
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
     std::array<uint8_t, 64 * 256> assets{};
     for (unsigned i = 0; i < assets.size(); ++i) assets[i] = uint8_t(i * 37 + i / 16);
-    std::array<std::array<f3rt::CanonicalGameTileCell, 2048>, 4> maps{};
-    std::vector<uint8_t> bytes(scene.state_size());
-    f3rt::StateWriter writer(bytes);
-    for (unsigned layer = 0; layer < maps.size(); ++layer) {
-        for (unsigned i = 0; i < maps[layer].size(); ++i) {
-            auto &cell = maps[layer][i];
-            cell = {uint16_t(0x8000 | (i & 63)), uint16_t(i * 31 + layer * 19),
-                    uint8_t(i & 63), uint8_t(i & 1), uint8_t((i >> 1) & 1), uint8_t((i >> 2) & 1)};
-            writer.write(cell);
+    struct RawCell { uint16_t attributes, code; };
+    std::array<std::array<RawCell, 2048>, 4> cells{};
+    for (unsigned layer = 0; layer < cells.size(); ++layer)
+        for (unsigned i = 0; i < cells[layer].size(); ++i) {
+            auto &cell = cells[layer][i];
+            cell.attributes = uint16_t((i & 0x1ff) | (uint16_t((i >> 9) & 1) << 9) |
+                (uint16_t((i >> 2) & 1) << 10) | (uint16_t(i & 1) << 14) | (uint16_t((i >> 1) & 1) << 15));
+            cell.code = uint16_t(0x8000 | (i & 63));
+            const unsigned at = 0x10000 + layer * 0x2000 + i * 4;
+            graphics[at] = uint8_t(cell.attributes >> 8); graphics[at + 1] = uint8_t(cell.attributes);
+            graphics[at + 2] = uint8_t(cell.code >> 8); graphics[at + 3] = uint8_t(cell.code);
         }
-        writer.write(uint8_t(1)); writer.write(uint32_t(0));
-    }
-    f3rt::StateReader reader(bytes);
-    scene.load_state(reader);
-    for (unsigned layer = 0; layer < maps.size(); ++layer)
+    f3rt::GameTiles scene;
+    f3rt::VideoRam vram{graphics, control, 0};
+    scene.decode(vram);
+    for (unsigned layer = 0; layer < cells.size(); ++layer)
         for (bool flipped : {false, true})
             for (int y : {-513, -512, -1, 0, 15, 16, 511, 512}) {
                 auto sampler = scene.row_sampler(layer, y, flipped, assets);
-                // Repeats, reverse jumps, cell boundaries and full-map wraps.
                 for (int x : {0, 15, 16, 17, 17, 31, 32, 1023, 1024, -1, -16,
                               -17, -1024, -1025, 511, 256, 0, 1023}) {
                     const unsigned sx = (unsigned(x) & 1023) ^ (flipped ? 1023 : 0);
                     const unsigned sy = (unsigned(y) & 511) ^ (flipped ? 511 : 0);
-                    const auto &cell = maps[layer][(sy / 16) * 64 + sx / 16];
-                    const unsigned tx = (sx & 15) ^ (cell.flip_x ? 15 : 0);
-                    const unsigned ty = (sy & 15) ^ (cell.flip_y ? 15 : 0);
-                    const uint8_t pen = assets[(cell.tile & 0x7fff) * 256 + ty * 16 + tx] & cell.pen_mask;
+                    const auto &cell = cells[layer][(sy / 16) * 64 + sx / 16];
+                    const unsigned palette_code = cell.attributes & 0x1ff;
+                    const unsigned pen_mask = (((cell.attributes >> 10) & 3 & ~cell.attributes) << 4) | 15;
+                    const unsigned tx = (sx & 15) ^ ((cell.attributes & 0x4000) ? 15 : 0);
+                    const unsigned ty = (sy & 15) ^ ((cell.attributes & 0x8000) ? 15 : 0);
+                    const uint8_t pen = assets[(cell.code & 0x7fff) * 256 + ty * 16 + tx] & pen_mask;
                     const auto pixel = sampler.pixel(x);
-                    require(pixel.palette == uint16_t(cell.palette + pen) &&
-                            pixel.flags == uint8_t((pen ? 0x10 : 0) | cell.blend),
-                            "Row sampling preserves descriptor changes, masks, flips and arbitrary wrapped X jumps");
+                    require(pixel.palette == uint16_t(palette_code * 16 + pen) &&
+                            pixel.flags == uint8_t((pen ? 0x10 : 0) | ((cell.attributes >> 9) & 1)),
+                            "Raw row sampling preserves palette base, mask, flips and wrapped X jumps");
                 }
             }
 }
-void check_game_sprite_descriptors() {
-    std::array<uint8_t, 36> rom{};
-    std::array<uint8_t, 0x20000> ram{};
-    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
-        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+void check_game_sprite_vram_block_chaining() {
+    // Raw sprite display list: entry 0 uses block control 00 to position the
+    // block, entry 1 uses block control 11 so each axis advances one 16-pixel
+    // block from the previous position (the hardware chaining rule).
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
+    const auto word = [&](unsigned offset, uint16_t value) {
+        graphics[offset] = uint8_t(value >> 8); graphics[offset + 1] = uint8_t(value);
     };
-    for (unsigned i = 0; i < 9; ++i) word(rom, i * 4 + 2, uint16_t(i + 1));
-    word(ram, 0x100, 0xfe); word(ram, 0x102, 17); // Y scale 2; X placement 239, raster scale 240.
-    word(ram, 0x104, 0); word(ram, 0x106, 104);
-    word(ram, 0x108, 0xe2); word(ram, 0x10a, 1); // Horizontally reversed grid.
-    f3rt::GameMemory memory{rom, ram};
+    word(0 * 16 + 0, 1);      // tile
+    word(0 * 16 + 2, 0);      // zoom 0 -> scale 256
+    word(0 * 16 + 4, 50);     // x position
+    word(0 * 16 + 6, 30);     // y position
+    word(0 * 16 + 8, 0x0005); // spritecont 0, colour 5
+    word(1 * 16 + 0, 2);
+    word(1 * 16 + 2, 0);
+    word(1 * 16 + 8, 0xf005); // block control 3/3, colour 5
     f3rt::GameSprites scene;
-    f3_cpu cpu{};
-    cpu.pc = 0x41d0; scene.observe(memory, cpu);
-    cpu.pc = 0x4528; scene.observe(memory, cpu);
-    cpu.a[0] = 0; cpu.a[4] = 0x400100; cpu.d[7] = 0x00020002;
-    cpu.pc = 0x46c0; scene.observe(memory, cpu);
-    cpu.pc = 0x4480; scene.observe(memory, cpu);
-    require(scene.sprites().empty(), "Submitted game sprites are not visible before the next latch");
+    f3rt::VideoRam vram{graphics, control, 0};
+    scene.decode(vram);
+    require(scene.sprites().empty(), "Decoded sprites are submitted, not visible before the latch");
     scene.latch();
     const auto sprites = scene.sprites();
-    require(scene.supported() && sprites.size() == 9, "Scaled game grid preserves all tile descriptors");
-    for (unsigned i = 0; i < 9; ++i) {
-        const auto &sprite = sprites[i];
-        require(sprite.x == (76 - int(i / 3) * 15) * 256 && sprite.y == 128 * 256,
-                "Producer rounds each grid coordinate before upload instead of inventing fractional tile chaining");
-        require(sprite.tile == i + 1 && sprite.scale_x == 240 && sprite.scale_y == 2 &&
-                sprite.flip_x && !sprite.flip_y && sprite.palette == 0xe2,
-                "Grid geometry uses full zoom precision while raster width masks the low four zoom bits");
-    }
-    cpu.a[0] = 0x610000; cpu.pc = 0x4688;
-    scene.observe(memory, cpu);
-    require(!scene.supported() && scene.unsupported_pc() == 0x4688,
-            "An unreadable sprite descriptor is unsupported, not an empty tile that silently disappears");
+    require(sprites.size() == 2, "Two sprite-list entries decode to two sprites");
+    require(sprites[0].x == 50 * 256 && sprites[0].y == 30 * 256,
+            "Sprite-list coordinates are scanout coordinates, with no extra origin");
+    require(sprites[1].x == (50 + 16) * 256 && sprites[1].y == (30 + 16) * 256,
+            "Block-chained sprite advances one 16-pixel block on each axis");
+    require(sprites[0].tile == 1 && sprites[1].tile == 2 && sprites[0].palette == 5 &&
+            sprites[0].scale_x == 256 && sprites[0].scale_y == 256,
+            "Tile code, colour and zoom survive VRAM decode");
 }
-void check_game_sprite_top_edge() {
-    std::array<uint8_t, 8> rom{};
-    std::array<uint8_t, 0x20000> ram{};
-    std::array<uint8_t, 3 * 256> assets{};
-    std::array<uint16_t, 432 * 256> pixels{};
-    const auto word = [](auto &bytes, unsigned offset, uint16_t value) {
-        bytes[offset] = uint8_t(value >> 8); bytes[offset + 1] = uint8_t(value);
+void check_game_line_vram_carry_forward() {
+    // Line RAM section 6000 subsection 3 holds the background palette; its latch
+    // word for scanline y is at lineram 0x400 + y*2 and its value at 0x6600 + y*2.
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
+    const auto word = [&](unsigned offset, uint16_t value) {
+        graphics[offset] = uint8_t(value >> 8); graphics[offset + 1] = uint8_t(value);
     };
-    word(rom, 2, 2); word(rom, 6, 1);
-    std::fill(assets.begin() + 512, assets.end(), 3); // Background tile.
-    std::fill(assets.begin() + 496, assets.begin() + 512, 15); // Foreground's last texel row.
-    f3rt::GameMemory memory{rom, ram};
-    f3rt::GameSprites scene;
-    f3_cpu cpu{};
-    cpu.pc = 0x41d0; scene.observe(memory, cpu);
-    const auto draw = [&](int foreground_y) {
-        cpu.pc = 0x4528; scene.observe(memory, cpu);
-        word(ram, 0, 0); word(ram, 2, 0); word(ram, 6, 0); word(ram, 8, 0xc0);
-        cpu.a[0] = 0; cpu.a[4] = 0x400000;
-        cpu.pc = 0x4688; scene.observe(memory, cpu);
-        word(ram, 0, 48); word(ram, 2, 48); word(ram, 6, uint16_t(foreground_y)); word(ram, 8, 0xf0);
-        cpu.a[0] = 4;
-        scene.observe(memory, cpu);
-        cpu.pc = 0x4480; scene.observe(memory, cpu);
-        scene.latch();
-        scene.raster(assets, pixels);
+    constexpr unsigned lineram = 0x20000;
+    word(lineram + 0x400 + 0, 1 << 3);  // line 0 latches subsection 3
+    word(lineram + 0x6600, 0x1234);
+    word(lineram + 0x400 + 4, 1 << 3);  // line 2 latches it again with a new value
+    word(lineram + 0x6604, 0x00ff);
+    f3rt::GameLines scene;
+    f3rt::VideoRam vram{graphics, control, 0};
+    scene.decode(vram);
+    scene.prepare(false);
+    require(scene.row(0).background == 0x1234, "Line 0 decodes its latched background palette");
+    require(scene.row(1).background == 0x1234,
+            "Line 1 carries the previous line's unlatched background palette forward");
+    require(scene.row(2).background == 0x00ff, "Line 2 adopts its own latched background palette");
+}
+void check_game_text_vram_decode() {
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
+    const auto word = [&](unsigned offset, uint16_t value) {
+        graphics[offset] = uint8_t(value >> 8); graphics[offset + 1] = uint8_t(value);
     };
-    draw(-13); // At scanout Y=11, height 16*208/256=13: bottom is exactly the active top.
-    require(pixels[24 * 432 + 46] == 0x1c03, "A fully clipped scaled sprite cannot leak its rounded last row into the viewport");
-    draw(-12);
-    require(pixels[25 * 432 + 46] == 0x1f0f, "The adjacent partially visible scaled sprite retains its last texel row");
+    // Cell 0: tile 0x12, palette 3, no flips.
+    word(0x1c000, uint16_t((3 << 9) | 0x12));
+    // Glyph 0x12, texel (0,0): the char-RAM decode reads byte row[3]'s low nibble.
+    graphics[0x1e000 + 0x12 * 32 + 3] = 0x05;
+    f3rt::GameText scene;
+    f3rt::VideoRam vram{graphics, control, 0};
+    scene.decode(vram);
+    const auto px = scene.pixel(0, 0, false);
+    require(px.palette == 3 * 16 + 5 && px.flags == 0x10,
+            "Text map and glyph RAM decode palette base and pen");
+    // Cell 1 (x=8): tile 0x21, palette 2, flip_x bit 8 and flip_y bit 15 set.
+    word(0x1c000 + 2, uint16_t((2 << 9) | 0x0100 | 0x8000 | 0x21));
+    // Glyph 0x21 row 6 (bytes 24..27): texel x=7 reads byte 24's high nibble.
+    graphics[0x1e000 + 0x21 * 32 + 24] = 0x9a;
+    scene.decode(vram);
+    // (8,1) -> cell 1, tx = 7 (flip X), ty = 6 (flip Y), pen = nibble 9.
+    const auto flipped = scene.pixel(8, 1, false);
+    require(flipped.palette == 2 * 16 + 9 && flipped.flags == 0x10,
+            "Text flip bits and glyph nibble order decode from raw words");
 }
 f3rt::RomSet fixture() {
     f3rt::RomSet r;
@@ -1119,10 +1137,14 @@ void check_audio_mixer() {
 int main() try {
     check_game_rom_video();
     check_fdp_geometry();
-    check_game_tile_descriptors();
+#ifdef F3RT_GAME_VIDEO
+    // The per-game scene decoders only exist for a game with games/<game>/video/.
+    check_game_tile_observation();
     check_game_tile_row_sampling();
-    check_game_sprite_descriptors();
-    check_game_sprite_top_edge();
+    check_game_sprite_vram_block_chaining();
+    check_game_line_vram_carry_forward();
+    check_game_text_vram_decode();
+#endif
     check_dsp_boundaries();
     check_audio_mixer();
     check_native_lookup();

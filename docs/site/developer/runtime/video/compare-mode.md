@@ -16,7 +16,7 @@ Sources: [game_video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/
 
 `Compare` enables oracle scene inspection, but its frame loop calls only `compare_composite`. Enabling inspection does not imply automatic source-layer or row comparison.
 
-All game-data modes require native producer hooks. Frontend compare rejects fallback-enabled execution and programs other than strict-native `landmakrj`.
+All game-data modes require `F3RT_GAME_VIDEO` (a `games/<game>/video/` folder) and strict native execution. Frontend compare rejects fallback-enabled execution and programs without the folder.
 
 ## Frontend compare sequence
 
@@ -88,7 +88,7 @@ A visible playfield check therefore includes the blend selector. Equal final RGB
 
 ## Failures
 
-Selecting an unsupported component throws immediately. The message gives its layer, frame, and producer PC. It does not skip the selected layer.
+A layer mask with bits outside 0–8 throws immediately. A layer mismatch reports the layer, frame, first differing coordinate and indexed palette/flag pairs; it does not skip the selected layer.
 
 A layer mismatch scans the complete domain and counts all differing pixels. The error reports the first coordinate and indexed palette/flag pairs.
 
@@ -96,7 +96,7 @@ Sprite errors also list nearby current descriptors. Their tile, palette, fixed-p
 
 Row comparison throws on the first field difference. It always compares layer state. It compares coordinates only for enabled text and PF layers.
 
-Composite comparison requires `rendered` to be true. Otherwise it throws an unsupported-composite error. Its current diagnostic wording names the line producer PC, even if another component caused the frame fallback.
+Composite comparison requires `rendered` to be true. Otherwise it throws `Game composite fallback at frame N`; the fallback reason is recorded separately by `report()`.
 
 The harness prints the report and optionally dumps machine state before propagating a comparison exception.
 
@@ -127,14 +127,14 @@ The report gives one line per sampled layer:
 VIDEO layer=pf0 domain=1024x512-indexed-texture sampled_frames=N compared_pixels=N*524288 pixel_mismatches=0
 VIDEO layer=composite domain=320x232-RGB sampled_frames=N compared_pixels=N*74240 pixel_mismatches=0
 VIDEO game_frames=N oracle_fallback_frames=M
-VIDEO fallback=lines producer_pc=0x... frames=N first=... last=...
+VIDEO fallback=<reason> frames=N first=... last=...
 ```
 
 The symbolic counts above explain the format. Actual output uses integer values.
 
 `game_frames` counts successful reconstruction, even when `Diagnostic` or `Compare` displays the oracle. `oracle_fallback_frames` counts unsupported game scenes.
 
-Fallback records group the first failed component and producer PC. Each record includes count and first/last frame. Only the first failing component is counted for a frame.
+Fallback records group one reason. Each record includes count and first/last frame. Only the first failing reason is counted for a frame.
 
 ## Limits of a passing run
 

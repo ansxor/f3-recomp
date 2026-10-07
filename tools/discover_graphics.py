@@ -1221,7 +1221,7 @@ def make_catalog(config_path, rom_root, root_rounds=6, caller_depth=4):
             "program_sha256": hashlib.sha256(rom).hexdigest(), "rom_size": len(rom),
             "program_chips": config["rom"]["lanes"],
             "rom_directory_selection": {"basis": "full_physical_program_chip_hash_identity", "rejected_candidates": rejected},
-            "discovery_configuration": {"original": config.get("discovery", {}), "hooks": config.get("hooks", []),
+            "discovery_configuration": {"original": config.get("discovery", {}),
                                         "forced_mode": "recursive", "disabled_aligned_seed_scans": ["task_traps", "callbacks", "actor_scripts"],
                                         "heuristic_jump_table_policy": "unfollowed_candidates_not_code_roots"},
             "discovery": discovery.report,

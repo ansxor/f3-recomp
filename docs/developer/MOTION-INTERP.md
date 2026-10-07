@@ -324,7 +324,7 @@ No window/GPU temporal history is created in either run.
 ```sh
 build/f3rt-gpu-regression --frames 1800 --seed 5 --scale 3 --border 48 \
   --every 60 --layers --interp off --inject-frame 1407 \
-  --inject-bitmap --inject-trails --inject-globalflip --inject-unknown \
+  --inject-bitmap --inject-trails --inject-globalflip \
   --inject-sprite-boundaries
 
 go build -C netplay/server -o ../../build/netplay-server .

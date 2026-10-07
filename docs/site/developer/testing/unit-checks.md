@@ -55,7 +55,8 @@ The file has more than 150 `require()` calls. Most checks use a **fixture**: `fi
 
 | Function | Component | What it proves |
 | --- | --- | --- |
-| `check_game_tile_descriptors` | `GameTiles` | A three-column reversed tile descriptor keeps cell alignment, palette XOR and blend flags. An unknown write marks the layer unsupported. A complete clear restores support. |
+| `check_game_tile_observation` | `GameTiles` | Raw video-RAM cells decode palette base, pen mask and blend; flip X/Y mirror the sampled texel; a masked extra plane is cleared by the palette's low bit. |
+| `check_game_tile_row_sampling` | `GameTiles` | Wrapping, repeats, reverse X jumps and global screen flip sample the correct raw cell across all four layers. |
 | `check_game_sprite_descriptors` | `GameSprites` | Scaled grids keep every tile descriptor. Submitted sprites appear only after the next latch. An unreadable descriptor is unsupported. |
 | `check_game_sprite_top_edge` | `GameSprites` raster | A fully clipped scaled sprite does not leak its last row into the viewport. |
 | `check_audio_mixer` | `Audio` | Board gain, signed PCM scaling, channel mute, the two gain stages, and what a CPU-line reset or a board reset keeps. |

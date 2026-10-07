@@ -160,10 +160,6 @@ def declared_roots(rom: bytes, config: dict, cpu: str, base: int) -> dict[int, s
     spec = config.get("discovery", {}) if cpu == "main" else config.get("sound", {}).get("discovery", {})
     for value in spec.get("entry_points", []):
         add(value, "declared_entry")
-    hooks = config.get("hooks", []) if cpu == "main" else config.get("sound", {}).get("hooks", [])
-    for hook in hooks:
-        if hook.get("cpu", cpu) == cpu and "address" in hook:
-            add(hook["address"], "declared_hook")
     for table in spec.get("jump_tables", []) + spec.get("pointer_tables", []):
         for value in table.get("targets", []):
             add(value, "explicit_pointer_table_target")

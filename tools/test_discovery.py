@@ -148,8 +148,6 @@ class AllAlignedDiscoveryTests(unittest.TestCase):
         # Odd entry points in config must raise ValueError
         with self.assertRaises(ValueError):
             discover(bytes(rom), {"discovery": {"entry_points": [0x401]}})
-        with self.assertRaises(ValueError):
-            discover(bytes(rom), {"hooks": [{"address": 0x401}]})
 
     def test_recursive_behavior_retained(self):
         rom, config = self.fixture("recursive")
@@ -186,14 +184,12 @@ class ExclusionTests(unittest.TestCase):
                          summary["aligned_decoded_count"] + summary["aligned_invalid_count"]
                          + summary["excluded_candidate_count"])
 
-    def test_vector_hook_and_explicit_table_targets_reject_exclusions(self):
-        for source in ("vector", "hook", "targets", "table"):
+    def test_vector_and_explicit_table_targets_reject_exclusions(self):
+        for source in ("vector", "targets", "table"):
             with self.subTest(source=source):
                 rom, config = self.fixture()
                 if source == "vector":
                     struct.pack_into(">I", rom, 4, 0x800)
-                elif source == "hook":
-                    config["hooks"] = [{"address": 0x800, "symbol": "test_hook"}]
                 else:
                     table = {"address": 0x500}
                     if source == "targets":

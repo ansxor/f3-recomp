@@ -66,7 +66,7 @@ Land Maker dependencies and conservative new-game bring-up work.
 
 1. [Video overview](/developer/runtime/video/) explains the two renderers.
 2. [FDP renderer](/developer/runtime/video/fdp) is the oracle.
-3. [Game-data HLE](/developer/runtime/video/game-hle) is the fast renderer that rebuilds the scene from game data.
+3. [Game-data HLE](/developer/runtime/video/game-hle) is the fast renderer that rebuilds the scene from FDP video RAM.
 4. [Presentation](/developer/runtime/video/presentation) covers scale, border and filter.
 5. [MAME oracle and captures](/developer/testing/mame) shows how to get a reference picture.
 6. [Gameplay regression](/developer/testing/gameplay-regression) has the `--video-diff` check.
@@ -173,7 +173,7 @@ flowchart TB
 | [Repository tour](/developer/repository) | Source file responsibilities and subsystem entry points. |
 | [Build pipeline](/developer/build-pipeline) | CMake steps, generated outputs, targets, netplay build ID. |
 | [Glossary](/developer/glossary) | Alphabetical list of terms. |
-| [Contributing](/developer/contributing) | Workflow, ABI rule, hooks, games, flags, conventions, docs. |
+| [Contributing](/developer/contributing) | Workflow, ABI rule, scene decoders, games, flags, conventions, docs. |
 
 ### Recompiler
 
@@ -217,18 +217,18 @@ flowchart TB
 | [FDP renderer](/developer/runtime/video/fdp) | Hardware-oriented tile, text, pivot, and scanline rendering. |
 | [FDP sprites](/developer/runtime/video/fdp-sprites) | Sprite lists, buffering, zoom, and rasterization. |
 | [FDP mixing](/developer/runtime/video/fdp-mixing) | Priorities, clipping, blending, and final pixel composition. |
-| [Game-data HLE](/developer/runtime/video/game-hle) | Scene reconstruction, hooks, and unsupported-frame fallback. |
-| [Producers](/developer/runtime/video/producers) | Display writer classification and observation contracts. |
-| [Tiles](/developer/runtime/video/tiles) | Game playfield descriptors and tile-block routines. |
-| [Text](/developer/runtime/video/text) | String, rectangle, glyph, and character producers. |
-| [Sprites](/developer/runtime/video/sprites) | Game sprite producers and scene sprite data. |
-| [Lines](/developer/runtime/video/lines) | Per-row scroll, zoom, clipping, and mixing profiles. |
-| [Scene](/developer/runtime/video/scene) | Renderer-independent records and allowed producer memory sources. |
+| [Game-data HLE](/developer/runtime/video/game-hle) | Scene reconstruction from video RAM, and unsupported-frame fallback. |
+| [Video write logging](/developer/runtime/video/producers) | Opt-in store logging and the remaining fallback reasons. |
+| [Tiles](/developer/runtime/video/tiles) | Raw playfield cells from video RAM. |
+| [Text](/developer/runtime/video/text) | Text map and glyph RAM decode. |
+| [Sprites](/developer/runtime/video/sprites) | Sprite display-list decode, latch and raster. |
+| [Lines](/developer/runtime/video/lines) | Per-row scroll, zoom, clipping, and mixing decoded from line RAM. |
+| [Scene](/developer/runtime/video/scene) | Renderer-independent records and the `VideoRam` source. |
 | [Compositor](/developer/runtime/video/compositor) | Scene sampling, layer ordering, palette, and enlarged output. |
 | [Presentation](/developer/runtime/video/presentation) | Scale, border, filtering, SDL texture, and screenshots. |
 | [Compare mode](/developer/runtime/video/compare-mode) | Supported scene checks and mismatch reporting. |
 | [Parity](/developer/runtime/video/parity) | Recorded evidence and remaining hardware comparison limits. |
-| [Extending video](/developer/runtime/video/extending) | Add a producer without hiding unsupported display writes. |
+| [Extending video](/developer/runtime/video/extending) | Add a decoder or write-log entry without hiding unsupported display writes. |
 
 ### Audio
 
