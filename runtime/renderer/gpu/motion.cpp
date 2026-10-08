@@ -67,9 +67,13 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
     pair_stats_ = {};
     // Compact render slots are not identities: tile-zero births/deaths shift them.
     // Sprites carrying a nonzero identity (stable per-entry id within an object/invocation) match
-    // exactly by it. An identity match that changes tile/palette is a pose change or a real
-    // animation: entry k may now be a different body part, so it interpolates only when its
-    // delta agrees with its object's reference delta (see the rigid check below). An identity
+    // exactly by it. A same-tile identity match is final. An identity match whose tile/palette
+    // changed is demoted below appearance matching: both sprites join the appearance pass (with
+    // births and vanished sprites), because entry k may now be a neighbouring cell of a zoomed
+    // grid while the sprite's static twin (same tile at the same spot) is still present. After the
+    // appearance pass, a demoted current sprite still unmatched whose previous partner is also
+    // still unmatched gets its identity pairing restored (by_identity); it interpolates only when
+    // its delta agrees with its object's reference delta (see the rigid check below). An identity
     // value occurring on both sides but duplicated is ambiguous: unmatched, no fallback. An
     // identity value absent from the other frame entirely (a birth in the current frame, a
     // vanished sprite in the previous) may be the same sprite re-keyed (some games change the
@@ -89,6 +93,8 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
         std::array<unsigned, CapturedFrame::max_sprites> old_order, new_order, old_ids, new_ids;
         unsigned old_n = 0, new_n = 0, old_id_n = 0, new_id_n = 0;
         matches.fill(CapturedFrame::max_sprites);
+        std::array<unsigned, CapturedFrame::max_sprites> demoted;
+        demoted.fill(CapturedFrame::max_sprites);
         for (unsigned i = 0; i < sprite_count_; ++i) {
             if (sprites_[i].value.identity) old_ids[old_id_n++] = i; else old_order[old_n++] = i;
         }
@@ -114,8 +120,16 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
             while (old_end < old_id_n && sprites_[old_ids[old_end]].value.identity == a) ++old_end;
             while (now_end < new_id_n && current[new_ids[now_end]].identity == b) ++now_end;
             if (old_end - old == 1 && now_end - now == 1) {
-                matches[new_ids[now]] = old_ids[old];
-                by_identity[new_ids[now]] = true;
+                const unsigned i = new_ids[now], p = old_ids[old];
+                if (same_appearance(current[i], sprites_[p].value)) {
+                    matches[i] = p;
+                    by_identity[i] = true;
+                } else {
+                    // Tile/palette changed: demote to the appearance pass; restored below if unmatched.
+                    demoted[i] = p;
+                    old_order[old_n++] = p;
+                    new_order[new_n++] = i;
+                }
             }
             old = old_end; now = now_end;
         }
@@ -164,6 +178,16 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
             }
             old = old_end; now = now_end;
         }
+        // Restore demoted identity pairs whose both sides stayed unmatched.
+        std::array<bool, CapturedFrame::max_sprites> old_used{};
+        for (unsigned i = 0; i < scene.sprite_count; ++i)
+            if (matches[i] != CapturedFrame::max_sprites) old_used[matches[i]] = true;
+        for (unsigned i = 0; i < scene.sprite_count; ++i)
+            if (demoted[i] != CapturedFrame::max_sprites && matches[i] == CapturedFrame::max_sprites && !old_used[demoted[i]]) {
+                matches[i] = demoted[i];
+                by_identity[i] = true;
+                old_used[demoted[i]] = true;
+            }
     }
     // Per-object rigid check. Entries that must agree with their object's reference delta: identity
     // matches whose tile/palette changed and appearance-fallback matches (identity sprites only;

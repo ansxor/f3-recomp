@@ -148,7 +148,10 @@ Sprites are matched by the game's own object identity when the game declares spr
 units, otherwise by tile/palette appearance groups and mutually unique closest
 positions. A sprite whose identity is new or has vanished (some games re-key a sprite
 that stays on screen) is also matched by appearance, but only against other re-keyed
-sprites. Count changes therefore do not reject surviving sprites. A matched sprite that
+sprites. Count changes therefore do not reject surviving sprites. A sprite whose artwork
+changed under the same identity is matched by appearance first, so a same-artwork sprite
+that stayed in place wins over a neighbouring cell of the same object; the identity pairing
+is kept only when nothing else claims either sprite. A matched sprite that
 changes artwork, or that was re-matched by appearance, still moves smoothly if it travels
 with the rest of its object (within one native pixel of the object's common movement); a
 pose change or mis-pairing that moves parts of one object differently snaps. Ambiguous

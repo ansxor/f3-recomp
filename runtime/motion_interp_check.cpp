@@ -205,6 +205,26 @@ int main() {
         result = pair(*a, *b);
         require(result.stats.sprites == 1 && result.state.sprite_x[0] == 22 * 256 && !result.stats.rejected_sprites,
                 "single-entry tile change snapped");
+        // Re-indexed zoomed grid: each identity now points at the other cell with its tile changed,
+        // and the static twins exist. Demoted below appearance matching, everything stays static.
+        *a = CapturedFrame{}; a->fallback = false;
+        sprite_obj(*a, 0, 0, 10, 1, 5); sprite_obj(*a, 1, 16, 11, 2, 5);
+        a->sprites[0].y = 0; a->sprites[1].y = 16 * 256;
+        *b = CapturedFrame{}; b->fallback = false;
+        sprite_obj(*b, 0, 16, 11, 1, 5); sprite_obj(*b, 1, 0, 10, 2, 5);
+        b->sprites[0].y = 16 * 256; b->sprites[1].y = 0;
+        result = pair(*a, *b);
+        require(result.stats.sprites == 0 && result.stats.moving_sprites == 0 && !result.stats.rejected_sprites &&
+                result.state.sprite_x[0] == 16 * 256 && result.state.sprite_x[1] == 0, "re-indexed grid moved");
+        // A demoted pair whose current sprite has a same-tile twin pairs with the twin, not the identity.
+        *a = CapturedFrame{}; a->fallback = false;
+        sprite_obj(*a, 0, 20, 10, 1, 5); sprite_obj(*a, 1, 40, 11, 2, 5);
+        *b = CapturedFrame{}; b->fallback = false;
+        sprite_obj(*b, 0, 40, 11, 1, 5); sprite_obj(*b, 1, 44, 12, 2, 5);
+        result = pair(*a, *b);
+        require(result.stats.sprites == 0 && result.state.sprite_x[0] == 40 * 256, "demoted pair beat its static twin");
+        *a = CapturedFrame{}; a->fallback = false; sprite_obj(*a, 0, 20, 10, 1, 5);
+        *b = CapturedFrame{}; b->fallback = false; sprite_obj(*b, 0, 24, 99, 1, 5);
         // Every entry tile-changed with no majority delta: no reference, all snap.
         sprite_obj(*a, 1, 60, 11, 2, 5); sprite_obj(*a, 2, 100, 12, 3, 5);
         sprite_obj(*b, 1, 68, 99, 2, 5); sprite_obj(*b, 2, 112, 98, 3, 5);

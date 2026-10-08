@@ -172,7 +172,11 @@ identity/count-subset/transform/jump/control rejection counts.
 
 Compact submitted slots are not object IDs: tile-zero entries are omitted, so
 insertions/removals can shift otherwise stable sprites. Sprites carrying a sprite-unit
-identity match exactly by it. An identity that occurs on both sides but is duplicated is
+identity match exactly by it when the tile/palette is unchanged. An identity match whose
+tile/palette changed is demoted: both sprites join the appearance pass below, and the
+identity pairing is restored only if both stay unmatched after it (so a static twin of the
+same tile wins; Command War's zoomed fighter grid re-indexes entries by one cell between
+frames and otherwise shifted diagonally). An identity that occurs on both sides but is duplicated is
 ambiguous and stays unmatched. An identity absent from the other frame entirely (a
 birth in the current frame, a vanished sprite in the previous one) falls back to the
 appearance pass, since some games re-key a sprite's identity (Command War: the emit
