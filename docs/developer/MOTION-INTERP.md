@@ -109,10 +109,8 @@ control/clip and palette safety checks. Alpha 1 uses the original shader path.
 
 ## Presentation clock and discontinuities
 
-Games with flicker shadows ([SPRITE-UNITS.md](SPRITE-UNITS.md#flicker-shadows)) use the same
-display pacing, without temporal history, when the GPU backend runs windowed: the frontend calls
-`GpuVideo::enable_display_pacing()` and redraws every display tick so shadow visibility
-alternates per refresh. `--motion-interp` implies it. GPU backend with game video only.
+Flicker shadows ([SPRITE-UNITS.md](SPRITE-UNITS.md#flicker-shadows)) do not use display pacing: the
+GPU presenter draws them as a steady linear-light blend of the scene with and without the shadow.
 
 The wait on the display link is bounded to 50 ms; a timeout marks the link dead and presentation
 falls back to the native-frame timer (emulation is never throttled below 58.94 Hz by a hidden or

@@ -28,11 +28,9 @@ public:
     // Host-only geometry. Assets, pipelines and canonical game state survive.
     void set_scale(unsigned scale);
     void set_scale_mode(VideoScaleMode mode);
-    // Flicker shadows (SceneSprite::shadow) are always presented display-synced: tagged shadows are
-    // skipped on odd presented frames, counted as accepted swapchain submissions (presented_frames()).
-    // set_presented_frames exists for offscreen tools, which never present.
+    // Accepted swapchain submissions. Flicker shadows (SceneSprite::shadow) are not tied to it: window presents
+    // draw them as the steady linear-light average of the scene with and without the tagged sprites.
     uint64_t presented_frames() const;
-    void set_presented_frames(uint64_t count);
     // Host overlay is invoked on the actual swapchain after the game blit.
     using Overlay = void (*)(void *, SDL_GPUCommandBuffer *, SDL_GPUTexture *, Uint32, Uint32);
     SDL_GPUDevice *device() const;
@@ -52,9 +50,6 @@ public:
     // Skip busy in-flight frames before uploading/rendering. No fence wait or
     // readback; draw() still waits for explicit captures and diagnostics.
     bool present(const CapturedFrame &scene);
-    // One GPU frame in flight and (macOS) a display-link tick for pace_motion/present_motion. Implied by
-    // capture_motion; call it alone to redraw at display rate without temporal history (flicker shadows).
-    void enable_display_pacing();
     // Explicit opt-in; completed emulated frames are captured, never draws.
     void capture_motion(const CapturedFrame &scene, uint64_t frame);
     void reset_motion();
@@ -86,6 +81,7 @@ public:
     // excluding the crisp swapchain overlay. A preset/scale change needs a draw.
     void save_surface(const char *path);
 private:
+    void enable_display_pacing(); // implied by capture_motion
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -84,11 +84,12 @@
 #define F3_SPRITE_FLIP 6u   // bit 0 flip X, bit 1 flip Y
 #define F3_SPRITE_FLIP_X 1u
 #define F3_SPRITE_FLIP_Y 2u
-#define F3_SPRITE_SHADOW 4u // flicker-shadow tag (SceneSprite::shadow): the presenter decides its visibility
+#define F3_SPRITE_SHADOW 4u // flicker-shadow tag (SceneSprite::shadow): drawn into sprite plane A only
 
 // Presenter bits in the layer-mask uniform (controls.w), above the nine layer bits; bit 31 is the
 // motion marker (renderer/gpu/motion.hpp).
-#define F3_MASK_HIDE_SHADOW 0x10000000u // sprite pass: skip descriptors tagged F3_SPRITE_SHADOW
+#define F3_MASK_HIDE_SHADOW 0x10000000u  // sprite pass: skip descriptors tagged F3_SPRITE_SHADOW (plane B)
+#define F3_MASK_BLEND_SHADOW 0x20000000u // scene pass: sprite plane B is valid; average shade(A) and shade(B) in linear light
 
 // Interpolation coefficients: per row, four playfield blocks of PF_STRIDE words:
 // [flags][3 source][3 zoom][3 vertical][3 palette], each triple being

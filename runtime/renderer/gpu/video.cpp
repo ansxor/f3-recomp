@@ -173,10 +173,10 @@ struct GpuVideo::Impl {
     // Asset ROM sizes in bytes (256 per 16x16 tile): fixed by the loaded ROM set, not the hardware maximum.
     Uint32 pf_asset_bytes = 0, sp_asset_bytes = 0;
     SDL_GPUBuffer *scene_buffer = nullptr, *pf_assets = nullptr, *sp_assets = nullptr, *native_buffer = nullptr;
-    SDL_GPUTexture *sprite_plane = nullptr, *surface = nullptr;
+    SDL_GPUTexture *sprite_plane = nullptr, *sprite_plane_b = nullptr, *surface = nullptr; // b: sprites without flicker shadows
     SDL_GPUSampler *sampler = nullptr;
     SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr, *interpolation_pipeline = nullptr;
-    uint64_t presented_frames = 0; // accepted swapchain submissions; drives flicker_shadow_visible
+    uint64_t presented_frames = 0; // accepted swapchain submissions
     SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr;
     std::vector<uint32_t> saved_pixels;
     Postprocess postprocess = Postprocess::Off;
@@ -199,6 +199,7 @@ struct GpuVideo::Impl {
         if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
         if (sampler) SDL_ReleaseGPUSampler(device, sampler);
         if (sprite_plane) SDL_ReleaseGPUTexture(device, sprite_plane);
+        if (sprite_plane_b) SDL_ReleaseGPUTexture(device, sprite_plane_b);
         if (surface) SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
         if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
@@ -353,6 +354,7 @@ struct GpuVideo::Impl {
         native_buffer = buffer(native_bytes);
         pf_assets = buffer(pf_asset_bytes); sp_assets = buffer(sp_asset_bytes);
         sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
+        sprite_plane_b = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
         surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
         SDL_GPUSamplerCreateInfo sampling{};
         sampling.min_filter = sampling.mag_filter = SDL_GPU_FILTER_NEAREST;
@@ -395,17 +397,19 @@ struct GpuVideo::Impl {
         if (scale == options.scale) return;
         auto geometry = options;
         geometry.scale = scale;
-        SDL_GPUTexture *next_plane = nullptr, *next_surface = nullptr, *next_post = nullptr;
+        SDL_GPUTexture *next_plane = nullptr, *next_plane_b = nullptr, *next_surface = nullptr, *next_post = nullptr;
         SDL_GPUTransferBuffer *next_download = nullptr;
         std::vector<uint32_t> next_pixels;
         try {
             next_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, geometry, true);
+            next_plane_b = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, geometry, true);
             next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
             if (post_surface) next_post = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
             if (download) next_download = transfer(geometry.width() * geometry.height() * 4, SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
             if (!saved_pixels.empty()) next_pixels.resize(size_t(geometry.width()) * geometry.height());
         } catch (...) {
             if (next_plane) SDL_ReleaseGPUTexture(device, next_plane);
+            if (next_plane_b) SDL_ReleaseGPUTexture(device, next_plane_b);
             if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
             if (next_post) SDL_ReleaseGPUTexture(device, next_post);
             if (next_download) SDL_ReleaseGPUTransferBuffer(device, next_download);
@@ -413,13 +417,14 @@ struct GpuVideo::Impl {
         }
         // SDL defers destruction until queued users finish: no GPU-idle stall.
         SDL_ReleaseGPUTexture(device, sprite_plane);
+        SDL_ReleaseGPUTexture(device, sprite_plane_b);
         SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
         if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
         comparison_native = nullptr;
         comparison_native_valid = false;
         if (download) SDL_ReleaseGPUTransferBuffer(device, download);
-        sprite_plane = next_plane; surface = next_surface; download = next_download;
+        sprite_plane = next_plane; sprite_plane_b = next_plane_b; surface = next_surface; download = next_download;
         post_surface = next_post;
         saved_pixels.swap(next_pixels);
         options = geometry;
@@ -562,29 +567,35 @@ struct GpuVideo::Impl {
         uniforms.pf_tile_count = pf_asset_bytes / 256; uniforms.sp_tile_count = sp_asset_bytes / 256;
         if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
             uniforms.layer_mask |= motion_layer_mask;
-        // Flicker shadows (SceneSprite::shadow): visibility is decided here, per presented frame, never
-        // from the emulated frame: tagged shadows are drawn on even accepted drawables and skipped on odd ones.
-        const bool hide_shadows = !scene.fallback && scene.shadow_count != 0 && !flicker_shadow_visible(presented_frames);
+        // Flicker shadows (SceneSprite::shadow) become a steady blend: plane A holds every sprite, plane B the
+        // same list without tagged shadows, and the scene pass averages the two composites (scene_body.glsl).
+        // Only window presents blend; readback/reference draws keep plane A (canonical sprite list).
+        const bool blend_shadows = !scene.fallback && scene.shadow_count != 0 && output.empty();
         if (!scene.fallback) {
-            GpuUniforms pass_uniforms = uniforms;
-            if (hide_shadows) pass_uniforms.layer_mask |= F3_MASK_HIDE_SHADOW;
-            SDL_PushGPUVertexUniformData(command.value, 0, &pass_uniforms, sizeof(pass_uniforms));
-            auto *pass = render_pass(command.value, sprite_plane);
-            SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
-            if (!options.expanded()) {
-                SDL_Rect scissor{46, int(geometry::first_line), int(geometry::native_width), int(geometry::height)};
-                SDL_SetGPUScissor(pass, &scissor);
-            }
-            SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);
-            SDL_BindGPUFragmentStorageBuffers(pass, 0, &sp_assets, 1);
-            SDL_DrawGPUPrimitives(pass, 6, scene.sprite_count, 0, 0);
-            SDL_EndGPURenderPass(pass);
+            const auto sprite_pass = [&](SDL_GPUTexture *plane, unsigned extra_mask) {
+                GpuUniforms pass_uniforms = uniforms;
+                pass_uniforms.layer_mask |= extra_mask;
+                SDL_PushGPUVertexUniformData(command.value, 0, &pass_uniforms, sizeof(pass_uniforms));
+                auto *pass = render_pass(command.value, plane);
+                SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
+                if (!options.expanded()) {
+                    SDL_Rect scissor{46, int(geometry::first_line), int(geometry::native_width), int(geometry::height)};
+                    SDL_SetGPUScissor(pass, &scissor);
+                }
+                SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);
+                SDL_BindGPUFragmentStorageBuffers(pass, 0, &sp_assets, 1);
+                SDL_DrawGPUPrimitives(pass, 6, scene.sprite_count, 0, 0);
+                SDL_EndGPURenderPass(pass);
+            };
+            sprite_pass(sprite_plane, 0);
+            if (blend_shadows) sprite_pass(sprite_plane_b, F3_MASK_HIDE_SHADOW);
         }
+        if (blend_shadows) uniforms.layer_mask |= F3_MASK_BLEND_SHADOW;
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
         auto *pass = render_pass(command.value, surface);
         SDL_BindGPUGraphicsPipeline(pass, options.scale > 1 && interpolation_pipeline ? interpolation_pipeline : scene_pipeline);
-        SDL_GPUTextureSamplerBinding sprite_binding{sprite_plane, sampler};
-        SDL_BindGPUFragmentSamplers(pass, 0, &sprite_binding, 1);
+        SDL_GPUTextureSamplerBinding sprite_binding[2]{{sprite_plane, sampler}, {blend_shadows ? sprite_plane_b : sprite_plane, sampler}};
+        SDL_BindGPUFragmentSamplers(pass, 0, sprite_binding, 2);
         SDL_GPUBuffer *buffers[]{scene_buffer, pf_assets, native_buffer};
         SDL_BindGPUFragmentStorageBuffers(pass, 0, buffers, 3);
         SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
@@ -701,7 +712,6 @@ const InterpolationStats &GpuVideo::last_interpolation() const { return impl_->i
 void GpuVideo::set_scale(unsigned scale) { impl_->set_scale(scale); }
 void GpuVideo::set_scale_mode(VideoScaleMode mode) { impl_->scale_mode = mode; }
 uint64_t GpuVideo::presented_frames() const { return impl_->presented_frames; }
-void GpuVideo::set_presented_frames(uint64_t count) { impl_->presented_frames = count; }
 SDL_GPUDevice *GpuVideo::device() const { return impl_->device; }
 void GpuVideo::set_linear(bool linear) { impl_->linear = linear; }
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
@@ -720,6 +730,7 @@ bool GpuVideo::present(const CapturedFrame &scene) {
     impl_->draw(scene, {}, all_layers, false, false, 1.0f, nullptr, {}, Impl::Presentation::SkipBusy);
     return impl_->last_presented;
 }
+// One GPU frame in flight and (macOS) a display-link tick for pace_motion/present_motion.
 void GpuVideo::enable_display_pacing() {
     if (impl_->display_pacing) return;
     if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))

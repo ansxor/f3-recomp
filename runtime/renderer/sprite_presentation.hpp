@@ -37,11 +37,6 @@ struct SpritePresentation {
     bool empty() const { return identity.empty() && splices.empty() && object.empty() && flags.empty(); }
 };
 
-// Visibility of tagged flicker shadows on the N-th presented frame (accepted drawables counted by
-// the presenter): they alternate per presented frame, i.e. per display refresh when the presenter
-// redraws at refresh rate. Never derived from the emulated frame counter.
-constexpr bool flicker_shadow_visible(uint64_t presented_frame) { return (presented_frame & 1) == 0; }
-
 // Stable per-entry identity derived from an invocation identity; never returns 0.
 constexpr uint64_t sprite_identity_mix(uint64_t identity, uint32_t index) {
     uint64_t x = identity ^ (uint64_t(index) + 0x9e3779b97f4a7c15ull);

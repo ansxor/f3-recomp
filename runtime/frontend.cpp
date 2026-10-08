@@ -434,9 +434,6 @@ int main(int argc,char **argv) try {
         if(m.sprite_units)m.sprite_units->set_discovery(m.discovery.get());
     }
     const bool shadows_active=m.sprite_units && m.sprite_units->flicker_shadows_enabled();
-    // Shadow visibility alternates per presented frame; only a presenter that redraws at refresh rate makes
-    // that follow the display, so it reuses the motion-interpolation display pacing (without temporal history).
-    const bool display_paced_shadows=shadows_active && !headless;
     const auto snapshot_video_options=video_options;
     const unsigned frame_width=video_options.width();
     const unsigned frame_height=m.game_video?video_options.height():m.roms.video.visible_height;
@@ -480,7 +477,6 @@ int main(int argc,char **argv) try {
                                                    video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off,
                                                    *interpolation_fields);
             sdl.gpu->set_scale_mode(video_scale_mode);
-            if(display_paced_shadows && !motion_interp)sdl.gpu->enable_display_pacing();
             if(postprocess!="off")sdl.gpu->set_postprocess(
                 postprocess=="crt"?f3rt::Postprocess::Crt:f3rt::Postprocess::User,user_shader);
         } else
@@ -511,9 +507,9 @@ int main(int argc,char **argv) try {
                  <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
                  <<" filter="<<video_filter<<" interp="<<video_interp
                  <<" interp_fields="<<f3rt::interpolation_fields_name(*interpolation_fields)<<'\n';
-        if(motion_interp || display_paced_shadows) {
+        if(motion_interp) {
             const auto *display=SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdl.window));
-            std::cout<<(motion_interp?"motion_interp=on":"flicker_shadows=display-sync")<<" display_hz="<<(display?display->refresh_rate:0)
+            std::cout<<"motion_interp=on display_hz="<<(display?display->refresh_rate:0)
                      <<" emulation_hz="<<double(f3rt::Machine::pixel_clock)/f3rt::Machine::frame_pixels
                      <<" temporal_pacing="<<(throttle?"display":"unthrottled-current")<<'\n';
         }
@@ -545,7 +541,7 @@ int main(int argc,char **argv) try {
     auto next_status=next_net_step;
     auto next_frame=std::chrono::steady_clock::now();
     const auto frame_time=std::chrono::nanoseconds(uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
-    const bool motion_presentation=(motion_interp || display_paced_shadows) && !headless;
+    const bool motion_presentation=motion_interp && !headless;
     auto motion_frame_start=next_frame;
     bool motion_capture_pending=false;
     uint64_t motion_presentations=0,motion_intermediates=0,motion_history_resets=0;
@@ -1062,7 +1058,7 @@ int main(int argc,char **argv) try {
     if(sdl.gpu && m.sprite_units && m.sprite_units->flicker_shadows_available()) {
         const auto report=m.sprite_units->report();
         std::cout<<"FLICKER-SHADOWS active="<<shadows_active<<" native_frames="<<executed_frames
-                 <<" presented_frames="<<sdl.gpu->presented_frames()<<" display_paced="<<display_paced_shadows
+                 <<" presented_frames="<<sdl.gpu->presented_frames()
                  <<" shadowed_objects="<<report.flicker.invocations<<" tagged_entries="<<report.flicker.replay_entries
                  <<" frames_with_shadow="<<report.flicker.frames<<'\n';
     }

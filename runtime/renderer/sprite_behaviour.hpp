@@ -134,8 +134,8 @@ struct BehaviourName {
 // entries exactly (sprite-RAM writes whose writer PC lies in `emit`, in the real draw and
 // in the replay), and (2) keep every shadowed object's shadow logically present: the
 // replay forces the game's parity gate so the shadow entries exist on every frame, tagged
-// sprite_flag_shadow. The presenter then picks their visibility per *presented* frame
-// (renderer/sprite_presentation.hpp, flicker_shadow_visible) instead of per emulated frame.
+// sprite_flag_shadow. The GPU presenter composites the scene with and without the tagged entries and
+// shows the linear-light average (a steady 50% shadow); no presenter alternates visibility.
 // Render-only like behaviours: nothing here touches emulated state.
 //
 //   F3RT_FLICKER_SHADOW(ident, unit, description, emit_first, emit_last,

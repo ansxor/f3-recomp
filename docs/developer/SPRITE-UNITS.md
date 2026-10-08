@@ -111,16 +111,16 @@ How it works:
    by position or tile.
 2. Decoders carry the tag (`DecodedSpriteEntry::flags`, `SceneSprite::shadow`). It is
    render-only: the canonical list and serialized state never see it.
-3. `GpuVideo` decides visibility per presented frame: tagged sprites are skipped in the sprite
-   pass when `flicker_shadow_visible(presented_frames)` is false, i.e. on odd accepted
-   drawables (`GpuVideo::presented_frames()`), never from the emulated frame counter. The
-   frontend redraws at display rate (the motion-interpolation display pacing, without temporal
-   history) whenever shadows are active, so alternation follows display refresh; persistence of
-   vision blends the two phases like a CRT. The display link stops while the window is hidden or
-   occluded: a wait that times out marks it dead, nothing blocks on it any more (emulation stays at
-   the native 58.94 Hz on the frame timer, presents run on a display-rate timer) and display-link
-   pacing resumes when a tick arrives again (`GpuVideo::wait_display_tick`). Measured with the link
-   dead: 1750 emulated frames in 30 s windowed.
+3. `GpuVideo` shows the shadow as a steady blend, not an alternation. Window presents draw the
+   sprite pass twice: plane A holds every sprite, plane B the same list with tagged sprites
+   culled (`F3_MASK_HIDE_SHADOW`). The scene shader composites both (`shade_mixed`,
+   `F3_MASK_BLEND_SHADOW`) and, where they differ, outputs the per-channel average in linear
+   light (sRGB decode, mean, re-encode): exactly the time average of the frames with and
+   without the shadow, because the eye integrates emitted light. Overlapping shadows
+   cannot double-darken (plane A is opaque overdraw, as in the "on" frame). Readback and reference
+   draws (`output` non-empty) never blend and keep plane A. Nothing depends on the display
+   refresh any more: no display-rate redraw, no presented-frame parity; only `--motion-interp`
+   uses the display-link pacing.
 4. CPU and FDP output are unchanged (the game's own flicker), by design: the feature is the GPU
    presenter's. The CPU reference raster draws tagged shadows, i.e. the "visible" phase, but
    shadows are never enabled for it.
@@ -131,12 +131,11 @@ game's gate was set, none were real when it was clear, tagged entries lead the r
 forcing the gate adds nothing but the shadow (untagged remainder equals the real entries). Per
 frame it also requires tagged entries in the presentation, detection in attract mode (before
 the first coin) and on frames of both game parities. `--shadow-trace N` prints per-frame
-counts; `--present-model HZ` replays the recorded per-frame data against a display of that rate
-and compares the game's own visibility with `flicker_shadow_visible`:
+counts:
 
 ```sh
 ./build-commandw/f3rt-sprite-check --frames 6000 --behaviour full-detail \
-    --shadow-trace 12 --present-model 144
+    --shadow-trace 12
 ```
 
 ```sh

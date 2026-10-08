@@ -10,8 +10,8 @@ SHADERS = (
     ("fullscreen", "vert", 0, 0, 0),
     ("sprite", "vert", 0, 1, 1),
     ("sprite", "frag", 0, 1, 0),
-    ("scene", "frag", 1, 3, 1),
-    ("scene_interp", "frag", 1, 3, 1),
+    ("scene", "frag", 2, 3, 1),
+    ("scene_interp", "frag", 2, 3, 1),
     ("postprocess", "frag", 1, 0, 1),
 )
 

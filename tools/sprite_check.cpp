@@ -21,9 +21,6 @@
 //   * detection happens in attract mode (before the first coin) and on frames of both game
 //     parities: the game's own gate is set on alternate frames only, the presented list
 //     carries the shadow on every frame that has shadowed objects.
-// --present-model HZ replays the recorded per-frame data against a display of HZ refreshes per
-// second: the game's own emission (what the original flicker would show) versus the
-// display-synced visibility the GPU presenter uses (flicker_shadow_visible).
 //
 // Behaviour invariants are checked every frame on the presentation A would render, by
 // decoding the sprite list with identities only (real entries) and with the splices
@@ -123,7 +120,6 @@ struct Args {
     bool inputs = true;
     bool flicker = true;
     uint64_t shadow_trace = 0;     // print this many consecutive frames from the first shadow frame
-    double present_model_hz = 0;   // simulate presenting at this display rate (0 = off)
     std::vector<std::string> behaviours;
 };
 
@@ -313,65 +309,6 @@ void check_full_detail(const Machine &m, const SpriteUnits &units, InvariantStat
     }
 }
 
-// Replays the recorded per-frame data against a display refreshing at `hz` (non-integer ratio to the
-// emulated frame rate). "original" = what the game's own emission shows on each refresh (the latest
-// completed emulated frame); "sync" = flicker_shadow_visible(refresh index), what the GPU presenter
-// uses. Only refreshes whose emulated frame holds shadowed objects are scored; run lengths are
-// consecutive refreshes with the same visibility.
-void present_model(const FlickerInvariants &shadows, double hz) {
-    const double emu_hz = double(Machine::pixel_clock) / double(Machine::frame_pixels);
-    std::map<unsigned, uint64_t> original_runs, sync_runs;
-    uint64_t scored = 0, repeats = 0, original_on = 0, sync_on = 0, parity_matches = 0;
-    int original_prev = -1, sync_prev = -1;
-    unsigned original_run = 0, sync_run = 0;
-    std::ostringstream sample;
-    unsigned sampled = 0;
-    const auto flush = [&] {
-        if (original_run) ++original_runs[original_run];
-        if (sync_run) ++sync_runs[sync_run];
-        original_run = sync_run = 0;
-        original_prev = sync_prev = -1;
-    };
-    // The game redraws its objects only on some frames (its loop can run at half the frame rate); the
-    // sprite list persists in between, so a frame without invocations shows the last drawn state.
-    constexpr uint64_t persistence = 3;
-    uint64_t drawn = ~0ull;
-    const uint64_t refreshes = uint64_t(double(shadows.per_frame.size()) / emu_hz * hz);
-    for (uint64_t k = 0; k < refreshes; ++k) {
-        const uint64_t e = std::min<uint64_t>(uint64_t(double(k) / hz * emu_hz), shadows.per_frame.size() - 1);
-        if (shadows.per_frame[e].objects) drawn = e;
-        if (drawn == ~0ull || e - drawn > persistence) { flush(); continue; }
-        const FlickerFrame &frame = shadows.per_frame[drawn];
-        const int original = frame.gate_set != 0, sync = flicker_shadow_visible(k) ? 1 : 0;
-        if (original == original_prev) ++original_run; else { if (original_run) ++original_runs[original_run]; original_run = 1; }
-        if (sync == sync_prev) { ++sync_run; ++repeats; } else { if (sync_run) ++sync_runs[sync_run]; sync_run = 1; }
-        original_prev = original; sync_prev = sync;
-        ++scored;
-        original_on += original;
-        sync_on += sync;
-        parity_matches += sync == int((e & 1) == 0);
-        if (sampled < 24 && scored > 600) {
-            sample << "    refresh " << k << " emu_frame " << e + 1 << " emu_parity " << ((e + 1) & 1) << " game_emits "
-                   << original << " sync_visible " << sync << '\n';
-            ++sampled;
-        }
-    }
-    flush();
-    const auto histogram = [](const std::map<unsigned, uint64_t> &runs) {
-        std::ostringstream ss;
-        for (const auto &[length, count] : runs) ss << ' ' << length << "x:" << count;
-        return ss.str();
-    };
-    std::cout << std::fixed << std::setprecision(3) << "  present model: display " << hz << " Hz, emulated " << emu_hz
-              << " Hz (ratio " << hz / emu_hz << "), scored refreshes=" << scored << '\n'
-              << "    original (game gate)  shadow visible " << original_on << "/" << scored << ", run lengths in refreshes:"
-              << histogram(original_runs) << '\n'
-              << "    sync (display parity) shadow visible " << sync_on << "/" << scored << ", run lengths in refreshes:"
-              << histogram(sync_runs) << "  consecutive-equal refreshes=" << repeats << '\n'
-              << "    sync visibility equals emulated-frame parity on " << parity_matches << "/" << scored << " refreshes\n"
-              << "    sample:\n" << sample.str();
-}
-
 void check_flicker_frame(const Machine &m, const SpriteUnits &units, FlickerInvariants &stats, uint64_t frame,
                          SpriteRamState &latch, uint64_t attract_end) {
     const SpritePresentation presentation = units.presentation();
@@ -540,7 +477,6 @@ int run(const Args &args) {
                 std::cout << "    " << i + 1 << ' ' << shadows.per_frame[i].entries << ' ' << shadows.per_frame[i].objects << ' '
                           << shadows.per_frame[i].gate_set << '\n';
         }
-        if (args.present_model_hz > 0) present_model(shadows, args.present_model_hz);
     }
     std::cout << std::dec << "frames=" << on->frame << " cycles=" << on->cpu.cycles << " native_blocks="
               << on->native_blocks << " state_compares=" << state_compares << " set=" << args.set << '\n'
@@ -573,11 +509,10 @@ int main(int argc, char **argv) try {
         else if (arg == "--behaviour") args.behaviours.push_back(value());
         else if (arg == "--no-flicker-shadows") args.flicker = false;
         else if (arg == "--shadow-trace") args.shadow_trace = std::stoull(value());
-        else if (arg == "--present-model") args.present_model_hz = std::stod(value());
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [--rom-dir DIR] [--set SET] [--frames N] [--compare-every N]\n"
                          "       [--seed N] [--no-inputs] [--behaviour NAME]... [--no-flicker-shadows]\n"
-                         "       [--shadow-trace N] [--present-model DISPLAY_HZ]\n"
+                         "       [--shadow-trace N]\n"
                          "Exits nonzero unless every unit replay is bit-exact, every sprite write is accounted\n"
                          "for, and emulated state is identical with sprite units on and off.\n";
             return 0;
