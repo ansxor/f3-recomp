@@ -1,9 +1,11 @@
 #pragma once
 #include "renderer/game/scene.hpp"
 #include "f3rt/game_video.hpp"
+#include "renderer/sprite_presentation.hpp"
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace f3rt {
 class StateWriter;
@@ -33,7 +35,14 @@ public:
     void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
                 GameVideoOptions options = {}) const;
     std::span<const SceneSprite> sprites() const;
+    // Presentation source for the next decode (null = none); set by GameVideo around decode.
+    void set_presentation(const SpritePresentation *presentation) { presentation_ = presentation; }
+    // Render-only: current sprites with unit splices applied, else sprites(). Same flip mirroring.
+    std::span<const SceneSprite> presented_sprites() const;
     bool flipped() const;
+    // The last decode produced a presented list (splices) and whether it hit kMaxPresentedSprites.
+    bool presented_valid() const { return presented_submitted_valid_; }
+    bool presented_overflow() const { return presented_overflow_; }
     uint8_t pen_mask() const;
     bool trails() const;
     size_t state_size() const;
@@ -42,7 +51,8 @@ public:
 
 private:
     friend class GameVideo;
-    static constexpr size_t kMaxSprites = 1024;
+    static constexpr size_t kMaxSprites = max_hardware_sprites;
+    static constexpr size_t kMaxPresentedSprites = max_presented_sprites;
 
     std::array<SceneSprite, kMaxSprites> staging_sprites_{};
     size_t staging_count_ = 0;
@@ -60,6 +70,14 @@ private:
     uint8_t reg_pen_mask_ = 15;
     bool reg_trails_ = false;
     bool reg_bank_ = false;
+
+    // Render-only splice view of the submitted/current lists (never serialized, so snapshots and
+    // CRCs match the canonical decode). Valid only when the last decode had splices.
+    const SpritePresentation *presentation_ = nullptr;
+    std::vector<SceneSprite> presented_submitted_, presented_current_;
+    size_t presented_submitted_count_ = 0, presented_current_count_ = 0;
+    bool presented_submitted_valid_ = false, presented_current_valid_ = false;
+    bool presented_overflow_ = false; // last decode filled the presented list to capacity
 };
 static_assert(SceneSource<GameSprites> && Snapshotable<GameSprites>);
 

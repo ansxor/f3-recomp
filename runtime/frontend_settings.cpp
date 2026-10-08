@@ -68,6 +68,7 @@ bool load_frontend_settings(const std::string &path,FrontendSettings &settings,s
         if(k=="video")s.video_mode=v;else if(k=="backend")s.video_backend=v;else if(k=="scale")s.video_scale=v;
         else if(k=="filter")s.filter=v;else if(k=="interpolation")s.interpolation=v;else if(k=="fields")s.interpolation_fields=v;
         else if(k=="postprocess")s.postprocess=v;else if(k=="user_shader")s.user_shader=v;
+        else if(k=="sprite_behaviour") {} // retired option: always on now; old files still carry the key
         else if(k=="server")s.server=v;else if(k=="room")s.room=v;
         else if(k=="audio") {if(v=="native")s.audio_backend=AudioBackend::Native;else if(v=="oracle")s.audio_backend=AudioBackend::Oracle;else if(v=="hle")s.audio_backend=AudioBackend::Hle;else {error="Unknown audio backend";return false;}}
         else if(k=="volume") { std::istringstream in(v);in>>s.volume;if(!in || in.peek()!=EOF){error="Invalid volume";return false;} }

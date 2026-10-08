@@ -155,6 +155,17 @@ Command War 0.0J prototype and Riding Fight World 1.0O use 320×224, y 32,
 lag 1. Command War retains upstream's imperfect-graphics source limitation;
 Riding Fight uses sprite trails.
 
+`extended_alt_maps = true` adds the PF2/PF3 alternate tilemaps (selected per scanline by line RAM
+bit `0x200`). `full_resolution_alt_maps = true` (default `false`, requires `extended_alt_maps`;
+checked at build time) is a presentation-only option for games such as Command War that draw
+distant floor rows from a horizontally half-scaled copy of the main map because F3 horizontal zoom
+cannot sample more than one texel per pixel. In expanded output (scale above 1 or a border; GPU and
+CPU compositor) such a row samples the main full-resolution map instead whenever the renderer finds
+an exact twin of that map row (`alt(x, y) == main((2x + c) mod 1024, y)` for every x and all 16
+lines, comparing decoded palette and pen). The native 320-wide frame, `--video compare`, snapshots
+and CRCs are unchanged; rows without an exact twin keep the alternate map. The `VIDEO
+presented_sprite_frames` stats line reports remapped and fallback alternate-map rows.
+
 Palette precision is dynamic FDA state, not a config key. Latched line RAM
 `$6400` bit 14 is active-low 15-bit selection versus 24-bit. The 15-bit format
 `RRRRGGGGBBBBRGBx` uses fifth bits 3/2/1 and channel quantization
@@ -163,6 +174,58 @@ tile attributes/sprite commands, not per-game constants. Pinned
 [manifest source](https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp)
 and [FDA research](https://github.com/y-ack/mame/blob/28e411d4f760df3d55fae070a2f6424f89966a2f/src/mame/taito/tc0630fdp.cpp)
 are described in [porting](/developer/porting).
+
+## [[video.emit_units]] and [video.frame_writers]
+
+Optional. An emit unit is a span of game code that draws one object or queue
+record into sprite RAM. Declaring one gives the runtime stable sprite identity,
+sandbox replay of the game's own native code and render-only splicing; emulated
+state, CRCs, cycles and native block counts are unchanged.
+
+```toml
+[[video.emit_units]]
+name  = "objects"      # C identifier, unique (not all/frame_writers/digest/detail)
+start = 0x9a3c         # even PC, or a list of them; each must decode as an instruction
+end   = 0x9a6c         # same arity as start; end[i] terminates start[i]; start < end
+unit  = "a6"           # d0-d7 / a0-a6: value at start = unit address in work RAM
+size  = 0x80           # optional, default 0: bytes behaviours may access at that address
+owner = "unit"         # "unit" (default) | "writer" (writer PC of the record's first word)
+[video.frame_writers]
+ranges = [[0x9a74, 0x9af6]]   # inclusive PC ranges writing sprite RAM outside any unit
+```
+
+Unit ids are declaration order. `tools/compile_sprite_units.py --config <toml>
+--output-dir <dir>` writes, at CMake configure time and without a ROM,
+`sprite_units.h` (`F3_SPRITE_UNITS_DIGEST`, `F3_SPRITE_UNIT_COUNT`) and
+`sprite_units.hpp` (`f3rt::sprite_units::<name>` `EmitUnit`s, `all`,
+`frame_writers`, `digest`, static_asserts). Games without units get empty arrays.
+`recomp emit` plants `F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every
+declared end/start PC, includes `sprite_units.h` with a digest `#error` guard in
+each file that has a hook, rejects PCs that are not retained decoded
+instructions or frame-writer ranges outside the ROM, and records per-unit hook
+counts under `emit_units` in `lowering.json`.
+
+Choosing spans and writer ranges is verified, not guessed: `f3rt-sprite-check`
+(see [developer notes](../../developer/SPRITE-UNITS.md)) replays every
+invocation unpatched in a sandbox and demands the bytes match what the real span wrote,
+and fails on any sprite-RAM write outside every unit whose PC is not in
+`frame_writers`. Annotate each declared span and range with the PCs that justify it:
+the checker prints every outside writer PC with its first frame and address.
+
+`size` must cover every field a behaviour reads or patches (offsets are
+compile-time checked against it). Behaviours live in
+`games/<id>/sprites/behaviours.hpp` (`F3RT_SPRITE_BEHAVIOUR`, registered
+through `F3RT_SPRITE_BEHAVIOURS_HEADER`); the frontend enables every registered
+behaviour automatically whenever the game runs natively (`--translated`).
+
+## Compile-time video geometry
+
+`tools/compile_roms.py --game <id> --game-output <path>` also writes
+`game_video_config.hpp` into the same `generated_config` directory, from the same
+validated `[video]` values as the runtime manifest: `f3rt::game_config::id`,
+`video` (a `VideoConfig`), `visible_end`, and `matches(const VideoConfig &)`, which
+the renderer calls at startup to reject a loaded set whose geometry differs from
+the one compiled in.
 
 ## [discovery]
 

@@ -12,6 +12,9 @@ struct VideoConfig {
     bool extend = true;
     // Immutable ROM layout capability: extended PF2/PF3 alternates are maps 4/5.
     bool extended_alt_maps = false;
+    // Presentation-only (never changes emulation): the presented output samples PF2/PF3 alternate-map
+    // rows from the full-resolution main map where an exact X2 alias exists. Requires extended_alt_maps.
+    bool full_resolution_alt_maps = false;
 };
 struct RomSet {
     std::string name;

@@ -21,6 +21,7 @@ static_assert(F3_ROW_ORDER + layer_count <= F3_ROW_MOTION_TEXT_X && F3_ROW_MOTIO
 static_assert(F3_LAYER_CLIPS + 2 * 16 == F3_LAYER_STRIDE);
 static_assert(F3_ROW_LAYERS + layer_count * F3_LAYER_STRIDE == F3_ROW_PF);
 static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE <= F3_SCENE_ROW_STRIDE);
+static_assert(GameTiles::map_count == 4 || GameTiles::map_count == 6);
 static_assert(CapturedFrame::max_sprites == F3_SCENE_SPRITE_COUNT && CapturedFrame::palette_size == F3_SCENE_PALETTE_WORDS);
 
 uint32_t layer_flags(const SceneLayer &l) {
@@ -28,9 +29,25 @@ uint32_t layer_flags(const SceneLayer &l) {
         (l.enabled ? F3_LAYER_ENABLED : 0u) | (uint32_t(l.blend_select) << F3_LAYER_SELECT_SHIFT) |
         (l.mosaic ? F3_LAYER_MOSAIC : 0u);
 }
-void encode_row(const SceneRow &r, const MotionState::Row *motion, int16_t left, int16_t right, uint32_t *at) {
+constexpr unsigned alternate_maps = GameTiles::map_count - 4;
+// `presented` (expanded output) routes playfield geometry through presented_playfield(): alt-map rows
+// with an exact full-resolution twin sample the main map at twice the step. Motion keeps moving such a
+// row horizontally (the remap is linear in source_x); a row whose vertical phase moved samples map rows
+// the twin was not solved for, so it keeps the canonical alternate map.
+void encode_row(const SceneRow &r, const MotionState::Row *motion, bool presented, int16_t left, int16_t right,
+                uint32_t *at) {
+    std::array<ScenePlayfield, 4> pf = r.playfields;
+    std::array<bool, 4> moved_y{};
+    for (unsigned i = 0; i < 4; ++i) {
+        if (!motion) continue;
+        pf[i].source_x = motion->source_x[i];
+        moved_y[i] = motion->phase[i] != int32_t(uint32_t(r.playfields[i].source_y) * 256u + r.playfields[i].y_fraction);
+    }
+    if (presented)
+        for (unsigned i = 0; i < 4; ++i)
+            if (!moved_y[i]) pf[i] = presented_playfield(pf[i]);
     at[F3_ROW_BACKGROUND] = r.background;
-    at[F3_ROW_MOSAIC] = r.mosaic_period;
+    at[F3_ROW_MOSAIC] = r.mosaic_period | (r.palette_15bit ? F3_ROW_PALETTE15 : 0u) | (r.blur ? F3_ROW_BLUR : 0u);
     at[F3_ROW_TEXT_X] = uint32_t(int32_t(r.text_x));
     at[F3_ROW_TEXT_Y] = uint32_t(int32_t(r.text_y));
     at[F3_ROW_BLEND] = r.blend[0] | (uint32_t(r.blend[1]) << 8) | (uint32_t(r.blend[2]) << 16) |
@@ -41,6 +58,8 @@ void encode_row(const SceneRow &r, const MotionState::Row *motion, int16_t left,
         const auto &l = r.layer(LayerId(i));
         uint32_t *la = at + F3_ROW_LAYERS + i * F3_LAYER_STRIDE;
         la[F3_LAYER_FLAGS] = layer_flags(l);
+        if (i < 4 && pf[i].alt_map) la[F3_LAYER_FLAGS] |= F3_LAYER_ALT_MAP;
+        if (i < 4 && r.playfields[i].empty_row) la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
         const auto clips = clip_ranges(r, l, left, right);
         la[F3_LAYER_CLIP_COUNT] = clips.count;
         for (unsigned c = 0; c < clips.count; ++c) {
@@ -49,7 +68,7 @@ void encode_row(const SceneRow &r, const MotionState::Row *motion, int16_t left,
         }
     }
     for (unsigned i = 0; i < 4; ++i) {
-        const auto &p = r.playfields[i];
+        const auto &p = pf[i];
         uint32_t *pa = at + F3_ROW_PF + i * F3_PF_STRIDE;
         pa[F3_PF_SOURCE_X] = uint32_t(p.source_x);
         pa[F3_PF_SOURCE_Y] = uint32_t(p.source_y);
@@ -57,10 +76,8 @@ void encode_row(const SceneRow &r, const MotionState::Row *motion, int16_t left,
         pa[F3_PF_Y_STEP] = uint32_t(p.y_step);
         pa[F3_PF_Y_FRACTION] = p.y_fraction;
         pa[F3_PF_PALETTE_ADD] = p.palette_add;
-        if (!motion) continue;
-        pa[F3_PF_SOURCE_X] = uint32_t(motion->source_x[i]);
         // The captured phase is kept bit-exact where motion did not move it.
-        if (motion->phase[i] != int32_t(uint32_t(p.source_y) * 256u + p.y_fraction)) {
+        if (moved_y[i]) {
             pa[F3_PF_SOURCE_Y] = uint32_t(motion->phase[i]) >> 8;
             pa[F3_PF_Y_FRACTION] = uint32_t(motion->phase[i]) & 255u;
         }
@@ -98,10 +115,13 @@ void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionSt
         // Raw 4-byte video-RAM cell (attributes<<16 | code); the shader decodes it
         // exactly like GameTiles::RowSampler. Word 1 of each slot is unused.
         const auto cells = frame.tiles.cells(l);
+        // Only PF2/PF3 have alternates (maps 4/5); word 1 carries them.
+        const bool alternate = alternate_maps && l >= 2;
+        const auto alt_cells = frame.tiles.cells(alternate ? l + 2 : l);
         uint32_t *dst = w + F3_SCENE_PF_CELLS + l * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE;
         for (unsigned i = 0; i < F3_SCENE_PF_LAYER_CELLS; ++i) {
             dst[i * 2] = cells[i];
-            dst[i * 2 + 1] = 0;
+            dst[i * 2 + 1] = alternate ? alt_cells[i] : 0;
         }
     }
     // Raw big-endian text-map words; the shader decodes them like GameText::pixel.
@@ -113,7 +133,7 @@ void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionSt
     std::memcpy(w + F3_SCENE_PALETTE, frame.colors.data(), F3_SCENE_PALETTE_WORDS * sizeof(uint32_t));
     const int16_t left = int16_t(46 - int(options.border)), right = int16_t(366 + options.border);
     for (unsigned y = 0; y < F3_SCENE_ROW_COUNT; ++y)
-        encode_row(frame.rows[y], motion ? &motion->rows[y] : nullptr, left, right,
+        encode_row(frame.rows[y], motion ? &motion->rows[y] : nullptr, options.expanded(), left, right,
                    w + F3_SCENE_ROWS + y * F3_SCENE_ROW_STRIDE);
     for (unsigned i = 0; i < frame.sprite_count; ++i) {
         const auto &s = frame.sprites[i];

@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt/game_video.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
@@ -18,6 +19,14 @@ public:
     // Shared Taito F3 decode defined in runtime/renderer/game/lines.cpp.
     void decode(const VideoRam &vram);
     void prepare(bool flipped);
+    // After prepare(): flag playfield rows whose sampled map row holds no tile codes.
+    void cull_empty_rows(const class GameTiles &tiles);
+    // Presented alt-map rows (PF2/PF3 alt_map rows that draw) over the visible scanlines.
+    struct AltRowCounts { uint64_t remapped = 0, fallback = 0; };
+    // After cull_empty_rows(): set ScenePlayfield::full_res_offset on every alt_map row whose sampled
+    // tile rows all have a common exact full-resolution twin (FullResolutionAltMaps). Render-only;
+    // canonical row fields are untouched. No-op unless game_config::video.full_resolution_alt_maps.
+    AltRowCounts resolve_full_resolution_alt(const class FullResolutionAltMaps &maps);
     const SceneRow &row(unsigned scanout_y) const { return rows_[scanout_y & 255]; }
     std::span<const SceneRow, 256> rows() const { return rows_; }
     void compare_rows(const Video &oracle, uint64_t frame);
@@ -83,7 +92,7 @@ private:
         bool clip_inv_mode = false;
         bool x_sample_enable = false;
 
-        uint16_t colscroll = 0;
+        uint16_t colscroll = 0; // bits 0-8 column scroll, bit 9 alternate map
         int32_t x_scale = 256;
         int32_t y_scale = 0;
         uint16_t pal_add = 0;
@@ -104,6 +113,9 @@ private:
         std::array<uint8_t, 4> blend{8, 8, 8, 8};
         uint8_t x_sample = 16;
         uint16_t bg_palette = 0;
+        // Defaults match the FDP until a line RAM latch sets them; not serialized
+        // (lines are re-decoded from video RAM at every VBSTART).
+        bool palette_15bit = true, blur = true;
         LinePivot pivot{};
         std::array<LineSprite, 4> sp{};
         std::array<LinePlayfield, 4> pf{};

@@ -409,8 +409,8 @@ def compile_sound_rom(
         "#define F3_SOUND_GENERATED_PROGRAM_H\n\n"
         "#include <stddef.h>\n"
         "#include <f3rt/cpu_abi.h>\n\n"
-        "#if F3RT_ABI_VERSION != 3u\n"
-        '#error "Generated sound program requires F3RT_ABI_VERSION 3"\n'
+        "#if F3RT_ABI_VERSION != 4u\n"
+        '#error "Generated sound program requires F3RT_ABI_VERSION 4"\n'
         "#endif\n\n"
         "#ifdef __cplusplus\n"
         'extern "C" {\n'

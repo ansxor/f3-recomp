@@ -48,7 +48,6 @@ struct WindowCapture {
         if (texture) SDL_ReleaseGPUTexture(device, texture);
     }
 };
-constexpr Uint32 asset_bytes = 32768 * 256;
 constexpr Uint32 scene_bytes = encoded_scene_words * sizeof(uint32_t);
 constexpr Uint32 interpolation_scene_bytes = encoded_interpolation_words * sizeof(uint32_t);
 constexpr Uint32 native_bytes = encoded_native_words * sizeof(uint32_t);
@@ -156,6 +155,8 @@ struct GpuVideo::Impl {
     InterpolationReason logged_reason = InterpolationReason::Off;
     bool have_interpolation_log = false;
     std::vector<uint64_t> tile_pen_masks;
+    // Asset ROM sizes in bytes (256 per 16x16 tile): fixed by the loaded ROM set, not the hardware maximum.
+    Uint32 pf_asset_bytes = 0, sp_asset_bytes = 0;
     SDL_GPUBuffer *scene_buffer = nullptr, *pf_assets = nullptr, *sp_assets = nullptr, *native_buffer = nullptr;
     SDL_GPUTexture *sprite_plane = nullptr, *surface = nullptr;
     SDL_GPUSampler *sampler = nullptr;
@@ -314,8 +315,10 @@ struct GpuVideo::Impl {
     void init(std::span<const uint8_t> tiles, std::span<const uint8_t> sprites) {
         if (!options.scale || options.scale > GameVideoOptions::max_gpu_scale || options.border > GameVideoOptions::max_border)
             throw std::runtime_error("Game GPU presentation scale/border out of range");
-        if (tiles.size() < asset_bytes || sprites.size() < asset_bytes)
+        if (tiles.empty() || sprites.empty() || tiles.size() % 256 || sprites.size() % 256 ||
+            tiles.size() > UINT32_MAX / 2 || sprites.size() > UINT32_MAX / 2 || tiles.size() + sprites.size() > UINT32_MAX)
             throw std::runtime_error("Incomplete GPU tile/sprite assets");
+        pf_asset_bytes = Uint32(tiles.size()); sp_asset_bytes = Uint32(sprites.size());
         device = checked(SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB, false, nullptr), "Create SDL GPU device");
         if (window) {
             if (!SDL_ClaimWindowForGPUDevice(device, window)) fail("Claim GPU window");
@@ -332,7 +335,7 @@ struct GpuVideo::Impl {
         }
         scene_buffer = buffer(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes);
         native_buffer = buffer(native_bytes);
-        pf_assets = buffer(asset_bytes); sp_assets = buffer(asset_bytes);
+        pf_assets = buffer(pf_asset_bytes); sp_assets = buffer(sp_asset_bytes);
         sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
         surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
         SDL_GPUSamplerCreateInfo sampling{};
@@ -344,24 +347,25 @@ struct GpuVideo::Impl {
         scene_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
         if (interpolation != VideoInterpolation::Off)
             interpolation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-        upload = transfer(asset_bytes * 2, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
+        upload = transfer(pf_asset_bytes + sp_asset_bytes, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
         if (interpolation != VideoInterpolation::Off && (unsigned(fields) & unsigned(InterpolationFields::Palette)))
-            tile_pen_masks.resize(32768);
+            tile_pen_masks.resize(pf_asset_bytes / 256);
         auto *mapped = static_cast<uint32_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, false), "Map GPU asset upload"));
         // Explicit low-byte-first packing also works on big-endian hosts.
-        for (Uint32 i = 0; i < asset_bytes; i += 4) {
+        for (Uint32 i = 0; i < pf_asset_bytes; i += 4) {
             mapped[i / 4] = uint32_t(tiles[i]) | (uint32_t(tiles[i + 1]) << 8) | (uint32_t(tiles[i + 2]) << 16) | (uint32_t(tiles[i + 3]) << 24);
-            mapped[(asset_bytes + i) / 4] = uint32_t(sprites[i]) | (uint32_t(sprites[i + 1]) << 8) | (uint32_t(sprites[i + 2]) << 16) | (uint32_t(sprites[i + 3]) << 24);
             if (!tile_pen_masks.empty())
                 tile_pen_masks[i / 256] |= (uint64_t{1} << (tiles[i] & 63)) |
                     (uint64_t{1} << (tiles[i + 1] & 63)) | (uint64_t{1} << (tiles[i + 2] & 63)) |
                     (uint64_t{1} << (tiles[i + 3] & 63));
         }
+        for (Uint32 i = 0; i < sp_asset_bytes; i += 4)
+            mapped[(pf_asset_bytes + i) / 4] = uint32_t(sprites[i]) | (uint32_t(sprites[i + 1]) << 8) | (uint32_t(sprites[i + 2]) << 16) | (uint32_t(sprites[i + 3]) << 24);
         SDL_UnmapGPUTransferBuffer(device, upload);
         Command command(device);
         auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU asset copy");
-        upload_buffer(copy, upload, pf_assets, 0, asset_bytes, false);
-        upload_buffer(copy, upload, sp_assets, asset_bytes, asset_bytes, false);
+        upload_buffer(copy, upload, pf_assets, 0, pf_asset_bytes, false);
+        upload_buffer(copy, upload, sp_assets, pf_asset_bytes, sp_asset_bytes, false);
         SDL_EndGPUCopyPass(copy);
         if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU asset upload");
         SDL_ReleaseGPUTransferBuffer(device, upload);
@@ -456,7 +460,7 @@ struct GpuVideo::Impl {
         const bool skip_busy = presentation == Presentation::SkipBusy;
         size_t count = size_t(options.width()) * options.height();
         if (!output.empty() && output.size() < count) throw std::runtime_error("Incomplete GPU output buffer");
-        if (scene.sprite_count > 1024) throw std::runtime_error("GPU sprite count out of range");
+        if (scene.sprite_count > F3_SCENE_SPRITE_COUNT) throw std::runtime_error("GPU sprite count out of range");
         [[maybe_unused]] const bool pace_prepared = !no_present && motion_pace_prepared;
         if (!no_present) motion_pace_prepared = false;
         if (comparison && !comparison_native_valid) {
@@ -538,6 +542,7 @@ struct GpuVideo::Impl {
         SDL_EndGPUCopyPass(copy);
         GpuUniforms uniforms{options.scale, options.border, options.width(), options.height(), scene.sprite_count,
                              scene.pen_mask, unsigned(scene.fallback), layer_mask & all_layers};
+        uniforms.pf_tile_count = pf_asset_bytes / 256; uniforms.sp_tile_count = sp_asset_bytes / 256;
         if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
             uniforms.layer_mask |= motion_layer_mask;
         if (!scene.fallback) {
@@ -545,7 +550,7 @@ struct GpuVideo::Impl {
             auto *pass = render_pass(command.value, sprite_plane);
             SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
             if (!options.expanded()) {
-                SDL_Rect scissor{46, 24, 320, 232};
+                SDL_Rect scissor{46, int(geometry::first_line), int(geometry::native_width), int(geometry::height)};
                 SDL_SetGPUScissor(pass, &scissor);
             }
             SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);

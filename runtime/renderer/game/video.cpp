@@ -10,6 +10,7 @@
 #include "renderer/game/video_log.hpp"
 #include "renderer/game/captured_frame.hpp"
 #include "state_io.hpp"
+#include "sprite_units.hpp"
 #include <algorithm>
 #include <array>
 #include <ostream>
@@ -66,7 +67,7 @@ struct GameVideo::Impl {
     std::array<std::array<uint16_t, 432 * 256>, 2> sprite_planes{};
     unsigned next_plane = 0, native_plane = 0;
     bool native_pending = false;
-    std::array<uint32_t, 320 * 232> pixels{};
+    std::array<uint32_t, geometry::native_pixels> pixels{};
     bool rendered = false;
     // Present exactly when GPU presentation is enabled. Overwritten once per
     // supported or fallback frame by capture(); the CPU compositor and the GPU
@@ -99,7 +100,7 @@ struct GameVideo::Impl {
         frame.tiles = tiles;
         frame.text = text;
         std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
-        const auto current = sprites.sprites();
+        const auto current = sprites.presented_sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
         frame.pen_mask = sprites.pen_mask();
@@ -122,7 +123,7 @@ struct GameVideo::Impl {
 
     FrameScene live_scene(std::span<const uint32_t> colors) const {
         return {tiles, text, lines.rows(), machine.video->playfield_tiles(), colors, all_layers,
-                sprites.flipped()};
+                sprites.flipped(), true};
     }
     FrameScene captured_scene(uint32_t mask = all_layers) const {
         return captured->scene(machine.video->playfield_tiles(), mask);
@@ -141,8 +142,8 @@ struct GameVideo::Impl {
         if (captured->fallback) {
             const unsigned left = opts.border * opts.scale;
             for (unsigned y = 0; y < opts.height(); ++y) for (unsigned x = 0; x < opts.width(); ++x)
-                output[size_t(y) * opts.width() + x] = x < left || x >= left + 320 * opts.scale ?
-                    0xff000000u : captured->native_pixels[(y / opts.scale) * 320 + (x - left) / opts.scale];
+                output[size_t(y) * opts.width() + x] = x < left || x >= left + geometry::native_width * opts.scale ?
+                    0xff000000u : captured->native_pixels[(y / opts.scale) * geometry::native_width + (x - left) / opts.scale];
             return;
         }
         auto &ref = reference_planes();
@@ -177,6 +178,15 @@ struct GameVideo::Impl {
     }
     uint64_t composite_frames = 0, composite_mismatches = 0;
     std::array<uint64_t, 9> frames{}, mismatches{};
+    // PF2/PF3 alternate physical maps (4/5), compared only for extended_alt_maps games.
+    std::array<uint64_t, 2> alt_frames{}, alt_mismatches{};
+    // Frames whose render-only presented sprite list (unit splices) existed / filled its capacity.
+    uint64_t presented_frames = 0, presented_overflow_frames = 0;
+    // Render-only full-resolution alternate-map presentation (game_config::video.full_resolution_alt_maps):
+    // the row solver cache and, over rendered frames, visible PF2/PF3 alt-map rows that draw from the
+    // main map (remapped) versus the canonical alternate map (fallback).
+    FullResolutionAltMaps alt_maps;
+    uint64_t alt_rows_remapped = 0, alt_rows_fallback = 0;
     // Layer components in decode order; the constrained helpers below enforce
     // that each one satisfies the scene lifecycle concepts.
     auto sources() { return std::tie(tiles, text, sprites, lines); }
@@ -207,7 +217,7 @@ struct GameVideo::Impl {
         writer.write(r);
         std::apply([&](const auto &...c) { Impl::save_all(writer, c...); }, stateful());
         writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_planes[next_plane]));
-        writer.write_span(std::span<const uint32_t, 320 * 232>(pixels));
+        writer.write_span(std::span<const uint32_t, geometry::native_pixels>(pixels));
         if (!sync) {
             writer.write_span(std::span<const uint32_t>(presentation_pixels));
             writer.write_span(std::span<const uint16_t>(presentation_sprites));
@@ -221,7 +231,7 @@ struct GameVideo::Impl {
         native_pending = false;
         next_plane = native_plane = 0;
         reader.read_span(std::span<uint16_t, 432 * 256>(sprite_planes[next_plane]));
-        reader.read_span(std::span<uint32_t, 320 * 232>(pixels));
+        reader.read_span(std::span<uint32_t, geometry::native_pixels>(pixels));
         if (!sync) {
             reader.read_span(std::span<uint32_t>(presentation_pixels));
             reader.read_span(std::span<uint16_t>(presentation_sprites));
@@ -235,10 +245,10 @@ struct GameVideo::Impl {
         if (options.expanded()) {
             const unsigned scale = options.scale, width = options.width();
             for (unsigned y = 0; y < options.height(); ++y)
-                for (unsigned x = 0; x < 320 * scale; ++x) {
+                for (unsigned x = 0; x < geometry::native_width * scale; ++x) {
                     const size_t at = size_t(y) * width + options.border * scale + x;
-                    presentation_pixels[at] = machine.pixels_[(y / scale) * 320 + x / scale];
-                    presentation_sprites[at] = sprite_planes[next_plane][(y / scale + 24) * 432 + x / scale + 46];
+                    presentation_pixels[at] = machine.pixels_[(y / scale) * geometry::native_width + x / scale];
+                    presentation_sprites[at] = sprite_planes[next_plane][(y / scale + geometry::first_line) * 432 + x / scale + 46];
                 }
         }
         presentation_pending = false;
@@ -254,8 +264,22 @@ struct GameVideo::Impl {
     }
 };
 
+namespace {
+// The renderer is compiled against games/<game>/config.toml [video]; a ROM set
+// carrying different geometry must never be drawn with it.
+Machine &require_matching_video(Machine &machine) {
+    if (!game_config::matches(machine.roms.video))
+        throw std::runtime_error("Game video geometry (rotation/sprite lag/visible window/extend/alternate maps) "
+                                 "differs from the geometry this build was configured for");
+    return machine;
+}
+static_assert(game_config::video.extend, "the game scene renderer decodes 64-column extended playfields only");
+static_assert(game_config::video.rotation == 0, "the game scene renderer does not rotate the scanout");
+static_assert(game_config::video.sprite_lag == 1, "GameVideo latches sprites with exactly one frame of lag");
+} // namespace
+
 GameVideo::GameVideo(Machine &machine, GameVideoMode mode, GameVideoOptions options)
-    : impl_(std::make_unique<Impl>(machine, mode, options)) {
+    : impl_(std::make_unique<Impl>(require_matching_video(machine), mode, options)) {
     if (!options.scale || options.scale > GameVideoOptions::max_scale || options.border > GameVideoOptions::max_border)
         throw std::runtime_error("Game presentation scale must be 1..4 and border 0..160");
     if (options.expanded()) {
@@ -283,6 +307,11 @@ void GameVideo::reset() {
     }
     impl_->frames.fill(0);
     impl_->mismatches.fill(0);
+    impl_->presented_frames = impl_->presented_overflow_frames = 0;
+    impl_->alt_maps.reset();
+    impl_->alt_rows_remapped = impl_->alt_rows_fallback = 0;
+    impl_->alt_frames.fill(0);
+    impl_->alt_mismatches.fill(0);
     impl_->rendered = false;
     impl_->composite_frames = impl_->composite_mismatches = 0;
     impl_->fallback_count = 0;
@@ -320,7 +349,19 @@ void GameVideo::render_frame() {
     // Render below still uses the previously latched sprite plane, preserving the
     // one-frame FDP sprite lag.
     const VideoRam vram{m.graphics, m.control, m.frame + 1};
+    // Render-only unit presentation (identities/splices) valid for this decode only.
+    SpritePresentation presentation;
+    const bool have_presentation = m.sprite_units && m.sprite_units->active();
+    if (have_presentation) {
+        presentation = m.sprite_units->presentation();
+        state.sprites.set_presentation(&presentation);
+    }
     std::apply([&](auto &...c) { Impl::decode_all(vram, c...); }, state.sources());
+    state.sprites.set_presentation(nullptr);
+    if (state.sprites.presented_valid()) {
+        ++state.presented_frames;
+        state.presented_overflow_frames += state.sprites.presented_overflow();
+    }
     render();
     if (state.rendered && state.mode == GameVideoMode::Game) {
         if (!state.captured)
@@ -341,8 +382,8 @@ void GameVideo::render_frame() {
         std::fill(state.presentation_pixels.begin(), state.presentation_pixels.end(), 0xff000000);
         const unsigned scale = state.options.scale, width = state.options.width();
         for (unsigned y = 0; y < state.options.height(); ++y)
-            for (unsigned x = 0; x < 320 * scale; ++x)
-                state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels_[(y / scale) * 320 + x / scale];
+            for (unsigned x = 0; x < geometry::native_width * scale; ++x)
+                state.presentation_pixels[y * width + state.options.border * scale + x] = m.pixels_[(y / scale) * geometry::native_width + x / scale];
     }
     if (state.captured) {
         // Only a supported successor may discard an unobserved composite.
@@ -363,8 +404,15 @@ void GameVideo::render() {
     if (state.sprites.flipped()) { state.fallback("sprites", "flipped-screen"); return; }
     if (state.sprites.trails()) { state.fallback("sprites", "sprite-trails"); return; }
     state.lines.prepare(state.sprites.flipped());
-    for (unsigned y = 24; y < 256; ++y)
+    state.lines.cull_empty_rows(state.tiles);
+    for (unsigned y = geometry::first_line; y < geometry::end_line; ++y)
         if (state.lines.row(y).bitmap) { state.fallback("text", "bitmap-pivot"); return; }
+    if constexpr (game_config::video.full_resolution_alt_maps) {
+        state.alt_maps.update(state.tiles, state.machine.video->playfield_tiles());
+        const auto counts = state.lines.resolve_full_resolution_alt(state.alt_maps);
+        state.alt_rows_remapped += counts.remapped;
+        state.alt_rows_fallback += counts.fallback;
+    }
     if (state.mode != GameVideoMode::Game || !state.captured) {
         std::array<uint32_t, 8192> colors;
         const auto &palette = state.machine.palette;
@@ -454,7 +502,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
                 else if (layer_kind == LayerKind::Text) game = impl_->text.pixel(x, y, m.video->flipscreen());
                 if (indexed) expected = {oracle.palette[x], oracle.flags[x]};
                 else {
-                    const unsigned offset = (y + 24) * 432 + x + 46;
+                    const unsigned offset = (y + geometry::first_line) * 432 + x + 46;
                     const uint16_t actual = impl_->sprite_planes[impl_->next_plane][offset];
                     const uint16_t reference = m.video->sprite_plane()[offset];
                     game = {actual, uint8_t(actual && sprite_layer(actual) == id ? 0x10 : 0)};
@@ -477,7 +525,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
             if (layer_kind == LayerKind::Sprite) {
                 for (const auto &sprite : impl_->sprites.sprites()) {
                     const int dx = (sprite.x >> 8) - (first_x + 46);
-                    const int dy = (sprite.y >> 8) - (first_y + 24);
+                    const int dy = (sprite.y >> 8) - (first_y + int(geometry::first_line));
                     if (dx < -32 || dx > 32 || dy < -32 || dy > 32) continue;
                     error << "\n nearby tile=0x" << std::hex << sprite.tile << " palette=0x" << unsigned(sprite.palette)
                           << std::dec << " xy8=(" << sprite.x << ',' << sprite.y << ") scale=("
@@ -485,6 +533,35 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
                 }
             }
             throw std::runtime_error(error.str());
+        }
+    }
+    if constexpr (game_config::video.extended_alt_maps) {
+        for (unsigned alt = 0; alt < 2; ++alt) {
+            const LayerId id = playfield(2 + alt);
+            if (!(layer_mask & layer_bit(id))) continue;
+            uint64_t count = 0;
+            int first_x = -1, first_y = -1;
+            ScenePixel first_game{}, first_oracle{};
+            for (int y = 0; y < layer_info[unsigned(id)].height; ++y) {
+                const auto oracle = m.video->inspect_playfield_line(4 + alt, y, m.graphics);
+                for (int x = 0; x < layer_info[unsigned(id)].width; ++x) {
+                    const ScenePixel game = impl_->tiles.playfield_pixel(2 + alt, x, y, m.video->flipscreen(), assets, true);
+                    const ScenePixel expected{oracle.palette[x], oracle.flags[x]};
+                    if (!differs(game, expected)) continue;
+                    if (!count) { first_x = x; first_y = y; first_game = game; first_oracle = expected; }
+                    ++count;
+                }
+            }
+            ++impl_->alt_frames[alt];
+            impl_->alt_mismatches[alt] += count;
+            if (count) {
+                std::ostringstream error;
+                error << "Game " << layer_info[unsigned(id)].name << " alternate map frame " << frame << ": " << count
+                      << " indexed pixel mismatches; first (" << first_x << ',' << first_y << ") game=0x"
+                      << std::hex << first_game.palette << '/' << unsigned(first_game.flags)
+                      << " oracle=0x" << first_oracle.palette << '/' << unsigned(first_oracle.flags);
+                throw std::runtime_error(error.str());
+            }
         }
     }
     if (layer_mask == all_layers) compare_composite(frame);
@@ -510,7 +587,7 @@ void GameVideo::compare_composite(uint64_t frame) {
     if (count) {
         std::ostringstream error;
         error << "Game composite frame " << frame << ": " << count << " RGB pixel mismatches; first ("
-              << first % 320 << ',' << first / 320 << ") game=0x" << std::hex << impl_->pixels[first]
+              << first % geometry::native_width << ',' << first / geometry::native_width << ") game=0x" << std::hex << impl_->pixels[first]
               << " oracle=0x" << oracle[first];
         throw std::runtime_error(error.str());
     }
@@ -521,15 +598,35 @@ void GameVideo::report(std::ostream &output) const {
         if (!impl_->frames[layer]) continue;
         const unsigned pixels = layer_info[layer].width * layer_info[layer].height;
         output << "VIDEO layer=" << layer_info[layer].name << " domain="
-               << layer_info[layer].domain
+               << layer_info[layer].width << 'x' << layer_info[layer].height << '-' << layer_info[layer].domain
                << " sampled_frames=" << impl_->frames[layer]
                << " compared_pixels=" << impl_->frames[layer] * pixels
                << " pixel_mismatches=" << impl_->mismatches[layer] << '\n';
     }
+    if constexpr (game_config::video.extended_alt_maps) {
+        for (unsigned alt = 0; alt < 2; ++alt) {
+            if (!impl_->alt_frames[alt]) continue;
+            const auto &info = layer_info[unsigned(LayerId::Pf2) + alt];
+            output << "VIDEO layer=" << info.name << "-alt domain=" << info.width << 'x' << info.height << '-'
+                   << info.domain << " sampled_frames=" << impl_->alt_frames[alt]
+                   << " compared_pixels=" << impl_->alt_frames[alt] * info.width * info.height
+                   << " pixel_mismatches=" << impl_->alt_mismatches[alt] << '\n';
+        }
+    }
     if (impl_->composite_frames)
-        output << "VIDEO layer=composite domain=320x232-RGB sampled_frames=" << impl_->composite_frames
-               << " compared_pixels=" << impl_->composite_frames * 320 * 232
+        output << "VIDEO layer=composite domain=" << geometry::native_width << 'x' << geometry::height
+               << "-RGB sampled_frames=" << impl_->composite_frames
+               << " compared_pixels=" << impl_->composite_frames * geometry::native_pixels
                << " pixel_mismatches=" << impl_->composite_mismatches << '\n';
+    if (impl_->presented_frames || game_config::video.full_resolution_alt_maps) {
+        output << "VIDEO presented_sprite_frames=" << impl_->presented_frames
+               << " presented_sprite_overflow_frames=" << impl_->presented_overflow_frames;
+        if constexpr (game_config::video.full_resolution_alt_maps)
+            output << " presented_alt_rows_remapped=" << impl_->alt_rows_remapped
+                   << " presented_alt_rows_fallback=" << impl_->alt_rows_fallback
+                   << " presented_alt_rows_solved=" << impl_->alt_maps.solved_rows();
+        output << '\n';
+    }
     output << "VIDEO game_frames=" << impl_->rendered_frames << " oracle_fallback_frames=" << impl_->fallback_frames << '\n';
     for (unsigned i = 0; i < impl_->fallback_count; ++i) {
         const auto &entry = impl_->fallbacks[i];

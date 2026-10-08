@@ -21,10 +21,10 @@ rasterization and extra horizontal columns.
 
 ::: info
 **Per-game scene file.** A game provides `games/<game>/video/` (Land Maker uses a
-single `video.cpp`). It defines the sprites `decode(const VideoRam&)` decoder
-and, when `F3RT_VIDEO_WRITE_LOG` is on, `observe_game_video_write` with every
-component's store-PC list. The shared tiles, text and line decoders live in
-`runtime/renderer/game/tiles.cpp`, `runtime/renderer/game/text.cpp` and `runtime/renderer/game/lines.cpp`; generic decode
+single `video.cpp`). It defines, when `F3RT_VIDEO_WRITE_LOG` is on,
+`observe_game_video_write` with every component's store-PC list. The shared
+sprites, tiles, text and line decoders live in
+`runtime/renderer/game/sprites.cpp`, `runtime/renderer/game/tiles.cpp`, `runtime/renderer/game/text.cpp` and `runtime/renderer/game/lines.cpp`; generic decode
 helpers live in `runtime/renderer/decode.{hpp,cpp}`. CMake compiles
 the folder and defines `F3RT_GAME_VIDEO`; games without it can still run but
 cannot select `game` or `compare`. There are no recompiler hooks.

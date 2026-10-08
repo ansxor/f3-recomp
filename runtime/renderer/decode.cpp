@@ -1,5 +1,7 @@
 // license:BSD-3-Clause
 #include "renderer/decode.hpp"
+#include <cstring>
+
 
 namespace f3rt {
 namespace {
@@ -48,18 +50,15 @@ struct sprite_axis {
 
 size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_height,
                           std::span<DecodedSpriteEntry> out, SpriteRamState &state,
-                          bool apply_flip) {
+                          bool apply_flip, const SpritePresentation *presentation) {
     sprite_axis x, y;
     uint8_t color = 0;
     bool multi = false;
     size_t count = 0;
 
-    int total_sprites = 0;
-    for (int offs = 0; offs < 0x400 && total_sprites < 0x400; ++offs) {
-        total_sprites++;
-        const uint32_t bank_offset = state.bank ? 0x8000 : 0x0000;
-        const uint8_t *spr = &spriteram[bank_offset + size_t(offs) * 16];
-
+    // One list entry through the hardware state machine. Returns false when the entry is a
+    // self-jump (list end). `allow_jump` is false for splice replacements.
+    auto step = [&](const uint8_t *spr, int &offs, bool allow_jump, uint64_t identity, uint64_t object) -> bool {
         const uint16_t w0 = read_be16(&spr[0]);
         const uint16_t w1 = read_be16(&spr[2]);
         const uint16_t w2 = read_be16(&spr[4]);
@@ -78,10 +77,10 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         }
 
         // Sprite list jump bit in word 6
-        if (w6 & 0x8000) {
+        if (allow_jump && (w6 & 0x8000)) {
             const int new_offs = w6 & 0x03ff;
             if (new_offs == offs)
-                break;
+                return false;
             offs = new_offs - 1;
         }
 
@@ -97,7 +96,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
 
         const uint32_t tile = uint32_t(w0) | (uint32_t(w5 & 0x0001) << 16);
         if (!tile)
-            continue;
+            return true;
 
         const int32_t tx = state.flipscreen ? ((512 << 8) - x.block_scale * 16 - x.pos) : x.pos;
         const int32_t ty = state.flipscreen ? ((256 << 8) - y.block_scale * 16 - y.pos) : y.pos;
@@ -106,10 +105,10 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         if (tx + x.block_scale * 16 <= (H_START << 8) || tx > ((H_START + H_VIS - 1) << 8) ||
             ty + y.block_scale * 16 <= (visible_y << 8) ||
             ty > ((visible_y + visible_height - 1) << 8))
-            continue;
+            return true;
 
         if (count >= out.size())
-            continue;
+            return true;
 
         const bool flip_x = (spritecont & 0x01) != 0;
         const bool flip_y = (spritecont & 0x02) != 0;
@@ -124,6 +123,49 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         s.flip_x = apply_flip && state.flipscreen ? !flip_x : flip_x;
         s.flip_y = apply_flip && state.flipscreen ? !flip_y : flip_y;
         s.pri = uint8_t((color >> 6) & 3);
+        s.identity = identity;
+        s.object = object;
+        return true;
+    };
+
+    const std::span<const SpriteSplice> splices =
+        presentation ? presentation->splices : std::span<const SpriteSplice>{};
+    const std::span<const uint64_t> identities =
+        presentation ? presentation->identity : std::span<const uint64_t>{};
+    const std::span<const uint64_t> objects =
+        presentation ? presentation->object : std::span<const uint64_t>{};
+
+    int total_sprites = 0;
+    for (int offs = 0; offs < 0x400 && total_sprites < 0x400; ++offs) {
+        total_sprites++;
+        const uint32_t bank_offset = state.bank ? 0x8000 : 0x0000;
+        const uint8_t *spr = &spriteram[bank_offset + size_t(offs) * 16];
+
+        for (const SpriteSplice &sp : splices) {
+            if (sp.bank != state.bank || sp.first != offs)
+                continue;
+            const size_t n = size_t(sp.last) - sp.first + 1;
+            if (sp.last < sp.first || sp.last >= 0x400 || sp.real.size() != n * 16 ||
+                std::memcmp(spr, sp.real.data(), n * 16) != 0)
+                break;
+            const size_t reps = sp.replacement.size() / 16;
+            for (size_t k = 0; k < reps; ++k) {
+                int dummy = offs;
+                step(&sp.replacement[k * 16], dummy, false, sprite_identity_mix(sp.identity, uint32_t(k)), sp.identity);
+            }
+            total_sprites += int(n) - 1;
+            offs = sp.last;
+            goto next_entry;
+        }
+
+        {
+            const size_t slot = size_t(state.bank ? 0x400 : 0) + size_t(offs);
+            const uint64_t id = slot < identities.size() ? identities[slot] : 0;
+            const uint64_t object = slot < objects.size() ? objects[slot] : 0;
+            if (!step(spr, offs, true, id, object))
+                break;
+        }
+    next_entry:;
     }
     return count;
 }

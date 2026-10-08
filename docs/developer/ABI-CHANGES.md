@@ -1,9 +1,22 @@
 # CPU ABI changes
 
-Current generated programs require **ABI 3**. Older sections record the ABI in
+Current generated programs require **ABI 4**. Older sections record the ABI in
 force at that checkpoint, including later features originally added under ABI 2.
 Scheduling costs and device models follow reference-emulator behavior; this
 interface history is not a physical bus-cycle accuracy claim.
+
+## Version 4 — render-only emit-unit hooks
+
+`void f3_unit_enter(f3_cpu *, uint32_t unit)` and `int f3_unit_exit(f3_cpu *,
+uint32_t unit)` are called by generated code (`F3_UNIT_ENTER`/`F3_UNIT_EXIT` in
+`recomp/cpu_ops.h`, after `f3_cc_flush`) at the label of every PC declared in
+`[[video.emit_units]]`, EXIT before ENTER, before the instruction executes. The
+interpreter calls them at the same boundary. They never alter the real CPU:
+`f3_unit_exit` returns nonzero only for a sandbox replay CPU that reached its
+unit end, and the generated function then returns without executing that
+instruction. `f3_cpu` layout is unchanged. Generated files containing hooks also
+include `sprite_units.h` and `#error` if `F3_SPRITE_UNITS_DIGEST` differs from the
+digest `recomp emit` computed. Sound programs only bump their version guard.
 
 ## Video-RAM scene decode — canonical snapshot format reduced
 

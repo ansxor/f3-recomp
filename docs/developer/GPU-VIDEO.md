@@ -48,6 +48,10 @@ For sample column q=u+LS:
 - F = trunc((y_fraction*S + t*y_step)/S).
 - Y = source_y + (F >> 8).
 
+With `full_resolution_alt_maps` (Command War) the same X formula runs on the presented row:
+`gpu/encode.cpp` writes `presented_playfield()` (main map, `x_step` up to 512, `source_x` doubled plus
+`c << 8`) for expanded output only; the shader needs no change and captured rows stay canonical.
+
 Signed X division is mathematical floor, **not** C/GLSL signed truncation:
 `n>=0 ? n/d : -1-(-1-n)/d`. Combined numerators must be divided only once.
 Maps wrap X to 1024 and Y to 512, select a 64x32 semantic cell and its 16x16

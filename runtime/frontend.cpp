@@ -12,6 +12,8 @@
 #include "renderer/scale.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "block_profile.hpp"
+#include "sprite_units.hpp"
+#include "renderer/sprite_behaviour.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
 #include "f3rt/video.hpp"
@@ -234,7 +236,7 @@ int main(int argc,char **argv) try {
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in game executables; oracle in f3rt-run)\n"
                      <<"  [--audio-backend accurate|hle] (default accurate; HLE runs on its own thread at 48 kHz)\n"
-                     <<"  [--video fdp|game|compare] (game data requires strict native landmakrj)\n"
+                     <<"  [--video fdp|game|compare] (game data requires strict native execution and games/<game>/video/)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
                      <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
                      <<"  [--video-interp off|linear|fit] (opt-in GPU line sampling; default off)\n"
@@ -369,6 +371,15 @@ int main(int argc,char **argv) try {
     if(video_mode!="fdp")
         m.game_video=std::make_unique<f3rt::GameVideo>(m,video_mode=="game"?f3rt::GameVideoMode::Game:f3rt::GameVideoMode::Compare,video_options);
 #endif
+    {
+        const auto &unit_table=f3rt::SpriteUnits::game_table();
+        if(translated && !unit_table.units.empty()) {
+            f3rt::SpriteUnits::Options options;
+            const auto registered=f3rt::registered_sprite_behaviours();
+            options.behaviours.assign(registered.begin(),registered.end());
+            m.sprite_units=std::make_unique<f3rt::SpriteUnits>(m,unit_table,std::move(options));
+        }
+    }
     const auto snapshot_video_options=video_options;
     const unsigned frame_width=video_options.width();
     const unsigned frame_height=m.game_video?video_options.height():m.roms.video.visible_height;
@@ -984,6 +995,7 @@ int main(int argc,char **argv) try {
         if(!report)throw std::runtime_error("Fallback report write failed");
     }
     if(m.game_video)m.game_video->report(std::cout);
+    if(m.sprite_units)m.sprite_units->write_summary(std::cout);
     if(m.sound_trace)m.sound_trace->finish(m);
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()

@@ -65,8 +65,8 @@ private:
     };
     ClipRanges ranges(const SceneRow &row, LayerId id) const noexcept;
     bool same_controls(const SceneRow &a, const SceneRow &b, LayerId id) const noexcept;
-    std::array<Sprite, 1024> sprites_{};
-    std::array<Row, 232> rows_{};
+    std::array<Sprite, CapturedFrame::max_sprites> sprites_{};
+    std::array<Row, geometry::height> rows_{};
     uint64_t frame_ = 0;
     unsigned sprite_count_ = 0;
     uint8_t pen_mask_ = 0;

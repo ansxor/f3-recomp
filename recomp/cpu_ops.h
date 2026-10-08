@@ -101,6 +101,12 @@ static inline void f3_cc_flush(f3_cpu *cpu) {
     cpu->cc_op = F3_CC_OP_NONE;
 }
 
+/* Emit-unit hooks planted at declared start/end PCs (ABI 4). Flags are flushed so
+ * a sandbox replay observes canonical sr; EXIT returns before the instruction at
+ * cpu->pc runs when a replay CPU reached its unit end. */
+#define F3_UNIT_ENTER(cpu, id) do { f3_cc_flush(cpu); f3_unit_enter((cpu), (id)); } while (0)
+#define F3_UNIT_EXIT(cpu, id) do { f3_cc_flush(cpu); if (f3_unit_exit((cpu), (id))) return; } while (0)
+
 /* Evaluate a 68000/68020 4-bit condition against canonicalized CCR. */
 static inline int f3_eval_cond(f3_cpu *cpu, uint8_t cond) {
     f3_cc_flush(cpu);

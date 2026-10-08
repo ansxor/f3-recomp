@@ -112,7 +112,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--sound-driver") {
             if (value() != "native") throw std::runtime_error("GPU regression requires --sound-driver native");
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Strict-native Land Maker GPU parity; optional presentation-only interpolation.\n"
+            std::cout << "Strict-native GPU parity for the configured game (injection scenarios are Land Maker scenes); optional presentation-only interpolation.\n"
                 "--rom-dir DIR --seed N --frames N (4000) --scale N (1..8 diagnostic) --border N (0..160)\n"
                 "--every N (1) --layers (all nine isolated contributions plus composite)\n"
                 "--bench (600-frame varied-scene warmup; 100 repeats on final supported snapshot)\n"
@@ -609,7 +609,7 @@ void inject(Harness &h, unsigned kind) {
         for (size_t bank : {size_t(0), size_t(0x8000)}) {
             put16(m.graphics, bank + 6, 0x8000);
             put16(m.graphics, bank + 10, command);
-            for (size_t slot = 1; slot < 1024; ++slot) {
+            for (size_t slot = 1; slot < f3rt::max_hardware_sprites; ++slot) {
                 const size_t descriptor = bank + slot * 16;
                 if (m.graphics[descriptor + 6] & 0x80)
                     put16(m.graphics, descriptor + 10, command);
@@ -1250,7 +1250,7 @@ struct SdlLifetime {
 int main(int argc, char **argv) try {
     auto o = parse(argc, argv);
     SdlLifetime sdl;
-    auto owner = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(o.rom_dir, "landmakrj"));
+    auto owner = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(o.rom_dir, std::string(f3rt::game_config::id)));
     auto &m = *owner;
     m.allow_main_fallback = false;
 #ifdef F3RT_GENERATED

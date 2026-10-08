@@ -6,6 +6,7 @@
 #include "renderer/gpu/video.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "gameplay_inputs.hpp"
+#include "sprite_units.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -32,7 +33,7 @@ namespace {
 struct Options {
     std::filesystem::path rom_dir, dump_dir;
     uint64_t frames = 4000, seed = 12345, every = 1;
-    bool demo = false;
+    bool demo = false, sprite_units = true;
     unsigned demo_seconds = 30;
     f3rt::GameVideoOptions video;
     f3rt::VideoInterpolation interp = f3rt::VideoInterpolation::Off;
@@ -70,10 +71,14 @@ Options parse(int argc, char **argv) {
             else if (v == "linear") o.interp = f3rt::VideoInterpolation::Linear;
             else if (v == "fit") o.interp = f3rt::VideoInterpolation::Fit;
             else throw std::runtime_error("Interpolation must be off, linear or fit");
+        } else if (arg == "--sprite-units") {
+            auto v = value();
+            require(v == "on" || v == "off", "Sprite units must be on or off");
+            o.sprite_units = v == "on";
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Strict-native seeded Land Maker temporal GPU proof\n"
                 "--rom-dir DIR --frames N (4000) --seed N (12345) --scale N (1..8)\n"
-                "--every N (1) --dump-dir DIR --interp off|linear|fit\n"
+                "--every N (1) --dump-dir DIR --interp off|linear|fit --sprite-units on|off (on)\n"
                 "--demo --demo-seconds N (30): one-window LEFT native / RIGHT motion comparison;\n"
                 "warms up --frames emulated frames, then pans a frozen ROM playfield render-only.\n"
                 "Short proof runs without visible paired ROM motion intentionally fail.\n";
@@ -321,6 +326,10 @@ int main(int argc, char **argv) try {
     auto o = parse(argc, argv); SdlLifetime sdl;
     if (o.demo) return comparison(o);
     auto owner = machine(o), reference = machine(o); auto &m = *owner;
+    // Identity tracking on the presented machine only: the reference stays without it,
+    // so every parity check below also proves sprite units leave emulation untouched.
+    if (o.sprite_units)
+        m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, f3rt::SpriteUnits::game_table(), f3rt::SpriteUnits::Options{});
     f3rt::GpuVideo gpu(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
         false, false, o.interp);
     if (!o.dump_dir.empty()) std::filesystem::create_directories(o.dump_dir);
@@ -376,6 +385,7 @@ int main(int argc, char **argv) try {
                 moving_samples += moving;
                 accepted_moving_samples += moving && (stats.sprites || stats.playfield_rows || stats.text_rows);
                 visible_moving_samples += moving && out != canonical;
+                census.sprites += stats.sprites;
                 census.moving_sprites += stats.moving_sprites;
                 census.moving_playfield_rows += stats.moving_playfield_rows;
                 census.moving_text_rows += stats.moving_text_rows;
@@ -447,7 +457,8 @@ int main(int argc, char **argv) try {
         << " sprite_geometry_draws=" << sprite_draws << " playfield_row_draws=" << playfield_draws
         << " text_row_draws=" << text_draws
         << " moving_samples=" << moving_samples << " accepted_moving_samples=" << accepted_moving_samples
-        << " visible_moving_samples=" << visible_moving_samples
+        << " visible_moving_samples=" << visible_moving_samples << " sprite_units=" << (o.sprite_units ? "on" : "off")
+        << " sampled_accepted_sprites=" << census.sprites
         << " sampled_moving_sprites=" << census.moving_sprites
         << " sampled_moving_pf_rows=" << census.moving_playfield_rows
         << " sampled_moving_text_rows=" << census.moving_text_rows

@@ -167,12 +167,21 @@ The emit step writes this report. The command also prints it, without the fields
 | `fallback_mnemonics` | object | Count for each untranslated mnemonic. |
 | `fallback_pcs` | array of integers | Addresses of the fallback instructions. |
 | `source_files` | array of strings | C files, including `program.c`. |
-| `runtime_abi_version` | integer | `3`. Must match `F3RT_ABI_VERSION`. |
+| `runtime_abi_version` | integer | `4`. Must match `F3RT_ABI_VERSION`. |
+| `emit_units` | object | `digest` (hex), per-unit `id`/`enter_hooks`/`exit_hooks`, and `frame_writer_ranges`. See [game config](game-config.md). |
 | `coverage_mode` | string | `all_aligned` or `recursive`. |
 | `max_block_instructions` | integer | The value that you passed (default 32). |
 | `timing` | string | A fixed note: `68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries`. |
 
 A nonzero `fallback_instructions` is not an error. Many of those addresses are data that the all-aligned scan decodes as code. A game run in strict native mode (`landmakr`) stops with an error if it reaches one.
+
+## Configure-time headers (tools/compile_sprite_units.py, tools/compile_roms.py)
+
+Written to `<build>/generated_config/` without a ROM: `sprite_units.h`,
+`sprite_units.hpp` (emit units, frame writers, digest) and
+`game_video_config.hpp` (compile-time `VideoConfig`). Generated C that contains a
+unit hook includes `sprite_units.h`. Field details are in
+[game config](game-config.md).
 
 ## Sound output (tools/compile_sound.py)
 

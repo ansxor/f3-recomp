@@ -7,7 +7,9 @@
 
 // Region bases.
 // PF cells: 4 layers * 2048 raw cells, two words per slot. Word 0 is the raw
-// big-endian video-RAM cell (attributes<<16 | tile code); word 1 is unused.
+// big-endian video-RAM cell (attributes<<16 | tile code). Word 1 of the PF2/PF3
+// slots holds the cell of that layer's alternate map (physical maps 4/5) when the
+// game has extended_alt_maps; it is read only on rows carrying F3_LAYER_ALT_MAP.
 #define F3_SCENE_PF_CELLS 0u
 #define F3_SCENE_PF_CELL_STRIDE 2u
 #define F3_SCENE_PF_LAYER_CELLS 2048u
@@ -24,20 +26,22 @@
 #define F3_SCENE_ROWS 32768u
 #define F3_SCENE_ROW_COUNT 256u
 #define F3_SCENE_ROW_STRIDE 352u
-// Sprites: up to 1024 descriptors of SPRITE_STRIDE words.
+// Sprites: up to 4096 descriptors (max_presented_sprites) of SPRITE_STRIDE words.
 #define F3_SCENE_SPRITES 122880u
-#define F3_SCENE_SPRITE_COUNT 1024u
+#define F3_SCENE_SPRITE_COUNT 4096u
 #define F3_SCENE_SPRITE_STRIDE 8u
 // Canonical scene size, and the opt-in interpolation coefficient region that
 // follows it.
-#define F3_SCENE_WORD_COUNT 131072u
-#define F3_SCENE_INTERP 131072u
+#define F3_SCENE_WORD_COUNT 155648u
+#define F3_SCENE_INTERP 155648u
 #define F3_SCENE_INTERP_ROW_STRIDE 52u
-#define F3_SCENE_INTERP_WORD_COUNT 144384u
+#define F3_SCENE_INTERP_WORD_COUNT 168960u
 
 // Row header fields (relative to a row base).
 #define F3_ROW_BACKGROUND 0u
-#define F3_ROW_MOSAIC 1u
+#define F3_ROW_MOSAIC 1u    // bits 0-7 mosaic period, then the row colour flags below
+#define F3_ROW_PALETTE15 256u // palette words are FDA 15-bit RRRRGGGGBBBBRGBx
+#define F3_ROW_BLUR 512u      // two-pixel horizontal blur of the finished row
 #define F3_ROW_TEXT_X 2u
 #define F3_ROW_TEXT_Y 3u
 #define F3_ROW_BLEND 4u     // four 8-bit weights, weight 0 in the low byte
@@ -58,6 +62,7 @@
 #define F3_LAYER_ENABLED 64u
 #define F3_LAYER_SELECT_SHIFT 7u
 #define F3_LAYER_MOSAIC 256u
+#define F3_LAYER_ALT_MAP 512u // playfield rows sampling the alternate map (word 1 of the cell slot)
 
 // Playfield geometry blocks: four per row, after the layer blocks.
 #define F3_ROW_PF 322u

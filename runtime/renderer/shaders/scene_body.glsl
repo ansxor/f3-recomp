@@ -89,17 +89,16 @@ uint palette_rgb(uint base, float addition, uint stride) {
     return rgb;
 }
 #endif
-void main() {
-    ivec2 pos = ivec2(gl_FragCoord.xy);
+// FDA 15-bit palette word RRRRGGGGBBBBRGBx: nibbles shifted, low bits fill the lsb (GameVideo compositor twin).
+uint color15(uint c) {
+    return ((c & 0xf000u) << 8) | ((c & 8u) << 16) | ((c & 0x0f00u) << 4) | ((c & 4u) << 9) | (c & 0x00f0u) | ((c & 2u) << 2);
+}
+// One output pixel before the optional row blur: the native rgb at fragment position `pos`.
+uint shade(ivec2 pos) {
     int s = int(params.dimensions.x), left = 46 - int(params.dimensions.y);
     int native_x = floor_scale(pos.x, s), native_y = floor_scale(pos.y, s);
     int sub_y = pos.y - native_y * s;
-    if (params.controls.z != 0u) {
-        int x = native_x - int(params.dimensions.y);
-        output_color = x < 0 || x >= 320 ? vec4(0,0,0,1) : unpack_rgb(native_frame.words[uint(native_y * 320 + x)]);
-        return;
-    }
-    uint row = ROWS + uint(24 + native_y) * ROW_STRIDE;
+    uint row = ROWS + (params.geometry.x + uint(native_y)) * ROW_STRIDE;
     uint packed_blend = scene.words[row + F3_ROW_BLEND];
     uvec4 blend = uvec4(packed_blend & 255u,(packed_blend >> 8u) & 255u,(packed_blend >> 16u) & 255u,packed_blend >> 24u);
     PixelMix pixel = PixelMix(0u,scene.words[row + F3_ROW_BACKGROUND],0u,8u,0u,0u,255u
@@ -117,7 +116,7 @@ void main() {
             int hi = (min(366 + int(params.dimensions.y),int(scene.words[layer + F3_LAYER_CLIPS + 1u + visit * 2u])) - left) * s;
             if (pos.x < lo || pos.x >= hi || ((flags >> F3_LAYER_MODE_SHIFT) & F3_LAYER_MODE_MASK) == pixel.mode) continue;
             int q = pos.x + left * s;
-            int period = int(scene.words[row + F3_ROW_MOSAIC]);
+            int period = int(scene.words[row + F3_ROW_MOSAIC] & 255u);
             if ((flags & F3_LAYER_MOSAIC) != 0u && period > 1) {
                 int h = left + native_x, c = ((h + 68) % 432 + 432) % 432;
                 q = (h - c % period) * s;
@@ -130,7 +129,7 @@ void main() {
                 uint pf = row + F3_ROW_PF + index * F3_PF_STRIDE;
                 int x = floor_scale((int(scene.words[pf + F3_PF_SOURCE_X]) * s + (q - 46 * s) * int(scene.words[pf + F3_PF_X_STEP])) >> 8, s) & 1023;
 #ifdef VIDEO_INTERP
-                uint metadata = INTERPOLATION + uint(24 + native_y) * INTERPOLATION_ROW_STRIDE +
+                uint metadata = INTERPOLATION + (params.geometry.x + uint(native_y)) * INTERPOLATION_ROW_STRIDE +
                     index * INTERPOLATION_PF_STRIDE;
                 uint interp_flags = scene.words[metadata];
                 float fraction = float(sub_y) / float(s);
@@ -154,13 +153,14 @@ void main() {
 #endif
                 // Raw 4-byte PF cell (bit layout shared with GameTiles::RowSampler,
                 // see runtime/renderer/game/tiles.hpp): attributes<<16 | code.
-                uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * 64 + x / 16)) * 2u;
+                uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * 64 + x / 16)) * 2u +
+                    ((flags & F3_LAYER_ALT_MAP) != 0u ? 1u : 0u);
                 uint packed = scene.words[cell];
                 uint attr = packed >> 16u;
                 uint code = packed & 65535u;
                 uint tx = uint(x & 15) ^ ((attr & 0x4000u) != 0u ? 15u : 0u);
                 uint ty = uint(y & 15) ^ ((attr & 0x8000u) != 0u ? 15u : 0u);
-                uint offset = (code & 32767u) * 256u + ty * 16u + tx;
+                uint offset = wrap_tile(code & 65535u, params.geometry.z) * 256u + ty * 16u + tx;
                 uint pen = byte_pen(assets.words[offset >> 2u],offset) &
                     ((((attr >> 10u) & 3u & ~attr) << 4u) | 15u);
                 color = ((attr & 511u) * 16u + pen) & 65535u;
@@ -180,7 +180,7 @@ void main() {
                 bool native_plane = s == 1 && params.dimensions.y == 0u;
                 int x = native_plane ? q : q - left * s;
                 if (x < 0 || x >= (native_plane ? 432 : int(params.dimensions.z))) continue;
-                color = texelFetch(sprite_plane,ivec2(x,pos.y + (native_plane ? 24 : 0)),0).r;
+                color = texelFetch(sprite_plane,ivec2(x,pos.y + (native_plane ? int(params.geometry.x) : 0)),0).r;
                 if (color == 0u || ((color >> 10u) & 3u) != index - LAYER_SP0) continue;
             } else {
                 int x = floor_scale(int(scene.words[row + F3_ROW_TEXT_X]) * s + q - 46 * s, s) & 511;
@@ -216,10 +216,32 @@ void main() {
     if ((pixel.source_rgb & 0xff000000u) != 0u) src = pixel.source_rgb;
     if ((pixel.destination_rgb & 0xff000000u) != 0u) dst = pixel.destination_rgb;
 #endif
+    if ((scene.words[row + F3_ROW_MOSAIC] & F3_ROW_PALETTE15) != 0u) {
+        src = color15(src); dst = color15(dst);
+    }
     uint rgb = 0u;
     for (uint shift = 0u; shift < 24u; shift += 8u) {
         uint value = (((src >> shift) & 255u) * pixel.sw + ((dst >> shift) & 255u) * pixel.dw) >> 3u;
         rgb |= min(255u,value) << shift;
+    }
+    return rgb;
+}
+void main() {
+    ivec2 pos = ivec2(gl_FragCoord.xy);
+    int s = int(params.dimensions.x);
+    int native_x = floor_scale(pos.x, s), native_y = floor_scale(pos.y, s);
+    if (params.controls.z != 0u) {
+        int x = native_x - int(params.dimensions.y);
+        output_color = x < 0 || x >= 320 ? vec4(0,0,0,1) : unpack_rgb(native_frame.words[uint(native_y * 320 + x)]);
+        return;
+    }
+    uint rgb = shade(pos);
+    uint row = ROWS + (params.geometry.x + uint(native_y)) * ROW_STRIDE;
+    if ((scene.words[row + F3_ROW_MOSAIC] & F3_ROW_BLUR) != 0u) {
+        // Average with the previous native column (same subpixel phase); black before the first.
+        uint previous = pos.x >= s ? shade(ivec2(pos.x - s, pos.y)) : 0u;
+        rgb = ((((rgb & 0x00ff00ffu) + (previous & 0x00ff00ffu)) >> 1) & 0x00ff00ffu) |
+              ((((rgb & 0x0000ff00u) + (previous & 0x0000ff00u)) >> 1) & 0x0000ff00u);
     }
     output_color = unpack_rgb(rgb);
 }

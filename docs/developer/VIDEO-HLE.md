@@ -49,16 +49,62 @@ geometry and per-row descriptions. Strict-native `landmakr` defaults to `game`;
 `fdp` is the diagnostic/fallback-execution default. `compare` renders both and
 rejects any supported-frame difference.
 
+## Compile-time geometry and per-game features
+
+The scene stack takes its scanout window from `[video]` in `games/<game>/config.toml` through
+`f3rt::geometry` (`include/f3rt/game_video.hpp`, backed by the generated
+`generated_config/game_video_config.hpp`): `first_line`, `height`, `end_line`. Land Maker is
+24/232, Command War 32/224. The GPU shaders receive the same values as a uniform. `GameVideo`
+throws at construction when the loaded `RomSet::video` does not match
+(`game_config::matches`). The CTest `game-geometry-literals` rejects a bare `24`/`232` in the
+renderer, GPU and shader sources. The horizontal window (46..365) is the same on every game.
+
+Features beyond the base Land Maker layout, all mirrored from the FDP:
+
+- `extended_alt_maps`: PF2/PF3 alternate maps 4/5 (`0x18000`/`0x1a000`), chosen per scanline by
+  line RAM bit `0x200` (`ScenePlayfield::alt_map`). The GPU stores the alternate cell in word 1
+  of the PF2/PF3 cell slots (`F3_LAYER_ALT_MAP`). `--video compare` also compares both maps.
+- `full_resolution_alt_maps` (needs `extended_alt_maps`; render-only, default off): Command War
+  uploads each floor twice, a full-resolution copy into the main map and a horizontally half-scaled
+  copy (X2/Y1) into the alternate map, and draws distant floor rows from the half copy because
+  `x_step` cannot exceed 256. `FullResolutionAltMaps` (`tiles.cpp`) solves, per PF2/PF3 tile row,
+  the offsets `c` in `[0, 1024)` with `alt(x, y) == main((2x + c) mod 1024, y)` for every x and all
+  16 lines. It compares the final `RowSampler::pixel` sample (palette, pen, blend flag), not raw
+  cells, skips rows with no tile code, and caches per row keyed on both maps' raw cells (only
+  uploaded rows are solved again; ~1.4 us per frame average, 0.75 ms worst frame over 6000
+  attract frames). `GameLines::resolve_full_resolution_alt` stores the smallest `c` valid for every
+  tile row a scanline can sample in `ScenePlayfield::full_res_offset` (-1: fall back). The canonical
+  row fields never change. `presented_playfield()` (`scene.hpp`) is the single remap: `alt_map=false`,
+  `x_step*2`, `source_x = 2*source_x + (c << 8)` wrapped to 1024 px; `y` is unchanged. It is
+  applied only to expanded output: the CPU compositor (`FrameScene::presented`, expanded kernels)
+  and `gpu/encode.cpp` (`options.expanded()`), so the native frame, `--video compare`, snapshots,
+  `state_crc` and `sync_state_crc` are untouched. A motion-interpolated row keeps moving
+  horizontally through the same remap; one whose vertical phase moved keeps the alternate map.
+  The shader and compositor already handle `x_step` up to 512. Rows with no exact twin (the
+  half copy is not 512-periodic, or its tiles are not whole-map aliases) keep canonical alternate
+  sampling; `GameVideo::report` appends `presented_alt_rows_remapped/fallback/solved` to the
+  `VIDEO presented_sprite_frames` line (visible, enabled, non-culled alt rows over rendered frames).
+  Measured on Command War attract, 6000 frames: 373,575 alt rows remapped, 132,764 fallback (26%).
+  Of the 640 row solves, 142 were not 512-periodic, 96 had no tile code and 402 matched
+  (typically `c` = 32, 288, 544 or 800; period 256). For the unmatched floor rows (PF3 rows 12..18)
+  98% of the best-offset mismatches are visible pixels that differ in palette bank and tile art,
+  not transparent-pixel or colour-equivalent differences, and no row shift helps.
+- Row-usage cull: a map row with no nonzero tile code is not drawn (`ScenePlayfield::empty_row`).
+- Asset ROM wrap: PF codes are 16-bit and sprite codes 17-bit, wrapped to the ROM tile count
+  (`wrap_tile_index`; the GPU receives both counts in the uniform).
+- Per-line 15-bit palette words and horizontal blur (line RAM `0x6000` section word 2, bits
+  14/13): CPU compositor and GPU shader. The interpolation analysis refuses 15-bit rows.
+
 ## Per-game scene code
 
 Each game opts into the de-HLE'd scene by providing a `games/<game>/video/`
-folder. `landmakrj` provides a single file, `games/landmakrj/video/video.cpp`,
-that defines the following. `GameTiles::decode` and `GameText::decode` are raw
-copies shared in `runtime/renderer/game/tiles.cpp` and `runtime/renderer/game/text.cpp`:
+folder. `landmakrj` and `commandw` each provide a single file, `games/<game>/video/video.cpp`,
+that defines only the debug hook below. `GameTiles::decode`, `GameText::decode` and
+`GameSprites::decode` are shared in `runtime/renderer/game/tiles.cpp`,
+`text.cpp` and `sprites.cpp`:
 
 | Symbol | Purpose |
 | --- | --- |
-| `GameSprites::decode` | Sprite display list |
 | `observe_game_video_write` | Debug store-PC check for every component |
 
 The runtime keeps the generic parts: `runtime/renderer/game/lines.cpp` defines the

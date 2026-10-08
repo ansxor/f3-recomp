@@ -116,6 +116,8 @@ source_y = pf.source_y + (vertical_phase >> 8)
 
 `sample_x` is a scaled scanout coordinate. `sub_y` ranges from zero through `s - 1`.
 
+For a game with `full_resolution_alt_maps` (Command War), expanded output first replaces an alternate-map row that has a solved full-resolution twin with `presented_playfield(pf)`: main map, `x_step` doubled (up to 512) and `source_x = 2 * source_x + (c << 8)` modulo the 1024-pixel map. The fixed native frame never does this.
+
 `floor_divide` preserves mathematical floor for negative horizontal coordinates. Truncation toward zero would move samples in the left border.
 
 `GameTiles::playfield_pixel` applies map wrapping, global orientation, cell flips, and the pen mask. Its flag bit 0 supplies the blend selector.

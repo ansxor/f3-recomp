@@ -1,6 +1,8 @@
 #include "renderer/game/sprites.hpp"
+#include "renderer/decode.hpp"
 #include "state_io.hpp"
 #include <algorithm>
+#include <array>
 
 namespace f3rt {
 
@@ -16,6 +18,63 @@ void GameSprites::reset() {
     reg_pen_mask_ = 15;
     reg_trails_ = false;
     reg_bank_ = false;
+    presented_submitted_valid_ = presented_current_valid_ = false;
+}
+
+void GameSprites::decode(const VideoRam &vram) {
+    SpriteRamState state;
+    state.flipscreen = reg_flipped_;
+    state.bank = reg_bank_;
+    state.trails = reg_trails_;
+    state.pen_mask = reg_pen_mask_;
+    state.extra_planes = uint8_t(reg_pen_mask_ >> 4);
+    const SpriteRamState initial = state;
+
+    // Canonical list (serialized state): identities only, never splices.
+    SpritePresentation identities;
+    if (presentation_) { identities.identity = presentation_->identity; identities.object = presentation_->object; }
+    std::array<DecodedSpriteEntry, kMaxSprites> decoded;
+    const size_t count = decode_sprite_list(vram.graphics.data(), int(geometry::first_line), int(geometry::height), decoded, state, false,
+                                            identities.identity.empty() ? nullptr : &identities);
+
+    auto convert = [](const DecodedSpriteEntry &d, SceneSprite &dst) {
+        dst.x = d.x;
+        dst.y = d.y;
+        dst.scale_x = uint16_t(d.scale_x);
+        dst.scale_y = uint16_t(d.scale_y);
+        dst.tile = d.tile;
+        dst.palette = d.color;
+        dst.flip_x = d.flip_x;
+        dst.flip_y = d.flip_y;
+        dst.identity = d.identity;
+        dst.object = d.object;
+    };
+    for (size_t i = 0; i < count; ++i) convert(decoded[i], staging_sprites_[i]);
+    // The decoded list is this frame's submission; GameVideo::latch_sprites()
+    // applies the scanout origin and the one-frame lag.
+    std::copy_n(staging_sprites_.begin(), count, submitted_sprites_.begin());
+    submitted_count_ = count;
+    staging_count_ = 0;
+
+    // Render-only presented list with splices; capacity-truncated like the canonical one.
+    presented_submitted_valid_ = presentation_ && !presentation_->splices.empty();
+    if (presented_submitted_valid_) {
+        SpriteRamState presented_state = initial;
+        std::array<DecodedSpriteEntry, kMaxPresentedSprites> presented;
+        const size_t n = decode_sprite_list(vram.graphics.data(), int(geometry::first_line), int(geometry::height), presented, presented_state, false,
+                                            presentation_);
+        presented_submitted_.resize(kMaxPresentedSprites);
+        for (size_t i = 0; i < n; ++i) convert(presented[i], presented_submitted_[i]);
+        presented_submitted_count_ = n;
+        presented_overflow_ = n == kMaxPresentedSprites;
+    } else {
+        presented_overflow_ = false;
+    }
+
+    reg_flipped_ = state.flipscreen;
+    reg_pen_mask_ = state.pen_mask;
+    reg_trails_ = state.trails;
+    reg_bank_ = state.bank;
 }
 
 void GameSprites::latch() {
@@ -26,9 +85,7 @@ void GameSprites::latch() {
 
     // Decoded positions are already in scanout space (Video::get_sprite_info);
     // the latch only mirrors them for flipscreen.
-    for (size_t i = 0; i < submitted_count_; ++i) {
-        const auto &src = submitted_sprites_[i];
-        auto &dst = current_sprites_[i];
+    auto mirror = [&](const SceneSprite &src, SceneSprite &dst) {
         dst = src;
         if (current_flipped_) {
             dst.x = (512 << 8) - int32_t(src.scale_x) * 16 - src.x;
@@ -36,11 +93,24 @@ void GameSprites::latch() {
             dst.flip_x = !src.flip_x;
             dst.flip_y = !src.flip_y;
         }
+    };
+    for (size_t i = 0; i < submitted_count_; ++i) mirror(submitted_sprites_[i], current_sprites_[i]);
+
+    presented_current_valid_ = presented_submitted_valid_;
+    if (presented_current_valid_) {
+        presented_current_.resize(kMaxPresentedSprites);
+        presented_current_count_ = presented_submitted_count_;
+        for (size_t i = 0; i < presented_current_count_; ++i) mirror(presented_submitted_[i], presented_current_[i]);
     }
 }
 
 std::span<const SceneSprite> GameSprites::sprites() const {
     return std::span<const SceneSprite>(current_sprites_.data(), current_count_);
+}
+
+std::span<const SceneSprite> GameSprites::presented_sprites() const {
+    if (!presented_current_valid_) return sprites();
+    return std::span<const SceneSprite>(presented_current_.data(), presented_current_count_);
 }
 
 bool GameSprites::flipped() const {
@@ -65,24 +135,26 @@ void raster_sprites(std::span<const SceneSprite> sprites, uint8_t mask, std::spa
     const GameVideoOptions options = raster.geometry;
     if (!raster.accumulate) std::fill(output.begin(), output.end(), 0);
     if (assets.empty()) return;
+    const uint32_t tile_count = uint32_t(assets.size() / 256);
     const bool expanded = options.expanded();
     const int scale = int(options.scale);
     const int width = expanded ? int(options.width()) : 432;
     const int origin_x = expanded ? 46 - int(options.border) : 0;
-    const int origin_y = expanded ? 24 : 0;
+    const int origin_y = expanded ? int(geometry::first_line) : 0;
     const int left = expanded ? 0 : 46, right = expanded ? width : 366;
-    const int top = expanded ? 0 : 24, bottom = expanded ? int(options.height()) : 256;
+    const int top = expanded ? 0 : int(geometry::first_line),
+        bottom = expanded ? int(options.height()) : int(geometry::end_line);
     const int y_bias = raster.flipped ? 0 : 255;
     for (size_t i = sprites.size(); i; --i) {
         const auto &sprite = sprites[i - 1];
         // Cull the nominal fixed-point rectangle BEFORE rounding texel rows.
-        // Otherwise a sprite ending exactly at Y=24 leaks its last row into
+        // Otherwise a sprite ending exactly at the first visible line leaks its last row into
         // the active picture through the +255 native raster phase.
         if (sprite.x + sprite.scale_x * 16 <= (46 - int(options.border)) * 256 ||
             sprite.x > (365 + int(options.border)) * 256 ||
-            sprite.y + sprite.scale_y * 16 <= 24 * 256 || sprite.y > 255 * 256)
+            sprite.y + sprite.scale_y * 16 <= int(geometry::first_line) * 256 || sprite.y > 255 * 256)
             continue;
-        const auto *pixels = assets.data() + (sprite.tile & 32767) * 256;
+        const auto *pixels = assets.data() + size_t(wrap_tile_index(sprite.tile, tile_count)) * 256;
         struct Column { int left, right, source; };
         std::array<Column, 16> columns;
         unsigned column_count = 0;
@@ -169,6 +241,7 @@ void GameSprites::load_state(StateReader &reader) {
         s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
         s.tile = ss.tile; s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+        s.identity = 0; s.object = 0;
     }
     reader.read(c);
     if (c > kMaxSprites) throw std::invalid_argument("Snapshot submitted sprite count out of range");
@@ -181,6 +254,7 @@ void GameSprites::load_state(StateReader &reader) {
         s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
         s.tile = ss.tile; s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+        s.identity = 0; s.object = 0;
     }
     reader.read(c);
     if (c > kMaxSprites) throw std::invalid_argument("Snapshot current sprite count out of range");
@@ -193,6 +267,7 @@ void GameSprites::load_state(StateReader &reader) {
         s.scale_x = ss.scale_x; s.scale_y = ss.scale_y;
         s.tile = ss.tile; s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0; s.flip_y = ss.flip_y != 0;
+        s.identity = 0; s.object = 0;
     }
     uint8_t u8;
     reader.read(u8); current_flipped_ = u8 != 0;
@@ -202,6 +277,7 @@ void GameSprites::load_state(StateReader &reader) {
     reader.read(reg_pen_mask_);
     reader.read(u8); reg_trails_ = u8 != 0;
     reader.read(u8); reg_bank_ = u8 != 0;
+    presented_submitted_valid_ = presented_current_valid_ = false;
 }
 
 } // namespace f3rt

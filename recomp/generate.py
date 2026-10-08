@@ -12,9 +12,10 @@ import zlib
 
 from .emitter import lower, static_flow
 from .discovery import parse_exclusions, exclusion_at
+from .sprite_units import guard_lines, parse_sprite_units, digest as sprite_units_digest
 from .timing import BASE_CYCLES
 
-_RUNTIME_ABI_VERSION = 3
+_RUNTIME_ABI_VERSION = 4
 
 
 def generate(rom: bytes, discovery, output: Path, config: dict,
@@ -92,6 +93,25 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         if not hot:
             raise ValueError("profile contains no matching main executable hits")
     retained = hot if profile_slim is not None else set(original_entries)
+    units = parse_sprite_units(config)
+    unit_enter, unit_exit = units.hook_pcs()
+    for unit in units.units:
+        for kind, pcs in (("start", unit.starts), ("end", unit.ends)):
+            for pc in pcs:
+                region = exclusion_at(exclusions, pc)
+                if pc not in discovery.instructions or region is not None:
+                    raise ValueError(
+                        f"Emit unit {unit.name!r} {kind} {pc:#x} is not a decoded "
+                        "instruction" + (f" (excluded: {region.reason})" if region else ""))
+                if pc not in retained:
+                    raise ValueError(
+                        f"Emit unit {unit.name!r} {kind} {pc:#x} is not retained by the "
+                        "slim profile; add it to the profile or use tiers")
+    for first, last in units.frame_writers:
+        if last >= len(rom):
+            raise ValueError(f"Frame writer range [{first:#x}, {last:#x}] lies outside the ROM")
+    unit_guard = guard_lines(units)
+    unit_hooks = Counter()
     emission_blocks = []
     for pcs in blocks:
         if profile_path is None:
@@ -128,6 +148,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     unsupported_pcs = []
     shards = {"hot": [], "cold": []}
     shard_calls = {"hot": set(), "cold": set()}
+    shard_hooked = {"hot": False, "cold": False}
     # Codegen-only resolved targets for computed jmp/jsr; absent on hand-built
     # discovery objects, where no indirect chain is emitted.
     indirect_targets = getattr(discovery, "indirect_targets", None) or {}
@@ -143,6 +164,16 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         for pc in pcs:
             insn = discovery.instructions[pc]
             lines.append(f'L_{pc:06x}: {{')
+            # Exit before enter: a PC that ends one unit and starts another
+            # closes the first invocation before opening the next.
+            for unit_id in unit_exit.get(pc, ()):
+                lines.append(f'    F3_UNIT_EXIT(cpu, {unit_id});')
+                unit_hooks[(unit_id, "exit")] += 1
+                shard_hooked[tier] = True
+            for unit_id in unit_enter.get(pc, ()):
+                lines.append(f'    F3_UNIT_ENTER(cpu, {unit_id});')
+                unit_hooks[(unit_id, "enter")] += 1
+                shard_hooked[tier] = True
             lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
             statements = lower(insn)
             if statements is None:
@@ -235,11 +266,28 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             # file (or a different tier), so declare them before the bodies.
             externs = ''.join(f'extern void {callee}(f3_cpu *cpu);\n'
                               for callee in sorted(shard_calls[tier]))
-            (output / filename).write_text(preamble + externs + '\n'.join(shard))
+            hooked = shard_hooked[tier]
+            (output / filename).write_text(
+                preamble + (unit_guard if hooked else '') + externs + '\n'.join(shard))
             source_names.append(filename)
             tier_sources[tier].append(filename)
             shards[tier] = []
             shard_calls[tier] = set()
+            shard_hooked[tier] = False
+
+    for unit in units.units:
+        for kind, pcs in (("enter", unit.starts), ("exit", unit.ends)):
+            if unit_hooks[(unit.id, kind)] != len(pcs):
+                raise ValueError(
+                    f"Emit unit {unit.name!r}: {unit_hooks[(unit.id, kind)]} of "
+                    f"{len(pcs)} {kind} hooks emitted")
+    unit_report = {
+        "digest": f"0x{sprite_units_digest(units):08x}",
+        "units": {unit.name: {"id": unit.id, "enter_hooks": unit_hooks[(unit.id, "enter")],
+                              "exit_hooks": unit_hooks[(unit.id, "exit")]}
+                  for unit in units.units},
+        "frame_writer_ranges": len(units.frame_writers),
+    }
 
     exception_entries = Counter()
     for pc, vector in rom_exceptions.items():
@@ -331,6 +379,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "fallback_mnemonics": dict(sorted(unsupported.items())),
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
         "runtime_abi_version": _RUNTIME_ABI_VERSION,
+        "emit_units": unit_report,
         "coverage_mode": "all_aligned" if exhaustive else "recursive",
         "exclusions": [
             {"start": region.start, "end": region.end,

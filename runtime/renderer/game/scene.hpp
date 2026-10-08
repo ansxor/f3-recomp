@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt/game_video.hpp"
 #include <array>
 #include <concepts>
 #include <cstddef>
@@ -41,6 +42,20 @@ concept Snapshotable = requires(const T &c, T &t, StateWriter &w, StateReader &r
     t.load_state(r);
 };
 
+// Tile index within an asset ROM of `count` 16x16 tiles (the ROM decides the
+// wrap, not a fixed 15-bit field): power-of-two ROMs mask, others take the remainder.
+// Mirrors the FDP's wrap_tile; GLSL `wrap_tile` in scene.glsl is the GPU twin.
+constexpr uint32_t wrap_tile_index(uint32_t code, uint32_t count) {
+    return (count & (count - 1)) == 0 ? code & (count - 1) : code % count;
+}
+
+// Hardware display-list limit: canonical (serialized) sprite lists never exceed it.
+inline constexpr size_t max_hardware_sprites = 1024;
+// Render-only presented list (unit splices): full-detail splices expand spliced objects ~17x
+// (measured peak 1300 presented sprites in Command War attract), so it needs its own capacity.
+// Overflow is counted (GameVideo::report), never silent.
+inline constexpr size_t max_presented_sprites = 4096;
+
 struct ScenePixel {
     uint16_t palette = 0;
     uint8_t flags = 0; // bit 4: nontransparent texel; bit 0: blend selector.
@@ -52,7 +67,16 @@ struct SceneSprite {
     uint32_t tile = 0;
     uint8_t palette = 0;
     bool flip_x = false, flip_y = false;
-    bool operator==(const SceneSprite &) const = default;
+    // Render-only stable object identity (0 = unknown); never serialized and not part of
+    // geometry equality, so identity-only changes are not motion.
+    uint64_t identity = 0;
+    // Owning invocation identity shared by all parts of one object (0 = unknown); render-only and
+    // excluded from equality like `identity`. Motion uses it for the per-object rigid check.
+    uint64_t object = 0;
+    bool operator==(const SceneSprite &o) const {
+        return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y && tile == o.tile &&
+               palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;
+    }
 };
 
 struct SceneLayer {
@@ -74,7 +98,41 @@ struct ScenePlayfield {
     int32_t y_step = 256;
     uint8_t y_fraction = 0; // Native subpixel phase retained for high-resolution sampling.
     uint16_t palette_add = 0;
+    // PF2/PF3 alternate physical map (maps 4/5) selected by line RAM bit 0x200;
+    // only ever set when game_config::video.extended_alt_maps.
+    bool alt_map = false;
+    // The sampled map row has no nonzero tile code, so the hardware skips the layer on this
+    // scanline (GameLines::cull_empty_rows). Derived each frame, never serialized.
+    bool empty_row = false;
+    // Render-only presentation hint, derived each frame (GameLines::resolve_full_resolution_alt),
+    // never serialized and never compared with the oracle: for an alt_map row, the offset c in
+    // [0, pf_map_width_px) with alt(x, y) == main((2x + c) mod pf_map_width_px, y) for every tile
+    // row the scanline samples; -1 = none (the canonical alternate-map sampling stands).
+    // Consumed only through presented_playfield().
+    int16_t full_res_offset = -1;
 };
+
+// Playfield map width in texels (64 columns of 16).
+inline constexpr unsigned pf_map_width_px = 1024;
+
+// The presented (expanded GPU/CPU output) view of one playfield row. With
+// game_config::video.full_resolution_alt_maps, an alt_map row that has a solved full-resolution
+// twin samples the main map at twice the step: x' = 2x + c, so alt_map=false, x_step*2 and
+// source_x = 2*source_x + (c << 8) wrapped to the map period (24.8). Vertical geometry is unchanged.
+// Canonical rows, native composition and snapshots never call this.
+constexpr ScenePlayfield presented_playfield(const ScenePlayfield &p) {
+    if constexpr (game_config::video.full_resolution_alt_maps) {
+        if (p.alt_map && p.full_res_offset >= 0) {
+            ScenePlayfield q = p;
+            q.alt_map = false;
+            q.x_step = p.x_step * 2;
+            q.source_x = int32_t((uint32_t(p.source_x) * 2u + (uint32_t(p.full_res_offset) << 8)) &
+                                 (pf_map_width_px * 256u - 1u));
+            return q;
+        }
+    }
+    return p;
+}
 
 struct SceneClip {
     int16_t left = 0, right = 0; // Half-open scanout coordinates, calibration applied.
@@ -109,18 +167,18 @@ constexpr LayerId sprite_layer(uint16_t plane_value) { return sprite((plane_valu
 struct LayerInfo {
     const char *name;
     uint16_t width, height;
-    const char *domain;
+    const char *domain; // sampling-domain suffix; reports print "<width>x<height>-<domain>"
 };
 inline constexpr std::array<LayerInfo, layer_count> layer_info{{
-    {"pf0", 1024, 512, "1024x512-indexed-texture"},
-    {"pf1", 1024, 512, "1024x512-indexed-texture"},
-    {"pf2", 1024, 512, "1024x512-indexed-texture"},
-    {"pf3", 1024, 512, "1024x512-indexed-texture"},
-    {"sp0", 320, 232, "320x232-next-sprite-plane"},
-    {"sp1", 320, 232, "320x232-next-sprite-plane"},
-    {"sp2", 320, 232, "320x232-next-sprite-plane"},
-    {"sp3", 320, 232, "320x232-next-sprite-plane"},
-    {"text", 512, 512, "512x512-indexed-texture"},
+    {"pf0", 1024, 512, "indexed-texture"},
+    {"pf1", 1024, 512, "indexed-texture"},
+    {"pf2", 1024, 512, "indexed-texture"},
+    {"pf3", 1024, 512, "indexed-texture"},
+    {"sp0", geometry::native_width, geometry::height, "next-sprite-plane"},
+    {"sp1", geometry::native_width, geometry::height, "next-sprite-plane"},
+    {"sp2", geometry::native_width, geometry::height, "next-sprite-plane"},
+    {"sp3", geometry::native_width, geometry::height, "next-sprite-plane"},
+    {"text", 512, 512, "indexed-texture"},
 }};
 // Layers with scroll geometry (playfields and text).
 inline constexpr std::array<LayerId, 5> scrolled_layers{
@@ -147,6 +205,9 @@ struct SceneRow {
     int16_t text_x = 0, text_y = 0;
     uint8_t mosaic_period = 16;
     bool bitmap = false;
+    // Line RAM 0x6000 section word 2 bits 14/13 (MAME y-ack/fdp-collapse): 15-bit palette
+    // words and a horizontal two-pixel blur. Not serialized: rows are re-decoded every VBSTART.
+    bool palette_15bit = false, blur = false;
 };
 
 } // namespace f3rt

@@ -8,15 +8,15 @@ enum class VideoScaleMode { Fixed, Auto, AutoInteger };
 
 inline unsigned video_scale_for_window(VideoScaleMode mode, unsigned pixel_width,
                                        unsigned pixel_height, unsigned border) {
-    const unsigned native_width = 320 + border * 2;
+    const unsigned native_width = geometry::native_width + border * 2;
     unsigned scale;
     if (mode == VideoScaleMode::Auto) {
         // Ceil the limiting axis without floating point or overflowing an addition.
         const unsigned width_scale = pixel_width / native_width + (pixel_width % native_width != 0);
-        const unsigned height_scale = pixel_height / 232 + (pixel_height % 232 != 0);
+        const unsigned height_scale = pixel_height / geometry::height + (pixel_height % geometry::height != 0);
         scale = std::min(width_scale, height_scale);
     } else {
-        scale = std::min(pixel_width / native_width, pixel_height / 232);
+        scale = std::min(pixel_width / native_width, pixel_height / geometry::height);
     }
     return std::clamp(scale, 1u, GameVideoOptions::max_scale);
 }

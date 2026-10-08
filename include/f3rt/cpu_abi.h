@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define F3RT_ABI_VERSION 3u
+#define F3RT_ABI_VERSION 4u
 
 /* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
  * stacks. All addresses/registers are host integers; bus accesses are big-endian.
@@ -75,6 +75,16 @@ int f3_dispatch(f3_cpu *cpu);
 /* Execute exactly one instruction at cpu->pc. Canonical SR on entry/exit.
  * Return nonzero on success; zero means no fallback is available. */
 int f3_fallback(f3_cpu *cpu);
+
+/* Render-only emit-unit hooks (ABI 4). Generated code calls these at the label
+ * of a declared unit start/end PC, after flushing pending flags and before that
+ * instruction executes; the interpreter calls them at the same instruction
+ * boundary. They never change emulated state of the real CPU. `unit` is the
+ * EmitUnit id from the generated sprite_units.h. f3_unit_exit returns nonzero
+ * only for a sandbox replay CPU that reached its unit end: the caller must then
+ * return without executing the instruction at cpu->pc. */
+void f3_unit_enter(f3_cpu *cpu, uint32_t unit);
+int f3_unit_exit(f3_cpu *cpu, uint32_t unit);
 
 #ifdef __cplusplus
 }

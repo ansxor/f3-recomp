@@ -42,13 +42,23 @@ void mix(PixelMix &pixel, const SceneLayer &layer, uint16_t color, bool select,
         pixel.destination_weight = blend[unsigned(select) + (pixel.source_mode == 1 ? 0 : 2)];
     }
 }
+// FDA 15-bit palette word RRRRGGGGBBBBRGBx: nibbles shifted, low bits fill the lsb (not replicated).
+uint32_t color15(uint32_t color) {
+    return ((color & 0xf000u) << 8) | ((color & 8u) << 16) | ((color & 0x0f00u) << 4) |
+           ((color & 4u) << 9) | (color & 0x00f0u) | ((color & 2u) << 2);
+}
+template<bool Palette15>
 uint32_t rgb(const PixelMix &pixel, std::span<const uint32_t> palette) {
+    auto fetch = [&](uint16_t index) {
+        const uint32_t color = palette[index & 8191];
+        return Palette15 ? color15(color) : color;
+    };
     if (pixel.source_weight == 8 && pixel.destination_weight == 0)
-        return 0xff000000u | palette[pixel.source & 8191];
+        return 0xff000000u | fetch(pixel.source);
     if (pixel.source_weight == 0 && pixel.destination_weight == 8)
-        return 0xff000000u | palette[pixel.destination & 8191];
-    const uint32_t source = palette[pixel.source & 8191];
-    const uint32_t destination = palette[pixel.destination & 8191];
+        return 0xff000000u | fetch(pixel.destination);
+    const uint32_t source = fetch(pixel.source);
+    const uint32_t destination = fetch(pixel.destination);
     uint32_t color = 0xff000000;
     for (unsigned shift : {0u, 8u, 16u}) {
         const unsigned value = (((source >> shift) & 255) * pixel.source_weight +
@@ -74,7 +84,7 @@ void validate_scene(const SceneJob &job) {
         job.target.output.size() < size_t(options.width()) * options.height())
         throw std::runtime_error("Incomplete game scene render buffers");
     // Reject unsupported rows on the caller before publishing any work.
-    for (unsigned y = 24; y < 256; ++y)
+    for (unsigned y = geometry::first_line; y < geometry::end_line; ++y)
         if (job.scene.rows[y].bitmap)
             throw std::runtime_error("Game scene bitmap pivot is unsupported");
 }
@@ -94,11 +104,11 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
     const auto output = job.target.output;
     const auto options = job.target.geometry;
     constexpr int scale = Expanded ? int(Scale) : 1;
-    const int width = Expanded ? int(options.width()) : 320;
+    const int width = Expanded ? int(options.width()) : int(geometry::native_width);
     const int left_edge = Expanded ? 46 - int(options.border) : 46;
     const int right_edge = Expanded ? 366 + int(options.border) : 366;
     constexpr unsigned max_width = Expanded
-        ? (320 + GameVideoOptions::max_border * 2) * GameVideoOptions::max_gpu_scale : 320;
+        ? (geometry::native_width + GameVideoOptions::max_border * 2) * GameVideoOptions::max_gpu_scale : geometry::native_width;
     std::array<PixelMix, max_width> pixels;
     for (unsigned y = begin; y < end; ++y) {
         const auto &row = scene.rows[y & 255];
@@ -106,24 +116,27 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
         std::array<bool, layer_count> active;
         for (unsigned i = 0; i < layer_count; ++i) {
             const LayerId id{uint8_t(i)};
-            active[i] = row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0;
+            active[i] = row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 &&
+                !(kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row);
         }
         std::array<ClipRanges, layer_count> clips;
         for (LayerId id : order)
             if (active[unsigned(id)]) clips[unsigned(id)] = clip_ranges(row, row.layer(id), int16_t(left_edge), int16_t(right_edge));
         for (int sub_y = 0; sub_y < scale; ++sub_y) {
-            const unsigned output_y = (y - 24) * scale + sub_y;
+            const unsigned output_y = (y - geometry::first_line) * scale + sub_y;
             std::fill_n(pixels.begin(), width, PixelMix{0, row.background, 0, 8, 0, 0, 255});
             for (LayerId id : order) {
                 const auto &state = row.layer(id);
                 if (!active[unsigned(id)]) continue;
                 const LayerKind layer_kind = kind(id);
                 GameTiles::RowSampler tile_sampler;
+                ScenePlayfield pf;
                 if (layer_kind == LayerKind::Playfield) {
-                    const auto &pf = row.playfields[sub_index(id)];
+                    pf = row.playfields[sub_index(id)];
+                    if constexpr (Expanded) if (scene.presented) pf = presented_playfield(pf);
                     const int fy = (int(pf.y_fraction) * scale + sub_y * pf.y_step) / scale;
                     const int source_y = pf.source_y + (fy >> 8);
-                    tile_sampler = tiles.row_sampler(sub_index(id), source_y, flipped, tile_pixels);
+                    tile_sampler = tiles.row_sampler(sub_index(id), source_y, flipped, tile_pixels, pf.alt_map);
                 }
                 // Expanded subcolumns often resolve to the same source texel.
                 // Cache only within one layer/subrow; palette offsets apply to copies.
@@ -148,7 +161,6 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                         ScenePixel source;
                         bool select = state.blend_select;
                         if (layer_kind == LayerKind::Playfield) {
-                            const auto &pf = row.playfields[sub_index(id)];
                             // Divide only after combining the native phase and output
                             // subpixel. This samples geometry, not an enlarged RGB frame.
                             const int x = floor_divide(pf.source_x * scale + (sample_x - 46 * scale) * pf.x_step, scale * 256);
@@ -193,7 +205,19 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                     }
                 }
             }
-            for (int x = 0; x < width; ++x) output[output_y * width + x] = rgb(pixels[x], colors);
+            uint32_t *out = &output[output_y * width];
+            if (row.palette_15bit) for (int x = 0; x < width; ++x) out[x] = rgb<true>(pixels[x], colors);
+            else for (int x = 0; x < width; ++x) out[x] = rgb<false>(pixels[x], colors);
+            if (row.blur) {
+                // Average with the previous native column (same subpixel phase); the first
+                // column averages with black exactly like the FDP. Descending keeps sources original.
+                for (int x = width - 1; x >= 0; --x) {
+                    const uint32_t color = out[x], previous = x >= scale ? out[x - scale] : 0;
+                    const uint32_t rb = (((color & 0x00ff00ffu) + (previous & 0x00ff00ffu)) >> 1) & 0x00ff00ffu;
+                    const uint32_t g = (((color & 0x0000ff00u) + (previous & 0x0000ff00u)) >> 1) & 0x0000ff00u;
+                    out[x] = 0xff000000u | rb | g;
+                }
+            }
         }
     }
 }
@@ -247,8 +271,8 @@ public:
 private:
     void compose_part(const SceneJob &job, unsigned part) const noexcept {
         const unsigned participants = count_ + 1;
-        compose_expanded_rows(job, 24 + 232 * part / participants,
-                     24 + 232 * (part + 1) / participants);
+        compose_expanded_rows(job, geometry::first_line + geometry::height * part / participants,
+                     geometry::first_line + geometry::height * (part + 1) / participants);
     }
     void work(unsigned part) {
         uint64_t observed = 0;
@@ -289,11 +313,11 @@ void compose_game_scene(const FrameScene &scene, const SceneTarget &target, Comp
     validate_scene(job);
     const bool expanded = target.geometry.expanded();
     if (mode == ComposeMode::Serial) {
-        if (expanded) compose_expanded_rows(job, 24, 256);
-        else compose_rows<0>(job, 24, 256);
+        if (expanded) compose_expanded_rows(job, geometry::first_line, geometry::end_line);
+        else compose_rows<0>(job, geometry::first_line, geometry::end_line);
     } else if (!expanded) {
         // Constant native geometry also removes per-pixel variable division.
-        compose_rows<0>(job, 24, 256);
+        compose_rows<0>(job, geometry::first_line, geometry::end_line);
     } else {
         static RowWorkers workers;
         workers.compose(job);

@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <span>
 
+#include "renderer/sprite_presentation.hpp"
+
 namespace f3rt {
 
 // One 8x8 4bpp character tile: 32 raw bytes -> 64 packed-nibble pixels
@@ -42,6 +44,8 @@ struct DecodedSpriteEntry {
     uint8_t color = 0;
     bool flip_x = false, flip_y = false;
     uint8_t pri = 0;
+    uint64_t identity = 0; // stable sprite identity from a SpritePresentation; 0 = unknown
+    uint64_t object = 0;   // owning invocation identity (shared by a multi-part object); 0 = unknown
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)
@@ -50,6 +54,6 @@ struct DecodedSpriteEntry {
 // Returns the number of entries written to `out`.
 size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_height,
                           std::span<DecodedSpriteEntry> out, SpriteRamState &state,
-                          bool apply_flip);
+                          bool apply_flip, const SpritePresentation *presentation = nullptr);
 
 } // namespace f3rt

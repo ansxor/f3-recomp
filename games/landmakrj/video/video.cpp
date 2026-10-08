@@ -1,56 +1,15 @@
 // Land Maker (landmakrj) game-specific video code.
 //
-// - Sprites: the display list at 0x600000 (0x10000 bytes, 1024 entries of 16
-//   bytes) is walked with block chaining, the list jump word, command/scaled/
-//   scroll words and the sprite-bank select. This is the same hardware list
-//   Video::get_sprite_info reads.
 // - With F3RT_VIDEO_WRITE_LOG: the known store-PC lists per scene component
 //   (observe_game_video_write).
 //
-// The tile, text and line-RAM decoders are shared and live in runtime/.
-#include "renderer/game/sprites.hpp"
-#include "renderer/decode.hpp"
+// The sprite, tile, text and line-RAM decoders are shared and live in runtime/.
 #ifdef F3RT_VIDEO_WRITE_LOG
 #include "renderer/game/video_log.hpp"
-#endif
-#include <algorithm>
 #include <array>
+#endif
 
 namespace f3rt {
-
-void GameSprites::decode(const VideoRam &vram) {
-    SpriteRamState state;
-    state.flipscreen = reg_flipped_;
-    state.bank = reg_bank_;
-    state.trails = reg_trails_;
-    state.pen_mask = reg_pen_mask_;
-    state.extra_planes = uint8_t(reg_pen_mask_ >> 4);
-
-    std::array<DecodedSpriteEntry, kMaxSprites> decoded;
-    const size_t count = decode_sprite_list(vram.graphics.data(), 24, 232, decoded, state, false);
-
-    for (size_t i = 0; i < count; ++i) {
-        auto &dst = staging_sprites_[i];
-        dst.x = decoded[i].x;
-        dst.y = decoded[i].y;
-        dst.scale_x = uint16_t(decoded[i].scale_x);
-        dst.scale_y = uint16_t(decoded[i].scale_y);
-        dst.tile = decoded[i].tile;
-        dst.palette = decoded[i].color;
-        dst.flip_x = decoded[i].flip_x;
-        dst.flip_y = decoded[i].flip_y;
-    }
-    // The decoded list is this frame's submission; GameVideo::latch_sprites()
-    // applies the scanout origin and the one-frame lag.
-    std::copy_n(staging_sprites_.begin(), count, submitted_sprites_.begin());
-    submitted_count_ = count;
-    staging_count_ = 0;
-
-    reg_flipped_ = state.flipscreen;
-    reg_pen_mask_ = state.pen_mask;
-    reg_trails_ = state.trails;
-    reg_bank_ = state.bank;
-}
 
 #ifdef F3RT_VIDEO_WRITE_LOG
 namespace {
@@ -162,3 +121,4 @@ void observe_game_video_write(uint32_t pc, uint32_t address, uint64_t frame) {
 #endif
 
 } // namespace f3rt
+

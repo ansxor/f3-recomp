@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace f3rt {
 enum class AudioBackend { Oracle, Native, Hle };

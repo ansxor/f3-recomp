@@ -240,8 +240,41 @@ extend = true
 # Its first 144 line words are 0x3200 (selector 0x0200); this is a source/layout
 # contract, not a claim that pinned MAME enables alternates in extended mode.
 extended_alt_maps = true
+# Presentation only (emulation, sync CRCs and --video compare are unchanged): the presented
+# output resamples PF2/PF3 alternate-map rows from the full-resolution main map where the
+# half-scaled copy is an exact X2 alias (runtime/renderer/game/tiles.cpp, FullResolutionAltMaps).
+full_resolution_alt_maps = true
 visible_y = 32
 visible_height = 224
+
+# Emit units (see docs/site/reference/game-config.md): the object loop at 0x9a0e
+# sets a6 = object (0x410000 + k*0x80). Per object, 0xa1c8 projects, 0xa334
+# rescales zoom and 0x9b32 compiles sprite entries through a4; 0x9a6c is the
+# loop's `lea $80(a6),a6`, so [0x9a3c,0x9a6c) draws exactly one object.
+[[video.emit_units]]
+name = "objects"
+start = 0x9a3c
+end = 0x9a6c
+unit = "a6"
+size = 0x80
+owner = "unit"
+# Sprite-RAM writers that run outside any unit. Evidence: f3rt-sprite-check (--frames 6000
+# attract) attributes every outside write to these PCs; replays of the object unit are
+# bit-exact, so nothing else draws.
+#   0x9984..0x9a00   per-frame list head: command-entry words at 0x600324/0x600334 (both
+#                    banks) selected by -$8000(a5); first_frame 585
+#   0x9a74..0x9af6   tail padding clears after the object loop (a4 +=16 stores) and the
+#                    final command word at 0x9aea/0x9af0
+#   0x00440..0x0045c boot: clears the whole sprite RAM (`move.l d0,(a0)+` at 0x45a)
+#   0x00540..0x00592 mode init: clears both banks (0x556, 0x568), copies the 8-long
+#                    initial entries from 0x644 (0x580, 0x590)
+#   0x00a9e..0x00aee initial list head/tail words of both banks (0xaa4..0xaec)
+#   0x4736..0x4742   generic memclr helper (move.l d1,(a0)+); only observed clearing a
+#                    sprite bank at boot (frame 14)
+#   0x514c..0x519a   level/screen init: clears list words 0x600000.. and both banks
+#                    from +0x20 (0x516c..0x5198); first_frame 270
+[video.frame_writers]
+ranges = [[0x440, 0x45c], [0x540, 0x592], [0xa9e, 0xaee], [0x4736, 0x4742], [0x514c, 0x519a], [0x9984, 0x9a00], [0x9a74, 0x9af6]]
 
 # Asset-research inputs consumed by tools/discover_prescaled_tiles.py; not a
 # renderer profile or hardware alt-selection override. Header ABI at 0x4868

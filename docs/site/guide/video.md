@@ -144,10 +144,16 @@ times per native frame on a high-refresh display. It adds one native frame of
 positional latency; artwork, animation frames, palette and layer controls stay
 discrete. Scale 2–4 exposes subpixel motion better than native scale 1.
 
-Sprite matching follows tile/palette appearance groups and mutually unique
-closest positions, so count changes do not reject surviving sprites.
-Ambiguous identity ties, changed artwork, zoom/flip changes, movement over
-32 native pixels per axis and wraps still snap. Playfield/line and text scroll
+Sprites are matched by the game's own object identity when the game declares sprite
+units, otherwise by tile/palette appearance groups and mutually unique closest
+positions. A sprite whose identity is new or has vanished (some games re-key a sprite
+that stays on screen) is also matched by appearance, but only against other re-keyed
+sprites. Count changes therefore do not reject surviving sprites. A matched sprite that
+changes artwork, or that was re-matched by appearance, still moves smoothly if it travels
+with the rest of its object (within one native pixel of the object's common movement); a
+pose change or mis-pairing that moves parts of one object differently snaps. Ambiguous
+matches, zoom/flip changes, movement over
+32 native pixels per axis and wraps also snap. Playfield/line and text scroll
 check their own layer controls; each axis can interpolate independently.
 State loads, rollback corrections, pause/resume and long stalls reset history.
 

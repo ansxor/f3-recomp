@@ -16,6 +16,7 @@ class Interpreter;
 class Eeprom;
 class SoundTrace;
 class SoundNative;
+class SpriteUnits;
 class Machine {
 public:
     static constexpr uint32_t main_clock = 16000000;
@@ -39,6 +40,8 @@ public:
     const std::vector<uint32_t> &native_pixels() const;
     RomSet roms;
     std::unique_ptr<Video> video;
+    // Render-only emit-unit tracking/replay; null = feature off. Never serialized.
+    std::unique_ptr<SpriteUnits> sprite_units;
     std::unique_ptr<GameVideo> game_video;
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;

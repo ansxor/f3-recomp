@@ -171,16 +171,38 @@ identity/count-subset/transform/jump/control rejection counts.
 ### Sprites
 
 Compact submitted slots are not object IDs: tile-zero entries are omitted, so
-insertions/removals can shift otherwise stable sprites. Match bounded
-tile/palette appearance groups, with mutually unique closest positions for
-duplicate groups. Equal-distance ties or non-mutual assignments snap, rather
-than arbitrarily selecting a neighbor. Unchanged sprite lists skip matching.
+insertions/removals can shift otherwise stable sprites. Sprites carrying a sprite-unit
+identity match exactly by it. An identity that occurs on both sides but is duplicated is
+ambiguous and stays unmatched. An identity absent from the other frame entirely (a
+birth in the current frame, a vanished sprite in the previous one) falls back to the
+appearance pass, since some games re-key a sprite's identity (Command War: the emit
+unit's object RAM address changes every two frames while the sprite stays on screen).
+Identity-less sprites and these births/vanished sprites match bounded tile/palette
+appearance groups, with mutually unique closest positions (32 px window) for duplicate
+groups; the two kinds never pair with each other (`key()` bit 63 marks identity-bearing).
+Equal-distance ties or non-mutual assignments snap, rather than
+arbitrarily selecting a neighbor. Unchanged sprite lists skip matching.
+
+An identity is (invocation, entry index), so a pose change can reassign entry k to a
+different body part of a multi-part object, and an appearance-fallback pairing can pair
+the wrong parts of one object. Tile/palette-changed identity matches and appearance-fallback
+matches of identity sprites therefore interpolate only if they pass a per-object rigid
+check: every sprite carries `object` (its invocation identity; splice replacement entries use
+`splice.identity`; 0 = unknown, never serialized, excluded from equality). The object's
+reference delta is the unique mode of (dx, dy) over its same-tile identity-pass matches;
+if it has none, the mode over all its matched entries (identity and fallback) when a strict
+majority holds it (a single-entry object trivially passes). A checked entry
+interpolates only when its delta is within ±1 native px per axis of that reference. No
+reference (tie, no majority), `object == 0`, or a delta disagreeing with the reference snaps;
+rejections count as `sprite_transform_rejections`. Same-tile identity-pass matches
+(measured clean) and identity-less sprites are unaffected.
 
 Count changes no longer veto surviving matched sprites. Require the same pen
 mask, X/Y scales and flip bits, valid coordinates and asset indices, and at
 most **32 native pixels per axis per frame**. Lerp X/Y in 24.8, nearest-rounding
-the fixed-point unit. Unmatched births/replacements, tile-animation changes,
-palette/zoom/flip changes, invalid data and larger movement snap. Raw coordinate
+the fixed-point unit. Unmatched births/replacements, tile-animation changes that
+disagree with their object's rigid motion, palette-only changes under the same test,
+zoom/flip changes, invalid data and larger movement snap. Raw coordinate
 wrap jumps exceed the guard; no modular shortest-path lerp.
 
 This remains render-snapshot matching, not semantic game-object tracking.
@@ -441,7 +463,7 @@ own-layer clips, independent-axis snaps, wraps, invalid alpha and resets.
 
 These are sampled **native-pair** counts, not physical presentation counts.
 Rows accepting one axis can also report a rejected other axis. Unknown identity
-counts include births/replacements, tile-animation changes and ambiguity;
+counts include births/replacements, non-rigid tile-animation changes and ambiguity;
 they are not silently included as known valid movement. In the large proof,
 63 of 190 paired samples had no known moving geometry. Every one of the 127
 known-moving samples produced a visibly different midpoint, versus 63 visible

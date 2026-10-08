@@ -6,6 +6,7 @@
 #include "sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
+#include "sprite_units.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -52,6 +53,8 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
     if (a - PALETTE_BASE <= m.palette.size() - Width)
         return m.palette.data() + (a - PALETTE_BASE);
     if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
+        // Sprite-RAM stores must reach SpriteUnits (entry attribution), so they take the byte path.
+        if constexpr (Write) if (m.sprite_units && a - GRAPHICS_BASE < 0x10000) return nullptr;
 #ifdef F3RT_VIDEO_WRITE_LOG
         // Debug write logging must see every graphics store byte by byte.
         if constexpr (Write) if (m.game_video) return nullptr;
@@ -126,6 +129,7 @@ void Machine::reset_devices() {
     watchdog_at = cpu.cycles + 3ull * main_clock;
 }
 void Machine::reset() {
+    if (sprite_units) sprite_units->reset();
     native_pixels();
     cpu = {};
     cpu.runtime = this;
@@ -182,16 +186,19 @@ void Machine::coin_write(unsigned bank, uint8_t value) {
 // Unlisted addresses, including ROM, ignore writes.
 void Machine::write8(uint32_t a, uint8_t v) {
     a &= 0xffffff;
-    if (a >= RAM_BASE && a < RAM_END) { ram[a & RAM_MIRROR_MASK] = v; return; }
+    if (a >= RAM_BASE && a < RAM_END) {
+        ram[a & RAM_MIRROR_MASK] = v;
+        if (sprite_units) sprite_units->note_write(a, 1);
+        return;
+    }
     if (a >= PALETTE_BASE && a < PALETTE_END) { palette[a - PALETTE_BASE] = v; return; }
     // Debug builds (F3RT_VIDEO_WRITE_LOG) log stores from undocumented game routines.
-    // TODO: maybe we add hooks for giving stable identities to sprites for things
-    // like motion interp?
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
 #ifdef F3RT_VIDEO_WRITE_LOG
         if (game_video) game_video->observe_write(cpu.pc, a);
 #endif
         graphics[a - GRAPHICS_BASE] = v;
+        if (sprite_units) sprite_units->note_write(a, 1);
         return;
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
@@ -224,6 +231,7 @@ void Machine::write16(uint32_t a, uint16_t v) {
     if (auto *p = direct_bytes<2, true>(*this, a)) {
         p[0] = uint8_t(v >> 8);
         p[1] = uint8_t(v);
+        if (sprite_units) sprite_units->note_write(a, 2);
         return;
     }
     write8(a, uint8_t(v >> 8));
@@ -235,6 +243,7 @@ void Machine::write32(uint32_t a, uint32_t v) {
         p[1] = uint8_t(v >> 16);
         p[2] = uint8_t(v >> 8);
         p[3] = uint8_t(v);
+        if (sprite_units) sprite_units->note_write(a, 4);
         return;
     }
     write16(a, uint16_t(v >> 16));
@@ -254,6 +263,7 @@ void Machine::advance_to(uint64_t cycles) {
             irq3_at = next_vblank + 10000;
             ++frame;
             next_vblank = raster_cycle((frame + 1) * frame_pixels);
+            if (sprite_units) sprite_units->frame_end();
         }
         if (hardware_cycles == irq3_at) { pending_irqs |= 1u << 3; irq3_at = UINT64_MAX; }
     }
@@ -277,6 +287,7 @@ int Machine::boundary() {
                 write16(cpu.a[7] + 6, uint16_t(0x1000 | ((24 + level) * 4)));
             }
             f3_set_sr(&cpu, uint16_t((cpu.sr & ~0x0700) | (level << 8)));
+            if (sprite_units) sprite_units->note_irq(unsigned(level));
             if (!cpu.pc) cpu.pc = read32(cpu.vbr + 15 * 4);
             return 1;
         }
@@ -318,6 +329,7 @@ int Machine::fallback() {
     }
     ++fallback_instructions;
     if (!fallback_hits.empty()) ++fallback_hits[physical_pc >> 1];
+    if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
     return interpreter->run_main(1) > 0 && !cpu.halted;
 }
 bool Machine::run_frame(bool translated) {
@@ -330,6 +342,7 @@ bool Machine::run_frame(bool translated) {
         else if (!boundary()) {
             // Reference execution must hand MMIO/IRQ changes back at every
             // instruction boundary. Coarse slices alter the ROM boot checks.
+            if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
             interpreter->run_main(1);
         }
     }
@@ -490,6 +503,7 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
             std::to_string(expected) + ", got " + std::to_string(src.size()));
     }
     native_pixels();
+    if (sprite_units) sprite_units->reset();
     StateReader reader(src);
     // 1. Native CPU
     CanonicalF3Cpu cpu_st;

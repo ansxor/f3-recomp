@@ -7,7 +7,7 @@
 
 namespace f3rt {
 namespace {
-constexpr unsigned first_row = 24, end_row = 256;
+constexpr unsigned first_row = geometry::first_line, end_row = geometry::end_line;
 int phase_delta(int a, int b, int period) {
     int delta = (b - a) % period;
     if (delta > period / 2) delta -= period;
@@ -32,7 +32,8 @@ struct Row {
 bool valid_row(const SceneRow &row, unsigned pf, GameVideoOptions options, ClipRanges &clips) {
     const auto &p = row.playfields[pf];
     const auto &layer = p.layer;
-    if (row.bitmap || !layer.enabled || layer.mosaic ||
+    // Alternate-map rows switch the sampled map per scanline; never interpolated across.
+    if (row.bitmap || row.palette_15bit || !layer.enabled || layer.mosaic || p.alt_map ||
         uint32_t(p.source_y) > 511 || uint32_t(p.x_step) == 0 || uint32_t(p.x_step) > 256 ||
         uint32_t(p.y_step) == 0 || uint32_t(p.y_step) > 510 || p.palette_add > 8191 ||
         std::abs(int64_t(p.source_x)) > (int64_t{1} << 24)) return false;
@@ -60,13 +61,13 @@ unsigned rgb_jump(uint32_t a, uint32_t b) {
 // Every bank traversed by the polynomial is checked against actual tile pen sets.
 bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsigned pf,
                   unsigned stride, GameVideoOptions options, std::span<const uint64_t> masks) {
-    if (masks.size() < 32768) return false;
+    if (masks.empty()) return false;
     const int source_b = a.source + phase_delta(a.source, b.source, 1024 * 256);
     // Source and zoom have independent cubics: all endpoint combinations,
     // not only paired endpoints, bound their combined horizontal footprint.
     const int64_t maximum_zoom = std::max(a.zoom, b.zoom);
     const int64_t x0 = int64_t(std::min(a.source, source_b)) - int64_t(options.border) * maximum_zoom;
-    const int64_t x1 = int64_t(std::max(a.source, source_b)) + int64_t(320 + options.border) * maximum_zoom;
+    const int64_t x1 = int64_t(std::max(a.source, source_b)) + int64_t(geometry::native_width + options.border) * maximum_zoom;
     const int phase_b = a.phase + phase_delta(a.phase, b.phase, 512 * 256);
     const int y0 = int(floor_divide(std::min(a.phase, phase_b), 16 * 256));
     const int y1 = int(floor_divide(std::max(a.phase, phase_b) + 256, 16 * 256));
@@ -80,7 +81,7 @@ bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsign
             const unsigned base = (attr & 511u) * 16u;
             const unsigned mask = (((attr >> 10u) & 3u & ~attr) << 4u) | 15u;
             if (base >= 8192 || mask > 63) return false;
-            uint64_t pens = masks[code & 32767];
+            uint64_t pens = masks[wrap_tile_index(code, uint32_t(masks.size()))];
             while (pens) {
                 const unsigned pen = unsigned(std::countr_zero(pens)) & mask;
                 pens &= pens - 1;

@@ -1,5 +1,6 @@
 #include "renderer/game/lines.hpp"
 #include "f3rt/video.hpp"
+#include "renderer/game/tiles.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <sstream>
@@ -75,7 +76,10 @@ void GameLines::decode(const VideoRam &vram) {
         for (int i : { 2, 3 }) {
             if (const uint32_t where = latched_addr(0, uint8_t(i), y)) {
                 const uint16_t colscroll = read_be16(&lineram[where]);
-                line.pf[i].colscroll = colscroll & 0x1ff;
+                // Bit 9 carries the alternate-map select (extended_alt_maps layouts only);
+                // scroll arithmetic masks to 9 bits, so the stored word keeps both.
+                line.pf[i].colscroll = uint16_t(colscroll & 0x1ff) |
+                    (f3rt::game_config::video.extended_alt_maps ? (colscroll & 0x200) : 0);
                 set_clip_upper(line.clip[2 * (i - 2) + 0], (colscroll >> 12) & 1, (colscroll >> 13) & 1);
                 set_clip_upper(line.clip[2 * (i - 2) + 1], (colscroll >> 14) & 1, (colscroll >> 15) & 1);
             }
@@ -112,6 +116,8 @@ void GameLines::decode(const VideoRam &vram) {
             line.x_sample = uint8_t(16 - ((x_mosaic >> 4) & 0x0f));
             for (int pf_num = 0; pf_num < 4; ++pf_num)
                 line.pf[pf_num].x_sample_enable = (x_mosaic & (1 << pf_num)) != 0;
+            line.palette_15bit = (x_mosaic & 0x4000) == 0;
+            line.blur = (x_mosaic & 0x2000) == 0;
             for (auto &sp : line.sp)
                 sp.x_sample_enable = (x_mosaic & 0x100) != 0;
             line.pivot.x_sample_enable = (x_mosaic & 0x200) != 0;
@@ -234,6 +240,8 @@ void GameLines::prepare(bool flipped) {
 
         // Mosaic period
         row.mosaic_period = line.x_sample;
+        row.palette_15bit = line.palette_15bit;
+        row.blur = line.blur;
 
         // Bitmap mode
         row.bitmap = (line.pivot.pivot_control & 0xa0) != 0;
@@ -283,6 +291,8 @@ void GameLines::prepare(bool flipped) {
             row.playfields[i].y_step = line.pf[i].y_scale;
             row.playfields[i].y_fraction = uint8_t(reg_fx_y[i]);
             row.playfields[i].palette_add = line.pf[i].pal_add;
+            row.playfields[i].alt_map = (line.pf[i].colscroll & 0x200) != 0;
+            row.playfields[i].full_res_offset = -1;
 
             int32_t line_y_pf = ((reg_fx_y[i] >> 8) + line.pf[i].colscroll) & 0x1ff;
             // source_y / text_y contract is BEFORE global flip
@@ -297,9 +307,38 @@ void GameLines::prepare(bool flipped) {
     }
 }
 
+void GameLines::cull_empty_rows(const GameTiles &tiles) {
+    for (auto &row : rows_)
+        for (unsigned i = 0; i < 4; ++i) {
+            auto &pf = row.playfields[i];
+            pf.empty_row = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map), unsigned(pf.source_y) & 511);
+        }
+}
+
+GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolutionAltMaps &maps) {
+    AltRowCounts counts;
+    if constexpr (f3rt::game_config::video.full_resolution_alt_maps) {
+        for (unsigned y = 0; y < rows_.size(); ++y)
+            for (unsigned i = 2; i < 4; ++i) {
+                auto &pf = rows_[y].playfields[i];
+                pf.full_res_offset = -1;
+                if (!pf.alt_map || pf.empty_row) continue;
+                // Every map row the scanline can sample: the highest sub-row phase stays below
+                // y_fraction + y_step (expanded sub-rows, GameLines/compositor vertical phase).
+                const int rows_spanned = std::clamp((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
+                const unsigned first = unsigned(pf.source_y) & 511;
+                const unsigned last = (first + unsigned(rows_spanned)) & 511;
+                pf.full_res_offset = int16_t(maps.offset(i, first >> 4, last >> 4));
+                if (y < geometry::first_line || y >= geometry::end_line || !pf.layer.enabled) continue;
+                ++(pf.full_res_offset >= 0 ? counts.remapped : counts.fallback);
+            }
+    }
+    return counts;
+}
+
 void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
     prepare(oracle.flipscreen());
-    for (unsigned screen_y = 24; screen_y < 256; ++screen_y) {
+    for (unsigned screen_y = geometry::first_line; screen_y < geometry::end_line; ++screen_y) {
         const auto &g = row(screen_y);
         const auto &o = oracle.inspect_scene_row(screen_y);
 

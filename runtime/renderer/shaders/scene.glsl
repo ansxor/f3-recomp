@@ -1,8 +1,9 @@
 #include "../gpu/scene_layout.h"
-// Host layout: runtime/renderer/gpu/scene_layout.h (shared with the C++ encoder). SDL uniforms are two tightly packed uvec4s.
+// Host layout: runtime/renderer/gpu/scene_layout.h (shared with the C++ encoder). SDL uniforms are three tightly packed uvec4s.
 layout(std140, set = UNIFORM_SET, binding = 0) uniform Parameters {
     uvec4 dimensions; // scale, border, width, height
     uvec4 controls;   // sprite count, pen mask, fallback, layer mask
+    uvec4 geometry;   // first visible scanout line, native visible height, PF tile count, sprite tile count
 } params;
 // Region bases come from scene_layout.h; the raw cell/glyph/palette formats are
 // documented there and mirrored by GameTiles::RowSampler / GameText::pixel.
@@ -18,5 +19,7 @@ const uint SPRITES = F3_SCENE_SPRITES;
 const uint LAYER_COUNT = 9u;
 const uint LAYER_SP0 = 4u;
 const uint LAYER_TEXT = 8u;
+// ROM tile index wrap: power-of-two ROMs mask, others take the remainder (GameTiles/raster_sprites twin).
+uint wrap_tile(uint code, uint count) { return (count & (count - 1u)) == 0u ? code & (count - 1u) : code % count; }
 uint byte_pen(uint packed, uint offset) { return (packed >> ((offset & 3u) * 8u)) & 255u; }
 int floor_divide(int n, int d) { return n >= 0 ? n / d : -1 - (-1 - n) / d; }

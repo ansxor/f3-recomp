@@ -100,6 +100,35 @@ extend = true
 visible_y = 24
 visible_height = 232
 
+# Emit units (see docs/site/reference/game-config.md).
+# Display-object loop at 0xa8e0c: a3 = display object, `jmp ([$8,a3])` enters
+# its draw handler, which returns via a4 = 0xa8e40. Object size is not yet known.
+[[video.emit_units]]
+name = "display_objects"
+start = 0xa8e22
+end = 0xa8e40
+unit = "a3"
+owner = "unit"
+# Deferred draw queue: each start is a `pea <end>(pc)` before a handler reads its
+# record via (a4)+. The ~136 inline push sites wrote the records, so the owner is
+# the writer PC of the record's first word.
+[[video.emit_units]]
+name = "queue"
+start = [0x4542, 0x456a, 0x4592, 0x45ba, 0x45f0, 0x4618, 0x4640, 0x4668]
+end = [0x4552, 0x457a, 0x45a2, 0x45ca, 0x4600, 0x4628, 0x4650, 0x4678]
+unit = "a4"
+size = 18
+owner = "writer"
+# Sprite-RAM writers that run outside any unit. Evidence: f3rt-sprite-check
+# (--frames 6000, attract + seeded inputs) attributes every outside write to these PCs:
+#   0x41d0..0x447e  per-frame list setup: command entries 0x4330..0x4374 clear both
+#                   banks word by word, tail/jump words 0x42d0..0x4306, 0x43ba..0x43d4,
+#                   0x43ea/0x43f0, 0x444c..0x447a
+#   0x10404..0x10432 boot RAM self-test: `move.w d1,(a0)` at 0x10412 walks the whole
+#                   graphics space once during boot (frame ~92)
+[video.frame_writers]
+ranges = [[0x41d0, 0x4380], [0x43b0, 0x43de], [0x43e0, 0x43fe], [0x4400, 0x4421], [0x4422, 0x447e], [0x10404, 0x10432]]
+
 [sprites]
 size = 4194304
 fill = 0

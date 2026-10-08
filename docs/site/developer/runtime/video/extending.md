@@ -29,7 +29,7 @@ palette indices, blend selectors, or transparent coverage.
 | Operation | Owner |
 | --- | --- |
 | PF cells, text cells/glyphs | shared `GameTiles::decode` / `GameText::decode` in `runtime/renderer/game/tiles.cpp` / `runtime/renderer/game/text.cpp` |
-| Sprite display list | per-game `games/<game>/video/` (Land Maker: `video.cpp`) |
+| Sprite display list | shared `GameSprites::decode` in `runtime/renderer/game/sprites.cpp` |
 | Line parameters | shared `GameLines::decode` in `runtime/renderer/game/lines.cpp` |
 | Generic char-RAM unpack, sprite display-list walk | `runtime/renderer/decode.{hpp,cpp}` |
 | Sampling / mixing | `GameTiles::RowSampler`, `GameText::pixel`, `GameSprites::raster`, `GameLines::prepare`, `compose_game_scene` |
