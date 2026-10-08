@@ -20,7 +20,7 @@ export PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages
 ROM=/Users/darien/Workspace/f3-stuff/roms/landmakr
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR="$ROM"
 cmake --build build --target landmakr f3rt-gameplay-regression -j 6
-./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48
+./build/landmakr --renderer enhanced --video-scale auto-integer --video-border 48
 
 # Ordinary Release optimization; the same config exclusions remain on.
 cmake -S . -B build/plain -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -188,7 +188,7 @@ its finer applied-data/padding attribution and original per-region bound.
   `62bac3a4d1baef4e7c2343ce987e44eb654a71f90d653b5b88c1d12d15eff05b`.
   Cycles 977,201,324; native blocks 51,507,335; **0 CPU fallback**;
   1,817,655 audio frames; frame CRC `3359f200`.
-- Additional `--video compare` invariant: **250,114,560 RGB pixel checks**,
+- Additional `--renderer compare-cpu` invariant: **250,114,560 RGB pixel checks**,
   0 differences over 3,369 supported frames. 231 explicit video-oracle fallback
   frames are presentation coverage, not CPU interpreter fallback.
 - Held-out native mash **301–308 × 20,000 = 160,000 frames**: **8/8 success**,
@@ -271,7 +271,7 @@ Only after `binsize-combined-2-gated`, launched this actual combined executable
 without a frame/time limit:
 
 ```sh
-./build/landmakr --video-backend gpu --video-scale auto-integer --video-border 48
+./build/landmakr --renderer enhanced --video-scale auto-integer --video-border 48
 ```
 
 Cwd: `wt/binsize-combined`; pid 20834. **423.092 s (7m03s)**,

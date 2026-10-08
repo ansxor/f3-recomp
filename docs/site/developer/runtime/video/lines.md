@@ -81,12 +81,11 @@ priority.
 
 ## Write log
 
-With `F3RT_VIDEO_WRITE_LOG`, the per-game `observe_game_video_write` watches
-`0x620000..0x62ffff` (line RAM) and `0x660000..0x66003f` (control) for lines.
+With `--discovery-log`, stores to
+`0x620000..0x62ffff` (line RAM, layer `lines`) and `0x660000..0x66003f` (layer `control`) are watched.
 If `pc` is one of the known ranges in `lines_covered_write`
-(`games/landmakrj/video/video.cpp`), it returns. Otherwise it calls
-`log_unknown_video_write("lines", pc, address,
-frame)`. No state is invalidated; the next VBSTART decodes the write. See
+(`games/landmakrj/video/video.cpp`, via `video_writer_known`), nothing is logged. Otherwise a
+`NEW video-write` line is written. No state is invalidated; the next VBSTART decodes the write. See
 [Video write logging](/developer/runtime/video/producers).
 
 ## Normalizing rows

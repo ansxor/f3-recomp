@@ -15,6 +15,8 @@
 //           return true;   // false: leave this unit unpatched (no splice)
 //       });
 //   inline constexpr std::array<const SpriteBehaviour *, 1> behaviours{&double_zoom};
+//   // required (may be empty): F3RT_FLICKER_SHADOW sources, see below
+//   inline constexpr std::array<const FlickerShadow *, 1> flicker_shadows{&shadow};
 //   }
 #include "f3rt/emit_unit.hpp"
 #include <cstddef>
@@ -126,8 +128,47 @@ struct BehaviourName {
             return (__VA_ARGS__)(unit, patch); \
         }}
 
+// Flicker shadows: some games fake translucent shadows by emitting the shadow sprite
+// entries only on alternate frames (a game-side parity bit). A FlickerShadow names the
+// game's own shadow emit path inside a unit so the renderer can (1) identify the shadow
+// entries exactly (sprite-RAM writes whose writer PC lies in `emit`, in the real draw and
+// in the replay), and (2) keep every shadowed object's shadow logically present: the
+// replay forces the game's parity gate so the shadow entries exist on every frame, tagged
+// sprite_flag_shadow. The presenter then picks their visibility per *presented* frame
+// (renderer/sprite_presentation.hpp, flicker_shadow_visible) instead of per emulated frame.
+// Render-only like behaviours: nothing here touches emulated state.
+//
+//   F3RT_FLICKER_SHADOW(ident, unit, description, emit_first, emit_last,
+//                       gate_register, gate_offset, gate_mask, lambda(const Unit<unit> &) -> bool)
+//   gate: the RAM byte at <gate_register> + gate_offset; the game emits shadows only
+//         while (byte & gate_mask) != 0. The replay sets those bits in its overlay.
+//   lambda: true when this unit instance has a shadow (read at unit start).
+struct FlickerShadow {
+    const char *name;        // identifier with '_' replaced by '-'
+    const char *description;
+    const EmitUnit *unit;
+    PcRange emit;            // inclusive PCs of the shadow entry writers
+    UnitRegister gate_register;
+    int32_t gate_offset;
+    uint8_t gate_mask;
+    bool (*applies)(const UnitView &);
+};
+
+#define F3RT_FLICKER_SHADOW(ident, unit_ref, description, emit_first, emit_last, gate_register, gate_offset, \
+                            gate_mask, ...) \
+    inline constexpr ::f3rt::detail::BehaviourName<sizeof(#ident)> ident##_flicker_name{#ident}; \
+    inline constexpr ::f3rt::FlickerShadow ident{ \
+        ident##_flicker_name.text, description, &(unit_ref), ::f3rt::PcRange{emit_first, emit_last}, \
+        gate_register, gate_offset, gate_mask, \
+        [](const ::f3rt::UnitView &view) -> bool { \
+            const ::f3rt::Unit<unit_ref> unit(view); \
+            return (__VA_ARGS__)(unit); \
+        }}
+
 // Behaviours compiled into this executable (games/<id>/sprites/behaviours.hpp, via
 // F3RT_SPRITE_BEHAVIOURS_HEADER); empty when the game has none.
 std::span<const SpriteBehaviour *const> registered_sprite_behaviours();
+// Flicker shadow sources of the game (`game_sprites::flicker_shadows`, required in the same header); empty when none.
+std::span<const FlickerShadow *const> registered_flicker_shadows();
 
 } // namespace f3rt

@@ -162,7 +162,7 @@ distant floor rows from a horizontally half-scaled copy of the main map because 
 cannot sample more than one texel per pixel. In expanded output (scale above 1 or a border; GPU and
 CPU compositor) such a row samples the main full-resolution map instead whenever the renderer finds
 an exact twin of that map row (`alt(x, y) == main((2x + c) mod 1024, y)` for every x and all 16
-lines, comparing decoded palette and pen). The native 320-wide frame, `--video compare`, snapshots
+lines, comparing decoded palette and pen). The native 320-wide frame, `--renderer compare-cpu`, snapshots
 and CRCs are unchanged; rows without an exact twin keep the alternate map. The `VIDEO
 presented_sprite_frames` stats line reports remapped and fallback alternate-map rows.
 
@@ -216,7 +216,9 @@ the checker prints every outside writer PC with its first frame and address.
 compile-time checked against it). Behaviours live in
 `games/<id>/sprites/behaviours.hpp` (`F3RT_SPRITE_BEHAVIOUR`, registered
 through `F3RT_SPRITE_BEHAVIOURS_HEADER`); the frontend enables every registered
-behaviour automatically whenever the game runs natively (`--translated`).
+behaviour automatically whenever the game runs natively (`--translated`). The same header
+must also define `flicker_shadows` (an array, empty if none) of `F3RT_FLICKER_SHADOW`
+sources; see [flicker shadows](../../developer/SPRITE-UNITS.md#flicker-shadows).
 
 ## Compile-time video geometry
 

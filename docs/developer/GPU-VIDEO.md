@@ -224,7 +224,7 @@ images and supported recoveries match CPU output; canonical restore is exact.
 The original 231 startup fallback frames remain unchanged.
 Isolated-layer counts exclude fallback images, since fallback bypasses masks.
 
-Fresh headless `--video compare --video-backend gpu` (GPU flag intentionally
+Fresh headless `--renderer compare-gpu` (GPU renderer intentionally
 does not instantiate a device headlessly) ran 3600 native frames:
 3369 supported native RGB comparisons / 250,114,560 pixels / zero mismatches;
 51,507,335 native blocks and zero CPU fallback. Retained MAME captures at
@@ -500,7 +500,7 @@ or interpolation on genuinely discrete unrelated profiles is claimed.
 
 The 4000-frame fit run also exercises induced bitmap, trails and flip
 fallback/recovery, keeping canonical bytes exact.
-A fresh headless `--video compare --video-backend gpu --video-interp fit`
+A fresh headless `--renderer compare-gpu --video-interp fit`
 3600-frame run retains 250,114,560 native RGB comparisons with zero differences,
 frame CRC `3359f200`, 51,507,335 native blocks and zero instruction fallback.
 Its WAV compares byte-identically with both the parity checkpoint and
@@ -531,7 +531,7 @@ Full varied timings and unfiltered logs: `/tmp/f3-gpuvideo/interpolation/perf`.
 Independent CPU-backend canonical bytes and GPU-off pixels at frame 1560
 remain exact in both runs.
 
-Actual frontend `--video-backend gpu --video-interp fit --video-scale 4
+Actual frontend `--renderer enhanced --video-interp fit --video-scale 4
 --video-border 48 --frames 3600 --no-audio --unthrottled` completes in
 **30.31 seconds / 118.8 frames/s**, including startup and final PNG readback.
 Native CPU/audio still run: frame CRC `3359f200`, 1,817,655 audio frames,
@@ -545,7 +545,7 @@ smooth runs or claim a universally accurate fitted effect function.
 
 ## Automatic internal resolution (phase 6)
 
-`--video-scale auto-integer` and `--video-scale auto` require the GPU backend.
+`--video-scale auto-integer` and `--video-scale auto` require the GPU renderer (`enhanced` or `compare-gpu`).
 Fixed numeric scales retain 1–4 on both backends. The window fit uses
 **physical pixels** from `SDL_GetWindowSizeInPixels`, including the native
 border width `320 + 2*border`; automatic windows request high pixel density.
@@ -1377,12 +1377,12 @@ Reproduce the display-backpressure scenario (muted playback):
 gamescope --backend wayland --expose-wayland -r 30 -o 30 \
   -w 960 -h 696 -W 960 -H 696 -- \
   env SDL_VIDEODRIVER=wayland ./build/landmakr \
-  --config /tmp/f3-pacing.conf --video game --video-backend gpu \
+  --config /tmp/f3-pacing.conf --renderer enhanced \
   --video-scale 1 --video-border 0 --video-interp off \
   --postprocess off --volume 0 --frames 1200
 ```
 
-Repeat with `--video-backend cpu` for the control, or add `--motion-interp`
+Repeat with `--renderer game-cpu` for the control, or add `--motion-interp`
 to exercise the independent display/native deadlines.
 
 Additional live checks on the same GPU:

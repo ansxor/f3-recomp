@@ -24,10 +24,10 @@ digest `recomp emit` computed. Sound programs only bump their version guard.
 VBSTART it decodes the playfield, text, sprite and scanline layers directly from
 FDP video RAM (`runtime/renderer/game/scene.hpp VideoRam`) and renders from it. The hook
 symbol `f3_landmakr_video_hook`, the `GameMemory` work-RAM reader and the
-component "poisoning" validity flags are gone. In debug builds configured with
-`F3RT_VIDEO_WRITE_LOG` (`OFF` by default), stores from PCs outside a component's
-known list are reported once per layer/PC by `log_unknown_video_write`; otherwise
-no write is observed at all. The only remaining FDP-oracle fallbacks are
+component "poisoning" validity flags are gone. With the runtime flag
+`--discovery-log FILE` (no special build; replaced the former `F3RT_VIDEO_WRITE_LOG`
+CMake option), stores from PCs outside a game's known writer list are reported once
+per layer/PC; otherwise no write is observed at all. The only remaining FDP-oracle fallbacks are
 flipped-screen, sprite-trails and bitmap-pivot, each reported once per
 component/kind by `log_unsupported_video` (stderr).
 

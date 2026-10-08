@@ -46,6 +46,7 @@ struct DecodedSpriteEntry {
     uint8_t pri = 0;
     uint64_t identity = 0; // stable sprite identity from a SpritePresentation; 0 = unknown
     uint64_t object = 0;   // owning invocation identity (shared by a multi-part object); 0 = unknown
+    uint8_t flags = 0;     // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)

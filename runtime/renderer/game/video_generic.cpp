@@ -1,17 +1,12 @@
-// Write-log observer for builds whose game has no
-// games/<game>/video/.
+// Known-writer list for games without games/<game>/video/.
 //
-// Such games never instantiate GameVideo (the frontend requires F3RT_GAME_VIDEO),
-// but runtime/renderer/game/video.cpp is always linked, so the entry point must
-// resolve. This body is unreachable in a correctly configured build.
-#ifdef F3RT_VIDEO_WRITE_LOG
-#include "renderer/game/video_log.hpp"
-#endif
+// Such games never instantiate GameVideo (the frontend requires F3RT_GAME_VIDEO), but
+// `--discovery-log` still classifies their graphics/control stores, so the entry point
+// must resolve: no store PC has a documented producer, every writer is reported.
+#include "discovery_log.hpp"
 
 namespace f3rt {
 
-#ifdef F3RT_VIDEO_WRITE_LOG
-void observe_game_video_write(uint32_t, uint32_t, uint64_t) {}
-#endif
+bool video_writer_known(VideoLayer, uint32_t) { return false; }
 
 } // namespace f3rt

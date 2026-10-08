@@ -48,6 +48,7 @@ void GameSprites::decode(const VideoRam &vram) {
         dst.flip_y = d.flip_y;
         dst.identity = d.identity;
         dst.object = d.object;
+        dst.shadow = (d.flags & sprite_flag_shadow) != 0;
     };
     for (size_t i = 0; i < count; ++i) convert(decoded[i], staging_sprites_[i]);
     // The decoded list is this frame's submission; GameVideo::latch_sprites()
@@ -57,7 +58,7 @@ void GameSprites::decode(const VideoRam &vram) {
     staging_count_ = 0;
 
     // Render-only presented list with splices; capacity-truncated like the canonical one.
-    presented_submitted_valid_ = presentation_ && !presentation_->splices.empty();
+    presented_submitted_valid_ = presentation_ && (!presentation_->splices.empty() || !presentation_->flags.empty());
     if (presented_submitted_valid_) {
         SpriteRamState presented_state = initial;
         std::array<DecodedSpriteEntry, kMaxPresentedSprites> presented;

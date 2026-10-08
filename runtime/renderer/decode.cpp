@@ -58,7 +58,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
 
     // One list entry through the hardware state machine. Returns false when the entry is a
     // self-jump (list end). `allow_jump` is false for splice replacements.
-    auto step = [&](const uint8_t *spr, int &offs, bool allow_jump, uint64_t identity, uint64_t object) -> bool {
+    auto step = [&](const uint8_t *spr, int &offs, bool allow_jump, uint64_t identity, uint64_t object,
+                    uint8_t flags) -> bool {
         const uint16_t w0 = read_be16(&spr[0]);
         const uint16_t w1 = read_be16(&spr[2]);
         const uint16_t w2 = read_be16(&spr[4]);
@@ -125,6 +126,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         s.pri = uint8_t((color >> 6) & 3);
         s.identity = identity;
         s.object = object;
+        s.flags = flags;
         return true;
     };
 
@@ -134,6 +136,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         presentation ? presentation->identity : std::span<const uint64_t>{};
     const std::span<const uint64_t> objects =
         presentation ? presentation->object : std::span<const uint64_t>{};
+    const std::span<const uint8_t> slot_flags =
+        presentation ? presentation->flags : std::span<const uint8_t>{};
 
     int total_sprites = 0;
     for (int offs = 0; offs < 0x400 && total_sprites < 0x400; ++offs) {
@@ -151,7 +155,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t reps = sp.replacement.size() / 16;
             for (size_t k = 0; k < reps; ++k) {
                 int dummy = offs;
-                step(&sp.replacement[k * 16], dummy, false, sprite_identity_mix(sp.identity, uint32_t(k)), sp.identity);
+                step(&sp.replacement[k * 16], dummy, false, sprite_identity_mix(sp.identity, uint32_t(k)), sp.identity,
+                     k < sp.flags.size() ? sp.flags[k] : uint8_t(0));
             }
             total_sprites += int(n) - 1;
             offs = sp.last;
@@ -162,7 +167,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t slot = size_t(state.bank ? 0x400 : 0) + size_t(offs);
             const uint64_t id = slot < identities.size() ? identities[slot] : 0;
             const uint64_t object = slot < objects.size() ? objects[slot] : 0;
-            if (!step(spr, offs, true, id, object))
+            if (!step(spr, offs, true, id, object, slot < slot_flags.size() ? slot_flags[slot] : uint8_t(0)))
                 break;
         }
     next_entry:;

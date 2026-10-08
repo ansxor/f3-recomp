@@ -63,7 +63,7 @@ Features beyond the base Land Maker layout, all mirrored from the FDP:
 
 - `extended_alt_maps`: PF2/PF3 alternate maps 4/5 (`0x18000`/`0x1a000`), chosen per scanline by
   line RAM bit `0x200` (`ScenePlayfield::alt_map`). The GPU stores the alternate cell in word 1
-  of the PF2/PF3 cell slots (`F3_LAYER_ALT_MAP`). `--video compare` also compares both maps.
+  of the PF2/PF3 cell slots (`F3_LAYER_ALT_MAP`). `--renderer compare-cpu` also compares both maps.
 - `full_resolution_alt_maps` (needs `extended_alt_maps`; render-only, default off): Command War
   uploads each floor twice, a full-resolution copy into the main map and a horizontally half-scaled
   copy (X2/Y1) into the alternate map, and draws distant floor rows from the half copy because
@@ -77,7 +77,7 @@ Features beyond the base Land Maker layout, all mirrored from the FDP:
   row fields never change. `presented_playfield()` (`scene.hpp`) is the single remap: `alt_map=false`,
   `x_step*2`, `source_x = 2*source_x + (c << 8)` wrapped to 1024 px; `y` is unchanged. It is
   applied only to expanded output: the CPU compositor (`FrameScene::presented`, expanded kernels)
-  and `gpu/encode.cpp` (`options.expanded()`), so the native frame, `--video compare`, snapshots,
+  and `gpu/encode.cpp` (`options.expanded()`), so the native frame, `--renderer compare-cpu`, snapshots,
   `state_crc` and `sync_state_crc` are untouched. A motion-interpolated row keeps moving
   horizontally through the same remap; one whose vertical phase moved keeps the alternate map.
   The shader and compositor already handle `x_step` up to 512. Rows with no exact twin (the
@@ -105,18 +105,18 @@ that defines only the debug hook below. `GameTiles::decode`, `GameText::decode` 
 
 | Symbol | Purpose |
 | --- | --- |
-| `observe_game_video_write` | Debug store-PC check for every component |
+| `video_writer_known` | Store PCs with a documented producer, per layer (`--discovery-log` suppresses them) |
 
 The runtime keeps the generic parts: `runtime/renderer/game/lines.cpp` defines the
 shared `GameLines::decode`, `runtime/renderer/decode.{hpp,cpp}` holds the shared
 char-RAM tile unpack and the sprite display-list walk, and the component
 classes hold sampling (`GameTiles::RowSampler`, `GameText::pixel`,
-`GameSprites::raster`, `GameLines::prepare`) and state serialization. The debug
-`observe_game_video_write` entry point exists only when `F3RT_VIDEO_WRITE_LOG` is enabled
+`GameSprites::raster`, `GameLines::prepare`) and state serialization. `video_writer_known` entry point (the default in `video_generic.cpp` and for games without a list reports
+nothing as known) feeds `--discovery-log`
 (see [Unsupported stores and fallbacks](#unsupported-stores-and-fallbacks)). CMake
 compiles `games/${F3_GAME}/video/*.cpp` and defines `F3RT_GAME_VIDEO`; games
 without the folder still link (`runtime/renderer/game/video_generic.cpp`) but cannot
-select `--video game|compare`.
+select `--renderer enhanced|game-cpu|compare-cpu|compare-gpu`.
 
 ## Decoded layouts
 
@@ -150,17 +150,16 @@ blend/alpha, mosaic, pivot and sprite mixing, PF zoom/palette-add/rowscroll/mix.
 
 ## Unsupported stores and fallbacks
 
-Store logging is opt-in. Only a build configured with `F3RT_VIDEO_WRITE_LOG`
-(`OFF` by default; defined publicly on `f3rt`) makes `Machine::write8` call
-`GameVideo::observe_write(pc, address)` for graphics and control writes. It
-calls the per-game `observe_game_video_write(pc, address, frame)`, which picks
-the component by address, returns for the store PCs that component knows and
-otherwise calls `log_unknown_video_write(layer, pc, address, frame)`, which prints the
-first occurrence of each `(layer, pc)` to stderr so unmodeled routines can be
-collected for future implementation. With the option `OFF` there is no write
-observation at all and the graphics path keeps its fast `direct_bytes` copy. A
-store from an unknown PC never invalidates anything in either build: the data
-still comes from video RAM.
+Store logging is opt-in at runtime: `--discovery-log FILE` (see
+[WORKFLOWS.md](WORKFLOWS.md#discovery-log)). `runtime/discovery_log.{hpp,cpp}` classifies
+every graphics/control store by address into a `VideoLayer`, asks the per-game
+`video_writer_known(layer, pc)` once per new `(layer, pc)` and writes the unknown ones
+(first frame, address, hit count). `GameVideo::fallback` reports oracle fallbacks
+(component, reason) to the same log. Without the flag `Machine::discovery` is null: graphics
+stores keep their fast `direct_bytes` copy. With it, graphics stores take the byte path
+(PC attribution) and cost one cached compare each; measured 6000 frames of Command War
+unthrottled headless: 10.2 s with the flag, 10.4 s without (noise). A store from an unknown PC never
+invalidates anything: the data still comes from video RAM.
 
 Three genuine features remain outside the measured normal-orientation contract
 and force the FDP oracle for that frame. `Impl::fallback(component, reason)`
@@ -197,7 +196,7 @@ staging/submitted/current lists and the command flags remain. See
 | `--video-border 0..160` | `0` | Adds that many native scene columns on each side. `48` gives a 416×232 viewport. |
 | `--video-filter nearest\|linear` | `nearest` | Optional SDL presentation-texture filtering. |
 
-Options require `--video game` or `compare`, which require `F3RT_GAME_VIDEO`.
+Options require `--renderer enhanced` or a developer game/compare renderer, which require `F3RT_GAME_VIDEO`.
 The invariant native `Machine::native_pixels()` stays 320×232 for comparison,
 captures and CRCs. Fallback frames preserve the exact oracle picture,
 integer-scaled in the center, with black added columns.
@@ -206,7 +205,7 @@ integer-scaled in the center, with black added columns.
 
 The scoped phase is complete: VRAM-owned scene reconstruction at VBSTART,
 per-game `games/<game>/video/` decoders, opt-in PC/address-only write logging
-(`F3RT_VIDEO_WRITE_LOG`), explicit `flipped-screen` / `sprite-trails` /
+(`--discovery-log`), explicit `flipped-screen` / `sprite-trails` /
 `bitmap-pivot` fallbacks and the opt-in presentation options are implemented.
 `f3rt-gameplay-regression --frames 6000 --video-diff --video-diff-every 60`
 reports pixel_mismatches=0 for all nine layers and the composite over 91 sampled

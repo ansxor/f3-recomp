@@ -80,7 +80,7 @@ They omit `spriteram_active.bin` and `reference.argb`, which `f3rt-replay` requi
 Use `compare_frames.py` to compare native dumps with MAME captures.
 Do not reconstruct the active sprite list from current graphics RAM. MAME uses the buffered list from the preceding frame.
 
-Choose the video path with `--video`. `fdp` uses the hardware-RAM renderer. `game` uses the game-data renderer (the default for `landmakr`). `compare` renders both and stops on any RGB difference for a supported frame. See the [command-line reference](/reference/cli).
+Choose the video path with `--renderer`. `accurate` uses the hardware-RAM renderer. `enhanced` uses the game-data renderer on the GPU (the default for `landmakr`) and `game-cpu` the same renderer on the CPU. `compare-cpu` and `compare-gpu` render both and stops on any RGB difference for a supported frame. See the [command-line reference](/reference/cli).
 
 ::: tip
 The option `--fallback-report FILE` writes a TSV with the columns `pc` and `count`. Each row is an address that the interpreter ran, and how often. Use it with `--allow-fallback` on `f3rt-run` to find code that the recompiler does not cover. The strict `landmakr` program does not allow fallback.

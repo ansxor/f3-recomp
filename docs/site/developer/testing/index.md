@@ -31,7 +31,7 @@ Each check compares a specific component with a reference. Some components need 
 | Lowered C for one 68EC020 instruction | Musashi 68EC020 core | D0-D7, A0-A7, PC, SR, cycles, bus writes, memory |
 | Whole recompiled main program | MAME frames and RAM, and the Musashi interpreter | RGB pixels, main RAM, WAV output |
 | FDP video renderer (`runtime/renderer/fdp/video.cpp`) | MAME frames | RGB pixels from captured video RAM |
-| Game-data video (`--video game`) | The FDP renderer | Indexed layer pixels and final RGB |
+| Game-data video (`--renderer game-cpu`) | The FDP renderer | Indexed layer pixels and final RGB |
 | Recompiled sound driver (`--sound-driver native`) | Interpreted sound driver (`--sound-driver oracle`) | Every sound-bus record, then the WAV bytes |
 | ES5505, ES5510, MB87078 device models | MAME audio write trace | PCM waveform metrics |
 | Rollback netplay | A single machine that runs the same inputs | State CRC, frame CRC, PCM CRC |

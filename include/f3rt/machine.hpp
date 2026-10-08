@@ -17,6 +17,7 @@ class Eeprom;
 class SoundTrace;
 class SoundNative;
 class SpriteUnits;
+class DiscoveryLog;
 class Machine {
 public:
     static constexpr uint32_t main_clock = 16000000;
@@ -40,6 +41,8 @@ public:
     const std::vector<uint32_t> &native_pixels() const;
     RomSet roms;
     std::unique_ptr<Video> video;
+    // Host-only `--discovery-log` observer of graphics/control stores; null = off. Never serialized.
+    std::unique_ptr<DiscoveryLog> discovery;
     // Render-only emit-unit tracking/replay; null = feature off. Never serialized.
     std::unique_ptr<SpriteUnits> sprite_units;
     std::unique_ptr<GameVideo> game_video;

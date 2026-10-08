@@ -38,20 +38,20 @@ flowchart TD
     G --> H
 ```
 
-In `game` mode, `GameVideo::render_frame` calls `Video::render_frame` only when the scene is not supported. Read [GameVideo and frame selection](/developer/runtime/video/game-hle) for the exact rules.
+In game mode (`enhanced` / `game-cpu`), `GameVideo::render_frame` calls `Video::render_frame` only when the scene is not supported. Read [GameVideo and frame selection](/developer/runtime/video/game-hle) for the exact rules.
 
 ## Mode selection
 
-The frontend selects the renderer with `--video`. The table shows the three user modes and one internal mode.
+The frontend selects the renderer with `--renderer` (or the `renderer=` setting). `accurate` and `enhanced` are user-facing; `game-cpu`, `compare-cpu` and `compare-gpu` are developer-only command-line values. Each name maps to a `GameVideoMode` and a presentation backend (CPU or GPU). The backend never changes `Machine::native_pixels()`. The table shows the modes and one internal mode.
 
-| Mode | `GameVideoMode` | Who sets it | Output in `Machine::native_pixels()` |
+| Renderer | `GameVideoMode` (backend) | Who sets it | Output in `Machine::native_pixels()` |
 | --- | --- | --- | --- |
-| `fdp` | none (`game_video` is null) | `--video fdp` | Oracle picture |
-| `game` | `Game` | `--video game` | Game-data picture for supported frames. Oracle picture for other frames. |
-| `compare` | `Compare` | `--video compare` | Always the oracle picture. The runtime also checks that the game-data picture is equal on each supported frame. |
+| `accurate` | none (`game_video` is null; CPU) | `--renderer accurate` | Oracle picture |
+| `enhanced`, `game-cpu` | `Game` (GPU, CPU) | `--renderer enhanced`, `--renderer game-cpu` | Game-data picture for supported frames. Oracle picture for other frames. |
+| `compare-cpu`, `compare-gpu` | `Compare` (CPU, GPU) | `--renderer compare-cpu`, `--renderer compare-gpu` | Always the oracle picture. The runtime also checks that the game-data picture is equal on each supported frame. |
 | none | `Diagnostic` | The gameplay regression tool | Always the oracle picture. The tool calls `compare_layers` at chosen frames. |
 
-Game-data video is compiled only for games with a `games/<game>/video/` folder (`F3RT_GAME_VIDEO`; today `landmakrj`). The strict-native `landmakr` program then uses `game` by default; with `--allow-fallback` it uses `fdp`, because game-data video requires strict native execution. A build without the folder supports only `fdp` and rejects `--video game|compare`. Read [Presentation](/developer/runtime/video/presentation) for scale, border and filter options and [Compare mode](/developer/runtime/video/compare-mode) for the checking tools. The user view of the same options is in the [video guide](/guide/video).
+Game-data video is compiled only for games with a `games/<game>/video/` folder (`F3RT_GAME_VIDEO`; today `landmakrj`). The strict-native `landmakr` program then uses `enhanced` by default (`accurate` when the build has no `F3RT_GPU`); with `--allow-fallback` it uses `accurate`, because game-data video requires strict native execution. A build without the folder supports only `accurate` and rejects every other renderer. Read [Presentation](/developer/runtime/video/presentation) for scale, border and filter options and [Compare mode](/developer/runtime/video/compare-mode) for the checking tools. The user view of the same options is in the [video guide](/guide/video).
 
 ## Source file map
 
@@ -63,13 +63,13 @@ The table lists every file of the video system and the page that explains it.
 | `include/f3rt/game_video.hpp`, `runtime/renderer/game/video.cpp` | `GameVideo`, `GameVideoOptions`, `GameVideoMode`; the VBSTART decode and frame selection | [GameVideo](/developer/runtime/video/game-hle) |
 | `runtime/renderer/game/scene.hpp` | `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow` | [Scene types](/developer/runtime/video/scene) |
 | `runtime/renderer/decode.hpp`, `runtime/renderer/decode.cpp` | Generic char-RAM tile unpack and sprite display-list walk | [Sprites](/developer/runtime/video/sprites) |
-| `games/landmakrj/video/video.cpp` | Per-game debug `observe_game_video_write` store-PC lists | [Video write logging](/developer/runtime/video/producers) |
+| `games/landmakrj/video/video.cpp` | Per-game `video_writer_known` store-PC lists for `--discovery-log` | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/renderer/game/tiles.hpp`, `runtime/renderer/game/tiles.cpp` | `GameTiles`: four raw playfield cell maps | [Playfield tiles](/developer/runtime/video/tiles) |
 | `runtime/renderer/game/text.hpp`, `runtime/renderer/game/text.cpp` | `GameText`: text map and glyphs | [Text layer](/developer/runtime/video/text) |
 | `runtime/renderer/game/sprites.hpp`, `runtime/renderer/game/sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |
 | `runtime/renderer/game/lines.hpp`, `runtime/renderer/game/lines.cpp` | `GameLines`: per-line effects and `SceneRow` generation | [Line effects](/developer/runtime/video/lines) |
 | `runtime/renderer/game/compositor.hpp`, `runtime/renderer/game/compositor.cpp` | `compose_game_scene` | [Compositor](/developer/runtime/video/compositor) |
-| `runtime/renderer/game/video_log.hpp`, `runtime/renderer/game/video_log.cpp` | `log_unsupported_video` (fallback kinds) and `log_unknown_video_write` (opt-in store PCs) | [Video write logging](/developer/runtime/video/producers) |
+| `runtime/renderer/game/video_log.hpp`, `runtime/renderer/game/video_log.cpp` | `log_unsupported_video` (fallback kinds); the opt-in store-PC log is `runtime/discovery_log.cpp` | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/state_io.hpp` | `Canonical*` structs that save the video state | [GameVideo](/developer/runtime/video/game-hle) |
 | `runtime/check.cpp` | Unit checks for tile, sprite and edge rules | [Extending the renderer](/developer/runtime/video/extending) |
 | `tools/gameplay_regression.cpp` | The `--video-diff` harness | [Compare mode](/developer/runtime/video/compare-mode) |

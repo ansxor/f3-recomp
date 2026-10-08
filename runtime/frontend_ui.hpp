@@ -10,6 +10,7 @@ struct FrontendUiState {
     bool connected = false, transferring = false, gpu_available = false;
     std::string status = "Solo", message;
     std::string active_postprocess = "off";
+    std::string active_renderer; // this session's renderer; differs from the saved preference after a restart-only change or a developer --renderer
     double rtt_ms = 0;
     unsigned rollback_depth = 0;
     int frame_advantage = 0;

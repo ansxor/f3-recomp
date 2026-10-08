@@ -78,14 +78,18 @@ void FrontendUi::draw(const FrontendUiState &state){
                 ImGui::BeginDisabled(!state.connected&&!state.transferring);if(ImGui::Button("Disconnect"))p.action(UiActionKind::Disconnect);ImGui::EndDisabled();ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Video")){
-                changed|=combo("Video model (restart)",s.video_mode,{"game","fdp","compare"});
-                changed|=combo("Renderer (restart)",s.video_backend,{"cpu","gpu"});if(!state.gpu_available)ImGui::TextWrapped("GPU renderer unavailable in this build; selecting GPU requires a GPU-enabled build on restart.");
+                changed|=combo("Renderer (restart)",s.renderer,{"accurate","enhanced"});
+                ImGui::TextWrapped("Active this session: %s.%s",state.active_renderer.c_str(),
+                    s.renderer=="enhanced"?"":" Accurate is the MAME-derived reference picture; the options below belong to Enhanced.");
+                if(!state.gpu_available)ImGui::TextWrapped("Enhanced is unavailable in this build (no GPU support); selecting it requires a GPU-enabled build on restart.");
+                ImGui::BeginDisabled(s.renderer=="accurate");
                 changed|=combo("Scale",s.video_scale,{"1","2","3","4","auto","auto-integer"});int border=int(s.border);if(ImGui::SliderInt("Widescreen border (restart)",&border,0,160)){s.border=border;changed=true;}
                 changed|=combo("Filtering",s.filter,{"nearest","linear"});changed|=combo("Interpolation (restart)",s.interpolation,{"off","linear","fit"});changed|=combo("Interpolation fields (restart)",s.interpolation_fields,{"none","geometry","palette","geometry,palette"});
-                ImGui::TextWrapped("Scale and filtering apply live on GPU. CPU scale, backend, model, border and interpolation apply on restart. Auto scale/interpolation require GPU; FDP requires native scale/border and nearest filtering. Settings are preferences; CLI flags override them on launch.");ImGui::EndTabItem();
+                ImGui::EndDisabled();
+                ImGui::TextWrapped("Scale and filtering apply live under Enhanced; the renderer, border and interpolation apply on restart. Settings are preferences; CLI flags override them on launch.");ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Shaders")){
-                if(!p.gpu)ImGui::TextUnformatted("Requires GPU backend (Video renderer setting; restart).");
+                if(!p.gpu)ImGui::TextUnformatted("Requires the Enhanced renderer (Video tab; restart).");
                 ImGui::BeginDisabled(!p.gpu);
                 if(combo("Post-process",s.postprocess,{"off","crt","user"}) && s.postprocess!="user")
                     p.action(UiActionKind::ApplyPostprocess);

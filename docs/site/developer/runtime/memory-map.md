@@ -72,7 +72,7 @@ Palette RAM holds 8192 colors as 32-bit values (see the comment on `Video::rende
 
 Graphics RAM at `0x600000` holds the data that the FDP renderer reads: tile maps, text and the sprite list. The control registers at `0x660000` hold the scroll values and other FDP control words. The CPU cannot read the control registers back. A read returns `0xff`.
 
-In a build configured with `F3RT_VIDEO_WRITE_LOG`, writes to both regions call `game_video->observe_write(cpu.pc, a)` first, if a `GameVideo` exists. The call passes the PC and the address, not the value, so a debug run can find game code that writes display data from an unknown routine. See [Video write logging](/developer/runtime/video/producers). A normal build does not observe writes; it decodes video RAM at VBSTART instead.
+With `--discovery-log`, writes to both regions call `discovery->video_write(cpu.pc, a)` first (graphics stores then take the byte path). The call passes the PC and the address, not the value, so a run can find game code that writes display data from an unknown routine. See [Video write logging](/developer/runtime/video/producers). Without the flag nothing observes writes; it decodes video RAM at VBSTART instead.
 
 ## Shared RAM and the sound mailbox
 

@@ -23,6 +23,7 @@ struct CapturedFrame {
     std::array<SceneRow, 256> rows{};
     std::array<SceneSprite, max_sprites> sprites{};
     unsigned sprite_count = 0;
+    unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, palette_size> colors{}; // 0x00RRGGBB, indexed by palette entry
     uint8_t pen_mask = 15;
     // Oracle-fallback frame: only native_pixels (320 x geometry::height ARGB) is meaningful.

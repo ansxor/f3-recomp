@@ -21,8 +21,8 @@ rasterization and extra horizontal columns.
 
 ::: info
 **Per-game scene file.** A game provides `games/<game>/video/` (Land Maker uses a
-single `video.cpp`). It defines, when `F3RT_VIDEO_WRITE_LOG` is on,
-`observe_game_video_write` with every component's store-PC list. The shared
+single `video.cpp`). It defines
+`video_writer_known` with every component's store-PC list (used by `--discovery-log`). The shared
 sprites, tiles, text and line decoders live in
 `runtime/renderer/game/sprites.cpp`, `runtime/renderer/game/tiles.cpp`, `runtime/renderer/game/text.cpp` and `runtime/renderer/game/lines.cpp`; generic decode
 helpers live in `runtime/renderer/decode.{hpp,cpp}`. CMake compiles
@@ -35,16 +35,13 @@ cannot select `game` or `compare`. There are no recompiler hooks.
 1. **Video RAM is the source of truth.** `VideoRam` (in `runtime/renderer/game/scene.hpp`)
    is a big-endian view of `graphics` (0x40000 bytes at 0x600000) and `control`
    (0x20 bytes at 0x660000).
-2. **Write logging is opt-in and uses only the PC and the address.** In a
-   `F3RT_VIDEO_WRITE_LOG` build, `Machine::write8` calls
-   `GameVideo::observe_write(pc, address)` for each byte written to 0x600000 to
-   0x63ffff and 0x660000 to 0x66001f. It never receives the value. It calls the
-   per-game `observe_game_video_write`, which returns for the store PCs the
-   addressed component knows; any other PC calls
-   `log_unknown_video_write(layer, pc, address, frame)`, which prints the first
-   occurrence of each `(layer, pc)` to stderr. With the option off no write is
-   observed, and either way a write from an unknown PC does not invalidate
-   anything.
+2. **Write logging is opt-in and uses only the PC and the address.** With
+   `--discovery-log`, `Machine::write8` calls `DiscoveryLog::video_write(pc, address)`
+   for each byte written to 0x600000 to 0x63ffff and 0x660000 to 0x66001f. It never
+   receives the value. The log asks the per-game `video_writer_known(layer, pc)`; any
+   other PC is written once to the log file with its first frame and address. Without
+   the flag no write is observed, and either way a write from an unknown PC does not
+   invalidate anything.
 3. **The palette is shared.** The compositor reads colors from `Machine::palette`.
 4. **ROM tiles are shared.** `GameVideo` uses `Video::playfield_tiles()` and
    `Video::sprite_tiles()` to avoid a second 16 MiB decode.
@@ -61,7 +58,6 @@ classDiagram
         +advance_to()
     }
     class GameVideo {
-        +observe_write(pc, address) (debug)
         +render_frame()
         +compare_layers(frame, mask)
         +report(out)
@@ -96,7 +92,7 @@ flowchart LR
     OBS --> X["GameText: map and glyphs"]
     OBS --> S["GameSprites: display list"]
     OBS --> L["GameLines: 256 line profiles"]
-    PROD -.->|"F3RT_VIDEO_WRITE_LOG: PC and address only"| GUARD["log unknown store PCs"]
+    PROD -.->|"--discovery-log: PC and address only"| GUARD["log unknown store PCs"]
     S -->|"latch and raster"| SP["sprite plane 432x256"]
     L -->|"prepare"| ROWS["256 SceneRow"]
     T --> C["compose_game_scene"]
@@ -115,7 +111,6 @@ flowchart LR
 | --- | --- |
 | `GameVideo(Machine&, GameVideoMode mode = Diagnostic, GameVideoOptions options = {})` | Stores the machine, mode and options. It throws `std::runtime_error` if `scale` is 0 or above 4, or `border` is above 160. When the options expand the picture, it allocates `presentation_pixels` (ARGB) and `presentation_sprites` (`uint16_t`), each of `width() * height()` entries. It calls `Video::enable_scene_inspection(mode != Game)` and `reset()`. |
 | `reset()` | Resets the four scene objects, the sprite plane, the presentation buffers (black), the counters and the fallback list. `Machine::reset` calls it. |
-| `observe_write(pc, address)` | Only compiled with `F3RT_VIDEO_WRITE_LOG`. Calls the per-game `observe_game_video_write(pc, address, frame)` with `frame = machine.frame + 1`; the addressed component's known-PC list decides whether to log. |
 | `render_frame()` | Called at VBSTART by `Machine::advance_to`. Builds `VideoRam{machine.graphics, machine.control, machine.frame + 1}`, calls `decode(vram)` on tiles/text/sprites/lines, then `render()`, then `latch_sprites()`. See the frame decision below. |
 | `compare_layers(frame, layer_mask)` | Diagnostic: compares layers with the oracle and throws on a difference. See [Compare mode](/developer/runtime/video/compare-mode). |
 | `report(std::ostream&)` | Prints the `VIDEO ...` summary lines. |
@@ -217,10 +212,11 @@ sequenceDiagram
     participant CPU as Native game code
     participant GV as GameVideo
     participant M as Machine
+    participant DL as DiscoveryLog
     participant FDP as Video (oracle)
     loop during the frame
         CPU->>M: write to video RAM
-        M->>GV: observe_write(pc, address) [F3RT_VIDEO_WRITE_LOG only]
+        M->>DL: video_write(pc, address) [--discovery-log only]
     end
     M->>GV: render_frame() at VBSTART
     GV->>GV: build VideoRam; decode(vram) on tiles/text/sprites/lines

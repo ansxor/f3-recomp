@@ -8,6 +8,7 @@
 #include "renderer/game/compositor.hpp"
 #include "renderer/game/clip.hpp"
 #include "renderer/game/video_log.hpp"
+#include "discovery_log.hpp"
 #include "renderer/game/captured_frame.hpp"
 #include "state_io.hpp"
 #include "sprite_units.hpp"
@@ -47,6 +48,7 @@ struct GameVideo::Impl {
     void fallback(const char *component, const char *reason) {
         const uint64_t frame = machine.frame + 1;
         log_unsupported_video(component, reason, frame);
+        if (machine.discovery) machine.discovery->video_fallback(component, reason, frame);
         ++fallback_frames;
         for (unsigned i = 0; i < fallback_count; ++i) {
             auto &entry = fallbacks[i];
@@ -103,6 +105,8 @@ struct GameVideo::Impl {
         const auto current = sprites.presented_sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
+        frame.shadow_count = unsigned(std::count_if(current.begin(), current.end(),
+                                                    [](const SceneSprite &s) { return s.shadow; }));
         frame.pen_mask = sprites.pen_mask();
         const auto &palette = machine.palette;
         for (unsigned i = 0; i < frame.colors.size(); ++i)
@@ -317,11 +321,6 @@ void GameVideo::reset() {
     impl_->fallback_count = 0;
     impl_->rendered_frames = impl_->fallback_frames = 0;
 }
-#ifdef F3RT_VIDEO_WRITE_LOG
-void GameVideo::observe_write(uint32_t pc, uint32_t address) {
-    observe_game_video_write(pc, address, impl_->machine.frame + 1);
-}
-#endif
 
 void GameVideo::latch_sprites() {
     auto &state = *impl_;

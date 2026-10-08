@@ -7,6 +7,9 @@
 
 namespace f3rt {
 
+// Per-entry render flags of a splice replacement (SpriteSplice::flags, DecodedSpriteEntry::flags).
+inline constexpr uint8_t sprite_flag_shadow = 1; // flicker shadow: the game's own shadow emit path wrote it
+
 // Replace bank entries [first, last] with `replacement` while decoding, if and only
 // if the bank still holds exactly `real` there (content validation makes stale
 // splices harmless across bank flips, lag and state loads).
@@ -16,6 +19,8 @@ struct SpriteSplice {
     std::span<const uint8_t> real;        // (last - first + 1) * 16 bytes captured at unit exit
     std::span<const uint8_t> replacement; // n * 16 raw entries; jump words inside are ignored
     uint64_t identity = 0;                // invocation identity; entry k gets sprite_identity_mix(identity, k)
+    // Parallel to `replacement` (one byte per 16-byte entry, sprite_flag_*); empty = no flags.
+    std::span<const uint8_t> flags;
 };
 
 struct SpritePresentation {
@@ -26,8 +31,16 @@ struct SpritePresentation {
     // Parallel to `identity`: the owning invocation's identity per entry (0 = unknown); empty = none.
     // Splice replacement entries take SpriteSplice::identity.
     std::span<const uint64_t> object;
-    bool empty() const { return identity.empty() && splices.empty() && object.empty(); }
+    // Parallel to `identity`: sprite_flag_* of the real entry (shadow entries written by a
+    // flicker shadow's emit path); empty = no tagged real entries. Splice entries use SpriteSplice::flags.
+    std::span<const uint8_t> flags;
+    bool empty() const { return identity.empty() && splices.empty() && object.empty() && flags.empty(); }
 };
+
+// Visibility of tagged flicker shadows on the N-th presented frame (accepted drawables counted by
+// the presenter): they alternate per presented frame, i.e. per display refresh when the presenter
+// redraws at refresh rate. Never derived from the emulated frame counter.
+constexpr bool flicker_shadow_visible(uint64_t presented_frame) { return (presented_frame & 1) == 0; }
 
 // Stable per-entry identity derived from an invocation identity; never returns 0.
 constexpr uint64_t sprite_identity_mix(uint64_t identity, uint32_t index) {

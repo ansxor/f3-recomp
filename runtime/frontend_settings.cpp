@@ -44,7 +44,7 @@ bool reserved(SDL_Scancode k) { return k==SDL_SCANCODE_F1 || k==SDL_SCANCODE_F11
 bool choice(const std::string &s,std::initializer_list<const char*> values) { for(auto v:values)if(s==v)return true;return false; }
 bool valid(const FrontendSettings &s) {
     if(!audio_backend_available(s.audio_backend))return false;
-    if(!choice(s.video_mode,{"game","fdp","compare"}) || !choice(s.video_backend,{"cpu","gpu"}) || !choice(s.video_scale,{"1","2","3","4","auto","auto-integer"}) || s.border>160 || !choice(s.filter,{"nearest","linear"}) || !choice(s.interpolation,{"off","linear","fit"}) || !choice(s.interpolation_fields,{"none","geometry","palette","geometry,palette"}) || !std::isfinite(s.volume) || s.volume<0 || s.volume>1 || s.requested_slot>2 || s.delay>8 || s.server.size()>255 || s.room.size()>64 || s.server.find_first_of("\r\n")!=std::string::npos || s.room.find_first_of("\r\n")!=std::string::npos)return false;
+    if(!choice(s.renderer,{"accurate","enhanced"}) || !choice(s.video_scale,{"1","2","3","4","auto","auto-integer"}) || s.border>160 || !choice(s.filter,{"nearest","linear"}) || !choice(s.interpolation,{"off","linear","fit"}) || !choice(s.interpolation_fields,{"none","geometry","palette","geometry,palette"}) || !std::isfinite(s.volume) || s.volume<0 || s.volume>1 || s.requested_slot>2 || s.delay>8 || s.server.size()>255 || s.room.size()>64 || s.server.find_first_of("\r\n")!=std::string::npos || s.room.find_first_of("\r\n")!=std::string::npos)return false;
     if(!choice(s.postprocess,{"off","crt","user"}) || s.user_shader.size()>1000 || s.user_shader.find_first_of("\r\n")!=std::string::npos)return false;
     for(const auto &p:s.profiles) {
         if(p.device_slot<0 || p.device_slot>15)return false;
@@ -65,10 +65,10 @@ bool load_frontend_settings(const std::string &path,FrontendSettings &settings,s
         if(line.empty() || line[0]=='#')continue;
         auto split=line.find('=');if(split==std::string::npos){error="Invalid config line";return false;}
         const auto k=line.substr(0,split),v=line.substr(split+1);int n=0;
-        if(k=="video")s.video_mode=v;else if(k=="backend")s.video_backend=v;else if(k=="scale")s.video_scale=v;
+        if(k=="renderer")s.renderer=v;else if(k=="scale")s.video_scale=v;
         else if(k=="filter")s.filter=v;else if(k=="interpolation")s.interpolation=v;else if(k=="fields")s.interpolation_fields=v;
         else if(k=="postprocess")s.postprocess=v;else if(k=="user_shader")s.user_shader=v;
-        else if(k=="sprite_behaviour") {} // retired option: always on now; old files still carry the key
+        else if(k=="sprite_behaviour" || k=="video" || k=="backend") {} // retired options (video/backend: replaced by renderer): ignored, old files still carry the keys
         else if(k=="server")s.server=v;else if(k=="room")s.room=v;
         else if(k=="audio") {if(v=="native")s.audio_backend=AudioBackend::Native;else if(v=="oracle")s.audio_backend=AudioBackend::Oracle;else if(v=="hle")s.audio_backend=AudioBackend::Hle;else {error="Unknown audio backend";return false;}}
         else if(k=="volume") { std::istringstream in(v);in>>s.volume;if(!in || in.peek()!=EOF){error="Invalid volume";return false;} }
@@ -95,7 +95,7 @@ bool save_frontend_settings(const std::string &path,const FrontendSettings &s,st
     // Same-directory temporary file keeps replacement atomic.
     std::string tmp=path+".tmp."+std::to_string(SDL_GetTicksNS());
     std::ofstream out(tmp,std::ios::binary|std::ios::trunc);if(!out){error="Cannot create config temporary file";return false;}
-    out<<"# f3rt settings, Dear ImGui frontend\nvideo="<<s.video_mode<<"\nbackend="<<s.video_backend<<"\nscale="<<s.video_scale<<"\nborder="<<s.border<<"\nfilter="<<s.filter<<"\ninterpolation="<<s.interpolation<<"\nfields="<<s.interpolation_fields<<"\naudio="<<audio_backend_name(s.audio_backend)<<"\nvolume="<<s.volume<<"\nserver="<<s.server<<"\nroom="<<s.room<<"\nslot="<<s.requested_slot<<"\ndelay="<<s.delay<<'\n';
+    out<<"# f3rt settings, Dear ImGui frontend\nrenderer="<<s.renderer<<"\nscale="<<s.video_scale<<"\nborder="<<s.border<<"\nfilter="<<s.filter<<"\ninterpolation="<<s.interpolation<<"\nfields="<<s.interpolation_fields<<"\naudio="<<audio_backend_name(s.audio_backend)<<"\nvolume="<<s.volume<<"\nserver="<<s.server<<"\nroom="<<s.room<<"\nslot="<<s.requested_slot<<"\ndelay="<<s.delay<<'\n';
     out<<"postprocess="<<s.postprocess<<"\nuser_shader="<<s.user_shader<<'\n';
     out<<"fast_boot="<<(s.fast_boot?"on":"off")<<"\nboot_cache="<<(s.boot_cache?"on":"off")<<'\n';
     for(unsigned p=0;p<s.profiles.size();++p) {out<<"device"<<p<<'='<<s.profiles[p].device_slot<<'\n';for(unsigned c=0;c<local_control_count;++c){const auto &b=s.profiles[p].controls[c];out<<"binding"<<p<<'.'<<c<<'='<<int(b.key)<<' '<<b.button<<' '<<b.axis<<' '<<b.direction<<'\n';}}

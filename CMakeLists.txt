@@ -151,7 +151,7 @@ add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp 
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/input.cpp runtime/netplay.cpp
     runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
-    runtime/netplay_transport.cpp runtime/netplay_session.cpp runtime/sprite_units.cpp runtime/sprite_behaviours.cpp
+    runtime/netplay_transport.cpp runtime/netplay_session.cpp runtime/sprite_units.cpp runtime/sprite_behaviours.cpp runtime/discovery_log.cpp
     ${AUDIO_SOURCES})
 # Generated headers are reached as "generated_config/<name>": runtime/sprite_units.hpp
 # and generated_config/sprite_units.hpp share a basename.
@@ -173,10 +173,6 @@ target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 if(F3RT_GAME_VIDEO)
     # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
     target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
-endif()
-option(F3RT_VIDEO_WRITE_LOG "Debug: log video RAM stores from game routines outside the known producer lists" OFF)
-if(F3RT_VIDEO_WRITE_LOG)
-    target_compile_definitions(f3rt PUBLIC F3RT_VIDEO_WRITE_LOG=1)
 endif()
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)

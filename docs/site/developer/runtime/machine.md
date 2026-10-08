@@ -78,7 +78,7 @@ classDiagram
 | Member | Type | Meaning |
 | --- | --- | --- |
 | `video` | `unique_ptr<Video>` | The FDP software renderer. Always present. |
-| `game_video` | `unique_ptr<GameVideo>` | The enhanced renderer. Null by default. The frontend sets it for `--video game` or `compare`. See [Video](/developer/runtime/video/). |
+| `game_video` | `unique_ptr<GameVideo>` | The enhanced renderer. Null by default. The frontend sets it for every renderer except `accurate`. See [Video](/developer/runtime/video/). |
 | `audio` | `unique_ptr<Audio>` | ES5505, ES5510, DUART, volume chip and the sound 68000 runner. See [Audio](/developer/runtime/audio/). |
 | `eeprom` | `unique_ptr<Eeprom>` | The 93C46. See [Input and EEPROM](/developer/runtime/input-and-eeprom). |
 | `interpreter` | `unique_ptr<Interpreter>` | The Musashi bridge. See [Interpreter](/developer/runtime/interpreter). |

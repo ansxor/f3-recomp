@@ -71,13 +71,13 @@ These messages come from the option checks in `runtime/frontend.cpp`.
 | `This generated executable requires landmakrj` | `landmakr` accepts only `--set landmakrj`. |
 | `--sound-driver must be oracle or native` | Use one of the two names. |
 | `Native sound requires a generated sound program (F3_ROM_DIR)` | The build has no generated sound code. Configure with `F3_ROM_DIR`, or use `--sound-driver oracle`. |
-| `--video must be fdp, game or compare` | Use one of the three names. |
-| `Game-data video requires strict native landmakrj` | You used `game` or `compare` with `--allow-fallback`, `--set` other than `landmakrj`, or in `f3rt-run`. Use `landmakr` without `--allow-fallback`. |
+| `--renderer must be accurate, enhanced, game-cpu, compare-cpu or compare-gpu` | Use one of the five names (`accurate` and `enhanced` are the user-facing ones). |
+| `Game-data video requires strict native execution` | You used `enhanced` or a developer game/compare renderer with `--allow-fallback`, `--set` other than `landmakrj`, or in `f3rt-run`. Use `landmakr` without `--allow-fallback`. |
 | `--video-scale must be 1..4, auto or auto-integer` | Use a numeric scale 1–4 or one of the automatic GPU modes. |
-| `--video-scale auto/auto-integer requires --video-backend gpu` | Select GPU or keep a fixed numeric CPU scale. |
+| `--video-scale auto/auto-integer requires --renderer enhanced or compare-gpu` | Use `--renderer enhanced` or keep a fixed numeric scale. |
 | `--video-border must be 0..160` | Use a value from 0 to 160. |
 | `--video-filter must be nearest or linear` | Use one of the two names. |
-| `Presentation enhancements require --video game or compare` | You gave scale, border or a filter other than `nearest` with `--video fdp`. Use `--video game`. |
+| `Scale, border and filter options require --renderer enhanced (or a developer game/compare renderer)` | You gave scale, border or a filter other than `nearest` with `--renderer accurate`. Use `--renderer enhanced`. |
 | `--netplay-player must be 1 or 2` | Use 1 or 2. |
 | `--netplay-delay must be 0..8` | Use a value from 0 to 8. |
 | `Netplay requires --netplay-server and --netplay-room` | Give both options. |
@@ -122,8 +122,9 @@ If SDL cannot start, the program prints the text that SDL gives. Typical causes:
 | `Untranslated main CPU instruction at PC 0x...` | The generated code does not cover this address. The `landmakr` program stops by design. Please report it with the address. You can try `--allow-fallback` for a diagnostic run, but that run does not count as the native game. |
 | `CPU halted at N` | The main CPU stopped. Please report the number. |
 | `SoundNative: fatal unsupported reachable PC: 0x... (opcode 0x...)` | The native sound driver reached code that it does not cover. Please report it. Try `--sound-driver oracle` to continue. |
-| `Game composite frame N: ... RGB pixel mismatches` | In `--video compare` mode the two renderers disagree. See [Video and presentation](/guide/video#what-an-error-means-in-compare-mode). |
-| The game is slow | Check that you configured `-DCMAKE_BUILD_TYPE=Release`. Try CPU presentation if GPU device or driver behavior is problematic. |
+| `Game composite frame N: ... RGB pixel mismatches` | With `--renderer compare-cpu` or `compare-gpu` the two renderers disagree. See [Video and presentation](/guide/video#what-an-error-means-in-the-compare-renderers). |
+| The game is slow | Check that you configured `-DCMAKE_BUILD_TYPE=Release`. Try `--renderer accurate` if GPU device or driver behavior is problematic.
+| `f3rt: warning: GPU renderer unavailable (...); falling back to --renderer accurate` | The default or saved `enhanced` renderer could not start a GPU device or claim a window, so this session runs `accurate`. Fix the GPU driver, or set Renderer to `accurate` in F1 → Video. Passing `--renderer enhanced` explicitly makes this an error instead. | |
 | No sound at the start | The game sets the output gain at about 13 seconds. Wait. Check that you did not give `--no-audio`. |
 | Frontend settings or remaps are lost | Choose **Save preferences** in F1 and check the selected `--config` path. |
 | Arcade game settings are lost | Add `--eeprom FILE`. See [Controls and options](/guide/running#settings-and-the-eeprom). |

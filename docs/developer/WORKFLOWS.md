@@ -45,6 +45,61 @@ coverage. `--video-diff` compares game-data layers and native RGB against the
 MAME-derived FDP reference; unsupported sampled state is not counted as a match.
 See [gameplay regression](../site/developer/testing/gameplay-regression.md).
 
+## Discovery log
+
+Humans find unhandled video routines the same way agents do (`f3rt-sprite-check`
+unaccounted writers, the old `F3RT_VIDEO_WRITE_LOG` build) without a special build or
+tool: play the game normally (all screens, fights, credits, endings) with
+
+```sh
+./commandw --discovery-log discovery.log          # any renderer, windowed or --headless --frames N
+```
+
+The log is observe-only: with and without the flag cycles, `native_blocks` and
+`state_crc()`/frame CRCs are identical (checked on Command War and Land Maker, 4000
+frames). Cost: graphics stores take the byte path with a one-entry PC cache; 6000
+unthrottled headless frames of Command War measured 10.2 s with, 10.4 s without (noise).
+
+Text file, one event per line, flushed immediately so a crash or quit loses nothing.
+`#` lines are comments. Fields are `key=value`, PCs/addresses are 24-bit hex
+(disassemble the PC in the generated program), `frame` is the 1-based emulated frame
+during which it happened (`f3rt-sprite-check` prints 0-based `Machine::frame`), `t` is wall
+seconds since start (correlate with a recording), counts are byte writes.
+
+```text
+NEW sprite-stray pc=0x010412 frame=93 t=0.06 addr=0x600000
+NEW video-write layer=lines pc=0x0100d0 frame=115 t=0.06 addr=0x621002
+NEW video-fallback component=sprites reason="flipped-screen" frame=812 t=14.20
+REPEAT video-write layer=lines pc=0x0100d0 count=1000      # hit count reached 10, 100, 1000, ...
+# SUMMARY
+SUM sprite-stray pc=0x010412 frame=93 t=0.06 addr=0x600000 count=262144
+SUM unit-replay-abort unit=objects reason=Budget count=3   # only if a unit replay aborted
+# TOTAL frames=3000 sprite-stray=1 video-write=3 video-fallback=0 known_writer_pcs_suppressed=73
+```
+
+Categories:
+
+- `sprite-stray`: sprite-RAM write outside every emit unit from a PC outside
+  `[video.frame_writers]`, the unaccounted PCs of `f3rt-sprite-check`. Add the PC to
+  `frame_writers` (with evidence) if it is frame setup/clear, else extend or add an
+  `[[video.emit_units]]` ([SPRITE-UNITS.md](SPRITE-UNITS.md)). Requires strict native
+  execution and a game with emit units.
+- `video-write`: graphics/control write from a PC that the game's
+  `video_writer_known` (`games/<id>/video/video.cpp`) does not list, per layer
+  (`control`, `sprites`, `pf0`..`pf3`, `pf2-alt`, `pf3-alt`, `text`, `lines`). Works for every
+  game build; games without a list report every writer. Sprite RAM is reported only as
+  `sprite-stray` when the game has emit units. Add the PC to the list once understood
+  ([VIDEO-HLE.md](VIDEO-HLE.md)).
+- `video-fallback`: the game-data renderer drew the frame with the FDP oracle
+  (component and reason). Only with `--renderer enhanced` or a developer game/compare renderer.
+- Summary only: `unit-replay-abort` (behaviour replays abandoned, with reason) and
+  `unit-stats`. Emit-unit replay *mismatches* need check mode, which replays every
+  invocation and is not cheap enough for play; use `f3rt-sprite-check` for that.
+
+No screenshot is taken on a first hit: the frame buffer is only complete at VBSTART
+and the capture path differs per renderer, so the frame number and wall time are
+logged instead (press F12 to mark a moment).
+
 ## CPU and device checks
 
 ```sh

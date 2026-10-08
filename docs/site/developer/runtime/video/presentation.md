@@ -11,7 +11,7 @@ Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/
 | `--video-scale 1..4\|auto\|auto-integer` | 1 | Fixed integer scale, GPU ceil-fit/aspect blit, or GPU floor-fit/exact nearest blit |
 | `--video-border 0..160` | 0 | Additional native scene columns on each side |
 | `--video-filter nearest\|linear` | `nearest` | SDL sampling of the completed presentation texture |
-| `--video-backend cpu\|gpu` | `cpu` | CPU expanded raster or SDL3 GPU presentation |
+| `--renderer enhanced\|game-cpu\|compare-gpu` | `enhanced` in `landmakr` | Selects SDL3 GPU presentation (`enhanced`, `compare-gpu`) or the CPU expanded raster (`game-cpu`, `compare-cpu`) |
 | `--video-interp off\|linear\|fit` | `off` | Validated per-field GPU sampling on all four playfields |
 | `--video-interp-fields none\|geometry\|palette\|geometry,palette` | `geometry` | Independent geometry and same-pen RGB bank blending; alpha stays native/discrete |
 | `--postprocess off\|crt\|user` | `off` | GPU-only final image transform; native pixels/checksums and menu are unchanged |
@@ -39,7 +39,7 @@ The border shows existing off-screen scene data. Map wrapping and empty cells ca
 
 ## Mode constraints
 
-Enhancements require `--video game` or `--video compare`. Game-data modes require strict-native `landmakrj`.
+Enhancements require `--renderer enhanced` or a developer game/compare renderer (not `accurate`). Those renderers require strict-native `landmakrj`. Under `accurate`, saved scale/border/filter/interpolation settings are ignored; explicit command-line values are an error.
 
 The frontend rejects numeric scale zero/above four, border above 160, and an unknown filter. Auto modes require GPU; GPU requires game/compare. FDP rejects expanded output or linear filtering.
 
@@ -218,9 +218,9 @@ Native dumps also contain palette, graphics, controls, main RAM, shared RAM, and
 These commands illustrate presentation options; recorded verification is linked above.
 
 ```sh
-./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter nearest
-./build/landmakr --video compare --video-scale 2 --video-border 48 --frames 3480
-./build/landmakr --video game --video-scale 2 --video-border 48 --video-filter linear \
+./build/landmakr --renderer game-cpu --video-scale 2 --video-border 48 --video-filter nearest
+./build/landmakr --renderer compare-cpu --video-scale 2 --video-border 48 --frames 3480
+./build/landmakr --renderer game-cpu --video-scale 2 --video-border 48 --video-filter linear \
   --frames 1920 --surface build/game-wide.bmp
 ```
 

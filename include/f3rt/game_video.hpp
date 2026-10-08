@@ -38,11 +38,6 @@ public:
     GameVideo(const GameVideo &) = delete;
     GameVideo &operator=(const GameVideo &) = delete;
     void reset();
-#ifdef F3RT_VIDEO_WRITE_LOG
-    // Debug builds only: Machine::write8 reports graphics/control stores so
-    // stores from undocumented game routines are logged once per PC.
-    void observe_write(uint32_t pc, uint32_t address);
-#endif
     void render_frame();
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;

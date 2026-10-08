@@ -5,8 +5,8 @@ FDP video RAM at VBSTART, the raw cell bit layout, how unknown writer PCs are
 reported, and how a pixel is sampled on both the CPU and the GPU.
 
 The class and its shared `decode` are in `runtime/renderer/game/tiles.hpp` and
-`runtime/renderer/game/tiles.cpp`. The Land Maker debug store-PC list used by
-`observe_game_video_write` is in `games/landmakrj/video/video.cpp`, linked only
+`runtime/renderer/game/tiles.cpp`. The Land Maker store-PC list used by
+`video_writer_known` (`--discovery-log`) is in `games/landmakrj/video/video.cpp`, linked only
 for the configured `F3_GAME`.
 
 ## What the class holds
@@ -58,8 +58,7 @@ RAM and rebuilt at VBSTART, so they are not part of `GameVideo` canonical state.
 4-byte cell per 16x16 tile, for all four layers. Video RAM is the source of
 truth.
 
-In a `F3RT_VIDEO_WRITE_LOG` build, `observe_game_video_write` receives only the store PC and
-destination address. Land Maker's tile-block copy/erase loops and per-layer clear
+With `--discovery-log`, `video_writer_known` receives only the layer and store PC. Land Maker's tile-block copy/erase loops and per-layer clear
 stores are accepted:
 
 ```text
@@ -71,9 +70,8 @@ stores are accepted:
 
 A write from any other PC in `0x610000..0x617fff` is **not** an error any more:
 the snapshot is read back from video RAM regardless, so it cannot fake or lose a
-layer. Under `F3RT_VIDEO_WRITE_LOG` the PC is logged once (stderr) through
-`log_unknown_video_write` with layer `pf0`..`pf3`, so unmodeled producers can be
-collected for future work. With the option off there is no write observation at
+layer. Under `--discovery-log` the PC is logged once (`video-write`, layer `pf0`..`pf3`), so unmodeled producers can be
+collected for future work. Without the flag there is no write observation at
 all.
 
 ## Pixel sampling
@@ -98,7 +96,7 @@ renderer reads that copy directly; `encode()` in `runtime/renderer/gpu/encode.cp
 writes the raw cells into the `F3_SCENE_PF_CELLS` region (one word per cell in the
 two-word slot, layout in `scene_layout.h`) of the GPU upload, and `scene_body.glsl`
 decodes `attributes`, `code`, flips, pen mask and blend with the same formulas.
-`--video compare` still compares video-RAM decode against the FDP renderer.
+`--renderer compare-cpu` still compares video-RAM decode against the FDP renderer.
 
 ## Unit check
 

@@ -14,7 +14,6 @@ CMake 3.24+, a C11/C++20 compiler and Python 3.11+ are required. Python generate
 | `F3_SOUND_GENERATED_DIR` | empty | Pre-generated sound C directory; ROM generation defaults to `BUILD_DIR/generated/sound-SET`. |
 | `F3RT_SDL` | `ON` | Build SDL frontend/player targets. |
 | `F3RT_GPU` | `ON` | GPU presentation and LM GPU regression harnesses; `OFF` retains CPU/FDP presentation without shader tools. |
-| `F3RT_VIDEO_WRITE_LOG` | `OFF` | Debug: observe graphics/control stores so `log_unknown_video_write` prints the first store from each unknown `(layer, PC)` to stderr. Defined publicly on `f3rt`. |
 | `F3_PROFILE_INSTRUMENT` | `OFF` | Allocation-free per-entry main/sound counters; requires ROM generation. Record with `--profile-out FILE`. |
 | `F3_PROFILE_DEFAULT_TIERS` | `ON` | Select frozen full-coverage `profiles/landmakrj.profile` automatically only for Japan. |
 | `F3_PROFILE_TIERS` | empty | Matching versioned full-coverage profile; hot units use `-O2`, cold use Clang `-Oz` or other compilers' `-Os`. |

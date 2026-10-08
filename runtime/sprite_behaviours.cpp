@@ -12,4 +12,11 @@ std::span<const SpriteBehaviour *const> registered_sprite_behaviours() {
     return {};
 #endif
 }
+std::span<const FlickerShadow *const> registered_flicker_shadows() {
+#ifdef F3RT_SPRITE_BEHAVIOURS_HEADER
+    return std::span<const FlickerShadow *const>(game_sprites::flicker_shadows);
+#else
+    return {};
+#endif
+}
 } // namespace f3rt

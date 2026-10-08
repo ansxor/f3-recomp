@@ -17,8 +17,8 @@ Source: [runtime/renderer/game/scene.hpp](https://github.com/ansxor/f3-recomp/bl
 | `control_u16(index)` | Big-endian control word 0..15 |
 
 Video RAM is the source of truth. The decoders read it directly; a store from an
-unknown PC never invalidates a component, it is only logged in a
-`F3RT_VIDEO_WRITE_LOG` build. See
+unknown PC never invalidates a component, it is only logged with
+`--discovery-log`. See
 [Video write logging](/developer/runtime/video/producers).
 
 ### Component lifecycle concepts

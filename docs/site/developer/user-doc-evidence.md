@@ -14,7 +14,7 @@ set=landmakrj frames=120 pc=0x1136 sound_pc=0xc108ea sound_driver=native frame_c
 
 ## Frontend video compare: 700-frame headless run
 
-Previously in `guide/video.md`, described as a `--video compare` run in the author's build:
+Previously in `guide/video.md`, described as a `--renderer compare-cpu` run in the author's build:
 
 ```text
 VIDEO layer=composite domain=320x232-RGB sampled_frames=469 compared_pixels=34818560 pixel_mismatches=0

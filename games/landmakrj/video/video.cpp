@@ -1,17 +1,13 @@
 // Land Maker (landmakrj) game-specific video code.
 //
-// - With F3RT_VIDEO_WRITE_LOG: the known store-PC lists per scene component
-//   (observe_game_video_write).
+// - video_writer_known: the known store-PC lists per scene component, used by
+//   `--discovery-log` to suppress documented writers.
 //
 // The sprite, tile, text and line-RAM decoders are shared and live in runtime/.
-#ifdef F3RT_VIDEO_WRITE_LOG
-#include "renderer/game/video_log.hpp"
-#include <array>
-#endif
+#include "discovery_log.hpp"
 
 namespace f3rt {
 
-#ifdef F3RT_VIDEO_WRITE_LOG
 namespace {
 
 constexpr uint32_t pf_begin = 0x10000; // PF0 data
@@ -104,21 +100,15 @@ bool lines_covered_write(uint32_t pc) {
 
 } // namespace
 
-void observe_game_video_write(uint32_t pc, uint32_t address, uint64_t frame) {
-    constexpr uint32_t graphics_base = 0x600000, pf_end = pf_begin + 4 * 0x2000;
-    if (address >= 0x600000 && address < 0x610000) {
-        if (!sprites_covered_write(pc)) log_unknown_video_write("sprites", pc, address, frame);
-    } else if (address >= graphics_base + pf_begin && address < graphics_base + pf_end) {
-        constexpr std::array<const char *, 4> layer_names{"pf0", "pf1", "pf2", "pf3"};
-        if (!tiles_covered_write(pc))
-            log_unknown_video_write(layer_names[(address - graphics_base - pf_begin) / 0x2000], pc, address, frame);
-    } else if (address >= 0x61c000 && address < 0x620000) {
-        if (!text_covered_write(pc)) log_unknown_video_write("text", pc, address, frame);
-    } else if ((address >= 0x620000 && address < 0x630000) || (address >= 0x660000 && address < 0x660040)) {
-        if (!lines_covered_write(pc)) log_unknown_video_write("lines", pc, address, frame);
+bool video_writer_known(VideoLayer layer, uint32_t pc) {
+    switch (layer) {
+    case VideoLayer::Sprites: return sprites_covered_write(pc);
+    case VideoLayer::Pf0: case VideoLayer::Pf1: case VideoLayer::Pf2: case VideoLayer::Pf3:
+        return tiles_covered_write(pc);
+    case VideoLayer::Text: return text_covered_write(pc);
+    case VideoLayer::Lines: case VideoLayer::Control: return lines_covered_write(pc);
+    default: return false; // alternate map banks (0x618000..0x61c000) were not observed before; no list
     }
 }
-#endif
 
 } // namespace f3rt
-

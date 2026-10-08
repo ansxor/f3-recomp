@@ -44,7 +44,7 @@ See [Discovery](/developer/recompiler/discovery).
 
 **Capstone** — A disassembler library. The Python recompiler uses version 5.0.9 to decode 68020 instructions. Some Capstone fields are wrong for some addressing modes. The code works around them. See [Code emission](/developer/recompiler/emission).
 
-**compare mode** — The video mode `--video compare`. It runs `GameVideo` and the FDP renderer for each frame. The program stops with an error if the pixels differ for a supported frame.
+**compare mode** — The developer renderers `--renderer compare-cpu` and `compare-gpu`. It runs `GameVideo` and the FDP renderer for each frame. The program stops with an error if the pixels differ for a supported frame.
 
 **confirmed frame** — A frame for which the program has the real input of both players. `Rollback::confirmed_frame()` is the first frame that is not confirmed.
 
@@ -188,8 +188,8 @@ See [Audio timing](/developer/runtime/audio/timing).
 **producer** — A game routine that builds display data.
 Examples include tile blocks, sprite lists, text strings, and line profiles.
 `GameVideo` does not observe producers; it decodes their output from FDP video RAM
-at VBSTART. In a `F3RT_VIDEO_WRITE_LOG` debug build it also logs producer store PCs
-that are not in a component's known list.
+at VBSTART. With `--discovery-log` the runtime also logs producer store PCs
+that are not in a game's known list.
 
 ## R
 

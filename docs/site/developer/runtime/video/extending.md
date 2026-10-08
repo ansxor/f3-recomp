@@ -7,11 +7,10 @@ not authorize changes to the game's behavior.
 
 ## Locate what is missing
 
-Start from an unknown store PC (`log_unknown_video_write` in a
-`F3RT_VIDEO_WRITE_LOG` build), a missing fallback, or a reproducible
+Start from an unknown store PC (`video-write` in a `--discovery-log` file), a missing fallback, or a reproducible
 indexed/row/composite difference.
 
-1. Read the producer PC and destination range from the stderr log line.
+1. Read the producer PC and destination range from the `NEW video-write` line.
 2. Find the native routine that contains the writing instruction.
 3. Decide whether the write targets video RAM that the decoder already reads.
 
@@ -45,8 +44,8 @@ rule, update the shared helper, the per-game decoder, or the shared line-RAM cop
 
 Add the instruction address (or a tight range) to the component's known list
 (`tiles_covered_write`, `text_covered_write`, `sprites_covered_write` or
-`lines_covered_write`) in `games/<game>/video/video.cpp`. These lists are used only by the opt-in
-`F3RT_VIDEO_WRITE_LOG` path; the log receives only the PC and address. Do not
+`lines_covered_write`) in `games/<game>/video/video.cpp`. These lists (served through `video_writer_known`) are used only by the opt-in
+`--discovery-log` path; the log receives only the PC and address. Do not
 list a whole unrelated routine family to silence a report.
 
 ## Add or fix a decode rule

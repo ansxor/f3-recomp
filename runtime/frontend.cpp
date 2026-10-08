@@ -13,6 +13,7 @@
 #include "renderer/gpu/interp.hpp"
 #include "block_profile.hpp"
 #include "sprite_units.hpp"
+#include "discovery_log.hpp"
 #include "renderer/sprite_behaviour.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
@@ -128,7 +129,7 @@ void parse_scale(const std::string &scale, f3rt::VideoScaleMode &mode, f3rt::Gam
     }
 }
 enum Preference : uint32_t {
-    VideoMode=1u<<0, Backend=1u<<1, Scale=1u<<2, Border=1u<<3, Filter=1u<<4,
+    Renderer=1u<<0, Scale=1u<<2, Border=1u<<3, Filter=1u<<4,
     Interpolation=1u<<5, Fields=1u<<6, SoundDriver=1u<<7, Volume=1u<<8,
     Server=1u<<9, Room=1u<<10, Slot=1u<<11, Delay=1u<<12,
     PostprocessMode=1u<<13, UserShader=1u<<14, SoundBackend=1u<<15,
@@ -137,15 +138,14 @@ enum Preference : uint32_t {
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
-    std::filesystem::path sound_trace_path,profile_path,config_path;
+    std::filesystem::path sound_trace_path,profile_path,config_path,discovery_path;
     std::string set=F3RT_DEFAULT_SET;
-    std::string video_mode="fdp";
+    std::string renderer;
     std::string sound_driver="oracle";
     std::string audio_backend="accurate";
     f3rt::GameVideoOptions video_options;
     f3rt::VideoScaleMode video_scale_mode=f3rt::VideoScaleMode::Fixed;
     std::string video_filter="nearest";
-    std::string video_backend="cpu";
     std::string video_interp="off";
     std::string video_interp_fields="geometry";
     std::string video_scale="1";
@@ -180,6 +180,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--wav")wav_path=value();
         else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
+        else if(arg=="--discovery-log")discovery_path=value();
         else if(arg=="--sound-driver") { sound_driver=value();cli_preferences|=SoundDriver; }
         else if(arg=="--audio-backend") { audio_backend=value();cli_preferences|=SoundBackend; }
         else if(arg=="--config")config_path=value();
@@ -192,7 +193,7 @@ int main(int argc,char **argv) try {
         }
         else if(arg=="--fallback-report")fallback_report=value();
         else if(arg=="--surface")surface=value();
-        else if(arg=="--video") { video_mode=value();cli_preferences|=VideoMode; }
+        else if(arg=="--renderer") { renderer=value();cli_preferences|=Renderer; }
         else if(arg=="--video-scale") { video_scale=value();cli_preferences|=Scale; }
         else if(arg=="--video-border") {
             const auto border=std::stoul(value());
@@ -200,7 +201,6 @@ int main(int argc,char **argv) try {
             video_options.border=unsigned(border);cli_preferences|=Border;
         }
         else if(arg=="--video-filter") { video_filter=value();cli_preferences|=Filter; }
-        else if(arg=="--video-backend") { video_backend=value();cli_preferences|=Backend; }
         else if(arg=="--video-interp") { video_interp=value();cli_preferences|=Interpolation; }
         else if(arg=="--video-interp-fields") { video_interp_fields=value();cli_preferences|=Fields; }
         else if(arg=="--motion-interp")motion_interp=true;
@@ -234,11 +234,12 @@ int main(int argc,char **argv) try {
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
                      <<"  [--config FILE] [--volume 0..100] (user preferences load first; CLI overrides)\n"
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
+                     <<"  [--discovery-log FILE] (host-only: log unhandled video writers/fallbacks seen during play; see docs)\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in game executables; oracle in f3rt-run)\n"
                      <<"  [--audio-backend accurate|hle] (default accurate; HLE runs on its own thread at 48 kHz)\n"
-                     <<"  [--video fdp|game|compare] (game data requires strict native execution and games/<game>/video/)\n"
+                     <<"  [--renderer accurate|enhanced] (accurate: MAME-derived reference renderer; enhanced: game-data GPU renderer, needs strict native execution and games/<game>/video/)\n"
+                     <<"  [--renderer game-cpu|compare-cpu|compare-gpu] (developer-only: game-data CPU compositor; compare also checks the FDP reference every supported frame)\n"
                      <<"  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] [--video-filter nearest|linear]\n"
-                     <<"  [--video-backend cpu|gpu] (presentation only; headless/captures retain CPU pixels)\n"
                      <<"  [--video-interp off|linear|fit] (opt-in GPU line sampling; default off)\n"
                      <<"  [--video-interp-fields none|geometry|palette|geometry,palette] (default geometry; native alpha stays discrete)\n"
                      <<"  [--motion-interp] (experimental GPU temporal motion; default off, one-frame positional latency)\n"
@@ -262,8 +263,9 @@ int main(int argc,char **argv) try {
 #if defined(F3RT_SOUND_GENERATED) && defined(F3RT_GAME)
     settings.audio_backend=f3rt::AudioBackend::Native;
 #endif
-#ifdef F3RT_GAME_VIDEO
-    if(translated && !allow_fallback)settings.video_mode="game";
+#if defined(F3RT_GAME_VIDEO) && defined(F3RT_GPU)
+    // Enhanced needs game-data video (strict native execution) and a GPU-enabled build; otherwise accurate.
+    if(translated && !allow_fallback)settings.renderer="enhanced";
 #endif
     const auto default_audio_backend=settings.audio_backend;
     if(config_path.empty())config_path=f3rt::default_config_path(set);
@@ -273,8 +275,42 @@ int main(int argc,char **argv) try {
     auto preference=[&](auto &option,auto &saved,Preference field) {
         if(cli_preferences&field)saved=option;else option=saved;
     };
-    preference(video_mode,settings.video_mode,VideoMode);
-    preference(video_backend,settings.video_backend,Backend);
+    // Developer renderers exist only on the command line; the settings file and UI hold accurate|enhanced.
+    if(cli_preferences&Renderer) {
+        if(renderer=="accurate" || renderer=="enhanced")settings.renderer=renderer;
+    } else renderer=settings.renderer;
+    std::string video_mode,video_backend;
+    auto select_renderer=[&] {
+        if(renderer=="accurate") { video_mode="fdp";video_backend="cpu"; }
+        else if(renderer=="enhanced") { video_mode="game";video_backend="gpu"; }
+        else if(renderer=="game-cpu") { video_mode="game";video_backend="cpu"; }
+        else if(renderer=="compare-cpu") { video_mode="compare";video_backend="cpu"; }
+        else if(renderer=="compare-gpu") { video_mode="compare";video_backend="gpu"; }
+        else throw std::runtime_error("--renderer must be accurate, enhanced, game-cpu, compare-cpu or compare-gpu");
+    };
+    select_renderer();
+#ifdef F3RT_GPU
+    // A renderer that came from the default or the settings file must not leave the user unable to launch:
+    // probe the GPU (hidden window + device + window claim) and fall back to accurate. An explicit
+    // --renderer keeps failing hard in the normal start-up path.
+    if(!(cli_preferences&Renderer) && !headless && video_backend=="gpu") {
+        std::string reason;
+        if(!SDL_Init(SDL_INIT_VIDEO))reason=SDL_GetError();
+        else if(auto *probe=SDL_CreateWindow("f3rt gpu probe",64,64,SDL_WINDOW_HIDDEN)) {
+            if(auto *device=SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV|SDL_GPU_SHADERFORMAT_MSL|SDL_GPU_SHADERFORMAT_METALLIB,false,nullptr)) {
+                if(!SDL_ClaimWindowForGPUDevice(device,probe))reason=SDL_GetError();
+                else SDL_ReleaseWindowFromGPUDevice(device,probe);
+                SDL_DestroyGPUDevice(device);
+            } else reason=SDL_GetError();
+            SDL_DestroyWindow(probe);
+        } else reason=SDL_GetError();
+        if(!reason.empty()) {
+            std::cerr<<"f3rt: warning: GPU renderer unavailable ("<<reason<<"); falling back to --renderer accurate. "
+                       "Pass --renderer enhanced to make this an error.\n";
+            renderer="accurate";select_renderer();
+        }
+    }
+#endif
     preference(video_scale,settings.video_scale,Scale);
     preference(video_options.border,settings.border,Border);
     preference(video_filter,settings.filter,Filter);
@@ -289,6 +325,15 @@ int main(int argc,char **argv) try {
     preference(net_options.delay,settings.delay,Delay);
     preference(fast_boot,settings.fast_boot,FastBoot);
     preference(boot_cache,settings.boot_cache,BootCache);
+    // Presentation options only exist for the game-data renderers. Saved values are ignored under accurate
+    // (and stay in the settings file for enhanced); explicit command-line options are rejected below.
+    if(video_mode=="fdp") {
+        if(!(cli_preferences&Scale))video_scale="1";
+        if(!(cli_preferences&Border))video_options.border=0;
+        if(!(cli_preferences&Filter))video_filter="nearest";
+        if(!(cli_preferences&Interpolation))video_interp="off";
+        if(!(cli_preferences&Fields))video_interp_fields="geometry";
+    }
     if(!(cli_preferences&SoundDriver))
         sound_driver=f3rt::audio_backend_name(settings.audio_backend==f3rt::AudioBackend::Hle?
             default_audio_backend:settings.audio_backend);
@@ -309,8 +354,6 @@ int main(int argc,char **argv) try {
 #ifdef F3RT_GAME
     if(set!=F3RT_DEFAULT_SET)throw std::runtime_error("This generated executable requires " F3RT_DEFAULT_SET);
 #endif
-    if(video_mode!="fdp" && video_mode!="game" && video_mode!="compare")
-        throw std::runtime_error("--video must be fdp, game or compare");
 #ifndef F3RT_GAME_VIDEO
     if(video_mode!="fdp")
         throw std::runtime_error("Game-data video is unavailable for this game");
@@ -320,23 +363,21 @@ int main(int argc,char **argv) try {
 #endif
     if(video_filter!="nearest" && video_filter!="linear")throw std::runtime_error("--video-filter must be nearest or linear");
     if(video_mode=="fdp" && (video_options.expanded() || video_filter!="nearest"))
-        throw std::runtime_error("Presentation enhancements require --video game or compare");
-    if(video_backend!="cpu" && video_backend!="gpu")throw std::runtime_error("--video-backend must be cpu or gpu");
+        throw std::runtime_error("Scale, border and filter options require --renderer enhanced (or a developer game/compare renderer)");
     bool automatic_scale=video_scale_mode!=f3rt::VideoScaleMode::Fixed;
-    if(automatic_scale && video_backend!="gpu")throw std::runtime_error("--video-scale auto/auto-integer requires --video-backend gpu");
-    if(video_backend=="gpu" && video_mode=="fdp")throw std::runtime_error("GPU presentation requires --video game or compare");
+    if(automatic_scale && video_backend!="gpu")throw std::runtime_error("--video-scale auto/auto-integer requires --renderer enhanced or compare-gpu");
     if(video_interp!="off" && video_interp!="linear" && video_interp!="fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
-    if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --video-backend gpu");
-    if(motion_interp && video_backend!="gpu")throw std::runtime_error("--motion-interp requires --video-backend gpu");
+    if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --renderer enhanced or compare-gpu");
+    if(motion_interp && video_backend!="gpu")throw std::runtime_error("--motion-interp requires --renderer enhanced or compare-gpu");
     if(postprocess!="off" && postprocess!="crt" && postprocess!="user")
         throw std::runtime_error("--postprocess must be off, crt or user");
     if(postprocess!="off" && video_backend!="gpu")
-        std::cerr<<"f3rt: post-processing requires GPU backend; preference is inactive on CPU\n";
+        std::cerr<<"f3rt: post-processing requires the enhanced renderer; preference is inactive\n";
     const auto interpolation_fields=f3rt::parse_interpolation_fields(video_interp_fields);
     if(!interpolation_fields)throw std::runtime_error("--video-interp-fields must be none, geometry, palette or geometry,palette");
 #ifndef F3RT_GPU
-    if(video_backend=="gpu" && !headless)throw std::runtime_error("GPU presentation requires F3RT_GPU build support");
+    if(video_backend=="gpu" && !headless)throw std::runtime_error("The GPU renderer requires F3RT_GPU build support");
 #endif
     const bool netplay=net_role_seen;
     if(netplay && set!="landmakrj")throw std::runtime_error("Netplay requires landmakrj");
@@ -377,9 +418,25 @@ int main(int argc,char **argv) try {
             f3rt::SpriteUnits::Options options;
             const auto registered=f3rt::registered_sprite_behaviours();
             options.behaviours.assign(registered.begin(),registered.end());
+            const auto shadows=f3rt::registered_flicker_shadows();
+            options.flicker_shadows.assign(shadows.begin(),shadows.end());
             m.sprite_units=std::make_unique<f3rt::SpriteUnits>(m,unit_table,std::move(options));
+            // Always on with the GPU presenter, which picks flicker shadow visibility per presented frame;
+            // CPU and FDP output keeps the game's own alternate-frame emission.
+            m.sprite_units->set_flicker_shadows(video_backend=="gpu" && m.game_video);
         }
     }
+    if(!discovery_path.empty()) {
+        m.discovery=std::make_unique<f3rt::DiscoveryLog>(discovery_path.string(),m,
+            "set="+set+" renderer="+(renderer.empty()?"default":renderer)+" exec="+(translated?"native":"interpreted")+
+            " emit_units="+(m.sprite_units?"yes":"no")+" game_video="+(m.game_video?"yes":"no"));
+        m.discovery->set_sprites_accounted_by_units(m.sprite_units!=nullptr);
+        if(m.sprite_units)m.sprite_units->set_discovery(m.discovery.get());
+    }
+    const bool shadows_active=m.sprite_units && m.sprite_units->flicker_shadows_enabled();
+    // Shadow visibility alternates per presented frame; only a presenter that redraws at refresh rate makes
+    // that follow the display, so it reuses the motion-interpolation display pacing (without temporal history).
+    const bool display_paced_shadows=shadows_active && !headless;
     const auto snapshot_video_options=video_options;
     const unsigned frame_width=video_options.width();
     const unsigned frame_height=m.game_video?video_options.height():m.roms.video.visible_height;
@@ -423,6 +480,7 @@ int main(int argc,char **argv) try {
                                                    video_interp=="linear"?f3rt::VideoInterpolation::Linear:f3rt::VideoInterpolation::Off,
                                                    *interpolation_fields);
             sdl.gpu->set_scale_mode(video_scale_mode);
+            if(display_paced_shadows && !motion_interp)sdl.gpu->enable_display_pacing();
             if(postprocess!="off")sdl.gpu->set_postprocess(
                 postprocess=="crt"?f3rt::Postprocess::Crt:f3rt::Postprocess::User,user_shader);
         } else
@@ -448,14 +506,14 @@ int main(int argc,char **argv) try {
         if(sdl.gpu)ui_device=sdl.gpu->device();
 #endif
         sdl.ui=std::make_unique<f3rt::FrontendUi>(sdl.window,sdl.renderer,ui_device,settings,*sdl.input);
-        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" backend="<<video_backend
-                 <<" video="<<video_mode<<" internal="<<display_width<<'x'<<display_height
+        std::cout<<"window_open video_driver="<<SDL_GetCurrentVideoDriver()<<" renderer="<<renderer
+                 <<" internal="<<display_width<<'x'<<display_height
                  <<" pixels="<<pixel_width<<'x'<<pixel_height<<" scale="<<video_options.scale
                  <<" filter="<<video_filter<<" interp="<<video_interp
                  <<" interp_fields="<<f3rt::interpolation_fields_name(*interpolation_fields)<<'\n';
-        if(motion_interp) {
+        if(motion_interp || display_paced_shadows) {
             const auto *display=SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdl.window));
-            std::cout<<"motion_interp=on display_hz="<<(display?display->refresh_rate:0)
+            std::cout<<(motion_interp?"motion_interp=on":"flicker_shadows=display-sync")<<" display_hz="<<(display?display->refresh_rate:0)
                      <<" emulation_hz="<<double(f3rt::Machine::pixel_clock)/f3rt::Machine::frame_pixels
                      <<" temporal_pacing="<<(throttle?"display":"unthrottled-current")<<'\n';
         }
@@ -477,6 +535,7 @@ int main(int argc,char **argv) try {
     ui_state.gpu_available=true;
     if(sdl.gpu)ui_state.active_postprocess=postprocess;
 #endif
+    ui_state.active_renderer=renderer;
     ui_state.message=settings_error;
     uint64_t executed_frames=0;
     bool screenshot_pending=false,surface_saved=false,surface_valid=false;
@@ -486,7 +545,7 @@ int main(int argc,char **argv) try {
     auto next_status=next_net_step;
     auto next_frame=std::chrono::steady_clock::now();
     const auto frame_time=std::chrono::nanoseconds(uint64_t(1e9*f3rt::Machine::frame_pixels/f3rt::Machine::pixel_clock));
-    const bool motion_presentation=motion_interp && !headless;
+    const bool motion_presentation=(motion_interp || display_paced_shadows) && !headless;
     auto motion_frame_start=next_frame;
     bool motion_capture_pending=false;
     uint64_t motion_presentations=0,motion_intermediates=0,motion_history_resets=0;
@@ -693,7 +752,7 @@ int main(int argc,char **argv) try {
                 case Action::ApplySettings:
                     sdl.input->configure(settings);
                     if(sdl.audio)check(SDL_SetAudioStreamGain(sdl.audio,settings.volume));
-                    video_filter=settings.filter;
+                    if(video_mode!="fdp")video_filter=settings.filter;
 #ifdef F3RT_GPU
                     if(sdl.gpu) {
                         auto requested=video_options;
@@ -725,13 +784,8 @@ int main(int argc,char **argv) try {
                         refresh=true;break;
                     }
 #endif
-                    throw std::runtime_error("Post-processing requires GPU backend");
+                    throw std::runtime_error("Post-processing requires the enhanced renderer");
                 case Action::SavePreferences:
-                    if(settings.video_mode=="fdp" && (settings.video_scale!="1" || settings.border ||
-                       settings.filter!="nearest" || settings.video_backend=="gpu"))
-                        throw std::runtime_error("FDP preferences require CPU, scale 1, border 0 and nearest filtering");
-                    if(settings.video_backend=="cpu" && (settings.video_scale.starts_with("auto") || settings.interpolation!="off"))
-                        throw std::runtime_error("Auto scale and interpolation preferences require GPU");
                     if(!f3rt::save_frontend_settings(config_path.string(),settings,ui_state.message))
                         throw std::runtime_error(ui_state.message);
                     ui_state.message="Preferences saved to "+config_path.string();break;
@@ -802,7 +856,7 @@ int main(int argc,char **argv) try {
         executed_frames+=advanced;
 #ifdef F3RT_GPU
         if(motion_presentation)motion_readout.native+=advanced;
-        if(motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {
+        if(motion_interp && motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {
             sdl.gpu->capture_motion(m.game_video->captured_frame(),m.frame);
             motion_capture_pending=false;
             motion_pair_pending=true;
@@ -965,7 +1019,7 @@ int main(int argc,char **argv) try {
             if(finite_netplay)quit=true;
         }
 #ifdef F3RT_GPU
-        if(motion_presentation && sdl.gpu &&
+        if(motion_interp && motion_presentation && sdl.gpu &&
            std::chrono::steady_clock::now()-motion_readout.begin>=std::chrono::seconds(2))
             motion_readout.report(*sdl.gpu);
 #endif
@@ -996,6 +1050,7 @@ int main(int argc,char **argv) try {
     }
     if(m.game_video)m.game_video->report(std::cout);
     if(m.sprite_units)m.sprite_units->write_summary(std::cout);
+    if(m.discovery)m.discovery->finish(m);
     if(m.sound_trace)m.sound_trace->finish(m);
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
@@ -1003,7 +1058,16 @@ int main(int argc,char **argv) try {
              <<" frame_crc=0x"<<f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),m.native_pixels().size()*4)<<std::dec
              <<" cycles="<<m.cpu.cycles<<" native_blocks="<<m.native_blocks<<" fallback_instructions="<<m.fallback_instructions
              <<" audio_frames="<<audio_frames<<" audio_peak="<<audio_peak<<" nonzero_samples="<<nonzero_samples<<'\n';
-    if(motion_presentation)
+#ifdef F3RT_GPU
+    if(sdl.gpu && m.sprite_units && m.sprite_units->flicker_shadows_available()) {
+        const auto report=m.sprite_units->report();
+        std::cout<<"FLICKER-SHADOWS active="<<shadows_active<<" native_frames="<<executed_frames
+                 <<" presented_frames="<<sdl.gpu->presented_frames()<<" display_paced="<<display_paced_shadows
+                 <<" shadowed_objects="<<report.flicker.invocations<<" tagged_entries="<<report.flicker.replay_entries
+                 <<" frames_with_shadow="<<report.flicker.frames<<'\n';
+    }
+#endif
+    if(motion_interp && motion_presentation)
         std::cout<<"MOTION-TOTAL native_frames="<<executed_frames<<" drawable_submissions="<<motion_presentations
                  <<" interpolated_submissions="<<motion_intermediates<<" history_resets="<<motion_history_resets
                  <<" interpolated_pct="<<(motion_presentations?100.0*double(motion_intermediates)/double(motion_presentations):0.0)

@@ -7,6 +7,7 @@ API_AVAILABLE(macos(14.0))
 @property(nonatomic, strong) CADisplayLink *link;
 @property(nonatomic, weak) NSWindow *window;
 @property(nonatomic) uint64_t ticks;
+@property(nonatomic) uint64_t seenTicks;
 @property(nonatomic) double firstTimestamp;
 @property(nonatomic) double lastTimestamp;
 @property(nonatomic) unsigned intervals;
@@ -71,9 +72,9 @@ void destroy_macos_motion_pacing(void *pacing) {
         clock.link = nil;
     }
 }
-void wait_macos_motion_pacing(void *pacing) {
+bool wait_macos_motion_pacing(void *pacing) {
     if (@available(macOS 14.0, *)) {
-        if (!pacing) return;
+        if (!pacing) return false;
         F3MotionDisplayClock *clock = (__bridge F3MotionDisplayClock *)pacing;
         [clock requestScreenRate];
         const uint64_t before = clock.ticks;
@@ -86,8 +87,22 @@ void wait_macos_motion_pacing(void *pacing) {
             const double remaining = double(deadline - now) / 1.0e9;
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, remaining, true);
         }
-        if (clock.ticks == before) clock.measuredHz = 0;
+        clock.seenTicks = clock.ticks;
+        if (clock.ticks == before) { clock.measuredHz = 0; return false; }
+        return true;
     }
+    return false;
+}
+bool poll_macos_motion_pacing(void *pacing) {
+    if (@available(macOS 14.0, *)) {
+        if (!pacing) return false;
+        F3MotionDisplayClock *clock = (__bridge F3MotionDisplayClock *)pacing;
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
+        const bool ticked = clock.ticks != clock.seenTicks;
+        clock.seenTicks = clock.ticks;
+        return ticked;
+    }
+    return false;
 }
 double macos_motion_callback_hz(void *pacing) {
     if (@available(macOS 14.0, *)) {

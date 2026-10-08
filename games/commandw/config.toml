@@ -240,7 +240,7 @@ extend = true
 # Its first 144 line words are 0x3200 (selector 0x0200); this is a source/layout
 # contract, not a claim that pinned MAME enables alternates in extended mode.
 extended_alt_maps = true
-# Presentation only (emulation, sync CRCs and --video compare are unchanged): the presented
+# Presentation only (emulation, sync CRCs and --renderer compare-cpu|compare-gpu are unchanged): the presented
 # output resamples PF2/PF3 alternate-map rows from the full-resolution main map where the
 # half-scaled copy is an exact X2 alias (runtime/renderer/game/tiles.cpp, FullResolutionAltMaps).
 full_resolution_alt_maps = true

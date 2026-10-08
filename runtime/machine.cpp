@@ -6,6 +6,7 @@
 #include "sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
+#include "discovery_log.hpp"
 #include "sprite_units.hpp"
 #include "state_io.hpp"
 #include <algorithm>
@@ -55,10 +56,8 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
     if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
         // Sprite-RAM stores must reach SpriteUnits (entry attribution), so they take the byte path.
         if constexpr (Write) if (m.sprite_units && a - GRAPHICS_BASE < 0x10000) return nullptr;
-#ifdef F3RT_VIDEO_WRITE_LOG
-        // Debug write logging must see every graphics store byte by byte.
-        if constexpr (Write) if (m.game_video) return nullptr;
-#endif
+        // Discovery logging must see every graphics store byte by byte (PC attribution).
+        if constexpr (Write) if (m.discovery) return nullptr;
         return m.graphics.data() + (a - GRAPHICS_BASE);
     }
     if constexpr (!Write) {
@@ -192,19 +191,14 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a >= PALETTE_BASE && a < PALETTE_END) { palette[a - PALETTE_BASE] = v; return; }
-    // Debug builds (F3RT_VIDEO_WRITE_LOG) log stores from undocumented game routines.
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
-#ifdef F3RT_VIDEO_WRITE_LOG
-        if (game_video) game_video->observe_write(cpu.pc, a);
-#endif
+        if (discovery) discovery->video_write(cpu.pc, a);
         graphics[a - GRAPHICS_BASE] = v;
         if (sprite_units) sprite_units->note_write(a, 1);
         return;
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
-#ifdef F3RT_VIDEO_WRITE_LOG
-        if (game_video) game_video->observe_write(cpu.pc, a);
-#endif
+        if (discovery) discovery->video_write(cpu.pc, a);
         control[a - CONTROL_BASE] = v; return;
     }
     if (a >= SHARED_BASE && a < SHARED_END) {

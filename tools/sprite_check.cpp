@@ -12,6 +12,19 @@
 //     the end) state_crc()/sync_state_crc();
 //   * behaviour invariants (below) or no splice produced although behaviours are enabled.
 //
+// Flicker shadows (FlickerShadow sources of the game, enabled unless --no-flicker-shadows) are
+// checked inside SpriteUnits (see SpriteUnits::check_flicker: every tagged entry comes from the
+// declared shadow emit path, tagged entries lead the object's run, forcing the game's parity
+// gate adds nothing but the shadow) and per frame here:
+//   * tagged entries are decoded from the presentation and from nowhere else (the real list has
+//     none), and never exceed what the splices carry;
+//   * detection happens in attract mode (before the first coin) and on frames of both game
+//     parities: the game's own gate is set on alternate frames only, the presented list
+//     carries the shadow on every frame that has shadowed objects.
+// --present-model HZ replays the recorded per-frame data against a display of HZ refreshes per
+// second: the game's own emission (what the original flicker would show) versus the
+// display-synced visibility the GPU presenter uses (flicker_shadow_visible).
+//
 // Behaviour invariants are checked every frame on the presentation A would render, by
 // decoding the sprite list with identities only (real entries) and with the splices
 // applied, and comparing the entries that belong to each splice (matched by identity).
@@ -108,7 +121,26 @@ struct Args {
     uint64_t compare_every = 60;
     uint64_t seed = 12345;
     bool inputs = true;
+    bool flicker = true;
+    uint64_t shadow_trace = 0;     // print this many consecutive frames from the first shadow frame
+    double present_model_hz = 0;   // simulate presenting at this display rate (0 = off)
     std::vector<std::string> behaviours;
+};
+
+struct FlickerFrame {
+    uint32_t entries = 0, objects = 0, gate_set = 0;
+};
+struct FlickerInvariants {
+    uint64_t frames = 0;                 // frames checked
+    uint64_t frames_with_shadow = 0;     // presentation carried tagged entries
+    uint64_t game_emitted_frames = 0;    // ... of which the game itself emitted a shadow
+    uint64_t synthesized_frames = 0;     // ... where every shadow was synthesized by the replay
+    uint64_t attract_frames_with_shadow = 0; // before the first coin
+    uint64_t decoded_tagged = 0, splice_tagged = 0;
+    uint64_t real_decode_tagged = 0;     // tagged real entries in a decode without splices (game-emitted shadows)
+    uint64_t violations = 0;
+    std::string first_violation;
+    std::vector<FlickerFrame> per_frame;
 };
 
 enum Key { UP, DOWN, LEFT, RIGHT, BTN1, BTN2, BTN3, COIN, START };
@@ -195,7 +227,7 @@ std::vector<DecodedSpriteEntry> decode(const Machine &m, const SpritePresentatio
     std::vector<DecodedSpriteEntry> out(0x800);
     SpritePresentation view{presentation.identity,
                             splices ? presentation.splices : std::span<const SpriteSplice>{},
-                            presentation.object};
+                            presentation.object, presentation.flags};
     const size_t n = decode_sprite_list(m.graphics.data(), int(m.roms.video.visible_y),
                                         int(m.roms.video.visible_height), out, state, false, &view);
     out.resize(n);
@@ -218,7 +250,11 @@ void check_full_detail(const Machine &m, const SpriteUnits &units, InvariantStat
             while (shared < limit && std::memcmp(&splice.real[shared * 16], &splice.replacement[shared * 16], 16) == 0)
                 ++shared;
             if (shared) { ++stats.shared_prefix_splices; stats.shared_prefix_entries += shared; }
-            if (shared == count && count == splice.real.size() / 16) {
+            // A splice that tags shadow entries may legitimately equal the real entries (the game itself
+            // emitted the shadow and nothing else changed): it is a flicker splice, not a no-effect patch.
+            const bool flicker_splice = std::any_of(splice.flags.begin(), splice.flags.end(),
+                                                    [](uint8_t f) { return (f & sprite_flag_shadow) != 0; });
+            if (shared == count && count == splice.real.size() / 16 && !flicker_splice) {
                 ++stats.identical_splices;
                 if (stats.first_violation.empty())
                     stats.first_violation = "frame " + std::to_string(frame) +
@@ -229,8 +265,12 @@ void check_full_detail(const Machine &m, const SpriteUnits &units, InvariantStat
         for (size_t k = 0; k < count; ++k) ids.insert(sprite_identity_mix(splice.identity, uint32_t(k)));
         Box before, after;
         uint64_t before_n = 0, after_n = 0;
-        for (const auto &e : real) if (ids.count(e.identity)) { before.add(e); ++before_n; }
-        for (const auto &e : spliced) if (ids.count(e.identity)) { after.add(e); ++after_n; }
+        // Footprints compare the object body: shadow entries (tagged by the flicker source) are the
+        // shadow's own tiles, checked by the flicker-shadow invariants instead.
+        for (const auto &e : real)
+            if (ids.count(e.identity) && !(e.flags & sprite_flag_shadow)) { before.add(e); ++before_n; }
+        for (const auto &e : spliced)
+            if (ids.count(e.identity) && !(e.flags & sprite_flag_shadow)) { after.add(e); ++after_n; }
         stats.real_entries += before_n;
         stats.replacement_entries += after_n;
         if (after_n > before_n) stats.grown_entries += after_n - before_n;
@@ -273,6 +313,101 @@ void check_full_detail(const Machine &m, const SpriteUnits &units, InvariantStat
     }
 }
 
+// Replays the recorded per-frame data against a display refreshing at `hz` (non-integer ratio to the
+// emulated frame rate). "original" = what the game's own emission shows on each refresh (the latest
+// completed emulated frame); "sync" = flicker_shadow_visible(refresh index), what the GPU presenter
+// uses. Only refreshes whose emulated frame holds shadowed objects are scored; run lengths are
+// consecutive refreshes with the same visibility.
+void present_model(const FlickerInvariants &shadows, double hz) {
+    const double emu_hz = double(Machine::pixel_clock) / double(Machine::frame_pixels);
+    std::map<unsigned, uint64_t> original_runs, sync_runs;
+    uint64_t scored = 0, repeats = 0, original_on = 0, sync_on = 0, parity_matches = 0;
+    int original_prev = -1, sync_prev = -1;
+    unsigned original_run = 0, sync_run = 0;
+    std::ostringstream sample;
+    unsigned sampled = 0;
+    const auto flush = [&] {
+        if (original_run) ++original_runs[original_run];
+        if (sync_run) ++sync_runs[sync_run];
+        original_run = sync_run = 0;
+        original_prev = sync_prev = -1;
+    };
+    // The game redraws its objects only on some frames (its loop can run at half the frame rate); the
+    // sprite list persists in between, so a frame without invocations shows the last drawn state.
+    constexpr uint64_t persistence = 3;
+    uint64_t drawn = ~0ull;
+    const uint64_t refreshes = uint64_t(double(shadows.per_frame.size()) / emu_hz * hz);
+    for (uint64_t k = 0; k < refreshes; ++k) {
+        const uint64_t e = std::min<uint64_t>(uint64_t(double(k) / hz * emu_hz), shadows.per_frame.size() - 1);
+        if (shadows.per_frame[e].objects) drawn = e;
+        if (drawn == ~0ull || e - drawn > persistence) { flush(); continue; }
+        const FlickerFrame &frame = shadows.per_frame[drawn];
+        const int original = frame.gate_set != 0, sync = flicker_shadow_visible(k) ? 1 : 0;
+        if (original == original_prev) ++original_run; else { if (original_run) ++original_runs[original_run]; original_run = 1; }
+        if (sync == sync_prev) { ++sync_run; ++repeats; } else { if (sync_run) ++sync_runs[sync_run]; sync_run = 1; }
+        original_prev = original; sync_prev = sync;
+        ++scored;
+        original_on += original;
+        sync_on += sync;
+        parity_matches += sync == int((e & 1) == 0);
+        if (sampled < 24 && scored > 600) {
+            sample << "    refresh " << k << " emu_frame " << e + 1 << " emu_parity " << ((e + 1) & 1) << " game_emits "
+                   << original << " sync_visible " << sync << '\n';
+            ++sampled;
+        }
+    }
+    flush();
+    const auto histogram = [](const std::map<unsigned, uint64_t> &runs) {
+        std::ostringstream ss;
+        for (const auto &[length, count] : runs) ss << ' ' << length << "x:" << count;
+        return ss.str();
+    };
+    std::cout << std::fixed << std::setprecision(3) << "  present model: display " << hz << " Hz, emulated " << emu_hz
+              << " Hz (ratio " << hz / emu_hz << "), scored refreshes=" << scored << '\n'
+              << "    original (game gate)  shadow visible " << original_on << "/" << scored << ", run lengths in refreshes:"
+              << histogram(original_runs) << '\n'
+              << "    sync (display parity) shadow visible " << sync_on << "/" << scored << ", run lengths in refreshes:"
+              << histogram(sync_runs) << "  consecutive-equal refreshes=" << repeats << '\n'
+              << "    sync visibility equals emulated-frame parity on " << parity_matches << "/" << scored << " refreshes\n"
+              << "    sample:\n" << sample.str();
+}
+
+void check_flicker_frame(const Machine &m, const SpriteUnits &units, FlickerInvariants &stats, uint64_t frame,
+                         SpriteRamState &latch, uint64_t attract_end) {
+    const SpritePresentation presentation = units.presentation();
+    const SpriteUnits::FrameShadow shadow = units.last_frame_shadow();
+    stats.per_frame.push_back({shadow.entries, shadow.objects, shadow.gate_set_objects});
+    ++stats.frames;
+    const auto fail = [&](const std::string &what) {
+        ++stats.violations;
+        if (stats.first_violation.empty()) stats.first_violation = "frame " + std::to_string(frame) + ": " + what;
+    };
+    SpriteRamState spliced_state = latch;
+    const auto real = decode(m, presentation, false, latch);
+    uint64_t real_tagged = 0;
+    for (const auto &e : real) real_tagged += (e.flags & sprite_flag_shadow) != 0;
+    stats.real_decode_tagged += real_tagged;
+    uint64_t carried = 0, decoded = 0;
+    if (!presentation.splices.empty()) {
+        const auto spliced = decode(m, presentation, true, spliced_state);
+        for (const auto &e : spliced) decoded += (e.flags & sprite_flag_shadow) != 0;
+        for (const SpriteSplice &splice : presentation.splices) {
+            if (!splice.flags.empty() && splice.flags.size() != splice.replacement.size() / 16)
+                fail("splice flags are not parallel to the replacement entries");
+            for (uint8_t flag : splice.flags) carried += (flag & sprite_flag_shadow) != 0;
+        }
+    }
+    stats.decoded_tagged += decoded;
+    stats.splice_tagged += carried;
+    if (decoded > carried + real_tagged) fail("decoded more tagged entries than the splices and real list carry");
+    if (shadow.entries) {
+        ++stats.frames_with_shadow;
+        ++(shadow.gate_set_objects ? stats.game_emitted_frames : stats.synthesized_frames);
+        if (frame < attract_end) ++stats.attract_frames_with_shadow;
+        if (!carried) fail("shadowed objects were detected but the presentation carries no tagged entry");
+    }
+}
+
 int run(const Args &args) {
     const auto registered = registered_sprite_behaviours();
     SpriteUnits::Options options;
@@ -288,6 +423,10 @@ int run(const Args &args) {
         }
         options.behaviours.push_back(found);
     }
+    if (args.flicker) {
+        const auto sources = registered_flicker_shadows();
+        options.flicker_shadows.assign(sources.begin(), sources.end());
+    }
     const bool full_detail = std::find(args.behaviours.begin(), args.behaviours.end(), "full-detail") !=
                              args.behaviours.end();
 
@@ -295,12 +434,16 @@ int run(const Args &args) {
     auto off = make_machine(args);
     on->sprite_units = std::make_unique<SpriteUnits>(*on, SpriteUnits::game_table(), options);
     if (!on->sprite_units->active()) throw std::runtime_error("game declares no emit units");
+    on->sprite_units->set_flicker_shadows(args.flicker);
+    const bool flicker = on->sprite_units->flicker_shadows_enabled();
+    FlickerInvariants shadows;
+    constexpr uint64_t attract_end = 700; // Inputs::step inserts the first coin at this frame
 
     Inputs inputs_on(args.seed), inputs_off(args.seed);
     InvariantStats invariants;
     std::string error;
     uint64_t state_compares = 0;
-    SpriteRamState latch;
+    SpriteRamState latch, flicker_latch;
     const auto diverged = [&](uint64_t frame, const char *what) {
         std::ostringstream ss;
         ss << "units on/off diverged at frame " << frame << " (" << what << "): on cycles=" << on->cpu.cycles
@@ -326,6 +469,7 @@ int run(const Args &args) {
             if (on->state_crc() != off->state_crc()) { diverged(frame, "state_crc"); break; }
         }
         if (full_detail) check_full_detail(*on, *on->sprite_units, invariants, frame, latch);
+        if (flicker) check_flicker_frame(*on, *on->sprite_units, shadows, frame, flicker_latch, attract_end);
     }
     if (error.empty()) {
         ++state_compares;
@@ -362,6 +506,42 @@ int run(const Args &args) {
         }
         if (invariants.compared == 0) { failed = true; std::cout << "FAIL: no splice footprints compared\n"; }
     }
+    if (flicker) {
+        const auto &f = report.flicker;
+        std::cout << "  flicker-shadow: frames=" << shadows.frames << " frames_with_shadow=" << shadows.frames_with_shadow
+                  << " game_emitted=" << shadows.game_emitted_frames << " synthesized_only=" << shadows.synthesized_frames
+                  << " attract_frames_with_shadow=" << shadows.attract_frames_with_shadow
+                  << " tagged_entries(splice/decoded)=" << shadows.splice_tagged << '/' << shadows.decoded_tagged
+                  << " real_tagged_decoded=" << shadows.real_decode_tagged
+                  << " real_entries=" << f.real_entries << " violations=" << shadows.violations + f.violations << '\n';
+        if (!shadows.first_violation.empty()) std::cout << "  first violation: " << shadows.first_violation << '\n';
+        if (shadows.violations || f.violations) {
+            failed = true;
+            std::cout << "FAIL: flicker-shadow invariant\n";
+        }
+        if (shadows.frames_with_shadow == 0 || f.invocations == 0) {
+            failed = true;
+            std::cout << "FAIL: no flicker shadow detected\n";
+        }
+        if (shadows.attract_frames_with_shadow == 0) { failed = true; std::cout << "FAIL: no flicker shadow detected in attract mode\n"; }
+        if (shadows.game_emitted_frames && shadows.decoded_tagged && !shadows.real_decode_tagged) {
+            failed = true;
+            std::cout << "FAIL: the game emitted shadows but no real entry was tagged\n";
+        }
+        if (!shadows.game_emitted_frames || !shadows.synthesized_frames) {
+            failed = true;
+            std::cout << "FAIL: shadows seen on frames of one game parity only\n";
+        }
+        if (args.shadow_trace) {
+            size_t i = 0;
+            while (i < shadows.per_frame.size() && !shadows.per_frame[i].entries) ++i;
+            std::cout << "  shadow trace (frame entries objects game_emitted_objects):\n";
+            for (size_t n = 0; n < args.shadow_trace && i < shadows.per_frame.size(); ++n, ++i)
+                std::cout << "    " << i + 1 << ' ' << shadows.per_frame[i].entries << ' ' << shadows.per_frame[i].objects << ' '
+                          << shadows.per_frame[i].gate_set << '\n';
+        }
+        if (args.present_model_hz > 0) present_model(shadows, args.present_model_hz);
+    }
     std::cout << std::dec << "frames=" << on->frame << " cycles=" << on->cpu.cycles << " native_blocks="
               << on->native_blocks << " state_compares=" << state_compares << " set=" << args.set << '\n'
               << (failed ? "FAIL" : "PASS") << '\n';
@@ -391,9 +571,13 @@ int main(int argc, char **argv) try {
         else if (arg == "--seed") args.seed = std::stoull(value());
         else if (arg == "--no-inputs") args.inputs = false;
         else if (arg == "--behaviour") args.behaviours.push_back(value());
+        else if (arg == "--no-flicker-shadows") args.flicker = false;
+        else if (arg == "--shadow-trace") args.shadow_trace = std::stoull(value());
+        else if (arg == "--present-model") args.present_model_hz = std::stod(value());
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: " << argv[0] << " [--rom-dir DIR] [--set SET] [--frames N] [--compare-every N]\n"
-                         "       [--seed N] [--no-inputs] [--behaviour NAME]...\n"
+                         "       [--seed N] [--no-inputs] [--behaviour NAME]... [--no-flicker-shadows]\n"
+                         "       [--shadow-trace N] [--present-model DISPLAY_HZ]\n"
                          "Exits nonzero unless every unit replay is bit-exact, every sprite write is accounted\n"
                          "for, and emulated state is identical with sprite units on and off.\n";
             return 0;

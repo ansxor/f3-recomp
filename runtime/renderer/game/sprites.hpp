@@ -72,7 +72,7 @@ private:
     bool reg_bank_ = false;
 
     // Render-only splice view of the submitted/current lists (never serialized, so snapshots and
-    // CRCs match the canonical decode). Valid only when the last decode had splices.
+    // CRCs match the canonical decode). Valid only when the last decode had splices or tagged real entries.
     const SpritePresentation *presentation_ = nullptr;
     std::vector<SceneSprite> presented_submitted_, presented_current_;
     size_t presented_submitted_count_ = 0, presented_current_count_ = 0;

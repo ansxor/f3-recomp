@@ -144,7 +144,8 @@ void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionSt
         at[F3_SPRITE_SCALE_Y] = s.scale_y;
         at[F3_SPRITE_TILE] = s.tile;
         at[F3_SPRITE_PALETTE] = s.palette;
-        at[F3_SPRITE_FLIP] = (s.flip_x ? F3_SPRITE_FLIP_X : 0u) | (s.flip_y ? F3_SPRITE_FLIP_Y : 0u);
+        at[F3_SPRITE_FLIP] = (s.flip_x ? F3_SPRITE_FLIP_X : 0u) | (s.flip_y ? F3_SPRITE_FLIP_Y : 0u) |
+                             (s.shadow ? F3_SPRITE_SHADOW : 0u);
     }
     if (coefficients) encode_coefficients(*coefficients, w + F3_SCENE_INTERP);
 }

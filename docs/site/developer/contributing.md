@@ -94,10 +94,10 @@ Rules that must stay true:
 `GameVideo` decodes the scene from FDP video RAM at VBSTART; there are no code
 hooks. Adding support usually means one of two things.
 
-**A store of already-decoded video RAM.** In a `F3RT_VIDEO_WRITE_LOG` build, add
+**A store of already-decoded video RAM.** Find it with `--discovery-log`, then add
 the instruction address (or a tight range) to the component's known list in
-`games/<game>/video/<component>.cpp`. Until then the store is logged once to
-stderr by `log_unknown_video_write`, but it still decodes correctly next frame.
+`games/<game>/video/<component>.cpp`. Until then the store is logged once in
+the discovery log, but it still decodes correctly next frame.
 
 **A feature not decoded yet.** Extend a per-game decoder's `decode(vram)`, or the
 shared primitive in `runtime/renderer/decode.cpp`, then add the store PCs. Follow
@@ -108,7 +108,7 @@ old hook PCs are ordinary `[discovery] entry_points` in the game configuration
 when they are needed as proven seeds.
 
 An unknown display-memory writer is only logged, and only under
-`F3RT_VIDEO_WRITE_LOG`; it never invalidates a component. Genuine unsupported
+`--discovery-log`; it never invalidates a component. Genuine unsupported
 features (`flipped-screen`, `sprite-trails`, `bitmap-pivot`) use the FDP renderer
 for that frame and log once through `log_unsupported_video`.
 See `is_covered_write` in the `renderer/game/*.cpp` files.
@@ -126,7 +126,7 @@ The toolchain has Land Maker-specific contracts. Review each part below before a
 5. **Sound.** Compile the selected `[sound]` region with validated padding/mirroring, retaining generated image CRC binding. Review its memory map and native/oracle timing/audio evidence independently.
 6. **Top-level CMake.** Select the title through `F3_GAME`; generated directories use `generated/SET` and `generated/sound-SET`. Extend the accepted selection list for a genuinely new title.
 7. **Frontend.** `F3RT_GAME` marks strict-native title targets; default set and generated main/sound CRC guards must agree. Enhanced/game-data/HLE/netplay eligibility remains Japan-only.
-8. **Game-specific video.** `GameVideo` and its `games/<game>/video/` decoders are specific to Land Maker. A new game can use the FDP renderer (`--video fdp`) and needs no game-data scene.
+8. **Game-specific video.** `GameVideo` and its `games/<game>/video/` decoders are specific to Land Maker. A new game can use the FDP renderer (`--renderer accurate`) and needs no game-data scene.
 
 ::: info World set
 `games/landmakr/config.toml` describes the World main ROM lanes.

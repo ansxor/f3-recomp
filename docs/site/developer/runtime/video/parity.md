@@ -81,7 +81,7 @@ startup guarantee.
 
 The recorded oracle attract captures compare exactly with 25 retained MAME frames. The comparison covers 1,856,000 RGB pixels, with zero mismatches and zero maximum channel error.
 
-The recorded `--video game` attract captures also match all 25 retained frames. All samples occur after the last startup fallback.
+The recorded `--renderer game-cpu` attract captures also match all 25 retained frames. All samples occur after the last startup fallback.
 
 Both modes record native CRC `0xb490d7d9` at frame 3480. They execute 49,866,062 native blocks with zero CPU fallback.
 
@@ -105,8 +105,7 @@ Permanent checks retain tile reversal, sprite quantization, and the top-edge cul
 ## Write-log injection and fallback transitions
 
 Write logging and renderer fallback are separate. A store from an unknown PC is
-only reported by `log_unknown_video_write`, and only in a `F3RT_VIDEO_WRITE_LOG`
-build; it never invalidates a layer and never forces a fallback. A two-machine
+only reported by `--discovery-log`; it never invalidates a layer and never forces a fallback. A two-machine
 smoke that injects an unknown PF0 writer keeps both native images equal across
 all frames.
 
@@ -154,7 +153,7 @@ Mosaic state is decoded and compared. No nontrivial mosaic animation is claimed 
 | Bitmap pivot | Whole-frame `bitmap-pivot` fallback |
 | Global screen flip | Whole-frame `flipped-screen` fallback, despite decoded command and descriptor fields |
 | Retained sprite framebuffer | Whole-frame `sprite-trails` fallback |
-| Store from an unknown PC | Logged once by `log_unknown_video_write` under `F3RT_VIDEO_WRITE_LOG`; nothing invalidated, no hardware-value readback |
+| Store from an unknown PC | Logged once under `--discovery-log`; nothing invalidated, no hardware-value readback |
 | Sprite grid above 32x32 or batch above 1024 | Component rejection, not accepted truncation |
 
 Expanded unsupported frames show the exact integer-scaled oracle image in the center with black added columns. They do not invent geometry.

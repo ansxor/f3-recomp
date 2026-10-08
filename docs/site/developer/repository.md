@@ -141,7 +141,7 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/renderer/fdp/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp) | FDP software renderer (`Video`). It reads the emulated FDP RAM. It is the oracle for the game-data renderer. |
 | [`runtime/renderer/game/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp) | `GameVideo`: decodes the scene from video RAM at VBSTART, decides when to fall back to `Video`. |
 | [`runtime/renderer/decode.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/decode.cpp) | Generic VRAM decode: char-RAM tile unpack and sprite display-list walk. |
-| [`games/landmakrj/video/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp) | Per-game debug `observe_game_video_write` store-PC lists. |
+| [`games/landmakrj/video/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/video/video.cpp) | Per-game `video_writer_known` store-PC lists for `--discovery-log`. |
 | [`runtime/renderer/game/scene.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/scene.hpp) | Shared scene types: `VideoRam`, `ScenePixel`, `SceneSprite`, `SceneLayer`, `ScenePlayfield`, `SceneClip`, `SceneRow`. |
 | [`runtime/renderer/game/tiles.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.cpp) | Playfield tile maps snapshotted from FDP video RAM (shared `decode`). |
 | [`runtime/renderer/game/tiles.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/tiles.hpp) | `GameTiles` declaration. |

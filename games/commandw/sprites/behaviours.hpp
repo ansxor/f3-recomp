@@ -32,4 +32,24 @@ F3RT_SPRITE_BEHAVIOUR(full_detail, sprite_units::objects,
 
 inline constexpr std::array<const SpriteBehaviour *, 1> behaviours{&full_detail};
 
+// Shadows under objects are drawn translucent by flicker: the game emits the shadow entries only
+// on alternate frames of its own frame counter.
+//
+//   0x680a  addq.w #1,-$7cd8(a5)    main loop, once per game frame (a5 = 0x410000, so the counter
+//                                   word is 0x408328 and its low byte, bit 0 = parity, 0x408329)
+//   0x9b32  object compile: `btst #7,$1(a6)` (object has a shadow) -> else straight to 0x9d32;
+//   0x9b42  `btst #0,-$7cd7(a5)` (counter parity) -> else straight to 0x9d32 (no shadow this frame)
+//   0x9b4c..0x9d30  shadow entries from $40 (descriptor), $42-$44 (offsets), flip/anchor bits;
+//                   the shadow's own tiles are emitted first, 0x9d32.. then compiles the object body.
+// So the shadow exists on every other game frame (counter bit 0 set) and nothing but that parity
+// gates it. The source forces the parity bit in the replay (shadows exist every frame, tagged) and
+// tags every entry written by PCs 0x9b32..0x9d31 (the subroutines called from the span at
+// 0xa30e/0xa31e only adjust a0/a2 and write no sprite RAM).
+F3RT_FLICKER_SHADOW(object_shadow, sprite_units::objects,
+    "Object shadows: byte1 bit 7 of the record, emitted by the game only on odd counter parity",
+    0x9b32, 0x9d31, UnitRegister::A5, -0x7cd7, 0x01,
+    [](const Unit<sprite_units::objects> &object) { return (object.u8<1>() & 0x80) != 0; });
+
+inline constexpr std::array<const FlickerShadow *, 1> flicker_shadows{&object_shadow};
+
 } // namespace f3rt::game_sprites

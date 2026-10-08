@@ -141,7 +141,7 @@ flowchart TB
     BUS --> IN
     BUS --> EE
     BUS -->|"sound mailbox: shared RAM at 0xc00000"| AU
-    BUS -->|"write notifications (F3RT_VIDEO_WRITE_LOG only)"| GV
+    BUS -->|"write notifications (--discovery-log only)"| GV
     BUS -->|"video RAM"| GV
     SCH -->|"at vblank"| GV
     SCH -->|"at vblank, or fallback"| FDP
@@ -316,7 +316,7 @@ The project uses these reference paths:
 | --- | --- | --- | --- |
 | Main CPU | Generated C blocks (`f3_dispatch`) | Musashi 68EC020, run one instruction at a time (`Interpreter::run_main`) | Run `f3rt-run` without `--translated`. `Machine::run_frame(false)` is the reference loop. |
 | Sound CPU | Compiled sound driver (`SoundNative`) | Musashi 68000 (`Interpreter::run_audio`) | `--sound-driver oracle` |
-| Video | `GameVideo` (game-data HLE) | `Video` (FDP software renderer) | `--video fdp`. `--video compare` checks supported scenes against FDP output. Unsupported frames use FDP output. |
+| Video | `GameVideo` (game-data HLE) | `Video` (FDP software renderer) | `--renderer accurate`. `--renderer compare-cpu` checks supported scenes against FDP output. Unsupported frames use FDP output. |
 | Whole machine | `f3rt` | MAME (external emulator) | Capture with `tools/mame/`, then compare. |
 | Netplay | Two clients with rollback | One machine that uses the same input schedule (`f3rt-netplay-oracle --mode reference`) | `tools/run_netplay_oracle.py` |
 

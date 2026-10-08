@@ -50,10 +50,10 @@ decoder always produces a complete texture from the current bytes.
 
 ## Write log
 
-With `F3RT_VIDEO_WRITE_LOG`, the per-game `observe_game_video_write` watches
-`0x61c000..0x61ffff` (map and glyph RAM) for text. If `pc` is one of the known
-store PCs in `text_covered_write` (`games/landmakrj/video/video.cpp`), it returns. Otherwise it
-calls `log_unknown_video_write("text", pc, address, frame)`. The store still
+With `--discovery-log`, stores to `0x61c000..0x61ffff` (map and glyph RAM) are the
+`text` layer. If `pc` is one of the known
+store PCs in `text_covered_write` (`games/landmakrj/video/video.cpp`, via `video_writer_known`), nothing is logged. Otherwise a
+`NEW video-write layer=text` line is written. The store still
 happens, and the next VBSTART snapshots it; no state is invalidated. See
 [Video write logging](/developer/runtime/video/producers).
 

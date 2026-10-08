@@ -3,16 +3,16 @@
 ## Decision and supported surface
 
 Opt-in **`--motion-interp`**, default off, CLI-only. Implemented on SDL3 GPU
-presentation (`--video-backend gpu`, `--video game|compare`); measured on
+presentation (`--renderer enhanced`; developer `compare-gpu`); measured on
 macOS arm64 / Cocoa / Metal. CPU/FDP presentation is not interpolated.
 Headless execution, native dumps, replay data and machine/netplay snapshots
 remain canonical. Game-data video still requires strict-native `landmakrj`;
 this feature does not permit `--allow-fallback`.
 
 ```sh
-./build/landmakr --video-backend gpu --video-scale auto-integer --motion-interp
+./build/landmakr --renderer enhanced --video-scale auto-integer --motion-interp
 # Independent spatial line sampling can be combined with temporal motion:
-./build/landmakr --video-backend gpu --video-scale 3 \
+./build/landmakr --renderer enhanced --video-scale 3 \
   --video-interp fit --motion-interp
 ```
 
@@ -108,6 +108,15 @@ retain the native replication rule. Spatial interpolation analyzes the
 control/clip and palette safety checks. Alpha 1 uses the original shader path.
 
 ## Presentation clock and discontinuities
+
+Games with flicker shadows ([SPRITE-UNITS.md](SPRITE-UNITS.md#flicker-shadows)) use the same
+display pacing, without temporal history, when the GPU backend runs windowed: the frontend calls
+`GpuVideo::enable_display_pacing()` and redraws every display tick so shadow visibility
+alternates per refresh. `--motion-interp` implies it. GPU backend with game video only.
+
+The wait on the display link is bounded to 50 ms; a timeout marks the link dead and presentation
+falls back to the native-frame timer (emulation is never throttled below 58.94 Hz by a hidden or
+occluded window; this also applies to `--motion-interp`), polling for ticks to resume display pacing.
 
 The frontend gates solo native steps against the existing monotonic native
 frame period. On macOS 14+, opt-in motion creates an `NSWindow` `CADisplayLink`,
@@ -324,7 +333,7 @@ animation.
 ## Initial live-window attempt counts (`c45da19b`)
 
 ```sh
-build/landmakr --video game --video-backend gpu --video-scale 3 \
+build/landmakr --renderer enhanced --video-scale 3 \
   --motion-interp --frames 1800 --no-audio --audio-backend accurate \
   --sound-driver native --config build/motion-evidence/clean.cfg \
   --surface build/motion-evidence/clean-final.png \
@@ -351,7 +360,7 @@ SHA-256 of `clean.wav`, `headless-off.wav` and `headless-on.wav`:
 9053a75ab08a394aa4a8c021e94d82d61090f5e76708803295f40c755092d2cc
 ```
 
-Headless commands use `--video game --video-backend gpu --headless --frames
+Headless commands use `--renderer enhanced --headless --frames
 1800 --audio-backend accurate --sound-driver native`, with/without
 `--motion-interp`, distinct WAV/dump destinations and `--dump-start 1800`.
 No window/GPU temporal history is created in either run.
@@ -389,7 +398,7 @@ A separate `build/cpu-only` build with `F3RT_GPU=OFF`, reusing generated CPU
 sources, succeeds. Its 600-frame CPU/headless native smoke has frame CRC
 `e384aa4b`, 10,999,398 native blocks, zero CPU fallback. GPU-disabled headless
 motion flags also execute canonically. CPU plus `--motion-interp` is rejected
-with `--motion-interp requires --video-backend gpu`; game video plus
+with `--motion-interp requires --renderer enhanced or compare-gpu`; game video plus
 `--allow-fallback` remains rejected with `Game-data video requires strict
 native landmakrj`.
 

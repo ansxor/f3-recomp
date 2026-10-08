@@ -56,8 +56,8 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | Effect of `--allow-fallback` | Detail |
 | --- | --- |
 | Machine setting | Sets `Machine::allow_main_fallback` to true. Without it, an untranslated instruction stops the program with `Untranslated main CPU instruction at PC ...`. |
-| Default video in `landmakr` | Becomes `fdp` unless you explicitly choose another mode. The game-data renderer needs the strict native path. |
-| `--video game` or `--video compare` | Rejected with `Game-data video requires strict native landmakrj`. |
+| Default renderer in `landmakr` | Becomes `accurate`. The game-data renderers need the strict native path. |
+| `--renderer enhanced`, `game-cpu`, `compare-cpu` or `compare-gpu` | Rejected with `Game-data video requires strict native execution`. |
 | Netplay | Rejected. See the netplay rules below. |
 | Counting | The program counts fallback instructions. `--fallback-report` writes the count for each address. |
 
@@ -81,22 +81,22 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--sound-trace` | `FILE` | none | Write a bus trace of the sound CPU in the F3SND2 format | Accurate audio only; netplay rejects this flag. Decode the trace with `tools/decode_sound.py`. |
 | `--sound-driver` | `oracle` or `native` | See the table above | Choose sound CPU execution for accurate audio, not a sound-device backend | `oracle` interprets the sound ROM with Musashi; `native` executes its recompiled C, not HLE. Both use the same MAME-derived devices. Native needs a generated sound program (`F3_ROM_DIR`). Explicit selection chooses accurate audio unless an incompatible explicit HLE selection was also given. |
 | `--profile-out` | `FILE` | none | Merge versioned main/sound entry counts, atomically flush every 30 seconds and on exit | Requires `F3_PROFILE_INSTRUMENT=ON` and strict native main/sound execution. Relative destinations are fixed against the startup working directory, including after later cwd changes. Slim builds also accept it for immediate `miss` records; cold aborts always append a durable `.cold-hits` log (or `f3-cold-hits.log` without this flag). Concurrent writers must use separate paths and merge later. |
+| `--discovery-log` | `FILE` | none | Record game routines the video HLE does not know about, from normal play or headless: sprite-RAM writes outside emit units from PCs not in `[video.frame_writers]` (`sprite-stray`), graphics/control writes from PCs without a documented producer (`video-write`) and oracle fallback frames (`video-fallback`) | Host-only and observe-only: cycles, `native_blocks` and CRCs equal a run without it. Each unique PC is written (and flushed) once on first sight with frame, address and wall time, with a summary at exit; see [the discovery log](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/WORKFLOWS.md#discovery-log). `sprite-stray` needs strict native execution and a game with emit units; `video-fallback` needs a game-data renderer. |
 | `--fallback-report` | `TSV` | none | Write a tab-separated list of `pc` and `count` for every instruction that used fallback | Diagnostic reporting does not permit interpreter fallback in netplay. |
 | `--dump-dir` | `DIR` | none | Write the machine state to `DIR/frame_NNNN/` | Files: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `rendered.bmp`, `cpu.json`. |
 | `--dump-start` | `N` | `1` | First frame to dump | |
 | `--dump-every` | `N` | `1` | Dump every N frames | `0` is an error. |
 | `--surface` | `BMP` or GPU `PNG` | none | Save the CPU window surface or GPU internal-resolution image at `--frames` | Window runs only. Native dumps remain CPU-produced. |
-| `--video` | `fdp`, `game` or `compare` | `fdp`. In `landmakr` strict native: `game` | Choose the video renderer | `fdp` is the MAME-derived video-memory reference, not physical-chip verification. `game` reads Land Maker scene data. `compare` checks supported game-renderer frames against the reference. `game` and `compare` need strict native `landmakrj`. |
-| `--video-scale` | `1` to `4`, `auto` or `auto-integer` | `1` | Fixed or window-pixel-following internal scale | Auto modes require GPU. `auto` ceil-fits then aspect-scales with the selected filter; `auto-integer` floor-fits then presents exact nearest integer pixels with black bars. All clamp to 1–4; border counts in the fit. Headless auto stays at scale 1. |
-| `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs `--video game` or `compare`. |
-| `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs `--video game` or `compare` if you choose `linear`. |
-| `--video-backend` | `cpu` or `gpu` | `cpu` | Presentation backend; GPU uses SDL3 GPU | GPU needs game/compare and `F3RT_GPU` build support. Headless still uses CPU. |
-| `--video-interp` | `off`, `linear` or `fit` | `off` | Opt-in validated GPU line sampling on all four playfields | Non-off needs GPU; scale 1/headless stay exact. Both modes preserve native subrow-zero and unflagged samples. |
+| `--renderer` | `accurate`, `enhanced` (user-facing); `game-cpu`, `compare-cpu`, `compare-gpu` (developer-only) | `enhanced` in `landmakr` (strict native, GPU-enabled build); otherwise `accurate` | Choose the renderer. Saved as `renderer=` in the settings file (only `accurate` or `enhanced`) and in F1 → Video | `accurate` is the MAME-derived video-memory reference (CPU), not physical-chip verification. `enhanced` is the game-data renderer composited on the GPU; the only renderer with scale/border/interpolation/post-processing and display-rate presentation. `game-cpu` is the same scene composited on the CPU (the parity baseline for native pixels/CRCs). `compare-cpu`/`compare-gpu` also check supported game-renderer frames against the reference. If the renderer came from the default or settings file and the GPU cannot start, the frontend warns and falls back to `accurate`; an explicit `--renderer` never falls back. Everything except `accurate` needs strict native `landmakrj`; `enhanced`/`compare-gpu` open a window only with `F3RT_GPU` build support (headless always works). Other value: `--renderer must be accurate, enhanced, game-cpu, compare-cpu or compare-gpu`. Presentation is never part of native state: all renderers give identical frame CRCs, cycles and native blocks. |
+| `--video-scale` | `1` to `4`, `auto` or `auto-integer` | `1` | Fixed or window-pixel-following internal scale | Auto modes require `enhanced` or `compare-gpu`. `auto` ceil-fits then aspect-scales with the selected filter; `auto-integer` floor-fits then presents exact nearest integer pixels with black bars. All clamp to 1–4; border counts in the fit. Headless auto stays at scale 1. |
+| `--video-border` | `0` to `160` | `0` | Extra scene columns on each side of the 320-column picture | Else: `--video-border must be 0..160`. Needs a game-data renderer (not `accurate`). |
+| `--video-filter` | `nearest` or `linear` | `nearest` | Texture filter for the window | Needs a game-data renderer (not `accurate`) if you choose `linear`. |
+| `--video-interp` | `off`, `linear` or `fit` | `off` | Opt-in validated GPU line sampling on all four playfields | Non-off needs `enhanced` or `compare-gpu`; scale 1/headless stay exact. Both modes preserve native subrow-zero and unflagged samples. |
 | `--video-interp-fields` | `none`, `geometry`, `palette`, `geometry,palette` | `geometry` | Independent geometry sampling and same-pen RGB palette-bank blending | Palette blending invents colors; alpha/clip/mosaic/priority and column jumps stay discrete. Sprite zoom already samples ROM texels at internal scale in every mode. |
-| `--motion-interp` | none | off | Experimental temporal sprite, playfield/line and text-scroll interpolation at display refresh | Requires GPU game/compare. One native frame of positional latency; discontinuities snap. Headless remains canonical; unthrottled uses current geometry. Independent of `--video-interp`; CLI-only, not a saved preference. Two-second logs report mode/request/callback Hz, drawable submissions/s and interpolation/candidate/rejection rates. |
+| `--motion-interp` | none | off | Experimental temporal sprite, playfield/line and text-scroll interpolation at display refresh | Requires `enhanced` or `compare-gpu`. One native frame of positional latency; discontinuities snap. Headless remains canonical; unthrottled uses current geometry. Independent of `--video-interp`; CLI-only, not a saved preference. Two-second logs report mode/request/callback Hz, drawable submissions/s and interpolation/candidate/rejection rates. |
 | `--config` | `FILE` | SDL preferences directory `settings.cfg` | Preferences path | Loads before CLI overrides; save explicitly in F1. States/screenshots use sibling directories. |
 | `--volume` | `0` to `100` | `100` | Host output percentage | Does not alter simulation or confirmed PCM. |
-| `--postprocess` | `off`, `crt` or `user` | `off` | GPU postprocess | Inactive on CPU; affects presentation/screenshots, not native pixels or menu. |
+| `--postprocess` | `off`, `crt` or `user` | `off` | GPU postprocess | Inactive unless `enhanced`; affects presentation/screenshots, not native pixels or menu. |
 | `--user-shader` | `FILE.metal` or `FILE.spv` | none | User postprocess file | Metal entry `f3_postprocess`; Vulkan entry `main`. See [shader ABI/examples](/guide/video#f1-shaders-and-live-controls). |
 | `--netplay-host` | none | off | Ready as canonical snapshot host | Exactly one host per room; independent of slot. |
 | `--netplay-join` | none | off | Ready as guest | Loads host handoff before rollback begins. |
@@ -119,11 +119,11 @@ The program checks these rules in this order.
 2. `--headless` needs `--frames`.
 3. The sound driver must be `oracle` or `native`, and the audio backend must be `accurate` or `hle`. HLE rejects explicit `--sound-driver` and sound tracing.
 4. In a title executable, `--set` must match the selected `F3_GAME`. HLE is Japan-only.
-5. The video mode must be `fdp`, `game` or `compare`.
-6. `game` and `compare` need `--set landmakrj`, native execution and no `--allow-fallback`.
+5. The renderer must be `accurate`, `enhanced`, `game-cpu`, `compare-cpu` or `compare-gpu`.
+6. Every renderer except `accurate` needs `--set landmakrj`, native execution and no `--allow-fallback`.
 7. The video filter must be `nearest` or `linear`.
-8. In `fdp` mode, a scale other than 1, a border other than 0, or the filter `linear` is an error: `Presentation enhancements require --video game or compare`.
-   GPU presentation also requires `game` or `compare`; automatic scale modes require GPU. Non-off interpolation requires GPU, and interpolation fields must be one of the listed values.
+8. With `accurate`, a command-line scale other than 1, border other than 0, or the filter `linear` is an error: `Scale, border and filter options require --renderer enhanced (or a developer game/compare renderer)`. Saved values of these settings are ignored under `accurate`.
+   Automatic scale modes and non-off interpolation require `enhanced` or `compare-gpu`, and interpolation fields must be one of the listed values.
 9. In netplay mode, the server and the room must be set.
 10. Instrumented collection requires strict native main and sound CPUs. Profile-slim rejects interpreter execution, `--allow-fallback` and oracle sound.
 

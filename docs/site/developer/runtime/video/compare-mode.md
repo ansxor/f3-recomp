@@ -1,6 +1,6 @@
 # Compare mode and layer diagnostics
 
-The runtime has two different comparison paths. Frontend `--video compare` checks final native RGB every supported frame. `compare_layers` checks source layers at selected frames.
+The runtime has two different comparison paths. Frontend `--renderer compare-cpu` / `compare-gpu` checks final native RGB every supported frame. `compare_layers` checks source layers at selected frames.
 
 Sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), [gameplay_regression.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
 
@@ -8,8 +8,8 @@ Sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/rende
 
 | Path | `GameVideoMode` | Native output | Automatic checks |
 | --- | --- | --- | --- |
-| Frontend `--video game` | `Game` | Game RGB on supported frames, oracle otherwise | None |
-| Frontend `--video compare` | `Compare` | Oracle on every frame | Native composite RGB on every supported frame |
+| Frontend `--renderer enhanced` / `game-cpu` | `Game` | Game RGB on supported frames, oracle otherwise | None |
+| Frontend `--renderer compare-cpu` / `compare-gpu` | `Compare` | Oracle on every frame | Native composite RGB on every supported frame |
 | Gameplay `--video-diff` | `Diagnostic` | Oracle on every frame | `compare_layers` at the harness sample schedule |
 
 `Diagnostic` is the constructor default. It reconstructs scenes but does not automatically compare them.

@@ -73,6 +73,9 @@ struct SceneSprite {
     // Owning invocation identity shared by all parts of one object (0 = unknown); render-only and
     // excluded from equality like `identity`. Motion uses it for the per-object rigid check.
     uint64_t object = 0;
+    // Render-only flicker shadow tag (sprite_flag_shadow: written by the game's shadow emit path); the
+    // GPU presenter picks its visibility per presented frame. Excluded from equality like `identity`.
+    bool shadow = false;
     bool operator==(const SceneSprite &o) const {
         return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y && tile == o.tile &&
                palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;

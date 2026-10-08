@@ -139,6 +139,21 @@ struct GpuVideo::Impl {
     bool vsync = true;
     bool last_presented = false;
     bool motion_pace_prepared = false;
+    bool display_pacing = false;
+    // The display link stops while the window is hidden/occluded. A wait that times out marks it dead: from
+    // then on nothing blocks on it (callers pace on the native-frame timer) until a tick shows up again.
+    bool display_link_alive = true;
+    bool wait_display_tick() {
+#ifdef __APPLE__
+        if (!motion_pacing || !vsync) return false;
+        if (display_link_alive) {
+            display_link_alive = wait_macos_motion_pacing(motion_pacing);
+            return display_link_alive;
+        }
+        display_link_alive = poll_macos_motion_pacing(motion_pacing); // a recovered link is waited on next time
+#endif
+        return false;
+    }
 #ifdef __APPLE__
     void *motion_pacing = nullptr;
 #endif
@@ -161,6 +176,7 @@ struct GpuVideo::Impl {
     SDL_GPUTexture *sprite_plane = nullptr, *surface = nullptr;
     SDL_GPUSampler *sampler = nullptr;
     SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr, *interpolation_pipeline = nullptr;
+    uint64_t presented_frames = 0; // accepted swapchain submissions; drives flicker_shadow_visible
     SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr;
     std::vector<uint32_t> saved_pixels;
     Postprocess postprocess = Postprocess::Off;
@@ -412,7 +428,8 @@ struct GpuVideo::Impl {
     }
     SDL_GPURenderPass *render_pass(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target) {
         SDL_GPUColorTargetInfo info{};
-        info.texture = target; info.load_op = SDL_GPU_LOADOP_CLEAR; info.store_op = SDL_GPU_STOREOP_STORE;
+        info.texture = target; info.load_op = SDL_GPU_LOADOP_CLEAR;
+        info.store_op = SDL_GPU_STOREOP_STORE;
         info.clear_color = {0, 0, 0, 1}; info.cycle = true;
         return checked(SDL_BeginGPURenderPass(command, &info, 1, nullptr), "Begin GPU render pass");
     }
@@ -492,7 +509,7 @@ struct GpuVideo::Impl {
         }
         if (frame_start) {
 #ifdef __APPLE__
-            if (vsync && !pace_prepared && !skip_busy) wait_macos_motion_pacing(motion_pacing);
+            if (vsync && !pace_prepared && !skip_busy) wait_display_tick();
 #endif
             if (window && !no_present && !skip_busy) {
                 if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
@@ -545,8 +562,13 @@ struct GpuVideo::Impl {
         uniforms.pf_tile_count = pf_asset_bytes / 256; uniforms.sp_tile_count = sp_asset_bytes / 256;
         if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
             uniforms.layer_mask |= motion_layer_mask;
+        // Flicker shadows (SceneSprite::shadow): visibility is decided here, per presented frame, never
+        // from the emulated frame: tagged shadows are drawn on even accepted drawables and skipped on odd ones.
+        const bool hide_shadows = !scene.fallback && scene.shadow_count != 0 && !flicker_shadow_visible(presented_frames);
         if (!scene.fallback) {
-            SDL_PushGPUVertexUniformData(command.value, 0, &uniforms, sizeof(uniforms));
+            GpuUniforms pass_uniforms = uniforms;
+            if (hide_shadows) pass_uniforms.layer_mask |= F3_MASK_HIDE_SHADOW;
+            SDL_PushGPUVertexUniformData(command.value, 0, &pass_uniforms, sizeof(pass_uniforms));
             auto *pass = render_pass(command.value, sprite_plane);
             SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
             if (!options.expanded()) {
@@ -645,6 +667,7 @@ struct GpuVideo::Impl {
         if (capture.texture) {
             capture.fence = checked(SDL_SubmitGPUCommandBufferAndAcquireFence(command.take()), "Submit window capture");
             last_presented = command.acquired_swapchain;
+            presented_frames += last_presented;
             if (!SDL_WaitForGPUFences(device, true, &capture.fence, 1)) fail("Wait for window capture");
             auto *pixels = checked(SDL_MapGPUTransferBuffer(device, capture.download, false), "Map window capture");
             capture.mapped = true;
@@ -656,6 +679,7 @@ struct GpuVideo::Impl {
             if (!output.empty()) finish_readback(command, output);
             else if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU frame");
             last_presented = command.acquired_swapchain;
+            presented_frames += last_presented;
         }
         rendered = true;
         rendered_post = apply_post;
@@ -676,6 +700,8 @@ const char *GpuVideo::driver() const { return SDL_GetGPUDeviceDriver(impl_->devi
 const InterpolationStats &GpuVideo::last_interpolation() const { return impl_->interpolation_stats; }
 void GpuVideo::set_scale(unsigned scale) { impl_->set_scale(scale); }
 void GpuVideo::set_scale_mode(VideoScaleMode mode) { impl_->scale_mode = mode; }
+uint64_t GpuVideo::presented_frames() const { return impl_->presented_frames; }
+void GpuVideo::set_presented_frames(uint64_t count) { impl_->presented_frames = count; }
 SDL_GPUDevice *GpuVideo::device() const { return impl_->device; }
 void GpuVideo::set_linear(bool linear) { impl_->linear = linear; }
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
@@ -694,15 +720,20 @@ bool GpuVideo::present(const CapturedFrame &scene) {
     impl_->draw(scene, {}, all_layers, false, false, 1.0f, nullptr, {}, Impl::Presentation::SkipBusy);
     return impl_->last_presented;
 }
+void GpuVideo::enable_display_pacing() {
+    if (impl_->display_pacing) return;
+    if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))
+        fail("Set temporal GPU queue depth");
+#ifdef __APPLE__
+    if (impl_->window && impl_->vsync)
+        impl_->motion_pacing = create_macos_motion_pacing(impl_->window);
+#endif
+    impl_->display_pacing = true;
+}
 void GpuVideo::capture_motion(const CapturedFrame &scene, uint64_t frame) {
     if (!impl_->motion) {
-        if (impl_->window && !SDL_SetGPUAllowedFramesInFlight(impl_->device, 1))
-            fail("Set temporal GPU queue depth");
+        enable_display_pacing();
         impl_->motion = std::make_unique<GpuMotionHistory>(impl_->options);
-#ifdef __APPLE__
-        if (impl_->window && impl_->vsync)
-            impl_->motion_pacing = create_macos_motion_pacing(impl_->window);
-#endif
     }
     impl_->motion->capture(scene, frame);
     impl_->comparison_native_valid = false;
@@ -716,10 +747,8 @@ void GpuVideo::reset_motion() {
 const MotionInterpolationStats &GpuVideo::last_motion() const { return impl_->motion_stats; }
 bool GpuVideo::pace_motion() {
 #ifdef __APPLE__
-    if (impl_->motion_pacing && impl_->vsync && !impl_->motion_pace_prepared) {
-        wait_macos_motion_pacing(impl_->motion_pacing);
-        impl_->motion_pace_prepared = true;
-    }
+    if (impl_->motion_pacing && impl_->vsync && !impl_->motion_pace_prepared)
+        impl_->motion_pace_prepared = impl_->wait_display_tick();
 #endif
     return impl_->motion_pace_prepared;
 }
