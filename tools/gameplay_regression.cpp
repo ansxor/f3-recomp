@@ -200,6 +200,7 @@ int main(int argc, char **argv) try {
     auto machine = std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir, set));
     auto &m = *machine;
     f3rt::BlockProfileSession profile(m.roms, profile_path);
+    if (!dump_dir.empty()) m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     if (!sound_trace_path.empty()) m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     if (audio_backend == "hle") m.audio->set_backend(f3rt::Audio::Backend::Hle);
     else if (sound_driver == "native") {

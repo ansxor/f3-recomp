@@ -138,7 +138,8 @@ enum Preference : uint32_t {
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
-    std::filesystem::path sound_trace_path,profile_path,config_path,discovery_path;
+    std::filesystem::path sound_trace_path,profile_path,config_path,discovery_path,inputs_path,watch_path,indirect_path;
+    std::vector<uint32_t> watch_entries;
     std::string set=F3RT_DEFAULT_SET;
     std::string renderer;
     std::string sound_driver="oracle";
@@ -165,6 +166,7 @@ int main(int argc,char **argv) try {
 #else
     bool allow_fallback=true;
 #endif
+    bool discovery_all=false;
     for(int i=1;i<argc;++i) {
         const std::string arg=argv[i];
         auto value=[&]() -> const char * { if(i+1>=argc)throw std::runtime_error("Missing value for "+arg);return argv[++i]; };
@@ -181,6 +183,18 @@ int main(int argc,char **argv) try {
         else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
         else if(arg=="--discovery-log")discovery_path=value();
+        else if(arg=="--discovery-all")discovery_all=true;
+        else if(arg=="--inputs")inputs_path=value();
+        else if(arg=="--watch-log")watch_path=value();
+        else if(arg=="--indirect-log")indirect_path=value();
+        else if(arg=="--watch-entries") {
+            std::string list=value();
+            for(size_t start=0;start<=list.size();) {
+                const size_t comma=std::min(list.find(',',start),list.size());
+                watch_entries.push_back(uint32_t(std::stoul(list.substr(start,comma-start),nullptr,16)));
+                start=comma+1;
+            }
+        }
         else if(arg=="--sound-driver") { sound_driver=value();cli_preferences|=SoundDriver; }
         else if(arg=="--audio-backend") { audio_backend=value();cli_preferences|=SoundBackend; }
         else if(arg=="--config")config_path=value();
@@ -235,6 +249,10 @@ int main(int argc,char **argv) try {
                      <<"  [--config FILE] [--volume 0..100] (user preferences load first; CLI overrides)\n"
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--discovery-log FILE] (host-only: log unhandled video writers/fallbacks seen during play; see docs)\n"
+                     <<"  [--discovery-all] (with --discovery-log: also log known writers (known=1) and unit-accounted sprite writes)\n"
+                     <<"  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM pokes; format in include/f3rt/input.hpp; disables fast boot)\n"
+                     <<"  [--watch-entries HEX,HEX --watch-log FILE] (instrumented build with --profile-out: per-frame execution counts of those main-CPU instructions)\n"
+                     <<"  [--indirect-log FILE] (instrumented build with --profile-out: log observed targets of computed jmp/jsr sites)\n"
                      <<"  [--sound-trace FILE] [--sound-driver oracle|native] (default native in game executables; oracle in f3rt-run)\n"
                      <<"  [--audio-backend accurate|hle] (default accurate; HLE runs on its own thread at 48 kHz)\n"
                      <<"  [--renderer accurate|enhanced] (accurate: MAME-derived reference renderer; enhanced: game-data GPU renderer, needs strict native execution and games/<game>/video/)\n"
@@ -385,6 +403,12 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("Netplay requires --netplay-server and --netplay-room");
     if(netplay && (!translated || allow_fallback || !sound_trace_path.empty()))
         throw std::runtime_error("Netplay requires strict-native main execution without sound tracing");
+    if(netplay && !inputs_path.empty())throw std::runtime_error("--inputs is offline only");
+    if(watch_entries.empty()!=watch_path.empty())throw std::runtime_error("--watch-entries and --watch-log go together");
+    if(netplay && !watch_path.empty())throw std::runtime_error("--watch-entries is offline only");
+    if(netplay && !indirect_path.empty())throw std::runtime_error("--indirect-log is offline only");
+    std::optional<f3rt::InputScript> input_script;
+    if(!inputs_path.empty())input_script=f3rt::InputScript::load(inputs_path.string());
 #ifdef F3_PROFILE_SLIM_ENABLED
     if(allow_fallback || !translated || (audio_backend=="accurate" && sound_driver!="native"))
         throw std::runtime_error("Profile-slim requires strict native main and sound CPUs; no interpreter fallback");
@@ -397,6 +421,10 @@ int main(int argc,char **argv) try {
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     f3rt::BlockProfileSession profile(m.roms,profile_path);
+    std::unique_ptr<f3rt::EntryWatch> entry_watch;
+    if(!watch_path.empty())entry_watch=std::make_unique<f3rt::EntryWatch>(watch_path,profile,watch_entries);
+    std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
+    if(!indirect_path.empty())indirect_watch=std::make_unique<f3rt::IndirectWatch>(indirect_path,profile);
     if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
     if(audio_backend=="hle")m.audio->set_backend(f3rt::Audio::Backend::Hle);
     else if(sound_driver=="native") {
@@ -426,11 +454,15 @@ int main(int argc,char **argv) try {
             m.sprite_units->set_flicker_shadows(video_backend=="gpu" && m.game_video);
         }
     }
+    if(!dumpdir.empty()) {
+        m.sprite_writers=std::make_unique<std::array<uint32_t,0x1000>>();
+    }
     if(!discovery_path.empty()) {
         m.discovery=std::make_unique<f3rt::DiscoveryLog>(discovery_path.string(),m,
             "set="+set+" renderer="+(renderer.empty()?"default":renderer)+" exec="+(translated?"native":"interpreted")+
             " emit_units="+(m.sprite_units?"yes":"no")+" game_video="+(m.game_video?"yes":"no"));
         m.discovery->set_sprites_accounted_by_units(m.sprite_units!=nullptr);
+        m.discovery->set_log_all(discovery_all);
         if(m.sprite_units)m.sprite_units->set_discovery(m.discovery.get());
     }
     const bool shadows_active=m.sprite_units && m.sprite_units->flicker_shadows_enabled();
@@ -592,7 +624,7 @@ int main(int argc,char **argv) try {
     const bool fast_boot_active=boot && !netplay &&
         ((!headless && settings.fast_boot) || explicit_fast_boot) &&
         wav_path.empty() && dumpdir.empty() && sound_trace_path.empty() &&
-        profile_path.empty() && fallback_report.empty();
+        profile_path.empty() && fallback_report.empty() && inputs_path.empty();
     std::filesystem::path config_dir;
     if(!config_path.empty())config_dir=std::filesystem::absolute(config_path).parent_path();
     bool eeprom_enabled=false,eeprom_loaded=false,eeprom_generated=false;
@@ -797,6 +829,10 @@ int main(int argc,char **argv) try {
         std::array<f3rt::LocalInputWord,f3rt::local_player_count> local{};
         if(sdl.input && !sdl.ui->open())
             for(unsigned p=0;p<local.size();++p)local[p]=sdl.input->word(p);
+        if(input_script && !session && (!sdl.ui || !sdl.ui->open())) {
+            const auto scripted=input_script->words(m.frame+1);
+            for(unsigned p=0;p<local.size();++p)local[p]|=scripted[p];
+        }
         if(session) {
             const auto previous_rollbacks=session->rollback()?session->rollback()->rollback_count():0;
             const bool was_synchronized=session->synchronized();
@@ -838,6 +874,7 @@ int main(int argc,char **argv) try {
         } else if((!sdl.ui || !sdl.ui->open()) &&
                   (!motion_presentation || !throttle || std::chrono::steady_clock::now()>=next_frame)) {
             f3rt::apply_local_inputs(m,local);
+            if(input_script)input_script->poke(m,m.frame+1);
             if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
             advanced=true;
             if(motion_presentation && throttle) {
@@ -850,6 +887,7 @@ int main(int argc,char **argv) try {
             }
         }
         executed_frames+=advanced;
+        if(advanced && entry_watch)entry_watch->frame(m.frame);
 #ifdef F3RT_GPU
         if(motion_presentation)motion_readout.native+=advanced;
         if(motion_interp && motion_presentation && sdl.gpu && (advanced || motion_capture_pending)) {

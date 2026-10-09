@@ -1,5 +1,6 @@
 #include "block_profile.hpp"
 #include "f3rt/block_profile.h"
+#include <algorithm>
 #include <charconv>
 #include <cerrno>
 #include <cstdio>
@@ -15,9 +16,12 @@
 extern "C" {
 uint64_t *f3_profile_main_counts = nullptr;
 uint64_t *f3_profile_sound_counts = nullptr;
+int f3_profile_indirect_enabled = 0;
+void f3_profile_indirect(uint32_t site, uint32_t target);
 }
 namespace {
 f3rt::BlockProfileSession *active = nullptr;
+f3rt::IndirectWatch *active_indirect = nullptr;
 constexpr uint32_t bases[] = {0, 0xc00000};
 const char *names[] = {"main", "sound"};
 uint64_t add(uint64_t a, uint64_t b) {
@@ -179,6 +183,10 @@ void BlockProfileSession::flush() {
     }
     sync_file(temporary);
     std::filesystem::rename(temporary, output);
+    if (indirect_watch_) {
+        try { indirect_watch_->flush(); }
+        catch (const std::exception &error) { std::fprintf(stderr, "INDIRECT LOG FLUSH FAILED: %s\n", error.what()); }
+    }
 }
 void BlockProfileSession::tick() {
     if (!output.empty() && std::chrono::steady_clock::now() >= next_flush) {
@@ -197,6 +205,112 @@ void BlockProfileSession::record_miss(unsigned region, uint32_t crc, uint32_t ad
         }
     }
 }
+uint64_t BlockProfileSession::main_count(uint32_t address) const {
+    const size_t index = address >> 1;
+    return index < counts[0].size() ? counts[0][index] : 0;
+}
+
+EntryWatch::EntryWatch(const std::filesystem::path &path, const BlockProfileSession &session,
+                       std::vector<uint32_t> addresses)
+    : session_(session), addresses_(std::move(addresses)) {
+#if !defined(F3_PROFILE_INSTRUMENT) || !F3_PROFILE_INSTRUMENT
+    throw std::runtime_error("--watch-entries needs a -DF3_PROFILE_INSTRUMENT=ON build");
+#endif
+    if (session.path().empty()) throw std::runtime_error("--watch-entries needs --profile-out FILE (the counters live there)");
+    for (const uint32_t address : addresses_)
+        if (address & 1) throw std::runtime_error("--watch-entries addresses must be even instruction addresses");
+    file_ = std::fopen(path.c_str(), "w");
+    if (!file_) throw std::runtime_error("Cannot create entry watch log " + path.string());
+    std::fputs("# f3rt entry watch v1: ENTRY lines list frames (1-based) in which a watched instruction executed\n", file_);
+    for (const uint32_t address : addresses_) {
+        last_.push_back(session_.main_count(address));
+        std::fprintf(file_, "# watch pc=0x%06x\n", address);
+    }
+    std::fflush(file_);
+}
+
+EntryWatch::~EntryWatch() {
+    if (file_) std::fclose(file_);
+}
+
+void EntryWatch::frame(uint64_t frame) {
+    bool wrote = false;
+    for (size_t i = 0; i < addresses_.size(); ++i) {
+        const uint64_t total = session_.main_count(addresses_[i]);
+        if (total == last_[i]) continue;
+        std::fprintf(file_, "ENTRY pc=0x%06x frame=%llu hits=%llu total=%llu\n", addresses_[i],
+                     static_cast<unsigned long long>(frame), static_cast<unsigned long long>(total - last_[i]),
+                     static_cast<unsigned long long>(total));
+        last_[i] = total;
+        wrote = true;
+    }
+    if (wrote) std::fflush(file_);
+}
+
+IndirectWatch::IndirectWatch(const std::filesystem::path &path, BlockProfileSession &session)
+    : session_(session), path_(path.empty() ? path : std::filesystem::absolute(path)) {
+#if !defined(F3_PROFILE_INSTRUMENT) || !F3_PROFILE_INSTRUMENT
+    throw std::runtime_error("--indirect-log needs a -DF3_PROFILE_INSTRUMENT=ON build");
+#endif
+    if (session.path().empty()) throw std::runtime_error("--indirect-log needs --profile-out FILE (the counters live there)");
+    if (path_.empty()) throw std::runtime_error("--indirect-log needs a non-empty FILE");
+    if (!path_.parent_path().empty()) std::filesystem::create_directories(path_.parent_path());
+    active_indirect = this;
+    f3_profile_indirect_enabled = 1;
+    session_.register_indirect_watch(this);
+    flush(); // An initial atomic file also proves the destination is writable.
+}
+
+IndirectWatch::~IndirectWatch() {
+    session_.register_indirect_watch(nullptr);
+    f3_profile_indirect_enabled = 0;
+    active_indirect = nullptr;
+    try { flush(); }
+    catch (const std::exception &error) { std::fprintf(stderr, "INDIRECT LOG FLUSH FAILED: %s\n", error.what()); }
+}
+
+void IndirectWatch::record(uint32_t site, uint32_t target) {
+    const uint64_t key = (static_cast<uint64_t>(site) << 32) | target;
+    auto &count = counts_[key];
+    if (count != UINT64_MAX) ++count;
+}
+
+void IndirectWatch::flush() {
+    if (path_.empty()) return;
+    const std::filesystem::path temporary = path_.string() + ".tmp";
+    {
+        std::ofstream file(temporary, std::ios::trunc);
+        if (!file) throw std::runtime_error("Cannot open indirect log: " + temporary.string() + ": " + std::strerror(errno));
+        file << "# f3rt indirect targets v1\n";
+        struct Item {
+            uint32_t site;
+            uint32_t target;
+            uint64_t count;
+        };
+        std::vector<Item> items;
+        items.reserve(counts_.size());
+        for (const auto &[key, count] : counts_) {
+            items.push_back({static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key & 0xffffffffu), count});
+        }
+        std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
+            if (a.site != b.site) return a.site < b.site;
+            return a.target < b.target;
+        });
+        char buf[128];
+        for (const auto &item : items) {
+            std::snprintf(buf, sizeof(buf), "INDIRECT site=0x%06x target=0x%06x count=%llu\n",
+                          item.site, item.target, static_cast<unsigned long long>(item.count));
+            file << buf;
+        }
+        file.flush();
+        if (!file) throw std::runtime_error("Indirect log write failed: " + temporary.string() + ": " + std::strerror(errno));
+    }
+    sync_file(temporary);
+    std::filesystem::rename(temporary, path_);
+}
+}
+extern "C" void f3_profile_indirect(uint32_t site, uint32_t target) {
+    if (active_indirect) active_indirect->record(site, target);
 }
 extern "C" [[noreturn]] void f3_profile_cold_abort(unsigned region, uint32_t crc, uint32_t address) {
     const auto log_path = active ? active->path().string() + ".cold-hits" : "f3-cold-hits.log";

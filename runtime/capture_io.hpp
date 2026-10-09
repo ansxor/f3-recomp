@@ -51,6 +51,11 @@ inline void dump_machine(const Machine &m, const std::filesystem::path &root) {
     write_bytes(dir/"shared.bin",m.shared);
     write_argb(dir/"rendered.argb",m.native_pixels());
     write_bmp(dir/"rendered.bmp",m.native_pixels());
+    if (m.sprite_writers) {
+        std::ofstream sw(dir/"sprite_writers.bin", std::ios::binary);
+        for (uint32_t pc : *m.sprite_writers) le32(sw, pc);
+        if (!sw) throw std::runtime_error("Sprite writers write failed");
+    }
     std::ofstream state(dir/"cpu.json");
     state << "{\"frame\":" << m.frame << ",\"cycles\":" << m.cpu.cycles
           << ",\"pc\":" << m.cpu.pc << ",\"sr\":" << m.cpu.sr << ",\"d\":[";

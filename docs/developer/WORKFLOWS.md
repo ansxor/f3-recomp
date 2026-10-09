@@ -45,6 +45,59 @@ coverage. `--video-diff` compares game-data layers and native RGB against the
 MAME-derived FDP reference; unsupported sampled state is not counted as a match.
 See [gameplay regression](../site/developer/testing/gameplay-regression.md).
 
+### Scripted input
+
+Headless runs see attract mode only. `--inputs FILE` presses buttons from a script, so
+gameplay-only code runs under `--discovery-log`, `--dump-*` and `tools/f3a run --inputs`. Each
+line is a rule for an inclusive range of 1-based emulated frames, the numbering of dumps and the
+discovery log. Active rules are OR'd per player, and the script is OR'd with live input. `#`
+starts a comment.
+
+```text
+700+20 coin                         # frames 700..719: player 1 coin (hold a pulse for a few frames)
+800-2400 mash keys=start period=45  # tap start
+1200-end mash seed=3                # gameplay-regression LCG mashing over up..b3 (default period 6)
+2000-2100 p2 right+b1               # hold controls: up down left right b1..b6 start coin service test
+3000-end poke 0x401f54.w=10         # write main RAM at the start of each frame (.b/.w/.l, big-endian)
+```
+
+`mash` takes `seed=N`, `period=N` and `keys=A+B`. `poke` reaches states that buttons make rare or
+slow, such as a win counter or a random-number seed. It writes only main RAM
+(`0x400000..0x41ffff`; `f3a xref a5-0xNNNN` prints an a5 global's absolute address). A range rewrites
+the value every frame, but the game can still change it within a frame. A run with pokes shows
+reachable code, not proof of a natural play path. The flag is host-only and offline-only, and it
+turns fast boot off so frame numbers stay those of a cold boot. `tools/f3a run --inputs FILE
+--until sub_09d72a,sub_0a913c` copies the script to `inputs.txt` in the run directory. It stops
+as soon as every listed routine has stored to video or control RAM, and reports the frame where
+each did first. With `--dump-every N --keep rendered.png`, `f3a run` keeps PNG screenshots, which
+show the screen the script reached.
+
+`--until` without `--watch` only sees routines that store to video or control RAM. `f3a run --watch
+sub_08e20c,0x08e62e` logs every frame in which those instructions execute (`entries.log`), so "never
+called" and "called, but the branch went the other way" look different. Watch a branch target to see
+Task routines that yield (trap handlers that switch tasks) run their entry once and then resume
+inside, so watch an instruction in their loop or their resume points (`dis` annotates yield traps with
+resumes, and `flow --tree` lists resume points; `run --watch` on a task entry that ran in ≤1 frame
+adds a note suggesting resume points). With `--watch`, `--until` targets count when they
+execute and may be any instruction. Watching needs an instrumented build of the game, and `f3a`
+prints the commands if there is none:
+
+```sh
+cmake -S . -B build-landmakrj-instrument -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_GAME=landmakrj \
+  -DF3_ROM_DIR=/path/to/roms/landmakr -DF3_PROFILE_INSTRUMENT=ON
+cmake --build build-landmakrj-instrument --target landmakr
+```
+
+`f3a` uses the instrumented build for watch and indirect-target runs (`f3a run --indirect`). The
+game binary takes `--profile-out FILE --watch-entries HEX,HEX --watch-log FILE` and `--indirect-log FILE`.
+Both watch and indirect instrumentation are observe-only: frame CRCs and cycles match a plain build's
+run.
+
+Finding a script is trial and error, so an analyst agent should hand it to a small-model subagent.
+Give the helper the target routines and the game, and have it report a working script path and
+run directory. Keep working scripts in `build/f3a/<game>-inputs/<scene>.txt` so the next analysis
+can reuse them.
+
 ## Discovery log
 
 Humans find unhandled video routines the same way agents do (`f3rt-sprite-check`
@@ -74,7 +127,7 @@ REPEAT video-write layer=lines pc=0x0100d0 count=1000      # hit count reached 1
 # SUMMARY
 SUM sprite-stray pc=0x010412 frame=93 t=0.06 addr=0x600000 count=262144
 SUM unit-replay-abort unit=objects reason=Budget count=3   # only if a unit replay aborted
-# TOTAL frames=3000 sprite-stray=1 video-write=3 video-fallback=0 known_writer_pcs_suppressed=73
+# TOTAL frames=3000 sprite-stray=1 video-write=3 video-fallback=0 known_writer_pcs_suppressed=73 known_listed=0
 ```
 
 Categories:
@@ -96,9 +149,127 @@ Categories:
   `unit-stats`. Emit-unit replay *mismatches* need check mode, which replays every
   invocation and is not cheap enough for play; use `f3rt-sprite-check` for that.
 
+`--discovery-all` (with `--discovery-log`) turns the log into an observed writer map: known
+producers are logged too, tagged `known=1`, and sprite-RAM writes are logged as `video-write`
+even when emit units account for them. Its header then contains
+`# ALL observed writers: ...`; `tools/f3a discover LOG --ranges` prints it per layer and routine.
+
 No screenshot is taken on a first hit: the frame buffer is only complete at VBSTART
 and the capture path differs per renderer, so the frame number and wall time are
 logged instead (press F12 to mark a moment).
+
+## Game analysis (`tools/f3a`)
+
+`tools/f3a` answers reverse-engineering questions about a game's 68EC020 program for humans and
+agents alike: fixed columns, addresses always `0x` + 6 hex digits, `--json` rows, bounded `--limit`.
+It reuses `recomp/discovery.py` (recursive discovery, scanned/config jump tables, devirtualized
+computed transfers) and `profiles/<game>.profile` execution counts when present; ROMs come from
+`--rom-dir`, `F3_ROM_DIR` or the `build*/CMakeCache.txt` of that game.
+
+```sh
+tools/f3a use commandw                          # default game for this terminal (or --game / F3A_GAME)
+tools/f3a vectors                               # reset, irqN, trapN handlers
+tools/f3a flow irq2 --tree 2                    # what the frame interrupt calls, in order, with call-site hit counts
+tools/f3a flow 0x2fed6 --path 3                 # caller chains from roots to a routine
+tools/f3a dis 0x9b32                            # annotated routine: a5 globals, resolved pointers, tables
+tools/f3a dis sub_009b32 --from 0x9d32 --to 0x9f38   # one block of a long routine
+tools/f3a dis 0x2ff42 --data words             # ROM tables as data (stops where code starts)
+tools/f3a dis 0x40aa --data offsets             # `jmp table(pc,d0.w)` offset table: index → handler
+tools/f3a xref a5-0x7cd7 --sort hits            # every read/write of a global (also via pointers)
+tools/f3a xref --field 0x1.2 --role write       # every bit op or andi/ori/eori mask touching bit 2 of byte +1
+tools/f3a xref --field 0x1.7 --within 0x410000-0x413fff   # ... of one record array, immediate stores included
+tools/f3a xref --field 0xc --role write --code  # who stores code addresses into a hook/callback slot
+tools/f3a writes --region sprites --ranges      # static store-PC ranges per discovery-log layer
+tools/f3a writes --field 0x1                    # every store to byte +1 of any record
+tools/f3a writes --region 0x660000-0x66001f     # stores into an address range (or a region name)
+tools/f3a struct sub_009b32 a4                  # field accesses through a register (span, reads, writes, rmw)
+tools/f3a flow '?dispatch'                      # what the static pass could not resolve, and why
+tools/f3a flow '?dispatch' --observed DIR       # unresolved sites checked against observed targets
+tools/f3a run --frames 1300 --dump-start 1190 --dump-every 1 --keep mainram.bin,graphics.bin --check-inert
+tools/f3a run --frames 2000 --indirect          # log observed computed jmp/jsr targets in indirect.log
+tools/f3a run --frames 3000 --all-writers --out build/f3a/cw-writers   # observed writer map
+tools/f3a run --frames 6000 --inputs play.txt --until sub_09d72a   # scripted input; stop once it runs
+tools/f3a discover build/f3a/cw-writers/discovery.log --ranges          # ... per layer and routine
+tools/f3a discover DIR --unknown-only           # only groups with at least one unknown writer PC
+tools/f3a records DIR --scan ram                # frame counters and parity bits, with their static writers
+tools/f3a records DIR --watch a5-0x7cd8:2 --changes
+tools/f3a records DIR --base 0x410000 --stride 0x80 --count 128 --active 0.7 --rel 0x2:2
+tools/f3a records DIR --base 0x410000 --stride 0x80 --count 128 --check '+0x2.w == +0x2a.w + 4' --where '+0x1.b & 0xc'
+tools/f3a sprites DIR --frames 600:603         # the hardware sprite list as the chip walks it (with writer attribution)
+tools/f3a sprites DIR --writer sub_009b32       # filter entries written by a specific routine or PC
+tools/f3a graph                                 # build/f3a/<game>-callgraph.html (interactive call graph)
+tools/f3a mametap --write 0x660000:0x66001f --frames 300 --run   # MAME taps (landmakrj ROMs staged)
+```
+
+`DIR` is a `run --out` directory; it records its game, so `records`/`discover` on it need no
+`--game`. Dumps are taken at the end of each emulated frame. `f3a use` stores the default per
+terminal, so parallel terminals do not change each other's game; shells without a terminal (agent
+harnesses that start a fresh shell per command) must pass `--game` or export `F3A_GAME`. Commands
+that took the game from a default name it on stderr.
+
+The same commands are a Python library for a REPL or notebook (`help(f3a)` lists everything). The
+game is analysed once per process, and results are rows with raw fields that print like the CLI,
+header notes and caveats included:
+
+```python
+import sys; sys.path.insert(0, "tools")
+from analysis import f3a
+g = f3a.game("commandw")
+g.xref(field="0x1.7").column("pc")                   # any command: positional args, long options as keywords
+help(g.writes)                                       # a command's options
+g.writes(region="sprites").where(routine="sub_009b32")
+g.words(0x2ff42, 17)                                 # ROM tables as ints (also g.longs, g.rom)
+run = g.run(frames=1300, dump_start=1190, dump_every=1, keep="mainram.bin,graphics.bin", out="build/f3a/cw")
+run.records(frame=1200, base="a5+0", stride=0x100, count=5, check="(+0x1.b & 0x80) != 0")
+run.series("a5-0x7cd8", 2)                           # (frame, value) per dump; run.table(...) for records
+```
+
+Evidence column: `xN` executed N times in the profile, `rooted` statically reached, `decoded?` not
+proven code. Routine kinds and edge kinds are listed in `tools/f3a --help`.
+
+Static limits, stated by the tool rather than hidden:
+
+- Pointer resolution follows constants (both arms of an `if`/`else` that loads different
+  constants), ROM pointers, RAM cells that receive constant stores, and stack/register arguments
+  through every static call site (bounded depth). A pointer stepped by a loop in the caller is shown
+  at its first value.
+- Unresolved computed `jmp`/`jsr` sites lead to the `?dispatch` pseudo routine; profile-hit entries
+  with no static predecessor leave from it, labelled with the ROM data that names them when found.
+  `slot +d` candidates (routines stored at offset `d` of any structure) over-approximate. Unresolved
+  sites can be checked against observed targets recorded by instrumented runs (`flow '?dispatch'
+  --observed DIR` or auto-loaded `profiles/<game>.indirect`).
+- Stores through incoming stack arguments in routines with no static callers are reported as
+  `stack-arg` (`--unresolved` lists them; `--ranges` notes them).
+- Task routines that switch tasks via cooperative yield traps get kind `task`; edges leaving them
+  to resume points after yield traps get kind `resume`.
+- Without `--inputs`, `run`/`discover` see attract mode only. Gameplay-only writers need an input
+  script ([scripted input](#scripted-input)) or a played session with `--discovery-log` (plus
+  `--discovery-all` for the full map).
+
+### Profiles for other games
+
+`profiles/landmakrj.profile` is frozen because it feeds code generation tiers. For other games a
+profile only feeds analysis: `xN` hit counts on vectors, routines and call sites, and profile-hit
+entries in `?dispatch`. `f3a profile` records attract mode, plus any input scripts, on the
+instrumented build and writes `profiles/<game>.profile` (and `profiles/<game>.indirect` for observed
+indirect targets). `--build` configures and builds `build-<game>-instrument/` first if it is missing.
+New runs merge into an existing profile unless you pass `--replace`. For landmakrj, pass `--out FILE`
+(which also writes `<out>.indirect`).
+```sh
+tools/f3a profile --game commandw --build --frames 6000
+tools/f3a profile --game commandw --inputs play.txt --frames 6000
+```
+
+### Shared notes and agents
+
+Findings live in `docs/notes/`, an evidence-linked wiki whose conventions are in
+`docs/notes/SCHEMA.md` (skill `.omp/skills/re-wiki`). A routine page
+`docs/notes/routines/<game>-<8 hex>-<name>.md` names that routine in all f3a output. The name ends
+in `?` while the page is a hypothesis, and refuted pages are ignored. `games/<id>/analysis/symbols.toml`
+overrides these names. Agents analysing a game use the skill `.omp/skills/f3a`.
+
+Regression suite: `PYTHONPATH=build/python python3 -m unittest tools.test_f3a`. It pins verified
+answers on both games and skips what is missing on the machine (ROMs, builds).
 
 ## CPU and device checks
 

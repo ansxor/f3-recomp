@@ -45,6 +45,8 @@ public:
     std::unique_ptr<DiscoveryLog> discovery;
     // Render-only emit-unit tracking/replay; null = feature off. Never serialized.
     std::unique_ptr<SpriteUnits> sprite_units;
+    // Host-only per-slot writer attribution (one PC per 16-byte sprite RAM entry); null = off. Never serialized.
+    std::unique_ptr<std::array<uint32_t, 0x1000>> sprite_writers;
     std::unique_ptr<GameVideo> game_video;
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;

@@ -9,6 +9,8 @@
 //                   producer, per layer. Sprite RAM is left to
 //                   sprite-stray when the game has emit units.
 //   video-fallback  game renderer fell back to the FDP/oracle frame, with the component and reason.
+// With `--discovery-all` (set_log_all) known producers are logged too (tagged `known=1`) and sprite RAM
+// writes are logged as video-write even when emit units account for them: an observed writer map.
 // Format: docs/developer/WORKFLOWS.md ("Discovery log").
 #include <array>
 #include <chrono>
@@ -40,6 +42,11 @@ public:
 
     // Sprite RAM belongs to the emit-unit accounting (sprite-stray) when the game has units.
     void set_sprites_accounted_by_units(bool on) { sprites_by_units_ = on; }
+    // Also log known producers (tagged known=1) and unit-accounted sprite writes.
+    void set_log_all(bool on) {
+        log_all_ = on;
+        if (on) line("# ALL observed writers: known producers are listed with known=1, sprite RAM included");
+    }
 
     // Machine::write8 for graphics RAM and control registers (`address` is a full 24-bit bus address).
     void video_write(uint32_t pc, uint32_t address);
@@ -72,7 +79,7 @@ private:
     std::FILE *file_ = nullptr;
     const Machine &machine_;
     std::chrono::steady_clock::time_point start_;
-    bool sprites_by_units_ = false, finished_ = false;
+    bool sprites_by_units_ = false, log_all_ = false, finished_ = false;
     // (category, layer, pc) -> entry. Node-stable, so the one-entry caches below stay valid.
     std::unordered_map<uint64_t, Entry> entries_;
     std::vector<std::unique_ptr<Entry>> fallbacks_;

@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Taito F3 game analysis toolkit; run `tools/f3a --help`."""
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from analysis.cli import main  # noqa: E402
+
+main()

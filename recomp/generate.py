@@ -219,6 +219,9 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                             shard_calls[tier].add(owner)
                             lines.append(f'    if ({guard}) {{ f3_cc_flush(cpu); '
                                          f'F3_CHAIN({owner}, cpu); }}')
+                    base_mnem = insn.mnemonic.split('.')[0].lower()
+                    if base_mnem in ('jmp', 'jsr') and not flow.targets:
+                        lines.append(f'    F3_PROFILE_INDIRECT_MAIN(0x{pc:08x}u, cpu->pc);')
                     candidates = indirect_targets.get(pc)
                     if candidates:
                         # A computed jmp/jsr always went through f3_dispatch, so

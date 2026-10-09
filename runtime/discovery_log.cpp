@@ -99,7 +99,8 @@ DiscoveryLog::Entry &DiscoveryLog::pc_entry(Category category, VideoLayer layer,
         entry.frame = machine_.frame + 1;
         entry.seconds = elapsed();
         entry.known = category == Category::VideoWrite && video_writer_known(layer, pc);
-        if (!entry.known) line(std::string("NEW ") + category_name(int(category)) + ' ' + describe(entry));
+        if (!entry.known || log_all_)
+            line(std::string("NEW ") + category_name(int(category)) + ' ' + describe(entry) + (entry.known ? " known=1" : ""));
     }
     return entry;
 }
@@ -107,7 +108,7 @@ DiscoveryLog::Entry &DiscoveryLog::pc_entry(Category category, VideoLayer layer,
 void DiscoveryLog::count_hit(Entry &entry) {
     if (++entry.count != entry.next_report) return;
     entry.next_report *= 10;
-    if (!entry.known)
+    if (!entry.known || log_all_)
         line(std::string("REPEAT ") + category_name(int(entry.category)) + ' ' + key_of(entry) +
              " count=" + std::to_string(entry.count));
 }
@@ -115,7 +116,7 @@ void DiscoveryLog::count_hit(Entry &entry) {
 void DiscoveryLog::video_write(uint32_t pc, uint32_t address) {
     const VideoLayer layer = classify(address);
     if (layer == VideoLayer::Count) return;
-    if (layer == VideoLayer::Sprites && sprites_by_units_) return;
+    if (layer == VideoLayer::Sprites && sprites_by_units_ && !log_all_) return;
     Entry *&last = last_video_[size_t(layer)];
     if (!last || last->pc != pc) last = &pc_entry(Category::VideoWrite, layer, pc, address);
     count_hit(*last);
@@ -146,22 +147,23 @@ void DiscoveryLog::video_fallback(const char *component, const char *reason, uin
 void DiscoveryLog::finish(const Machine &machine) {
     if (finished_) return;
     finished_ = true;
-    std::vector<const Entry *> unknown;
-    uint64_t suppressed = 0;
+    std::vector<const Entry *> listed;
+    uint64_t suppressed = 0, known_listed = 0;
     for (const auto &[key, entry] : entries_) {
-        if (entry.known) ++suppressed;
-        else unknown.push_back(&entry);
+        if (entry.known && !log_all_) ++suppressed;
+        else listed.push_back(&entry);
     }
-    for (const auto &entry : fallbacks_) unknown.push_back(entry.get());
-    std::sort(unknown.begin(), unknown.end(), [](const Entry *a, const Entry *b) {
+    for (const auto &entry : fallbacks_) listed.push_back(entry.get());
+    std::sort(listed.begin(), listed.end(), [](const Entry *a, const Entry *b) {
         return std::tie(a->category, a->layer, a->pc, a->reason) < std::tie(b->category, b->layer, b->pc, b->reason);
     });
     line("# SUMMARY");
     uint64_t totals[3] = {};
-    for (const Entry *entry : unknown) {
-        ++totals[size_t(entry->category)];
+    for (const Entry *entry : listed) {
+        if (entry->known) ++known_listed;
+        else ++totals[size_t(entry->category)];
         line(std::string("SUM ") + category_name(int(entry->category)) + ' ' + describe(*entry) +
-             " count=" + std::to_string(entry->count));
+             (entry->known ? " known=1" : "") + " count=" + std::to_string(entry->count));
     }
     if (machine.sprite_units) {
         const auto report = machine.sprite_units->report();
@@ -175,10 +177,11 @@ void DiscoveryLog::finish(const Machine &machine) {
     }
     line("# TOTAL frames=" + std::to_string(machine.frame) + " sprite-stray=" + std::to_string(totals[0]) +
          " video-write=" + std::to_string(totals[1]) + " video-fallback=" + std::to_string(totals[2]) +
-         " known_writer_pcs_suppressed=" + std::to_string(suppressed));
-    std::printf("DISCOVERY sprite_stray=%llu video_write=%llu video_fallback=%llu known_suppressed=%llu\n",
+         " known_writer_pcs_suppressed=" + std::to_string(suppressed) + " known_listed=" + std::to_string(known_listed));
+    std::printf("DISCOVERY sprite_stray=%llu video_write=%llu video_fallback=%llu known_suppressed=%llu known_listed=%llu\n",
                 static_cast<unsigned long long>(totals[0]), static_cast<unsigned long long>(totals[1]),
-                static_cast<unsigned long long>(totals[2]), static_cast<unsigned long long>(suppressed));
+                static_cast<unsigned long long>(totals[2]), static_cast<unsigned long long>(suppressed),
+                static_cast<unsigned long long>(known_listed));
     std::fclose(file_);
     file_ = nullptr;
 }

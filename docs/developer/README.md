@@ -8,6 +8,7 @@ they are not a support promise or a requirement to run the game.
 ## Current contracts and workflows
 
 - [Generation and verification workflows](WORKFLOWS.md).
+- [Game analysis with `tools/f3a`](WORKFLOWS.md#game-analysis-toolsf3a): disassembly, cross references, call flow, store maps, dump analysis and the HTML call graph.
 - [CPU ABI changes](ABI-CHANGES.md): current ABI 3 and earlier interface history.
 - [Game scope and porting audit](../site/developer/porting.md): generic F3 pieces, Land Maker assumptions and deferred refactors.
 - [Sound-driver investigation](../SOUND-DRIVER.md): ROM-specific driver semantics and native/oracle comparison.
