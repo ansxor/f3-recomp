@@ -165,7 +165,7 @@ matches, zoom/flip changes, movement over
 check their own layer controls; each axis can interpolate independently.
 State loads, rollback corrections, pause/resume and long stalls reset history.
 
-This experimental flag is GPU-only and CLI-only, default off. CPU/headless
+This experimental flag is GPU-only, default off; also a saved restart preference in F1 → Video. CPU/headless
 pixels, captures, replay state and netplay checksums remain native.
 `--unthrottled` presents current geometry rather than synthesizing intermediate
 timed frames. `--video-interp linear|fit` remains an independent spatial option

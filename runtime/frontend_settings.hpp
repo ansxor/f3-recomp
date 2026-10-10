@@ -28,6 +28,7 @@ struct FrontendSettings {
     AudioBackend audio_backend = AudioBackend::Oracle;
     float volume = 1.0f;
     bool fast_boot = true, boot_cache = false;
+    bool motion_interp = false;
     std::string server = "127.0.0.1:9000", room;
     unsigned requested_slot = 0, delay = 2;
     std::array<InputProfile, local_player_count> profiles;

@@ -85,8 +85,10 @@ void FrontendUi::draw(const FrontendUiState &state){
                 ImGui::BeginDisabled(s.renderer=="accurate");
                 changed|=combo("Scale",s.video_scale,{"1","2","3","4","auto","auto-integer"});int border=int(s.border);if(ImGui::SliderInt("Widescreen border (restart)",&border,0,160)){s.border=border;changed=true;}
                 changed|=combo("Filtering",s.filter,{"nearest","linear"});changed|=combo("Interpolation (restart)",s.interpolation,{"off","linear","fit"});changed|=combo("Interpolation fields (restart)",s.interpolation_fields,{"none","geometry","palette","geometry,palette"});
+                changed|=ImGui::Checkbox("Motion interpolation (restart)",&s.motion_interp);
                 ImGui::EndDisabled();
-                ImGui::TextWrapped("Scale and filtering apply live under Enhanced; the renderer, border and interpolation apply on restart. Settings are preferences; CLI flags override them on launch.");ImGui::EndTabItem();
+                ImGui::TextWrapped("Motion interpolation: experimental temporal sprite/scroll interpolation at display refresh; adds one native frame of positional latency. Requires the Enhanced renderer.");
+                ImGui::TextWrapped("Scale and filtering apply live under Enhanced; the renderer, border, interpolation and motion interpolation apply on restart. Settings are preferences; CLI flags override them on launch.");ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Shaders")){
                 if(!p.gpu)ImGui::TextUnformatted("Requires the Enhanced renderer (Video tab; restart).");

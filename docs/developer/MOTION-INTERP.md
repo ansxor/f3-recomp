@@ -2,7 +2,7 @@
 
 ## Decision and supported surface
 
-Opt-in **`--motion-interp`**, default off, CLI-only. Implemented on SDL3 GPU
+Opt-in **`--motion-interp`**, default off, also a saved restart preference in F1 → Video. Implemented on SDL3 GPU
 presentation (`--renderer enhanced`; developer `compare-gpu`); measured on
 macOS arm64 / Cocoa / Metal. CPU/FDP presentation is not interpolated.
 Headless execution, native dumps, replay data and machine/netplay snapshots

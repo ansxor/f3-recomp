@@ -72,6 +72,10 @@ bool load_frontend_settings(const std::string &path,FrontendSettings &settings,s
         else if(k=="server")s.server=v;else if(k=="room")s.room=v;
         else if(k=="audio") {if(v=="native")s.audio_backend=AudioBackend::Native;else if(v=="oracle")s.audio_backend=AudioBackend::Oracle;else if(v=="hle")s.audio_backend=AudioBackend::Hle;else {error="Unknown audio backend";return false;}}
         else if(k=="volume") { std::istringstream in(v);in>>s.volume;if(!in || in.peek()!=EOF){error="Invalid volume";return false;} }
+        else if(k=="motion_interp") {
+            if(v!="on" && v!="off"){error="Invalid motion interpolation setting";return false;}
+            s.motion_interp=v=="on";
+        }
         else if(k=="fast_boot" || k=="boot_cache") {
             if(v!="on" && v!="off"){error="Invalid fast boot setting";return false;}
             (k=="fast_boot"?s.fast_boot:s.boot_cache)=v=="on";
@@ -97,6 +101,7 @@ bool save_frontend_settings(const std::string &path,const FrontendSettings &s,st
     std::ofstream out(tmp,std::ios::binary|std::ios::trunc);if(!out){error="Cannot create config temporary file";return false;}
     out<<"# f3rt settings, Dear ImGui frontend\nrenderer="<<s.renderer<<"\nscale="<<s.video_scale<<"\nborder="<<s.border<<"\nfilter="<<s.filter<<"\ninterpolation="<<s.interpolation<<"\nfields="<<s.interpolation_fields<<"\naudio="<<audio_backend_name(s.audio_backend)<<"\nvolume="<<s.volume<<"\nserver="<<s.server<<"\nroom="<<s.room<<"\nslot="<<s.requested_slot<<"\ndelay="<<s.delay<<'\n';
     out<<"postprocess="<<s.postprocess<<"\nuser_shader="<<s.user_shader<<'\n';
+    out<<"motion_interp="<<(s.motion_interp?"on":"off")<<'\n';
     out<<"fast_boot="<<(s.fast_boot?"on":"off")<<"\nboot_cache="<<(s.boot_cache?"on":"off")<<'\n';
     for(unsigned p=0;p<s.profiles.size();++p) {out<<"device"<<p<<'='<<s.profiles[p].device_slot<<'\n';for(unsigned c=0;c<local_control_count;++c){const auto &b=s.profiles[p].controls[c];out<<"binding"<<p<<'.'<<c<<'='<<int(b.key)<<' '<<b.button<<' '<<b.axis<<' '<<b.direction<<'\n';}}
     out.close();if(!out){error="Cannot write config";std::filesystem::remove(tmp,ec);return false;}

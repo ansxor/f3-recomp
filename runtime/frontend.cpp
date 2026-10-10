@@ -133,7 +133,7 @@ enum Preference : uint32_t {
     Interpolation=1u<<5, Fields=1u<<6, SoundDriver=1u<<7, Volume=1u<<8,
     Server=1u<<9, Room=1u<<10, Slot=1u<<11, Delay=1u<<12,
     PostprocessMode=1u<<13, UserShader=1u<<14, SoundBackend=1u<<15,
-    FastBoot=1u<<16, BootCache=1u<<17
+    FastBoot=1u<<16, BootCache=1u<<17, MotionInterp=1u<<18
 };
 }
 int main(int argc,char **argv) try {
@@ -217,7 +217,7 @@ int main(int argc,char **argv) try {
         else if(arg=="--video-filter") { video_filter=value();cli_preferences|=Filter; }
         else if(arg=="--video-interp") { video_interp=value();cli_preferences|=Interpolation; }
         else if(arg=="--video-interp-fields") { video_interp_fields=value();cli_preferences|=Fields; }
-        else if(arg=="--motion-interp")motion_interp=true;
+        else if(arg=="--motion-interp") { motion_interp=true;cli_preferences|=MotionInterp; }
         else if(arg=="--postprocess") { postprocess=value();cli_preferences|=PostprocessMode; }
         else if(arg=="--user-shader") { user_shader=value();cli_preferences|=UserShader; }
         else if(arg=="--netplay-server") { net_options.server=value();cli_preferences|=Server; }
@@ -343,6 +343,7 @@ int main(int argc,char **argv) try {
     preference(net_options.delay,settings.delay,Delay);
     preference(fast_boot,settings.fast_boot,FastBoot);
     preference(boot_cache,settings.boot_cache,BootCache);
+    preference(motion_interp,settings.motion_interp,MotionInterp);
     // Presentation options only exist for the game-data renderers. Saved values are ignored under accurate
     // (and stay in the settings file for enhanced); explicit command-line options are rejected below.
     if(video_mode=="fdp") {
@@ -351,6 +352,7 @@ int main(int argc,char **argv) try {
         if(!(cli_preferences&Filter))video_filter="nearest";
         if(!(cli_preferences&Interpolation))video_interp="off";
         if(!(cli_preferences&Fields))video_interp_fields="geometry";
+        if(!(cli_preferences&MotionInterp))motion_interp=false;
     }
     if(!(cli_preferences&SoundDriver))
         sound_driver=f3rt::audio_backend_name(settings.audio_backend==f3rt::AudioBackend::Hle?
