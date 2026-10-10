@@ -55,7 +55,7 @@ supersedes: []
 
 | Kind | What it is here | Where it goes in `raw/` |
 |---|---|---|
-| `test` | A run that checks a prediction: `f3a run --inputs/--watch/--until`, `f3a records --check`, `run.series` over every dumped frame, `f3rt-check` | `raw/tests/` (command, script and output) |
+| `test` | A run that checks a prediction: `f3a run --inputs/--watch/--until`, `f3a records --check`, `run.series` over every dumped frame, the per-area runtime tests | `raw/tests/` (command, script and output) |
 | `trace` | Observed execution: discovery logs, `entries.log`, frame dumps decoded by `f3a records`/`sprites`, MAME taps | `raw/traces/` |
 | `emu-source` | MAME or this runtime's device code | `raw/emu-source/` |
 | `doc` | Datasheets, hardware notes, and static `f3a dis`/`xref`/`flow`/`writes` output | `raw/disasm/` for f3a static output, `raw/docs/` otherwise |

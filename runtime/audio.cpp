@@ -113,8 +113,8 @@ struct Audio::Impl {
             const float route = float(int(physical * 100.0f + 0.5f)) / 32.0f;
             m_otis_gain[channel] = 0.18f *
                 (m_gain_model == Audio::GainModel::MameRouting ? route : 1.0f);
-            m_output_gain[channel] =
-                m_gain_model == Audio::GainModel::MameRouting ? route : physical;
+            m_output_gain[channel] = Audio::output_boost *
+                (m_gain_model == Audio::GainModel::MameRouting ? route : physical);
         }
     }
 
@@ -773,6 +773,11 @@ size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
     }
     m_impl->m_rb_count -= frames;
     return frames;
+}
+
+size_t Audio::render_ready(int16_t *interleaved_stereo, size_t max_frames) {
+    if (m_impl->m_hle) return m_impl->m_hle->render_ready(interleaved_stereo, max_frames);
+    return render(interleaved_stereo, max_frames);
 }
 
 size_t Audio::state_size() const {

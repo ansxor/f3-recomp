@@ -126,7 +126,7 @@ Earlier runs in `docs/developer/DECISIONS.md` show how the metric tracks fixes: 
 
 The recompiled sound driver is compared with the interpreted driver by exact bus-record equality, not by metrics. See [Sound traces and sound tools](/developer/testing/sound-tools).
 
-The `f3rt-check` program also has audio unit checks (mixer scaling, sample-clock drift over ten seconds, board reset). See [Unit checks](/developer/testing/unit-checks).
+The `runtime-audio` test also checks audio behavior (mixer scaling, sample-clock drift over ten seconds, board reset). See [Unit checks](/developer/testing/unit-checks).
 
 ## Limits
 

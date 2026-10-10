@@ -278,8 +278,7 @@ PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
 PYTHONPATH=build/python python3 tools/differential/run.py \
   --musashi runtime/third_party/musashi \
   --output build/differential --cases 5000
-cmake --build build --target f3rt-check -j 4
-./build/f3rt-check
+ctest --test-dir build -R runtime-
 ```
 
 Instruction differential checks compare registers, PC/SR, elapsed reference-model
@@ -683,7 +682,7 @@ Actual native gameplay seed 89 / 1560 frames matches WAV and BMP bytes directly
 (787,650 audio frames, native CRC `6ddd781b`); the capture was visually inspected.
 Vulkan seed 5 / 1501 frames has ten exact composite samples, ten deferred-state
 boundaries and exact induced trails fallback recovery.
-Memcheck completed the retained `f3rt-check` device/boundary suite with zero
+Memcheck completed the retained the runtime tests device/boundary suite with zero
 errors, zero suppressions, 617 allocations/frees and no live bytes or leaks.
 It used the same isolated matching glibc/debug loader, without altering the host
 or original executable. Record: `build/opt/round3/runtime-memcheck.log`.

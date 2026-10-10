@@ -4,7 +4,7 @@ Static recompilation of Taito F3 arcade games into native C, with an SDL3 runtim
 
 ## Building
 
-**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Python 3.11+, Capstone 5.0.9, SDL3, `glslangValidator`, `spirv-cross`.
+**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Python 3.11+, Capstone 5.0.9, SDL3, `glslangValidator`, `spirv-cross`. Google Highway is used if installed; otherwise CMake fetches it.
 
 **macOS:**
 ```sh

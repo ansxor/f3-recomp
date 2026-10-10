@@ -36,7 +36,7 @@ Each check compares a specific component with a reference. Some components need 
 | ES5505, ES5510, MB87078 device models | MAME audio write trace | PCM waveform metrics |
 | Rollback netplay | A single machine that runs the same inputs | State CRC, frame CRC, PCM CRC |
 | Relay server (Go) | Go unit tests with a real UDP socket | Protocol and room behavior |
-| Device models, scheduler, EEPROM | Hand-written expected values in `runtime/check.cpp` | Cycle counts, IRQ order, register values |
+| Device models, scheduler, EEPROM | Hand-written expected values in `runtime/tests/*.cpp` | Cycle counts, IRQ order, register values |
 
 The diagram shows the same relations. Arrows point from the oracle to the candidate it checks.
 
@@ -70,7 +70,7 @@ flowchart LR
     MAME -->|"audio trace replay"| DEV
     REF -->|"netplay oracle"| NET
     HAND -->|"go test"| RELAY
-    HAND -->|"f3rt-check"| MISC
+    HAND -->|"runtime-* tests"| MISC
 ```
 
 Two oracles appear on both sides of the diagram. The FDP renderer is a candidate for MAME and an oracle for the game-data video. The Musashi core is the oracle for the emitter and also the engine of the interpreter. The repository vendors one copy of Musashi in `runtime/third_party/musashi` and keeps MAME-compatible fixes in it (see [differential testing](/developer/testing/differential)).
@@ -83,7 +83,7 @@ A **gate** is one test that you run before you accept a change. The table lists 
 | --- | --- | --- |
 | [Differential harness](/developer/testing/differential) | Each lowered instruction gives the same registers, flags, cycles and bus writes as Musashi, for the generated cases. | Control flow between blocks. Discovery coverage. RESET and STOP. Device behavior. Correct timing of the whole machine. |
 | [Python unit tests](/developer/testing/unit-checks) | Discovery rules and block deadline code work on small synthetic ROMs. The sound trace decoder rejects bad input. | Anything about the real ROM. |
-| [`f3rt-check`](/developer/testing/unit-checks) | Device models, scheduler, EEPROM, DUART, mixer and exception timing match hand-written expectations. | Whole-game behavior. |
+| [`runtime-* tests`](/developer/testing/unit-checks) | Device models, scheduler, EEPROM, DUART, mixer and exception timing match hand-written expectations. | Whole-game behavior. |
 | [Seeded gameplay regression](/developer/testing/gameplay-regression) | A cold boot plus a seeded input script runs for N frames with zero interpreter fallback, no CPU halt and no execution error. | That every game state works. Output correctness (it checks only that the run completes). |
 | Gameplay regression with `--video-diff` | The game-data renderer equals the FDP renderer on sampled frames. | Equality with real hardware. Frames that fall back to the FDP renderer. |
 | [MAME frame comparison](/developer/testing/frame-compare) | Native frames equal MAME frames on the sampled frames. Main RAM equals MAME RAM at frame 600. | Frames between samples. RAM equality after frame 600. |
@@ -104,12 +104,12 @@ Use this table to choose gates. Run every gate in the row.
 | You changed | Run these gates |
 | --- | --- |
 | `recomp/emitter.py`, `recomp/cpu_ops.h`, `recomp/bitfield.h` | Differential harness, Python unit tests, gameplay regression, MAME frame comparison |
-| `recomp/timing.py`, `recomp/*_cycles.csv` | Differential harness (it compares cycles), `f3rt-check`, MAME frame comparison |
+| `recomp/timing.py`, `recomp/*_cycles.csv` | Differential harness (it compares cycles), `runtime-* tests`, MAME frame comparison |
 | `recomp/discovery.py`, `recomp/generate.py`, `games/*/config.toml` | Python unit tests, gameplay regression (it rejects any fallback), MAME frame comparison |
-| `runtime/machine.cpp`, `runtime/cpu_abi.cpp`, `runtime/interpreter.cpp` | `f3rt-check`, gameplay regression, MAME frame comparison, sound trace comparison |
+| `runtime/machine.cpp`, `runtime/cpu_abi.cpp`, `runtime/interpreter.cpp` | `runtime-* tests`, gameplay regression, MAME frame comparison, sound trace comparison |
 | `runtime/renderer/fdp/video.cpp` | `f3rt-replay` video mode, MAME frame comparison |
-| `runtime/renderer/game/*.cpp` | `f3rt-check`, gameplay regression with `--video-diff`, MAME frame comparison |
-| `runtime/audio.cpp`, `runtime/third_party/audio/*` | `f3rt-check`, audio trace replay, sound trace comparison |
+| `runtime/renderer/game/*.cpp` | `runtime-* tests`, gameplay regression with `--video-diff`, MAME frame comparison |
+| `runtime/audio.cpp`, `runtime/third_party/audio/*` | `runtime-* tests`, audio trace replay, sound trace comparison |
 | `tools/compile_sound.py`, `runtime/sound_native.cpp` | Sound trace comparison and WAV comparison |
 | `runtime/netplay*.cpp`, `runtime/state_io.*`, snapshot code | Netplay oracle (snapshot suite first), gameplay regression |
 | `netplay/server/*.go` | `go test -race ./...`, netplay oracle suites that use the server |
@@ -121,7 +121,7 @@ Use this table to choose gates. Run every gate in the row.
 | --- | --- | --- | --- |
 | Differential harness | No | No | Python 3.11+, Capstone 5.0.9, a C compiler |
 | Python unit tests | No | No | Python, Capstone, a C compiler |
-| `f3rt-check` / `ctest` | No | No | CMake build with `BUILD_TESTING` on |
+| `runtime-* tests` / `ctest` | No | No | CMake build with `BUILD_TESTING` on |
 | `go test` in `netplay/server` | No | No | Go 1.22+ |
 | Gameplay regression | Yes | No | Build with `F3_ROM_DIR` |
 | `f3rt-sound-extract` | Yes | No | Build with `F3_ROM_DIR` |
@@ -150,8 +150,7 @@ PYTHONPATH=build/python python3 tools/differential/run.py \
 
 # Device and scheduler checks
 cmake -S . -B build -DF3RT_SDL=OFF
-cmake --build build --target f3rt-check
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R runtime-
 
 # Relay server tests
 (cd netplay/server && go test -race ./...)
@@ -195,7 +194,7 @@ If a whole-machine check fails, use the isolated checks to narrow the cause.
 
 ```mermaid
 flowchart TB
-    A["1. Unit checks: f3rt-check, unittest, go test"]
+    A["1. Unit checks: runtime-* tests, unittest, go test"]
     B["2. Differential harness: one instruction vs Musashi"]
     C["3. Gameplay regression: strict native, no fallback"]
     D["4. MAME frames and RAM"]

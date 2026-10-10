@@ -42,7 +42,7 @@ The ES5505 changes its rate when the driver writes the `ACT` register (number of
 
 All three counters use integer arithmetic. Fractional remainders survive caller partitions.
 
-`check_audio_partitioning` in `runtime/check.cpp` checks partition-independent CPU state. A separate ten-second clock check expects exactly `10 * sample_rate()` frames.
+`check_audio_partitioning` in `runtime/tests/audio.cpp` checks partition-independent CPU state. A separate ten-second clock check expects exactly `10 * sample_rate()` frames.
 
 These are descriptions of existing checks, not new executions for this page.
 
@@ -118,9 +118,9 @@ sequenceDiagram
     M->>A: advance(cycles since 1400)
 ```
 
-The same rule holds for reads. A read of a mailbox byte first catches up device time. The main CPU then sees replies that the sound CPU made before the read. The checks in `runtime/check.cpp` (`check_main_sound_ordering`) test this for byte, word and long accesses. They also test an unaligned long access that starts at `0xbfffff` and crosses into the mailbox.
+The same rule holds for reads. A read of a mailbox byte first catches up device time. The main CPU then sees replies that the sound CPU made before the read. The checks in `runtime/tests/audio.cpp` (`check_main_sound_ordering`) test this for byte, word and long accesses. They also test an unaligned long access that starts at `0xbfffff` and crosses into the mailbox.
 
-The test in `check.cpp` also shows two more facts:
+The tests in `runtime/tests/audio.cpp` also show two more facts:
 
 - A release of the sound reset line does not run the sound CPU over the time before the release.
 - An assertion of the reset line keeps the sound work that came before the reset instruction.
@@ -140,7 +140,7 @@ The test in `check.cpp` also shows two more facts:
 
 `Audio` starts with the reset line asserted (`m_reset_asserted = true`). The main CPU releases it by writing to `0xc80000` - `0xc80003`. It asserts it again with a write to `0xc80100` - `0xc80103`. `Machine::write8` calls `audio->set_reset(a >= 0xc80100)`.
 
-`Machine::reset` and the watchdog call `reset_board`. The check in `check.cpp` says that a reset of the board keeps the queued audio and the fractional sample phase.
+`Machine::reset` and the watchdog call `reset_board`. The check in [`runtime/tests/audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp) confirms that a board reset keeps queued audio and the fractional sample phase.
 
 ## Making one PCM frame
 
@@ -172,7 +172,7 @@ If the buffer is full, `push_frame` drops the oldest frame. The code comment say
 
 ## How the frontend delivers samples
 
-The loop in `runtime/frontend.cpp` drains audio once for each loop pass, after the machine ran a video frame. It reads at most 4096 PCM frames at a time (the buffer `samples` has 8192 `int16_t`). For each block it does these actions:
+The loop in `runtime/frontend.cpp` drains audio once for each loop pass, after the machine ran a video frame. Outside netplay it calls `Audio::render_ready`. That call never waits for the HLE worker: it returns only PCM already produced, so HLE synthesis overlaps the next frame (the accurate backend behaves like `render`). After the loop ends, a blocking `Audio::render` drains the remainder, so the WAV and the counters cover the complete stream. It reads at most 4096 PCM frames at a time (the buffer `samples` has 8192 `int16_t`). For each block it does these actions:
 
 1. It updates the counters `audio_frames`, `audio_peak` and `nonzero_samples`. The final status line prints them.
 2. If `--wav` is set, it appends the samples to the `WavWriter`.

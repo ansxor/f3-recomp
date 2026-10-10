@@ -118,7 +118,7 @@ at 1024.
 
 `check_game_sprite_vram_block_chaining` builds a two-entry display list and checks
 block-chained positions on both axes. It lives in
-[runtime/check.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp).
+[runtime/tests/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp).
 
 Full sprite parity compares all four groups in the native visible crop. See
 [Compare mode](/developer/runtime/video/compare-mode) and

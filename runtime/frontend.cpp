@@ -703,6 +703,21 @@ int main(int argc,char **argv) try {
         std::cout<<"fast_boot frames="<<turbo_frames<<" ms="<<turbo_ms<<" source="<<boot_source
                  <<" eeprom="<<(!eeprom_enabled?"none":eeprom_generated?"generated":eeprom_loaded?"loaded":"none")<<'\n';
     if(netplay)connect(net_options);
+    auto handle_audio_chunk=[&](size_t count) {
+        audio_frames+=count;
+        for(size_t i=0;i<count*2;++i) { audio_peak=std::max(audio_peak,std::abs(int(samples[i])));nonzero_samples+=samples[i]!=0; }
+        if(wav)wav->append(std::span(samples.data(),count*2));
+        if(sdl.audio) {
+            // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the picture.
+            // Past the latency cap, drop the stale backlog so new sound plays now.
+            if(throttle && SDL_GetAudioStreamQueued(sdl.audio)>int(audio_rate*4*max_audio_queue_ms/1000)) {
+                check(SDL_ClearAudioStream(sdl.audio));++audio_queue_drops;
+            }
+            check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
+            const uint64_t queued=uint64_t(SDL_GetAudioStreamQueued(sdl.audio));
+            audio_queue_sum+=queued;++audio_queue_samples;audio_queue_max=std::max(audio_queue_max,queued);
+        }
+    };
     while(!quit && (netplay || !frames || executed_frames<frames)) {
         profile.tick();
         bool refresh=false;
@@ -901,21 +916,7 @@ int main(int argc,char **argv) try {
         if(advanced && !dumpdir.empty() && m.frame>=dump_start && (m.frame-dump_start)%dump_every==0)f3rt::dump_machine(m,dumpdir);
         size_t count;
         while((count=session?session->render_audio(samples.data(),samples.size()/2):
-               m.audio->render(samples.data(),samples.size()/2))!=0) {
-            audio_frames+=count;
-            for(size_t i=0;i<count*2;++i) { audio_peak=std::max(audio_peak,std::abs(int(samples[i])));nonzero_samples+=samples[i]!=0; }
-            if(wav)wav->append(std::span(samples.data(),count*2));
-            if(sdl.audio) {
-                // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the picture.
-                // Past the latency cap, drop the stale backlog so new sound plays now.
-                if(throttle && SDL_GetAudioStreamQueued(sdl.audio)>int(audio_rate*4*max_audio_queue_ms/1000)) {
-                    check(SDL_ClearAudioStream(sdl.audio));++audio_queue_drops;
-                }
-                check(SDL_PutAudioStreamData(sdl.audio,samples.data(),int(count*4)));
-                const uint64_t queued=uint64_t(SDL_GetAudioStreamQueued(sdl.audio));
-                audio_queue_sum+=queued;++audio_queue_samples;audio_queue_max=std::max(audio_queue_max,queued);
-            }
-        }
+               m.audio->render_ready(samples.data(),samples.size()/2))!=0)handle_audio_chunk(count);
         const bool capture_final=!surface_saved && !surface.empty() && frames &&
             (finite_netplay ? session && session->synchronized() &&
                 session->result()!=f3rt::netplay::Session::Result::None : executed_frames==frames);
@@ -1077,6 +1078,10 @@ int main(int argc,char **argv) try {
 #endif
     }
     if(session && session->connected())session->disconnect("Local frontend closed");
+    if(!session) {
+        size_t count;
+        while((count=m.audio->render(samples.data(),samples.size()/2))!=0)handle_audio_chunk(count);
+    }
     if(!eeprom.empty())m.save_eeprom(eeprom);
     if(!fallback_report.empty()) {
         std::ofstream report(fallback_report);

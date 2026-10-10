@@ -11,7 +11,7 @@ This page lists their interfaces, formats, consumers, and source boundaries.
 | `runtime/core_state.c`, `runtime/state_oracle.h` | [Core state](#core-state) |
 | `runtime/sound_trace.hpp`, `runtime/sound_trace.cpp` | [Sound trace](#sound-trace) |
 | `runtime/state_io.hpp` | [State serialization](#state-serialization) |
-| `runtime/replay.cpp`, `runtime/check.cpp` | [Replay and check](/developer/runtime/replay-and-check) |
+| `runtime/replay.cpp`, `runtime/tests/*.cpp` | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/LICENSES.txt` | [Licenses and source boundaries](#licenses-and-source-boundaries) |
 
 ```mermaid

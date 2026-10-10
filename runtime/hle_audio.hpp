@@ -24,6 +24,7 @@ public:
     size_t available() const;
     size_t render(float *stereo, size_t frames);
     size_t render(int16_t *stereo, size_t frames);
+    size_t render_ready(int16_t *stereo, size_t frames);
     uint64_t generated() const;
     Audio::HleStats stats() const;
     void set_observer(std::function<void(const VoiceEvent &)> observer);

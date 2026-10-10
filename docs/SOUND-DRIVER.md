@@ -148,7 +148,7 @@ Against the retained reset-aware native-rate MAME capture, seconds 20–54 retai
 L/R correlation **0.9956761849580716 / 0.9952171577492129**, RMS error
 18.722660457703864 / 19.499802079856668 LSB and fixed lag -1 sample. This is the
 existing compatibility baseline, not waveform equality to physical hardware.
-`f3rt-check` passes. Evidence: local ignored `build/seed5*`, `build/oracle-*`.
+the runtime test suite passes. Evidence: local ignored `build/seed5*`, `build/oracle-*`.
 
 ## Mailbox grammar and main-game selectors
 

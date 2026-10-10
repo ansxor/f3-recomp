@@ -1,4 +1,5 @@
 #include "hle_synth.hpp"
+#include "hle_voice_kernel.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -45,7 +46,7 @@ struct Envelope {
     }
 };
 struct Filter {
-    std::array<double,4> state{}, previous{};
+    std::array<float,4> state{}, previous{};
     double a1 = 1, a2 = 1, target1 = 1, target2 = 1;
     double high_pole = 1, target_high_pole = 1;
     unsigned ramp = 0;
@@ -58,32 +59,19 @@ struct Filter {
         // register/clock execution. Quantization masks come from ROM's format.
         target1 = 1 - std::pow(1 - double(k1 & 0xfff0) / 65536, rate_ratio);
         target2 = 1 - std::pow(1 - double(k2 & 0xfff0) / 65536, rate_ratio);
+        // Native highpass pole is (1+k/65536)/2. Converting its
+        // pole rather than cutoff-Hz guesses keeps low-k differences.
         target_high_pole = std::pow((1 + double(k2 & 0xfff0) / 65536) * 0.5, rate_ratio);
         if (initial) { a1 = target1; a2 = target2; high_pole = target_high_pole; ramp = 0; }
         else ramp = filter_ramp;
     }
-    double process(double input) {
+    void advance() {
         if (ramp) {
-            a1 += (target1-a1)/ramp;
-            a2 += (target2-a2)/ramp;
-            high_pole += (target_high_pole-high_pole)/ramp;
+            a1 += (target1 - a1) / ramp;
+            a2 += (target2 - a2) / ramp;
+            high_pole += (target_high_pole - high_pole) / ramp;
             --ramp;
         }
-        for (unsigned i = 0; i != 4; ++i) {
-            bool high = i == 3 ? mode < 2 : i == 2 && mode == 0;
-            double a = (i < 2 || (i == 2 && mode != 2)) ? a1 : a2;
-            double result;
-            if (high) {
-                // Native highpass pole is (1+k/65536)/2. Converting its
-                // pole rather than cutoff-Hz guesses keeps low-k differences.
-                double pole = high_pole;
-                result = input - previous[i] + pole * state[i];
-            } else result = state[i] + a * (input - state[i]);
-            previous[i] = input;
-            state[i] = result;
-            input = result;
-        }
-        return input;
     }
 };
 }
@@ -95,6 +83,8 @@ struct Synth::Impl {
         std::array<int8_t,17> sample_banks{};
         uint8_t enabled = 0;
     };
+    // Volume ramp gain, stepped linearly while the ramp stays inside one gain-table interval.
+    struct GainSegment { double value = 0, slope = 0; unsigned frames = 0; };
     struct Voice {
         Note owner{};
         const uint8_t *patch = nullptr;
@@ -115,6 +105,8 @@ struct Synth::Impl {
         uint8_t layer = 0, selector = 14, pair = 0, priority = 0, allocation = 0;
         uint8_t effective_key = 0, weight = 127, pressure = 0;
         unsigned gain_frames = 0;
+        double step_left = 0, step_right = 0;
+        GainSegment left_segment{}, right_segment{};
         bool active = false, released = false, direct = false, reverse = false;
         bool loop = false, bidirectional = false, boundary = false, sample_finished = false, hardware_valid = false;
     };
@@ -127,7 +119,7 @@ struct Synth::Impl {
     std::array<Voice,32> voices{};
     std::array<Pending,96> pending{};
     std::array<ProgramData,256> programs{};
-    std::array<uint8_t,32> next{}, previous{};
+    std::array<uint8_t,32> next{}, voice_prev{};
     std::array<uint16_t,128> rates{};
     std::array<uint16_t,256> phase_rates{};
     std::array<uint16_t,2048> filters{};
@@ -137,17 +129,38 @@ struct Synth::Impl {
     std::array<float,256> gain{};
     std::array<uint8_t,12> budgets{};
     std::function<void(const VoiceEvent &)> observer;
+    struct BufferedEvent { size_t frame = 0; unsigned voice = 0; VoiceEvent event; };
+    std::vector<BufferedEvent> buffered_events;
+    std::vector<uint64_t> frame_ticks;
+    bool buffering_events = false;
+    size_t current_frame = 0;
+    unsigned current_voice = 0;
     uint64_t tick = 0, timer = timer_ticks, serial = 0;
     uint32_t tick_remainder = 0;
     uint16_t noise = 0;
     uint16_t noise_history = 0;
     uint8_t cursor = 0, budget_slot = 0, bend_range = 0;
     uint32_t reset_start = 0, reset_end = 0;
+    alignas(64) float input[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float a1[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float a2[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float high_pole[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float gain_left[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float gain_right[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float out_left[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float out_right[voice_block_frames * voice_lane_stride]{};
+    alignas(64) float state[4 * 32]{};
+    alignas(64) float previous[4 * 32]{};
+    alignas(64) uint8_t mode[32]{};
+    alignas(64) uint8_t lane_voice[32]{};
+    alignas(64) uint8_t lane_pair[32]{};
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
         if (r.size() != 0x80000 || s.size() != 0x800000)
             throw std::runtime_error("Land Maker HLE requires mapped sound and sample ROM regions");
         metadata.reserve(0x10000);
+        frame_ticks.reserve(1024);
+        buffered_events.reserve(32);
         decode_banks();
         // c15fb4..c15fde heap header overlaps bankc8 sample0. Decode the boot
         // operands rather than assuming sample metadata remains ROM-identical.
@@ -445,6 +458,8 @@ struct Synth::Impl {
         v.target_left=v.left_volume;v.target_right=v.right_volume;
         if(initial){v.left=v.target_left;v.right=v.target_right;v.gain_frames=0;}
         else v.gain_frames=(v.left==v.target_left&&v.right==v.target_right)?0:volume_ramp;
+        if(v.gain_frames){v.step_left=(v.target_left-v.left)/v.gain_frames;v.step_right=(v.target_right-v.right)/v.gain_frames;}
+        v.left_segment.frames=v.right_segment.frames=0;
         v.gain_dirty=true;
         v.filter.targets(v.k1,v.k2,initial);
         if(!initial&&notify)emit(v,VoiceEvent::Kind::Parameters,at);
@@ -456,7 +471,9 @@ struct Synth::Impl {
         e.sample_start=uint32_t(v.start);e.sample_end=uint32_t(v.end);e.frequency=v.frequency;
         e.left_volume=v.left_volume;e.right_volume=v.right_volume;e.k1=v.k1;e.k2=v.k2;
         if(onset){e.left_volume=(*onset)[0];e.right_volume=(*onset)[1];e.k1=(*onset)[2];e.k2=(*onset)[3];}
-        e.loop=v.loop;e.reverse=v.reverse;observer(e);
+        e.loop=v.loop;e.reverse=v.reverse;
+        if(buffering_events)buffered_events.push_back({current_frame,current_voice,e});
+        else observer(e);
     }
     void stop(Voice &v,uint64_t at){if(v.active&&!v.sample_finished)emit(v,VoiceEvent::Kind::Stop,at);v.active=false;}
     void end_sample(Voice &v,uint64_t at) {
@@ -487,9 +504,9 @@ struct Synth::Impl {
         return 32;
     }
     void move_before_cursor(unsigned i) {
-        unsigned a=previous[i],b=next[i];next[a]=uint8_t(b);previous[b]=uint8_t(a);
+        unsigned a=voice_prev[i],b=next[i];next[a]=uint8_t(b);voice_prev[b]=uint8_t(a);
         if(cursor==i)cursor=uint8_t(b);
-        a=previous[cursor];next[a]=uint8_t(i);previous[i]=uint8_t(a);next[i]=cursor;previous[cursor]=uint8_t(i);
+        a=voice_prev[cursor];next[a]=uint8_t(i);voice_prev[i]=uint8_t(a);next[i]=cursor;voice_prev[cursor]=uint8_t(i);
     }
     int key_weight(const uint8_t *p,int key) const {
         int amount=s8(p[0x58]),lo=p[0x5a],hi=p[0x5c];
@@ -643,10 +660,10 @@ struct Synth::Impl {
     void reset(uint64_t at) {
         for(Voice &v:voices){stop(v,at);v=Voice{};}
         for(Pending &p:pending)p.active=false;
-        for(unsigned i=0;i<32;++i){next[i]=uint8_t((i+1)%32);previous[i]=uint8_t((i+31)%32);}
+        for(unsigned i=0;i<32;++i){next[i]=uint8_t((i+1)%32);voice_prev[i]=uint8_t((i+31)%32);}
         tick=at;tick_remainder=0;timer=(at/timer_ticks+1)*timer_ticks;cursor=0;budget_slot=0;
         noise=rw(0xc16f04);noise_history=rw(0xc16f0a);
-        serial=0;
+        serial=0;buffered_events.clear();buffering_events=false;
     }
     void cancel(uint64_t instance,uint64_t at,uint32_t frames) {
         for(Pending &p:pending)if(p.active&&p.note.instance==instance)p.active=false;
@@ -673,38 +690,272 @@ struct Synth::Impl {
         double index=std::clamp(encoded/256.0,0.0,255.0);unsigned i=unsigned(index);
         return float(gain[i]+(gain[std::min(i+1,255u)]-gain[i])*(index-i));
     }
+    // gain[] is linear between adjacent entries and ramps move the encoded
+    // volume by a constant step, so a running sum tracks interpolated_gain (to
+    // double rounding) until the ramp crosses into the next table interval.
+    float ramp_gain(double encoded,double step,GainSegment &s) const {
+        if(s.frames){--s.frames;s.value+=s.slope;return float(s.value);}
+        const float exact=interpolated_gain(encoded);
+        const double index=encoded/256.0;
+        if(index>0&&index<255){
+            const unsigned i=unsigned(index);const double per_frame=step/256.0,delta=double(gain[i+1])-gain[i];
+            s.value=gain[i]+delta*(index-i);s.slope=delta*per_frame;
+            const double room=per_frame>0?(double(i+1)-index)/per_frame:per_frame<0?(index-double(i))/-per_frame:1e9;
+            s.frames=room>2?unsigned(std::min(room,1e6))-1:0;
+        }
+        return exact;
+    }
     void render(float *output,size_t frames) {
         if(!output&&frames)throw std::invalid_argument("Null HLE output buffer");
-        for(size_t frame=0;frame<frames;++frame){
-            while(timer<=tick){service(timer);timer+=timer_ticks;}
-            float *out=output+frame*8;std::fill_n(out,8,0.f);
-            for(Voice &v:voices){if(!v.active)continue;
-                if(v.gain_frames){v.left+=(v.target_left-v.left)/v.gain_frames;v.right+=(v.target_right-v.right)/v.gain_frames;--v.gain_frames;v.gain_dirty=true;}
-                if(v.cancellation_frames){v.cancellation-=v.cancellation/v.cancellation_frames;if(!--v.cancellation_frames){stop(v,tick);continue;}}
-                if(v.sample_finished)continue;
-                if(v.position<0||v.position>=double(samples.size())){stop(v,tick);continue;}
-                size_t index=size_t(v.position);double fraction=v.position-index;
-                double first=sample(index);
-                double value=first+(sample(index+1)-first)*fraction;
-                value=v.filter.process(value)*v.cancellation/524288.0;
-                if(v.gain_dirty){v.left_gain=interpolated_gain(v.left);v.right_gain=interpolated_gain(v.right);v.gain_dirty=false;}
-                out[v.pair*2]+=float(value)*v.left_gain;
-                out[v.pair*2+1]+=float(value)*v.right_gain;
-                v.position+=v.reverse?-v.increment:v.increment;
-                double length=v.end-v.start;
-                if(!v.reverse&&v.position>v.end){
-                    if(!v.loop||length<=0){end_sample(v,tick);continue;}
-                    if(v.bidirectional){v.position=v.end-(v.position-v.end);v.reverse=true;}
-                    else v.position=v.start+std::fmod(v.position-v.end,length);
-                }else if(v.reverse&&v.position<v.start){
-                    if(!v.loop||length<=0){end_sample(v,tick);continue;}
-                    if(v.bidirectional){v.position=v.start+(v.start-v.position);v.reverse=false;}
-                    else v.position=v.end-std::fmod(v.start-v.position,length);
+        if(!frames)return;
+        if(frame_ticks.size()<frames)frame_ticks.resize(frames);
+        uint64_t cur_tick=tick;uint32_t cur_rem=tick_remainder;
+        for(size_t f=0;f<frames;++f){
+            frame_ticks[f]=cur_tick;
+            cur_rem+=main_clock;cur_tick+=cur_rem/sample_rate;cur_rem%=sample_rate;
+        }
+        const double samples_limit=double(samples.size());
+        size_t frame_start=0;
+        while(frame_start<frames){
+            if(timer<=frame_ticks[frame_start]){
+                tick=frame_ticks[frame_start];
+                while(timer<=tick){service(timer);timer+=timer_ticks;}
+            }
+            size_t frame_end=frame_start+1;
+            while(frame_end<frames&&frame_ticks[frame_end]<timer)++frame_end;
+            std::fill_n(output+frame_start*8,(frame_end-frame_start)*8,0.f);
+            if(observer){buffering_events=true;buffered_events.clear();}
+            for(size_t chunk_start=frame_start;chunk_start<frame_end;chunk_start+=voice_block_frames){
+                const size_t chunk_frames=std::min(voice_block_frames,frame_end-chunk_start);
+                size_t count=0;
+                for(unsigned vi=0;vi<32;++vi){
+                    Voice &v=voices[vi];if(!v.active)continue;
+                    const size_t lane=count++;
+                    lane_voice[lane]=uint8_t(vi);
+                    lane_pair[lane]=v.pair;
+                    mode[lane]=v.filter.mode;
+                    for(unsigned s=0;s<4;++s){
+                        state[s*voice_lane_stride+lane]=v.filter.state[s];
+                        previous[s*voice_lane_stride+lane]=v.filter.previous[s];
+                    }
+                    current_voice=vi;
+                    const double length=v.end-v.start,increment=v.increment;
+                    auto fill_remaining=[&](size_t start_row){
+                        for(size_t rem=start_row;rem<chunk_frames;++rem){
+                            const size_t idx=rem*voice_lane_stride+lane;
+                            input[idx]=0.f;gain_left[idx]=0.f;gain_right[idx]=0.f;
+                            a1[idx]=float(v.filter.a1);a2[idx]=float(v.filter.a2);high_pole[idx]=float(v.filter.high_pole);
+                        }
+                    };
+                    size_t r=0;
+                    while(r<chunk_frames){
+                        size_t n=0;
+                        const bool ramping=v.gain_frames>0;
+                        if(v.cancellation_frames==0&&!v.sample_finished&&v.filter.ramp==0&&
+                           (!ramping||(v.left_segment.frames>0&&v.right_segment.frames>0&&v.gain_frames>1))){
+                            bool pos_ok=false;
+                            double pos_bound=0;
+                            if(!v.reverse){
+                                if(v.position>=0&&v.position<samples_limit-1&&v.end<samples_limit-1){
+                                    if(increment>0){
+                                        pos_bound=std::floor((v.end-v.position)/increment)-1.0;
+                                        pos_ok=(pos_bound>=1.0);
+                                    }else pos_ok=true;
+                                }
+                            }else{
+                                if(v.start>=0&&v.position>=0&&v.position<samples_limit-1){
+                                    if(increment>0){
+                                        pos_bound=std::floor((v.position-v.start)/increment)-1.0;
+                                        pos_ok=(pos_bound>=1.0);
+                                    }else pos_ok=true;
+                                }
+                            }
+                            if(pos_ok){
+                                n=chunk_frames-r;
+                                if(ramping){
+                                    n=std::min(n,size_t(v.left_segment.frames));
+                                    n=std::min(n,size_t(v.right_segment.frames));
+                                    n=std::min(n,size_t(v.gain_frames-1));
+                                }
+                                if(increment>0&&pos_bound<double(n))n=size_t(pos_bound);
+                            }
+                        }
+                        const bool slow=n<1;
+                        if(slow){
+                            const size_t frame=chunk_start+r;
+                            current_frame=frame;
+                            const uint64_t frame_tick=frame_ticks[frame];
+                            if(v.gain_frames){
+                                v.left+=v.step_left;v.right+=v.step_right;
+                                if(!--v.gain_frames){v.left=v.target_left;v.right=v.target_right;v.gain_dirty=true;}
+                                else{v.left_gain=ramp_gain(v.left,v.step_left,v.left_segment);v.right_gain=ramp_gain(v.right,v.step_right,v.right_segment);v.gain_dirty=false;}
+                            }
+                            if(v.cancellation_frames){
+                                v.cancellation-=v.cancellation/v.cancellation_frames;
+                                if(!--v.cancellation_frames){stop(v,frame_tick);fill_remaining(r);break;}
+                            }
+                            if(v.sample_finished){
+                                const size_t idx=r*voice_lane_stride+lane;
+                                input[idx]=0.f;gain_left[idx]=0.f;gain_right[idx]=0.f;
+                                a1[idx]=float(v.filter.a1);a2[idx]=float(v.filter.a2);high_pole[idx]=float(v.filter.high_pole);
+                                ++r;
+                                continue;
+                            }
+                            if(v.position<0||v.position>=samples_limit){stop(v,frame_tick);fill_remaining(r);break;}
+                            const size_t index=size_t(v.position);
+                            const double fraction=v.position-index;
+                            const double first=sample(index);
+                            const size_t idx=r*voice_lane_stride+lane;
+                            input[idx]=float(first+(sample(index+1)-first)*fraction);
+                            v.filter.advance();
+                            a1[idx]=float(v.filter.a1);
+                            a2[idx]=float(v.filter.a2);
+                            high_pole[idx]=float(v.filter.high_pole);
+                            if(v.gain_dirty){
+                                v.left_gain=interpolated_gain(v.left);
+                                v.right_gain=interpolated_gain(v.right);
+                                v.gain_dirty=false;
+                            }
+                            const float scale=v.cancellation*(1.f/524288.f);
+                            gain_left[idx]=v.left_gain*scale;
+                            gain_right[idx]=v.right_gain*scale;
+                            v.position+=v.reverse?-increment:increment;
+                            if(!v.reverse&&v.position>v.end){
+                                if(!v.loop||length<=0){end_sample(v,frame_tick);fill_remaining(r+1);break;}
+                                if(v.bidirectional){v.position=v.end-(v.position-v.end);v.reverse=true;}
+                                else v.position=v.start+std::fmod(v.position-v.end,length);
+                            }else if(v.reverse&&v.position<v.start){
+                                if(!v.loop||length<=0){end_sample(v,frame_tick);fill_remaining(r+1);break;}
+                                if(v.bidirectional){v.position=v.start+(v.start-v.position);v.reverse=false;}
+                                else v.position=v.end-std::fmod(v.start-v.position,length);
+                            }
+                            ++r;
+                        }else{
+                            const float a1c=float(v.filter.a1);
+                            const float a2c=float(v.filter.a2);
+                            const float hpc=float(v.filter.high_pole);
+                            double pos=v.position;
+                            const double inc=v.reverse?-increment:increment;
+                            if(ramping){
+                                double v_left=v.left,v_right=v.right;
+                                double seg_l_val=v.left_segment.value;
+                                const double seg_l_slope=v.left_segment.slope;
+                                double seg_r_val=v.right_segment.value;
+                                const double seg_r_slope=v.right_segment.slope;
+                                const double step_l=v.step_left,step_r=v.step_right;
+                                const float scale=1.f/524288.f;
+                                for(size_t k=0;k<n;++k){
+                                    const size_t idx=(r+k)*voice_lane_stride+lane;
+                                    const size_t i=size_t(pos);
+                                    const double frac=pos-double(i);
+                                    const double a=int16_t(samples[i]),b=int16_t(samples[i+1]);
+                                    input[idx]=float(a+(b-a)*frac);
+                                    pos+=inc;
+                                    a1[idx]=a1c;a2[idx]=a2c;high_pole[idx]=hpc;
+                                    v_left+=step_l;v_right+=step_r;
+                                    seg_l_val+=seg_l_slope;seg_r_val+=seg_r_slope;
+                                    gain_left[idx]=float(seg_l_val)*scale;
+                                    gain_right[idx]=float(seg_r_val)*scale;
+                                }
+                                v.left=v_left;v.right=v_right;
+                                v.left_segment.frames-=unsigned(n);
+                                v.left_segment.value=seg_l_val;
+                                v.right_segment.frames-=unsigned(n);
+                                v.right_segment.value=seg_r_val;
+                                v.gain_frames-=unsigned(n);
+                                v.left_gain=float(seg_l_val);
+                                v.right_gain=float(seg_r_val);
+                                v.gain_dirty=false;
+                            }else{
+                                if(v.gain_dirty){
+                                    v.left_gain=interpolated_gain(v.left);
+                                    v.right_gain=interpolated_gain(v.right);
+                                    v.gain_dirty=false;
+                                }
+                                const float gl=v.left_gain*(1.f/524288.f);
+                                const float gr=v.right_gain*(1.f/524288.f);
+                                for(size_t k=0;k<n;++k){
+                                    const size_t idx=(r+k)*voice_lane_stride+lane;
+                                    const size_t i=size_t(pos);
+                                    const double frac=pos-double(i);
+                                    const double a=int16_t(samples[i]),b=int16_t(samples[i+1]);
+                                    input[idx]=float(a+(b-a)*frac);
+                                    pos+=inc;
+                                    a1[idx]=a1c;a2[idx]=a2c;high_pole[idx]=hpc;
+                                    gain_left[idx]=gl;
+                                    gain_right[idx]=gr;
+                                }
+                            }
+                            v.position=pos;
+                            current_frame=chunk_start+r+n-1;
+                            r+=n;
+                        }
+                    }
+                }
+                const size_t lanes=count==0?0:((count+voice_lane_multiple-1)/voice_lane_multiple)*voice_lane_multiple;
+                for(size_t lane=count;lane<lanes;++lane){
+                    mode[lane]=3;
+                    for(unsigned s=0;s<4;++s){
+                        state[s*voice_lane_stride+lane]=0.f;
+                        previous[s*voice_lane_stride+lane]=0.f;
+                    }
+                    for(size_t r=0;r<chunk_frames;++r){
+                        const size_t idx=r*voice_lane_stride+lane;
+                        input[idx]=0.f;gain_left[idx]=0.f;gain_right[idx]=0.f;
+                        a1[idx]=0.f;a2[idx]=0.f;high_pole[idx]=0.f;
+                    }
+                }
+                if(count>0){
+                    const VoiceBlock block{
+                        .frames=chunk_frames,
+                        .lanes=lanes,
+                        .input=input,
+                        .a1=a1,
+                        .a2=a2,
+                        .high_pole=high_pole,
+                        .gain_left=gain_left,
+                        .gain_right=gain_right,
+                        .mode=mode,
+                        .state=state,
+                        .previous=previous,
+                        .out_left=out_left,
+                        .out_right=out_right,
+                    };
+                    render_voice_block(block);
+                    for(size_t lane=0;lane<count;++lane){
+                        const unsigned pair_left=unsigned(lane_pair[lane])*2;
+                        const unsigned pair_right=pair_left+1;
+                        for(size_t r=0;r<chunk_frames;++r){
+                            float *out=output+(chunk_start+r)*8;
+                            out[pair_left]+=out_left[r*voice_lane_stride+lane];
+                            out[pair_right]+=out_right[r*voice_lane_stride+lane];
+                        }
+                    }
+                    for(size_t lane=0;lane<count;++lane){
+                        Voice &v=voices[lane_voice[lane]];
+                        for(unsigned s=0;s<4;++s){
+                            v.filter.state[s]=state[s*voice_lane_stride+lane];
+                            v.filter.previous[s]=previous[s*voice_lane_stride+lane];
+                        }
+                    }
                 }
             }
-            for(unsigned bus=0;bus<8;++bus)out[bus]=std::clamp(out[bus],-1.f,1.f-1.f/524288.f);
-            tick_remainder+=main_clock;tick+=tick_remainder/sample_rate;tick_remainder%=sample_rate;
+            if(observer){
+                buffering_events=false;
+                if(!buffered_events.empty()){
+                    std::stable_sort(buffered_events.begin(),buffered_events.end(),[](const BufferedEvent &a,const BufferedEvent &b){
+                        return a.frame!=b.frame?a.frame<b.frame:a.voice<b.voice;
+                    });
+                    for(const auto &be:buffered_events)observer(be.event);
+                    buffered_events.clear();
+                }
+            }
+            float *sub_out=output+frame_start*8;
+            const size_t sub_floats=(frame_end-frame_start)*8;
+            for(size_t i=0;i<sub_floats;++i)sub_out[i]=std::clamp(sub_out[i],-1.f,1.f-1.f/524288.f);
+            frame_start=frame_end;
         }
+        tick=cur_tick;tick_remainder=cur_rem;
     }
 };
 

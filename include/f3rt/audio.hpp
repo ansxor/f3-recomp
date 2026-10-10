@@ -74,12 +74,22 @@ public:
     uint64_t clock_ticks() const;
     uint64_t generated_frames() const;
 
+    // Final output gain after the board mix, shared by accurate and HLE audio. The MAME-equivalent
+    // mix (ES5505 /2^19, 0.18 pump input, MB87078 percent/32 twice, 0.5 route) peaks near -25 dBFS
+    // on every measured game (1.3k-1.9k of 32768 at game volume), so the output stage is raised 12x
+    // (+21.6 dB). Loud passages then reach roughly 0.5-0.6 FS and the existing +/-1 clamp is not hit.
+    static constexpr float output_boost = 12.0f;
+
     // Audio output stream: interleaved stereo (Left, Right)
     // Accurate: ES5505 native rate; HLE: 48000 Hz.
     uint32_t sample_rate() const;
     size_t available_frames() const;
     size_t render(int16_t *interleaved_stereo, size_t max_frames);
     size_t render(float *interleaved_stereo, size_t max_frames);
+    // Non-blocking drain: returns only PCM already produced by the HLE worker
+    // without waiting. Never blocks on the HLE worker. Callers needing a
+    // complete, deterministic stream must finish with the blocking render.
+    size_t render_ready(int16_t *interleaved_stereo, size_t max_frames);
     // Default matches the observed MAME board mix; SingleStage is an explicit
     // unverified analog-gain experiment, not an asserted board schematic.
     void set_gain_model(GainModel model);

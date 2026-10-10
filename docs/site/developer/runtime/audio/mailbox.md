@@ -15,7 +15,7 @@ The two CPUs see the same bytes at different addresses:
 | Main | `0xc00000` - `0xc007ff` | One byte per address. |
 | Sound | `0x140000` - `0x140fff` | Data only at even addresses. Byte `i` is at `0x140000 + 2 * i`. |
 
-A sound read of an odd address returns `0xff`. A sound 16-bit read of a mailbox word returns `(byte << 8) | 0xff`. A 16-bit write stores the high byte. The check in `runtime/check.cpp` tests both directions ("DPRAM sound high-byte lane" and "DPRAM reverse lane").
+A sound read of an odd address returns `0xff`. A sound 16-bit read of a mailbox word returns `(byte << 8) | 0xff`. A 16-bit write stores the high byte. The check in `runtime/tests/audio.cpp` tests both directions ("DPRAM sound high-byte lane" and "DPRAM reverse lane").
 
 Neither side has a lock or an interrupt for the mailbox. Both sides use plain reads and writes. The sound driver polls the ring in its timer interrupt.
 

@@ -218,7 +218,7 @@ It does not enter another CPU runner from a main-CPU bus callback.
 
 `reset()` does not clear the RAM arrays. The constructor zero-fills them. It does not clear inputs or coin counters either.
 
-`f3rt-check` tests the result: "Cold reset charges four cycles without executing the first opcode".
+`runtime/tests/cpu.cpp` tests the result: "Cold reset charges four cycles without executing the first opcode".
 
 ## Sound device synchronization
 

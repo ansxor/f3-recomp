@@ -1,55 +1,39 @@
 # Unit checks
 
 This page explains the tests that need no ROM or MAME.
-It covers `f3rt-check`, the Python tests and the Go tests.
+It covers the split C++ runtime tests, the Python tests and the Go tests.
 You will learn what each test checks and how to add a check.
 
 These tests check isolated behavior. Run the relevant tests before the whole-game checks.
 
 | Test set | Language | Command | Needs ROM |
 | --- | --- | --- | --- |
-| `f3rt-check` (CTest name `runtime-devices`) | C++ | `ctest` | No |
+| `f3rt-test-<area>` (CTest name `runtime-<area>`) | C++ | `ctest --test-dir build -R runtime-` | No |
 | `tools/test_*.py` | Python | `python3 -m unittest discover` | No |
 | `netplay/server/*_test.go` | Go | `go test -race ./...` | No |
 | Differential harness | Python and C | See [Differential testing](/developer/testing/differential) | No |
 
-## `f3rt-check`: device and scheduler checks
+## C++ runtime tests
 
-`runtime/check.cpp` builds the program `f3rt-check`. The file `CMakeLists.txt` registers it with CTest when `BUILD_TESTING` is on (the default after `include(CTest)`):
-
-```cmake
-add_executable(f3rt-check runtime/check.cpp)
-target_link_libraries(f3rt-check PRIVATE f3rt)
-add_test(NAME runtime-devices COMMAND f3rt-check)
-```
-
-The program links only the `f3rt` library. It does not need generated code, ROM files or SDL. You can build it without `F3_ROM_DIR`.
+The C++ checks are split by area under `runtime/tests/`. CMake builds the `f3rt-test-support` static library and one executable per area (`f3rt-test-<area>`), registering each as `runtime-<area>` with CTest when `BUILD_TESTING` is on.
 
 ```sh
 cmake -S . -B build -G Ninja -DF3RT_SDL=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target f3rt-check
-ctest --test-dir build --output-on-failure     # or: build/f3rt-check
+ctest --test-dir build -R runtime-
 ```
 
-A passing run prints one line and exits with 0:
+Each area test prints `PASS` on success or `FAIL <message>` on failure. Shared fixture and assertion helpers are in `runtime/tests/support.hpp` and `support.cpp`. The fixture uses zero-filled ROM data, an initial stack at `0x41fff0`, a small loop at `0x100`, and one sample word.
 
-```text
-PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter
-```
+| Area | Source | Coverage |
+| --- | --- | --- |
+| video | [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | FDP geometry and game-video decoding checks. |
+| input | [`runtime/tests/input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp) | Local and dial inputs, scripts, coin edges and active-low start. |
+| eeprom | [`runtime/tests/eeprom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp) | EEPROM protocol and factory image. |
+| cpu | [`runtime/tests/cpu.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp) | CPU dispatch, memory, timing, exceptions, IRQ and watchdog. |
+| sprite_units | [`runtime/tests/sprite_units.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprite_units.cpp) | Sprite unit sandbox. |
+| audio | [`runtime/tests/audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp) | Sound ordering, audio timing, DUART, DSP, mixer and reset behavior. |
 
-A failing run prints `FAIL <message>` and exits with 1.
-
-### How it is built
-
-`check.cpp` is a single file. It is not a test framework. It has a helper:
-
-```cpp
-void require(bool ok, const char *why) { if (!ok) throw std::runtime_error(why); }
-```
-
-The first failed `require()` throws. The `main()` function catches the exception, prints `FAIL` with the message and stops. Each message states the rule that the check protects. Read the message to learn the rule.
-
-The file has more than 150 `require()` calls. Most checks use a **fixture**: `fixture()` returns a synthetic `RomSet` with a tiny main program (`MOVEQ #42,D0` at `0x100`, then `BRA` to itself), a 0x80000-byte sound ROM and one planted sample word. A `Machine` built from this fixture starts at PC `0x100` with the stack at `0x41fff0`. The fixture contains no game data.
+The checks use a synthetic fixture and do not need game ROMs.
 
 ### What the checks cover
 
@@ -80,7 +64,7 @@ Some checks run the same input on the interpreter (`m->interpreter->run_main(1)`
 
 `docs/developer/DECISIONS.md` records that several of these checks failed before the fix that they protect, and pass after it. Examples are the pending-IRQ-at-STOP check and the DC-voice sound check.
 
-### What `f3rt-check` does not prove
+### What the runtime tests does not prove
 
 It tests single rules with small inputs. It does not run the game. It does not replace the gameplay gates. See [Machine, memory and scheduling](/developer/runtime/machine).
 
@@ -89,7 +73,7 @@ It tests single rules with small inputs. It does not run the game. It does not r
 1. Find the function whose component you changed. Add a `require()` call at the end, or add a new function.
 2. Write the message as a rule: "X does Y when Z".
 3. Call the new function from `main()`, before the code that builds the main `Machine` if it needs its own machine.
-4. Make the check fail first. Revert your fix, run `f3rt-check`, and see the `FAIL` message. Then restore the fix.
+4. Make the check fail first. Revert your fix, run the runtime tests, and see the `FAIL` message. Then restore the fix.
 
 Use the fixture for a machine. If you need sound code, write it with `m->audio->write16()` into sound RAM, as `check_main_sound_ordering` does.
 
@@ -164,4 +148,4 @@ See [Relay server](/developer/netplay/server) and [Wire protocol](/developer/net
 ## Limits
 
 - No automatic system runs these tests. The repository has only a documentation workflow. Run them before you commit.
-- `f3rt-check` stops at the first failure. It does not list all failing checks.
+- the runtime tests stops at the first failure. It does not list all failing checks.

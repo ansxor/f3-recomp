@@ -111,7 +111,7 @@ dispatch subtracts preceding excluded words, with no second allocation/map.
 An excluded sound target throws before an opcode read. Timing, `f3_cpu` layout
 and canonical machine snapshots are unchanged.
 
-The synthetic discovery/generator/scanner suite and actual `f3rt-check` cover
+The synthetic discovery/generator/scanner suite and actual the runtime tests cover
 bounds, overlap, entry/table conflicts, lazy flags/deadlines and fallback
 precedence. A real-ROM smoke additionally forces even/odd starts and both ends
 of all six applied ranges, plus `JMP (A0)` into an excluded range: **25** explicit

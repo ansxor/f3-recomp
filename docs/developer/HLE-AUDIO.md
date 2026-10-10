@@ -129,6 +129,34 @@ No sound-CPU, chip state, worker queue, voice, host instance ID or PCM enters
 an HLE snapshot or peer checksum. Worker failures propagate to the caller.
 All queues and voice/note pools are bounded; exhaustion fails explicitly.
 
+The worker thread enables flush-to-zero and denormals-are-zero (x86 MXCSR,
+arm64 FPCR.FZ) because decaying reverb and filter tails otherwise become
+subnormal: effects cost rose ~2.8x about ten seconds after input stopped and
+did not recover. `Synth::render` works in sub-blocks split at the 1 kHz service
+boundaries, in chunks of at most 64 frames. A scalar prepass walks each active
+voice and writes structure-of-arrays rows (interpolated input, filter
+coefficients, final per-frame gain) into 32 lanes. Most frames run in branch-free
+runs bounded by the next loop end, gain-ramp end, gain-table interval, filter
+ramp or cancellation; those events take a per-frame slow path that also emits
+voice events at the same frame and voice as before. `render_voice_block`
+(`runtime/hle_voice_kernel.cpp`) then runs the four-pole filter and gain for all
+lanes in float SIMD, dispatched at runtime by Google Highway, and the synth adds
+the results to the buses in ascending voice order. Volume ramps advance the
+encoded level by a constant step; because the gain table is linear between
+adjacent entries, ramp gain is a running sum re-evaluated only when the ramp
+crosses a table entry.
+
+Output is perceptually transparent rather than bit-identical: float filter
+state, fused multiply-add and reordered arithmetic are intentional. Over 20
+songs × 30 s, int16 output differs from the former double-precision loop by at
+most 1 LSB (RMS 0.04 LSB, 95.8 dB below the signal), and synth cost fell from
+12.5 to 6.8 ns per active voice-sample on a Ryzen 7 5700X3D. `Effects` bypasses its delay and
+reverb once the sends have been silent for 96,000 frames and every value
+written to its lines in that window is below 1e-8. Entry zeroes the lines
+without moving their cursors, so later output keeps the same fractional-delay
+rounding. The discarded tail is below 0.02 int16 LSB at the maximum output
+gain.
+
 Canonical HLE loads validate mailbox offsets, flags and command context, not
 just serialized byte count. On non-rollback state adoption (host handoff,
 confirmed local return or local restore), the main-side clock is rebased to
@@ -160,6 +188,11 @@ frames. The netplay core supplies that range; ordinary correction restores
 main-side state without rebasing or rewinding playback.
 Headless extraction synchronizes with the worker when draining PCM, making
 offline output independent of scheduling without involving audio in gameplay.
+`Audio::render`/`available_frames` keep that blocking contract. Outside
+netplay, the interactive frontend loop instead uses `Audio::render_ready`,
+which returns only PCM the worker has already produced and never waits, so
+synthesis overlaps the next emulated frame. After the loop it drains the rest
+with the blocking `render`, so WAV contents and audio counters are unchanged.
 
 ## Historical verification and tolerances
 
@@ -167,7 +200,7 @@ Acceptance is correct note/SFX identity and timing, close pitch/level/envelopes,
 and useful listening captures, not waveform parity. The observations below
 are automated measurements; no human listening approval is claimed.
 
-`runtime-devices` and `hle-audio` pass under CTest. The latter exercises real
+`runtime-audio` and `hle-audio` pass under CTest. The latter exercises real
 ROM synthesis, a sound-CPU callback that fails if invoked, worker isolation,
 snapshot independence, parked-sequence direct SFX, arrangement selection/stop,
 identical replay, changed instruments, missing SFX and one/two-frame leeway.
@@ -306,7 +339,7 @@ A fresh Release build of all targets completed in `build/hle-merge`, using
 `PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages` and
 `F3_ROM_DIR=/Users/darien/Workspace/f3-stuff/roms/landmakr`.
 `ctest --test-dir build/hle-merge --output-on-failure` passed both
-`runtime-devices` and `hle-audio` (2/2).
+`runtime-audio` and `hle-audio` (2/2).
 
 Both actual frontend runs completed 1,800 frames:
 

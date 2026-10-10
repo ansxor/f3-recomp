@@ -194,7 +194,7 @@ At seed 5, frame 1500, border 48, 300 timed compositor-only repetitions after
 Scale 4 mean speedup: 3.54x. A strict-native seed-5 smoke through 3600 frames
 compared 144 serial/threaded images: scales 1..4, borders 0/48/160, 12 scenes
 at 300-frame intervals. **Zero differing pixels**; 48,820,718 native blocks,
-zero interpreter fallback. `f3rt-check` passes.
+zero interpreter fallback. `runtime tests` passes.
 External captures: `/tmp/f3-gpuvideo/threaded-cpu/frame_{1200,1500,3600}_4x.png`.
 These are sampled rerasterizations using the live scene at the sample boundary,
 not a new claim about scanout lag. Actual Cocoa/Metal frontend additionally
@@ -505,7 +505,7 @@ A fresh headless `--renderer compare-gpu --video-interp fit`
 frame CRC `3359f200`, 51,507,335 native blocks and zero instruction fallback.
 Its WAV compares byte-identically with both the parity checkpoint and
 integration `coverage-final.wav`. The retained `F3RT_GPU=OFF` frontend and
-`f3rt-check` also build/run without shader tools.
+`runtime tests` also build/run without shader tools.
 
 ### Accepted-water performance
 
@@ -1006,7 +1006,7 @@ flip fallback/recovery are induced. These are branch proofs. No CPU fallback.
 Fresh 3600-frame headless `compare`, GPU/fit/combined flags and automatic scale
 retain 250,114,560 exact native RGB comparisons and byte-identical WAV against
 the established native baseline. `F3RT_GPU=OFF` frontend and existing
-`f3rt-check` build/run; the device check passes. Native/MAME acceptance remains
+`runtime tests` build/run; the device check passes. Native/MAME acceptance remains
 the earlier 25/25 proof; no guest/video/audio implementation changed here.
 
 Frozen seed 5 frame 1560, border 48, **100 measured draws after 25 warmup**,
@@ -1195,7 +1195,7 @@ results}.json`, `fit-geometry-foreground/run.json` and the three foreground
 capture directories. Full-resolution source captures/metrics remain external;
 throwaway executables and sources were removed after smoke proof.
 
-Current integrated `f3rt-check` passes. The GPU-off Cocoa frontend also accepts
+Current integrated `runtime tests` passes. The GPU-off Cocoa frontend also accepts
 the field-control CLI without GPU support and presents its native boot surface.
 No sprite/canonical data layout, CPU ABI, machine/audio semantics, rollback
 schema or existing MAME acceptance path changed. Metal on this Mac is exercised;

@@ -200,7 +200,7 @@ During the first boot the game ROM writes the whole EEPROM, including a checksum
 
 ## Tests
 
-`f3rt-check` has EEPROM tests with these facts:
+`runtime/tests/eeprom.cpp` checks these EEPROM facts:
 
 - A write is ignored before EWEN.
 - A deselected chip has DO high. Raising CS during programming shows busy.
@@ -219,4 +219,4 @@ Also see [Replay and check](/developer/runtime/replay-and-check).
 - [Input and coin bus mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp)
 - [Local keyboard mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp)
 - [Two-player input mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay.cpp)
-- [EEPROM checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp)
+- [EEPROM checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp)

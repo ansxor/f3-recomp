@@ -1,10 +1,10 @@
-# f3rt-replay and f3rt-check
+# f3rt-replay and runtime tests
 
-The runtime provides two validation programs.
+The runtime provides a replay tool and per-area validation tests.
 `f3rt-replay` compares isolated devices with recorded reference data.
-`f3rt-check` exercises the board runtime with synthetic ROMs.
+The C++ runtime tests exercise the board runtime with synthetic ROMs.
 
-Both programs link the `f3rt` library. Neither needs generated game code. For the larger test setup, read the [Testing overview](/developer/testing/).
+The replay tool links the `f3rt` library; the tests link `f3rt-test-support`. Neither needs generated game code. For the larger test setup, read the [Testing overview](/developer/testing/).
 
 ## f3rt-replay
 
@@ -79,25 +79,15 @@ Successful audio replay returns 0; it does not compare the WAV against MAME itse
 
 The script `tools/compare_audio.py` compares the WAV file with a MAME recording. `docs/developer/DECISIONS.md` records that the replay of a 62-second baseline gave a correlation of 0.999978 with MAME after a one-sample latency fix. Treat this as a device-level result. It does not prove that the integrated game audio matches.
 
-## f3rt-check
+## C++ runtime tests
 
-The source is `runtime/check.cpp`. CMake builds it only when `BUILD_TESTING` is on, and registers it as the CTest test `runtime-devices`.
+The tests live in `runtime/tests/`, with one binary and CTest test per area. CMake builds the shared `f3rt-test-support` library and the `f3rt-test-<area>` executables only when `BUILD_TESTING` is on.
 
 ```sh
-ctest --test-dir build -R runtime-devices
+ctest --test-dir build -R runtime-
 ```
 
-The program has no options. It runs all checks in order. On the first failed check it prints `FAIL <message>` and returns 1. On success it prints one `PASS` line and returns 0.
-
-The helper `require(ok, why)` throws a `std::runtime_error` with the text `why`. So each message in the source states the rule that the check proves.
-
-### The fixture
-
-`fixture()` builds a `RomSet` with zero-filled regions of the right sizes. It then adds:
-
-- The main ROM vectors: SSP `0x41fff0`, PC `0x100`.
-- At `0x100`: `MOVEQ #42,D0` and a `BRA` to itself.
-- A sample word in the sample ROM to test a 20-bit address.
+Each test runs its area's checks, prints `PASS` on success, and prints `FAIL <message>` on failure. The shared `f3test::require` helper reports failed expectations. `f3test::fixture()` supplies zero-filled ROM regions, SSP `0x41fff0`, PC `0x100` with `MOVEQ #42,D0` and a branch to itself, and one sample word.
 
 The checks need no game data, so they run anywhere.
 
@@ -148,12 +138,18 @@ The same style applies to every check. Set up the state, call the public functio
 ## Key points
 
 - `f3rt-replay` tests the renderer and the sound chips against MAME data. It uses no CPU.
-- `f3rt-check` is the unit test of the runtime core. It uses a tiny synthetic ROM.
+- The per-area runtime tests check isolated runtime behavior with a tiny synthetic ROM.
 - Both programs print results that are easy to compare in scripts.
 
 ## Sources
 
 - [Replay command and comparison loop](https://github.com/ansxor/f3-recomp/blob/main/runtime/replay.cpp)
-- [Device checks and synthetic ROM fixture](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp)
+- [Video checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp)
+- [Input checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp)
+- [EEPROM checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp)
+- [CPU checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp)
+- [Audio checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp)
+- [Sprite unit checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprite_units.cpp)
+- [Shared test support](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/support.cpp)
 - [Exact-size capture reads and WAV output](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp)
 - [Validation build targets](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt)

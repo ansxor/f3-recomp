@@ -150,7 +150,7 @@ add_library(f3rt STATIC runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp 
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} runtime/audio.cpp
     runtime/sound_trace.cpp runtime/sound_native.cpp runtime/block_profile.cpp runtime/input.cpp runtime/netplay.cpp
-    runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp
+    runtime/hle_audio.cpp runtime/hle_sequencer.cpp runtime/hle_synth.cpp runtime/hle_voice_kernel.cpp
     runtime/netplay_transport.cpp runtime/netplay_session.cpp runtime/sprite_units.cpp runtime/sprite_behaviours.cpp runtime/discovery_log.cpp
     ${AUDIO_SOURCES})
 # Generated headers are reached as "generated_config/<name>": runtime/sprite_units.hpp
@@ -166,7 +166,19 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB)
+# Google Highway: runtime-dispatched SIMD for the HLE voice kernel.
+find_package(hwy 1.0 CONFIG QUIET)
+if(NOT TARGET hwy::hwy)
+    include(FetchContent)
+    set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(highway GIT_REPOSITORY https://github.com/google/highway.git GIT_TAG 1.4.0 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(highway)
+    add_library(hwy::hwy ALIAS hwy)
+endif()
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy)
 # Musashi calls the runtime bus; static consumers need both archives rescanned.
 target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
@@ -315,10 +327,14 @@ if(BUILD_TESTING)
     add_test(NAME motion-interpolation-guards COMMAND f3rt-motion-check)
     add_test(NAME game-geometry-literals COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_game_geometry_literals.cmake)
-    add_executable(f3rt-check runtime/check.cpp)
-    target_link_libraries(f3rt-check PRIVATE f3rt)
-    target_include_directories(f3rt-check PRIVATE runtime)
-    add_test(NAME runtime-devices COMMAND f3rt-check)
+    add_library(f3rt-test-support STATIC runtime/tests/support.cpp)
+    target_link_libraries(f3rt-test-support PUBLIC f3rt)
+    target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests)
+    foreach(area video input eeprom cpu sprite_units audio)
+        add_executable(f3rt-test-${area} runtime/tests/${area}.cpp)
+        target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support)
+        add_test(NAME runtime-${area} COMMAND f3rt-test-${area})
+    endforeach()
     # Emit-unit replay check (needs the game ROMs and a game that declares emit units).
     file(READ "${F3_GAME_CONFIG}" F3_GAME_CONFIG_TEXT)
     string(FIND "${F3_GAME_CONFIG_TEXT}" "[[video.emit_units]]" F3_EMIT_UNITS_POS)

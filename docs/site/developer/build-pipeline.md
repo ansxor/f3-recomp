@@ -13,6 +13,7 @@ The top-level `CMakeLists.txt` drives everything. The ROM-to-C step runs at **co
 | CMake 3.24 or newer | `cmake_minimum_required(VERSION 3.24)` | `CMakeLists.txt` |
 | A C11 and C++20 compiler | `CMAKE_C_STANDARD 11`, `CMAKE_CXX_STANDARD 20` | `CMakeLists.txt` |
 | SDL3 with CMake config files | The frontend. Skip it with `-DF3RT_SDL=OFF`. | `find_package(SDL3 CONFIG REQUIRED)` |
+| Google Highway 1.0 or newer | Runtime-dispatched SIMD for the HLE voice kernel. Without an installed package, CMake fetches tag 1.4.0. | `find_package(hwy CONFIG)`, `FetchContent` fallback |
 | Python 3.11 or newer | The recompiler uses `tomllib`. CMake needs the `Interpreter` component. | `README.md`, `recomp/discovery.py` |
 | Capstone 5.0.9 (Python package) | The disassembler. Install it into `build/python`. | `recomp/requirements.txt` |
 | Ninja (recommended) | The README commands use `-G Ninja`. | `README.md` |
@@ -141,7 +142,7 @@ The next table lists all targets. A target exists only when its condition is tru
 | --- | --- | --- | --- | --- |
 | `f3rt_m68kmake` | executable | always | `m68kmake.c` | none |
 | `f3rt_musashi` | static library | always | Musashi, `m68kops.c`, `core_state.c` | none |
-| `f3rt` | static library | always | Explicit runtime library sources and `third_party/audio/*.cpp` | `f3rt_musashi` (private). Public include path `include`. |
+| `f3rt` | static library | always | Explicit runtime library sources and `third_party/audio/*.cpp` | `f3rt_musashi`, `hwy::hwy` (private). Public include path `include`. |
 | `f3_sound_recompiled` | static library | `F3_SOUND_GENERATED_DIR` set | `F3_SOUND_GENERATED_SOURCES` from the sound directory | `f3rt` (public) |
 | `f3_recompiled` | static library (C) | `F3_GENERATED_DIR` set | `F3_GENERATED_SOURCES` of the main directory | none. Compiled with `-Wall -Wextra -Werror` on Clang and GCC. |
 | `f3rt-sound-extract` | executable | always | `tools/sound_extract.cpp` | `f3rt` |
@@ -150,7 +151,8 @@ The next table lists all targets. A target exists only when its condition is tru
 | `f3rt-run` | executable | `F3RT_SDL` | `runtime/frontend.cpp` | `f3rt`, `SDL3::SDL3`, and `f3_recompiled` if generated code exists |
 | `landmakr` | executable | `F3RT_SDL` and `F3_GENERATED_DIR` set | `runtime/frontend.cpp` | `f3rt`, `f3_recompiled`, `SDL3::SDL3` |
 | `f3rt-replay` | executable | always | `runtime/replay.cpp` | `f3rt` |
-| `f3rt-check` | executable | `BUILD_TESTING` (CTest) | `runtime/check.cpp` | `f3rt` |
+| `f3rt-test-support` | static library | `BUILD_TESTING` | `runtime/tests/support.cpp` | `f3rt` |
+| `f3rt-test-<area>` | executable (one per area) | `BUILD_TESTING` (CTest) | `runtime/tests/<area>.cpp` | `f3rt-test-support` |
 | `f3rt_musashi_generated` | custom target | always | Depends on the generated `m68kops.h` | Orders Musashi header generation. |
 
 The library `f3rt` compiles with `-Wall -Wextra -Wpedantic`. It contains `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `renderer/fdp/video.cpp`, the `renderer/game/*.cpp` files, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` and the ES5505, ES5510, MC68681 and MB87078 chip files.
@@ -231,11 +233,11 @@ cmake --build build --target landmakr -j 4
 The second recipe builds the test tools, including the checks:
 
 ```sh
-cmake --build build --target f3rt-check f3rt-gameplay-regression f3rt-netplay-oracle
-ctest --test-dir build
+cmake --build build --target f3rt-gameplay-regression f3rt-netplay-oracle
+ctest --test-dir build -R runtime-
 ```
 
-The `ctest` command runs one test: `runtime-devices`, which runs `f3rt-check`.
+The CTest command runs the per-area runtime tests (`runtime-video`, `runtime-input`, `runtime-eeprom`, `runtime-cpu`, `runtime-sprite_units` and `runtime-audio`).
 
 The third recipe builds the relay server. CMake does not manage it:
 

@@ -68,7 +68,7 @@ Open these files first. Then follow the subsystem pages.
 | Transport | `include/f3rt/netplay_transport.hpp` | `runtime/netplay_transport.cpp` | [Client transport](/developer/netplay/transport) |
 | Session lifecycle | `include/f3rt/netplay_session.hpp` | `runtime/netplay_session.cpp` | [Frontend integration](/developer/netplay/frontend-integration) |
 | Relay server | `netplay/server/main.go` | `server.go`, `room.go`, `protocol.go` | [Relay server](/developer/netplay/server) |
-| Tests | `runtime/check.cpp` | `tools/gameplay_regression.cpp` | [Testing](/developer/testing/) |
+| Tests | `runtime/tests/*.cpp` | `tools/gameplay_regression.cpp` | [Testing](/developer/testing/) |
 
 ## File lists
 
@@ -174,7 +174,7 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/netplay_session.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_session.cpp) | Local/lobby/preparation/handoff/versus/local-return lifecycle, including fresh rematches. |
 | [`runtime/capture_io.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp) | Helpers that dump frames, RAM and CPU state to files, and the `WavWriter`. |
 | [`runtime/replay.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/replay.cpp) | `f3rt-replay`: renders MAME captures with the FDP renderer, or replays a MAME audio trace to a WAV file. |
-| [`runtime/check.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp) | `f3rt-check`: unit checks for devices, timing, EEPROM, DUART, mixer and game-video descriptors. |
+| [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp), [`input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp), [`eeprom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp), [`cpu.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp), [`sprite_units.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprite_units.cpp), [`audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp) | Per-area synthetic-ROM checks. Shared fixtures and assertions are in [`runtime/tests/support.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/support.cpp). |
 | [`runtime/LICENSES.txt`](https://github.com/ansxor/f3-recomp/blob/main/runtime/LICENSES.txt) | Licenses of the vendored MAME-derived and Musashi code. |
 
 ### runtime/third_party/ (vendored code)

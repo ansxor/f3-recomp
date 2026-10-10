@@ -18,7 +18,7 @@ This page lists the project commands and their arguments. The tables give defaul
 | `f3rt-gameplay-regression` | `tools/gameplay_regression.cpp` | 1 (message starts with `REGRESSION ERROR:`) |
 | `f3rt-sound-extract` | `tools/sound_extract.cpp` | 1 (message starts with `SOUND_EXTRACT ERROR:`) |
 | `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | 1 (message starts with `ORACLE ERROR:`) |
-| `f3rt-check` | `runtime/check.cpp` | 1 (message starts with `FAIL`) |
+| `f3rt-test-<area>` | `runtime/tests/<area>.cpp` | 1 (message starts with `FAIL`) |
 | `f3rt-gpu-regression` | `tools/gpu_video_regression.cpp` | 1 (`GPU REGRESSION ERROR:`) |
 | `f3rt-motion-regression` | `tools/motion_interp_regression.cpp` | 1 (`MOTION REGRESSION ERROR:`) |
 
@@ -383,16 +383,15 @@ and one actual app-owned full-window composition submitted to the drawable.
 ./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 --demo-seconds 30
 ```
 
-## f3rt-check
+## Runtime unit tests
 
-`f3rt-check` is the unit-level self-test of the runtime devices. It takes **no arguments**. It does not read ROM files. It builds only when `BUILD_TESTING` is on (the default after `include(CTest)`). CTest registers it as the test `runtime-devices`.
+The per-area runtime test binaries take no arguments and do not read ROM files. They build only when `BUILD_TESTING` is on. CTest registers each as `runtime-<area>`.
 
 ```sh
-ctest --test-dir build --output-on-failure
-./build/f3rt-check
+ctest --test-dir build -R runtime-
 ```
 
-On success it prints `PASS memory/lanes, input/coin, ...` and exits with code 0. On failure it prints `FAIL` and the failed check, and exits with code 1.
+Each area prints `PASS` on success or `FAIL` and the failed check on failure.
 
 ## python3 -m recomp
 

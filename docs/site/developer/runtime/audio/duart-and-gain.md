@@ -96,7 +96,7 @@ The two transmitters exist because the driver reads and writes their status bits
 - `tx_bit` restores TXRDY during frame progress when the holding register is available. Frame completion sets TXEMT.
 - `tx_interrupt` copies the TXRDY status to ISR.
 
-The unit test `check_duart_tx` in `check.cpp` covers this behavior.
+The unit test `check_duart_tx` in `runtime/tests/audio.cpp` covers this behavior.
 
 ### Output pins and the ESP halt
 
@@ -118,7 +118,7 @@ The addresses `0x28001d` and `0x28001f` come from `docs/SOUND-DRIVER.md`. They m
 
 ### Reset behavior
 
-`reset()` clears `ACR`, `IMR`, `ISR`, `OPR` and the other registers, sets `IVR` to `0x0f`, and calls the output callback. A CPU-line reset does not reset the DUART. The check in `check.cpp` shows that a CPU-line reset keeps the DUART vector, and a watchdog reset restores it to `0x0f`.
+`reset()` clears `ACR`, `IMR`, `ISR`, `OPR` and the other registers, sets `IVR` to `0x0f`, and calls the output callback. A CPU-line reset does not reset the DUART. The check in `runtime/tests/audio.cpp` shows that a CPU-line reset keeps the DUART vector, and a watchdog reset restores it to `0x0f`.
 
 Serial reset clears occupancy and enable state. It preserves idle clock phase and edge state.
 
@@ -178,7 +178,7 @@ Reads return the corresponding latch. Snapshots retain indices, channel latches 
 ```cpp
 const float route = float(int(physical * 100.0f + 0.5f)) / 32.0f;
 m_otis_gain[ch]   = 0.18f * (MameRouting ? route : 1.0f);
-m_output_gain[ch] = MameRouting ? route : physical;
+m_output_gain[ch] = Audio::output_boost * (MameRouting ? route : physical);
 ```
 
 The enum `Audio::GainModel` has two values.
@@ -188,6 +188,8 @@ The enum `Audio::GainModel` has two values.
 | `MameRouting` (default) | `0.18 * route` | `route` | The volume applies twice: before the ESP input and after the pump. This matches the output that the MAME baseline gives. |
 | `SingleStage` | `0.18` | `physical` | One analog stage after the ESP. The header says this is an unverified experiment. |
 
+`Audio::output_boost` (12, +21.6 dB) is a final output gain shared by accurate and HLE audio. The MAME-equivalent mix peaks near -25 dBFS on every measured game, so without it the output is very quiet. It is applied after the DSP, so it never overdrives the ESP input or the sample accumulator.
+
 `route` is the modeled gain as a percentage, rounded to an integer, divided by 32. At 0 dB the percentage is 100 and `route` is 3.125.
 
 The final mix, from `generate_one_frame`:
@@ -195,7 +197,7 @@ The final mix, from `generate_one_frame`:
 ```text
 channels[i]  = clamp(otis_sum[i] / 524288, -1, 1) * m_otis_gain[i & 1]
 ESP inputs   = int16(channels[2..7] * 32768)
-out_left     = (ser_r(6) / 32768 + channels[0]) * 0.5 * m_output_gain[0]
+out_left     = (ser_r(6) / 32768 + channels[0]) * 0.5 * m_output_gain[0]   (includes output_boost)
 out_right    = (ser_r(7) / 32768 + channels[1]) * 0.5 * m_output_gain[1]
 ```
 

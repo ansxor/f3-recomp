@@ -16,6 +16,7 @@ Install these tools before you build.
 | Ninja | any recent version | Build backend. The commands below use `-G Ninja`. |
 | C and C++ compiler | C11 and C++20 | Compile the runtime and the generated C. Use Clang or GCC. |
 | SDL3 | development files | Window, keyboard and audio. CMake runs `find_package(SDL3 CONFIG REQUIRED)`. |
+| Google Highway | 1.0 or newer (optional) | SIMD for HLE audio. If CMake can't find it, it downloads Highway 1.4.0 while configuring. |
 | Python | 3.11 or newer | Run the recompiler. It reads TOML with the standard `tomllib` module. |
 | Capstone | exactly 5.0.9 | Decode 68k instructions. It is pinned in `recomp/requirements.txt`. |
 | Go | 1.22 or newer | Build the relay server. Only needed for [online play](/guide/netplay). |
@@ -162,7 +163,7 @@ The build creates more programs. You do not need them to play.
 | `f3rt-gameplay-regression` | Headless seeded gameplay test. |
 | `f3rt-netplay-oracle` | Netplay reference and snapshot test. |
 | `f3rt-sound-extract` | Plays sound commands and writes WAV and trace files. See [Sound](/guide/sound). |
-| `f3rt-check` | Unit checks for the devices. CTest runs it. |
+| `f3rt-test-<area>` | Per-area runtime unit checks, run by CTest. |
 
 Build one with `cmake --build build --target NAME`. For all CMake options see the [build options reference](/reference/build-options).
 

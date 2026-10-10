@@ -197,7 +197,7 @@ its finer applied-data/padding attribution and original per-region bound.
   baseline held-outs. Training corpus is unchanged.
 - **45/45 Python checks**, including actual compiled synthetic C/C++ behavior
   for exclusion/tier/slim boundaries, contradictory profiles, hooks, deadlines,
-  flags and shared exceptions. Actual `f3rt-check` PASS. All sound callers built.
+  flags and shared exceptions. Actual the runtime tests PASS. All sound callers built.
 
 Final files per held-out seed: `palette.bin`, `graphics.bin`, `control.bin`,
 `mainram.bin`, `shared.bin`, `rendered.argb`, `cpu.json`. Verified duplicate

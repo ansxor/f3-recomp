@@ -177,7 +177,7 @@ Dispatch table bytes (16 bytes per entry on this arm64 build):
 
 ### Configure/build wall time
 
-Seconds, `-j 6`, targets `landmakr` and `f3rt-gameplay-regression` (full/instrumentation also included `f3rt-check`). Initial clean builds include runtime/third-party compilation; final regeneration builds reuse those objects. Concurrent host load and nearly-full-disk recovery make these measurements non-isolated benchmarks. Supplied reference's original configure/build timing was not recorded.
+Seconds, `-j 6`, targets `landmakr` and `f3rt-gameplay-regression` (full/instrumentation also included the runtime tests). Initial clean builds include runtime/third-party compilation; final regeneration builds reuse those objects. Concurrent host load and nearly-full-disk recovery make these measurements non-isolated benchmarks. Supplied reference's original configure/build timing was not recorded.
 
 | Build | Initial configure | Initial build | Final configure | Final regeneration/build |
 |---|---:|---:|---:|---:|
@@ -212,7 +212,7 @@ Fresh MAME capture used a separate ROM staging directory, cfg and NVRAM, not a s
 
 Final state files compared at frame 20,000: `palette.bin`, `graphics.bin`, `control.bin`, `mainram.bin`, `shared.bin`, `rendered.argb`, `cpu.json`. Native sound was selected for every target run. Reference held-out seeds 301–308 all completed 20,000 frames; slim held-out seed 306 matched WAV/state, the other seven aborted before completion. Eight trained seeds passing is not held-out admission.
 
-22 unique Python/compiled-C/C++ regressions passed: discovery/overlap/deadlines, profile identity/bounds/saturation, cross-tier fallthrough/indirect entry, redirected hooks, both CPUs' shared exceptions, sparse removal and cwd-stable runtime persistence. Actual runtime `f3rt-check`: `PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter` (the diagnostic interpreter check is not fallback in any candidate game run).
+22 unique Python/compiled-C/C++ regressions passed: discovery/overlap/deadlines, profile identity/bounds/saturation, cross-tier fallthrough/indirect entry, redirected hooks, both CPUs' shared exceptions, sparse removal and cwd-stable runtime persistence. Actual runtime the runtime tests: `PASS memory/lanes, input/coin, EEPROM protocol, IRQ/stack, native dispatch and real interpreter` (the diagnostic interpreter check is not fallback in any candidate game run).
 
 The final fixed instrumentation frontend also ran with `--profile-out`, passed 25/25 / RAM600 / WAV, and wrote a real profile. This post-fix smoke was not merged into the frozen training corpus.
 

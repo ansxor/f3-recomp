@@ -36,7 +36,7 @@ Follow these steps once.
 4. Build the test tools:
 
    ```sh
-   cmake --build build --target f3rt-check f3rt-gameplay-regression f3rt-netplay-oracle f3rt-replay f3rt-sound-extract
+   cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprite_units f3rt-test-audio f3rt-gameplay-regression f3rt-netplay-oracle f3rt-replay f3rt-sound-extract
    ```
 
 5. Install Go 1.22 or newer if you work on the relay server.
@@ -52,7 +52,7 @@ Run the test that matches your change. Several changes need more than one test.
 | `recomp/emitter.py`, `recomp/cpu_ops.h`, `recomp/bitfield.h`, cycle tables | `PYTHONPATH=build/python python3 tools/differential/run.py --musashi runtime/third_party/musashi --output build/differential --cases 5000` | Compares generated cases against Musashi: registers, flags, writes, and cycles. It does not cover every instruction form. |
 | `recomp/discovery.py` | `PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'` | Discovery rules on small synthetic ROMs. |
 | `recomp/generate.py`, dispatch deadline logic | The same `unittest` command (`tools/test_generate.py`) | Blocks return at the deadline, keep flags correct and resume inside a block. |
-| Devices, audio timing, EEPROM, game-video descriptors | `ctest --test-dir build` | Runs `f3rt-check` as test `runtime-devices`. |
+| Runtime devices, audio timing, EEPROM, game-video descriptors | `ctest --test-dir build -R runtime-` | Runs the per-area runtime tests. |
 | Anything that affects the main CPU path | `python3 tools/run_gameplay_regression.py --rom-dir ../roms/landmakr --frames 40000 --seeds 1 2 3 4 5 6 7 8` | Eight seeded runs end with no fallback, no halt and no error. See [Gameplay regression](/developer/testing/gameplay-regression). |
 | Video code | The same gameplay command with `--video-diff` | Compares supported game-data scenes with the FDP oracle. Unsupported scenes remain explicit fallback frames. |
 | Sound code or `tools/compile_sound.py` | Run `f3rt-gameplay-regression` with each sound driver and `--sound-trace`. Then run `python3 tools/compare_sound.py`. | Detects bus trace differences for the selected input schedule. |

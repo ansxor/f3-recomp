@@ -125,7 +125,7 @@ The steps are:
 4. Execute with a budget of 1. The core has a four-cycle reset latency. A budget below that returns without executing an opcode. The four cycles are added to `cpu.cycles`.
 5. Export the registers back to `machine.cpu`.
 
-`f3rt-check` tests this: a cold reset leaves `cpu.cycles == 4`, `pc == 0x100` and `d[0] == 0`. A warm reset keeps D0 and CCR and charges exactly 4 cycles.
+`runtime/tests/cpu.cpp` tests this: a cold reset leaves `cpu.cycles == 4`, `pc == 0x100` and `d[0] == 0`. A warm reset keeps D0 and CCR and charges exactly 4 cycles.
 
 ## run_main and one-instruction fallback
 
@@ -190,7 +190,7 @@ sequenceDiagram
 
 The option `--allow-fallback` sets it to true for any binary. The help text calls it "diagnostic only". The option `--fallback-report FILE` allocates `fallback_hits` with `0x800000` entries (one for each even address in 16 MiB). At the end of the run the frontend writes a TSV with the columns `pc` and `count`. Use it to find instructions that the recompiler did not cover.
 
-A check in `f3rt-check` proves the rejection. With `allow_main_fallback = false`, `f3_fallback` throws a message that contains the PC, and it does not change registers or count an instruction.
+A check in `runtime/tests/cpu.cpp` proves the rejection. With `allow_main_fallback = false`, `f3_fallback` throws a message that contains the PC, and it does not change registers or count an instruction.
 
 Strict native mode is the acceptance criterion. `docs/developer/DECISIONS.md` records runs with "zero fallback instructions" in 3 600-frame cold boots and 8 400-frame play tests.
 

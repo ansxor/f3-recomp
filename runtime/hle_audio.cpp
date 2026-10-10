@@ -10,9 +10,25 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__SSE__)
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#endif
 
 namespace f3rt::hle {
 namespace {
+// Flush-to-zero and denormals-are-zero prevent decaying reverb/filter tails from becoming subnormal.
+static void enable_ftz_daz() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__SSE__)
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#elif defined(__aarch64__)
+    uint64_t fpcr;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+    fpcr |= (1ULL << 24);
+    __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
+#endif
+}
 constexpr size_t history = 64, per_frame = 256, queue_size = 4096, pcm_capacity = 32768;
 struct Packet {
     std::array<uint8_t, 8> bytes{};
@@ -117,7 +133,7 @@ struct AudioEngine::Impl : VoiceSink {
         for (unsigned ch = 0; ch < 2; ++ch) {
             const float route = float(int(gain[ch] * 100.f + .5f)) / 32.f;
             input[ch] = .18f * (gain_model == Audio::GainModel::MameRouting ? route : 1.f);
-            output[ch] = gain_model == Audio::GainModel::MameRouting ? route : gain[ch];
+            output[ch] = Audio::output_boost * (gain_model == Audio::GainModel::MameRouting ? route : gain[ch]);
         }
         while (worker_frames < end) {
             const size_t n = size_t(std::min<uint64_t>(256, end - worker_frames));
@@ -145,6 +161,7 @@ struct AudioEngine::Impl : VoiceSink {
         }
     }
     void run() noexcept {
+        enable_ftz_daz();
         try {
             for (;;) {
                 Message m;
@@ -339,8 +356,9 @@ void AudioEngine::flush() const { impl_->flush(); }
 size_t AudioEngine::available() const {
     flush(); std::lock_guard lock(impl_->pcm_mutex); return size_t(impl_->pcm_write - impl_->pcm_read);
 }
-template<class Sample> static size_t drain(auto &p, Sample *out, size_t count) {
-    p.flush(); std::lock_guard lock(p.pcm_mutex);
+template<bool Wait = true, class Sample> static size_t drain(auto &p, Sample *out, size_t count) {
+    if constexpr (Wait) p.flush();
+    std::lock_guard lock(p.pcm_mutex);
     count = std::min<uint64_t>(count, p.pcm_write - p.pcm_read);
     for (size_t n = 0; n < count; ++n) {
         for (unsigned c = 0; c < 2; ++c) {
@@ -354,6 +372,7 @@ template<class Sample> static size_t drain(auto &p, Sample *out, size_t count) {
 }
 size_t AudioEngine::render(float *out, size_t count) { return drain(*impl_, out, count); }
 size_t AudioEngine::render(int16_t *out, size_t count) { return drain(*impl_, out, count); }
+size_t AudioEngine::render_ready(int16_t *out, size_t count) { return drain<false>(*impl_, out, count); }
 uint64_t AudioEngine::generated() const { return impl_->generated.load(std::memory_order_relaxed); }
 Audio::HleStats AudioEngine::stats() const {
     return {impl_->command_count, impl_->reused, impl_->cancelled, generated()};

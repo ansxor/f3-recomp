@@ -56,13 +56,13 @@ The program ROM is 2 MiB. The constructor of `Machine` throws `Main ROM must be 
 
 ### Mirrors
 
-The work RAM window `0x400000` to `0x43ffff` is 256 KiB. The RAM array is 128 KiB (`0x20000`). The code uses `a & 0x1ffff`, so the second 128 KiB repeats the first. A 32-bit access that crosses `0x41ffff` to `0x420000` wraps inside the array. A check in `runtime/check.cpp` confirms this: a write at `0x41fffe` changes both the last word and the first word.
+The work RAM window `0x400000` to `0x43ffff` is 256 KiB. The RAM array is 128 KiB (`0x20000`). The code uses `a & 0x1ffff`, so the second 128 KiB repeats the first. A 32-bit access that crosses `0x41ffff` to `0x420000` wraps inside the array. A check in `runtime/tests/cpu.cpp` confirms this: a write at `0x41fffe` changes both the last word and the first word.
 
 No other region has a mirror. The graphics RAM, palette and shared RAM end at the sizes in the table.
 
 ## Work RAM
 
-Work RAM holds the game variables. `Machine::ram` is a `std::array<uint8_t, 0x20000>`. The RAM stores bytes in big-endian order, so no byte swap is needed for 16-bit and 32-bit reads. The VBR register can point into this region, as the tests in `check.cpp` do.
+Work RAM holds the game variables. `Machine::ram` is a `std::array<uint8_t, 0x20000>`. The RAM stores bytes in big-endian order, so no byte swap is needed for 16-bit and 32-bit reads. The VBR register can point into this region, as the tests in `runtime/tests/cpu.cpp` do.
 
 ## Palette RAM
 
@@ -126,7 +126,7 @@ The write side of the block uses the same addresses for other purposes:
 
 `main_clock` is 16 000 000. So the watchdog time is 48 000 000 cycles, or 3 seconds.
 
-`coin_write` treats the byte as follows. Bits 0 and 1 are lockout bits for the two coin counters of the bank. A lockout is active when the bit is 0: `coin_locked[bank * 2 + i] = !(value & (1 << i))`. Bits 2 and 3 are counter pulses. A counter goes up by 1 on a 0-to-1 edge: `++coin_count[bank * 2 + i]`. The tests in `check.cpp` confirm that a repeated write of `0x04` counts only once.
+`coin_write` treats the byte as follows. Bits 0 and 1 are lockout bits for the two coin counters of the bank. A lockout is active when the bit is 0: `coin_locked[bank * 2 + i] = !(value & (1 << i))`. Bits 2 and 3 are counter pulses. A counter goes up by 1 on a 0-to-1 edge: `++coin_count[bank * 2 + i]`. The input tests in `runtime/tests/input.cpp` confirm that a repeated write of `0x04` counts only once.
 
 ## Timer control
 

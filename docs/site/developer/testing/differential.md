@@ -249,5 +249,5 @@ The script writes the file `recomp/68020_cycles.csv` by default. `recomp/timing.
 
 - The harness checks one instruction, or a short sequence, in a fixed memory map. It does not check control flow between blocks or the discovery of code.
 - It does not run RESET or STOP, because these need the device model.
-- The harness version of the runtime ABI is a copy. A bug in `runtime/cpu_abi.cpp` is not found here. `f3rt-check` and the gameplay gates cover it (see [Unit checks](/developer/testing/unit-checks)).
+- The harness version of the runtime ABI is a copy. A bug in `runtime/cpu_abi.cpp` is not found here. the CPU runtime tests and gameplay gates cover it (see [Unit checks](/developer/testing/unit-checks)).
 - Both sides agree with each other, not with the real chip. Musashi is the accepted model. Where MAME differs from Musashi, the team patches Musashi and records the reason in `docs/developer/DECISIONS.md`.

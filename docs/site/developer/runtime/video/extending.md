@@ -71,14 +71,14 @@ Rules:
 
 ## Validate the consumer-visible behavior
 
-Focused checks live in [runtime/check.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp).
+Focused checks live in [runtime/tests/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp).
 
 | Check | Behavior protected |
 | --- | --- |
-| `check_game_tile_observation`, `check_game_tile_row_sampling` | Raw cell palette/mask/flips/blend and wrapped row sampling |
-| `check_game_sprite_vram_block_chaining` | Display-list block chaining on both axes |
-| `check_game_line_vram_carry_forward` | Line-RAM subsection carry-forward between scanlines |
-| `check_game_text_vram_decode` | Text map + glyph RAM palette/pen decode |
+| [`check_game_tile_observation`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp), [`check_game_tile_row_sampling`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | Raw cell palette/mask/flips/blend and wrapped row sampling |
+| [`check_game_sprite_vram_block_chaining`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | Display-list block chaining on both axes |
+| [`check_game_line_vram_carry_forward`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | Line-RAM subsection carry-forward between scanlines |
+| [`check_game_text_vram_decode`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | Text map + glyph RAM palette/pen decode |
 
 Keep a permanent regression for a plausible visible bug, not merely wiring.
 

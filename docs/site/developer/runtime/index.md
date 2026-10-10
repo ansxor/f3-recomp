@@ -77,7 +77,7 @@ The video, audio, and netplay rows identify files covered by their own subsystem
 | `runtime/sound_trace.hpp`, `runtime/sound_trace.cpp` | `F3SND2` bus records and sound-RAM context probes. | [Support files](/developer/runtime/support#sound-trace) |
 | `runtime/frontend.cpp` | CLI, SDL resource ownership, local input, frame pacing, reporting, and netplay integration. | [Frontend](/developer/runtime/frontend) |
 | `runtime/replay.cpp` | Video capture replay and `F3AUD2` device-write replay without CPU execution. | [Replay and check](/developer/runtime/replay-and-check) |
-| `runtime/check.cpp` | Synthetic-ROM device, timing, bus, IRQ, dispatch, and EEPROM checks. | [Replay and check](/developer/runtime/replay-and-check) |
+| `runtime/tests/*.cpp` | Per-area synthetic-ROM checks for video, input, EEPROM, CPU, sprites and audio. | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/LICENSES.txt` | Adapted hardware sources, pinned revisions, and retained license notices. | [Support files](/developer/runtime/support#licenses-and-source-boundaries) |
 
 `recomp/cpu_ops.h` is outside the runtime directory.

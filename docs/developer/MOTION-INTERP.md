@@ -252,7 +252,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DF3_ROM_DIR=/path/to/roms/landmakr
 cmake --build build --target landmakr f3rt-motion-regression f3rt-motion-check \
-  f3rt-gpu-regression f3rt-netplay-oracle f3rt-check f3rt-state-check \
+  f3rt-gpu-regression f3rt-netplay-oracle f3rt-state-check \
   f3rt-frontend-check f3rt-hle-check -j 8
 ctest --test-dir build --output-on-failure
 ```

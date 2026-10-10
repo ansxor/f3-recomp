@@ -151,7 +151,7 @@ The constructor `Machine(RomSet set)` does this:
 The optional parts (`game_video`, `sound_trace`, `sound_native`) are set by the caller after construction. `use_native_sound` throws `Select the native sound driver before machine execution` if the audio is not in reset or if `clock_ticks()` is not 0.
 
 ::: tip
-The tests build a `Machine` from a fixture ROM set in `check.cpp` with zero-filled ROM data and a tiny program at `0x100`. The machine does not need real game data to construct.
+The tests build a `Machine` from a fixture ROM set in `runtime/tests/support.cpp` with zero-filled ROM data and a tiny program at `0x100`. The machine does not need real game data to construct.
 :::
 
 ## The step

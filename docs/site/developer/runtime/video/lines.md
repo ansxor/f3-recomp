@@ -128,7 +128,7 @@ enabled. The first difference throws with its frame and row.
 
 Snapshots include all decoded `LineParams` and normalized rows. Boolean fields
 use explicit byte values. `check_game_line_vram_carry_forward` in
-[runtime/check.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp)
+[runtime/tests/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp)
 checks that an unlatched scanline inherits the previous line's value.
 
 The full-mask diagnostic invokes row comparison before layer and RGB checks. See

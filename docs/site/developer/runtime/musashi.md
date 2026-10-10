@@ -77,7 +77,7 @@ flowchart LR
   SF["softfloat/softfloat.c"] --> LIB
   CS["runtime/core_state.c"] --> LIB
   LIB --> F3["f3rt (static library)"]
-  F3 --> EXE["landmakr, f3rt-run, f3rt-check, f3rt-replay"]
+  F3 --> EXE["landmakr, f3rt-run, f3rt-test-cpu, f3rt-replay"]
 ```
 
 ## Changes to the vendored source
@@ -171,4 +171,4 @@ On import the code restores the cycle table pointers by looking them up again: `
 - [Instruction generator](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/musashi/m68kmake.c)
 - [Canonical state bridge](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c)
 - [Sound-core state record](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_oracle.h)
-- [Sound timing regression cases](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp)
+- [Sound timing regression cases](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp)

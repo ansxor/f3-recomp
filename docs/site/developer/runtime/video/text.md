@@ -93,7 +93,7 @@ into the `TEXT_CELLS` / `GLYPHS` words of the GPU upload.
 ## Unit check
 
 `check_game_text_vram_decode` in
-[runtime/check.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/check.cpp)
+[runtime/tests/video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp)
 builds raw text-map words and glyph bytes and checks the palette base, pen,
 flip bits and glyph nibble order. The text-layer comparison of the gameplay
 regression (layer mask 256) is the full proof. See

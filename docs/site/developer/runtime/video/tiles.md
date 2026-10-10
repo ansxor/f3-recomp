@@ -101,7 +101,7 @@ decodes `attributes`, `code`, flips, pen mask and blend with the same formulas.
 ## Unit check
 
 `check_game_tile_observation` and `check_game_tile_row_sampling` in
-`runtime/check.cpp` write raw cells into a synthetic graphics buffer, call
+[`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) write raw cells into a synthetic graphics buffer, call
 `decode`, and verify:
 
 - Palette base, pen mask and blend selector decode.
