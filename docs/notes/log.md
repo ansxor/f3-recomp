@@ -47,3 +47,12 @@ correct), MAME raw sha256 and submodule HEAD (no drift).
 Touched: the pages above, hardware/glossary.md, index.md, log.md.
 Remaining: 30 of 36 pages carry contradictions (contested); all 36 are open hypotheses; intro,
 legend and navigation paragraphs carry no citation by design.
+
+## [2026-10-10] ingest | taito-f3 submodule bump a070cbd → eaa5a0a
+Moved raw/docs/taito-f3 from a070cbd to eaa5a0a (“note on 5505-5510 channels”). The only change in
+the range is the added raw/docs/taito-f3/5505-5510.txt (22 lines): 12's notes on the OTIS/ESP sound
+hardware. Not ingested; no page cites it yet, and the bump changes no existing file, so no existing
+citations need re-checking. Updated the provenance sidecar raw/docs/taito-f3.md: git_commit →
+eaa5a0ab624464f5ae904a6227414d09d75f64ee, the git hash in captured_with → eaa5a0a, ingested →
+2026-10-10. The submodule pointer is staged in the superproject and not committed.
+Touched: raw/docs/taito-f3.md, log.md.
