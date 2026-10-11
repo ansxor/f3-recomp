@@ -75,14 +75,17 @@ The 527-byte set is the whole gameplay block plus the credits block `0x400090..0
 
 `apply_sync` requires exactly 528 bytes and version `0x04`. Otherwise it throws `Invalid sync blob size or version`. It then writes the four ranges back. The seed argument is not used. `[INFERENCE]` What the session does when the hook throws was not traced.
 
-**Per-frame reseed.** `on_match_frame` writes the 32-bit RNG word at `0x400826`:
+**Per-frame reseed.** `on_match_frame` writes the 32-bit RNG word at `0x400826` before every lockstepped frame:
 
 ```
-key = seed ^ (match_frame * 0x100000001b3)
+round_index = read16(0x401f6a) + read16(0x401f6c)   // round wins P1 + P2
+key = seed ^ (round_index * 0x100000001b3)
 write32(0x400826, splitmix32(key))
 ```
 
-`splitmix32` is the splitmix64 finalizer truncated to 32 bits. `seed` is the shared session seed. The RNG word is not in the sync blob, because the per-frame reseed sets it.
+`splitmix32` is the splitmix64 finalizer truncated to 32 bits. `seed` is the shared session seed, drawn by the relay server (`netplay/server/state.cpp`, `random_u64()`) and sent to both peers in MATCH_START. The RNG word is not in the sync blob, because the reseed sets it. The key depends on no session counter, only on the seed and synced RAM, so a machine snapshot restores it.
+
+The value is constant within a round. The win counters are updated about 2 frames before `round_task` (`0x08e470`) picks the stage and about 12 frames before `sub_093462` seeds both players' piece generators from this word, so each round gets a new stage step and new bags. Every other reader of `0x400826` also sees the same value for the whole round, including the roll in `sub_0a04d0` (`0x0a04d0`), whose role is unconfirmed. A round that ends without a winner would repeat the previous round's key. `[INFERENCE]` The notes list only winners 1 and 2.
 
 **Desync hash.** `sync_hash` is ungated: CRC32 over 522 bytes from the first report, in this order:
 

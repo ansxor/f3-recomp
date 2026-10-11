@@ -46,6 +46,8 @@ constexpr uint32_t LOBBY_TIMER_WORD = 0x407908;
 constexpr uint16_t LOBBY_TIMER_DEFAULT = 0x04b0;
 
 constexpr uint32_t MATCH_RNG_SEED_LONG = 0x400826;      // reseeded every match frame
+constexpr uint32_t ROUND_WINS_P1_WORD = 0x401f6a;       // P1 round wins; with P2's gives the round index
+constexpr uint32_t ROUND_WINS_P2_WORD = 0x401f6c;
 
 struct RamRange {
     uint32_t addr;
@@ -169,8 +171,14 @@ inline uint32_t splitmix32(uint64_t x) {
     return uint32_t(x ^ (x >> 31));
 }
 
-void on_match_frame(Machine &m, uint64_t seed, uint32_t match_frame) {
-    uint64_t key = seed ^ (uint64_t(match_frame) * 0x100000001b3ULL);
+// Reseeds the global RNG word before every lockstepped frame. The value depends only on the server seed and the round
+// index (round wins P1 + P2, synced RAM that is updated before round_task picks the stage), so it is constant within
+// a round and a pure function of machine state: rollback restores the key with the snapshot.
+// Evidence: docs/notes/raw/tests/landmakrj-differential-sync-experiment.md; round-index timing from a 2P run
+// (stage pick 0x08e470 at frames 2631/4983/11043 with wins sum 0/1/2; bag init sub_093462 ~12 frames later).
+void on_match_frame(Machine &m, uint64_t seed, uint32_t /*match_frame*/) {
+    const uint32_t round_index = uint32_t(m.read16(ROUND_WINS_P1_WORD)) + m.read16(ROUND_WINS_P2_WORD);
+    uint64_t key = seed ^ (uint64_t(round_index) * 0x100000001b3ULL);
     m.write32(MATCH_RNG_SEED_LONG, splitmix32(key));
 }
 
