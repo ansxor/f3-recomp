@@ -68,11 +68,12 @@ The video and audio rows identify files covered by their own subsystem pages.
 | `runtime/core_state.c` | Main register transfer and pointer-free sound-core state transfer. | [Musashi](/developer/runtime/musashi) |
 | `runtime/audio/reference/state_oracle.h` | Packed sound-interpreter snapshot record and bridge declarations. | [Musashi](/developer/runtime/musashi) |
 | `runtime/state_io.hpp` | Bounded state readers and writers; packed board and device records. | [Support files](/developer/runtime/support#state-serialization) |
-| `include/f3rt/input.hpp`, `runtime/input.cpp` | Local player input words, their mapping onto the active-low board ports, and input scripts. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
+| `include/f3rt/input.hpp`, `runtime/input.cpp` | Local player input words and their mapping onto the active-low board ports. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
+| `runtime/debug/input_script.hpp`, `runtime/debug/input_script.cpp` | Host-only debug input scripts (`--inputs`): scripted controls and main-RAM pokes OR'd into local input. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
 | `runtime/eeprom.hpp` | Header-only 93C46 protocol, busy timing, word persistence, and serial snapshots. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
 | `include/f3rt/rom.hpp`, `runtime/rom.cpp` | Validated ROM regions, chip interleaving, supported sets, and CRC32. | [Support files](/developer/runtime/support#rom-loading) |
 | `runtime/capture_io.hpp` | Exact-size reads, frame dumps, raw ARGB, BMP, JSON, and stereo WAV output. | [Support files](/developer/runtime/support#capture-files) |
-| `runtime/audio/sound_trace.hpp`, `runtime/audio/sound_trace.cpp` | `F3SND2` bus records and sound-RAM context probes. | [Support files](/developer/runtime/support#sound-trace) |
+| `runtime/audio/sound_trace.hpp`, `runtime/audio/sound_trace.cpp` | `F3SND2` bus records for sound parity comparison. | [Support files](/developer/runtime/support#sound-trace) |
 | `runtime/frontend/frontend.cpp` | CLI, SDL resource ownership, local input, frame pacing, and reporting. | [Frontend](/developer/runtime/frontend) |
 | `runtime/replay.cpp` | Video capture replay and `F3AUD2` device-write replay without CPU execution. | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/tests/*.cpp` | Per-area synthetic-ROM checks for video, input, EEPROM, CPU, sprites and audio. | [Replay and check](/developer/runtime/replay-and-check) |

@@ -3,7 +3,7 @@
 // Such games never instantiate GameVideo (the frontend requires F3RT_GAME_VIDEO), but
 // `--discovery-log` still classifies their graphics/control stores, so the entry point
 // must resolve: no store PC has a documented producer, every writer is reported.
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 
 namespace f3rt {
 

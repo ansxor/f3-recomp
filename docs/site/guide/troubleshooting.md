@@ -70,7 +70,6 @@ These messages come from the option checks in `runtime/frontend/frontend.cpp`.
 | `This generated executable requires landmakrj` | `landmakr` accepts only `--set landmakrj`. |
 | `--audio-backend must be enhanced or reference` | Use one of the two names. |
 | `Enhanced audio requires landmakrj` | Enhanced audio exists only for `landmakrj`. Use `--audio-backend reference` for other sets. |
-| `Enhanced audio does not execute a sound driver; --sound-trace requires reference audio` | Add `--audio-backend reference`, or drop `--sound-trace`. |
 | `--renderer must be accurate, enhanced, game-cpu, compare-cpu or compare-gpu` | Use one of the five names (`accurate` and `enhanced` are the user-facing ones). |
 | `Game-data video requires strict native execution` | You used `enhanced` or a developer game/compare renderer with `--allow-fallback`, `--set` other than `landmakrj`, or in `f3rt-run`. Use `landmakr` without `--allow-fallback`. |
 | `--video-scale must be 1..4, auto or auto-integer` | Use a numeric scale 1–4 or one of the automatic GPU modes. |

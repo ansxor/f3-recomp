@@ -114,12 +114,10 @@ a fixed pre-rendered impulse is not the runtime implementation.
 
 ## Runtime contract
 
-Select `--audio-backend enhanced` before execution. `--sound-trace` belongs
-to `--audio-backend reference` and cannot be combined with Enhanced.
-`landmakr`, `f3rt-run`, and `f3rt-tool` (`gameplay`, `sound-extract`)
-accept the backend switch.
-The extraction tool's `--hle-events FILE` records semantic voice events as
-CSV; `decode_sound.py` also decodes optional Reference note-release records.
+Select `--audio-backend enhanced` before execution. In `f3rt-tool` (`gameplay`,
+`sound-extract`), `--sound-trace` belongs to `--audio-backend reference` and cannot
+be combined with Enhanced. `landmakr`, `f3rt-run`, and `f3rt-tool` accept the backend
+switch. The extraction tool's `--hle-events FILE` records semantic voice events as CSV.
 
 The HLE worker owns sequencer state, sample voices, filters, effects delay
 lines and 48 kHz PCM. It never reads mutable shared RAM or writes machine

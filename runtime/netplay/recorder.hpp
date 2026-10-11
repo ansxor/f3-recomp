@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -68,10 +69,14 @@ std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts, 
 bool parse_inputs_txt(const std::string &text, InputsFile &out, std::string &error);
 std::string header_value(const InputsFile &file, const std::string &key, const std::string &fallback = {});
 
-// Minimal flat JSON helpers (info.json is flat apart from the "reports" array that is not read back).
-std::string json_escape(const std::string &text);
-bool json_find_u64(const std::string &json, const std::string &key, uint64_t &out);
-bool json_find_string(const std::string &json, const std::string &key, std::string &out); // plain strings without escapes
+// info.json, written by MatchRecorder::write_bundle and read back by `f3rt-tool netplay-replay` (cpp-yyjson).
+// A key that is missing or has the wrong JSON type stays nullopt.
+struct BundleInfo {
+    std::optional<uint64_t> seed, frame, crc_interval, hashed_len, recorded_crc, player_index, machine_gpu, hash_layout;
+    std::optional<std::string> audio_backend;
+};
+// Throws std::runtime_error if `json` is not valid JSON or its top level is not an object.
+BundleInfo parse_info_json(const std::string &json);
 
 class MatchRecorder {
 public:

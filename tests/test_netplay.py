@@ -92,6 +92,7 @@ def find_rom_dir() -> Path | None:
 
 def find_tool_binary() -> Path | None:
     candidates = [
+        ROOT / "build-vcpkg/f3rt-tool",
         ROOT / "build-landmakrj/f3rt-tool",
         ROOT / "build/f3rt-tool",
     ]
@@ -102,17 +103,36 @@ def find_tool_binary() -> Path | None:
 
 
 def find_or_build_server_binary() -> tuple[list[str], Path | None]:
-    server_bin = ROOT / "build/netplay-server"
-    if server_bin.is_file() and os.access(server_bin, os.X_OK):
-        return [str(server_bin)], server_bin
+    candidates = [
+        ROOT / "build-vcpkg/f3-netplay-server",
+        ROOT / "build/netplay-server",
+    ]
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return [str(c)], c
 
-    if shutil.which("go") and (ROOT / "netplay/server").is_dir():
-        res = subprocess.run(["make", "netplay-server"], cwd=ROOT, capture_output=True)
-        if res.returncode == 0 and server_bin.is_file() and os.access(server_bin, os.X_OK):
-            return [str(server_bin)], server_bin
-        return ["go", "run", "./netplay/server"], None
+    res = subprocess.run(["make", "netplay-server"], cwd=ROOT, capture_output=True)
+    if res.returncode == 0:
+        for c in candidates:
+            if c.is_file() and os.access(c, os.X_OK):
+                return [str(c)], c
 
     return [], None
+
+def start_server(server_cmd: list[str], log_dir: Path) -> tuple[subprocess.Popen, str]:
+    proc = subprocess.Popen(
+        list(server_cmd) + ["--port", "0", "--logdir", str(log_dir)],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    line = proc.stdout.readline()  # "netplay-server: port N, public-address ..."
+    match = re.search(r"port (\d+)", line)
+    if not match or int(match.group(1)) == 0:
+        proc.kill()
+        raise RuntimeError(f"relay did not report a port: {line!r}\n{proc.stderr.read()}")
+    return proc, f"127.0.0.1:{match.group(1)}"
 
 
 def run_netplay_match(tool_bin: Path, rom_dir: Path, tcp_addr: str,
@@ -239,37 +259,8 @@ def test_netplay_end_to_end_3000_frames():
         p1_file.write_text(P1_INPUT_SCRIPT)
         p2_file.write_text(P2_INPUT_SCRIPT)
 
-        server_args = list(server_cmd) + [
-            "-tcp", "127.0.0.1:0",
-            "-udp", "127.0.0.1:0",
-            "-logdir", str(log_dir),
-        ]
-
-        server_proc = subprocess.Popen(
-            server_args,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
+        server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-            # Parse server listen address
-            tcp_addr = None
-            start_time = time.time()
-            stderr_lines = []
-            while time.time() - start_time < 5.0:
-                line = server_proc.stderr.readline()
-                if line:
-                    stderr_lines.append(line)
-                    match = re.search(r"tcp (127\.0\.0\.1:\d+)", line)
-                    if match:
-                        tcp_addr = match.group(1)
-                        break
-                time.sleep(0.05)
-
-            assert tcp_addr, f"Failed to get server TCP address from stderr: {''.join(stderr_lines)}"
-
             # 1. Session 1: Both P1 and P2 have distinct real button inputs (3000 frames)
             crc_both, _ = run_netplay_match(
                 tool_bin, rom_dir, tcp_addr,
@@ -410,36 +401,8 @@ def test_netplay_differential_sync_5000_frames():
         p1_match_file.write_text(P1_MATCH_SCRIPT)
         p2_match_file.write_text(P2_MATCH_SCRIPT)
 
-        server_args = list(server_cmd) + [
-            "-tcp", "127.0.0.1:0",
-            "-udp", "127.0.0.1:0",
-            "-logdir", str(log_dir),
-        ]
-
-        server_proc = subprocess.Popen(
-            server_args,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
+        server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-            tcp_addr = None
-            start_time = time.time()
-            stderr_lines = []
-            while time.time() - start_time < 5.0:
-                line = server_proc.stderr.readline()
-                if line:
-                    stderr_lines.append(line)
-                    match = re.search(r"tcp (127\.0\.0\.1:\d+)", line)
-                    if match:
-                        tcp_addr = match.group(1)
-                        break
-                time.sleep(0.05)
-
-            assert tcp_addr, f"Failed to get server TCP address from stderr: {''.join(stderr_lines)}"
-
             host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
                 tool_bin, rom_dir, tcp_addr,
                 frames=5000,
@@ -515,36 +478,8 @@ def test_netplay_differential_sync_negative_control():
         p1_match_file.write_text(P1_MATCH_SCRIPT)
         p2_match_file.write_text(P2_MATCH_SCRIPT)
 
-        server_args = list(server_cmd) + [
-            "-tcp", "127.0.0.1:0",
-            "-udp", "127.0.0.1:0",
-            "-logdir", str(log_dir),
-        ]
-
-        server_proc = subprocess.Popen(
-            server_args,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
+        server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-            tcp_addr = None
-            start_time = time.time()
-            stderr_lines = []
-            while time.time() - start_time < 5.0:
-                line = server_proc.stderr.readline()
-                if line:
-                    stderr_lines.append(line)
-                    match = re.search(r"tcp (127\.0\.0\.1:\d+)", line)
-                    if match:
-                        tcp_addr = match.group(1)
-                        break
-                time.sleep(0.05)
-
-            assert tcp_addr, f"Failed to get server TCP address from stderr: {''.join(stderr_lines)}"
-
             host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
                 tool_bin, rom_dir, tcp_addr,
                 frames=500,
@@ -600,19 +535,8 @@ def test_netplay_residue_paths_stay_in_sync(swap_roles):
         p1_match_file.write_text(P1_MATCH_SCRIPT)
         p2_match_file.write_text(P2_MATCH_SCRIPT)
 
-        server_proc = subprocess.Popen(
-            list(server_cmd) + ["-tcp", "127.0.0.1:0", "-udp", "127.0.0.1:0", "-logdir", str(log_dir)],
-            cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
+        server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-            tcp_addr = None
-            start_time = time.time()
-            while time.time() - start_time < 5.0 and not tcp_addr:
-                line = server_proc.stderr.readline()
-                match = re.search(r"tcp (127\.0\.0\.1:\d+)", line)
-                if match:
-                    tcp_addr = match.group(1)
-            assert tcp_addr, "Failed to get server TCP address"
 
             host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
                 tool_bin, rom_dir, tcp_addr, frames=2200,

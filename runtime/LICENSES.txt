@@ -53,32 +53,12 @@ source notices. All four original notice paragraphs are retained verbatim
 in third_party/musashi/softfloat source files, and the legal overview is in
 third_party/musashi/softfloat/README.txt. No modifications to SoftFloat code.
 
-SDL3: zlib license, linked as a system dependency; not vendored.
+Linked from the vcpkg submodule (vcpkg.json), not vendored: SDL3 (zlib
+license), Dear ImGui (MIT), Google Highway (Apache-2.0 or BSD-3-Clause),
+zlib (zlib license), Yojimbo / netcode / reliable / serialize (BSD-3-Clause,
+Glenn Fiedler and Rowan Claude), bundled libsodium (ISC), bundled TLSF (BSD-2-Clause),
+cpp-httplib (MIT), yyjson (MIT), cpp-yyjson (MIT); tests only: GoogleTest (BSD-3-Clause),
+RapidCheck (BSD-2-Clause). Each package's license is installed by vcpkg to
+vcpkg_installed/<triplet>/share/<package>/copyright in the build directory.
 No ROMs, generated game code, decoded graphics, or captured game media are
 included in the committed runtime sources.
-
-Dear ImGui: https://github.com/ocornut/imgui, pinned official release v1.92.5.
-Core and SDL3 / SDLRenderer3 / SDLGPU3 backends are vendored unmodified in
-third_party/imgui. SDLGPU3's embedded upstream shader header is included.
-
-The MIT License (MIT)
-
-Copyright (c) 2014-2025 Omar Cornut
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

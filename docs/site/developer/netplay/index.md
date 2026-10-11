@@ -10,11 +10,11 @@ For the wire format, message IDs and server rules, read the [protocol page](/dev
 
 | Part | Path | Role |
 | --- | --- | --- |
-| Relay server | `netplay/server/` | Go, standard library only. TCP control, UDP input, rooms, JSON logs. Built by `make netplay-server`. |
-| Wire and session | `runtime/netplay/` | `protocol.cpp` (encoders and decoders), `client.cpp` and `socket.cpp` (TCP and UDP), `session.cpp` (state machine), `sha256.cpp`. Compiled into `f3rt`. |
+| Relay server | `netplay/server/` | C++ (Yojimbo, cpp-httplib, cpp-yyjson). Single port (TCP token endpoint, UDP game socket), encrypted rooms, JSON logs. Built by `make netplay-server`. |
+| Wire and session | `runtime/netplay/` | Protocol v3, Yojimbo client (`client.cpp`), lockstep session state machine (`session.cpp`). Compiled into `f3rt`. |
 | Public API | `include/f3rt/netplay.hpp` | `SessionConfig`, `Session`, `SessionState`, `EndReason`, `step_lockstep_frame`. |
 | Game hook type | `include/f3rt/game_netplay.hpp` | `GameNetplay`, returned by `f3rt::game_netplay()`. |
-| Default hook | `runtime/game_netplay_generic.cpp` | Returns `nullptr`. Used when `games/<set>/netplay/` has no sources. |
+| Default hook | `runtime/stubs/netplay.cpp` | Returns `nullptr`. Used when `games/<set>/netplay/` has no sources. |
 | Game hook source | `games/<set>/netplay/*.cpp` | Per-game hook. CMake globs this directory for the selected `F3_GAME`. Land Maker: `games/landmakrj/netplay/netplay.cpp`. |
 | Frontend | `runtime/frontend/frontend.cpp`, `ui.cpp`, `settings.cpp` | Settings, lobby, versus trigger, CLI flags, status text and overlay. |
 | Headless client | `tools/commands/netplay.cpp` | `f3rt-tool netplay`, for scripted two-process runs. |
@@ -24,22 +24,23 @@ For the wire format, message IDs and server rules, read the [protocol page](/dev
 
 Host:
 
-1. TCP: HELLO (identity and name), then WELCOME.
-2. TCP: CREATE_ROOM (`input_delay`, `flags`), then ROOM_CREATED with the room code. Flag bit 0 is set when `capture_sync` is configured.
-3. The joiner sends JOIN_ROOM. The server sends MATCH_START to both players.
-4. If `capture_sync` is set, the host calls it and sends SYNC_BLOB (1 to 2048 bytes) before GO. The host then sends UDP REGISTER.
+1. Connects to relay: acquires 2048-byte Netcode connect token over HTTP (`GET /token?v=3`) and connects via UDP.
+2. Channel 0 (reliable): sends HELLO (identity and name), receives WELCOME.
+3. Channel 0: sends CREATE_ROOM (`input_delay`, `flags`), receives ROOM_CREATED with the room code. Flag bit 0 is set when `capture_sync` is configured.
+4. The joiner sends JOIN_ROOM. The server sends MATCH_START to both players.
+5. If `capture_sync` is set, the host calls it and sends SYNC_BLOB (1 to 2048 bytes as block data) before GO.
+6. Server sends GO once the sync blob has been relayed (or immediately if no sync blob is required). Both sides enter Running.
 
 Joiner:
 
-1. HELLO, then WELCOME. JOIN_ROOM, then MATCH_START. The state becomes Registering.
-2. If `apply_sync` is set, the joiner waits for SYNC_BLOB_FWD, calls `apply_sync(blob, seed)`, and then sends UDP REGISTER every 100 ms until GO.
-
-The server sends GO to both players once both UDP registrations have arrived and, when flag bit 0 is set, the blob has been relayed. Both sides then enter Running.
+1. Acquires connect token over HTTP (`GET /token?v=3`) and connects via UDP.
+2. Channel 0: sends HELLO, receives WELCOME. Sends JOIN_ROOM, receives MATCH_START.
+3. If `apply_sync` is set, the joiner waits for SYNC_BLOB_FWD, applies the blob, and then waits for GO.
+4. Server sends GO. Both sides enter Running.
 
 **Invariant: no machine frame between the sync point and GO.** `capture_sync` / `apply_sync` run on the exact `in_versus` edge frame (the frontend restores its lobby-trigger snapshot and runs input-0 frames to that edge, without `lobby_hold_frame` or `on_match_frame`). From that moment until GO the frontend runs no frames at all, so match frame 0 is exactly the synced state on both peers. Running pinned hold frames in that window (a different count per peer) desynced the match. The frontend logs `NETPLAY_RUNNING ... frames_between_sync_and_start=N` and `NETPLAY_INVARIANT_VIOLATION` if N is not 0; `f3rt-tool netplay` prints `NETPLAY_INVARIANT frames_between_sync_and_start=0` and exits 1 otherwise. Both values are recorded in desync bundles.
 
-In Running, each side sends its inputs over UDP and retransmits them every 8 ms. A frame runs only when both inputs for that frame are known. Each side sends a CRC every 60 frames. At the end, the frontend sends the result and then BYE.
-
+In Running, each side sends its inputs over Channel 1 (unreliable) with redundant multi-frame history. A frame runs only when both inputs for that frame are known. Each side sends a CRC every 60 frames on Channel 0. At the end, the frontend sends the result and then BYE.
 ## Hook contract
 
 The frontend and the headless tool build one `SessionConfig` from `f3rt::game_netplay()`. The signatures below are taken from `include/f3rt/game_netplay.hpp`.
@@ -145,14 +146,14 @@ The server compares `game_id`, the seven ROM CRCs and `build_hash` from the two 
 ## Testing
 
 - `runtime/tests/netplay.cpp` builds as `f3rt-test-netplay`. GoogleTest discovery uses the prefix `runtime-netplay.`. Run `ctest -R runtime-netplay`. This needs `BUILD_TESTING` and GoogleTest. `[INFERENCE]` The exact ctest invocation was not run.
-- `tests/test_netplay.py` is a pytest file. It needs a ROM directory (`F3_ROM_DIR`, `ROM_DIR` or `roms/landmakrj`), an `f3rt-tool` in `build-landmakrj/` or `build/`, and either Go or `build/netplay-server`. The server is started on `127.0.0.1:0`. The file has four tests:
+- `tests/test_netplay.py` is a pytest file. It needs a ROM directory (`F3_ROM_DIR`, `ROM_DIR` or `roms/landmakrj`), an `f3rt-tool` in `build-landmakrj/` or `build/`, and `build/netplay-server`. The server is started on `127.0.0.1:0`. The file has four tests:
   - `test_netplay_poke_script_rejected`: a poke script is rejected with a message containing "poke".
   - `test_netplay_end_to_end_3000_frames`: a two-process match for 3000 frames.
   - `test_netplay_differential_sync_5000_frames`: host at trigger 2065 and joiner at trigger 2945, with scripted inputs for 5000 frames. It checks that both `TRIGGER` lines appear, that there is no DESYNC, that both `FINAL sync_hash` values are equal, and that the `state_crc` values differ. The differing `state_crc` values show that the two copies came from different attract paths.
   - `test_netplay_differential_sync_negative_control`: the same setup for 500 frames, with `--disable-apply-sync` on the joiner. It expects a DESYNC or a non-zero exit.
 
   No `add_test` in `CMakeLists.txt` refers to this file, so it is not part of ctest. These tests were not run for this page.
-- Server unit tests: `go -C netplay/server test ./...`.
+- Server unit tests: `ctest --test-dir build -R '^netplay-relay\.'`.
 - Headless client: `f3rt-tool netplay --server HOST:PORT --host` or `--join CODE`. Useful flags:
   - `--inputs FILE` runs before the trigger. Pokes are rejected.
   - `--until-trigger` runs `--inputs` locally until `in_versus` goes 0 to 1, then prints `TRIGGER frame=N [sync_hash=0x...]`.
@@ -167,8 +168,8 @@ The server compares `game_id`, the seven ROM CRCs and `build_hash` from the two 
 
 - The Land Maker sync covers the blob ranges above. Other state, such as sound and animation timing, can differ between the copies. The desync check covers the synced gameplay block minus five cosmetic bytes, plus credits, operator settings and the rounds word.
 - The relay is the only path. There is no direct connection, and there is no reconnect.
-- There is no authentication. The session key is sent in cleartext over TCP and is shared by both players, so either player can forge the other's UDP inputs.
-- There is no cap on concurrent TCP connections.
+- The relay encrypts and authenticates every packet per client using Netcode (ChaCha20-Poly1305 AEAD). Connect tokens are signed with the relay's private key.
+- A single relay process supports at most 32 concurrent rooms (`--max-rooms`, default 32) due to `yojimbo::MaxClients = 64`.
+- Single port (default 7845) is used for both TCP (token endpoint) and UDP (game socket).
 - SYNC_BLOB is limited to 2048 bytes, so a full snapshot cannot be sent.
 - The host's input delay sets the delay for the match.
-- `-max-rooms` caps the number of rooms and defaults to 64.

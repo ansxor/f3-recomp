@@ -27,7 +27,8 @@ Each area test runs its test suite using GoogleTest and RapidCheck property chec
 | Area | Source | Coverage |
 | --- | --- | --- |
 | video | [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | FDP geometry and game-video decoding checks. |
-| input | [`runtime/tests/input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp) | Local and dial inputs, scripts, coin edges and active-low start. |
+| input | [`runtime/tests/input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp) | Local and dial inputs, coin edges and active-low start. |
+| input_script | [`runtime/tests/input_script.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input_script.cpp) | Host-only debug input scripts (`--inputs`): ranges, mash timing, malformed lines and RAM pokes. |
 | eeprom | [`runtime/tests/eeprom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp) | EEPROM protocol and factory image. |
 | cpu | [`runtime/tests/cpu.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp) | CPU dispatch, memory, timing, exceptions, IRQ and watchdog. |
 | sprites | [`runtime/tests/sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprites.cpp) | Sprite unit sandbox. |

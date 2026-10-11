@@ -11,13 +11,13 @@
 #include "ui.hpp"
 #include "state.hpp"
 #include "interpreter.hpp"
-#include "audio/sound_trace.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
 #include "renderer/gpu/interp.hpp"
-#include "debug/block_profile.hpp"
+#include "debug/profile.hpp"
+#include "debug/input_script.hpp"
 #include "sprites/units.hpp"
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 #include "sprites/behaviour.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
@@ -145,7 +145,7 @@ enum Preference : uint32_t {
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
-    std::filesystem::path sound_trace_path,profile_path,config_path,discovery_path,inputs_path,watch_path,indirect_path;
+    std::filesystem::path profile_path,config_path,discovery_path,inputs_path,watch_path,indirect_path;
     std::vector<uint32_t> watch_entries;
     std::string set=F3RT_DEFAULT_SET;
     std::string renderer;
@@ -193,7 +193,6 @@ int main(int argc,char **argv) try {
         else if(arg=="--fast-boot") { const std::string v=value();if(v=="on")fast_boot=true;else if(v=="off")fast_boot=false;else throw std::runtime_error("--fast-boot must be on or off");cli_preferences|=FastBoot; }
         else if(arg=="--boot-cache") { const std::string v=value();if(v=="on")boot_cache=true;else if(v=="off")boot_cache=false;else throw std::runtime_error("--boot-cache must be on or off");cli_preferences|=BootCache; }
         else if(arg=="--wav")wav_path=value();
-        else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
         else if(arg=="--discovery-log")discovery_path=value();
         else if(arg=="--discovery-all")discovery_all=true;
@@ -269,7 +268,7 @@ int main(int argc,char **argv) try {
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--discovery-log FILE] (host-only: log unhandled video writers/fallbacks seen during play; see docs)\n"
                      <<"  [--discovery-all] (with --discovery-log: also log known writers (known=1) and unit-accounted sprite writes)\n"
-                     <<"  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM pokes; format in include/f3rt/input.hpp; disables fast boot)\n"
+                     <<"  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM pokes; format in runtime/debug/input_script.hpp; disables fast boot)\n"
                      <<"  [--watch-entries HEX,HEX --watch-log FILE] (instrumented build with --profile-out: per-frame execution counts of those main-CPU instructions)\n"
                      <<"  [--indirect-log FILE] (instrumented build with --profile-out: log observed targets of computed jmp/jsr sites)\n"
                      <<"  [--sound-trace FILE] (reference audio only)\n"
@@ -381,8 +380,6 @@ int main(int argc,char **argv) try {
         audio_backend=f3rt::audio_backend_name(settings.audio_backend);
     }
     parse_scale(video_scale,video_scale_mode,video_options);
-    if(settings.audio_backend==f3rt::AudioBackend::Enhanced && !sound_trace_path.empty())
-        throw std::runtime_error("Enhanced audio does not execute a sound driver; --sound-trace requires reference audio");
 #ifdef F3RT_GAME
     if(set!=F3RT_DEFAULT_SET)throw std::runtime_error("This generated executable requires " F3RT_DEFAULT_SET);
 #endif
@@ -426,7 +423,6 @@ int main(int argc,char **argv) try {
     if(!watch_path.empty())entry_watch=std::make_unique<f3rt::EntryWatch>(watch_path,profile,watch_entries);
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if(!indirect_path.empty())indirect_watch=std::make_unique<f3rt::IndirectWatch>(indirect_path,profile);
-    if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
 #ifdef F3RT_SOUND_GENERATED
     if(set==F3RT_DEFAULT_SET) {
         m.use_native_sound(f3_sound_blocks,f3_sound_block_count,
@@ -603,7 +599,7 @@ int main(int argc,char **argv) try {
             throw std::runtime_error("Input scripts with RAM pokes cannot be used in netplay");
         f3rt::netplay::SessionConfig cfg;
         std::string host=settings.netplay_server;
-        uint16_t port=f3rt::netplay::default_tcp_port;
+        uint16_t port=f3rt::netplay::default_port;
         auto colon=host.rfind(':');
         if(colon!=std::string::npos) {
             port=static_cast<uint16_t>(std::stoul(host.substr(colon+1)));
@@ -655,7 +651,7 @@ int main(int argc,char **argv) try {
         }
         f3rt::netplay::SessionConfig cfg;
         std::string host=settings.netplay_server;
-        uint16_t port=f3rt::netplay::default_tcp_port;
+        uint16_t port=f3rt::netplay::default_port;
         auto colon=host.rfind(':');
         if(colon!=std::string::npos) {
             port=static_cast<uint16_t>(std::stoul(host.substr(colon+1)));
@@ -777,7 +773,7 @@ int main(int argc,char **argv) try {
     const bool explicit_fast_boot=(cli_preferences&FastBoot)!=0 && fast_boot;
     const bool fast_boot_active=boot &&
         ((!headless && settings.fast_boot) || explicit_fast_boot) &&
-        wav_path.empty() && dumpdir.empty() && sound_trace_path.empty() &&
+        wav_path.empty() && dumpdir.empty() &&
         profile_path.empty() && fallback_report.empty() && inputs_path.empty();
     std::filesystem::path config_dir;
     if(!config_path.empty())config_dir=std::filesystem::absolute(config_path).parent_path();
@@ -997,7 +993,8 @@ int main(int argc,char **argv) try {
                         reason_str = netplay_session->last_error();
                         break;
                     case f3rt::netplay::EndReason::Disconnected:
-                        reason_str = "Disconnected from server";
+                        reason_str = netplay_session->last_error().empty() ? "Disconnected from server"
+                                                                           : netplay_session->last_error();
                         break;
                     default: break;
                     }
@@ -1038,8 +1035,8 @@ int main(int argc,char **argv) try {
                 case Action::SaveState: case Action::LoadState: {
                     if(netplay_active)
                         throw std::runtime_error("Save/load states are disabled during active netplay");
-                    if(!translated || allow_fallback || m.sound_trace)
-                        throw std::runtime_error("Slots require offline strict-native execution without sound tracing");
+                    if(!translated || allow_fallback)
+                        throw std::runtime_error("Slots require offline strict-native execution");
                     if(config_path.empty())throw std::runtime_error("No user config path; supply --config FILE");
                     const auto path=std::filesystem::absolute(config_path).parent_path()/"states"/
                         (set+"-"+std::to_string(action.slot)+".f3state");
@@ -1423,7 +1420,6 @@ int main(int argc,char **argv) try {
     if(m.game_video)m.game_video->report(std::cout);
     if(m.sprite_units)m.sprite_units->write_summary(std::cout);
     if(m.discovery)m.discovery->finish(m);
-    if(m.sound_trace)m.sound_trace->finish(m);
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
              <<" audio_backend="<<f3rt::audio_backend_name(settings.audio_backend)

@@ -1,26 +1,14 @@
 #pragma once
 
-#include "protocol.hpp"
-#include "socket.hpp"
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
+#include "netplay/shared/contract.hpp"
+#include "f3rt/netplay.hpp"
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
 #include <string>
-#include <vector>
 
 namespace f3rt::netplay {
-
-struct IncomingTcpMsg {
-    uint8_t type = 0;
-    std::vector<uint8_t> payload;
-};
-
-struct IncomingUdpPkt {
-    uint8_t player_index = 0;
-    uint8_t kind = 0;
-    std::vector<uint8_t> body;
-};
 
 class Client {
 public:
@@ -30,56 +18,66 @@ public:
     Client(const Client &) = delete;
     Client &operator=(const Client &) = delete;
 
-    bool connect_tcp(const std::string &host, uint16_t port);
-    bool is_tcp_connected() const { return tcp_connected_; }
-    bool is_tcp_connecting() const { return tcp_connecting_; }
-    bool is_tcp_closed() const { return tcp_closed_; }
+    bool connect(const std::string &host, uint16_t port);
+    void disconnect();
 
-    void set_session(uint64_t session_id, std::span<const uint8_t, 32> session_key,
-                     const SocketAddress &udp_addr);
-    uint16_t local_udp_port() const { return udp_sock_.local_port(); }
+    bool is_connecting() const;
+    bool is_connected() const;
+    bool is_disconnected() const;
+    bool connection_failed() const;
 
-    bool has_session() const { return has_session_; }
-    uint64_t session_id() const { return session_id_; }
-    std::span<const uint8_t, 32> session_key() const { return session_key_; }
-    const SocketAddress &server_udp_addr() const { return server_udp_addr_; }
-
-    void send_tcp(uint8_t type, std::span<const uint8_t> payload);
-    void send_tcp_raw(std::span<const uint8_t> frame);
-
-    void send_udp_raw(std::span<const uint8_t> packet);
-
-    // Drain TCP and UDP sockets non-blocking
+    // Pumps network I/O: AdvanceTime, ReceivePackets, SendPackets
     void poll();
 
-    // Check received messages
-    bool pop_tcp_msg(IncomingTcpMsg &out_msg);
-    bool pop_udp_pkt(IncomingUdpPkt &out_pkt);
+    // Message creation & sending
+    template <typename T>
+    T *create_message(NetplayMessageType type) {
+        if (!yojimbo_client_) return nullptr;
+        return static_cast<T *>(yojimbo_client_->CreateMessage(static_cast<int>(type)));
+    }
 
-    void close();
+    void send_control_message(yojimbo::Message *msg);
+    void send_inputs_message(yojimbo::Message *msg);
+    void attach_block_to_message(yojimbo::BlockMessage *msg, const uint8_t *data, size_t bytes);
+
+    // Message reception
+    yojimbo::Message *receive_control_message();
+    yojimbo::Message *receive_inputs_message();
+    void release_message(yojimbo::Message *msg);
+
+    // Flush outgoing packets immediately
+    void send_packets();
 
     const std::string &last_error() const { return error_; }
+    void set_error(std::string error) { error_ = std::move(error); }
+
+    uint64_t client_id() const { return client_id_; }
+    NetplayStats stats() const;
 
 private:
-    Socket tcp_sock_;
-    Socket udp_sock_;
-    SocketAddress server_tcp_addr_;
-    SocketAddress server_udp_addr_;
+    static std::atomic<int> s_netplay_refcount;
 
-    bool tcp_connecting_ = false;
-    bool tcp_connected_ = false;
-    bool tcp_closed_ = false;
+    struct AsyncFetchState {
+        std::atomic<bool> cancelled{false};
+        std::atomic<bool> finished{false};
+        std::mutex mutex;
+        bool success = false;
+        std::string error;
+        uint64_t client_id = 0;
+        std::array<uint8_t, yojimbo::ConnectTokenBytes> token{};
+    };
 
-    std::vector<uint8_t> tcp_out_buf_;
-    std::vector<uint8_t> tcp_in_buf_;
+    std::shared_ptr<AsyncFetchState> fetch_state_;
+    bool token_fetch_failed_ = false;
 
-    uint64_t session_id_ = 0;
-    std::array<uint8_t, 32> session_key_{};
-    bool has_session_ = false;
+    std::unique_ptr<NetplayAdapter> adapter_;
+    std::unique_ptr<NetplayConfig> config_;
+    std::unique_ptr<yojimbo::Client> yojimbo_client_;
 
-    std::vector<IncomingTcpMsg> tcp_queue_;
-    std::vector<IncomingUdpPkt> udp_queue_;
+    std::chrono::steady_clock::time_point start_time_;
+    double get_elapsed_seconds();
 
+    uint64_t client_id_ = 0;
     std::string error_;
 };
 

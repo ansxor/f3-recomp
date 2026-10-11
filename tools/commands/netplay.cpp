@@ -1,5 +1,6 @@
 #include "commands.hpp"
 #include "../runner/runner.hpp"
+#include "debug/input_script.hpp"
 #include "f3rt/game_netplay.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/machine.hpp"
@@ -148,7 +149,7 @@ int cmd_netplay(int argc, char **argv) try {
 
     // Parse host and port
     std::string host = server_arg;
-    uint16_t port = netplay::default_tcp_port;
+    uint16_t port = netplay::default_port;
     auto colon = server_arg.rfind(':');
     if (colon != std::string::npos) {
         host = server_arg.substr(0, colon);

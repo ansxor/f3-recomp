@@ -6,7 +6,7 @@
 #include "audio/reference/native/sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 #include "sprites/units.hpp"
 #include "state_io.hpp"
 #include <algorithm>

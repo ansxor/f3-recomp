@@ -59,7 +59,6 @@ std::vector<uint8_t> read_all(const fs::path &path) {
 
 struct Bundle {
     fs::path dir;
-    std::string info;
     InputsFile inputs;
     std::vector<uint8_t> trigger, hashed;
     uint64_t seed = 0, frame = 0, interval = 60, hashed_len = 0, recorded_crc = 0, player = 0;
@@ -74,7 +73,12 @@ Bundle load_bundle(const fs::path &dir) {
     Bundle b;
     b.dir = dir;
     const auto info_bytes = read_all(dir / "info.json");
-    b.info.assign(info_bytes.begin(), info_bytes.end());
+    BundleInfo info;
+    try {
+        info = parse_info_json(std::string(info_bytes.begin(), info_bytes.end()));
+    } catch (const std::exception &e) {
+        throw std::runtime_error(dir.string() + ": " + e.what());
+    }
     const auto inputs_bytes = read_all(dir / "inputs.txt");
     std::string error;
     if (!parse_inputs_txt(std::string(inputs_bytes.begin(), inputs_bytes.end()), b.inputs, error)) {
@@ -82,16 +86,16 @@ Bundle load_bundle(const fs::path &dir) {
     }
     b.trigger = read_all(dir / "trigger.f3s");
     b.hashed = read_all(dir / "hashed.bin");
-    if (!json_find_u64(b.info, "seed", b.seed)) throw std::runtime_error(dir.string() + ": info.json has no seed");
-    json_find_u64(b.info, "frame", b.frame);
-    json_find_u64(b.info, "crc_interval", b.interval);
-    json_find_u64(b.info, "hashed_len", b.hashed_len);
-    json_find_u64(b.info, "recorded_crc", b.recorded_crc);
-    json_find_u64(b.info, "player_index", b.player);
-    uint64_t gpu = 0, layout = 0;
-    if (json_find_u64(b.info, "machine_gpu", gpu)) b.gpu = int(gpu);
-    json_find_string(b.info, "audio_backend", b.audio);
-    b.legacy_hash = !json_find_u64(b.info, "hash_layout", layout);
+    if (!info.seed) throw std::runtime_error(dir.string() + ": info.json has no seed");
+    b.seed = *info.seed;
+    b.frame = info.frame.value_or(0);
+    b.interval = info.crc_interval.value_or(60);
+    b.hashed_len = info.hashed_len.value_or(0);
+    b.recorded_crc = info.recorded_crc.value_or(0);
+    b.player = info.player_index.value_or(0);
+    if (info.machine_gpu) b.gpu = int(*info.machine_gpu);
+    if (info.audio_backend) b.audio = *info.audio_backend;
+    b.legacy_hash = !info.hash_layout.has_value();
     if (b.interval == 0) b.interval = 60;
     return b;
 }

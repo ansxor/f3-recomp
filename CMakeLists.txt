@@ -1,10 +1,29 @@
 cmake_minimum_required(VERSION 3.24)
+option(F3RT_SDL "Build SDL3 frontend" ON)
+option(F3RT_GPU "Build SDL3 GPU presentation (offline SPIR-V/MSL shader tools required)" ON)
+option(BUILD_TESTING "Build the unit tests" ON)
+# Every C/C++ dependency comes from the vcpkg submodule in manifest mode (vcpkg.json).
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(_f3_vcpkg_toolchain "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    if(NOT EXISTS "${_f3_vcpkg_toolchain}")
+        message(FATAL_ERROR "vcpkg submodule missing. Run: git submodule update --init vcpkg")
+    endif()
+    set(CMAKE_TOOLCHAIN_FILE "${_f3_vcpkg_toolchain}" CACHE FILEPATH "vcpkg toolchain")
+endif()
+set(VCPKG_MANIFEST_FEATURES "")
+if(F3RT_SDL)
+    list(APPEND VCPKG_MANIFEST_FEATURES frontend)
+    if(F3RT_GPU)
+        list(APPEND VCPKG_MANIFEST_FEATURES gpu)
+    endif()
+endif()
+if(BUILD_TESTING)
+    list(APPEND VCPKG_MANIFEST_FEATURES tests)
+endif()
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(F3RT_SDL "Build SDL3 frontend" ON)
-option(F3RT_GPU "Build SDL3 GPU presentation (offline SPIR-V/MSL shader tools required)" ON)
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -277,13 +296,13 @@ if(GAME_BOOT_SOURCES)
     set(F3RT_GAME_BOOT_SOURCES ${GAME_BOOT_SOURCES})
 else()
     # Games with no boot predicate never turbo-boot; the entry point still resolves.
-    set(F3RT_GAME_BOOT_SOURCES runtime/game_boot_generic.cpp)
+    set(F3RT_GAME_BOOT_SOURCES runtime/stubs/boot.cpp)
 endif()
 file(GLOB GAME_NETPLAY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/netplay/*.cpp")
 if(GAME_NETPLAY_SOURCES)
     set(F3RT_GAME_NETPLAY_SOURCES ${GAME_NETPLAY_SOURCES})
 else()
-    set(F3RT_GAME_NETPLAY_SOURCES runtime/game_netplay_generic.cpp)
+    set(F3RT_GAME_NETPLAY_SOURCES runtime/stubs/netplay.cpp)
 endif()
 set(F3RT_CORE_SOURCES
     runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
@@ -292,10 +311,9 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
-    runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/block_profile.cpp runtime/input.cpp
+    runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
     runtime/audio/hle/audio.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/synth.cpp runtime/audio/hle/voice_kernel.cpp
-    runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/discovery_log.cpp
-    runtime/netplay/sha256.cpp runtime/netplay/socket.cpp runtime/netplay/protocol.cpp
+    runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
     ${AUDIO_SOURCES}
 )
@@ -374,6 +392,9 @@ execute_process(
 
 add_library(f3rt STATIC ${F3RT_CORE_SOURCES})
 add_dependencies(f3rt f3rt_build_identity)
+
+
+
 # Generated headers are reached as "generated_config/<name>"; runtime sprite headers
 # use "sprites/<name>" to avoid basename ambiguity.
 target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
@@ -388,18 +409,45 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
 # Google Highway: runtime-dispatched SIMD for the HLE voice kernel.
-find_package(hwy 1.0 CONFIG QUIET)
-if(NOT TARGET hwy::hwy)
-    include(FetchContent)
-    set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-    set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
-    set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(highway GIT_REPOSITORY https://github.com/google/highway.git GIT_TAG 1.4.0 GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(highway)
-    add_library(hwy::hwy ALIAS hwy)
+find_package(hwy CONFIG REQUIRED)
+find_package(cpp_yyjson CONFIG REQUIRED)
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy cpp_yyjson::cpp_yyjson)
+target_link_libraries(f3rt PUBLIC f3-netplay-shared)
+find_package(Yojimbo CONFIG REQUIRED)
+find_package(httplib CONFIG REQUIRED)
+
+add_library(f3-netplay-shared STATIC
+    netplay/shared/contract.cpp
+)
+target_include_directories(f3-netplay-shared PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(f3-netplay-shared PUBLIC Yojimbo::yojimbo httplib::httplib)
+target_compile_options(f3-netplay-shared PRIVATE -Wall -Wextra -Wpedantic)
+
+add_library(f3-netplay-relay STATIC
+    netplay/server/relay.cpp
+    netplay/server/state.cpp
+    netplay/server/log_writer.cpp
+    netplay/server/token_service.cpp
+    netplay/server/socket_transport.cpp
+)
+target_include_directories(f3-netplay-relay PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" netplay/server)
+target_link_libraries(f3-netplay-relay PUBLIC f3-netplay-shared cpp_yyjson::cpp_yyjson)
+target_compile_options(f3-netplay-relay PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(f3-netplay-server
+    netplay/server/main.cpp
+)
+target_link_libraries(f3-netplay-server PRIVATE f3-netplay-relay)
+
+if(BUILD_TESTING)
+    find_package(GTest CONFIG REQUIRED)
+    include(GoogleTest)
+    add_executable(f3-netplay-relay-test
+        netplay/server/tests/relay_test.cpp
+    )
+    target_link_libraries(f3-netplay-relay-test PRIVATE f3-netplay-relay GTest::gtest_main)
+    gtest_discover_tests(f3-netplay-relay-test TEST_PREFIX "netplay-relay.")
 endif()
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy)
 if(WIN32)
     target_link_libraries(f3rt PRIVATE ws2_32)
 endif()
@@ -453,12 +501,10 @@ if(F3_GENERATED_DIR)
 endif()
 if(F3RT_SDL)
     find_package(SDL3 CONFIG REQUIRED)
-    set(IMGUI "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/imgui")
-    add_library(f3rt-ui STATIC runtime/frontend/settings.cpp runtime/frontend/ui.cpp
-        ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
-        ${IMGUI}/backends/imgui_impl_sdl3.cpp ${IMGUI}/backends/imgui_impl_sdlrenderer3.cpp)
-    target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime ${IMGUI} ${IMGUI}/backends)
-    target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3)
+    find_package(imgui CONFIG REQUIRED)
+    add_library(f3rt-ui STATIC runtime/frontend/settings.cpp runtime/frontend/ui.cpp)
+    target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime)
+    target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui)
     if(F3_SOUND_GENERATED_DIR)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_SOUND_GENERATED=1)
     endif()
@@ -476,7 +522,6 @@ if(F3RT_SDL)
             F3RT_GENERATED=1 F3RT_GAME=1 F3RT_DEFAULT_SET="${F3_GAME}" F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
     if(F3RT_GPU)
-        target_sources(f3rt-ui PRIVATE ${IMGUI}/backends/imgui_impl_sdlgpu3.cpp)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
         find_program(F3_GLSLANG glslangValidator REQUIRED)
         find_program(F3_SPIRV_CROSS spirv-cross REQUIRED)
@@ -529,40 +574,9 @@ include(CTest)
 if(BUILD_TESTING)
     add_test(NAME game-geometry-literals COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake)
-    find_package(GTest QUIET)
-    if(NOT TARGET GTest::gtest)
-        include(FetchContent)
-        FetchContent_Declare(
-            googletest
-            GIT_REPOSITORY https://github.com/google/googletest.git
-            GIT_TAG v1.18.0
-            GIT_SHALLOW TRUE
-        )
-        FetchContent_MakeAvailable(googletest)
-    endif()
+    find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
-
-    find_path(RAPIDCHECK_GTEST_INCLUDE_DIR "rapidcheck/gtest.h")
-    if(RAPIDCHECK_GTEST_INCLUDE_DIR)
-        find_package(rapidcheck CONFIG QUIET)
-        if(TARGET rapidcheck AND NOT TARGET rapidcheck_gtest)
-            add_library(rapidcheck_gtest INTERFACE)
-            target_link_libraries(rapidcheck_gtest INTERFACE rapidcheck)
-            target_include_directories(rapidcheck_gtest INTERFACE "${RAPIDCHECK_GTEST_INCLUDE_DIR}")
-        endif()
-    endif()
-    if(NOT TARGET rapidcheck_gtest)
-        include(FetchContent)
-        set(RC_ENABLE_GTEST ON CACHE BOOL "" FORCE)
-        set(RC_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-        set(RC_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
-        FetchContent_Declare(
-            rapidcheck
-            GIT_REPOSITORY https://github.com/emil-e/rapidcheck.git
-            GIT_TAG 2c3c4365aca21ef4e612768fdc95b1ce8b39a651
-        )
-        FetchContent_MakeAvailable(rapidcheck)
-    endif()
+    find_package(rapidcheck CONFIG REQUIRED)
 
     add_library(f3rt-test-support STATIC runtime/tests/support.cpp runtime/renderer/gpu/motion.cpp)
     target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt_musashi f3rt-runner GTest::gtest rapidcheck_gtest)
@@ -571,7 +585,7 @@ if(BUILD_TESTING)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    foreach(area video input eeprom cpu sprites audio motion_interp state netplay)
+    foreach(area video input input_script eeprom cpu sprites audio motion_interp state netplay)
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp)
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")

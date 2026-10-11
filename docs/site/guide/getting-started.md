@@ -15,10 +15,10 @@ Install these tools before you build.
 | CMake | 3.24 or newer | Configure and build. The top-level `CMakeLists.txt` requires 3.24. |
 | Ninja | any recent version | Build backend. The commands below use `-G Ninja`. |
 | C and C++ compiler | C11 and C++20 | Compile the runtime and the generated C. Use Clang or GCC. |
-| SDL3 | development files | Window, keyboard and audio. CMake runs `find_package(SDL3 CONFIG REQUIRED)`. |
-| Google Highway | 1.0 or newer (optional) | SIMD for Enhanced audio. If CMake can't find it, it downloads Highway 1.4.0 while configuring. |
 | uv | any recent version | Manages Python (3.11+) and pinned dependencies (`capstone==5.0.9`; analysis group: NumPy, SciPy) defined in `pyproject.toml` and `uv.lock`. |
-| Shader tools | `glslangValidator` and `spirv-cross` | Required by the default GPU-enabled build; omit with `-DF3RT_GPU=OFF` for CPU-only presentation. |
+| Git | any recent version | Fetches the `vcpkg` submodule. |
+
+All C and C++ libraries and the shader tools come from the [vcpkg](https://vcpkg.io) submodule in `vcpkg/`, pinned by `vcpkg.json`: SDL3, Dear ImGui, Yojimbo, cpp-httplib, cpp-yyjson, Google Highway, zlib, GoogleTest, RapidCheck, `glslangValidator` and `spirv-cross`. You do not install them yourself. The first configure bootstraps vcpkg and builds them into the build directory, which takes several minutes; later configures reuse vcpkg's binary cache.
 
 The authors tested on macOS (Apple silicon). Other systems are untested.
 
@@ -27,7 +27,7 @@ The authors tested on macOS (Apple silicon). Other systems are untested.
 Clone the repository.
 
 ```sh
-git clone https://github.com/ansxor/f3-recomp.git
+git clone --recurse-submodules https://github.com/ansxor/f3-recomp.git
 cd f3-recomp
 ```
 

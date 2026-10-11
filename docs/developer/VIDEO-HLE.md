@@ -151,7 +151,7 @@ blend/alpha, mosaic, pivot and sprite mixing, PF zoom/palette-add/rowscroll/mix.
 ## Unsupported stores and fallbacks
 
 Store logging is opt-in at runtime: `--discovery-log FILE` (see
-[WORKFLOWS.md](WORKFLOWS.md#discovery-log)). `runtime/discovery_log.{hpp,cpp}` classifies
+[WORKFLOWS.md](WORKFLOWS.md#discovery-log)). `runtime/debug/discovery.{hpp,cpp}` classifies
 every graphics/control store by address into a `VideoLayer`, asks the per-game
 `video_writer_known(layer, pc)` once per new `(layer, pc)` and writes the unknown ones
 (first frame, address, hit count). `GameVideo::fallback` reports oracle fallbacks

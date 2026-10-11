@@ -59,10 +59,11 @@ help:
 list-games:
 	@for d in roms/*/; do s=$${d#roms/}; s=$${s%/}; if [ -f games/$$s/config.toml ]; then echo "$$s"; fi; done
 
+RELAY_BUILD_DIR = $(if $(wildcard build-vcpkg/CMakeCache.txt),build-vcpkg,$(BUILD_DIR))
 netplay-server:
 	@mkdir -p build
-	go -C netplay/server build -o $(call shq,$(CURDIR))/build/netplay-server .
-
+	cmake --build $(call shq,$(RELAY_BUILD_DIR)) --target f3-netplay-server
+	cp -f $(call shq,$(RELAY_BUILD_DIR))/f3-netplay-server build/netplay-server
 rom-check:
 	@test -d $(call shq,$(ROM_DIR)) || { printf 'error: ROM directory %s does not exist (GAME=%s). Set ROM_DIR=/path/to/roms/%s, or pick a set from make list-games.\n' $(call shq,$(ROM_DIR)) $(call shq,$(GAME)) $(call shq,$(GAME)) >&2; exit 1; }
 

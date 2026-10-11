@@ -119,7 +119,7 @@ This example starts looping sequence 8 and sets its sequence volume to `0x74`:
 build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
   --wav-window event --sound-trace build/music.sound --wav build/music.wav
-uv run f3 decode build/music.sound \
+uv run f3 decode trace build/music.sound \
   --output build/music-full.jsonl
 ```
 
@@ -138,7 +138,7 @@ build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 068d01074002 --packet 068e01072768 \
   --at 1.5:058f010727 --seconds 3 --wav-window event \
   --sound-trace build/sfx.sound --wav build/sfx.wav
-uv run f3 decode build/sfx.sound --notes-only \
+uv run f3 decode trace build/sfx.sound --notes-only \
   --output build/sfx-onsets.jsonl
 ```
 
@@ -167,14 +167,14 @@ Audio counters include boot and the pre-origin drain, even with an event-only WA
 
 JSONL uses absolute trace ticks and PCM ordinals. Subtract the printed event origin when you need an event-relative timeline.
 
-For HLE voice event inspection, replace the Reference example's `--sound-driver native --sound-trace ...` with `--audio-backend enhanced --hle-events build/music-hle.csv` and use a distinct WAV filename. The CSV columns are `kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse`. `decode_sound.py` and `compare_sound.py` accept F3SND2 traces, not this CSV.
+For HLE voice event inspection, replace the Reference example's `--sound-driver native --sound-trace ...` with `--audio-backend enhanced --hle-events build/music-hle.csv` and use a distinct WAV filename. The CSV columns are `kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse`. `uv run f3 decode trace` and `uv run f3 compare trace` accept F3SND2 traces, not this CSV.
 
 ## Compare Reference sound drivers
 
 Keep `--audio-backend reference` (the default) and repeat each extraction with `--sound-driver oracle` and distinct output filenames. Compare complete traces and WAV files separately:
 
 ```sh
-python3 tools/compare_sound.py build/music-oracle.sound \
+uv run f3 compare trace build/music-oracle.sound \
   build/music-native.sound --json build/music-parity.json
 cmp build/music-oracle.wav build/music-native.wav
 ```

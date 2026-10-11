@@ -21,8 +21,7 @@ namespace f3rt::netplay {
 
 class MatchRecorder;
 
-constexpr uint16_t default_tcp_port = 7845;
-constexpr uint16_t default_udp_port = 7845;
+constexpr uint16_t default_port = 7845;
 
 enum class SessionState {
     Idle,
@@ -64,7 +63,7 @@ struct ChatMessage {
 
 struct SessionConfig {
     std::string server_host;
-    uint16_t server_port = default_tcp_port;
+    uint16_t server_port = default_port;
     std::string game_id;
     std::array<uint32_t, 7> rom_crcs{};
     std::array<uint8_t, 32> build_hash{};

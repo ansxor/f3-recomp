@@ -1,4 +1,5 @@
 #include "inputs.hpp"
+#include "f3rt/input.hpp"
 
 namespace f3rt::runner {
 

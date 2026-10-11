@@ -51,8 +51,8 @@ flowchart LR
 
 `--audio-backend enhanced` selects approximate audio on a separate 48 kHz worker.
 It reads Land Maker's music/instrument data and sample ROM directly, without
-executing the sound CPU or ES5505/ES5510 programs. Do not combine it with
-`--sound-trace`, and do not give it a `--sound-driver` (a tool option, described below).
+executing the sound CPU or ES5505/ES5510 programs. Do not give it a
+`--sound-driver` (a tool option, described below).
 It is available only for `landmakrj`.
 
 Explicit `--audio-backend` selections override the saved backend.
@@ -104,7 +104,7 @@ Keep WAV files in the ignored `build/` directory. They contain audio from the RO
 A sound trace records every read and write that the sound CPU makes on its bus, and every write from the main CPU to the sound mailbox. The trace does not change the timing and does not read any device register a second time. It needs Reference audio, because Enhanced audio runs no sound CPU.
 
 ```sh
-./build/landmakr --headless --frames 6000 --audio-backend reference --sound-trace build/run.sound --wav build/run.wav
+./build/f3rt-tool gameplay --frames 6000 --audio-backend reference --sound-trace build/run.sound --wav build/run.wav
 ```
 
 Notes:

@@ -14,8 +14,7 @@ public:
 
     void start();
     void poll();
-    // Handles one TCP message while Running. Returns true when it ended the session (desync / peer left / error).
-    bool handle_running_tcp(const IncomingTcpMsg &msg);
+    bool handle_running_control(yojimbo::Message *msg);
 
     SessionState state() const { return state_; }
     EndReason end_reason() const { return end_reason_; }
@@ -28,8 +27,14 @@ public:
     const std::string &peer_name() const { return peer_name_; }
     const std::string &last_error() const { return last_error_; }
     const DesyncInfo &desync_info() const { return desync_info_; }
-    const NetplayStats &stats() const { return stats_; }
-    uint16_t local_udp_port() const { return client_.local_udp_port(); }
+    const NetplayStats &stats() const {
+        const NetplayStats net = client_.stats();
+        stats_.ping_ms = net.ping_ms;
+        stats_.packets_sent = net.packets_sent;
+        stats_.packets_received = net.packets_received;
+        stats_.packets_dropped = net.packets_dropped;
+        return stats_;
+    }
 
     bool ready_to_step(uint32_t frame) const;
     std::array<LocalInputWord, 2> inputs_for(uint32_t frame) const;
@@ -46,8 +51,7 @@ public:
     std::vector<ChatMessage> drain_chat();
 
 private:
-    void send_udp_register();
-    void send_udp_inputs_packet(uint32_t current_frame);
+    void send_inputs_packet(uint32_t current_frame);
     void record_remote_input(uint32_t frame, uint16_t word);
 
     SessionConfig config_;
@@ -59,23 +63,20 @@ private:
     bool hello_sent_ = false;
     std::string room_code_;
     uint64_t session_id_ = 0;
-    std::array<uint8_t, 32> session_key_{};
     uint64_t seed_ = 0;
     uint8_t player_index_ = 0;
     uint8_t input_delay_ = 2;
-    uint16_t udp_port_ = 0;
     std::string peer_name_;
     bool sync_blob_sent_ = false;
     bool sync_blob_applied_ = false;
 
-    std::chrono::steady_clock::time_point last_register_time_{};
     std::chrono::steady_clock::time_point last_inputs_send_time_{};
 
     DesyncInfo desync_info_{};
-    mutable NetplayStats stats_{};
     std::string last_error_;
     std::vector<ChatMessage> received_chat_;
     std::vector<std::string> pending_chat_;
+    mutable NetplayStats stats_{};
 
     uint32_t current_local_frame_ = 0;
     uint32_t last_sent_frame_ = 0;

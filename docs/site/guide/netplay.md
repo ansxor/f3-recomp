@@ -17,7 +17,7 @@ Netplay runs Land Maker Japan two-player versus over the network. Each player ru
 
 - A copy of the game built on each computer, with your own Land Maker Japan ROM files. See [Getting started](/guide/getting-started).
 - A relay server that both computers can reach. Run one yourself, or use one that someone else gives you.
-- Network access on the server port, for both TCP and UDP.
+- Network access on the server port, for both TCP (token endpoint) and UDP (game socket).
 
 ## Run a relay server
 
@@ -32,11 +32,12 @@ The server accepts these options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `-tcp` | `:7845` | TCP address for the control connection. |
-| `-udp` | `:7845` | UDP address for the input packets. |
-| `-logdir` | `./netplay-logs` | Directory for one JSON log per session. |
-| `-max-rooms` | `64` | Maximum number of rooms. |
+| `--port` | `7845` | Port for both the HTTP token endpoint (TCP) and the game socket (UDP). |
+| `--public-address` | `127.0.0.1:<port>` | Advertised public host:port embedded in client connect tokens. |
+| `--logdir` | `./netplay-logs` | Directory for one JSON log per session. |
+| `--max-rooms` | `32` | Maximum number of concurrent rooms (1 to 32). |
 
+The server listens on a single port number (default `7845`) for both TCP (token endpoint) and UDP (encrypted Yojimbo game traffic). Firewalls and NAT port-forwarding rules need only forward port 7845 for both TCP and UDP.
 The server has no accounts or passwords. Anyone who can reach its port can create a room or join one with the room code.
 
 ## Settings

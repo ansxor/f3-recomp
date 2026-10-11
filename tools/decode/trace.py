@@ -115,37 +115,6 @@ class Decoder:
         self.banks = [0] * 32
         self.dsp = bytearray(256)
         self.commands = CommandRing()
-        self.ram = bytearray(0x10000)
-        self.driver = [None] * 32
-        self.dispatch_command = None
-        self.sequence_commands = {}
-        self.note_sources = {}
-        self.note_event = 0
-        self.direct_command = None
-        self.next_note = 1
-
-    def ram_bytes(self, address: int, size: int) -> bytes:
-        return bytes(self.ram[(address + i) & 0xffff] for i in range(size))
-
-    def ram_int(self, address: int, size: int) -> int:
-        return int.from_bytes(self.ram_bytes(address, size), "big")
-
-    def voice_context(self, voice: int, at: int):
-        channel = self.ram_int(at + 0x10, 2)
-        sample = self.ram_int(at + 0x8c, 2)
-        node = self.ram_int(at + 0x0e, 2)
-        sequence = (self.ram_int(channel + 0x0e, 2) - 0x5e5c) // 0x28
-        source = dict(voice_state=at, channel_state=channel,
-                      patch_descriptor=self.ram_int(at + 0x16, 4), channel_descriptor=sample,
-                      sample_descriptor=self.ram_int(at + 0x1a, 4),
-                      key=self.ram[at + 4], tag5=self.ram[at + 5],
-                      tag6=self.ram[at + 6], tag7=self.ram[at + 7], sequence=sequence,
-                      note_node=node, origin=self.note_sources.get(node))
-        self.driver[voice] = source
-        return dict(voice=voice, driver=source, voice_ram=self.ram_bytes(at, 0xac).hex(),
-                    channel_ram=self.ram_bytes(channel, 0x40).hex(),
-                    channel_descriptor_ram=self.ram_bytes(sample, 0x20).hex())
-
     def snapshot(self, voice: int):
         r = self.voices[voice]
         bank = self.banks[voice] & 7
@@ -156,51 +125,11 @@ class Decoder:
                     frequency=r[1], sample_step=r[1] / 1024, control=r[0],
                     loop=bool(r[0] & 8), bidirectional=bool(r[0] & 16), reverse=bool(r[0] & 64),
                     stopped=bool(r[0] & 3), output_pair=(r[0] >> 8) & 3,
-                    left_volume=r[8] >> 8, right_volume=r[9] >> 8, k1=r[7], k2=r[6],
-                    driver=self.driver[voice])
+                    left_volume=r[8] >> 8, right_volume=r[9] >> 8, k1=r[7], k2=r[6])
 
     def decode(self, row):
         tick, sample, pc, address, value, kind, width = row
         base = dict(tick=tick, seconds=tick / 16000000, sample=sample, pc=f"0x{pc:06x}")
-        if kind == 6:
-            yield base | dict(event="voice_context", **self.voice_context(value, address))
-            return
-        if kind == 7:
-            for i, byte in enumerate(value.to_bytes(width, "big")):
-                self.ram[(address + i) & 0xffff] = byte
-            return
-        if kind == 10:
-            self.note_event = address
-            return
-        if kind == 9:
-            if self.dispatch_command is None or self.dispatch_command["opcode"] != 0x8e:
-                raise ValueError("Direct note has no dispatched note-on command")
-            self.direct_command = self.dispatch_command
-            return
-        if kind == 8:
-            track, channel = value >> 16, value & 0xffff
-            sequence = (self.ram_int(channel + 0x0e, 2) - 0x5e5c) // 0x28
-            track_id = self.ram[(track + 3) & 0xffff]
-            note = self.ram[(self.note_event + 0x14) & 0xffff]
-            velocity = self.ram[(self.note_event + 0x15) & 0xffff]
-            command_id = self.sequence_commands.get(sequence)
-            trigger = "sequence"
-            if self.direct_command:
-                if self.direct_command["payload"] != [sequence, track_id, note, velocity]:
-                    raise ValueError("Direct note context disagrees with mailbox operands")
-                command_id = self.direct_command["command_id"]
-                trigger = "mailbox"
-                self.direct_command = None
-            source = dict(note_id=self.next_note, note_node=address, command_id=command_id,
-                          trigger=trigger, sequence=sequence, track=track_id, note=note,
-                          velocity=velocity, track_state=track, channel_state=channel)
-            self.next_note += 1
-            self.note_sources[address] = source
-            yield base | dict(event="note_source", **source)
-            return
-        if kind == 11:
-            yield base | dict(event="note_release", origin=self.note_sources.get(address))
-            return
         if kind == 5:
             yield base | dict(event="end")
             return
@@ -220,10 +149,6 @@ class Decoder:
             yield base | dict(event="command_consumed", **self.commands.consume(address, value))
         if kind == 2 and pc in (0xc12ecc, 0xc0b414):
             command = self.commands.dispatch(address, value)
-            if pc == 0xc12ecc:
-                self.dispatch_command = command
-                if command["opcode"] in (0x80, 0x81):
-                    self.sequence_commands[command["payload"][0] & 127] = command["command_id"]
             yield base | dict(event="command_dispatch", **command)
         write = kind == 3
         for a, data, mask in words(address, value, width):
@@ -296,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("trace", type=Path, help="Input .sound-trace file")
     parser.add_argument("--output", type=Path, required=True, help="Output JSONL (gzip when ending .gz)")
     parser.add_argument("--notes-only", action="store_true",
-                        help="Voice starts, note ownership/releases, command lifecycle and reset/end events")
+                        help="Voice starts, command lifecycle and reset/end events")
     parser.add_argument("--commands-only", action="store_true",
                         help="Only submitted/consumed command packets")
     args = parser.parse_args(argv)
@@ -314,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                         include = event["event"] in selected
                     else:
                         include = not args.notes_only or event["event"] in selected + (
-                            "command_dispatch", "note_source", "note_release", "voice_start", "board_reset", "end")
+                            "command_dispatch", "voice_start", "board_reset", "end")
                     if include:
                         output.write(json.dumps(event, separators=(",", ":")) + "\n")
         print(json.dumps(dict(counts), sort_keys=True))

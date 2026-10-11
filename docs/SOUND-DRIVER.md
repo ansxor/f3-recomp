@@ -27,14 +27,13 @@ scheduling, change a register write, or perform additional side-effectful reads.
 ```sh
 build/f3rt-tool gameplay --seed 5 --frames 6000 --sound-driver oracle \
   --sound-trace build/seed5.sound --wav build/seed5.wav
-python3 tools/decode_sound.py build/seed5.sound \
+uv run f3 decode trace build/seed5.sound \
   --output build/seed5-writes.jsonl.gz
-python3 tools/decode_sound.py build/seed5.sound --notes-only \
+uv run f3 decode trace build/seed5.sound --notes-only \
   --output build/seed5-notes.jsonl
 ```
 
-The frontend accepts the same `--sound-trace FILE` option, including independent
-main-CPU interpretation with `f3rt-run`. Seeded gameplay uses the established
+The extraction tool accepts the same `--sound-trace FILE` option. Seeded gameplay uses the established
 coin/start/64-bit LCG schedule; the explicit `oracle` command above interprets sound.
 All captures and extracted game data remain ignored, not committed.
 

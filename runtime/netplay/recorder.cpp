@@ -2,6 +2,7 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
+#include "cpp_yyjson.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -48,55 +49,42 @@ void write_text(const std::filesystem::path &path, const std::string &text) {
 
 } // namespace
 
-std::string json_escape(const std::string &text) {
-    std::string out;
-    for (const unsigned char c : text) {
-        switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default:
-            if (c < 0x20) {
-                char buf[8];
-                std::snprintf(buf, sizeof buf, "\\u%04x", c);
-                out += buf;
-            } else {
-                out += char(c);
-            }
-        }
-    }
-    return out;
+namespace {
+
+// One field of a parsed info.json object. nullopt when the key is absent or has another JSON type.
+template <typename Object>
+std::optional<uint64_t> info_u64(const Object &obj, std::string_view key) {
+    const auto it = obj.find(key);
+    if (it == obj.end()) return std::nullopt;
+    return it->second.as_uint();
 }
 
-bool json_find_u64(const std::string &json, const std::string &key, uint64_t &out) {
-    const std::string needle = "\"" + key + "\"";
-    const size_t at = json.find(needle);
-    if (at == std::string::npos) return false;
-    size_t i = json.find(':', at + needle.size());
-    if (i == std::string::npos) return false;
-    ++i;
-    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
-    if (i >= json.size() || json[i] < '0' || json[i] > '9') return false;
-    uint64_t value = 0;
-    while (i < json.size() && json[i] >= '0' && json[i] <= '9') value = value * 10 + uint64_t(json[i++] - '0');
-    out = value;
-    return true;
+template <typename Object>
+std::optional<std::string> info_string(const Object &obj, std::string_view key) {
+    const auto it = obj.find(key);
+    if (it == obj.end()) return std::nullopt;
+    const auto text = it->second.as_string();
+    if (!text) return std::nullopt;
+    return std::string(*text);
 }
 
-bool json_find_string(const std::string &json, const std::string &key, std::string &out) {
-    const std::string needle = "\"" + key + "\"";
-    const size_t at = json.find(needle);
-    if (at == std::string::npos) return false;
-    size_t i = json.find(':', at + needle.size());
-    if (i == std::string::npos) return false;
-    i = json.find('"', i);
-    if (i == std::string::npos) return false;
-    const size_t end = json.find('"', i + 1);
-    if (end == std::string::npos) return false;
-    out = json.substr(i + 1, end - i - 1);
-    return true;
+} // namespace
+
+BundleInfo parse_info_json(const std::string &json) {
+    const auto doc = yyjson::read(json, yyjson::ReadFlag::AllowInvalidUnicode);
+    const auto obj = doc.as_object();
+    if (!obj) throw std::runtime_error("info.json is not a JSON object");
+    BundleInfo info;
+    info.seed = info_u64(*obj, "seed");
+    info.frame = info_u64(*obj, "frame");
+    info.crc_interval = info_u64(*obj, "crc_interval");
+    info.hashed_len = info_u64(*obj, "hashed_len");
+    info.recorded_crc = info_u64(*obj, "recorded_crc");
+    info.player_index = info_u64(*obj, "player_index");
+    info.machine_gpu = info_u64(*obj, "machine_gpu");
+    info.hash_layout = info_u64(*obj, "hash_layout");
+    info.audio_backend = info_string(*obj, "audio_backend");
+    return info;
 }
 
 std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts, const std::vector<AppliedInputs> &frames) {
@@ -254,68 +242,72 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
     const uint32_t local_crc = (facts.player_index == 0) ? facts.desync_crc_p1 : facts.desync_crc_p2;
     const uint32_t remote_crc = (facts.player_index == 0) ? facts.desync_crc_p2 : facts.desync_crc_p1;
 
-    std::ostringstream j;
-    j << "{\n";
-    j << "  \"bundle_version\": 2,\n";
-    j << "  \"hash_layout\": 2,\n";
-    j << "  \"machine_gpu\": " << (meta.machine_gpu ? 1 : 0) << ",\n";
-    j << "  \"audio_backend\": \"" << json_escape(meta.audio_backend) << "\",\n";
-    j << "  \"machine_state_bytes\": " << meta.machine_state_bytes << ",\n";
-    j << "  \"frame\": " << facts.desync_frame << ",\n";
-    j << "  \"local_crc\": " << local_crc << ",\n";
-    j << "  \"remote_crc\": " << remote_crc << ",\n";
-    j << "  \"local_crc_hex\": \"0x" << hex_u64(local_crc, 8) << "\",\n";
-    j << "  \"remote_crc_hex\": \"0x" << hex_u64(remote_crc, 8) << "\",\n";
-    j << "  \"recorded_crc\": " << (at ? at->rec.crc : 0) << ",\n";
-    j << "  \"seed\": " << facts.seed << ",\n";
-    j << "  \"input_delay\": " << unsigned(facts.input_delay) << ",\n";
-    j << "  \"crc_interval\": " << facts.crc_interval << ",\n";
-    j << "  \"hash_phase\": " << (at ? unsigned(at->rec.phase) : 0) << ",\n";
-    j << "  \"player_index\": " << unsigned(facts.player_index) << ",\n";
-    j << "  \"own_name\": \"" << json_escape(facts.own_name) << "\",\n";
-    j << "  \"peer_name\": \"" << json_escape(facts.peer_name) << "\",\n";
-    j << "  \"room_code\": \"" << json_escape(facts.room_code) << "\",\n";
-    j << "  \"session_id\": \"" << hex_u64(facts.session_id, 16) << "\",\n";
-    j << "  \"build_hash\": \"";
-    for (uint8_t b : facts.build_hash) j << hex_u64(b, 2);
-    j << "\",\n";
-    j << "  \"stall_count\": " << meta.stall_count << ",\n";
-    j << "  \"clock_resyncs\": " << meta.clock_resyncs << ",\n";
-    j << "  \"audio_queue_drops\": " << meta.audio_queue_drops << ",\n";
-    j << "  \"trigger_machine_frame\": " << meta.trigger_machine_frame << ",\n";
-    j << "  \"edge_machine_frame\": " << meta.edge_machine_frame << ",\n";
-    j << "  \"sync_machine_frame\": " << meta.sync_machine_frame << ",\n";
-    j << "  \"start_machine_frame\": " << meta.start_machine_frame << ",\n";
-    j << "  \"frames_between_sync_and_start\": " << (meta.start_machine_frame - meta.sync_machine_frame) << ",\n";
-    j << "  \"lobby_hold_frames\": " << meta.lobby_hold_frames << ",\n";
-    j << "  \"lobby_hold_ms\": " << static_cast<long long>(meta.lobby_hold_ms) << ",\n";
-    j << "  \"matched_frames_recorded\": " << inputs_.size() << ",\n";
-    j << "  \"hashed_is_mismatch_frame\": " << (at && exact ? "true" : "false") << ",\n";
-    j << "  \"state_note\": \"No state snapshot is stored during play. Regenerate the state at any match frame with "
-         "`f3rt-tool netplay-replay --bundle <this folder> --dump-state FRAME out.f3s` (trigger.f3s + inputs.txt). "
-         "hashed.bin holds the hashed bytes of the report at hashed_frame followed by the previous report's bytes.\",\n";
-    j << "  \"hashed_frame\": " << (at ? int64_t(at->rec.frame) : int64_t(-1)) << ",\n";
-    j << "  \"hashed_offset\": 0,\n";
-    j << "  \"hashed_len\": " << cur_len << ",\n";
-    j << "  \"hashed_prev_frame\": " << (prev ? int64_t(prev->rec.frame) : int64_t(-1)) << ",\n";
-    j << "  \"hashed_prev_offset\": " << cur_len << ",\n";
-    j << "  \"hashed_prev_len\": " << prev_len << ",\n";
-    for (const auto &[k, v] : meta.extra) {
-        j << "  \"" << json_escape(k) << "\": \"" << json_escape(v) << "\",\n";
-    }
-    j << "  \"reports\": [";
+    yyjson::object j;
+    j.emplace("bundle_version", 2);
+    j.emplace("hash_layout", 2);
+    j.emplace("machine_gpu", meta.machine_gpu ? 1 : 0);
+    j.emplace("audio_backend", meta.audio_backend, yyjson::copy_string);
+    j.emplace("machine_state_bytes", meta.machine_state_bytes);
+    j.emplace("frame", facts.desync_frame);
+    j.emplace("local_crc", local_crc);
+    j.emplace("remote_crc", remote_crc);
+    j.emplace("local_crc_hex", "0x" + hex_u64(local_crc, 8), yyjson::copy_string);
+    j.emplace("remote_crc_hex", "0x" + hex_u64(remote_crc, 8), yyjson::copy_string);
+    j.emplace("recorded_crc", at ? at->rec.crc : 0u);
+    j.emplace("seed", facts.seed);
+    j.emplace("input_delay", unsigned(facts.input_delay));
+    j.emplace("crc_interval", facts.crc_interval);
+    j.emplace("hash_phase", at ? unsigned(at->rec.phase) : 0u);
+    j.emplace("player_index", unsigned(facts.player_index));
+    j.emplace("own_name", facts.own_name, yyjson::copy_string);
+    j.emplace("peer_name", facts.peer_name, yyjson::copy_string);
+    j.emplace("room_code", facts.room_code, yyjson::copy_string);
+    j.emplace("session_id", hex_u64(facts.session_id, 16), yyjson::copy_string);
+    std::string build_hash;
+    for (uint8_t b : facts.build_hash) build_hash += hex_u64(b, 2);
+    j.emplace("build_hash", build_hash, yyjson::copy_string);
+    j.emplace("stall_count", meta.stall_count);
+    j.emplace("clock_resyncs", meta.clock_resyncs);
+    j.emplace("audio_queue_drops", meta.audio_queue_drops);
+    j.emplace("trigger_machine_frame", meta.trigger_machine_frame);
+    j.emplace("edge_machine_frame", meta.edge_machine_frame);
+    j.emplace("sync_machine_frame", meta.sync_machine_frame);
+    j.emplace("start_machine_frame", meta.start_machine_frame);
+    j.emplace("frames_between_sync_and_start", meta.start_machine_frame - meta.sync_machine_frame);
+    j.emplace("lobby_hold_frames", meta.lobby_hold_frames);
+    j.emplace("lobby_hold_ms", static_cast<int64_t>(meta.lobby_hold_ms));
+    j.emplace("matched_frames_recorded", inputs_.size());
+    j.emplace("hashed_is_mismatch_frame", at && exact);
+    j.emplace("state_note", "No state snapshot is stored during play. Regenerate the state at any match frame with "
+                            "`f3rt-tool netplay-replay --bundle <this folder> --dump-state FRAME out.f3s` (trigger.f3s + inputs.txt). "
+                            "hashed.bin holds the hashed bytes of the report at hashed_frame followed by the previous report's bytes.");
+    j.emplace("hashed_frame", at ? int64_t(at->rec.frame) : int64_t(-1));
+    j.emplace("hashed_offset", 0);
+    j.emplace("hashed_len", cur_len);
+    j.emplace("hashed_prev_frame", prev ? int64_t(prev->rec.frame) : int64_t(-1));
+    j.emplace("hashed_prev_offset", cur_len);
+    j.emplace("hashed_prev_len", prev_len);
+    for (const auto &[k, v] : meta.extra) j.emplace(k, v, yyjson::copy_string);
+
     std::vector<const Entry *> sorted;
     for (const auto &e : ring_) {
         if (e.valid) sorted.push_back(&e);
     }
     std::sort(sorted.begin(), sorted.end(), [](const Entry *a, const Entry *b) { return a->rec.frame < b->rec.frame; });
-    for (size_t i = 0; i < sorted.size(); ++i) {
-        const auto &r = sorted[i]->rec;
-        j << (i ? ", " : "") << "{\"frame\": " << r.frame << ", \"crc\": " << r.crc << ", \"phase\": " << unsigned(r.phase)
-          << ", \"hashed_len\": " << r.hashed_len << "}";
+    yyjson::array reports;
+    for (const Entry *e : sorted) {
+        yyjson::object r;
+        r.emplace("frame", e->rec.frame);
+        r.emplace("crc", e->rec.crc);
+        r.emplace("phase", unsigned(e->rec.phase));
+        r.emplace("hashed_len", e->rec.hashed_len);
+        reports.emplace_back(std::move(r));
     }
-    j << "]\n}\n";
-    write_text(dir / "info.json", j.str());
+    j.emplace("reports", std::move(reports));
+
+    const auto text = j.write(yyjson::WriteFlag::Pretty | yyjson::WriteFlag::PrettyTwoSpaces |
+                              yyjson::WriteFlag::NewlineAtEnd | yyjson::WriteFlag::AllowInvalidUnicode);
+    write_text(dir / "info.json", std::string(text));
     return dir;
 }
 
