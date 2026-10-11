@@ -318,7 +318,7 @@ In `recursive` mode `invalid_pcs` holds the PCs of the `decode_failure` entries.
 Run them with:
 
 ```sh
-PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
+uv run python -m unittest discover -s tools -p 'test_*.py'
 ```
 
 For the next stage, read [Instruction emission](/developer/recompiler/emission).

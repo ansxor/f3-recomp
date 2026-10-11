@@ -53,9 +53,6 @@ public:
     size_t state_size() const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
-    size_t sync_state_size() const;
-    void save_sync_state(std::span<uint8_t> dst) const;
-    void load_sync_state(std::span<const uint8_t> src);
 private:
     friend class Machine;
     void materialize_native() const;

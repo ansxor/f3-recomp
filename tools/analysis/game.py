@@ -28,9 +28,8 @@ import tomllib
 import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
-for _path in (ROOT / "build" / "python", ROOT):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from recomp.discovery import (  # noqa: E402  (path set up above)
     CALL_MNEMONICS, COND_BRANCH_MNEMONICS, TERMINAL_MNEMONICS, UNCOND_BRANCH_MNEMONICS,

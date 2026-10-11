@@ -12,40 +12,20 @@ import sys
 import tomllib
 import zlib
 
-# Ensure Capstone can be loaded from build/python if not globally installed
-try:
-    import capstone
-    from capstone import Cs, CsInsn, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
-    from capstone.m68k import (
-        M68K_AM_ABSOLUTE_DATA_LONG,
-        M68K_AM_ABSOLUTE_DATA_SHORT,
-        M68K_AM_BRANCH_DISPLACEMENT,
-        M68K_AM_PCI_DISP,
-        M68K_AM_PCI_INDEX_8_BIT_DISP,
-        M68K_AM_PCI_INDEX_BASE_DISP,
-        M68K_AM_PC_MEMI_POST_INDEX,
-        M68K_AM_PC_MEMI_PRE_INDEX,
-        M68K_OP_BR_DISP,
-        M68K_OP_IMM,
-    )
-except ImportError:
-    build_python = Path(__file__).resolve().parent.parent / "build" / "python"
-    if build_python.is_dir() and str(build_python) not in sys.path:
-        sys.path.insert(0, str(build_python))
-    import capstone
-    from capstone import Cs, CsInsn, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
-    from capstone.m68k import (
-        M68K_AM_ABSOLUTE_DATA_LONG,
-        M68K_AM_ABSOLUTE_DATA_SHORT,
-        M68K_AM_BRANCH_DISPLACEMENT,
-        M68K_AM_PCI_DISP,
-        M68K_AM_PCI_INDEX_8_BIT_DISP,
-        M68K_AM_PCI_INDEX_BASE_DISP,
-        M68K_AM_PC_MEMI_POST_INDEX,
-        M68K_AM_PC_MEMI_PRE_INDEX,
-        M68K_OP_BR_DISP,
-        M68K_OP_IMM,
-    )
+import capstone
+from capstone import Cs, CsInsn, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
+from capstone.m68k import (
+    M68K_AM_ABSOLUTE_DATA_LONG,
+    M68K_AM_ABSOLUTE_DATA_SHORT,
+    M68K_AM_BRANCH_DISPLACEMENT,
+    M68K_AM_PCI_DISP,
+    M68K_AM_PCI_INDEX_8_BIT_DISP,
+    M68K_AM_PCI_INDEX_BASE_DISP,
+    M68K_AM_PC_MEMI_POST_INDEX,
+    M68K_AM_PC_MEMI_PRE_INDEX,
+    M68K_OP_BR_DISP,
+    M68K_OP_IMM,
+)
 
 
 # 68020 control flow instruction categories

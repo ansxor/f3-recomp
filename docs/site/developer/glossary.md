@@ -26,8 +26,6 @@ Decodes can overlap and can interpret data as instructions.
 The mode does not prove reachability or supported lowering.
 See [Discovery](/developer/recompiler/discovery).
 
-**apply_inputs** — The function in `runtime/netplay.cpp` that writes the two players' input words into the machine's input ports before each netplay frame.
-
 **autovector** — An interrupt vector that the CPU computes from the IRQ level. The main CPU uses vector `24 + level`.
 
 ## B
@@ -36,19 +34,11 @@ See [Discovery](/developer/recompiler/discovery).
 
 **boundary** — The point between two blocks, or between two instructions inside a block when the deadline is due. The runtime function `Machine::boundary` runs there. It advances the devices and delivers interrupts.
 
-**build ID** (also build hash) — A SHA-256 hash of the sources, the generated C and the compiler settings. Netplay players must have the same build ID. It is written to `netplay_build.hpp`. See [Build pipeline](/developer/build-pipeline).
-
 ## C
-
-**canonical state** — Bytes from `Machine::save_sync_state` for handoff and network CRCs: hardware, native rendering/trails and audio simulation, without expanded presentation buffers. Full local `save_state` retains those buffers for rollback/slots/replay. See [Snapshots](/developer/netplay/snapshots).
 
 **Capstone** — A disassembler library. The Python recompiler uses version 5.0.9 to decode 68020 instructions. Some Capstone fields are wrong for some addressing modes. The code works around them. See [Code emission](/developer/recompiler/emission).
 
 **compare mode** — The developer renderers `--renderer compare-cpu` and `compare-gpu`. It runs `GameVideo` and the FDP renderer for each frame. The program stops with an error if the pixels differ for a supported frame.
-
-**confirmed frame** — A frame for which the program has the real input of both players. `Rollback::confirmed_frame()` is the first frame that is not confirmed.
-
-**confirmed-only audio** — The default accurate backend's netplay rule: publish only PCM from confirmed frames and replace speculative PCM during rollback. HLE instead drains an independent speculative worker stream, reconciles commands without restoring the worker, and excludes PCM from peer comparison. See [Rollback](/developer/netplay/rollback) and the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
 
 **coverage** — The report of what the recompiler found. The file is `coverage.json`. It lists decoded instructions, rejected words and unresolved transfers. It is not proof that unknown bytes are data.
 
@@ -61,10 +51,6 @@ Strict-native mode rejects it.
 **decoder rejection** — Capstone cannot produce a valid instruction at a candidate offset.
 A rejection differs from an unsupported lowering.
 Only recognized primary-opcode cases become generated exception entries.
-
-**delay frames** — The number of frames between a key press and its use in the simulation. A press at frame `f` takes effect at frame `f + delay`. The valid range is 0 to 8. The default is 2. More delay means fewer rollbacks and more input lag.
-
-**desync** — The two netplay machines have different states for the same frame. `Rollback` detects it with a CRC32 check every 60 confirmed frames and throws "DESYNC at frame ...".
 
 **differential test** — A test that runs the same instruction in the lowered C and in the Musashi reference. It compares registers, flags, memory writes and cycles. The code is in `tools/differential/`. See [Differential testing](/developer/testing/differential).
 
@@ -102,8 +88,6 @@ It does not classify every decoder rejection as illegal.
 
 **FDP (TC0630FDP)** — The F3 video chip. It draws four tile playfields, a text layer and sprites. `Video` (in `runtime/renderer/fdp/video.cpp`) is a MAME-derived software model; internal parity is not physical-chip verification. See [FDP renderer](/developer/runtime/video/fdp).
 
-**frame advantage** — In netplay, the local simulated frame minus the peer's last reported frame. `Transport::frame_advantage()` returns it. The frontend waits if it is too large.
-
 ## G
 
 **game-data HLE** — `GameVideo` rebuilds supported scenes from the FDP video RAM that the game already wrote.
@@ -112,7 +96,7 @@ See [Game-data HLE](/developer/runtime/video/game-hle).
 
 **GameVideo** — The class that does game-data HLE. Its modes are `Diagnostic`, `Game` and `Compare` (`GameVideoMode`).
 
-**generated code** — The C files that `python3 -m recomp emit` and `tools/compile_sound.py` write. They come from your ROM. Never commit them.
+**generated code** — The C files that `uv run python -m recomp emit` and `tools/compile_sound.py` write. They come from your ROM. Never commit them.
 
 ## H
 
@@ -124,9 +108,7 @@ See [Game-data HLE](/developer/runtime/video/game-hle).
 
 **IACK (interrupt acknowledge)** — The bus cycle in which the CPU reads the interrupt vector. For the sound CPU, `Audio::irq_ack` supplies a vector from the DUART.
 
-**identity** — `Identity` in `netplay_transport.hpp`: seven ROM CRCs, build hash and canonical state format. EEPROM, initial local state, delay and presentation are not identity fields; the host supplies match state at handoff.
-
-**input word** — A 16-bit value (`InputWord`) with 11 active-high bits for one netplay player. Bits 0 to 3 are up, down, left, right. Bits 4 to 6 are buttons 1 to 3. Bit 7 is start, bit 8 coin, bit 9 service, bit 10 test.
+**input word** — A 16-bit value (`LocalInputWord`) with 14 active-high bits for one local player. Bits 0 to 3 are up, down, left, right. Bits 4 to 6 are buttons 1 to 3. Bit 7 is start, bit 8 coin, bit 9 service, bit 10 test. Bits 11 to 13 are buttons 4 to 6.
 
 **interpreter** — The class `Interpreter` that wraps the Musashi core. It runs one main CPU instruction (fallback and reference mode) and runs the sound CPU in oracle mode. See [Interpreter](/developer/runtime/interpreter).
 
@@ -170,7 +152,7 @@ f3-recomp follows this separation. See [Architecture](/developer/architecture).
 ## O
 
 **oracle** — A reference implementation used for comparison.
-Examples include Musashi, the FDP renderer, MAME, and the single-machine netplay reference.
+Examples include Musashi, the FDP renderer, and MAME.
 A disagreement needs investigation; it does not prove which side is wrong.
 
 **OTIS** — Another name for the ES5505 chip. See *ES5505*.
@@ -183,8 +165,6 @@ See [Audio timing](/developer/runtime/audio/timing).
 
 **playfield (PF)** — One of the four tile layers of the FDP. The code names them PF0 to PF3.
 
-**prediction** — Netplay guesses the remote input when it has not arrived. `Rollback` repeats the last input that it used.
-
 **producer** — A game routine that builds display data.
 Examples include tile blocks, sprite lists, text strings, and line profiles.
 `GameVideo` does not observe producers; it decodes their output from FDP video RAM
@@ -193,13 +173,7 @@ that are not in a game's known list.
 
 ## R
 
-**relay server** — The Go program in `netplay/server/`. It pairs two clients in a room and forwards their packets. It does not run the game. See [Relay server](/developer/netplay/server).
-
-**rollback** — A netplay method. The program keeps snapshots. When a real remote input differs from the guess, it restores the snapshot of that frame and runs the frames again with correct inputs. See [Rollback engine](/developer/netplay/rollback).
-
 **ROM set** — The group of ROM chip files for one game version. `RomSet` in `rom.hpp` holds the regions: `main`, `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound` and `samples`. The set names are `landmakrj` (Japan) and `landmakr` (World).
-
-**room** — A relay server object that is named by a code of 1 to 32 letters, digits, `_` or `-`. It holds two player slots.
 
 ## S
 
@@ -215,9 +189,7 @@ See [Scene model](/developer/runtime/video/scene).
 
 **shared RAM** — The 2 KiB RAM (`Machine::shared`) visible to both CPUs. It is at `0xc00000` for the main CPU and at `0x140000` for the sound CPU. The sound CPU reads only the even byte lane.
 
-**slot** — A netplay player position. It is 0 or 1 in the code and 1 or 2 on the command line.
-
-**snapshot** — A frame-boundary machine copy. Full local APIs retain presentation for rollback, slots and replay; canonical sync APIs omit expanded buffers for handoff and network checksums. See [Snapshots](/developer/netplay/snapshots).
+**snapshot** — A frame-boundary machine copy. `Machine::save_state` and `load_state` write and read it for save-state slots and tests, and `state_crc` checksums it.
 
 **sound driver** — The program that runs on the sound CPU. It reads commands from the mailbox and controls the ES5505. The project runs it natively (`SoundNative`) or in the interpreter (oracle). See [Sound-CPU compiler](/developer/recompiler/sound-compiler).
 
@@ -241,8 +213,6 @@ It differs from the runtime's fatal `halted` state.
 `f3_dispatch` sends trace-mode execution to Musashi.
 Strict-native execution therefore rejects this path.
 
-**Transport** — The netplay client class (`netplay_transport.cpp`). It talks UDP to the relay server.
-
 ## V
 
 **vblank** — The start of the vertical blanking period. In this runtime it is the moment when the machine renders the frame and raises IRQ2. The time zero of the raster is the reference screen's VBSTART epoch.
@@ -258,8 +228,6 @@ See [Video hardware](/developer/runtime/video/hardware).
 ## W
 
 **watchdog** — A timer that resets the machine if the game does not strobe it. The game writes to `0x4a0000`. The machine resets three seconds of main-clock cycles after the last strobe.
-
-**window (rollback)** — The largest number of frames that the simulation may run ahead of the confirmed frame. The default is 16. The maximum is 32 (`Rollback::max_window`).
 
 **worktree (`wt/`)** — A local Git worktree. The folder is ignored and is not part of the distributed source tree.
 

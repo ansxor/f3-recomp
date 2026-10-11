@@ -11,7 +11,7 @@ Chip size, CRC32 and SHA-1 protect against wrong revisions and corrupt files. Ru
 ## Main compiler invocation
 
 ```sh
-python3 -m recomp emit --config games/rayforce/config.toml \
+uv run python -m recomp emit --config games/rayforce/config.toml \
   --rom-dir /path/to/roms/rayforce --output build/rayforce/generated/rayforce
 ```
 

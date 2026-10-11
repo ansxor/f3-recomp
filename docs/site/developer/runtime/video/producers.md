@@ -31,7 +31,7 @@ suppressed; unknown ones get a `NEW video-write` line. Sprite RAM is left to the
 emit-unit accounting (`sprite-stray`) when the game declares emit units. See
 [the format](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/WORKFLOWS.md#discovery-log).
 
-The log is host-only and never part of machine, snapshot or netplay state. A store
+The log is host-only and never part of machine or snapshot state. A store
 from an unknown PC does **not** invalidate anything: the scene is still decoded from
 video RAM next frame. Without the flag there is no write observation and the
 graphics-write fast path (`direct_bytes`) is unchanged.

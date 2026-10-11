@@ -67,7 +67,7 @@ A trace without an end record is rejected as truncated.
 `tools/compare_audio.py` needs NumPy and SciPy. The program reads two 16-bit stereo WAV files. It resamples the candidate to the rate of the reference with `scipy.signal.resample_poly`.
 
 ```sh
-PYTHONPATH=build/python python3 tools/compare_audio.py \
+uv run --group analysis python tools/compare_audio.py \
   build/mame-audio.wav build/replay-audio.wav \
   --start 18 --end 54 --json build/audio-comparison.json
 ```

@@ -2,7 +2,7 @@
 
 The runtime has two different comparison paths. Frontend `--renderer compare-cpu` / `compare-gpu` checks final native RGB every supported frame. `compare_layers` checks source layers at selected frames.
 
-Sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), [gameplay_regression.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), [gameplay_regression.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp).
 
 ## Modes are not interchangeable
 
@@ -102,22 +102,22 @@ The harness prints the report and optionally dumps machine state before propagat
 
 ## Harness schedule
 
-`f3rt-gameplay-regression --video-diff` creates a diagnostic `GameVideo`. The program still enforces zero CPU fallback instructions.
+`f3rt-tool gameplay --video-diff` creates a diagnostic `GameVideo`. The program still enforces zero CPU fallback instructions.
 
 Comparison starts at frame 600. The sample condition is `(frame - 600) % interval == 0`.
 
 The default interval is 120 and the default mask is 511. A positive interval is required. `--video-diff-every 1` samples every frame from 600 onward.
 
 ```sh
-./build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+./build/f3rt-tool gameplay --seed 5 --frames 6000 \
   --video-diff --video-layer-mask 511
-./build/f3rt-gameplay-regression --seed 5 --frames 4000 \
+./build/f3rt-tool gameplay --seed 5 --frames 4000 \
   --video-diff --video-layer-mask 511 --video-diff-every 1
-./build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+./build/f3rt-tool gameplay --seed 5 --frames 6000 \
   --video-diff --video-layer-mask 256
 ```
 
-The wrapper [run_gameplay_regression.py](https://github.com/ansxor/f3-recomp/blob/main/tools/run_gameplay_regression.py) forwards the same video options.
+The runner `uv run f3 gameplay-seeds` forwards the same video options.
 
 ## Report fields
 

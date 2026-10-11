@@ -15,7 +15,7 @@ An emitter change must preserve instruction semantics, access order, flags, and 
 | Discovery and ROM/config input | `recomp/discovery.py` |
 | Command-line option | `recomp/__main__.py` |
 
-The package `__init__.py` contains only its description. `requirements.txt` pins Capstone 5.0.9.
+The package `__init__.py` contains only its description. `pyproject.toml` pins Capstone 5.0.9.
 
 ## Inspect a synthetic instruction
 

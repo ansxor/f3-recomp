@@ -25,7 +25,7 @@ scheduling, change a register write, or perform additional side-effectful reads.
 ## Capturing and decoding the oracle
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver oracle \
+build/f3rt-tool gameplay --seed 5 --frames 6000 --sound-driver oracle \
   --sound-trace build/seed5.sound --wav build/seed5.wav
 python3 tools/decode_sound.py build/seed5.sound \
   --output build/seed5-writes.jsonl.gz
@@ -321,9 +321,10 @@ the distinction between resetting DSP/DUART/volume and preserving OTIS.
 
 ## Native driver and strict comparison
 
-`--sound-driver oracle|native` is independent of the main-CPU execution mode.
-`landmakr` and the gameplay harness default to `native` when sound code is generated;
-select `--sound-driver oracle` explicitly for interpreted reference captures.
+`--sound-driver oracle|native` is accepted by the `f3rt-tool` subcommands `gameplay` and `sound-extract`
+(default `oracle`) and is independent of the main-CPU execution mode. `landmakr` and
+`f3rt-run` have no such option: with `--audio-backend reference` they use `native` when
+sound code is generated and `oracle` otherwise.
 `native` is a **literal statically recompiled ROM driver**,
 not a high-level musical rewrite: its own `f3_cpu` state executes generated C
 for the 68000 program, with native memory/control callbacks. It preserves the
@@ -353,9 +354,9 @@ decodes. None is reached by the exercised runs. All packet variants, sequence
 aliases and error paths have **not** been exhaustively exercised.
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+build/f3rt-tool gameplay --seed 5 --frames 6000 \
   --sound-trace build/seed5-oracle.sound --wav build/seed5-oracle.wav
-build/f3rt-gameplay-regression --seed 5 --frames 6000 --sound-driver native \
+build/f3rt-tool gameplay --seed 5 --frames 6000 --sound-driver native \
   --sound-trace build/seed5-native.sound --wav build/seed5-native.wav
 python3 tools/compare_sound.py build/seed5-oracle.sound build/seed5-native.sound \
   --json build/seed5-parity.json
@@ -377,7 +378,7 @@ regress the separate hardware-model residual.
 
 ## Extracting music and SFX events
 
-`f3rt-sound-extract` runs the interpreted main game for 900 frames by default,
+`f3rt-tool sound-extract` runs the interpreted main game for 900 frames by default,
 then freezes it and advances only the sound subsystem. The game publishes its
 startup packets itself. Main `$3400/$3404/$340a/$3410` writes the four gain
 requests at main `$c007f8..$c007fb` around 13.2338 seconds; the old 660-frame
@@ -396,7 +397,7 @@ packets or master-volume overrides are inserted.
 Music sequence 8 with sequence volume `$74`:
 
 ```sh
-build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
   --wav-window event --sound-trace build/music.sound --wav build/music.wav
 python3 tools/decode_sound.py build/music.sound --notes-only \
@@ -406,7 +407,7 @@ python3 tools/decode_sound.py build/music.sound --notes-only \
 An observed direct SFX program/key/velocity, followed by note release:
 
 ```sh
-build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 068d01074002 --packet 068e01072768 \
   --at 1.5:058f010727 --seconds 3 --wav-window event \
   --sound-trace build/sfx.sound --wav build/sfx.wav

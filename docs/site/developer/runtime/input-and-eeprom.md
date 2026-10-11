@@ -32,7 +32,7 @@ void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
 The CPU reads each port at `0x4a0000 + 4 * port`.
 Read the [input block](/developer/runtime/memory-map#input-block-at-0x4a0000) for byte positions and `coin_word` readback.
 
-The frontend and the test harness use these masks. They are the facts that the code shows. The code does not name the buttons, so the names come from the help text of `f3rt-run` and from the netplay header.
+The frontend and the test harness use these masks. They are the facts that the code shows. The code does not name the buttons, so the names come from the help text of `f3rt-run`.
 
 | Port | Mask | Frontend key | Meaning |
 | --- | --- | --- | --- |
@@ -47,16 +47,16 @@ The frontend and the test harness use these masks. They are the facts that the c
 | 0 | `0x2000` | 2 | Player 2 start |
 | 0 | `0x0200` | F3 | Service switch (default P1 profile; F1 opens frontend menu) |
 
-The netplay code uses the same ports for two players. `netplay::apply_inputs` in `runtime/netplay.cpp` shifts the player 2 bits:
+The frontend uses the same ports for two players. `apply_local_inputs` in `runtime/input.cpp` shifts the player 2 bits:
 
-- Directions: `(word & 0xf) << (slot * 4)` on port 1. So player 2 directions use bits 4 to 7.
-- Buttons: `((word >> 4) & 7) << (slot * 4)` on port 0. Player 2 buttons use bits 4 to 6.
+- Directions: `(word & 0xf) << ((slot & 1) * 4)` on port 1. So player 2 directions use bits 4 to 7.
+- Buttons: `((word >> 4) & 7) << ((slot & 1) * 4)` on port 0. Player 2 buttons use bits 4 to 6.
 - Start: `0x1000 << slot` on port 0.
 - Service: `0x200 << slot` on port 0.
 - Coin: `system_inputs &= ~(0x10 << slot)`.
 - Test: `system_inputs &= ~2`.
 
-It first sets all ports to `0xffffffff` and `system_inputs` to `0xff`. It then applies both players. See [Rollback](/developer/netplay/rollback).
+It first sets all ports to `0xffffffff` and `system_inputs` to `0xff`. It then applies each player. Some games (dial controls, Kaiser Knuckle) have extra rules for the other ports in the same function.
 
 ## System inputs and the EEPROM line
 
@@ -77,7 +77,7 @@ The frontend and the test harness set these bits:
 | `0x10` | 5 | Coin 1 |
 | `0x20` | 6 | Coin 2 |
 
-The header comment says the byte holds "service/test, four coins". The frontend uses only the bits in the table. The netplay documentation states that the byte holds test at bit 1 and coins at bits 4 and 5. The meaning of other bits is not tested in this repository.
+The header comment says the byte holds "service/test, four coins". The frontend uses only the bits in the table. The meaning of other bits is not tested in this repository.
 
 ## Coins and lockouts
 
@@ -193,8 +193,8 @@ stateDiagram-v2
 - `Eeprom::reset()` clears the serial state (`selected`, `old_clock`, `writable`, `ready_at`, the command). It keeps `words`. `Machine::reset()` calls it. `reset_devices()` calls `pins(0, ...)` which only deselects.
 - `Eeprom::load(path)` reads a 128-byte file of 64 big-endian words. It does nothing if the file does not exist. It throws `Invalid EEPROM file` if the size is not 128 bytes.
 - `Eeprom::save(path)` writes the 128 bytes.
-- `--eeprom FILE` loads at startup and saves at normal exit. Independent EEPROM histories are allowed in netplay; the host canonical handoff supplies match state.
-- `save_state` and `load_state` write the words and the serial state as one packed record (`CanonicalEeprom`). See [Snapshots](/developer/netplay/snapshots).
+- `--eeprom FILE` loads at startup and saves at normal exit.
+- `save_state` and `load_state` write the words and the serial state as one packed record (`CanonicalEeprom`).
 
 During the first boot the game ROM writes the whole EEPROM, including a checksum `$85ac`. The runtime does not seed the data or skip the check. `docs/developer/DECISIONS.md` records that wrong scheduling once left `$ffff` there and the game showed `PUSH TEST SWITCH`.
 
@@ -217,6 +217,6 @@ Also see [Replay and check](/developer/runtime/replay-and-check).
 
 - [EEPROM protocol and persistence](https://github.com/ansxor/f3-recomp/blob/main/runtime/eeprom.hpp)
 - [Input and coin bus mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp)
-- [Local keyboard mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp)
-- [Two-player input mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay.cpp)
+- [Local keyboard mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp)
+- [Two-player input mapping](https://github.com/ansxor/f3-recomp/blob/main/runtime/input.cpp)
 - [EEPROM checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp)

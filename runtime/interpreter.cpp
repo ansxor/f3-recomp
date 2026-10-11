@@ -3,8 +3,8 @@
 #include "f3rt/audio.hpp"
 #include "m68k.h"
 #include "state_io.hpp"
-#include "state_oracle.h"
-#include "sound_trace.hpp"
+#include "audio/reference/state_oracle.h"
+#include "audio/sound_trace.hpp"
 #include <mutex>
 
 extern "C" {
@@ -88,20 +88,11 @@ Interpreter::Interpreter(Machine &m) : machine(m) {
     std::call_once(init_flag, [] { m68k_init(); });
     main_context.resize((m68k_context_size() + 7) / 8);
     sound_context.resize(main_context.size());
-}
-void Interpreter::reset_main() {
-    bind(machine, false);
+    // The main context keeps the 68EC020 type and interrupt callbacks. Main CPU
+    // reset is native (Machine::reset_main_cpu); run_main imports canonical state.
     m68k_set_context(main_context.data());
     m68k_set_cpu_type(M68K_CPU_TYPE_68EC020);
-    // RESET preserves general registers and CCR: generated execution may have
-    // advanced them since the last interpreter context was saved.
-    f3rt_core_import(&machine.cpu);
     callbacks();
-    m68k_pulse_reset();
-    // Drain reset latency before canonical imports can discard it. A budget
-    // below the 020's four reset cycles returns without executing an opcode.
-    machine.cpu.cycles += unsigned(m68k_execute(1));
-    f3rt_core_export(&machine.cpu);
     m68k_get_context(main_context.data());
 }
 void Interpreter::audio_reset(bool asserted) {
@@ -114,6 +105,7 @@ void Interpreter::audio_irq(bool asserted) {
 }
 int Interpreter::run_main(int cycles) {
     bind(machine, false);
+    f3_cc_flush(&machine.cpu);
     m68k_set_context(main_context.data());
     f3rt_core_import(&machine.cpu);
     m68k_set_irq(0); // Main IRQs enter via the shared ABI boundary.

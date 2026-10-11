@@ -1,0 +1,26 @@
+---
+source_url: relayed by user (from "12")
+ingested: 2026-10-09
+sha256: c7e6832c393d6697feb922a78e29f615a0f0ead3aedccec7aab6c5953b1474f2
+captured_with: "hardware (board probing by 12, relayed)"
+---
+ok first connection confirmed:
+5505 channel 3 connects to 5510 channel 1
+also the reason only 3 are used is just
+5510 has 4 input/output channels.  you can program each one as an input or an output.  so obviously you end up leaving one for the final output, in this case channel 0 is configured as the main output, i think
+and 1-3 are inputs from the 5505
+otis.6 (ser0) → nc?
+otis.7 (ser1) → esp.15 (serio3)
+otis.8 (ser2) → esp.14 (serio2)
+otis.9 (ser3) → esp.13 (serio1)
+
+esp.13 (serio0) → dac.3 (data)
+so it should be like this:
+
+   m_ensoniq->add_route(2, "pump", 0.18, 6); // 1L -> 3L
+   m_ensoniq->add_route(3, "pump", 0.18, 7); // 1R -> 3R
+   m_ensoniq->add_route(4, "pump", 0.18, 4);  // etc
+   m_ensoniq->add_route(5, "pump", 0.18, 5);
+   m_ensoniq->add_route(6, "pump", 0.18, 2);
+   m_ensoniq->add_route(7, "pump", 0.18, 3);
+asnyawy tldr just swap channels 1 and 3  btwn the 5505 and 5510

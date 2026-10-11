@@ -2,7 +2,7 @@
 #include <cstdint>
 
 namespace f3rt {
-// Host-only diagnostics; never part of machine, snapshot or netplay state.
+// Host-only diagnostics; never part of machine or snapshot state.
 // `component`, `kind` and `layer` must be string literals (compared by address).
 
 // Prints the first occurrence of each (component, kind) FDP fallback reason.

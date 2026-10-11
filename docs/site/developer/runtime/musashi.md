@@ -114,7 +114,7 @@ These values are emulator model values from the reference, not hardware bus cycl
 
 ### Reset latency
 
-`m68k_pulse_reset` stores `RESET_CYCLES` from `CYC_EXCEPTION[EXCEPTION_RESET]`. The runtime drains these four cycles in `Interpreter::reset_main` and charges `cpu.cycles`. The core field is `reset_cycles`.
+`m68k_pulse_reset` stores `RESET_CYCLES` from `CYC_EXCEPTION[EXCEPTION_RESET]`. The sound CPU pulses reset through Musashi in `Interpreter::run_audio`. The main CPU does not use Musashi for reset. `Machine::reset_main_cpu` adds the same four cycles directly. The core field is `reset_cycles`.
 
 ## Canonical CPU state transfer
 
@@ -147,7 +147,7 @@ They are not a general FPU-capable Musashi snapshot interface.
 
 The struct has the registers (`dar`, `dar_save`, `sp[7]`, `pc`, `ppc`, `vbr`, `sfc`, `dfc`, `cacr`, `caar`, `ir`), the flags (`x_flag`, `n_flag`, `not_z_flag`, `v_flag`, `c_flag`, `s_flag`, `m_flag`, `t0_flag`, `t1_flag`), the interrupt state (`int_mask`, `int_level`, `virq_state`, `nmi_pending`), run state (`stopped`, `run_mode`, `instr_mode`, `reset_cycles`), prefetch (`pref_addr`, `pref_data`), CPU variables (`cpu_type`, `address_mask`, `sr_mask`), the cycle tables (`cyc_*`), the PMMU registers and one extra byte `sound_needs_reset`. The struct uses `#pragma pack(1)`. It has no pointers.
 
-On import the code restores the cycle table pointers by looking them up again: `core->cyc_instruction = m68ki_cycles[0]` and `core->cyc_exception = m68ki_exception_cycle_table[0]`. It does this when the CPU type is not 0, or when the saved state was not waiting for a reset. Pointers must never be saved in a snapshot, because they differ between processes. See [Snapshots](/developer/netplay/snapshots).
+On import the code restores the cycle table pointers by looking them up again: `core->cyc_instruction = m68ki_cycles[0]` and `core->cyc_exception = m68ki_exception_cycle_table[0]`. It does this when the CPU type is not 0, or when the saved state was not waiting for a reset. Pointers must never be saved in a snapshot, because they differ between processes.
 
 ## When to touch this code
 
@@ -170,5 +170,5 @@ On import the code restores the cycle table pointers by looking them up again: `
 - [Instruction templates and cycle declarations](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/musashi/m68k_in.c)
 - [Instruction generator](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/musashi/m68kmake.c)
 - [Canonical state bridge](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c)
-- [Sound-core state record](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_oracle.h)
+- [Sound-core state record](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/state_oracle.h)
 - [Sound timing regression cases](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp)

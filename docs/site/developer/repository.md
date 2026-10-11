@@ -2,7 +2,7 @@
 
 **What you will learn:** where each file lives, what it does, and where to start reading each subsystem.
 
-The repository has five main parts. The `recomp/` folder holds the recompiler. The `runtime/` folder holds the runtime library. The `include/f3rt/` folder holds the ABI between them. The `netplay/server/` folder holds the relay server. The `tools/` folder holds test and analysis tools. The tables describe source responsibilities, not file sizes. Generated files and local dependency caches have separate roles.
+The repository has four main parts. The `recomp/` folder holds the recompiler. The `runtime/` folder holds the runtime library. The `include/f3rt/` folder holds the ABI between them. The `tools/` folder holds test and analysis tools. The tables describe source responsibilities, not file sizes. Generated files and local dependency caches have separate roles.
 
 The exercised game is Land Maker Japan 2.01J. The World configuration is untested;
 shared F3 models are not a claim of other-game support. Video and audio devices
@@ -27,10 +27,9 @@ flowchart LR
     subgraph run_time["Run time"]
         rt["runtime/ (library f3rt)"]
         mus["runtime/third_party"]
-        fe["runtime/frontend.cpp"]
+        fe["runtime/frontend/frontend.cpp"]
     end
     subgraph around["Around the game"]
-        srv["netplay/server (Go)"]
         tools["tools/ (tests and analysis)"]
     end
     games --> recomp
@@ -41,7 +40,6 @@ flowchart LR
     rt --> mus
     fe --> rt
     gen -->|"linked into"| fe
-    fe <-->|"UDP"| srv
     tools --> rt
     tools --> gen
 ```
@@ -54,20 +52,16 @@ Open these files first. Then follow the subsystem pages.
 | --- | --- | --- | --- |
 | ABI | `include/f3rt/cpu_abi.h` | `runtime/cpu_abi.cpp` | [CPU ABI](/developer/runtime/cpu-abi) |
 | Machine and scheduler | `include/f3rt/machine.hpp` | `runtime/machine.cpp` (`advance_to`, `boundary`) | [Machine](/developer/runtime/machine) |
-| Frontend | `runtime/frontend.cpp` | `runtime/capture_io.hpp` | [Frontend](/developer/runtime/frontend) |
+| Frontend | `runtime/frontend/frontend.cpp` | `runtime/capture_io.hpp` | [Frontend](/developer/runtime/frontend) |
 | Recompiler | `recomp/__main__.py` | `recomp/generate.py`, then `recomp/emitter.py` | [Recompiler](/developer/recompiler/) |
 | Discovery | `recomp/discovery.py` (`discover`) | `games/landmakrj/config.toml` | [Discovery](/developer/recompiler/discovery) |
 | Timing and flags | `recomp/timing.py` | `recomp/cpu_ops.h` (`f3_cc_flush`) | [Flags and timing](/developer/recompiler/flags-and-timing) |
-| Sound compiler | `tools/compile_sound.py` | `runtime/sound_native.cpp` | [Sound compiler](/developer/recompiler/sound-compiler) |
+| Sound compiler | `tools/compile_sound.py` | `runtime/audio/reference/native/sound_native.cpp` | [Sound compiler](/developer/recompiler/sound-compiler) |
 | FDP renderer | `include/f3rt/video.hpp` | `runtime/renderer/fdp/video.cpp` | [FDP](/developer/runtime/video/fdp) |
 | Game-data video | `include/f3rt/game_video.hpp` | `runtime/renderer/game/video.cpp`, `runtime/renderer/game/scene.hpp` | [Game-data HLE](/developer/runtime/video/game-hle) |
-| Audio | `include/f3rt/audio.hpp` | `runtime/audio.cpp` | [Audio](/developer/runtime/audio/) |
+| Audio | `include/f3rt/audio.hpp` | `runtime/audio/audio.cpp` | [Audio](/developer/runtime/audio/) |
 | Interpreter | `runtime/interpreter.cpp` | `runtime/core_state.c` | [Interpreter](/developer/runtime/interpreter) |
-| Snapshots | `runtime/state_io.hpp` | Full/local and canonical/sync APIs in `runtime/machine.cpp` | [Snapshots](/developer/netplay/snapshots) |
-| Rollback | `include/f3rt/netplay.hpp` | `runtime/netplay.cpp` | [Rollback](/developer/netplay/rollback) |
-| Transport | `include/f3rt/netplay_transport.hpp` | `runtime/netplay_transport.cpp` | [Client transport](/developer/netplay/transport) |
-| Session lifecycle | `include/f3rt/netplay_session.hpp` | `runtime/netplay_session.cpp` | [Frontend integration](/developer/netplay/frontend-integration) |
-| Relay server | `netplay/server/main.go` | `server.go`, `room.go`, `protocol.go` | [Relay server](/developer/netplay/server) |
+| Save states | `runtime/state_io.hpp` | `save_state`, `load_state` and `state_crc` in `runtime/machine.cpp` | [Machine](/developer/runtime/machine) |
 | Tests | `runtime/tests/*.cpp` | `tools/gameplay_regression.cpp` | [Testing](/developer/testing/) |
 
 ## File lists
@@ -78,18 +72,17 @@ Each table lists one directory. The link on each file name opens the file on Git
 
 | File | Purpose |
 | --- | --- |
-| [`CMakeLists.txt`](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt) | Top-level build. Runs the recompiler at configure time. Builds Musashi, `f3rt`, the frontends and the test tools. Writes the netplay build ID. |
+| [`CMakeLists.txt`](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt) | Top-level build. Runs the recompiler at configure time. Builds Musashi, `f3rt`, the frontends and the test tools. |
 | [`README.md`](https://github.com/ansxor/f3-recomp/blob/main/README.md) | Project identity, support scope, build and run commands, defaults, and credits. |
 | [`docs/developer/VALIDATION.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md) | Retained validation scenarios, measurements, and limits. |
 | [`docs/developer/DECISIONS.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) | Technical rationale and observed compatibility evidence. |
-| [`docs/developer/IMGUI-NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) | Overlay, shader ABI, canonical versus handoff and observed verification. |
 | [`.gitignore`](https://github.com/ansxor/f3-recomp/blob/main/.gitignore) | Ignores `build/`, `roms/`, `games/*/generated/`, `wt/`, `*.bin`, `*.wav` and captures. |
 
 ### recomp/ (ROM to C recompiler, Python)
 
 | File | Purpose |
 | --- | --- |
-| [`recomp/__main__.py`](https://github.com/ansxor/f3-recomp/blob/main/recomp/__main__.py) | Command line for `python3 -m recomp discover` and `python3 -m recomp emit`. |
+| [`recomp/__main__.py`](https://github.com/ansxor/f3-recomp/blob/main/recomp/__main__.py) | Command line for `uv run python -m recomp discover` and `uv run python -m recomp emit`. |
 | [`recomp/__init__.py`](https://github.com/ansxor/f3-recomp/blob/main/recomp/__init__.py) | Package marker. |
 | [`recomp/discovery.py`](https://github.com/ansxor/f3-recomp/blob/main/recomp/discovery.py) | ROM lane loader (`load_rom`) and instruction discovery (`discover`). Writes the coverage report. |
 | [`recomp/emitter.py`](https://github.com/ansxor/f3-recomp/blob/main/recomp/emitter.py) | Lowers one Capstone 68020 instruction to C statements (`lower`). |
@@ -100,7 +93,7 @@ Each table lists one directory. The link on each file name opens the file on Git
 | [`recomp/68020_cycles.csv`](https://github.com/ansxor/f3-recomp/blob/main/recomp/68020_cycles.csv) | 68EC020 opcode cost table exported from Musashi. It holds CPU data, not game data. |
 | [`recomp/68000_cycles.csv`](https://github.com/ansxor/f3-recomp/blob/main/recomp/68000_cycles.csv) | 68000 opcode cost table. The sound CPU compiler uses it. |
 | [`recomp/CMakeLists.txt`](https://github.com/ansxor/f3-recomp/blob/main/recomp/CMakeLists.txt) | Small CMake project that builds the static library `f3_recompiled` from `sources.cmake`. |
-| [`recomp/requirements.txt`](https://github.com/ansxor/f3-recomp/blob/main/recomp/requirements.txt) | Python dependency: `capstone==5.0.9`. |
+| [`pyproject.toml`](https://github.com/ansxor/f3-recomp/blob/main/pyproject.toml) | Python project dependencies (`capstone==5.0.9`; analysis group: NumPy, SciPy) managed by `uv`. |
 
 ### include/f3rt/ (public interfaces)
 
@@ -112,8 +105,6 @@ Each table lists one directory. The link on each file name opens the file on Git
 | [`include/f3rt/video.hpp`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/video.hpp) | `Video`: the FDP (TC0630FDP) software renderer. |
 | [`include/f3rt/game_video.hpp`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp) | `GameVideo`, `GameVideoMode` and `GameVideoOptions`: the game-data renderer. |
 | [`include/f3rt/audio.hpp`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) | `Audio`: the sound board (OTIS, DSP, DUART, volume) and PCM output. |
-| [`include/f3rt/netplay.hpp`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/netplay.hpp) | `Rollback`, `InputWord`, `apply_inputs` and `machine_identity`. |
-| [`include/f3rt/netplay_transport.hpp`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/netplay_transport.hpp) | `Transport`, `Identity`, `Input`, `Checksum` and `TransportOptions`. |
 
 ### runtime/ core (machine, scheduler, CPUs)
 
@@ -126,13 +117,13 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/interpreter.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/interpreter.cpp) | Wraps Musashi. Runs the main CPU one instruction at a time (fallback and reference mode). Runs the sound 68000 in oracle mode. |
 | [`runtime/interpreter.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/interpreter.hpp) | `Interpreter` class declaration. |
 | [`runtime/core_state.c`](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c) | C bridge that copies state between `f3_cpu` and the Musashi context, and exports the sound CPU state. |
-| [`runtime/state_oracle.h`](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_oracle.h) | Packed struct `f3rt_sound_oracle_state` for the interpreted sound CPU. |
-| [`runtime/state_io.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_io.hpp) | `StateWriter`, `StateReader` and the packed `Canonical*` records used by snapshots. |
+| [`runtime/audio/reference/state_oracle.h`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/state_oracle.h) | Packed struct `f3rt_sound_oracle_state` for the interpreted sound CPU. |
+| [`runtime/state_io.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_io.hpp) | `StateWriter`, `StateReader` and the packed `Canonical*` records used by save states. |
 | [`runtime/rom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/rom.cpp) | `RomSet::load` and `crc32`. Checks the size and CRC32 of every ROM chip. |
 | [`runtime/eeprom.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/eeprom.hpp) | 93C46 EEPROM (64 words of 16 bits) with busy timing, load and save. |
-| [`runtime/frontend.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp) | SDL3 program. Parses all command-line options, drives the frame loop, audio, window, and netplay. |
-| [`runtime/frontend_ui.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend_ui.cpp) | Dear ImGui overlay: preferences, slots, input capture, shader controls and netplay actions. |
-| [`runtime/frontend_settings.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend_settings.cpp) | Preference persistence and two independent keyboard/gamepad input profiles. |
+| [`runtime/frontend/frontend.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp) | SDL3 program. Parses all command-line options, drives the frame loop, audio and window. |
+| [`runtime/frontend/ui.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/ui.cpp) | Dear ImGui overlay: preferences, slots, input capture, and shader controls. |
+| [`runtime/frontend/settings.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/settings.cpp) | Preference persistence and two independent keyboard/gamepad input profiles. |
 
 ### runtime/ video
 
@@ -158,23 +149,24 @@ These files form the `f3rt` library core and the frontend.
 
 | File | Purpose |
 | --- | --- |
-| [`runtime/audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp) | `Audio`: sound work RAM, ES5505, ES5510, DUART and volume chips, the sound-CPU time slicing and the PCM ring buffer. |
-| [`runtime/sound_native.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp) | `SoundNative`: runs the statically compiled sound driver and implements the `f3_sound_*` runtime functions. |
-| [`runtime/sound_native.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.hpp) | `SoundNative` declaration. |
-| [`runtime/sound_native_ops.h`](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native_ops.h) | C header that the generated sound code includes (`f3_sound_read8`, `f3_sound_exception` and more). |
-| [`runtime/sound_trace.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.cpp) | `SoundTrace`: writes the F3SND2 bus trace file. |
-| [`runtime/sound_trace.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.hpp) | `SoundTrace` declaration and the record kinds. |
+| [`runtime/audio/audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp) | `Audio`: sound work RAM, ES5505, ES5510, DUART and volume chips, the sound-CPU time slicing and the PCM ring buffer. |
+| [`runtime/audio/reference/native/sound_native.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.cpp) | `SoundNative`: runs the statically compiled sound driver and implements the `f3_sound_*` runtime functions. |
+| [`runtime/audio/reference/native/sound_native.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.hpp) | `SoundNative` declaration. |
+| [`runtime/audio/reference/native/sound_native_ops.h`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native_ops.h) | C header that the generated sound code includes (`f3_sound_read8`, `f3_sound_exception` and more). |
+| [`runtime/audio/sound_trace.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.cpp) | `SoundTrace`: writes the F3SND2 bus trace file. |
+| [`runtime/audio/sound_trace.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.hpp) | `SoundTrace` declaration and the record kinds. |
+| [`runtime/audio/reference/state_oracle.h`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/state_oracle.h) | Packed sound Musashi interpreter state record. |
+| [`runtime/audio/hle/audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/hle/audio.cpp) | `AudioEngine`: top-level HLE (enhanced) audio driver. |
+| [`runtime/audio/hle/synth.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/hle/synth.cpp) | ROM sample synthesis and voice allocation. |
+| [`runtime/audio/hle/sequencer.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/hle/sequencer.cpp) | HLE command sequencer. |
 
-### runtime/ netplay, tools and tests
+### runtime/ capture, replay and tests
 
 | File | Purpose |
 | --- | --- |
-| [`runtime/netplay.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay.cpp) | SDL-independent rollback core (`Rollback`), `apply_inputs`, `machine_identity`. |
-| [`runtime/netplay_transport.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_transport.cpp) | Protocol-v2 pairing, compressed canonical transfer/barrier, inputs/checksums, ping and finish verdict. |
-| [`runtime/netplay_session.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay_session.cpp) | Local/lobby/preparation/handoff/versus/local-return lifecycle, including fresh rematches. |
 | [`runtime/capture_io.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp) | Helpers that dump frames, RAM and CPU state to files, and the `WavWriter`. |
 | [`runtime/replay.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/replay.cpp) | `f3rt-replay`: renders MAME captures with the FDP renderer, or replays a MAME audio trace to a WAV file. |
-| [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp), [`input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp), [`eeprom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp), [`cpu.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp), [`sprite_units.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprite_units.cpp), [`audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp) | Per-area synthetic-ROM checks. Shared fixtures and assertions are in [`runtime/tests/support.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/support.cpp). |
+| [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp), [`input.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/input.cpp), [`eeprom.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp), [`cpu.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp), [`sprites.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprites.cpp), [`audio.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp) | Per-area synthetic-ROM checks. Shared fixtures and assertions are in [`runtime/tests/support.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/support.cpp). |
 | [`runtime/LICENSES.txt`](https://github.com/ansxor/f3-recomp/blob/main/runtime/LICENSES.txt) | Licenses of the vendored MAME-derived and Musashi code. |
 
 ### runtime/third_party/ (vendored code)
@@ -206,39 +198,14 @@ These files form the `f3rt` library core and the frontend.
 | [`runtime/third_party/audio/mb87078.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mb87078.cpp) | MB87078 electronic volume chip. |
 | [`runtime/third_party/audio/mb87078.hpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mb87078.hpp) | MB87078 declaration. |
 
-### netplay/server/ (relay server, Go)
-
-| File | Purpose |
-| --- | --- |
-| [`netplay/server/main.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/main.go) | Command-line flags and start-up. |
-| [`netplay/server/server.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/server.go) | UDP read loop, packet dispatch, rate limits and the janitor that removes old rooms. |
-| [`netplay/server/room.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/room.go) | Room state: pairing of two slots, identity checks, finish verdict, timeouts. |
-| [`netplay/server/protocol.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/protocol.go) | Wire format: constants, packet encode and decode, validation. |
-| [`netplay/server/impairment.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/impairment.go) | Optional delay, jitter, loss, reorder and duplicate for tests. |
-| [`netplay/server/server_test.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/server_test.go) | Relay tests (end to end through UDP sockets). |
-| [`netplay/server/protocol_test.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/protocol_test.go) | Packet parser tests. |
-| [`netplay/server/impairment_test.go`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/impairment_test.go) | Impairment tests. |
-| [`netplay/server/go.mod`](https://github.com/ansxor/f3-recomp/blob/main/netplay/server/go.mod) | Go module file (`go 1.22`, no dependencies). |
-
 ### tools/ (test, capture and analysis tools)
 
 | File | Purpose |
 | --- | --- |
-| [`tools/compile_sound.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/compile_sound.py) | Compiles the sound 68000 ROM to C. CMake runs it at configure time. |
-| [`tools/netplay_build_id.cmake`](https://github.com/ansxor/f3-recomp/blob/main/tools/netplay_build_id.cmake) | CMake script that hashes sources and generated C into `netplay_build.hpp`. |
-| [`tools/gameplay_regression.cpp`](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_regression.cpp) | `f3rt-gameplay-regression`: seeded headless gameplay runs. |
-| [`tools/gameplay_inputs.hpp`](https://github.com/ansxor/f3-recomp/blob/main/tools/gameplay_inputs.hpp) | Input schedule shared by the gameplay and netplay oracle tools. |
-| [`tools/run_gameplay_regression.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/run_gameplay_regression.py) | Runs the gameplay regression over several seeds. |
-| [`tools/netplay_oracle.cpp`](https://github.com/ansxor/f3-recomp/blob/main/tools/netplay_oracle.cpp) | `f3rt-netplay-oracle`: snapshot proof, reference run and headless netplay client. |
-| [`tools/run_netplay_oracle.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/run_netplay_oracle.py) | Starts the Go server and two clients, then compares results with the reference. |
-| [`tools/sound_extract.cpp`](https://github.com/ansxor/f3-recomp/blob/main/tools/sound_extract.cpp) | `f3rt-sound-extract`: plays chosen sound commands and records WAV and trace. |
-| [`tools/decode_sound.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/decode_sound.py) | Decodes F3SND2 traces into JSON lines. |
-| [`tools/compare_sound.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/compare_sound.py) | Compares two F3SND2 traces exactly. |
-| [`tools/compare_audio.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/compare_audio.py) | Compares two WAV files (needs NumPy and SciPy). |
-| [`tools/compare_frames.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/compare_frames.py) | Compares frames against MAME captures. |
-| [`tools/test_discovery.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/test_discovery.py) | Unit tests for discovery. |
-| [`tools/test_generate.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/test_generate.py) | Unit tests for block generation and dispatch deadlines. |
-| [`tools/test_decode_sound.py`](https://github.com/ansxor/f3-recomp/blob/main/tools/test_decode_sound.py) | Unit tests for the sound trace decoder. |
+| [`tools/tool.cpp`](https://github.com/ansxor/f3-recomp/blob/main/tools/tool.cpp) | `f3rt-tool`: unified CLI for gameplay, gpu-compare, motion, sound-extract, and sprite-check. |
+| [`tools/runner/`](https://github.com/ansxor/f3-recomp/blob/main/tools/runner/) | Shared machine runner and input schedule implementations (`f3rt-runner`). |
+| [`tools/commands/`](https://github.com/ansxor/f3-recomp/blob/main/tools/commands/) | Subcommand implementations for `f3rt-tool`. |
+| [`cmake/check_game_geometry_literals.cmake`](https://github.com/ansxor/f3-recomp/blob/main/cmake/check_game_geometry_literals.cmake) | CTest geometry literal guard. |
 
 ### tools/differential/ and tools/mame/
 
@@ -265,8 +232,7 @@ These files form the `f3rt` library core and the frontend.
 | --- | --- |
 | [`games/landmakrj/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakrj/config.toml) | Land Maker Japan: ROM lanes, `all_aligned` discovery and the video entry-point seeds. This is the execution target. |
 | [`games/landmakr/config.toml`](https://github.com/ansxor/f3-recomp/blob/main/games/landmakr/config.toml) | Land Maker World: ROM lanes only. It is untested. |
-| [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | ABI history and full/local versus canonical/sync snapshot contracts. |
-| [`docs/NETPLAY.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/NETPLAY.md) | Netplay usage, protocol, determinism and measurements. |
+| [`docs/developer/ABI-CHANGES.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md) | ABI history. |
 | [`docs/developer/VIDEO-HLE.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md) | Game-data video addresses, layouts and parity evidence. |
 | [`docs/SOUND-DRIVER.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md) | Sound driver evidence, trace format and native driver. |
 | [`docs/developer/`](https://github.com/ansxor/f3-recomp/tree/main/docs/developer) | Canonical validation, decisions, ABI history, video evidence, and binary-size measurements. See the [evidence index](/developer/evidence). |
@@ -282,15 +248,14 @@ These files form the `f3rt` library core and the frontend.
 | [`docs/site/.vitepress/theme/index.ts`](https://github.com/ansxor/f3-recomp/blob/main/docs/site/.vitepress/theme/index.ts) | Loads the default VitePress theme and the diagram stylesheet. |
 | [`docs/site/.vitepress/theme/style.css`](https://github.com/ansxor/f3-recomp/blob/main/docs/site/.vitepress/theme/style.css) | Keeps diagram labels readable and confines scrolling to each diagram. |
 | [`docs/site/index.md`](https://github.com/ansxor/f3-recomp/blob/main/docs/site/index.md) | Site entry point. |
-| `docs/site/guide/` | Player setup, controls, video, sound, netplay, and troubleshooting. |
+| `docs/site/guide/` | Player setup, controls, video, sound, and troubleshooting. |
 | `docs/site/reference/` | CLI, build options, game config, generated files, and tools. |
 | `docs/site/developer/` | Architecture and source tour, with subsystem explanations below. |
 | `docs/site/developer/recompiler/` | ROM loading, discovery, emission, flags, timing, and sound compilation. |
-| `docs/site/developer/runtime/` | CPU ABI, machine, bus, scheduling, frontend, interpreter, snapshots, and support. |
+| `docs/site/developer/runtime/` | CPU ABI, machine, bus, scheduling, frontend, interpreter, save states, and support. |
 | `docs/site/developer/runtime/video/` | Hardware renderer, game-data renderer, scenes, composition, and presentation. |
 | `docs/site/developer/runtime/audio/` | Sound CPUs, mailbox, timing, chips, native driver, and PCM output. |
-| `docs/site/developer/netplay/` | Rollback, state identity, transport, relay, determinism, and limits. |
-| `docs/site/developer/testing/` | Unit checks, differential cases, captures, comparisons, gameplay, sound, and netplay oracles. |
+| `docs/site/developer/testing/` | Unit checks, differential cases, captures, comparisons, gameplay, and sound. |
 | [`.github/workflows/docs.yml`](https://github.com/ansxor/f3-recomp/blob/main/.github/workflows/docs.yml) | Builds documentation on matching pushes and pull requests, or manual dispatch. Publishes non-PR builds to Pages. |
 
 The [Developer overview](/developer/#every-developer-page) lists the individual subsystem pages.
@@ -303,13 +268,13 @@ The `.gitignore` file hides these items. You will see some of them in your own c
 | Item | What it is |
 | --- | --- |
 | `build/` | CMake build directory. It holds generated C, libraries, executables, captures and WAV files. |
-| `build/python/` | Optional folder for the Capstone Python package (`pip install --target build/python`). The CMake configure step adds it to `PYTHONPATH`. |
+| `.venv/` | Python virtual environment managed by `uv`. |
 | `roms/` | ROM sets. The project never contains ROMs. The README uses `../roms/landmakr` as an example path outside the repository. |
-| `games/*/generated/` | Optional output folder for a manual `python3 -m recomp emit` run. |
+| `games/*/generated/` | Optional output folder for a manual `uv run python -m recomp emit` run. |
 | `wt/` | Local Git worktrees. Ignored and not part of the distributed source tree. |
 | `games/*/rom/` | Optional local ROM input directory. |
 | `captures/`, `diffs/`, `nvram/`, `cfg/` | Local capture, comparison, and emulator working data. |
-| `__pycache__/`, `*.pyc`, `.venv/` | Python caches and local virtual environments. |
+| `__pycache__/`, `*.pyc` | Python bytecode caches. |
 | `docs/site/node_modules/` | Installed documentation dependencies. |
 | `docs/site/.vitepress/dist/`, `docs/site/.vitepress/cache/` | Built pages and VitePress cache. |
 

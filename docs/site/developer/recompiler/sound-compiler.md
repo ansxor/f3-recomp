@@ -12,8 +12,8 @@ It is not HLE and does not convert the driver into a note player. The ROM's task
 | [68000_cycles.csv](https://github.com/ansxor/f3-recomp/blob/main/recomp/68000_cycles.csv) | Mask/match/base-cycle rows for all 16-bit opcode values. |
 | [emitter.py](https://github.com/ansxor/f3-recomp/blob/main/recomp/emitter.py) | Shared instruction lowering and effective-address decoding. |
 | [cpu_ops.h](https://github.com/ansxor/f3-recomp/blob/main/recomp/cpu_ops.h) | Shared arithmetic and condition-code operations. |
-| [sound_native_ops.h](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native_ops.h) | Sound bus, control, division and dynamic-cycle helpers. |
-| [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp) | Generated-table dispatch and 68000 execution state. |
+| [sound_native_ops.h](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native_ops.h) | Sound bus, control, division and dynamic-cycle helpers. |
+| [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.cpp) | Generated-table dispatch and 68000 execution state. |
 
 The [main recompiler](/developer/recompiler/) has a discovery phase. This sound compiler does not discover reachable basic blocks.
 
@@ -39,14 +39,12 @@ flowchart TD
 
 ## ROM input and validation
 
-The compiler requires Python and the Capstone M68K module. Use the configured environment from [the build pipeline](/developer/build-pipeline).
-
-CMake supplies its local `build/python` dependency directory through `PYTHONPATH`. A manual invocation needs an equivalent module search path.
+The compiler requires Python and the Capstone M68K module, managed via `uv`. Use the configured environment from [the build pipeline](/developer/build-pipeline).
 
 Use the supplied sound chips in a local ROM directory:
 
 ```sh
-python3 tools/compile_sound.py --rom-dir /path/to/roms/landmakr \
+uv run python tools/compile_sound.py --rom-dir /path/to/roms/landmakr \
   --config games/landmakrj/config.toml --output build/generated/sound-landmakrj
 ```
 

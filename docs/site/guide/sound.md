@@ -4,9 +4,14 @@ This page explains sound generation and driver selection. It shows how to record
 
 ## Host audio backend and volume
 
-Normal play defaults to `--audio-backend accurate`, using the native sound driver and emulated chips. Optional `--audio-backend hle` uses separate host synthesis/reconciliation; it is not an accurate-PCM-equivalent implementation. F1 exposes the available audio choices. Respect restart-required controls and use **Save preferences** explicitly; CLI values override saved settings. See [HLE design and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+There are two audio backends, selected with `--audio-backend enhanced|reference`:
 
-`--volume 0..100` (default 100%) and F1 volume affect host output only, not emulated gain, snapshots or network checksums. Accurate netplay audio is confirmed-only; HLE reconciliation is non-rewound and must not be described as replaying accurate PCM. Driver/oracle diagnostics below describe the accurate simulation path.
+- **Enhanced** uses separate host synthesis. It is the default for Land Maker Japan (`landmakrj`), the only set that supports it. It is not PCM-equivalent to Reference audio.
+- **Reference** uses the native sound driver (or the oracle) and emulated chips. It is the default for every other set, and `--audio-backend reference` selects it for Land Maker Japan.
+
+F1 → Audio lists the available choices as **Sound backend (restart)**; a backend the current set cannot use is greyed out. The choice is a restart-required control. Use **Save preferences** to store it explicitly (settings key `audio=enhanced|reference`); an explicit `--audio-backend` overrides the saved value. A saved Enhanced preference falls back to Reference for a set that does not support it, while an explicit `--audio-backend enhanced` for such a set is an error. See [Enhanced audio design and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+
+`--volume 0..100` (default 100%) and F1 volume affect host output only, not emulated gain or snapshots. Driver/oracle diagnostics below describe the Reference simulation path.
 
 
 ## How the sound works
@@ -21,7 +26,7 @@ The F3 board has a separate sound computer. It has these parts:
 
 The main CPU sends commands to the sound CPU through a mailbox in shared memory. The sound driver reads the commands and programs the ES5505 voices.
 
-The default `--audio-backend accurate` uses MAME-derived sound-device implementations, validated against reference output rather than physical hardware. It has two ways to execute the sound ROM; **native sound is not HLE**:
+`--audio-backend reference` uses MAME-derived sound-device implementations, validated against reference output rather than physical hardware. It has two ways to execute the sound ROM; **native sound is not HLE**:
 
 | Driver | Name in the option | What it is |
 | --- | --- | --- |
@@ -42,36 +47,34 @@ flowchart LR
     A --> WAV["WAV file (optional)"]
 ```
 
-## Opt-in HLE audio
+## Enhanced audio
 
-`--audio-backend hle` opts into approximate audio on a separate 48 kHz worker.
+`--audio-backend enhanced` selects approximate audio on a separate 48 kHz worker.
 It reads Land Maker's music/instrument data and sample ROM directly, without
 executing the sound CPU or ES5505/ES5510 programs. Do not combine it with
-`--sound-driver` or `--sound-trace`.
+`--sound-trace`, and do not give it a `--sound-driver` (a tool option, described below).
+It is available only for `landmakrj`.
 
-Accurate (emulated) audio remains the default. In netplay, both peers must
-select the same backend; HLE audio is not rewound during rollback.
-Explicit `--audio-backend` selections override the saved backend. An explicit
-`--sound-driver native|oracle` selects accurate audio over a saved HLE preference;
-explicit HLE together with an explicit sound driver remains an error.
-See [HLE evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+Explicit `--audio-backend` selections override the saved backend.
+See [Enhanced audio evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
 
 ## Choose the sound driver
 
-With the accurate backend, use `--sound-driver native` or `--sound-driver oracle`.
+The sound driver matters only with Reference audio. `landmakr` and `f3rt-run` have no `--sound-driver` option; they choose the driver themselves. The `f3rt-tool` subcommands `gameplay` and `sound-extract` accept `--sound-driver native` or `--sound-driver oracle`.
 
 | Situation | Driver |
 | --- | --- |
-| You built with `F3_ROM_DIR` and give no option | `native` |
-| You give `--sound-driver oracle` | `oracle` |
-| The program has no generated sound code and you give no option | `oracle`. This happens if you configured the build without `F3_ROM_DIR`. |
-| The program has no generated sound code and you give `--sound-driver native` | Error: `Native sound requires a generated sound program (F3_ROM_DIR)` |
-| You give another value | Error: `--sound-driver must be oracle or native` |
+| You run `landmakr` or `f3rt-run` with Reference audio and built with `F3_ROM_DIR` (generated sound code) | `native` |
+| You run `landmakr` or `f3rt-run` with Reference audio and the program has no generated sound code. This happens if you configured the build without `F3_ROM_DIR`. | `oracle` |
+| You run one of the tools and give no option | `oracle` |
+| You give a tool `--sound-driver oracle` | `oracle` |
+| You give a tool `--sound-driver native` and it has no generated sound code | Error: `Native sound requires a generated sound program (F3_ROM_DIR)` |
+| You give a tool another value | Error: `--sound-driver must be oracle or native` |
 
 Finite seeded runs compare native sound bus traces and WAV output with the oracle. These checks do not establish correctness for every reachable game state. See [Developer evidence](/developer/evidence) and the [sound-driver document](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/SOUND-DRIVER.md) for coverage and limits.
 
 ::: info Why two drivers
-Use the oracle to investigate a suspected native sound CPU bug. Use the native driver for normal play and netplay. Both execute the same ROM and feed the same emulated sound devices.
+Use the oracle to investigate a suspected native sound CPU bug. Use the native driver for normal Reference play. Both execute the same ROM and feed the same emulated sound devices.
 :::
 
 The native driver needs exactly the sound ROM with CRC32 `5a7e9117`. For another ROM the program stops with `SoundNative: unsupported sound ROM CRC 0x... (expected 0x5a7e9117)`.
@@ -82,7 +85,7 @@ Add `--no-audio` to skip the sound device. The machine still makes the samples. 
 
 ## Record a WAV file
 
-Use `--wav FILE` to record 16-bit stereo PCM. Accurate audio uses the ES5505 audio core's sample rate; HLE uses 48 kHz. Offline runs record generated audio; netplay records confirmed accurate audio or the HLE worker's speculative output.
+Use `--wav FILE` to record 16-bit stereo PCM. Reference audio uses the ES5505 audio core's sample rate; Enhanced audio uses 48 kHz.
 
 ```sh
 ./build/landmakr --headless --frames 3600 --wav build/audio.wav
@@ -98,17 +101,16 @@ Keep WAV files in the ignored `build/` directory. They contain audio from the RO
 
 ## Record a sound trace
 
-A sound trace records every read and write that the sound CPU makes on its bus, and every write from the main CPU to the sound mailbox. The trace does not change the timing and does not read any device register a second time.
+A sound trace records every read and write that the sound CPU makes on its bus, and every write from the main CPU to the sound mailbox. The trace does not change the timing and does not read any device register a second time. It needs Reference audio, because Enhanced audio runs no sound CPU.
 
 ```sh
-./build/landmakr --headless --frames 6000 --sound-trace build/run.sound --wav build/run.wav
+./build/landmakr --headless --frames 6000 --audio-backend reference --sound-trace build/run.sound --wav build/run.wav
 ```
 
 Notes:
 
 - The trace file starts with the 8 bytes `F3SND2` and two zero bytes. Each record has 32 bytes.
 - The trace contains data from the ROM. Keep it in `build/`. Do not commit it.
-- Online play rejects `--sound-trace`.
 
 Decode the trace with the Python tools. All paths are examples.
 
@@ -123,21 +125,21 @@ python3 tools/decode_sound.py build/run.sound --notes-only --output build/run-no
 | `--notes-only` | Keeps only voice starts, commands and reset or end events. |
 | `--commands-only` | Keeps only the submitted and consumed command packets. |
 
-To compare the traces of the two drivers, record one trace with each driver and run the comparison tool.
+To compare the traces of the two drivers, record one trace with each driver (with `f3rt-tool sound-extract` or `f3rt-tool gameplay`, which take `--sound-driver`) and run the comparison tool.
 
 ```sh
-python3 tools/compare_sound.py build/oracle.sound build/native.sound
+uv run f3 compare trace build/oracle.sound build/native.sound
 ```
 
 The tool needs exact records, timestamps and ownership data. Add `--json FILE` to save the result.
 
 ## Extract one sound or one music sequence
 
-The `f3rt-sound-extract` program boots the game, freezes the main CPU, and then sends sound commands that you choose. It writes a WAV file and a trace of only that sound.
+The `f3rt-tool sound-extract` subcommand boots the game, freezes the main CPU, and then sends sound commands that you choose. It writes a WAV file and a trace of only that sound.
 
 ```sh
-cmake --build build --target f3rt-sound-extract
-build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+cmake --build build --target f3rt-tool
+build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
   --wav-window event --sound-trace build/music.sound --wav build/music.wav
 ```
@@ -154,8 +156,8 @@ build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
 | `--wav FILE` | none | Write a WAV file. |
 | `--wav-window full\|event` | `full` | `full` records from cold boot. `event` records from the event time. |
 | `--sound-driver oracle\|native` | `oracle` | Driver to use. |
-| `--audio-backend accurate\|hle` | `accurate` | Choose board emulation or the independent HLE engine. |
-| `--hle-events FILE` | none | HLE voice-event CSV; requires HLE. |
+| `--audio-backend reference\|enhanced` | `reference` | Choose board emulation or the independent Enhanced engine. Enhanced is `landmakrj` only and rejects `--sound-driver` and `--sound-trace`. |
+| `--hle-events FILE` | none | HLE voice-event CSV; requires `--audio-backend enhanced`. |
 
 A packet is a hex string. The first byte is the total packet size, including the size byte and the opcode byte. For example, `038001` has size 3, opcode `0x80` and parameter `0x01`. The program adds no hidden setup packets.
 
@@ -163,5 +165,4 @@ The default of 900 boot frames is after the output-gain writes of the game. A sm
 
 ## Next steps
 
-- [Online play](/guide/netplay) uses the native sound driver by default, or opt-in HLE audio.
 - The sound compiler: [Developer: sound compiler](/developer/recompiler/sound-compiler).

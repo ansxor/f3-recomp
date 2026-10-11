@@ -4,7 +4,7 @@ layout: home
 hero:
   name: f3-recomp
   text: Land Maker static recompiler
-  tagline: Native CPU execution, an SDL3 runtime and optional two-player rollback netplay for Land Maker Japan 2.01J.
+  tagline: Native CPU execution and an SDL3 runtime for Land Maker Japan 2.01J.
   actions:
     - theme: brand
       text: User guide
@@ -23,12 +23,10 @@ features:
     details: The f3rt library provides memory, interrupts, video, sound and EEPROM. The SDL3 frontend provides an F1 menu, keyboard/gamepad remapping, offline slots and screenshots.
   - title: Game-data video
     details: The runtime can build each frame from the game's own tile and sprite data. It can draw at 1x to 4x scale with extra border columns. The original FDP renderer stays available as a reference.
-  - title: Rollback netplay
-    details: Two players connect through a Go UDP relay. A fresh host snapshot starts versus rollback after both clients load. Confirmed exit or disconnect returns local; presentation settings stay independent.
   - title: Reference-based validation
     details: Video and sound devices are derived from MAME. Finite captures and seeded runs compare output with MAME and CPU execution with Musashi; this is not physical-board verification.
   - title: Developer documentation
-    details: Explore the runtime, recompiler, netplay protocol and the Land Maker-specific work needed before another F3 game can be supported.
+    details: Explore the runtime, recompiler and the Land Maker-specific work needed before another F3 game can be supported.
 ---
 
 ## What this project is
@@ -41,7 +39,7 @@ The repository does **not** contain any ROM data. You must supply your own legal
 
 | Game | Status |
 | --- | --- |
-| Land Maker Japan 2.01J (`landmakrj`) | Supported player build; exercised by finite reference captures, seeded gameplay and netplay checks. Coverage is not exhaustive. |
+| Land Maker Japan 2.01J (`landmakrj`) | Supported player build; exercised by finite reference captures and seeded gameplay checks. Coverage is not exhaustive. |
 | Land Maker World (`landmakr`) | Config and ROM-loader entry only; untested and rejected by the generated `landmakr` player build. |
 | Other Taito F3 games | Not implemented. |
 
@@ -52,7 +50,6 @@ The [portability audit](/developer/porting) distinguishes shared platform code f
 | You want to | Read |
 | --- | --- |
 | Build and run the game | [Getting started](/guide/getting-started) |
-| Play with a friend online | [Online play](/guide/netplay) |
 | Look up a command-line option | [Command-line reference](/reference/cli) |
 | Understand how the code works | [Developer overview](/developer/) |
 

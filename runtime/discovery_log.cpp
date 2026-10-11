@@ -1,6 +1,6 @@
 #include "discovery_log.hpp"
 #include "f3rt/machine.hpp"
-#include "sprite_units.hpp"
+#include "sprites/units.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <tuple>

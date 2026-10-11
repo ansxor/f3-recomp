@@ -57,7 +57,7 @@ Recorded CPU fallback is zero in these runs. Renderer fallback is separate.
 
 In the final design the VRAM decoders always produce a complete scene from the
 current bytes, so startup frames are drawn by the game renderer. A run shaped
-`f3rt-gameplay-regression --frames 6000 --video-diff --video-diff-every 60`
+`f3rt-tool gameplay --frames 6000 --video-diff --video-diff-every 60`
 reports `pixel_mismatches=0` for all nine layers and the composite over 91
 sampled frames, with `VIDEO game_frames=6000 oracle_fallback_frames=0` and a
 frame CRC identical to the pre-change baseline. Earlier retained runs recorded

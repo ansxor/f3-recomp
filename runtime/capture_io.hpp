@@ -57,6 +57,7 @@ inline void dump_machine(const Machine &m, const std::filesystem::path &root) {
         if (!sw) throw std::runtime_error("Sprite writers write failed");
     }
     std::ofstream state(dir/"cpu.json");
+    f3_cc_flush(const_cast<f3_cpu *>(&m.cpu));
     state << "{\"frame\":" << m.frame << ",\"cycles\":" << m.cpu.cycles
           << ",\"pc\":" << m.cpu.pc << ",\"sr\":" << m.cpu.sr << ",\"d\":[";
     for (int i=0;i<8;++i) state << (i ? "," : "") << m.cpu.d[i];

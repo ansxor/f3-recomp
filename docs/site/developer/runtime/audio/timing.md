@@ -2,7 +2,7 @@
 
 `Audio::advance` moves the sound devices through main-clock time. This page explains instruction deadlines, PCM generation, output queues and reset behavior.
 
-Sources: [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp), [cpu_abi.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/cpu_abi.cpp), and [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp).
+Sources: [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp), [cpu_abi.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/cpu_abi.cpp), and [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp).
 
 ## Why a device clock exists
 
@@ -172,7 +172,7 @@ If the buffer is full, `push_frame` drops the oldest frame. The code comment say
 
 ## How the frontend delivers samples
 
-The loop in `runtime/frontend.cpp` drains audio once for each loop pass, after the machine ran a video frame. Outside netplay it calls `Audio::render_ready`. That call never waits for the HLE worker: it returns only PCM already produced, so HLE synthesis overlaps the next frame (the accurate backend behaves like `render`). After the loop ends, a blocking `Audio::render` drains the remainder, so the WAV and the counters cover the complete stream. It reads at most 4096 PCM frames at a time (the buffer `samples` has 8192 `int16_t`). For each block it does these actions:
+The loop in `runtime/frontend/frontend.cpp` drains audio once for each loop pass, after the machine ran a video frame. It calls `Audio::render_ready`. That call never waits for the Enhanced worker: it returns only PCM already produced, so Enhanced synthesis overlaps the next frame (the Reference backend behaves like `render`). After the loop ends, a blocking `Audio::render` drains the remainder, so the WAV and the counters cover the complete stream. It reads at most 4096 PCM frames at a time (the buffer `samples` has 8192 `int16_t`). For each block it does these actions:
 
 1. It updates the counters `audio_frames`, `audio_peak` and `nonzero_samples`. The final status line prints them.
 2. If `--wav` is set, it appends the samples to the `WavWriter`.
@@ -186,10 +186,6 @@ The option `--no-audio` skips `SDL_INIT_AUDIO`. The machine still makes samples,
 
 `WavWriter` in `runtime/capture_io.hpp` writes a 44-byte header and then raw samples. The header has these fields: format 1 (PCM), 2 channels, the sample rate, byte rate `rate * 4`, block align 4 and 16 bits per sample. The destructor writes the header again with the final byte count. The file is therefore valid only after the writer closes.
 
-### Netplay audio
-
-During netplay, the frontend calls `rollback->render_audio` instead of `Audio::render`. The rollback engine renders the PCM of each emulated frame into its own buffer. It sends only confirmed frames to the output. See the [netplay pages](/developer/netplay/).
-
 ## State save and load
 
 `Audio::save_state` writes a fixed-size block. It starts with `CanonicalAudioCore`: banks, gains, flags, accumulators, clocks and queue length.
@@ -202,4 +198,4 @@ Both public state methods require an exact span size. They also check that the w
 
 ROM bytes, device callbacks, mutexes and the shared-RAM pointer are not serialized. The owning machine supplies those attachments.
 
-See [snapshots](/developer/netplay/snapshots) for the machine-level contract.
+See the [machine page](/developer/runtime/machine) for the machine-level state API.

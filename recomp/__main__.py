@@ -26,7 +26,10 @@ def main() -> int:
         rom, config = load_rom(args.config, args.rom_dir)
         result = discover(rom, config)
         args.output.mkdir(parents=True, exist_ok=True)
-        (args.output / 'coverage.json').write_text(json.dumps(result.report, indent=2) + '\n')
+        cov_text = json.dumps(result.report, indent=2) + '\n'
+        cov_path = args.output / 'coverage.json'
+        if not cov_path.is_file() or cov_path.read_text(encoding="utf-8") != cov_text:
+            cov_path.write_text(cov_text, encoding="utf-8")
         print(json.dumps({"coverage": result.report["summary"],
                           "report": str(args.output / "coverage.json")}, indent=2))
         if args.command == 'emit':

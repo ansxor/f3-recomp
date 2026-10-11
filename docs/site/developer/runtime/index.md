@@ -2,7 +2,7 @@
 
 The runtime executes the generated program and models the Taito F3 board.
 It owns CPU state, memory, input ports, devices, and frame timing.
-The frontend adds a window, audio output, command-line options, and netplay integration.
+The frontend adds a window, audio output, and command-line options.
 
 The main library is `f3rt`.
 It links the patched Musashi interpreter for reset, diagnostics, fallback, and reference execution.
@@ -25,7 +25,6 @@ Then follow the subsystem entry pages:
 
 - [Video](/developer/runtime/video/) covers FDP rendering and the game-data renderer.
 - [Audio](/developer/runtime/audio/) covers the sound CPU, mailbox, clocks, DSP, and chip models.
-- [Netplay](/developer/netplay/) covers rollback, snapshots, transport, and the relay protocol.
 
 ## Execution structure
 
@@ -45,8 +44,6 @@ flowchart TD
   TIME --> V["Video or GameVideo at vblank"]
   TIME --> IRQ["Pending main IRQs"]
   IRQ --> D
-  FE --> NP["Optional rollback and transport"]
-  NP --> M
 ```
 
 The CPU and devices have separate clocks.
@@ -59,7 +56,7 @@ Mailbox synchronization advances devices without delivering a main interrupt ins
 
 The paths below are relative to the repository root.
 Every direct runtime-core file appears here.
-The video, audio, and netplay rows identify files covered by their own subsystem pages.
+The video and audio rows identify files covered by their own subsystem pages.
 
 | File | Responsibility | Main explanation |
 | --- | --- | --- |
@@ -69,13 +66,14 @@ The video, audio, and netplay rows identify files covered by their own subsystem
 | `runtime/cpu_abi.cpp` | Native bus synchronization, SR changes, exceptions, block registration, and dispatch. | [CPU ABI](/developer/runtime/cpu-abi) |
 | `runtime/interpreter.hpp`, `runtime/interpreter.cpp` | Two Musashi contexts, bus callbacks, sound IRQ updates, and fallback. | [Interpreter](/developer/runtime/interpreter) |
 | `runtime/core_state.c` | Main register transfer and pointer-free sound-core state transfer. | [Musashi](/developer/runtime/musashi) |
-| `runtime/state_oracle.h` | Packed sound-interpreter snapshot record and bridge declarations. | [Musashi](/developer/runtime/musashi) |
-| `runtime/state_io.hpp` | Bounded state readers and writers; packed board and device records. | [Support files](/developer/runtime/support#state-serialization), [snapshots](/developer/netplay/snapshots) |
+| `runtime/audio/reference/state_oracle.h` | Packed sound-interpreter snapshot record and bridge declarations. | [Musashi](/developer/runtime/musashi) |
+| `runtime/state_io.hpp` | Bounded state readers and writers; packed board and device records. | [Support files](/developer/runtime/support#state-serialization) |
+| `include/f3rt/input.hpp`, `runtime/input.cpp` | Local player input words, their mapping onto the active-low board ports, and input scripts. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
 | `runtime/eeprom.hpp` | Header-only 93C46 protocol, busy timing, word persistence, and serial snapshots. | [Input and EEPROM](/developer/runtime/input-and-eeprom) |
 | `include/f3rt/rom.hpp`, `runtime/rom.cpp` | Validated ROM regions, chip interleaving, supported sets, and CRC32. | [Support files](/developer/runtime/support#rom-loading) |
 | `runtime/capture_io.hpp` | Exact-size reads, frame dumps, raw ARGB, BMP, JSON, and stereo WAV output. | [Support files](/developer/runtime/support#capture-files) |
-| `runtime/sound_trace.hpp`, `runtime/sound_trace.cpp` | `F3SND2` bus records and sound-RAM context probes. | [Support files](/developer/runtime/support#sound-trace) |
-| `runtime/frontend.cpp` | CLI, SDL resource ownership, local input, frame pacing, reporting, and netplay integration. | [Frontend](/developer/runtime/frontend) |
+| `runtime/audio/sound_trace.hpp`, `runtime/audio/sound_trace.cpp` | `F3SND2` bus records and sound-RAM context probes. | [Support files](/developer/runtime/support#sound-trace) |
+| `runtime/frontend/frontend.cpp` | CLI, SDL resource ownership, local input, frame pacing, and reporting. | [Frontend](/developer/runtime/frontend) |
 | `runtime/replay.cpp` | Video capture replay and `F3AUD2` device-write replay without CPU execution. | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/tests/*.cpp` | Per-area synthetic-ROM checks for video, input, EEPROM, CPU, sprites and audio. | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/LICENSES.txt` | Adapted hardware sources, pinned revisions, and retained license notices. | [Support files](/developer/runtime/support#licenses-and-source-boundaries) |
@@ -105,24 +103,15 @@ Snapshots include both objects in that configuration.
 
 | Files | Responsibility |
 | --- | --- |
-| `include/f3rt/audio.hpp`, `runtime/audio.cpp` | Sound board bus, device scheduling, reset, shared RAM, PCM queues, and snapshots. |
-| `runtime/sound_native.hpp`, `runtime/sound_native.cpp` | Native 68000 dispatch, sound ABI callbacks, interrupts, reset latency, and snapshots. |
-| `runtime/sound_native_ops.h` | Generated sound instruction helpers and sound-specific timing rules. |
+| `include/f3rt/audio.hpp`, `runtime/audio/audio.cpp` | Sound board bus, device scheduling, reset, shared RAM, PCM queues, and snapshots. |
+| `runtime/audio/reference/native/sound_native.hpp`, `runtime/audio/reference/native/sound_native.cpp` | Native 68000 dispatch, sound ABI callbacks, interrupts, reset latency, and snapshots. |
+| `runtime/audio/reference/native/sound_native_ops.h` | Generated sound instruction helpers and sound-specific timing rules. |
+| `runtime/audio/reference/state_oracle.h` | Packed sound Musashi interpreter state record. |
+| `runtime/audio/hle/` | Top-level HLE (enhanced) audio driver, synth, and sequencer. |
 | `runtime/third_party/audio/` | Adapted ES5505, ES5510, MC68681, and MB87078 hardware models. |
 
 The [audio entry page](/developer/runtime/audio/) gives the complete chip-file inventory.
 The runtime sound trace is documented here because both CPU drivers use it.
-
-### Netplay files
-
-| Files | Responsibility |
-| --- | --- |
-| `include/f3rt/netplay.hpp`, `runtime/netplay.cpp` | Input mapping, machine identity, bounded rollback, checksums, and confirmed audio. |
-| `include/f3rt/netplay_transport.hpp`, `runtime/netplay_transport.cpp` | UDP handshake, room identity, input transport, status, and final-state exchange. |
-
-Read the [netplay entry page](/developer/netplay/) for the protocol and failure rules.
-The frontend owns the transport and rollback objects.
-The machine provides the deterministic state API that rollback uses.
 
 ### Vendored CPU files
 
@@ -138,7 +127,7 @@ Generated `m68kops.c` and `m68kops.h` belong to the build directory, not this so
 | CPU to board devices | Preserve instruction-boundary IRQ delivery. Synchronize native mailbox and reset-line accesses first. |
 | Main bus to sound bus | Shared RAM maps one main byte to the sound CPU's even byte lane. |
 | Machine to frontend | `run_frame` advances board state. The frontend drains audio and presents the selected pixel buffer. |
-| Machine to rollback | Use exact-size snapshots with matching ROMs, builds, sound drivers, and video configuration. |
+| Machine to save states | Use exact-size snapshots with matching ROMs, builds, sound drivers, and video configuration. |
 | Runtime to capture tools | Keep runtime dumps, MAME captures, `F3SND2`, and `F3AUD2` distinct. |
 
 Direct `Machine::read*` and `write*` calls do not apply the ABI synchronization helper.

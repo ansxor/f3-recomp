@@ -2,7 +2,7 @@
 
 The sound 68000 runs the game driver. This page explains ROM loading, reset, interrupts, backend selection and the `Audio` runner contract.
 
-Sources: [interpreter.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/interpreter.cpp), [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp), and [rom.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/rom.cpp).
+Sources: [interpreter.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/interpreter.cpp), [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.cpp), and [rom.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/rom.cpp).
 
 ## What the sound CPU is
 
@@ -129,28 +129,23 @@ The native driver is not a rewrite of the music logic. It runs the same 68000 pr
 
 ## Choosing a backend
 
-| Program | Default | How to choose |
+| Program | Sound CPU driver with `--audio-backend reference` | How to choose |
 |---|---|---|
-| `landmakr`, `f3rt-run` | Native, if the build made the sound program (`F3RT_SOUND_GENERATED`). Otherwise oracle. | `--sound-driver oracle` or `--sound-driver native` |
-| `f3rt-gameplay-regression` | Oracle | `--sound-driver native` |
-| `f3rt-sound-extract` | Oracle | `--sound-driver native` |
-| Netplay | Native accurate audio | Oracle sound is refused; both peers may instead opt into `--audio-backend hle`. |
+| `landmakr`, `f3rt-run` | Native, if the build made the sound program (`F3RT_SOUND_GENERATED`). Otherwise oracle. | Not selectable. `--audio-backend enhanced\|reference` picks the backend only. |
+| `f3rt-tool gameplay` | Oracle | `--sound-driver native` |
+| `f3rt-tool sound-extract` | Oracle | `--sound-driver native` |
 
-The code in `frontend.cpp` sets the default to `native` when the macro `F3RT_SOUND_GENERATED` exists and the user gave no `--sound-driver`. A request for `native` in a build without the macro stops with the error "Native sound requires a generated sound program (F3_ROM_DIR)". `Machine::use_native_sound` must run before the machine executes. It throws "Select the native sound driver before machine execution" if the reset line is released or the audio clock has started.
+`landmakr` and `f3rt-run` have no `--sound-driver` option. `frontend.cpp` calls `Machine::use_native_sound` whenever the macro `F3RT_SOUND_GENERATED` exists and the set is the generated one; otherwise the oracle runs. The `f3rt-tool` subcommands `gameplay` and `sound-extract` accept `--sound-driver oracle|native`. In the tools, a request for `native` in a build without the macro stops with the error "Native sound requires a generated sound program (F3_ROM_DIR)". `Machine::use_native_sound` must run before the machine executes. It throws "Select the native sound driver before machine execution" if the reset line is released or the audio clock has started.
 
 See the [command-line reference](/reference/cli) for all options.
-`--audio-backend hle` bypasses sound CPU execution entirely. The driver
-selection table applies to the default accurate backend, not HLE.
-
-The frontend help text names different defaults for `landmakr` and `f3rt-run`. The implemented generated-build rule selects native for both.
-
-`docs/SOUND-DRIVER.md` also names a native gameplay default. The current gameplay tool initializes `sound_driver` to `oracle`; select the backend explicitly.
+`--audio-backend enhanced` bypasses sound CPU execution entirely. The driver
+selection table applies to the Reference backend, not Enhanced.
 
 ## Why keep the oracle
 
 Historical pre-cutover [VALIDATION.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VALIDATION.md) recorded mean whole-machine throughput of 276.2 FPS with native sound and 146.3 FPS with oracle sound on Apple M5. These are scenario-specific measurements, not current performance guarantees.
 
-Oracle sound costs more execution time than native. Current snapshot sizes are 4,231,509 canonical bytes for native and 4,231,724 for oracle; full local expanded geometry adds buffers. See [current proof and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md), rather than treating old throughput measurements as guarantees.
+Oracle sound costs more execution time than native. Do not treat the old throughput measurements as guarantees.
 
 The oracle gives the proof. Without it, nobody can check that the generated C is right. See [sound traces](/developer/runtime/audio/tracing).
 

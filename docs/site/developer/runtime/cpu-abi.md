@@ -405,7 +405,7 @@ The interpreter does not use `f3_read*`. Its Musashi callbacks call `Machine::re
 
 ## The sound CPU also uses f3_cpu
 
-The native sound driver reuses `f3_cpu` and `f3_block`, but not these functions. `SoundNative` sets `cpu.runtime` to itself. The generated sound code calls a second set of callbacks: `f3_sound_read8` and friends, `f3_sound_set_sr`, `f3_sound_exception`, `f3_sound_rte`, `f3_sound_stop` and `f3_sound_unsupported_pc`. These are defined in `runtime/sound_native.cpp`. See the [audio runtime pages](/developer/runtime/audio/).
+The native sound driver reuses `f3_cpu` and `f3_block`, but not these functions. `SoundNative` sets `cpu.runtime` to itself. The generated sound code calls a second set of callbacks: `f3_sound_read8` and friends, `f3_sound_set_sr`, `f3_sound_exception`, `f3_sound_rte`, `f3_sound_stop` and `f3_sound_unsupported_pc`. These are defined in `runtime/audio/reference/native/sound_native.cpp`. See the [audio runtime pages](/developer/runtime/audio/).
 
 ## Key points
 

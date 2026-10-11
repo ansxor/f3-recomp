@@ -2,12 +2,12 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
-#include "sound_trace.hpp"
-#include "sound_native.hpp"
+#include "audio/sound_trace.hpp"
+#include "audio/reference/native/sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "discovery_log.hpp"
-#include "sprite_units.hpp"
+#include "sprites/units.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -101,7 +101,7 @@ const std::vector<uint32_t> &Machine::native_pixels() const {
 }
 void Machine::use_native_sound(const f3_block *program, size_t count,
                                std::span<const f3_excluded_range> excluded, uint32_t expected_crc) {
-    if (audio->backend() == Audio::Backend::Hle)
+    if (audio->is_enhanced_active())
         throw std::runtime_error("HLE audio does not execute a native sound driver");
     if (!audio->is_reset() || audio->clock_ticks())
         throw std::runtime_error("Select the native sound driver before machine execution");
@@ -113,7 +113,7 @@ void Machine::use_native_sound(const f3_block *program, size_t count,
     sound_native->reset(true);
 }
 uint32_t Machine::sound_pc() const {
-    if (audio->backend() == Audio::Backend::Hle) return 0;
+    if (audio->is_enhanced_active()) return 0;
     return sound_native ? sound_native->pc() : interpreter->sound_pc();
 }
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
@@ -141,7 +141,21 @@ void Machine::reset() {
     if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
     video->reset();
     if (game_video) game_video->reset();
-    interpreter->reset_main();
+    reset_main_cpu();
+}
+void Machine::reset_main_cpu() {
+    // 68EC020 RESET, mirroring Musashi m68k_pulse_reset: supervisor mode with
+    // mask 7, T bits clear, VBR 0, SSP and PC from vectors 0 and 4. CCR, data,
+    // address registers, CACR, CAAR, SFC and DFC are preserved.
+    f3_cc_flush(&cpu);
+    cpu.stopped = 0;
+    cpu.halted = 0;
+    f3_set_sr(&cpu, uint16_t(0x2700u | (cpu.sr & 0x1fu)));
+    cpu.vbr = 0;
+    cpu.a[7] = read32(0);
+    cpu.ssp = cpu.a[7];
+    cpu.pc = read32(4);
+    cpu.cycles += 4; // RESET_CYCLES for the 68EC020 (Musashi CYC_EXCEPTION[EXCEPTION_RESET]).
 }
 uint32_t Machine::input_word(unsigned index) const {
     if (index >= inputs.size()) return 0xffffffff;
@@ -206,7 +220,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if (a >= SHARED_BASE && a < SHARED_END) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
         shared[a - SHARED_BASE] = v;
-        audio->shared_write(a - SHARED_BASE, frame);
+        audio->shared_write(a - SHARED_BASE);
         return;
     }
     if ((a >= SOUND_RESET_RELEASE && a < SOUND_RESET_RELEASE + 4) ||
@@ -271,6 +285,7 @@ int Machine::boundary() {
     for (int level = 7; level > int((cpu.sr >> 8) & 7); --level) {
         if (pending_irqs & (1u << level)) {
             pending_irqs &= uint8_t(~(1u << level));
+            f3_cc_flush(&cpu);
             const uint16_t old_sr = cpu.sr;
             const uint32_t old_pc = cpu.pc;
             f3_exception(&cpu, 24 + unsigned(level), old_pc);
@@ -292,7 +307,7 @@ int Machine::boundary() {
         reset_devices();
         audio->reset_board();
         if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
-        interpreter->reset_main();
+        reset_main_cpu();
         return 1;
     }
     const uint64_t next_event = std::min({next_vblank, irq3_at, watchdog_at});
@@ -330,10 +345,9 @@ int Machine::fallback() {
 }
 bool Machine::run_frame(bool translated) {
     const uint64_t target = frame + 1;
-    audio->begin_frame(frame);
     while (frame < target && !cpu.halted) {
         if (translated) {
-            if (!f3_dispatch(&cpu)) { audio->finish_frame(frame); return false; }
+            if (!f3_dispatch(&cpu)) { audio->finish_frame(); return false; }
         }
         else if (!boundary()) {
             // Reference execution must hand MMIO/IRQ changes back at every
@@ -342,7 +356,7 @@ bool Machine::run_frame(bool translated) {
             interpreter->run_main(1);
         }
     }
-    audio->finish_frame(frame);
+    audio->finish_frame();
     return !cpu.halted;
 }
 void Machine::load_eeprom(const std::filesystem::path &p) { eeprom->load(p); }
@@ -363,25 +377,16 @@ size_t Machine::state_size() const {
                 eeprom->state_size() +
                 audio->state_size() +
                 video->state_size();
-    if (audio->backend() != Audio::Backend::Hle) {
+    if (!audio->is_enhanced_active()) {
         if (sound_native) sz += sound_native->state_size();
         else sz += interpreter->sound_state_size();
     }
     if (game_video) sz += game_video->state_size();
     return sz;
 }
-size_t Machine::sync_state_size() const {
-    return state_size() - (game_video ? game_video->state_size() - game_video->sync_state_size() : 0);
-}
 
 void Machine::save_state(std::span<uint8_t> dst) const {
-    save_state_impl(dst, false);
-}
-void Machine::save_sync_state(std::span<uint8_t> dst) const {
-    save_state_impl(dst, true);
-}
-void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
-    const size_t expected = sync ? sync_state_size() : state_size();
+    const size_t expected = state_size();
     if (dst.size() != expected) {
         throw std::invalid_argument("Machine snapshot save size mismatch: expected " +
             std::to_string(expected) + ", got " + std::to_string(dst.size()));
@@ -452,7 +457,7 @@ void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
     }
 
     // 6. Sound CPU
-    if (audio->backend() != Audio::Backend::Hle) {
+    if (!audio->is_enhanced_active()) {
         if (sound_native) sound_native->save_state(writer);
         else interpreter->save_sound_state(writer);
     }
@@ -461,23 +466,14 @@ void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
     {
         std::span<uint8_t> v_slice(writer.current(), video->state_size());
         video->save_state(v_slice);
-        if (sync) {
-            // FDP scanout reloads controls from Machine::control and rebuilds
-            // row usages from graphics RAM. Game mode can skip that scanout,
-            // so its stale caches must not enter the synchronization checksum.
-            constexpr size_t begin = offsetof(CanonicalVideo, control_0);
-            constexpr size_t end = offsetof(CanonicalVideo, spritelist);
-            std::fill(v_slice.begin() + begin, v_slice.begin() + end, uint8_t(0));
-        }
         writer.advance(video->state_size());
     }
 
     // 8. GameVideo (when present)
     if (game_video) {
-        const size_t size = sync ? game_video->sync_state_size() : game_video->state_size();
+        const size_t size = game_video->state_size();
         std::span<uint8_t> gv_slice(writer.current(), size);
-        if (sync) game_video->save_sync_state(gv_slice);
-        else game_video->save_state(gv_slice);
+        game_video->save_state(gv_slice);
         writer.advance(size);
     }
 
@@ -487,13 +483,7 @@ void Machine::save_state_impl(std::span<uint8_t> dst, bool sync) const {
 }
 
 void Machine::load_state(std::span<const uint8_t> src) {
-    load_state_impl(src, false);
-}
-void Machine::load_sync_state(std::span<const uint8_t> src) {
-    load_state_impl(src, true);
-}
-void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
-    const size_t expected = sync ? sync_state_size() : state_size();
+    const size_t expected = state_size();
     if (src.size() != expected) {
         throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
             std::to_string(expected) + ", got " + std::to_string(src.size()));
@@ -568,7 +558,7 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
     }
 
     // 6. Sound CPU
-    if (audio->backend() != Audio::Backend::Hle) {
+    if (!audio->is_enhanced_active()) {
         if (sound_native) sound_native->load_state(reader);
         else interpreter->load_sound_state(reader);
     }
@@ -587,10 +577,9 @@ void Machine::load_state_impl(std::span<const uint8_t> src, bool sync) {
 
     // 8. GameVideo (when present)
     if (game_video) {
-        const size_t size = sync ? game_video->sync_state_size() : game_video->state_size();
+        const size_t size = game_video->state_size();
         std::span<const uint8_t> gv_slice(reader.current(), size);
-        if (sync) game_video->load_sync_state(gv_slice);
-        else game_video->load_state(gv_slice);
+        game_video->load_state(gv_slice);
         reader.skip(size);
     }
 
@@ -607,10 +596,4 @@ uint32_t Machine::state_crc() const {
     save_state(state_scratch_);
     return crc32(state_scratch_.data(), state_scratch_.size());
 }
-uint32_t Machine::sync_state_crc() const {
-    const size_t sz = sync_state_size();
-    if (sync_state_scratch_.size() != sz) sync_state_scratch_.resize(sz);
-    save_sync_state(sync_state_scratch_);
-    return crc32(sync_state_scratch_.data(), sync_state_scratch_.size());
-}
-}
+} // namespace f3rt

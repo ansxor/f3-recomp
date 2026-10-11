@@ -8,10 +8,10 @@ The runtime writes binary records during execution. `tools/decode_sound.py` deco
 
 | Source | Responsibility |
 |---|---|
-| [sound_trace.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.hpp) | Record kinds and writer API. |
-| [sound_trace.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.cpp) | Binary encoding, work-RAM snapshots and end marker. |
+| [sound_trace.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.hpp) | Record kinds and writer API. |
+| [sound_trace.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.cpp) | Binary encoding, work-RAM snapshots and end marker. |
 | [interpreter.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/interpreter.cpp) | Oracle bus observation and ROM-specific probes. |
-| [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp) | Equivalent native bus observation. |
+| [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.cpp) | Equivalent native bus observation. |
 | [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp) | Main mailbox writes, reset-line writes and board-reset markers. |
 | [decode_sound.py](https://github.com/ansxor/f3-recomp/blob/main/tools/decode_sound.py) | Format validation, register reconstruction and command ownership. |
 | [compare_sound.py](https://github.com/ansxor/f3-recomp/blob/main/tools/compare_sound.py) | Strict record comparison. |
@@ -21,10 +21,10 @@ The runtime writes binary records during execution. `tools/decode_sound.py` deco
 Select the oracle explicitly when you need an interpreted reference. Sound-driver selection is independent of main-CPU selection.
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+build/f3rt-tool gameplay --seed 5 --frames 6000 \
   --sound-driver oracle --sound-trace build/seed5-oracle.sound \
   --wav build/seed5-oracle.wav
-python3 tools/decode_sound.py build/seed5-oracle.sound \
+uv run f3 decode build/seed5-oracle.sound \
   --output build/seed5-writes.jsonl.gz
 ```
 

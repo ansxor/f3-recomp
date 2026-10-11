@@ -19,11 +19,11 @@ The project is built on evidence. Read these rules before you change behavior.
 
 Follow these steps once.
 
-1. Install CMake 3.24 or newer, Ninja, a C11 and C++20 compiler, SDL3 development files, and Python 3.11 or newer.
-2. Install Capstone into the build folder:
+1. Install CMake 3.24 or newer, Ninja, a C11 and C++20 compiler, SDL3 development files, and `uv`.
+2. Sync Python dependencies:
 
    ```sh
-   python3 -m pip install --target build/python -r recomp/requirements.txt
+   uv sync
    ```
 
 3. Configure and build:
@@ -36,10 +36,8 @@ Follow these steps once.
 4. Build the test tools:
 
    ```sh
-   cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprite_units f3rt-test-audio f3rt-gameplay-regression f3rt-netplay-oracle f3rt-replay f3rt-sound-extract
+   cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprites f3rt-test-audio f3rt-tool f3rt-replay
    ```
-
-5. Install Go 1.22 or newer if you work on the relay server.
 
 The [Build pipeline](/developer/build-pipeline) page explains what each command does.
 
@@ -49,16 +47,14 @@ Run the test that matches your change. Several changes need more than one test.
 
 | You changed | Run | What it proves |
 | --- | --- | --- |
-| `recomp/emitter.py`, `recomp/cpu_ops.h`, `recomp/bitfield.h`, cycle tables | `PYTHONPATH=build/python python3 tools/differential/run.py --musashi runtime/third_party/musashi --output build/differential --cases 5000` | Compares generated cases against Musashi: registers, flags, writes, and cycles. It does not cover every instruction form. |
-| `recomp/discovery.py` | `PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'` | Discovery rules on small synthetic ROMs. |
-| `recomp/generate.py`, dispatch deadline logic | The same `unittest` command (`tools/test_generate.py`) | Blocks return at the deadline, keep flags correct and resume inside a block. |
+| `recomp/emitter.py`, `recomp/cpu_ops.h`, `recomp/bitfield.h`, cycle tables | `uv run f3 differential --cases 5000` | Compares generated cases against Musashi: registers, flags, writes, and cycles. It does not cover every instruction form. |
+| `recomp/discovery.py` | `uv run pytest tests/` | Discovery rules on small synthetic ROMs. |
+| `recomp/generate.py`, dispatch deadline logic | `uv run pytest tests/recomp/test_generate.py` | Blocks return at the deadline, keep flags correct and resume inside a block. |
 | Runtime devices, audio timing, EEPROM, game-video descriptors | `ctest --test-dir build -R runtime-` | Runs the per-area runtime tests. |
-| Anything that affects the main CPU path | `python3 tools/run_gameplay_regression.py --rom-dir ../roms/landmakr --frames 40000 --seeds 1 2 3 4 5 6 7 8` | Eight seeded runs end with no fallback, no halt and no error. See [Gameplay regression](/developer/testing/gameplay-regression). |
+| Anything that affects the main CPU path | `uv run f3 gameplay-seeds --rom-dir ../roms/landmakr --frames 40000 --seeds 1 2 3 4 5 6 7 8` | Eight seeded runs end with no fallback, no halt and no error. See [Gameplay regression](/developer/testing/gameplay-regression). |
 | Video code | The same gameplay command with `--video-diff` | Compares supported game-data scenes with the FDP oracle. Unsupported scenes remain explicit fallback frames. |
-| Sound code or `tools/compile_sound.py` | Run `f3rt-gameplay-regression` with each sound driver and `--sound-trace`. Then run `python3 tools/compare_sound.py`. | Detects bus trace differences for the selected input schedule. |
+| Sound code or sound recompiler | Run `f3rt-tool gameplay` with each sound driver and `--sound-trace`. Then run `uv run f3 compare trace`. | Detects bus trace differences for the selected input schedule. |
 | MAME parity | `tools/mame/` scripts and `f3rt-replay` | Measures picture or audio differences against captured MAME output. |
-| `netplay/server/` | `(cd netplay/server && go test -race ./...)` | Relay tests. |
-| Netplay C++ code, snapshots | `python3 tools/run_netplay_oracle.py --suite snapshot` (and `baseline`, `impaired`, `cases`) | Snapshots are exact. Two clients equal the single-machine reference. See [Testing strategy](/developer/testing/). |
 
 Always run the real program after a change. A build that compiles is not proof that the game works. Use `--frames N --headless` for a finite run and read the final line. It shows `native_blocks`, `fallback_instructions`, `frame_crc` and the audio counters.
 
@@ -75,8 +71,8 @@ Use these steps:
 1. Decide if the change needs a new version. Add or remove a field of `f3_cpu`, add or remove a function, or change the meaning of an existing field: this needs a new version.
 2. Edit `include/f3rt/cpu_abi.h` and increase `F3RT_ABI_VERSION`.
 3. Edit `_RUNTIME_ABI_VERSION` in `recomp/generate.py` to the same number. The generated files then contain a matching `#if F3RT_ABI_VERSION != N` guard.
-4. Change the implementation in `runtime/cpu_abi.cpp` and `runtime/machine.cpp`. Change `tools/compile_sound.py` and `runtime/sound_native.cpp` if the sound code uses the changed part.
-5. Update CPU state export/import (`runtime/core_state.c`), packed records (`runtime/state_io.hpp`), full local save/load and canonical sync save/load/CRC. Add safe-field validation; preserve local presentation and omit expanded buffers only from sync state.
+4. Change the implementation in `runtime/cpu_abi.cpp` and `runtime/machine.cpp`. Change `tools/compile_sound.py` and `runtime/audio/reference/native/sound_native.cpp` if the sound code uses the changed part.
+5. Update CPU state export/import (`runtime/core_state.c`), packed records (`runtime/state_io.hpp`), save/load and state CRC. Add safe-field validation.
 6. Update the differential harness (`tools/differential/harness_abi.c`) if it uses the changed part.
 7. Add a section to `docs/developer/ABI-CHANGES.md`, stating the change, reason and unchanged contracts.
 8. Rebuild everything. Run the tests from the table.
@@ -118,14 +114,14 @@ See `is_covered_write` in the `renderer/game/*.cpp` files.
 The toolchain has Land Maker-specific contracts. Review each part below before adding a new game.
 
 1. **Config.** Copy `games/landmakrj/config.toml`. Set `[game]`, `[rom]` (`size`, `interleave`), one `[[rom.lanes]]` for each chip (`file`, `offset`, `size`, `crc`, `sha1`) and `[discovery]`. See [Per-game config](/reference/game-config).
-2. **Discovery first.** Run `python3 -m recomp discover --config games/<id>/config.toml --rom-dir <dir> --output build/<id>`. It writes only `coverage.json`. Read the unresolved transfers.
+2. **Discovery first.** Run `uv run python -m recomp discover --config games/<id>/config.toml --rom-dir <dir> --output build/<id>`. It writes only `coverage.json`. Read the unresolved transfers.
 3. **Emit.** Use `emit` instead of `discover`. Inspect `lowering.json` separately from the coverage report.
    Independent aligned decodes include data and overlapping candidates.
    Unsupported candidates can remain, but strict-native execution must never reach an unsupported lowering.
 4. **Runtime manifest.** Add all region chip sizes/hashes/placement to the selected TOML; `tools/compile_roms.py` and `recomp/roms.py` generate shared runtime metadata. Empty upper planes are not fake files.
 5. **Sound.** Compile the selected `[sound]` region with validated padding/mirroring, retaining generated image CRC binding. Review its memory map and native/oracle timing/audio evidence independently.
 6. **Top-level CMake.** Select the title through `F3_GAME`; generated directories use `generated/SET` and `generated/sound-SET`. Extend the accepted selection list for a genuinely new title.
-7. **Frontend.** `F3RT_GAME` marks strict-native title targets; default set and generated main/sound CRC guards must agree. Enhanced/game-data/HLE/netplay eligibility remains Japan-only.
+7. **Frontend.** `F3RT_GAME` marks strict-native title targets; default set and generated main/sound CRC guards must agree. Enhanced/game-data/HLE eligibility remains Japan-only.
 8. **Game-specific video.** `GameVideo` and its `games/<game>/video/` decoders are specific to Land Maker. A new game can use the FDP renderer (`--renderer accurate`) and needs no game-data scene.
 
 ::: info World set
@@ -138,13 +134,12 @@ The World set has no recorded validation here.
 
 For the SDL program:
 
-1. Add the parse branch in the argument loop in `runtime/frontend.cpp`. Use the `value()` helper for a flag with an argument. Validate the range and throw `std::runtime_error` with a clear message.
-2. Add the cross-checks after the loop. Many flags are only valid in some modes. The loop shows examples (video options need `game` or `compare`, netplay needs strict-native).
+1. Add the parse branch in the argument loop in `runtime/frontend/frontend.cpp`. Use the `value()` helper for a flag with an argument. Validate the range and throw `std::runtime_error` with a clear message.
+2. Add the cross-checks after the loop. Many flags are only valid in some modes. The loop shows examples (video options need `game` or `compare`).
 3. Add the flag to the `--help` text.
 4. Add it to the [Command-line reference](/reference/cli) and to the user guide page that fits.
-5. If the flag changes machine behavior, check the netplay settings word in `machine_identity` (`runtime/netplay.cpp`). Netplay must reject any setting that the handshake does not cover.
 
-The other programs have their own argument loops: `tools/gameplay_regression.cpp`, `tools/netplay_oracle.cpp`, `tools/sound_extract.cpp` and `runtime/replay.cpp`. The recompiler uses `argparse` in `recomp/__main__.py`. A new CMake option uses `option()` or a `CACHE` variable in `CMakeLists.txt`. Document it in [Build options](/reference/build-options).
+The other programs have their own argument loops: `tools/gameplay_regression.cpp`, `tools/sound_extract.cpp` and `runtime/replay.cpp`. The recompiler uses `argparse` in `recomp/__main__.py`. A new CMake option uses `option()` or a `CACHE` variable in `CMakeLists.txt`. Document it in [Build options](/reference/build-options).
 
 ## Code conventions
 
@@ -153,9 +148,9 @@ These conventions come from the existing code. Follow them.
 **C++ runtime**
 
 - The standard is C++20. Runtime components use `namespace f3rt`; C ABI entry points use `extern "C"`.
-- A big component hides its data behind `struct Impl` and a `std::unique_ptr` (`Video`, `Audio`, `GameVideo`, `Transport`, `Rollback`). Such classes are not copyable.
+- A big component hides its data behind `struct Impl` and a `std::unique_ptr` (`Video`, `Audio`, `GameVideo`). Such classes are not copyable.
 - Errors are exceptions: `throw std::runtime_error("clear message")`. The frontend prints `f3rt: message` and exits with code 1. Do not add silent fallbacks.
-- Valid save/load must not allocate. Use fixed storage, bounded `StateWriter`/`StateReader` and packed records. Update both full/local and canonical/sync size/save/load paths and validators. Keep rendering/trails and hardware state in sync; omit only expanded presentation. Document representation changes in `docs/developer/ABI-CHANGES.md`.
+- Valid save/load must not allocate. Use fixed storage, bounded `StateWriter`/`StateReader` and packed records. Update the size/save/load paths and validators. Document representation changes in `docs/developer/ABI-CHANGES.md`.
 - Exclude diagnostic counters from the snapshot (`native_blocks`, `fallback_instructions` and similar).
 - Write addresses as lower-case hex with `0x`. Comments name the evidence: a ROM address, a MAME file and line, or a test.
 - Files derived from MAME keep their license header. They are listed in `runtime/LICENSES.txt`.
@@ -172,15 +167,11 @@ These conventions come from the existing code. Follow them.
 - Raise `ValueError` or `FileNotFoundError` with a message that names the file and the expected value. `recomp/__main__.py` prints these as `f3-recomp: message` and exits with 1.
 - Tests use `unittest` in `tools/test_*.py`. They build small synthetic ROMs. They contain no game data.
 
-**Go**
-
-- The relay server uses only the standard library (`go 1.22`). Tests run with `go test -race ./...`.
-
 ## Work on this documentation site
 
 The VitePress project lives in `docs/site/`.
 It publishes at [https://ansxor.github.io/f3-recomp/](https://ansxor.github.io/f3-recomp/).
-Documentation work needs no ROMs, generated game code, SDL3, CMake, or Go.
+Documentation work needs no ROMs, generated game code, SDL3, or CMake.
 Use Node 22 to match the workflow.
 
 Install the locked dependencies and start the development server:
@@ -244,7 +235,7 @@ flowchart TD
 - Put command placeholders such as `<rom-dir>` inside backticks or code fences.
 - Do not use two consecutive opening braces in prose or inline code. Vue interprets them as an interpolation expression.
 - Put literal template expressions in a fenced code block.
-- Mark each code block with a language (`sh`, `cpp`, `c`, `python`, `toml`, `text`, `go`).
+- Mark each code block with a language (`sh`, `cpp`, `c`, `python`, `toml`, `text`).
 - Use `::: tip`, `::: warning` and `::: info` containers only when they help.
 - Copy measurements only with a developer evidence source and observed setup; do not turn historical measurements into current guarantees.
 - Check each claim against the code. The long Markdown files in the repository can be out of date.
@@ -266,9 +257,7 @@ The theme stylesheet matches Mermaid's label spacing. Do not apply the document 
 | --- | --- |
 | Why a recompiler decision was made | `docs/developer/DECISIONS.md` (dated entries) |
 | Recorded validation scenarios and limits | `docs/developer/VALIDATION.md` |
-| Overlay, handoff and observed verification | `docs/developer/IMGUI-NETPLAY.md` |
 | ABI and snapshot contract | `docs/developer/ABI-CHANGES.md` |
-| Netplay protocol and limits | `docs/NETPLAY.md` |
 | Video addresses and layouts | `docs/developer/VIDEO-HLE.md` |
 | Sound driver and trace format | `docs/SOUND-DRIVER.md` |
 | MAME capture protocol | `tools/mame/README.md` |

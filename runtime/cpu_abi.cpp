@@ -1,7 +1,7 @@
 #include "f3rt/cpu_abi.h"
 #include "f3rt/machine.hpp"
 #include "f3rt/block_profile.h"
-#include "sprite_units.hpp"
+#include "sprites/units.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -69,6 +69,7 @@ void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     if (auto *s = sandbox(cpu)) { s->sandbox_abort(f3rt::SpriteUnits::Abort::Exception); return; }
     if (vector > 255) { cpu->halted = 1; return; }
+    f3_cc_flush(cpu);
     const uint16_t old_sr = cpu->sr;
     const uint32_t instruction_pc = cpu->pc;
     const bool format2 = vector == 5 || vector == 6 || vector == 7 || vector == 9;

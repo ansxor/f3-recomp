@@ -10,7 +10,6 @@ class Machine;
 class Interpreter {
 public:
     explicit Interpreter(Machine &machine);
-    void reset_main();
     void audio_reset(bool asserted);
     void audio_irq(bool asserted);
     int run_main(int cycles);

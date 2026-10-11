@@ -8,7 +8,7 @@ revision; interpolation is an optional presentation change, not hardware fidelit
 ## Scope and checkpoints
 
 Presentation only. Native `Machine::native_pixels()`, strict-native execution, captures,
-frame/replay CRCs, audio and rollback snapshots remain CPU-produced. FDP oracle
+frame/replay CRCs, audio and snapshots remain CPU-produced. FDP oracle
 fallback remains available. The CPU path is retained and row-parallelized before
 the GPU port. Checkpoints are distinct commits/tags:
 `gpuvideo-1-threaded-cpu`, `gpuvideo-2-gpu-parity`, `gpuvideo-3-interp`.
@@ -273,7 +273,7 @@ GPU scene. Reference storage is now allocated at enablement, and the rare lazy
 snapshot materialization uses serial composition rather than starting workers.
 At frame 601, scale 1/border 0 and scale 4/border 48 each report **zero first-save
 and restore/save allocations**, zero restored byte differences and zero CPU
-fallback. Native netplay remains scale 1/border 0; no snapshot schema changed.
+fallback. No snapshot schema changed.
 
 ## GPU parity checkpoint performance
 
@@ -569,9 +569,11 @@ border width `320 + 2*border`; automatic windows request high pixel density.
 `GpuVideo::set_scale` replaces only sprite/surface targets and any already-used
 readback buffer/capture storage. Device, tile/sprite assets, scene/native/upload
 buffers, sampler and pipelines survive. SDL releases old resources when queued
-users finish: **no GPU-idle wait or asset re-upload**. Both off and interpolation
-pipelines are created once, and interpolation tile pen masks are computed even
-when startup scale is 1; transitions through 1 cannot lose the effect.
+users finish: **no GPU-idle wait or asset re-upload**. The off pipeline is created
+at init; the interpolation pipeline is created on first enable (at init or from the
+settings UI, live). Tile pen masks and the interpolation-sized scene buffer are
+built at init in every mode, so interpolation can be enabled live; transitions
+through scale 1 cannot lose the effect.
 
 `GameVideo` constructor options remain the canonical CPU snapshot geometry.
 `set_gpu_scale` changes separate host/reference geometry. Canonical and selected
@@ -585,8 +587,7 @@ not clear their history or introduce a one-frame retention glitch.
 Frontend changes occur **after native audio is enqueued and before GPU draw**.
 The integrated audiosync pre-enqueue 50ms FIFO cap and 50ms late-deadline resync
 remain. Headless automatic flags use startup scale 1 without SDL initialization
-or window queries. Netplay explicitly rejects automatic modes and retains fixed
-scale 1/border 0. No native CPU/sound/snapshot schema changes.
+or window queries. No native CPU/sound/snapshot schema changes.
 
 ### Maximum-scale decision and frame cost
 
@@ -646,12 +647,12 @@ CPU window and clear automatic-mode rejection also pass.
 Reproduction:
 
 ```sh
-./build/f3rt-gpu-regression --seed 5 --frames 4000 --border 48 --every 1 \
+./build/f3rt-tool gpu-compare --seed 5 --frames 4000 --border 48 --every 1 \
   --change-scale 240:3 --change-scale 1400:2 --change-scale 1500:4 \
   --change-scale 1600:1 --change-scale 2000:3 --change-scale 3000:2 \
   --change-scale 3600:4 --change-scale 3900:1 \
   --inject-frame 1501 --inject-bitmap --inject-trails --inject-globalflip
-./build/f3rt-gpu-regression --seed 5 --frames 1560 --every 120 --scale 8 --border 48 --bench
+./build/f3rt-tool gpu-compare --seed 5 --frames 1560 --every 120 --scale 8 --border 48 --bench
 ```
 
 Full per-run summaries/logs and scale-change captures:
@@ -910,7 +911,7 @@ per row/playfield (`analyze_gpu_interpolation` returns typed
 `InterpolationCoefficients`; `encode()` writes them): flags plus four triples of local
 polynomial increments.
 Both the storage buffer and cycled staging upload include the entire appended
-region; interpolation-off retains the original smaller allocation.
+region in every mode, so live enablement needs no reallocation (about 52 KiB extra when off).
 
 ### Valid runs and field controls
 
@@ -1044,7 +1045,7 @@ window runs are not substituted for an unobserved second-monitor GPU test.
 
 Reproduction and full logs: `/tmp/f3-gpuvideo/general/parity/{runs,summary}.json`,
 `general/bench-runs.json`, `survey-data/seed5/frame*.general-bench.log`
-and `general/windows/*`. No changed game state, CPU ABI, netplay snapshot
+and `general/windows/*`. No changed game state, CPU ABI, snapshot
 schema or palette/texture asset data; Metal on this Mac is the exercised GPU.
 
 ## Sprite sampling and precision (Phase 8)
@@ -1119,7 +1120,7 @@ claim that every cross-scale anchor equals 1x. Enabling line interpolation
 changes zero sprite pixels/native rows at the *same* scale. Unscaled descriptor
 subsets in all three scenes have zero changed pixels versus nearest 1x.
 
-`f3rt-gpu-regression --inject-sprite-boundaries` submits actual native producers
+`f3rt-tool gpu-compare --inject-sprite-boundaries` submits actual native producers
 with a real ROM tile and distinguishable branch palettes:
 
 - Y-step 1 plus overlapping descriptors: first opaque texel and later
@@ -1141,7 +1142,7 @@ Requested captures now include PF0–3, SP0–3 and text, not just PF layers.
 Reproduce the boundary matrix with:
 
 ```sh
-build/f3rt-gpu-regression --seed 5 --frames 1080 --every 1080 \
+build/f3rt-tool gpu-compare --seed 5 --frames 1080 --every 1080 \
   --scale 4 --border 48 --interp fit --interp-fields geometry,palette \
   --layers --inject-frame 1080 --inject-sprite-boundaries \
   --capture-frame 1080 --dump-dir /tmp/f3-gpuvideo/sprites/repro
@@ -1197,7 +1198,7 @@ throwaway executables and sources were removed after smoke proof.
 
 Current integrated `runtime tests` passes. The GPU-off Cocoa frontend also accepts
 the field-control CLI without GPU support and presents its native boot surface.
-No sprite/canonical data layout, CPU ABI, machine/audio semantics, rollback
+No sprite/canonical data layout, CPU ABI, machine/audio semantics, snapshot
 schema or existing MAME acceptance path changed. Metal on this Mac is exercised;
 other GPUs, another monitor and a played campaign ending remained unverified
 at that checkpoint.
@@ -1280,8 +1281,8 @@ presentation/audio pacing fix is recorded below.
 Reproduce the real-ROM timing/boundary check with:
 
 ```sh
-cmake --build build --target landmakr f3rt-gpu-regression -j 4
-./build/f3rt-gpu-regression --seed 5 --frames 1560 --scale 4 --border 48 \
+cmake --build build --target landmakr f3rt-tool -j 4
+./build/f3rt-tool gpu-compare --seed 5 --frames 1560 --scale 4 --border 48 \
   --every 120 --layers --inject-sprite-boundaries --bench
 ```
 
@@ -1297,11 +1298,11 @@ use the same six-vertex sprite pass. The merged Release build passed:
 
 - Scale-3/border-48/fit/both-fields seed-5 parity through 1440 frames, including
   all isolated layers and all six native-producer boundary groups: zero mismatches.
-- `f3rt-motion-regression --seed 5 --frames 1600 --scale 4 --every 20 --interp fit`:
+- `f3rt-tool motion --seed 5 --frames 1600 --scale 4 --every 20 --interp fit`:
   81 sampled frames, 20 visible ROM midpoints, 1206 accepted sprite geometry
   draws, exact current-frame endpoints/repeated draws/native pixels/audio/state,
   and discontinuity snapping plus replay. Half-pixel text sampling was exact.
-- CTest `motion-interpolation-guards`.
+- CTest `runtime-motion_interp`.
 - A real 1500-frame Wayland frontend with `--motion-interp`, scale 3 / border 48
   and fit geometry: 6078 drawable submissions, 786 interpolated submissions,
   zero interpreter fallback instructions. The captured player-select surface
@@ -1418,10 +1419,10 @@ Additional live checks on the same GPU:
   all isolated layers and native sprite boundaries, passed with zero mismatches.
   Scale-4 fit motion regression through 1600 frames passed 81 samples, 70 pairs,
   20 visible intermediate frames, exact endpoints/repeats/native audio/state,
-  discontinuity snapping and replay. CTest `motion-interpolation-guards` passed.
+  discontinuity snapping and replay. CTest `runtime-motion_interp` passed.
 - Live frozen comparison on the reported 240Hz Wayland display mode: 235 native
   render-only pan steps and 939 drawable submissions in four seconds, including
-  937 interpolated submissions; frozen native/state/sync bytes remained exact.
+  937 interpolated submissions; frozen native/state bytes remained exact.
   The full-window left-native/right-motion capture was inspected. The measured
   first reporting window was 229.8 submissions/s; this is not a 240Hz scanout
   claim or fullspeed proof for lower-end GPUs.

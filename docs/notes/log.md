@@ -1,5 +1,20 @@
 # Log
 
+## [2026-10-10] confirm | OTIS/ESP hardware channel routing
+Ingested 12's new remark verbatim in raw/docs/otis-esp-routing-12-remark-2026-10-10.txt and recorded the user's explicit hardware confirmation. Replaced the open routing question with confirmed channel wiring in hardware/sound.md and comparisons/hardware-vs-mame-audio-routing.md; recorded the refuted reversed-numbering and mix-break claims, pin-label contradiction, upstream eaa5a0a note absent from the a070cbd submodule, second index-swap remark, and in-progress Enhanced backend implication. Updated index statuses/summaries. Touched: raw/docs/otis-esp-routing-12-remark-2026-10-10.txt, hardware/sound.md, comparisons/hardware-vs-mame-audio-routing.md, index.md, log.md.
+
+## [2026-10-10] ingest | OTIS/ESP routing runtime experiments
+Saved raw/tests/2026-10-10-otis-esp-routing-experiments.md with the commandw and landmakrj ROM hashes from SCHEMA; added test-backed runtime results and remaining physical-routing hypothesis to hardware/sound.md and comparisons/hardware-vs-mame-audio-routing.md; updated index.md. Touched: raw/tests/2026-10-10-otis-esp-routing-experiments.md, hardware/sound.md, comparisons/hardware-vs-mame-audio-routing.md, index.md, log.md.
+
+## [2026-10-09] correction | audio-routing patch attribution
+Corrected comparisons/hardware-vs-mame-audio-routing.md: attributed the “swap 1 and 3” patch to the later pin-map report and removed the unsupported attribution of game ESP SER3 programming to that report. Checked hardware/sound.md; it contains neither attribution error. Touched: comparisons/hardware-vs-mame-audio-routing.md, log.md.
+
+## [2026-10-09] ingest | OTIS/ESP routing follow-up and chronology correction
+Saved raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt verbatim as 12's earlier speculation; updated hardware/sound.md to retain it as superseded history and mark only OTIS SER3 → ESP serio1 as confirmed per the user's vouching; revised comparisons/hardware-vs-mame-audio-routing.md with conditional pump/register mapping, experimental patch interpretation, and open questions; updated index.md. Touched: raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt, hardware/sound.md, comparisons/hardware-vs-mame-audio-routing.md, index.md, log.md.
+
+## [2026-10-09] ingest | relayed OTIS/ESP/DAC routing observation
+Saved raw/docs/otis-esp-dac-routing-2026-10-09.txt verbatim; added the pin-map hypothesis and explicit source inconsistencies to hardware/sound.md; created comparisons/hardware-vs-mame-audio-routing.md with current MAME add_route lines; updated index.md. All claims remain hypothesis pending user confirmation. Touched: raw/docs/otis-esp-dac-routing-2026-10-09.txt, hardware/sound.md, comparisons/hardware-vs-mame-audio-routing.md, index.md, log.md.
+
 ## [2026-10-09] init | wiki
 Created SCHEMA.md, index.md, log.md and the layout directories.
 
@@ -47,6 +62,16 @@ correct), MAME raw sha256 and submodule HEAD (no drift).
 Touched: the pages above, hardware/glossary.md, index.md, log.md.
 Remaining: 30 of 36 pages carry contradictions (contested); all 36 are open hypotheses; intro,
 legend and navigation paragraphs carry no citation by design.
+
+## [2026-10-10] update | Enhanced OTIS→ESP hardware routing
+Updated comparisons/hardware-vs-mame-audio-routing.md and hardware/sound.md: Enhanced now
+uses the hardware pair routing, while Reference remains MAME-routed. Added the user-reported
+Enhanced routing test and 2400-frame Land Maker RMS/peak measurement as
+raw/tests/2026-10-10-enhanced-effects-hardware-routing.md; refreshed index summaries.
+Also replaced the stale in-progress status in hardware/sound.md with the completed pair map.
+Touched: docs/developer/HLE-AUDIO.md, runtime/audio/hle/effects.hpp,
+comparisons/hardware-vs-mame-audio-routing.md, hardware/sound.md,
+raw/tests/2026-10-10-enhanced-effects-hardware-routing.md, index.md, log.md.
 
 ## [2026-10-10] ingest | taito-f3 submodule bump a070cbd → eaa5a0a
 Moved raw/docs/taito-f3 from a070cbd to eaa5a0a (“note on 5505-5510 channels”). The only change in

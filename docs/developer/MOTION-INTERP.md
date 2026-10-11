@@ -2,10 +2,10 @@
 
 ## Decision and supported surface
 
-Opt-in **`--motion-interp`**, default off, also a saved restart preference in F1 → Video. Implemented on SDL3 GPU
+Opt-in **`--motion-interp`**, default off, also a saved preference in F1 → Video that applies live (no restart). Implemented on SDL3 GPU
 presentation (`--renderer enhanced`; developer `compare-gpu`); measured on
 macOS arm64 / Cocoa / Metal. CPU/FDP presentation is not interpolated.
-Headless execution, native dumps, replay data and machine/netplay snapshots
+Headless execution, native dumps, replay data and machine snapshots
 remain canonical. Game-data video still requires strict-native `landmakrj`;
 this feature does not permit `--allow-fallback`.
 
@@ -26,7 +26,7 @@ quantizes to native pixels; scale 2–4 exposes fractional movement better.
 For a visible, repeatable A/B comparison, run from this worktree:
 
 ```sh
-./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 \
+./build/f3rt-tool motion --demo --frames 1560 --seed 5 --scale 3 \
   --demo-seconds 30
 ```
 
@@ -135,14 +135,12 @@ Temporal window mode requests one GPU frame in flight. Ordinary/default-off
 mode does not create a display link and retains SDL's default allowed frames in
 flight; both modes share the mailbox presentation preference.
 
-The network advance deadline, lead limit, input words, session pump and
-rollback execution are unchanged. Additional presentation iterations do not
-advance the machine. History resets on:
+The machine advance deadline and input words are unchanged. Additional
+presentation iterations do not advance the machine. History resets on:
 
-- local state loads;
-- network rollback-count changes and session discontinuities/handoff;
-- connect/disconnect and solo pause/resume;
-- a solo clock resync after a stall beyond the existing 50 ms catch-up window;
+- state loads;
+- pause/resume;
+- a clock resync after a stall beyond the existing 50 ms catch-up window;
 - fallback capture/draw, duplicate/backward or nonconsecutive frame identities.
 
 The first recovered frame snaps. No extrapolation while stalled; alpha clamps
@@ -251,14 +249,14 @@ PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages \
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DF3_ROM_DIR=/path/to/roms/landmakr
-cmake --build build --target landmakr f3rt-motion-regression f3rt-motion-check \
-  f3rt-gpu-regression f3rt-netplay-oracle f3rt-state-check \
-  f3rt-frontend-check f3rt-hle-check -j 8
+cmake --build build --target landmakr f3rt-tool f3rt-test-motion_interp \
+  f3rt-test-state \
+  f3rt-test-frontend f3rt-test-audio -j 8
 ctest --test-dir build --output-on-failure
 ```
 
 The initial `c45da19b` build passed four CTests. The follow-up adds the
-consumer-behavior `motion-interpolation-guards` test. Original measurements
+consumer-behavior `runtime-motion_interp` tests. Original measurements
 below are historical; follow-up measurements are recorded separately.
 Linker duplicate-library/Musashi alignment warnings predate this feature.
 
@@ -267,19 +265,19 @@ Linker duplicate-library/Musashi alignment warnings predate this feature.
 `tools/motion_interp_regression.cpp` cold-boots two independently seeded
 strict-native machines. One is repeatedly presented; the other is not.
 Native pixels/audio are compared every frame. At sampled frames it compares
-serialized bytes/sync CRCs, current GPU endpoints, nonfinite-alpha snapping and
+serialized bytes, current GPU endpoints, nonfinite-alpha snapping and
 repeated frozen draws. It also checks reset/gap/duplicate/backward/fallback
 recovery and actual final-frame state-load/reexecution, including native audio.
-Focused guard fixtures now live in `runtime/motion_interp_check.cpp`, including
+Focused guard fixtures now live in `runtime/tests/motion_interp.cpp`, including
 count shifts, duplicate identity ties, dense unambiguous duplicate movement,
 fixed-point boundaries/fractions, controls, wraps and resets.
 
 ```sh
-build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 \
+build/f3rt-tool motion --frames 4000 --seed 12345 --scale 3 \
   --every 20 --interp off --dump-dir build/motion-evidence/off
-build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 \
+build/f3rt-tool motion --frames 4000 --seed 12345 --scale 3 \
   --every 20 --interp linear --dump-dir build/motion-evidence/linear
-build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 \
+build/f3rt-tool motion --frames 4000 --seed 12345 --scale 3 \
   --every 20 --interp fit --dump-dir build/motion-evidence/fit
 ```
 
@@ -294,7 +292,7 @@ All three spatial modes pass, with identical native outcomes:
 | Eligible moving geometry across phase draws | 75,267 |
 | Native pixel CRC | `1782af13` |
 | Audio CRC / signed samples | `12d140ec` / 4,039,234 |
-| Serialized state / sync CRC | `dbdd0aab` / `637802aa` |
+| Serialized state CRC | `dbdd0aab` |
 | CPU fallback instructions | 0 |
 
 Alpha 1, repeated draws and state/native/audio parity are exact. The harness
@@ -309,14 +307,14 @@ intermediate position differences are visible without image blending.
 Additional seed-5 4x fit run:
 
 ```sh
-build/f3rt-motion-regression --frames 1560 --seed 5 --scale 4 \
+build/f3rt-tool motion --frames 1560 --seed 5 --scale 4 \
   --every 20 --interp fit --dump-dir build/motion-evidence/gameplay
 ```
 
 79 samples, 68 paired, 17 visibly different midpoint frames; 1,206 eligible
 sprite geometry draws and 36,360 eligible PF-row draws. No moving text rows in
 this sampled ROM sequence; text-scroll geometry is separately fixture-covered.
-Native/audio/state/sync CRCs: `a38b55e4` / `4c7823c0` / `85e52564` / `3d402d65`.
+Native/audio/state CRCs: `a38b55e4` / `4c7823c0` / `85e52564`.
 The inspected `final_1560_phase_{0,1,2}.png` and `final_1560_native.png` show
 player selection, moving name/character sprites and a spatially sampled floor.
 
@@ -332,8 +330,8 @@ animation.
 
 ```sh
 build/landmakr --renderer enhanced --video-scale 3 \
-  --motion-interp --frames 1800 --no-audio --audio-backend accurate \
-  --sound-driver native --config build/motion-evidence/clean.cfg \
+  --motion-interp --frames 1800 --no-audio --audio-backend reference \
+  --config build/motion-evidence/clean.cfg \
   --surface build/motion-evidence/clean-final.png \
   --wav build/motion-evidence/clean.wav
 ```
@@ -359,38 +357,23 @@ SHA-256 of `clean.wav`, `headless-off.wav` and `headless-on.wav`:
 ```
 
 Headless commands use `--renderer enhanced --headless --frames
-1800 --audio-backend accurate --sound-driver native`, with/without
+1800 --audio-backend reference`, with/without
 `--motion-interp`, distinct WAV/dump destinations and `--dump-start 1800`.
 No window/GPU temporal history is created in either run.
 
-## Existing backend and netplay checks
+## Existing backend checks
 
 ```sh
-build/f3rt-gpu-regression --frames 1800 --seed 5 --scale 3 --border 48 \
+build/f3rt-tool gpu-compare --frames 1800 --seed 5 --scale 3 --border 48 \
   --every 60 --layers --interp off --inject-frame 1407 \
   --inject-bitmap --inject-trails --inject-globalflip \
   --inject-sprite-boundaries
-
-go build -C netplay/server -o ../../build/netplay-server .
-python3 tools/run_netplay_oracle.py --suite impaired --seeds 5 --frames 4000 \
-  --sound-driver native --rom-dir /path/to/roms/landmakr \
-  --log-dir build/motion-evidence/netplay
 ```
 
 GPU baseline: 48 sampled composites, all nine isolated layer contributions,
 **zero mismatching pixels**. Induced bitmap/trails/global-flip/unknown producer
 fallback and recovery pass, as do crushed-overlap, mirrored zoom and nominal
 sprite cull branches. These are induced boundary checks, not played endings.
-
-Real impaired relay: 80 ms RTT, 20 ms jitter, 3% loss/reorder, including snapshot
-chunks. 4000 match frames, one host handoff/local return, native fallback 0;
-240/244 rollbacks, maximum depth 16/16. Both peers/reference agree on state
-`dd1567b6`, audio `b4570dc3`, 2,019,617 audio samples. No natural match ending in
-this finite run. This existing oracle is headless, not a two-window motion-on
-netplay session; temporal draw invariance/reexecution is established separately
-by the two-machine renderer proof. Wire/snapshot schemas are unchanged. Build
-content identity changes with source edits as usual; peers still need the same
-build, but may independently choose the motion flag.
 
 A separate `build/cpu-only` build with `F3RT_GPU=OFF`, reusing generated CPU
 sources, succeeds. Its 600-frame CPU/headless native smoke has frame CRC
@@ -449,9 +432,9 @@ metric: it mixed boot/static/endpoints with rejected moving channels.
 
 ```sh
 ctest --test-dir build --output-on-failure
-build/f3rt-motion-regression --frames 4000 --seed 12345 --scale 3 --every 20 \
+build/f3rt-tool motion --frames 4000 --seed 12345 --scale 3 --every 20 \
   --interp off --dump-dir build/motion-evidence/followup-off
-build/f3rt-motion-regression --frames 1560 --seed 5 --scale 4 --every 20 \
+build/f3rt-tool motion --frames 1560 --seed 5 --scale 4 --every 20 \
   --interp fit --dump-dir build/motion-evidence/followup-fit
 ```
 
@@ -481,17 +464,17 @@ known-moving samples produced a visibly different midpoint, versus 63 visible
 midpoints before the fixes. Moving text is now observed in the ROM census
 (232 layer/scanline pairs), in addition to the isolated exact glyph fixture.
 
-Both proofs retain exact native pixels, serialized/sync state, native audio,
+Both proofs retain exact native pixels, serialized state, native audio,
 alpha-1 endpoints, repeated draws and final-frame load/reexecution, with zero
-main-CPU fallback. Large-run native/audio/state/sync CRCs remain
-`1782af13` / `12d140ec` / `dbdd0aab` / `637802aa`; 4,039,234 signed audio samples.
-Small-run CRCs remain `a38b55e4` / `4c7823c0` / `85e52564` / `3d402d65`;
+main-CPU fallback. Large-run native/audio/state CRCs remain
+`1782af13` / `12d140ec` / `dbdd0aab`; 4,039,234 signed audio samples.
+Small-run CRCs remain `a38b55e4` / `4c7823c0` / `85e52564`;
 1,575,300 signed audio samples. The 4x fractional text shader check also passes.
 
 ### Actual one-window comparison
 
 ```sh
-build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 \
+build/f3rt-tool motion --demo --frames 1560 --seed 5 --scale 3 \
   --demo-seconds 12 --dump-dir build/motion-evidence/followup-demo
 ```
 
@@ -503,7 +486,7 @@ per-interval interpolation was 91.7–93.4%.
 
 Totals: 707 render-only native steps, **1,433 drawable submissions / 1,326
 interpolated submissions (92.53%)** over 12 seconds. The frozen emulated frame
-remained 1560; serialized/native/sync state stayed exact, zero CPU fallback.
+remained 1560; serialized/native state stayed exact, zero CPU fallback.
 Offscreen canonical/midpoint CRCs are `090f3c24` / `cf8c23ed`.
 The actual app-owned 2560x928 split surface `demo-window.png` was inspected:
 both panes contain the same real selection scene and distinct pan positions.

@@ -3,7 +3,7 @@
 This records the historical exclusion-only experiment at
 `binsize-exclude-3-applied`. The combined checkout now also enables full-coverage
 compile tiers by default; use `F3_PROFILE_DEFAULT_TIERS=OFF` and clear any
-explicit `F3_PROFILE_TIERS` cache override to measure exclusion-only code.
+explicit `F3_PROFILE_TIERS` cache override to measure exclusion-only code. The default tiers need the local, gitignored `profiles/landmakrj.profile` (regenerate it per [BINSIZE-PROFILE.md](BINSIZE-PROFILE.md)); without it, configure fails unless `F3_PROFILE_DEFAULT_TIERS=OFF`.
 [BINSIZE-COMBINED.md](BINSIZE-COMBINED.md) records the semantic ABI 3 merge,
 unchanged six intervals, profile contradiction guards and combined gates.
 

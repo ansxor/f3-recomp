@@ -1,0 +1,68 @@
+name: Runtime tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'runtime/**'
+      - 'include/**'
+      - 'games/**'
+      - 'recomp/**'
+      - 'tools/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'runtime/**'
+      - 'include/**'
+      - 'games/**'
+      - 'recomp/**'
+      - 'tools/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-tests-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # commandw opts into game video; bubblemj has no video/ directory and uses the generic path.
+        game: [commandw, bubblemj]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Build runtime unit tests
+        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprites f3rt-test-audio f3rt-test-motion_interp f3rt-test-state
+      - name: Run runtime unit tests
+        run: ctest --test-dir build -R '^runtime-' --output-on-failure
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run Python tests
+        run: uv run pytest

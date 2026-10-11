@@ -1,7 +1,7 @@
 # Seeded gameplay regression
 
 This page explains the seeded gameplay test and its input schedule.
-The source files are `tools/gameplay_regression.cpp`, `tools/gameplay_inputs.hpp` and `tools/run_gameplay_regression.py`.
+The source files are `tools/tool.cpp`, `tools/commands/gameplay.cpp` and `tools/runner/inputs.hpp`.
 You will learn how to interpret execution failures and compare the game-data renderer with the FDP renderer.
 
 ## What the test does
@@ -15,7 +15,7 @@ The test has two goals:
 
 The test is a regression gate. It does not compare the picture or the sound with an oracle by default. It checks that a long run completes without a CPU halt, an execution error or a fallback. The optional `--video-diff` flag adds a picture comparison (see below).
 
-Audio defaults to `--audio-backend accurate` with the oracle sound driver. Opt-in `--audio-backend hle` runs the direct ROM sequencer and PCM synthesizer at 48 kHz on a separate non-rolled-back worker, without sound CPU or ES chip execution. It does not change strict native main execution or the zero-fallback gate. HLE rejects explicit `--sound-driver`, `--sound-trace` and `--profile-out`.
+Audio defaults to `--audio-backend reference` with the oracle sound driver. `--audio-backend enhanced` runs the direct ROM sequencer and PCM synthesizer at 48 kHz on a separate worker, without sound CPU or ES chip execution. It does not change strict native main execution or the zero-fallback gate. Enhanced rejects explicit `--sound-driver`, `--sound-trace` and `--profile-out`.
 
 ::: warning
 A passing seed is a sample of gameplay. It is not a proof that every game state works. `docs/developer/DECISIONS.md` states the same limit.
@@ -25,15 +25,15 @@ A passing seed is a sample of gameplay. It is not a proof that every game state 
 
 | File | Job |
 | --- | --- |
-| `tools/gameplay_regression.cpp` | The executable `f3rt-gameplay-regression`. Runs one seed. |
-| `tools/gameplay_inputs.hpp` | `f3rt::test::ScheduleConfig` (the schedule constants) and `GameplaySchedule` (the input generator). |
-| `tools/run_gameplay_regression.py` | Runs the executable for many seeds and collects failures. |
+| `tools/tool.cpp`, `tools/commands/gameplay.cpp` | The executable `f3rt-tool gameplay`. Runs one seed. |
+| `tools/runner/inputs.hpp` | `f3rt::runner::ScheduleConfig` (the schedule constants) and `SeededScheduleInputSource` (the input generator). |
+| `f3` CLI (`uv run f3 gameplay-seeds`) | Runs the executable for many seeds and collects failures. |
 
 `CMakeLists.txt` builds the executable when `F3_GENERATED_DIR` is set (this happens when you pass `F3_ROM_DIR`). It links `f3rt`, `f3_recompiled` and, when the sound program exists, `f3_sound_recompiled`. If you configured with `F3_ROM_DIR`, the build also defines `F3RT_DEFAULT_ROM_DIR` so that `--rom-dir` is optional.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR=/path/to/roms/landmakr
-cmake --build build --target f3rt-gameplay-regression -j 4
+cmake --build build --target f3rt-tool -j 4
 ```
 
 ## The input schedule
@@ -46,7 +46,7 @@ The harness uses the constants in `ScheduleConfig`. The regression uses the sing
 | P1 start pulse | Frames 800 to 2399 | Press when the frame number is a multiple of 90. Release when the remainder after division by 90 is 5. The first press is at frame 810 and the last at frame 2340. |
 | Button mashing | From frame 1200, every 6 frames | One random key changes state at each step (see below). |
 
-`ScheduleConfig` has more fields for the versus form (`p2_coin_frame = 740`, `p2_coin_duration = 20`, `p2_start_offset = 45`). The netplay oracle uses them. See [Netplay oracle](/developer/testing/netplay-oracle).
+`ScheduleConfig` has more fields for the versus form (`p2_coin_frame = 740`, `p2_coin_duration = 20`, `p2_start_offset = 45`).
 
 ### The random key generator
 
@@ -73,13 +73,13 @@ The seven keys map to the machine inputs as follows. The directions use input po
 
 `Machine::set_input()` clears the bit when a key is pressed, because the F3 inputs are active low.
 
-`tools/gameplay_inputs.hpp` also defines `GameplaySchedule`. This class makes the same schedule as 16-bit input words. A word has bits 0 to 3 for the directions, bits 4 to 6 for the buttons, bit 7 for start and bit 8 for coin. The netplay oracle uses this class. `gameplay_regression.cpp` includes the header for the constants and writes the same logic inline. A comment in the header says that the start timing must match the original `f % period` code.
+`tools/gameplay_inputs.hpp` also defines `GameplaySchedule`. This class makes the same schedule as 16-bit input words. A word has bits 0 to 3 for the directions, bits 4 to 6 for the buttons, bit 7 for start and bit 8 for coin. The GPU video and motion-interpolation regression tools use this class. `gameplay_regression.cpp` includes the header for the constants and writes the same logic inline. A comment in the header says that the start timing must match the original `f % period` code.
 
 ## Per-frame flow
 
 ```mermaid
 flowchart TD
-    A["Load ROM set landmakrj: RomSet::load"] --> B["Machine, accurate (oracle/native) or HLE audio"]
+    A["Load ROM set landmakrj: RomSet::load"] --> B["Machine, Reference (oracle/native) or Enhanced audio"]
     B --> C["allow_main_fallback = false"]
     C --> D["f3_generated_register: install recompiled blocks"]
     D --> E{"Frames left to run ?"}
@@ -134,7 +134,7 @@ Setup errors and video mismatches print `REGRESSION ERROR: <message>`. Both form
 A passing run prints one line:
 
 ```text
-SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... audio_backend=accurate sound_driver=oracle
+SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... audio_backend=reference sound_driver=oracle
   frame_crc=0x... cycles=... native_blocks=... fallback_instructions=0
   audio_frames=... audio_peak=... nonzero_samples=... fps=...
 ```
@@ -151,25 +151,25 @@ SUCCESS set=landmakrj seed=5 frames=6000 pc=0x... sound_pc=0x... audio_backend=a
 | `--frames N` | 40000 | Frames to run. Must be positive. |
 | `--dump-dir DIR` | none | Write a state dump (see below). |
 | `--surface BMP`, `--capture-surface BMP` | none | Write the last frame as a 320 by 232 BMP. |
-| `--audio-backend accurate\|hle` | `accurate` | Chip-accurate audio or the threaded HLE ROM sequencer/PCM synthesizer at 48 kHz. |
-| `--sound-trace FILE` | none | Record accurate-audio sound bus events. Rejected with HLE. See [Sound tools](/developer/testing/sound-tools). |
-| `--sound-driver MODE` | `oracle` | Accurate-audio driver: `oracle` runs the interpreted sound driver; `native` runs the recompiled driver and needs generated sound code. Explicit selection is rejected with HLE. |
-| `--profile-out FILE` | none | Merge generated main/sound entry counts in an instrumented build. Requires accurate audio and `--sound-driver native`; rejected with HLE. |
+| `--audio-backend reference\|enhanced` | `reference` | Chip-accurate audio or the threaded Enhanced ROM sequencer/PCM synthesizer at 48 kHz. |
+| `--sound-trace FILE` | none | Record Reference-audio sound bus events. Rejected with Enhanced. See [Sound tools](/developer/testing/sound-tools). |
+| `--sound-driver MODE` | `oracle` | Reference-audio driver: `oracle` runs the interpreted sound driver; `native` runs the recompiled driver and needs generated sound code. Explicit selection is rejected with Enhanced. |
+| `--profile-out FILE` | none | Merge generated main/sound entry counts in an instrumented build. Requires Reference audio and `--sound-driver native`; rejected with Enhanced. |
 | `--wav FILE` | none | Write all audio to a WAV file. |
 | `--video-diff` | off | Compare the game-data renderer with the FDP renderer. |
 | `--video-layer-mask N` | 511 | Select the layers to compare. Hexadecimal input works. |
 | `--video-diff-every N` | 120 | Sample interval in frames. |
 | `--help`, `-h` | | Print the help text. |
 
-The accurate-audio default sound driver of this executable is `oracle`. The `landmakr` game executable uses `native` by default when it has the generated sound program. HLE success output reports `audio_backend=hle sound_driver=none`; audio counters are observations, not an oracle comparison.
+The Reference-audio default sound driver of this executable is `oracle`. The `landmakr` game executable uses `native` by default when it has the generated sound program. Enhanced success output reports `audio_backend=enhanced sound_driver=none`; audio counters are observations, not an oracle comparison.
 
 ## The Python runner
 
-`run_gameplay_regression.py` runs the executable once per seed. It does not stop at the first failure. It prints the failed seeds at the end.
+`uv run f3 gameplay-seeds` runs `f3rt-tool gameplay` once per seed. It does not stop at the first failure. It prints the failed seeds at the end.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--binary PATH` | `build/f3rt-gameplay-regression` | Executable. Use this for an isolated build. |
+| `--binary PATH` | `build/f3rt-tool` | Executable. Use this for an isolated build. |
 | `--rom-dir DIR` | none | Passed to the executable. |
 | `--seeds N...` | 1 to 8 | List of seeds. Each must fit in 64 bits. |
 | `--frames N` | 40000 | Frames per seed. |
@@ -178,10 +178,10 @@ The accurate-audio default sound driver of this executable is `oracle`. The `lan
 | `--video-layer-mask N` | 511 | Must be 1 to 511. |
 | `--video-diff-every N` | 120 | Must be positive. |
 
-The script prints `seeds=N failures=[...] elapsed_seconds=...` and exits 1 if any seed failed. The runner has no option for `--dump-dir`, `--audio-backend`, `--sound-driver`, `--sound-trace`, `--profile-out` or `--wav`. Call the executable directly to use them.
+The script prints `seeds=N failures=[...] elapsed_seconds=...` and exits 1 if any seed failed.
 
 ```sh
-python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
+uv run f3 gameplay-seeds --rom-dir /path/to/roms/landmakr \
   --frames 40000 --seeds 1 2 3 4 5 6 7 8
 ```
 
@@ -239,7 +239,7 @@ The `fallback` lines list the reasons for which the game renderer gave up on som
 `docs/developer/VIDEO-HLE.md` records measured results. Example: seed 5 with 6,000 frames and `--video-diff-every 60` compares 91 samples per layer with zero mismatches, plus `VIDEO game_frames=6000 oracle_fallback_frames=0`, identical to the pre-change frame CRC. See [Game-data video HLE](/developer/runtime/video/game-hle) for how the renderer works.
 
 ```sh
-build/f3rt-gameplay-regression --seed 5 --frames 6000 --video-diff \
+build/f3rt-tool gameplay --seed 5 --frames 6000 --video-diff \
   --video-layer-mask 15 --dump-dir build/video-fail
 ```
 
@@ -251,14 +251,11 @@ These file names match the MAME capture files. You can compare a dump with a MAM
 
 ## Other uses of the schedule
 
-The schedule is also the input source for the sound and netplay gates:
-
-- The native-versus-interpreted sound comparison runs the same seed twice with `--sound-trace`. See [Sound tools](/developer/testing/sound-tools).
-- The netplay oracle runs `GameplaySchedule` with `versus = true`. See [Netplay oracle](/developer/testing/netplay-oracle).
+The schedule is also the input source for the sound gate: the native-versus-interpreted sound comparison runs the same seed twice with `--sound-trace`. See [Sound tools](/developer/testing/sound-tools).
 
 ## Limits
 
 - The test samples the game. It does not enumerate states.
 - Without `--video-diff` the test does not look at the picture. A wrong picture can pass.
 - The ROM set must be `landmakrj`. The recompiled blocks belong to this set only.
-- With default accurate audio, the sound driver is interpreted. Pass `--sound-driver native` to test the recompiled driver in the same run. HLE tests command-driven audio without executing either driver; it does not establish accurate PCM or bus parity.
+- With the default Reference audio, the sound driver is interpreted. Pass `--sound-driver native` to test the recompiled driver in the same run. Enhanced tests command-driven audio without executing either driver; it does not establish Reference PCM or bus parity.

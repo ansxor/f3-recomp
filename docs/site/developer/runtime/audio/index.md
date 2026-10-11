@@ -13,15 +13,15 @@ physical sound-board output. The registers, mixing, and clocks below describe th
 implementation; see [audio comparison](/developer/testing/audio-compare) for measured
 compatibility and remaining waveform differences.
 
-These device pages describe the default `--audio-backend accurate` path.
-Opt-in `--audio-backend hle` bypasses sound CPU/device execution and runs
-ROM-data sequencing, sample mixing and approximate effects on an independent
-48 kHz worker that is not rewound during rollback. Accurate publishes only
-confirmed PCM in netplay; HLE drains its speculative worker stream instead.
-See [the sound guide](/guide/sound#opt-in-hle-audio) and
-[HLE implementation evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
+These device pages describe `--audio-backend reference`, which runs the
+cycle-accurate sound devices. The frontend default is `--audio-backend enhanced` when
+available; otherwise it resolves to Reference. Enhanced bypasses sound
+CPU/device execution and runs ROM-data sequencing, sample mixing and approximate
+effects on an independent 48 kHz worker.
+See [the sound guide](/guide/sound#enhanced-audio) and
+[Enhanced audio implementation evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
 
-Sources: [audio.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
+Sources: [audio.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/audio.hpp) and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp).
 
 ## Words used on these pages
 
@@ -53,7 +53,7 @@ flowchart TB
         MACH["Machine (runtime/machine.cpp)"]
         SHARED["shared[0x800] mailbox"]
     end
-    subgraph audio_obj["f3rt::Audio (runtime/audio.cpp)"]
+    subgraph audio_obj["f3rt::Audio (runtime/audio/audio.cpp)"]
         ADV["advance(main_cycles)"]
         BUS["Sound bus: read8/16/32, write8/16/32"]
         WRAM["Work RAM 64 KiB"]
@@ -109,7 +109,7 @@ Only one sound CPU is active in a run. `Machine::use_native_sound` replaces the 
 
 ## Sound CPU memory map
 
-The sound CPU sees the address space below. The table comes from the bus handlers `Audio::Impl::read8` and `write8` in `runtime/audio.cpp`. The code masks every address to 24 bits.
+The sound CPU sees the address space below. The table comes from the bus handlers `Audio::Impl::read8` and `write8` in `runtime/audio/audio.cpp`. The code masks every address to 24 bits.
 
 | Address range | Device | Notes |
 |---|---|---|
@@ -128,18 +128,18 @@ The main CPU sees the same mailbox bytes at `0xc00000` - `0xc007ff`. The sound C
 
 ## Source files
 
-This table lists the core audio files and tools. Frontend output also uses `runtime/frontend.cpp` and `runtime/capture_io.hpp`.
+This table lists the core audio files and tools. Frontend output also uses `runtime/frontend/frontend.cpp` and `runtime/capture_io.hpp`.
 
 | File | Role |
 |---|---|
 | `include/f3rt/audio.hpp` | The public `Audio` class. |
-| `runtime/audio.cpp` | Bus handlers, device time, mixer, ring buffer, state save and load. |
+| `runtime/audio/audio.cpp` | Bus handlers, device time, mixer, ring buffer, state save and load. |
 | `runtime/third_party/audio/es5505.*` | OTIS voices. |
 | `runtime/third_party/audio/es5510.*` | ESP DSP. |
 | `runtime/third_party/audio/mc68681.*` | DUART timer, serial transmitters and output pins. |
 | `runtime/third_party/audio/mb87078.*` | Volume controller. |
-| `runtime/sound_native.*`, `runtime/sound_native_ops.h` | The native driver runtime. |
-| `runtime/sound_trace.*` | The bus trace writer. |
+| `runtime/audio/reference/native/sound_native.*`, `runtime/audio/reference/native/sound_native_ops.h` | The native driver runtime. |
+| `runtime/audio/sound_trace.*` | The bus trace writer. |
 | `runtime/interpreter.cpp` | The oracle (Musashi) sound CPU. |
 | `tools/compile_sound.py` | The sound driver compiler. |
 | `tools/sound_extract.cpp`, `tools/decode_sound.py`, `tools/compare_sound.py` | Extraction, decoding and comparison tools. |

@@ -2,7 +2,7 @@
 
 The DUART supplies driver timing and DSP control. The MB87078 sets channel attenuation. This page explains both devices and the board mixer.
 
-Sources: [mc68681.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mc68681.cpp), [mb87078.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mb87078.cpp), and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp).
+Sources: [mc68681.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mc68681.cpp), [mb87078.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/third_party/audio/mb87078.cpp), and [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp).
 
 The device descriptions document the MAME-derived runtime models and their board
 wiring. Configured clocks, pin behavior, and gain stages are not physical-board
@@ -188,7 +188,7 @@ The enum `Audio::GainModel` has two values.
 | `MameRouting` (default) | `0.18 * route` | `route` | The volume applies twice: before the ESP input and after the pump. This matches the output that the MAME baseline gives. |
 | `SingleStage` | `0.18` | `physical` | One analog stage after the ESP. The header says this is an unverified experiment. |
 
-`Audio::output_boost` (12, +21.6 dB) is a final output gain shared by accurate and HLE audio. The MAME-equivalent mix peaks near -25 dBFS on every measured game, so without it the output is very quiet. It is applied after the DSP, so it never overdrives the ESP input or the sample accumulator.
+`Audio::output_boost` (12, +21.6 dB) is a final output gain shared by Reference and Enhanced audio. The MAME-equivalent mix peaks near -25 dBFS on every measured game, so without it the output is very quiet. It is applied after the DSP, so it never overdrives the ESP input or the sample accumulator.
 
 `route` is the modeled gain as a percentage, rounded to an integer, divided by 32. At 0 dB the percentage is 100 and `route` is 3.125.
 

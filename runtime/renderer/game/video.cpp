@@ -11,7 +11,7 @@
 #include "discovery_log.hpp"
 #include "renderer/game/captured_frame.hpp"
 #include "state_io.hpp"
-#include "sprite_units.hpp"
+#include "sprites/units.hpp"
 #include <algorithm>
 #include <array>
 #include <ostream>
@@ -202,9 +202,9 @@ struct GameVideo::Impl {
     template<Snapshotable... S> static size_t state_size_all(const S &...s) { return (size_t(0) + ... + s.state_size()); }
     template<Snapshotable... S> static void save_all(StateWriter &w, const S &...s) { (s.save_state(w), ...); }
     template<Snapshotable... S> static void load_all(StateReader &r, S &...s) { (s.load_state(r), ...); }
+    // Playfield tiles and text are derived from serialized video RAM, so
+    // their caches are not serialized.
     size_t state_size() const {
-        // Playfield tiles and text are derived from serialized video RAM, so
-        // they are not part of snapshot state; decode() rebuilds them at VBSTART.
         return 1 +
                std::apply([](const auto &...c) { return Impl::state_size_all(c...); }, stateful()) +
                sizeof(uint16_t) * 432 * 256 +
@@ -212,22 +212,16 @@ struct GameVideo::Impl {
                sizeof(uint32_t) * presentation_pixels.size() +
                sizeof(uint16_t) * presentation_sprites.size();
     }
-    size_t sync_state_size() const {
-        return state_size() - sizeof(uint32_t) * presentation_pixels.size() -
-               sizeof(uint16_t) * presentation_sprites.size();
-    }
-    void save_state(StateWriter &writer, bool sync = false) const {
+    void save_state(StateWriter &writer) const {
         uint8_t r = rendered ? 1 : 0;
         writer.write(r);
         std::apply([&](const auto &...c) { Impl::save_all(writer, c...); }, stateful());
         writer.write_span(std::span<const uint16_t, 432 * 256>(sprite_planes[next_plane]));
         writer.write_span(std::span<const uint32_t, geometry::native_pixels>(pixels));
-        if (!sync) {
-            writer.write_span(std::span<const uint32_t>(presentation_pixels));
-            writer.write_span(std::span<const uint16_t>(presentation_sprites));
-        }
+        writer.write_span(std::span<const uint32_t>(presentation_pixels));
+        writer.write_span(std::span<const uint16_t>(presentation_sprites));
     }
-    void load_state(StateReader &reader, bool sync = false) {
+    void load_state(StateReader &reader) {
         uint8_t r;
         reader.read(r);
         rendered = r != 0;
@@ -236,10 +230,8 @@ struct GameVideo::Impl {
         next_plane = native_plane = 0;
         reader.read_span(std::span<uint16_t, 432 * 256>(sprite_planes[next_plane]));
         reader.read_span(std::span<uint32_t, geometry::native_pixels>(pixels));
-        if (!sync) {
-            reader.read_span(std::span<uint32_t>(presentation_pixels));
-            reader.read_span(std::span<uint16_t>(presentation_sprites));
-        }
+        reader.read_span(std::span<uint32_t>(presentation_pixels));
+        reader.read_span(std::span<uint16_t>(presentation_sprites));
     }
     void reseed_presentation() {
         // Imported native retention is authoritative. Do not reconstruct a
@@ -665,26 +657,5 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
     if (reader.remaining() != 0) {
         throw std::logic_error("GameVideo::load_state remaining unread bytes");
     }
-}
-size_t GameVideo::sync_state_size() const {
-    return impl_->sync_state_size();
-}
-void GameVideo::save_sync_state(std::span<uint8_t> dst) const {
-    if (dst.size() != sync_state_size())
-        throw std::invalid_argument("GameVideo::save_sync_state size mismatch");
-    impl_->materialize_native();
-    StateWriter writer(dst);
-    impl_->save_state(writer, true);
-    if (writer.remaining()) throw std::logic_error("GameVideo sync snapshot unwritten bytes");
-}
-void GameVideo::load_sync_state(std::span<const uint8_t> src) {
-    if (src.size() != sync_state_size())
-        throw std::invalid_argument("GameVideo::load_sync_state size mismatch");
-    impl_->materialize_native();
-    impl_->materialize_presentation();
-    StateReader reader(src);
-    impl_->load_state(reader, true);
-    if (reader.remaining()) throw std::logic_error("GameVideo sync snapshot unread bytes");
-    impl_->reseed_presentation();
 }
 } // namespace f3rt

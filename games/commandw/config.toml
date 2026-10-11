@@ -258,7 +258,7 @@ end = 0x9a6c
 unit = "a6"
 size = 0x80
 owner = "unit"
-# Sprite-RAM writers that run outside any unit. Evidence: f3rt-sprite-check (--frames 6000
+# Sprite-RAM writers that run outside any unit. Evidence: f3rt-tool sprite-check (--frames 6000
 # attract) attributes every outside write to these PCs; replays of the object unit are
 # bit-exact, so nothing else draws.
 #   0x9984..0x9a00   per-frame list head: command-entry words at 0x600324/0x600334 (both

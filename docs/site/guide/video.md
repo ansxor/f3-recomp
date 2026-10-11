@@ -96,7 +96,7 @@ Important facts:
 
 The GPU renderer uses Metal on macOS and SPIR-V/Vulkan on supported hosts. It and the CPU compositor
 use the same integer sampling, sprite raster rules and blend ordering.
-Headless, native captures/CRCs, audio and rollback checksums remain CPU-produced.
+Headless, native captures/CRCs and audio remain CPU-produced.
 If the renderer came from the default or the settings file and the GPU cannot be used (no SDL GPU driver, or the window cannot be claimed by a GPU device), the program prints `f3rt: warning: GPU renderer unavailable (...); falling back to --renderer accurate` and runs `accurate` for that session; the F1 menu shows "Active this session: accurate" and the saved preference is unchanged. An explicit `--renderer enhanced` does not fall back: it stops with the SDL error.
 
 `--video-scale auto-integer` selects the largest scale fitting the physical
@@ -110,7 +110,7 @@ Below the 1x footprint, auto-integer crops centrally instead of shrinking.
 Both modes follow resize, fullscreen and display density after 100ms quiet
 (250ms maximum live-drag delay). F11 or Alt+Enter toggles fullscreen.
 Numeric scales retain their existing behavior on either compositor. Headless auto
-keeps scale 1 without opening/querying a window. Online peers can choose independent presentation modes.
+keeps scale 1 without opening/querying a window.
 The GPU port does not interpolate adjacent native line values by default.
 
 `--video-interp linear` samples between adjacent valid playfield rows.
@@ -163,10 +163,10 @@ pose change or mis-pairing that moves parts of one object differently snaps. Amb
 matches, zoom/flip changes, movement over
 32 native pixels per axis and wraps also snap. Playfield/line and text scroll
 check their own layer controls; each axis can interpolate independently.
-State loads, rollback corrections, pause/resume and long stalls reset history.
+State loads, pause/resume and long stalls reset history.
 
 This experimental flag is GPU-only, default off; also a saved restart preference in F1 → Video. CPU/headless
-pixels, captures, replay state and netplay checksums remain native.
+pixels, captures, replay state and checksums remain native.
 `--unthrottled` presents current geometry rather than synthesizing intermediate
 timed frames. `--video-interp linear|fit` remains an independent spatial option
 and can be combined with it. See [design and measured limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/MOTION-INTERP.md).
@@ -181,7 +181,7 @@ interpolation even with 120Hz callbacks.
 For a repeatable side-by-side test:
 
 ```sh
-./build/f3rt-motion-regression --demo --frames 1560 --seed 5 --scale 3 --demo-seconds 30
+./build/f3rt-tool motion --demo --frames 1560 --seed 5 --scale 3 --demo-seconds 30
 ```
 
 Left: native-rate steps. Right: interpolated positions. Watch the purple floor
@@ -192,7 +192,7 @@ Optional `--dump-dir DIR` saves only app-owned comparison images.
 
 ## F1 shaders and live controls
 
-F1 → Video applies **scale and filtering live under the enhanced renderer**. The renderer, border and interpolation are restart preferences. Scale, filter, border and interpolation are disabled while `accurate` is selected. A developer `--renderer` value is shown as the active renderer; the saved preference is unchanged. Save preferences explicitly; CLI values override them at launch.
+F1 → Video applies **scale, filtering, interpolation and motion interpolation live under the enhanced renderer**. The renderer and border are restart preferences. Scale, filter, border and interpolation are disabled while `accurate` is selected. A developer `--renderer` value is shown as the active renderer; the saved preference is unchanged. Save preferences explicitly; CLI values override them at launch.
 
 F1 → Shaders offers **Off**, **CRT** and **User**. Off is the default. Effects require the enhanced renderer; `accurate` retains the preference but does not apply it. Select a user file and press **Load / reload shader**. Failed reloads keep the last valid shader; the Active label shows what is actually running.
 
@@ -204,9 +204,9 @@ glslangValidator -V --target-env vulkan1.0 -o build/user_transform.spv runtime/r
 build/landmakr --renderer enhanced --postprocess user --user-shader build/user_transform.spv
 ```
 
-The small shader ABI uses a source texture/sampler at slot 0 and a float4 containing internal width, height, scale and elapsed seconds. Metal loads `.metal` source with entry `f3_postprocess`; Vulkan loads `.spv` with entry `main` (sampled image set 2/binding 0, uniform set 3/binding 0). Use the provided examples rather than arbitrary shaders. See the [full ABI and verified limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md).
+The small shader ABI uses a source texture/sampler at slot 0 and a float4 containing internal width, height, scale and elapsed seconds. Metal loads `.metal` source with entry `f3_postprocess`; Vulkan loads `.spv` with entry `main` (sampled image set 2/binding 0, uniform set 3/binding 0). Use the provided examples rather than arbitrary shaders.
 
-Postprocessing affects GPU presentation and its screenshots, not the menu, native pixels, simulation or checksums. F12 saves a PNG alongside preferences in `screenshots/`. Scale, border, filter and shader settings can differ between [online peers](/guide/netplay).
+Postprocessing affects GPU presentation and its screenshots, not the menu, native pixels, simulation or checksums. F12 saves a PNG alongside preferences in `screenshots/`.
 
 ## The video report
 

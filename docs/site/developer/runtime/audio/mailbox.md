@@ -2,7 +2,7 @@
 
 The mailbox is shared RAM between the main CPU and sound CPU. This page explains its byte lanes, packet ring and driver commands.
 
-Sources: [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp), [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp), and [driver evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md).
+Sources: [audio.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp), [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp), and [driver evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/SOUND-DRIVER.md).
 
 ## Shared RAM
 

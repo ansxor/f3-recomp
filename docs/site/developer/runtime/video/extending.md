@@ -86,7 +86,7 @@ Then run the real native scenario that exposed the failure, using mask 511 for
 the complete scene:
 
 ```sh
-./build/f3rt-gameplay-regression --seed 5 --frames 6000 \
+./build/f3rt-tool gameplay --seed 5 --frames 6000 \
   --video-diff --video-layer-mask 511
 ```
 

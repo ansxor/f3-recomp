@@ -1,0 +1,57 @@
+---
+source_url: relayed by user (from "12")
+ingested: 2026-10-09
+sha256: 51dcc01cf3d24bb595b265cbad06c20a0476552b388dc5562899aeff24ec3e7b
+captured_with: "board inspection of FCM pin arrangement by 12, relayed; not oscilloscope-verified"
+---
+and it's not just reverb and other fancy effects, but also
+it affects perhaps volume level and maybe stereo panning (though each of these channels is already stereo so perhaps not)
+
+oh sorry correction um:
+it's 4 channels, each of which is stereo (so 8 total audio streams)
+anyway so
+channel 0 is not used  as far as i can tell, the pin is totally unconnected
+so like.
+im thinking that,
+5505 SER0 → nothing
+5505 SER1 → 5510 SER0
+5505 SER2 → 5510 SER1
+5505 SER3 → 5510 SER2
+nothing? → 5510 SER3
+is how the channels are connected on the F3
+based on how the pins on the FCM are arranged,
+though the only way to be sure would be to check with an oscilloscope
+this is actually kinda insane  maybe i was right
+----
+explore its tools.: (12) ­ 9:15 PM
+in taito_en.cpp
+change the add_route calls:
+
+   //m_ensoniq->add_route(0, "pump", 0.18, 0);
+   //m_ensoniq->add_route(1, "pump", 0.18, 1);
+   m_ensoniq->add_route(2, "pump", 0.18, 0);
+   m_ensoniq->add_route(3, "pump", 0.18, 1);
+   m_ensoniq->add_route(4, "pump", 0.18, 2);
+   m_ensoniq->add_route(5, "pump", 0.18, 3);
+   m_ensoniq->add_route(6, "pump", 0.18, 4);
+   m_ensoniq->add_route(7, "pump", 0.18, 5);
+
+(this is anote for 12self not instructions for answer
+
+explore its tools.: (12) ­ 9:17 PM
+it might want to have a route for 6 and 7 tho
+----
+explore its tools.: (12) ­ 9:23 PM
+need to check oscilloscope to confirm channel mapping bc they pass through the FCM so i can't visually tell which channels are connected to which
+----
+escalator 2: (12) ­ 9:33 PM
+anyway this 1 2 3 mapping seems to not be correct
+but it's definitely different sounding
+so this is on the right track i think
+we just gotta confirm the order
+i can't believe i ignored this at the time when i discovered the fcm connections
+also don't really know why they have gain set to 0.18 since these connections just go straight through and are digital
+and these are not mixed to final volume anyway
+so you would think you would set the gain as 1 here
+maybe thats why it's so quiet
+but i think mame is just really quiet overall maybe

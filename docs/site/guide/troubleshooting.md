@@ -11,7 +11,6 @@ flowchart TD
     B -->|"cmake build"| D["Build stage: compiler and SDL"]
     B -->|"Program start"| E["Options and ROM loading"]
     B -->|"During the game"| F["Runtime errors"]
-    B -->|"Online match"| G["Netplay errors"]
 ```
 
 ## Build stage: configure
@@ -26,8 +25,8 @@ The configure step runs the recompiler and the sound compiler. Both read your RO
 | `f3-recomp: ROM lane 'FILE' size mismatch: expected 524288 bytes, got N bytes.` | The file has a wrong size. Use the original dump. |
 | `f3-recomp: ROM lane 'FILE' CRC32 mismatch: expected X, got Y.` | The file has a different content, or a different version of the game. Use the files in the table in [Getting started](/guide/getting-started#step-2-prepare-the-rom-files). |
 | `f3-recomp: ROM lane 'FILE' SHA1 mismatch: expected X, got Y.` | Same cause as for CRC32. The tool checks both values. |
-| An error that names a missing module, for example `No module named 'capstone'` | Capstone is not installed, or Python cannot find it. Run the `pip install --target build/python -r recomp/requirements.txt` command from [Getting started](/guide/getting-started#step-3-install-capstone). |
-| An error that names `tomllib` | The Python version is older than 3.11. Use Python 3.11 or newer. |
+| An error that names a missing module, for example `No module named 'capstone'` | Dependencies are not synced in the virtual environment. Run `uv sync` from the repository root. |
+| An error that names `uv` not found | `uv` is not installed or not in `PATH`. Install `uv` (e.g. `brew install uv` or via your package manager). |
 
 The recompiler checks only the four program files. The other 11 ROM files are checked when you start the program. See [Program start](#program-start-rom-files).
 
@@ -48,7 +47,7 @@ The recompiler also has messages about the config file, for example `Config ... 
 | CMake says it needs a newer version | The top-level `CMakeLists.txt` needs CMake 3.24 or newer. |
 | CMake cannot find a package configuration file for `SDL3` | Install the SDL3 development files. If they are in a non-standard place, set `CMAKE_PREFIX_PATH` or `SDL3_DIR`. |
 | You want no window program | Add `-DF3RT_SDL=OFF`. The `landmakr` program is then not built. |
-| `Set F3_GENERATED_DIR to emitted program directory (sources.cmake missing)` | You used the `recomp` directory alone and gave no generated code. Use the top-level build with `F3_ROM_DIR`, or run `python3 -m recomp emit` first. |
+| `Set F3_GENERATED_DIR to emitted program directory (sources.cmake missing)` | You used the `recomp` directory alone and gave no generated code. Use the top-level build with `F3_ROM_DIR`, or run `uv run python -m recomp emit` first. |
 
 ## Build stage: compile
 
@@ -59,7 +58,7 @@ The recompiler also has messages about the config file, for example `Config ... 
 
 ## Program start: options
 
-These messages come from the option checks in `runtime/frontend.cpp`.
+These messages come from the option checks in `runtime/frontend/frontend.cpp`.
 
 | Message | Cause and action |
 | --- | --- |
@@ -69,8 +68,9 @@ These messages come from the option checks in `runtime/frontend.cpp`.
 | `Headless execution requires --frames` | Add `--frames N` to `--headless`. |
 | `--rom-dir required; --dump-every must be positive` | No ROM directory is known, or `--dump-every` is 0. |
 | `This generated executable requires landmakrj` | `landmakr` accepts only `--set landmakrj`. |
-| `--sound-driver must be oracle or native` | Use one of the two names. |
-| `Native sound requires a generated sound program (F3_ROM_DIR)` | The build has no generated sound code. Configure with `F3_ROM_DIR`, or use `--sound-driver oracle`. |
+| `--audio-backend must be enhanced or reference` | Use one of the two names. |
+| `Enhanced audio requires landmakrj` | Enhanced audio exists only for `landmakrj`. Use `--audio-backend reference` for other sets. |
+| `Enhanced audio does not execute a sound driver; --sound-trace requires reference audio` | Add `--audio-backend reference`, or drop `--sound-trace`. |
 | `--renderer must be accurate, enhanced, game-cpu, compare-cpu or compare-gpu` | Use one of the five names (`accurate` and `enhanced` are the user-facing ones). |
 | `Game-data video requires strict native execution` | You used `enhanced` or a developer game/compare renderer with `--allow-fallback`, `--set` other than `landmakrj`, or in `f3rt-run`. Use `landmakr` without `--allow-fallback`. |
 | `--video-scale must be 1..4, auto or auto-integer` | Use a numeric scale 1–4 or one of the automatic GPU modes. |
@@ -78,12 +78,6 @@ These messages come from the option checks in `runtime/frontend.cpp`.
 | `--video-border must be 0..160` | Use a value from 0 to 160. |
 | `--video-filter must be nearest or linear` | Use one of the two names. |
 | `Scale, border and filter options require --renderer enhanced (or a developer game/compare renderer)` | You gave scale, border or a filter other than `nearest` with `--renderer accurate`. Use `--renderer enhanced`. |
-| `--netplay-player must be 1 or 2` | Use 1 or 2. |
-| `--netplay-delay must be 0..8` | Use a value from 0 to 8. |
-| `Netplay requires --netplay-server and --netplay-room` | Give both options. |
-| `Netplay requires --netplay-host or --netplay-join` | Choose exactly one role for CLI entry, or use F1 Host/Join. |
-| `Netplay requires strict-native main execution without sound tracing` | Use generated main execution without fallback or a sound trace. Presentation geometry and EEPROM persistence are allowed. |
-| `Netplay frame limit exceeds protocol range` | The `--frames` value is too large for netplay. |
 | `This binary was built without F3_GENERATED_DIR` | You used `--translated` with a program that has no generated code. |
 | `Generated block registration failed` | The generated code does not match the runtime. Rebuild everything. |
 
@@ -121,60 +115,14 @@ If SDL cannot start, the program prints the text that SDL gives. Typical causes:
 | --- | --- |
 | `Untranslated main CPU instruction at PC 0x...` | The generated code does not cover this address. The `landmakr` program stops by design. Please report it with the address. You can try `--allow-fallback` for a diagnostic run, but that run does not count as the native game. |
 | `CPU halted at N` | The main CPU stopped. Please report the number. |
-| `SoundNative: fatal unsupported reachable PC: 0x... (opcode 0x...)` | The native sound driver reached code that it does not cover. Please report it. Try `--sound-driver oracle` to continue. |
+| `SoundNative: fatal unsupported reachable PC: 0x... (opcode 0x...)` | The native sound driver reached code that it does not cover. Please report it. Try `--audio-backend enhanced` (`landmakrj` only), which runs no sound driver. |
 | `Game composite frame N: ... RGB pixel mismatches` | With `--renderer compare-cpu` or `compare-gpu` the two renderers disagree. See [Video and presentation](/guide/video#what-an-error-means-in-the-compare-renderers). |
 | The game is slow | Check that you configured `-DCMAKE_BUILD_TYPE=Release`. Try `--renderer accurate` if GPU device or driver behavior is problematic.
 | `f3rt: warning: GPU renderer unavailable (...); falling back to --renderer accurate` | The default or saved `enhanced` renderer could not start a GPU device or claim a window, so this session runs `accurate`. Fix the GPU driver, or set Renderer to `accurate` in F1 → Video. Passing `--renderer enhanced` explicitly makes this an error instead. | |
 | No sound at the start | The game sets the output gain at about 13 seconds. Wait. Check that you did not give `--no-audio`. |
 | Frontend settings or remaps are lost | Choose **Save preferences** in F1 and check the selected `--config` path. |
 | Arcade game settings are lost | Add `--eeprom FILE`. See [Controls and options](/guide/running#settings-and-the-eeprom). |
-| The keys do not work | Focus the window and close F1; game input is neutral with the menu open. Check bindings; P2 has only start/coin defaults, and gamepads require explicit bindings. Netplay uses local P1 for your assigned player. |
-
-## Netplay errors
-
-Session failures appear in the F1 status and console and return local. A new Host/Join creates a fresh handoff rather than restarting the process.
-
-### Before the match
-
-| Message | Cause and action |
-| --- | --- |
-| `netplay room name cannot be empty` | Give a name with `--netplay-room`. |
-| `netplay room name must be 1 to 32 characters, got N` | Shorten the name. |
-| `netplay room name contains invalid characters: NAME` | Use only letters, digits, `_` and `-`. |
-| `netplay player option must be 0 (auto), 1, or 2, got N` | Use 1 or 2, or omit the option. |
-| `netplay delay must be between 0 and 8, got N` | Use a value from 0 to 8. |
-| `failed to resolve netplay server address: HOST:PORT (REASON)` | The host name or address is wrong. Write it as `HOST:PORT`. |
-| `failed to create UDP socket`, `failed to set non-blocking UDP socket`, `failed to connect UDP socket to server` | The operating system refused a socket. The text after the colon gives the reason. |
-| `netplay handshake timeout: no response from server for 10 seconds` | The relay is not running, the address or port is wrong, or a firewall blocks the UDP port. |
-| `netplay room wait timeout: exceeded 120 seconds waiting for opponent` | The other player did not join. Start the second game. |
-| `netplay join rejected: protocol mismatch` | The relay and the game use different protocol versions. Build both from the same source. |
-| `netplay join rejected: room full (max 2 players)` | Two players are in the room. Use another room name. |
-| `netplay join rejected: requested slot already taken` | Both players asked for the same slot. |
-| `netplay join rejected: ROM CRC mismatch` | The ROM files differ between the players. |
-| `netplay join rejected: build hash mismatch` | The builds differ. Both players must build the same source with the same compiler, platform and options. |
-| `netplay join rejected: snapshot format mismatch` | Match audio/video simulation configuration and state format. |
-| `netplay join rejected: host/join role conflict` | Choose one host and one guest; either may be P1 or P2. |
-| `netplay join rejected: invalid room name` | The relay rejected the name. Use 1 to 32 letters, digits, `_` or `-`. |
-| `netplay join rejected: rate limited` | Too many packets from your IP address. Wait and try again. |
-| `netplay join rejected: match already in progress` | The room has a running match. Use a new room name. |
-| `netplay join rejected: invalid identity payload` | The relay and the game do not agree on the packet format. Build both from the same source. |
-| Guest requested a different delay | This is supported: the guest adopts the host's 0–8 frame delay. |
-| `netplay handshake peer identity mismatch` | The other player's identity differs from yours. Use the same build and ROM files. |
-| `netplay invalid slot assigned: N` or `netplay invalid session id 0` | The relay sent a bad answer. Check that the relay is the one from this repository. |
-
-### During the match
-
-| Message | Cause and action |
-| --- | --- |
-| `netplay connection timeout: peer unreachable for 8 seconds` | Check relay/network reachability. After local return, ready a fresh Host/Join; the same room can be reused. |
-| `netplay disconnected: REASON` | The relay ended the session. Restore/return is automatic; ready a fresh handoff. |
-| `netplay desync detected at frame N ...` or `DESYNC at frame N ...` | The two machines have different state. The message gives both CRC32 values. This is a bug or a build mismatch. Please report it with the build details of both players. |
-| `netplay finish CRC mismatch ...` | At the end of a `--frames` match, the final CRC32 values differ. |
-| `netplay input buffer overflow (peer stalled/backpressure) ...` | The other player stopped for too long. |
-| `netplay peer sent invalid input word: 0x...`, `netplay input mutation detected at frame N ...` | A packet had wrong content. Check the network, and that both sides run the same build. |
-| `Netplay strict-native execution halted at frame N` | The native CPU code stopped. Please report it. |
-| `Netplay frame counter exhausted; start a new match` | The match reached the end of the frame counter range. Start a new match. |
-| `Confirmed audio queue full; drain render_audio while stalled` or `Rollback exceeded retained snapshot window` | These messages show an internal limit. Please report them. |
+| The keys do not work | Focus the window and close F1; game input is neutral with the menu open. Check bindings; P2 has only start/coin defaults, and gamepads require explicit bindings. |
 
 ## Ask for help
 

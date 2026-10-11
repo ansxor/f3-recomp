@@ -2,7 +2,7 @@
 
 **What you will learn:** how CMake configures and builds the project.
 This page lists generated outputs, target dependencies, and compile definitions.
-It also explains the netplay build ID and the separate documentation build.
+It also explains the separate documentation build.
 
 The top-level `CMakeLists.txt` drives everything. The ROM-to-C step runs at **configure time**, not at build time. This means that `cmake -S . -B build -DF3_ROM_DIR=...` already runs the Python recompilers.
 
@@ -13,19 +13,15 @@ The top-level `CMakeLists.txt` drives everything. The ROM-to-C step runs at **co
 | CMake 3.24 or newer | `cmake_minimum_required(VERSION 3.24)` | `CMakeLists.txt` |
 | A C11 and C++20 compiler | `CMAKE_C_STANDARD 11`, `CMAKE_CXX_STANDARD 20` | `CMakeLists.txt` |
 | SDL3 with CMake config files | The frontend. Skip it with `-DF3RT_SDL=OFF`. | `find_package(SDL3 CONFIG REQUIRED)` |
-| Google Highway 1.0 or newer | Runtime-dispatched SIMD for the HLE voice kernel. Without an installed package, CMake fetches tag 1.4.0. | `find_package(hwy CONFIG)`, `FetchContent` fallback |
-| Python 3.11 or newer | The recompiler uses `tomllib`. CMake needs the `Interpreter` component. | `README.md`, `recomp/discovery.py` |
-| Capstone 5.0.9 (Python package) | The disassembler. Install it into `build/python`. | `recomp/requirements.txt` |
+| Google Highway 1.0 or newer | Runtime-dispatched SIMD for HLE voice kernel. Without an installed package, CMake fetches tag 1.4.0. | `find_package(hwy CONFIG)`, `FetchContent` fallback |
+| uv (recent version) | Manages Python 3.11+ and dependencies (`capstone==5.0.9`, NumPy, SciPy). CMake runs generators via `uv run`. | `pyproject.toml`, `uv.lock` |
 | Ninja (recommended) | The README commands use `-G Ninja`. | `README.md` |
-| Go 1.22 or newer | Only for the relay server. CMake does not build it. | `netplay/server/go.mod` |
 
-Install Capstone with this command:
+Dependencies are locked in `pyproject.toml` and `uv.lock`. CMake invokes `uv run --project ... --locked` during configure, managing dependencies inside `.venv`. You can pre-sync dependencies with:
 
 ```sh
-python3 -m pip install --target build/python -r recomp/requirements.txt
+uv sync
 ```
-
-CMake adds `build/python` to `PYTHONPATH` when it runs the recompilers. You can also install Capstone in your own Python environment.
 
 ## The CMake options
 
@@ -37,7 +33,7 @@ The [Build options](/reference/build-options) reference page lists every option.
 | `F3_ROM_DIR` | empty | A directory with the selected title's ROM files (`F3_GAME`, default `landmakrj`). A value turns on automatic generation of both the main and the sound C code. |
 | `F3_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/SET` when `F3_ROM_DIR` is set) | A directory with already generated main CPU C code. |
 | `F3_SOUND_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/sound-SET` when `F3_ROM_DIR` is set) | A directory with already generated sound driver C code. |
-| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Japan ROM generation uses the frozen full-coverage profile unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
+| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Japan ROM generation uses the frozen full-coverage profile (local, gitignored `profiles/landmakrj.profile`; configure fails if it is missing) unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
 | `F3_PROFILE_TIERS` | empty cache; frozen profile selected automatically | Explicit CRC-keyed profile override: hot units `-O2`, cold units `-Oz`/`-Os`. |
 | `F3_PROFILE_SLIM` | empty | Explicit removal of unprofiled code, never enabled automatically. |
 
@@ -51,7 +47,7 @@ The examples and counts below illustrate the Japan default. For another title,
 select `-DF3_GAME=SET`; automatic commands use `games/SET/config.toml` and
 `BUILD_DIR/generated/SET`, `BUILD_DIR/generated/sound-SET`. The title target is
 `landmakr` for both LM selections, otherwise the set name. Japan's frozen tiers,
-per-game scene decoders and gameplay/netplay/GPU campaigns are not generic title support.
+per-game scene decoders and gameplay/GPU campaigns are not generic title support.
 Every configure also generates `rom_manifest.hpp` with `tools/compile_roms.py`
 and `recomp/roms.py`; those tools and all game configs are tracked dependencies.
 See [build options](/reference/build-options) for per-title reproducible commands.
@@ -60,19 +56,16 @@ The flowchart shows the steps in order. Rounded boxes are CMake steps. Plain box
 
 ```mermaid
 flowchart TB
-    start(["cmake -S . -B build -DF3_ROM_DIR=..."]) --> dep["Add recomp py and csv files, config.toml and compile_sound.py as configure dependencies"]
-    dep --> emit(["execute_process: python -m recomp emit"])
+    start(["cmake -S . -B build -DF3_ROM_DIR=..."]) --> dep["Add recomp py and csv files, config.toml, pyproject.toml, uv.lock and compile_sound.py as configure dependencies"]
+    dep --> emit(["execute_process: uv run python -m recomp emit"])
     emit --> maing["build/generated/landmakrj: blocks_NNNN.c, program.c, program.h, sources.cmake, coverage.json, lowering.json, program.bin"]
-    maing --> snd(["execute_process: python tools/compile_sound.py"])
+    maing --> snd(["execute_process: uv run python tools/compile_sound.py"])
     snd --> soundg["build/generated/sound-landmakrj: sound_blocks_NNNN.c, sound_program.c, sound_program.h, sources.cmake, coverage.json"]
     soundg --> mus(["Define Musashi targets: f3rt_m68kmake is built, then runs on m68k_in.c"])
     mus --> libs(["Define libraries and executables"])
-    libs --> id(["Define custom command for netplay_build.hpp"])
-    id --> build(["cmake --build build --target landmakr: build time starts"])
+    libs --> build(["cmake --build build --target landmakr: build time starts"])
     build --> ops["build/musashi/m68kops.c and m68kops.h"]
-    build --> hash["tools/netplay_build_id.cmake hashes sources and generated C into netplay_build.hpp"]
     ops --> exe["build/landmakr"]
-    hash --> exe
 ```
 
 ### Step 1: generate the main CPU code
@@ -80,15 +73,20 @@ flowchart TB
 If `F3_ROM_DIR` is set, CMake runs this command with `COMMAND_ERROR_IS_FATAL ANY`:
 
 ```sh
-python3 -m recomp emit \
+uv run python -m recomp emit \
   --config games/landmakrj/config.toml \
   --rom-dir "$F3_ROM_DIR" \
   --output build/generated/landmakrj
 ```
 
-The working directory is the repository root. `PYTHONPATH` starts with `build/python`. If the command fails, the configure step fails.
+The working directory is the repository root. If the command fails, the configure step fails.
 
-`CMakeLists.txt` also registers `recomp/*.py`, `recomp/*.csv` (with `CONFIGURE_DEPENDS`) and the selected `games/SET/config.toml` as configure dependencies. When one of them changes, the next `cmake --build` runs the configure step again. The configure step runs the recompiler again.
+`CMakeLists.txt` also registers `recomp/*.py`, `recomp/*.csv` (with `CONFIGURE_DEPENDS`), `pyproject.toml`, `uv.lock`, and the selected `games/SET/config.toml` as configure dependencies. When one of them changes, the next `cmake --build` runs the configure step again.
+
+CMake caches the generation step using an input content stamp file (`recomp_emit.stamp` in the generated directory). The stamp hashes the recompiler sources (`recomp/*.py`, `recomp/*.csv`), game `config.toml`, `pyproject.toml`, `uv.lock`, profile files and arguments, ROM directory identity (file names, sizes, mtimes), and generator CLI flags. If the stamp matches and generated outputs exist, CMake skips `execute_process` entirely during configuration.
+To force regeneration manually, delete the stamp file (e.g. `rm build/generated/<game>/recomp_emit.stamp`) or delete the generated directory.
+
+All emitted files use write-if-changed semantics: files are rewritten only if their contents differ from what is on disk, keeping mtimes stable so unchanged compilation units avoid downstream recompilation by Ninja. Stale files from prior runs that are no longer emitted are automatically unlinked.
 
 The selected `--profile-tiers` or explicit `--profile-slim` argument is passed
 to both generators. Exclusion-filtered entries are the partition input:
@@ -124,6 +122,7 @@ Full-coverage hot/cold shards keep that exact exclusion complement; only explici
 slim uses a sparse hot subset. Shared exception bodies are tiered by retained
 executed aliases, not duplicated for each address. Both programs require ABI 3.
 `sound_program.c` supplies `f3_sound_blocks[]` and `f3_sound_block_count`.
+Like the main recompiler, sound generation is cached with an input content stamp (`compile_sound.stamp` in the sound generated directory) covering `tools/compile_sound.py`, `recomp/*.py`, `recomp/*.csv`, game `config.toml`, profile files and arguments, ROM directory identity, and generator CLI flags. Unchanged outputs retain their modification times via write-if-changed, and deleting `compile_sound.stamp` forces sound regeneration.
 See [Sound-CPU compiler](/developer/recompiler/sound-compiler).
 
 ### Step 3: build the Musashi reference core
@@ -145,86 +144,33 @@ The next table lists all targets. A target exists only when its condition is tru
 | `f3rt` | static library | always | Explicit runtime library sources and `third_party/audio/*.cpp` | `f3rt_musashi`, `hwy::hwy` (private). Public include path `include`. |
 | `f3_sound_recompiled` | static library | `F3_SOUND_GENERATED_DIR` set | `F3_SOUND_GENERATED_SOURCES` from the sound directory | `f3rt` (public) |
 | `f3_recompiled` | static library (C) | `F3_GENERATED_DIR` set | `F3_GENERATED_SOURCES` of the main directory | none. Compiled with `-Wall -Wextra -Werror` on Clang and GCC. |
-| `f3rt-sound-extract` | executable | always | `tools/sound_extract.cpp` | `f3rt` |
-| `f3rt-gameplay-regression` | executable | `F3_GENERATED_DIR` set | `tools/gameplay_regression.cpp` | `f3rt`, `f3_recompiled` |
-| `f3rt-netplay-oracle` | executable | `F3_GENERATED_DIR` set | `tools/netplay_oracle.cpp` | `f3rt`, `f3_recompiled` |
-| `f3rt-run` | executable | `F3RT_SDL` | `runtime/frontend.cpp` | `f3rt`, `SDL3::SDL3`, and `f3_recompiled` if generated code exists |
-| `landmakr` | executable | `F3RT_SDL` and `F3_GENERATED_DIR` set | `runtime/frontend.cpp` | `f3rt`, `f3_recompiled`, `SDL3::SDL3` |
+| `f3rt-runner` | static library | always | `tools/runner/runner.cpp`, `tools/runner/inputs.cpp` | `f3rt` |
+| `f3rt-tool` | executable | always | `tools/tool.cpp`, `tools/commands/*.cpp` | `f3rt`, `f3rt-runner`, `f3_recompiled` (if generated) |
+| `f3rt-run` | executable | `F3RT_SDL` | `runtime/frontend/frontend.cpp` | `f3rt`, `SDL3::SDL3`, and `f3_recompiled` if generated code exists |
+| `landmakr` | executable | `F3RT_SDL` and `F3_GENERATED_DIR` set | `runtime/frontend/frontend.cpp` | `f3rt`, `f3_recompiled`, `SDL3::SDL3` |
 | `f3rt-replay` | executable | always | `runtime/replay.cpp` | `f3rt` |
 | `f3rt-test-support` | static library | `BUILD_TESTING` | `runtime/tests/support.cpp` | `f3rt` |
 | `f3rt-test-<area>` | executable (one per area) | `BUILD_TESTING` (CTest) | `runtime/tests/<area>.cpp` | `f3rt-test-support` |
 | `f3rt_musashi_generated` | custom target | always | Depends on the generated `m68kops.h` | Orders Musashi header generation. |
 
-The library `f3rt` compiles with `-Wall -Wextra -Wpedantic`. It contains `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `renderer/fdp/video.cpp`, the `renderer/game/*.cpp` files, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp`, `netplay.cpp`, `netplay_transport.cpp` and the ES5505, ES5510, MC68681 and MB87078 chip files.
+The library `f3rt` compiles with `-Wall -Wextra -Wpedantic`. It contains `rom.cpp`, `cpu_abi.cpp`, `machine.cpp`, `interpreter.cpp`, `renderer/fdp/video.cpp`, the `renderer/game/*.cpp` files, `audio.cpp`, `sound_trace.cpp`, `sound_native.cpp` and the ES5505, ES5510, MC68681 and MB87078 chip files.
 
 The `landmakr` target and `f3rt-run` use the same source file. The compile definitions make the difference:
 
 | Definition | Set on | Effect in `frontend.cpp` |
 | --- | --- | --- |
-| `F3RT_GENERATED=1` | `f3rt-run` (with generated code), `landmakr`, `f3rt-gameplay-regression`, `f3rt-netplay-oracle` | Includes `program.h` and allows `f3_generated_register`. |
+| `F3RT_GENERATED=1` | `f3rt-run` (with generated code), `landmakr`, `f3rt-tool` | Includes `program.h` and allows `f3_generated_register`. |
 | `F3RT_GAME=1` | Selected title target | Defaults strict native execution, configured ROM directory and selected `F3RT_DEFAULT_SET`. Japan defaults to game-data video; other titles use FDP. Set must match the selected game. |
 | `F3RT_DEFAULT_ROM_DIR="..."` | `landmakr`, tools, regression targets | The default for `--rom-dir`. It is the value of `F3_ROM_DIR`. |
 | `F3RT_SOUND_GENERATED=1` | All executables that link `f3_sound_recompiled` | Includes `sound_program.h`. Makes `native` the default sound driver. |
 
 The `f3_recompiled` target is defined in `recomp/CMakeLists.txt`. That file fails with a clear message if `F3_GENERATED_DIR/sources.cmake` does not exist. It adds three include paths: `include/`, the repository root (for `recomp/cpu_ops.h`), and the generated directory (for `program.h`).
 
-### Step 5: the netplay build ID
-
-Two netplay players need matching build identities.
-The next section explains how the project detects a mismatch.
-
-## The netplay build ID
-
-Different source, generated C, compiler settings, or platforms can change simulation results.
-The build ID hashes these inputs with SHA-256.
-The handshake rejects unequal build hashes.
-A matching hash is an admission check, not proof of correct or deterministic execution.
-The [Netplay oracle](/developer/testing/netplay-oracle) supplies execution evidence.
-
-```mermaid
-flowchart LR
-    subgraph configure["Configure time"]
-        files["Glob: include, runtime, recomp, games toml, CMakeLists.txt, compile_sound.py, netplay_build_id.cmake"]
-        ident["NETPLAY_IDENTITY string: OS, CPU, pointer size, compilers and versions, build type, flags, macOS target"]
-        cmd["add_custom_command OUTPUT netplay_build.hpp"]
-    end
-    subgraph buildtime["Build time"]
-        script["cmake -P tools/netplay_build_id.cmake"]
-        sha["SHA-256 of every listed file and every generated c and h file"]
-        hdr["build/netplay_build.hpp: F3_NETPLAY_BUILD_HASH"]
-    end
-    subgraph runtime["Run time"]
-        mi["machine_identity in netplay.cpp: 32-byte build_hash"]
-        hs["Handshake: Transport sends Identity, server compares"]
-    end
-    files --> cmd
-    ident --> cmd
-    cmd --> script --> sha --> hdr --> mi --> hs
-```
-
-The details:
-
-1. At configure time `CMakeLists.txt` globs these files: `include/*.h`, `include/*.hpp`, `runtime/*.c`, `runtime/*.h`, `runtime/*.cpp`, `runtime/*.hpp`, `recomp/*.py`, `recomp/*.h`, `recomp/*.csv`, `games/*.toml`. It adds `CMakeLists.txt`, `tools/compile_sound.py` and `tools/netplay_build_id.cmake`. It sorts the list. The glob is recursive, so it also covers `runtime/third_party`.
-2. `NETPLAY_IDENTITY` records the system, CPU, pointer size, compiler IDs and versions, build type, and compiler flags.
-   It also records macOS architecture, deployment target, and sysroot settings.
-3. A custom command creates `build/netplay_build.hpp`. It depends on every listed file and on every `*.c` and `*.h` file in the two generated directories. It runs `cmake -P tools/netplay_build_id.cmake`.
-4. The script hashes each file with `file(SHA256 ...)`, appends all hashes to the identity string, and hashes the whole string. It writes `#define F3_NETPLAY_BUILD_HASH "<64 hex digits>"`. It does not touch the file when the content is the same, so the compile of `netplay.cpp` does not repeat.
-5. `target_sources(f3rt PRIVATE netplay_build.hpp)` attaches the header to the library.
-6. `machine_identity` in `runtime/netplay.cpp` converts the 64 hex digits to 32 bytes. These bytes are the `build_hash` field of `Identity`.
-
-The script runs at build time, not at configure time. A change in a runtime file therefore refreshes the hash without a new discovery run.
-
-`Identity` also contains seven loaded ROM region CRC32 values and canonical state format, covering audio/video simulation compatibility.
-EEPROM, initial local state, requested delay and presentation are excluded; the host transfers canonical state after pairing.
-The handshake also checks the protocol version.
-See [Wire protocol](/developer/netplay/protocol).
-
 ## Common build recipes
 
 The first recipe builds the game from ROMs. It is the one in the README.
 
 ```sh
-python3 -m pip install --target build/python -r recomp/requirements.txt
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR=../roms/landmakr
 cmake --build build --target landmakr -j 4
 ./build/landmakr
@@ -233,22 +179,16 @@ cmake --build build --target landmakr -j 4
 The second recipe builds the test tools, including the checks:
 
 ```sh
-cmake --build build --target f3rt-gameplay-regression f3rt-netplay-oracle
+cmake --build build --target f3rt-tool
 ctest --test-dir build -R runtime-
 ```
 
-The CTest command runs the per-area runtime tests (`runtime-video`, `runtime-input`, `runtime-eeprom`, `runtime-cpu`, `runtime-sprite_units` and `runtime-audio`).
+The CTest command runs the per-area runtime tests (`runtime-video`, `runtime-input`, `runtime-eeprom`, `runtime-cpu`, `runtime-sprites` and `runtime-audio`).
 
-The third recipe builds the relay server. CMake does not manage it:
-
-```sh
-(cd netplay/server && go build -o ../../build/netplay-server .)
-```
-
-The fourth recipe builds the generated code alone, without the runtime. It is useful when you only study the recompiler output:
+The third recipe builds the generated code alone, without the runtime. It is useful when you only study the recompiler output:
 
 ```sh
-python3 -m recomp emit --config games/landmakrj/config.toml \
+uv run python -m recomp emit --config games/landmakrj/config.toml \
   --rom-dir /path/to/roms/landmakr --output games/landmakrj/generated
 cmake -S recomp -B build/native -G Ninja -DF3_GENERATED_DIR="$PWD/games/landmakrj/generated"
 cmake --build build/native
@@ -261,7 +201,7 @@ The generated C comes from your ROM. Never commit it. The `.gitignore` file alre
 ## Documentation build
 
 The VitePress site has a separate Node build.
-It does not invoke CMake, either ROM compiler, or the Go relay.
+It does not invoke CMake or either ROM compiler.
 It needs no ROM files.
 
 ```sh
@@ -278,7 +218,6 @@ The [Contributing page](/developer/contributing#work-on-this-documentation-site)
 
 - [CMakeLists.txt](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt): target conditions, configure dependencies, and compile definitions.
 - [recomp/CMakeLists.txt](https://github.com/ansxor/f3-recomp/blob/main/recomp/CMakeLists.txt): standalone generated library.
-- [tools/netplay_build_id.cmake](https://github.com/ansxor/f3-recomp/blob/main/tools/netplay_build_id.cmake): sorted content hashes and header updates.
 - [docs/site/package.json](https://github.com/ansxor/f3-recomp/blob/main/docs/site/package.json): documentation commands.
 - [.github/workflows/docs.yml](https://github.com/ansxor/f3-recomp/blob/main/.github/workflows/docs.yml): documentation build and deployment.
 

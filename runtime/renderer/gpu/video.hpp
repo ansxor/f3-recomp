@@ -3,7 +3,7 @@
 #include "renderer/gpu/interp.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "renderer/scale.hpp"
-#include "renderer/sprite_presentation.hpp"
+#include "sprites/presentation.hpp"
 #include <SDL3/SDL.h>
 #include <chrono>
 #include <filesystem>
@@ -35,6 +35,9 @@ public:
     using Overlay = void (*)(void *, SDL_GPUCommandBuffer *, SDL_GPUTexture *, Uint32, Uint32);
     SDL_GPUDevice *device() const;
     void set_linear(bool linear);
+    // Live scanline interpolation mode and fields; takes effect on the next draw. Off/on
+    // changes only switch the pipeline and coefficient upload, so assets and buffers persist.
+    void set_interpolation(VideoInterpolation mode, InterpolationFields fields);
     void set_overlay(Overlay callback, void *userdata);
     // User ABI: .metal entry f3_postprocess on Metal, .spv entry main on Vulkan.
     // Fullscreen triangle, position builtin only; texture/sampler slot 0 and a

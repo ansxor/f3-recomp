@@ -87,7 +87,7 @@ The tests live in `runtime/tests/`, with one binary and CTest test per area. CMa
 ctest --test-dir build -R runtime-
 ```
 
-Each test runs its area's checks, prints `PASS` on success, and prints `FAIL <message>` on failure. The shared `f3test::require` helper reports failed expectations. `f3test::fixture()` supplies zero-filled ROM regions, SSP `0x41fff0`, PC `0x100` with `MOVEQ #42,D0` and a branch to itself, and one sample word.
+Each test runs its area's checks via GoogleTest and RapidCheck property checks. `f3test::fixture()` supplies zero-filled ROM regions, SSP `0x41fff0`, PC `0x100` with `MOVEQ #42,D0` and a branch to itself, and one sample word.
 
 The checks need no game data, so they run anywhere.
 
@@ -149,7 +149,7 @@ The same style applies to every check. Set up the state, call the public functio
 - [EEPROM checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/eeprom.cpp)
 - [CPU checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/cpu.cpp)
 - [Audio checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/audio.cpp)
-- [Sprite unit checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprite_units.cpp)
+- [Sprite unit checks](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/sprites.cpp)
 - [Shared test support](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/support.cpp)
 - [Exact-size capture reads and WAV output](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp)
 - [Validation build targets](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt)

@@ -15,9 +15,9 @@ The project has three layers:
 | --- | --- | --- |
 | Recompiler | `recomp/`, `tools/compile_sound.py` | Reads the ROM and writes C code for the main CPU (68EC020) and the sound CPU (68000). |
 | ABI | `include/f3rt/` | The C interface between the generated code and the runtime. |
-| Runtime | `runtime/` | Implements the board: memory map, interrupts, video, audio, input, EEPROM. Also the SDL3 frontend and netplay. |
+| Runtime | `runtime/` | Implements the board: memory map, interrupts, video, audio, input, EEPROM. Also the SDL3 frontend. |
 
-Around these layers are the netplay relay server (`netplay/server/`, Go) and the test tools (`tools/`).
+Around these layers are the test tools (`tools/`).
 
 ## Support and evidence
 
@@ -34,10 +34,6 @@ between those CPU paths does not establish waveform equality with MAME or a boar
 See the [evidence index](/developer/evidence) for retained measurements and their
 limits. The testing pages describe how to reproduce comparisons; their historical
 results are not a claim that every game state has been exercised.
-
-Versus-only rollback uses a fresh host canonical snapshot, a both-loaded barrier
-and confirmed local return. [ImGui/netplay evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
-records observed overlay, shader, snapshot and lifecycle coverage.
 
 ## Choose your path
 
@@ -79,16 +75,6 @@ Land Maker dependencies and conservative new-game bring-up work.
 4. [Sound tracing](/developer/runtime/audio/tracing) explains observable bus events.
 5. [Sound tools](/developer/testing/sound-tools) covers extraction, sequence reports, and native-versus-oracle checks.
 6. [Audio comparison](/developer/testing/audio-compare) explains waveform metrics and their limits.
-
-### I want to understand netplay
-
-1. [Netplay overview](/developer/netplay/) gives the model.
-2. [Snapshots and determinism](/developer/netplay/snapshots) explains why the machine can be saved and restored exactly.
-3. [Rollback engine](/developer/netplay/rollback) explains `Rollback`.
-4. [Wire protocol](/developer/netplay/protocol) lists the UDP packets.
-5. [Client transport](/developer/netplay/transport) explains delivery, retransmission, and timeout handling.
-6. [Relay server](/developer/netplay/server) explains the Go server.
-7. [Netplay for players](/guide/netplay) shows the commands.
 
 ### I think an instruction or a timing is wrong
 
@@ -141,23 +127,16 @@ flowchart TB
         rt2 --> vid["Video: hardware, FDP, producers, scene, compositor, presentation"]
         rt2 --> aud["Audio: mailbox, CPUs, scheduling, chips, tracing, and extraction"]
     end
-    subgraph NP["Netplay"]
-        np0["Overview"] --> np1["Snapshots and determinism"] --> np2["Rollback"]
-        np2 --> np3["Protocol and client transport"] --> np4["Relay server"]
-        np3 --> np5["Build identity and frontend integration"]
-        np4 --> np6["Oracle, limits, debugging, and client development"]
-    end
     subgraph TS["Testing"]
         ts0["Overview"] --> ts1["MAME capture and replay"]
         ts0 --> ts2["Differential and unit checks"]
-        ts0 --> ts3["Gameplay and netplay regression"]
+        ts0 --> ts3["Gameplay regression"]
         ts1 --> ts4["Frame, audio, and sound comparisons"]
     end
     idx --> arch
     arch --> repo --> bp
     arch --> rc0
     arch --> rt0
-    rt2 --> np0
     arch --> ts0
     idx --> glo
     idx --> con
@@ -169,9 +148,9 @@ flowchart TB
 
 | Page | Content |
 | --- | --- |
-| [Architecture](/developer/architecture) | Build time and run time, components, one frame, oracles, netplay, ABI owner. |
+| [Architecture](/developer/architecture) | Build time and run time, components, one frame, oracles, ABI owner. |
 | [Repository tour](/developer/repository) | Source file responsibilities and subsystem entry points. |
-| [Build pipeline](/developer/build-pipeline) | CMake steps, generated outputs, targets, netplay build ID. |
+| [Build pipeline](/developer/build-pipeline) | CMake steps, generated outputs, targets. |
 | [Glossary](/developer/glossary) | Alphabetical list of terms. |
 | [Contributing](/developer/contributing) | Workflow, ABI rule, scene decoders, games, flags, conventions, docs. |
 
@@ -179,7 +158,7 @@ flowchart TB
 
 | Page | Content |
 | --- | --- |
-| [Pipeline overview](/developer/recompiler/) | `python3 -m recomp` from ROM to C. |
+| [Pipeline overview](/developer/recompiler/) | `uv run python -m recomp` from ROM to C. |
 | [ROM loading and config](/developer/recompiler/rom-and-config) | Lane files, checks, interleave, TOML keys. |
 | [Discovery](/developer/recompiler/discovery) | How instructions are found. |
 | [Code emission](/developer/recompiler/emission) | Lowering, blocks, shards, tables. |
@@ -202,7 +181,7 @@ flowchart TB
 | [Memory map](/developer/runtime/memory-map) | Main bus regions, mirrors, byte order, and device access. |
 | [Scheduling](/developer/runtime/scheduling) | Integer time, vblank, interrupts, watchdog, and deadlines. |
 | [Input and EEPROM](/developer/runtime/input-and-eeprom) | Active-low ports, coins, settings, serial pins, and busy timing. |
-| [Frontend](/developer/runtime/frontend) | Argument parsing, SDL3 input, pacing, output, and netplay. |
+| [Frontend](/developer/runtime/frontend) | Argument parsing, SDL3 input, pacing, and output. |
 | [Interpreter](/developer/runtime/interpreter) | Musashi contexts, main fallback, reference execution, and sound CPU. |
 | [Musashi](/developer/runtime/musashi) | Vendored core, opcode generation, patches, and context bridge. |
 | [Support code](/developer/runtime/support) | ROM loading, capture helpers, canonical records, and licenses. |
@@ -246,24 +225,6 @@ flowchart TB
 | [Extraction](/developer/runtime/audio/extraction) | Sound commands, deterministic playback, WAV, and trace output. |
 | [Sequences](/developer/runtime/audio/sequences) | Driver stream interpretation and decoded sequence reports. |
 
-### Netplay
-
-| Page | Content |
-| --- | --- |
-| [Netplay overview](/developer/netplay/) | Two-player model, responsibilities, and strict-native requirements. |
-| [Snapshots](/developer/netplay/snapshots) | Canonical state inventory and exact restore. |
-| [Determinism](/developer/netplay/determinism) | Simulation invariants and external timing boundaries. |
-| [Rollback](/developer/netplay/rollback) | Prediction, correction, confirmation, snapshots, and audio. |
-| [Protocol](/developer/netplay/protocol) | UDP packets, validation, identity, and finish verdict. |
-| [Client transport](/developer/netplay/transport) | Handshake, reliability, queues, ping, and timeouts. |
-| [Relay server](/developer/netplay/server) | Rooms, pairing, rate limits, expiry, and impairment. |
-| [Build identity](/developer/netplay/build-identity) | ROM CRCs, build fingerprint and canonical simulation/state format. |
-| [Frontend integration](/developer/netplay/frontend-integration) | Local input, stall handling, presentation, and confirmed audio. |
-| [Oracle](/developer/netplay/oracle) | Compare two clients with a single-machine input schedule. |
-| [Limits](/developer/netplay/limits) | Bounds, unsupported modes, security scope, and protocol constraints. |
-| [Debugging](/developer/netplay/debugging) | Diagnose handshake failures, stalls, and state differences. |
-| [Writing a client](/developer/netplay/writing-a-client) | Protocol and simulation contracts for client integration. |
-
 ### Testing
 
 | Page | Content |
@@ -275,8 +236,7 @@ flowchart TB
 | [Frame comparison](/developer/testing/frame-compare) | Capture alignment, pixel differences, and image reports. |
 | [Audio comparison](/developer/testing/audio-compare) | WAV alignment, correlation, error metrics, and evidence limits. |
 | [Sound tools](/developer/testing/sound-tools) | Sound extraction, decoded events, and exact bus trace comparison. |
-| [Unit checks](/developer/testing/unit-checks) | Python synthetic cases, C++ device checks, and Go relay tests. |
-| [Netplay oracle](/developer/testing/netplay-oracle) | Snapshot, baseline, impaired-network, and rejection scenarios. |
+| [Unit checks](/developer/testing/unit-checks) | Python synthetic cases, and C++ device checks. |
 
 ## User and reference pages
 
@@ -298,10 +258,8 @@ decisions, ABI history, and subsystem records. Detailed logs live in
 `docs/developer/`, rather than the project overview. Use the testing pages for
 tool behavior and reproduction commands.
 
-See [IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
-for the overlay and versus-only cutover, and
-[HLE-AUDIO.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md)
-for the separate non-rewound audio policy.
+See [HLE-AUDIO.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md)
+for the Enhanced audio engine.
 
 Historical measurements describe their recorded build and scenario. Check the
 implementation before relying on a revision-sensitive detail.

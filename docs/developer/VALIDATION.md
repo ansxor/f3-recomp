@@ -14,7 +14,7 @@ project-status file.
 | Native execution | Strict-native main/sound build with ABI 3, reviewed exclusions and full-coverage compile tiers. Attract and held-out seeded gameplay completed without CPU fallback. |
 | Video | Captured MAME attract frames and RAM compared exactly. Game-data/CPU/GPU comparisons cover sampled layers, composites and induced transitions; they do not verify physical TC0630FDP behavior. |
 | Audio | Attract and held-out WAVs matched the preserved native reference. Native/oracle equivalence is distinct from MAME waveform agreement or physical-board fidelity; the known instruction-atomic audio residual remains documented in [sound investigation](../SOUND-DRIVER.md). |
-| Snapshots and relay | Save/load replay, allocation and Go checks passed at the checkpoint. This was not a new impaired-network campaign; see [netplay investigation](../NETPLAY.md) for that separate evidence. |
+| Snapshots | Save/load replay and allocation checks passed at the checkpoint. |
 | Human run | The foreground GPU/automatic-integer/border-48 window exited normally. Key-versus-window-close exit, completed-match count and a human-played campaign ending were not independently established. |
 
 Full coverage means all existing **nonexcluded** dispatch entries are retained,

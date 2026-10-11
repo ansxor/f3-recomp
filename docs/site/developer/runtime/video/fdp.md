@@ -177,7 +177,7 @@ When `enable_scene_inspection(true)` is on, `scanline_draw` also fills one `Scen
 
 ## Snapshot state
 
-`Video::Impl::save_state` writes a packed `CanonicalVideo` struct (flags, sprite state, both control copies, the row-usage tables and the 1024 parsed sprites), the buffered sprite RAM (0x10000 bytes), the sprite plane (432 x 256 x 2 bytes) and `sprite_pri_row_usage` (256 bytes). `state_size()` returns the sum. It does not save the decoded ROM, the line caches or the inspection rows. `load_state` clears the line caches and the inspection rows. See [Snapshots](/developer/netplay/snapshots) for how netplay uses this.
+`Video::Impl::save_state` writes a packed `CanonicalVideo` struct (flags, sprite state, both control copies, the row-usage tables and the 1024 parsed sprites), the buffered sprite RAM (0x10000 bytes), the sprite plane (432 x 256 x 2 bytes) and `sprite_pri_row_usage` (256 bytes). `state_size()` returns the sum. It does not save the decoded ROM, the line caches or the inspection rows. `load_state` clears the line caches and the inspection rows.
 
 ## Invariants to keep
 

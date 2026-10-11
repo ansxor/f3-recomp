@@ -8,7 +8,7 @@ The two tools write to two separate directories. CMake picks default directories
 
 ```mermaid
 flowchart LR
-    ROM["ROM files"] --> RECOMP["python3 -m recomp emit"]
+    ROM["ROM files"] --> RECOMP["uv run python -m recomp emit"]
     ROM --> SND["tools/compile_sound.py"]
     RECOMP --> G["BUILD_DIR/generated/landmakrj"]
     SND --> S["BUILD_DIR/generated/sound-landmakrj"]
@@ -22,7 +22,7 @@ flowchart LR
 Generated files contain code that comes from the game ROM. Do not commit them and do not share them. Every generated C file starts with a comment that says so.
 :::
 
-## Program output (python3 -m recomp emit)
+## Program output (uv run python -m recomp emit)
 
 The `discover` command writes only `coverage.json`. The `emit` command writes all files in this table.
 
@@ -198,7 +198,7 @@ The script compiles the 512 KiB sound ROM. The ROM starts at address `0xc00000` 
 
 The function for the word at address `PC` has the name `f3_sound_block_XXXXXX` (6 hexadecimal digits). It has one instruction. It ends with `f3_sound_cc_flush(cpu)`. A word that the script cannot translate gets a function that calls `f3_sound_unsupported_pc(cpu, PC)`. This is an *actionable error stub*: the program reports the address when it runs the stub. A word with an illegal, line-A or line-F opcode does not get a function. The table points to `f3_sound_vector_4`, `f3_sound_vector_10` or `f3_sound_vector_11`, which call `f3_sound_exception`.
 
-The files include `runtime/sound_native_ops.h`. That header defines the helper macros for the sound CPU and declares `f3_sound_exception`, `f3_sound_unsupported_pc` and `f3_sound_cc_flush` (an alias of `f3_cc_flush`).
+The files include `runtime/audio/reference/native/sound_native_ops.h`. That header defines the helper macros for the sound CPU and declares `f3_sound_exception`, `f3_sound_unsupported_pc` and `f3_sound_cc_flush` (an alias of `f3_cc_flush`).
 
 ### sound_program.h
 
@@ -237,8 +237,7 @@ The generated header also declares `f3_sound_rom_crc32`, `f3_sound_excluded_rang
 | `f3_register_blocks`, `f3_register_exclusions`, `f3_dispatch`, `f3_boundary`, `f3_exception`, `f3_set_sr`, `f3_reset_devices`, `f3_fallback` | `runtime/cpu_abi.cpp` | Generated code | The runtime side of the CPU ABI. |
 | `f3_read8/16/32`, `f3_write8/16/32` | `runtime/cpu_abi.cpp` | Generated code through `recomp/cpu_ops.h` | Memory access. |
 | `f3_cc_flush` | `recomp/cpu_ops.h` | Generated code | Turns the lazy condition codes into the status register. |
-| `f3_sound_exception`, `f3_sound_unsupported_pc` | `runtime/sound_native.cpp` | `sound_blocks_NNNN.c`, `sound_program.c` | Sound CPU exception and error stub handlers. |
-| `F3_NETPLAY_BUILD_HASH` | `BUILD_DIR/netplay_build.hpp` | `runtime/netplay.cpp` | See [Build options](/reference/build-options#generated-header-netplay-build-hpp). |
+| `f3_sound_exception`, `f3_sound_unsupported_pc` | `runtime/audio/reference/native/sound_native.cpp` | `sound_blocks_NNNN.c`, `sound_program.c` | Sound CPU exception and error stub handlers. |
 
 For the ABI structure itself, read [CPU ABI](/developer/runtime/cpu-abi). For the emitter, read [Emission](/developer/recompiler/emission).
 

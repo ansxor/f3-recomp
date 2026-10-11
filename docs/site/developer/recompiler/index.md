@@ -62,7 +62,7 @@ All recompiler code is in the [`recomp/`](https://github.com/ansxor/f3-recomp/tr
 | [`recomp/bitfield.h`](https://github.com/ansxor/f3-recomp/blob/main/recomp/bitfield.h) | C helper `f3_bitfield` for the eight 68020 bit-field instructions. |
 | [`recomp/68020_cycles.csv`](https://github.com/ansxor/f3-recomp/blob/main/recomp/68020_cycles.csv) | Base cycle table for the main CPU. It has no game data. |
 | [`recomp/68000_cycles.csv`](https://github.com/ansxor/f3-recomp/blob/main/recomp/68000_cycles.csv) | Base cycle table for the sound CPU. Only the [sound compiler](/developer/recompiler/sound-compiler) uses it. |
-| [`recomp/requirements.txt`](https://github.com/ansxor/f3-recomp/blob/main/recomp/requirements.txt) | One line: `capstone==5.0.9`. |
+| [`pyproject.toml`](https://github.com/ansxor/f3-recomp/blob/main/pyproject.toml) | Declares `capstone==5.0.9` and runtime dependencies locked in `uv.lock`. |
 | [`recomp/CMakeLists.txt`](https://github.com/ansxor/f3-recomp/blob/main/recomp/CMakeLists.txt) | Builds the generated sources as the static library `f3_recompiled`. |
 | [`include/f3rt/cpu_abi.h`](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/cpu_abi.h) | The ABI. It defines `f3_cpu`, `f3_block` and the callbacks. The runtime owns it. |
 
@@ -70,7 +70,7 @@ The [sound compiler](/developer/recompiler/sound-compiler) in `tools/compile_sou
 
 ## Output files
 
-`python3 -m recomp emit` writes these files into the output directory. The files hold ROM-derived data. Git ignores them. Never commit them.
+`uv run python -m recomp emit` writes these files into the output directory. The files hold ROM-derived data. Git ignores them. Never commit them.
 
 | File | Content |
 | --- | --- |
@@ -86,22 +86,22 @@ See [Generated files](/reference/generated-files) for the reference description.
 
 ## How to run it
 
-Install the one Python dependency. Python 3.11 or later is required, because the code uses `tomllib`.
+Dependencies are managed by `uv`. Pre-sync them or let `uv run` manage the virtual environment:
 
 ```sh
-python3 -m pip install -r recomp/requirements.txt
+uv sync
 ```
 
 Run the recompiler from the repository root.
 
 ```sh
-python3 -m recomp emit \
+uv run python -m recomp emit \
   --config games/landmakrj/config.toml \
   --rom-dir /path/to/roms/landmakr \
   --output build/generated/landmakrj
 ```
 
-The command `discover` runs only stages 1 and 2. It writes only `coverage.json`. The options are in [CLI reference](/reference/cli). The normal build does not need you to run these commands. The top-level `CMakeLists.txt` runs `python -m recomp emit` at configure time when you set `F3_ROM_DIR`. See [Build pipeline](/developer/build-pipeline).
+The command `discover` runs only stages 1 and 2. It writes only `coverage.json`. The options are in [CLI reference](/reference/cli). The normal build does not need you to run these commands. The top-level `CMakeLists.txt` runs `uv run python -m recomp emit` at configure time when you set `F3_ROM_DIR`. CMake caches execution with an input content stamp file (`recomp_emit.stamp`) and uses write-if-changed to prevent unnecessary recompiles. See [Build pipeline](/developer/build-pipeline).
 
 ::: warning
 Handled ROM, config, import, and file errors return exit code 1. The message starts with `f3-recomp: ` on standard error. Argument-parser errors use argparse's exit code 2. The command does not replace missing or wrong ROM files.
@@ -126,7 +126,7 @@ These numbers come from `docs/developer/DECISIONS.md` in the repository. They de
 - 460,668 of those decoded entries lower to native C. The other decoded entries use `f3_fallback` when executed.
 - 568,753 more entries point to shared exception handlers (illegal, A-line, F-line).
 - The result is 17,534 native blocks (one per 64-byte page that holds code).
-- The strict native game run executes with zero fallback instructions; [developer evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) records the observed run, not a universal compatibility promise.
+- The strict native game run executes with zero fallback instructions; [developer evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/DECISIONS.md) records the observed run, not a universal compatibility promise.
 
 These counts include data that looks like code. They do not prove that all those instructions can run. See [Limits and known issues](/developer/recompiler/limits-and-known-issues).
 

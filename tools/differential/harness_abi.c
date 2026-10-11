@@ -166,6 +166,7 @@ void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value) {
 }
 
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
+    f3_cc_flush(cpu);
     DiffEnv *env = (DiffEnv *)cpu->runtime;
     env->exception_taken = 1;
     env->exception_vector = vector;

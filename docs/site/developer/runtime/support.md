@@ -8,8 +8,8 @@ This page lists their interfaces, formats, consumers, and source boundaries.
 | `include/f3rt/rom.hpp`, `runtime/rom.cpp` | [ROM loading](#rom-loading) |
 | `runtime/eeprom.hpp` | [EEPROM](#eeprom) |
 | `runtime/capture_io.hpp` | [Capture files](#capture-files) |
-| `runtime/core_state.c`, `runtime/state_oracle.h` | [Core state](#core-state) |
-| `runtime/sound_trace.hpp`, `runtime/sound_trace.cpp` | [Sound trace](#sound-trace) |
+| `runtime/core_state.c`, `runtime/audio/reference/state_oracle.h` | [Core state](#core-state) |
+| `runtime/audio/sound_trace.hpp`, `runtime/audio/sound_trace.cpp` | [Sound trace](#sound-trace) |
 | `runtime/state_io.hpp` | [State serialization](#state-serialization) |
 | `runtime/replay.cpp`, `runtime/tests/*.cpp` | [Replay and check](/developer/runtime/replay-and-check) |
 | `runtime/LICENSES.txt` | [Licenses and source boundaries](#licenses-and-source-boundaries) |
@@ -81,7 +81,7 @@ The two sound program chips can be half size (0x20000 bytes). Then the loader ch
 
 - It includes `state_io.hpp` so that `save_state` and `load_state` use `CanonicalEeprom`.
 - `load` and `save` use a 128-byte file with 64 big-endian words.
-- `words` is public. Tests and the netplay identity code read it directly.
+- `words` is public. Tests read it directly.
 
 ## Capture files
 
@@ -142,7 +142,7 @@ Read [canonical CPU state transfer](/developer/runtime/musashi#canonical-cpu-sta
 
 ## Sound trace
 
-`SoundTrace` writes a binary log of the traffic between the main CPU and the sound CPU. The tool `f3rt-sound-extract` (`tools/sound_extract.cpp`) and the script `tools/decode_sound.py` read the file offline. The header comment says: "Lossless bus observation; decoding is offline and never reads device registers."
+`SoundTrace` writes a binary log of the traffic between the main CPU and the sound CPU. The tool `f3rt-tool sound-extract` (`tools/commands/sound_extract.cpp`) and the script `uv run f3 decode` read the file offline. The header comment says: "Lossless bus observation; decoding is offline and never reads device registers."
 
 You turn it on with `--sound-trace FILE`. The frontend creates the object and sets `Machine::sound_trace`. If the pointer is null, every hook is skipped.
 
@@ -208,7 +208,7 @@ These probes use fixed addresses from the target game's sound driver. They help 
   The records contain no host pointers.
   The code copies scalar bytes in host byte order; it does not encode a portable wire format.
 
-`Machine::save_state` uses these types. Details are on the [snapshot page](/developer/netplay/snapshots).
+`Machine::save_state` uses these types.
 
 ### State helper API
 
@@ -258,7 +258,7 @@ Committed runtime sources do not include ROMs, generated game code, decoded asse
 
 - [ROM loader](https://github.com/ansxor/f3-recomp/blob/main/runtime/rom.cpp)
 - [Capture and WAV helpers](https://github.com/ansxor/f3-recomp/blob/main/runtime/capture_io.hpp)
-- [Sound trace writer](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.cpp)
-- [Sound trace interface](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_trace.hpp)
+- [Sound trace writer](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.cpp)
+- [Sound trace interface](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/sound_trace.hpp)
 - [State helpers and packed records](https://github.com/ansxor/f3-recomp/blob/main/runtime/state_io.hpp)
 - [Core state bridge](https://github.com/ansxor/f3-recomp/blob/main/runtime/core_state.c)

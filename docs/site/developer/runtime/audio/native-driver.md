@@ -6,9 +6,9 @@ This is static translation of the sound ROM, not HLE. It retains the emulated
 sound devices. Agreement with the interpreter at instruction boundaries does not
 verify physical CPU bus timing or sound-board output.
 
-Sources: [sound_native.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.hpp), [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native.cpp), and [sound_native_ops.h](https://github.com/ansxor/f3-recomp/blob/main/runtime/sound_native_ops.h).
+Sources: [sound_native.hpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.hpp), [sound_native.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native.cpp), and [sound_native_ops.h](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/reference/native/sound_native_ops.h).
 
-The compiler is described on [another page](/developer/recompiler/sound-compiler). This page covers the run-time half: `runtime/sound_native.hpp`, `runtime/sound_native.cpp` and `runtime/sound_native_ops.h`.
+The compiler is described on [another page](/developer/recompiler/sound-compiler). This page covers the run-time half: `runtime/audio/reference/native/sound_native.hpp`, `runtime/audio/reference/native/sound_native.cpp` and `runtime/audio/reference/native/sound_native_ops.h`.
 
 ## The idea
 
@@ -63,7 +63,7 @@ The structure `f3_cpu` is in `include/f3rt/cpu_abi.h`. The main CPU also uses it
 
 A table entry is `f3_block { uint32_t address; f3_block_fn execute; }`. A block function takes only the `f3_cpu` pointer.
 
-The generated code calls functions that depend on the bus. The main CPU build uses `f3_read8`, `f3_write8` and so on. They go to `Machine`. For the sound CPU the compiler renames them to `f3_sound_read8` and the like. The header `runtime/sound_native_ops.h` declares the sound versions and some helpers:
+The generated code calls functions that depend on the bus. The main CPU build uses `f3_read8`, `f3_write8` and so on. They go to `Machine`. For the sound CPU the compiler renames them to `f3_sound_read8` and the like. The header `runtime/audio/reference/native/sound_native_ops.h` declares the sound versions and some helpers:
 
 | Item in `sound_native_ops.h` | Purpose |
 |---|---|

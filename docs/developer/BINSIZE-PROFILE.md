@@ -40,7 +40,7 @@ The illustrated `ADDRESS8HEX` / `COUNT_DECIMAL` fields describe the format, not 
 
 Sequential runs merge into an existing destination. An advisory lock rejects simultaneous writers to the same path; independent processes use separate files and merge later. Every approximately 30 wall-clock seconds at a frame boundary and on normal exit, the writer flushes/fsyncs a temporary file and atomically replaces the destination. Relative paths are fixed against startup cwd. Explicit flush errors terminate the command; destructor errors are reported without discarding an earlier snapshot. Writable storage and free disk space are required.
 
-Committed `profiles/landmakrj.profile`: **1,186,177 bytes**, SHA256 `5ae3c7b6e01b07a569ab984a7409cce33ab13282090435188ad65cb61ccffebb`. It contains no ROM bytes.
+`profiles/landmakrj.profile` is local and gitignored, not committed; regenerate it with the merge command below. Reference size: **1,186,177 bytes**, SHA256 `5ae3c7b6e01b07a569ab984a7409cce33ab13282090435188ad65cb61ccffebb`. It contains no ROM bytes.
 
 ### Persistence proofs
 
@@ -177,7 +177,7 @@ Dispatch table bytes (16 bytes per entry on this arm64 build):
 
 ### Configure/build wall time
 
-Seconds, `-j 6`, targets `landmakr` and `f3rt-gameplay-regression` (full/instrumentation also included the runtime tests). Initial clean builds include runtime/third-party compilation; final regeneration builds reuse those objects. Concurrent host load and nearly-full-disk recovery make these measurements non-isolated benchmarks. Supplied reference's original configure/build timing was not recorded.
+Seconds, `-j 6`, targets `landmakr` and `f3rt-tool` (full/instrumentation also included the runtime tests). Initial clean builds include runtime/third-party compilation; final regeneration builds reuse those objects. Concurrent host load and nearly-full-disk recovery make these measurements non-isolated benchmarks. Supplied reference's original configure/build timing was not recorded.
 
 | Build | Initial configure | Initial build | Final configure | Final regeneration/build |
 |---|---:|---:|---:|---:|
@@ -225,19 +225,19 @@ export PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages
 ROM=/Users/darien/Workspace/f3-stuff/roms/landmakr
 PROFILE="$PWD/profiles/landmakrj.profile"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR="$ROM" -DF3_PROFILE_INSTRUMENT=ON
-cmake --build build --target landmakr f3rt-gameplay-regression -j 6
+cmake --build build --target landmakr f3rt-tool -j 6
 ./build/landmakr --profile-out build/evidence/human-play.profile --video-scale 2
 
 cmake -S . -B build/tiers -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR="$ROM" -DF3_PROFILE_TIERS="$PROFILE"
-cmake --build build/tiers --target landmakr f3rt-gameplay-regression -j 6
+cmake --build build/tiers --target landmakr f3rt-tool -j 6
 cmake -S . -B build/slim -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR="$ROM" -DF3_PROFILE_SLIM="$PROFILE"
-cmake --build build/slim --target landmakr f3rt-gameplay-regression -j 6
+cmake --build build/slim --target landmakr f3rt-tool -j 6
 ```
 
 Training invocation, repeated for seeds 101–108 with independent destinations:
 
 ```sh
-./build/f3rt-gameplay-regression --rom-dir "$ROM" --sound-driver native --seed 101 --frames 20000 --wav build/evidence/training/seed-101.wav --dump-dir build/evidence/training/seed-101 --profile-out build/evidence/training/seed-101.profile
+./build/f3rt-tool gameplay --rom-dir "$ROM" --sound-driver native --seed 101 --frames 20000 --wav build/evidence/training/seed-101.wav --dump-dir build/evidence/training/seed-101 --profile-out build/evidence/training/seed-101.profile
 python3 tools/block_profile.py merge --output profiles/landmakrj.profile build/evidence/training/seed-{101,102,103,104,105,106,107,108}.profile build/evidence/human.profile build/evidence/instrument-attract.profile build/evidence/human-play.profile
 ```
 

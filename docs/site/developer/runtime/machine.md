@@ -134,7 +134,7 @@ classDiagram
 | `read8/16/32`, `write8/16/32` | Main CPU bus. See [Memory map](/developer/runtime/memory-map). |
 | `load_eeprom(path)`, `save_eeprom(path)` | Forward to `Eeprom::load` and `save`. |
 | `set_input(port, mask, pressed)` | Sets or clears input bits. Throws `std::out_of_range` for port 6 or more. |
-| `state_size()`, `save_state(dst)`, `load_state(src)`, `state_crc()` | Snapshots. See [Snapshots](/developer/netplay/snapshots). |
+| `state_size()`, `save_state(dst)`, `load_state(src)`, `state_crc()` | Save-state snapshots. See [Snapshot API](#snapshot-api). |
 
 ## Construction
 
@@ -272,7 +272,6 @@ The method therefore has a mutable cache even though it is `const`.
 The records copy host integer bytes.
 They are not a versioned, portable save-file format.
 Use them between machines with matching builds and configurations.
-Read [snapshots](/developer/netplay/snapshots) for the rollback requirements.
 
 ## Exceptions
 

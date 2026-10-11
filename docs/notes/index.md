@@ -41,7 +41,7 @@
 
 - [[hardware/interrupts]] (hypothesis) — main CPU IRQ levels 2/3/5, int5 timer at 0x4C0000, MAME's model
 - [[hardware/fio]] (hypothesis) — TC0640FIO port map: inputs, dials, coin counters/lockouts, EEPROM, watchdog/reset
-- [[hardware/sound]] (hypothesis) — sound 68000 map, 0xC00000 shared RAM, sound reset, OTIS bank counter, ES5510, DUART
+- [[hardware/sound]] (hypothesis) — sound 68000 map; confirmed OTIS→ESP wiring and Enhanced hardware-routing test
 
 ## Quirks
 
@@ -61,3 +61,4 @@
 
 - [[comparisons/hardware-vs-mame-video]] (hypothesis) — notes vs MAME 0.289: sprites, tilemaps/pivot, line RAM, blend/priority/clip/mosaic/colour
 - [[comparisons/hardware-vs-mame-system]] (hypothesis) — notes vs MAME 0.289: clocks/raster, interrupts 2/3/5, address map, FIO/input
+- [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing; Enhanced now follows it while Reference retains MAME routing

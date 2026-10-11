@@ -1,16 +1,16 @@
 # Extracting music and sound effects
 
-`f3rt-sound-extract` sends actual command packets through the mailbox. It produces PCM from the selected audio backend and optional backend-specific events.
+`f3rt-tool sound-extract` sends actual command packets through the mailbox. It produces PCM from the selected audio backend and optional backend-specific events.
 
-The default `--audio-backend accurate` executes the oracle or native sound driver and the audio chips. Opt-in `--audio-backend hle` uses a direct ROM sequencer and PCM synthesizer at 48 kHz on its own worker, without executing the sound CPU or ES chips. Neither mode exports ROM samples; the main game initializes the board before extraction.
+The default `--audio-backend reference` executes the sound driver (the interpreted Musashi oracle by default, or the native driver with `--sound-driver native`) and the audio chips. `--audio-backend enhanced` uses a direct ROM sequencer and PCM synthesizer at 48 kHz on its own worker, without executing the sound CPU or ES chips; it is available only for `landmakrj`. Neither mode exports ROM samples; the main game initializes the board before extraction.
 
-Source: [tools/sound_extract.cpp](https://github.com/ansxor/f3-recomp/blob/main/tools/sound_extract.cpp).
+Source: `tools/commands/sound_extract.cpp`.
 
 ## Execution phases
 
 ```mermaid
 flowchart TD
-    A["Load ROMs and construct Machine"] --> B["Select accurate (oracle/native) or HLE audio"]
+    A["Load ROMs and construct Machine"] --> B["Select Reference (oracle/native) or Enhanced audio"]
     B --> C["Attach optional backend events and WAV writer"]
     C --> D["Run interpreted main CPU for boot frames"]
     D --> E["Require sound reset release"]
@@ -21,11 +21,11 @@ flowchart TD
     I --> J["Write final PCM; finish trace if enabled"]
 ```
 
-The main CPU uses interpretation during boot, even when accurate sound uses the native driver or HLE is selected. The tool calls `run_frame(false)`.
+The main CPU uses interpretation during boot, even when Reference sound uses the native driver or Enhanced is selected. The tool calls `run_frame(false)`.
 
 After boot, the tool stops running the main CPU. It calls `Audio::advance` directly, so extraction does not trigger the main watchdog.
 
-With accurate audio, the original sound driver, OTIS, DSP, DUART, banks and gain controller continue to run. HLE consumes the same mailbox packets through its ROM sequencer and PCM synthesizer instead.
+With Reference audio, the original sound driver, OTIS, DSP, DUART, banks and gain controller continue to run. Enhanced consumes the same mailbox packets through its ROM sequencer and PCM synthesizer instead.
 
 ## Options
 
@@ -33,14 +33,14 @@ With accurate audio, the original sound driver, OTIS, DSP, DUART, banks and gain
 |---|---|
 | `--rom-dir DIR` | ROM directory. Required unless `F3RT_DEFAULT_ROM_DIR` was compiled into the tool. |
 | `--set SET` | ROM set. Default: `landmakrj`. |
-| `--audio-backend accurate\|hle` | Audio backend. Default: `accurate`. HLE uses the threaded ROM sequencer/PCM synthesizer at 48 kHz. |
-| `--sound-driver oracle\|native` | Accurate-audio sound CPU implementation. Default: `oracle`. Native requires generated sound code in the binary. HLE rejects an explicit driver option. |
+| `--audio-backend enhanced\|reference` | Audio backend. Default: `reference`. Enhanced is `landmakrj` only and uses the threaded ROM sequencer/PCM synthesizer at 48 kHz. |
+| `--sound-driver oracle\|native` | Reference-audio sound CPU implementation. Default: `oracle`. Native requires generated sound code in the binary. Enhanced rejects an explicit driver option. |
 | `--boot-frames N` | Positive interpreted-main boot frame count. Default: 900. |
 | `--seconds DURATION` | Positive extraction duration after the event origin. Default: 5.0 seconds. |
 | `--packet HEX` | Packet at event time zero. Repeat the option to submit several packets. |
 | `--at SECONDS:HEX` | Packet at a nonnegative time relative to the event origin. Repeat as required. |
-| `--sound-trace FILE` | Complete binary sound trace from cold boot through extraction. Accurate audio only; rejected with HLE. |
-| `--hle-events FILE` | HLE voice start/release/stop/parameter/cancel CSV. Requires `--audio-backend hle`; this is not an F3SND2 bus trace. |
+| `--sound-trace FILE` | Complete binary sound trace from cold boot through extraction. Reference audio only; rejected with Enhanced. |
+| `--hle-events FILE` | HLE voice start/release/stop/parameter CSV. Requires `--audio-backend enhanced`; this is not an F3SND2 bus trace. |
 | `--wav FILE` | Stereo signed-16-bit PCM WAV at the advertised audio sample rate. |
 | `--wav-window full\|event` | WAV interval. Default: `full`. |
 | `--help`, `-h` | Usage and startup notes. |
@@ -83,7 +83,7 @@ The parser requires an even number of hexadecimal characters. It also requires a
 
 Byte 0 must equal the complete packet length, including the length and opcode bytes. The parser does not validate opcode-specific operand semantics.
 
-With accurate audio, the driver applies its own command checks after consumption. HLE consumes these packets without driver execution. See [the mailbox command table](/developer/runtime/audio/mailbox).
+With Reference audio, the driver applies its own command checks after consumption. Enhanced consumes these packets without driver execution. See [the mailbox command table](/developer/runtime/audio/mailbox).
 
 `publish_packet` performs these actions:
 
@@ -93,7 +93,7 @@ With accurate audio, the driver applies its own command checks after consumption
 4. Write the new doubled producer high byte at `0xc00480`.
 5. Commit its low byte at `0xc00481`.
 
-The packet travels through the same shared RAM as a game command. For accurate audio, [the trace decoder](/developer/runtime/audio/tracing) reconstructs its publication and ownership.
+The packet travels through the same shared RAM as a game command. For Reference audio, [the trace decoder](/developer/runtime/audio/tracing) reconstructs its publication and ownership.
 
 ### Scheduling rules
 
@@ -111,15 +111,15 @@ The ring reserves one byte to distinguish full from empty. Free space is `1023 -
 
 If a due packet does not fit, extraction fails. The tool does not delay it, drop it or silently extend the duration.
 
-## Accurate-audio music example
+## Reference-audio music example
 
 This example starts looping sequence 8 and sets its sequence volume to `0x74`:
 
 ```sh
-build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 038108 --packet 04860874 --seconds 5 \
   --wav-window event --sound-trace build/music.sound --wav build/music.wav
-python3 tools/decode_sound.py build/music.sound \
+uv run f3 decode build/music.sound \
   --output build/music-full.jsonl
 ```
 
@@ -127,18 +127,18 @@ python3 tools/decode_sound.py build/music.sound \
 
 The volume packet does not replace the start packet as the owner of sequenced notes.
 
-## Accurate-audio direct sound-effect example
+## Reference-audio direct sound-effect example
 
 This example selects program `0x4002` on sequence 1, track 7. It starts key `0x27` with velocity `0x68`.
 
 It releases the same key after 1.5 seconds:
 
 ```sh
-build/f3rt-sound-extract --rom-dir /path/to/roms/landmakr \
+build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
   --sound-driver native --packet 068d01074002 --packet 068e01072768 \
   --at 1.5:058f010727 --seconds 3 --wav-window event \
   --sound-trace build/sfx.sound --wav build/sfx.wav
-python3 tools/decode_sound.py build/sfx.sound --notes-only \
+uv run f3 decode build/sfx.sound --notes-only \
   --output build/sfx-onsets.jsonl
 ```
 
@@ -150,7 +150,7 @@ No command guarantees audible output for every program or sequence. A missing tr
 
 ## WAV windows and counters
 
-An accurate sound trace always begins at cold boot. `--wav-window event` changes only which drained PCM frames enter the WAV, in either backend.
+A Reference sound trace always begins at cold boot. `--wav-window event` changes only which drained PCM frames enter the WAV, in either backend.
 
 | Window | WAV contents |
 |---|---|
@@ -167,11 +167,11 @@ Audio counters include boot and the pre-origin drain, even with an event-only WA
 
 JSONL uses absolute trace ticks and PCM ordinals. Subtract the printed event origin when you need an event-relative timeline.
 
-For HLE voice inspection, replace the accurate example's `--sound-driver native --sound-trace ...` with `--audio-backend hle --hle-events build/music-hle.csv` and use a distinct WAV filename. The CSV columns are `kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse`. `decode_sound.py` and `compare_sound.py` accept F3SND2 traces, not this CSV.
+For HLE voice event inspection, replace the Reference example's `--sound-driver native --sound-trace ...` with `--audio-backend enhanced --hle-events build/music-hle.csv` and use a distinct WAV filename. The CSV columns are `kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse`. `decode_sound.py` and `compare_sound.py` accept F3SND2 traces, not this CSV.
 
-## Compare accurate sound drivers
+## Compare Reference sound drivers
 
-Keep `--audio-backend accurate` (the default) and repeat each extraction with `--sound-driver oracle` and distinct output filenames. Compare complete traces and WAV files separately:
+Keep `--audio-backend reference` (the default) and repeat each extraction with `--sound-driver oracle` and distinct output filenames. Compare complete traces and WAV files separately:
 
 ```sh
 python3 tools/compare_sound.py build/music-oracle.sound \
@@ -198,4 +198,4 @@ Important failures include malformed packets, invalid times, missing ROMs, unava
 
 It also rejects an undrained ring, insufficient ring space, out-of-range clock intervals and packets at or after the duration.
 
-A successful accurate trace capture writes a trace `End` record. Failed captures can lack it; the decoder rejects such incomplete traces. HLE rejects sound tracing and explicit sound-driver selection; `--hle-events` is rejected unless HLE is selected.
+A successful Reference trace capture writes a trace `End` record. Failed captures can lack it; the decoder rejects such incomplete traces. Enhanced rejects sound tracing and explicit sound-driver selection; `--hle-events` is rejected unless Enhanced is selected.

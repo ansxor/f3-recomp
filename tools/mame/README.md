@@ -50,7 +50,7 @@ The provided Land Maker ROMs correspond to the Japanese set (`landmakrj`, Ver 2.
 
 To verify and stage into an untracked zip for MAME:
 ```bash
-python3 tools/mame/stage_roms.py
+uv run python tools/mame/stage_roms.py
 ```
 Options:
 - `--check-only`: Verifies CRCs without writing files.
@@ -79,18 +79,18 @@ Options:
 
 ---
 
-## 5. Comparing Frames (`tools/compare_frames.py`)
+## 5. Comparing Frames (`f3 compare frames`)
 
-`tools/compare_frames.py` is a standalone Python tool (zero external dependencies) that compares reference MAME frames against `f3rt` rendered frames.
+`uv run f3 compare frames` compares reference MAME frames against `f3rt` rendered frames.
 
 ### Single Frame Comparison
 ```bash
-python3 tools/compare_frames.py captures/landmakrj_attract/frame_0300/reference.bmp f3rt_frame_0300.bmp --diff diff_0300.bmp
+uv run f3 compare frames captures/landmakrj_attract/frame_0300/reference.bmp f3rt_frame_0300.bmp --diff diff_0300.bmp
 ```
 
 ### Directory Comparison
 ```bash
-python3 tools/compare_frames.py captures/landmakrj_attract/ f3rt_output_dir/ --diff-dir diffs/
+uv run f3 compare frames captures/landmakrj_attract/ f3rt_output_dir/
 ```
 
 ### Quantitative Metrics Produced
@@ -144,14 +144,14 @@ that alternative is not claimed to match the physical board.
 
 ### Reproducible waveform metrics
 
-`tools/compare_audio.py` requires NumPy and SciPy in the analysis Python
+`f3 compare audio` requires NumPy and SciPy in the analysis Python
 environment. It uses one fixed latency for the entire comparison interval,
 does not fit gain or warp time, and reports per-channel RMS error, correlation,
 SNR, and two-second window metrics. A negative lag means the runtime is early.
 Metrics are not an automatic parity verdict.
 
 ```sh
-PYTHONPATH=build/python python3 tools/compare_audio.py \
+uv run --group analysis f3 compare audio \
   build/mame-audio.wav build/replay-audio.wav \
   --start 18 --end 54 --json build/audio-comparison.json
 ```

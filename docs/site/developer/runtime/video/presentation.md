@@ -2,7 +2,7 @@
 
 The game renderer separates native output from optional presentation output. Native captures remain 320x232. Enhanced output rerasterizes supported scene geometry.
 
-Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Sources: [game_video.hpp](https://github.com/ansxor/f3-recomp/blob/main/include/f3rt/game_video.hpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp).
 
 ## Options and dimensions
 
@@ -44,8 +44,6 @@ Enhancements require `--renderer enhanced` or a developer game/compare renderer 
 The frontend rejects numeric scale zero/above four, border above 160, and an unknown filter. Auto modes require GPU; GPU requires game/compare. FDP rejects expanded output or linear filtering.
 
 The strict-native `landmakr` executable selects `game` unless the user selects another mode. With `--allow-fallback`, its default remains `fdp`.
-
-Netplay permits independent presentation geometry, including auto modes. Full local rollback snapshots retain each client's presentation; canonical handoff and network CRCs omit expanded buffers. Audio/video simulation compatibility still belongs to identity.
 
 ## Window-following GPU scale
 
@@ -107,16 +105,16 @@ It uploads semantic cells/glyphs, palette, normalized rows and the rendered
 sprite list; ROM pens are uploaded once. An indexed sprite pass precedes a
 per-output-sample fragment compositor. The CPU still makes native pixels.
 Expanded CPU presentation is materialized lazily for `presentation()`/save,
-so canonical snapshots remain byte-compatible. GPU caches/resources are not
+so snapshots remain byte-compatible. GPU caches/resources are not
 machine state. See [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md).
 
 ## ImGui postprocess and live controls
 
-F1 → Video applies GPU scale/filtering live; CPU scale, renderer/model, border and interpolation are restart preferences. Save preferences explicitly; CLI overrides loaded values.
+F1 → Video applies GPU scale, filtering, interpolation and motion interpolation live; CPU scale, renderer/model and border are restart preferences. Save preferences explicitly; CLI overrides loaded values.
 
 The final GPU postprocess pass offers Off (default), CRT and User. CPU leaves the preference inactive. F1 → Shaders loads/reloads a user file; a failed reload retains the last valid shader. The pass transforms presentation/captures, not native rendering, simulation, canonical CRCs or ImGui.
 
-Metal accepts `.metal` source with entry `f3_postprocess`, source texture/sampler index 0 and a float4 width/height/scale/elapsed-seconds uniform. Vulkan accepts `.spv` entry `main`; GLSL examples use sampled image set 2/binding 0 and uniform set 3/binding 0. Examples live at `runtime/renderer/shaders/user_transform.metal` and `user_transform.frag`; compile the latter offline before loading it. [Shader commands](/guide/video#f1-shaders-and-live-controls) and the [complete ABI/evidence](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md) give the supported interface and limits.
+Metal accepts `.metal` source with entry `f3_postprocess`, source texture/sampler index 0 and a float4 width/height/scale/elapsed-seconds uniform. Vulkan accepts `.spv` entry `main`; GLSL examples use sampled image set 2/binding 0 and uniform set 3/binding 0. Examples live at `runtime/renderer/shaders/user_transform.metal` and `user_transform.frag`; compile the latter offline before loading it. [Shader commands](/guide/video#f1-shaders-and-live-controls) and the [GPU design](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/GPU-VIDEO.md) give the supported interface and limits.
 
 
 ## What rerasterization changes

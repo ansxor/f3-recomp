@@ -19,7 +19,7 @@ No pushes; ROMs, generated C, executables and captures remain uncommitted.
 export PYTHONPATH=/private/tmp/sb-context-oracle/lib/python3.13/site-packages
 ROM=/Users/darien/Workspace/f3-stuff/roms/landmakr
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR="$ROM"
-cmake --build build --target landmakr f3rt-gameplay-regression -j 6
+cmake --build build --target landmakr f3rt-tool -j 6
 ./build/landmakr --renderer enhanced --video-scale auto-integer --video-border 48
 
 # Ordinary Release optimization; the same config exclusions remain on.
@@ -31,7 +31,7 @@ cmake -S . -B build/custom -G Ninja -DCMAKE_BUILD_TYPE=Release \
 # Explicit removal experiment, not the default or a general-playability recommendation.
 cmake -S . -B build/slim -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DF3_ROM_DIR="$ROM" -DF3_PROFILE_SLIM="$PWD/profiles/landmakrj.profile"
-cmake --build build/slim --target landmakr f3rt-gameplay-regression -j 6
+cmake --build build/slim --target landmakr f3rt-tool -j 6
 ```
 
 `F3_PROFILE_DEFAULT_TIERS=ON` selects the frozen profile only with ROM generation
@@ -39,6 +39,7 @@ and no explicit tiers/slim override. The cache's `F3_PROFILE_TIERS` value stays
 empty for this automatic selection. An explicit cached profile must be cleared
 when opting out. Tiers/slim overrides are mutually exclusive; their profiles
 are configure dependencies. Pre-generated-only builds keep their supplied mode.
+`profiles/landmakrj.profile` is local and gitignored, not committed. A ROM-backed landmakrj configure with the default `F3_PROFILE_DEFAULT_TIERS=ON` needs that file (regenerate it as in [BINSIZE-PROFILE.md](BINSIZE-PROFILE.md)) or `-DF3_PROFILE_DEFAULT_TIERS=OFF`.
 The opt-out was configured, built and actually run for 600 native frames:
 336,775 main / 61,997 sound registrations, zero fallback.
 
@@ -95,7 +96,7 @@ the failed log and corrected successful configure.
 Only identities, addresses and counts; no ROM bytes.
 
 The original corpus was re-merged into an ignored `refrozen.profile` and audited
-against all six current intervals. It is **byte-identical** to the committed
+against all six current intervals. It is **byte-identical** to the local, gitignored
 profile: **30,146 main / 7,519 sound hit keys**, **0 misses**, **0 excluded
 records**, no dropped hot entries. CRC/base/size still identify the full images,
 not a trimmed byte image. Both generators now reject matching hit **or miss**
@@ -218,23 +219,6 @@ the existing golden baseline WAVs/dumps were not changed or deleted.
 Native block counters need not equal an untiered build's dispatch count after
 page partitioning; all seven compared state/output files and audio remain exact.
 
-## Save/load and Go checks
-
-`go test ./...` in `netplay/server`: exit 0, package
-`f3rt/netplay/server` **0.423 s** (command wall 0.938 s).
-Actual `f3rt-netplay-oracle --mode snapshot --frames 6000 --seed 301
---sound-driver all`: exit 0, command wall **118.343 s**.
-
-**60/60 exact save/load replays**: 30 native-sound + 30 oracle-sound,
-points 0/1000/2000/3000/4000/5000, depths 1/7/16/31/97, memory/pixels/PCM/nonempty
-sound traces exact and **0 save / 0 load allocations** for both drivers.
-Each finishes 6,000 frames and `BOTH_PLAYERS_ACTIVE`; each has 30 deliberate
-wall-clock perturbations. Final native/oracle state CRCs differ as expected
-for different CPU state representations: `bcdefd0a` / `bc62613f`; both frame CRC
-`177cbcda`, audio CRC `1f4a6e2b`, audio samples 3,029,425.
-State sizes: native 4,231,509 / oracle 4,231,724 bytes.
-This is the existing save/load oracle, not a new impaired-network campaign.
-
 ## GPU presentation gates
 
 Actual Metal harness: **35/35 SUCCESS**, each scenario executed once.
@@ -300,7 +284,7 @@ and `human-combined-focused.png`. Local checkpoint: `binsize-combined-3-human`.
 Ignored `build/combined-evidence/` holds commands, durations, exit codes, logs,
 `profile-audit.json`, `sizes.json`, regional reports, effective tier flags,
 MAME captures, attract-gate JSON, eight per-seed gate JSONs/hashes, runtime
-exclusion/cold-hit probe logs, `gpu/results.json` and `netplay/results.json`.
+exclusion/cold-hit probe logs, and `gpu/results.json`.
 
 Only Japanese Land Maker and this Darwin arm64/Metal environment are validated.
 Finite profiles and seeded gates are not all-state proof of every exclusion,
@@ -308,4 +292,4 @@ ending or indirect path. Full coverage means every existing nonexcluded entry
 is retained, not that every baseline unsupported lowering is implemented.
 Slim retains the same hot union and still has its historical 7/8 held-out abort
 risk; no generally playable slim claim. No original campaign tail was recovered,
-no other ROM set or GPU-host correctness claim, no new network-impairment claim.
+no other ROM set or GPU-host correctness claim.

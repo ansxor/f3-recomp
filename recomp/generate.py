@@ -11,11 +11,34 @@ import json
 import zlib
 
 from .emitter import lower, static_flow
+from .liveness import analyse
 from .discovery import parse_exclusions, exclusion_at
 from .sprite_units import guard_lines, parse_sprite_units, digest as sprite_units_digest
 from .timing import BASE_CYCLES
 
-_RUNTIME_ABI_VERSION = 4
+_RUNTIME_ABI_VERSION = 5
+
+
+def _count_flag_stores(statements: list[str]) -> tuple[int, int]:
+    """(lazy condition-code producers, eager X writes) among lowered statements."""
+    lazy = sum(1 for statement in statements
+               if 'cpu->cc_op = F3_CC_OP_' in statement and 'F3_CC_OP_NONE' not in statement)
+    eager_x = sum(1 for statement in statements if 'cpu->sr = (cpu->sr & ~0x10u) |' in statement)
+    return lazy, eager_x
+
+
+def write_if_changed(path: Path, data: str | bytes, encoding: str = "utf-8") -> bool:
+    """Write data to path only if the file does not exist or its content differs."""
+    payload = data.encode(encoding) if isinstance(data, str) else data
+    if path.is_file():
+        try:
+            if path.read_bytes() == payload:
+                return False
+        except OSError:
+            pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    return True
 
 
 def generate(rom: bytes, discovery, output: Path, config: dict,
@@ -142,6 +165,26 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         table.extend((pc, name) for pc in pcs)
         for pc in pcs:
             pc_to_name[pc] = name
+    # Backward flag liveness over the instructions emitted natively. Hook PCs flush
+    # for a sandbox and fallback stubs run in the interpreter: both observe sr.
+    # Lowering is independent of liveness for instructions without flag stores,
+    # so those results are reused by the emission pass below.
+    flag_producers = Counter()
+    fallback_entries = set()
+    unflagged = {}
+    for pc in pc_to_name:
+        statements = lower(discovery.instructions[pc])
+        if statements is None:
+            fallback_entries.add(pc)
+            continue
+        lazy, eager_x = _count_flag_stores(statements)
+        flag_producers["lazy"] += lazy
+        flag_producers["eager_x"] += eager_x
+        if not lazy and not eager_x:
+            unflagged[pc] = statements
+    liveness = analyse(discovery.instructions, pc_to_name,
+                       pinned=fallback_entries | unit_enter.keys() | unit_exit.keys())
+    flag_emitted = Counter()
     source_names = []
     tier_sources = {"hot": [], "cold": []}
     supported, unsupported = Counter(), Counter()
@@ -175,15 +218,21 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                 unit_hooks[(unit_id, "enter")] += 1
                 shard_hooked[tier] = True
             lines.append(f'    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);')
-            statements = lower(insn)
+            if pc in fallback_entries:
+                statements = None
+            else:
+                statements = (unflagged.get(pc) or
+                              lower(insn, liveness.live_out[pc]))
             if statements is None:
                 unsupported[insn.mnemonic] += 1
                 unsupported_pcs.append(pc)
-                lines.extend(['    f3_cc_flush(cpu);',
-                              '    if (!f3_fallback(cpu)) cpu->halted = 1;',
+                lines.extend(['    if (!f3_fallback(cpu)) cpu->halted = 1;',
                               '    return;'])
             else:
                 supported[insn.mnemonic] += 1
+                lazy, eager_x = _count_flag_stores(statements)
+                flag_emitted["lazy"] += lazy
+                flag_emitted["eager_x"] += eager_x
                 lines.extend('    ' + statement for statement in statements)
                 # Chain into a statically known successor instead of returning
                 # to the dispatcher. One guard per successor proves the pending
@@ -217,7 +266,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                             lines.append(f'    if ({guard}) goto L_{target:06x};')
                         else:
                             shard_calls[tier].add(owner)
-                            lines.append(f'    if ({guard}) {{ f3_cc_flush(cpu); '
+                            lines.append(f'    if ({guard}) {{ '
                                          f'F3_CHAIN({owner}, cpu); }}')
                     base_mnem = insn.mnemonic.split('.')[0].lower()
                     if base_mnem in ('jmp', 'jsr') and not flow.targets:
@@ -251,14 +300,13 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                                 else:
                                     shard_calls[tier].add(owner)
                                     lines.append(f'        case 0x{target:08x}u: '
-                                                 f'f3_cc_flush(cpu); '
                                                  f'F3_CHAIN({owner}, cpu);')
                             lines.append('        default: break;')
                             lines.append('        }')
                             lines.append('    }')
-                    lines.extend(['    f3_cc_flush(cpu);', '    return;'])
+                    lines.append('    return;')
             lines.append('}')
-        lines.extend(['    f3_cc_flush(cpu);', '}\n'])
+        lines.append('}\n')
         shard = shards[tier]
         shard.append('\n'.join(lines))
         remaining[tier] -= 1
@@ -270,8 +318,8 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
             externs = ''.join(f'extern void {callee}(f3_cpu *cpu);\n'
                               for callee in sorted(shard_calls[tier]))
             hooked = shard_hooked[tier]
-            (output / filename).write_text(
-                preamble + (unit_guard if hooked else '') + externs + '\n'.join(shard))
+            write_if_changed(output / filename,
+                             preamble + (unit_guard if hooked else '') + externs + '\n'.join(shard))
             source_names.append(filename)
             tier_sources[tier].append(filename)
             shards[tier] = []
@@ -309,7 +357,6 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         storage = '' if profile_tiers is not None else 'static '
         definition = (f'{storage}void f3_rom_exception_{vector}(f3_cpu *cpu) {{\n'
                       '    F3_PROFILE_HIT_MAIN(cpu->pc);\n'
-                      '    f3_cc_flush(cpu);\n'
                       f'    f3_exception(cpu, {vector}, cpu->pc);\n'
                       '}\n')
         if profile_tiers is None:
@@ -321,7 +368,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     for tier, definitions in exception_sources.items():
         if definitions:
             filename = f'exceptions_{tier}.c'
-            (output / filename).write_text(preamble + ''.join(definitions))
+            write_if_changed(output / filename, preamble + ''.join(definitions))
             source_names.append(filename)
             tier_sources[tier].append(filename)
     program += 'static const f3_block translated_blocks[] = {\n'
@@ -343,8 +390,9 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
                     '        sizeof(excluded_ranges) / sizeof(excluded_ranges[0]));\n}\n')
     else:
         program += '    return f3_register_exclusions(cpu, NULL, 0);\n}\n'
-    (output / 'program.c').write_text(program)
-    (output / 'program.h').write_text(
+    write_if_changed(output / 'program.c', program)
+    write_if_changed(
+        output / 'program.h',
         '#ifndef F3_GENERATED_PROGRAM_H\n#define F3_GENERATED_PROGRAM_H\n'
         '#include <f3rt/cpu_abi.h>\n' + abi_guard +
         '#ifdef __cplusplus\nextern "C" {\n#endif\n'
@@ -355,12 +403,12 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
     source_variables = {"F3_GENERATED_SOURCES": source_names,
                         "F3_GENERATED_HOT_SOURCES": tier_sources["hot"],
                         "F3_GENERATED_COLD_SOURCES": tier_sources["cold"]}
-    (output / 'sources.cmake').write_text(''.join(
+    write_if_changed(output / 'sources.cmake', ''.join(
         f'set({variable}\n' + ''.join(
             f'    "${{CMAKE_CURRENT_LIST_DIR}}/{name}"\n' for name in names) + ')\n'
         for variable, names in source_variables.items()))
     # Used by runtime loader, not embedded in generated C or committed.
-    (output / 'program.bin').write_bytes(rom)
+    write_if_changed(output / 'program.bin', rom)
     inventory = {
         "version": 1, "region": "main",
         "rom_crc32": f"{zlib.crc32(rom) & 0xffffffff:08x}",
@@ -369,7 +417,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "cold_entries": len(original_entries) - len(hot),
         "generated_c_bytes": sum((output / name).stat().st_size for name in source_names),
     }
-    (output / 'profile_inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
+    write_if_changed(output / 'profile_inventory.json', json.dumps(inventory, indent=2) + '\n')
     report = {
         "decoded_instructions": len(discovery.instructions),
         "registered_entries": len(table),
@@ -383,6 +431,12 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "fallback_pcs": unsupported_pcs, "source_files": source_names,
         "runtime_abi_version": _RUNTIME_ABI_VERSION,
         "emit_units": unit_report,
+        "flag_liveness": {
+            "lazy_producers": flag_producers["lazy"],
+            "lazy_producers_emitted": flag_emitted["lazy"],
+            "eager_x_writes": flag_producers["eager_x"],
+            "eager_x_writes_emitted": flag_emitted["eager_x"],
+        },
         "coverage_mode": "all_aligned" if exhaustive else "recursive",
         "exclusions": [
             {"start": region.start, "end": region.end,
@@ -403,6 +457,18 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         "indirect_chain_capped_sites": indirect_capped,
         "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
     }
-    (output / 'lowering.json').write_text(json.dumps(report, indent=2) + '\n')
-    (output / 'coverage.json').write_text(json.dumps(discovery.report, indent=2) + '\n')
+    write_if_changed(output / 'lowering.json', json.dumps(report, indent=2) + '\n')
+    write_if_changed(output / 'coverage.json', json.dumps(discovery.report, indent=2) + '\n')
+    emitted = set(source_names) | {
+        "program.h",
+        "sources.cmake",
+        "program.bin",
+        "profile_inventory.json",
+        "lowering.json",
+        "coverage.json",
+    }
+    for item in output.iterdir():
+        if (item.is_file() and item.name not in emitted
+                and not item.name.startswith(".") and not item.name.endswith(".stamp")):
+            item.unlink()
     return report

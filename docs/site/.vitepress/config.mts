@@ -7,7 +7,7 @@ export default withMermaid(
   defineConfig({
     title: 'f3-recomp',
     description:
-      'Land Maker Japan static recompiler, SDL3 runtime and optional rollback netplay.',
+      'Land Maker Japan static recompiler and SDL3 runtime.',
     base: '/f3-recomp/',
     cleanUrls: true,
     lastUpdated: true,
@@ -29,7 +29,6 @@ export default withMermaid(
               { text: 'Controls and options', link: '/guide/running' },
               { text: 'Video and presentation', link: '/guide/video' },
               { text: 'Sound', link: '/guide/sound' },
-              { text: 'Online play', link: '/guide/netplay' },
               { text: 'Troubleshooting', link: '/guide/troubleshooting' },
             ],
           },
@@ -137,26 +136,6 @@ export default withMermaid(
             ],
           },
           {
-            text: 'Netplay',
-            collapsed: true,
-            items: [
-              { text: 'Overview', link: '/developer/netplay/' },
-              { text: 'ImGui / versus evidence', link: 'https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md' },
-              { text: 'Snapshots', link: '/developer/netplay/snapshots' },
-              { text: 'Determinism rules', link: '/developer/netplay/determinism' },
-              { text: 'Rollback engine', link: '/developer/netplay/rollback' },
-              { text: 'Transport', link: '/developer/netplay/transport' },
-              { text: 'Wire protocol', link: '/developer/netplay/protocol' },
-              { text: 'Relay server', link: '/developer/netplay/server' },
-              { text: 'Build identity', link: '/developer/netplay/build-identity' },
-              { text: 'Frontend integration', link: '/developer/netplay/frontend-integration' },
-              { text: 'Netplay oracle', link: '/developer/netplay/oracle' },
-              { text: 'Writing a client', link: '/developer/netplay/writing-a-client' },
-              { text: 'Debugging', link: '/developer/netplay/debugging' },
-              { text: 'Limits', link: '/developer/netplay/limits' },
-            ],
-          },
-          {
             text: 'Verification',
             collapsed: true,
             items: [
@@ -168,7 +147,6 @@ export default withMermaid(
               { text: 'Audio comparison', link: '/developer/testing/audio-compare' },
               { text: 'Sound tools', link: '/developer/testing/sound-tools' },
               { text: 'Unit checks', link: '/developer/testing/unit-checks' },
-              { text: 'Netplay oracle', link: '/developer/testing/netplay-oracle' },
             ],
           },
         ],

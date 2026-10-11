@@ -118,7 +118,6 @@ flowchart LR
 | `enable_gpu_presentation(enabled)`, `captured_frame()` | Enable/read the host-only `CapturedFrame` scanout snapshot (typed tiles, text, rows, colors, sprite list; overwritten once per VBSTART capture). |
 | `set_gpu_scale(scale)`, `render_reference(output, options, mask, serial)` | Select host GPU/reference scale 1..8 and render that geometry; constructor-fixed presentation/state buffers and border do not change. |
 | `state_size()`, `save_state(dst)`, `load_state(src)` | Snapshot support. They throw `std::invalid_argument` for a wrong size and `std::logic_error` for leftover bytes. |
-| `sync_state_size()`, `save_sync_state(dst)`, `load_sync_state(src)` | Canonical native rendering/trails without expanded presentation buffers. |
 
 `latch_sprites()`, `render()` and `compare_composite(frame)` are private.
 
@@ -243,9 +242,8 @@ counters. The structures use the packed `Canonical*` types in
 `runtime/state_io.hpp`: `CanonicalSceneSprite`, `CanonicalSceneLayer`,
 `CanonicalScenePlayfield`, `CanonicalSceneClip`, `CanonicalSceneRow`,
 `CanonicalLinePivot`, `CanonicalLineSprite`, `CanonicalLinePlayfield` and
-`CanonicalLineParams`. Rollback netplay saves this state every frame, so it must
-contain every value that affects the next picture. See [Snapshots](/developer/netplay/snapshots)
-and [ABI changes](/developer/abi-changes).
+`CanonicalLineParams`. The saved state must contain every value that affects the
+next picture. See [ABI changes](/developer/abi-changes).
 
 ## Report output
 

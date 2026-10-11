@@ -59,12 +59,12 @@ EXPECTED_ROMS = {
 }
 
 DEFAULT_SEARCH_PATHS = [
-    "/Users/darien/Workspace/f3-stuff/roms/landmakr",
-    "/Users/darien/Workspace/f3-stuff/roms/landmakr.zip",
-    "/Users/darien/Workspace/f3-stuff/landmakr.zip",
+    "roms/landmakr",
+    "roms/landmakrj",
     "../../roms/landmakr",
-    "../../landmakr.zip",
+    "../../roms/landmakrj",
     "../roms/landmakr",
+    "../roms/landmakrj",
 ]
 
 
@@ -189,8 +189,8 @@ def main():
         description="Verify and stage Land Maker (landmakrj) ROMs for MAME."
     )
     parser.add_argument("--source", help="Source ROMs directory or zip file")
-    parser.add_argument("--board-source", default="/Users/darien/Workspace/f3-stuff/roms/puchicar",
-                        help="Directory/ZIP with CRC-identical F3 motherboard PLDs")
+    parser.add_argument("--board-source", default="roms/puchicarj",
+                        help="Directory/ZIP with CRC-identical F3 motherboard PLDs (default: roms/puchicarj)")
     parser.add_argument(
         "--out-zip",
         default="tools/mame/staged_roms/landmakrj.zip",

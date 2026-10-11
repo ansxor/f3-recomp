@@ -1,6 +1,6 @@
 # Tools catalog
 
-This catalog covers `tools/` and related runtime and netplay programs. Each entry explains its purpose and gives a command example.
+This catalog covers `tools/` and related runtime programs. Each entry explains its purpose and gives a command example.
 
 For all flags, see the [CLI reference](/reference/cli). For how the tests work inside, see [Testing](/developer/testing/).
 
@@ -11,68 +11,60 @@ All commands run from the repository root. The examples use `build/` as the buil
 | I want to ... | Use |
 | --- | --- |
 | Check that the game runs for a long time without a fallback | `tools/run_gameplay_regression.py` |
-| Check that netplay gives the same result as one machine | `tools/run_netplay_oracle.py` |
-| Compare my frames with MAME frames | `tools/mame/run_capture.sh`, then `f3rt-replay`, then `tools/compare_frames.py` |
-| Compare my audio with MAME audio | `tools/compare_audio.py` |
-| Compare the oracle and native sound drivers | `f3rt-gameplay-regression --sound-trace`, then `tools/compare_sound.py` |
-| Test the CPU lowering against Musashi | `tools/differential/run.py` |
-| Make the sound driver C code | `tools/compile_sound.py` |
+| Compare my frames with MAME frames | `tools/mame/run_capture.sh`, then `f3rt-replay`, then `uv run f3 compare frames` |
+| Compare my audio with MAME audio | `uv run f3 compare audio` |
+| Compare the oracle and native sound drivers | `f3rt-tool gameplay --sound-trace`, then `uv run f3 compare trace` |
+| Test the CPU lowering against Musashi | `uv run f3 differential` |
+| Make the sound driver C code | `recomp/compile/sound.py` |
 
 ## Programs built by CMake
 
 | Program | Source | What it does |
 | --- | --- | --- |
-| `f3rt-gameplay-regression` | `tools/gameplay_regression.cpp` | Runs the native game for many frames with a seeded input schedule. It fails if the CPU halts or a fallback instruction runs. It can also compare the game-data renderer with the FDP renderer. |
-| `f3rt-netplay-oracle` | `tools/netplay_oracle.cpp` | Full snapshot replay, canonical cross-presentation sync proof, handoff-loaded reference and real versus campaigns. |
-| `f3rt-motion-regression` | `tools/motion_interp_regression.cpp` | Strict-native two-machine state/audio/native-pixel parity, temporal GPU endpoints, visible ROM motion and candidate/rejection census; `--demo` shows native/interpolated steady render-only motion in one window. |
-| `f3rt-sound-extract` | `tools/sound_extract.cpp` | Boots the game, freezes the main CPU, injects sound packets, and records audio and a bus trace. |
+| `f3rt-tool` | `tools/tool.cpp`, `tools/commands/*.cpp` | Runtime tool with subcommands: `gameplay` (seeded regression), `gpu-compare` (GPU parity), `motion` (temporal GPU motion proof), `sound-extract` (stimulus injection and WAV/trace capture), `sprite-check` (emit-unit replay verification). |
 | `f3rt-replay` | `runtime/replay.cpp` | Renders MAME captures with the f3rt video code, or renders a MAME audio trace to a WAV file. |
 | `f3rt-test-<area>` | `runtime/tests/<area>.cpp` | Per-area runtime unit tests. Runs under CTest. |
-| `f3rt-motion-check` | `runtime/motion_interp_check.cpp` | ROM/window-independent motion identity, count-shift, transform, independent-axis and discontinuity regressions. Runs under CTest. |
-| `netplay-server` | `netplay/server/*.go` | UDP relay for two players. Built with `go build`, not with CMake. |
 
 ```sh
-# 40000 frames, 8 seeds
-python3 tools/run_gameplay_regression.py --rom-dir roms/landmakrj
+# Gameplay regression: 40000 frames
+./build/f3rt-tool gameplay --seed 1 --frames 40000
 
 # One run with video comparison
-./build/f3rt-gameplay-regression --seed 1 --frames 20000 --video-diff
+./build/f3rt-tool gameplay --seed 1 --frames 20000 --video-diff
 
 # Inject one sound packet and save the result
-./build/f3rt-sound-extract --sound-driver native --packet 038001 --seconds 3 --wav note.wav
+./build/f3rt-tool sound-extract --sound-driver native --packet 038001 --seconds 3 --wav note.wav
 ```
 
 ## Python scripts in tools/
 
 | Script | What it does | How to run it |
 | --- | --- | --- |
-| `run_gameplay_regression.py` | Runs `f3rt-gameplay-regression` for each seed (default seeds 1 to 8) and reports the failed seeds. | `python3 tools/run_gameplay_regression.py --rom-dir DIR` |
-| `run_netplay_oracle.py` | Runs real relay campaigns from independent solo histories, compares each match to its host handoff reference, and checks natural return/rematch. Suites: snapshots, baseline, impaired (including transfer chunks), and cases (late input, stall, geometry/delay independence, host-P2, mismatch, disconnect). | `python3 tools/run_netplay_oracle.py --suite all` |
-| `compile_sound.py` | Compiles the sound CPU ROM to C. CMake runs it for you. | `python3 tools/compile_sound.py --rom-dir DIR --output DIR` |
-| `compare_frames.py` | Compares two frames, or two directories of frames. Reports mismatch count, maximum error, mean error, RMSE and PSNR. Can write diff images. It uses only the Python standard library. | `python3 tools/compare_frames.py REFERENCE ACTUAL --json` |
-| `compare_audio.py` | Compares two WAV files after one fixed delay correction. Reports metrics for the whole range and for windows. It needs NumPy and SciPy. The metrics are evidence and not a pass or fail verdict. | `python3 tools/compare_audio.py ref.wav test.wav --json report.json` |
-| `compare_sound.py` | Compares two sound bus traces record by record. Reports the first difference with the commands before it. | `python3 tools/compare_sound.py oracle.trace model.trace` |
-| `decode_sound.py` | Decodes an F3SND2 sound trace to JSON lines (gzip if the name ends in `.gz`). Filters: `--notes-only`, `--commands-only`. | `python3 tools/decode_sound.py trace.bin --output events.jsonl.gz` |
+| `f3 gameplay-seeds` | Runs `f3rt-tool gameplay` for each seed (default seeds 1 to 8) and reports the failed seeds. | `uv run f3 gameplay-seeds --rom-dir DIR` |
+| `compile_sound.py` | Compiles the sound CPU ROM to C. CMake runs it for you. | `uv run python tools/compile_sound.py --rom-dir DIR --output DIR` |
+| `compare_frames.py` | Compares two frames, or two directories of frames. Reports mismatch count, maximum error, mean error, RMSE and PSNR. Can write diff images. It uses only the Python standard library. | `uv run python tools/compare_frames.py REFERENCE ACTUAL --json` |
+| `compare_audio.py` | Compares two WAV files after one fixed delay correction. Reports metrics for the whole range and for windows. It needs NumPy and SciPy. The metrics are evidence and not a pass or fail verdict. | `uv run --group analysis python tools/compare_audio.py ref.wav test.wav --json report.json` |
+| `compare_sound.py` | Compares two sound bus traces record by record. Reports the first difference with the commands before it. | `uv run python tools/compare_sound.py oracle.trace model.trace` |
+| `decode_sound.py` | Decodes an F3SND2 sound trace to JSON lines (gzip if the name ends in `.gz`). Filters: `--notes-only`, `--commands-only`. | `uv run python tools/decode_sound.py trace.bin --output events.jsonl.gz` |
 | `test_discovery.py` | Unit tests for discovery, with a synthetic ROM. No game data. | See "Python unit tests" below. |
 | `test_generate.py` | Unit tests that build generated blocks for synthetic code and run them across dispatch deadlines. Needs a C compiler. | See below. |
 | `test_decode_sound.py` | Unit tests for `decode_sound.py`. | See below. |
 
 ### Python unit tests
 
-The test files use `unittest`. They import `recomp` and `decode_sound`. Run them with both the repository root and `tools/` on the module path.
+The test files use `unittest`. They import `recomp` and `decode_sound`. Run them via `uv run`:
 
 ```sh
-PYTHONPATH=.:tools python3 -m unittest discover -s tools -p "test_*.py"
+uv run python -m unittest discover -s tools -p "test_*.py"
 ```
 
-Install the pinned Capstone dependency first. These are developer checks, not a replacement for exercising the player build.
+Dependencies are managed by `uv`. These are developer checks, not a replacement for exercising the player build.
 
 ## C++ and CMake helpers in tools/
 
 | File | What it does |
 | --- | --- |
-| `gameplay_inputs.hpp` | Constants of the seeded input schedule (`f3rt::test::ScheduleConfig`): coin frame, start button pulses, and button mashing. `f3rt-gameplay-regression` and `f3rt-netplay-oracle` share it. |
-| `netplay_build_id.cmake` | A CMake script that writes `netplay_build.hpp`, the build hash for the netplay handshake. CMake runs it at build time. See [Build options](/reference/build-options#generated-header-netplay-build-hpp). |
+| `tools/runner/inputs.hpp` | Seeded input schedule (`f3rt::runner::ScheduleConfig`, `SeededScheduleInputSource`): coin frame, start button pulses, and button mashing. `f3rt-tool gameplay` uses it. |
 
 ## tools/differential/
 
@@ -81,7 +73,7 @@ This package tests the recompiler lowering against the Musashi reference core. I
 | File | What it does |
 | --- | --- |
 | `run.py` | Script wrapper. It adds the repository root to `sys.path` and calls `main()`. |
-| `__main__.py` | Command-line entry point. Also available as `python3 -m tools.differential`. |
+| `__main__.py` | Command-line entry point. Also available as `uv run python -m tools.differential`. |
 | `runner.py` | Builds the test runner with `CC` (default `clang`) and runs it. Contains `run_differential()`. |
 | `generator.py` | Generates deterministic test cases, with a focus on boundary states such as sticky Z in ADDX, SUBX and NEGX, shift counts, and branch displacements. |
 | `musashi_build.py` | Finds the Musashi source (`find_musashi_source`) and builds `libmusashi.a` with `CC` and `AR`. |
@@ -89,8 +81,8 @@ This package tests the recompiler lowering against the Musashi reference core. I
 | `export_cycles.py` | Writes `recomp/68020_cycles.csv` from a generated Musashi `m68kops.c`. |
 
 ```sh
-python3 tools/differential/run.py --cases 2000 --seed 7
-python3 tools/differential/run.py --filter add --cases 500 -v
+uv run python tools/differential/run.py --cases 2000 --seed 7
+uv run python tools/differential/run.py --filter add --cases 500 -v
 ```
 
 ## tools/mame/
@@ -107,21 +99,21 @@ These files compare f3rt with the MAME emulator. They record frames and audio fr
 
 ```sh
 # Check ROMs and write the ZIP
-python3 tools/mame/stage_roms.py --source roms/landmakr --board-source roms/puchicar
+uv run python tools/mame/stage_roms.py --source roms/landmakr --board-source roms/puchicar
 
 # Capture 10 frames (needs a MAME build)
 tools/mame/run_capture.sh --mame /path/to/mame --start-frame 600 --count 10
 
 # Render them with f3rt and compare
 ./build/f3rt-replay --rom-dir roms/landmakrj --captures captures/landmakrj_attract --output build/replay
-python3 tools/compare_frames.py captures/landmakrj_attract build/replay
+uv run python tools/compare_frames.py captures/landmakrj_attract build/replay
 ```
 
 ## Other programs
 
 | Program | Source | Notes |
 | --- | --- | --- |
-| `python3 -m recomp discover` and `emit` | `recomp/` | The recompiler. See the [CLI reference](/reference/cli#python3-m-recomp). |
-| `landmakr` and `f3rt-run` | `runtime/frontend.cpp` | The game frontends. See [Running the game](/guide/running). |
+| `uv run python -m recomp discover` and `emit` | `recomp/` | The recompiler. See the [CLI reference](/reference/cli#uv-run-python-m-recomp). |
+| `landmakr` and `f3rt-run` | `runtime/frontend/frontend.cpp` | The game frontends. See [Running the game](/guide/running). |
 
 For the design of the test tools, read [Testing](/developer/testing/), [Differential tests](/developer/testing/differential) and [Gameplay regression](/developer/testing/gameplay-regression).

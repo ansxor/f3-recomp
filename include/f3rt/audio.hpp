@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace f3rt {
 namespace hle { struct VoiceEvent; }
@@ -12,19 +13,20 @@ namespace hle { struct VoiceEvent; }
 class Audio {
 public:
     enum class GainModel { MameRouting, SingleStage };
-    enum class Backend { Accurate, Hle };
-    struct HleStats {
-        uint64_t commands = 0, reused = 0, cancelled = 0, rendered_frames = 0;
+    enum class Backend { Enhanced, Reference };
+    // "enhanced" / "reference"; the --audio-backend spelling shared by every executable.
+    static bool parse_backend(std::string_view name, Backend &backend);
+    static const char *backend_name(Backend backend);
+    struct EnhancedStats {
+        uint64_t commands = 0, rendered_frames = 0;
     };
     // Select once, after ROM loading and before machine execution.
     void set_backend(Backend backend);
     Backend backend() const;
-    void shared_write(uint32_t offset, uint64_t frame);
-    void begin_frame(uint64_t frame);
-    void finish_frame(uint64_t frame);
-    void begin_rollback(uint64_t begin, uint64_t end);
-    void end_rollback();
-    HleStats hle_stats() const;
+    bool is_enhanced_active() const;
+    void shared_write(uint32_t offset);
+    void finish_frame();
+    EnhancedStats enhanced_stats() const;
     // Diagnostic callback executes on the worker, never on the main CPU.
     void set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer);
     Audio();
@@ -74,20 +76,20 @@ public:
     uint64_t clock_ticks() const;
     uint64_t generated_frames() const;
 
-    // Final output gain after the board mix, shared by accurate and HLE audio. The MAME-equivalent
+    // Final output gain after the board mix, shared by reference and enhanced audio. The MAME-equivalent
     // mix (ES5505 /2^19, 0.18 pump input, MB87078 percent/32 twice, 0.5 route) peaks near -25 dBFS
     // on every measured game (1.3k-1.9k of 32768 at game volume), so the output stage is raised 12x
     // (+21.6 dB). Loud passages then reach roughly 0.5-0.6 FS and the existing +/-1 clamp is not hit.
     static constexpr float output_boost = 12.0f;
 
     // Audio output stream: interleaved stereo (Left, Right)
-    // Accurate: ES5505 native rate; HLE: 48000 Hz.
+    // Reference: ES5505 native rate; Enhanced: 48000 Hz.
     uint32_t sample_rate() const;
     size_t available_frames() const;
     size_t render(int16_t *interleaved_stereo, size_t max_frames);
     size_t render(float *interleaved_stereo, size_t max_frames);
-    // Non-blocking drain: returns only PCM already produced by the HLE worker
-    // without waiting. Never blocks on the HLE worker. Callers needing a
+    // Non-blocking drain: returns only PCM already produced by the Enhanced worker
+    // without waiting. Never blocks on the Enhanced worker. Callers needing a
     // complete, deterministic stream must finish with the blocking render.
     size_t render_ready(int16_t *interleaved_stereo, size_t max_frames);
     // Default matches the observed MAME board mix; SingleStage is an explicit

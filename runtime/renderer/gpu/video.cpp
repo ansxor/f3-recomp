@@ -323,6 +323,20 @@ struct GpuVideo::Impl {
         post_start = SDL_GetTicksNS();
         rendered = false; rendered_post = false;
     }
+    // Created on first use, so an interpolation-off session never compiles the shader.
+    void ensure_interpolation_pipeline() {
+        if (!interpolation_pipeline)
+            interpolation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag,
+                                              SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+    }
+    void set_interpolation(VideoInterpolation mode, InterpolationFields next_fields) {
+        if (mode == interpolation && next_fields == fields) return;
+        if (mode != VideoInterpolation::Off) ensure_interpolation_pipeline(); // throws before any state changes
+        interpolation = mode;
+        fields = next_fields;
+        interpolation_stats = {};
+        have_interpolation_log = false;
+    }
     void upload_buffer(SDL_GPUCopyPass *pass, SDL_GPUTransferBuffer *source, SDL_GPUBuffer *destination,
                        Uint32 offset, Uint32 size, bool cycle) {
         SDL_GPUTransferBufferLocation from{source, offset};
@@ -350,7 +364,8 @@ struct GpuVideo::Impl {
                 !SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
                 fail("Set GPU presentation mode");
         }
-        scene_buffer = buffer(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes);
+        // Sized for the interpolation region in every mode so the mode can change live (+52 KiB).
+        scene_buffer = buffer(interpolation_scene_bytes);
         native_buffer = buffer(native_bytes);
         pf_assets = buffer(pf_asset_bytes); sp_assets = buffer(sp_asset_bytes);
         sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R16_UINT, options, true);
@@ -363,19 +378,17 @@ struct GpuVideo::Impl {
         sampler = checked(SDL_CreateGPUSampler(device, &sampling), "Create GPU sampler");
         sprite_pipeline = pipeline(video_shaders::sprite_vert, video_shaders::sprite_frag, SDL_GPU_TEXTUREFORMAT_R16_UINT);
         scene_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-        if (interpolation != VideoInterpolation::Off)
-            interpolation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        if (interpolation != VideoInterpolation::Off) ensure_interpolation_pipeline();
         upload = transfer(pf_asset_bytes + sp_asset_bytes, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-        if (interpolation != VideoInterpolation::Off && (unsigned(fields) & unsigned(InterpolationFields::Palette)))
-            tile_pen_masks.resize(pf_asset_bytes / 256);
+        // Built unconditionally: palette interpolation may be enabled live (256 KiB per 8 MiB of tiles).
+        tile_pen_masks.assign(pf_asset_bytes / 256, 0);
         auto *mapped = static_cast<uint32_t *>(checked(SDL_MapGPUTransferBuffer(device, upload, false), "Map GPU asset upload"));
         // Explicit low-byte-first packing also works on big-endian hosts.
         for (Uint32 i = 0; i < pf_asset_bytes; i += 4) {
             mapped[i / 4] = uint32_t(tiles[i]) | (uint32_t(tiles[i + 1]) << 8) | (uint32_t(tiles[i + 2]) << 16) | (uint32_t(tiles[i + 3]) << 24);
-            if (!tile_pen_masks.empty())
-                tile_pen_masks[i / 256] |= (uint64_t{1} << (tiles[i] & 63)) |
-                    (uint64_t{1} << (tiles[i + 1] & 63)) | (uint64_t{1} << (tiles[i + 2] & 63)) |
-                    (uint64_t{1} << (tiles[i + 3] & 63));
+            tile_pen_masks[i / 256] |= (uint64_t{1} << (tiles[i] & 63)) |
+                (uint64_t{1} << (tiles[i + 1] & 63)) | (uint64_t{1} << (tiles[i + 2] & 63)) |
+                (uint64_t{1} << (tiles[i + 3] & 63));
         }
         for (Uint32 i = 0; i < sp_asset_bytes; i += 4)
             mapped[(pf_asset_bytes + i) / 4] = uint32_t(sprites[i]) | (uint32_t(sprites[i + 1]) << 8) | (uint32_t(sprites[i + 2]) << 16) | (uint32_t(sprites[i + 3]) << 24);
@@ -388,8 +401,7 @@ struct GpuVideo::Impl {
         if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU asset upload");
         SDL_ReleaseGPUTransferBuffer(device, upload);
         upload = nullptr;
-        upload = transfer(std::max(interpolation == VideoInterpolation::Off ? scene_bytes : interpolation_scene_bytes,
-                                   native_bytes), SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
+        upload = transfer(std::max(interpolation_scene_bytes, native_bytes), SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
     }
     void set_scale(unsigned scale) {
         if (!scale || scale > GameVideoOptions::max_gpu_scale)
@@ -593,7 +605,9 @@ struct GpuVideo::Impl {
         if (blend_shadows) uniforms.layer_mask |= F3_MASK_BLEND_SHADOW;
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
         auto *pass = render_pass(command.value, surface);
-        SDL_BindGPUGraphicsPipeline(pass, options.scale > 1 && interpolation_pipeline ? interpolation_pipeline : scene_pipeline);
+        // Same decision as the upload size and coefficient encode above: the interpolation shader reads
+        // coefficient words that exist only when active_interpolation.
+        SDL_BindGPUGraphicsPipeline(pass, active_interpolation ? interpolation_pipeline : scene_pipeline);
         SDL_GPUTextureSamplerBinding sprite_binding[2]{{sprite_plane, sampler}, {blend_shadows ? sprite_plane_b : sprite_plane, sampler}};
         SDL_BindGPUFragmentSamplers(pass, 0, sprite_binding, 2);
         SDL_GPUBuffer *buffers[]{scene_buffer, pf_assets, native_buffer};
@@ -714,6 +728,9 @@ void GpuVideo::set_scale_mode(VideoScaleMode mode) { impl_->scale_mode = mode; }
 uint64_t GpuVideo::presented_frames() const { return impl_->presented_frames; }
 SDL_GPUDevice *GpuVideo::device() const { return impl_->device; }
 void GpuVideo::set_linear(bool linear) { impl_->linear = linear; }
+void GpuVideo::set_interpolation(VideoInterpolation mode, InterpolationFields fields) {
+    impl_->set_interpolation(mode, fields);
+}
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
     impl_->set_postprocess(preset, path);
     impl_->comparison_native_valid = false;

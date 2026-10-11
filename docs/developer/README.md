@@ -1,6 +1,6 @@
 # Developer evidence
 
-Normal build, controls and online-play instructions live in the
+Normal build and controls instructions live in the
 [README](../../README.md) and [user guide](../site/guide/index.md). These files
 retain technical contracts, historical measurements and investigation notes;
 they are not a support promise or a requirement to run the game.
@@ -8,14 +8,12 @@ they are not a support promise or a requirement to run the game.
 ## Current contracts and workflows
 
 - [Generation and verification workflows](WORKFLOWS.md).
-- [Game analysis with `tools/f3a`](WORKFLOWS.md#game-analysis-toolsf3a): disassembly, cross references, call flow, store maps, dump analysis and the HTML call graph.
+- [Game analysis with `uv run f3 analyze`](WORKFLOWS.md#game-analysis-uv-run-f3-analyze): disassembly, cross references, call flow, store maps, dump analysis and the HTML call graph.
 - [CPU ABI changes](ABI-CHANGES.md): current ABI 3 and earlier interface history.
 - [Game scope and porting audit](../site/developer/porting.md): generic F3 pieces, Land Maker assumptions and deferred refactors.
 - [Sound-driver investigation](../SOUND-DRIVER.md): ROM-specific driver semantics and native/oracle comparison.
-- [Opt-in HLE audio](HLE-AUDIO.md): ROM-data synthesis, non-rewound rollback policy, tolerance-based comparisons and known limits.
-- [Netplay usage and contracts](../NETPLAY.md): versus-only lifecycle and player workflow.
-- [ImGui/netplay implementation and evidence](IMGUI-NETPLAY.md): overlay, shaders, canonical host handoff, lifecycle campaigns and observed limits.
-- [Emit-unit replay and sprite behaviours](SPRITE-UNITS.md): declaring units, the `f3rt-sprite-check` workflow and its invariants.
+- [Enhanced audio (HLE)](HLE-AUDIO.md): ROM-data synthesis, tolerance-based comparisons and known limits.
+- [Emit-unit replay and sprite behaviours](SPRITE-UNITS.md): declaring units, the `f3rt-tool sprite-check` workflow and its invariants.
 - [Experimental motion interpolation](MOTION-INTERP.md): render-only GPU geometry history, presentation timing, snap rules and ROM verification.
 
 ## Measurement archive

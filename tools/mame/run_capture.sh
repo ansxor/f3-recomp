@@ -5,8 +5,8 @@
 #   ./tools/mame/run_capture.sh [options]
 #
 # Options:
-#   --mame <path>         Path to MAME/f3 executable
-#   --rompath <path>      Path to ROMs directory (default: tools/mame/staged_roms;/Users/darien/Workspace/f3-stuff/roms;/Users/darien/Workspace/f3-stuff)
+#   --mame <path>         Path to MAME/f3 executable (or set MAME_BIN)
+#   --rompath <path>      Path to ROMs directory (default: <staged_dir>:<repo_root>/roms)
 #   --outdir <path>       Output directory for captured frames (default: captures/landmakrj_attract)
 #   --start-frame <N>     First frame to capture (default: 300)
 #   --count <N>           Number of frames to capture (default: 10)
@@ -23,8 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Default configurations
-MAME_BIN="${MAME_BIN:-/Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3}"
-MAME_ALT_BIN="/Users/darien/Workspace/f3-stuff/tools/mame-baseline/mamef3"
+MAME_BIN="${MAME_BIN:-}"
 OUTDIR="${REPO_ROOT}/captures/landmakrj_attract"
 START_FRAME=300
 COUNT=10
@@ -78,7 +77,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      grep '^# ' "$0" | cut -c 3-
+      sed -n '2,/^set -/ { /^set -/d; s/^# //; s/^#//; p; }' "$0"
       exit 0
       ;;
     *)
@@ -104,7 +103,7 @@ echo "Audio WAV:        $WAV_PATH"
 STAGED_ZIP="${SCRIPT_DIR}/staged_roms/landmakrj.zip"
 if [[ ! -f "$STAGED_ZIP" ]]; then
   echo "Staging Japanese ROM set (landmakrj.zip)..."
-  python3 "${SCRIPT_DIR}/stage_roms.py" --out-zip "$STAGED_ZIP"
+  uv run --project "${REPO_ROOT}" --locked python "${SCRIPT_DIR}/stage_roms.py" --out-zip "$STAGED_ZIP"
 else
   echo "Found existing staged ROMs: $STAGED_ZIP"
 fi
@@ -119,15 +118,13 @@ STAGED_DIR="$(dirname "$STAGED_ZIP")"
 if [[ -n "$ROMPATH_ARG" ]]; then
   ROMPATH="$ROMPATH_ARG"
 else
-  ROMPATH="${STAGED_DIR}:/Users/darien/Workspace/f3-stuff/roms:/Users/darien/Workspace/f3-stuff"
+  ROMPATH="${STAGED_DIR}:${REPO_ROOT}/roms"
 fi
 
 # 2. Check MAME Executable
 RESOLVED_MAME=""
-if [[ -x "$MAME_BIN" ]]; then
+if [[ -n "$MAME_BIN" && -x "$MAME_BIN" ]]; then
   RESOLVED_MAME="$MAME_BIN"
-elif [[ -x "$MAME_ALT_BIN" ]]; then
-  RESOLVED_MAME="$MAME_ALT_BIN"
 elif command -v f3 >/dev/null 2>&1; then
   RESOLVED_MAME="$(command -v f3)"
 elif command -v mame >/dev/null 2>&1; then
@@ -135,23 +132,8 @@ elif command -v mame >/dev/null 2>&1; then
 fi
 
 if [[ -z "$RESOLVED_MAME" ]]; then
-  echo ""
-  echo "=========================================================================="
-  echo "NOTICE: MAME executable not found at: $MAME_BIN"
-  echo ""
-  echo "Orchestrator Instructions for acquiring the baseline MAME binary:"
-  echo "  1. Bug worktrees under /Users/darien/Workspace/f3-stuff/mame-f3-bugs/wt/"
-  echo "     are compiling SUBTARGET=f3 (taito_f3.cpp only)."
-  echo "  2. Once the first build finishes, confirm clean source:"
-  echo "       git -C <wt-dir> log origin/master..HEAD (must be empty)"
-  echo "  3. Copy the compiled binary to the baseline location:"
-  echo "       mkdir -p /Users/darien/Workspace/f3-stuff/tools/mame-baseline/"
-  echo "       cp <wt-dir>/f3 /Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3"
-  echo "       chmod +x /Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3"
-  echo ""
-  echo "The capture tooling is fully implemented and staged. When the MAME binary"
-  echo "is present, re-run this script to capture attract mode frames."
-  echo "=========================================================================="
+  echo "Error: MAME executable not found." >&2
+  echo "Please specify with --mame <path> or set the MAME_BIN environment variable." >&2
   exit 1
 fi
 

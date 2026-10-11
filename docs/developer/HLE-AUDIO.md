@@ -2,16 +2,16 @@
 
 Implementation evidence from `hle-audio` commit `5e8c775`, measured on macOS
 arm64 with Land Maker Japan 2.01J. Historical captures remain in that worktree;
-they are not bundled downloads or a whole-F3 compatibility claim.
-
-Current F1 selection, adopted-clock regressions, and impaired versus handoff,
-natural-exit/rematch evidence are recorded in
-[merged integration verification](IMGUI-NETPLAY.md#merged-integration-verification).
+they are not bundled downloads or a whole-F3 compatibility claim. In current
+terminology, historical “accurate”/“HLE” audio is called Reference/Enhanced.
 
 ## ROM-derived protocol and data
 
-The accurate native/interpreted sound path remains the default and oracle.
-The HLE path must not execute the sound CPU, OTIS device or ESP instruction
+Enhanced is the default audio backend; when unavailable (currently for sets
+other than `landmakrj`), the default resolves to Reference. Reference runs the
+cycle-accurate chips and uses the recompiled native sound driver when compiled
+in, otherwise the interpreted Musashi driver. Enhanced audio uses the ROM-data
+sequencer and must not execute the sound CPU, OTIS device or ESP instruction
 program. Its inputs are the loaded sound and sample ROMs, not extracted traces.
 
 The mailbox is **1024 bytes**, not 8 KiB: main `$c00000..c003ff`, inside
@@ -20,8 +20,7 @@ The mailbox is **1024 bytes**, not 8 KiB: main `$c00000..c003ff`, inside
 Main `$2fde` appends inclusive-length packets and masks each byte index with
 `$3ff`. See [SOUND-DRIVER.md](../SOUND-DRIVER.md) for the complete command grammar.
 `8f` really releases the first matching sequence/track/key, through `$c141ce`.
-It has no instance ID: rollback cancellation must target host instance IDs,
-not send a synthetic equal-key `8f` that could release a replacement sound.
+It has no instance ID.
 
 Command `90` correction: `$c1310e` pops the return PC into A3. Matching-note
 lookup returns by JMP(A3); `$c13148` writes `6(A3)` at ROM `$c1314e`, ignored
@@ -90,19 +89,21 @@ configuration/program bytes, is byte-identical to Land Maker. This establishes
 shared firmware/effects, **not** interchangeable song/instrument banks or full
 other-game support.
 
-An isolated ES5510 oracle replayed 15,609 actual host writes from the boot
-capture, warmed up with zero input, then measured each serial input with
-1024- and 4096-level impulses. Inputs0/1 pass dry; inputs2/3 give damped stereo
-cross-delay and reverb; inputs4/5 give a dry plus diffused reverb route.
-At 4096, input2 has first peak2663 at native frame1, then echoes at
-8178L2094,16355R946,24532L427,32709R191. The cross-delay interval is
-8177/29761 seconds (~274.8 ms), feedback ~0.45. Input4 has dry3779 at frame0,
-early reflections449L520/687R520 and signed diffusion taps. Reverb remains
-above quantization noise through two seconds. The cheap equivalent uses
-fractional-rate-independent delay lines, damping and stereo diffusion rather
-than interpreting the ESP program. This implementation does not reproduce
-ESP output bit-for-bit; that observation does not establish that byte parity
-is impossible for HLE in general.
+Physical PCB wiring observed on hardware (12's routing note,
+`docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt`) swaps OTIS pairs 1
+and 3 relative to MAME and leaves pair 0 unconnected. Enhanced follows it: pair
+3 (channels 6/7) → ESP inputs 0/1, dry pass-through; pair 2 (channels 4/5) → ESP
+inputs 2/3, damped stereo cross-delay (~274.8 ms) plus secondary reverb send;
+pair 1 (channels 2/3) → ESP inputs 4/5, dry plus diffused reverb; pair 0
+(channels 0/1) is not connected and is silent. Reference keeps MAME's routing.
+The isolated ES5510 oracle experiment replayed 15,609 actual host writes from
+the boot capture and used 1024- and 4096-level impulses. At 4096, input2 has
+first peak2663 at native frame1, then echoes at 8178L2094,16355R946,24532L427,
+32709R191. The cross-delay interval is 8177/29761 seconds (~274.8 ms), feedback
+~0.45. Input4 has dry3779 at frame0, early reflections449L520/687R520 and
+signed diffusion taps. Reverb remains above quantization noise through two
+seconds. The Enhanced routing test and 2400-frame Land Maker measurement are
+recorded in the wiki's runtime evidence note.
 
 ROM menu callbacks identify parameter2 as delay-address increments
 `value*$7000` (24-bit address, eight fractional bits), parameter6's high nibble
@@ -111,22 +112,22 @@ ROM-table wet/dry gains. Parameter0 controls decay/diffusion and parameter1 a
 signed feedback coefficient. These control semantics must remain responsive;
 a fixed pre-rendered impulse is not the runtime implementation.
 
-## Runtime and rollback contract
+## Runtime contract
 
-Select `--audio-backend hle` before execution. `--sound-driver` and CPU-bus
-traces belong to `--audio-backend accurate` and cannot be combined with HLE.
-`landmakr`, `f3rt-run`, `f3rt-gameplay-regression`, `f3rt-sound-extract` and
-the netplay oracle's reference/client modes accept the backend switch.
+Select `--audio-backend enhanced` before execution. `--sound-trace` belongs
+to `--audio-backend reference` and cannot be combined with Enhanced.
+`landmakr`, `f3rt-run`, and `f3rt-tool` (`gameplay`, `sound-extract`)
+accept the backend switch.
 The extraction tool's `--hle-events FILE` records semantic voice events as
-CSV; `decode_sound.py` also decodes optional accurate note-release records.
+CSV; `decode_sound.py` also decodes optional Reference note-release records.
 
 The HLE worker owns sequencer state, sample voices, filters, effects delay
 lines and 48 kHz PCM. It never reads mutable shared RAM or writes machine
 state. The main thread consumes complete published packets and acknowledges
-the ring deterministically, retaining packet count/hash, clock, reset,
-consumer offset and direct-note program-selection context in snapshots.
-No sound-CPU, chip state, worker queue, voice, host instance ID or PCM enters
-an HLE snapshot or peer checksum. Worker failures propagate to the caller.
+the ring deterministically, retaining the clock, command count, consumer
+offset and held flag in the 32-byte snapshot record.
+No sound-CPU, chip state, worker queue, voice or PCM enters an HLE snapshot.
+Worker failures propagate to the caller.
 All queues and voice/note pools are bounded; exhaustion fails explicitly.
 
 The worker thread enables flush-to-zero and denormals-are-zero (x86 MXCSR,
@@ -136,10 +137,10 @@ did not recover. `Synth::render` works in sub-blocks split at the 1 kHz service
 boundaries, in chunks of at most 64 frames. A scalar prepass walks each active
 voice and writes structure-of-arrays rows (interpolated input, filter
 coefficients, final per-frame gain) into 32 lanes. Most frames run in branch-free
-runs bounded by the next loop end, gain-ramp end, gain-table interval, filter
-ramp or cancellation; those events take a per-frame slow path that also emits
+runs bounded by the next loop end, gain-ramp end, gain-table interval
+or filter ramp; those events take a per-frame slow path that also emits
 voice events at the same frame and voice as before. `render_voice_block`
-(`runtime/hle_voice_kernel.cpp`) then runs the four-pole filter and gain for all
+(`runtime/audio/hle/voice_kernel.cpp`) then runs the four-pole filter and gain for all
 lanes in float SIMD, dispatched at runtime by Google Highway, and the synth adds
 the results to the buses in ascending voice order. Volume ramps advance the
 encoded level by a constant step; because the gain table is linear between
@@ -157,39 +158,19 @@ without moving their cursors, so later output keeps the same fractional-delay
 rounding. The discarded tail is below 0.02 int16 LSB at the maximum output
 gain.
 
-Canonical HLE loads validate mailbox offsets, flags and command context, not
-just serialized byte count. On non-rollback state adoption (host handoff,
-confirmed local return or local restore), the main-side clock is rebased to
-the worker's monotonic output timeline. Existing local music, voices and
-effects continue: this is not exact playback restoration or an HLE PCM
-snapshot. Main-side canonical state remains the peer-comparison boundary.
+HLE loads validate the mailbox offset, flags and reserved bytes, not just the
+serialized byte count. On state load (slot restore), the main-side clock is
+rebased to the worker's monotonic output timeline and PCM not yet consumed is
+discarded. Existing music, voices and effects continue: this is not exact
+playback restoration or an HLE PCM snapshot.
 
-The output-side command ledger retains 64 frames, up to 256 packets/frame.
-Rollback copies the affected ledger, restores only main-side state and
-records resimulated commands without stepping/restarting the worker. At the
-old frontier, exact packet plus direct-program matches within two frames
-reuse their original instance. Setters re-establish channel context before
-new commands; matched starts/releases are not repeated. Missing direct notes
-are cancelled by instance with a 240-sample (5 ms) linear fade. Commands at
-the last two frames retain a two-frame grace period; a delayed matching
-command consumes that pending cancellation. Cancelling also removes note
-bookkeeping, without firing release-trigger layers. Music is not rewound:
-matched sequence starts are suppressed and genuinely new commands take effect
-at the worker's current monotonic time. Completed sounds cannot be unplayed.
-
-Accurate netplay still replaces speculative PCM and publishes only confirmed
-audio. HLE netplay instead drains the independent speculative stream; peers
-may hear different corrected histories while their canonical game state
-must agree. The handshake includes backend selection. A snapshot restore
-alone is not an audio rollback transaction: callers must bracket correction
-with `begin_rollback(begin,end)` and `end_rollback()`. The range uses absolute
-machine frames, including the host handoff origin, not match-relative network
-frames. The netplay core supplies that range; ordinary correction restores
-main-side state without rebasing or rewinding playback.
+Packet attribution is bracketed per machine frame: `shared_write(offset)`
+records a mailbox write and `finish_frame()` closes the frame. The engine
+reports only `{commands, rendered_frames}` statistics.
 Headless extraction synchronizes with the worker when draining PCM, making
 offline output independent of scheduling without involving audio in gameplay.
-`Audio::render`/`available_frames` keep that blocking contract. Outside
-netplay, the interactive frontend loop instead uses `Audio::render_ready`,
+`Audio::render`/`available_frames` keep that blocking contract. The
+interactive frontend loop instead uses `Audio::render_ready`,
 which returns only PCM the worker has already produced and never waits, so
 synthesis overlaps the next emulated frame. After the loop it drains the rest
 with the blocking `render`, so WAV contents and audio counters are unchanged.
@@ -203,7 +184,7 @@ are automated measurements; no human listening approval is claimed.
 `runtime-audio` and `hle-audio` pass under CTest. The latter exercises real
 ROM synthesis, a sound-CPU callback that fails if invoked, worker isolation,
 snapshot independence, parked-sequence direct SFX, arrangement selection/stop,
-identical replay, changed instruments, missing SFX and one/two-frame leeway.
+identical replay, changed instruments and missing SFX.
 The actual native frontend also completed 900 HLE frames with sound PC0 and
 zero main-CPU fallback.
 
@@ -211,7 +192,7 @@ zero main-CPU fallback.
 
 Both extraction paths boot the real interpreted main for 900 frames, freeze
 at main tick244300326, and inject the same packets into the real mailbox.
-Accurate extraction uses the interpreted sound oracle.
+Reference extraction uses the interpreted sound oracle.
 
 | Capture | Observed agreement |
 | --- | --- |
@@ -249,7 +230,7 @@ Other-game banks are not supported by this Land Maker implementation.
 ### Performance
 
 Release build on this Apple-arm64 workstation; three sequential runs of
-`f3rt-gameplay-regression --seed 5 --frames 6000 --wav ...`, strict native main,
+`f3rt-tool gameplay --seed 5 --frames 6000 --wav ...`, strict native main,
 same game-video path. These are end-to-end throughput numbers, not isolated
 audio-thread timings.
 
@@ -267,35 +248,6 @@ and interpreted WAVs are byte-identical, SHA256
 This is a finding about those accurate paths, not evidence that HLE byte
 parity is impossible.
 
-### Real rollback and cancellation
-
-A real local UDP relay used RTT80 ms, jitter20 ms, loss3%, reorder3%,
-duplicate1%, seed5. Two HLE clients ran6,000 versus frames, delay2/window16.
-P1 withheld input at frame1500 for120 ms. The separate no-network reference
-and both peers finished with state CRC`97a71e83`, frame CRC`0a1902d4`,
-1,950 canonical commands and4,886,006 audio frames. Strict native execution
-remained enforced.
-
-| Observation | P1 | P2 |
-| --- | ---: | ---: |
-| Rollbacks / maximum depth | 302 / 16 | 304 / 16 |
-| Reused commands | 973 | 860 |
-| Missing-SFX cancel commands | 20 | 26 |
-| Actually active cancelled voices / observed stops | 15 / 15 | 16 / 16 |
-| Maximum cancel-to-stop main ticks | 79,772 | 79,778 |
-
-Some cancel commands target already-finished voices. Every observed active
-cancel stopped within5 ms; P2's withholding-event correction reached depth16.
-Its full-window stall lasted83.23 ms. PCM CRCs differ (`d17b3dde`/`d15518fa`),
-as expected for non-rewound speculative histories, without a game-state desync.
-
-The isolated PCM cancellation regression compares against an uncancelled
-audible reference: all240 samples follow the linear5-ms fade within two
-int16 LSB, then the dry voice is silent. That proves the cancellation path
-does not hard-cut a waveform. The netplay run proves actual cancellations
-complete; neither check substitutes for listening to the final mix for pops.
-Reverb tails are deliberately allowed to decay rather than being hard-cut.
-
 ### Listening artifacts and reproduction
 
 Artifacts remain local under `wt/hle-audio/build/`; none is committed:
@@ -305,24 +257,23 @@ Artifacts remain local under `wt/hle-audio/build/`; none is committed:
 | `listen-music-{hle,oracle}.wav` | Five-second sequence8 comparison,32× |
 | `listen-sfx-{hle,oracle}.wav` | Two-second direct-note/release comparison,32× |
 | `listen-gameplay-{hle,oracle}.wav` | About102 s of seed5 gameplay,16× |
-| `listen-netplay-hle-p{1,2}.wav` | Actual impaired peer output,8× |
 | `gallery-{hle,oracle}.wav` | Raw108-second sequence gallery |
 | `arrangement-transition-{hle,oracle}.wav` | Raw17-second intro/loop transition |
 
 Listening copies apply one identical fixed gain to both members of a pair,
 with no clipping, time shifting, independent normalization or resampling.
-Raw captures (`music-*`, `sfx-*`, `gameplay-*`, `netplay-*`) retain runtime
+Raw captures (`music-*`, `sfx-*`, `gameplay-*`) retain runtime
 levels. HLE is48 kHz and accurate is29,761 Hz.
 
 ```sh
 ROM=/Users/darien/Workspace/f3-stuff/roms/landmakr
-build/f3rt-sound-extract --rom-dir "$ROM" --audio-backend hle \
+build/f3rt-tool sound-extract --rom-dir "$ROM" --audio-backend enhanced \
   --packet 038108 --packet 04860874 --seconds 5 --wav-window event \
   --wav build/music-hle.wav --hle-events build/music-hle.csv
-build/f3rt-sound-extract --rom-dir "$ROM" \
+build/f3rt-tool sound-extract --rom-dir "$ROM" \
   --packet 038108 --packet 04860874 --seconds 5 --wav-window event \
   --wav build/music-oracle.wav --sound-trace build/music-oracle.sound
-build/f3rt-sound-extract --rom-dir "$ROM" --audio-backend hle \
+build/f3rt-tool sound-extract --rom-dir "$ROM" --audio-backend enhanced \
   --packet 068d02014002 --packet 068e02012768 --at .15:058f020127 \
   --seconds 2 --wav-window event --wav build/sfx-hle.wav
 ctest --test-dir build --output-on-failure
@@ -331,7 +282,7 @@ ctest --test-dir build --output-on-failure
 ## Integration merge verification
 
 The merge of `hle-audio` (`5e8c775`) into `integration` (`4c74107`) was checked
-from the clean main integration worktree, not `wt/imgui-netplay`. The new
+from the clean main integration worktree. The new
 documentation layout is retained: no root `STATUS.md`, concise opt-in user
 guidance, and HLE evidence here under `docs/developer/`.
 
@@ -347,30 +298,31 @@ Both actual frontend runs completed 1,800 frames:
 build/hle-merge/landmakr --headless --frames 1800 --unthrottled \
   --wav build/hle-merge/merged-default.wav
 build/hle-merge/landmakr --headless --frames 1800 --unthrottled \
-  --audio-backend hle --wav build/hle-merge/merged-hle.wav
+  --audio-backend enhanced --wav build/hle-merge/merged-hle.wav
 ```
 
 Both reported PC`1136`, frame CRC`f08f089c`, 488,600,676 main cycles,
 27,238,881 native blocks and **zero CPU fallback instructions**. The default
-selected `audio_backend=accurate sound_driver=native`; HLE selected
-`audio_backend=hle sound_driver=none` with sound PC0. The 231 retained video
+selected Reference audio; Enhanced selected audio without a sound driver, with
+sound PC0. Historical output fields used `accurate`/`hle` and `sound_driver`. The 231 retained video
 renderer fallback frames in each run are separate from CPU fallback.
 WAVs remain ignored local artifacts.
 
 The VitePress production build also passed. A Chromium preview verified the
 rendered opt-in HLE guide, explicit emulated default, and relocated developer
 evidence link. This merge check does not replace the broader historical
-sequencer, performance and impaired-netplay measurements above.
+sequencer and performance measurements above.
 
 ## Native-rate experiment: evaluated, not enabled
 
 A private end-to-end HLE29761 build was compared with exact HLE48k and the accurate
 interpreted sound oracle. Production defaults and settings are unchanged:
-accurate/native remains the player default; opt-in HLE still renders at 48 kHz.
+Enhanced is the player default when available; otherwise the default resolves to
+Reference. Enhanced still renders at 48 kHz.
 No new public rate setting or approximation was retained.
 
 The experiment preserves all voices/layers and ROM parameter calculations. It
-scales the existing gain/filter/cancellation ramps and effect line lengths to
+scales the existing gain/filter ramps and effect line lengths to
 29,761 Hz, converts per-sample damping, and uses the existing stereo playback
 resampling path. It does not add a second service clock: the synth's existing
 1 kHz service meets different PCM deadlines. Those differences count as error,
@@ -403,10 +355,9 @@ was performed.
   but 148 loop-direction (`reverse`) fields changed. Stop deltas ranged from
   −437 to +683 main ticks (at most 0.043 ms).
 - The physically aligned all-program/high-key/polyphony corpus retained all
-  259,485 events and identical Start/Parameters/Release/Cancel ticks. It changed
+  259,485 events and identical Start/Parameters/Release ticks. It changed
   176 loop-direction fields across 22 cases; only Stops reordered, in two
-  program-98/polyphony-32 cases. Cancellation Stops arrived at most 0.021 ms
-  earlier. Twenty program-70 one-shot Stops arrived 0.042–0.056 ms earlier,
+  program-98/polyphony-32 cases. Twenty program-70 one-shot Stops arrived 0.042–0.056 ms earlier,
   beyond one native sample in those cases. Six pre-existing sample-directory
   rejections remained unchanged; no new rejection was introduced.
 
@@ -416,6 +367,6 @@ change. This pass keeps the default and existing PCM stable. Evidence and raw
 WAV/event recordings remain under `build/hle-native-rate/evidence/`; reports
 include `summary.json`, `recommendation.json` and
 `corpus-events-29761-vs-48k.json`. Results cover one available ROM set and finite
-windows, not subjective listening, other games, or impaired native-rate netplay.
+windows, not subjective listening, or other games.
 
 

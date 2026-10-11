@@ -1,0 +1,9 @@
+---
+source_url: relayed by user from 12
+ingested: 2026-10-10
+sha256: 53f1ce7a111607a90ef223a988fdd9a69d5eb74ddd70b33ef61b85567995702c
+captured_with: "relayed by user from 12; user states these reportings match hardware"
+---
+F3 stands for    if i had a nickel for every time they Fuckin swapped index 1 and 3   i'd have 2 nickels but it's strange it happened twice?
+
+and these reportings apparently match HW

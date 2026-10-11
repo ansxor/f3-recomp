@@ -11,7 +11,7 @@ This page describes each key in the per-game TOML file. The recompiler uses it t
 
 `F3_GAME` selects `games/SET/config.toml`; default `landmakrj`, with `landmakr`,
 `rayforce`, `commandw`, `ridingf` also accepted. The three new titles have native
-main/sound bring-up with FDP video and accurate sound, not LM enhanced paths.
+main/sound bring-up with FDP video and Reference sound, not LM enhanced paths.
 Their exact revisions and finite evidence are in [porting](/developer/porting).
 You can also pass `--config` directly to the compiler; a config alone is not proof
 of a complete port.
@@ -205,7 +205,7 @@ each file that has a hook, rejects PCs that are not retained decoded
 instructions or frame-writer ranges outside the ROM, and records per-unit hook
 counts under `emit_units` in `lowering.json`.
 
-Choosing spans and writer ranges is verified, not guessed: `f3rt-sprite-check`
+Choosing spans and writer ranges is verified, not guessed: `f3rt-tool sprite-check`
 (see [developer notes](../../developer/SPRITE-UNITS.md)) replays every
 invocation unpatched in a sandbox and demands the bytes match what the real span wrote,
 and fails on any sprite-RAM write outside every unit whose PC is not in

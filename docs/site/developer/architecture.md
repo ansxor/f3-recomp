@@ -2,7 +2,7 @@
 
 **What you will learn:** how the parts of f3-recomp fit together.
 This page separates build time from run time.
-It covers frame execution, reference comparisons, and netplay's machine wrapper.
+It covers frame execution, reference comparisons, and determinism.
 
 Read this page first. The other Developer pages go deeper into each part. The [Developer overview](/developer/) lists them all.
 
@@ -42,7 +42,7 @@ The generated C never contains the ROM bytes. It contains code only. At run time
 
 At build time, a Python tool reads the ROM and writes C files. CMake compiles those files into a library. At run time, the executable links that library with the runtime library `f3rt`.
 
-Two compilers run. The main compiler (`python3 -m recomp emit`) translates the 68EC020 program. The sound compiler (`tools/compile_sound.py`) translates the 68000 sound program. CMake runs both at configure time when you set `F3_ROM_DIR`.
+Two compilers run. The main compiler (`uv run python -m recomp emit`) translates the 68EC020 program. The sound compiler (`tools/compile_sound.py`) translates the 68000 sound program. CMake runs both at configure time when you set `F3_ROM_DIR`.
 
 ```mermaid
 flowchart TB
@@ -102,8 +102,7 @@ For bus access and runtime services, it calls the C ABI in `include/f3rt/cpu_abi
 
 ```mermaid
 flowchart TB
-    FE["Frontend: runtime/frontend.cpp - SDL3 window, audio, keys, pacing"]
-    NP["Netplay: Rollback and Transport (optional)"]
+    FE["Frontend: runtime/frontend/frontend.cpp - SDL3 window, audio, keys, pacing"]
     subgraph M["Machine"]
         RF["run_frame"]
         DISP["f3_dispatch: block lookup in sorted table"]
@@ -121,15 +120,13 @@ flowchart TB
         FDP["Video: FDP software renderer"]
     end
     subgraph AUD["Audio"]
-        AU["Audio: accurate sound board (default)"]
+        AU["Audio: Reference sound board"]
         SN["SoundNative: compiled sound driver"]
         SI["Interpreter sound 68000: oracle"]
         CH["ES5505, ES5510, MC68681, MB87078"]
-        HW["HLE: ROM sequencer and PCM worker (opt-in)"]
+        HW["Enhanced: ROM sequencer and PCM worker (landmakrj)"]
     end
     FE --> RF
-    NP -->|"run_frame, full local snapshots, canonical sync CRC"| RF
-    FE --> NP
     RF --> DISP
     DISP --> BND
     BND --> SCH
@@ -150,14 +147,14 @@ flowchart TB
     AU --> CH
     AU --> SN
     AU -.-> SI
-    AU -.->|"HLE backend instead of CPU/chips"| HW
+    AU -.->|"Enhanced backend instead of CPU/chips"| HW
 ```
 
 The table gives one line for each component.
 
 | Component | Class or file | Job |
 | --- | --- | --- |
-| Frontend | `runtime/frontend.cpp` | Parses options. Opens the SDL3 window and audio stream. Calls `Machine::run_frame` once for each frame. Sleeps to keep the native frame rate. |
+| Frontend | `runtime/frontend/frontend.cpp` | Parses options. Opens the SDL3 window and audio stream. Calls `Machine::run_frame` once for each frame. Sleeps to keep the native frame rate. |
 | Machine | `runtime/machine.cpp` | Owns memory and devices. Maps bus addresses. Runs the scheduler. Saves and loads snapshots. |
 | Generated CPU code | `build/generated/landmakrj/blocks_*.c` | The translated game. One C function for each block. |
 | `f3_dispatch` | `runtime/cpu_abi.cpp` | Runs the boundary check, then selects a registered block. Missing entries and trace mode request interpreter fallback. |
@@ -165,11 +162,10 @@ The table gives one line for each component.
 | Bus | `Machine::read8`, `Machine::write8` | Maps addresses to ROM, RAM, palette, graphics RAM, control registers, inputs, EEPROM, sound mailbox. |
 | FDP renderer | `Video` | Draws a frame from the emulated FDP RAM. It is the video oracle. |
 | Game-data renderer | `GameVideo` | Builds supported scenes from game data. Unsupported frames use the FDP renderer, which reads FDP RAM. |
-| Audio | `Audio` | Default `accurate` backend runs the sound CPU, DUART, ES5505, ES5510 and volume chip. Opt-in `hle` uses a ROM-derived sequencer and 48 kHz PCM worker without executing the sound CPU or chips. |
-| Sound CPU | `SoundNative` or `Interpreter` | Accurate backend only. Runs the sound program as compiled C or Musashi. |
+| Audio | `Audio` | The `reference` backend runs the sound CPU, DUART, ES5505, ES5510 and volume chip. The `enhanced` backend (`landmakrj` only, the frontend default there) uses a ROM-derived sequencer and 48 kHz PCM worker without executing the sound CPU or chips. |
+| Sound CPU | `SoundNative` or `Interpreter` | Reference backend only. Runs the sound program as compiled C or Musashi. |
 | Input | `Machine::inputs`, `system_inputs`, `coin_word` | Holds active-low port values and coin counters. |
 | EEPROM | `Eeprom` (`runtime/eeprom.hpp`) | 93C46 settings memory. It has a busy interval after each write. |
-| Netplay | `Rollback`, `Transport` | Optional. Runs the machine in a rollback loop. |
 
 ### Memory map
 
@@ -315,10 +311,9 @@ The project uses these reference paths:
 | Component | Native (fast) version | Oracle (reference) version | How you select the oracle |
 | --- | --- | --- | --- |
 | Main CPU | Generated C blocks (`f3_dispatch`) | Musashi 68EC020, run one instruction at a time (`Interpreter::run_main`) | Run `f3rt-run` without `--translated`. `Machine::run_frame(false)` is the reference loop. |
-| Sound CPU | Compiled sound driver (`SoundNative`) | Musashi 68000 (`Interpreter::run_audio`) | `--sound-driver oracle` |
+| Sound CPU | Compiled sound driver (`SoundNative`) | Musashi 68000 (`Interpreter::run_audio`) | `--sound-driver oracle` on `f3rt-tool gameplay` and `f3rt-tool sound-extract` (the frontend picks native when the build has it) |
 | Video | `GameVideo` (game-data HLE) | `Video` (FDP software renderer) | `--renderer accurate`. `--renderer compare-cpu` checks supported scenes against FDP output. Unsupported frames use FDP output. |
 | Whole machine | `f3rt` | MAME (external emulator) | Capture with `tools/mame/`, then compare. |
-| Netplay | Two clients with rollback | One machine that uses the same input schedule (`f3rt-netplay-oracle --mode reference`) | `tools/run_netplay_oracle.py` |
 
 The oracles are not just test code. The `Interpreter` is part of the runtime and also acts as the fallback for an instruction with no native translation. The `Video` renderer is still the video output for frames that `GameVideo` cannot yet draw.
 
@@ -341,87 +336,20 @@ The generation report separates these cases from native instructions and excepti
 | `landmakr` with `--allow-fallback` | Generated code | Interpreter runs one instruction. Diagnostic only. | `fdp` | `native` |
 | `f3rt-run` | Interpreter (reference) unless `--translated` | Not applicable in the reference loop. | `fdp` | `native` if the build made the sound code, else `oracle` |
 
-The two fallback ideas are different. **CPU fallback** is the interpreter. **Video fallback** is `GameVideo` drawing a frame with `Video` when a supported-feature test fails (flipped screen, sprite trails, bitmap pivot). Video fallback never enables CPU fallback. Netplay allows video fallback and does not allow CPU fallback.
+The two fallback ideas are different. **CPU fallback** is the interpreter. **Video fallback** is `GameVideo` drawing a frame with `Video` when a supported-feature test fails (flipped screen, sprite trails, bitmap pivot). Video fallback never enables CPU fallback.
 
 A run counts as native only if the fallback instruction counter (`Machine::fallback_instructions`) stays at zero. The frontend prints this counter at the end of every run.
 
 ## Determinism
 
-Three features need the machine to be **deterministic**: rollback netplay, snapshot tests, and comparison with the oracles. Given the same ROM, build and applied input stream, canonical game state must agree. The default accurate backend also produces reproducible PCM. HLE worker PCM intentionally depends on speculative command history and is not compared across peers.
+Snapshot tests and comparison with the oracles need the machine to be **deterministic**. Given the same ROM, build and applied input stream, game state must agree. The Reference backend also produces reproducible PCM. Enhanced worker PCM depends on speculative command history and is not compared.
 
 The project uses these rules:
 
-- **Integer time.** Canonical simulation time is a count of 16 MHz cycles; main-side HLE command consumption is deterministic.
-- **Fixed scheduling (accurate).** Sound execution stops at the next sample time or sound-CPU instruction time. `Audio::advance` makes it independent of main-CPU block splits.
-- **Pointer-free state.** Packed `Canonical*` records (`runtime/state_io.hpp`) contain no host pointers or padding. Full local APIs retain expanded presentation; canonical sync APIs omit it but retain native rendering/trails and hardware state. HLE snapshots retain main-side mailbox/command state, not worker queues, voices, effects or PCM.
-- **Host time stays outside canonical state.** The frontend uses it to pace frames; transport uses it for timeouts and ping. The independent HLE worker is not rolled back. See the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
-- **Build identity.** Players must have matching source, generated code, compiler, and platform identity. The handshake rejects unequal hashes.
-
-See [Snapshots and determinism](/developer/netplay/snapshots) for the full list.
-
-## How netplay wraps the machine
-
-`Session` (`runtime/netplay_session.cpp`) wraps local play, lobby, automatic ordinary-input host preparation, canonical snapshot transfer, both-loaded barrier and confirmed local return. Independent histories/EEPROM and presentation settings are supported. `Rollback` starts only after handoff, with match-relative history and host absolute origin; natural exit is detected at a confirmed boundary.
-
-`Transport` (in `runtime/netplay_transport.cpp`) sends the local input to the relay server by UDP. The Go relay server (`netplay/server/`) forwards packets between exactly two players. It does not run the game.
-
-```mermaid
-flowchart LR
-    subgraph ClientA["Client A process"]
-        KA["Keys to InputWord"]
-        RA["Rollback"]
-        MA["Machine"]
-        TA["Transport"]
-        OA["PCM: confirmed accurate / speculative HLE"]
-        PX["Current simulated pixels"]
-    end
-    subgraph Relay["Relay server (Go)"]
-        RS["Rooms: two slots, identity check, finish verdict"]
-    end
-    subgraph ClientB["Client B process"]
-        TB["Transport"]
-        RB["Rollback"]
-        MB["Machine"]
-    end
-    KA --> RA
-    RA -->|"local_input"| TA
-    RA <-->|"save_state, load_state, run_frame"| MA
-    RA -->|"render_audio"| OA
-    MA --> PX
-    TA <-->|"UDP: handoff/barrier, inputs, checksums, ping"| RS
-    RS <-->|"UDP"| TB
-    TB <--> RB
-    RB <--> MB
-    TA -->|"receive"| RA
-```
-
-For the default accurate backend, a rollback happens in this order:
-
-```mermaid
-sequenceDiagram
-    participant T as Transport
-    participant R as Rollback
-    participant M as Machine
-    T->>R: receive(Input for frame f)
-    Note over R: The guess for frame f was wrong. dirty = f
-    R->>R: synchronize()
-    R->>M: load_state(full local snapshot of frame f)
-    loop frame f up to the current frame
-        R->>M: apply_inputs, run_frame(true)
-        R->>R: render audio into a per-frame buffer, save snapshot
-    end
-    R->>R: promote(): copy confirmed frames to the output queue
-    Note over R: Only confirmed PCM leaves the Rollback object
-```
-
-Four facts to remember:
-
-- **Delay frames.** A local key press at frame `f` applies at frame `f + delay`. The default delay is 2.
-- **Prediction.** For a missing remote input, `Rollback` repeats the last input that it used.
-- **Window.** The default window is 16 frames. `advance()` returns false when the simulated frame is 16 or more frames ahead of the confirmed frame.
-- **Backend-specific audio.** Accurate replaces speculative PCM and publishes only confirmed frames. HLE drains an independent speculative worker stream and reconciles commands across rollback without rewinding music. Worker state and PCM are excluded from canonical state and peer checksums; see the [HLE worker policy](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md#runtime-and-rollback-contract).
-
-The [Netplay overview](/developer/netplay/) and its sub-pages give the details.
+- **Integer time.** Simulation time is a count of 16 MHz cycles; main-side Enhanced command consumption is deterministic.
+- **Fixed scheduling (Reference).** Sound execution stops at the next sample time or sound-CPU instruction time. `Audio::advance` makes it independent of main-CPU block splits.
+- **Pointer-free state.** Packed records (`runtime/state_io.hpp`) contain no host pointers or padding. Enhanced snapshots retain main-side mailbox/command state, not worker queues, voices, effects or PCM.
+- **Host time stays outside machine state.** The frontend uses it to pace frames.
 
 ## Who owns the ABI
 
@@ -447,12 +375,11 @@ Regenerate both CPU programs when an ABI change affects their shared state.
 
 The explanations above use these implementation files:
 
-- [CMakeLists.txt](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt): generation, libraries, executables, and build identity.
+- [CMakeLists.txt](https://github.com/ansxor/f3-recomp/blob/main/CMakeLists.txt): generation, libraries, and executables.
 - [recomp/generate.py](https://github.com/ansxor/f3-recomp/blob/main/recomp/generate.py): independent decode packing, fallback calls, and exception entries.
 - [runtime/cpu_abi.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/cpu_abi.cpp): dispatch, exceptions, and synchronized sound bus access.
 - [runtime/machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp): memory, scheduling, frame execution, and snapshots.
-- [runtime/frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp): mode defaults, netplay constraints, and presentation.
-- [runtime/netplay.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/netplay.cpp): prediction, correction, and confirmed audio.
+- [runtime/frontend/frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp): mode defaults and presentation.
 
 ## Where to go next
 
@@ -462,6 +389,5 @@ The explanations above use these implementation files:
 | How the runtime schedules time | [Machine, memory and scheduling](/developer/runtime/machine) |
 | How video works | [Video overview](/developer/runtime/video/) |
 | How sound works | [Audio overview](/developer/runtime/audio/) |
-| How two players stay in sync | [Netplay overview](/developer/netplay/) |
 | How the project proves correctness | [Testing strategy](/developer/testing/) |
 | What a word means | [Glossary](/developer/glossary) |

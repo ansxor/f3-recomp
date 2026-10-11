@@ -101,4 +101,4 @@ Read the pages in this order if you are new to the code.
 
 The long evidence log for the game-data renderer is in [docs/developer/VIDEO-HLE.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/VIDEO-HLE.md). The ABI note is in [docs/developer/ABI-CHANGES.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/ABI-CHANGES.md). For the surrounding runtime, read [Machine](/developer/runtime/machine) and [Frontend](/developer/runtime/frontend).
 
-Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend.cpp).
+Primary sources: [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/fdp/video.cpp), [video.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/renderer/game/video.cpp), and [frontend.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/frontend/frontend.cpp).

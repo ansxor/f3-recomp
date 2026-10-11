@@ -1,7 +1,7 @@
 ---
 title: Sound board section (68000, ES5505 OTIS, ES5510 ESP, MC68681 DUART)
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-10
 type: hardware
 tags: [audio, cpu, memory-map, reset, pcb]
 sources:
@@ -13,6 +13,10 @@ sources:
   - raw/docs/taito-f3/list.txt
   - raw/emu-source/mame-0.289/taito_en.cpp
   - raw/emu-source/mame-0.289/taito_f3.cpp
+  - raw/docs/otis-esp-dac-routing-2026-10-09.txt
+  - raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt
+  - raw/tests/2026-10-10-otis-esp-routing-experiments.md
+  - raw/tests/2026-10-10-enhanced-effects-hardware-routing.md
 games: []
 addresses: [0x00C00000, 0x00C80000, 0x00C80100, 0x00300000]
 status: hypothesis
@@ -20,6 +24,9 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/sound-address.txt, note: "sound CPU address decode"}
   - {kind: doc, ref: raw/docs/taito-f3/otis-bank.txt, note: "bank counter/flip-flop wiring (ic21, ic22, ic30)"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_en.cpp, note: "sound 68000 map, clocks, DUART I/O, OTIS banking"}
+  - {kind: test, ref: raw/docs/otis-esp-dac-routing-2026-10-09.txt, note: "12's reported hardware continuity check for OTIS SER3 → ESP serio1; relayed and vouched for by the user"}
+  - {kind: test, ref: raw/tests/2026-10-10-otis-esp-routing-experiments.md, note: "runtime ESP microprogram instrumentation and OTIS pair muting/gain experiments"}
+  - {kind: test, ref: raw/tests/2026-10-10-enhanced-effects-hardware-routing.md, note: "Enhanced hardware-routing test and 2400-frame Land Maker measurement"}
 contradictions:
   - "ES5510 clock: list.txt shows an 8 MHz clock from counter ic18 (generator unknown); MAME uses 10 MHz (from Gun Buster schematics)."
   - "DUART OP6 -> ESPHALT in MAME; duart.txt marks all output pins OP0-OP7 as 'nc? unused'."
@@ -27,12 +34,45 @@ contradictions:
   - "Sound RAM size/mirroring: notes' decode has 64 KiB repeating over 0x000000-0x07ffff and 0xf80000-0xffffff; MAME maps 64 KiB at 0x000000 mirrored to 0x03ffff, plus 0xff0000-0xffffff."
   - "ES5510 register window: notes decode 0x240000 (bits 17-16 don't care); MAME maps 0x260000-0x2601ff; same chip select, no real disagreement."
   - "otis-bank.txt says 'otis e = input divided by 8' for 3.8 MHz yet list.txt shows the 15 MHz clock on otis.34; 15.238/8 = 1.9 MHz, so either the OTIS input is the 30 MHz clock or the E ratio differs; the notes do not resolve this."
+  - "12's earlier speculative SER1→ESP SER0, SER2→SER1, SER3→SER2 map in raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt is superseded by the later raw/docs/otis-esp-dac-routing-2026-10-09.txt pin map; the latter still has ESP pin 13 assigned to both serio1 and serio0."
 supersedes: []
 ---
 
 # Sound board section
 
 The F3 audio side is a separate 68000 with an Ensoniq ES5505 ("OTIS") sample player, an ES5510 ("ESP") effects DSP, an MC68681 DUART used as timer/IRQ source, a dual-port RAM shared with the main CPU, and a volume chip. The main CPU can start/stop the audio CPU and exchange data through the shared RAM. Board-level information is in [[hardware/board]]; main-CPU clocks in [[hardware/clocks]].
+
+## OTIS → ESP → DAC serial routing (confirmed)
+
+12's board observation reports OTIS channel 0 unconnected, channel 1 → ESP channel 3, channel 2 → ESP channel 2, channel 3 → ESP channel 1, and ESP channel 0 → DAC. The user explicitly states these reportings match hardware; this is confirmed hardware routing. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+
+| Source | Destination | Status |
+|---|---|---|
+| OTIS channel 0 | unconnected | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+| OTIS channel 1 | ESP channel 3 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+| OTIS channel 2 | ESP channel 2 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+| OTIS channel 3 | ESP channel 1 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+| ESP channel 0 | DAC | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+
+In MAME pump terms, OTIS pair 1 → serial inputs 4/5, pair 2 → 2/3, pair 3 → 0/1, pair 0 → nothing. MAME instead routes straight through and includes pair 0's Aux bypass, so MAME does not match hardware. The Reference backend copies MAME's routing and likewise does not match. ^[raw/emu-source/mame-0.289/taito_en.cpp L261-L269; raw/docs/otis-esp-dac-routing-2026-10-09.txt]
+
+Enhanced now implements the hardware routing: pair 3 (channels 6/7) → ESP inputs 0/1, dry; pair 2 (channels 4/5) → inputs 2/3, delay; pair 1 (channels 2/3) → inputs 4/5, reverb; pair 0 (channels 0/1) is silent. Reference remains unchanged and follows MAME. The runtime routing test and render measurement are documented in [[comparisons/hardware-vs-mame-audio-routing]]. ^[raw/tests/2026-10-10-enhanced-effects-hardware-routing.md]
+
+12's `chips.txt` ES5510 pin labels (pins 12–15 = SER3..SER0, from the ES5510 datasheet) and `fcm.txt` labels differ from channel numbering in 12's routing note. This contradiction is flagged for the user/12; the hardware wiring conclusion above stands regardless of pin-label interpretation. The `5505-5510.txt` note is absent from the submodule pinned at a070cbd; it was added upstream in eaa5a0a and is cited through the submodule provenance record without changing the pin. ^[raw/docs/taito-f3.md]
+
+12 remarked that this is the second 1↔3 index swap found on F3. No other such index-routing swap is recorded in the current wiki; the other instance has not yet been recorded. ^[raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+
+Earlier analysis hypothesized reversed register↔pin numbering, under which MAME would already match hardware, and claimed 12's swap would break the mix. Both claims are refuted by the hardware observation and user's confirmation; they remain recorded in [[comparisons/hardware-vs-mame-audio-routing]]. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+
+## Runtime routing experiments
+
+In commandw and landmakrj, runtime instrumentation found loaded ESP programs reading SER0, SER1, and SER2 and writing stereo output only to SER3. Pair muting changed output samples in the tested runtime; these results do not override the hardware-observed routing. ^[raw/tests/2026-10-10-otis-esp-routing-experiments.md]
+
+Enhanced now implements the hardware wiring: pair 3 (channels 6/7) → ESP inputs 0/1, dry; pair 2 (channels 4/5) → inputs 2/3, delay; pair 1 (channels 2/3) → inputs 4/5, reverb; pair 0 (channels 0/1) is silent. Reference remains unchanged and follows MAME. The routing behavior and 2400-frame Land Maker render are recorded in the runtime test note. ^[raw/tests/2026-10-10-enhanced-effects-hardware-routing.md]
+
+Changing emulated OTIS→ESP gain from 0.18 to 1.0 raised Command War RMS by 5.55× in the test; whether physical hardware carries unity-gain words remains unestablished. ^[raw/tests/2026-10-10-otis-esp-routing-experiments.md]
+
+See [[comparisons/hardware-vs-mame-audio-routing]] for the full comparison and [[hardware/board]] for chip inventory. ^[raw/docs/otis-esp-routing-12-remark-2026-10-10.txt; raw/tests/2026-10-10-otis-esp-routing-experiments.md]
 
 ## Main-CPU view
 

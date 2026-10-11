@@ -31,15 +31,13 @@ When the window loses focus, the program releases all keys. It does this so that
 
 P2 has only `2` (start) and `6` (coin) by default. Bind its directions/buttons in F1 for offline two-player play. There are no default gamepad bindings; select the device and capture buttons or axis directions in the menu.
 
-In [online play](/guide/netplay), your local P1 profile controls your assigned player slot, including start and coin.
-
 ## F1 menu, preferences and slots
 
-The menu pauses solo play. Network simulation continues while it is open, with local P1 input neutral. Closing the menu or losing focus releases captured/held input; release a held control before pressing it again.
+The menu pauses the game while it is open. Closing the menu or losing focus releases captured/held input; release a held control before pressing it again.
 
 Use **Save preferences** explicitly to persist settings and remaps. Preferences load before CLI arguments, so explicit flags win. `--config FILE` selects a different preferences file; the default is `settings.cfg` under `SDL_GetPrefPath("f3-recomp", "f3rt")`. `states/` and `screenshots/` live alongside it. Volume is host output only (`--volume 0..100`, default 100%).
 
-The menu offers save/load slots **0–9** for offline strict-native play. A slot requires a compatible build, ROMs and presentation geometry. Slots are unavailable during network play; they are not portable canonical netplay snapshots. F12 writes a PNG into `screenshots/`; GPU postprocess captures include the effect, not the menu.
+The menu offers save/load slots **0–9** for strict-native play. A slot requires a compatible build, ROMs and presentation geometry. F12 writes a PNG into `screenshots/`; GPU postprocess captures include the effect, not the menu.
 
 Only controls labeled live by the UI take effect immediately. Respect restart-required labels rather than assuming every saved preference reconfigures the running machine.
 
@@ -47,7 +45,7 @@ Only controls labeled live by the UI take effect immediately. Respect restart-re
 
 The window opens at 960 by 696 pixels and you can resize it. The picture keeps its shape. The program adds black bars if the window has a different shape. The size 960 is 320 native columns times 3. With a video border the window is wider.
 
-The window title is `f3rt — landmakrj`. In online play the title shows the match state instead.
+The window title is `f3rt — landmakrj`.
 
 On start the program prints one line that starts with `window_open`. It gives the video driver, the renderer name, the video mode, the internal size and the filter.
 
@@ -75,8 +73,6 @@ A normal end is the `Escape` key, a closed window, or the end of a `--frames` li
 
 The file has 128 bytes. It stores the 64 words as big-endian 16-bit values. A new file is all `0xff` until the game writes to it.
 
-In netplay, the host's canonical handoff state becomes the match state. Independent EEPROM files and solo histories are supported; EEPROM equality is not a join requirement.
-
 ## Fast boot
 
 A window launch runs the power-on self-test and boot waits at full speed by default, without drawing the frames and with the sound samples discarded. The machine executes the same frames as an ordinary power-on. Fast boot is host-side only: it does not patch the ROM, change the CPU start, or write game RAM.
@@ -90,7 +86,7 @@ Fast boot does not alter emulation: with the same build, ROMs, EEPROM contents a
 
 The F1 menu adds **Fast boot** and **Boot state cache** in the Save states panel. They take effect on the next launch and are written only by **Save preferences**. Explicit CLI flags override the saved values.
 
-Fast boot is used only when nothing needs the per-frame output. A headless run ignores it unless you pass `--fast-boot on` explicitly, and it is disabled whenever `--wav`, `--dump-dir`, `--sound-trace`, `--profile-out` or `--fallback-report` is given. Online play always runs the ordinary boot.
+Fast boot is used only when nothing needs the per-frame output. A headless run ignores it unless you pass `--fast-boot on` explicitly, and it is disabled whenever `--wav`, `--dump-dir`, `--sound-trace`, `--profile-out` or `--fallback-report` is given.
 
 Fast boot prints one `fast_boot frames=N ms=T source=turbo|cache eeprom=generated|loaded|none` line before the summary.
 
@@ -116,7 +112,7 @@ Use `--headless` to run without a window, keyboard or sound device. You must als
 
 Without `--frames` the program stops with `Headless execution requires --frames`.
 
-A headless run without netplay does not wait. It runs as fast as the computer allows. The machine does the same work as in a window, so the result is the same. An online match keeps the frame pace unless you add `--unthrottled`.
+A headless run does not wait. It runs as fast as the computer allows. The machine does the same work as in a window, so the result is the same.
 
 | Option | Effect |
 | --- | --- |
@@ -164,7 +160,7 @@ At the end of every run the program prints a summary beginning with `set=`. Valu
 
 The `frame_crc` value is useful to check that two runs give the same picture. Two runs with the same ROM, build and inputs give the same value.
 
-Before this line the program can print a `fast_boot` line (see [Fast boot](#fast-boot)) and `VIDEO` lines. The `VIDEO` lines describe the game-data renderer. See [Video and presentation](/guide/video#the-video-report). In online play the program also prints a `netplay_confirmed` line. See [Online play](/guide/netplay).
+Before this line the program can print a `fast_boot` line (see [Fast boot](#fast-boot)) and `VIDEO` lines. The `VIDEO` lines describe the game-data renderer. See [Video and presentation](/guide/video#the-video-report).
 
 ## Choose the ROM set and directory
 

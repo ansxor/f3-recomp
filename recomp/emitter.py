@@ -26,6 +26,53 @@ COND_MAP = {
 MASK_MAP = {1: 0xff, 2: 0xffff, 4: 0xffffffff}
 SIGN_MAP = {1: 0x80, 2: 0x8000, 4: 0x80000000}
 
+# CCR flags as laid out in cpu->sr. lower() takes ``live_out``, the subset of
+# these that some successor may still observe (see recomp/liveness.py); flag
+# producers whose results are all dead emit no condition-code stores.
+CCR_C, CCR_V, CCR_Z, CCR_N, CCR_X = 0x01, 0x02, 0x04, 0x08, 0x10
+CCR_NZVC = CCR_N | CCR_Z | CCR_V | CCR_C
+CCR_ALL = CCR_X | CCR_NZVC
+
+
+def _cc_logic(live_out: int, result: str, width: int) -> list[str]:
+    """Lazy N/Z producer with V=C=0 (MOVE, TST, AND...). X is untouched."""
+    if not live_out & CCR_NZVC:
+        return []
+    return [f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = {result}; cpu->cc_width = {width};"]
+
+
+def _cc_cmp(live_out: int, src: str, dst: str, result: str, width: int) -> list[str]:
+    """Lazy NZVC producer of a subtraction whose X flag is not affected."""
+    if not live_out & CCR_NZVC:
+        return []
+    return [f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = {src}; cpu->cc_dst = {dst}; "
+            f"cpu->cc_result = {result}; cpu->cc_width = {width};"]
+
+
+def _cc_arith(live_out: int, op: str, src: str, dst: str, result: str, width: int,
+              carry: str) -> list[str]:
+    """Lazy XNZVC producer of ADD/SUB/NEG. X is also written eagerly into sr so
+    that a later LOGIC/CMP producer, which preserves X from sr, sees it.
+
+    When only X is live the pending state is cleared instead of replaced: a stale
+    ADD/SUB flush would recompute X from old operands and clobber the eager X,
+    and the N/Z/V/C it would materialise are dead.
+    """
+    stmts = []
+    if live_out & CCR_X:
+        stmts.append(f"cpu->sr = (cpu->sr & ~0x10u) | (({carry}) ? 0x10u : 0u);")
+    if live_out & CCR_NZVC:
+        stmts.append(f"cpu->cc_op = F3_CC_OP_{op}; cpu->cc_src = {src}; cpu->cc_dst = {dst}; "
+                     f"cpu->cc_result = {result}; cpu->cc_width = {width};")
+    elif live_out & CCR_X:
+        stmts.append("cpu->cc_op = F3_CC_OP_NONE;")
+    return stmts
+
+
+def _discard_value(ea: "_EA") -> list[str]:
+    """Keep a memory operand's variable referenced when its compare/test was elided."""
+    return [f"(void){ea.val_expr};"] if ea.is_mem else []
+
 
 def _get_base_mnemonic(insn: CsInsn) -> str:
     """Extract base mnemonic without size suffix."""
@@ -353,14 +400,17 @@ class StaticFlow:
     ``targets`` lists non-sequential successors (branch/jump destinations) that
     are statically known from the opcode. ``falls_through`` reports whether the
     sequential next instruction is also a possible successor. An indirect
-    transfer reports neither, which keeps it out of any chain.
+    transfer reports neither, which keeps it out of any chain. ``escapes`` is
+    set when control may also reach an address that is not named here (computed
+    jump or call, return, malformed branch operands).
     """
 
-    __slots__ = ("targets", "falls_through")
+    __slots__ = ("targets", "falls_through", "escapes")
 
-    def __init__(self, targets=(), falls_through=True):
+    def __init__(self, targets=(), falls_through=True, escapes=False):
         self.targets = tuple(int(target) & 0xffffffff for target in targets)
         self.falls_through = falls_through
+        self.escapes = escapes
 
 
 def _static_ea_target(insn: CsInsn, op) -> int | None:
@@ -382,33 +432,37 @@ def static_flow(insn: CsInsn) -> StaticFlow:
     try:
         ops = insn.operands
     except Exception:
-        return StaticFlow()
+        return StaticFlow(escapes=True)
     if mnem in ('bra', 'bsr'):
         if ops and ops[0].type == m68k.M68K_OP_BR_DISP:
             return StaticFlow(((insn.address + 2 + ops[0].br_disp.disp) & 0xffffffff,), False)
-        return StaticFlow((), False)
+        return StaticFlow((), False, True)
     if mnem.startswith('b') and mnem[1:] in COND_MAP:
         if ops and ops[0].type == m68k.M68K_OP_BR_DISP:
             return StaticFlow(((insn.address + 2 + ops[0].br_disp.disp) & 0xffffffff,), True)
-        return StaticFlow((), True)
+        return StaticFlow((), True, True)
     if mnem.startswith('db'):
         cond_name = mnem[2:]
         if cond_name in COND_MAP and len(ops) >= 2 and ops[1].type == m68k.M68K_OP_BR_DISP:
             return StaticFlow(((insn.address + 2 + ops[1].br_disp.disp) & 0xffffffff,), True)
-        return StaticFlow((), True)
+        return StaticFlow((), True, True)
     if mnem in ('jmp', 'jsr'):
         if ops:
             target = _static_ea_target(insn, ops[0])
             if target is not None:
                 return StaticFlow((target,), False)
-        return StaticFlow((), False)
+        return StaticFlow((), False, True)
     if mnem in ('rts', 'rtd', 'rtr', 'rte'):
-        return StaticFlow((), False)
+        return StaticFlow((), False, True)
     return StaticFlow()
 
 
-def lower(insn: CsInsn) -> list[str] | None:
+def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
     """Lower a single Capstone CsInsn into equivalent C statements.
+
+    ``live_out`` is the set of CCR flags (CCR_*) that a successor may observe
+    before overwriting them. Lazy flag producers store no condition-code state
+    when none of the flags they write is live; the default keeps all of it.
 
     Returns None if the instruction is unsupported (signaling fallback to Musashi).
     """
@@ -418,12 +472,10 @@ def lower(insn: CsInsn) -> list[str] | None:
     # the unimplemented-coprocessor exception on this CPU.
     if opcode >> 12 in (10, 15):
         vector = 10 if opcode >> 12 == 10 else 11
-        return ["f3_cc_flush(cpu);",
-                f"f3_exception(cpu, {vector}, 0x{insn.address:x}u);", "return;"]
+        return [f"f3_exception(cpu, {vector}, 0x{insn.address:x}u);", "return;"]
     if opcode == 0x4afc or opcode & 0xfff8 == 0x4848:
         # BKPT without external instruction substitution takes illegal opcode.
-        return ["f3_cc_flush(cpu);",
-                f"f3_exception(cpu, 4, 0x{insn.address:x}u);", "return;"]
+        return [f"f3_exception(cpu, 4, 0x{insn.address:x}u);", "return;"]
     if getattr(insn, 'id', 0) == 0:
         return None
     try:
@@ -937,18 +989,18 @@ def lower(insn: CsInsn) -> list[str] | None:
         if mnem == 'ext' and size == 2:
             stmts.append(f"int16_t ext_val = (int8_t)(cpu->d[{reg_num}] & 0xffu);")
             stmts.append(f"cpu->d[{reg_num}] = (cpu->d[{reg_num}] & 0xffff0000u) | ((uint16_t)ext_val & 0xffffu);")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = (uint16_t)ext_val; cpu->cc_width = 2;")
+            stmts.extend(_cc_logic(live_out, "(uint16_t)ext_val", 2))
         elif mnem == 'ext' and size == 4:
             stmts.append(f"int32_t ext_val = (int16_t)(cpu->d[{reg_num}] & 0xffffu);")
             stmts.append(f"cpu->d[{reg_num}] = (uint32_t)ext_val;")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = (uint32_t)ext_val; cpu->cc_width = 4;")
+            stmts.extend(_cc_logic(live_out, "(uint32_t)ext_val", 4))
         elif mnem == 'extb':
             stmts.append(f"int32_t ext_val = (int8_t)(cpu->d[{reg_num}] & 0xffu);")
             stmts.append(f"cpu->d[{reg_num}] = (uint32_t)ext_val;")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = (uint32_t)ext_val; cpu->cc_width = 4;")
+            stmts.extend(_cc_logic(live_out, "(uint32_t)ext_val", 4))
         elif mnem == 'swap':
             stmts.append(f"cpu->d[{reg_num}] = (cpu->d[{reg_num}] >> 16) | (cpu->d[{reg_num}] << 16);")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = cpu->d[{reg_num}]; cpu->cc_width = 4;")
+            stmts.extend(_cc_logic(live_out, f"cpu->d[{reg_num}]", 4))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
@@ -962,7 +1014,7 @@ def lower(insn: CsInsn) -> list[str] | None:
         dst_reg = ops[1].reg - m68k.M68K_REG_D0
         return [
             f"cpu->d[{dst_reg}] = 0x{(s32 & 0xffffffff):08x}u;",
-            f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = cpu->d[{dst_reg}]; cpu->cc_width = 4;",
+            *_cc_logic(live_out, f"cpu->d[{dst_reg}]", 4),
             f"cpu->pc = 0x{next_pc:08x}u;",
             f"cpu->cycles += {cycles};",
         ]
@@ -1003,7 +1055,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.extend(dst_ea.ea_setup)
             stmts.extend(_gen_write(dst_ea, val_expr, size))
             if not special and (not dst_ea.is_reg or dst_ea.reg_type in ('d', None)):
-                stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = {val_expr}; cpu->cc_width = {size};")
+                stmts.extend(_cc_logic(live_out, val_expr, size))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
@@ -1099,7 +1151,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             return None
         stmts = list(dst_ea.ea_setup)
         stmts.extend(_gen_write(dst_ea, "0u", size))
-        stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = 0u; cpu->cc_width = {size};")
+        stmts.extend(_cc_logic(live_out, "0u", size))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
@@ -1113,7 +1165,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             return None
         stmts = list(src_ea.ea_setup)
         stmts.extend(src_ea.read_stmts)
-        stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = {src_ea.val_expr}; cpu->cc_width = {size};")
+        stmts.extend(_cc_logic(live_out, src_ea.val_expr, size) or _discard_value(src_ea))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
         stmts.append(f"cpu->cycles += {cycles};")
         return stmts
@@ -1149,8 +1201,8 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.append(f"uint32_t add_dst = {dst_ea.val_expr};")
             stmts.append(f"uint32_t add_res = (add_dst + add_src) & {mask_s};")
             stmts.extend(_gen_write(dst_ea, "add_res", size))
-            stmts.append(f"cpu->sr = (cpu->sr & ~0x10u) | (((add_res & {mask_s}) < (add_src & {mask_s})) ? 0x10u : 0u);")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_ADD; cpu->cc_src = add_src; cpu->cc_dst = add_dst; cpu->cc_result = add_res; cpu->cc_width = {size};")
+            stmts.extend(_cc_arith(live_out, "ADD", "add_src", "add_dst", "add_res", size,
+                                   f"(add_res & {mask_s}) < (add_src & {mask_s})"))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1186,8 +1238,8 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.append(f"uint32_t sub_dst = {dst_ea.val_expr};")
             stmts.append(f"uint32_t sub_res = (sub_dst - sub_src) & {mask_s};")
             stmts.extend(_gen_write(dst_ea, "sub_res", size))
-            stmts.append(f"cpu->sr = (cpu->sr & ~0x10u) | (((sub_dst & {mask_s}) < (sub_src & {mask_s})) ? 0x10u : 0u);")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_SUB; cpu->cc_src = sub_src; cpu->cc_dst = sub_dst; cpu->cc_result = sub_res; cpu->cc_width = {size};")
+            stmts.extend(_cc_arith(live_out, "SUB", "sub_src", "sub_dst", "sub_res", size,
+                                   f"(sub_dst & {mask_s}) < (sub_src & {mask_s})"))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1199,13 +1251,23 @@ def lower(insn: CsInsn) -> list[str] | None:
         source, destination = opcode & 7, (opcode >> 9) & 7
         source_step = 2 if source == 7 and size == 1 else size
         destination_step = 2 if destination == 7 and size == 1 else size
+        if not live_out & CCR_NZVC:
+            # The bus reads and pointer updates are still architectural.
+            return [
+                f"(void)f3_read{size * 8}(cpu, cpu->a[{source}]);",
+                f"cpu->a[{source}] += {source_step}u;",
+                f"(void)f3_read{size * 8}(cpu, cpu->a[{destination}]);",
+                f"cpu->a[{destination}] += {destination_step}u;",
+                f"cpu->pc = 0x{next_pc:08x}u;",
+                f"cpu->cycles += {cycles};",
+            ]
         return [
             f"uint32_t cmp_src = f3_read{size * 8}(cpu, cpu->a[{source}]);",
             f"cpu->a[{source}] += {source_step}u;",
             f"uint32_t cmp_dst = f3_read{size * 8}(cpu, cpu->a[{destination}]);",
             f"cpu->a[{destination}] += {destination_step}u;",
             f"uint32_t cmp_res = (cmp_dst - cmp_src) & 0x{MASK_MAP[size]:x}u;",
-            f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = cmp_src; cpu->cc_dst = cmp_dst; cpu->cc_result = cmp_res; cpu->cc_width = {size};",
+            *_cc_cmp(live_out, "cmp_src", "cmp_dst", "cmp_res", size),
             f"cpu->pc = 0x{next_pc:08x}u;",
             f"cpu->cycles += {cycles};",
         ]
@@ -1223,10 +1285,13 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts = list(src_ea.ea_setup)
             stmts.extend(src_ea.read_stmts)
             cast = "(uint32_t)(int32_t)(int16_t)" if size == 2 else "(uint32_t)"
-            stmts.append(f"uint32_t cmp_src = {cast}({src_ea.val_expr});")
-            stmts.append(f"uint32_t cmp_dst = cpu->a[{dst_reg}];")
-            stmts.append("uint32_t cmp_res = cmp_dst - cmp_src;")
-            stmts.append("cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = cmp_src; cpu->cc_dst = cmp_dst; cpu->cc_result = cmp_res; cpu->cc_width = 4;")
+            if live_out & CCR_NZVC:
+                stmts.append(f"uint32_t cmp_src = {cast}({src_ea.val_expr});")
+                stmts.append(f"uint32_t cmp_dst = cpu->a[{dst_reg}];")
+                stmts.append("uint32_t cmp_res = cmp_dst - cmp_src;")
+                stmts.extend(_cc_cmp(live_out, "cmp_src", "cmp_dst", "cmp_res", 4))
+            else:
+                stmts.extend(_discard_value(src_ea))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1240,10 +1305,14 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.extend(dst_ea.ea_setup)
             stmts.extend(dst_ea.read_stmts)
             mask_s = f"0x{MASK_MAP[size]:x}u"
-            stmts.append(f"uint32_t cmp_src = {src_ea.val_expr};")
-            stmts.append(f"uint32_t cmp_dst = {dst_ea.val_expr};")
-            stmts.append(f"uint32_t cmp_res = (cmp_dst - cmp_src) & {mask_s};")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = cmp_src; cpu->cc_dst = cmp_dst; cpu->cc_result = cmp_res; cpu->cc_width = {size};")
+            if live_out & CCR_NZVC:
+                stmts.append(f"uint32_t cmp_src = {src_ea.val_expr};")
+                stmts.append(f"uint32_t cmp_dst = {dst_ea.val_expr};")
+                stmts.append(f"uint32_t cmp_res = (cmp_dst - cmp_src) & {mask_s};")
+                stmts.extend(_cc_cmp(live_out, "cmp_src", "cmp_dst", "cmp_res", size))
+            else:
+                stmts.extend(_discard_value(src_ea))
+                stmts.extend(_discard_value(dst_ea))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1263,8 +1332,8 @@ def lower(insn: CsInsn) -> list[str] | None:
             stmts.append(f"uint32_t neg_src = {dst_ea.val_expr};")
             stmts.append(f"uint32_t neg_res = (0u - neg_src) & {mask_s};")
             stmts.extend(_gen_write(dst_ea, "neg_res", size))
-            stmts.append(f"cpu->sr = (cpu->sr & ~0x10u) | (((neg_src & {mask_s}) != 0u) ? 0x10u : 0u);")
-            stmts.append(f"cpu->cc_op = F3_CC_OP_SUB; cpu->cc_src = neg_src; cpu->cc_dst = 0u; cpu->cc_result = neg_res; cpu->cc_width = {size};")
+            stmts.extend(_cc_arith(live_out, "SUB", "neg_src", "0u", "neg_res", size,
+                                   f"(neg_src & {mask_s}) != 0u"))
         else:  # negx
             stmts.append("f3_cc_flush(cpu);")
             stmts.append("uint32_t neg_x = (cpu->sr >> 4) & 1u;")
@@ -1333,7 +1402,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             mask_s = f"0x{MASK_MAP[size]:x}u"
             stmts.append(f"uint32_t not_res = (~{dst_ea.val_expr}) & {mask_s};")
             stmts.extend(_gen_write(dst_ea, "not_res", size))
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = not_res; cpu->cc_width = {size};")
+            stmts.extend(_cc_logic(live_out, "not_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1367,7 +1436,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             mask_s = f"0x{MASK_MAP[size]:x}u"
             stmts.append(f"uint32_t log_res = ({dst_ea.val_expr} {op_sym} {src_ea.val_expr}) & {mask_s};")
             stmts.extend(_gen_write(dst_ea, "log_res", size))
-            stmts.append(f"cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = log_res; cpu->cc_width = {size};")
+            stmts.extend(_cc_logic(live_out, "log_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
             stmts.append(f"cpu->cycles += {cycles};")
             return stmts
@@ -1516,7 +1585,6 @@ def lower(insn: CsInsn) -> list[str] | None:
             return None
         vec = 32 + (ops[0].imm & 0x0f)
         return [
-            "f3_cc_flush(cpu);",
             f"f3_exception(cpu, {vec}u, 0x{next_pc:08x}u);",
             "return;",
         ]
@@ -1526,7 +1594,7 @@ def lower(insn: CsInsn) -> list[str] | None:
             return None
         imm16 = ops[0].imm & 0xffff
         return [
-            f"if (!(cpu->sr & 0x2000u)) {{ f3_cc_flush(cpu); f3_exception(cpu, 8u, 0x{insn.address:08x}u); return; }}",
+            f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8u, 0x{insn.address:08x}u); return; }}",
             "f3_cc_flush(cpu);",
             f"f3_set_sr(cpu, 0x{imm16:04x}u);",
             "cpu->stopped = 1;",

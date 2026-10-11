@@ -4,15 +4,15 @@ Render-only machinery (nothing here is serialized or part of `Machine` state):
 
 - `[[video.emit_units]]` / `[video.frame_writers]` in `games/<id>/config.toml`
   ([syntax](../site/reference/game-config.md#videoemit_units-and-videoframe_writers)).
-- `runtime/sprite_units.{hpp,cpp}`: identity tracking, synchronous sandbox replay
+- `runtime/sprites/units.{hpp,cpp}`: identity tracking, synchronous sandbox replay
   (copy-on-write RAM overlay, no emulated side effects), splices, check mode.
-- `runtime/renderer/sprite_behaviour.hpp`, `games/<id>/sprites/behaviours.hpp`:
+- `runtime/sprites/behaviour.hpp`, `games/<id>/sprites/behaviours.hpp`:
   per-game patches applied to the replay.
 
 Units and behaviours are always on: the frontend creates `SpriteUnits` whenever the
 game declares units and runs natively (`--translated`; the interpreter has no unit
 hooks), and enables every registered behaviour. There are no flags. They never change
-cycles, native block counts or `Machine::state_crc()` / `sync_state_crc()`. The
+cycles, native block counts or `Machine::state_crc()`. The
 checker tools keep their own on/off switches for parity proofs.
 
 ## Workflow: add or change a unit
@@ -23,14 +23,14 @@ checker tools keep their own on/off switches for parity proofs.
 2. Configure (`cmake -S . -B <dir>`; regenerates the hooks) and run the checker:
 
    ```sh
-   cmake --build build -j10 --target f3rt-sprite-check
-   ./build/f3rt-sprite-check --rom-dir ../roms/landmakr --frames 6000
+   cmake --build build -j10 --target f3rt-tool
+   ./build/f3rt-tool sprite-check --rom-dir ../roms/landmakr --frames 6000
    ```
 
    `--set` defaults to the compiled game; `--frames N` (default 6000);
-   `--compare-every N` (default 60) is the state-CRC comparison interval;
+   `--compare-every N` (default 60) verifies that identical inputs advance state identically;
    `--seed N` / `--no-inputs` control the coin/start/button-mashing schedule shared
-   with `f3rt-gameplay-regression`; `--behaviour NAME` is repeatable.
+   with `f3rt-tool gameplay`; `--behaviour NAME` is repeatable.
 3. Read the report. It must end in `PASS` (exit code 0):
    - every invocation `matched` (unpatched replay equals the real writes bit for
      bit), no aborts;
@@ -39,7 +39,7 @@ checker tools keep their own on/off switches for parity proofs.
      disassemble them, decide whether they are frame setup/clears (add a range with
      an evidence comment) or a missed draw span (extend/add a unit);
    - a second machine without sprite units has identical cycles, `native_blocks` and
-     (every `--compare-every` frames and at the end) `sync_state_crc()` / `state_crc()`.
+     (every `--compare-every` frames and at the end) `state_crc()`.
 4. A mismatch means the span is wrong (too short: state set up before the start PC;
    too long: reads outside the declared start state) or the replay hit something it
    cannot reproduce (device access, interrupts); the report names the first differing
@@ -83,7 +83,7 @@ entries (matched by sprite identity) and must satisfy:
 Some games fake translucent shadows by emitting the shadow sprites on alternate frames only.
 On a display that does not run at the game's ~58.9 Hz that shows the shadow for one or two
 presented frames unevenly. A `FlickerShadow` source (`F3RT_FLICKER_SHADOW` in
-`runtime/renderer/sprite_behaviour.hpp`, declared in `games/<id>/sprites/behaviours.hpp`
+`runtime/sprites/behaviour.hpp`, declared in `games/<id>/sprites/behaviours.hpp`
 next to `behaviours`) names the game's shadow emit path inside an emit unit; like units and
 behaviours it is always on (no flag) but **only for the GPU backend with game video**
 (`--renderer enhanced`, or developer `compare-gpu`; CPU and FDP output are untouched and keep the game's own
@@ -125,7 +125,7 @@ How it works:
    presenter's. The CPU reference raster draws tagged shadows, i.e. the "visible" phase, but
    shadows are never enabled for it.
 
-`f3rt-sprite-check` enables the source (switch: `--no-flicker-shadows`) and checks inside
+`f3rt-tool sprite-check` enables the source (switch: `--no-flicker-shadows`) and checks inside
 `SpriteUnits::check_flicker`: tagged replay entries equal the real shadow-path entries when the
 game's gate was set, none were real when it was clear, tagged entries lead the run, and
 forcing the gate adds nothing but the shadow (untagged remainder equals the real entries). Per
@@ -134,11 +134,11 @@ the first coin) and on frames of both game parities. `--shadow-trace N` prints p
 counts:
 
 ```sh
-./build-commandw/f3rt-sprite-check --frames 6000 --behaviour full-detail \
+./build-commandw/f3rt-tool sprite-check --frames 6000 --behaviour full-detail \
     --shadow-trace 12
 ```
 
 ```sh
-cmake --build build-check-cw -j10 --target f3rt-sprite-check   # -DF3_GAME=commandw
-./build-check-cw/f3rt-sprite-check --frames 6000 --behaviour full-detail
+cmake --build build-check-cw -j10 --target f3rt-tool   # -DF3_GAME=commandw
+./build-check-cw/f3rt-tool sprite-check --frames 6000 --behaviour full-detail
 ```

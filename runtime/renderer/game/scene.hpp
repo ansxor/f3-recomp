@@ -33,7 +33,7 @@ concept SceneSource = requires(T &t, const VideoRam &vram) {
     t.decode(vram);
 };
 
-// A component serialized into machine/netplay snapshots; components rebuilt
+// A component serialized into machine snapshots; components rebuilt
 // purely from video RAM are not.
 template<class T>
 concept Snapshotable = requires(const T &c, T &t, StateWriter &w, StateReader &r) {

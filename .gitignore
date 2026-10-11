@@ -14,7 +14,30 @@ diffs/
 nvram/
 cfg/
 *.wav
-*.profile.lock
-*.profile.tmp
-*.profile.cold-hits
+# Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
+*.profile
+*.profile.*
+!profiles/.gitkeep
 f3-cold-hits.log
+
+# CMake/Makefile build trees: BUILD_DIR=build-<game> (and build-<game>-headless)
+/build-*/
+# In-source CMake leftovers from a configure run in the source root
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+# tools/mame/stage_roms.py default output (ROM ZIPs)
+/tools/mame/staged_roms/
+# Root-level outputs if CMake/Ninja is configured in the source root
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/compile_commands.json
+/CMakeUserPresets.json
+/rom_manifest.hpp
+/generated_config/
+/_deps/
+/lib*.a
+/f3rt-*

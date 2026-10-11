@@ -2,7 +2,7 @@
 #include "f3rt/cpu_abi.h"
 #include "m68kcpu.h"
 #include "m68kops.h"
-#include "state_oracle.h"
+#include "audio/reference/state_oracle.h"
 
 void f3rt_core_import(const f3_cpu *cpu) {
     unsigned i;

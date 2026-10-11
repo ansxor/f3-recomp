@@ -1,7 +1,7 @@
 #pragma once
-// Command War sprite behaviours (see runtime/renderer/sprite_behaviour.hpp).
+// Command War sprite behaviours (see runtime/sprites/behaviour.hpp).
 #include "generated_config/sprite_units.hpp"
-#include "renderer/sprite_behaviour.hpp"
+#include "sprites/behaviour.hpp"
 
 #include <array>
 

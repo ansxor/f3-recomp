@@ -1,9 +1,32 @@
 # CPU ABI changes
 
-Current generated programs require **ABI 4**. Older sections record the ABI in
+Current generated programs require **ABI 5**. Older sections record the ABI in
 force at that checkpoint, including later features originally added under ABI 2.
 Scheduling costs and device models follow reference-emulator behavior; this
 interface history is not a physical bus-cycle accuracy claim.
+
+## Version 5 — lazy condition codes across block boundaries (flush at read points)
+
+Condition codes (`cc_*`) are part of CPU state and remain lazy across block
+boundaries and chains. Any code outside generated blocks that reads CCR bits of
+`sr` must call `f3_cc_flush` first. Generated code no longer flushes at block
+exits or chains. Runtime callbacks that read CCR (`f3_exception`, IRQ delivery
+in `Machine::boundary`, state capture/dump) flush before reading `sr`. The
+interpreter fallback flushes once in `Interpreter::run_main` before importing
+canonical state, so `f3_fallback` does not flush itself. `f3_cc_flush` is
+defined in `include/f3rt/cpu_abi.h` for all callers.
+
+The recompiler also skips flag production nobody can observe. `recomp/liveness.py`
+solves backward per-flag (X N Z V C) liveness over the emitted instruction graph, and
+`lower(insn, live_out)` emits no `cc_*` stores when none of the flags an instruction
+writes is live (only the eager X write when X alone is). Returns, computed jumps and
+calls, successors that are not emitted instructions, emit-unit hook PCs and interpreter
+fallback PCs keep every flag live; a known `jsr`/`bsr` flows into its callee, and the
+return point is reached through the callee's `rts`. A flushed `sr` is therefore exact
+only for flags some later instruction can read: bits the program overwrites before
+reading again (in an IRQ frame or a state dump, for example) may be stale. Anything
+that needs the true CCR is an instruction that reads it (`MOVE from CCR/SR`, an
+exception, `RTR`/`RTE`...), and those keep every flag live.
 
 ## Version 4 — render-only emit-unit hooks
 
@@ -46,30 +69,23 @@ hook-only:
   remain).
 
 `CanonicalGameVideoHeader` (runtime/state_io.hpp) is reduced to the fixed
-sprite header fields. The netplay state-format word is the recomputed sync-state
-byte size, so netplay peers built from different revisions correctly reject
-pairing. No CPU instruction layout, timing or ABI version changes; generated
+sprite header fields. No CPU instruction layout, timing or ABI version changes; generated
 main/sound programs are unaffected.
 
-## Opt-in HLE audio — CPU ABI 3 unchanged
+## Enhanced audio — CPU ABI 3 unchanged
 
-`Audio::set_backend(Backend::Hle)` selects the ROM-data sequencer and mixer
+`Audio::set_backend(Backend::Enhanced)` selects the ROM-data sequencer and mixer
 after ROM/shared-memory configuration and before execution. The default
-`Backend::Accurate` preserves the sound CPU/device snapshot format.
-HLE uses 48 kHz output and does not execute a sound CPU. `Machine::sound_pc()`
-returns zero and HLE snapshots omit both native and interpreted sound CPUs.
+`Backend::Reference` preserves the sound CPU/device snapshot format.
+Enhanced uses 48 kHz output and does not execute a sound CPU. `Machine::sound_pc()`
+returns zero and Enhanced snapshots omit both native and interpreted sound CPUs.
+Historical “HLE”/“accurate” labels are now called Enhanced/Reference.
 
-The HLE audio record is 1632 explicitly serialized bytes: main clock,
-packet count/hash, consumer/reset state and per-track direct-program context.
-Worker sequencer/voices/effects/PCM and output-side command identities are
-excluded. Machine frame stepping brackets packet attribution with
-`begin_frame`/`finish_frame`, including instructions that cross vblank.
-Rollback callers bracket restore/resimulation with `begin_rollback(begin,end)`
-and `end_rollback`; restoration alone never rewinds HLE audio.
-
-Netplay settings bit14 identifies HLE. Accurate confirmed-only PCM remains
-unchanged; HLE publishes its speculative stream and reconciles missing direct
-notes by instance. No generated CPU layout, timing, instruction-start table
+The HLE audio record is 32 explicitly serialized bytes: main clock, command
+count and consumer/hold mailbox state. Worker sequencer/voices/effects/PCM are
+excluded. Machine frame stepping brackets
+packet attribution with `finish_frame()`, including instructions that cross
+vblank. No generated CPU layout, timing, instruction-start table
 or CPU ABI version changes. See [HLE-AUDIO.md](HLE-AUDIO.md).
 
 ## Version 3 — explicit ROM instruction-start exclusions
@@ -264,14 +280,11 @@ The C CPU ABI remains version 2. The C++ `Machine` adds state snapshot methods:
 - `Machine::load_state(std::span<const uint8_t> src)`
 - `Machine::state_crc() const -> uint32_t`
 
-Full local snapshot storage has a fixed size for a configured machine. Rollback
-preallocates `window + 1` slots (17 by default). `save_state` and `load_state`
-are allocation-free per frame. `state_crc()` computes `f3rt::crc32` over full
-local bytes and lazily allocates scratch once; netplay peer checksums now use
-`sync_state_crc()` instead. Snapshots are same-build, host-endian state, not a
-portable save-file format. Full local load requires compatible geometry;
-canonical sync load supports independent peer presentation geometry. Exact
-sizes and unsafe canonical fields are validated. Save/load must run at frame
+Snapshot storage has a fixed size for a configured machine. `save_state` and
+`load_state` are allocation-free per frame. `state_crc()` computes `f3rt::crc32`
+over the snapshot bytes and lazily allocates scratch once. Snapshots are
+same-build, host-endian state, not a portable save-file format. Load requires
+compatible geometry. Exact sizes and unsafe canonical fields are validated. Save/load must run at frame
 boundaries on the emulation thread with no racing reconfiguration or consumer.
 
 ### Canonical state byte rules
@@ -336,17 +349,16 @@ next-frame plane is serialized. Pending flags, indices and reference caches are
 derived and unsaved. Root saves materialize before writing their native pixels.
 Unsupported successors preserve the preceding game composite before replacing
 Machine scanout with the oracle. CPU presentation and Diagnostic/Compare remain
-eager. Expanded GPU presentation is also materialized on demand; canonical and
-sync byte sizes/order remain unchanged.
+eager. Expanded GPU presentation is also materialized on demand; canonical
+byte sizes/order remain unchanged.
 Load invalidates GPU host caches and initially presents the restored native
-frame; the next scanout rebuilds GPU scene data. Netplay uses canonical sync state,
-so peers may use independent presentation scale and border settings.
+frame; the next scanout rebuilds GPU scene data.
 
 Opt-in GPU interpolation adds only host-side `VideoInterpolation`/
 `InterpolationFields` analysis and appended per-playfield metadata in the
 **upload copy**. Each row/playfield has flags and four triples of anchored
 local polynomial increments (source X, X zoom, vertical phase, palette add).
-No `SceneRow`, `GameLines`, machine-state, snapshot, CPU ABI or netplay schema
+No `SceneRow`, `GameLines`, machine-state, snapshot or CPU ABI
 changes. The captured frame and lazily materialized CPU images remain
 non-interpolated. Both interpolation modes preserve native subrow-zero samples;
 alpha and discrete clip/mosaic/priority/column boundaries remain native.
@@ -363,8 +375,7 @@ share decoded scene sources but not scale-dependent raster storage.
 GPU device/assets/pipelines and immutable tile pen masks survive scale changes.
 Only render targets and already-used diagnostic readback buffers are replaced;
 SDL defers releasing queued GPU resources. Scale/interpolation/blit policy is not
-serialized. Netplay canonical sync state excludes expanded presentation buffers;
-local full snapshots retain them. GPU scale changes do not change the C CPU ABI.
+serialized. Snapshots retain the expanded presentation buffers. GPU scale changes do not change the C CPU ABI.
 
 ### Sprite sampling verification
 
@@ -373,42 +384,9 @@ Phase 8 retains the existing `SceneSprite`, GPU word layout, fixed-point raster
 phases, producer hooks and canonical state. Diagnostic captures now include
 all nine isolated layers; native-producer boundary branches cover crushed
 opaque overlap, mirrored zoom and nominal top-edge culling. No new sprite
-mode, transform field, CPU ABI, snapshot or netplay schema is introduced.
+mode, transform field, CPU ABI or snapshot schema is introduced.
 
-## ImGui and versus-only netplay synchronization cutover
-
-This C++ snapshot cutover does not bump the C CPU ABI; integration's current
-ABI is version 3. `Machine` adds a second snapshot surface:
-
-- `sync_state_size() const -> size_t`
-- `save_sync_state(std::span<uint8_t> dst) const`
-- `load_sync_state(std::span<const uint8_t> src)`
-- `sync_state_crc() const -> uint32_t`
-
-Full local snapshots continue to retain expanded GameVideo presentation buffers
-for offline slots and rollback. Sync snapshots omit those buffers, retain native
-render/trail/hardware state, and canonicalize derived FDP scanout controls. Sync
-load regenerates presentation under the recipient's geometry and invalidates
-host caches. Native sound/GameVideo sync bytes are 4,231,509; full local bytes
-at scale 2/border 48 are 6,547,797; oracle sound adds 215 bytes. Save/load remain
-allocation-free, with exact-sized spans and exclusive frame-boundary ownership.
-
-Canonical state crosses the network at host versus handoff. `StateReader`
-validates unsafe CPU, EEPROM, sound/device and video fields before device loaders
-use them; size/CRC alone is not validation. Imported Musashi sound state is
-restricted to valid board-68000 flags, opcode/model/timing constants and sound
-clock bounds, with process-local callbacks rebound. This does not authenticate
-the host or make UDP safe on an untrusted network.
-
-Wire protocol is now version 2. Its 64-byte identity comprises seven ROM CRCs,
-build SHA-256 and sync state-format word, not EEPROM, initial local state, delay
-or presentation settings. Exactly one host supplies a bounded compressed,
-chunked, checksummed canonical versus-entry snapshot; the relay's loaded barrier
-precedes rollback. Periodic peer CRCs use sync state while the rollback ring
-uses full local state. Confirmed natural exit/disconnect restores a retained
-confirmed boundary before local play resumes; rematches use fresh handoffs.
+## ImGui frontend — CPU ABI unchanged
 
 ImGui preferences, bindings, offline slots, screenshots, GPU postprocessing and
-host output volume do not change generated CPU hooks or the C CPU ABI. Detailed
-lifecycle, validation, trust limits and observed versus-cutover evidence are in
-[IMGUI-NETPLAY.md](IMGUI-NETPLAY.md).
+host output volume do not change generated CPU hooks or the C CPU ABI.

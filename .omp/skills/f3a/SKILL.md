@@ -1,16 +1,16 @@
 ---
 name: f3a
-description: "Analyse a Taito F3 game's 68EC020 program with tools/f3a (CLI or Python library): find routines, globals, record layouts, video writers, frame order, dispatch targets; run the game headless with scripted input, RAM pokes and execution watches to verify; file findings in docs/notes. Use for any reverse-engineering question about a game in games/<id>/."
+description: "Analyse a Taito F3 game's 68EC020 program with uv run f3 analyze (CLI or Python library): find routines, globals, record layouts, video writers, frame order, dispatch targets; run the game headless with scripted input, RAM pokes and execution watches to verify; file findings in docs/notes. Use for any reverse-engineering question about a game in games/<id>/."
 ---
 
 # f3a: game analysis for Taito F3
 
-`tools/f3a` gives static answers about the game's program, which come from the recompiler's own
+`uv run f3 analyze` gives static answers about the game's program, which come from the recompiler's own
 discovery, and checks them with headless runs of the real runtime. Static output shows what the code
 can do. Runs show what it does. A claim is not finished until a run supports it, or it is marked
 `[INFERENCE]`.
 
-Reference: `docs/developer/WORKFLOWS.md`, sections "Game analysis (`tools/f3a`)" and "Scripted input".
+Reference: `docs/developer/WORKFLOWS.md`, sections "Game analysis (`uv run f3 analyze`)" and "Scripted input".
 Shared findings: `docs/notes/`, through the `re-wiki` skill (`skill://re-wiki`).
 
 ## Start
@@ -28,11 +28,11 @@ Shared findings: `docs/notes/`, through the `re-wiki` skill (`skill://re-wiki`).
      an open contradiction (for example, the value it writes and what then shows on screen), report
      that with the run as evidence. It is a finding in its own right.
 2. Pick the interface.
-   - **CLI** (`tools/f3a <cmd> --game <id>`) for one-off lookups. Shells without a terminal must pass
+   - **CLI** (`uv run f3 analyze <cmd> --game <id>`) for one-off lookups. Shells without a terminal must pass
      `--game` or set `F3A_GAME`; `f3a use` only works in an interactive terminal.
    - **Library** for checking a guess across many frames or rows:
      ```python
-     import sys; sys.path.insert(0, "tools"); from analysis import f3a   # from the repo root
+     from tools.analysis import f3a    # run with `uv run python` from repo root
      g = f3a.game("landmakrj")          # analysed once per kernel
      help(g.xref)                       # each method's docstring is the CLI help
      ```

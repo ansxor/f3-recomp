@@ -77,8 +77,8 @@ Features beyond the base Land Maker layout, all mirrored from the FDP:
   row fields never change. `presented_playfield()` (`scene.hpp`) is the single remap: `alt_map=false`,
   `x_step*2`, `source_x = 2*source_x + (c << 8)` wrapped to 1024 px; `y` is unchanged. It is
   applied only to expanded output: the CPU compositor (`FrameScene::presented`, expanded kernels)
-  and `gpu/encode.cpp` (`options.expanded()`), so the native frame, `--renderer compare-cpu`, snapshots,
-  `state_crc` and `sync_state_crc` are untouched. A motion-interpolated row keeps moving
+  and `gpu/encode.cpp` (`options.expanded()`), so the native frame, `--renderer compare-cpu`, snapshots
+  and `state_crc` are untouched. A motion-interpolated row keeps moving
   horizontally through the same remap; one whose vertical phase moved keeps the alternate map.
   The shader and compositor already handle `x_step` up to 512. Rows with no exact twin (the
   half copy is not 512-periodic, or its tiles are not whole-map aliases) keep canonical alternate
@@ -207,7 +207,7 @@ The scoped phase is complete: VRAM-owned scene reconstruction at VBSTART,
 per-game `games/<game>/video/` decoders, opt-in PC/address-only write logging
 (`--discovery-log`), explicit `flipped-screen` / `sprite-trails` /
 `bitmap-pivot` fallbacks and the opt-in presentation options are implemented.
-`f3rt-gameplay-regression --frames 6000 --video-diff --video-diff-every 60`
+`f3rt-tool gameplay --frames 6000 --video-diff --video-diff-every 60`
 reports pixel_mismatches=0 for all nine layers and the composite over 91 sampled
 frames, with `VIDEO game_frames=6000 oracle_fallback_frames=0` and the
 pre-change frame CRC.

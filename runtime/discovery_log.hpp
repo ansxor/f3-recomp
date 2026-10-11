@@ -1,10 +1,10 @@
 #pragma once
 // Runtime discovery log (`--discovery-log PATH`): host-only, observe-only record of game routines
-// that the video HLE does not know about yet. Never part of machine, snapshot or netplay state.
+// that the video HLE does not know about yet. Never part of machine or snapshot state.
 //
 // Categories (one deduplicated entry per (category, key), written and flushed on first sight):
 //   sprite-stray    sprite-RAM write outside every emit unit from a PC not in [video.frame_writers]
-//                   (the "UNACCOUNTED" PCs of f3rt-sprite-check). Needs a game with emit units.
+//                   (the "UNACCOUNTED" PCs of f3rt-tool sprite-check). Needs a game with emit units.
 //   video-write     graphics/control RAM write from a PC the game's video code does not list as a known
 //                   producer, per layer. Sprite RAM is left to
 //                   sprite-stray when the game has emit units.

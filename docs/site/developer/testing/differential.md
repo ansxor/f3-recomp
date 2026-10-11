@@ -59,7 +59,7 @@ flowchart TD
 `run_differential()` in `runner.py` runs these steps in order.
 
 1. **Find and build Musashi.** `find_musashi_source()` looks for `m68k.h` in the `--musashi` path, then in `runtime/third_party/musashi`. `build_musashi()` compiles `m68kmake`, generates `m68kops.c`, compiles `m68kcpu.c`, `m68kops.c` and `softfloat/softfloat.c` with `-DM68K_INSTRUCTION_HOOK=1`, and archives them into `<output>/musashi/libmusashi.a`. It rebuilds only if a source file is newer than the library.
-2. **Start Capstone.** `_get_capstone_disassembler()` opens a Capstone M68K 020 big-endian decoder with details on. It adds `build/python` to `sys.path` if that folder exists.
+2. **Start Capstone.** `_get_capstone_disassembler()` opens a Capstone M68K 020 big-endian decoder with details on.
 3. **Import the emitter.** The runner imports `lower` from `recomp.emitter`. It must run from the repository root so that this import works.
 4. **Generate cases.** The runner always adds all boundary cases from `generate_boundary_cases()`. It adds `max(0, cases - boundary_count)` random cases from `generate_random_cases()`. It adds external cases if `--instructions` is set.
 5. **Decode and lower.** For each case the runner decodes the bytes. It keeps the first `instruction_count` instructions. It calls `lower()` for each one. If every call returns statements, the case is *supported*. If any call returns `None`, the case is *unsupported*.
@@ -213,12 +213,12 @@ Exit codes: 0 means all cases passed. 1 means a case failed, the compile failed,
 ## How to run
 
 ```sh
-PYTHONPATH=build/python python3 tools/differential/run.py \
+uv run python tools/differential/run.py \
   --musashi runtime/third_party/musashi \
   --output build/differential --cases 5000
 ```
 
-The same command works as `python3 -m tools.differential` from the repository root. Install Capstone with `pip install -r recomp/requirements.txt` (into `build/python` with `--target`, or into any environment on `PYTHONPATH`).
+The same command works as `uv run python -m tools.differential` from the repository root. Dependencies are managed via `uv`.
 
 The retained run in `docs/developer/DECISIONS.md` records 5,000 deterministic cases with 5,000 passes and no unsupported case. This is evidence for that recorded build and case set, not a current execution result.
 

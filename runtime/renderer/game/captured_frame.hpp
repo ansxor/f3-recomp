@@ -11,7 +11,7 @@
 namespace f3rt {
 
 // Host-only, CPU-typed snapshot of one decoded scanout frame; never serialized
-// into machine/netplay state. GameVideo overwrites its single instance at
+// into machine state. GameVideo overwrites its single instance at
 // VBSTART after the layer components decode video RAM. Everything downstream
 // reads this value: the CPU compositor directly (scene()), and the GPU
 // encoder (runtime/renderer/gpu/encode.hpp) into its own word layout once per

@@ -152,4 +152,4 @@ An example: the ROM writes the watchdog.
 
 - [Bus implementation](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp)
 - [Native access synchronization](https://github.com/ansxor/f3-recomp/blob/main/runtime/cpu_abi.cpp)
-- [Sound bus and shared byte lanes](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio.cpp)
+- [Sound bus and shared byte lanes](https://github.com/ansxor/f3-recomp/blob/main/runtime/audio/audio.cpp)

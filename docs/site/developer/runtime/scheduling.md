@@ -106,7 +106,7 @@ flowchart TD
   P -- yes --> T["clear bit, f3_exception(24 + level), set SR mask = level"]
   T --> R1
   P -- no, none found --> W{"cycles reached watchdog_at"}
-  W -- yes --> WR["reset_devices, audio.reset_board, interpreter.reset_main"]
+  W -- yes --> WR["reset_devices, audio.reset_board, reset_main_cpu"]
   WR --> R1
   W -- no --> N["next_event = min(next_vblank, irq3_at, watchdog_at)"]
   N --> ST{"cpu.stopped"}
@@ -176,7 +176,7 @@ When `cpu.cycles >= watchdog_at` at a boundary, the runtime does a whole-board r
 1. `reset_devices()`
 2. `audio->reset_board()`
 3. A `SoundTrace::Reset` record, if tracing is on.
-4. `interpreter->reset_main()`. This pulses the reset of the Musashi core. The CPU reloads SSP and PC from the ROM vectors. The reset costs 4 cycles. The core first receives the current canonical registers, so general registers and CCR stay as native code left them.
+4. `Machine::reset_main_cpu()`. This runs natively and does not use Musashi. It flushes pending condition codes, sets SR to supervisor with interrupts masked, loads SSP and PC from the ROM vectors, and charges 4 cycles. General registers and CCR stay as native code left them.
 5. Return 1.
 
 The raster clock does not restart. `hardware_cycles`, `next_vblank` and `frame` keep going.
@@ -214,7 +214,7 @@ It does not enter another CPU runner from a main-CPU bus callback.
 6. Calls `audio->reset_board()`.
 7. Records a sound trace reset.
 8. Resets `video` and `game_video`.
-9. Calls `interpreter->reset_main()`. The CPU gets its first PC and SP from the ROM, and `cpu.cycles` becomes 4.
+9. Calls `reset_main_cpu()`. The CPU gets its first PC and SP from the ROM, and `cpu.cycles` becomes 4.
 
 `reset()` does not clear the RAM arrays. The constructor zero-fills them. It does not clear inputs or coin counters either.
 

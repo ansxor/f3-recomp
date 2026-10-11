@@ -119,7 +119,7 @@ end = [0x4552, 0x457a, 0x45a2, 0x45ca, 0x4600, 0x4628, 0x4650, 0x4678]
 unit = "a4"
 size = 18
 owner = "writer"
-# Sprite-RAM writers that run outside any unit. Evidence: f3rt-sprite-check
+# Sprite-RAM writers that run outside any unit. Evidence: f3rt-tool sprite-check
 # (--frames 6000, attract + seeded inputs) attributes every outside write to these PCs:
 #   0x41d0..0x447e  per-frame list setup: command entries 0x4330..0x4374 clear both
 #                   banks word by word, tail/jump words 0x42d0..0x4306, 0x43ba..0x43d4,

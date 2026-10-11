@@ -10,7 +10,7 @@ The files are `runtime/interpreter.hpp`, `runtime/interpreter.cpp` and `runtime/
 The main purpose of the project is to run the game as native code, made from the ROM at build time. An interpreter is still useful:
 
 - **Fallback.** The recompiler cannot lower every instruction. For those the generated block calls `f3_fallback`. The dispatcher also uses it for any PC without a block.
-- **Reset.** `Machine::reset` and the watchdog reset use the interpreter core to load the reset vectors and charge the reset time.
+- **Reset.** `Machine::reset` and the watchdog reset run natively in `Machine::reset_main_cpu`. They load the reset vectors and charge the reset time without running Musashi.
 - **Reference.** A run without `--translated` uses only the interpreter. Tests use it to compare native and interpreted results.
 - **Sound oracle.** The sound 68000 can run in Musashi. The native sound driver is the alternative. See the [audio runtime pages](/developer/runtime/audio/).
 
@@ -22,7 +22,6 @@ The interpreter is a validation tool. The finished game runs in strict native mo
 class Interpreter {
 public:
     explicit Interpreter(Machine &machine);
-    void reset_main();
     void audio_reset(bool asserted);
     void audio_irq(bool asserted);
     int run_main(int cycles);
@@ -41,8 +40,7 @@ private:
 
 | Member | Purpose |
 | --- | --- |
-| `Interpreter(Machine &)` | Calls `m68k_init()` once (a `std::call_once`). Allocates two context buffers of size `m68k_context_size()`, rounded up to 8-byte units. |
-| `reset_main()` | Resets the main CPU core and charges the reset time. |
+| `Interpreter(Machine &)` | Calls `m68k_init()` once (a `std::call_once`). Allocates two context buffers of size `m68k_context_size()`, rounded up to 8-byte units. Sets the main context's 68EC020 type and callbacks. |
 | `audio_reset(asserted)` | Reset-line callback from `Audio`. When the line is released, it sets `sound_needs_reset`. |
 | `audio_irq(asserted)` | IRQ-line callback from `Audio`. Sets or clears the sound CPU interrupt at once. |
 | `run_main(cycles)` | Runs the main CPU for a cycle budget. A budget of 1 runs one instruction. |
@@ -101,29 +99,20 @@ For the sound CPU, `run_audio` calls `m68k_set_irq(audio->irq_level())` before e
 
 `reset_devices()` in `interpreter.cpp` runs on the guest RESET instruction. It calls `Machine::reset_devices()` only if the main bus is active. A RESET in the sound program does nothing.
 
-## reset_main
+## Main CPU reset
 
-```cpp
-void Interpreter::reset_main() {
-    bind(machine, false);
-    m68k_set_context(main_context.data());
-    m68k_set_cpu_type(M68K_CPU_TYPE_68EC020);
-    f3rt_core_import(&machine.cpu);
-    callbacks();
-    m68k_pulse_reset();
-    machine.cpu.cycles += unsigned(m68k_execute(1));
-    f3rt_core_export(&machine.cpu);
-    m68k_get_context(main_context.data());
-}
-```
+The main CPU reset is native: `Machine::reset_main_cpu()` in `runtime/machine.cpp`. It does not run Musashi. It mirrors `m68k_pulse_reset` for the 68EC020 and then reads the vectors through `Machine::read32`:
 
-The steps are:
+1. Flush pending condition codes.
+2. Clear the stopped and halted state.
+3. Set SR to `0x2700 | (sr & 0x1f)` with `f3_set_sr`, which swaps the stack banks.
+4. Set VBR to 0.
+5. Load SSP and A7 from address 0, then PC from address 4.
+6. Add 4 cycles, the 68EC020 reset latency.
 
-1. Select the main context and the 68EC020 CPU type.
-2. Import the canonical registers from `machine.cpu`. A reset keeps general registers and CCR. Without the import, a watchdog reset after native code would bring back the values of the last fallback.
-3. Pulse reset. Musashi reads the initial SSP and PC from address 0 and 4 through `m68k_read_memory_32`, which reads the ROM.
-4. Execute with a budget of 1. The core has a four-cycle reset latency. A budget below that returns without executing an opcode. The four cycles are added to `cpu.cycles`.
-5. Export the registers back to `machine.cpu`.
+Data and address registers, CCR, CACR, CAAR, SFC and DFC are preserved.
+
+The constructor sets up the Musashi main context once: the 68EC020 CPU type and the interrupt-acknowledge and reset-instruction callbacks. A guest RESET instruction in the main program therefore still reaches `Machine::reset_devices`. `run_main` imports canonical state before every slice, so the saved Musashi main context does not need to follow a native reset.
 
 `runtime/tests/cpu.cpp` tests this: a cold reset leaves `cpu.cycles == 4`, `pc == 0x100` and `d[0] == 0`. A warm reset keeps D0 and CCR and charges exactly 4 cycles.
 
@@ -159,12 +148,12 @@ sequenceDiagram
   participant M as Machine::fallback
   participant I as Interpreter::run_main
   participant X as Musashi
-  G->>G: f3_cc_flush (flags into SR)
   G->>A: f3_fallback(cpu)
   A->>M: fallback()
   M->>M: allow_main_fallback ? else throw
   M->>M: fallback_instructions + 1, fallback_hits update
   M->>I: run_main(1)
+  I->>I: f3_cc_flush (flags into SR)
   I->>X: import registers, m68k_execute(1)
   X->>M: m68k_read_memory_N / write_memory_N
   X-->>I: cycles used
@@ -235,13 +224,13 @@ These PCs belong to the sound driver of the target game. The trace is a bus log 
 
 ## Snapshots
 
-The interpreter state matters for rollback and for tests.
+The interpreter state matters for save states and for tests.
 
 - `save_sound_state` calls `f3rt_sound_core_export` to copy the sound core into the packed record `f3rt_sound_oracle_state`. It adds `sound_needs_reset`. The record has no pointers. Callbacks are not saved.
 - `load_sound_state` reads the record with `f3rt_sound_core_import`. If the sound CPU was not waiting for a reset, it selects the context, calls `callbacks()` again to rebind the handlers, and stores the context.
 - `sync_main_from_cpu` imports `machine.cpu` into the main context and rebinds callbacks. `Machine::load_state` calls it, so a later fallback has correct registers.
 
-The main CPU has no separate interpreter state in a snapshot. It is always rebuilt from `machine.cpu`. See [Snapshots](/developer/netplay/snapshots).
+The main CPU has no separate interpreter state in a snapshot. It is always rebuilt from `machine.cpu`.
 
 ## Key points
 

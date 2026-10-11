@@ -11,26 +11,30 @@ import subprocess
 import sys
 from typing import Any
 
-from .generator import (
-    RawTestCase,
-    generate_boundary_cases,
-    generate_random_cases,
-    load_external_instructions,
-)
-from .musashi_build import build_musashi, find_musashi_source
+try:
+    from .generator import (
+        RawTestCase,
+        generate_boundary_cases,
+        generate_random_cases,
+        load_external_instructions,
+    )
+    from .musashi_build import build_musashi, find_musashi_source
+except (ImportError, ValueError):
+    from tools.differential.generator import (
+        RawTestCase,
+        generate_boundary_cases,
+        generate_random_cases,
+        load_external_instructions,
+    )
+    from tools.differential.musashi_build import build_musashi, find_musashi_source
 
 
 def _get_capstone_disassembler():
-    # Ensure build/python is in sys.path if capstone is installed there
-    py_build = Path("build/python").resolve()
-    if py_build.exists() and str(py_build) not in sys.path:
-        sys.path.insert(0, str(py_build))
-
     try:
         from capstone import Cs, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
     except ImportError as exc:
         raise ImportError(
-            "Capstone 5.0.9 Python binding not found. Ensure PYTHONPATH=build/python"
+            "Capstone 5.0.9 Python binding not found. Ensure dependencies are installed via uv"
         ) from exc
 
     md = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)

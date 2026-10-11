@@ -9,6 +9,7 @@ must execute with zero main-CPU interpreter fallback.
 
 The [README](../../README.md#build) is the canonical integrated build recipe.
 `F3_ROM_DIR` generates Japanese main and sound CPU programs during configuration.
+CMake caches both generation steps with input content stamps (`recomp_emit.stamp` and `compile_sound.stamp` in the generated directories) and applies write-if-changed semantics so unchanged files retain their modification times. To force regeneration, delete the corresponding stamp file or generated directory.
 The current [CPU ABI](ABI-CHANGES.md) is version 3; regenerate both programs when
 changing it. Full-coverage tiers retain cold dispatch entries; do not use the
 experimental slim build as a general-play baseline.
@@ -16,10 +17,10 @@ experimental slim build as a general-play baseline.
 For standalone main-program discovery or emission:
 
 ```sh
-PYTHONPATH=build/python python3 -m recomp discover \
+uv run python -m recomp discover \
   --config games/landmakrj/config.toml \
   --rom-dir /path/to/roms/landmakr --output build/discovery
-PYTHONPATH=build/python python3 -m recomp emit \
+uv run python -m recomp emit \
   --config games/landmakrj/config.toml \
   --rom-dir /path/to/roms/landmakr --output build/generated-main
 ```
@@ -33,7 +34,7 @@ and [per-game config](../site/reference/game-config.md) for their contracts.
 
 ```sh
 ./build/landmakr --frames 3600 --headless --wav build/attract.wav
-cmake --build build --target f3rt-gameplay-regression -j 4
+cmake --build build --target f3rt-tool -j 4
 python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
   --frames 40000 --seeds 1 2 3 4 5 6 7 8
 ```
@@ -48,7 +49,7 @@ See [gameplay regression](../site/developer/testing/gameplay-regression.md).
 ### Scripted input
 
 Headless runs see attract mode only. `--inputs FILE` presses buttons from a script, so
-gameplay-only code runs under `--discovery-log`, `--dump-*` and `tools/f3a run --inputs`. Each
+gameplay-only code runs under `--discovery-log`, `--dump-*` and `uv run f3 analyze run --inputs`. Each
 line is a rule for an inclusive range of 1-based emulated frames, the numbering of dumps and the
 discovery log. Active rules are OR'd per player, and the script is OR'd with live input. `#`
 starts a comment.
@@ -66,7 +67,7 @@ slow, such as a win counter or a random-number seed. It writes only main RAM
 (`0x400000..0x41ffff`; `f3a xref a5-0xNNNN` prints an a5 global's absolute address). A range rewrites
 the value every frame, but the game can still change it within a frame. A run with pokes shows
 reachable code, not proof of a natural play path. The flag is host-only and offline-only, and it
-turns fast boot off so frame numbers stay those of a cold boot. `tools/f3a run --inputs FILE
+turns fast boot off so frame numbers stay those of a cold boot. `uv run f3 analyze run --inputs FILE
 --until sub_09d72a,sub_0a913c` copies the script to `inputs.txt` in the run directory. It stops
 as soon as every listed routine has stored to video or control RAM, and reports the frame where
 each did first. With `--dump-every N --keep rendered.png`, `f3a run` keeps PNG screenshots, which
@@ -100,7 +101,7 @@ can reuse them.
 
 ## Discovery log
 
-Humans find unhandled video routines the same way agents do (`f3rt-sprite-check`
+Humans find unhandled video routines the same way agents do (`f3rt-tool sprite-check`
 unaccounted writers, the old `F3RT_VIDEO_WRITE_LOG` build) without a special build or
 tool: play the game normally (all screens, fights, credits, endings) with
 
@@ -116,7 +117,7 @@ unthrottled headless frames of Command War measured 10.2 s with, 10.4 s without 
 Text file, one event per line, flushed immediately so a crash or quit loses nothing.
 `#` lines are comments. Fields are `key=value`, PCs/addresses are 24-bit hex
 (disassemble the PC in the generated program), `frame` is the 1-based emulated frame
-during which it happened (`f3rt-sprite-check` prints 0-based `Machine::frame`), `t` is wall
+during which it happened (`f3rt-tool sprite-check` prints 0-based `Machine::frame`), `t` is wall
 seconds since start (correlate with a recording), counts are byte writes.
 
 ```text
@@ -133,7 +134,7 @@ SUM unit-replay-abort unit=objects reason=Budget count=3   # only if a unit repl
 Categories:
 
 - `sprite-stray`: sprite-RAM write outside every emit unit from a PC outside
-  `[video.frame_writers]`, the unaccounted PCs of `f3rt-sprite-check`. Add the PC to
+  `[video.frame_writers]`, the unaccounted PCs of `f3rt-tool sprite-check`. Add the PC to
   `frame_writers` (with evidence) if it is frame setup/clear, else extend or add an
   `[[video.emit_units]]` ([SPRITE-UNITS.md](SPRITE-UNITS.md)). Requires strict native
   execution and a game with emit units.
@@ -147,58 +148,58 @@ Categories:
   (component and reason). Only with `--renderer enhanced` or a developer game/compare renderer.
 - Summary only: `unit-replay-abort` (behaviour replays abandoned, with reason) and
   `unit-stats`. Emit-unit replay *mismatches* need check mode, which replays every
-  invocation and is not cheap enough for play; use `f3rt-sprite-check` for that.
+  invocation and is not cheap enough for play; use `f3rt-tool sprite-check` for that.
 
 `--discovery-all` (with `--discovery-log`) turns the log into an observed writer map: known
 producers are logged too, tagged `known=1`, and sprite-RAM writes are logged as `video-write`
 even when emit units account for them. Its header then contains
-`# ALL observed writers: ...`; `tools/f3a discover LOG --ranges` prints it per layer and routine.
+`# ALL observed writers: ...`; `uv run f3 analyze discover LOG --ranges` prints it per layer and routine.
 
 No screenshot is taken on a first hit: the frame buffer is only complete at VBSTART
 and the capture path differs per renderer, so the frame number and wall time are
 logged instead (press F12 to mark a moment).
 
-## Game analysis (`tools/f3a`)
+## Game analysis (`uv run f3 analyze`)
 
-`tools/f3a` answers reverse-engineering questions about a game's 68EC020 program for humans and
+`uv run f3 analyze` answers reverse-engineering questions about a game's 68EC020 program for humans and
 agents alike: fixed columns, addresses always `0x` + 6 hex digits, `--json` rows, bounded `--limit`.
 It reuses `recomp/discovery.py` (recursive discovery, scanned/config jump tables, devirtualized
 computed transfers) and `profiles/<game>.profile` execution counts when present; ROMs come from
 `--rom-dir`, `F3_ROM_DIR` or the `build*/CMakeCache.txt` of that game.
 
 ```sh
-tools/f3a use commandw                          # default game for this terminal (or --game / F3A_GAME)
-tools/f3a vectors                               # reset, irqN, trapN handlers
-tools/f3a flow irq2 --tree 2                    # what the frame interrupt calls, in order, with call-site hit counts
-tools/f3a flow 0x2fed6 --path 3                 # caller chains from roots to a routine
-tools/f3a dis 0x9b32                            # annotated routine: a5 globals, resolved pointers, tables
-tools/f3a dis sub_009b32 --from 0x9d32 --to 0x9f38   # one block of a long routine
-tools/f3a dis 0x2ff42 --data words             # ROM tables as data (stops where code starts)
-tools/f3a dis 0x40aa --data offsets             # `jmp table(pc,d0.w)` offset table: index → handler
-tools/f3a xref a5-0x7cd7 --sort hits            # every read/write of a global (also via pointers)
-tools/f3a xref --field 0x1.2 --role write       # every bit op or andi/ori/eori mask touching bit 2 of byte +1
-tools/f3a xref --field 0x1.7 --within 0x410000-0x413fff   # ... of one record array, immediate stores included
-tools/f3a xref --field 0xc --role write --code  # who stores code addresses into a hook/callback slot
-tools/f3a writes --region sprites --ranges      # static store-PC ranges per discovery-log layer
-tools/f3a writes --field 0x1                    # every store to byte +1 of any record
-tools/f3a writes --region 0x660000-0x66001f     # stores into an address range (or a region name)
-tools/f3a struct sub_009b32 a4                  # field accesses through a register (span, reads, writes, rmw)
-tools/f3a flow '?dispatch'                      # what the static pass could not resolve, and why
-tools/f3a flow '?dispatch' --observed DIR       # unresolved sites checked against observed targets
-tools/f3a run --frames 1300 --dump-start 1190 --dump-every 1 --keep mainram.bin,graphics.bin --check-inert
-tools/f3a run --frames 2000 --indirect          # log observed computed jmp/jsr targets in indirect.log
-tools/f3a run --frames 3000 --all-writers --out build/f3a/cw-writers   # observed writer map
-tools/f3a run --frames 6000 --inputs play.txt --until sub_09d72a   # scripted input; stop once it runs
-tools/f3a discover build/f3a/cw-writers/discovery.log --ranges          # ... per layer and routine
-tools/f3a discover DIR --unknown-only           # only groups with at least one unknown writer PC
-tools/f3a records DIR --scan ram                # frame counters and parity bits, with their static writers
-tools/f3a records DIR --watch a5-0x7cd8:2 --changes
-tools/f3a records DIR --base 0x410000 --stride 0x80 --count 128 --active 0.7 --rel 0x2:2
-tools/f3a records DIR --base 0x410000 --stride 0x80 --count 128 --check '+0x2.w == +0x2a.w + 4' --where '+0x1.b & 0xc'
-tools/f3a sprites DIR --frames 600:603         # the hardware sprite list as the chip walks it (with writer attribution)
-tools/f3a sprites DIR --writer sub_009b32       # filter entries written by a specific routine or PC
-tools/f3a graph                                 # build/f3a/<game>-callgraph.html (interactive call graph)
-tools/f3a mametap --write 0x660000:0x66001f --frames 300 --run   # MAME taps (landmakrj ROMs staged)
+uv run f3 analyze use commandw                          # default game for this terminal (or --game / F3A_GAME)
+uv run f3 analyze vectors                               # reset, irqN, trapN handlers
+uv run f3 analyze flow irq2 --tree 2                    # what the frame interrupt calls, in order, with call-site hit counts
+uv run f3 analyze flow 0x2fed6 --path 3                 # caller chains from roots to a routine
+uv run f3 analyze dis 0x9b32                            # annotated routine: a5 globals, resolved pointers, tables
+uv run f3 analyze dis sub_009b32 --from 0x9d32 --to 0x9f38   # one block of a long routine
+uv run f3 analyze dis 0x2ff42 --data words             # ROM tables as data (stops where code starts)
+uv run f3 analyze dis 0x40aa --data offsets             # `jmp table(pc,d0.w)` offset table: index → handler
+uv run f3 analyze xref a5-0x7cd7 --sort hits            # every read/write of a global (also via pointers)
+uv run f3 analyze xref --field 0x1.2 --role write       # every bit op or andi/ori/eori mask touching bit 2 of byte +1
+uv run f3 analyze xref --field 0x1.7 --within 0x410000-0x413fff   # ... of one record array, immediate stores included
+uv run f3 analyze xref --field 0xc --role write --code  # who stores code addresses into a hook/callback slot
+uv run f3 analyze writes --region sprites --ranges      # static store-PC ranges per discovery-log layer
+uv run f3 analyze writes --field 0x1                    # every store to byte +1 of any record
+uv run f3 analyze writes --region 0x660000-0x66001f     # stores into an address range (or a region name)
+uv run f3 analyze struct sub_009b32 a4                  # field accesses through a register (span, reads, writes, rmw)
+uv run f3 analyze flow '?dispatch'                      # what the static pass could not resolve, and why
+uv run f3 analyze flow '?dispatch' --observed DIR       # unresolved sites checked against observed targets
+uv run f3 analyze run --frames 1300 --dump-start 1190 --dump-every 1 --keep mainram.bin,graphics.bin --check-inert
+uv run f3 analyze run --frames 2000 --indirect          # log observed computed jmp/jsr targets in indirect.log
+uv run f3 analyze run --frames 3000 --all-writers --out build/f3a/cw-writers   # observed writer map
+uv run f3 analyze run --frames 6000 --inputs play.txt --until sub_09d72a   # scripted input; stop once it runs
+uv run f3 analyze discover build/f3a/cw-writers/discovery.log --ranges          # ... per layer and routine
+uv run f3 analyze discover DIR --unknown-only           # only groups with at least one unknown writer PC
+uv run f3 analyze records DIR --scan ram                # frame counters and parity bits, with their static writers
+uv run f3 analyze records DIR --watch a5-0x7cd8:2 --changes
+uv run f3 analyze records DIR --base 0x410000 --stride 0x80 --count 128 --active 0.7 --rel 0x2:2
+uv run f3 analyze records DIR --base 0x410000 --stride 0x80 --count 128 --check '+0x2.w == +0x2a.w + 4' --where '+0x1.b & 0xc'
+uv run f3 analyze sprites DIR --frames 600:603         # the hardware sprite list as the chip walks it (with writer attribution)
+uv run f3 analyze sprites DIR --writer sub_009b32       # filter entries written by a specific routine or PC
+uv run f3 analyze graph                                 # build/f3a/<game>-callgraph.html (interactive call graph)
+uv run f3 analyze mametap --write 0x660000:0x66001f --frames 300 --run   # MAME taps (landmakrj ROMs staged)
 ```
 
 `DIR` is a `run --out` directory; it records its game, so `records`/`discover` on it need no
@@ -225,7 +226,7 @@ run.series("a5-0x7cd8", 2)                           # (frame, value) per dump; 
 ```
 
 Evidence column: `xN` executed N times in the profile, `rooted` statically reached, `decoded?` not
-proven code. Routine kinds and edge kinds are listed in `tools/f3a --help`.
+proven code. Routine kinds and edge kinds are listed in `uv run f3 analyze --help`.
 
 Static limits, stated by the tool rather than hidden:
 
@@ -248,7 +249,7 @@ Static limits, stated by the tool rather than hidden:
 
 ### Profiles for other games
 
-`profiles/landmakrj.profile` is frozen because it feeds code generation tiers. For other games a
+`profiles/landmakrj.profile` is frozen because it feeds code generation tiers. It is a local, gitignored file, not committed. For other games a
 profile only feeds analysis: `xN` hit counts on vectors, routines and call sites, and profile-hit
 entries in `?dispatch`. `f3a profile` records attract mode, plus any input scripts, on the
 instrumented build and writes `profiles/<game>.profile` (and `profiles/<game>.indirect` for observed
@@ -256,8 +257,8 @@ indirect targets). `--build` configures and builds `build-<game>-instrument/` fi
 New runs merge into an existing profile unless you pass `--replace`. For landmakrj, pass `--out FILE`
 (which also writes `<out>.indirect`).
 ```sh
-tools/f3a profile --game commandw --build --frames 6000
-tools/f3a profile --game commandw --inputs play.txt --frames 6000
+uv run f3 analyze profile --game commandw --build --frames 6000
+uv run f3 analyze profile --game commandw --inputs play.txt --frames 6000
 ```
 
 ### Shared notes and agents
@@ -268,14 +269,14 @@ Findings live in `docs/notes/`, an evidence-linked wiki whose conventions are in
 in `?` while the page is a hypothesis, and refuted pages are ignored. `games/<id>/analysis/symbols.toml`
 overrides these names. Agents analysing a game use the skill `.omp/skills/f3a`.
 
-Regression suite: `PYTHONPATH=build/python python3 -m unittest tools.test_f3a`. It pins verified
+Regression suite: `uv run pytest tests/tools/test_f3a.py`. It pins verified
 answers on both games and skips what is missing on the machine (ROMs, builds).
 
 ## CPU and device checks
 
 ```sh
-PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
-PYTHONPATH=build/python python3 tools/differential/run.py \
+uv run pytest
+uv run f3 differential \
   --musashi runtime/third_party/musashi \
   --output build/differential --cases 5000
 ctest --test-dir build -R runtime-
@@ -290,7 +291,6 @@ accuracy. See [testing](../site/developer/testing/index.md).
 ## Sound, snapshots and reference captures
 
 - [Sound-driver investigation](../SOUND-DRIVER.md): select `--sound-driver oracle` explicitly for interpreted captures; native ROM execution is not HLE.
-- [Netplay design and oracle](../NETPLAY.md): save/load, deterministic replay and impaired-relay scenarios are separate checks.
 - [MAME capture tooling](../../tools/mame/README.md): format-2 state/pixel alignment; format-1 bundles are not valid comparison pairs.
 - [Measurement archive](README.md): original metrics and limits, rather than a new verification claim.
 
@@ -313,7 +313,7 @@ existing accuracy limits of those backends still apply.
 | Native main dispatch | `include/f3rt/machine.hpp::NativePage`; `runtime/cpu_abi.cpp::f3_register_blocks`, `f3_dispatch` | Fixed 512-entry, 4 KiB-page index; dense runs use checked arithmetic lookup, sparse runs retain bounded binary search. Cached first addresses avoid dependent table loads. The index is 8 KiB on x86-64, derived from immutable validated registration, and never serialized. Failed registration, trace gating, raw-PC eligibility, exclusions and fallback retain their behavior. | Restore global sorted-table lookup in `f3_dispatch`; remove the derived page descriptors and their registration construction together. |
 | Wide main-bus access | `runtime/machine.cpp::direct_bytes`, `read16`, `read32`, `write16`, `write32` | Decode only contiguous, side-effect-free backing storage once; preserve big-endian byte assembly. Mirror/region/address wrapping, shared writes, MMIO and observed graphics writes retain ordered byte helpers. No unaligned host casts or new steady-state allocations. | Restore wide access through the existing ordered byte helpers and remove `direct_bytes`. |
 | CPU composition | `runtime/renderer/game/compositor.cpp::compose_rows`, `compose_expanded_rows`, `rgb`; `runtime/renderer/game/tiles.hpp::playfield_pixel`; `runtime/renderer/game/text.hpp::pixel` | One source loop, native and scale-1..8 specializations; constant divisors, row-invariant Y sampling, bounded mosaic wrap and expanded-only last-texel reuse. Palette offsets apply to copies. Opaque 8/0 and background 0/8 weights return the exact palette RGB with alpha forced to 255; other weights retain the original saturating arithmetic. More generated code replaces repeated work; native pixel scratch shrinks to 320 entries. | Restore the generic row kernel and full RGB blend arithmetic; move the two sampler definitions back to their `.cpp` files if reversing inlining. Revert serial and worker dispatch together. |
-| Accurate audio scheduler | `runtime/audio.cpp::Audio::Impl::advance` | Bound by the CPU deadline before testing the sample deadline; avoid unnecessary variable-rate division. Every slice and DUART → sample → sound-CPU edge order remains unchanged. No sound CPU or device batching. | Restore sample-deadline-first selection, keeping the same three-way minimum. |
+| Reference audio scheduler | `runtime/audio/audio.cpp::Audio::Impl::advance` | Bound by the CPU deadline before testing the sample deadline; avoid unnecessary variable-rate division. Every slice and DUART → sample → sound-CPU edge order remains unchanged. No sound CPU or device batching. | Restore sample-deadline-first selection, keeping the same three-way minimum. |
 | ES5510 execution | `runtime/third_party/audio/es5510.cpp::run_once`, `execute_run`; `es5510.hpp` | Preserve the initial HALT-released cycle, then run the same bounded 200-cycle budget in one call. Reuse the uint8 PC modulo-160 result, eliminate unused ALU metadata, and avoid division for zero/one positive delay wrap. Mutable instructions, pipeline writes, signed remainder and END behavior remain canonical. | Restore the per-cycle outer loop, original modulo expressions and operand metadata together; do not change instruction/operand/pipeline ordering. |
 | ROM-access diagnostic | `tools/profile_rom_access.py::build_profile`, `instrument_generated` | Instrument successful wide-read spans as well as byte fallbacks. Include split exception translation units and their fetch hooks. Original runtime/generated sources remain untouched. | If reversing wide reads, remove their private-copy hooks with that cutover; retain split exception-unit support. |
 
@@ -357,8 +357,8 @@ misses as hardware-counter measurements.
 
 | Timed path | Baseline mean frame (ms) | Optimized mean frame (ms) | Reduction | Baseline → optimized p95 (ms) |
 | --- | ---: | ---: | ---: | ---: |
-| Game renderer, accurate/native sound; 5 pairs | 5.91440 | 4.32739 | 26.83% | 6.18144 → 4.49125 |
-| FDP renderer, accurate/native sound; 5 pairs | 3.80996 | 3.60476 | 5.39% | 3.92846 → 3.73020 |
+| Game renderer, Reference/native sound; 5 pairs | 5.91440 | 4.32739 | 26.83% | 6.18144 → 4.49125 |
+| FDP renderer, Reference/native sound; 5 pairs | 3.80996 | 3.60476 | 5.39% | 3.92846 → 3.73020 |
 | Game renderer, existing HLE sound; 3 pairs | 4.24566 | 2.78605 | 34.38% | 4.48996 → 2.93561 |
 
 Scale-4/border-48 composition: serial 59.7724 → 30.2417 ms (49.41% lower),
@@ -394,12 +394,10 @@ With a configured Release build and the supported ROM directory:
 
 ```sh
 ctest --test-dir build/opt --output-on-failure
-build/opt/f3rt-gameplay-regression --rom-dir roms/landmakrj --seed 5 \
+build/opt/f3rt-tool gameplay --rom-dir roms/landmakrj --seed 5 \
   --frames 1320 --sound-driver native --video-diff --wav build/opt/replay.wav
-build/opt/f3rt-gpu-regression --rom-dir roms/landmakrj --seed 5 \
+build/opt/f3rt-tool gpu-compare --rom-dir roms/landmakrj --seed 5 \
   --frames 1560 --scale 4 --border 48 --every 120 --bench
-build/opt/f3rt-netplay-oracle --mode sync-proof --rom-dir roms/landmakrj \
-  --seed 5 --frames 2400 --sound-driver all
 ```
 
 The ignored local probe binaries preserve the original and final executable
@@ -435,7 +433,7 @@ this host is described below.
   seed 5 at 2400; expanded native/game at scale 3/border 160 and scale 4/border 48
   at 1560. Every-frame native/presentation pixel and PCM CRC streams, canonical
   state CRC streams every 120 frames, final state sizes/CRCs and execution/sample
-  counts matched. HLE was compared with the original HLE path, not accurate audio.
+  counts matched. HLE was compared with the original HLE path, not Reference audio.
 - Real Vulkan layer/composite comparisons exercised scales 1..8 at border 160:
   43 composite samples, 33 supported layer samples (39 for sprite plane 3), zero
   mismatching pixels. Bitmap, trails, global flip, unknown producer, ending
@@ -443,9 +441,7 @@ this host is described below.
   injection is not a played-through ending.
 - Snapshot proof exercised native and oracle sound, frames 0/1000/2000/3000,
   replay depths 1/7/16/31/97: 40 exact checks including sound-trace records and
-  wall-clock perturbations; zero save/load allocations. Final cross-presentation
-  sync proof at 2400 frames passed 786 checks per sound driver, with exact local
-  replay and zero save/load allocations in game and compare modes.
+  wall-clock perturbations; zero save/load allocations.
 - Valgrind 3.25.1 Memcheck ran 1320 actual native gameplay frames with layer
   comparisons: zero errors, zero suppressions, zero blocks/bytes live at exit.
   The host's stripped CachyOS loader lacked required `memcmp` symbols and its
@@ -497,10 +493,10 @@ candidates use generic algorithms, not ROM/opcode/program special cases:
   gain change; equal-current/target volume does not need a zero-delta ramp.
   HLE effects replace bounded cursor/remainder divisions with conditional wrapping.
   Float arithmetic ordering, sample rate and effects topology are unchanged.
-  Reverse these in `hle_synth.cpp` and `hle_effects.hpp`; they are exact against the
-  existing HLE output, not a claim of accurate-engine waveform equivalence.
+  Reverse these in `runtime/audio/hle/synth.cpp` and `runtime/audio/hle/effects.hpp`; they are exact against the
+  existing HLE output, not a claim of Reference-engine waveform equivalence.
 
-Isolated five-pair accurate/native game measurements against this checkpoint:
+Isolated five-pair Reference/native game measurements against this checkpoint:
 DSP arithmetic 4.33096 → 4.29656 ms (0.79% lower); sprite columns
 4.33152 → 4.24708 ms (1.95%); tile rows 4.34219 → 4.12845 ms (4.92%).
 Combined: 4.33057 → 4.03624 ms (6.80%), p95 4.50515 → 4.17643 ms.
@@ -554,28 +550,25 @@ reconstructs captured maps/glyphs/rows/palette with the retained current sprite
 plane; it does not read the now-latched sprite list or live palette. Two fixed
 native planes cost another 221,184 bytes; only the original next-frame plane is
 serialized. CPU presentation and Diagnostic/Compare stay eager. Observations,
-canonical/sync saves and backend/scale/load/reset transitions preserve the same
+canonical saves and backend/scale/load/reset transitions preserve the same
 native output and state layout. Reverse this checkpoint as a unit: restore eager
 native composition and the original public pixel field together with every caller.
 
 Direct-byte smoke: 14,600 frames over four input seeds plus expanded presentation,
 477 irregular native/state observations and 147 mutation/transition branches.
-Native/expanded pixels, complete canonical/sync bytes and PCM matched an independent
-CPU-eager peer. All GPU scales 1–8 matched the CPU reference; scale 3 additionally
+Native/expanded pixels, complete canonical bytes and PCM matched an independent
+CPU-eager machine. All GPU scales 1–8 matched the CPU reference; scale 3 additionally
 exercised all nine layers, bitmap/trails/global flip guards,
 sprite boundaries and runtime scale 1/8/3 changes. Durable `verify_deferred_native` covers ten first-observer and
 pending-frame boundaries, with independent visible sprite-lag witnesses:
 
 ```sh
-taskset -c 4-7 build/opt/f3rt-gpu-regression --rom-dir roms/landmakrj \
+taskset -c 4-7 build/opt/f3rt-tool gpu-compare --rom-dir roms/landmakrj \
   --seed 5 --frames 1501 --every 1500 --scale 3 --border 48 \
   --inject-frame 1501 --inject-trails
-taskset -c 4-7 build/opt/f3rt-netplay-oracle --rom-dir roms/landmakrj \
-  --mode sync-proof --sound-driver native --frames 2400 --seed 89
 ```
 
-The sync proof passed 786 checks, 372 paired frames and 372 exact local replays,
-comparing 375,648 PCM samples; save/load allocations were zero. An actual Wayland/
+An actual Wayland/
 Vulkan frontend under a nested 30 Hz Gamescope compositor ran 1200 frames on the
 pre-main, upstream-main and merged-lazy executables. Clock resyncs were 108/0/0;
 audio queue drops were zero for all three. Captured BMPs and WAVs were directly
@@ -609,7 +602,7 @@ error; they are not successful synthesis cases. Evidence:
 `e5a87e5` checkpoints the exact deferred-native/accessor cutover and durable
 regressions. Final CTest passed 5/5. Targeted Memcheck loaded a ready real snapshot,
 executed 40 supported unobserved scanouts and ten pending-frame/mutation/fallback/
-backend/scale/reset/load/trail boundaries: native/expanded/canonical/sync bytes
+backend/scale/reset/load/trail boundaries: native/expanded/canonical bytes
 matched, zero errors and zero bytes live at exit (174 allocations/frees). It used
 an isolated matching glibc/debug loader because the host loader lacks Valgrind's
 required redirect symbol. Raw result: `build/opt/lazy-targeted-memcheck.log`.
@@ -619,8 +612,8 @@ this is targeted retention-path coverage, not a completed full-run Memcheck.
 The merged temporal GPU regression also completed seed 5 / scale 2 / 4000 frames:
 46 samples, 43 paired scenes, 30 visible intermediate/midpoint frames, exact
 alpha-1/repeated draws, canonical/native/audio parity, and exact reset/gap/
-duplicate/rollback/fallback replay. Captured midpoint output was visually
-inspected. Reproduce with `build/opt/f3rt-motion-regression --rom-dir
+duplicate/fallback replay. Captured midpoint output was visually
+inspected. Reproduce with `build/opt/f3rt-tool motion --rom-dir
 roms/landmakrj --frames 4000 --seed 5 --scale 2 --every 90 --interp off`;
 PNG evidence remains in `build/opt/lazy-motion-proof/`.
 

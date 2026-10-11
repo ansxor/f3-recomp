@@ -10,7 +10,7 @@
 #include <string>
 #include <type_traits>
 
-#include "state_oracle.h"
+#include "audio/reference/state_oracle.h"
 namespace f3rt {
 // Validate canonical fields before device loaders can use imported indices.
 template <typename T> void validate_state_value(const T &) {}
@@ -509,7 +509,7 @@ template <> inline void validate_state_value(const CanonicalF3Cpu &s) {
 }
 template <> inline void validate_state_value(const CanonicalSoundOracle &s) {
     // An unstarted oracle context is zero-filled. Once initialized it is the
-    // board's 68000, never a peer-selected Musashi CPU model or timing table.
+    // board's 68000, never a foreign Musashi CPU model or timing table.
     if (s.cpu_type == 0) {
         CanonicalSoundOracle cold{};
         cold.sound_needs_reset = 1;

@@ -1,7 +1,7 @@
 #pragma once
 #include "renderer/game/scene.hpp"
 #include "f3rt/game_video.hpp"
-#include "renderer/sprite_presentation.hpp"
+#include "sprites/presentation.hpp"
 #include <array>
 #include <cstdint>
 #include <span>

@@ -34,8 +34,6 @@ Each check compares a specific component with a reference. Some components need 
 | Game-data video (`--renderer game-cpu`) | The FDP renderer | Indexed layer pixels and final RGB |
 | Recompiled sound driver (`--sound-driver native`) | Interpreted sound driver (`--sound-driver oracle`) | Every sound-bus record, then the WAV bytes |
 | ES5505, ES5510, MB87078 device models | MAME audio write trace | PCM waveform metrics |
-| Rollback netplay | A single machine that runs the same inputs | State CRC, frame CRC, PCM CRC |
-| Relay server (Go) | Go unit tests with a real UDP socket | Protocol and room behavior |
 | Device models, scheduler, EEPROM | Hand-written expected values in `runtime/tests/*.cpp` | Cycle counts, IRQ order, register values |
 
 The diagram shows the same relations. Arrows point from the oracle to the candidate it checks.
@@ -47,7 +45,6 @@ flowchart LR
         MAME["MAME frames, RAM and audio"]
         INT["Interpreted sound driver"]
         FDPO["FDP renderer"]
-        REF["Single-machine reference"]
         HAND["Hand-written expectations"]
     end
     subgraph Candidates["Components under test"]
@@ -57,8 +54,6 @@ flowchart LR
         GAME["Game-data video"]
         SND["Recompiled sound driver"]
         DEV["Audio device models"]
-        NET["Rollback netplay"]
-        RELAY["Go relay server"]
         MISC["Scheduler, EEPROM, DUART, mixer"]
     end
     MUS -->|"differential run"| EMIT
@@ -68,8 +63,6 @@ flowchart LR
     FDPO -->|"--video-diff"| GAME
     INT -->|"compare_sound"| SND
     MAME -->|"audio trace replay"| DEV
-    REF -->|"netplay oracle"| NET
-    HAND -->|"go test"| RELAY
     HAND -->|"runtime-* tests"| MISC
 ```
 
@@ -90,12 +83,6 @@ A **gate** is one test that you run before you accept a change. The table lists 
 | [`f3rt-replay` video mode](/developer/testing/frame-compare) | The FDP renderer draws the same picture as MAME from the same video RAM. | CPU behavior. |
 | [Audio trace replay](/developer/testing/audio-compare) | The sound device models produce a waveform that correlates with MAME for the same writes. | Exact waveform equality. Game-level sound timing. |
 | [Sound trace comparison](/developer/testing/sound-tools) | The recompiled sound driver issues exactly the same bus records, at the same times, as the interpreted driver. | Equality with MAME. |
-| [Netplay oracle](/developer/testing/netplay-oracle) | Rollback clients with real UDP loss end in the same state as a single machine. | That the emulation itself is correct. |
-| `go test -race ./...` in `netplay/server` | Relay rules for rooms, identity, spoofing and malformed packets. | Client behavior. |
-
-::: warning
-A passing netplay oracle proves that two clients agree with a reference. It does not prove that the reference is right. The MAME and gameplay gates remain independent checks.
-:::
 
 ## Which gate to run for a change
 
@@ -109,30 +96,26 @@ Use this table to choose gates. Run every gate in the row.
 | `runtime/machine.cpp`, `runtime/cpu_abi.cpp`, `runtime/interpreter.cpp` | `runtime-* tests`, gameplay regression, MAME frame comparison, sound trace comparison |
 | `runtime/renderer/fdp/video.cpp` | `f3rt-replay` video mode, MAME frame comparison |
 | `runtime/renderer/game/*.cpp` | `runtime-* tests`, gameplay regression with `--video-diff`, MAME frame comparison |
-| `runtime/audio.cpp`, `runtime/third_party/audio/*` | `runtime-* tests`, audio trace replay, sound trace comparison |
-| `tools/compile_sound.py`, `runtime/sound_native.cpp` | Sound trace comparison and WAV comparison |
-| `runtime/netplay*.cpp`, `runtime/state_io.*`, snapshot code | Netplay oracle (snapshot suite first), gameplay regression |
-| `netplay/server/*.go` | `go test -race ./...`, netplay oracle suites that use the server |
-| Any change to deterministic state | Netplay oracle: every field of the state must stay in the snapshot |
+| `runtime/audio/audio.cpp`, `runtime/third_party/audio/*` | `runtime-* tests`, audio trace replay, sound trace comparison |
+| `tools/compile_sound.py`, `runtime/audio/reference/native/sound_native.cpp` | Sound trace comparison and WAV comparison |
+| `runtime/state_io.*`, snapshot code | `runtime-* tests` (the `state` area), gameplay regression |
 
 ## Which gates need ROMs
 
 | Gate | Needs ROM files | Needs MAME binary | Needs other tools |
 | --- | --- | --- | --- |
-| Differential harness | No | No | Python 3.11+, Capstone 5.0.9, a C compiler |
-| Python unit tests | No | No | Python, Capstone, a C compiler |
+| Differential harness | No | No | `uv`, a C compiler |
+| Python unit tests | No | No | `uv`, a C compiler |
 | `runtime-* tests` / `ctest` | No | No | CMake build with `BUILD_TESTING` on |
-| `go test` in `netplay/server` | No | No | Go 1.22+ |
 | Gameplay regression | Yes | No | Build with `F3_ROM_DIR` |
-| `f3rt-sound-extract` | Yes | No | Build with `F3_ROM_DIR` |
-| Sound trace comparison | Yes (to make traces) | No | Python |
-| Netplay oracle | Yes | No | Build with `F3_ROM_DIR`, Go server binary |
-| MAME capture | Yes | Yes | Python, the staged ROM zip |
-| `compare_frames.py` | The captures come from ROMs | Only to make the reference | Python only |
-| `compare_audio.py` | The WAV files come from ROMs | Only to make the reference | Python, NumPy, SciPy |
+| Sound extraction (`f3rt-tool`) | Yes | No | Build with `F3_ROM_DIR` |
+| Sound trace comparison | Yes (to make traces) | No | `uv` |
+| MAME capture | Yes | Yes | `uv`, the staged ROM zip |
+| Frame comparison | The captures come from ROMs | Only to make the reference | `uv` |
+| Audio comparison | The WAV files come from ROMs | Only to make the reference | `uv` (analysis group: NumPy, SciPy) |
 | `f3rt-replay` | Yes | Captures come from MAME | Build of `f3rt-replay` |
 
-The four gates in the first four rows can run without any game data. Use them first. They are the only gates that a contributor without ROMs can run.
+The three gates in the first three rows can run without any game data. Use them first. They are the only gates that a contributor without ROMs can run.
 
 ## How to run each gate
 
@@ -141,19 +124,15 @@ All commands run from the repository root. Pages in this section explain each co
 ### Gates without ROMs
 
 ```sh
-# Python unit tests (needs Capstone on PYTHONPATH)
-PYTHONPATH=build/python python3 -m unittest discover -s tools -p 'test_*.py'
+# Python unit tests
+uv run pytest
 
 # Instruction-level differential harness
-PYTHONPATH=build/python python3 tools/differential/run.py \
-  --musashi runtime/third_party/musashi --output build/differential --cases 5000
+uv run f3 differential --cases 5000
 
 # Device and scheduler checks
 cmake -S . -B build -DF3RT_SDL=OFF
 ctest --test-dir build -R runtime-
-
-# Relay server tests
-(cd netplay/server && go test -race ./...)
 ```
 
 ### Gates with ROMs
@@ -162,27 +141,23 @@ Configure the build with the ROM directory. The build then generates the recompi
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_ROM_DIR=/path/to/roms/landmakr
-cmake --build build --target f3rt-gameplay-regression f3rt-netplay-oracle f3rt-sound-extract -j 4
+cmake --build build --target f3rt-tool -j 4
 
 # Seeded gameplay regression, eight seeds
-python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
+uv run f3 gameplay-seeds --rom-dir /path/to/roms/landmakr \
   --frames 40000 --seeds 1 2 3 4 5 6 7 8
 
 # Same run with the game-data renderer compared with the FDP oracle
-python3 tools/run_gameplay_regression.py --rom-dir /path/to/roms/landmakr \
+uv run f3 gameplay-seeds --rom-dir /path/to/roms/landmakr \
   --frames 6000 --seeds 5 --video-diff
-
-# Netplay: relay server, then the suites
-(cd netplay/server && go build -o ../../build/netplay-server .)
-python3 tools/run_netplay_oracle.py --suite snapshot --frames 6000 --seeds 1 2 3 5
 ```
 
 ### Gates with MAME
 
 ```sh
-python3 tools/mame/stage_roms.py
+uv run python tools/mame/stage_roms.py
 ./tools/mame/run_capture.sh --start-frame 600 --count 25 --step 120
-python3 tools/compare_frames.py captures/landmakrj_attract/ build/captures/native/
+uv run python tools/compare_frames.py captures/landmakrj_attract/ build/captures/native/
 ```
 
 See [MAME oracle and captures](/developer/testing/mame) and [frame comparison](/developer/testing/frame-compare) for the full steps.
@@ -194,18 +169,16 @@ If a whole-machine check fails, use the isolated checks to narrow the cause.
 
 ```mermaid
 flowchart TB
-    A["1. Unit checks: runtime-* tests, unittest, go test"]
+    A["1. Unit checks: runtime-* tests, unittest"]
     B["2. Differential harness: one instruction vs Musashi"]
     C["3. Gameplay regression: strict native, no fallback"]
     D["4. MAME frames and RAM"]
     E["5. Video-diff and sound-trace compare"]
-    F["6. Netplay oracle"]
-    A --> B --> C --> D --> E --> F
+    A --> B --> C --> D --> E
 ```
 
 Instruction tests identify errors in individual lowerings. Gameplay tests identify missing code paths and execution failures.
 MAME comparisons expose output differences, including timing errors.
-Netplay tests expose missing snapshot state and errors during replay.
 
 ## Evidence in the repository
 
@@ -216,10 +189,6 @@ and subsystem records. Those documents retain measured results and their scenari
 This section describes the tools and comparison boundaries rather than duplicating
 their measurement logs.
 
-[IMGUI-NETPLAY.md](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/IMGUI-NETPLAY.md)
-records overlay, canonical sync and versus-only lifecycle evidence separately
-from the historical pre-cutover validation.
-
 ## Pages in this section
 
 - [Differential instruction harness](/developer/testing/differential)
@@ -229,4 +198,3 @@ from the historical pre-cutover validation.
 - [Audio comparison](/developer/testing/audio-compare)
 - [Sound traces and sound tools](/developer/testing/sound-tools)
 - [Unit checks](/developer/testing/unit-checks)
-- [Netplay oracle](/developer/testing/netplay-oracle)

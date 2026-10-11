@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <span>
 
-#include "renderer/sprite_presentation.hpp"
+#include "sprites/presentation.hpp"
 
 namespace f3rt {
 
