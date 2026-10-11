@@ -11,7 +11,7 @@ FRAMES     ?= 600
 JOBS       ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help list-games rom-check configure build test run smoke headless clean distclean
+.PHONY: help list-games rom-check configure build test run smoke headless clean distclean netplay-server
 
 # Single-quote a value for the shell so paths with spaces or quotes survive.
 shq = '$(subst ','\'',$(1))'
@@ -42,6 +42,7 @@ help:
 	@echo "  clean       cmake --build --target clean"
 	@echo "  distclean   rm -rf BUILD_DIR (only if it holds a CMakeCache.txt)"
 	@echo "  list-games  ROM sets under roms/ that have games/SET/config.toml"
+	@echo "  netplay-server  build the netplay relay into build/netplay-server"
 	@echo "  help        this table"
 	@echo ""
 	@echo "Variables (override on the command line):"
@@ -57,6 +58,10 @@ help:
 
 list-games:
 	@for d in roms/*/; do s=$${d#roms/}; s=$${s%/}; if [ -f games/$$s/config.toml ]; then echo "$$s"; fi; done
+
+netplay-server:
+	@mkdir -p build
+	go -C netplay/server build -o $(call shq,$(CURDIR))/build/netplay-server .
 
 rom-check:
 	@test -d $(call shq,$(ROM_DIR)) || { printf 'error: ROM directory %s does not exist (GAME=%s). Set ROM_DIR=/path/to/roms/%s, or pick a set from make list-games.\n' $(call shq,$(ROM_DIR)) $(call shq,$(GAME)) $(call shq,$(GAME)) >&2; exit 1; }

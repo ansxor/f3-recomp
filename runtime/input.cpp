@@ -197,4 +197,10 @@ void InputScript::poke(Machine &machine, uint64_t frame) const {
             machine.ram[rule.poke_address - 0x400000 + i] = uint8_t(rule.poke_value >> (8 * (rule.poke_size - 1 - i)));
     }
 }
+bool InputScript::has_pokes() const {
+    for (const auto &rule : rules_) {
+        if (rule.poke_size > 0) return true;
+    }
+    return false;
+}
 }

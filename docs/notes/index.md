@@ -10,6 +10,7 @@
 ## Routines
 
 - [[routines/landmakrj-0008e20c-round-task]] (hypothesis) — round task; the round-end gate opens at 0x401f54 ≥ 10 (or ≥ 3)
+- [[routines/landmakrj-0008edde-versus-mode-transition]] (hypothesis) — versus mode latch and 2P join transition; word 0x401f6e transitions 0 -> 1
 
 ## Hardware: board and CPU side
 

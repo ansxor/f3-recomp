@@ -42,6 +42,7 @@ See [Developer evidence](/developer/evidence) for validation limits, and [Portin
 | [Controls and options](/guide/running) | F1 menu, keyboard/gamepad remaps, saved preferences, slots, screenshots and headless output. |
 | [Video and presentation](/guide/video) | Renderer, scale/border/filter, GPU postprocess and user shader examples. |
 | [Sound](/guide/sound) | Choose the sound driver. Write WAV files and sound traces. |
+| [Netplay](/guide/netplay) | Play two-player versus over a relay server. |
 | [Troubleshooting](/guide/troubleshooting) | Find the cause of an error message. |
 
 For a complete list of command-line options, read the [command-line reference](/reference/cli). To learn how the code works, read the [developer documentation](/developer/).

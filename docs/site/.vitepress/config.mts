@@ -29,6 +29,7 @@ export default withMermaid(
               { text: 'Controls and options', link: '/guide/running' },
               { text: 'Video and presentation', link: '/guide/video' },
               { text: 'Sound', link: '/guide/sound' },
+              { text: 'Netplay', link: '/guide/netplay' },
               { text: 'Troubleshooting', link: '/guide/troubleshooting' },
             ],
           },
@@ -147,6 +148,14 @@ export default withMermaid(
               { text: 'Audio comparison', link: '/developer/testing/audio-compare' },
               { text: 'Sound tools', link: '/developer/testing/sound-tools' },
               { text: 'Unit checks', link: '/developer/testing/unit-checks' },
+            ],
+          },
+          {
+            text: 'Netplay',
+            collapsed: true,
+            items: [
+              { text: 'Overview', link: '/developer/netplay/' },
+              { text: 'Protocol', link: '/developer/netplay/protocol' },
             ],
           },
         ],

@@ -1,0 +1,14 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <string_view>
+
+namespace f3rt::netplay {
+
+inline constexpr std::string_view default_game_id = "@F3_GAME@";
+inline constexpr std::array<uint8_t, 32> build_hash = {
+    @F3_BUILD_HASH_BYTES@
+};
+
+} // namespace f3rt::netplay

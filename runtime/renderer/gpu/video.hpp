@@ -52,7 +52,7 @@ public:
               bool process_diagnostic = false);
     // Skip busy in-flight frames before uploading/rendering. No fence wait or
     // readback; draw() still waits for explicit captures and diagnostics.
-    bool present(const CapturedFrame &scene);
+    bool present(const CapturedFrame &scene, const char *capture_path = nullptr);
     // Explicit opt-in; completed emulated frames are captured, never draws.
     void capture_motion(const CapturedFrame &scene, uint64_t frame);
     void reset_motion();
@@ -66,7 +66,7 @@ public:
     // Sample live alpha after acquisition. Caller owns display pacing; busy
     // GPU frames are skipped unless an explicit capture requests a wait.
     bool present_motion(const CapturedFrame &scene, std::chrono::steady_clock::time_point frame_start,
-                        std::chrono::nanoseconds period, bool wait = false);
+                        std::chrono::nanoseconds period, bool wait = false, const char *capture_path = nullptr);
     // Diagnostic single-window comparison: left native/current, right temporal.
     // Capture each changed input scene first; the native pane is cached until
     // capture_motion, reset_motion, scale or postprocess changes.

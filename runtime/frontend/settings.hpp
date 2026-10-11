@@ -30,6 +30,9 @@ struct FrontendSettings {
     bool fast_boot = true, boot_cache = false;
     bool motion_interp = false;
     std::array<InputProfile, local_player_count> profiles;
+    std::string netplay_server = "127.0.0.1:7845";
+    std::string netplay_name = "Player";
+    uint8_t netplay_delay = 2;
     FrontendSettings();
 };
 std::string default_config_path(const std::string &set);

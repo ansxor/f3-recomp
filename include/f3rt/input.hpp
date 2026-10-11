@@ -38,6 +38,7 @@ public:
     // Applies the poke rules active at `frame` to main RAM (call right before run_frame).
     void poke(Machine &machine, uint64_t frame) const;
     size_t rules() const { return rules_.size(); }
+    bool has_pokes() const;
 
 private:
     struct Rule {

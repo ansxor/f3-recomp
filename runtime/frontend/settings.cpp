@@ -44,6 +44,7 @@ bool choice(const std::string &s,std::initializer_list<const char*> values) { fo
 bool valid(const FrontendSettings &s) {
     if(!audio_backend_available(s.audio_backend))return false;
     if(!choice(s.renderer,{"accurate","enhanced"}) || !choice(s.video_scale,{"1","2","3","4","auto","auto-integer"}) || s.border>160 || !choice(s.filter,{"nearest","linear"}) || !choice(s.interpolation,{"off","linear","fit"}) || !choice(s.interpolation_fields,{"none","geometry","palette","geometry,palette"}) || !std::isfinite(s.volume) || s.volume<0 || s.volume>1)return false;
+    if(s.netplay_server.empty() || s.netplay_server.size()>256 || s.netplay_name.empty() || s.netplay_name.size()>24 || s.netplay_delay<1 || s.netplay_delay>8)return false;
     if(!choice(s.postprocess,{"off","crt","user"}) || s.user_shader.size()>1000 || s.user_shader.find_first_of("\r\n")!=std::string::npos)return false;
     for(const auto &p:s.profiles) {
         if(p.device_slot<0 || p.device_slot>15)return false;
@@ -78,6 +79,9 @@ bool load_frontend_settings(const std::string &path,FrontendSettings &settings,s
             if(v!="on" && v!="off"){error="Invalid fast boot setting";return false;}
             (k=="fast_boot"?s.fast_boot:s.boot_cache)=v=="on";
         }
+        else if(k=="netplay_server")s.netplay_server=v;
+        else if(k=="netplay_name")s.netplay_name=v;
+        else if(k=="netplay_delay"){if(!integer(v,n) || n<1 || n>8){error="Invalid netplay delay";return false;}s.netplay_delay=uint8_t(n);}
         else if(k=="border") {if(!integer(v,n) || n<0){error="Invalid numeric setting";return false;}s.border=n;}
         else if(k.size()==7 && k.substr(0,6)=="device" && k[6]>='0' && unsigned(k[6]-'0')<s.profiles.size()) {if(!integer(v,n)){error="Invalid device slot";return false;}s.profiles[k[6]-'0'].device_slot=n;}
         else if(k.starts_with("binding")) {
@@ -101,6 +105,7 @@ bool save_frontend_settings(const std::string &path,const FrontendSettings &s,st
     out<<"postprocess="<<s.postprocess<<"\nuser_shader="<<s.user_shader<<'\n';
     out<<"motion_interp="<<(s.motion_interp?"on":"off")<<'\n';
     out<<"fast_boot="<<(s.fast_boot?"on":"off")<<"\nboot_cache="<<(s.boot_cache?"on":"off")<<'\n';
+    out<<"netplay_server="<<s.netplay_server<<"\nnetplay_name="<<s.netplay_name<<"\nnetplay_delay="<<int(s.netplay_delay)<<'\n';
     for(unsigned p=0;p<s.profiles.size();++p) {out<<"device"<<p<<'='<<s.profiles[p].device_slot<<'\n';for(unsigned c=0;c<local_control_count;++c){const auto &b=s.profiles[p].controls[c];out<<"binding"<<p<<'.'<<c<<'='<<int(b.key)<<' '<<b.button<<' '<<b.axis<<' '<<b.direction<<'\n';}}
     out.close();if(!out){error="Cannot write config";std::filesystem::remove(tmp,ec);return false;}
     std::filesystem::rename(tmp,target,ec);if(ec){error=ec.message();std::filesystem::remove(tmp,ec);return false;}return true;

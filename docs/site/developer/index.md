@@ -238,6 +238,13 @@ flowchart TB
 | [Sound tools](/developer/testing/sound-tools) | Sound extraction, decoded events, and exact bus trace comparison. |
 | [Unit checks](/developer/testing/unit-checks) | Python synthetic cases, and C++ device checks. |
 
+### Netplay
+
+| Page | Content |
+| --- | --- |
+| [Overview](/developer/netplay/) | Architecture, hook contract, adding a game, and tests. |
+| [Protocol](/developer/netplay/protocol) | Relay wire format, server behavior, and session logs. |
+
 ## User and reference pages
 
 Developers also use these pages.

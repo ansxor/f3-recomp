@@ -1,0 +1,163 @@
+// Throwaway harness: two peers through the NEW lobby flow (confirm -> hold N -> restore -> run to edge -> sync -> lockstep).
+#include "f3rt/game_netplay.hpp"
+#include "f3rt/input.hpp"
+#include "f3rt/machine.hpp"
+#include "f3rt/rom.hpp"
+#include "runner/runner.hpp"
+
+#include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace f3rt;
+
+static const char *ROM_DIR = "/Users/darien/Workspace/f3-stuff/f3-recomp/roms/landmakrj";
+static const f3rt::GameNetplay *hook;
+
+static void zero_inputs(Machine &m) { apply_local_inputs(m, {}); }
+
+static const char *SCRIPTS[] = {
+    "700+20 coin\n720+20 p2 coin\n800-1300 mash keys=start period=45\n1400+5 right\n1500+5 b1\n",
+    "800+20 coin\n820+20 p2 coin\n900-1400 mash keys=start period=45\n1500+5 right\n1600+5 b1\n",
+    "700+20 coin\n720+20 p2 coin\n800-1300 mash keys=start period=29\n1400+5 right\n1450+5 b1\n",
+    "900+20 coin\n920+20 p2 coin\n1000-1500 mash keys=start period=45\n1600+5 right\n1700+5 b1\n",
+    "720+20 coin\n760+20 coin\n780+20 p2 coin\n850-1300 mash keys=start period=37\n1400+5 right\n1533+5 b1\n",
+};
+
+struct Peer {
+    std::unique_ptr<Machine> m;
+    uint64_t trig_frame = 0;
+};
+
+static Peer prepare(int script_idx, int hold_n, bool host, std::vector<uint8_t> &blob_io, uint64_t seed, int run_variant, int tail_n) {
+    Peer p;
+    p.m = runner::create_strict_machine(ROM_DIR, "landmakrj", true, 1);
+    p.m->audio->set_backend(Audio::Backend::Enhanced);
+    Machine &m = *p.m;
+    auto script = InputScript::parse(SCRIPTS[script_idx], "pre");
+    bool prev = false;
+    std::vector<uint8_t> snap;
+    for (uint64_t f = 1; f < 6000; ++f) {
+        auto w = script.words(f);
+        apply_local_inputs(m, w);
+        if (!m.run_frame(true)) throw std::runtime_error("halt");
+        m.audio->finish_frame();
+        bool trig = hook->lobby_trigger(m);
+        if (f % 250 == 0) std::printf("   pre f%llu 407902=%x 401f66=%x cred=%x\n", (unsigned long long)f, m.read8(0x407902), m.read16(0x401f66), m.read16(0x400090));
+        if (!prev && trig) {
+            p.trig_frame = m.frame;
+            std::printf("  trigger at frame %llu: 407902=%x 401f66=%x 401f6e=%x 407903=%x 407908=%x\n", (unsigned long long)m.frame, m.read8(0x407902), m.read16(0x401f66), m.read16(0x401f6e), m.read8(0x407903), m.read16(0x407908)); std::fflush(stdout);
+            snap.resize(m.state_size());
+            m.save_state(snap);
+            break;
+        }
+        prev = trig;
+    }
+    if (snap.empty()) throw std::runtime_error("no trigger");
+    hook->lobby_hold_begin(m);
+    for (int i = 0; i < hold_n; ++i) {
+        zero_inputs(m);
+        hook->lobby_hold_frame(m);
+        m.run_frame(true);
+        hook->lobby_hold_frame(m);
+        if (run_variant == 1) m.audio->finish_frame();
+    }
+    m.load_state(snap);
+    int edge_frames = 0;
+    while (!hook->in_versus(m)) {
+        if (edge_frames > 3000) { std::printf("edge never reached: 407902=%x 401f66=%x 401f6e=%x 407903=%x 407908=%x\n", m.read8(0x407902), m.read16(0x401f66), m.read16(0x401f6e), m.read8(0x407903), m.read16(0x407908)); std::exit(3); }
+        zero_inputs(m);
+        m.run_frame(true);
+        if (run_variant == 1) m.audio->finish_frame();
+        ++edge_frames;
+    }
+    std::printf("  peer(script=%d hold=%d host=%d): trigger frame=%llu edge after %d frames, machine frame=%llu\n",
+                script_idx, hold_n, host, (unsigned long long)p.trig_frame, edge_frames, (unsigned long long)m.frame);
+    if (host) {
+        blob_io.assign(2048, 0);
+        size_t n = hook->capture_sync(m, blob_io);
+        blob_io.resize(n);
+    } else {
+        hook->apply_sync(m, blob_io, seed);
+    }
+    for (int i = 0; i < tail_n; ++i) { // frontend keeps in_lobby=true until SessionState::Running
+        zero_inputs(m);
+        hook->lobby_hold_frame(m);
+        m.run_frame(true);
+        hook->lobby_hold_frame(m);
+    }
+    return p;
+}
+
+static uint32_t splitmix_unused;
+
+int main(int argc, char **argv) {
+    if (argc < 8) {
+        std::fprintf(stderr, "usage: sa na sb nb frames inputs.txt seedhex [varA varB]\n");
+        return 2;
+    }
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    hook = f3rt::game_netplay();
+    int sa = std::atoi(argv[1]), na = std::atoi(argv[2]), sb = std::atoi(argv[3]), nb = std::atoi(argv[4]);
+    int frames = std::atoi(argv[5]);
+    uint64_t seed = std::strtoull(argv[7], nullptr, 16);
+    int va = argc > 8 ? std::atoi(argv[8]) : 0, vb = argc > 9 ? std::atoi(argv[9]) : 0;
+    int ta = argc > 10 ? std::atoi(argv[10]) : 0, tb = argc > 11 ? std::atoi(argv[11]) : 0;
+    std::vector<std::array<uint16_t, 2>> in;
+    {
+        std::ifstream f(argv[6]);
+        unsigned a, b;
+        while (f >> a >> b) in.push_back({uint16_t(a), uint16_t(b)});
+    }
+    std::vector<uint8_t> blob;
+    Peer A = prepare(sa, na, true, blob, seed, va, ta);
+    Peer B = prepare(sb, nb, false, blob, seed, vb, tb);
+    Machine &a = *A.m, &b = *B.m;
+    if (std::getenv("FIXSYNC")) for (uint32_t ad = 0x401f40; ad <= 0x40212f; ++ad) b.write8(ad, a.read8(ad));
+
+    auto hashed = [](uint32_t ad) {
+        return !(ad == 0x401f85 || ad == 0x401fa1 || ad == 0x402033 || ad == 0x4020db || ad == 0x4020f7);
+    };
+    bool printed_ram_diff = false;
+    for (int step = 0; step < frames; ++step) {
+        std::array<LocalInputWord, local_player_count> w{0, 0, 0, 0};
+        if (step < (int)in.size()) { w[0] = in[step][0]; w[1] = in[step][1]; }
+        for (Machine *m : {&a, &b}) {
+            apply_local_inputs(*m, w);
+            hook->on_match_frame(*m, seed, step);
+            m->run_frame(true);
+            m->audio->finish_frame();
+        }
+        uint32_t ha = hook->sync_hash(a), hb = hook->sync_hash(b);
+        // full-RAM diff census (first time any diff appears in the 0x401f40..0x40212f block)
+        std::vector<uint32_t> diffs;
+        for (uint32_t ad = 0x401f40; ad <= 0x40212f; ++ad)
+            if (a.read8(ad) != b.read8(ad)) diffs.push_back(ad);
+        if (!printed_ram_diff && !diffs.empty()) {
+            printed_ram_diff = true;
+            std::printf("FIRST block diff at completed frame %d (hash %s): ", step + 1, ha == hb ? "equal" : "DIFF");
+            for (auto d : diffs) std::printf("0x%x(A=%02x,B=%02x,%s) ", d, a.read8(d), b.read8(d), hashed(d) ? "hashed" : "excl");
+            std::printf("\n");
+        }
+        if (ha != hb) {
+            std::printf("DESYNC at completed frame %d crcA=%08x crcB=%08x\n", step + 1, ha, hb);
+            for (auto d : diffs)
+                if (hashed(d)) std::printf("  0x%x: A=%02x B=%02x\n", d, a.read8(d), b.read8(d));
+            size_t total = 0;
+            for (size_t i = 0; i < a.ram.size(); ++i) total += a.ram[i] != b.ram[i];
+            std::printf("  total work-RAM bytes differing: %zu\n", total);
+            return 1;
+        }
+        if ((step + 1) % 60 == 0 && (step + 1) % 300 == 0)
+            std::printf("  frame %d ok crc=%08x gate=%d\n", step + 1, ha, a.read16(0x401f82) >= 0x50 && a.read16(0x40210e) == 1);
+    }
+    std::printf("NO DESYNC through %d frames; final crc=%08x\n", frames, hook->sync_hash(a));
+    return 0;
+}

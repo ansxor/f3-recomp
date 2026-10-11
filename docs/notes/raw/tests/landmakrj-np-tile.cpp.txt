@@ -1,0 +1,93 @@
+// Throwaway: compare lobby-hold flash counter pin rules on the GAME SELECT confirm tile.
+#include "capture_io.hpp"
+#include "f3rt/game_netplay.hpp"
+#include "f3rt/input.hpp"
+#include "f3rt/machine.hpp"
+#include "runner/runner.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+using namespace f3rt;
+
+static const char *PRE = "700+20 coin\n720+20 p2 coin\n800-1300 mash keys=start period=45\n1400+5 right\n1500+5 b1\n";
+
+static void shot(Machine &m, const std::string &name) {
+    m.audio->finish_frame();
+    f3rt::write_bmp("build/f3a/tile/" + name + ".bmp", m.native_pixels());
+}
+
+int main(int argc, char **argv) {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    // argv[1]=rule: "old" (pin to captured value) | "fixed:<hex>" | "cycle"
+    std::string rule = argv[1];
+    int hold = argc > 2 ? std::atoi(argv[2]) : 300;
+    system("mkdir -p build/f3a/tile");
+    const auto *hook = f3rt::game_netplay();
+    auto mp = runner::create_strict_machine("/Users/darien/Workspace/f3-stuff/f3-recomp/roms/landmakrj", "landmakrj");
+    Machine &m = *mp;
+    auto script = InputScript::parse(PRE, "pre");
+    std::vector<uint8_t> snap;
+    bool prev = false;
+    for (uint64_t f = 1; f < 3000; ++f) {
+        apply_local_inputs(m, script.words(f));
+        m.run_frame(true);
+        m.audio->finish_frame();
+        bool t = hook->lobby_trigger(m);
+        if (!prev && t) { snap.resize(m.state_size()); m.save_state(snap); break; }
+        prev = t;
+    }
+    uint8_t c0 = m.read8(0x407903);
+    uint16_t timer = m.read16(0x407908);
+    std::printf("trigger frame=%llu 407903=%02x 407908=%04x\n", (unsigned long long)m.frame, c0, timer);
+    auto pins = [&](Machine &mm, int i) {
+        mm.write8(0x407902, 1);
+        if (rule == "old") mm.write8(0x407903, c0);
+        else if (rule.rfind("fixed:", 0) == 0) mm.write8(0x407903, uint8_t(std::strtoul(rule.c_str() + 6, nullptr, 16)));
+        else if (rule == "cycle") mm.write8(0x407903, uint8_t(0x21 + (i % 0x1e))); // 0x21..0x3e
+        mm.write16(0x407908, timer);
+        mm.write16(0x401f6e, 0);
+    };
+    uint8_t cmin = 255, cmax = 0;
+    for (int i = 0; i <= hold; ++i) {
+        if (i == 0 || i == 1 || i == 2 || i == 3 || i == 6 || i == 60 || i == 61 || i == 300 || i == 301) {
+            char nm[64];
+            std::snprintf(nm, sizeof nm, "%s_%03d", rule.c_str(), i);
+            for (auto &ch : std::string(nm)) (void)ch;
+            std::string n = nm;
+            for (auto &ch : n) if (ch == ':') ch = '-';
+            shot(m, n);
+        }
+        apply_local_inputs(m, {});
+        pins(m, i);
+        m.run_frame(true);
+        pins(m, i + 1);
+        m.audio->finish_frame();
+        uint8_t c = m.read8(0x407903);
+        cmin = std::min(cmin, c);
+        cmax = std::max(cmax, c);
+    }
+    std::printf("hold %d frames: 407903 range seen after pin [%02x..%02x], 407902=%x 401f6e=%x\n", hold, cmin, cmax,
+                m.read8(0x407902), m.read16(0x401f6e));
+    // Play locally: restore snapshot, no pins, run to edge.
+    m.load_state(snap);
+    int n = 0;
+    while (!hook->in_versus(m) && n < 3000) { apply_local_inputs(m, {}); m.run_frame(true); ++n; }
+    std::printf("play-locally: edge after %d frames, 401f6e=%x 401f82=%x\n", n, m.read16(0x401f6e), m.read16(0x401f82));
+    // Cancel: restore snapshot, hook cancel, then press left and check cursor, timer counting, no refire.
+    m.load_state(snap);
+    hook->lobby_hold_begin(m);
+    hook->lobby_cancel(m);
+    std::printf("cancel: 407902=%x 407903=%x 407908=%04x 4078f6=%x\n", m.read8(0x407902), m.read8(0x407903), m.read16(0x407908), m.read16(0x4078f6));
+    bool refire = false;
+    for (int i = 0; i < 120; ++i) {
+        std::array<LocalInputWord, local_player_count> w{};
+        if (i >= 10 && i < 15) w[0] = 4; // left
+        apply_local_inputs(m, w);
+        m.run_frame(true);
+        if (hook->lobby_trigger(m)) refire = true;
+        if (i == 119) shot(m, rule + "_cancel_120");
+    }
+    std::printf("cancel+120f: cursor 4078f6=%x timer=%04x 407902=%x refire=%d\n", m.read16(0x4078f6), m.read16(0x407908), m.read8(0x407902), refire);
+    return 0;
+}

@@ -95,6 +95,10 @@ The fallback is the 68020 interpreter. The interpreter runs instructions that th
 | `--volume` | `0` to `100` | `100` | Host output percentage | Does not alter simulation or confirmed PCM. |
 | `--postprocess` | `off`, `crt` or `user` | `off` | GPU postprocess | Inactive unless `enhanced`; affects presentation/screenshots, not native pixels or menu. |
 | `--user-shader` | `FILE.metal` or `FILE.spv` | none | User postprocess file | Metal entry `f3_postprocess`; Vulkan entry `main`. See [shader ABI/examples](/guide/video#f1-shaders-and-live-controls). |
+| `--netplay-server` | `HOST:PORT` | `127.0.0.1:7845` | Netplay relay server control connection | Overrides saved preference. |
+| `--netplay-auto` | `host`, `host:file:PATH`, `join:CODE`, `join:file:PATH` | none | Automate netplay trigger action upon 2P versus transition | Test and automation shortcut: automatically initiates hosting or joining when versus mode commits. |
+| `--netplay-name` | `NAME` | `Player` | Netplay player name (1 to 24 bytes) | Overrides saved preference. |
+| `--netplay-delay` | `1` to `8` | `2` | Netplay input delay in frames | Overrides saved preference. |
 | `--help` | none | | Print usage and exit with code 0 | |
 
 Window geometry follows the selected crop/rotation. Japan starts at

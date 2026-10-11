@@ -1,0 +1,27 @@
+#include "f3rt/game_netplay.hpp"
+#include "f3rt/machine.hpp"
+#include "f3rt/netplay.hpp"
+#include "netplay/recorder.hpp"
+#include "runner/runner.hpp"
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <set>
+#include <array>
+#include <cstring>
+using namespace f3rt; using namespace f3rt::netplay;
+static std::vector<uint8_t> rd(const std::string&p){std::ifstream i(p,std::ios::binary);return {std::istreambuf_iterator<char>(i),{}};}
+struct B{InputsFile in;std::vector<uint8_t> trig;uint64_t seed=0;std::unique_ptr<Machine> m;uint64_t n=0;};
+static B load(const std::string&d){B b;auto ib=rd(d+"/info.json");std::string info(ib.begin(),ib.end());auto ip=rd(d+"/inputs.txt");std::string e;parse_inputs_txt(std::string(ip.begin(),ip.end()),b.in,e);b.trig=rd(d+"/trigger.f3s");json_find_u64(info,"seed",b.seed);
+ b.m=runner::create_strict_machine("/Users/darien/Workspace/f3-stuff/f3-recomp/roms/landmakrj","landmakrj",true,1);b.m->audio->set_backend(Audio::Backend::Enhanced);b.m->load_state(b.trig);return b;}
+static void step(B&b){auto w=b.in.frames.at(b.n);run_lockstep_frame(*b.m,{w[0],w[1],0,0},b.seed,uint32_t(b.n),game_netplay());++b.n;}
+int main(int c,char**v){B a=load(v[1]),b=load(v[2]);int until=atoi(v[3]);uint32_t lo=strtoul(v[4],0,16),hi=strtoul(v[5],0,16);
+ for(uint32_t ad=lo;ad<=hi;++ad)b.m->write8(ad,a.m->read8(ad));
+ const GameNetplay*h=game_netplay();std::array<uint8_t,2048> ba{},bb{};uint8_t pa,pb;int firstblock=-1;
+ for(int f=0;f<until;++f){step(a);step(b);
+  size_t na=h->sync_hash_region(*a.m,ba,pa),nb=h->sync_hash_region(*b.m,bb,pb);
+  if(pa!=pb||na!=nb||memcmp(ba.data(),bb.data(),na)){std::printf("HASH DIVERGE at frame %d\n",f+1);return 0;}
+  if(firstblock<0)for(uint32_t ad=0x401f40;ad<=0x40212f;++ad)if(a.m->read8(ad)!=b.m->read8(ad)){firstblock=f+1;std::printf("whole-block (incl. excluded) first differs frame %d at 0x%x (%02x/%02x)\n",f+1,ad,a.m->read8(ad),b.m->read8(ad));break;}
+ }
+ std::printf("NO HASH DIVERGENCE through %d frames (phase %d)\n",until,pa);}
