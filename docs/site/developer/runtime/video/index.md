@@ -69,7 +69,7 @@ The table lists every file of the video system and the page that explains it.
 | `runtime/renderer/game/sprites.hpp`, `runtime/renderer/game/sprites.cpp` | `GameSprites`: sprite list, latch and raster | [Sprites](/developer/runtime/video/sprites) |
 | `runtime/renderer/game/lines.hpp`, `runtime/renderer/game/lines.cpp` | `GameLines`: per-line effects and `SceneRow` generation | [Line effects](/developer/runtime/video/lines) |
 | `runtime/renderer/game/compositor.hpp`, `runtime/renderer/game/compositor.cpp` | `compose_game_scene` | [Compositor](/developer/runtime/video/compositor) |
-| `runtime/renderer/game/video_log.hpp`, `runtime/renderer/game/video_log.cpp` | `log_unsupported_video` (fallback kinds); the opt-in store-PC log is `runtime/discovery_log.cpp` | [Video write logging](/developer/runtime/video/producers) |
+| `runtime/renderer/game/video_log.hpp`, `runtime/renderer/game/video_log.cpp` | `log_unsupported_video` (fallback kinds); the opt-in store-PC log is `runtime/debug/discovery.cpp` | [Video write logging](/developer/runtime/video/producers) |
 | `runtime/state_io.hpp` | `Canonical*` structs that save the video state | [GameVideo](/developer/runtime/video/game-hle) |
 | [`runtime/tests/video.cpp`](https://github.com/ansxor/f3-recomp/blob/main/runtime/tests/video.cpp) | Unit checks for tile, sprite and edge rules | [Extending the renderer](/developer/runtime/video/extending) |
 | `tools/gameplay_regression.cpp` | The `--video-diff` harness | [Compare mode](/developer/runtime/video/compare-mode) |

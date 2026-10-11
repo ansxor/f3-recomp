@@ -1,0 +1,17 @@
+{
+  "name": "yojimbo",
+  "version": "1.13.5",
+  "description": "A network library for client/server games with reliable/unreliable messages, data blocks, encryption and authentication.",
+  "homepage": "https://github.com/mas-bandwidth/yojimbo",
+  "license": "BSD-3-Clause",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 ---
 title: Land Maker (Japan) — landmakrj
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-10
 type: game
 tags: [game-loop, video]
-sources: [raw/tests/landmakrj-round-gate-watch.md]
+sources: [raw/tests/landmakrj-round-gate-watch.md, raw/tests/landmakrj-2p-versus-trigger-runs.md, raw/tests/landmakrj-differential-sync-experiment.md]
 games: [landmakrj]
 addresses: []
 status: hypothesis
@@ -30,6 +30,7 @@ ones a page relies on into `raw/tests/`. ^[raw/tests/landmakrj-round-gate-watch.
 ## Routine index
 
 - [[routines/landmakrj-0008e20c-round-task]]: round task and its round-end gate (hypothesis)
+- [[routines/landmakrj-0008edde-versus-mode-transition]]: 2P versus mode latch and join transition (hypothesis)
 
 ## Quirks relied on
 

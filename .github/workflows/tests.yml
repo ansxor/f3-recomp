@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'runtime/**'
@@ -13,10 +14,15 @@ on:
       - 'recomp/**'
       - 'tools/**'
       - 'tests/**'
+      - 'netplay/**'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'vcpkg'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
       - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'runtime/**'
@@ -25,6 +31,10 @@ on:
       - 'recomp/**'
       - 'tools/**'
       - 'tests/**'
+      - 'netplay/**'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'vcpkg'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -45,17 +55,26 @@ jobs:
         game: [commandw, bubblemj]
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch vcpkg submodule
+        id: vcpkg
+        run: |
+          git submodule update --init vcpkg
+          echo "commit=$(git rev-parse HEAD:vcpkg)" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
       - name: Configure
         run: cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
       - name: Build runtime unit tests
-        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprites f3rt-test-audio f3rt-test-motion_interp f3rt-test-state
+        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-input_script f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprites f3rt-test-audio f3rt-test-motion_interp f3rt-test-state f3rt-test-netplay f3-netplay-server f3-netplay-relay-test
       - name: Run runtime unit tests
-        run: ctest --test-dir build -R '^runtime-' --output-on-failure
+        run: ctest --test-dir build -R '^(runtime-|netplay-relay\.)' --output-on-failure
 
   pytest:
     runs-on: ubuntu-latest

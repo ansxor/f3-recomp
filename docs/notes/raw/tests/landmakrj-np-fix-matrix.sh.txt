@@ -1,0 +1,7 @@
+cd /Users/darien/.herdr/worktrees/f3-recomp/worktree-netplay
+for cfg in "0 0 1 0" "1 0 0 400" "1 300 2 0" "4 50 3 700" "2 0 1 123"; do
+ for fix in "" 1; do
+  echo "== cfg='$cfg' FIXSYNC=${fix:-off}"
+  env ${fix:+FIXSYNC=1} timeout 300 ./build/f3a/np-repro/np_fix $cfg 6000 build/f3a/np-repro/mash_inputs.txt e3b669ac5fab33c5 0 0 0 0 2>&1 | grep -v "   pre\|trigger at\|frame [0-9]* ok" | cut -c1-260
+ done
+done

@@ -108,25 +108,8 @@ uint32_t SoundNative::pc() const {
 void SoundNative::trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
     if (!m_machine.sound_trace) return;
     address &= 0xffffffu; // The 68000 exposes a 24-bit physical bus.
+    if (address < SOUND_TRACE_BUS_BEGIN || address >= SOUND_TRACE_BUS_END) return;
     const uint32_t pc = m_cpu.pc;
-    if (m_rom_crc == 0x5a7e9117u && write && width == 1 && pc == 0xc130f0 &&
-        address == ((m_cpu.a[4] + 0x14u) & 0xffffffu))
-        m_machine.sound_trace->record(m_machine, SoundTrace::DirectNote, pc, address, value, width);
-    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc140e4 &&
-        address == ((m_cpu.a[1] + 0x24u) & 0xffffffu))
-        m_machine.sound_trace->note_context(m_machine, pc,
-            m_cpu.a[5], m_cpu.a[1], m_cpu.a[6], m_cpu.a[4]);
-    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc141d6 &&
-        address == ((m_cpu.a[5] + 2u) & 0xffffffu))
-        m_machine.sound_trace->record(m_machine, SoundTrace::NoteRelease,
-            pc, m_cpu.a[5] & 0xffffu, value, width);
-    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && pc == 0xc17632 &&
-        address == ((m_cpu.a[4] + 0xau) & 0xffffffu))
-        m_machine.sound_trace->voice_context(m_machine, pc, m_cpu.a[4]);
-    if (address < 0x140000 || address >= 0x340004) return;
-    if (m_rom_crc == 0x5a7e9117u && write && width == 2 && address == 0x20001e &&
-        (pc == 0xc17e62 || pc == 0xc17806))
-        m_machine.sound_trace->voice_context(m_machine, pc, m_cpu.a[4]);
     m_machine.sound_trace->record(m_machine,
         write ? SoundTrace::SoundWrite : SoundTrace::SoundRead,
         pc, address, value, width);

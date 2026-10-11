@@ -86,7 +86,7 @@ Fast boot does not alter emulation: with the same build, ROMs, EEPROM contents a
 
 The F1 menu adds **Fast boot** and **Boot state cache** in the Save states panel. They take effect on the next launch and are written only by **Save preferences**. Explicit CLI flags override the saved values.
 
-Fast boot is used only when nothing needs the per-frame output. A headless run ignores it unless you pass `--fast-boot on` explicitly, and it is disabled whenever `--wav`, `--dump-dir`, `--sound-trace`, `--profile-out` or `--fallback-report` is given.
+Fast boot is used only when nothing needs the per-frame output. A headless run ignores it unless you pass `--fast-boot on` explicitly, and it is disabled whenever `--wav`, `--dump-dir`, `--profile-out` or `--fallback-report` is given.
 
 Fast boot prints one `fast_boot frames=N ms=T source=turbo|cache eeprom=generated|loaded|none` line before the summary.
 

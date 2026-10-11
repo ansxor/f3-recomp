@@ -1,7 +1,7 @@
 #pragma once
 
 #include "f3rt/machine.hpp"
-#include "f3rt/input.hpp"
+#include "debug/input_script.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>

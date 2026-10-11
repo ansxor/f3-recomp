@@ -12,8 +12,8 @@ The top-level `CMakeLists.txt` drives everything. The ROM-to-C step runs at **co
 | --- | --- | --- |
 | CMake 3.24 or newer | `cmake_minimum_required(VERSION 3.24)` | `CMakeLists.txt` |
 | A C11 and C++20 compiler | `CMAKE_C_STANDARD 11`, `CMAKE_CXX_STANDARD 20` | `CMakeLists.txt` |
-| SDL3 with CMake config files | The frontend. Skip it with `-DF3RT_SDL=OFF`. | `find_package(SDL3 CONFIG REQUIRED)` |
-| Google Highway 1.0 or newer | Runtime-dispatched SIMD for HLE voice kernel. Without an installed package, CMake fetches tag 1.4.0. | `find_package(hwy CONFIG)`, `FetchContent` fallback |
+| Git submodule `vcpkg/` | Supplies every C/C++ dependency in manifest mode. `CMakeLists.txt` sets `CMAKE_TOOLCHAIN_FILE` to `vcpkg/scripts/buildsystems/vcpkg.cmake` unless you pass your own, and the toolchain bootstraps vcpkg on first configure. | `vcpkg.json`, `git submodule update --init vcpkg` |
+| vcpkg packages | Always: zlib, Google Highway (SIMD for the HLE voice kernel), Yojimbo (encrypted netplay transport), cpp-httplib (token endpoint), cpp-yyjson (session logs). Feature `frontend` (`F3RT_SDL`): SDL3, Dear ImGui with SDL3 bindings. Feature `gpu` (`F3RT_GPU`): ImGui SDLGPU3 binding, host tools `glslangValidator` and `spirv-cross`. Feature `tests` (`BUILD_TESTING`): GoogleTest, RapidCheck. `CMakeLists.txt` maps the options to `VCPKG_MANIFEST_FEATURES` before `project()`. | `vcpkg.json`, `find_package(... CONFIG REQUIRED)` |
 | uv (recent version) | Manages Python 3.11+ and dependencies (`capstone==5.0.9`, NumPy, SciPy). CMake runs generators via `uv run`. | `pyproject.toml`, `uv.lock` |
 | Ninja (recommended) | The README commands use `-G Ninja`. | `README.md` |
 

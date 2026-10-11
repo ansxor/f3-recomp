@@ -41,7 +41,7 @@ from capstone import m68k as M  # noqa: E402
 
 DISPATCH = -1  # pseudo routine: f3_dispatch / anything the static pass cannot attribute
 
-# Fixed Taito F3 main-CPU map. Layer names match runtime/discovery_log.cpp.
+# Fixed Taito F3 main-CPU map. Layer names match runtime/debug/discovery.cpp.
 REGIONS = [
     (0x000000, 0x200000, "rom"), (0x400000, 0x440000, "ram"), (0x440000, 0x448000, "palette"),
     (0x4a0000, 0x4a0020, "io"), (0x4c0000, 0x4c0004, "timer"), (0x600000, 0x610000, "sprites"),
@@ -53,7 +53,7 @@ REGIONS = [
 ]
 VIDEO_REGIONS = {"sprites", "pf0", "pf1", "pf2", "pf3", "pf2-alt", "pf3-alt", "text", "charram",
                  "lines", "pivot", "control", "palette"}
-# discovery_log.cpp folds charram into text and pivot into lines.
+# runtime/debug/discovery.cpp folds charram into text and pivot into lines.
 LOG_LAYER = {"charram": "text", "pivot": "lines"}
 
 VECTOR_NAMES = {1: "reset", 2: "bus-error", 3: "address-error", 4: "illegal", 5: "zero-divide",

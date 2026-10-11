@@ -8,7 +8,7 @@ Configure ROMs, native blocks, sound and video before the machine starts running
 
 The [CLI reference](/reference/cli) lists option values/defaults. Strict `landmakr` defaults to generated main execution, native sound and GameVideo. The Enhanced host audio backend is the default; Reference runs the cycle-accurate sound devices. Do not conflate the diagnostic sound-CPU driver with the host audio backend.
 
-`--audio-backend enhanced|reference` selects the backend. The frontend has no sound-driver option: with Reference audio it runs the native sound driver when the build generated one (`F3RT_SOUND_GENERATED`) and the oracle otherwise. An explicit CLI backend overrides the saved backend preference. Explicit Enhanced with `--sound-trace` remains an error.
+`--audio-backend enhanced|reference` selects the backend. The frontend has no sound-driver option: with Reference audio it runs the native sound driver when the build generated one (`F3RT_SOUND_GENERATED`) and the oracle otherwise. An explicit CLI backend overrides the saved backend preference.
 
 GPU/auto/interpolation options retain their own game/compare and GPU gates.
 

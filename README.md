@@ -4,11 +4,12 @@ Static recompilation of Taito F3 arcade games into native C, with an SDL3 runtim
 
 ## Building
 
-**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, `uv` (managing Python 3.11+ and Capstone 5.0.9), SDL3, `glslangValidator`, `spirv-cross`. Google Highway is used if installed; otherwise CMake fetches it.
+**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, `uv` (managing Python 3.11+ and Capstone 5.0.9). Every C/C++ library and the shader tools (SDL3, Dear ImGui, Yojimbo, cpp-httplib, cpp-yyjson, Google Highway, zlib, GoogleTest, RapidCheck, `glslangValidator`, `spirv-cross`) come from the `vcpkg` submodule; the first configure bootstraps vcpkg and builds them.
 
 **macOS:**
 ```sh
-brew install cmake ninja sdl3 glslang spirv-cross uv
+brew install cmake ninja uv
+git submodule update --init vcpkg
 ```
 
 **Build steps** (using your own legally obtained ROMs):

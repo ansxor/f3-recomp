@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -26,4 +27,5 @@ struct RomSet {
     static RomSet load(const std::filesystem::path &directory, const std::string &set = "landmakrj");
 };
 uint32_t crc32(const uint8_t *data, size_t size);
+std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms);
 }

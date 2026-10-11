@@ -743,8 +743,10 @@ void GpuVideo::set_overlay(Overlay callback, void *userdata) {
 void GpuVideo::draw(const CapturedFrame &scene, std::span<uint32_t> output, unsigned layer_mask, bool process_diagnostic) {
     impl_->draw(scene, output, layer_mask, process_diagnostic);
 }
-bool GpuVideo::present(const CapturedFrame &scene) {
-    impl_->draw(scene, {}, all_layers, false, false, 1.0f, nullptr, {}, Impl::Presentation::SkipBusy);
+bool GpuVideo::present(const CapturedFrame &scene, const char *capture_path) {
+    impl_->draw(scene, {}, all_layers, false, false, 1.0f, nullptr, {},
+                capture_path ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy,
+                false, capture_path);
     return impl_->last_presented;
 }
 // One GPU frame in flight and (macOS) a display-link tick for pace_motion/present_motion.
@@ -786,10 +788,11 @@ void GpuVideo::draw_motion(const CapturedFrame &scene, float alpha, std::span<ui
     impl_->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
 }
 bool GpuVideo::present_motion(const CapturedFrame &scene, std::chrono::steady_clock::time_point frame_start,
-                              std::chrono::nanoseconds period, bool wait) {
+                              std::chrono::nanoseconds period, bool wait, const char *capture_path) {
     impl_->motion_stats = {};
     impl_->draw(scene, {}, all_layers, false, true, 1.0f, &frame_start, period,
-                wait ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy);
+                wait ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy,
+                false, capture_path);
     return impl_->last_presented;
 }
 void GpuVideo::draw_motion_comparison_timed(const CapturedFrame &scene,

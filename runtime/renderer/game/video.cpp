@@ -8,7 +8,7 @@
 #include "renderer/game/compositor.hpp"
 #include "renderer/game/clip.hpp"
 #include "renderer/game/video_log.hpp"
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 #include "renderer/game/captured_frame.hpp"
 #include "state_io.hpp"
 #include "sprites/units.hpp"

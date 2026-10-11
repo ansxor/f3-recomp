@@ -215,12 +215,9 @@ When the main CPU releases the sound reset line, `audio_reset(false)` sets `soun
 
 ## Sound tracing
 
-`trace_sound` is a probe for the sound ROM analysis. It does nothing if `Machine::sound_trace` is null. If a trace exists it records:
+`trace_sound` records bus events for sound analysis and parity comparison. It does nothing if `Machine::sound_trace` is null. If a trace exists it records all sound-CPU accesses at addresses from `SOUND_TRACE_BUS_BEGIN` (`0x140000`) to below `SOUND_TRACE_BUS_END` (`0x340004`) as `SoundRead` or `SoundWrite`.
 
-- All sound-CPU accesses at addresses from `0x140000` to below `0x340004` as `SoundRead` or `SoundWrite`.
-- Special events at fixed sound ROM PCs: `DirectNote` for a byte write at PC `0xc130f0` to A4+0x14; `note_context` for a word write at `0xc140e4` to A1+0x24; `voice_context` for specific writes at `0xc17e62`, `0xc17806` and `0xc17632`.
-
-These PCs belong to the sound driver of the target game. The trace is a bus log for offline analysis. See [Support files](/developer/runtime/support#sound-trace).
+The trace is a bus log for offline analysis. See [Support files](/developer/runtime/support#sound-trace).
 
 ## Snapshots
 

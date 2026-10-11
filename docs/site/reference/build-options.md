@@ -2,7 +2,7 @@
 
 ## Requirements
 
-CMake 3.24+, a C11/C++20 compiler, and `uv` (managing Python 3.11+ and dependencies like `capstone==5.0.9`; analysis group: NumPy, SciPy) are required. Python tools generate runtime ROM manifest metadata and recompiled C code on configuration through `uv run`. SDL3 development files are required with `F3RT_SDL`; `glslangValidator` and `spirv-cross` are required when GPU/SDL support is enabled.
+CMake 3.24+, a C11/C++20 compiler, Git, and `uv` (managing Python 3.11+ and dependencies like `capstone==5.0.9`; analysis group: NumPy, SciPy) are required. Python tools generate runtime ROM manifest metadata and recompiled C code on configuration through `uv run`. All C/C++ libraries and the shader tools come from the `vcpkg` submodule (`vcpkg.json`); `F3RT_SDL`, `F3RT_GPU` and `BUILD_TESTING` select its `frontend`, `gpu` and `tests` features. Changing one of these options on an existing build directory makes vcpkg install the newly needed packages on the next configure.
 
 ## Cache variables
 

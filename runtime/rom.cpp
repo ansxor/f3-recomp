@@ -18,6 +18,17 @@ uint32_t crc32(const uint8_t *data, size_t size) {
     }
     return ~crc;
 }
+std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms) {
+    const std::vector<uint8_t> *regions[] = {
+        &roms.main, &roms.sprites, &roms.sprites_hi,
+        &roms.tiles, &roms.tiles_hi, &roms.sound, &roms.samples
+    };
+    std::array<uint32_t, 7> crcs{};
+    for (size_t i = 0; i < 7; ++i) {
+        crcs[i] = crc32(regions[i]->data(), regions[i]->size());
+    }
+    return crcs;
+}
 namespace {
 // Stack-only SHA1 for full physical chip integrity, including padded short dumps.
 bool sha1_matches(std::span<const uint8_t> bytes, const char *expected) {

@@ -4,7 +4,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
 #include "capture_io.hpp"
-#include "debug/block_profile.hpp"
+#include "debug/profile.hpp"
 #include "audio/sound_trace.hpp"
 
 #include <cstdint>

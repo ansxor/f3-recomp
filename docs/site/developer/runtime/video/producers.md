@@ -23,7 +23,7 @@ calls `DiscoveryLog::video_write(pc, address)` for:
 - every byte write to 0x600000 to 0x63ffff (graphics RAM);
 - every byte write to 0x660000 to 0x66001f (control registers).
 
-`DiscoveryLog` (`runtime/discovery_log.{hpp,cpp}`) classifies the address into a
+`DiscoveryLog` (`runtime/debug/discovery.{hpp,cpp}`) classifies the address into a
 `VideoLayer` (`control`, `sprites`, `pf0`..`pf3`, `pf2-alt`, `pf3-alt`, `text`, `lines`;
 the Taito F3 layout is the same for every game) and, the first time it sees a `(layer, pc)`, asks the
 per-game `video_writer_known(layer, pc)` (**list of known store PCs**). Known PCs are
@@ -97,5 +97,5 @@ See [Extending the renderer](/developer/runtime/video/extending) to add a decode
 or a known store-PC range.
 
 Sources: [machine.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/machine.cpp),
-[discovery_log.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/discovery_log.cpp)
+[discovery.cpp](https://github.com/ansxor/f3-recomp/blob/main/runtime/debug/discovery.cpp)
 and the per-game `games/landmakrj/video/video.cpp`.

@@ -4,7 +4,7 @@
 //   `--discovery-log` to suppress documented writers.
 //
 // The sprite, tile, text and line-RAM decoders are shared and live in runtime/.
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 
 namespace f3rt {
 

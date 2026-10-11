@@ -1,6 +1,6 @@
 #include "sprites/units.hpp"
 #include "f3rt/machine.hpp"
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 #include "generated_config/sprite_units.hpp" // the configure-time generated table
 #include <algorithm>
 #include <cstdio>

@@ -1,0 +1,60 @@
+// Bundle replay with the frontend's real machine config (GPU game video + enhanced audio).
+#include "f3rt/game_netplay.hpp"
+#include "f3rt/machine.hpp"
+#include "f3rt/netplay.hpp"
+#include "netplay/recorder.hpp"
+#include "runner/runner.hpp"
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <string>
+#include <vector>
+using namespace f3rt; using namespace f3rt::netplay;
+static std::vector<uint8_t> rd(const std::string&p){std::ifstream i(p,std::ios::binary);return {std::istreambuf_iterator<char>(i),{}};}
+struct B{std::string dir;InputsFile in;std::vector<uint8_t> trig,hashed;uint64_t seed=0,frame=0,len=0,crc=0;std::unique_ptr<Machine> m;uint64_t n=0;};
+static const char*ROM="/Users/darien/Workspace/f3-stuff/f3-recomp/roms/landmakrj";
+static bool gpu=true,enh=true;
+static B load(const std::string&d){
+  B b;b.dir=d;auto ib=rd(d+"/info.json");std::string info(ib.begin(),ib.end());
+  auto ip=rd(d+"/inputs.txt");std::string err;
+  if(!parse_inputs_txt(std::string(ip.begin(),ip.end()),b.in,err)){std::printf("parse err %s\n",err.c_str());exit(2);}
+  b.trig=rd(d+"/trigger.f3s");b.hashed=rd(d+"/hashed.bin");
+  json_find_u64(info,"seed",b.seed);json_find_u64(info,"frame",b.frame);json_find_u64(info,"hashed_len",b.len);json_find_u64(info,"recorded_crc",b.crc);
+  b.m=runner::create_strict_machine(ROM,"landmakrj",gpu,1);
+  b.m->audio->set_backend(enh?Audio::Backend::Enhanced:Audio::Backend::Reference);
+  if(b.trig.size()!=b.m->state_size()){std::printf("size mismatch %zu vs %zu\n",b.trig.size(),b.m->state_size());exit(2);}
+  b.m->load_state(b.trig);
+  return b;}
+static void step(B&b,const GameNetplay*h){auto w=b.in.frames.at(b.n);run_lockstep_frame(*b.m,{w[0],w[1],0,0},b.seed,uint32_t(b.n),h);++b.n;}
+int main(int argc,char**argv){
+  const GameNetplay*h=game_netplay();
+  std::vector<std::string> dirs;uint64_t until=0;
+  for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--nogpu")gpu=false;else if(a=="--ref")enh=false;else if(a=="--until")until=std::stoull(argv[++i]);else dirs.push_back(a);}
+  std::vector<B> bs;for(auto&d:dirs)bs.push_back(load(d));
+  std::array<uint8_t,2048> buf{};uint8_t ph=0;
+  for(auto&b:bs){ // verify own recording
+    uint64_t u=until?until:b.frame;
+    while(b.n<u){step(b,h);}
+    size_t n=h->sync_hash_region(*b.m,buf,ph);
+    bool bm=n==b.len&&b.hashed.size()>=n&&!memcmp(buf.data(),b.hashed.data(),n);
+    std::printf("VERIFY %s frame=%llu phase=%d len=%zu bytes=%s crc=0x%08x recorded=0x%08x\n",b.dir.c_str(),(unsigned long long)b.n,ph,n,bm?"yes":"NO",f3rt::crc32(buf.data(),n),(uint32_t)b.crc);
+  }
+  if(bs.size()==2){
+    std::array<uint8_t,2048> ba{},bb{};uint8_t pa,pb;
+    for(auto&b:bs){b.m->load_state(b.trig);b.n=0;}
+    std::vector<uint32_t> addr(2048);
+    for(uint64_t f=0;f<(until?until:540);++f){step(bs[0],h);step(bs[1],h);
+      size_t na=h->sync_hash_region(*bs[0].m,ba,pa),nb=h->sync_hash_region(*bs[1].m,bb,pb);
+      if(pa!=pb||na!=nb||memcmp(ba.data(),bb.data(),na)){
+        std::printf("FIRST_DIVERGENCE frame=%llu phase %d/%d len %zu/%zu\n",(unsigned long long)(f+1),pa,pb,na,nb);
+        size_t k=h->sync_hash_addresses(pa,addr);(void)k;int c=0;
+        for(size_t i=0;i<na&&i<nb&&c<64;++i)if(ba[i]!=bb[i]){std::printf("  0x%x: A=%02x B=%02x\n",addr[i],ba[i],bb[i]);++c;}
+        size_t t=0;for(size_t i=0;i<bs[0].m->ram.size();++i)t+=bs[0].m->ram[i]!=bs[1].m->ram[i];
+        std::printf("  work-RAM differing bytes: %zu\n",t);return 0;}
+    }
+    std::printf("NO_DIVERGENCE\n");
+  }
+}

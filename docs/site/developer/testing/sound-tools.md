@@ -62,13 +62,8 @@ The record kinds are in the enum `SoundTrace::Kind`.
 | 3 | `SoundWrite` | The sound CPU wrote to the bus (OTIS, DSP, DUART, volume, mailbox, bank registers). |
 | 4 | `Reset` | A whole-board reset. |
 | 5 | `End` | End of the trace. Written by `finish()`. |
-| 6 | `VoiceContext` | The driver started to use a voice. The address is the voice state in sound RAM. |
-| 7 | `RamSnapshot` | A 4-byte piece of sound work RAM. These records give the ownership context. |
-| 8 | `NoteContext` | A note was allocated. It carries the track and channel pointers. |
-| 9 | `DirectNote` | A direct note-on command from the main CPU mailbox. |
-| 10 | `NoteEvent` | The address of the note event that follows. |
 
-The trace is lossless and does not read device registers. A device read would change device state. The trace code reads only work RAM mirrors, which have no side effects.
+The trace is lossless and does not read device registers. A device read would change device state.
 
 ::: warning
 A trace holds ROM-derived data. Keep traces under the ignored folder `build/`. Do not commit them.
@@ -76,7 +71,7 @@ A trace holds ROM-derived data. Keep traces under the ignored folder `build/`. D
 
 ## Record a trace
 
-The gameplay harness, the `landmakr` and `f3rt-run` programs and `f3rt-tool sound-extract` accept `--sound-trace FILE` with Reference audio. They reject sound tracing with Enhanced audio.
+The gameplay harness and `f3rt-tool sound-extract` accept `--sound-trace FILE` with Reference audio. They reject sound tracing with Enhanced audio.
 
 ```sh
 build/f3rt-tool gameplay --seed 5 --frames 6000 --sound-driver oracle \
@@ -92,8 +87,8 @@ Trace files grow fast. The seed-5 run of 6,000 frames has 12,258,121 records, wh
 `tools/decode_sound.py` decodes a trace into events. It only reads the file. It does not touch any running device.
 
 ```sh
-python3 tools/decode_sound.py build/seed5-oracle.sound --output build/seed5-writes.jsonl.gz
-python3 tools/decode_sound.py build/music.sound --notes-only --output build/music.jsonl
+uv run f3 decode trace build/seed5-oracle.sound --output build/seed5-writes.jsonl.gz
+uv run f3 decode trace build/music.sound --notes-only --output build/music.jsonl
 ```
 
 | Option | Meaning |
@@ -126,7 +121,6 @@ The `Decoder` class keeps a model of the sound hardware, built only from the tra
 | `page` | The selected OTIS register page. Pages below 32 are voice pages. |
 | `banks[32]` | The sample bank per voice (bank registers at `0x300000`). |
 | `dsp` | ES5510 write buffer, and a flag set that tells which GPR and instruction bytes are known. |
-| `ram` | A copy of sound work RAM, rebuilt from `RamSnapshot` records. |
 | `commands` | A `CommandRing` (see below). |
 
 The decoder handles these address ranges.
@@ -140,7 +134,7 @@ The decoder handles these address ranges.
 | `0x340000` to `0x340003` | Volume device | `volume_write` |
 | `0x140000` to `0x140fff` | Mailbox | `mailbox_write`, `mailbox_read` |
 
-A `voice_start` event includes the sample address in words, the pitch step, the loop and direction flags, the left and right volume, the output pair, and the driver context (voice state address, patch descriptor, sequence, note node and origin).
+A `voice_start` event includes the sample address in words, the pitch step, the loop and direction flags, the left and right volume, and the output pair.
 
 ### The command ring
 

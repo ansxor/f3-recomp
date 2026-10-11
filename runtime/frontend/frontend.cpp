@@ -3,16 +3,21 @@
 #include "f3rt/game_video.hpp"
 #include "f3rt/game_boot.hpp"
 #include "f3rt/input.hpp"
+#include "f3rt/game_netplay.hpp"
+#include "f3rt/netplay.hpp"
+#include "f3rt/rom.hpp"
+#include "generated_config/build_identity.hpp"
+#include "netplay/recorder.hpp"
 #include "ui.hpp"
 #include "state.hpp"
 #include "interpreter.hpp"
-#include "audio/sound_trace.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
 #include "renderer/gpu/interp.hpp"
-#include "debug/block_profile.hpp"
+#include "debug/profile.hpp"
+#include "debug/input_script.hpp"
 #include "sprites/units.hpp"
-#include "discovery_log.hpp"
+#include "debug/discovery.hpp"
 #include "sprites/behaviour.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
@@ -28,13 +33,13 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <unordered_set>
 #ifdef F3RT_GENERATED
 #include "program.h"
 #endif
 #ifdef F3RT_SOUND_GENERATED
 #include "sound_program.h"
 #endif
-
 namespace {
 struct Sdl {
     SDL_Window *window=nullptr;
@@ -140,7 +145,7 @@ enum Preference : uint32_t {
 }
 int main(int argc,char **argv) try {
     std::filesystem::path romdir,dumpdir,eeprom,wav_path,fallback_report,surface;
-    std::filesystem::path sound_trace_path,profile_path,config_path,discovery_path,inputs_path,watch_path,indirect_path;
+    std::filesystem::path profile_path,config_path,discovery_path,inputs_path,watch_path,indirect_path;
     std::vector<uint32_t> watch_entries;
     std::string set=F3RT_DEFAULT_SET;
     std::string renderer;
@@ -166,6 +171,15 @@ int main(int argc,char **argv) try {
     bool allow_fallback=true;
 #endif
     bool discovery_all=false;
+    std::string netplay_auto;
+    std::string netplay_server_cli;
+    std::string netplay_name_cli;
+    uint8_t netplay_delay_cli=0;
+    std::vector<uint64_t> screenshot_frames;
+    uint64_t open_f1_frame=0;
+    uint64_t chat_open_frame=0;
+    uint64_t chat_close_frame=0;
+    std::vector<std::pair<uint64_t, std::string>> chat_send_frames;
     for(int i=1;i<argc;++i) {
         const std::string arg=argv[i];
         auto value=[&]() -> const char * { if(i+1>=argc)throw std::runtime_error("Missing value for "+arg);return argv[++i]; };
@@ -179,7 +193,6 @@ int main(int argc,char **argv) try {
         else if(arg=="--fast-boot") { const std::string v=value();if(v=="on")fast_boot=true;else if(v=="off")fast_boot=false;else throw std::runtime_error("--fast-boot must be on or off");cli_preferences|=FastBoot; }
         else if(arg=="--boot-cache") { const std::string v=value();if(v=="on")boot_cache=true;else if(v=="off")boot_cache=false;else throw std::runtime_error("--boot-cache must be on or off");cli_preferences|=BootCache; }
         else if(arg=="--wav")wav_path=value();
-        else if(arg=="--sound-trace")sound_trace_path=value();
         else if(arg=="--profile-out")profile_path=value();
         else if(arg=="--discovery-log")discovery_path=value();
         else if(arg=="--discovery-all")discovery_all=true;
@@ -223,6 +236,29 @@ int main(int argc,char **argv) try {
         else if(arg=="--translated")translated=true;
         else if(arg=="--allow-fallback")allow_fallback=true;
         else if(arg=="--unthrottled")throttle=false;
+        else if(arg=="--netplay-auto")netplay_auto=value();
+        else if(arg=="--netplay-server")netplay_server_cli=value();
+        else if(arg=="--netplay-name")netplay_name_cli=value();
+        else if(arg=="--netplay-delay")netplay_delay_cli=uint8_t(std::stoul(value()));
+        else if(arg=="--screenshot-frame") {
+            std::string list=value();
+            for(size_t start=0;start<=list.size();) {
+                const size_t comma=std::min(list.find(',',start),list.size());
+                screenshot_frames.push_back(std::stoull(list.substr(start,comma-start)));
+                start=comma+1;
+            }
+        }
+        else if(arg=="--open-f1-frame")open_f1_frame=std::stoull(value());
+        else if(arg=="--chat-open-frame")chat_open_frame=std::stoull(value());
+        else if(arg=="--chat-close-frame")chat_close_frame=std::stoull(value());
+        else if(arg=="--chat-send-frame") {
+            std::string val=value();
+            auto colon=val.find(':');
+            if(colon!=std::string::npos) {
+                uint64_t fr=std::stoull(val.substr(0,colon));
+                chat_send_frames.push_back({fr, val.substr(colon+1)});
+            }
+        }
         else if(arg=="--help") {
             std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr|rayforce|commandw|ridingf] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
@@ -232,7 +268,7 @@ int main(int argc,char **argv) try {
                      <<"  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush every 30s and at exit)\n"
                      <<"  [--discovery-log FILE] (host-only: log unhandled video writers/fallbacks seen during play; see docs)\n"
                      <<"  [--discovery-all] (with --discovery-log: also log known writers (known=1) and unit-accounted sprite writes)\n"
-                     <<"  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM pokes; format in include/f3rt/input.hpp; disables fast boot)\n"
+                     <<"  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM pokes; format in runtime/debug/input_script.hpp; disables fast boot)\n"
                      <<"  [--watch-entries HEX,HEX --watch-log FILE] (instrumented build with --profile-out: per-frame execution counts of those main-CPU instructions)\n"
                      <<"  [--indirect-log FILE] (instrumented build with --profile-out: log observed targets of computed jmp/jsr sites)\n"
                      <<"  [--sound-trace FILE] (reference audio only)\n"
@@ -244,6 +280,9 @@ int main(int argc,char **argv) try {
                      <<"  [--video-interp-fields none|geometry|palette|geometry,palette] (default geometry; native alpha stays discrete)\n"
                      <<"  [--motion-interp] (experimental GPU temporal motion; default off, one-frame positional latency)\n"
                      <<"  [--postprocess off|crt|user] [--user-shader FILE.metal|FILE.spv] (GPU only, default off)\n"
+                     <<"  [--netplay-server HOST:PORT] (netplay relay server, default 127.0.0.1:7845)\n"
+                     <<"  [--netplay-auto host|join:CODE] (automate 2P versus netplay trigger; host, host:file:PATH, join:CODE, join:file:PATH)\n"
+                     <<"  [--netplay-name NAME] [--netplay-delay 1..8] (player name and frame delay)\n"
                      <<"  Presentation options require game/compare; defaults: scale 1, border 0, nearest.\n"
                      <<"  Auto scales follow window pixels (GPU only); auto-integer uses nearest filtering.\n"
                      <<"Arrows: move/dial; Z/X/C: buttons 1/2/3; A/S/D: buttons 4/5/6.\n"
@@ -315,6 +354,9 @@ int main(int argc,char **argv) try {
     preference(fast_boot,settings.fast_boot,FastBoot);
     preference(boot_cache,settings.boot_cache,BootCache);
     preference(motion_interp,settings.motion_interp,MotionInterp);
+    if(!netplay_server_cli.empty())settings.netplay_server=netplay_server_cli;
+    if(!netplay_name_cli.empty())settings.netplay_name=netplay_name_cli;
+    if(netplay_delay_cli!=0)settings.netplay_delay=netplay_delay_cli;
     // Presentation options only exist for the game-data renderers. Saved values are ignored under accurate
     // (and stay in the settings file for enhanced); explicit command-line options are rejected below.
     if(video_mode=="fdp") {
@@ -338,8 +380,6 @@ int main(int argc,char **argv) try {
         audio_backend=f3rt::audio_backend_name(settings.audio_backend);
     }
     parse_scale(video_scale,video_scale_mode,video_options);
-    if(settings.audio_backend==f3rt::AudioBackend::Enhanced && !sound_trace_path.empty())
-        throw std::runtime_error("Enhanced audio does not execute a sound driver; --sound-trace requires reference audio");
 #ifdef F3RT_GAME
     if(set!=F3RT_DEFAULT_SET)throw std::runtime_error("This generated executable requires " F3RT_DEFAULT_SET);
 #endif
@@ -370,7 +410,12 @@ int main(int argc,char **argv) try {
 #endif
     if(watch_entries.empty()!=watch_path.empty())throw std::runtime_error("--watch-entries and --watch-log go together");
     std::optional<f3rt::InputScript> input_script;
-    if(!inputs_path.empty())input_script=f3rt::InputScript::load(inputs_path.string());
+    if(!inputs_path.empty()) {
+        auto loaded = f3rt::InputScript::load(inputs_path.string());
+        if(loaded.has_pokes() && (!netplay_auto.empty() || f3rt::game_netplay()))
+            throw std::runtime_error("Input scripts with memory poke rules cannot be used when netplay is enabled: "+inputs_path.string());
+        input_script = std::move(loaded);
+    }
     auto machine=std::make_unique<f3rt::Machine>(f3rt::RomSet::load(romdir,set));
     auto &m=*machine;
     f3rt::BlockProfileSession profile(m.roms,profile_path);
@@ -378,7 +423,6 @@ int main(int argc,char **argv) try {
     if(!watch_path.empty())entry_watch=std::make_unique<f3rt::EntryWatch>(watch_path,profile,watch_entries);
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if(!indirect_path.empty())indirect_watch=std::make_unique<f3rt::IndirectWatch>(indirect_path,profile);
-    if(!sound_trace_path.empty())m.sound_trace=std::make_unique<f3rt::SoundTrace>(sound_trace_path);
 #ifdef F3RT_SOUND_GENERATED
     if(set==F3RT_DEFAULT_SET) {
         m.use_native_sound(f3_sound_blocks,f3_sound_block_count,
@@ -518,6 +562,170 @@ int main(int argc,char **argv) try {
     ui_state.active_renderer=renderer;
     ui_state.set=set;
     ui_state.message=settings_error;
+    const auto *netplay_hook=f3rt::game_netplay();
+    ui_state.netplay_supported=(netplay_hook!=nullptr && netplay_hook->in_versus!=nullptr);
+    ui_state.netplay_has_state_sync=(netplay_hook!=nullptr && netplay_hook->capture_sync!=nullptr && netplay_hook->apply_sync!=nullptr);
+    bool prev_in_versus=false;
+    bool netplay_lobby_active=false;
+    std::vector<uint8_t> netplay_trigger_snapshot;
+    f3rt::netplay::MatchMeta netplay_meta;
+    std::unique_ptr<f3rt::netplay::MatchRecorder> netplay_recorder;
+    std::chrono::steady_clock::time_point netplay_trigger_time;
+    // Restores the lobby-trigger snapshot and runs input-0 local frames to the in_versus edge: the exact frame
+    // capture_sync/apply_sync fire on. No lobby_hold_frame / on_match_frame here (identical on both peers).
+    bool netplay_state_sync_done=false;
+    auto sync_to_edge=[&]() {
+        netplay_meta.lobby_hold_frames=m.frame-netplay_meta.trigger_machine_frame;
+        netplay_meta.lobby_hold_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-netplay_trigger_time).count();
+        if(!netplay_trigger_snapshot.empty()) {
+            m.load_state(netplay_trigger_snapshot);
+        }
+        while(netplay_hook->in_versus && !netplay_hook->in_versus(m)) {
+            f3rt::apply_local_inputs(m, {});
+            m.run_frame(translated);
+        }
+        netplay_meta.edge_machine_frame=netplay_meta.sync_machine_frame=m.frame;
+        // From here until GO the machine must not run a single frame (see the pause in the main loop).
+        netplay_state_sync_done=true;
+    };
+    std::unique_ptr<f3rt::netplay::Session> netplay_session;
+    bool netplay_active=false;
+    uint32_t netplay_match_frame=0;
+    std::unordered_set<uint64_t> screenshots_taken;
+    uint32_t next_netplay_local_frame=0;
+
+    auto start_host=[&]() {
+        if(input_script && input_script->has_pokes())
+            throw std::runtime_error("Input scripts with RAM pokes cannot be used in netplay");
+        f3rt::netplay::SessionConfig cfg;
+        std::string host=settings.netplay_server;
+        uint16_t port=f3rt::netplay::default_port;
+        auto colon=host.rfind(':');
+        if(colon!=std::string::npos) {
+            port=static_cast<uint16_t>(std::stoul(host.substr(colon+1)));
+            host=host.substr(0,colon);
+        }
+        cfg.server_host=host;
+        cfg.server_port=port;
+        cfg.game_id=std::string(f3rt::netplay::default_game_id);
+        cfg.rom_crcs=f3rt::rom_region_crcs(m.roms);
+        cfg.build_hash=f3rt::netplay::build_hash;
+        cfg.player_name=settings.netplay_name;
+        cfg.is_host=true;
+        cfg.input_delay=settings.netplay_delay;
+        if(netplay_hook && netplay_hook->capture_sync) {
+            cfg.capture_sync=[&]() -> std::vector<uint8_t> {
+                sync_to_edge();
+                std::vector<uint8_t> buf(2048);
+                size_t n=netplay_hook->capture_sync(m,buf);
+                buf.resize(n);
+                return buf;
+            };
+        }
+        if(netplay_hook && netplay_hook->sync_hash) {
+            cfg.sync_hash=[&]() -> uint32_t {
+                return netplay_hook->sync_hash(m);
+            };
+        }
+        cfg.crc_interval=60;
+        netplay_session=std::make_unique<f3rt::netplay::Session>(cfg);
+        netplay_session->start();
+        netplay_state_sync_done=false;
+        netplay_active=false;
+        netplay_match_frame=0;
+        next_netplay_local_frame=0;
+        ui_state.netplay_status="Connecting to server...";
+        ui_state.netplay_error.clear();
+        ui_state.netplay_desync_path.clear();
+        ui_state.netplay_room_code.clear();
+    };
+
+    auto start_join=[&](const std::string &code) {
+        if(input_script && input_script->has_pokes())
+            throw std::runtime_error("Input scripts with RAM pokes cannot be used in netplay");
+        std::string actual_code=code;
+        if(actual_code.starts_with("file:")) {
+            std::string p=actual_code.substr(5);
+            for(int i=0;i<50;++i){if(std::filesystem::exists(p))break;std::this_thread::sleep_for(std::chrono::milliseconds(100));}
+            std::ifstream in(p);in>>actual_code;
+        }
+        f3rt::netplay::SessionConfig cfg;
+        std::string host=settings.netplay_server;
+        uint16_t port=f3rt::netplay::default_port;
+        auto colon=host.rfind(':');
+        if(colon!=std::string::npos) {
+            port=static_cast<uint16_t>(std::stoul(host.substr(colon+1)));
+            host=host.substr(0,colon);
+        }
+        cfg.server_host=host;
+        cfg.server_port=port;
+        cfg.game_id=std::string(f3rt::netplay::default_game_id);
+        cfg.rom_crcs=f3rt::rom_region_crcs(m.roms);
+        cfg.build_hash=f3rt::netplay::build_hash;
+        cfg.player_name=settings.netplay_name;
+        cfg.is_host=false;
+        cfg.room_code=actual_code;
+        cfg.crc_interval=60;
+        if(netplay_hook && netplay_hook->apply_sync) {
+            cfg.apply_sync=[&](std::span<const uint8_t> blob, uint64_t seed) {
+                sync_to_edge();
+                netplay_hook->apply_sync(m,blob,seed);
+            };
+        }
+        if(netplay_hook && netplay_hook->sync_hash) {
+            cfg.sync_hash=[&]() -> uint32_t {
+                return netplay_hook->sync_hash(m);
+            };
+        }
+        netplay_session=std::make_unique<f3rt::netplay::Session>(cfg);
+        netplay_session->start();
+        netplay_state_sync_done=false;
+        netplay_active=false;
+        netplay_match_frame=0;
+        next_netplay_local_frame=0;
+        ui_state.netplay_status="Connecting to room "+code+"...";
+        ui_state.netplay_error.clear();
+        ui_state.netplay_desync_path.clear();
+        ui_state.netplay_room_code=code;
+    };
+    auto cancel_netplay=[&]() {
+        if(netplay_session)netplay_session->close();
+        netplay_session.reset();
+        netplay_active=false;
+        netplay_state_sync_done=false;
+        netplay_lobby_active=false;
+        if(!netplay_trigger_snapshot.empty()) {
+            m.load_state(netplay_trigger_snapshot);
+            netplay_trigger_snapshot.clear();
+        }
+        if(netplay_hook && netplay_hook->lobby_cancel) {
+            netplay_hook->lobby_cancel(m);
+        }
+        prev_in_versus=false;
+        if(sdl.input)sdl.input->release();
+        if(sdl.ui)sdl.ui->set_lobby_open(false);
+        ui_state.netplay_status.clear();
+        ui_state.netplay_room_code.clear();
+        ui_state.netplay_error.clear();
+    };
+
+    auto local_netplay=[&]() {
+        if(netplay_session)netplay_session->close();
+        netplay_session.reset();
+        netplay_active=false;
+        netplay_state_sync_done=false;
+        netplay_lobby_active=false;
+        if(!netplay_trigger_snapshot.empty()) {
+            m.load_state(netplay_trigger_snapshot);
+            netplay_trigger_snapshot.clear();
+        }
+        prev_in_versus=false;
+        if(sdl.input)sdl.input->release();
+        if(sdl.ui)sdl.ui->set_lobby_open(false);
+        ui_state.netplay_status.clear();
+        ui_state.netplay_room_code.clear();
+        ui_state.netplay_error.clear();
+    };
     uint64_t executed_frames=0;
     bool screenshot_pending=false,surface_saved=false,surface_valid=false;
     auto next_frame=std::chrono::steady_clock::now();
@@ -565,7 +773,7 @@ int main(int argc,char **argv) try {
     const bool explicit_fast_boot=(cli_preferences&FastBoot)!=0 && fast_boot;
     const bool fast_boot_active=boot &&
         ((!headless && settings.fast_boot) || explicit_fast_boot) &&
-        wav_path.empty() && dumpdir.empty() && sound_trace_path.empty() &&
+        wav_path.empty() && dumpdir.empty() &&
         profile_path.empty() && fallback_report.empty() && inputs_path.empty();
     std::filesystem::path config_dir;
     if(!config_path.empty())config_dir=std::filesystem::absolute(config_path).parent_path();
@@ -692,15 +900,143 @@ int main(int argc,char **argv) try {
                 }
 #endif
             }
-            if(sdl.ui->open())ui_state.status="Solo paused at frame "+std::to_string(m.frame);
+            if (netplay_session) {
+                netplay_session->poll();
+                using SState = f3rt::netplay::SessionState;
+                switch (netplay_session->state()) {
+                case SState::Connecting:
+                    ui_state.netplay_status = "Connecting to server...";
+                    break;
+                case SState::Lobby:
+                    if (!netplay_session->room_code().empty()) {
+                        static std::string logged_room;
+                        if (logged_room != netplay_session->room_code()) {
+                            logged_room = netplay_session->room_code();
+                            std::cout << "NETPLAY_ROOM " << logged_room << std::endl;
+                            if (netplay_auto.starts_with("host:file:")) {
+                                std::ofstream out(netplay_auto.substr(10));
+                                out << logged_room << std::endl;
+                            }
+                        }
+                        ui_state.netplay_room_code = netplay_session->room_code();
+                    }
+                    ui_state.netplay_status = "Waiting for peer...";
+                    break;
+                case SState::Registering:
+                    ui_state.netplay_status = "Peer matched! Registering UDP...";
+                    break;
+                case SState::Running:
+                    if (!netplay_active) {
+                        netplay_active = true;
+                        ui_state.netplay_active = true;
+                        if (sdl.ui) sdl.ui->set_lobby_open(false);
+                        netplay_recorder = std::make_unique<f3rt::netplay::MatchRecorder>(netplay_hook);
+                        netplay_recorder->meta = netplay_meta;
+                        netplay_recorder->begin_match(m, netplay_session->seed());
+                        const auto frames_between=m.frame-netplay_meta.sync_machine_frame;
+                        std::cout << "NETPLAY_RUNNING match_frame=" << netplay_match_frame
+                                  << " machine_frame=" << m.frame << " sync_machine_frame=" << netplay_meta.sync_machine_frame
+                                  << " frames_between_sync_and_start=" << frames_between << std::endl;
+                        if (frames_between != 0) {
+                            std::cerr << "NETPLAY_INVARIANT_VIOLATION frames_between_sync_and_start=" << frames_between
+                                      << " (the machine ran frames between sync and GO)" << std::endl;
+                            ui_state.netplay_error = "Internal error: frames ran between sync and start";
+                        }
+                    }
+                    ui_state.netplay_room_code = netplay_session->room_code();
+                    ui_state.netplay_peer_name = netplay_session->peer_name();
+                    ui_state.netplay_delay = netplay_session->input_delay();
+                    ui_state.netplay_player_index = netplay_session->player_index();
+                    ui_state.netplay_ping = netplay_session->stats().ping_ms;
+                    ui_state.netplay_stall_count = netplay_session->stats().stall_count;
+                    ui_state.netplay_status = "Running";
+                    break;
+                case SState::Ended: {
+                    std::string reason_str = "Ended";
+                    switch (netplay_session->end_reason()) {
+                    case f3rt::netplay::EndReason::Completed: reason_str = "Match completed"; break;
+                    case f3rt::netplay::EndReason::PeerLeft: reason_str = "Peer left match"; break;
+                    case f3rt::netplay::EndReason::Desync:
+                        reason_str = "DESYNC at frame " + std::to_string(netplay_session->desync_info().frame);
+                        std::cerr << "DESYNC frame=" << netplay_session->desync_info().frame
+                                  << " p1=0x" << std::hex << netplay_session->desync_info().crc_p1
+                                  << " p2=0x" << netplay_session->desync_info().crc_p2 << std::dec << std::endl;
+                        {
+                            const auto &di = netplay_session->desync_info();
+                            if (netplay_recorder) {
+                                f3rt::netplay::SessionFacts facts;
+                                facts.session_id = netplay_session->session_id();
+                                facts.seed = netplay_session->seed();
+                                facts.player_index = netplay_session->player_index();
+                                facts.input_delay = netplay_session->input_delay();
+                                facts.own_name = settings.netplay_name;
+                                facts.peer_name = netplay_session->peer_name();
+                                facts.room_code = netplay_session->room_code();
+                                facts.build_hash = f3rt::netplay::build_hash;
+                                facts.desync_frame = di.frame;
+                                facts.desync_crc_p1 = di.crc_p1;
+                                facts.desync_crc_p2 = di.crc_p2;
+                                netplay_recorder->meta.stall_count = netplay_session->stats().stall_count;
+                                netplay_recorder->meta.clock_resyncs = clock_resyncs;
+                                netplay_recorder->meta.audio_queue_drops = audio_queue_drops;
+                                try {
+                                    const auto base = (config_dir.empty() ? std::filesystem::current_path() : config_dir) / "netplay-desync";
+                                    ui_state.netplay_desync_path = netplay_recorder->write_bundle(base, facts).string();
+                                    std::cerr << "DESYNC_BUNDLE " << ui_state.netplay_desync_path << std::endl;
+                                } catch (const std::exception &e) {
+                                    std::cerr << "Could not write desync bundle: " << e.what() << std::endl;
+                                }
+                            }
+                        }
+                        break;
+                    case f3rt::netplay::EndReason::Error:
+                        reason_str = netplay_session->last_error();
+                        break;
+                    case f3rt::netplay::EndReason::Disconnected:
+                        reason_str = netplay_session->last_error().empty() ? "Disconnected from server"
+                                                                           : netplay_session->last_error();
+                        break;
+                    default: break;
+                    }
+                    ui_state.netplay_error = reason_str;
+                    ui_state.netplay_status = "Ended: " + reason_str;
+                    netplay_active = false;
+                    netplay_state_sync_done = false;
+                    ui_state.netplay_active = false;
+                    netplay_lobby_active=false;
+                    netplay_trigger_snapshot.clear();
+                    netplay_recorder.reset();
+                    if (sdl.ui) sdl.ui->set_lobby_open(true);
+                    netplay_session.reset();
+                    break;
+                }
+                default: break;
+                }
+            }
+            ui_state.netplay_in_session = (netplay_session != nullptr);
+            ui_state.netplay_own_name = settings.netplay_name;
+            if (netplay_session && sdl.ui) {
+                for (auto &c : netplay_session->drain_chat()) {
+                    sdl.ui->receive_chat(c.from_player, std::move(c.text));
+                }
+                for (const auto &out_msg : sdl.ui->take_outgoing_chat()) {
+                    netplay_session->send_chat(out_msg);
+                }
+            }
+            if(open_f1_frame && m.frame >= open_f1_frame && sdl.ui && !sdl.ui->open()) {
+                sdl.ui->set_open(true);
+            }
+            if(sdl.ui->open() && !netplay_active)ui_state.status="Solo paused at frame "+std::to_string(m.frame);
             sdl.ui->draw(ui_state);
             for(const auto action:sdl.ui->take_actions())try {
                 using Action=f3rt::UiActionKind;
                 switch(action.kind) {
                 case Action::Screenshot:screenshot_pending=true;break;
                 case Action::SaveState: case Action::LoadState: {
-                    if(!translated || allow_fallback || m.sound_trace)
-                        throw std::runtime_error("Slots require offline strict-native execution without sound tracing");
+                    if(netplay_active)
+                        throw std::runtime_error("Save/load states are disabled during active netplay");
+                    if(!translated || allow_fallback)
+                        throw std::runtime_error("Slots require offline strict-native execution");
                     if(config_path.empty())throw std::runtime_error("No user config path; supply --config FILE");
                     const auto path=std::filesystem::absolute(config_path).parent_path()/"states"/
                         (set+"-"+std::to_string(action.slot)+".f3state");
@@ -768,6 +1104,10 @@ int main(int argc,char **argv) try {
                     if(!f3rt::save_frontend_settings(config_path.string(),settings,ui_state.message))
                         throw std::runtime_error(ui_state.message);
                     ui_state.message="Preferences saved to "+config_path.string();break;
+                case Action::NetplayHost: start_host(); break;
+                case Action::NetplayJoin: start_join(sdl.ui->join_code()); break;
+                case Action::NetplayCancel: cancel_netplay(); refresh=true; break;
+                case Action::NetplayLocal: local_netplay(); refresh=true; break;
                 }
             } catch(const std::exception &error) { ui_state.message=error.what(); }
         }
@@ -776,26 +1116,138 @@ int main(int argc,char **argv) try {
         const bool motion_display_paced=motion_presentation && throttle && sdl.gpu &&
             !sdl.ui->open() && sdl.gpu->pace_motion();
 #endif
+        const bool in_lobby = (sdl.ui && sdl.ui->lobby_open()) || (netplay_session != nullptr && !netplay_active);
+        const bool has_hold = (netplay_hook && netplay_hook->lobby_hold_frame != nullptr);
+        const bool netplay_waiting = in_lobby && !has_hold;
+        const bool paused = (!netplay_active && (netplay_state_sync_done || (sdl.ui && sdl.ui->open()) || netplay_waiting));
         bool advanced=false;
-        std::array<f3rt::LocalInputWord,f3rt::local_player_count> local{};
-        if(sdl.input && !sdl.ui->open())
-            for(unsigned p=0;p<local.size();++p)local[p]=sdl.input->word(p);
-        if(input_script && (!sdl.ui || !sdl.ui->open())) {
-            const auto scripted=input_script->words(m.frame+1);
-            for(unsigned p=0;p<local.size();++p)local[p]|=scripted[p];
+        if (!netplay_active) {
+            std::array<f3rt::LocalInputWord,f3rt::local_player_count> local{};
+            if(!paused && !in_lobby) {
+                if(sdl.input)
+                    for(unsigned p=0;p<local.size();++p)local[p]=sdl.input->word(p);
+                if(input_script) {
+                    const auto scripted=input_script->words(m.frame+1);
+                    for(unsigned p=0;p<local.size();++p)local[p]|=scripted[p];
+                }
+            }
+            if(!paused && (!motion_presentation || !throttle || std::chrono::steady_clock::now()>=next_frame)) {
+                f3rt::apply_local_inputs(m,local);
+                if(!in_lobby && input_script)input_script->poke(m,m.frame+1);
+                if(in_lobby && has_hold) {
+                    netplay_hook->lobby_hold_frame(m);
+                }
+                if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
+                if(in_lobby && has_hold) {
+                    netplay_hook->lobby_hold_frame(m);
+                }
+                advanced=true;
+                if(motion_presentation && throttle) {
+                    motion_frame_start=next_frame;
+                    next_frame+=frame_time;
+                    const auto now=std::chrono::steady_clock::now();
+                    if(now-next_frame>std::chrono::milliseconds(max_catchup_ms)) {
+                        next_frame=now+frame_time;reset_motion();++clock_resyncs;
+                    }
+                }
+            }
+        } else {
+            // Netplay lockstep execution
+            if (next_netplay_local_frame <= netplay_match_frame) {
+                f3rt::LocalInputWord local_word = 0;
+                if (!sdl.ui || !sdl.ui->chat_input_open()) {
+                    if (sdl.input) local_word = sdl.input->word(0);
+                    if (input_script) local_word |= input_script->words(m.frame + 1)[0];
+                }
+                netplay_session->submit_local(next_netplay_local_frame, local_word);
+                ++next_netplay_local_frame;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (throttle && now - next_frame > std::chrono::milliseconds(max_catchup_ms)) {
+                next_frame = now;
+                ++clock_resyncs;
+            }
+            const bool due = (!throttle || now >= next_frame);
+
+            if (due && netplay_session->ready_to_step(netplay_match_frame)) {
+                if (!step_lockstep_frame(m, *netplay_session, netplay_match_frame, netplay_hook, 60, netplay_recorder.get())) {
+                    throw std::runtime_error("CPU halted at " + std::to_string(m.cpu.pc));
+                }
+                advanced = true;
+                ++netplay_match_frame;
+                if (throttle) {
+                    next_frame += frame_time;
+                    const auto tnow = std::chrono::steady_clock::now();
+                    if (tnow - next_frame > std::chrono::milliseconds(max_catchup_ms)) {
+                        next_frame = tnow + frame_time;
+                        ++clock_resyncs;
+                    }
+                }
+            } else {
+                advanced = false;
+            }
         }
-        if((!sdl.ui || !sdl.ui->open()) &&
-           (!motion_presentation || !throttle || std::chrono::steady_clock::now()>=next_frame)) {
-            f3rt::apply_local_inputs(m,local);
-            if(input_script)input_script->poke(m,m.frame+1);
-            if(!m.run_frame(translated))throw std::runtime_error("CPU halted at "+std::to_string(m.cpu.pc));
-            advanced=true;
-            if(motion_presentation && throttle) {
-                motion_frame_start=next_frame;
-                next_frame+=frame_time;
-                const auto now=std::chrono::steady_clock::now();
-                if(now-next_frame>std::chrono::milliseconds(max_catchup_ms)) {
-                    next_frame=now+frame_time;reset_motion();++clock_resyncs;
+        auto check_lobby_trigger = [&]() -> bool {
+            if (netplay_hook) {
+                if (netplay_hook->lobby_trigger) return netplay_hook->lobby_trigger(m);
+                if (netplay_hook->in_versus) return netplay_hook->in_versus(m);
+            }
+            return false;
+        };
+        bool trig = check_lobby_trigger();
+        if (advanced && !netplay_active && !netplay_session && !netplay_lobby_active) {
+            if (!prev_in_versus && trig) {
+                netplay_trigger_snapshot.resize(m.state_size());
+                m.save_state(netplay_trigger_snapshot);
+                netplay_meta = {};
+                netplay_meta.trigger_machine_frame = m.frame;
+                netplay_trigger_time = std::chrono::steady_clock::now();
+                netplay_lobby_active=true;
+                if(netplay_hook && netplay_hook->lobby_hold_begin) {
+                    netplay_hook->lobby_hold_begin(m);
+                }
+                if (sdl.ui) sdl.ui->set_lobby_open(true);
+                for (auto sf : screenshot_frames) {
+                    if (sf == m.frame) {
+                        screenshot_pending = true;
+                        screenshots_taken.insert(sf);
+                    }
+                }
+                if (!netplay_auto.empty()) {
+                    if (netplay_auto == "host" || netplay_auto.starts_with("host:")) {
+                        start_host();
+                    } else if (netplay_auto.starts_with("join:")) {
+                        start_join(netplay_auto.substr(5));
+                    }
+                }
+            }
+        }
+        if (!trig) {
+            prev_in_versus = false;
+        } else if (advanced) {
+            prev_in_versus = true;
+        }
+        if (open_f1_frame && m.frame == open_f1_frame && sdl.ui) {
+            sdl.ui->set_open(true);
+        }
+        if (chat_open_frame && m.frame == chat_open_frame && sdl.ui) {
+            sdl.ui->open_chat();
+        }
+        if (chat_close_frame && m.frame == chat_close_frame && sdl.ui) {
+            sdl.ui->close_chat();
+        }
+        for (const auto &[f, text] : chat_send_frames) {
+            if (m.frame == f && netplay_session) {
+                netplay_session->send_chat(text);
+            }
+        }
+        if (!screenshot_frames.empty()) {
+            for (auto sf : screenshot_frames) {
+                if (m.frame == sf && !screenshots_taken.contains(sf) && !screenshot_pending) {
+                    screenshot_pending = true;
+                    screenshots_taken.insert(sf);
+                    break;
                 }
             }
         }
@@ -813,7 +1265,7 @@ int main(int argc,char **argv) try {
         size_t count;
         while((count=m.audio->render_ready(samples.data(),samples.size()/2))!=0)handle_audio_chunk(count);
         const bool capture_final=!surface_saved && !surface.empty() && frames && executed_frames==frames;
-        const bool draw_menu=sdl.ui && sdl.ui->open();
+        const bool draw_menu=sdl.ui && (sdl.ui->open() || sdl.ui->lobby_open() || netplay_active || sdl.ui->chat_visible());
         if(!headless && (advanced || refresh || draw_menu || screenshot_pending || capture_final ||
                          (motion_presentation && surface_valid))) {
             std::filesystem::path screenshot;
@@ -864,13 +1316,14 @@ int main(int argc,char **argv) try {
                     bool presented=false;
                     const bool due=motion_display_paced || std::chrono::steady_clock::now()>=next_motion_present;
                     if(!throttle || due || capture_final || screenshot_pending) {
-                        if(throttle && !draw_menu && !capture_final)
+                        const std::string screenshot_str=screenshot.string();
+                        const char *cpath=screenshot_pending?screenshot_str.c_str():nullptr;
+                        if(throttle && !draw_menu && !capture_final && !screenshot_pending)
                             presented=sdl.gpu->present_motion(m.game_video->captured_frame(),motion_frame_start,
-                                                              frame_time,screenshot_pending);
-                        else {
-                            sdl.gpu->draw_motion(m.game_video->captured_frame(),1.0f);
-                            presented=sdl.gpu->last_presented();
-                        }
+                                                              frame_time,false,nullptr);
+                        else
+                            presented=sdl.gpu->present_motion(m.game_video->captured_frame(),motion_frame_start,
+                                                              frame_time,true,cpath);
                         if(throttle && !motion_display_paced) {
                             next_motion_present+=motion_present_period;
                             const auto now=std::chrono::steady_clock::now();
@@ -889,11 +1342,14 @@ int main(int argc,char **argv) try {
                                 (stats.sprites || stats.playfield_rows || stats.text_rows);
                         }
                     }
-                } else if(capture_final || screenshot_pending || !throttle)
-                    sdl.gpu->draw(m.game_video->captured_frame());
-                else sdl.gpu->present(m.game_video->captured_frame());
-                if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
-                if(screenshot_pending)sdl.gpu->save_surface(screenshot.string().c_str());
+                } else {
+                    if(screenshot_pending)
+                        sdl.gpu->present(m.game_video->captured_frame(), screenshot.string().c_str());
+                    else if(capture_final || !throttle)
+                        sdl.gpu->draw(m.game_video->captured_frame());
+                    else sdl.gpu->present(m.game_video->captured_frame());
+                    if(capture_final)sdl.gpu->save_surface(surface.string().c_str());
+                }
             } else
 #endif
             {
@@ -904,6 +1360,7 @@ int main(int argc,char **argv) try {
                 if(rotation)check(SDL_RenderTextureRotated(sdl.renderer,sdl.texture,nullptr,&rotated_rect,
                                                           rotation,nullptr,SDL_FLIP_NONE));
                 else check(SDL_RenderTexture(sdl.renderer,sdl.texture,nullptr,nullptr));
+                sdl.ui->render_cpu();
                 if(capture_final || screenshot_pending) {
                     SDL_Surface *shot=SDL_RenderReadPixels(sdl.renderer,nullptr);
                     check(shot!=nullptr);
@@ -911,12 +1368,15 @@ int main(int argc,char **argv) try {
                         (!screenshot_pending || SDL_SavePNG(shot,screenshot.string().c_str()));
                     SDL_DestroySurface(shot);check(saved);
                 }
-                sdl.ui->render_cpu();
                 check(SDL_RenderPresent(sdl.renderer));
             }
             surface_valid=true;
             if(capture_final)surface_saved=true;
-            if(screenshot_pending) { ui_state.message="Screenshot saved to "+screenshot.string();screenshot_pending=false; }
+            if(screenshot_pending) {
+                ui_state.message="Screenshot saved to "+screenshot.string();
+                std::cout<<"SCREENSHOT_SAVED "<<screenshot.string()<<std::endl;
+                screenshot_pending=false;
+            }
             if(throttle && advanced && !motion_presentation) {
                 // Pace against a rolling deadline. After a stall longer than one catch-up window, resync to now instead of
                 // running flat out to make up lost time (that burst is what delayed audio by the length of the stall).
@@ -935,7 +1395,7 @@ int main(int argc,char **argv) try {
             if(!motion_presentation)next_frame=std::chrono::steady_clock::now();
             if(!motion_presentation || !throttle || draw_menu ||
                (sdl.window && (SDL_GetWindowFlags(sdl.window)&(SDL_WINDOW_MINIMIZED|SDL_WINDOW_HIDDEN))))
-                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 #ifdef F3RT_GPU
         if(motion_presentation && throttle && sdl.gpu && !motion_display_paced) {
@@ -960,7 +1420,6 @@ int main(int argc,char **argv) try {
     if(m.game_video)m.game_video->report(std::cout);
     if(m.sprite_units)m.sprite_units->write_summary(std::cout);
     if(m.discovery)m.discovery->finish(m);
-    if(m.sound_trace)m.sound_trace->finish(m);
     profile.flush();
     std::cout<<"set="<<set<<" frames="<<m.frame<<" pc=0x"<<std::hex<<m.cpu.pc<<" sound_pc=0x"<<m.sound_pc()
              <<" audio_backend="<<f3rt::audio_backend_name(settings.audio_backend)
@@ -990,5 +1449,13 @@ int main(int argc,char **argv) try {
     if(audio_queue_samples)std::cerr<<"f3rt: pacing clock_resyncs="<<clock_resyncs<<" audio_queue_drops="<<audio_queue_drops
         <<" queued_ms mean="<<1000.0*double(audio_queue_sum)/double(audio_queue_samples)/(4.0*audio_rate)
         <<" max="<<1000.0*double(audio_queue_max)/(4.0*audio_rate)<<'\n';
+    std::cout<<"FINAL state_crc=0x"<<std::hex<<std::setw(8)<<std::setfill('0')<<m.state_crc()<<std::dec<<'\n';
+    if(netplay_session && netplay_session->state()==f3rt::netplay::SessionState::Running) {
+        netplay_session->send_result(netplay_match_frame, 0xFF, m.state_crc());
+        netplay_session->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        netplay_session->send_bye();
+        netplay_session->poll();
+    }
     return 0;
 } catch(const std::exception &e) { std::cerr<<"f3rt: "<<e.what()<<'\n';return 1; }

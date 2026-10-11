@@ -142,9 +142,9 @@ Read [canonical CPU state transfer](/developer/runtime/musashi#canonical-cpu-sta
 
 ## Sound trace
 
-`SoundTrace` writes a binary log of the traffic between the main CPU and the sound CPU. The tool `f3rt-tool sound-extract` (`tools/commands/sound_extract.cpp`) and the script `uv run f3 decode` read the file offline. The header comment says: "Lossless bus observation; decoding is offline and never reads device registers."
+`SoundTrace` writes a binary log of the traffic between the main CPU and the sound CPU. The tools `f3rt-tool sound-extract` and `f3rt-tool gameplay` record traces, and `uv run f3 decode` reads the file offline. The header comment says: "Lossless bus observation; decoding is offline and never reads device registers."
 
-You turn it on with `--sound-trace FILE`. The frontend creates the object and sets `Machine::sound_trace`. If the pointer is null, every hook is skipped.
+You turn it on with `--sound-trace FILE` in tools that support it. The runner creates the object and sets `Machine::sound_trace`. If the pointer is null, every hook is skipped.
 
 ### File format F3SND2
 
@@ -168,32 +168,15 @@ The file starts with 8 bytes: `F3SND2` and two zero bytes. After that, each reco
 | `SoundWrite` | 3 | The sound CPU wrote a device address. |
 | `Reset` | 4 | A machine or watchdog reset. Value is 2. |
 | `End` | 5 | End of the trace. `finish` writes it and flushes the file. |
-| `VoiceContext` | 6 | A voice context marker. |
-| `RamSnapshot` | 7 | A 32-bit word of sound work RAM. |
-| `NoteContext` | 8 | A note context marker. |
-| `DirectNote` | 9 | A direct note write. |
-| `NoteEvent` | 10 | A note event marker. |
 
 ### Where the hooks are
 
 - `Machine::write8` records `MainWrite` for writes in `0xc00000` to `0xc007ff` and for the two reset-line ranges.
 - `Machine::reset` and the watchdog record `Reset` with value 2.
-- `trace_sound` in `interpreter.cpp` records interpreted sound-bus accesses and special context events.
+- `trace_sound` in `interpreter.cpp` records interpreted sound-bus accesses within `SOUND_TRACE_BUS_BEGIN` (`0x140000`) to `SOUND_TRACE_BUS_END` (`0x340004`).
   Read [sound tracing](/developer/runtime/interpreter#sound-tracing) for the hook conditions.
 - `SoundNative::trace_sound` serves the native sound CPU.
-- `SoundTrace::finish` runs at the end of the frontend.
-
-`voice_context` and `note_context` call the private `ram_snapshot`. It reads work RAM through `audio->read32(0xff0000 | address)`. The code comment says only work-RAM mirrors are read, so the reads have no side effects. `voice_context` records 0xac bytes at the voice, 0x40 and 0x20 bytes at two pointers stored in the voice, 0x28 bytes at `0xd81a`, and then a `VoiceContext` record. The snapshots come before the marker, so a decoder sees the data first.
-
-`note_context` snapshots 0x38 bytes at the channel, 0x10 at the track, and 0x18 at the event.
-It also snapshots four bytes at `0xd40e`.
-It then writes `NoteEvent` with the low 16-bit event address.
-`NoteContext` stores the low 16-bit note address.
-Its value packs the track address in the high half and the channel address in the low half.
-Marker widths are zero because these records describe contexts, not bus transfers.
-
-These probes use fixed addresses from the target game's sound driver. They help to document and test the driver. See [Sound compiler](/developer/recompiler/sound-compiler).
-
+- `SoundTrace::finish` writes the `End` record and flushes output at the end of capture.
 ### The other trace: F3AUD2
 
 `f3rt-replay --audio-trace` reads a different file, `F3AUD2`. A MAME script writes it (`tools/mame/audio_trace.lua`). It records the device writes that MAME makes. It is not the same as `F3SND2`. See [Replay and check](/developer/runtime/replay-and-check).

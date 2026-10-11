@@ -58,26 +58,36 @@ class SoundDecodeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unconsumed'):
             ring.dispatch(0x1407fc, 6)
 
-    def test_voice_origin_survives_note_node_reuse(self):
+    def test_command_lifecycle_in_decoder(self):
         d = Decoder()
-        # Two note allocations reuse one kernel node but belong to different songs.
-        def allocate(sequence):
-            d.sequence_commands[sequence] = sequence + 100
-            for address, value, size in ((0x101e, 0x5e5c + sequence * 0x28, 2),
-                                         (0x2003, 7, 1), (0xd45e, 0x2768, 2)):
-                list(d.decode((1, 0, 0, address, value, 7, size)))
-            list(d.decode((1, 0, 0, 0xd44a, 0, 10, 0)))
-            return list(d.decode((1, 0, 0, 0xee92, 0x20001010, 8, 0)))[0]
-        first = allocate(8)
-        for address, value in ((0xedee, 0xee92), (0xedf0, 0x1010)):
-            list(d.decode((1, 0, 0, address, value, 7, 2)))
-        d.voice_context(31, 0xede0)
-        second = allocate(3)
-        self.assertEqual(first['command_id'], 108)
-        self.assertEqual(second['command_id'], 103)
-        self.assertNotEqual(first['note_id'], second['note_id'])
-        self.assertEqual(d.snapshot(31)['driver']['origin']['command_id'], 108)
+        packet = bytes.fromhex('068e01072768')
+        for index, byte in enumerate(packet):
+            events = list(d.decode((10, 0, 0x1234, 0xc00000 + index, byte, 1, 1)))
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]['event'], 'main_write')
+        list(d.decode((11, 0, 0x1234, 0xc00480, 0, 1, 1)))
+        events = list(d.decode((12, 0, 0x1234, 0xc00481, 12, 1, 1)))
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]['event'], 'command')
+        self.assertEqual(events[0]['command_id'], 1)
+        self.assertEqual(events[0]['payload'], [1, 7, 39, 104])
+        self.assertEqual(events[1]['event'], 'main_write')
 
+        # Sound CPU consumes the command
+        consumed = list(d.decode((20, 0, 0xc11116, 0x140000, 6, 2, 2)))
+        self.assertEqual(consumed[0]['event'], 'command_consumed')
+        self.assertEqual(consumed[0]['command_id'], 1)
+
+        # Sound CPU dispatches the command
+        dispatched = list(d.decode((30, 0, 0xc12ecc, 0x140000, 6, 2, 2)))
+        self.assertEqual(dispatched[0]['event'], 'command_dispatch')
+        self.assertEqual(dispatched[0]['command_id'], 1)
+        self.assertEqual(dispatched[0]['payload'], [1, 7, 39, 104])
+
+        # Removed kinds now raise ValueError
+        for removed_kind in (6, 7, 8, 9, 10, 11):
+            with self.assertRaises(ValueError):
+                list(d.decode((40, 0, 0, 0, 0, removed_kind, 0)))
     def test_trace_requires_end_and_monotonic_time(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'trace'

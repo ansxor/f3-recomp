@@ -14,6 +14,7 @@ diffs/
 nvram/
 cfg/
 *.wav
+netplay-logs/
 # Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
 *.profile
 *.profile.*

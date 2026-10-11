@@ -17,7 +17,7 @@ class RuntimeProfileTests(unittest.TestCase):
             root = Path(directory)
             driver = root / "driver.cpp"
             driver.write_text(r'''
-#include "debug/block_profile.hpp"
+#include "debug/profile.hpp"
 #include "f3rt/block_profile.h"
 #include <cassert>
 #include <filesystem>
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
             subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
                             "-DF3_PROFILE_INSTRUMENT=1", "-I", str(ROOT / "include"), "-I", str(ROOT / "runtime"),
                             "-I", str(root),
-                            str(driver), str(ROOT / "runtime/debug/block_profile.cpp"), str(ROOT / "runtime/rom.cpp"),
+                            str(driver), str(ROOT / "runtime/debug/profile.cpp"), str(ROOT / "runtime/rom.cpp"),
                             "-o", str(binary)], check=True)
             subprocess.run([str(binary), str(root)], check=True)
             profile = read_profile(root / "profiles/run.profile")
