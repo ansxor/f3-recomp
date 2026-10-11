@@ -15,7 +15,7 @@ CMake 3.24+, a C11/C++20 compiler, and `uv` (managing Python 3.11+ and dependenc
 | `F3RT_SDL` | `ON` | Build SDL frontend/player targets. |
 | `F3RT_GPU` | `ON` | GPU presentation and LM GPU regression harnesses; `OFF` retains CPU/FDP presentation without shader tools. |
 | `F3_PROFILE_INSTRUMENT` | `OFF` | Allocation-free per-entry main/sound counters; requires ROM generation. Record with `--profile-out FILE`. |
-| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Select frozen full-coverage `profiles/landmakrj.profile` automatically only for Japan. The file is local and gitignored; configure fails if it is missing. |
+| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Select frozen full-coverage `profiles/landmakrj.profile` automatically only for Japan. The file is local and gitignored; if it is missing, configure builds without tiers. |
 | `F3_PROFILE_TIERS` | empty | Matching versioned full-coverage profile; hot units use `-O2`, cold use Clang `-Oz` or other compilers' `-Os`. |
 | `F3_PROFILE_SLIM` | empty | Explicit code-removal experiment; cold hits abort, no fallback. Mutually exclusive with tiers; not recommended for general play. |
 | `BUILD_TESTING` | `ON` | Runtime check targets and CTest registration; no ROMs needed for runtime checks. |

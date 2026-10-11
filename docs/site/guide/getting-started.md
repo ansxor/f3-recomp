@@ -87,7 +87,7 @@ Hot code uses `-O2`; cold code uses Clang `-Oz` (or `-Os` on other supported
 compilers). Every nonexcluded entry remains native. To keep exclusions but
 disable automatic tiers, add `-DF3_PROFILE_DEFAULT_TIERS=OFF` (and
 `-DF3_PROFILE_TIERS=` if reusing an explicit profile override).
-An explicit `-DF3_PROFILE_TIERS=/path/to/profile` replaces the frozen corpus. The frozen `profiles/landmakrj.profile` is local and gitignored, not in the repository: a Japan ROM configure needs it or `-DF3_PROFILE_DEFAULT_TIERS=OFF`.
+An explicit `-DF3_PROFILE_TIERS=/path/to/profile` replaces the frozen corpus. The frozen `profiles/landmakrj.profile` is local and gitignored, not in the repository: without it, a Japan ROM configure builds without tiers.
 `F3_PROFILE_SLIM` removes cold code and is not the playable default.
 
 

@@ -39,7 +39,7 @@ and no explicit tiers/slim override. The cache's `F3_PROFILE_TIERS` value stays
 empty for this automatic selection. An explicit cached profile must be cleared
 when opting out. Tiers/slim overrides are mutually exclusive; their profiles
 are configure dependencies. Pre-generated-only builds keep their supplied mode.
-`profiles/landmakrj.profile` is local and gitignored, not committed. A ROM-backed landmakrj configure with the default `F3_PROFILE_DEFAULT_TIERS=ON` needs that file (regenerate it as in [BINSIZE-PROFILE.md](BINSIZE-PROFILE.md)) or `-DF3_PROFILE_DEFAULT_TIERS=OFF`.
+`profiles/landmakrj.profile` is local and gitignored, not committed. A ROM-backed landmakrj configure with the default `F3_PROFILE_DEFAULT_TIERS=ON` uses that file when present (regenerate it as in [BINSIZE-PROFILE.md](BINSIZE-PROFILE.md)); when it is missing, configure prints a status line and builds without tiers, as with `-DF3_PROFILE_DEFAULT_TIERS=OFF`.
 The opt-out was configured, built and actually run for 600 native frames:
 336,775 main / 61,997 sound registrations, zero fallback.
 

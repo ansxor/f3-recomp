@@ -33,7 +33,7 @@ The [Build options](/reference/build-options) reference page lists every option.
 | `F3_ROM_DIR` | empty | A directory with the selected title's ROM files (`F3_GAME`, default `landmakrj`). A value turns on automatic generation of both the main and the sound C code. |
 | `F3_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/SET` when `F3_ROM_DIR` is set) | A directory with already generated main CPU C code. |
 | `F3_SOUND_GENERATED_DIR` | empty (set to `BUILD_DIR/generated/sound-SET` when `F3_ROM_DIR` is set) | A directory with already generated sound driver C code. |
-| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Japan ROM generation uses the frozen full-coverage profile (local, gitignored `profiles/landmakrj.profile`; configure fails if it is missing) unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
+| `F3_PROFILE_DEFAULT_TIERS` | `ON` | Japan ROM generation uses the frozen full-coverage profile (local, gitignored `profiles/landmakrj.profile`; skipped with a status message if it is missing) unless a tiers/slim override is selected. `OFF` retains exclusions with ordinary optimization. |
 | `F3_PROFILE_TIERS` | empty cache; frozen profile selected automatically | Explicit CRC-keyed profile override: hot units `-O2`, cold units `-Oz`/`-Os`. |
 | `F3_PROFILE_SLIM` | empty | Explicit removal of unprofiled code, never enabled automatically. |
 
