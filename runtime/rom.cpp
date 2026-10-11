@@ -1,5 +1,9 @@
 #include "f3rt/rom.hpp"
 #include "rom_manifest.hpp"
+extern "C" {
+#include "third_party/sha1dc/sha1.h"
+}
+#include <zlib.h>
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -10,13 +14,14 @@
 
 namespace f3rt {
 uint32_t crc32(const uint8_t *data, size_t size) {
-    uint32_t crc = ~0u;
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= data[i];
-        for (unsigned bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+    uLong crc = ::crc32(0L, Z_NULL, 0);
+    while (size) {
+        const uInt chunk = uInt(std::min<size_t>(size, 1u << 30));
+        crc = ::crc32(crc, data, chunk);
+        data += chunk;
+        size -= chunk;
     }
-    return ~crc;
+    return uint32_t(crc);
 }
 std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms) {
     const std::vector<uint8_t> *regions[] = {
@@ -30,42 +35,15 @@ std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms) {
     return crcs;
 }
 namespace {
-// Stack-only SHA1 for full physical chip integrity, including padded short dumps.
+// SHA1 with collision detection (sha1collisiondetection); rejects detected attack inputs.
 bool sha1_matches(std::span<const uint8_t> bytes, const char *expected) {
-    const auto rotate = [](uint32_t value, unsigned bits) {
-        return (value << bits) | (value >> (32 - bits));
-    };
-    std::array<uint32_t, 5> hash = {0x67452301u, 0xefcdab89u, 0x98badcfeu,
-                                  0x10325476u, 0xc3d2e1f0u};
-    const size_t padded_size = ((bytes.size() + 9 + 63) / 64) * 64;
-    const uint64_t bit_size = uint64_t(bytes.size()) * 8;
-    for (size_t block = 0; block < padded_size; block += 64) {
-        std::array<uint32_t, 80> words{};
-        for (size_t i = 0; i < 64; ++i) {
-            const size_t position = block + i;
-            uint8_t value = 0;
-            if (position < bytes.size()) value = bytes[position];
-            else if (position == bytes.size()) value = 0x80;
-            else if (position >= padded_size - 8)
-                value = uint8_t(bit_size >> ((padded_size - 1 - position) * 8));
-            words[i / 4] |= uint32_t(value) << (24 - (i % 4) * 8);
-        }
-        for (size_t i = 16; i < words.size(); ++i)
-            words[i] = rotate(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
-        auto [a, b, c, d, e] = hash;
-        for (unsigned i = 0; i < words.size(); ++i) {
-            const uint32_t function = i < 20 ? ((b & c) | (~b & d)) :
-                                      i < 40 ? (b ^ c ^ d) :
-                                      i < 60 ? ((b & c) | (b & d) | (c & d)) : (b ^ c ^ d);
-            const uint32_t constant = i < 20 ? 0x5a827999u : i < 40 ? 0x6ed9eba1u :
-                                      i < 60 ? 0x8f1bbcdcu : 0xca62c1d6u;
-            const uint32_t next = rotate(a, 5) + function + e + constant + words[i];
-            e = d; d = c; c = rotate(b, 30); b = a; a = next;
-        }
-        hash[0] += a; hash[1] += b; hash[2] += c; hash[3] += d; hash[4] += e;
-    }
+    SHA1_CTX context;
+    SHA1DCInit(&context);
+    SHA1DCUpdate(&context, reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    unsigned char digest[20];
+    if (SHA1DCFinal(digest, &context)) return false;
     for (size_t i = 0; i < 40; ++i) {
-        const unsigned nibble = (hash[i / 8] >> (28 - (i % 8) * 4)) & 15;
+        const unsigned nibble = (digest[i / 2] >> ((i % 2) ? 0 : 4)) & 15;
         const char actual = "0123456789abcdef"[nibble];
         const char wanted = expected[i] >= 'A' && expected[i] <= 'F' ?
                             expected[i] + ('a' - 'A') : expected[i];

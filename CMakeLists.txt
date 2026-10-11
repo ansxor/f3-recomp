@@ -309,6 +309,7 @@ else()
     set(F3RT_GAME_NETPLAY_SOURCES runtime/stubs/netplay.cpp)
 endif()
 set(F3RT_CORE_SOURCES
+    runtime/third_party/sha1dc/sha1.c runtime/third_party/sha1dc/ubc_check.c
     runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
