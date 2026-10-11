@@ -145,6 +145,7 @@ The server compares `game_id`, the seven ROM CRCs and `build_hash` from the two 
 - When no session is active, the 0 to 1 edge of `in_versus` opens the lobby. `--netplay-auto` starts host or join.
 - The lobby shows a warning that state sync is not yet implemented only for games that have neither `capture_sync` nor `apply_sync`. Land Maker has both, so it does not show the warning.
 - Input scripts with memory poke rules are rejected while netplay is active. `--inputs` with pokes plus `--netplay-auto` or a netplay hook throws.
+- **Threads.** A windowed run keeps the whole netplay state (lobby, `Session`, `MatchRecorder`, trigger snapshot, state sync, lockstep stepping) on the emulation thread, because the session callbacks (`capture_sync`, `apply_sync`, `sync_hash`) and the lobby hooks run the machine. The video thread shows it through a `NetStatus` copy and drives it with `NetHost`, `NetJoin`, `NetCancel`, `NetLocal` and `Chat` commands (see [Frontend](/developer/runtime/frontend#hand-off)). The emulation thread polls the session about once per millisecond while it waits for the peer, and latches the local input word once per match frame. Headless runs do the same on the main thread.
 
 ## Testing
 

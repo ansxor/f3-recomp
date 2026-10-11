@@ -74,7 +74,12 @@ struct GameVideo::Impl {
     // Present exactly when GPU presentation is enabled. Overwritten once per
     // supported or fallback frame by capture(); the CPU compositor and the GPU
     // encoder both read it.
-    std::unique_ptr<CapturedFrame> captured;
+    CapturedFrame *captured = nullptr;
+    std::unique_ptr<CapturedFrame> captured_storage;
+    // Optional caller-owned destination for the next capture or load. `captured` always names the newest frame
+    // and is never rewritten in place once a target is installed, so a frame handed to another thread stays immutable.
+    CapturedFrame *capture_target = nullptr;
+    CapturedFrame &capture_dest() { return capture_target ? *capture_target : *captured; }
     // Reference-scale sprite planes, rastered lazily from `captured`; stale after every recapture.
     struct ReferencePlanes {
         std::vector<uint16_t> canonical_sprite_plane;
@@ -92,7 +97,8 @@ struct GameVideo::Impl {
     bool presentation_pending = false;
 
     void capture() {
-        auto &frame = *captured;
+        auto &frame = capture_dest();
+        captured = &frame;
         frame.fallback = !rendered;
         if (reference) reference->invalidate();
         if (frame.fallback) {
@@ -298,8 +304,10 @@ void GameVideo::reset() {
     std::fill(impl_->presentation_pixels.begin(), impl_->presentation_pixels.end(), 0xff000000);
     impl_->presentation_pending = false;
     if (impl_->captured) {
-        impl_->captured->fallback = true;
-        impl_->captured->native_pixels.fill(0xff000000);
+        auto &frame = impl_->capture_dest();
+        impl_->captured = &frame;
+        frame.fallback = true;
+        frame.native_pixels.fill(0xff000000);
     }
     impl_->frames.fill(0);
     impl_->mismatches.fill(0);
@@ -431,15 +439,20 @@ void GameVideo::enable_gpu_presentation(bool enabled) {
     impl_->materialize_native();
     impl_->materialize_presentation();
     if (enabled) {
-        if (!impl_->captured) impl_->captured = std::make_unique<CapturedFrame>();
+        if (!impl_->captured) impl_->captured = (impl_->captured_storage = std::make_unique<CapturedFrame>()).get();
         // Native and expanded snapshot observations must not allocate.
         if ((impl_->options.expanded() || impl_->mode == GameVideoMode::Game) && !impl_->reference)
             impl_->reference = std::make_unique<Impl::ReferencePlanes>(impl_->options);
     } else {
-        impl_->captured.reset();
+        impl_->captured = impl_->capture_target = nullptr;
+        impl_->captured_storage.reset();
         impl_->reference.reset();
         impl_->reference_selected = false;
     }
+}
+void GameVideo::set_capture_target(CapturedFrame *target) {
+    if (target && !impl_->captured) throw std::runtime_error("GPU presentation snapshot is not enabled");
+    impl_->capture_target = target;
 }
 void GameVideo::set_gpu_scale(unsigned scale) {
     if (!impl_->captured) throw std::runtime_error("GPU presentation snapshot is not enabled");
@@ -650,8 +663,10 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
     impl_->load_state(reader);
     impl_->presentation_pending = false;
     if (impl_->captured) {
-        impl_->captured->fallback = true;
-        std::copy(impl_->machine.pixels_.begin(), impl_->machine.pixels_.end(), impl_->captured->native_pixels.begin());
+        auto &frame = impl_->capture_dest();
+        impl_->captured = &frame;
+        frame.fallback = true;
+        std::copy(impl_->machine.pixels_.begin(), impl_->machine.pixels_.end(), frame.native_pixels.begin());
         if (impl_->reference) impl_->reference->invalidate();
     }
     if (reader.remaining() != 0) {

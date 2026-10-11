@@ -178,7 +178,7 @@ The loop in `runtime/frontend/frontend.cpp` drains audio once for each loop pass
 2. If `--wav` is set, it appends the samples to the `WavWriter`.
 3. If SDL audio is open, it calls `SDL_PutAudioStreamData`.
 
-SDL opens with `SDL_AudioSpec{SDL_AUDIO_S16, 2, audio_rate}` through `SDL_OpenAudioDeviceStream` on the default playback device. SDL converts the 29761 Hz signal to the rate of the real device. The frontend does not slow down for audio. The wall-clock sleep for video (`sleep_until`) sets the speed. With `--unthrottled` the machine can make samples faster than the device plays them.
+SDL opens with `SDL_AudioSpec{SDL_AUDIO_S16, 2, audio_rate}` through `SDL_OpenAudioDeviceStream` on the default playback device. SDL converts the 29761 Hz signal to the rate of the real device. The frontend does not slow down for audio. The emulation thread's wall-clock frame deadline sets the speed, and the same thread drains PCM into the stream, so a slow or blocked present cannot hold up audio. With `--unthrottled` the machine can make samples faster than the device plays them.
 
 The option `--no-audio` skips `SDL_INIT_AUDIO`. The machine still makes samples, and `--wav` still works. The option `--headless` opens no window and no audio device. Use `--headless --frames N --wav FILE` to write a file without a display.
 

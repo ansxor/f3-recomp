@@ -102,7 +102,7 @@ For bus access and runtime services, it calls the C ABI in `include/f3rt/cpu_abi
 
 ```mermaid
 flowchart TB
-    FE["Frontend: runtime/frontend/frontend.cpp - SDL3 window, audio, keys, pacing"]
+    FE["Frontend: runtime/frontend/frontend.cpp - video thread (SDL3 window, UI, keys, present) and emulation thread (frames, pacing, PCM drain)"]
     subgraph M["Machine"]
         RF["run_frame"]
         DISP["f3_dispatch: block lookup in sorted table"]

@@ -46,8 +46,12 @@ public:
     void enable_gpu_presentation(bool enabled = true);
     // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
     void set_gpu_scale(unsigned scale);
-    // The one scanout snapshot, overwritten at each VBSTART capture.
+    // The newest scanout snapshot. Overwritten in place at each VBSTART capture unless a capture target is set.
     const CapturedFrame &captured_frame() const;
+    // Redirect subsequent captures (and state loads) into caller-owned storage; null restores the internal frame.
+    // captured_frame() keeps naming the newest frame, which is never rewritten while a target is installed
+    // (the caller picks a target that is neither the newest frame nor in use elsewhere).
+    void set_capture_target(CapturedFrame *target);
     void render_reference(std::span<uint32_t> output, GameVideoOptions options,
                           unsigned layer_mask = 511, bool serial = false) const;
     size_t state_size() const;
