@@ -33,4 +33,5 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+bool validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept;
 } // namespace f3rt::hle

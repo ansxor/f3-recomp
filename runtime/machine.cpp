@@ -90,7 +90,7 @@ Machine::Machine(RomSet set) : pixels_(320 * set.video.visible_height),
                                         roms.factory_eeprom[2 * i + 1]);
     }
     // Analog ports start at counter zero; resets preserve the serialized counters.
-    if (roms.name == "arkretrnj" || roms.name == "puchicarj")
+    if (roms.input.dial)
         inputs[2] = inputs[3] = 0xffff0000;
     reset();
 }

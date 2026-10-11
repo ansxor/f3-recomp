@@ -425,7 +425,7 @@ int main(int argc,char **argv) try {
             }
         }
         else if(arg=="--help") {
-            std::cout<<argv[0]<<" [--rom-dir DIR] [--set landmakrj|landmakr|rayforce|commandw|ridingf] [--frames N] [--headless] [--no-audio]\n"
+            std::cout<<argv[0]<<" [--rom-dir DIR] [--set SET] [--frames N] [--headless] [--no-audio]\n"
                      <<"  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
                      <<"  [--fast-boot on|off] [--boot-cache on|off] (host-only boot shortcut; default fast boot on, cache off)\n"
                      <<"  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
@@ -536,13 +536,6 @@ int main(int argc,char **argv) try {
         f3rt::Audio::Backend parsed;
         if(!f3rt::Audio::parse_backend(audio_backend,parsed))throw std::runtime_error("--audio-backend must be enhanced or reference");
         settings.audio_backend=parsed==f3rt::Audio::Backend::Enhanced?f3rt::AudioBackend::Enhanced:f3rt::AudioBackend::Reference;
-        if(!audio_backend_available(settings.audio_backend, set))
-            throw std::runtime_error("Enhanced audio requires landmakrj");
-    } else {
-        if(!audio_backend_available(settings.audio_backend, set)) {
-            settings.audio_backend=f3rt::AudioBackend::Reference;
-        }
-        audio_backend=f3rt::audio_backend_name(settings.audio_backend);
     }
     parse_scale(video_scale,video_scale_mode,video_options);
 #ifdef F3RT_GAME
@@ -594,8 +587,16 @@ int main(int argc,char **argv) try {
                            {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
     }
 #endif
+    if(settings.audio_backend==f3rt::AudioBackend::Enhanced) {
+        if(!m.audio->backend_available(f3rt::Audio::Backend::Enhanced)) {
+            if(cli_preferences&SoundBackend)
+                throw std::runtime_error("Enhanced audio is not supported for this game");
+            settings.audio_backend=f3rt::AudioBackend::Reference;
+        }
+    }
     if(settings.audio_backend==f3rt::AudioBackend::Enhanced)m.audio->set_backend(f3rt::Audio::Backend::Enhanced);
     else m.audio->set_backend(f3rt::Audio::Backend::Reference);
+    audio_backend=f3rt::audio_backend_name(settings.audio_backend);
 #ifdef F3_PROFILE_SLIM_ENABLED
     if(allow_fallback || !translated || (settings.audio_backend==f3rt::AudioBackend::Reference && !m.sound_native))
         throw std::runtime_error("Profile-slim requires strict native main and sound CPUs; no interpreter fallback");
@@ -726,6 +727,7 @@ int main(int argc,char **argv) try {
 #endif
     ui_state.active_renderer=renderer;
     ui_state.set=set;
+    ui_state.enhanced_audio_available=m.audio->backend_available(f3rt::Audio::Backend::Enhanced);
     ui_state.message=settings_error;
     const auto *netplay_hook=f3rt::game_netplay();
     ui_state.netplay_supported=(netplay_hook!=nullptr && netplay_hook->in_versus!=nullptr);

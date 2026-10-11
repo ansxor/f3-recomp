@@ -33,7 +33,7 @@ void set_color(std::array<uint8_t, 0x8000> &bytes, size_t at, uint32_t value) {
 }
 } // namespace
 
-TEST(Video, RomPlaneLoading4BppAndRayForceVisibleScanline) {
+TEST(Video, RomPlaneLoading4BppAndCustomVisibleScanline) {
     std::vector<uint8_t> sprites(256, 0x21), tiles(128, 0x43);
     f3rt::Video video;
     f3rt::VideoConfig config{90, 2, 31, 224};
@@ -61,7 +61,7 @@ TEST(Video, RomPlaneLoading4BppAndRayForceVisibleScanline) {
     set_word(graphics, 16 + 12, 0x8001);
     video.render_frame(palette, graphics, control, pixels);
     EXPECT_TRUE(pixels[0] == 0xff112233 && pixels[320] == 0xff445566)
-        << "RayForce's first visible scanline is 31, not Land Maker's 24";
+        << "Custom first visible scanline is 31, not default 24";
 }
 
 TEST(Video, SpriteLagAndDelayedPositionSnapshot) {
@@ -98,11 +98,11 @@ TEST(Video, SpriteLagAndDelayedPositionSnapshot) {
         << "Snapshots preserve the delayed parsed list, not only the framebuffer";
 }
 
-TEST(Video, RidingFightGeometryAndFdaPaletteBlur) {
+TEST(Video, CustomGeometryAndFdaPaletteBlur) {
     std::vector<uint8_t> sprites(256, 0x21), tiles(128, 0x43);
     f3rt::Video video;
     f3rt::VideoConfig config{0, 1, 32, 224};
-    EXPECT_TRUE(video.load_roms(sprites, {}, tiles, {}, config)) << "Riding Fight geometry loads";
+    EXPECT_TRUE(video.load_roms(sprites, {}, tiles, {}, config)) << "Custom geometry loads";
     video.reset();
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x8000> palette{};

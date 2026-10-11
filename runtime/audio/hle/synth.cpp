@@ -1,6 +1,7 @@
 #include "audio/hle/synth.hpp"
 #include "audio/hle/voice_kernel.hpp"
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -138,6 +139,7 @@ struct Synth::Impl {
     uint16_t noise = 0;
     uint16_t noise_history = 0;
     uint8_t cursor = 0, budget_slot = 0, bend_range = 0;
+    unsigned board_bank_mask = 0;
     uint32_t reset_start = 0, reset_end = 0;
     alignas(64) float input[voice_block_frames * voice_lane_stride]{};
     alignas(64) float a1[voice_block_frames * voice_lane_stride]{};
@@ -154,8 +156,9 @@ struct Synth::Impl {
     alignas(64) uint8_t lane_pair[32]{};
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
-        if (r.size() != 0x80000 || s.size() != 0x800000)
-            throw std::runtime_error("Land Maker HLE requires mapped sound and sample ROM regions");
+        if (r.size() != 0x80000 || s.size() < 0x80000 || !std::has_single_bit(s.size()))
+            throw std::runtime_error("HLE requires mapped sound and power-of-two sample ROM regions");
+        board_bank_mask = (samples.size() >= 0x100000) ? unsigned((samples.size() / 0x100000) - 1) : 0;
         metadata.reserve(0x10000);
         frame_ticks.reserve(1024);
         buffered_events.reserve(32);
@@ -166,9 +169,11 @@ struct Synth::Impl {
         uint32_t heap_limit=longword(rom_pointer(0xc15fba,4))+longword(rom_pointer(0xc15fc0,4));
         uint32_t heap_size=heap_limit-heap_base-longword(rom_pointer(0xc15fcc,4));
         uint32_t heap_next=longword(rom_pointer(0xc15fd8,4));
-        for(unsigned i=0;i<4;++i){
-            metadata.at(heap_base-0x6e9c+i)=uint8_t(heap_size>>(24-i*8));
-            metadata.at(heap_base-0x6e9c+4+i)=uint8_t(heap_next>>(24-i*8));
+        if (heap_base >= 0x6e9c && heap_base - 0x6e9c + 8 <= metadata.size()) {
+            for(unsigned i=0;i<4;++i){
+                metadata[heap_base-0x6e9c+i]=uint8_t(heap_size>>(24-i*8));
+                metadata[heap_base-0x6e9c+4+i]=uint8_t(heap_next>>(24-i*8));
+            }
         }
         cache_programs();
         for (unsigned i=0;i<rates.size();++i) rates[i]=rw(0xc089dc+2*i);
@@ -199,10 +204,11 @@ struct Synth::Impl {
     void append_word(uint16_t w) { metadata.push_back(uint8_t(w>>8)); metadata.push_back(uint8_t(w)); }
     void decode_banks() {
         // c0b4a4..c0b610: immutable PCM metadata, including expanded flag word.
-        for (unsigned b=0;b<16;++b) {
+        const size_t num_banks = std::min(size_t(16), samples.size() / 0x80000);
+        for (unsigned b=0;b<num_banks;++b) {
             unsigned at=0, base=b*0x80000;
             auto sample_word=[&]() {
-                if (at>=0x80000) throw std::runtime_error("HLE sample metadata exceeds half-bank");
+                if (at>=0x80000 || base+at>=samples.size()) throw std::runtime_error("HLE sample metadata exceeds half-bank");
                 return samples[base+at++];
             };
             uint16_t flag=sample_word(); bool packed=(flag&0x8000)!=0;
@@ -231,7 +237,7 @@ struct Synth::Impl {
                 for (unsigned j=0;j<7;++j) append_word(data_word());
                 if (metadata[begin+5]==127) break;
             }
-            uint16_t tag=samples[base+0x7ffff]; bank.tag=uint8_t(packed?tag>>8:tag);
+            uint16_t tag=(base+0x7ffff<samples.size())?samples[base+0x7ffff]:0; bank.tag=uint8_t(packed?tag>>8:tag);
         }
     }
     void cache_programs() {
@@ -243,7 +249,7 @@ struct Synth::Impl {
             data.enabled=data.base[0x196]>>5;data.sample_banks.fill(-1);
             auto find_bank=[&](uint8_t tag){
                 int8_t result=-2;
-                for(unsigned b=0;b<banks.size();++b)if(banks[b].tag==tag)result=int8_t(b);
+                for(unsigned b=0;b<banks.size();++b)if(banks[b].count && banks[b].tag==tag)result=int8_t(b);
                 return result;
             };
             if(!data.enabled){
@@ -267,6 +273,10 @@ struct Synth::Impl {
     }
     Split split_for(const uint8_t *patch,unsigned layer,bool direct,int pitch,uint8_t &selector,uint16_t program_id) const {
         unsigned id=(direct?patch[4]:patch[0x6c])&127;
+        if (!direct && id >= 0x78) {
+            selector = uint8_t(board_bank_mask * 2);
+            return Split{};
+        }
         int bank=programs[program_id&255].sample_banks[layer];
         if(bank==-2)throw std::runtime_error("HLE instrument names missing sample bank");
         const uint8_t *data=nullptr; size_t available=0;
@@ -277,7 +287,7 @@ struct Synth::Impl {
             if(offset+14>metadata.size())throw std::runtime_error("HLE sample offset exceeds metadata");
             data=metadata.data()+offset;available=metadata.size()-offset;
         } else {
-            selector=14;
+            selector=uint8_t(board_bank_mask * 2);
             if(id>120)throw std::runtime_error("HLE ROM split ID exceeds table");
             uint32_t address=uint32_t(0xc1ae76+int16_t(rw(0xc1c1e0+id*2)));
             data=rom_pointer(address,14);available=rom.size()-size_t(data-rom.data());
@@ -566,18 +576,37 @@ struct Synth::Impl {
         v.split=split_for(patch,layer,direct,v.pitch,v.selector,n.channel.program);
         unsigned id=(direct?patch[4]:patch[0x6c])&127;
         if(direct&&id==0x78)throw std::runtime_error("ROM direct sample78 enters infinite branch c1968e");
-        if(!direct&&id>=0x78)throw std::runtime_error("HLE concatenated sample program is outside supplied active Land Maker patches");
-        uint32_t bit=uint32_t(v.selector&1)<<28;unsigned board=(v.selector>>1)<<20;
-        uint8_t control=(!direct&&id>=0x6f)?0x0b:rb(0xc0a734+v.split.mode);
+        uint32_t bit=uint32_t(v.selector&1)<<28;unsigned board=((v.selector>>1)&board_bank_mask)<<20;
+        uint8_t control=(!direct&&id>=0x6f&&id<0x78)?0x0b:rb(0xc0a734+v.split.mode);
         v.reverse=((direct?patch[4]:patch[0x6c])&128)&&id<0x54;
         if(v.reverse)control=0x43;
-        v.loop=(control&8)!=0;v.bidirectional=(control&16)!=0;
         uint32_t start=v.reverse?v.split.accumulator:v.split.start;
         uint32_t phase=v.reverse?v.split.end:v.split.accumulator;
+        uint32_t end=v.split.end;
         if(id>=0x54&&id<0x6f)phase&=0xfffffe00;
-        if(!direct)phase&=0xffffff00;
+        if(!direct&&id<0x78)phase&=0xffffff00;
+        if(!direct&&id>=0x78){
+            uint32_t d0=patch[0x72];
+            uint32_t d1=std::min(uint32_t(d0+patch[0x70]),0xfau);
+            d0*=14;d1*=14;
+            const uint32_t split_table=0xc1ae84;
+            uint32_t d4=longword(rom_pointer(split_table+d0+2,4));
+            if(d4==0x1dcaa07f){
+                d0+=14;
+                d4=longword(rom_pointer(split_table+d0+2,4));
+                if(d0==d1)d1+=14;
+            }
+            uint32_t d5=longword(rom_pointer(split_table+d1+2,4));
+            if(d5==0x1dcaa07f)d5=longword(rom_pointer(split_table+d1+0x14,4));
+            v.reverse=(patch[0x6c]&128)!=0;
+            control=v.reverse?0x4b:0x0b;
+            start=d4;end=d5;
+            phase=v.reverse?d5:d4;
+            if(v.reverse)start+=0x800;
+        }
+        v.loop=(control&8)!=0;v.bidirectional=(control&16)!=0;
         v.start=double(board)+double((start|bit)&0x1fffffe0)/512;
-        v.end=double(board)+double((v.split.end|bit)&0x1fffffe0)/512;
+        v.end=double(board)+double((end|bit)&0x1fffffe0)/512;
         v.position=double(board)+double((phase|bit)&0x1fffffff)/512;
         if(!direct&&id<0x54){
             int amount=s8(patch[0x70])*n.velocity+(patch[0x72]<<7);
@@ -587,7 +616,7 @@ struct Synth::Impl {
                 v.position=std::clamp(v.position,v.start,v.end);
             }
         }
-        if(!direct&&id>=0x6f){
+        if(!direct&&id>=0x6f&&id<0x78){
             // c17e8c loads ACC from this bank's probe. c17fbe leaves START/END
             // unchanged, including when the physical slot was previously free.
             v.boundary=true;v.loop=true;
@@ -676,8 +705,8 @@ struct Synth::Impl {
         }
     }
     double sample(size_t at) const {
-        if(at>=samples.size())return 0;
-        return int16_t(samples[at]);
+        if(samples.empty())return 0;
+        return int16_t(samples[at & (samples.size() - 1)]);
     }
     float interpolated_gain(double encoded) const {
         double index=std::clamp(encoded/256.0,0.0,255.0);unsigned i=unsigned(index);
@@ -958,4 +987,12 @@ void Synth::channel_update(uint8_t sequence,uint8_t track,const Channel &c,uint6
 void Synth::reset(uint64_t tick){impl_->reset(tick);}
 void Synth::render(float *output,size_t frames){impl_->render(output,frames);}
 void Synth::set_observer(std::function<void(const VoiceEvent &)> observer){impl_->observer=std::move(observer);}
+bool Synth::validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
+    try {
+        Synth synth(sound, samples);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 }

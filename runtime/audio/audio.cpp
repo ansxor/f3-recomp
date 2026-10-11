@@ -38,6 +38,14 @@ struct Audio::Impl {
     std::unique_ptr<hle::AudioEngine> m_hle;
     reference::Engine m_reference;
     Audio::Backend m_backend = Audio::Backend::Enhanced;
+    bool m_enhanced_available = false;
+    void update_enhanced_available() {
+        if (!m_sound_rom.empty() && !m_sample_words.empty()) {
+            m_enhanced_available = hle::validate(m_sound_rom, m_sample_words);
+        } else {
+            m_enhanced_available = false;
+        }
+    }
 
     uint8_t *m_shared_ram;
     size_t m_shared_ram_size;
@@ -509,6 +517,8 @@ Audio &Audio::operator=(Audio &&) noexcept = default;
 void Audio::set_backend(Backend backend) {
     if (clock_ticks() || !is_reset())
         throw std::runtime_error("Select audio backend before machine execution");
+    if (backend == Backend::Enhanced && !m_impl->m_enhanced_available)
+        throw std::runtime_error("Enhanced audio is not supported for this game");
     m_impl->m_backend = backend;
     if (backend == Backend::Enhanced) {
         m_impl->m_hle = std::make_unique<hle::AudioEngine>(
@@ -525,6 +535,11 @@ bool Audio::parse_backend(std::string_view name, Backend &backend) {
 }
 const char *Audio::backend_name(Backend backend) {
     return backend == Backend::Enhanced ? "enhanced" : "reference";
+}
+bool Audio::backend_available(Backend backend) const {
+    if (backend == Backend::Reference) return true;
+    if (backend == Backend::Enhanced) return m_impl->m_enhanced_available;
+    return false;
 }
 Audio::Backend Audio::backend() const { return m_impl->m_backend; }
 bool Audio::is_enhanced_active() const { return m_impl->m_hle != nullptr; }
@@ -552,6 +567,7 @@ void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
     if (m_impl->m_sound_rom.size() >= 8) {
         std::memcpy(m_impl->m_work_ram.data(), m_impl->m_sound_rom.data(), 8);
     }
+    m_impl->update_enhanced_available();
 }
 
 void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
@@ -563,6 +579,7 @@ void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
     }
     m_impl->m_reference.set_sample_rom(m_impl->m_sample_words.data(), word_count);
     m_impl->m_reference.set_bank_mask((sample_rom.size() >= 0x200000) ? ((sample_rom.size() / 0x200000) - 1) : 0);
+    m_impl->update_enhanced_available();
 }
 
 void Audio::set_shared_ram(uint8_t *shared_ram, size_t size) {

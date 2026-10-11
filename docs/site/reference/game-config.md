@@ -286,6 +286,16 @@ This table describes a bytecode that the game uses for actor scripts. The recomp
 | `entry_points` | array of addresses | no | `[]` | Extra script start addresses. |
 | `pointer_tables` | array of tables | no | `[]` | Tables of script pointers. Each table has `table` (address) and `count` (integer). A missing key raises `KeyError`. |
 
+
+## [input]
+
+Optional input configuration table.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `dial` | boolean | `false` | Enable paddle / dial spinner counters on analog ports 2 and 3. |
+| `six_button` | boolean | `false` | Enable 2-player 6-button layout (extra punch/kick lines on ports 4 and 5). |
+
 ## What the config does not contain
 
 - The board memory map and device implementations remain runtime code.

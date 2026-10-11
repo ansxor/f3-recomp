@@ -56,7 +56,7 @@ void print_help(const char *prog) {
               << "Deterministic strict-native seeded gameplay regression harness.\n\n"
               << "Options:\n"
               << "  --rom-dir DIR          Path to ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
-              << "  --set SET              ROM set name (default: landmakrj)\n"
+              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
               << "  --seed N               PRNG seed for input schedule (default: 12345, or SEED env)\n"
               << "  --frames N             Number of frames to advance (default: 40000)\n"
               << "  --dump-dir DIR         Dump final state or the first video mismatch\n"

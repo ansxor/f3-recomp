@@ -23,9 +23,9 @@ constexpr uint16_t service_masks[] = {0x200, 0x400, 0x800, 0};
 } // namespace
 
 TEST(Input, LocalControlsActiveLowMapping) {
-    for (bool kaiser : {false, true}) {
+    for (bool six_button : {false, true}) {
         auto roms = fixture();
-        roms.name = kaiser ? "kaiserknj" : "landmakrj";
+        roms.input.six_button = six_button;
         auto m = std::make_unique<f3rt::Machine>(std::move(roms));
         m->write16(0x4a0004, 0x0ba6);
         m->write16(0x4a0014, 0x0975);
@@ -40,7 +40,7 @@ TEST(Input, LocalControlsActiveLowMapping) {
             EXPECT_TRUE(m->read16(0x4a0004) == 0x0ba6 && m->read16(0x4a0014) == 0x0975)
                 << "Applying controls preserves both readable coin-counter banks";
         };
-        const unsigned players = kaiser ? 2 : f3rt::local_player_count;
+        const unsigned players = six_button ? 2 : f3rt::local_player_count;
         for (unsigned slot = 0; slot < players; ++slot) {
             for (unsigned bit = 0; bit < f3rt::local_control_count; ++bit) {
                 Words words{};
@@ -53,7 +53,7 @@ TEST(Input, LocalControlsActiveLowMapping) {
                 else if (bit == 8) system &= uint8_t(~coin_masks[slot]);
                 else if (bit == 9) low[0] &= uint16_t(~service_masks[slot]);
                 else if (bit == 10) system &= uint8_t(~2u);
-                else if (kaiser) {
+                else if (six_button) {
                     constexpr uint16_t extra_masks[2][3] = {{1, 2, 4}, {0x100, 0x200, 0x400}};
                     low[slot == 0 ? 3 : 2] &= uint16_t(~extra_masks[slot][bit - 11]);
                 } else if (bit == 11) low[slot < 2 ? 0 : 2] &= uint16_t(~button_masks[slot][3]);
@@ -61,7 +61,7 @@ TEST(Input, LocalControlsActiveLowMapping) {
                 expect(low, system);
             }
         }
-        if (kaiser) {
+        if (six_button) {
             f3rt::apply_local_inputs(*m, {0, 0, f3rt::local_input_mask, f3rt::local_input_mask});
             expect({0xffff, 0xffff, 0xffff, 0xffff}, 0xfe);
             f3rt::apply_local_inputs(*m, {f3rt::local_input_mask, f3rt::local_input_mask, 0, 0});
@@ -75,9 +75,9 @@ TEST(Input, LocalControlsActiveLowMapping) {
 
 TEST(Input, DialNibblePackingAndDirectionCancellation) {
     using Words = std::array<f3rt::LocalInputWord, f3rt::local_player_count>;
-    for (const char *name : {"arkretrnj", "puchicarj"}) {
+    for (int run = 0; run < 2; ++run) {
         auto roms = fixture();
-        roms.name = name;
+        roms.input.dial = true;
         auto m = std::make_unique<f3rt::Machine>(std::move(roms));
         const auto expect = [&](uint32_t first, uint32_t second) {
             EXPECT_TRUE(m->read32(0x4a0008) == first && m->read32(0x4a000c) == second)

@@ -17,14 +17,20 @@ struct VideoConfig {
     // rows from the full-resolution main map where an exact X2 alias exists. Requires extended_alt_maps.
     bool full_resolution_alt_maps = false;
 };
+struct InputConfig {
+    bool dial = false;
+    bool six_button = false;
+};
 struct RomSet {
     std::string name;
     VideoConfig video;
+    std::string pref_dir;
+    InputConfig input;
     std::vector<uint8_t> main, sprites, sprites_hi, tiles, tiles_hi, sound, samples;
     // Optional immutable 128-byte factory image; guest writes never alter ROM assets.
     std::vector<uint8_t> factory_eeprom;
     // Directory contains extracted MAME filenames. Each chip is CRC/SHA1-validated.
-    static RomSet load(const std::filesystem::path &directory, const std::string &set = "landmakrj");
+    static RomSet load(const std::filesystem::path &directory, const std::string &set);
 };
 uint32_t crc32(const uint8_t *data, size_t size);
 std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms);

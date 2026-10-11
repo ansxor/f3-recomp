@@ -43,7 +43,7 @@ void print_help() {
               << "  --bundle DIR     Bundle folder written on DESYNC (give two to diff them frame by frame)\n"
               << "  --until N        Replay N match frames (default: the bundle's DESYNC frame)\n"
               << "  --rom-dir DIR    ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
-              << "  --set SET        ROM set name (default: landmakrj)\n"
+              << "  --set SET        ROM set name (default: " F3RT_DEFAULT_SET ")\n"
               << "  --max-diff N     Differing bytes to list (default 64)\n"
               << "  --gpu 0|1        Override the recorded machine: GPU game video (bundles from before info.json recorded it)\n"
               << "  --audio NAME     Override the recorded audio backend: enhanced | reference\n"
@@ -223,7 +223,7 @@ bool verify_one(Bundle &b, const GameNetplay *hook, uint64_t until) {
 int cmd_netplay_replay(int argc, char **argv) try {
     std::vector<fs::path> bundle_dirs;
     fs::path rom_dir;
-    std::string set = "landmakrj";
+    std::string set = F3RT_DEFAULT_SET;
     uint64_t until_opt = 0;
     size_t max_diff = 64;
     int64_t dump_frame = -1;
@@ -232,9 +232,6 @@ int cmd_netplay_replay(int argc, char **argv) try {
     std::string audio_override;
 #ifdef F3RT_DEFAULT_ROM_DIR
     rom_dir = F3RT_DEFAULT_ROM_DIR;
-#endif
-#ifdef F3RT_DEFAULT_SET
-    set = F3RT_DEFAULT_SET;
 #endif
     for (int i = 0; i < argc; ++i) {
         const std::string arg = argv[i];

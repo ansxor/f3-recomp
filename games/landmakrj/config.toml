@@ -2,6 +2,7 @@
 name = "Land Maker (Japan)"
 id = "landmakrj"
 platform = "taito_f3"
+pref_dir = "f3rt"
 
 [rom]
 size = 2097152 # 2 MiB (0x200000)
@@ -257,4 +258,5 @@ crc = "2e717bfe"
 sha1 = "1be54cd2ec65d8fd49a5c09b5d27791fd7a320d4"
 stride = 2
 group = 1
+
 

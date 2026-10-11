@@ -1,6 +1,6 @@
 # CTest guard: the game renderer stack takes its scanout geometry from the compile-time
 # f3rt::geometry / game_config::video (games/<game>/config.toml [video]). No source in it may
-# spell the Land Maker window (first visible line 24, height 232) as a literal.
+# spell the default scanout window (first visible line 24, height 232) as a literal.
 # Usage: cmake -DSOURCE_DIR=<repo> -P cmake/check_game_geometry_literals.cmake
 file(GLOB_RECURSE files
     "${SOURCE_DIR}/runtime/renderer/game/*" "${SOURCE_DIR}/runtime/renderer/gpu/*"

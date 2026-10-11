@@ -6,8 +6,8 @@ This page explains sound generation and driver selection. It shows how to record
 
 There are two audio backends, selected with `--audio-backend enhanced|reference`:
 
-- **Enhanced** uses separate host synthesis. It is the default for Land Maker Japan (`landmakrj`), the only set that supports it. It is not PCM-equivalent to Reference audio.
-- **Reference** uses the native sound driver (or the oracle) and emulated chips. It is the default for every other set, and `--audio-backend reference` selects it for Land Maker Japan.
+- **Enhanced** uses separate host synthesis. It is the default for games whose sound/sample data validates at load time (such as Land Maker Japan `landmakrj`). It is not PCM-equivalent to Reference audio.
+- **Reference** uses the native sound driver (or the oracle) and emulated chips. It is the default whenever Enhanced audio is unavailable, and `--audio-backend reference` selects it explicitly.
 
 F1 → Audio lists the available choices as **Sound backend (restart)**; a backend the current set cannot use is greyed out. The choice is a restart-required control. Use **Save preferences** to store it explicitly (settings key `audio=enhanced|reference`); an explicit `--audio-backend` overrides the saved value. A saved Enhanced preference falls back to Reference for a set that does not support it, while an explicit `--audio-backend enhanced` for such a set is an error. See [Enhanced audio design and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
 
@@ -50,10 +50,10 @@ flowchart LR
 ## Enhanced audio
 
 `--audio-backend enhanced` selects approximate audio on a separate 48 kHz worker.
-It reads Land Maker's music/instrument data and sample ROM directly, without
+It reads the game's music/instrument data and sample ROM directly, without
 executing the sound CPU or ES5505/ES5510 programs. Do not give it a
 `--sound-driver` (a tool option, described below).
-It is available only for `landmakrj`.
+It is available for games whose sound data validates at load time.
 
 Explicit `--audio-backend` selections override the saved backend.
 See [Enhanced audio evidence and limits](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/HLE-AUDIO.md).
@@ -156,7 +156,7 @@ build/f3rt-tool sound-extract --rom-dir /path/to/roms/landmakr \
 | `--wav FILE` | none | Write a WAV file. |
 | `--wav-window full\|event` | `full` | `full` records from cold boot. `event` records from the event time. |
 | `--sound-driver oracle\|native` | `oracle` | Driver to use. |
-| `--audio-backend reference\|enhanced` | `reference` | Choose board emulation or the independent Enhanced engine. Enhanced is `landmakrj` only and rejects `--sound-driver` and `--sound-trace`. |
+| `--audio-backend reference\|enhanced` | `reference` | Choose board emulation or the independent Enhanced engine. Enhanced requires a supported sequence/sample bank layout, and rejects `--sound-driver` and `--sound-trace`. |
 | `--hle-events FILE` | none | HLE voice-event CSV; requires `--audio-backend enhanced`. |
 
 A packet is a hex string. The first byte is the total packet size, including the size byte and the opcode byte. For example, `038001` has size 3, opcode `0x80` and parameter `0x01`. The program adds no hidden setup packets.

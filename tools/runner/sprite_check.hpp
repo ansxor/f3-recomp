@@ -6,11 +6,12 @@
 #include <string>
 #include <vector>
 
+
 namespace f3rt::runner {
 
 struct SpriteCheckArgs {
     std::filesystem::path rom_dir;
-    std::string set = "commandw";
+    std::string set = F3RT_DEFAULT_SET;
     uint64_t frames = 6000;
     uint64_t compare_every = 60;
     uint64_t seed = 12345;

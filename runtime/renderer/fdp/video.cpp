@@ -1240,7 +1240,7 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
         m_impl->control_1[i] = read_be16(&control_regs[16 + i * 2]);
     }
 
-    // Lag 2 (RayForce): compose old framebuffer, draw old parsed list, parse new list.
+    // Lag 2: compose old framebuffer, draw old parsed list, parse new list.
     // Lag 1: compose old framebuffer, parse and draw current list.
     // Lag 0: parse and draw before composing.
     if (m_impl->config.sprite_lag == 0) {

@@ -7,8 +7,8 @@ terminology, historical “accurate”/“HLE” audio is called Reference/Enhan
 
 ## ROM-derived protocol and data
 
-Enhanced is the default audio backend; when unavailable (currently for sets
-other than `landmakrj`), the default resolves to Reference. Reference runs the
+Enhanced is the default audio backend; when unavailable for a loaded set (if its
+sound or sample ROM data fails load-time HLE capability validation), the default resolves to Reference. Reference runs the
 cycle-accurate chips and uses the recompiled native sound driver when compiled
 in, otherwise the interpreted Musashi driver. Enhanced audio uses the ROM-data
 sequencer and must not execute the sound CPU, OTIS device or ESP instruction
@@ -83,12 +83,15 @@ contains one `20 0b` selection and parameter writes 0..9 with values
 its loaded instruction CRC is `cdcfa577`. Boot also loads preset0. This is
 an observed campaign inventory, not a claim every possible game mode was heard.
 
-Gunlock, Recalhorn, Twin Cobra II and Puchi Carat ROMs were available. Their
-sound images differ, but the entire code bank `$10000..1ffff`, including DSP
-configuration/program bytes, is byte-identical to Land Maker. This establishes
-shared firmware/effects, **not** interchangeable song/instrument banks or full
-other-game support.
-
+Gunlock, Recalhorn, Twin Cobra II and Puchi Carat ROMs were evaluated. Their
+sound images differ in song and instrument tables, but the entire code bank
+`$10000..1ffff` (sound address `0xc08000..0xc1ffff`), including fixed tables and DSP
+configuration/program bytes, is byte-identical to Land Maker. Only `$c085f2` (bend
+range: 0x02 in Land Maker, 0x0c in Twin Cobra II) differs and is read dynamically from
+ROM. Per-game data comprises the program table at `$c00134`, song bank at `$c20000+`,
+and sample ROM. Load-time capability validation (`Sequencer::validate` and
+`Synth::validate`) validates the loaded sound and sample ROMs dynamically without
+game-specific config flags or literals.
 Physical PCB wiring observed on hardware (12's routing note,
 `docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt`) swaps OTIS pairs 1
 and 3 relative to MAME and leaves pair 0 unconnected. Enhanced follows it: pair
@@ -223,7 +226,7 @@ approximations at48 kHz; volume/filter smoothing and reverb diffusion differ
 from the native-rate oracle. The music8 whole-clip RMS difference is−1.24 dB.
 Only the observed preset11 has a measured effect target; other configurations
 use the same cheap parameterized topology, not individually validated models.
-Other-game banks are not supported by this Land Maker implementation.
+Other-game banks are validated and supported via generic structural and sample-directory checks at load time.
 
 ### Performance
 

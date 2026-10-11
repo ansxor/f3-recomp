@@ -60,19 +60,21 @@ int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
 
 int main(int argc, char **argv) try {
     std::filesystem::path romdir, captures, output, audio_trace;
+    std::string set = F3RT_DEFAULT_SET;
     for (int i=1;i<argc;++i) {
         const std::string arg=argv[i];
-        if ((arg=="--rom-dir" || arg=="--captures" || arg=="--output" || arg=="--audio-trace") && i+1<argc) {
-            const std::filesystem::path value=argv[++i];
+        if ((arg=="--rom-dir" || arg=="--captures" || arg=="--output" || arg=="--audio-trace" || arg=="--set") && i+1<argc) {
+            const std::string value=argv[++i];
             if(arg=="--rom-dir") romdir=value;
             if(arg=="--captures") captures=value;
             if(arg=="--output") output=value;
             if(arg=="--audio-trace") audio_trace=value;
-        } else throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR (--captures DIR | --audio-trace FILE) --output PATH");
+            if(arg=="--set") set=value;
+        } else throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR (--captures DIR | --audio-trace FILE) --output PATH [--set SET]");
     }
     if(romdir.empty() || output.empty() || (captures.empty() == audio_trace.empty()))
         throw std::runtime_error("--rom-dir, --output and exactly one of --captures/--audio-trace are required");
-    auto roms=f3rt::RomSet::load(romdir);
+    auto roms=f3rt::RomSet::load(romdir, set);
     if (!audio_trace.empty()) return replay_audio(roms, audio_trace, output);
     f3rt::Video video;
     if(!video.load_roms(roms.sprites,roms.sprites_hi,roms.tiles,roms.tiles_hi,roms.video)) throw std::runtime_error("Video ROM decode failed");

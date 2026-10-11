@@ -52,10 +52,12 @@ int main(int argc, char **argv) {
                             str(ROOT / "recomp/compile/roms.py"), "--configs",
                             *map(str, sorted((ROOT / "games").glob("*/config.toml"))),
                             "--output", str(root / "rom_manifest.hpp")], check=True, cwd=ROOT)
-            subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
+            subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated",
                             "-DF3_PROFILE_INSTRUMENT=1", "-I", str(ROOT / "include"), "-I", str(ROOT / "runtime"),
                             "-I", str(root),
                             str(driver), str(ROOT / "runtime/debug/profile.cpp"), str(ROOT / "runtime/rom.cpp"),
+                            str(ROOT / "runtime/third_party/sha1dc/sha1.c"), str(ROOT / "runtime/third_party/sha1dc/ubc_check.c"),
+                            "-lz",
                             "-o", str(binary)], check=True)
             subprocess.run([str(binary), str(root)], check=True)
             profile = read_profile(root / "profiles/run.profile")

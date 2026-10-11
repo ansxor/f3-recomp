@@ -42,7 +42,7 @@ void print_help(const char *) {
               << "  --frames N             Number of match frames to run (default: 3000)\n"
               << "  --crc-every N          Report state CRC every N frames (default: 60)\n"
               << "  --rom-dir DIR          ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
-              << "  --set SET              ROM set name (default: landmakrj)\n"
+              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
               << "  --disable-apply-sync   Joiner negative control: do not apply sync blob\n"
               << "  --gpu 0|1              Build the machine with GPU game video, like the frontend (default 0)\n"
               << "  --audio NAME           Audio backend: enhanced | reference (default reference)\n"
@@ -70,13 +70,10 @@ int cmd_netplay(int argc, char **argv) try {
     uint32_t crc_every = 60;
     std::filesystem::path desync_dir;
     std::filesystem::path rom_dir;
-    std::string set = "landmakrj";
+    std::string set = F3RT_DEFAULT_SET;
 
 #ifdef F3RT_DEFAULT_ROM_DIR
     rom_dir = F3RT_DEFAULT_ROM_DIR;
-#endif
-#ifdef F3RT_DEFAULT_SET
-    set = F3RT_DEFAULT_SET;
 #endif
 
     for (int i = 0; i < argc; ++i) {

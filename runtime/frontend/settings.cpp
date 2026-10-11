@@ -1,4 +1,6 @@
 #include "settings.hpp"
+#include "f3rt/audio.hpp"
+#include "rom_manifest.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -8,12 +10,8 @@
 #include <vector>
 
 namespace f3rt {
-bool audio_backend_available(AudioBackend backend, const std::string &set) {
-    if (backend == AudioBackend::Reference) return true;
-    if (backend == AudioBackend::Enhanced) {
-        return set.empty() || set == "landmakrj";
-    }
-    return false;
+bool audio_backend_available(AudioBackend backend) {
+    return backend == AudioBackend::Enhanced || backend == AudioBackend::Reference;
 }
 const char *audio_backend_name(AudioBackend backend) {
     switch (backend) {
@@ -34,7 +32,14 @@ FrontendSettings::FrontendSettings() {
     }
 }
 std::string default_config_path(const std::string &set) {
-    char *p=SDL_GetPrefPath("f3-recomp",set=="landmakrj"?"f3rt":set.c_str());
+    std::string_view pref = set.empty() ? std::string_view("f3rt") : std::string_view(set);
+    for (const auto &candidate : rom_manifest::games) {
+        if (candidate.id == set) {
+            pref = candidate.pref_dir;
+            break;
+        }
+    }
+    char *p = SDL_GetPrefPath("f3-recomp", std::string(pref).c_str());
     if(!p)return {};
     std::string result=std::string(p)+"settings.cfg";SDL_free(p);return result;
 }

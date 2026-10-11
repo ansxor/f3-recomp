@@ -20,6 +20,7 @@ public:
     void reset(uint64_t tick);
     void render(float *interleaved_eight_channels, size_t frames);
     void set_observer(std::function<void(const VoiceEvent &)> observer);
+    static bool validate(std::span<const uint8_t> sound_rom, std::span<const uint16_t> sample_words) noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

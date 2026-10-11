@@ -11,7 +11,7 @@ void print_general_help(const char *prog) {
               << "Subcommands:\n"
               << "  gameplay       Deterministic strict-native seeded gameplay regression harness\n"
               << "  gpu-compare    Strict-native GPU parity verification against FDP oracle\n"
-              << "  motion         Strict-native seeded Land Maker temporal GPU proof\n"
+              << "  motion         Strict-native seeded temporal GPU motion proof\n"
               << "  sound-extract  Standalone sound extraction and stimulus injection tool\n"
               << "  sprite-check   Sprite emit-unit and behaviour verification against native code\n\n"
               << "  netplay        Deterministic 2-player lockstep netplay client\n"

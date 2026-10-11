@@ -165,7 +165,7 @@ TEST(NetplayContract, MessageSerializationRoundTripAndBounds) {
     // HelloMessage round-trip
     {
         HelloMessage hello;
-        std::strncpy(hello.game_id, "landmakrj", sizeof(hello.game_id) - 1);
+        std::strncpy(hello.game_id, "testgame", sizeof(hello.game_id) - 1);
         hello.rom_crcs[0] = 0x12345678;
         hello.rom_crcs[6] = 0x87654321;
         std::memset(hello.build_hash, 0xBE, sizeof(hello.build_hash));
@@ -179,7 +179,7 @@ TEST(NetplayContract, MessageSerializationRoundTripAndBounds) {
         HelloMessage read_hello;
         yojimbo::ReadStream read_stream(buf, write_stream.GetBytesProcessed());
         EXPECT_TRUE(read_hello.Serialize(read_stream));
-        EXPECT_STREQ(read_hello.game_id, "landmakrj");
+        EXPECT_STREQ(read_hello.game_id, "testgame");
         EXPECT_EQ(read_hello.rom_crcs[0], 0x12345678u);
         EXPECT_EQ(read_hello.rom_crcs[6], 0x87654321u);
         EXPECT_EQ(read_hello.build_hash[0], 0xBE);

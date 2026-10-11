@@ -253,13 +253,17 @@ TEST(SpriteUnits, RomReplayAndInvariants) {
         GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed sprite units check";
     }
 
-    std::string set = "commandw";
-#ifdef F3RT_DEFAULT_SET
-    set = F3RT_DEFAULT_SET;
-#endif
-    if (set != "commandw") {
-        GTEST_SKIP() << "Configured game does not declare emit units";
+    bool has_full_detail = false;
+    for (const auto *b : f3rt::registered_sprite_behaviours()) {
+        if (std::string_view(b->name) == "full-detail") {
+            has_full_detail = true;
+            break;
+        }
     }
+    if (!has_full_detail) {
+        GTEST_SKIP() << "Configured game does not register full-detail behaviour";
+    }
+    const std::string set = F3RT_DEFAULT_SET;
 
     const std::filesystem::path rom_dir(rom_env);
     if (!std::filesystem::exists(rom_dir)) {

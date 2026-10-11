@@ -2,7 +2,7 @@
 
 `f3rt-tool sound-extract` sends actual command packets through the mailbox. It produces PCM from the selected audio backend and optional backend-specific events.
 
-The default `--audio-backend reference` executes the sound driver (the interpreted Musashi oracle by default, or the native driver with `--sound-driver native`) and the audio chips. `--audio-backend enhanced` uses a direct ROM sequencer and PCM synthesizer at 48 kHz on its own worker, without executing the sound CPU or ES chips; it is available only for `landmakrj`. Neither mode exports ROM samples; the main game initializes the board before extraction.
+The default `--audio-backend reference` executes the sound driver (the interpreted Musashi oracle by default, or the native driver with `--sound-driver native`) and the audio chips. `--audio-backend enhanced` uses a direct ROM sequencer and PCM synthesizer at 48 kHz on its own worker, without executing the sound CPU or ES chips; it is available for any set whose sound and sample ROMs validate for HLE (such as `landmakrj` and `tcobra2`). Neither mode exports ROM samples; the main game initializes the board before extraction.
 
 Source: `tools/commands/sound_extract.cpp`.
 
@@ -33,7 +33,7 @@ With Reference audio, the original sound driver, OTIS, DSP, DUART, banks and gai
 |---|---|
 | `--rom-dir DIR` | ROM directory. Required unless `F3RT_DEFAULT_ROM_DIR` was compiled into the tool. |
 | `--set SET` | ROM set. Default: `landmakrj`. |
-| `--audio-backend enhanced\|reference` | Audio backend. Default: `reference`. Enhanced is `landmakrj` only and uses the threaded ROM sequencer/PCM synthesizer at 48 kHz. |
+| `--audio-backend enhanced\|reference` | Audio backend. Default: `reference`. Enhanced uses the threaded ROM sequencer/PCM synthesizer at 48 kHz when supported by the ROM set. |
 | `--sound-driver oracle\|native` | Reference-audio sound CPU implementation. Default: `oracle`. Native requires generated sound code in the binary. Enhanced rejects an explicit driver option. |
 | `--boot-frames N` | Positive interpreted-main boot frame count. Default: 900. |
 | `--seconds DURATION` | Positive extraction duration after the event origin. Default: 5.0 seconds. |

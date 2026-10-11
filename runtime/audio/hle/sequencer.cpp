@@ -70,10 +70,15 @@ struct Sequencer::Impl {
     uint64_t serial = 0;
 
     explicit Impl(std::span<const uint8_t> image, VoiceSink &output) : rom(image), sink(output) {
-        if (rom.size() != 0x80000) invalid("HLE requires the padded Land Maker sound ROM");
-        // Verify the reset-installed bases, rather than accepting another game's data.
-        const uint32_t header = stream_base + u32(stream_base);
-        if (header != 0xc3879e) invalid("unsupported HLE sequence bank layout");
+        if (rom.size() != 0x80000) invalid("HLE requires a 512 KiB padded sound ROM");
+        const uint32_t stream_limit = rom_base + uint32_t(rom.size());
+        const uint32_t header_rel = u32(stream_base);
+        if (header_rel < 8 + slots * 4 || (header_rel & 1) || stream_base + header_rel >= stream_limit)
+            invalid("unsupported HLE sequence bank layout");
+        const uint32_t header = stream_base + header_rel;
+        const uint32_t header_size = u32(header);
+        if (header_size < 8 + slots * 2 + 0xa8 || header + header_size > stream_limit)
+            invalid("unsupported HLE sequence bank layout");
         for (size_t id = 0; id < slots; ++id) {
             const uint32_t relative = u32(stream_base + 8 + uint32_t(id) * 4);
             if (!relative) continue;
@@ -560,4 +565,20 @@ void Sequencer::reset(uint64_t tick) {
     impl_->sink.reset(tick);
 }
 uint64_t Sequencer::next_tick() const { return std::min(impl_->timer, impl_->fade_timer); }
+bool Sequencer::validate(std::span<const uint8_t> sound_rom) noexcept {
+    try {
+        struct NullSink : VoiceSink {
+            void note_on(const Note &) override {}
+            void note_off(uint64_t, uint64_t) override {}
+            void channel_update(uint8_t, uint8_t, const Channel &, uint64_t) override {}
+            void effect(uint8_t, uint64_t) override {}
+            void effect_parameter(uint8_t, uint8_t, uint64_t) override {}
+            void reset(uint64_t) override {}
+        } null_sink;
+        Sequencer seq(sound_rom, null_sink);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 } // namespace f3rt::hle

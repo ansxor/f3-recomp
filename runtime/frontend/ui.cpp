@@ -175,7 +175,7 @@ void FrontendUi::draw(const FrontendUiState &state){
                 changed|=ImGui::SliderFloat("Host output volume",&s.volume,0,1,"%.2f");
                 if(ImGui::BeginCombo("Sound backend (restart)",audio_backend_name(s.audio_backend))) {
                     for(auto backend:{AudioBackend::Enhanced,AudioBackend::Reference}) {
-                        ImGui::BeginDisabled(!audio_backend_available(backend, state.set));
+                        ImGui::BeginDisabled(backend == AudioBackend::Enhanced && !state.enhanced_audio_available);
                         if(ImGui::Selectable(audio_backend_name(backend),s.audio_backend==backend)){s.audio_backend=backend;changed=true;}
                         ImGui::EndDisabled();
                     }
@@ -201,7 +201,7 @@ void FrontendUi::draw(const FrontendUiState &state){
                 const std::array<const char*,local_control_count> names={"Up","Down","Left","Right","Button 1","Button 2","Button 3","Start","Coin","Service","Test","Button 4","Button 5","Button 6"};
                 for(unsigned player=0;player<s.profiles.size();++player){ImGui::PushID(int(player));char label[48];std::snprintf(label,sizeof label,"Player %u",player+1);ImGui::SeparatorText(label);int slot=s.profiles[player].device_slot;if(ImGui::SliderInt("Gamepad device ordinal",&slot,0,15)){s.profiles[player].device_slot=slot;p.input.configure(s);changed=true;}
                     for(unsigned c=0;c<local_control_count;++c){ImGui::PushID(int(c));const auto &b=s.profiles[player].controls[c];ImGui::Text("%s: %s | button %d axis %d (%+d)",names[c],b.key==SDL_SCANCODE_UNKNOWN?"unbound":SDL_GetScancodeName(b.key),b.button,b.axis,b.direction);ImGui::SameLine();if(ImGui::SmallButton("Key"))p.input.start_capture(player,c,false);ImGui::SameLine();if(ImGui::SmallButton("Pad"))p.input.start_capture(player,c,true);ImGui::SameLine();if(ImGui::SmallButton("Clear")){s.profiles[player].controls[c]={};p.input.configure(s);changed=true;}ImGui::PopID();}ImGui::PopID();}
-                if(p.input.capturing())ImGui::TextUnformatted("Press a key or gamepad control on the selected device. Escape cancels.");ImGui::TextWrapped("F1/F11/F12 and Alt+Enter are reserved. Device ordinal follows connected SDL gamepads; hotplug releases all controls. No gamepad bindings are added by default. Players 3/4 and buttons 4/5/6 are offline only; Left/Right also drive native Arkanoid/Puchi Car dial counters.");ImGui::EndTabItem();
+                if(p.input.capturing())ImGui::TextUnformatted("Press a key or gamepad control on the selected device. Escape cancels.");ImGui::TextWrapped("F1/F11/F12 and Alt+Enter are reserved. Device ordinal follows connected SDL gamepads; hotplug releases all controls. No gamepad bindings are added by default. Players 3/4 and buttons 4/5/6 are offline only; Left/Right also drive native dial/paddle counters.");ImGui::EndTabItem();
             }
             if(ImGui::BeginTabItem("Netplay")){
                 char s_buf[256];std::snprintf(s_buf,sizeof s_buf,"%s",s.netplay_server.c_str());

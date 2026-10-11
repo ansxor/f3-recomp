@@ -8,7 +8,7 @@
 
 namespace f3rt {
 enum class AudioBackend { Enhanced, Reference };
-bool audio_backend_available(AudioBackend backend, const std::string &set = "");
+bool audio_backend_available(AudioBackend backend);
 const char *audio_backend_name(AudioBackend backend);
 struct InputBinding {
     SDL_Scancode key = SDL_SCANCODE_UNKNOWN;

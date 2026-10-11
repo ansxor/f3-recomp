@@ -797,7 +797,7 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
     }
 }
 
-TEST(HleAudio, LandmakrStateAndSequencing) {
+TEST(HleAudio, StateAndSequencing) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
     if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
@@ -806,11 +806,19 @@ TEST(HleAudio, LandmakrStateAndSequencing) {
         GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed HLE audio checks";
     }
     const std::filesystem::path rom_dir(rom_env);
-    if (!std::filesystem::exists(rom_dir / "e61-13.20")) {
-        GTEST_SKIP() << "landmakrj ROMs not found in " << rom_dir;
+    const std::string set = F3RT_DEFAULT_SET;
+    f3rt::RomSet rom;
+    try {
+        rom = f3rt::RomSet::load(rom_dir, set);
+    } catch (const std::exception &e) {
+        GTEST_SKIP() << "ROM set unavailable: " << e.what();
     }
-
-    const auto rom = f3rt::RomSet::load(rom_dir, "landmakrj");
+    f3rt::Audio probe_audio;
+    probe_audio.load_sound_rom(rom.sound);
+    probe_audio.load_sample_rom(rom.samples);
+    if (!probe_audio.backend_available(f3rt::Audio::Backend::Enhanced)) {
+        GTEST_SKIP() << "Configured game does not support enhanced audio";
+    }
     using Kind = f3rt::hle::VoiceEvent::Kind;
 
     struct Fixture {

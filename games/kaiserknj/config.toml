@@ -288,3 +288,6 @@ visible_height = 224
 
 # kn six-button input layout and graphics-address alias evidence are cataloged
 # in local://f3-graphics-early.json; they are not fabricated ROM lanes.
+
+[input]
+six_button = true

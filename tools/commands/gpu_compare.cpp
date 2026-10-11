@@ -117,7 +117,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--sound-driver") {
             if (value() != "native") throw std::runtime_error("GPU regression requires --sound-driver native");
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Strict-native GPU parity for the configured game (injection scenarios are Land Maker scenes); optional presentation-only interpolation.\n"
+            std::cout << "Strict-native GPU parity for the configured game; optional presentation-only interpolation.\n"
                 "--rom-dir DIR --seed N --frames N (4000) --scale N (1..8 diagnostic) --border N (0..160)\n"
                 "--every N (1) --layers (all nine isolated contributions plus composite)\n"
                 "--bench (600-frame varied-scene warmup; 100 repeats on final supported snapshot)\n"
@@ -181,7 +181,7 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
     auto copy = std::make_unique<f3rt::CapturedFrame>(scene);
     unsigned plane = 0, anchor = 256;
     for (unsigned pf = 0; pf < 4 && anchor == 256; ++pf)
-        for (unsigned y = 24; y < 256; ++y) {
+        for (unsigned y = f3rt::geometry::first_line; y < f3rt::geometry::end_line; ++y) {
             const auto &p = scene.rows[y].playfields[pf];
             if (p.layer.enabled && !p.layer.mosaic && !scene.rows[y].bitmap) {
                 plane = pf; anchor = y; break;
@@ -220,8 +220,8 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
     const auto accepted = result;
     if (geometry_result == reference) throw std::runtime_error("Safe source fixture had no visible geometry sampling");
     if (result == geometry_result) throw std::runtime_error("Compatible fixture had no visible palette blending");
-    for (unsigned sy : {24u, 255u}) {
-        const size_t at = size_t(sy - 24) * options.scale * options.width();
+    for (unsigned sy : {f3rt::geometry::first_line, f3rt::geometry::end_line - 1}) {
+        const size_t at = size_t(sy - f3rt::geometry::first_line) * options.scale * options.width();
         require_exact(std::span(reference).subspan(at, options.width() * options.scale),
             std::span(result).subspan(at, options.width() * options.scale), "Raw fixture run endpoint");
     }
@@ -253,7 +253,7 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
         geometry.draw(*copy, geometry_result, 1u << plane);
         const auto stats = selected.last_interpolation();
         if (kind != 6) for (unsigned sy : {79u, 80u}) {
-            const size_t at = size_t(sy - 24) * options.scale * options.width();
+            const size_t at = size_t(sy - f3rt::geometry::first_line) * options.scale * options.width();
             require_exact(std::span(reference).subspan(at, options.width() * options.scale),
                 std::span(geometry_result).subspan(at, options.width() * options.scale), labels[kind]);
         }
@@ -262,7 +262,7 @@ bool interpolation_boundaries(f3rt::GpuVideo &off, f3rt::GpuVideo &selected, f3r
             if (geometry_result == reference) throw std::runtime_error("Unsafe palette disabled visible safe geometry");
         }
         for (unsigned y = 0; y < options.height(); ++y) {
-            const unsigned sy = y / options.scale + 24;
+            const unsigned sy = y / options.scale + f3rt::geometry::first_line;
             const size_t at = size_t(y) * options.width();
             if (y % options.scale == 0 || !stats.row_fields[plane][sy])
                 require_exact(std::span(reference).subspan(at, options.width()),
@@ -420,7 +420,7 @@ struct Harness {
             for (unsigned y = 0; y < 256; ++y) {
                 const auto &r = scene.rows[y];
                 const auto &p = r.playfields[pf];
-                csv << m.frame << ',' << pf << ',' << y << ',' << int(y) - 24 << ',' << unsigned(stats.row_fields[pf][y])
+                csv << m.frame << ',' << pf << ',' << y << ',' << int(y) - int(f3rt::geometry::first_line) << ',' << unsigned(stats.row_fields[pf][y])
                     << ',' << p.layer.enabled << ',' << r.bitmap << ',' << p.layer.mosaic << ',' << p.source_x
                     << ',' << p.source_y << ',' << p.x_step << ',' << p.y_step << ',' << unsigned(p.y_fraction)
                     << ',' << p.palette_add << ',' << unsigned(p.layer.priority) << ',' << unsigned(p.layer.blend_mode)
@@ -449,7 +449,7 @@ struct Harness {
         }
         if (o.bench && m.frame > 600 && !injected) interpolation_ms.push_back(elapsed);
         for (unsigned y = 0; y < o.video.height(); ++y) {
-            const unsigned sy = y / o.video.scale + 24;
+            const unsigned sy = y / o.video.scale + f3rt::geometry::first_line;
             bool flagged = false;
             for (unsigned pf = 0; pf < 4; ++pf) flagged |= stats.row_fields[pf][sy] != 0;
             if (y % o.video.scale == 0 || !flagged) {
@@ -462,7 +462,7 @@ struct Harness {
             gpu.draw(scene, sprite_off, 1u << pf);
             interpolated_gpu->draw(scene, sprite_selected, 1u << pf);
             for (unsigned y = 0; y < o.video.height(); ++y)
-                if (y % o.video.scale == 0 || !stats.row_fields[pf][y / o.video.scale + 24]) {
+                if (y % o.video.scale == 0 || !stats.row_fields[pf][y / o.video.scale + f3rt::geometry::first_line]) {
                     const size_t at = size_t(y) * o.video.width();
                     require_exact(std::span(sprite_off).subspan(at, o.video.width()),
                         std::span(sprite_selected).subspan(at, o.video.width()),
@@ -548,7 +548,7 @@ void put16(std::span<uint8_t> bytes, size_t offset, uint16_t value) {
 }
 // One sprite display-list descriptor decoded by runtime/renderer/decode.cpp. `x`/`y`
 // are native scanout coordinates (0,0 = the first visible pixel); the encoder adds
-// the 46/24 scanout origin. Scale is 1..256 with 256 = 1:1.
+// the native origin. Scale is 1..256 with 256 = 1:1.
 struct SpriteEntry {
     uint32_t tile = 0;
     int x = 0, y = 0;
@@ -563,7 +563,7 @@ void put_sprite_entry(std::span<uint8_t> graphics, size_t offset, const SpriteEn
     // Scroll mode 8 keeps each descriptor absolute (the block accumulator ignores
     // the persistent global/subglobal scroll words).
     put16(graphics, offset + 4, uint16_t(0x8000 | ((s.x + 46) & 0x0fff)));
-    put16(graphics, offset + 6, uint16_t(command ? (0x8000 | ((s.y + 24) & 0x0fff)) : ((s.y + 24) & 0x0fff)));
+    put16(graphics, offset + 6, uint16_t(command ? (0x8000 | ((s.y + f3rt::geometry::first_line) & 0x0fff)) : ((s.y + f3rt::geometry::first_line) & 0x0fff)));
     put16(graphics, offset + 8, uint16_t((unsigned(s.flip_x ? 1 : 0) | unsigned(s.flip_y ? 2 : 0)) << 8 | s.color));
     // Word 5 carries the command bits (flipscreen/trails/bank) and the tile high bit.
     put16(graphics, offset + 10, uint16_t(command ? command : ((s.tile >> 16) & 1)));
@@ -590,7 +590,7 @@ void inject(Harness &h, unsigned kind) {
     if (kind == 0) {
         // Line RAM bitmap pivot: latch section-2 sub-0 for the visible rows and
         // set the pivot control bits the decoder reads as bitmap mode.
-        for (unsigned y = 24; y < 256; ++y) {
+        for (unsigned y = f3rt::geometry::first_line; y < f3rt::geometry::end_line; ++y) {
             put16(m.graphics, 0x20400 + y * 2, 1);
             put16(m.graphics, 0x26000 + y * 2, 0x2000);
         }
@@ -613,7 +613,7 @@ void inject(Harness &h, unsigned kind) {
     m.game_video->render_frame();
     if (!m.game_video->captured_frame().fallback) throw std::runtime_error("Injected producer did not reach oracle fallback");
 }
-// One native sprite descriptor: integral fields relative to the (46, 24)
+// One native sprite descriptor: integral fields relative to the (46, visible_y)
 // sprite origin with scroll zero and no global flip.
 struct BoundarySprite {
     int x = 0, y = 0;
@@ -635,15 +635,15 @@ struct BoundarySpans {
 };
 BoundarySpans boundary_spans(const BoundarySprite &d, f3rt::GameVideoOptions v) {
     const int s = int(v.scale), b = int(v.border), sx = int(d.sx), sy = int(d.sy);
-    const int x = (d.x + 46) * 256, y = (d.y + 24) * 256;
+    const int x = (d.x + 46) * 256, y = (d.y + int(f3rt::geometry::first_line)) * 256;
     BoundarySpans r;
-    r.culled = x + sx * 16 <= (46 - b) * 256 || x > (365 + b) * 256 || y + sy * 16 <= 24 * 256 || y > 255 * 256;
+    r.culled = x + sx * 16 <= (46 - b) * 256 || x > (365 + b) * 256 || y + sy * 16 <= int(f3rt::geometry::first_line) * 256 || y > int(f3rt::geometry::end_line - 1) * 256;
     for (int t = 0; t < 16; ++t) {
         const int px = (x + t * sx) * s + 128, py = (y + t * sy) * s + 255;
         r.x0[t] = (px >> 8) - (46 - b) * s;
         r.x1[t] = ((px + sx * s) >> 8) - (46 - b) * s;
-        r.y0[t] = (py >> 8) - 24 * s;
-        r.y1[t] = std::max(r.y0[t] + 1, ((py + sy * s) >> 8) - 24 * s);
+        r.y0[t] = (py >> 8) - int(f3rt::geometry::first_line) * s;
+        r.y1[t] = std::max(r.y0[t] + 1, ((py + sy * s) >> 8) - int(f3rt::geometry::first_line) * s);
     }
     r.clipped = {r.x0[0] < 0, r.x1[15] > int(v.width()), r.y0[0] < 0, r.y1[15] > int(v.height())};
     return r;

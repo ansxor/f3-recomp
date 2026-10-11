@@ -18,9 +18,14 @@ physical-bus measurements.
 
 ES5505/ES5510 and the board devices use MAME-derived emulation, not
 physical-board waveform verification. Native sound executes the statically
-recompiled ROM driver; it is not HLE. The interpreted driver remains the reference
-oracle, and SDL3 remains the playback backend. Observation does not affect device
-scheduling, change a register write, or perform additional side-effectful reads.
+recompiled ROM driver; it is not HLE. Enhanced audio uses a direct ROM-data sequencer
+and synthesizer evaluated via a load-time capability check. The sound driver code and fixed
+tables across `0xc08000..0xc1ffff` are byte-identical across Land Maker, Twin Cobra II,
+Gunlock, and Recalhorn (only the pitch bend range at `0xc085f2` differs and is read from ROM),
+while per-game data resides in the program table at `0xc00134`, song bank at `0xc20000+`,
+and sample ROM. The interpreted driver remains the reference oracle, and SDL3 remains the
+playback backend. Observation does not affect device scheduling, change a register write,
+or perform additional side-effectful reads.
 
 ## Capturing and decoding the oracle
 

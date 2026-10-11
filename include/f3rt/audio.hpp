@@ -17,6 +17,7 @@ public:
     // "enhanced" / "reference"; the --audio-backend spelling shared by every executable.
     static bool parse_backend(std::string_view name, Backend &backend);
     static const char *backend_name(Backend backend);
+    bool backend_available(Backend backend) const;
     struct EnhancedStats {
         uint64_t commands = 0, rendered_frames = 0;
     };

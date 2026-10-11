@@ -84,6 +84,8 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
     RomSet roms;
     roms.name = set;
     roms.video = game->video;
+    roms.pref_dir = std::string(game->pref_dir);
+    roms.input = game->input;
     const std::array regions = {&roms.main, &roms.sprites, &roms.sprites_hi,
                                &roms.tiles, &roms.tiles_hi, &roms.sound, &roms.samples,
                                &roms.factory_eeprom};

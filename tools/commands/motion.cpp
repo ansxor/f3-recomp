@@ -49,6 +49,7 @@ struct Options {
     f3rt::GameVideoOptions video;
     f3rt::VideoInterpolation interp = f3rt::VideoInterpolation::Off;
     bool json_output = false;
+    std::string set = F3RT_DEFAULT_SET;
 };
 
 void require(bool ok, const std::string &why) { if (!ok) throw std::runtime_error(why); }
@@ -73,6 +74,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--seed") o.seed = number(value());
         else if (arg == "--every") o.every = number(value());
         else if (arg == "--demo") o.demo = true;
+        else if (arg == "--set") o.set = value();
         else if (arg == "--demo-seconds") {
             auto n = number(value()); require(n && n <= 3600, "Demo seconds must be 1..3600");
             o.demo_seconds = unsigned(n);
@@ -93,7 +95,7 @@ Options parse(int argc, char **argv) {
         } else if (arg == "--json") {
             o.json_output = true;
         } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Strict-native seeded Land Maker temporal GPU proof\n"
+            std::cout << "Strict-native seeded temporal GPU motion proof\n"
                 "--rom-dir DIR --frames N (4000) --seed N (12345) --scale N (1..8)\n"
                 "--every N (1) --dump-dir DIR --interp off|linear|fit --sprite-units on|off (on)\n"
                 "--demo --demo-seconds N (30): one-window LEFT native / RIGHT motion comparison;\n"
@@ -187,7 +189,7 @@ struct ScopedWindow {
 };
 
 int comparison(const Options &o) {
-    auto owner = runner::create_strict_machine(o.rom_dir, "landmakrj", true, o.video.scale); auto &m = *owner;
+    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale); auto &m = *owner;
     runner::SeededScheduleInputSource schedule(o.seed, runner::ScheduleConfig{.versus = false});
     while (m.frame < o.frames) {
         runner::apply_gameplay_word(m, schedule.step(m.frame)[0]);
@@ -197,7 +199,7 @@ int comparison(const Options &o) {
     require(!base.fallback, "Cannot demonstrate motion on a fallback frame");
     const auto before = state(m);
     const auto pixels = m.native_pixels();
-    ScopedWindow window("Land Maker GPU temporal motion proof (LEFT: native / RIGHT: motion)",
+    ScopedWindow window("GPU temporal motion proof (LEFT: native / RIGHT: motion)",
         int(o.video.width() * 2), int(o.video.height()));
     f3rt::GpuVideo gpu(window.value, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
         false, true, o.interp);
@@ -316,8 +318,8 @@ int comparison(const Options &o) {
 int cmd_motion(int argc, char **argv) try {
     auto o = parse(argc, argv); SdlLifetime sdl;
     if (o.demo) return comparison(o);
-    auto owner = runner::create_strict_machine(o.rom_dir, "landmakrj", true, o.video.scale);
-    auto reference = runner::create_strict_machine(o.rom_dir, "landmakrj", true, o.video.scale);
+    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
+    auto reference = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
     auto &m = *owner;
     if (o.sprite_units)
         m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, f3rt::SpriteUnits::game_table(), f3rt::SpriteUnits::Options{});

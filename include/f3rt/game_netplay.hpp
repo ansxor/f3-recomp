@@ -24,7 +24,7 @@ struct GameNetplay {
     uint32_t (*sync_hash)(Machine &) = nullptr;
 
     // Optional: writes the exact bytes the desync hash covers into dst and returns the count.
-    // `phase` receives a small game-defined id (Land Maker: 1 = synced ranges, 2 = full gameplay block).
+    // `phase` receives a small game-defined id (e.g. 1 = synced ranges, 2 = full gameplay block).
     // When present, the netplay step function hashes these bytes (crc32) so the recorded copy cannot drift from the report.
     size_t (*sync_hash_region)(Machine &, std::span<uint8_t>, uint8_t &phase) = nullptr;
 

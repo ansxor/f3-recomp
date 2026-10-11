@@ -21,10 +21,10 @@ namespace {
 
 void print_help(const char *prog) {
     std::cout << "Usage: " << prog << " sound-extract [options]\n\n"
-              << "Standalone sound extraction and stimulus injection tool for Land Maker (Taito F3).\n\n"
+              << "Standalone sound extraction and stimulus injection tool (Taito F3).\n\n"
               << "Options:\n"
               << "  --rom-dir DIR          Path to ROM directory\n"
-              << "  --set SET              ROM set name (default: landmakrj)\n"
+              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
               << "  --packet HEX           Inject length-prefixed packet at event origin (can be repeated)\n"
               << "  --at SECONDS:HEX       Schedule packet injection at SECONDS from event origin (can be repeated)\n"
               << "  --seconds DURATION     Duration in seconds to advance audio after event origin (default: 5.0)\n"
@@ -123,9 +123,6 @@ int cmd_sound_extract(int argc, char **argv) try {
         throw std::runtime_error("ROM directory must be specified via --rom-dir");
     }
     const bool enhanced = (cfg.audio_backend == Audio::Backend::Enhanced);
-    if (enhanced && cfg.set != "landmakrj") {
-        throw std::runtime_error("Enhanced audio requires landmakrj");
-    }
     if (enhanced && (sound_explicit || !cfg.sound_trace_path.empty())) {
         throw std::runtime_error("Enhanced audio does not execute a sound driver or emit CPU bus traces");
     }
@@ -153,6 +150,9 @@ int cmd_sound_extract(int argc, char **argv) try {
     cfg.allow_fallback = true;
     runner::MachineRunner runner(cfg);
     auto &m = runner.machine();
+    if (enhanced && !m.audio->backend_available(Audio::Backend::Enhanced)) {
+        throw std::runtime_error("Enhanced audio is not supported for this game");
+    }
 
     const bool record_boot_wav = (cfg.wav_window == "full");
 

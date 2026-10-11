@@ -276,4 +276,7 @@ void AudioEngine::load(std::span<const uint8_t> src) {
     impl_->clock = words[0]; impl_->command_count = words[1];
     impl_->consumer = consumer; impl_->held = src[18] != 0;
 }
+bool validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
+    return Sequencer::validate(sound) && Synth::validate(sound, samples);
+}
 } // namespace f3rt::hle

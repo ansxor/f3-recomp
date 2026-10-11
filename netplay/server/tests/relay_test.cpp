@@ -15,7 +15,7 @@
 namespace f3rt::netplay {
 namespace {
 
-Identity make_test_identity(std::string_view gid = "landmakrj") {
+Identity make_test_identity(std::string_view gid = "testgame") {
     Identity id;
     id.game_id = std::string(gid);
     id.rom_crcs = {10, 20, 30, 40, 50, 60, 70};
@@ -96,7 +96,7 @@ TEST_F(StateMachineFixture, MatchStartFields) {
 
 // 2. IdentityMismatch
 TEST_F(StateMachineFixture, IdentityMismatch) {
-    auto id_host = make_test_identity("landmakrj");
+    auto id_host = make_test_identity("testgame");
     actions.clear();
     sm.on_client_connected(0, current_time, actions);
     sm.on_hello(0, id_host.game_id, id_host.rom_crcs, id_host.build_hash, "alice", current_time, actions);
@@ -707,14 +707,14 @@ protected:
     }
     std::string establish_wire_match(uint8_t input_delay = 2, uint8_t flags = 0) {
         auto *h = static_cast<HelloMessage *>(host_client->CreateMessage(MSG_HELLO));
-        std::strncpy(h->game_id, "landmakrj", sizeof(h->game_id));
+        std::strncpy(h->game_id, "testgame", sizeof(h->game_id));
         std::strncpy(h->player_name, "alice", sizeof(h->player_name));
         for (size_t i = 0; i < ROM_CRCS_COUNT; ++i) h->rom_crcs[i] = 100 + i;
         std::memset(h->build_hash, 0xAA, sizeof(h->build_hash));
         host_client->SendMessage(CHANNEL_CONTROL, h);
 
         auto *j = static_cast<HelloMessage *>(joiner_client->CreateMessage(MSG_HELLO));
-        std::strncpy(j->game_id, "landmakrj", sizeof(j->game_id));
+        std::strncpy(j->game_id, "testgame", sizeof(j->game_id));
         std::strncpy(j->player_name, "bob", sizeof(j->player_name));
         for (size_t i = 0; i < ROM_CRCS_COUNT; ++i) j->rom_crcs[i] = 100 + i;
         std::memset(j->build_hash, 0xAA, sizeof(j->build_hash));
@@ -1046,7 +1046,7 @@ TEST_F(LoopbackFixture, LoopbackByeAndLogFile) {
 
             const auto it_game = obj->find("game_id");
             ASSERT_NE(it_game, obj->end());
-            EXPECT_EQ(*it_game->second.as_string(), "landmakrj");
+            EXPECT_EQ(*it_game->second.as_string(), "testgame");
 
             const auto it_names = obj->find("player_names");
             ASSERT_NE(it_names, obj->end());
