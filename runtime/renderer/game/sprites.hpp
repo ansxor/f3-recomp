@@ -36,13 +36,13 @@ public:
                 GameVideoOptions options = {}) const;
     std::span<const SceneSprite> sprites() const;
     // Presentation source for the next decode (null = none); set by GameVideo around decode.
-    void set_presentation(const SpritePresentation *presentation) { presentation_ = presentation; }
+    void set_presentation(const SpritePresentation *presentation) { m_presentation = presentation; }
     // Render-only: current sprites with unit splices applied, else sprites(). Same flip mirroring.
     std::span<const SceneSprite> presented_sprites() const;
     bool flipped() const;
-    // The last decode produced a presented list (splices) and whether it hit kMaxPresentedSprites.
-    bool presented_valid() const { return presented_submitted_valid_; }
-    bool presented_overflow() const { return presented_overflow_; }
+    // The last decode produced a presented list (splices) and whether it hit MAX_PRESENTED_SPRITES.
+    bool presented_valid() const { return m_presented_submitted_valid; }
+    bool presented_overflow() const { return m_presented_overflow; }
     uint8_t pen_mask() const;
     bool trails() const;
     size_t state_size() const;
@@ -51,33 +51,33 @@ public:
 
 private:
     friend class GameVideo;
-    static constexpr size_t kMaxSprites = max_hardware_sprites;
-    static constexpr size_t kMaxPresentedSprites = max_presented_sprites;
+    static constexpr size_t MAX_SPRITES = f3rt::MAX_HARDWARE_SPRITES;
+    static constexpr size_t MAX_PRESENTED_SPRITES = f3rt::MAX_PRESENTED_SPRITES;
 
-    std::array<SceneSprite, kMaxSprites> staging_sprites_{};
-    size_t staging_count_ = 0;
+    std::array<SceneSprite, MAX_SPRITES> m_staging_sprites{};
+    size_t m_staging_count = 0;
 
-    std::array<SceneSprite, kMaxSprites> submitted_sprites_{};
-    size_t submitted_count_ = 0;
+    std::array<SceneSprite, MAX_SPRITES> m_submitted_sprites{};
+    size_t m_submitted_count = 0;
 
-    std::array<SceneSprite, kMaxSprites> current_sprites_{};
-    size_t current_count_ = 0;
-    bool current_flipped_ = false;
-    uint8_t current_pen_mask_ = 15;
-    bool current_trails_ = false;
+    std::array<SceneSprite, MAX_SPRITES> m_current_sprites{};
+    size_t m_current_count = 0;
+    bool m_current_flipped = false;
+    uint8_t m_current_pen_mask = 15;
+    bool m_current_trails = false;
 
-    bool reg_flipped_ = false;
-    uint8_t reg_pen_mask_ = 15;
-    bool reg_trails_ = false;
-    bool reg_bank_ = false;
+    bool m_reg_flipped = false;
+    uint8_t m_reg_pen_mask = 15;
+    bool m_reg_trails = false;
+    bool m_reg_bank = false;
 
     // Render-only splice view of the submitted/current lists (never serialized, so snapshots and
     // CRCs match the canonical decode). Valid only when the last decode had splices or tagged real entries.
-    const SpritePresentation *presentation_ = nullptr;
-    std::vector<SceneSprite> presented_submitted_, presented_current_;
-    size_t presented_submitted_count_ = 0, presented_current_count_ = 0;
-    bool presented_submitted_valid_ = false, presented_current_valid_ = false;
-    bool presented_overflow_ = false; // last decode filled the presented list to capacity
+    const SpritePresentation *m_presentation = nullptr;
+    std::vector<SceneSprite> m_presented_submitted, m_presented_current;
+    size_t m_presented_submitted_count = 0, m_presented_current_count = 0;
+    bool m_presented_submitted_valid = false, m_presented_current_valid = false;
+    bool m_presented_overflow = false; // last decode filled the presented list to capacity
 };
 static_assert(SceneSource<GameSprites>);
 

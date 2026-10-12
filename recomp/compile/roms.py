@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Compile game TOML manifests into immutable runtime chip tables (no ROM bytes)."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from recomp.roms import REGIONS, region_spec
+# sys.path is patched above so this script can run directly; import must follow it.
+from recomp.roms import REGIONS, region_spec  # noqa: E402
 
 
 def video_settings(config: dict, path: Path) -> tuple[tuple, str]:
@@ -24,14 +26,21 @@ def video_settings(config: dict, path: Path) -> tuple[tuple, str]:
     extend = video.get("extend", True)
     extended_alt_maps = video.get("extended_alt_maps", False)
     full_resolution_alt_maps = video.get("full_resolution_alt_maps", False)
-    if (rotation not in (0, 90, 180, 270) or lag not in (0, 1, 2) or
-            not 0 <= y < y + height <= 256 or not isinstance(extend, bool) or
-            not isinstance(extended_alt_maps, bool) or not isinstance(full_resolution_alt_maps, bool)):
+    if (
+        rotation not in (0, 90, 180, 270)
+        or lag not in (0, 1, 2)
+        or not 0 <= y < y + height <= 256
+        or not isinstance(extend, bool)
+        or not isinstance(extended_alt_maps, bool)
+        or not isinstance(full_resolution_alt_maps, bool)
+    ):
         raise ValueError(f"Unsupported video configuration: {path}")
     if full_resolution_alt_maps and not extended_alt_maps:
         raise ValueError(f"video.full_resolution_alt_maps requires video.extended_alt_maps: {path}")
-    settings = (f"{{ {rotation}, {lag}, {y}, {height}, {str(extend).lower()}, "
-                f"{str(extended_alt_maps).lower()}, {str(full_resolution_alt_maps).lower()} }}")
+    settings = (
+        f"{{ {rotation}, {lag}, {y}, {height}, {str(extend).lower()}, "
+        f"{str(extended_alt_maps).lower()}, {str(full_resolution_alt_maps).lower()} }}"
+    )
     return (rotation, lag, y, height, extend, extended_alt_maps, full_resolution_alt_maps), settings
 
 
@@ -43,7 +52,6 @@ def input_settings(config: dict, path: Path) -> tuple[tuple, str]:
         raise ValueError(f"Unsupported input configuration: {path}")
     settings = f"{{ {str(dial).lower()}, {str(six_button).lower()} }}"
     return (dial, six_button), settings
-
 
 
 def write_if_changed(path: Path, text: str) -> None:
@@ -110,11 +118,16 @@ def generate(configs: list[Path], output: Path) -> None:
             table = f"chips_{index}_{name}"
             lines.append(f"inline constexpr std::array<Chip, {len(chips)}> {table} = {{{{\n")
             for chip in chips:
-                values = [json.dumps(chip["file"]), str(chip["size"]), f"0x{chip['crc']}u",
-                          json.dumps(chip["sha1"]), str(chip.get("short_size", 0)),
-                          f"0x{chip.get('short_crc', '0')}u", json.dumps(chip.get("short_sha1", "")),
-                          *(str(chip[key]) for key in
-                            ("offset", "stride", "group", "source_offset", "length"))]
+                values = [
+                    json.dumps(chip["file"]),
+                    str(chip["size"]),
+                    f"0x{chip['crc']}u",
+                    json.dumps(chip["sha1"]),
+                    str(chip.get("short_size", 0)),
+                    f"0x{chip.get('short_crc', '0')}u",
+                    json.dumps(chip.get("short_sha1", "")),
+                    *(str(chip[key]) for key in ("offset", "stride", "group", "source_offset", "length")),
+                ]
                 lines.append("    { " + ", ".join(values) + " },\n")
             lines.append("}};\n")
             mapped_size = config.get(name, {}).get("mirror_size", size)
@@ -124,7 +137,11 @@ def generate(configs: list[Path], output: Path) -> None:
         vid_settings = video_settings(config, path)[1]
         in_settings = input_settings(config, path)[1]
         pref_dir = config.get("game", {}).get("pref_dir", identity)
-        games.append(f"    {{ {json.dumps(identity)}, {json.dumps(pref_dir)}, {vid_settings}, {in_settings}, {{{{ " + ", ".join(regions) + " }} },\n")
+        games.append(
+            f"    {{ {json.dumps(identity)}, {json.dumps(pref_dir)}, {vid_settings}, {in_settings}, {{{{ "
+            + ", ".join(regions)
+            + " }} },\n"
+        )
     lines.append(f"inline constexpr std::array<Game, {len(games)}> games = {{{{\n")
     lines.extend(games)
     lines.append("}};\n} // namespace f3rt::rom_manifest\n")

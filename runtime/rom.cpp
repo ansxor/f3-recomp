@@ -6,6 +6,7 @@ extern "C" {
 #include <zlib.h>
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <fstream>
 #include <span>
 #include <stdexcept>
@@ -24,10 +25,9 @@ uint32_t crc32(const uint8_t *data, size_t size) {
     return uint32_t(crc);
 }
 std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms) {
-    const std::vector<uint8_t> *regions[] = {
-        &roms.main, &roms.sprites, &roms.sprites_hi,
-        &roms.tiles, &roms.tiles_hi, &roms.sound, &roms.samples
-    };
+    const std::vector<uint8_t> *regions[] = {&roms.main,   &roms.sprites,  &roms.sprites_hi,
+                                             &roms.tiles,  &roms.tiles_hi, &roms.sound,
+                                             &roms.samples};
     std::array<uint32_t, 7> crcs{};
     for (size_t i = 0; i < 7; ++i) {
         crcs[i] = crc32(regions[i]->data(), regions[i]->size());
@@ -45,8 +45,9 @@ bool sha1_matches(std::span<const uint8_t> bytes, const char *expected) {
     for (size_t i = 0; i < 40; ++i) {
         const unsigned nibble = (digest[i / 2] >> ((i % 2) ? 0 : 4)) & 15;
         const char actual = "0123456789abcdef"[nibble];
-        const char wanted = expected[i] >= 'A' && expected[i] <= 'F' ?
-                            expected[i] + ('a' - 'A') : expected[i];
+        const char wanted = expected[i] >= 'A' && expected[i] <= 'F'
+                                ? static_cast<char>(expected[i] + ('a' - 'A'))
+                                : expected[i];
         if (actual != wanted) return false;
     }
     return expected[40] == '\0';
@@ -56,8 +57,8 @@ std::vector<uint8_t> chip(const std::filesystem::path &dir, const rom_manifest::
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) throw std::runtime_error("Cannot open ROM: " + path.string());
     const auto length = input.tellg();
-    if (length < 0 || (size_t(length) != entry.size &&
-        !(entry.short_size && size_t(length) == entry.short_size)))
+    if (length < 0 ||
+        (size_t(length) != entry.size && !(entry.short_size && size_t(length) == entry.short_size)))
         throw std::runtime_error("Wrong ROM length: " + path.string());
     std::vector<uint8_t> bytes(entry.size, 0xff);
     input.seekg(0);
@@ -75,20 +76,23 @@ std::vector<uint8_t> chip(const std::filesystem::path &dir, const rom_manifest::
     }
     return bytes;
 }
-}
+} // namespace
 RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
     const rom_manifest::Game *game = nullptr;
     for (const auto &candidate : rom_manifest::games)
-        if (candidate.id == set) { game = &candidate; break; }
+        if (candidate.id == set) {
+            game = &candidate;
+            break;
+        }
     if (!game) throw std::runtime_error("Unsupported ROM set: " + set);
     RomSet roms;
     roms.name = set;
     roms.video = game->video;
     roms.pref_dir = std::string(game->pref_dir);
     roms.input = game->input;
-    const std::array regions = {&roms.main, &roms.sprites, &roms.sprites_hi,
-                               &roms.tiles, &roms.tiles_hi, &roms.sound, &roms.samples,
-                               &roms.factory_eeprom};
+    const std::array regions = {&roms.main,    &roms.sprites,       &roms.sprites_hi,
+                                &roms.tiles,   &roms.tiles_hi,      &roms.sound,
+                                &roms.samples, &roms.factory_eeprom};
     for (size_t region_index = 0; region_index < regions.size(); ++region_index) {
         auto &region = *regions[region_index];
         const auto &spec = game->regions[region_index];
@@ -102,8 +106,9 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
         for (size_t lane = 0; lane < spec.chips.size(); ++lane) {
             const auto &entry = spec.chips[lane];
             const std::string_view file = entry.file;
-            const auto cached = std::find_if(continued.begin(), continued.end(),
-                [file](const auto &item) { return item.file == file; });
+            const auto cached =
+                std::find_if(continued.begin(), continued.end(),
+                             [file](const auto &item) { return item.file == file; });
             std::vector<uint8_t> physical;
             const std::vector<uint8_t> *bytes;
             if (cached != continued.end()) bytes = &cached->bytes;
@@ -114,8 +119,9 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
             size_t destination = entry.offset;
             for (size_t i = 0; i < entry.length; i += entry.group, destination += entry.stride)
                 std::copy_n(bytes->data() + entry.source_offset + i, entry.group,
-                            region.data() + destination);
-            const bool used_again = std::any_of(spec.chips.begin() + lane + 1, spec.chips.end(),
+                            region.data() + static_cast<std::ptrdiff_t>(destination));
+            const bool used_again = std::any_of(
+                spec.chips.begin() + static_cast<std::ptrdiff_t>(lane + 1), spec.chips.end(),
                 [file](const auto &next) { return file == next.file; });
             if (cached == continued.end()) {
                 if (used_again) continued.push_back({file, std::move(physical)});
@@ -126,4 +132,4 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
     }
     return roms;
 }
-}
+} // namespace f3rt

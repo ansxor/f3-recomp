@@ -5,14 +5,13 @@
 namespace f3rt {
 
 void GameText::reset() {
-    map_.fill(0);
-    glyph_ram_.fill(0);
+    m_map.fill(0);
+    m_glyph_ram.fill(0);
 }
 
 void GameText::decode(const VideoRam &vram) {
-    for (unsigned i = 0; i < map_.size(); ++i)
-        map_[i] = vram.u16(OFFS_TEXTRAM_MAP + i * 2);
-    std::memcpy(glyph_ram_.data(), &vram.graphics[OFFS_TEXTRAM_GLYPHS], glyph_ram_.size());
+    for (unsigned i = 0; i < m_map.size(); ++i) m_map[i] = vram.u16(OFFS_TEXTRAM_MAP + i * 2);
+    std::memcpy(m_glyph_ram.data(), &vram.graphics[OFFS_TEXTRAM_GLYPHS], m_glyph_ram.size());
 }
 
 } // namespace f3rt

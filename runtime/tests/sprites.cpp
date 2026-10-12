@@ -47,17 +47,20 @@ constexpr uint32_t SYNTH_DATA_OFFSET = 0x100;
 constexpr uint32_t SYNTH_DATA = f3rt::RAM_BASE + SYNTH_DATA_OFFSET;
 // Emit-unit replay fixtures: unit 0 bumps a RAM counter and draws entries 3-4 of bank 0;
 // unit 1 touches I/O and must abort. Blocks follow the generated hook order (hook first).
-constexpr uint32_t synth_starts0[] = {UNIT0_BLOCK0}, synth_ends0[] = {UNIT0_BLOCK2};
-constexpr uint32_t synth_starts1[] = {UNIT1_BLOCK0}, synth_ends1[] = {UNIT1_BLOCK2};
-constexpr f3rt::EmitUnit synth_unit0{0, "synth_bump", synth_starts0, synth_ends0, f3rt::UnitRegister::A3, 0x20, f3rt::UnitOwner::Unit};
-constexpr f3rt::EmitUnit synth_unit1{1, "synth_io", synth_starts1, synth_ends1, f3rt::UnitRegister::A3, 0, f3rt::UnitOwner::Unit};
-constexpr std::array<const f3rt::EmitUnit *, 2> synth_units{&synth_unit0, &synth_unit1};
+constexpr uint32_t SYNTH_STARTS0[] = {UNIT0_BLOCK0}, SYNTH_ENDS0[] = {UNIT0_BLOCK2};
+constexpr uint32_t SYNTH_STARTS1[] = {UNIT1_BLOCK0}, SYNTH_ENDS1[] = {UNIT1_BLOCK2};
+constexpr f3rt::EmitUnit SYNTH_UNIT0{
+    0,    "synth_bump",         SYNTH_STARTS0, SYNTH_ENDS0, f3rt::UnitRegister::A3,
+    0x20, f3rt::UnitOwner::Unit};
+constexpr f3rt::EmitUnit SYNTH_UNIT1{
+    1, "synth_io", SYNTH_STARTS1, SYNTH_ENDS1, f3rt::UnitRegister::A3, 0, f3rt::UnitOwner::Unit};
+constexpr std::array<const f3rt::EmitUnit *, 2> SYNTH_UNITS{&SYNTH_UNIT0, &SYNTH_UNIT1};
 
-F3RT_SPRITE_BEHAVIOUR(synth_bump_behaviour, synth_unit0, "Adds 5 to the unit's first word",
-    [](const f3rt::Unit<synth_unit0> &u, f3rt::Patch<synth_unit0> &p) {
-        p.u16<0>(uint16_t(u.u16<0>() + 5));
-        return true;
-    });
+F3RT_SPRITE_BEHAVIOUR(SYNTH_BUMP_BEHAVIOUR, SYNTH_UNIT0, "Adds 5 to the unit's first word",
+                      [](const f3rt::Unit<SYNTH_UNIT0> &u, f3rt::Patch<SYNTH_UNIT0> &p) {
+                          p.u16<0>(uint16_t(u.u16<0>() + 5));
+                          return true;
+                      });
 
 void synth_start(f3_cpu *cpu) {
     f3_unit_enter(cpu, 0);
@@ -99,19 +102,21 @@ void synth_io_end(f3_cpu *cpu) {
     cpu->cycles += 4;
 }
 
-const f3_block synth_blocks[] = {{UNIT0_BLOCK0, synth_start}, {UNIT0_BLOCK1, synth_mid}, {UNIT0_BLOCK2, synth_end},
-                                {UNIT1_BLOCK0, synth_io}, {UNIT1_BLOCK1, synth_io_mid}, {UNIT1_BLOCK2, synth_io_end}};
+const f3_block SYNTH_BLOCKS[] = {{UNIT0_BLOCK0, synth_start},  {UNIT0_BLOCK1, synth_mid},
+                                 {UNIT0_BLOCK2, synth_end},    {UNIT1_BLOCK0, synth_io},
+                                 {UNIT1_BLOCK1, synth_io_mid}, {UNIT1_BLOCK2, synth_io_end}};
 
 std::unique_ptr<f3rt::Machine> synth_machine(bool units, bool check, bool behaviour) {
     auto m = std::make_unique<f3rt::Machine>(fixture());
     m->allow_main_fallback = false;
-    EXPECT_TRUE(f3_register_blocks(&m->cpu, synth_blocks, std::size(synth_blocks)))
+    EXPECT_TRUE(f3_register_blocks(&m->cpu, SYNTH_BLOCKS, std::size(SYNTH_BLOCKS)))
         << "Synthetic unit blocks register";
     if (units) {
         f3rt::SpriteUnits::Options options;
         options.check = check;
-        if (behaviour) options.behaviours.push_back(&synth_bump_behaviour);
-        m->sprite_units = std::make_unique<f3rt::SpriteUnits>(*m, f3rt::SpriteUnitTable{synth_units, {}}, std::move(options));
+        if (behaviour) options.behaviours.push_back(&SYNTH_BUMP_BEHAVIOUR);
+        m->sprite_units = std::make_unique<f3rt::SpriteUnits>(
+            *m, f3rt::SpriteUnitTable{SYNTH_UNITS, {}}, std::move(options));
     }
     m->write16(SYNTH_DATA, 0x1234);
     m->cpu.sr = 0x2700;
@@ -137,22 +142,23 @@ struct SynthSnapshot {
     uint32_t crc;
 
     explicit SynthSnapshot(f3rt::Machine &m)
-        : ram(m.ram), graphics(m.graphics), palette(m.palette), pc(m.cpu.pc), sr((f3_cc_flush(&m.cpu), m.cpu.sr)),
-          cycles(m.cpu.cycles), native_blocks(m.native_blocks), crc(m.state_crc()) {
+        : ram(m.ram), graphics(m.graphics), palette(m.palette), pc(m.cpu.pc),
+          sr((f3_cc_flush(&m.cpu), m.cpu.sr)), cycles(m.cpu.cycles), native_blocks(m.native_blocks),
+          crc(m.state_crc()) {
         std::copy(std::begin(m.cpu.d), std::end(m.cpu.d), d.begin());
         std::copy(std::begin(m.cpu.a), std::end(m.cpu.a), a.begin());
     }
 
     bool operator==(const SynthSnapshot &o) const {
-        return ram == o.ram && graphics == o.graphics && palette == o.palette && d == o.d && a == o.a &&
-               pc == o.pc && sr == o.sr && cycles == o.cycles && native_blocks == o.native_blocks &&
-               crc == o.crc;
+        return ram == o.ram && graphics == o.graphics && palette == o.palette && d == o.d &&
+               a == o.a && pc == o.pc && sr == o.sr && cycles == o.cycles &&
+               native_blocks == o.native_blocks && crc == o.crc;
     }
 };
 } // namespace
 
 TEST(SpriteUnits, BehaviourNameHyphenation) {
-    EXPECT_EQ(std::string(synth_bump_behaviour.name), "synth-bump-behaviour")
+    EXPECT_EQ(std::string(SYNTH_BUMP_BEHAVIOUR.name), "synth-bump-behaviour")
         << "Behaviour names replace underscores with hyphens";
 }
 
@@ -173,8 +179,7 @@ TEST(SpriteUnits, DeviceAccessAbortsReplay) {
     m->cpu.pc = UNIT1_BLOCK0;
     const SynthSnapshot at_unit(*m);
     f3_unit_enter(&m->cpu, 1);
-    EXPECT_TRUE(SynthSnapshot(*m) == at_unit)
-        << "Aborted replay leaves machine state untouched";
+    EXPECT_TRUE(SynthSnapshot(*m) == at_unit) << "Aborted replay leaves machine state untouched";
     const auto report = m->sprite_units->report();
     EXPECT_TRUE(report.replays == 1 && report.completed == 0 && report.aborted == 1 &&
                 report.units[1].aborts[size_t(f3rt::SpriteUnits::Abort::Device)] == 1)
@@ -198,11 +203,12 @@ TEST(SpriteUnits, UnpatchedReplayMatchesRealSpan) {
     EXPECT_TRUE(presented.identity.size() == 0x800 && presented.splices.empty())
         << "No behaviour means no splice";
     EXPECT_TRUE(presented.identity[3] && presented.identity[4] &&
-                presented.identity[3] != presented.identity[4] &&
-                !presented.identity[2] && !presented.identity[5])
+                presented.identity[3] != presented.identity[4] && !presented.identity[2] &&
+                !presented.identity[5])
         << "Written sprite entries receive per-entry identities";
     on->write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001);
-    EXPECT_TRUE(!on->sprite_units->presentation().identity[3] && on->sprite_units->presentation().identity[4])
+    EXPECT_TRUE(!on->sprite_units->presentation().identity[3] &&
+                on->sprite_units->presentation().identity[4])
         << "A write outside any unit clears that slot's identity";
     EXPECT_EQ(on->sprite_units->report().stray_unaccounted, 2)
         << "Check mode records unaccounted writers";
@@ -215,7 +221,8 @@ TEST(SpriteUnits, BehaviourSplicingNeverChangesEmulatedState) {
     auto without_units = synth_machine(false, false, false);
     synth_span(*with_units);
     synth_span(*without_units);
-    ASSERT_EQ(with_units->sprite_units->presentation().splices.size(), 1) << "Splice must actually happen";
+    ASSERT_EQ(with_units->sprite_units->presentation().splices.size(), 1)
+        << "Splice must actually happen";
     EXPECT_TRUE(SynthSnapshot(*with_units) == SynthSnapshot(*without_units))
         << "ram, graphics, cpu, cycles, native_blocks and state_crc match without units";
 }
@@ -234,12 +241,13 @@ TEST(DiscoveryLog, IsObserveOnly) {
         for (auto *m : {plain.get(), logged.get()}) {
             synth_span(*m);
             m->write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001); // sprite RAM outside any unit
-            m->write8(PLAYFIELD_RAM_PROBE, 0x5a);    // playfield RAM
-            m->write16(f3rt::CONTROL_BASE, 0x1234); // control register
+            m->write8(PLAYFIELD_RAM_PROBE, 0x5a);                     // playfield RAM
+            m->write16(f3rt::CONTROL_BASE, 0x1234);                   // control register
             m->write32(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_HIGH, 0xdeadbeef);
         }
         EXPECT_TRUE(SynthSnapshot(*plain) == SynthSnapshot(*logged))
-            << "ram, graphics, palette, cpu, cycles, native_blocks and state_crc, log_all=" << log_all;
+            << "ram, graphics, palette, cpu, cycles, native_blocks and state_crc, log_all="
+            << log_all;
         EXPECT_EQ(plain->control, logged->control);
         logged->discovery->finish(*logged);
         EXPECT_GT(std::filesystem::file_size(path), 0u) << "The log must have observed something";
@@ -258,12 +266,13 @@ TEST(SpriteUnits, BehaviourSplicesReplacementEntries) {
     EXPECT_EQ(presented.splices.size(), 1) << "Behaviour produces one splice";
     ASSERT_FALSE(presented.splices.empty());
     const auto &splice = presented.splices[0];
-    EXPECT_TRUE(!splice.bank && splice.first == 3 && splice.last == 4 &&
-                splice.real.size() == 32 && splice.replacement.size() == 32 &&
-                std::equal(splice.real.begin(), splice.real.end(), m->graphics.begin() + SPRITE_ENTRY_3) &&
-                splice.replacement[0] == 0xab && splice.replacement[1] == 0xcd &&
-                splice.replacement[2] == 0x12 && splice.replacement[3] == 0x39 &&
-                splice.replacement[16] == 0x11 && splice.identity)
+    EXPECT_TRUE(
+        !splice.bank && splice.first == 3 && splice.last == 4 && splice.real.size() == 32 &&
+        splice.replacement.size() == 32 &&
+        std::equal(splice.real.begin(), splice.real.end(), m->graphics.begin() + SPRITE_ENTRY_3) &&
+        splice.replacement[0] == 0xab && splice.replacement[1] == 0xcd &&
+        splice.replacement[2] == 0x12 && splice.replacement[3] == 0x39 &&
+        splice.replacement[16] == 0x11 && splice.identity)
         << "Splice holds the real range and the patched replay's entries";
     EXPECT_EQ(m->sprite_units->report().spliced, 1) << "Splice is counted";
 }
@@ -274,11 +283,12 @@ RC_GTEST_PROP(SpriteUnits, ReplayPipelineSplicesPatchedCounter, ()) {
     const auto counter_val = *rc::gen::arbitrary<uint16_t>();
     auto m = std::make_unique<f3rt::Machine>(fixture());
     m->allow_main_fallback = false;
-    f3_register_blocks(&m->cpu, synth_blocks, std::size(synth_blocks));
+    f3_register_blocks(&m->cpu, SYNTH_BLOCKS, std::size(SYNTH_BLOCKS));
     f3rt::SpriteUnits::Options options;
     options.check = false;
-    options.behaviours.push_back(&synth_bump_behaviour);
-    m->sprite_units = std::make_unique<f3rt::SpriteUnits>(*m, f3rt::SpriteUnitTable{synth_units, {}}, std::move(options));
+    options.behaviours.push_back(&SYNTH_BUMP_BEHAVIOUR);
+    m->sprite_units = std::make_unique<f3rt::SpriteUnits>(
+        *m, f3rt::SpriteUnitTable{SYNTH_UNITS, {}}, std::move(options));
 
     m->write16(SYNTH_DATA, counter_val);
     m->cpu.sr = 0x2700;
@@ -287,11 +297,13 @@ RC_GTEST_PROP(SpriteUnits, ReplayPipelineSplicesPatchedCounter, ()) {
 
     // 1. Real RAM is untouched by the behaviour patch:
     // synth_start wrote counter_val + 1 to 0x400102.
-    const uint16_t real_ram_val = uint16_t((m->ram[SYNTH_DATA_OFFSET + 2] << 8) | m->ram[SYNTH_DATA_OFFSET + 3]);
+    const uint16_t real_ram_val =
+        uint16_t((m->ram[SYNTH_DATA_OFFSET + 2] << 8) | m->ram[SYNTH_DATA_OFFSET + 3]);
     RC_ASSERT(real_ram_val == uint16_t(counter_val + 1));
 
     // 2. Real graphics RAM was untouched by the replay:
-    const uint16_t real_gfx_val = uint16_t((m->graphics[SPRITE_ENTRY_3 + 2] << 8) | m->graphics[SPRITE_ENTRY_3 + 3]);
+    const uint16_t real_gfx_val =
+        uint16_t((m->graphics[SPRITE_ENTRY_3 + 2] << 8) | m->graphics[SPRITE_ENTRY_3 + 3]);
     RC_ASSERT(real_gfx_val == counter_val);
 
     // 3. The presentation splice received the behaviour's patched overlay (counter_val + 5):
@@ -349,4 +361,3 @@ TEST(SpriteUnits, RomReplayAndInvariants) {
 }
 
 #endif
-

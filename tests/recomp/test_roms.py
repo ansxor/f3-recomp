@@ -1,16 +1,24 @@
 """Behavioral checks for sparse grouped lanes, sound mirrors and validated dump variants."""
+
 import hashlib
-from pathlib import Path
 import tempfile
 import unittest
 import zlib
+from pathlib import Path
 
 from recomp.roms import load_region, region_spec
 
 
 def lane(name, data, offset=0, stride=1, group=1):
-    return {"file": name, "size": len(data), "offset": offset, "stride": stride, "group": group,
-            "crc": f"{zlib.crc32(data):08x}", "sha1": hashlib.sha1(data).hexdigest()}
+    return {
+        "file": name,
+        "size": len(data),
+        "offset": offset,
+        "stride": stride,
+        "group": group,
+        "crc": f"{zlib.crc32(data):08x}",
+        "sha1": hashlib.sha1(data).hexdigest(),
+    }
 
 
 class RomRegionTests(unittest.TestCase):
@@ -27,8 +35,12 @@ class RomRegionTests(unittest.TestCase):
             root = Path(directory)
             root.joinpath("low").write_bytes(bytes([1, 2, 3, 4]))
             root.joinpath("mid").write_bytes(bytes([5, 6, 7, 8]))
-            config = {"tiles": {"size": 8, "lanes": [lane("low", bytes([1, 2, 3, 4]), 0, 4, 2),
-                                                      lane("mid", bytes([5, 6, 7, 8]), 2, 4, 2)]}}
+            config = {
+                "tiles": {
+                    "size": 8,
+                    "lanes": [lane("low", bytes([1, 2, 3, 4]), 0, 4, 2), lane("mid", bytes([5, 6, 7, 8]), 2, 4, 2)],
+                }
+            }
             self.assertEqual(load_region(config, "tiles", root), bytes([1, 2, 5, 6, 3, 4, 7, 8]))
             config = {"samples": {"size": 12, "lanes": [lane("low", bytes([1, 2, 3, 4]), 4, 2)]}}
             self.assertEqual(load_region(config, "samples", root), bytes([0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0]))
@@ -51,8 +63,12 @@ class RomRegionTests(unittest.TestCase):
             mask04 = bytes(range(9, 17))
             patch15 = bytes(range(0x21, 0x25))
             patch16 = bytes(range(0x31, 0x35))
-            for name, data in (("d40_03.rom", mask03), ("d40_04.rom", mask04),
-                               ("d40_15.rom", patch15), ("d40_16.rom", patch16)):
+            for name, data in (
+                ("d40_03.rom", mask03),
+                ("d40_04.rom", mask04),
+                ("d40_15.rom", patch15),
+                ("d40_16.rom", patch16),
+            ):
                 root.joinpath(name).write_bytes(data)
             first_half = lane("d40_04.rom", mask04, 9, 2)
             first_half.update(source_offset=0, length=4)
@@ -60,14 +76,15 @@ class RomRegionTests(unittest.TestCase):
             continued_half.update(source_offset=4, length=4)
             lanes = [lane("d40_03.rom", mask03, 0, 2), first_half, continued_half]
             config = {"sprites": {"size": 16, "fill": 0, "lanes": lanes}}
-            self.assertEqual(load_region(config, "sprites", root),
-                             bytes([13, 0, 14, 0, 15, 0, 16, 0, 5, 9, 6, 10, 7, 11, 8, 12]))
+            self.assertEqual(
+                load_region(config, "sprites", root), bytes([13, 0, 14, 0, 15, 0, 16, 0, 5, 9, 6, 10, 7, 11, 8, 12])
+            )
             # Scaled MAME geometry: patches replace both lower lanes after CONTINUE.
-            lanes.extend([lane("d40_15.rom", patch15, 0, 2),
-                          lane("d40_16.rom", patch16, 1, 2)])
-            self.assertEqual(load_region(config, "sprites", root),
-                             bytes([0x21, 0x31, 0x22, 0x32, 0x23, 0x33, 0x24, 0x34,
-                                    5, 9, 6, 10, 7, 11, 8, 12]))
+            lanes.extend([lane("d40_15.rom", patch15, 0, 2), lane("d40_16.rom", patch16, 1, 2)])
+            self.assertEqual(
+                load_region(config, "sprites", root),
+                bytes([0x21, 0x31, 0x22, 0x32, 0x23, 0x33, 0x24, 0x34, 5, 9, 6, 10, 7, 11, 8, 12]),
+            )
 
     def test_continue_validates_bytes_outside_selected_source_slice(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,12 +96,13 @@ class RomRegionTests(unittest.TestCase):
                     spec.update(source_offset=source_offset, length=4)
                     config = {"sprites": {"size": 8, "fill": 0, "lanes": [spec]}}
                     root.joinpath("d40_04.rom").write_bytes(chip)
-                    selected = chip[source_offset:source_offset + 4]
-                    self.assertEqual(load_region(config, "sprites", root),
-                                     bytes([0, selected[0], 0, selected[1],
-                                            0, selected[2], 0, selected[3]]))
+                    selected = chip[source_offset : source_offset + 4]
+                    self.assertEqual(
+                        load_region(config, "sprites", root),
+                        bytes([0, selected[0], 0, selected[1], 0, selected[2], 0, selected[3]]),
+                    )
                     corrupt = bytearray(chip)
-                    corrupt[4 if source_offset == 0 else 0] ^= 0xff
+                    corrupt[4 if source_offset == 0 else 0] ^= 0xFF
                     root.joinpath("d40_04.rom").write_bytes(corrupt)
                     with self.assertRaisesRegex(ValueError, "CRC32 mismatch"):
                         load_region(config, "sprites", root)
@@ -95,8 +113,7 @@ class RomRegionTests(unittest.TestCase):
             short = bytes([1, 2])
             full = short + b"\xff\xff"
             spec = lane("chip", full)
-            spec.update(short_size=2, short_crc=f"{zlib.crc32(short):08x}",
-                        short_sha1=hashlib.sha1(short).hexdigest())
+            spec.update(short_size=2, short_crc=f"{zlib.crc32(short):08x}", short_sha1=hashlib.sha1(short).hexdigest())
             config = {"sound": {"size": 4, "fill": 255, "lanes": [spec]}}
             root.joinpath("chip").write_bytes(short)
             self.assertEqual(load_region(config, "sound", root), full)

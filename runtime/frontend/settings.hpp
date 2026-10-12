@@ -18,7 +18,7 @@ struct InputBinding {
 };
 struct InputProfile {
     int device_slot = 0; // ordinal among connected SDL gamepads, not transient instance id
-    std::array<InputBinding, local_control_count> controls{};
+    std::array<InputBinding, LOCAL_CONTROL_COUNT> controls{};
 };
 struct FrontendSettings {
     std::string renderer = "accurate", video_scale = "1"; // renderer: accurate | enhanced
@@ -29,7 +29,7 @@ struct FrontendSettings {
     float volume = 1.0f;
     bool fast_boot = true, boot_cache = false;
     bool motion_interp = false;
-    std::array<InputProfile, local_player_count> profiles;
+    std::array<InputProfile, LOCAL_PLAYER_COUNT> profiles;
     std::string netplay_server = "127.0.0.1:7845";
     std::string netplay_name = "Player";
     uint8_t netplay_delay = 2;
@@ -37,8 +37,10 @@ struct FrontendSettings {
 };
 std::string default_config_path(const std::string &set);
 // Load before applying explicit CLI flags. Invalid/missing files leave defaults intact.
-bool load_frontend_settings(const std::string &path, FrontendSettings &settings, std::string &error);
-bool save_frontend_settings(const std::string &path, const FrontendSettings &settings, std::string &error);
+bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
+                            std::string &error);
+bool save_frontend_settings(const std::string &path, const FrontendSettings &settings,
+                            std::string &error);
 class InputMapper {
 public:
     explicit InputMapper(const FrontendSettings &settings);
@@ -50,14 +52,21 @@ public:
     void start_capture(unsigned profile, unsigned control, bool gamepad);
     bool capturing() const;
     bool take_binding(unsigned &profile, unsigned &control, InputBinding &binding);
+
 private:
-    struct Pad { SDL_JoystickID id; SDL_Gamepad *handle; std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{}, blocked_buttons{}; std::array<int16_t, SDL_GAMEPAD_AXIS_COUNT> axes{}; std::array<bool, SDL_GAMEPAD_AXIS_COUNT> blocked_axes{}; };
-    std::array<InputProfile, local_player_count> profiles_;
-    std::array<bool, SDL_SCANCODE_COUNT> keys_{}, blocked_keys_{};
-    std::array<Pad, 16> pads_{};
-    unsigned pad_count_ = 0, capture_profile_ = 0, capture_control_ = 0;
-    bool capture_ = false, capture_pad_ = false, captured_ = false;
-    InputBinding captured_binding_{};
+    struct Pad {
+        SDL_JoystickID id;
+        SDL_Gamepad *handle;
+        std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{}, blocked_buttons{};
+        std::array<int16_t, SDL_GAMEPAD_AXIS_COUNT> axes{};
+        std::array<bool, SDL_GAMEPAD_AXIS_COUNT> blocked_axes{};
+    };
+    std::array<InputProfile, LOCAL_PLAYER_COUNT> m_profiles;
+    std::array<bool, SDL_SCANCODE_COUNT> m_keys{}, m_blocked_keys{};
+    std::array<Pad, 16> m_pads{};
+    unsigned m_pad_count = 0, m_capture_profile = 0, m_capture_control = 0;
+    bool m_capture = false, m_capture_pad = false, m_captured = false;
+    InputBinding m_captured_binding{};
     void add_pad(SDL_JoystickID id);
 };
-}
+} // namespace f3rt

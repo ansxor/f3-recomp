@@ -67,8 +67,7 @@ inline std::vector<int16_t> drain_audio_samples(Machine &m) {
 // Creates and initializes a strict-native Machine with recompiled code, native sound, and optional GPU presentation.
 std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_dir,
                                                const std::string &set = F3RT_DEFAULT_SET,
-                                               bool enable_gpu = false,
-                                               unsigned gpu_scale = 1);
+                                               bool enable_gpu = false, unsigned gpu_scale = 1);
 
 struct RunnerConfig {
     std::filesystem::path rom_dir;
@@ -101,7 +100,8 @@ public:
 
     // Run N emulated frames. Optional per_frame_cb is called right after run_frame().
     // If per_frame_cb returns false, execution stops early.
-    bool run_frames(uint64_t target_frames, std::function<bool(uint64_t frame)> per_frame_cb = nullptr);
+    bool run_frames(uint64_t target_frames,
+                    const std::function<bool(uint64_t frame)> &per_frame_cb = nullptr);
 
     // Drain audio into buffer/wav and update stats.
     void drain_audio(bool record_to_wav = true);

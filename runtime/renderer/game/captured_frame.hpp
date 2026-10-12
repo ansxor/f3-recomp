@@ -17,23 +17,23 @@ namespace f3rt {
 // encoder (runtime/renderer/gpu/encode.hpp) into its own word layout once per
 // present. Nothing in renderer/game knows about the GPU buffer layout.
 struct CapturedFrame {
-    static constexpr size_t max_sprites = max_presented_sprites, palette_size = 8192;
+    static constexpr size_t MAX_SPRITES = MAX_PRESENTED_SPRITES, PALETTE_SIZE = 8192;
     GameTiles tiles;
     GameText text;
     std::array<SceneRow, 256> rows{};
-    std::array<SceneSprite, max_sprites> sprites{};
+    std::array<SceneSprite, MAX_SPRITES> sprites{};
     unsigned sprite_count = 0;
     unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
-    std::array<uint32_t, palette_size> colors{}; // 0x00RRGGBB, indexed by palette entry
+    std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
     uint8_t pen_mask = 15;
-    // Oracle-fallback frame: only native_pixels (320 x geometry::height ARGB) is meaningful.
+    // Oracle-fallback frame: only native_pixels (320 x geometry::HEIGHT ARGB) is meaningful.
     bool fallback = true;
-    std::array<uint32_t, geometry::native_pixels> native_pixels{};
+    std::array<uint32_t, geometry::NATIVE_PIXELS> native_pixels{};
 
     std::span<const SceneSprite> sprite_list() const { return {sprites.data(), sprite_count}; }
     // CPU compositor view. `tile_pixels` is the playfield asset ROM. Expanded outputs of this view are
     // presented (FrameScene::presented); the native frame composed from it is canonical.
-    FrameScene scene(std::span<const uint8_t> tile_pixels, uint32_t layer_mask = all_layers) const {
+    FrameScene scene(std::span<const uint8_t> tile_pixels, uint32_t layer_mask = ALL_LAYERS) const {
         return {tiles, text, rows, tile_pixels, colors, layer_mask, false, true};
     }
 };

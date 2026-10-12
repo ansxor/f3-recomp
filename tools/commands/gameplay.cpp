@@ -23,55 +23,58 @@ namespace f3rt::tool {
 
 namespace {
 
-void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame, const std::string &error) {
+void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame,
+                         const std::string &error) {
     f3_cc_flush(const_cast<f3_cpu *>(&m.cpu));
     std::cerr << "REGRESSION FAILURE: " << error << "\n"
               << "  seed: " << seed << "\n"
               << "  frame: " << frame << "\n"
               << "  pc: 0x" << std::hex << m.cpu.pc << std::dec << "\n"
               << "  sound_pc: 0x" << std::hex << m.sound_pc() << std::dec << "\n"
-              << "  sr: 0x" << std::hex << m.cpu.sr << std::dec
-              << " halted: " << int(m.cpu.halted)
+              << "  sr: 0x" << std::hex << m.cpu.sr << std::dec << " halted: " << int(m.cpu.halted)
               << " stopped: " << int(m.cpu.stopped) << "\n"
-              << "  cycles: " << m.cpu.cycles
-              << " native_blocks: " << m.native_blocks
+              << "  cycles: " << m.cpu.cycles << " native_blocks: " << m.native_blocks
               << " fallback_instructions: " << m.fallback_instructions << "\n";
 
     std::cerr << "  registers:\n";
     for (int i = 0; i < 8; ++i) {
-        std::cerr << "    d" << i << "=0x" << std::hex << std::setw(8) << std::setfill('0') << m.cpu.d[i]
-                  << " a" << i << "=0x" << std::setw(8) << std::setfill('0') << m.cpu.a[i] << std::dec << "\n";
+        std::cerr << "    d" << i << "=0x" << std::hex << std::setw(8) << std::setfill('0')
+                  << m.cpu.d[i] << " a" << i << "=0x" << std::setw(8) << std::setfill('0')
+                  << m.cpu.a[i] << std::dec << "\n";
     }
 
     std::cerr << "  stack dump (a7=0x" << std::hex << m.cpu.a[7] << std::dec << "):\n";
     for (int i = 0; i < 8; ++i) {
         uint32_t addr = m.cpu.a[7] + uint32_t(i * 4);
-        std::cerr << "    stk+" << std::setw(2) << std::setfill(' ') << (i * 4) << " (0x" << std::hex << addr << "): 0x"
-                  << std::setw(8) << std::setfill('0') << f3_read32(const_cast<f3_cpu *>(&m.cpu), addr) << std::dec << "\n";
+        std::cerr << "    stk+" << std::setw(2) << std::setfill(' ') << (i * 4) << " (0x"
+                  << std::hex << addr << "): 0x" << std::setw(8) << std::setfill('0')
+                  << f3_read32(const_cast<f3_cpu *>(&m.cpu), addr) << std::dec << "\n";
     }
 }
 
 void print_help(const char *prog) {
-    std::cout << "Usage: " << prog << " gameplay [options]\n\n"
-              << "Deterministic strict-native seeded gameplay regression harness.\n\n"
-              << "Options:\n"
-              << "  --rom-dir DIR          Path to ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
-              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
-              << "  --seed N               PRNG seed for input schedule (default: 12345, or SEED env)\n"
-              << "  --frames N             Number of frames to advance (default: 40000)\n"
-              << "  --dump-dir DIR         Dump final state or the first video mismatch\n"
-              << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
-              << "  --surface BMP          Alias for --capture-surface\n"
-              << "  --sound-trace FILE     Record sound CPU and main mailbox bus events\n"
-              << "  --sound-driver MODE    oracle (default) or native (generated driver)\n"
-              << "  --audio-backend MODE   reference (default) or enhanced (threaded ROM sequencer)\n"
-              << "  --wav FILE             Save audio\n"
-              << "  --profile-out FILE     Merge main/sound entry counts (instrumented build)\n"
-              << "  --video-diff           Compare game-owned layers and final RGB against FDP from frame 600\n"
-              << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
-              << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
-              << "  --json                 Output machine-readable JSON result\n"
-              << "  --help, -h             Show this help message\n";
+    std::cout
+        << "Usage: " << prog << " gameplay [options]\n\n"
+        << "Deterministic strict-native seeded gameplay regression harness.\n\n"
+        << "Options:\n"
+        << "  --rom-dir DIR          Path to ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
+        << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
+        << "  --seed N               PRNG seed for input schedule (default: 12345, or SEED env)\n"
+        << "  --frames N             Number of frames to advance (default: 40000)\n"
+        << "  --dump-dir DIR         Dump final state or the first video mismatch\n"
+        << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
+        << "  --surface BMP          Alias for --capture-surface\n"
+        << "  --sound-trace FILE     Record sound CPU and main mailbox bus events\n"
+        << "  --sound-driver MODE    oracle (default) or native (generated driver)\n"
+        << "  --audio-backend MODE   reference (default) or enhanced (threaded ROM sequencer)\n"
+        << "  --wav FILE             Save audio\n"
+        << "  --profile-out FILE     Merge main/sound entry counts (instrumented build)\n"
+        << "  --video-diff           Compare game-owned layers and final RGB against FDP from "
+           "frame 600\n"
+        << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
+        << "  --video-diff-every N   Sample interval (default: 120 frames)\n"
+        << "  --json                 Output machine-readable JSON result\n"
+        << "  --help, -h             Show this help message\n";
 }
 
 } // namespace
@@ -83,14 +86,12 @@ int cmd_gameplay(int argc, char **argv) try {
 #endif
 
     uint64_t seed = 12345;
-    bool seed_specified = false;
     uint64_t target_frames = 40000;
     std::filesystem::path capture_surface;
     bool json_output = false;
 
     if (const char *env_seed = std::getenv("SEED")) {
         seed = std::stoull(env_seed);
-        seed_specified = true;
     }
 
     for (int i = 0; i < argc; ++i) {
@@ -106,7 +107,6 @@ int cmd_gameplay(int argc, char **argv) try {
             cfg.set = value();
         } else if (arg == "--seed") {
             seed = std::stoull(value());
-            seed_specified = true;
         } else if (arg == "--frames") {
             target_frames = std::stoull(value());
         } else if (arg == "--dump-dir") {
@@ -146,7 +146,8 @@ int cmd_gameplay(int argc, char **argv) try {
     }
 
     if (cfg.rom_dir.empty()) {
-        throw std::runtime_error("ROM directory must be specified via --rom-dir or compiled F3RT_DEFAULT_ROM_DIR");
+        throw std::runtime_error(
+            "ROM directory must be specified via --rom-dir or compiled F3RT_DEFAULT_ROM_DIR");
     }
     const bool enhanced = (cfg.audio_backend == Audio::Backend::Enhanced);
     if (enhanced && !cfg.sound_trace_path.empty()) {
@@ -170,7 +171,8 @@ int cmd_gameplay(int argc, char **argv) try {
             return false;
         }
         if (m.fallback_instructions > 0) {
-            print_failure_state(m, seed, frame, "Fallback instruction executed under strict native mode");
+            print_failure_state(m, seed, frame,
+                                "Fallback instruction executed under strict native mode");
             return false;
         }
 #if defined(F3RT_GAME_VIDEO)
@@ -221,25 +223,20 @@ int cmd_gameplay(int argc, char **argv) try {
                   << ",\"fallback_instructions\":" << m.fallback_instructions
                   << ",\"audio_frames\":" << runner.audio_frames()
                   << ",\"audio_peak\":" << runner.audio_peak()
-                  << ",\"nonzero_samples\":" << runner.nonzero_samples()
-                  << ",\"fps\":" << fps << "}\n";
+                  << ",\"nonzero_samples\":" << runner.nonzero_samples() << ",\"fps\":" << fps
+                  << "}\n";
     } else {
-        std::cout << "SUCCESS set=" << cfg.set
-                  << " seed=" << seed
-                  << " frames=" << m.frame
-                  << " pc=0x" << std::hex << m.cpu.pc
-                  << " sound_pc=0x" << m.sound_pc()
+        std::cout << "SUCCESS set=" << cfg.set << " seed=" << seed << " frames=" << m.frame
+                  << " pc=0x" << std::hex << m.cpu.pc << " sound_pc=0x" << m.sound_pc()
                   << " audio_backend=" << Audio::backend_name(cfg.audio_backend)
-                  << " sound_driver=" << (enhanced ? "none" : cfg.sound_driver)
-                  << " frame_crc=0x" << frame_crc << std::dec
-                  << " cycles=" << m.cpu.cycles
+                  << " sound_driver=" << (enhanced ? "none" : cfg.sound_driver) << " frame_crc=0x"
+                  << frame_crc << std::dec << " cycles=" << m.cpu.cycles
                   << " native_blocks=" << m.native_blocks
                   << " fallback_instructions=" << m.fallback_instructions
                   << " audio_frames=" << runner.audio_frames()
                   << " audio_peak=" << runner.audio_peak()
-                  << " nonzero_samples=" << runner.nonzero_samples()
-                  << " fps=" << std::fixed << std::setprecision(1) << fps << std::defaultfloat
-                  << '\n';
+                  << " nonzero_samples=" << runner.nonzero_samples() << " fps=" << std::fixed
+                  << std::setprecision(1) << fps << std::defaultfloat << '\n';
     }
 
     return 0;

@@ -1,12 +1,13 @@
 """End-to-end netplay lockstep regression test."""
-from pathlib import Path
+
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import time
+from pathlib import Path
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,9 +120,10 @@ def find_or_build_server_binary() -> tuple[list[str], Path | None]:
 
     return [], None
 
+
 def start_server(server_cmd: list[str], log_dir: Path) -> tuple[subprocess.Popen, str]:
     proc = subprocess.Popen(
-        list(server_cmd) + ["--port", "0", "--logdir", str(log_dir)],
+        [*list(server_cmd), "--port", "0", "--logdir", str(log_dir)],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -135,16 +137,22 @@ def start_server(server_cmd: list[str], log_dir: Path) -> tuple[subprocess.Popen
     return proc, f"127.0.0.1:{match.group(1)}"
 
 
-def run_netplay_match(tool_bin: Path, rom_dir: Path, tcp_addr: str,
-                       frames: int, p1_script: Path | None, p2_script: Path | None) -> tuple[str, str]:
+def run_netplay_match(
+    tool_bin: Path, rom_dir: Path, tcp_addr: str, frames: int, p1_script: Path | None, p2_script: Path | None
+) -> tuple[str, str]:
     # Start Host
     host_cmd = [
-        str(tool_bin), "netplay",
-        "--server", tcp_addr,
+        str(tool_bin),
+        "netplay",
+        "--server",
+        tcp_addr,
         "--host",
-        "--delay", "2",
-        "--frames", str(frames),
-        "--rom-dir", str(rom_dir),
+        "--delay",
+        "2",
+        "--frames",
+        str(frames),
+        "--rom-dir",
+        str(rom_dir),
     ]
     if p1_script:
         host_cmd.extend(["--inputs", str(p1_script)])
@@ -174,11 +182,16 @@ def run_netplay_match(tool_bin: Path, rom_dir: Path, tcp_addr: str,
 
     # Start Joiner
     joiner_cmd = [
-        str(tool_bin), "netplay",
-        "--server", tcp_addr,
-        "--join", room_code,
-        "--frames", str(frames),
-        "--rom-dir", str(rom_dir),
+        str(tool_bin),
+        "netplay",
+        "--server",
+        tcp_addr,
+        "--join",
+        room_code,
+        "--frames",
+        str(frames),
+        "--rom-dir",
+        str(rom_dir),
     ]
     if p2_script:
         joiner_cmd.extend(["--inputs", str(p2_script)])
@@ -226,8 +239,17 @@ def test_netplay_poke_script_rejected():
         poke_file.write_text(POKE_INPUT_SCRIPT)
 
         res = subprocess.run(
-            [str(tool_bin), "netplay", "--server", "127.0.0.1:7845", "--host",
-             "--inputs", str(poke_file), "--rom-dir", str(rom_dir)],
+            [
+                str(tool_bin),
+                "netplay",
+                "--server",
+                "127.0.0.1:7845",
+                "--host",
+                "--inputs",
+                str(poke_file),
+                "--rom-dir",
+                str(rom_dir),
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -263,8 +285,12 @@ def test_netplay_end_to_end_3000_frames():
         try:
             # 1. Session 1: Both P1 and P2 have distinct real button inputs (3000 frames)
             crc_both, _ = run_netplay_match(
-                tool_bin, rom_dir, tcp_addr,
-                frames=3000, p1_script=p1_file, p2_script=p2_file,
+                tool_bin,
+                rom_dir,
+                tcp_addr,
+                frames=3000,
+                p1_script=p1_file,
+                p2_script=p2_file,
             )
 
             # Assert server log recorded non-zero inputs for both players
@@ -280,8 +306,12 @@ def test_netplay_end_to_end_3000_frames():
 
             # 2. Session 2: Same server, but Joiner has empty script (P2 inputs are all zero)
             crc_p1_only, _ = run_netplay_match(
-                tool_bin, rom_dir, tcp_addr,
-                frames=3000, p1_script=p1_file, p2_script=None,
+                tool_bin,
+                rom_dir,
+                tcp_addr,
+                frames=3000,
+                p1_script=p1_file,
+                p2_script=None,
             )
 
             # Assert P2's inputs affected the simulation state (proves remote inputs reached both machines)
@@ -298,23 +328,35 @@ def test_netplay_end_to_end_3000_frames():
 
 
 def run_differential_sync_match(
-    tool_bin: Path, rom_dir: Path, tcp_addr: str,
-    frames: int, host_script: Path, joiner_script: Path,
-    host_match_script: Path, joiner_match_script: Path,
+    tool_bin: Path,
+    rom_dir: Path,
+    tcp_addr: str,
+    frames: int,
+    host_script: Path,
+    joiner_script: Path,
+    host_match_script: Path,
+    joiner_match_script: Path,
     disable_apply_sync: bool = False,
     extra_args: list[str] | None = None,
 ) -> tuple[str, str, int, str, str, int]:
     # Start Host
     host_cmd = [
-        str(tool_bin), "netplay",
-        "--server", tcp_addr,
+        str(tool_bin),
+        "netplay",
+        "--server",
+        tcp_addr,
         "--host",
-        "--delay", "2",
-        "--inputs", str(host_script),
-        "--match-inputs", str(host_match_script),
+        "--delay",
+        "2",
+        "--inputs",
+        str(host_script),
+        "--match-inputs",
+        str(host_match_script),
         "--until-trigger",
-        "--frames", str(frames),
-        "--rom-dir", str(rom_dir),
+        "--frames",
+        str(frames),
+        "--rom-dir",
+        str(rom_dir),
     ] + (extra_args or [])
 
     host_proc = subprocess.Popen(
@@ -342,14 +384,21 @@ def run_differential_sync_match(
 
     # Start Joiner
     joiner_cmd = [
-        str(tool_bin), "netplay",
-        "--server", tcp_addr,
-        "--join", room_code,
-        "--inputs", str(joiner_script),
-        "--match-inputs", str(joiner_match_script),
+        str(tool_bin),
+        "netplay",
+        "--server",
+        tcp_addr,
+        "--join",
+        room_code,
+        "--inputs",
+        str(joiner_script),
+        "--match-inputs",
+        str(joiner_match_script),
         "--until-trigger",
-        "--frames", str(frames),
-        "--rom-dir", str(rom_dir),
+        "--frames",
+        str(frames),
+        "--rom-dir",
+        str(rom_dir),
     ]
     if disable_apply_sync:
         joiner_cmd.append("--disable-apply-sync")
@@ -369,8 +418,12 @@ def run_differential_sync_match(
     host_full_out = "".join(host_out_lines) + host_remaining_out
 
     return (
-        host_full_out, host_err, host_proc.returncode,
-        joiner_out, joiner_err, joiner_proc.returncode,
+        host_full_out,
+        host_err,
+        host_proc.returncode,
+        joiner_out,
+        joiner_err,
+        joiner_proc.returncode,
     )
 
 
@@ -404,7 +457,9 @@ def test_netplay_differential_sync_5000_frames():
         server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
             host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
-                tool_bin, rom_dir, tcp_addr,
+                tool_bin,
+                rom_dir,
+                tcp_addr,
                 frames=5000,
                 host_script=path_a_file,
                 joiner_script=path_b_file,
@@ -480,8 +535,10 @@ def test_netplay_differential_sync_negative_control():
 
         server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-            host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
-                tool_bin, rom_dir, tcp_addr,
+            host_out, _host_err, host_rc, joiner_out, _joiner_err, joiner_rc = run_differential_sync_match(
+                tool_bin,
+                rom_dir,
+                tcp_addr,
                 frames=500,
                 host_script=path_a_file,
                 joiner_script=path_b_file,
@@ -523,7 +580,9 @@ def test_netplay_residue_paths_stay_in_sync(swap_roles):
     if not server_cmd:
         pytest.skip("Go / netplay-server missing")
 
-    host_text, joiner_text = (RESIDUE_JOINER_SCRIPT, RESIDUE_HOST_SCRIPT) if swap_roles else (RESIDUE_HOST_SCRIPT, RESIDUE_JOINER_SCRIPT)
+    host_text, joiner_text = (
+        (RESIDUE_JOINER_SCRIPT, RESIDUE_HOST_SCRIPT) if swap_roles else (RESIDUE_HOST_SCRIPT, RESIDUE_JOINER_SCRIPT)
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         host_file, joiner_file = tmp_path / "host.txt", tmp_path / "joiner.txt"
@@ -537,11 +596,15 @@ def test_netplay_residue_paths_stay_in_sync(swap_roles):
 
         server_proc, tcp_addr = start_server(server_cmd, log_dir)
         try:
-
             host_out, host_err, host_rc, joiner_out, joiner_err, joiner_rc = run_differential_sync_match(
-                tool_bin, rom_dir, tcp_addr, frames=2200,
-                host_script=host_file, joiner_script=joiner_file,
-                host_match_script=p1_match_file, joiner_match_script=p2_match_file,
+                tool_bin,
+                rom_dir,
+                tcp_addr,
+                frames=2200,
+                host_script=host_file,
+                joiner_script=joiner_file,
+                host_match_script=p1_match_file,
+                joiner_match_script=p2_match_file,
                 extra_args=["--crc-every", "30"],
             )
             assert "DESYNC" not in host_out and "DESYNC" not in joiner_out, f"DESYNC:\n{host_out}\n{joiner_out}"

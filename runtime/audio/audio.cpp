@@ -30,7 +30,7 @@ inline int16_t clamp16(int32_t val) {
 } // namespace
 
 struct Audio::Impl {
-    static constexpr size_t WORK_RAM_SIZE = 0x10000; // 64KB
+    static constexpr size_t WORK_RAM_SIZE = 0x10000;      // 64KB
     static constexpr size_t RING_BUFFER_CAPACITY = 32768; // Stereo frames
 
     std::vector<uint8_t> m_work_ram;
@@ -78,18 +78,10 @@ struct Audio::Impl {
     size_t m_rb_count;
 
     Impl()
-        : m_work_ram(WORK_RAM_SIZE, 0)
-        , m_shared_ram(nullptr)
-        , m_shared_ram_size(SHARED_RAM_SIZE)
-        , m_reset_asserted(true)
-        , m_cpu_accum(0)
-        , m_duart_accum(0)
-        , m_sample_accum(0)
-        , m_sample_buffer(RING_BUFFER_CAPACITY * 2, 0.0f)
-        , m_rb_read_pos(0)
-        , m_rb_write_pos(0)
-        , m_rb_count(0)
-    {
+        : m_work_ram(WORK_RAM_SIZE, 0), m_shared_ram(nullptr), m_shared_ram_size(SHARED_RAM_SIZE),
+          m_reset_asserted(true), m_cpu_accum(0), m_duart_accum(0), m_sample_accum(0),
+          m_sample_buffer(RING_BUFFER_CAPACITY * 2, 0.0f), m_rb_read_pos(0), m_rb_write_pos(0),
+          m_rb_count(0) {
         // Connect DUART OP6 output to ES5510 HALT pin via Reference Engine
         m_duart.set_outport_callback([this](uint8_t output_pins) {
             // Pin OP6: 1 = ESPHALT asserted (halted), 0 = ESP running
@@ -111,14 +103,14 @@ struct Audio::Impl {
     void update_gains() {
         for (unsigned channel = 0; channel < 2; ++channel) {
             const float physical = m_volume_gain[channel];
-            const float route = float(int(physical * 100.0f + 0.5f)) / 32.0f;
-            m_otis_gain[channel] = 0.18f *
-                (m_gain_model == Audio::GainModel::MameRouting ? route : 1.0f);
-            m_output_gain[channel] = Audio::output_boost *
+            const float route = float(std::lround(physical * 100.0f)) / 32.0f;
+            m_otis_gain[channel] =
+                0.18f * (m_gain_model == Audio::GainModel::MameRouting ? route : 1.0f);
+            m_output_gain[channel] =
+                Audio::OUTPUT_BOOST *
                 (m_gain_model == Audio::GainModel::MameRouting ? route : physical);
         }
     }
-
 
     void set_reset(bool asserted) {
         if (m_reset_asserted != asserted) {
@@ -135,8 +127,7 @@ struct Audio::Impl {
         m_duart.reset();
         m_reference.reset();
         m_volume.reset();
-        if (m_sound_rom.size() >= 8)
-            std::memcpy(m_work_ram.data(), m_sound_rom.data(), 8);
+        if (m_sound_rom.size() >= 8) std::memcpy(m_work_ram.data(), m_sound_rom.data(), 8);
     }
 
     void push_frame(float left, float right) {
@@ -154,9 +145,8 @@ struct Audio::Impl {
 
     void generate_one_frame() {
         ++m_generated_frames;
-        m_reference.generate_one_frame(m_otis_gain, m_output_gain, [this](float l, float r) {
-            push_frame(l, r);
-        });
+        m_reference.generate_one_frame(m_otis_gain, m_output_gain,
+                                       [this](float l, float r) { push_frame(l, r); });
     }
 
     void advance_slice(uint32_t main_cycles) {
@@ -183,8 +173,7 @@ struct Audio::Impl {
         // instruction at a time so IRQ recognition cannot depend on main blocks.
         if (!m_reset_asserted && m_cpu_runner) {
             m_cpu_accum += int64_t(main_cycles) * 15238090LL;
-            if (m_cpu_accum >= 16000000LL)
-                m_cpu_accum -= int64_t(m_cpu_runner(1)) * 16000000LL;
+            if (m_cpu_accum >= 16000000LL) m_cpu_accum -= int64_t(m_cpu_runner(1)) * 16000000LL;
         } else {
             m_cpu_accum = 0;
         }
@@ -196,7 +185,8 @@ struct Audio::Impl {
             // and complete-instruction overrun across arbitrary caller chunks.
             uint32_t step = main_cycles;
             if (!m_reset_asserted && m_cpu_runner) {
-                const uint32_t until_cpu = uint32_t((16000000LL - m_cpu_accum + 15238089LL) / 15238090LL);
+                const uint32_t until_cpu =
+                    uint32_t((16000000LL - m_cpu_accum + 15238089LL) / 15238090LL);
                 step = std::min(step, until_cpu);
             }
             const uint32_t rate = m_reference.sample_rate();
@@ -421,13 +411,9 @@ struct Audio::Impl {
     }
 
     size_t state_size() const {
-        return sizeof(CanonicalAudioCore) +
-               WORK_RAM_SIZE +
-               sizeof(float) * RING_BUFFER_CAPACITY * 2 +
-               m_reference.es5505().state_size() +
-               m_reference.es5510().state_size() +
-               m_duart.state_size() +
-               m_volume.state_size();
+        return sizeof(CanonicalAudioCore) + WORK_RAM_SIZE +
+               sizeof(float) * RING_BUFFER_CAPACITY * 2 + m_reference.es5505().state_size() +
+               m_reference.es5510().state_size() + m_duart.state_size() + m_volume.state_size();
     }
 
     void save_state(StateWriter &writer) const {
@@ -438,9 +424,12 @@ struct Audio::Impl {
         core.reset_asserted = m_reset_asserted ? 1 : 0;
         core.esp_halted = m_reference.esp_halted() ? 1 : 0;
         core.gain_model = uint8_t(m_gain_model);
-        core.volume_gain[0] = m_volume_gain[0]; core.volume_gain[1] = m_volume_gain[1];
-        core.otis_gain[0] = m_otis_gain[0]; core.otis_gain[1] = m_otis_gain[1];
-        core.output_gain[0] = m_output_gain[0]; core.output_gain[1] = m_output_gain[1];
+        core.volume_gain[0] = m_volume_gain[0];
+        core.volume_gain[1] = m_volume_gain[1];
+        core.otis_gain[0] = m_otis_gain[0];
+        core.otis_gain[1] = m_otis_gain[1];
+        core.output_gain[0] = m_output_gain[0];
+        core.output_gain[1] = m_output_gain[1];
         core.cpu_accum = m_cpu_accum;
         core.duart_accum = m_duart_accum;
         core.sample_accum = m_sample_accum;
@@ -478,13 +467,17 @@ struct Audio::Impl {
         CanonicalAudioCore core;
         reader.read(core);
         m_reference.set_bank_mask(core.bank_mask);
-        for (int i = 0; i < ES5505::MAX_VOICES; ++i) m_reference.set_bank_table(i, core.bank_table[i]);
+        for (int i = 0; i < ES5505::MAX_VOICES; ++i)
+            m_reference.set_bank_table(i, core.bank_table[i]);
         m_reset_asserted = core.reset_asserted != 0;
         m_reference.set_esp_halted(core.esp_halted != 0);
         m_gain_model = Audio::GainModel(core.gain_model);
-        m_volume_gain[0] = core.volume_gain[0]; m_volume_gain[1] = core.volume_gain[1];
-        m_otis_gain[0] = core.otis_gain[0]; m_otis_gain[1] = core.otis_gain[1];
-        m_output_gain[0] = core.output_gain[0]; m_output_gain[1] = core.output_gain[1];
+        m_volume_gain[0] = core.volume_gain[0];
+        m_volume_gain[1] = core.volume_gain[1];
+        m_otis_gain[0] = core.otis_gain[0];
+        m_otis_gain[1] = core.otis_gain[1];
+        m_output_gain[0] = core.output_gain[0];
+        m_output_gain[1] = core.output_gain[1];
         m_cpu_accum = core.cpu_accum;
         m_duart_accum = core.duart_accum;
         m_sample_accum = core.sample_accum;
@@ -499,7 +492,8 @@ struct Audio::Impl {
         if (m_rb_count > 0) {
             reader.read_bytes(m_sample_buffer.data(), m_rb_count * 2 * sizeof(float));
         }
-        std::memset(&m_sample_buffer[m_rb_count * 2], 0, (RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
+        std::memset(&m_sample_buffer[m_rb_count * 2], 0,
+                    (RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
         reader.skip((RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
 
         m_reference.load_state(reader);
@@ -579,7 +573,8 @@ void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
         m_impl->m_sample_words[i] = (uint16_t(sample_rom[i * 2]) << 8) | sample_rom[i * 2 + 1];
     }
     m_impl->m_reference.set_sample_rom(m_impl->m_sample_words.data(), word_count);
-    m_impl->m_reference.set_bank_mask((sample_rom.size() >= 0x200000) ? ((sample_rom.size() / 0x200000) - 1) : 0);
+    m_impl->m_reference.set_bank_mask(
+        (sample_rom.size() >= 0x200000) ? ((sample_rom.size() / 0x200000) - 1) : 0);
     m_impl->update_enhanced_available();
 }
 
@@ -590,21 +585,31 @@ void Audio::set_shared_ram(uint8_t *shared_ram, size_t size) {
 }
 
 void Audio::set_cpu_runner(std::function<int(int cycles)> runner) {
-    m_impl->m_cpu_runner = runner;
+    m_impl->m_cpu_runner = std::move(runner);
 }
 
 void Audio::set_reset(bool asserted) {
-    if (m_impl->m_hle) { m_impl->m_hle->set_reset(asserted); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->set_reset(asserted);
+        return;
+    }
     m_impl->set_reset(asserted);
 }
 
 void Audio::reset_board() {
-    if (m_impl->m_hle) { m_impl->m_hle->set_reset(true); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->set_reset(true);
+        return;
+    }
     m_impl->reset_board();
 }
 
-uint64_t Audio::clock_ticks() const { return m_impl->m_hle ? m_impl->m_hle->clock() : m_impl->m_clock_ticks; }
-uint64_t Audio::generated_frames() const { return m_impl->m_hle ? m_impl->m_hle->generated() : m_impl->m_generated_frames; }
+uint64_t Audio::clock_ticks() const {
+    return m_impl->m_hle ? m_impl->m_hle->clock() : m_impl->m_clock_ticks;
+}
+uint64_t Audio::generated_frames() const {
+    return m_impl->m_hle ? m_impl->m_hle->generated() : m_impl->m_generated_frames;
+}
 
 bool Audio::is_reset() const {
     if (m_impl->m_hle) return m_impl->m_hle->is_reset();
@@ -612,36 +617,24 @@ bool Audio::is_reset() const {
 }
 
 void Audio::set_reset_callback(std::function<void(bool asserted)> cb) {
-    m_impl->m_reset_cb = cb;
+    m_impl->m_reset_cb = std::move(cb);
 }
 
 void Audio::set_irq_callback(std::function<void(bool asserted)> cb) {
     m_impl->m_duart.set_irq_callback(std::move(cb));
 }
 
-uint8_t Audio::read8(uint32_t address) {
-    return m_impl->read8(address);
-}
+uint8_t Audio::read8(uint32_t address) { return m_impl->read8(address); }
 
-uint16_t Audio::read16(uint32_t address) {
-    return m_impl->read16(address);
-}
+uint16_t Audio::read16(uint32_t address) { return m_impl->read16(address); }
 
-uint32_t Audio::read32(uint32_t address) {
-    return m_impl->read32(address);
-}
+uint32_t Audio::read32(uint32_t address) { return m_impl->read32(address); }
 
-void Audio::write8(uint32_t address, uint8_t value) {
-    m_impl->write8(address, value);
-}
+void Audio::write8(uint32_t address, uint8_t value) { m_impl->write8(address, value); }
 
-void Audio::write16(uint32_t address, uint16_t value) {
-    m_impl->write16(address, value);
-}
+void Audio::write16(uint32_t address, uint16_t value) { m_impl->write16(address, value); }
 
-void Audio::write32(uint32_t address, uint32_t value) {
-    m_impl->write32(address, value);
-}
+void Audio::write32(uint32_t address, uint32_t value) { m_impl->write32(address, value); }
 
 int Audio::irq_level() const {
     // DUART timer/counter triggers IRQ level 6
@@ -659,17 +652,23 @@ uint8_t Audio::irq_ack(int level) {
 }
 
 void Audio::advance(uint32_t main_cycles) {
-    if (m_impl->m_hle) { m_impl->m_hle->advance(main_cycles); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->advance(main_cycles);
+        return;
+    }
     m_impl->advance(main_cycles);
 }
 
 uint32_t Audio::sample_rate() const {
-    if (m_impl->m_hle) return hle::sample_rate;
+    if (m_impl->m_hle) return hle::SAMPLE_RATE;
     return m_impl->m_reference.sample_rate();
 }
 
 void Audio::set_gain_model(GainModel model) {
-    if (m_impl->m_hle) { m_impl->m_hle->set_gain_model(model); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->set_gain_model(model);
+        return;
+    }
     m_impl->m_gain_model = model;
     m_impl->update_gains();
 }
@@ -715,13 +714,16 @@ size_t Audio::render_ready(int16_t *interleaved_stereo, size_t max_frames) {
 }
 
 size_t Audio::state_size() const {
-    if (m_impl->m_hle) return hle::AudioEngine::state_bytes;
+    if (m_impl->m_hle) return hle::AudioEngine::STATE_BYTES;
     return m_impl->state_size();
 }
 
 void Audio::save_state(std::span<uint8_t> dst) const {
     static_assert(Snapshotable<Impl>);
-    if (m_impl->m_hle) { m_impl->m_hle->save(dst); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->save(dst);
+        return;
+    }
     if (dst.size() != state_size()) {
         throw std::invalid_argument("Audio::save_state size mismatch");
     }
@@ -733,7 +735,10 @@ void Audio::save_state(std::span<uint8_t> dst) const {
 }
 
 void Audio::load_state(std::span<const uint8_t> src) {
-    if (m_impl->m_hle) { m_impl->m_hle->load(src); return; }
+    if (m_impl->m_hle) {
+        m_impl->m_hle->load(src);
+        return;
+    }
     if (src.size() != state_size()) {
         throw std::invalid_argument("Audio::load_state size mismatch");
     }

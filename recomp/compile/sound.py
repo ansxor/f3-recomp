@@ -4,31 +4,40 @@
 Compiles sound ROM instructions into statically compiled native C blocks
 with pinned 68000 instruction-boundary timing.
 """
+
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from dataclasses import asdict
 import json
-from pathlib import Path
 import re
 import sys
-import zlib
 import tomllib
+import zlib
+from collections import Counter
+from dataclasses import asdict
+from pathlib import Path
 
 # Ensure project root is in sys.path to access recomp package
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from recomp.discovery import (
-    PHYSICAL_ADDRESS_MASK, parse_exclusions, exclusion_at, _resolve_target,
-    CALL_MNEMONICS, UNCOND_BRANCH_MNEMONICS, COND_BRANCH_MNEMONICS,
+# sys.path is patched above so this script can run directly; imports must follow it.
+import capstone as cs  # noqa: E402
+import capstone.m68k as m68k  # noqa: E402
+
+from recomp.discovery import (  # noqa: E402
+    CALL_MNEMONICS,
+    COND_BRANCH_MNEMONICS,
+    PHYSICAL_ADDRESS_MASK,
+    UNCOND_BRANCH_MNEMONICS,
+    _resolve_target,
+    exclusion_at,
+    parse_exclusions,
 )
-from recomp.generate import _RUNTIME_ABI_VERSION
-from recomp.emitter import lower as emitter_lower, _decode_ea
-import capstone as cs
-import capstone.m68k as m68k
+from recomp.emitter import _decode_ea  # noqa: E402
+from recomp.emitter import lower as emitter_lower  # noqa: E402
+from recomp.generate import _RUNTIME_ABI_VERSION  # noqa: E402
 
 
 def write_if_changed(path: Path, data: str | bytes, encoding: str = "utf-8") -> bool:
@@ -55,7 +64,7 @@ def load_68000_base_cycles() -> bytes:
             continue
         mask_s, match_s, cyc_s = line.split(",")
         mask, match, cyc = int(mask_s, 16), int(match_s, 16), int(cyc_s)
-        free = (~mask) & 0xffff
+        free = (~mask) & 0xFFFF
         sub = free
         while True:
             table[match | sub] = cyc
@@ -73,19 +82,19 @@ def sound_instruction_cycles(insn: cs.CsInsn) -> str:
     opcode = int.from_bytes(insn.bytes[:2], "big")
     mnem = insn.mnemonic.split(".")[0]
     cycles = BASE_CYCLES[opcode]
-    if opcode & 0xf000 == 0x6000 and (opcode >> 8) & 15 >= 2:
+    if opcode & 0xF000 == 0x6000 and (opcode >> 8) & 15 >= 2:
         untaken = cycles + (-2 if insn.size == 2 else 2)
         return f"(f3_eval_cond(cpu, {(opcode >> 8) & 15}) ? {cycles}u : {untaken}u)"
     if mnem == "movem":
         count = int.from_bytes(insn.bytes[2:4], "big").bit_count()
         return f"{cycles + count * (8 if opcode & 0x40 else 4)}u"
-    if opcode & 0xf000 == 0xe000 and opcode & 0xc0 != 0xc0:
+    if opcode & 0xF000 == 0xE000 and opcode & 0xC0 != 0xC0:
         count = f"(cpu->d[{(opcode >> 9) & 7}] & 63u)" if opcode & 0x20 else f"{((opcode >> 9) & 7) or 8}u"
         return f"({cycles}u + 2u * {count})"
     if mnem in ("bchg", "bclr", "bset") and opcode & 0x38 == 0:
         bit = f"cpu->d[{(opcode >> 9) & 7}]" if opcode & 0x100 else f"{insn.operands[0].imm}u"
         return f"({cycles}u - ((({bit}) & 31u) < 16u ? 2u : 0u))"
-    if opcode & 0xf0f8 == 0x50c0 and (opcode >> 8) & 15 >= 2:
+    if opcode & 0xF0F8 == 0x50C0 and (opcode >> 8) & 15 >= 2:
         return f"({cycles}u + (f3_eval_cond(cpu, {(opcode >> 8) & 15}) ? 2u : 0u))"
     return "132u" if mnem == "reset" else f"{cycles}u"
 
@@ -107,7 +116,7 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
         ]
 
     # Illegal instruction trap (0x4afc or illegal opcodes)
-    if opcode == 0x4afc or (opcode & 0xfff8 == 0x4848):
+    if opcode == 0x4AFC or (opcode & 0xFFF8 == 0x4848):
         return [
             f"cpu->pc = 0x{insn.address:08x}u;",
             f"f3_sound_exception(cpu, 4u, 0x{insn.address:08x}u);",
@@ -126,7 +135,7 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
     if mnem == "stop":
         if not insn.operands or insn.operands[0].type != m68k.M68K_OP_IMM:
             return None
-        imm16 = insn.operands[0].imm & 0xffff
+        imm16 = insn.operands[0].imm & 0xFFFF
         return [
             f"cpu->pc = 0x{insn.address:08x}u;",
             f"f3_sound_stop(cpu, 0x{imm16:04x}u, 0x{next_pc:08x}u);",
@@ -137,7 +146,7 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
     if mnem == "trap":
         if not insn.operands or insn.operands[0].type != m68k.M68K_OP_IMM:
             return None
-        vec = 32 + (insn.operands[0].imm & 0x0f)
+        vec = 32 + (insn.operands[0].imm & 0x0F)
         return [
             f"cpu->pc = 0x{insn.address:08x}u;",
             f"f3_sound_exception(cpu, {vec}u, 0x{next_pc:08x}u);",
@@ -145,31 +154,31 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
         ]
 
     # DBcc instruction on 68000
-    if opcode & 0xf0f8 == 0x50c8:
-        cond = (opcode >> 8) & 0x0f
+    if opcode & 0xF0F8 == 0x50C8:
+        cond = (opcode >> 8) & 0x0F
         reg_num = opcode & 7
         try:
-            target = (insn.address + 2 + insn.operands[1].br_disp.disp) & 0xffffffff
+            target = (insn.address + 2 + insn.operands[1].br_disp.disp) & 0xFFFFFFFF
         except Exception:
             return None
         return [
             f"cpu->pc = 0x{insn.address:08x}u;",
             f"if (!f3_sound_eval_cond(cpu, {cond})) {{",
             f"    uint16_t count = (uint16_t)(cpu->d[{reg_num}] & 0xffffu);",
-            f"    count--;",
+            "    count--;",
             f"    cpu->d[{reg_num}] = (cpu->d[{reg_num}] & 0xffff0000u) | count;",
-            f"    if (count != 0xffffu) {{",
+            "    if (count != 0xffffu) {",
             f"        cpu->pc = 0x{target:08x}u;",
-            f"        cpu->cycles += 10u;",
-            f"        return;",
-            f"    }}",
+            "        cpu->cycles += 10u;",
+            "        return;",
+            "    }",
             f"    cpu->pc = 0x{next_pc:08x}u;",
-            f"    cpu->cycles += 14u;",
-            f"    return;",
-            f"}}",
+            "    cpu->cycles += 14u;",
+            "    return;",
+            "}",
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += 12u;",
-            f"return;",
+            "cpu->cycles += 12u;",
+            "return;",
         ]
     if mnem in ("mulu", "muls", "divu", "divs"):
         ea = _decode_ea(insn, insn.operands[0], 2, "source", post_inc_on_read=True)
@@ -177,10 +186,14 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
             return None
         register = (opcode >> 9) & 7
         base = BASE_CYCLES[opcode]
-        statements = ea.ea_setup + ea.read_stmts + [
-            f"uint16_t source = (uint16_t)({ea.val_expr});",
-            f"uint32_t destination = cpu->d[{register}];",
-        ]
+        statements = (
+            ea.ea_setup
+            + ea.read_stmts
+            + [
+                f"uint16_t source = (uint16_t)({ea.val_expr});",
+                f"uint32_t destination = cpu->d[{register}];",
+            ]
+        )
         if mnem.startswith("mul"):
             cast = "int16_t" if mnem == "muls" else "uint16_t"
             statements += [
@@ -207,8 +220,12 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
 
     remapped = [f"const uint32_t sound_cycles = {cyc_expr};"]
     writes_sr = any("f3_set_sr(" in s for s in stmts)
-    reads_sr = (mnem == "move" and insn.operands[0].type == m68k.M68K_OP_REG
-                and insn.operands[0].reg == m68k.M68K_REG_SR and not writes_sr)
+    reads_sr = (
+        mnem == "move"
+        and insn.operands[0].type == m68k.M68K_OP_REG
+        and insn.operands[0].reg == m68k.M68K_REG_SR
+        and not writes_sr
+    )
     for s in stmts:
         if reads_sr and "f3_exception(cpu, 8u," in s:
             continue  # MOVE from SR is unprivileged on 68000, unlike 68010/020.
@@ -258,18 +275,16 @@ def compile_sound_rom(
     """Compile sound ROM instructions into native C sources and CMake configuration."""
     if profile_tiers is not None and profile_slim is not None:
         raise ValueError("profile_tiers and profile_slim are mutually exclusive")
-    rom_base = 0xc00000
+    rom_base = 0xC00000
     # Candidate entries always cover the exact post-exclusion ROM complement.
     exclusions = parse_exclusions(config or {}, len(rom), cpu="sound", base=rom_base, image=rom)
-    entries = [pc for pc in range(rom_base, rom_base + len(rom), 2)
-               if exclusion_at(exclusions, pc) is None]
+    entries = [pc for pc in range(rom_base, rom_base + len(rom), 2) if exclusion_at(exclusions, pc) is None]
     profile_path = profile_tiers if profile_tiers is not None else profile_slim
     profile_mode = "slim" if profile_slim is not None else "tiers" if profile_tiers is not None else "normal"
     if profile_path is not None:
         from recomp.block_profile import load_hot
 
-        hot_entries = load_hot(profile_path, "sound", rom, base=rom_base,
-                               exclusions=exclusions) & set(entries)
+        hot_entries = load_hot(profile_path, "sound", rom, base=rom_base, exclusions=exclusions) & set(entries)
         if not hot_entries:
             raise ValueError("Sound profile contains no matching sound hits")
     else:
@@ -287,7 +302,7 @@ def compile_sound_rom(
     # Reset/vector addresses are code seeds, unlike apparent branch targets
     # found by exhaustive decoding of arbitrary ROM data.
     for offset in range(4, min(len(rom), 0x400) - 3, 4):
-        target = int.from_bytes(rom[offset:offset + 4], "big")
+        target = int.from_bytes(rom[offset : offset + 4], "big")
         # Targets above the 24-bit bus (e.g. the 0xffc48080 in vector 136 of the shipped
         # image) are not checked: this vector check predates alias-aware exclusion_at and
         # must keep its behaviour until that vector is proven live or dead.
@@ -318,12 +333,12 @@ def compile_sound_rom(
             continue
         tier = "hot" if pc in hot_entries else "cold"
         fn_name = f"f3_sound_block_{pc:06x}"
-        opcode = int.from_bytes(rom[addr:addr + 2], "big")
+        opcode = int.from_bytes(rom[addr : addr + 2], "big")
         if opcode >> 12 in (10, 15):
             table.append((pc, f"f3_sound_vector_{10 if opcode >> 12 == 10 else 11}"))
             supported["line_exception"] += 1
             continue
-        if not BASE_CYCLES[opcode] and opcode != 0x4e70:
+        if not BASE_CYCLES[opcode] and opcode != 0x4E70:
             table.append((pc, "f3_sound_vector_4"))
             supported["illegal_exception"] += 1
             continue
@@ -332,8 +347,7 @@ def compile_sound_rom(
         code = bytearray(rom[addr : addr + 16])
         # Capstone rejects nonzero ignored upper bytes for CCR/bit immediates.
         # The 68000 consumes the word but uses only its low 8 / 5 / 3 bits.
-        if len(code) >= 4 and (opcode in (0x003c, 0x023c, 0x0a3c)
-                               or opcode & 0xff00 == 0x0800):
+        if len(code) >= 4 and (opcode in (0x003C, 0x023C, 0x0A3C) or opcode & 0xFF00 == 0x0800):
             code[2] = 0
         insns = list(md.disasm(code, pc, 1))
 
@@ -344,10 +358,14 @@ def compile_sound_rom(
                 target = _resolve_target(insn, insn.operands[-1]) if insn.operands else None
                 region = exclusion_at(exclusions, target) if target is not None else None
                 if region is not None:
-                    deferred_targets.append({
-                        "pc": pc, "target": target, "reason": region.reason,
-                        "validation": "deferred_runtime",
-                    })
+                    deferred_targets.append(
+                        {
+                            "pc": pc,
+                            "target": target,
+                            "reason": region.reason,
+                            "validation": "deferred_runtime",
+                        }
+                    )
             stmts = sound_lower(insn)
             if stmts is not None:
                 supported[insn.mnemonic.split(".")[0].lower()] += 1
@@ -374,7 +392,7 @@ def compile_sound_rom(
                 else 11
                 if (opcode >> 12) == 15
                 else 4
-                if not BASE_CYCLES[opcode] and opcode != 0x4e70
+                if not BASE_CYCLES[opcode] and opcode != 0x4E70
                 else None
             )
             if vector is not None:
@@ -401,7 +419,7 @@ def compile_sound_rom(
     preamble = (
         "/* Generated by recomp/compile/sound.py. Do not commit. */\n"
         '#include "runtime/audio/reference/native/sound_native_ops.h"\n'
-        '#include <f3rt/block_profile.h>\n'
+        "#include <f3rt/block_profile.h>\n"
         '#include "sound_program.h"\n\n'
     )
 
@@ -444,13 +462,16 @@ def compile_sound_rom(
     program_c = [
         "/* Generated by recomp/compile/sound.py. Do not commit. */\n",
         '#include "runtime/audio/reference/native/sound_native_ops.h"\n',
-        '#include <f3rt/block_profile.h>\n',
+        "#include <f3rt/block_profile.h>\n",
         '#include "sound_program.h"\n\n',
     ]
     exception_names = {name for _, name in table if name.startswith("f3_sound_vector_")}
     emitted_functions += len(exception_names)
-    hot_exception_names = ({name for pc, name in table if pc in hot_entries and name in exception_names}
-                           if profile_tiers is not None else set())
+    hot_exception_names = (
+        {name for pc, name in table if pc in hot_entries and name in exception_names}
+        if profile_tiers is not None
+        else set()
+    )
     exception_sources = {"hot": [], "cold": []}
     for vector in (4, 10, 11):
         name = f"f3_sound_vector_{vector}"
@@ -510,7 +531,7 @@ def compile_sound_rom(
     write_if_changed(output_dir / "sources.cmake", "".join(cmake_lines))
 
     report = {
-        "rom_crc32": f"{zlib.crc32(rom) & 0xffffffff:08x}",
+        "rom_crc32": f"{zlib.crc32(rom) & 0xFFFFFFFF:08x}",
         "coverage_mode": coverage_mode,
         "total_words": total_words,
         "compiled_blocks": len(table),
@@ -553,8 +574,12 @@ def compile_sound_rom(
         "profile_inventory.json",
     }
     for item in output_dir.iterdir():
-        if (item.is_file() and item.name not in emitted
-                and not item.name.startswith(".") and not item.name.endswith(".stamp")):
+        if (
+            item.is_file()
+            and item.name not in emitted
+            and not item.name.startswith(".")
+            and not item.name.endswith(".stamp")
+        ):
             item.unlink()
 
     return report
@@ -565,7 +590,9 @@ def main() -> None:
     parser.add_argument("--rom-dir", required=True, type=Path, help="Directory containing the selected game ROMs")
     parser.add_argument("--output", required=True, type=Path, help="Output directory for generated sources")
     parser.add_argument("--config", required=True, type=Path, help="Game ROM manifest and instruction exclusions")
-    parser.add_argument("--blocks-per-file", type=int, default=1024, help="Number of instruction blocks per shard C file")
+    parser.add_argument(
+        "--blocks-per-file", type=int, default=1024, help="Number of instruction blocks per shard C file"
+    )
     profile = parser.add_mutually_exclusive_group()
     profile.add_argument("--profile-tiers", type=Path, help="Profile for hot/cold full-coverage generation")
     profile.add_argument("--profile-slim", type=Path, help="Profile for explicit hot-only generation")

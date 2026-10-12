@@ -34,4 +34,4 @@ struct RomSet {
 };
 uint32_t crc32(const uint8_t *data, size_t size);
 std::array<uint32_t, 7> rom_region_crcs(const RomSet &roms);
-}
+} // namespace f3rt

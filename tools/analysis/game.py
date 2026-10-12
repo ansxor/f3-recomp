@@ -14,58 +14,142 @@ pass cannot attribute is kept visible instead of dropped: unresolved computed
 jmp/jsr sites and profile-hit entries with no static predecessor both connect to
 the pseudo routine DISPATCH ("?dispatch"), i.e. the runtime's f3_dispatch lookup.
 """
+
 from __future__ import annotations
 
-from bisect import bisect_right
-import dataclasses
 import copy
-from dataclasses import dataclass, field
+import dataclasses
 import os
-from pathlib import Path
 import re
 import sys
 import tomllib
 import zlib
+from bisect import bisect_right
+from dataclasses import dataclass, field
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from capstone import m68k as M  # noqa: E402
+
 from recomp.discovery import (  # noqa: E402  (path set up above)
-    CALL_MNEMONICS, COND_BRANCH_MNEMONICS, TERMINAL_MNEMONICS, UNCOND_BRANCH_MNEMONICS,
-    Cs, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, _computed_transfer,
-    _resolve_target, discover, load_rom,
+    CALL_MNEMONICS,
+    COND_BRANCH_MNEMONICS,
+    CS_ARCH_M68K,
+    CS_MODE_BIG_ENDIAN,
+    CS_MODE_M68K_020,
+    TERMINAL_MNEMONICS,
+    UNCOND_BRANCH_MNEMONICS,
+    Cs,
+    _computed_transfer,
+    _resolve_target,
+    discover,
+    load_rom,
 )
 from recomp.emitter import _ea_extension_bytes, _pc_base  # noqa: E402
-from capstone import m68k as M  # noqa: E402
 
 DISPATCH = -1  # pseudo routine: f3_dispatch / anything the static pass cannot attribute
 
 # Fixed Taito F3 main-CPU map. Layer names match runtime/debug/discovery.cpp.
 REGIONS = [
-    (0x000000, 0x200000, "rom"), (0x400000, 0x440000, "ram"), (0x440000, 0x448000, "palette"),
-    (0x4a0000, 0x4a0020, "io"), (0x4c0000, 0x4c0004, "timer"), (0x600000, 0x610000, "sprites"),
-    (0x610000, 0x612000, "pf0"), (0x612000, 0x614000, "pf1"), (0x614000, 0x616000, "pf2"),
-    (0x616000, 0x618000, "pf3"), (0x618000, 0x61a000, "pf2-alt"), (0x61a000, 0x61c000, "pf3-alt"),
-    (0x61c000, 0x61e000, "text"), (0x61e000, 0x620000, "charram"), (0x620000, 0x630000, "lines"),
-    (0x630000, 0x640000, "pivot"), (0x660000, 0x660040, "control"), (0xc00000, 0xc00800, "shared"),
-    (0xc80000, 0xc80104, "sound-reset"),
+    (0x000000, 0x200000, "rom"),
+    (0x400000, 0x440000, "ram"),
+    (0x440000, 0x448000, "palette"),
+    (0x4A0000, 0x4A0020, "io"),
+    (0x4C0000, 0x4C0004, "timer"),
+    (0x600000, 0x610000, "sprites"),
+    (0x610000, 0x612000, "pf0"),
+    (0x612000, 0x614000, "pf1"),
+    (0x614000, 0x616000, "pf2"),
+    (0x616000, 0x618000, "pf3"),
+    (0x618000, 0x61A000, "pf2-alt"),
+    (0x61A000, 0x61C000, "pf3-alt"),
+    (0x61C000, 0x61E000, "text"),
+    (0x61E000, 0x620000, "charram"),
+    (0x620000, 0x630000, "lines"),
+    (0x630000, 0x640000, "pivot"),
+    (0x660000, 0x660040, "control"),
+    (0xC00000, 0xC00800, "shared"),
+    (0xC80000, 0xC80104, "sound-reset"),
 ]
-VIDEO_REGIONS = {"sprites", "pf0", "pf1", "pf2", "pf3", "pf2-alt", "pf3-alt", "text", "charram",
-                 "lines", "pivot", "control", "palette"}
+VIDEO_REGIONS = {
+    "sprites",
+    "pf0",
+    "pf1",
+    "pf2",
+    "pf3",
+    "pf2-alt",
+    "pf3-alt",
+    "text",
+    "charram",
+    "lines",
+    "pivot",
+    "control",
+    "palette",
+}
 # runtime/debug/discovery.cpp folds charram into text and pivot into lines.
 LOG_LAYER = {"charram": "text", "pivot": "lines"}
 
-VECTOR_NAMES = {1: "reset", 2: "bus-error", 3: "address-error", 4: "illegal", 5: "zero-divide",
-                6: "chk", 7: "trapv", 8: "privilege", 9: "trace", 24: "spurious"}
+VECTOR_NAMES = {
+    1: "reset",
+    2: "bus-error",
+    3: "address-error",
+    4: "illegal",
+    5: "zero-divide",
+    6: "chk",
+    7: "trapv",
+    8: "privilege",
+    9: "trace",
+    24: "spurious",
+}
 VECTOR_NAMES.update({24 + level: f"irq{level}" for level in range(1, 8)})
 VECTOR_NAMES.update({32 + n: f"trap{n}" for n in range(16)})
 
-READ_ONLY = {"tst", "cmp", "cmpa", "cmpi", "cmpm", "cmp2", "btst", "chk", "chk2", "bftst",
-             "bfextu", "bfexts", "bfffo", "pack", "unpk"}
-WRITE_ONLY = {"move", "movea", "moveq", "clr", "st", "sf", "shi", "sls", "scc", "scs", "sne",
-              "seq", "svc", "svs", "spl", "smi", "sge", "slt", "sgt", "sle", "movep", "move16",
-              "bfins", "lea"}
+READ_ONLY = {
+    "tst",
+    "cmp",
+    "cmpa",
+    "cmpi",
+    "cmpm",
+    "cmp2",
+    "btst",
+    "chk",
+    "chk2",
+    "bftst",
+    "bfextu",
+    "bfexts",
+    "bfffo",
+    "pack",
+    "unpk",
+}
+WRITE_ONLY = {
+    "move",
+    "movea",
+    "moveq",
+    "clr",
+    "st",
+    "sf",
+    "shi",
+    "sls",
+    "scc",
+    "scs",
+    "sne",
+    "seq",
+    "svc",
+    "svs",
+    "spl",
+    "smi",
+    "sge",
+    "slt",
+    "sgt",
+    "sle",
+    "movep",
+    "move16",
+    "bfins",
+    "lea",
+}
 ADDRESS_ONLY = {"lea", "pea", "jmp", "jsr"}
 
 
@@ -78,10 +162,10 @@ def region_of(address: int) -> str:
 
 def canonical(address: int) -> int:
     """Fold the work-RAM mirror (128 KiB repeated across 0x400000..0x43ffff)."""
-    address &= 0xffffffff
+    address &= 0xFFFFFFFF
     if 0x400000 <= address < 0x440000:
-        return 0x400000 + ((address - 0x400000) & 0x1ffff)
-    return address & 0xffffff
+        return 0x400000 + ((address - 0x400000) & 0x1FFFF)
+    return address & 0xFFFFFF
 
 
 ALL_SCRATCH = ("a0", "a1", "a2", "a3", "a4", "a6", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7")
@@ -134,16 +218,17 @@ def base_register(insn, op) -> str:
 @dataclass
 class Operand:
     """One memory operand with whatever its address statically resolves to."""
+
     index: int
-    role: str            # read | write | rmw | addr
-    mode: str            # abs | pc | a5 | areg | areg-idx | pc-idx | memi
+    role: str  # read | write | rmw | addr
+    mode: str  # abs | pc | a5 | areg | areg-idx | pc-idx | memi
     address: int | None  # statically known effective address (base for indexed modes)
-    reg: str = ""        # base address register for areg modes
+    reg: str = ""  # base address register for areg modes
     disp: int = 0
     index_reg: str = ""
     scale: int = 1
     indirect: bool = False
-    postinc: int = 0      # +size for (An)+, -size for -(An)
+    postinc: int = 0  # +size for (An)+, -size for -(An)
 
 
 @dataclass
@@ -156,15 +241,21 @@ class Routine:
 
 @dataclass
 class Edge:
-    src: int      # routine entry or DISPATCH
-    dst: int      # routine entry or DISPATCH
-    kind: str     # call | tail | fall | table | table-call | regconst | regtable | ref | slot | dispatch | resume
-    site: int     # instruction PC making the transfer (-1 for synthetic)
+    src: int  # routine entry or DISPATCH
+    dst: int  # routine entry or DISPATCH
+    kind: str  # call | tail | fall | table | table-call | regconst | regtable | ref | slot | dispatch | resume
+    site: int  # instruction PC making the transfer (-1 for synthetic)
 
 
 class Game:
-    def __init__(self, game: str, rom_dir: str | None = None, profile: str | None = None,
-                 symbols: str | None = None, a5: int | None = None):
+    def __init__(
+        self,
+        game: str,
+        rom_dir: str | None = None,
+        profile: str | None = None,
+        symbols: str | None = None,
+        a5: int | None = None,
+    ):
         self.id = game
         self.config_path = ROOT / "games" / game / "config.toml"
         if not self.config_path.is_file():
@@ -217,7 +308,8 @@ class Game:
             if status and status.group(1) == "refuted":
                 continue
             labels[int(match.group(1), 16)] = match.group(2).replace("-", "_") + (
-                "" if status and status.group(1) == "confirmed" else "?")
+                "" if status and status.group(1) == "confirmed" else "?"
+            )
         return labels
 
     def _discover(self, profile: str | None) -> None:
@@ -238,15 +330,19 @@ class Game:
             raise SystemExit(f"f3a: profile not found: {profile}")
         if self.hits:
             discovery["entry_points"] = list(discovery.get("entry_points", [])) + sorted(
-                pc for pc in self.hits if pc < len(self.rom) and not pc & 1)
+                pc for pc in self.hits if pc < len(self.rom) and not pc & 1
+            )
             merged = discover(self.rom, config)
         else:
             merged = rooted
         self.code = merged.instructions
         self.branch_targets = merged.branch_targets
         self.indirect_targets = merged.indirect_targets
-        self.config_tables = {int(str(t["address"]), 0) for t in discovery.get("jump_tables", [])
-                              if isinstance(t, dict) and "address" in t}
+        self.config_tables = {
+            int(str(t["address"]), 0)
+            for t in discovery.get("jump_tables", [])
+            if isinstance(t, dict) and "address" in t
+        }
         self.unresolved = {int(item["pc"], 16): item for item in merged.report.get("unresolved_branches", [])}
         # Instruction -> owning basic-block entry, for "executed" evidence.
         self.block_of: dict[int, int] = {}
@@ -258,12 +354,12 @@ class Game:
 
     def _read_profile(self, path: Path) -> dict[int, int]:
         hits: dict[int, int] = {}
-        crc = zlib.crc32(self.rom) & 0xffffffff
+        crc = zlib.crc32(self.rom) & 0xFFFFFFFF
         for line in path.read_text().splitlines():
             parts = line.split()
             if len(parts) == 5 and parts[0] == "rom" and parts[1] == "main":
                 size = int(parts[4], 16)
-                image_crc = zlib.crc32(self.rom.ljust(size, b"\0")) & 0xffffffff
+                image_crc = zlib.crc32(self.rom.ljust(size, b"\0")) & 0xFFFFFFFF
                 if int(parts[2], 16) not in (crc, image_crc):
                     print(f"f3a: warning: {path} was recorded on a different ROM; ignoring it", file=sys.stderr)
                     return {}
@@ -278,11 +374,17 @@ class Game:
                 continue
             insn = self.code[pc]
             ops = insn.operands
-            if base_mnemonic(insn) in ("lea", "movea") and len(ops) == 2 and ops[1].type == M.M68K_OP_REG \
-                    and insn.reg_name(ops[1].reg) == "a5":
-                if ops[0].address_mode in (M.M68K_AM_ABSOLUTE_DATA_LONG, M.M68K_AM_IMMEDIATE,
-                                           M.M68K_AM_ABSOLUTE_DATA_SHORT):
-                    values.add(ops[0].imm & 0xffffffff)
+            if (
+                base_mnemonic(insn) in ("lea", "movea")
+                and len(ops) == 2
+                and ops[1].type == M.M68K_OP_REG
+                and insn.reg_name(ops[1].reg) == "a5"
+            ) and ops[0].address_mode in (
+                M.M68K_AM_ABSOLUTE_DATA_LONG,
+                M.M68K_AM_IMMEDIATE,
+                M.M68K_AM_ABSOLUTE_DATA_SHORT,
+            ):
+                values.add(ops[0].imm & 0xFFFFFFFF)
         return values.pop() if len(values) == 1 else None
 
     # ---------------------------------------------------------------- evidence
@@ -300,7 +402,7 @@ class Game:
         if insn is not None:
             return insn
         if pc not in self._decoded_cache:
-            chunk = self.rom[pc:pc + 24].ljust(24, b"\0")
+            chunk = self.rom[pc : pc + 24].ljust(24, b"\0")
             insn = next(self.md.disasm(chunk, pc, count=1), None)
             if insn is not None and (not insn.id or insn.mnemonic.startswith("dc")):
                 insn = None  # Capstone SKIPDATA record: data, not an instruction
@@ -342,7 +444,7 @@ class Game:
                 target = op.imm
             elif op.address_mode == M.M68K_AM_PCI_DISP:
                 target = _pc_base(insn) + op.mem.disp
-        elif op.type == M.M68K_OP_IMM and access_size(insn) == 4 and op.imm & 0xfff:
+        elif op.type == M.M68K_OP_IMM and access_size(insn) == 4 and op.imm & 0xFFF:
             target = op.imm  # 4 KiB multiples (0x4000, 0x5000...) are fixed-point numbers far more often than code
         if target is None or target & 1 or not 0x400 <= target < len(self.rom) or target not in self.code:
             return []
@@ -357,7 +459,7 @@ class Game:
 
         self.vectors: dict[int, int] = {}
         for vector in range(1, 256):
-            target = int.from_bytes(self.rom[vector * 4:vector * 4 + 4], "big")
+            target = int.from_bytes(self.rom[vector * 4 : vector * 4 + 4], "big")
             self.vectors[vector] = target
             if target in self.code and not target & 1 and target >= 0x400:
                 add(target, f"vector:{VECTOR_NAMES.get(vector, f'v{vector}')}")
@@ -427,15 +529,27 @@ class Game:
                 ops = insn.operands
                 if base in ("move", "movea") and len(ops) == 2:
                     # saves a7/sp to memory (excluding stack push -(a7))
-                    if ops[0].type == M.M68K_OP_REG and insn.reg_name(ops[0].reg) in ("a7", "sp"):
-                        if ops[1].type == M.M68K_OP_MEM:
-                            if not (ops[1].address_mode == M.M68K_AM_REGI_ADDR_PRE_DEC and base_register(insn, ops[1]) in ("a7", "sp")):
-                                saves_sp = True
+                    if (
+                        ops[0].type == M.M68K_OP_REG
+                        and insn.reg_name(ops[0].reg) in ("a7", "sp")
+                        and ops[1].type == M.M68K_OP_MEM
+                        and not (
+                            ops[1].address_mode == M.M68K_AM_REGI_ADDR_PRE_DEC
+                            and base_register(insn, ops[1]) in ("a7", "sp")
+                        )
+                    ):
+                        saves_sp = True
                     # loads a7/sp from memory (excluding stack pop (a7)+)
-                    if ops[1].type == M.M68K_OP_REG and insn.reg_name(ops[1].reg) in ("a7", "sp"):
-                        if ops[0].type == M.M68K_OP_MEM:
-                            if not (ops[0].address_mode == M.M68K_AM_REGI_ADDR_POST_INC and base_register(insn, ops[0]) in ("a7", "sp")):
-                                loads_sp = True
+                    if (
+                        ops[1].type == M.M68K_OP_REG
+                        and insn.reg_name(ops[1].reg) in ("a7", "sp")
+                        and ops[0].type == M.M68K_OP_MEM
+                        and not (
+                            ops[0].address_mode == M.M68K_AM_REGI_ADDR_POST_INC
+                            and base_register(insn, ops[0]) in ("a7", "sp")
+                        )
+                    ):
+                        loads_sp = True
             if saves_sp and loads_sp:
                 trap_num = int(name.removeprefix("trap"))
                 self.yield_traps[trap_num] = target
@@ -451,7 +565,7 @@ class Game:
                     if routine_entry is not None:
                         self.resume_points[nxt] = routine_entry
 
-        for res_pc, routine_entry in self.resume_points.items():
+        for _res_pc, routine_entry in self.resume_points.items():
             routine = self.routines.get(routine_entry)
             if routine is not None:
                 routine.kinds.add("task")
@@ -537,8 +651,7 @@ class Game:
                     self.edges += [Edge(entry, t, "table-call", pc) for t in targets if t in entries]
                 elif kind in ("branch", "cond", "table-jump"):
                     edge_kind = "table" if kind == "table-jump" else "tail"
-                    self.edges += [Edge(entry, t, edge_kind, pc) for t in targets
-                                   if t in entries and t != entry]
+                    self.edges += [Edge(entry, t, edge_kind, pc) for t in targets if t in entries and t != entry]
                 elif kind in ("unresolved-call", "unresolved-jump"):
                     resolved, how = self.register_target(entry, pc)
                     resolved = [t for t in resolved if t in entries]
@@ -607,20 +720,31 @@ class Game:
             if value.kind == "const":
                 return targets, "register constant"
             if value.kind == "table":
-                return targets, (f"ROM pointer table {h(value.value)} loaded at {h(value.set_at)}: {len(targets)} "
-                                 "plausible code pointers (bounded by the first non-code long; f3a dis --data longs)")
+                return targets, (
+                    f"ROM pointer table {h(value.value)} loaded at {h(value.set_at)}: {len(targets)} "
+                    "plausible code pointers (bounded by the first non-code long; f3a dis --data longs)"
+                )
             if value.kind == "field":
-                return [], f"target = long at {value.reg}{value.value:+#x} (loaded at {h(value.set_at)}; " \
-                           f"stores to that field: f3a writes --field {value.value:#x})"
+                return (
+                    [],
+                    f"target = long at {value.reg}{value.value:+#x} (loaded at {h(value.set_at)}; "
+                    f"stores to that field: f3a writes --field {value.value:#x})",
+                )
             if value.kind == "stream":
-                return [], f"target = next long of a data stream ({value.reg})+ (loaded at {h(value.set_at)}): " \
-                           f"a script or callback list operand; see the ROM data that names the candidates"
+                return (
+                    [],
+                    f"target = next long of a data stream ({value.reg})+ (loaded at {h(value.set_at)}): "
+                    f"a script or callback list operand; see the ROM data that names the candidates",
+                )
             return [], f"target = {reg} ({value.kind}, set {h(value.set_at)})"
         if op.address_mode in (M.M68K_AM_MEMI_PRE_INDEX, M.M68K_AM_MEMI_POST_INDEX):
             operand = self._operand(insn, op, len(insn.operands) - 1, "addr")
             if operand is not None and operand.reg:
-                return [], f"target = long at {operand.reg}{operand.disp:+#x} (a code-pointer slot; who stores " \
-                           f"it: f3a xref --field {operand.disp:#x} --role write --code)"
+                return (
+                    [],
+                    f"target = long at {operand.reg}{operand.disp:+#x} (a code-pointer slot; who stores "
+                    f"it: f3a xref --field {operand.disp:#x} --role write --code)",
+                )
         if op.address_mode in (M.M68K_AM_PCI_INDEX_8_BIT_DISP, M.M68K_AM_PCI_INDEX_BASE_DISP):
             # jmp table(pc,d0.w) with d0 read from one RAM variable: the constants the program stores there.
             operand = self._operand(insn, op, len(insn.operands) - 1, "addr")
@@ -631,8 +755,10 @@ class Game:
                 cell = self.describe_address(value.value)
                 if values and complete:
                     targets = sorted({operand.address + v * operand.scale for v in values})
-                    return targets, (f"index {index} = {cell} (read at {h(value.set_at)}); the program only stores "
-                                     f"{', '.join(hex(v) for v in sorted(values))} there")
+                    return targets, (
+                        f"index {index} = {cell} (read at {h(value.set_at)}); the program only stores "
+                        f"{', '.join(hex(v) for v in sorted(values))} there"
+                    )
                 return [], f"index {index} = {cell}; non-constant stores to it (f3a xref {h(value.value)})"
         return [], ""
 
@@ -678,7 +804,7 @@ class Game:
         long, so adjacent tables can run together."""
         targets = []
         for address in range(base, min(len(self.rom) - 3, base + 4 * limit), 4):
-            value = int.from_bytes(self.rom[address:address + 4], "big")
+            value = int.from_bytes(self.rom[address : address + 4], "big")
             if value & 1 or not 0x400 <= value < len(self.rom) or self.insn_at(value) is None:
                 break
             targets.append(value)
@@ -698,18 +824,22 @@ class Game:
             for pc in self.routines[entry].pcs:
                 insn = self.code[pc]
                 ops = list(insn.operands)
-                if base_mnemonic(insn) not in ("move", "movea") or len(ops) != 2 or access_size(insn) != 4 \
-                        or ops[1].type != M.M68K_OP_MEM:
+                if (
+                    base_mnemonic(insn) not in ("move", "movea")
+                    or len(ops) != 2
+                    or access_size(insn) != 4
+                    or ops[1].type != M.M68K_OP_MEM
+                ):
                     continue
                 state = states.get(pc, {})
                 src = ops[0]
                 value = None
                 if src.type == M.M68K_OP_IMM:
-                    value = src.imm & 0xffffffff
+                    value = src.imm & 0xFFFFFFFF
                 elif src.type == M.M68K_OP_REG:
                     prior = state.get(insn.reg_name(src.reg))
                     if prior is not None and prior.kind == "const":
-                        value = (prior.value + prior.step) & 0xffffffff
+                        value = (prior.value + prior.step) & 0xFFFFFFFF
                 if value not in self.routines:
                     continue
                 dest = self._operand(insn, ops[1], 1, "write")
@@ -765,7 +895,7 @@ class Game:
             return self._rom_pointers
         covered = bytearray(len(self.rom))
         for pc, insn in self.code.items():
-            covered[pc:pc + insn.size] = b"\1" * insn.size
+            covered[pc : pc + insn.size] = b"\1" * insn.size
         found: dict[int, list[int]] = {}
         rom = self.rom
         for address in range(0, len(rom) - 3, 2):
@@ -781,25 +911,37 @@ class Game:
         """Why a profile-hit entry has no static predecessor: code that stores its address into a
         structure slot or RAM cell, ROM data that names it, or the instruction laid out before it."""
         slots, cells = self.code_stores()
-        stored = [(f"slot {disp:+#x}", pcs) for disp, targets in slots.items() for t, pcs in targets.items() if t == entry]
-        stored += [(f"cell {self.describe_address(a)}", pcs) for a, targets in cells.items()
-                   for t, pcs in targets.items() if t == entry]
+        stored = [
+            (f"slot {disp:+#x}", pcs) for disp, targets in slots.items() for t, pcs in targets.items() if t == entry
+        ]
+        stored += [
+            (f"cell {self.describe_address(a)}", pcs)
+            for a, targets in cells.items()
+            for t, pcs in targets.items()
+            if t == entry
+        ]
         if stored:
-            return "stored as a code pointer: " + ", ".join(f"{where} at {', '.join(h(p) for p in pcs[:2])}"
-                                                           for where, pcs in stored[:3])
+            return "stored as a code pointer: " + ", ".join(
+                f"{where} at {', '.join(h(p) for p in pcs[:2])}" for where, pcs in stored[:3]
+            )
         listed = self.rom_pointers().get(entry, [])
         if listed:
             more = f" +{len(listed) - 3}" if len(listed) > 3 else ""
-            return f"its address is a long in ROM data at {', '.join(h(a) for a in listed[:3])}{more} " \
-                   "(script, callback list or pointer table)"
+            return (
+                f"its address is a long in ROM data at {', '.join(h(a) for a in listed[:3])}{more} "
+                "(script, callback list or pointer table)"
+            )
         for back in (2, 4, 6, 8, 10):
             prev = self.code.get(entry - back)
             if prev is not None and entry - back + prev.size == entry:
                 base = base_mnemonic(prev)
                 if base in ("jmp", "bra") and prev.operands and not _computed_transfer(prev):
                     target = _resolve_target(prev, prev.operands[-1])
-                    return f"laid out after a tail jump ({base} {h(target)} at {h(prev.address)}); entered by computed transfer" \
-                        if target is not None else f"laid out after {base} at {h(prev.address)}"
+                    return (
+                        f"laid out after a tail jump ({base} {h(target)} at {h(prev.address)}); entered by computed transfer"
+                        if target is not None
+                        else f"laid out after {base} at {h(prev.address)}"
+                    )
                 if base in ("rts", "rte", "rtr"):
                     return f"laid out after {base} at {h(prev.address)}; entered by computed transfer"
                 return f"laid out after {prev.mnemonic} at {h(prev.address)}; entered by computed transfer"
@@ -837,22 +979,33 @@ class Game:
         reg = base_register(insn, op)
         size = access_size(insn)
         if mode in (M.M68K_AM_ABSOLUTE_DATA_LONG, M.M68K_AM_ABSOLUTE_DATA_SHORT):
-            value = op.imm & 0xffffffff
+            value = op.imm & 0xFFFFFFFF
             if mode == M.M68K_AM_ABSOLUTE_DATA_SHORT and value & 0x8000:
-                value |= 0xffff0000
+                value |= 0xFFFF0000
             return Operand(index, role, "abs", canonical(value))
         if mode == M.M68K_AM_PCI_DISP:
             return Operand(index, role, "pc", canonical(_pc_base(insn) + mem.disp))
-        if mode in (M.M68K_AM_REGI_ADDR, M.M68K_AM_REGI_ADDR_POST_INC, M.M68K_AM_REGI_ADDR_PRE_DEC,
-                    M.M68K_AM_REGI_ADDR_DISP):
+        if mode in (
+            M.M68K_AM_REGI_ADDR,
+            M.M68K_AM_REGI_ADDR_POST_INC,
+            M.M68K_AM_REGI_ADDR_PRE_DEC,
+            M.M68K_AM_REGI_ADDR_DISP,
+        ):
             disp = mem.disp if mode == M.M68K_AM_REGI_ADDR_DISP else 0
             step = size if mode == M.M68K_AM_REGI_ADDR_POST_INC else -size if mode == M.M68K_AM_REGI_ADDR_PRE_DEC else 0
             if reg == "a5" and self.a5 is not None:
                 return Operand(index, role, "a5", canonical(self.a5 + disp), reg, disp, postinc=step)
             return Operand(index, role, "areg", None, reg, disp, postinc=step)
-        if mode in (M.M68K_AM_AREGI_INDEX_8_BIT_DISP, M.M68K_AM_AREGI_INDEX_BASE_DISP,
-                    M.M68K_AM_MEMI_POST_INDEX, M.M68K_AM_MEMI_PRE_INDEX, M.M68K_AM_PCI_INDEX_8_BIT_DISP,
-                    M.M68K_AM_PCI_INDEX_BASE_DISP, M.M68K_AM_PC_MEMI_POST_INDEX, M.M68K_AM_PC_MEMI_PRE_INDEX):
+        if mode in (
+            M.M68K_AM_AREGI_INDEX_8_BIT_DISP,
+            M.M68K_AM_AREGI_INDEX_BASE_DISP,
+            M.M68K_AM_MEMI_POST_INDEX,
+            M.M68K_AM_MEMI_PRE_INDEX,
+            M.M68K_AM_PCI_INDEX_8_BIT_DISP,
+            M.M68K_AM_PCI_INDEX_BASE_DISP,
+            M.M68K_AM_PC_MEMI_POST_INDEX,
+            M.M68K_AM_PC_MEMI_PRE_INDEX,
+        ):
             return self._extension_operand(insn, op, index, role)
         return None
 
@@ -866,23 +1019,26 @@ class Game:
             offset += _ea_extension_bytes(raw, offset, (opcode >> 3) & 7, opcode & 7, access_size(insn))
         if offset + 2 > len(raw):
             return None
-        ext = int.from_bytes(raw[offset:offset + 2], "big")
+        ext = int.from_bytes(raw[offset : offset + 2], "big")
         index_reg = f"{'a' if ext & 0x8000 else 'd'}{(ext >> 12) & 7}.{'l' if ext & 0x800 else 'w'}"
         scale = 1 << ((ext >> 9) & 3)
         pc_based = op.mem.base_reg == M.M68K_REG_PC or op.address_mode in (
-            M.M68K_AM_PCI_INDEX_8_BIT_DISP, M.M68K_AM_PCI_INDEX_BASE_DISP,
-            M.M68K_AM_PC_MEMI_POST_INDEX, M.M68K_AM_PC_MEMI_PRE_INDEX)
+            M.M68K_AM_PCI_INDEX_8_BIT_DISP,
+            M.M68K_AM_PCI_INDEX_BASE_DISP,
+            M.M68K_AM_PC_MEMI_POST_INDEX,
+            M.M68K_AM_PC_MEMI_PRE_INDEX,
+        )
         reg = "" if pc_based else (insn.reg_name(op.mem.base_reg) if op.mem.base_reg else "")
         indirect = False
         if not ext & 0x100:
-            disp = int.from_bytes(raw[offset + 1:offset + 2], "big", signed=True)
+            disp = int.from_bytes(raw[offset + 1 : offset + 2], "big", signed=True)
         else:
             bd_size = {1: 0, 2: 2, 3: 4}.get((ext >> 4) & 3, 0)
-            disp = int.from_bytes(raw[offset + 2:offset + 2 + bd_size], "big", signed=True) if bd_size else 0
+            disp = int.from_bytes(raw[offset + 2 : offset + 2 + bd_size], "big", signed=True) if bd_size else 0
             indirect = bool(ext & 3)
-            if ext & 0x80:      # base suppressed
+            if ext & 0x80:  # base suppressed
                 pc_based, reg = False, ""
-            if ext & 0x40:      # index suppressed
+            if ext & 0x40:  # index suppressed
                 index_reg, scale = "", 1
         if not index_reg and not indirect:
             # (bd,An,invalid) with the index suppressed is plain displacement addressing.
@@ -893,35 +1049,62 @@ class Game:
             if reg:
                 return Operand(index, role, "areg", None, reg, disp)
         if pc_based:
-            return Operand(index, role, "pc-idx" if not indirect else "memi", canonical(_pc_base(insn) + disp),
-                           "pc", disp, index_reg, scale, indirect)
+            return Operand(
+                index,
+                role,
+                "pc-idx" if not indirect else "memi",
+                canonical(_pc_base(insn) + disp),
+                "pc",
+                disp,
+                index_reg,
+                scale,
+                indirect,
+            )
         if reg == "a5" and self.a5 is not None:
-            return Operand(index, role, "areg-idx" if not indirect else "memi", canonical(self.a5 + disp),
-                           reg, disp, index_reg, scale, indirect)
+            return Operand(
+                index,
+                role,
+                "areg-idx" if not indirect else "memi",
+                canonical(self.a5 + disp),
+                reg,
+                disp,
+                index_reg,
+                scale,
+                indirect,
+            )
         if not reg:
-            return Operand(index, role, "abs-idx" if not indirect else "memi", canonical(disp), "", disp,
-                           index_reg, scale, indirect)
+            return Operand(
+                index,
+                role,
+                "abs-idx" if not indirect else "memi",
+                canonical(disp),
+                "",
+                disp,
+                index_reg,
+                scale,
+                indirect,
+            )
         return Operand(index, role, "areg-idx" if not indirect else "memi", None, reg, disp, index_reg, scale, indirect)
 
     # ---------------------------------------------------------------- register tracking
     @dataclass
     class Value:
-        kind: str          # const | ptr (loaded from RAM cell `value`) | sp / frame (offset from the
-                           # stack pointer at routine entry) | arg (loaded from the caller's stack slot
-                           # at entry_sp + value) | in (the caller's value of register `reg`) | field
-                           # (long at reg+value) | table (entry of constant table `value`) | stream
-                           # (long read through (reg)+: script/callback list operand) | cell (data
-                           # register loaded with the byte/word RAM variable at `value`)
+        kind: str  # const | ptr (loaded from RAM cell `value`) | sp / frame (offset from the
+        # stack pointer at routine entry) | arg (loaded from the caller's stack slot
+        # at entry_sp + value) | in (the caller's value of register `reg`) | field
+        # (long at reg+value) | table (entry of constant table `value`) | stream
+        # (long read through (reg)+: script/callback list operand) | cell (data
+        # register loaded with the byte/word RAM variable at `value`)
         value: int
         set_at: int
-        step: int = 0      # accumulated (An)+ / addq / adda adjustments seen after set_at
-        reg: str = ""      # for kind "in"
+        step: int = 0  # accumulated (An)+ / addq / adda adjustments seen after set_at
+        reg: str = ""  # for kind "in"
         drift: bool = False  # also advanced by a non-constant amount (adda.w dN,aN)
-        alts: tuple = ()   # const: other constants set on alternative branches (lea A,a4 / bra / lea B,a4)
+        alts: tuple = ()  # const: other constants set on alternative branches (lea A,a4 / bra / lea B,a4)
 
         def constants(self) -> list[int]:
             """Every value a const may hold: this one plus the branch alternatives, each stepped."""
-            return [(v + self.step) & 0xffffffff for v in (self.value,) + self.alts]
+            return [(v + self.step) & 0xFFFFFFFF for v in (self.value, *self.alts)]
 
     def track_registers(self, entry: int, stop: int | None = None, observe=None) -> dict:
         """Forward pass over a routine in address order tracking registers that hold constants
@@ -947,8 +1130,12 @@ class Game:
         cache = self.__dict__.setdefault("_state_cache", {})
         if entry not in cache:
             snapshots: dict[int, dict] = {}
-            self.track_registers(entry, observe=lambda pc, insn, state: snapshots.__setitem__(
-                pc, {k: dataclasses.replace(v) for k, v in state.items()}))
+            self.track_registers(
+                entry,
+                observe=lambda pc, insn, state: snapshots.__setitem__(
+                    pc, {k: dataclasses.replace(v) for k, v in state.items()}
+                ),
+            )
             cache[entry] = snapshots
         return cache[entry]
 
@@ -957,8 +1144,10 @@ class Game:
         ops = list(insn.operands)
         sp = state.get("a7")
         for op in ops:  # (An)+ / -(An) side effects
-            if op.type == M.M68K_OP_MEM and op.address_mode in (M.M68K_AM_REGI_ADDR_POST_INC,
-                                                                 M.M68K_AM_REGI_ADDR_PRE_DEC):
+            if op.type == M.M68K_OP_MEM and op.address_mode in (
+                M.M68K_AM_REGI_ADDR_POST_INC,
+                M.M68K_AM_REGI_ADDR_PRE_DEC,
+            ):
                 reg = base_register(insn, op)
                 if reg in state:
                     size = access_size(insn)
@@ -998,8 +1187,11 @@ class Game:
         if base == "movem" and len(ops) == 2 and sp is not None and sp.kind == "sp":
             # Register saves to the stack and their restores keep the tracked values ("@<sp offset>" slots).
             size = access_size(insn)
-            if ops[0].type == M.M68K_OP_REG_BITS and ops[1].type == M.M68K_OP_MEM \
-                    and base_register(insn, ops[1]) == "a7":
+            if (
+                ops[0].type == M.M68K_OP_REG_BITS
+                and ops[1].type == M.M68K_OP_MEM
+                and base_register(insn, ops[1]) == "a7"
+            ):
                 for i, reg in enumerate(ordered_registers(ops[0].register_bits)):  # sp already decremented
                     slot = f"@{sp.value + size * i}"
                     if reg in state and reg != "a7":
@@ -1007,9 +1199,12 @@ class Game:
                     else:
                         state.pop(slot, None)
                 return
-            if dest.type == M.M68K_OP_REG_BITS and ops[0].type == M.M68K_OP_MEM \
-                    and base_register(insn, ops[0]) == "a7" \
-                    and ops[0].address_mode == M.M68K_AM_REGI_ADDR_POST_INC:
+            if (
+                dest.type == M.M68K_OP_REG_BITS
+                and ops[0].type == M.M68K_OP_MEM
+                and base_register(insn, ops[0]) == "a7"
+                and ops[0].address_mode == M.M68K_AM_REGI_ADDR_POST_INC
+            ):
                 registers = ordered_registers(dest.register_bits)
                 start = sp.value - size * len(registers)  # sp already incremented
                 for i, reg in enumerate(registers):
@@ -1031,8 +1226,12 @@ class Game:
             return
         src = ops[0] if len(ops) == 2 else None
         new = None
-        if base in ("adda", "addq", "suba", "subq", "addi", "subi", "add", "sub") and src is not None \
-                and src.type == M.M68K_OP_IMM and reg in state:
+        if (
+            base in ("adda", "addq", "suba", "subq", "addi", "subi", "add", "sub")
+            and src is not None
+            and src.type == M.M68K_OP_IMM
+            and reg in state
+        ):
             amount = src.imm if base.startswith("add") else -src.imm
             if state[reg].kind == "sp":
                 state[reg].value += amount
@@ -1055,36 +1254,54 @@ class Game:
                         prior.step += operand.disp
                     return
                 if prior.kind in ("const", "sp", "frame"):
-                    new = Game.Value(prior.kind, prior.value + prior.step + operand.disp, pc,
-                                     alts=tuple(a + prior.step + operand.disp for a in prior.alts))
+                    new = Game.Value(
+                        prior.kind,
+                        prior.value + prior.step + operand.disp,
+                        pc,
+                        alts=tuple(a + prior.step + operand.disp for a in prior.alts),
+                    )
                 else:  # lea d(a0),a1 from a caller/argument/field pointer: same base, moved by d
                     new = dataclasses.replace(prior, step=prior.step + operand.disp, set_at=pc)
         elif base in ("movea", "move", "moveq") and src is not None:
             if src.type == M.M68K_OP_IMM:
-                new = Game.Value("const", src.imm & 0xffffffff, pc)
+                new = Game.Value("const", src.imm & 0xFFFFFFFF, pc)
             elif src.type == M.M68K_OP_REG and insn.reg_name(src.reg) in state:
                 prior = state[insn.reg_name(src.reg)]
                 new = dataclasses.replace(prior, set_at=pc)
             elif src.type == M.M68K_OP_MEM and access_size(insn) in (1, 2) and reg.startswith("d"):
                 operand = self._operand(insn, src, 0, "read")
-                if operand is not None and operand.address is not None and operand.mode in ("abs", "a5") \
-                        and operand.address >= len(self.rom):
+                if (
+                    operand is not None
+                    and operand.address is not None
+                    and operand.mode in ("abs", "a5")
+                    and operand.address >= len(self.rom)
+                ):
                     new = Game.Value("cell", operand.address, pc)  # move.w var,d0: value of a RAM variable
             elif src.type == M.M68K_OP_MEM and access_size(insn) == 4:
                 operand = self._operand(insn, src, 0, "read")
                 if operand is not None and operand.address is not None and operand.mode in ("abs", "pc", "a5"):
                     if operand.address + 4 <= len(self.rom):  # pointer stored in ROM: read it
-                        new = Game.Value("const", int.from_bytes(self.rom[operand.address:operand.address + 4], "big"), pc)
+                        new = Game.Value(
+                            "const", int.from_bytes(self.rom[operand.address : operand.address + 4], "big"), pc
+                        )
                     else:
                         new = Game.Value("ptr", operand.address, pc)
-                elif operand is not None and operand.mode == "areg" and operand.reg in state \
-                        and state[operand.reg].kind in ("sp", "frame"):
+                elif (
+                    operand is not None
+                    and operand.mode == "areg"
+                    and operand.reg in state
+                    and state[operand.reg].kind in ("sp", "frame")
+                ):
                     holder = state[operand.reg]
                     slot = holder.value + holder.step + operand.disp
                     if slot >= 4:  # above the return address: a caller-pushed argument
                         new = Game.Value("arg", slot, pc)
-                elif operand is not None and operand.mode == "areg-idx" and operand.reg in state \
-                        and state[operand.reg].kind == "const":
+                elif (
+                    operand is not None
+                    and operand.mode == "areg-idx"
+                    and operand.reg in state
+                    and state[operand.reg].kind == "const"
+                ):
                     holder = state[operand.reg]  # movea.l (a0,d1.w*4),a1 (or a pre-scaled index): constant table
                     new = Game.Value("table", holder.value + holder.step + operand.disp, pc)
                 elif operand is not None and operand.mode == "areg" and operand.reg and operand.postinc:
@@ -1095,10 +1312,16 @@ class Game:
             state.pop(reg, None)
             return
         prior = state.get(reg)
-        if new.kind == "const" and prior is not None and prior.kind == "const" and prior.set_at >= 0 \
-                and prior.set_at < pc and self._jumps_between(prior.set_at, pc):
+        if (
+            new.kind == "const"
+            and prior is not None
+            and prior.kind == "const"
+            and prior.set_at >= 0
+            and prior.set_at < pc
+            and self._jumps_between(prior.set_at, pc)
+        ):
             # lea A,a4 / bra join / lea B,a4: the second assignment is the other branch, not a replacement.
-            new.alts = tuple(dict.fromkeys(prior.alts + ((prior.value + prior.step) & 0xffffffff,)))
+            new.alts = tuple(dict.fromkeys((*prior.alts, prior.value + prior.step & 4294967295)))
         state[reg] = new
 
     def _jumps_between(self, start: int, end: int) -> bool:
@@ -1110,7 +1333,7 @@ class Game:
             if insn is None:
                 return False
             if base_mnemonic(insn) in ("bra", "jmp"):
-                kind, targets = self._transfer_targets(pc, insn)
+                _kind, targets = self._transfer_targets(pc, insn)
                 return bool(targets) and all(t > end for t in targets)
             pc += insn.size
         return False
@@ -1141,8 +1364,11 @@ class Game:
             base = base_mnemonic(insn)
             ops = list(insn.operands)
             kind, targets = self._transfer_targets(pc, insn) if base != "trap" else ("trap", [])
-            if kind not in ("terminal", "branch", "table-jump", "unresolved-jump") and pc + insn.size in self.routines \
-                    and pc + insn.size != entry:
+            if (
+                kind not in ("terminal", "branch", "table-jump", "unresolved-jump")
+                and pc + insn.size in self.routines
+                and pc + insn.size != entry
+            ):
                 merge(self.clobbers(pc + insn.size))  # falls into the next routine
             if kind in ("call", "branch", "cond", "table-call", "table-jump"):
                 for target in targets:
@@ -1159,12 +1385,17 @@ class Game:
             if base in ("jsr", "bsr", "jmp", "bra", "trap"):
                 continue
             for op in ops:
-                if op.type == M.M68K_OP_MEM and op.address_mode in (M.M68K_AM_REGI_ADDR_POST_INC,
-                                                                     M.M68K_AM_REGI_ADDR_PRE_DEC):
+                if op.type == M.M68K_OP_MEM and op.address_mode in (
+                    M.M68K_AM_REGI_ADDR_POST_INC,
+                    M.M68K_AM_REGI_ADDR_PRE_DEC,
+                ):
                     written.add(base_register(insn, op))
             if base == "movem" and len(ops) == 2:
-                if ops[0].type == M.M68K_OP_REG_BITS and ops[1].type == M.M68K_OP_MEM \
-                        and base_register(insn, ops[1]) == "a7":
+                if (
+                    ops[0].type == M.M68K_OP_REG_BITS
+                    and ops[1].type == M.M68K_OP_MEM
+                    and base_register(insn, ops[1]) == "a7"
+                ):
                     saved |= register_list(ops[0].register_bits)
                 elif ops[1].type == M.M68K_OP_REG_BITS:
                     written |= register_list(ops[1].register_bits)
@@ -1203,7 +1434,7 @@ class Game:
             return base_register(insn, ops[0]) == reg
         return False
 
-    def call_args(self, caller: int, site: int) -> dict[int, "Game.Value | None"]:
+    def call_args(self, caller: int, site: int) -> dict[int, Game.Value | None]:
         """Stack arguments pushed right before a call: {offset from callee entry sp: value or None}."""
         routine = self.routines.get(caller)
         if routine is None or site not in routine.pcs:
@@ -1231,8 +1462,13 @@ class Game:
                     if prior is not None and prior.kind not in ("sp", "frame"):
                         value = dataclasses.replace(prior, step=prior.step + operand.disp)
                 size = 4
-            elif base == "move" and len(ops) == 2 and ops[1].type == M.M68K_OP_MEM \
-                    and ops[1].address_mode == M.M68K_AM_REGI_ADDR_PRE_DEC and base_register(insn, ops[1]) == "a7":
+            elif (
+                base == "move"
+                and len(ops) == 2
+                and ops[1].type == M.M68K_OP_MEM
+                and ops[1].address_mode == M.M68K_AM_REGI_ADDR_PRE_DEC
+                and base_register(insn, ops[1]) == "a7"
+            ):
                 size = access_size(insn)
                 src = ops[0]
                 if src.type == M.M68K_OP_IMM:
@@ -1247,7 +1483,7 @@ class Game:
             offset += size
         return args
 
-    def bases(self, entry: int, value: "Game.Value", depth: int = 4) -> tuple[list[int], int, int]:
+    def bases(self, entry: int, value: Game.Value, depth: int = 4) -> tuple[list[int], int, int]:
         """Possible base addresses of a register value, following stack arguments and incoming
         registers back through every static call site and RAM pointer cells through their constant
         stores. Returns (addresses, call paths that resolved, call paths tried)."""
@@ -1265,7 +1501,15 @@ class Game:
             found: set[int] = set()
             resolved = tried = 0
             for edge in self.callers.get(entry, []):
-                if edge.site < 0 or edge.kind not in ("call", "table-call", "regconst", "regtable", "slot", "tail", "fall"):
+                if edge.site < 0 or edge.kind not in (
+                    "call",
+                    "table-call",
+                    "regconst",
+                    "regtable",
+                    "slot",
+                    "tail",
+                    "fall",
+                ):
                     continue
                 tried += 1
                 if value.kind == "arg":
@@ -1303,11 +1547,11 @@ class Game:
                 src = ops[0]
                 value = None
                 if src.type == M.M68K_OP_IMM:
-                    value = src.imm & 0xffffffff
+                    value = src.imm & 0xFFFFFFFF
                 elif src.type == M.M68K_OP_REG:
                     prior = states.get(pc, {}).get(insn.reg_name(src.reg))
                     if prior is not None and prior.kind == "const":
-                        value = (prior.value + prior.step) & 0xffffffff
+                        value = (prior.value + prior.step) & 0xFFFFFFFF
                 if value is not None and region_of(canonical(value)) not in ("rom", "unmapped"):
                     cells.setdefault(dest.address, set()).add(value)
         self._pointer_cells = cells
@@ -1316,9 +1560,9 @@ class Game:
     def _raw_address(self, insn, op, operand: Operand) -> int:
         """lea of an a5/pc/abs operand: keep the bus address (lea does not fold RAM mirrors)."""
         if operand.mode == "a5":
-            return (self.a5 + operand.disp) & 0xffffffff
+            return (self.a5 + operand.disp) & 0xFFFFFFFF
         if operand.mode == "abs":
-            return op.imm & 0xffffffff
+            return op.imm & 0xFFFFFFFF
         return operand.address
 
     # ---------------------------------------------------------------- formatting helpers

@@ -17,14 +17,12 @@ void send_bit(f3rt::Eeprom &e, bool bit, uint64_t now) {
 
 void command(f3rt::Eeprom &e, unsigned word, uint64_t now) {
     e.pins(0, now);
-    for (int bit = 8; bit >= 0; --bit)
-        send_bit(e, (word >> bit) & 1, now);
+    for (int bit = 8; bit >= 0; --bit) send_bit(e, (word >> bit) & 1, now);
 }
 
 void serial_write(f3rt::Eeprom &e, unsigned address, uint16_t value, uint64_t now) {
     command(e, 0x140 | address, now);
-    for (int bit = 15; bit >= 0; --bit)
-        send_bit(e, (value >> bit) & 1, now);
+    for (int bit = 15; bit >= 0; --bit) send_bit(e, (value >> bit) & 1, now);
     e.pins(0, now);
 }
 
@@ -45,14 +43,12 @@ void send_bit(f3rt::Machine &m, bool bit) {
 
 void command(f3rt::Machine &m, unsigned word) {
     m.write8(f3rt::EEPROM_PINS, 0);
-    for (int bit = 8; bit >= 0; --bit)
-        send_bit(m, (word >> bit) & 1);
+    for (int bit = 8; bit >= 0; --bit) send_bit(m, (word >> bit) & 1);
 }
 
 void serial_write(f3rt::Machine &m, unsigned address, uint16_t value) {
     command(m, 0x140 | address);
-    for (int bit = 15; bit >= 0; --bit)
-        send_bit(m, (value >> bit) & 1);
+    for (int bit = 15; bit >= 0; --bit) send_bit(m, (value >> bit) & 1);
     m.write8(f3rt::EEPROM_PINS, 0);
 }
 
@@ -91,7 +87,8 @@ TEST(Eeprom, FactoryDefaultsAndSerialWrap) {
     const uint16_t w1 = read_word(*m);
     const uint16_t w2 = read_word(*m);
     EXPECT_TRUE(w0 == 0xfedc && w1 == 0x1234 && w2 == 0x89ab)
-        << "Factory EEPROM seeds all addresses big-endian before initial reset, including serial wrap";
+        << "Factory EEPROM seeds all addresses big-endian before initial reset, including serial "
+           "wrap";
 
     command(*m, 0x130);
     m->write8(f3rt::EEPROM_PINS, 0); // EWEN
@@ -116,8 +113,10 @@ TEST(Eeprom, UserImageOverrideAndPersistence) {
     roms.factory_eeprom[127] = 0xdc;
     auto m = std::make_unique<f3rt::Machine>(std::move(roms));
 
-    TemporaryImage image{std::filesystem::temp_directory_path() /
-        ("f3rt-check-eeprom-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".nv")};
+    TemporaryImage image{
+        std::filesystem::temp_directory_path() /
+        ("f3rt-check-eeprom-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".nv")};
     f3rt::Eeprom user;
     user.words.fill(0x579b);
     user.words[0] = 0xc318;
@@ -224,8 +223,7 @@ TEST(Eeprom, SingleWordEraseTiming) {
     now += 15999;
     EXPECT_FALSE(e.output(now)) << "EEPROM erase remains busy before 1000us deadline";
     ++now;
-    EXPECT_TRUE(e.output(now) && e.words[63] == 0xffff)
-        << "EEPROM single-word erase completes";
+    EXPECT_TRUE(e.output(now) && e.words[63] == 0xffff) << "EEPROM single-word erase completes";
 }
 
 TEST(Eeprom, EraseAllTiming) {
@@ -246,8 +244,7 @@ TEST(Eeprom, WriteAllTiming) {
     uint64_t now = 100;
     command(e, 0x130, now);
     command(e, 0x110, now); // WRAL
-    for (int bit = 15; bit >= 0; --bit)
-        send_bit(e, (0x5a5a >> bit) & 1, now);
+    for (int bit = 15; bit >= 0; --bit) send_bit(e, (0x5a5a >> bit) & 1, now);
     e.pins(0, now);
     e.pins(0x10, now);
     now += 127999;
@@ -262,11 +259,9 @@ TEST(Eeprom, PowerResetPreservesContents) {
     uint64_t now = 100;
     command(e, 0x130, now);
     command(e, 0x110, now); // WRAL
-    for (int bit = 15; bit >= 0; --bit)
-        send_bit(e, (0x5a5a >> bit) & 1, now);
+    for (int bit = 15; bit >= 0; --bit) send_bit(e, (0x5a5a >> bit) & 1, now);
     e.pins(0, now);
     e.pins(0x10, now);
-    now += 128000;
     e.reset();
     e.pins(0x10, 0);
     EXPECT_TRUE(e.output(0) && e.words[0] == 0x5a5a)
@@ -284,7 +279,7 @@ RC_GTEST_PROP(Eeprom, SerialWriteReadRoundTrip, ()) {
     serial_write(e, address, value, now);
     now += 28000;
     command(e, 0x180 | address, now); // READ address
-    RC_ASSERT(!e.output(now)); // dummy bit
+    RC_ASSERT(!e.output(now));        // dummy bit
     const uint16_t read_back = read_word(e, now);
     RC_ASSERT(read_back == value);
     RC_ASSERT(e.words[address] == value);
@@ -332,8 +327,10 @@ RC_GTEST_PROP(Eeprom, FileSaveLoadRoundTrip, ()) {
     for (size_t i = 0; i < original.words.size(); ++i) {
         original.words[i] = *rc::gen::arbitrary<uint16_t>();
     }
-    TemporaryImage temp{std::filesystem::temp_directory_path() /
-        ("f3rt-rc-eeprom-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".nv")};
+    TemporaryImage temp{
+        std::filesystem::temp_directory_path() /
+        ("f3rt-rc-eeprom-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".nv")};
     original.save(temp.path);
 
     f3rt::Eeprom restored;

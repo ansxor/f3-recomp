@@ -1,6 +1,7 @@
 #pragma once
 
 #include "f3rt/input.hpp"
+#include "netplay/shared/default_port.hpp"
 #include <array>
 #include <chrono>
 #include <functional>
@@ -21,25 +22,16 @@ namespace f3rt::netplay {
 
 class MatchRecorder;
 
-constexpr uint16_t default_port = 7845;
-
 enum class SessionState {
     Idle,
     Connecting,
-    Lobby,          // or WaitingForPeer
+    Lobby, // or WaitingForPeer
     Registering,
     Running,
     Ended
 };
 
-enum class EndReason {
-    None,
-    Completed,
-    PeerLeft,
-    Desync,
-    Error,
-    Disconnected
-};
+enum class EndReason { None, Completed, PeerLeft, Desync, Error, Disconnected };
 
 struct DesyncInfo {
     bool detected = false;
@@ -63,14 +55,14 @@ struct ChatMessage {
 
 struct SessionConfig {
     std::string server_host;
-    uint16_t server_port = default_port;
+    uint16_t server_port = DEFAULT_PORT;
     std::string game_id;
     std::array<uint32_t, 7> rom_crcs{};
     std::array<uint8_t, 32> build_hash{};
     std::string player_name = "player";
     bool is_host = false;
     uint8_t input_delay = 2;
-    uint8_t flags = 0; // bit 0 = sync blob required
+    uint8_t flags = 0;     // bit 0 = sync blob required
     std::string room_code; // for joiner
     uint32_t crc_interval = 60;
 
@@ -115,7 +107,7 @@ public:
     // Returns inputs for frame `frame` mapped by player_index:
     // [0] = P1 (player 0), [1] = P2 (player 1)
     std::array<LocalInputWord, 2> inputs_for(uint32_t frame) const;
-    std::array<LocalInputWord, local_player_count> all_inputs_for(uint32_t frame) const;
+    std::array<LocalInputWord, LOCAL_PLAYER_COUNT> all_inputs_for(uint32_t frame) const;
 
     // Submits local input sampled at match frame `frame`.
     // Scheduled for frame `frame + input_delay`.
@@ -130,18 +122,19 @@ public:
     std::vector<ChatMessage> drain_chat();
 
 private:
-    std::unique_ptr<SessionImpl> impl_;
+    std::unique_ptr<SessionImpl> m_impl;
 };
 
 // Applies `words` (P1/P2 ports), runs the game hook's per-frame write, then one emulated frame. This is the single place
 // that defines lockstep frame semantics: apply inputs -> on_match_frame -> run_frame -> audio finish. The frontend, the
 // headless tool and `f3rt-tool netplay-replay` all go through it.
-bool run_lockstep_frame(Machine &m, const std::array<LocalInputWord, local_player_count> &words, uint64_t seed,
-                        uint32_t match_frame, const GameNetplay *hook);
+bool run_lockstep_frame(Machine &m, const std::array<LocalInputWord, LOCAL_PLAYER_COUNT> &words,
+                        uint64_t seed, uint32_t match_frame, const GameNetplay *hook);
 
 // Shared lockstep frame step function used by both frontend and headless tool.
 // `recorder` (optional, local only) logs the applied inputs and, at CRC report frames, the hashed bytes + a snapshot.
 bool step_lockstep_frame(Machine &m, Session &session, uint32_t match_frame,
-                         const GameNetplay *hook, uint32_t crc_interval = 60, MatchRecorder *recorder = nullptr);
+                         const GameNetplay *hook, uint32_t crc_interval = 60,
+                         MatchRecorder *recorder = nullptr);
 
 } // namespace f3rt::netplay

@@ -1,9 +1,10 @@
 """CLI entry point for 68EC020 differential test harness."""
+
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from .runner import run_differential
 
@@ -54,7 +55,8 @@ def main() -> int:
         help="Only generate and compile the differential runner binary, do not execute",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Enable verbose output",
     )

@@ -23,14 +23,14 @@ Generates deterministic synthetic test cases covering:
    - 68020 bitfield instructions (BFTST, BFEXTU, BFEXTS, BFINS, BFSET, BFCLR, BFCHG, BFFFO)
 3. External instruction stream ingestion (JSON / ROM discovery).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
-from pathlib import Path
 import random
 import struct
-from typing import Any, Iterator, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 # Safe memory layout for synthetic differential testing
 TEST_PC = 0x00010000
@@ -77,66 +77,76 @@ def generate_boundary_cases() -> list[RawTestCase]:
     # 1. Sticky-Z in ADDX / SUBX / NEGX
     # -------------------------------------------------------------------------
     # ADDX/SUBX D0,D1; size bits are supplied independently below.
-    for name, op_word, is_sub in [("addx", 0xD300, False), ("subx", 0x9300, True)]:
-        for size_name, sz_bits, mask in [("b", 0x00, 0xFF), ("w", 0x40, 0xFFFF), ("l", 0x80, 0xFFFFFFFF)]:
+    for name, op_word in [("addx", 0xD300), ("subx", 0x9300)]:
+        for size_name, sz_bits, _mask in [("b", 0x00, 0xFF), ("w", 0x40, 0xFFFF), ("l", 0x80, 0xFFFFFFFF)]:
             code = struct.pack(">H", op_word | sz_bits)
             # Case A: initial Z=1, result=0 -> Z must remain 1
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{name}_{size_name}_sticky_z_remains_1",
-                code_bytes=code,
-                initial_d=[0, 0, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0004,  # Z=1, X=0
-                is_boundary=True,
-                boundary_kind="sticky_z",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{name}_{size_name}_sticky_z_remains_1",
+                    code_bytes=code,
+                    initial_d=[0, 0, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0004,  # Z=1, X=0
+                    is_boundary=True,
+                    boundary_kind="sticky_z",
+                )
+            )
             case_id += 1
             # Case B: initial Z=1, result != 0 -> Z must become 0
-            val = 5 if not is_sub else 5
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{name}_{size_name}_sticky_z_cleared_by_nonzero",
-                code_bytes=code,
-                initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0004,  # Z=1, X=0
-                is_boundary=True,
-                boundary_kind="sticky_z",
-            ))
+            val = 5
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{name}_{size_name}_sticky_z_cleared_by_nonzero",
+                    code_bytes=code,
+                    initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0004,  # Z=1, X=0
+                    is_boundary=True,
+                    boundary_kind="sticky_z",
+                )
+            )
             case_id += 1
             # Case C: initial Z=0, result == 0 -> Z must remain 0! (Sticky-Z behavior)
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{name}_{size_name}_sticky_z_remains_0_on_zero_result",
-                code_bytes=code,
-                initial_d=[0, 0, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0000,  # Z=0, X=0
-                is_boundary=True,
-                boundary_kind="sticky_z",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{name}_{size_name}_sticky_z_remains_0_on_zero_result",
+                    code_bytes=code,
+                    initial_d=[0, 0, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0000,  # Z=0, X=0
+                    is_boundary=True,
+                    boundary_kind="sticky_z",
+                )
+            )
             case_id += 1
 
     # NEGX.L D0: 0x4080
     for size_name, sz_bits in [("b", 0x00), ("w", 0x40), ("l", 0x80)]:
         code = struct.pack(">H", 0x4000 | sz_bits)
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"negx_{size_name}_sticky_z_remains_1",
-            code_bytes=code,
-            initial_d=[0] * 8,
-            initial_sr=0x0004,  # Z=1
-            is_boundary=True,
-            boundary_kind="sticky_z",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"negx_{size_name}_sticky_z_remains_1",
+                code_bytes=code,
+                initial_d=[0] * 8,
+                initial_sr=0x0004,  # Z=1
+                is_boundary=True,
+                boundary_kind="sticky_z",
+            )
+        )
         case_id += 1
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"negx_{size_name}_sticky_z_remains_0",
-            code_bytes=code,
-            initial_d=[0] * 8,
-            initial_sr=0x0000,  # Z=0
-            is_boundary=True,
-            boundary_kind="sticky_z",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"negx_{size_name}_sticky_z_remains_0",
+                code_bytes=code,
+                initial_d=[0] * 8,
+                initial_sr=0x0000,  # Z=0
+                is_boundary=True,
+                boundary_kind="sticky_z",
+            )
+        )
         case_id += 1
 
     # -------------------------------------------------------------------------
@@ -167,40 +177,49 @@ def generate_boundary_cases() -> list[RawTestCase]:
         for count in test_counts:
             # Test with operand having MSB and LSB set
             operand = 0x80000001
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{name}_count_{count}",
-                code_bytes=code,
-                initial_d=[count, operand, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0010,  # X=1
-                is_boundary=True,
-                boundary_kind="shift_count",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{name}_count_{count}",
+                    code_bytes=code,
+                    initial_d=[count, operand, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0010,  # X=1
+                    is_boundary=True,
+                    boundary_kind="shift_count",
+                )
+            )
             case_id += 1
 
     # Immediate shifts: LSL.L #1, D0 (0xE388), LSL.L #8, D0 (0xE188 count=0 means 8)
     for shift_name, op in [("lsl_imm", 0xE388), ("lsr_imm", 0xE288), ("asl_imm", 0xE380), ("asr_imm", 0xE280)]:
         code = struct.pack(">H", op)
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"{shift_name}_imm_edge",
-            code_bytes=code,
-            initial_d=[0x80000001, 0, 0, 0, 0, 0, 0, 0],
-            initial_sr=0x0000,
-            is_boundary=True,
-            boundary_kind="shift_imm",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"{shift_name}_imm_edge",
+                code_bytes=code,
+                initial_d=[0x80000001, 0, 0, 0, 0, 0, 0, 0],
+                initial_sr=0x0000,
+                is_boundary=True,
+                boundary_kind="shift_imm",
+            )
+        )
         case_id += 1
 
     # EC020 immediate rotates have fixed opcode timing, independent of count.
-    for name, base in (("ror", 0xe018), ("rol", 0xe118),
-                       ("roxr", 0xe010), ("roxl", 0xe110)):
+    for name, base in (("ror", 0xE018), ("rol", 0xE118), ("roxr", 0xE010), ("roxl", 0xE110)):
         for size_bits, count in ((0, 8), (0x40, 3), (0x80, 4)):
-            cases.append(RawTestCase(
-                id=case_id, name=f"{name}_immediate_{size_bits:x}_{count}",
-                code_bytes=struct.pack(">H", base | size_bits | ((count & 7) << 9)),
-                initial_d=[0x81ff8001, 0, 0, 0, 0, 0, 0, 0], initial_sr=0x001f,
-                is_boundary=True, boundary_kind="shift_imm"))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{name}_immediate_{size_bits:x}_{count}",
+                    code_bytes=struct.pack(">H", base | size_bits | ((count & 7) << 9)),
+                    initial_d=[0x81FF8001, 0, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x001F,
+                    is_boundary=True,
+                    boundary_kind="shift_imm",
+                )
+            )
             case_id += 1
 
     # -------------------------------------------------------------------------
@@ -210,15 +229,29 @@ def generate_boundary_cases() -> list[RawTestCase]:
     # If disp8 == 0: followed by 16-bit word displacement
     # If disp8 == 0xFF: followed by 32-bit long displacement (68020)
     cond_names = [
-        "bra", "bsr", "bhi", "bls", "bcc", "bcs", "bne", "beq",
-        "bvc", "bvs", "bpl", "bmi", "bge", "blt", "bgt", "ble"
+        "bra",
+        "bsr",
+        "bhi",
+        "bls",
+        "bcc",
+        "bcs",
+        "bne",
+        "beq",
+        "bvc",
+        "bvs",
+        "bpl",
+        "bmi",
+        "bge",
+        "blt",
+        "bgt",
+        "ble",
     ]
     for cond in range(16):
         cname = cond_names[cond]
         # Condition setups for taken vs not taken
         # Test taken:
         # e.g. for BEQ (cond 7), set Z=1; for BNE (cond 6), set Z=0; etc.
-        for taken in ([True] if cond < 2 else [True, False]):
+        for taken in [True] if cond < 2 else [True, False]:
             sr_val = 0
             if cname in ("bra", "bsr"):
                 sr_val = 0
@@ -253,38 +286,44 @@ def generate_boundary_cases() -> list[RawTestCase]:
 
             # Byte displacement (+4 bytes)
             code_byte = struct.pack(">H", 0x6000 | (cond << 8) | 0x04)
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{cname}_byte_{'taken' if taken else 'not_taken'}",
-                code_bytes=code_byte,
-                initial_sr=sr_val,
-                is_boundary=True,
-                boundary_kind="branch_byte",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{cname}_byte_{'taken' if taken else 'not_taken'}",
+                    code_bytes=code_byte,
+                    initial_sr=sr_val,
+                    is_boundary=True,
+                    boundary_kind="branch_byte",
+                )
+            )
             case_id += 1
 
             # Word displacement (+0x0100 bytes)
             code_word = struct.pack(">HH", 0x6000 | (cond << 8) | 0x00, 0x0100)
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{cname}_word_{'taken' if taken else 'not_taken'}",
-                code_bytes=code_word,
-                initial_sr=sr_val,
-                is_boundary=True,
-                boundary_kind="branch_word",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{cname}_word_{'taken' if taken else 'not_taken'}",
+                    code_bytes=code_word,
+                    initial_sr=sr_val,
+                    is_boundary=True,
+                    boundary_kind="branch_word",
+                )
+            )
             case_id += 1
 
             # Long displacement (+0x00000200 bytes on 68020)
             code_long = struct.pack(">HI", 0x6000 | (cond << 8) | 0xFF, 0x00000200)
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{cname}_long_{'taken' if taken else 'not_taken'}",
-                code_bytes=code_long,
-                initial_sr=sr_val,
-                is_boundary=True,
-                boundary_kind="branch_long",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{cname}_long_{'taken' if taken else 'not_taken'}",
+                    code_bytes=code_long,
+                    initial_sr=sr_val,
+                    is_boundary=True,
+                    boundary_kind="branch_long",
+                )
+            )
             case_id += 1
 
     # -------------------------------------------------------------------------
@@ -293,31 +332,35 @@ def generate_boundary_cases() -> list[RawTestCase]:
     # MOVEA.W D0, A0: 0x3040 (sign extends 16-bit to 32-bit, preserves CCR!)
     # MOVEA.L D0, A0: 0x2040 (preserves CCR!)
     for val, label in [(0x8000, "neg"), (0x7FFF, "pos"), (0xFFFF, "minus_one")]:
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"movea_w_{label}_preserves_ccr",
-            code_bytes=struct.pack(">H", 0x3040),
-            initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
-            initial_a=[0, 0, 0, 0, 0, 0, 0, TEST_SP],
-            initial_sr=0x001F,  # All CCR flags set
-            is_boundary=True,
-            boundary_kind="movea_sign",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"movea_w_{label}_preserves_ccr",
+                code_bytes=struct.pack(">H", 0x3040),
+                initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
+                initial_a=[0, 0, 0, 0, 0, 0, 0, TEST_SP],
+                initial_sr=0x001F,  # All CCR flags set
+                is_boundary=True,
+                boundary_kind="movea_sign",
+            )
+        )
         case_id += 1
 
     # EXT.W D0 (0x4880), EXT.L D0 (0x48C0), EXTB.L D0 (0x49C0 68020)
     for ext_name, op in [("ext_w", 0x4880), ("ext_l", 0x48C0), ("extb_l", 0x49C0)]:
         code = struct.pack(">H", op)
         for val in [0x80, 0x7F, 0x8000, 0x7FFF]:
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{ext_name}_val_{val:#x}",
-                code_bytes=code,
-                initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0000,
-                is_boundary=True,
-                boundary_kind="ext_sign",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{ext_name}_val_{val:#x}",
+                    code_bytes=code,
+                    initial_d=[val, 0, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0000,
+                    is_boundary=True,
+                    boundary_kind="ext_sign",
+                )
+            )
             case_id += 1
 
     # -------------------------------------------------------------------------
@@ -330,34 +373,40 @@ def generate_boundary_cases() -> list[RawTestCase]:
     mem_at_sp = MemInitItem(address=TEST_SP - 8, data=bytes.fromhex("123456789abcdef03ca55ac3"))
     mem_at_a0 = MemInitItem(address=TEST_A0 - 8, data=bytes.fromhex("123456789abcdef03ca55ac3"))
 
-    cases.append(RawTestCase(
-        id=case_id,
-        name="move_b_postinc_a7_step2",
-        code_bytes=struct.pack(">H", 0x101F),  # move.b (a7)+, d0
-        initial_mem=[mem_at_sp],
-        is_boundary=True,
-        boundary_kind="postinc_a7_byte",
-    ))
+    cases.append(
+        RawTestCase(
+            id=case_id,
+            name="move_b_postinc_a7_step2",
+            code_bytes=struct.pack(">H", 0x101F),  # move.b (a7)+, d0
+            initial_mem=[mem_at_sp],
+            is_boundary=True,
+            boundary_kind="postinc_a7_byte",
+        )
+    )
     case_id += 1
 
-    cases.append(RawTestCase(
-        id=case_id,
-        name="move_b_predec_a7_step2",
-        code_bytes=struct.pack(">H", 0x1027),  # move.b -(a7), d0
-        initial_mem=[mem_at_sp],
-        is_boundary=True,
-        boundary_kind="predec_a7_byte",
-    ))
+    cases.append(
+        RawTestCase(
+            id=case_id,
+            name="move_b_predec_a7_step2",
+            code_bytes=struct.pack(">H", 0x1027),  # move.b -(a7), d0
+            initial_mem=[mem_at_sp],
+            is_boundary=True,
+            boundary_kind="predec_a7_byte",
+        )
+    )
     case_id += 1
 
-    cases.append(RawTestCase(
-        id=case_id,
-        name="move_b_postinc_a0_step1",
-        code_bytes=struct.pack(">H", 0x1018),  # move.b (a0)+, d0
-        initial_mem=[mem_at_a0],
-        is_boundary=True,
-        boundary_kind="postinc_a0_byte",
-    ))
+    cases.append(
+        RawTestCase(
+            id=case_id,
+            name="move_b_postinc_a0_step1",
+            code_bytes=struct.pack(">H", 0x1018),  # move.b (a0)+, d0
+            initial_mem=[mem_at_a0],
+            is_boundary=True,
+            boundary_kind="postinc_a0_byte",
+        )
+    )
     case_id += 1
 
     # -------------------------------------------------------------------------
@@ -378,15 +427,17 @@ def generate_boundary_cases() -> list[RawTestCase]:
     for op_name, op_code in arith_ops:
         code = struct.pack(">H", op_code)
         for label, d0, d1 in arith_cases:
-            cases.append(RawTestCase(
-                id=case_id,
-                name=f"{op_name}_{label}",
-                code_bytes=code,
-                initial_d=[d0, d1, 0, 0, 0, 0, 0, 0],
-                initial_sr=0x0000,
-                is_boundary=True,
-                boundary_kind="arith_flags",
-            ))
+            cases.append(
+                RawTestCase(
+                    id=case_id,
+                    name=f"{op_name}_{label}",
+                    code_bytes=code,
+                    initial_d=[d0, d1, 0, 0, 0, 0, 0, 0],
+                    initial_sr=0x0000,
+                    is_boundary=True,
+                    boundary_kind="arith_flags",
+                )
+            )
             case_id += 1
 
     # -------------------------------------------------------------------------
@@ -399,17 +450,19 @@ def generate_boundary_cases() -> list[RawTestCase]:
         ext_word = (1 << 12) | (1 << 11) | (scale_shift << 9) | 0x10  # D1.L*scale + 0x10
         code = struct.pack(">HH", 0x2430, ext_word)
         target_addr = TEST_A0 + (4 << scale_shift) + 0x10
-        mem_item = MemInitItem(address=target_addr, data=b"\xCA\xFE\xBA\xBE")
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"move_l_brief_ea_{scale_name}",
-            code_bytes=code,
-            initial_d=[0, 4, 0, 0, 0, 0, 0, 0],  # D1 = 4
-            initial_a=list(SAFE_A_REGS),
-            initial_mem=[mem_item],
-            is_boundary=True,
-            boundary_kind="brief_ea",
-        ))
+        mem_item = MemInitItem(address=target_addr, data=b"\xca\xfe\xba\xbe")
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"move_l_brief_ea_{scale_name}",
+                code_bytes=code,
+                initial_d=[0, 4, 0, 0, 0, 0, 0, 0],  # D1 = 4
+                initial_a=list(SAFE_A_REGS),
+                initial_mem=[mem_item],
+                is_boundary=True,
+                boundary_kind="brief_ea",
+            )
+        )
         case_id += 1
 
     # Full format extension word:
@@ -422,16 +475,18 @@ def generate_boundary_cases() -> list[RawTestCase]:
     ptr_addr = TEST_A0 + 8 + 0x20
     target_data_addr = 0x00035000
     mem1 = MemInitItem(address=ptr_addr, data=struct.pack(">I", target_data_addr))
-    mem2 = MemInitItem(address=target_data_addr, data=b"\xDE\xAD\xBE\xEF")
-    cases.append(RawTestCase(
-        id=case_id,
-        name="move_l_full_format_ea_preindexed",
-        code_bytes=code_full,
-        initial_d=[0, 4, 0, 0, 0, 0, 0, 0],
-        initial_mem=[mem1, mem2],
-        is_boundary=True,
-        boundary_kind="full_ea",
-    ))
+    mem2 = MemInitItem(address=target_data_addr, data=b"\xde\xad\xbe\xef")
+    cases.append(
+        RawTestCase(
+            id=case_id,
+            name="move_l_full_format_ea_preindexed",
+            code_bytes=code_full,
+            initial_d=[0, 4, 0, 0, 0, 0, 0, 0],
+            initial_mem=[mem1, mem2],
+            is_boundary=True,
+            boundary_kind="full_ea",
+        )
+    )
     case_id += 1
 
     # -------------------------------------------------------------------------
@@ -439,17 +494,19 @@ def generate_boundary_cases() -> list[RawTestCase]:
     # -------------------------------------------------------------------------
     # BFEXTU D0{offset:width}, D1: 0xE9C0 | extension word
     # Ext word: bit 11: Do (0=imm), bits 10-6: offset, bit 5: Dw (0=imm), bits 4-0: width
-    for bf_name, op in [("bfextu", 0xE9C0), ("bfexts", 0xEBc0), ("bftst", 0xE8C0), ("bfset", 0xEEC0)]:
+    for bf_name, op in [("bfextu", 0xE9C0), ("bfexts", 0xEBC0), ("bftst", 0xE8C0), ("bfset", 0xEEC0)]:
         ext = (4 << 6) | 12  # offset 4, width 12
         code = struct.pack(">HH", op, ext)
-        cases.append(RawTestCase(
-            id=case_id,
-            name=f"{bf_name}_d0_off4_w12",
-            code_bytes=code,
-            initial_d=[0x12345678, 0, 0, 0, 0, 0, 0, 0],
-            is_boundary=True,
-            boundary_kind="bitfield",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=f"{bf_name}_d0_off4_w12",
+                code_bytes=code,
+                initial_d=[0x12345678, 0, 0, 0, 0, 0, 0, 0],
+                is_boundary=True,
+                boundary_kind="bitfield",
+            )
+        )
         case_id += 1
 
     # -------------------------------------------------------------------------
@@ -463,14 +520,16 @@ def generate_boundary_cases() -> list[RawTestCase]:
         ("divs_w_neg", 0x83C0, 0xFFFE, 0x00000064),
     ]:
         code = struct.pack(">H", op)
-        cases.append(RawTestCase(
-            id=case_id,
-            name=muldiv_name,
-            code_bytes=code,
-            initial_d=[d0, d1, 0, 0, 0, 0, 0, 0],
-            is_boundary=True,
-            boundary_kind="mul_div",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=muldiv_name,
+                code_bytes=code,
+                initial_d=[d0, d1, 0, 0, 0, 0, 0, 0],
+                is_boundary=True,
+                boundary_kind="mul_div",
+            )
+        )
         case_id += 1
 
     # -------------------------------------------------------------------------
@@ -480,252 +539,386 @@ def generate_boundary_cases() -> list[RawTestCase]:
     # Static: BTST #bit, D1 (0x0801, imm)
     for bit_op_name, op in [("btst_reg", 0x0101), ("bset_reg", 0x01C1), ("bclr_reg", 0x0181), ("bchg_reg", 0x0141)]:
         code = struct.pack(">H", op)
-        cases.append(RawTestCase(
-            id=case_id,
-            name=bit_op_name,
-            code_bytes=code,
-            initial_d=[5, 0x00000020, 0, 0, 0, 0, 0, 0],
-            is_boundary=True,
-            boundary_kind="bit_ops",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=bit_op_name,
+                code_bytes=code,
+                initial_d=[5, 0x00000020, 0, 0, 0, 0, 0, 0],
+                is_boundary=True,
+                boundary_kind="bit_ops",
+            )
+        )
         case_id += 1
 
     # Aliasing, control registers, MOVEM ordering, and extension-word PC bases.
     def add_case(name, code, *, d=None, a=None, sr=0, memory=()):
-        cases.append(RawTestCase(
-            id=len(cases) + 1, name=name, code_bytes=bytes.fromhex(code),
-            initial_d=list(d or [0x12345678, 7, 0, 0, 0, 0, 0, 0]),
-            initial_a=list(a or SAFE_A_REGS), initial_sr=sr,
-            initial_mem=list(memory), is_boundary=True, boundary_kind="operand_aliasing"))
+        cases.append(
+            RawTestCase(
+                id=len(cases) + 1,
+                name=name,
+                code_bytes=bytes.fromhex(code),
+                initial_d=list(d or [0x12345678, 7, 0, 0, 0, 0, 0, 0]),
+                initial_a=list(a or SAFE_A_REGS),
+                initial_sr=sr,
+                initial_mem=list(memory),
+                is_boundary=True,
+                boundary_kind="operand_aliasing",
+            )
+        )
 
     # CMPM operands are Capstone REGs with postincrement modes, not CMPA.
     # EEPROM signature validation depends on the reads and both increments.
     for width, size_bits in ((1, 0), (2, 0x40), (4, 0x80)):
         mask, sign = (1 << (width * 8)) - 1, 1 << (width * 8 - 1)
-        for source, destination in ((0, 0), (1, 0), (mask, 1),
-                                    (sign - 1, sign), (sign, sign - 1)):
+        for source, destination in ((0, 0), (1, 0), (mask, 1), (sign - 1, sign), (sign, sign - 1)):
             for form, opcode, source_address, destination_address in (
-                    ("distinct", 0xb10a, TEST_A2, TEST_A0),
-                    ("alias", 0xb108, TEST_A0, TEST_A0 + width),
-                    ("stack_alias", 0xbf0f, TEST_SP, TEST_SP + (2 if width == 1 else width))):
-                add_case(f"cmpm_{width}_{form}_{source:x}_{destination:x}",
-                         struct.pack(">H", opcode | size_bits).hex(), sr=0x1f,
-                         memory=[MemInitItem(source_address, source.to_bytes(width, "big")),
-                                 MemInitItem(destination_address, destination.to_bytes(width, "big"))])
+                ("distinct", 0xB10A, TEST_A2, TEST_A0),
+                ("alias", 0xB108, TEST_A0, TEST_A0 + width),
+                ("stack_alias", 0xBF0F, TEST_SP, TEST_SP + (2 if width == 1 else width)),
+            ):
+                add_case(
+                    f"cmpm_{width}_{form}_{source:x}_{destination:x}",
+                    struct.pack(">H", opcode | size_bits).hex(),
+                    sr=0x1F,
+                    memory=[
+                        MemInitItem(source_address, source.to_bytes(width, "big")),
+                        MemInitItem(destination_address, destination.to_bytes(width, "big")),
+                    ],
+                )
 
     add_case("move_a0_predec_alias", "2108")
     add_case("move_a0_postinc_alias", "20c8")
     add_case("jsr_stack_target", "4e97")
     add_case("pea_stack_target", "4857")
-    add_case("unlk_stack_alias", "4e5f", memory=[
-        MemInitItem(TEST_SP, bytes.fromhex("00029000"))])
-    for value in (0, 0x7f, 0x80, 0xff):
-        for sr in (0, 0x1f):
-            add_case(f"tas_register_{value:x}_{sr:x}", "4ac0",
-                     d=[0x12345600 | value, 0, 0, 0, 0, 0, 0, 0], sr=sr)
+    add_case("unlk_stack_alias", "4e5f", memory=[MemInitItem(TEST_SP, bytes.fromhex("00029000"))])
+    for value in (0, 0x7F, 0x80, 0xFF):
+        for sr in (0, 0x1F):
+            add_case(f"tas_register_{value:x}_{sr:x}", "4ac0", d=[0x12345600 | value, 0, 0, 0, 0, 0, 0, 0], sr=sr)
             for mode, opcode, address in (
-                    ("indirect", "4ad0", TEST_A0),
-                    ("postinc", "4ad8", TEST_A0),
-                    ("stack_predec", "4ae7", TEST_SP - 2)):
-                add_case(f"tas_{mode}_{value:x}_{sr:x}", opcode, sr=sr,
-                         memory=[MemInitItem(address, bytes([value]))])
-    for sr in (0x001f, 0x201f):
-        for name, code in (("read_sr", "40c0"), ("write_sr", "46c0"),
-                           ("read_ccr", "42c0"), ("write_ccr", "44c0"),
-                           ("read_usp", "4e68"), ("write_usp", "4e60"),
-                           ("ori_sr", "007c0001"), ("andi_sr", "027c2700"),
-                           ("eori_sr", "0a7c0004")):
+                ("indirect", "4ad0", TEST_A0),
+                ("postinc", "4ad8", TEST_A0),
+                ("stack_predec", "4ae7", TEST_SP - 2),
+            ):
+                add_case(f"tas_{mode}_{value:x}_{sr:x}", opcode, sr=sr, memory=[MemInitItem(address, bytes([value]))])
+    for sr in (0x001F, 0x201F):
+        for name, code in (
+            ("read_sr", "40c0"),
+            ("write_sr", "46c0"),
+            ("read_ccr", "42c0"),
+            ("write_ccr", "44c0"),
+            ("read_usp", "4e68"),
+            ("write_usp", "4e60"),
+            ("ori_sr", "007c0001"),
+            ("andi_sr", "027c2700"),
+            ("eori_sr", "0a7c0004"),
+        ):
             add_case(f"{name}_{sr:04x}", code, sr=sr)
     add_case("movem_predec_base_in_list", "48e080c0")
     add_case("movem_word_predec_base_in_list", "48a080c0")
-    add_case("movem_postinc_base_in_list", "4cd80301", memory=[
-        MemInitItem(TEST_A0, bytes.fromhex("800012341122334455667788"))])
-    add_case("movem_word_sign_extend", "4c900003", memory=[
-        MemInitItem(TEST_A0, bytes.fromhex("80007fff"))])
-    add_case("movem_pc_relative", "4cfa00010008", memory=[
-        MemInitItem(TEST_PC + 12, bytes.fromhex("cafebabe"))])
-    add_case("btst_immediate_pc_relative", "083a00000008", memory=[
-        MemInitItem(TEST_PC + 12, bytes.fromhex("01"))])
-    for count in (0, 1, 0xffff, 0x12340000):
+    add_case(
+        "movem_postinc_base_in_list",
+        "4cd80301",
+        memory=[MemInitItem(TEST_A0, bytes.fromhex("800012341122334455667788"))],
+    )
+    add_case("movem_word_sign_extend", "4c900003", memory=[MemInitItem(TEST_A0, bytes.fromhex("80007fff"))])
+    add_case("movem_pc_relative", "4cfa00010008", memory=[MemInitItem(TEST_PC + 12, bytes.fromhex("cafebabe"))])
+    add_case("btst_immediate_pc_relative", "083a00000008", memory=[MemInitItem(TEST_PC + 12, bytes.fromhex("01"))])
+    for count in (0, 1, 0xFFFF, 0x12340000):
         add_case(f"dbra_counter_{count:x}", "51c8fffc", d=[count, 0, 0, 0, 0, 0, 0, 0])
     for x in (0, 0x10):
         add_case(f"addx_byte_carry_{x}", "d300", d=[255, 0, 0, 0, 0, 0, 0, 0], sr=x | 4)
         add_case(f"subx_byte_borrow_{x}", "9300", d=[255, 0, 0, 0, 0, 0, 0, 0], sr=x | 4)
-    add_case("scaled_index_wrap", "24301e10", d=[0, 0x40000000, 0, 0, 0, 0, 0, 0],
-             memory=[MemInitItem(TEST_A0 + 16, bytes.fromhex("fedcba98"))])
-    add_case("pc_full_extension", "243b11200020", d=[0, 4, 0, 0, 0, 0, 0, 0],
-             memory=[MemInitItem(TEST_PC + 38, bytes.fromhex("1234abcd"))])
-    add_case("asl_all_bits_shifted", "e1a1", d=[32, 0xffffffff, 0, 0, 0, 0, 0, 0])
-    add_case("divs_word_min_over_minus_one", "83c0",
-             d=[0xffff, 0x80000000, 0, 0, 0, 0, 0, 0])
-    add_case("divu_word_overflow_flags", "82c0",
-             d=[1, 0x10000, 0, 0, 0, 0, 0, 0], sr=0x1d)
-    for name, code in (("mulu32", "4c001000"), ("mulu64", "4c001402"),
-                       ("muls32", "4c001800"), ("muls64", "4c001c02"),
-                       ("divu32", "4c401001"), ("divu32_remainder", "4c401002"),
-                       ("divu64", "4c401402"), ("divs32", "4c401801"),
-                       ("divs32_remainder", "4c401802"), ("divs64", "4c401c02")):
-        for source, low, high in ((7, 100, 0), (0xfffffffe, 0xfffffff1, 0xffffffff),
-                                  (1, 0x80000000, 0x12345678)):
-            add_case(f"{name}_{source:x}_{low:x}_{high:x}", code,
-                     d=[source, low, high, 0, 0, 0, 0, 0], sr=0x1f)
-    for name, code in (("divu_zero", "82c0"), ("divs_zero", "83c0"),
-                       ("divul_zero", "4c401002"), ("divsl_zero", "4c401802")):
-        add_case(name, code, d=[0, 100, 23, 0, 0, 0, 0, 0], sr=0x201f)
+    add_case(
+        "scaled_index_wrap",
+        "24301e10",
+        d=[0, 0x40000000, 0, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_A0 + 16, bytes.fromhex("fedcba98"))],
+    )
+    add_case(
+        "pc_full_extension",
+        "243b11200020",
+        d=[0, 4, 0, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_PC + 38, bytes.fromhex("1234abcd"))],
+    )
+    add_case("asl_all_bits_shifted", "e1a1", d=[32, 0xFFFFFFFF, 0, 0, 0, 0, 0, 0])
+    add_case("divs_word_min_over_minus_one", "83c0", d=[0xFFFF, 0x80000000, 0, 0, 0, 0, 0, 0])
+    add_case("divu_word_overflow_flags", "82c0", d=[1, 0x10000, 0, 0, 0, 0, 0, 0], sr=0x1D)
+    for name, code in (
+        ("mulu32", "4c001000"),
+        ("mulu64", "4c001402"),
+        ("muls32", "4c001800"),
+        ("muls64", "4c001c02"),
+        ("divu32", "4c401001"),
+        ("divu32_remainder", "4c401002"),
+        ("divu64", "4c401402"),
+        ("divs32", "4c401801"),
+        ("divs32_remainder", "4c401802"),
+        ("divs64", "4c401c02"),
+    ):
+        for source, low, high in ((7, 100, 0), (0xFFFFFFFE, 0xFFFFFFF1, 0xFFFFFFFF), (1, 0x80000000, 0x12345678)):
+            add_case(f"{name}_{source:x}_{low:x}_{high:x}", code, d=[source, low, high, 0, 0, 0, 0, 0], sr=0x1F)
+    for name, code in (
+        ("divu_zero", "82c0"),
+        ("divs_zero", "83c0"),
+        ("divul_zero", "4c401002"),
+        ("divsl_zero", "4c401802"),
+    ):
+        add_case(name, code, d=[0, 100, 23, 0, 0, 0, 0, 0], sr=0x201F)
     for name, code in (("rol", "e1b8"), ("ror", "e0b8"), ("roxl", "e1b0"), ("roxr", "e0b0")):
-        add_case(f"{name}_count_destination_alias", code,
-                 d=[0x80000021, 0, 0, 0, 0, 0, 0, 0], sr=0x1f)
+        add_case(f"{name}_count_destination_alias", code, d=[0x80000021, 0, 0, 0, 0, 0, 0, 0], sr=0x1F)
     add_case("full_negative_word_bd", "41f50520fa26")
-    add_case("full_negative_word_outer", "24301b220000fff8",
-             d=[0, 4, 0, 0, 0, 0, 0, 0], memory=[
-                 MemInitItem(TEST_A0 + 8, bytes.fromhex("00035008")),
-                 MemInitItem(0x35000, bytes.fromhex("cafebabe"))])
-    add_case("move_two_full_extensions", "23b01120fff021200010",
-             d=[0, 4, 8, 0, 0, 0, 0, 0], memory=[
-                 MemInitItem(TEST_A0 - 12, bytes.fromhex("deadbeef"))])
-    add_case("brief_zero_displacement", "10300000",
-             d=[3, 0, 0, 0, 0, 0, 0, 0],
-             memory=[MemInitItem(TEST_A0 + 3, bytes.fromhex("a5"))])
-    add_case("move_two_brief_extensions", "21b100001000",
-             d=[4, 8, 0, 0, 0, 0, 0, 0],
-             memory=[MemInitItem(TEST_A1 + 4, bytes.fromhex("cafebabe"))])
+    add_case(
+        "full_negative_word_outer",
+        "24301b220000fff8",
+        d=[0, 4, 0, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_A0 + 8, bytes.fromhex("00035008")), MemInitItem(0x35000, bytes.fromhex("cafebabe"))],
+    )
+    add_case(
+        "move_two_full_extensions",
+        "23b01120fff021200010",
+        d=[0, 4, 8, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_A0 - 12, bytes.fromhex("deadbeef"))],
+    )
+    add_case(
+        "brief_zero_displacement",
+        "10300000",
+        d=[3, 0, 0, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_A0 + 3, bytes.fromhex("a5"))],
+    )
+    add_case(
+        "move_two_brief_extensions",
+        "21b100001000",
+        d=[4, 8, 0, 0, 0, 0, 0, 0],
+        memory=[MemInitItem(TEST_A1 + 4, bytes.fromhex("cafebabe"))],
+    )
     for operation in range(8):
         for memory_ea in (False, True):
             for offset in (-9, -1, 0, 7, 31, 32):
                 for width in (1, 8, 9, 16, 17, 24, 31, 32):
-                    opcode = 0xe8c0 | (operation << 8) | (0x10 if memory_ea else 4)
-                    add_case(f"bitfield_{operation}_{int(memory_ea)}_{offset}_{width}",
-                             struct.pack(">HH", opcode, 0x3862 if operation & 1 else 0x0862).hex(),
-                             d=[0, offset & 0xffffffff, width, 0xdeadbeef, 0xaabbccdd, 0, 0, 0],
-                             sr=0x1f, memory=[
-                                 MemInitItem(TEST_A0 - 8, bytes.fromhex("80ff5533aa661177809abcdeff012345"))])
+                    opcode = 0xE8C0 | (operation << 8) | (0x10 if memory_ea else 4)
+                    add_case(
+                        f"bitfield_{operation}_{int(memory_ea)}_{offset}_{width}",
+                        struct.pack(">HH", opcode, 0x3862 if operation & 1 else 0x0862).hex(),
+                        d=[0, offset & 0xFFFFFFFF, width, 0xDEADBEEF, 0xAABBCCDD, 0, 0, 0],
+                        sr=0x1F,
+                        memory=[MemInitItem(TEST_A0 - 8, bytes.fromhex("80ff5533aa661177809abcdeff012345"))],
+                    )
     for fmt in (0, 1, 2, 3):
         frame = struct.pack(">HIH", 0x2015, TEST_PC + 0x80, fmt << 12)
         if fmt == 1:
             frame += struct.pack(">HIH", 0x2004, TEST_PC + 0x100, 0)
-        add_case(f"rte_format_{fmt}", "4e73", sr=0x2700,
-                 memory=[MemInitItem(TEST_SP, frame + bytes(8))])
-    add_case("rte_privilege", "4e73", sr=0x001f)
+        add_case(f"rte_format_{fmt}", "4e73", sr=0x2700, memory=[MemInitItem(TEST_SP, frame + bytes(8))])
+    add_case("rte_privilege", "4e73", sr=0x001F)
     for vector in range(16):
-        for sr in (0x0015, 0x201f):
-            add_case(f"trap_{vector}_{sr:x}", f"{0x4e40 | vector:04x}", sr=sr,
-                     memory=[MemInitItem((32 + vector) * 4,
-                                         struct.pack(">I", TEST_PC + 0x100 + vector * 2))])
+        for sr in (0x0015, 0x201F):
+            add_case(
+                f"trap_{vector}_{sr:x}",
+                f"{0x4E40 | vector:04x}",
+                sr=sr,
+                memory=[MemInitItem((32 + vector) * 4, struct.pack(">I", TEST_PC + 0x100 + vector * 2))],
+            )
     for control in (0, 1, 2, 0x800, 0x801, 0x802, 0x803, 0x804):
-        code = struct.pack(">HHHH", 0x4e7b, control, 0x4e7a, 0x1000 | control)
-        cases.append(RawTestCase(
-            id=len(cases) + 1, name=f"movec_roundtrip_{control:03x}", code_bytes=code,
-            initial_d=[0xabcdef01, 0, 0, 0, 0, 0, 0, 0], initial_sr=0x201f,
-            instruction_count=2, is_boundary=True, boundary_kind="control_register"))
-    add_case("movec_privilege", "4e7b0002", sr=0x001f)
-    for width, opcode in ((1, 0x00d0), (2, 0x02d0), (4, 0x04d0)):
+        code = struct.pack(">HHHH", 0x4E7B, control, 0x4E7A, 0x1000 | control)
+        cases.append(
+            RawTestCase(
+                id=len(cases) + 1,
+                name=f"movec_roundtrip_{control:03x}",
+                code_bytes=code,
+                initial_d=[0xABCDEF01, 0, 0, 0, 0, 0, 0, 0],
+                initial_sr=0x201F,
+                instruction_count=2,
+                is_boundary=True,
+                boundary_kind="control_register",
+            )
+        )
+    add_case("movec_privilege", "4e7b0002", sr=0x001F)
+    for width, opcode in ((1, 0x00D0), (2, 0x02D0), (4, 0x04D0)):
         for value in (-129, -128, -1, 0, 1, 126, 127, 128, 0x10000):
             for reg in (0, 8):
-                add_case(f"cmp2_{width}_{reg}_{value}", struct.pack(">HH", opcode, reg << 12).hex(),
-                         d=[value & 0xffffffff, 0, 0, 0, 0, 0, 0, 0],
-                         sr=0x1f, memory=[MemInitItem(TEST_A0,
-                             (-128).to_bytes(width, "big", signed=True) +
-                             (127).to_bytes(width, "big", signed=True))])
+                add_case(
+                    f"cmp2_{width}_{reg}_{value}",
+                    struct.pack(">HH", opcode, reg << 12).hex(),
+                    d=[value & 0xFFFFFFFF, 0, 0, 0, 0, 0, 0, 0],
+                    sr=0x1F,
+                    memory=[
+                        MemInitItem(
+                            TEST_A0,
+                            (-128).to_bytes(width, "big", signed=True) + (127).to_bytes(width, "big", signed=True),
+                        )
+                    ],
+                )
     for name, code in (
-            ("lazy_x_through_move", "d2807600d583"),
-            ("lazy_x_through_compare", "d280b680d583"),
-            ("lazy_sr_observation", "d28040c2")):
-        cases.append(RawTestCase(
-            id=len(cases) + 1, name=name, code_bytes=bytes.fromhex(code),
-            initial_d=[0xffffffff, 1, 0, 0, 0, 0, 0, 0], initial_sr=0x2000,
-            instruction_count=len(code) // 4, is_boundary=True,
-            boundary_kind="lazy_flag_transition"))
+        ("lazy_x_through_move", "d2807600d583"),
+        ("lazy_x_through_compare", "d280b680d583"),
+        ("lazy_sr_observation", "d28040c2"),
+    ):
+        cases.append(
+            RawTestCase(
+                id=len(cases) + 1,
+                name=name,
+                code_bytes=bytes.fromhex(code),
+                initial_d=[0xFFFFFFFF, 1, 0, 0, 0, 0, 0, 0],
+                initial_sr=0x2000,
+                instruction_count=len(code) // 4,
+                is_boundary=True,
+                boundary_kind="lazy_flag_transition",
+            )
+        )
 
     # Exhaustive ROM coverage also compiles rare instruction forms. Exercise
     # their state transitions, aliased EAs and exception paths, not just decode.
     for name, code in (("abcd", "c300"), ("sbcd", "8300"), ("nbcd", "4800")):
-        for src, dst in ((0, 0), (1, 0), (0x99, 1), (0x09, 1), (0x80, 0x99), (0xff, 0xff)):
-            for sr in (0, 4, 0x14, 0x1f):
-                add_case(f"{name}_{src:x}_{dst:x}_{sr:x}", code,
-                         d=[0x12340000 | src, 0x56780000 | dst, 0, 0, 0, 0, 0, 0], sr=sr)
-    for name, code in (("abcd_mem", "c308"), ("sbcd_mem", "8308"),
-                       ("abcd_a7_alias", "cf0f"), ("sbcd_a7_alias", "8f0f"),
-                       ("nbcd_a7", "4827")):
-        for sr in (0, 4, 0x14, 0x1f):
-            add_case(f"{name}_{sr:x}", code, sr=sr, memory=[
-                MemInitItem(address - 8, bytes.fromhex("0000009912345699"))
-                for address in (TEST_A0, TEST_A1, TEST_SP)])
-    for name, opcode in (("pack_reg", 0x8340), ("unpk_reg", 0x8380),
-                         ("pack_mem", 0x8348), ("unpk_mem", 0x8388),
-                         ("pack_a7_alias", 0x8f4f), ("unpk_a7_alias", 0x8f8f)):
-        for adjustment in (0, 1, 0xffff, 0x1234):
-            add_case(f"{name}_{adjustment:x}", struct.pack(">HH", opcode, adjustment).hex(),
-                     d=[0xabcdef99, 0x12345678, 0, 0, 0, 0, 0, 0], sr=0x1f,
-                     memory=[MemInitItem(address - 8, bytes.fromhex("0000000012345699"))
-                             for address in (TEST_A0, TEST_A1, TEST_SP)])
+        for src, dst in ((0, 0), (1, 0), (0x99, 1), (0x09, 1), (0x80, 0x99), (0xFF, 0xFF)):
+            for sr in (0, 4, 0x14, 0x1F):
+                add_case(
+                    f"{name}_{src:x}_{dst:x}_{sr:x}",
+                    code,
+                    d=[0x12340000 | src, 0x56780000 | dst, 0, 0, 0, 0, 0, 0],
+                    sr=sr,
+                )
+    for name, code in (
+        ("abcd_mem", "c308"),
+        ("sbcd_mem", "8308"),
+        ("abcd_a7_alias", "cf0f"),
+        ("sbcd_a7_alias", "8f0f"),
+        ("nbcd_a7", "4827"),
+    ):
+        for sr in (0, 4, 0x14, 0x1F):
+            add_case(
+                f"{name}_{sr:x}",
+                code,
+                sr=sr,
+                memory=[
+                    MemInitItem(address - 8, bytes.fromhex("0000009912345699"))
+                    for address in (TEST_A0, TEST_A1, TEST_SP)
+                ],
+            )
+    for name, opcode in (
+        ("pack_reg", 0x8340),
+        ("unpk_reg", 0x8380),
+        ("pack_mem", 0x8348),
+        ("unpk_mem", 0x8388),
+        ("pack_a7_alias", 0x8F4F),
+        ("unpk_a7_alias", 0x8F8F),
+    ):
+        for adjustment in (0, 1, 0xFFFF, 0x1234):
+            add_case(
+                f"{name}_{adjustment:x}",
+                struct.pack(">HH", opcode, adjustment).hex(),
+                d=[0xABCDEF99, 0x12345678, 0, 0, 0, 0, 0, 0],
+                sr=0x1F,
+                memory=[
+                    MemInitItem(address - 8, bytes.fromhex("0000000012345699"))
+                    for address in (TEST_A0, TEST_A1, TEST_SP)
+                ],
+            )
     for name, code in (("chk_w", "4380"), ("chk_l", "4300")):
-        for bound, value in ((0, 0), (127, -1), (127, 127), (127, 128), (-1, 1), (0x7fffffff, 0x80000000)):
-            add_case(f"{name}_{bound}_{value}", code, sr=0x201f,
-                     d=[bound & 0xffffffff, value & 0xffffffff, 0, 0, 0, 0, 0, 0])
-    for name, opcode in (("movep_load_word", 0x0308), ("movep_load_long", 0x0348),
-                         ("movep_store_word", 0x0388), ("movep_store_long", 0x03c8)):
-        add_case(name, struct.pack(">HH", opcode, 0xfff8).hex(), sr=0x1f,
-                 d=[0, 0x89abcdef, 0, 0, 0, 0, 0, 0],
-                 memory=[MemInitItem(TEST_A0 - 8, bytes.fromhex("8001fe027f03aa04"))])
-    for width, opcode in ((1, 0x0ad0), (2, 0x0cd0), (4, 0x0ed0)):
-        for compared in (0, 0x80, 0xffffffff):
-            for memory_value in (0, 0x80, 0xff):
-                add_case(f"cas_{width}_{compared:x}_{memory_value:x}",
-                         struct.pack(">HH", opcode, 0x0040).hex(), sr=0x1f,
-                         d=[compared, 0x12345678, 0, 0, 0, 0, 0, 0],
-                         memory=[MemInitItem(TEST_A0, memory_value.to_bytes(width, "big"))])
-    for width, opcode in ((2, 0x0cfc), (4, 0x0efc)):
+        for bound, value in ((0, 0), (127, -1), (127, 127), (127, 128), (-1, 1), (0x7FFFFFFF, 0x80000000)):
+            add_case(
+                f"{name}_{bound}_{value}", code, sr=0x201F, d=[bound & 0xFFFFFFFF, value & 0xFFFFFFFF, 0, 0, 0, 0, 0, 0]
+            )
+    for name, opcode in (
+        ("movep_load_word", 0x0308),
+        ("movep_load_long", 0x0348),
+        ("movep_store_word", 0x0388),
+        ("movep_store_long", 0x03C8),
+    ):
+        add_case(
+            name,
+            struct.pack(">HH", opcode, 0xFFF8).hex(),
+            sr=0x1F,
+            d=[0, 0x89ABCDEF, 0, 0, 0, 0, 0, 0],
+            memory=[MemInitItem(TEST_A0 - 8, bytes.fromhex("8001fe027f03aa04"))],
+        )
+    for width, opcode in ((1, 0x0AD0), (2, 0x0CD0), (4, 0x0ED0)):
+        for compared in (0, 0x80, 0xFFFFFFFF):
+            for memory_value in (0, 0x80, 0xFF):
+                add_case(
+                    f"cas_{width}_{compared:x}_{memory_value:x}",
+                    struct.pack(">HH", opcode, 0x0040).hex(),
+                    sr=0x1F,
+                    d=[compared, 0x12345678, 0, 0, 0, 0, 0, 0],
+                    memory=[MemInitItem(TEST_A0, memory_value.to_bytes(width, "big"))],
+                )
+    for width, opcode in ((2, 0x0CFC), (4, 0x0EFC)):
         for left, right in ((1, 2), (0, 2), (1, 0)):
             for same_address in (False, True):
-                add_case(f"cas2_{width}_{left}_{right}_{same_address}",
-                         struct.pack(">HHH", opcode, 0x8040,
-                                     0x80c2 if same_address else 0x90c2).hex(),
-                         d=[1, 0x12345678, 2, 0x89abcdef, 0, 0, 0, 0], sr=0x1f,
-                         memory=[MemInitItem(TEST_A0, left.to_bytes(width, "big")),
-                                 MemInitItem(TEST_A1, right.to_bytes(width, "big"))])
-    for width, opcode in ((1, 0x0e10), (2, 0x0e50), (4, 0x0e90)):
+                add_case(
+                    f"cas2_{width}_{left}_{right}_{same_address}",
+                    struct.pack(">HHH", opcode, 0x8040, 0x80C2 if same_address else 0x90C2).hex(),
+                    d=[1, 0x12345678, 2, 0x89ABCDEF, 0, 0, 0, 0],
+                    sr=0x1F,
+                    memory=[
+                        MemInitItem(TEST_A0, left.to_bytes(width, "big")),
+                        MemInitItem(TEST_A1, right.to_bytes(width, "big")),
+                    ],
+                )
+    for width, opcode in ((1, 0x0E10), (2, 0x0E50), (4, 0x0E90)):
         for extension in (0x1000, 0x1800, 0x9000, 0x9800):
-            for sr in (0x001f, 0x201f):
-                add_case(f"moves_{width}_{extension:x}_{sr:x}",
-                         struct.pack(">HH", opcode, extension).hex(), sr=sr,
-                         memory=[MemInitItem(TEST_A0, bytes.fromhex("80fe7f01"))])
+            for sr in (0x001F, 0x201F):
+                add_case(
+                    f"moves_{width}_{extension:x}_{sr:x}",
+                    struct.pack(">HH", opcode, extension).hex(),
+                    sr=sr,
+                    memory=[MemInitItem(TEST_A0, bytes.fromhex("80fe7f01"))],
+                )
     for name, code in (("tas_reg", "4ac0"), ("tas_mem", "4ad0"), ("tas_a7", "4ae7")):
-        for value in (0, 1, 0x80, 0xff):
-            add_case(f"{name}_{value}", code, d=[value, 0, 0, 0, 0, 0, 0, 0], sr=0x1f,
-                     memory=[MemInitItem(TEST_A0, bytes([value])),
-                             MemInitItem(TEST_SP - 2, bytes([value]))])
+        for value in (0, 1, 0x80, 0xFF):
+            add_case(
+                f"{name}_{value}",
+                code,
+                d=[value, 0, 0, 0, 0, 0, 0, 0],
+                sr=0x1F,
+                memory=[MemInitItem(TEST_A0, bytes([value])), MemInitItem(TEST_SP - 2, bytes([value]))],
+            )
     for condition in range(16):
-        for suffix, extension in ((0xfc, b""), (0xfa, b"\x12\x34"), (0xfb, b"\x12\x34\x56\x78")):
-            for sr in (0x2000, 0x201f):
-                add_case(f"trapcc_{condition}_{suffix}_{sr:x}",
-                         (struct.pack(">H", 0x5000 | condition << 8 | suffix) + extension).hex(), sr=sr)
-    for name, code in (("trapv", "4e76"), ("illegal", "4afc"),
-                       ("bkpt", "4848"),
-                       ("coprocessor_absent", "f2000000")):
-        for sr in (0, 0x201f):
+        for suffix, extension in ((0xFC, b""), (0xFA, b"\x12\x34"), (0xFB, b"\x12\x34\x56\x78")):
+            for sr in (0x2000, 0x201F):
+                add_case(
+                    f"trapcc_{condition}_{suffix}_{sr:x}",
+                    (struct.pack(">H", 0x5000 | condition << 8 | suffix) + extension).hex(),
+                    sr=sr,
+                )
+    for name, code in (("trapv", "4e76"), ("illegal", "4afc"), ("bkpt", "4848"), ("coprocessor_absent", "f2000000")):
+        for sr in (0, 0x201F):
             add_case(f"{name}_{sr:x}", code, sr=sr)
 
     for code in ("48d00000", "48e00000", "4cd00000", "4cd80000", "48f000000151"):
-        add_case(f"movem_empty_mask_{code}", code, sr=0x201f,
-                 memory=[MemInitItem(SAFE_A_REGS[0], struct.pack(">I", SAFE_A_REGS[1]))])
-    for size, opcode in ((2, 0x0cfc), (4, 0x0efc)):
-        add_case(f"cas2_{size}_same_address_success",
-                 struct.pack(">HHH", opcode, 0x8040, 0x80c2).hex(),
-                 d=[1, 0x12345678, 1, 0xabcdef98, 0, 0, 0, 0], sr=0x201f,
-                 memory=[MemInitItem(SAFE_A_REGS[0], (1).to_bytes(size, "big"))])
-    for size, opcode in ((1, 0x0ac0), (2, 0x0cc0), (4, 0x0ec0)):
+        add_case(
+            f"movem_empty_mask_{code}",
+            code,
+            sr=0x201F,
+            memory=[MemInitItem(SAFE_A_REGS[0], struct.pack(">I", SAFE_A_REGS[1]))],
+        )
+    for size, opcode in ((2, 0x0CFC), (4, 0x0EFC)):
+        add_case(
+            f"cas2_{size}_same_address_success",
+            struct.pack(">HHH", opcode, 0x8040, 0x80C2).hex(),
+            d=[1, 0x12345678, 1, 0xABCDEF98, 0, 0, 0, 0],
+            sr=0x201F,
+            memory=[MemInitItem(SAFE_A_REGS[0], (1).to_bytes(size, "big"))],
+        )
+    for size, opcode in ((1, 0x0AC0), (2, 0x0CC0), (4, 0x0EC0)):
         for mode in (3, 4):
             address = SAFE_A_REGS[0] - (size if mode == 4 else 0)
-            add_case(f"cas_{size}_mode{mode}", struct.pack(">HH", opcode | mode << 3, 0x40).hex(),
-                     d=[1, 0x12345678, 0, 0, 0, 0, 0, 0], sr=0x201f,
-                     memory=[MemInitItem(address, (1).to_bytes(size, "big"))])
-    for size, opcode in ((1, 0x0e00), (2, 0x0e40), (4, 0x0e80)):
+            add_case(
+                f"cas_{size}_mode{mode}",
+                struct.pack(">HH", opcode | mode << 3, 0x40).hex(),
+                d=[1, 0x12345678, 0, 0, 0, 0, 0, 0],
+                sr=0x201F,
+                memory=[MemInitItem(address, (1).to_bytes(size, "big"))],
+            )
+    for size, opcode in ((1, 0x0E00), (2, 0x0E40), (4, 0x0E80)):
         for mode in (3, 4):
             for store in (False, True):
                 address = SAFE_A_REGS[0] - (size if mode == 4 else 0)
-                add_case(f"moves_{size}_mode{mode}_alias_{store}",
-                         struct.pack(">HH", opcode | mode << 3, 0x8000 | (0x800 if store else 0)).hex(),
-                         sr=0x201f, memory=[MemInitItem(address, b"\x80\xfe\x7f\x01"[:size])])
+                add_case(
+                    f"moves_{size}_mode{mode}_alias_{store}",
+                    struct.pack(">HH", opcode | mode << 3, 0x8000 | (0x800 if store else 0)).hex(),
+                    sr=0x201F,
+                    memory=[MemInitItem(address, b"\x80\xfe\x7f\x01"[:size])],
+                )
 
     return cases
 
@@ -750,10 +943,21 @@ def generate_random_cases(count: int, seed: int, start_id: int) -> list[RawTestC
     for i in range(count):
         case_seed = rng.randint(0, 0xFFFFFFFFFFFF)
         case_rng = random.Random(case_seed)
-        family = case_rng.choice([
-            "move_dn", "moveq", "add_sub", "logical", "swap_ext",
-            "clr_tst", "lea_pea", "exg", "shift", "cmp", "bit_op"
-        ])
+        family = case_rng.choice(
+            [
+                "move_dn",
+                "moveq",
+                "add_sub",
+                "logical",
+                "swap_ext",
+                "clr_tst",
+                "lea_pea",
+                "exg",
+                "shift",
+                "cmp",
+                "bit_op",
+            ]
+        )
 
         initial_d = [case_rng.randint(0, 0xFFFFFFFF) for _ in range(8)]
         # Bias some registers to boundary values
@@ -851,18 +1055,20 @@ def generate_random_cases(count: int, seed: int, start_id: int) -> list[RawTestC
             code = struct.pack(">HH", op[0] | d_reg, bit_num)
             name = f"{op[1]}_imm_{bit_num}_d{d_reg}"
 
-        cases.append(RawTestCase(
-            id=start_id + i,
-            name=name,
-            code_bytes=code,
-            initial_d=initial_d,
-            initial_a=initial_a,
-            initial_sr=initial_sr,
-            initial_mem=initial_mem,
-            is_boundary=False,
-            boundary_kind="randomized",
-            seed=case_seed,
-        ))
+        cases.append(
+            RawTestCase(
+                id=start_id + i,
+                name=name,
+                code_bytes=code,
+                initial_d=initial_d,
+                initial_a=initial_a,
+                initial_sr=initial_sr,
+                initial_mem=initial_mem,
+                is_boundary=False,
+                boundary_kind="randomized",
+                seed=case_seed,
+            )
+        )
 
     return cases
 
@@ -879,17 +1085,19 @@ def load_external_instructions(json_path: Path | str, start_id: int) -> list[Raw
         raw_hex = item.get("bytes", "")
         code_bytes = bytes.fromhex(raw_hex)
         name = item.get("name", f"ext_insn_{pc:06x}")
-        cases.append(RawTestCase(
-            id=case_id,
-            name=name,
-            code_bytes=code_bytes,
-            initial_pc=pc,
-            initial_d=[0] * 8,
-            initial_a=list(SAFE_A_REGS),
-            initial_sr=0x0000,
-            is_boundary=False,
-            boundary_kind="external_rom",
-        ))
+        cases.append(
+            RawTestCase(
+                id=case_id,
+                name=name,
+                code_bytes=code_bytes,
+                initial_pc=pc,
+                initial_d=[0] * 8,
+                initial_a=list(SAFE_A_REGS),
+                initial_sr=0x0000,
+                is_boundary=False,
+                boundary_kind="external_rom",
+            )
+        )
         case_id += 1
 
     return cases

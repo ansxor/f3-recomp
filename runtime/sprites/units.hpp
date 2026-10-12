@@ -56,9 +56,11 @@ struct SpriteUnitTable {
 class SpriteUnits {
 public:
     struct Options {
-        bool check = false;                              // compare unpatched replay with real writes
-        std::vector<const SpriteBehaviour *> behaviours; // enabled behaviours (patched replay + splice)
-        std::vector<const FlickerShadow *> flicker_shadows; // sources known to this game; see set_flicker_shadows
+        bool check = false; // compare unpatched replay with real writes
+        std::vector<const SpriteBehaviour *>
+            behaviours; // enabled behaviours (patched replay + splice)
+        std::vector<const FlickerShadow *>
+            flicker_shadows; // sources known to this game; see set_flicker_shadows
     };
     // Why a sandbox replay was abandoned (real entries are then kept).
     enum class Abort : uint8_t {
@@ -82,34 +84,34 @@ public:
     };
     struct UnitStats {
         std::string name;
-        uint64_t invocations = 0;   // real entries into the unit
-        uint64_t replays = 0;       // sandbox replays started (check and patched)
-        uint64_t completed = 0;     // replays that reached the unit end
-        uint64_t matched = 0;       // check mode: bit-exact against the real writes
-        uint64_t mismatched = 0;    // check mode: differs from the real writes
+        uint64_t invocations = 0; // real entries into the unit
+        uint64_t replays = 0;     // sandbox replays started (check and patched)
+        uint64_t completed = 0;   // replays that reached the unit end
+        uint64_t matched = 0;     // check mode: bit-exact against the real writes
+        uint64_t mismatched = 0;  // check mode: differs from the real writes
         uint64_t aborted = 0;
-        uint64_t spliced = 0;       // splices produced by behaviours
-        uint64_t real_entries = 0;  // sprite entries written by the real span
+        uint64_t spliced = 0;      // splices produced by behaviours
+        uint64_t real_entries = 0; // sprite entries written by the real span
         std::array<uint64_t, size_t(Abort::Count)> aborts{};
     };
     struct StrayWriter {
         uint32_t pc = 0;
-        uint64_t count = 0;         // sprite-RAM byte writes outside any unit
+        uint64_t count = 0; // sprite-RAM byte writes outside any unit
         uint64_t first_frame = 0;
         uint32_t first_address = 0;
-        bool accounted = false;     // pc lies in a declared frame_writers range
+        bool accounted = false; // pc lies in a declared frame_writers range
     };
     // Flicker shadow accounting (all zero unless a source is registered and enabled).
     struct FlickerStats {
-        uint64_t invocations = 0;     // unit instances that have a shadow
-        uint64_t gate_set = 0;        // ... whose shadow the game itself emitted (parity gate set)
-        uint64_t gate_clear = 0;      // ... whose shadow the game dropped; the replay synthesized it
-        uint64_t real_entries = 0;    // entries written by the real shadow emit path
-        uint64_t replay_entries = 0;  // entries tagged by the patched replay
-        uint64_t splices = 0;         // splices that carry tagged entries
-        uint64_t frames = 0;          // frames presenting at least one tagged entry
+        uint64_t invocations = 0;    // unit instances that have a shadow
+        uint64_t gate_set = 0;       // ... whose shadow the game itself emitted (parity gate set)
+        uint64_t gate_clear = 0;     // ... whose shadow the game dropped; the replay synthesized it
+        uint64_t real_entries = 0;   // entries written by the real shadow emit path
+        uint64_t replay_entries = 0; // entries tagged by the patched replay
+        uint64_t splices = 0;        // splices that carry tagged entries
+        uint64_t frames = 0;         // frames presenting at least one tagged entry
         uint64_t max_frame_entries = 0;
-        uint64_t violations = 0;      // see check_flicker in sprites/units.cpp
+        uint64_t violations = 0; // see check_flicker in sprites/units.cpp
         std::string first_violation;
     };
     // Tagged entries presented by the most recently completed frame.
@@ -119,13 +121,13 @@ public:
     struct Report {
         std::vector<UnitStats> units;
         FlickerStats flicker;
-        std::vector<Mismatch> mismatches;   // first few only
-        std::vector<StrayWriter> stray;     // check mode, sorted by pc
+        std::vector<Mismatch> mismatches; // first few only
+        std::vector<StrayWriter> stray;   // check mode, sorted by pc
         uint64_t invocations = 0, replays = 0, completed = 0, matched = 0, mismatched = 0;
         uint64_t aborted = 0, spliced = 0, frames = 0;
-        uint64_t unmatched_exits = 0;       // exits without an open invocation
-        uint64_t discarded = 0;             // invocations dropped (nesting/IRQ/frame policy)
-        uint64_t no_native_skips = 0;       // replays skipped because no native blocks exist
+        uint64_t unmatched_exits = 0; // exits without an open invocation
+        uint64_t discarded = 0;       // invocations dropped (nesting/IRQ/frame policy)
+        uint64_t no_native_skips = 0; // replays skipped because no native blocks exist
         uint64_t stray_writes = 0, stray_unaccounted = 0;
     };
 
@@ -138,19 +140,21 @@ public:
     static const SpriteUnitTable &game_table();
 
     // True when the game declares at least one unit (identity tracking is meaningful).
-    bool active() const { return !units_.empty(); }
-    const Options &options() const { return options_; }
+    bool active() const { return !m_units.empty(); }
+    const Options &options() const { return m_options; }
     // Render-only view; valid until the next enter/exit/frame_end/reset.
     SpritePresentation presentation() const;
     // Flicker shadows are inert until enabled (frontend: setting; tools: explicit). Enabling or
     // disabling takes effect from the next unit invocation; stale splices age out normally.
-    bool flicker_shadows_available() const { return has_flicker_; }
-    bool flicker_shadows_enabled() const { return flicker_enabled_; }
-    void set_flicker_shadows(bool enabled) { flicker_enabled_ = enabled && flicker_shadows_available(); }
-    FrameShadow last_frame_shadow() const { return last_frame_shadow_; }
+    bool flicker_shadows_available() const { return m_has_flicker; }
+    bool flicker_shadows_enabled() const { return m_flicker_enabled; }
+    void set_flicker_shadows(bool enabled) {
+        m_flicker_enabled = enabled && flicker_shadows_available();
+    }
+    FrameShadow last_frame_shadow() const { return m_last_frame_shadow; }
 
     // ---- Hooks (cpu_abi.cpp, machine.cpp) ----
-    bool is_sandbox(const f3_cpu *cpu) const { return cpu == &sandbox_cpu_; }
+    bool is_sandbox(const f3_cpu *cpu) const { return cpu == &m_sandbox_cpu; }
     void unit_enter(f3_cpu *cpu, uint32_t unit);
     int unit_exit(f3_cpu *cpu, uint32_t unit); // nonzero only for the sandbox at its unit end
     // Interpreted execution: call before the instruction at `pc` runs (exit hooks, then enter).
@@ -158,8 +162,8 @@ public:
     // Real-CPU bus writes (Machine::write*): RAM word writer PCs and sprite-RAM entries.
     void note_write(uint32_t address, unsigned width);
     // `--discovery-log`: report writes outside units from PCs outside frame_writers (works without check mode).
-    void set_discovery(DiscoveryLog *log) { discovery_ = log; }
-    bool tracks_writers() const { return !writer_pc_.empty(); }
+    void set_discovery(DiscoveryLog *log) { m_discovery = log; }
+    bool tracks_writers() const { return !m_writer_pc.empty(); }
     void note_irq(unsigned level);
     void frame_end();
     // Drops all transient state (machine reset, state load); counters are kept.
@@ -178,24 +182,32 @@ public:
 
 private:
     struct Entry {
-        uint16_t key;                // bank * 0x400 + entry
+        uint16_t key; // bank * 0x400 + entry
         std::array<uint8_t, 16> bytes;
-        uint8_t flags = 0;           // sprite_flag_* (replay only)
+        uint8_t flags = 0; // sprite_flag_* (replay only)
     };
     struct ReplayResult {
         bool ok = false;
         Abort reason = Abort::Count; // Count: not run
         bool shadow_forced = false;  // flicker shadow gate was forced for this replay
         uint32_t shadow_entries = 0; // written entries tagged sprite_flag_shadow
-        std::vector<uint8_t> dense_flags; // sprite_flag_* per dense entry (empty unless shadow_forced)
-        std::vector<Entry> written;  // sorted by key; every entry the replay wrote
+        std::vector<uint8_t>
+            dense_flags;            // sprite_flag_* per dense entry (empty unless shadow_forced)
+        std::vector<Entry> written; // sorted by key; every entry the replay wrote
         // Dense run of the first-written bank, first..last, gaps from unit-start hardware.
         bool bank = false;
         uint16_t first = 0, last = 0;
         std::vector<uint8_t> dense;
         void clear() {
-            ok = false; reason = Abort::Count; shadow_forced = false; shadow_entries = 0; dense_flags.clear();
-            written.clear(); dense.clear(); first = last = 0; bank = false;
+            ok = false;
+            reason = Abort::Count;
+            shadow_forced = false;
+            shadow_entries = 0;
+            dense_flags.clear();
+            written.clear();
+            dense.clear();
+            first = last = 0;
+            bank = false;
         }
     };
     struct Invocation {
@@ -203,8 +215,8 @@ private:
         uint64_t identity = 0, frame = 0;
         std::vector<uint16_t> keys; // sprite entries written by the real span, write order
         const FlickerShadow *flicker = nullptr; // source active for this invocation
-        bool gate_set = false;      // the game's parity gate was set at unit start
-        std::vector<uint16_t> shadow_keys; // entries written by the real shadow emit path
+        bool gate_set = false;                  // the game's parity gate was set at unit start
+        std::vector<uint16_t> shadow_keys;      // entries written by the real shadow emit path
         ReplayResult check, patched;
         bool has_patched = false;
     };
@@ -214,8 +226,13 @@ private:
         uint64_t identity = 0, frame = 0;
         std::vector<uint8_t> real, replacement, flags;
     };
-    struct Hooks { std::vector<uint32_t> exits, enters; };
-    struct Generation { uint64_t last_frame = 0; uint32_t generation = 0; };
+    struct Hooks {
+        std::vector<uint32_t> exits, enters;
+    };
+    struct Generation {
+        uint64_t last_frame = 0;
+        uint32_t generation = 0;
+    };
 
     void enter_real(uint32_t unit);
     int exit_real(uint32_t unit);
@@ -226,7 +243,8 @@ private:
     void sprite_write(uint32_t address);
     void finish(Invocation &invocation);
     void compare(Invocation &invocation, const std::vector<uint16_t> &real_keys);
-    void run_replay(const EmitUnit &unit, const Invocation &invocation, bool patched, ReplayResult &out);
+    void run_replay(const EmitUnit &unit, const Invocation &invocation, bool patched,
+                    ReplayResult &out);
     const f3_block *find_block(uint32_t pc) const;
     void collect(ReplayResult &out, bool dense);
     uint8_t ram_get(uint32_t offset) const;
@@ -239,47 +257,47 @@ private:
     uint32_t flicker_gate_address(const f3_cpu &cpu, const FlickerShadow &source) const;
     void check_flicker(Invocation &invocation, bool bank, uint16_t first, size_t real_count);
 
-    Machine &machine_;
-    Options options_;
-    std::vector<const EmitUnit *> units_;
-    std::span<const PcRange> frame_writers_;
-    std::vector<std::vector<const SpriteBehaviour *>> behaviours_; // per unit id
-    std::vector<const FlickerShadow *> flicker_by_unit_;           // per unit id (null = none)
-    bool has_flicker_ = false, flicker_enabled_ = false;
-    const FlickerShadow *replay_flicker_ = nullptr;                // source tagging sandbox writes
-    uint32_t frame_shadow_entries_ = 0, frame_shadow_objects_ = 0, frame_shadow_gate_set_ = 0;
-    FrameShadow last_frame_shadow_;
-    std::unordered_map<uint32_t, Hooks> hooks_;                    // by PC (interpreted execution)
-    std::array<uint64_t, 0x800> identity_{};
-    std::array<uint64_t, 0x800> object_{};                         // owning invocation identity per slot
-    std::array<uint8_t, 0x800> flag_{};                            // sprite_flag_* per slot (real shadow entries)
-    mutable std::vector<uint8_t> flag_view_;
-    std::vector<uint32_t> writer_pc_;                              // per RAM word, only when needed
-    std::unordered_map<uint64_t, Generation> generations_;
-    std::unordered_map<uint64_t, uint32_t> ordinals_;              // (unit, writer pc) -> per-frame count
-    std::vector<Invocation> stack_, pool_;
-    std::vector<unsigned> irq_levels_;
-    std::vector<Splice> splices_;
-    mutable std::vector<SpriteSplice> view_;
-    uint32_t last_hook_pc_ = 0;
-    uint64_t last_hook_cycles_ = UINT64_MAX;
+    Machine &m_machine;
+    Options m_options;
+    std::vector<const EmitUnit *> m_units;
+    std::span<const PcRange> m_frame_writers;
+    std::vector<std::vector<const SpriteBehaviour *>> m_behaviours; // per unit id
+    std::vector<const FlickerShadow *> m_flicker_by_unit;           // per unit id (null = none)
+    bool m_has_flicker = false, m_flicker_enabled = false;
+    const FlickerShadow *m_replay_flicker = nullptr; // source tagging sandbox writes
+    uint32_t m_frame_shadow_entries = 0, m_frame_shadow_objects = 0, m_frame_shadow_gate_set = 0;
+    FrameShadow m_last_frame_shadow;
+    std::unordered_map<uint32_t, Hooks> m_hooks; // by PC (interpreted execution)
+    std::array<uint64_t, 0x800> m_identity{};
+    std::array<uint64_t, 0x800> m_object{}; // owning invocation identity per slot
+    std::array<uint8_t, 0x800> m_flag{};    // sprite_flag_* per slot (real shadow entries)
+    mutable std::vector<uint8_t> m_flag_view;
+    std::vector<uint32_t> m_writer_pc; // per RAM word, only when needed
+    std::unordered_map<uint64_t, Generation> m_generations;
+    std::unordered_map<uint64_t, uint32_t> m_ordinals; // (unit, writer pc) -> per-frame count
+    std::vector<Invocation> m_stack, m_pool;
+    std::vector<unsigned> m_irq_levels;
+    std::vector<Splice> m_splices;
+    mutable std::vector<SpriteSplice> m_view;
+    uint32_t m_last_hook_pc = 0;
+    uint64_t m_last_hook_cycles = UINT64_MAX;
 
     // Sandbox state.
-    f3_cpu sandbox_cpu_{};
-    static constexpr uint32_t overlay_page = 256;
-    std::array<int16_t, 0x20000 / overlay_page> page_slot_{};
-    std::vector<std::array<uint8_t, overlay_page>> page_pool_;
-    std::vector<uint16_t> touched_pages_;
-    std::array<int16_t, 0x800> capture_slot_{};
-    std::vector<Entry> capture_;                                   // first-touch order
-    uint32_t sandbox_unit_ = 0, sandbox_end_pc_ = 0;
-    bool sandbox_done_ = false;
-    Abort sandbox_abort_ = Abort::Count;
+    f3_cpu m_sandbox_cpu{};
+    static constexpr uint32_t OVERLAY_PAGE = 256;
+    std::array<int16_t, 0x20000 / OVERLAY_PAGE> m_page_slot{};
+    std::vector<std::array<uint8_t, OVERLAY_PAGE>> m_page_pool;
+    std::vector<uint16_t> m_touched_pages;
+    std::array<int16_t, 0x800> m_capture_slot{};
+    std::vector<Entry> m_capture; // first-touch order
+    uint32_t m_sandbox_unit = 0, m_sandbox_end_pc = 0;
+    bool m_sandbox_done = false;
+    Abort m_sandbox_abort = Abort::Count;
 
-    Report report_;
-    std::unordered_map<uint32_t, StrayWriter> stray_;
-    StrayWriter *last_stray_ = nullptr; // one-entry cache into stray_ (node-stable)
-    DiscoveryLog *discovery_ = nullptr;
+    Report m_report;
+    std::unordered_map<uint32_t, StrayWriter> m_stray;
+    StrayWriter *m_last_stray = nullptr; // one-entry cache into m_stray (node-stable)
+    DiscoveryLog *m_discovery = nullptr;
 };
 
 } // namespace f3rt

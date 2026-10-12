@@ -26,25 +26,53 @@ void f3_sound_stop(f3_cpu *cpu, uint16_t new_sr, uint32_t next_pc);
 void f3_sound_unsupported_pc(f3_cpu *cpu, uint32_t pc);
 
 /* Mathematical condition code aliases */
-#define f3_sound_cc_flush f3_cc_flush
-#define f3_sound_eval_cond f3_eval_cond
-#define f3_sound_lsl f3_lsl
-#define f3_sound_lsr f3_lsr
-#define f3_sound_asl f3_asl
-#define f3_sound_asr f3_asr
-#define f3_sound_rol f3_rol
-#define f3_sound_ror f3_ror
-#define f3_sound_roxl f3_roxl
-#define f3_sound_roxr f3_roxr
-#define f3_sound_btst f3_btst
-#define f3_sound_bset f3_bset
-#define f3_sound_bclr f3_bclr
-#define f3_sound_bchg f3_bchg
+static inline void f3_sound_cc_flush(f3_cpu *cpu) { f3_cc_flush(cpu); }
+static inline int f3_sound_eval_cond(f3_cpu *cpu, uint8_t cond) { return f3_eval_cond(cpu, cond); }
+static inline uint32_t f3_sound_lsl(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_lsl(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_lsr(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_lsr(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_asl(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_asl(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_asr(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_asr(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_rol(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_rol(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_ror(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_ror(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_roxl(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_roxl(cpu, val, count, width);
+}
+static inline uint32_t f3_sound_roxr(f3_cpu *cpu, uint32_t val, uint32_t count, uint8_t width) {
+    return f3_roxr(cpu, val, count, width);
+}
+static inline void f3_sound_btst(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t width) {
+    f3_btst(cpu, val, bit, width);
+}
+static inline uint32_t f3_sound_bset(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t width) {
+    return f3_bset(cpu, val, bit, width);
+}
+static inline uint32_t f3_sound_bclr(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t width) {
+    return f3_bclr(cpu, val, bit, width);
+}
+static inline uint32_t f3_sound_bchg(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t width) {
+    return f3_bchg(cpu, val, bit, width);
+}
+static inline uint32_t f3_sound_mulu_w(f3_cpu *cpu, uint16_t src, uint16_t dst) {
+    return f3_mulu_w(cpu, src, dst);
+}
+static inline uint32_t f3_sound_muls_w(f3_cpu *cpu, int16_t src, int16_t dst) {
+    return f3_muls_w(cpu, src, dst);
+}
 
-#define f3_sound_mulu_w f3_mulu_w
-#define f3_sound_muls_w f3_muls_w
-
-static inline uint32_t f3_sound_divs_w(f3_cpu *cpu, int16_t src, uint32_t dst, uint32_t pc, int *ex) {
+static inline uint32_t f3_sound_divs_w(f3_cpu *cpu, int16_t src, uint32_t dst, uint32_t pc,
+                                       int *ex) {
     if (src == 0) {
         f3_sound_cc_flush(cpu);
         f3_sound_exception(cpu, 5, pc);
@@ -73,7 +101,8 @@ static inline uint32_t f3_sound_divs_w(f3_cpu *cpu, int16_t src, uint32_t dst, u
     return (((uint32_t)(uint16_t)rem) << 16) | ((uint32_t)(uint16_t)q16);
 }
 
-static inline uint32_t f3_sound_divu_w(f3_cpu *cpu, uint16_t src, uint32_t dst, uint32_t pc, int *ex) {
+static inline uint32_t f3_sound_divu_w(f3_cpu *cpu, uint16_t src, uint32_t dst, uint32_t pc,
+                                       int *ex) {
     if (src == 0) {
         f3_sound_cc_flush(cpu);
         f3_sound_exception(cpu, 5, pc);

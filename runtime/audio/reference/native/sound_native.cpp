@@ -17,14 +17,16 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
                          std::span<const f3_excluded_range> excluded, uint32_t expected_crc)
     : m_machine(machine), m_blocks(blocks), m_excluded(excluded)
 #ifdef F3_PROFILE_SLIM_ENABLED
-    , m_block_count(block_count)
+      ,
+      m_block_count(block_count)
 #endif
 {
     const auto &rom_bytes = m_machine.roms.sound;
     m_rom_crc = crc32(rom_bytes.data(), rom_bytes.size());
     if (rom_bytes.size() != ROM_SIZE || m_rom_crc != expected_crc) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "SoundNative: sound ROM mismatch: size %zu, CRC 0x%08x (expected %u, 0x%08x)",
+        snprintf(buf, sizeof(buf),
+                 "SoundNative: sound ROM mismatch: size %zu, CRC 0x%08x (expected %u, 0x%08x)",
                  rom_bytes.size(), m_rom_crc, ROM_SIZE, expected_crc);
         throw std::runtime_error(buf);
     }
@@ -36,27 +38,27 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
     size_t excluded_words = 0;
     for (const auto &range : m_excluded) {
         if ((range.start | range.end) & 1u || range.start < previous_end ||
-            range.start >= range.end || range.end > ROM_BASE + ROM_SIZE ||
-            !range.reason || !*range.reason || !range.evidence || !*range.evidence)
+            range.start >= range.end || range.end > ROM_BASE + ROM_SIZE || !range.reason ||
+            !*range.reason || !range.evidence || !*range.evidence)
             throw std::runtime_error("SoundNative: invalid excluded ROM ranges");
         excluded_words += (range.end - range.start) / 2;
         previous_end = range.end;
     }
 #ifdef F3_PROFILE_SLIM_ENABLED
     if (!blocks || !block_count || block_count > ROM_SIZE / 2 - excluded_words)
-        throw std::runtime_error("SoundNative requires a nonempty retained ROM exclusion complement");
+        throw std::runtime_error(
+            "SoundNative requires a nonempty retained ROM exclusion complement");
     size_t excluded_index = 0;
     for (size_t index = 0; index < block_count; ++index) {
         const auto &block = blocks[index];
-        if (!block.execute || (block.address & 1u) ||
-            block.address < ROM_BASE || block.address >= ROM_BASE + ROM_SIZE ||
+        if (!block.execute || (block.address & 1u) || block.address < ROM_BASE ||
+            block.address >= ROM_BASE + ROM_SIZE ||
             (index && blocks[index - 1].address >= block.address))
             throw std::runtime_error("Invalid profile-slim sound ROM table");
         while (excluded_index < m_excluded.size() &&
                m_excluded[excluded_index].end <= block.address)
             ++excluded_index;
-        if (excluded_index < m_excluded.size() &&
-            block.address >= m_excluded[excluded_index].start)
+        if (excluded_index < m_excluded.size() && block.address >= m_excluded[excluded_index].start)
             throw std::runtime_error("SoundNative: retained sound ROM entry is excluded");
     }
 #else
@@ -66,19 +68,17 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
     uint32_t next_pc = ROM_BASE;
     for (const auto &range : m_excluded) {
         for (; next_pc < range.start; next_pc += 2, ++index) {
-            if (blocks[index].address != next_pc || !blocks[index].execute)
+            if (index >= block_count || blocks[index].address != next_pc || !blocks[index].execute)
                 throw std::runtime_error("SoundNative: missing or unsorted aligned ROM entry");
         }
         next_pc = range.end;
     }
     for (; next_pc < ROM_BASE + ROM_SIZE; next_pc += 2, ++index) {
-        if (blocks[index].address != next_pc || !blocks[index].execute)
+        if (index >= block_count || blocks[index].address != next_pc || !blocks[index].execute)
             throw std::runtime_error("SoundNative: missing or unsorted aligned ROM entry");
     }
 #endif
 }
-
-SoundNative::~SoundNative() = default;
 
 void SoundNative::do_reset() {
     m_cpu.stopped = 0;
@@ -100,19 +100,15 @@ void SoundNative::reset(bool asserted) {
     }
 }
 
-
-uint32_t SoundNative::pc() const {
-    return m_cpu.pc;
-}
+uint32_t SoundNative::pc() const { return m_cpu.pc; }
 
 void SoundNative::trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
     if (!m_machine.sound_trace) return;
     address &= 0xffffffu; // The 68000 exposes a 24-bit physical bus.
     if (address < SOUND_TRACE_BUS_BEGIN || address >= SOUND_TRACE_BUS_END) return;
     const uint32_t pc = m_cpu.pc;
-    m_machine.sound_trace->record(m_machine,
-        write ? SoundTrace::SoundWrite : SoundTrace::SoundRead,
-        pc, address, value, width);
+    m_machine.sound_trace->record(m_machine, write ? SoundTrace::SoundWrite : SoundTrace::SoundRead,
+                                  pc, address, value, width);
 }
 
 uint8_t SoundNative::read8(uint32_t address) {
@@ -185,11 +181,10 @@ void SoundNative::exception(unsigned vector, uint32_t return_pc) {
     write32(m_cpu.a[7] + 2, return_pc);
     m_cpu.pc = read32(vector * 4);
 
-    static const uint8_t s_sound_exception_cycles[16] = {
-        40, 4, 50, 50, 34, 38, 40, 34, 34, 34, 34, 34, 4, 4, 4, 44
-    };
+    static const uint8_t S_SOUND_EXCEPTION_CYCLES[16] = {40, 4,  50, 50, 34, 38, 40, 34,
+                                                         34, 34, 34, 34, 4,  4,  4,  44};
     uint32_t cost = 34;
-    if (vector < 16) cost = s_sound_exception_cycles[vector];
+    if (vector < 16) cost = S_SOUND_EXCEPTION_CYCLES[vector];
     else if (vector >= 24 && vector < 32) cost = 44;
     else if (vector >= 32 && vector < 48) cost = 34;
     else cost = 4;
@@ -260,8 +255,8 @@ size_t SoundNative::block_index(uint32_t pc) const {
         if (physical_pc < range.end) {
             char prefix[128];
             snprintf(prefix, sizeof(prefix),
-                     "SoundNative: fatal excluded reachable PC 0x%08x in [0x%08x, 0x%08x): ",
-                     pc, range.start, range.end);
+                     "SoundNative: fatal excluded reachable PC 0x%08x in [0x%08x, 0x%08x): ", pc,
+                     range.start, range.end);
             throw std::runtime_error(std::string(prefix) + range.reason);
         }
 #ifndef F3_PROFILE_SLIM_ENABLED
@@ -270,14 +265,16 @@ size_t SoundNative::block_index(uint32_t pc) const {
     }
     if (pc < ROM_BASE || pc >= ROM_BASE + ROM_SIZE || (pc & 1u)) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC 0x%08x (%s)",
-                 pc, (pc & 1u) ? "odd address" : "outside sound ROM");
+        snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC 0x%08x (%s)", pc,
+                 (pc & 1u) ? "odd address" : "outside sound ROM");
         throw std::runtime_error(buf);
     }
 #ifdef F3_PROFILE_SLIM_ENABLED
     const auto *end = m_blocks + m_block_count;
-    const auto *entry = std::lower_bound(m_blocks, end, pc,
-        [](const f3_block &block, uint32_t address) { return block.address < address; });
+    const auto *entry =
+        std::lower_bound(m_blocks, end, pc, [](const f3_block &block, uint32_t address) {
+            return block.address < address;
+        });
     return entry != end && entry->address == pc ? size_t(entry - m_blocks) : m_block_count;
 #else
     return ((pc - ROM_BASE) >> 1) - removed_words;
@@ -287,8 +284,7 @@ size_t SoundNative::block_index(uint32_t pc) const {
 void SoundNative::dispatch_one() {
     const size_t index = block_index(m_cpu.pc);
 #ifdef F3_PROFILE_SLIM_ENABLED
-    if (index == m_block_count)
-        f3_profile_cold_abort(F3_PROFILE_SOUND, m_rom_crc, m_cpu.pc);
+    if (index == m_block_count) f3_profile_cold_abort(F3ProfileSound, m_rom_crc, m_cpu.pc);
 #endif
     ++m_instruction_count;
     m_blocks[index].execute(&m_cpu);
@@ -315,9 +311,7 @@ int SoundNative::run(int cycles) {
     return int(m_cpu.cycles - begin);
 }
 
-size_t SoundNative::state_size() const {
-    return sizeof(CanonicalSoundNative);
-}
+size_t SoundNative::state_size() const { return sizeof(CanonicalSoundNative); }
 
 void SoundNative::save_state(StateWriter &writer) const {
     CanonicalSoundNative st{};
@@ -390,50 +384,48 @@ static_assert(Snapshotable<SoundNative>);
 extern "C" {
 
 uint8_t f3_sound_read8(f3_cpu *cpu, uint32_t address) {
-    return static_cast<f3rt::SoundNative*>(cpu->runtime)->read8(address);
+    return static_cast<f3rt::SoundNative *>(cpu->runtime)->read8(address);
 }
 
 uint16_t f3_sound_read16(f3_cpu *cpu, uint32_t address) {
-    return static_cast<f3rt::SoundNative*>(cpu->runtime)->read16(address);
+    return static_cast<f3rt::SoundNative *>(cpu->runtime)->read16(address);
 }
 
 uint32_t f3_sound_read32(f3_cpu *cpu, uint32_t address) {
-    return static_cast<f3rt::SoundNative*>(cpu->runtime)->read32(address);
+    return static_cast<f3rt::SoundNative *>(cpu->runtime)->read32(address);
 }
 
 void f3_sound_write8(f3_cpu *cpu, uint32_t address, uint8_t value) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->write8(address, value);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->write8(address, value);
 }
 
 void f3_sound_write16(f3_cpu *cpu, uint32_t address, uint16_t value) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->write16(address, value);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->write16(address, value);
 }
 
 void f3_sound_write32(f3_cpu *cpu, uint32_t address, uint32_t value) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->write32(address, value);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->write32(address, value);
 }
 
 void f3_sound_set_sr(f3_cpu *cpu, uint16_t sr) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->set_sr(sr);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->set_sr(sr);
 }
 
 void f3_sound_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->exception(vector, return_pc);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->exception(vector, return_pc);
 }
 
-void f3_sound_rte(f3_cpu *cpu) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->rte();
-}
+void f3_sound_rte(f3_cpu *cpu) { static_cast<f3rt::SoundNative *>(cpu->runtime)->rte(); }
 
 void f3_sound_stop(f3_cpu *cpu, uint16_t new_sr, uint32_t next_pc) {
-    static_cast<f3rt::SoundNative*>(cpu->runtime)->stop(new_sr, next_pc);
+    static_cast<f3rt::SoundNative *>(cpu->runtime)->stop(new_sr, next_pc);
 }
 
-
 void f3_sound_unsupported_pc(f3_cpu *cpu, uint32_t pc) {
-    uint16_t opcode = static_cast<f3rt::SoundNative*>(cpu->runtime)->read16(pc);
+    uint16_t opcode = static_cast<f3rt::SoundNative *>(cpu->runtime)->read16(pc);
     char buf[128];
-    snprintf(buf, sizeof(buf), "SoundNative: fatal unsupported reachable PC: 0x%08x (opcode 0x%04x)", pc, opcode);
+    snprintf(buf, sizeof(buf),
+             "SoundNative: fatal unsupported reachable PC: 0x%08x (opcode 0x%04x)", pc, opcode);
     fprintf(stderr, "%s\n", buf);
     cpu->halted = 1;
     throw std::runtime_error(buf);

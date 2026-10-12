@@ -21,9 +21,9 @@ class SpriteUnits;
 class DiscoveryLog;
 class Machine {
 public:
-    static constexpr uint32_t main_clock = 16000000;
-    static constexpr uint32_t pixel_clock = 6671500;
-    static constexpr uint32_t frame_pixels = 432 * 262;
+    static constexpr uint32_t MAIN_CLOCK = 16000000;
+    static constexpr uint32_t PIXEL_CLOCK = 6671500;
+    static constexpr uint32_t FRAME_PIXELS = 432 * 262;
     explicit Machine(RomSet roms);
     ~Machine();
     Machine(const Machine &) = delete;
@@ -34,9 +34,11 @@ public:
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
     std::array<uint8_t, 0x800> shared{};
+
 private:
     friend class GameVideo;
-    mutable std::vector<uint32_t> pixels_;
+    mutable std::vector<uint32_t> m_pixels;
+
 public:
     // Observing native scanout materializes a retained GPU-presented frame.
     const std::vector<uint32_t> &native_pixels() const;
@@ -54,7 +56,8 @@ public:
     std::unique_ptr<Interpreter> interpreter;
     std::unique_ptr<SoundTrace> sound_trace;
     std::unique_ptr<SoundNative> sound_native;
-    std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff};
+    std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff,
+                                   0xffffffff, 0xffffffff, 0xffffffff};
     uint8_t system_inputs = 0xff; // EEPROMIN: service/test, four coins, active low.
     std::array<uint64_t, 4> coin_count{};
     std::array<bool, 4> coin_locked{};
@@ -104,13 +107,14 @@ public:
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
     uint32_t state_crc() const;
+
 private:
-    uint64_t hardware_cycles = 0;
-    uint64_t next_vblank = 0, irq3_at = UINT64_MAX;
-    uint64_t watchdog_at = 0;
+    uint64_t m_hardware_cycles = 0;
+    uint64_t m_next_vblank = 0, m_irq3_at = UINT64_MAX;
+    uint64_t m_watchdog_at = 0;
     uint64_t raster_cycle(uint64_t pixels) const;
     uint32_t input_word(unsigned index) const;
     void coin_write(unsigned bank, uint8_t value);
-    mutable std::vector<uint8_t> state_scratch_;
+    mutable std::vector<uint8_t> m_state_scratch;
 };
-}
+} // namespace f3rt

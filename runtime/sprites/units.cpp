@@ -19,83 +19,94 @@ constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE, ENTRIES = 0x400;
 constexpr uint64_t REPLAY_BUDGET_CYCLES = 1000000;
 constexpr uint32_t REPLAY_BUDGET_BLOCKS = 500000;
 constexpr size_t MAX_OPEN = 8;
-constexpr uint64_t SPLICE_FRAMES = 4;          // frames a splice survives without refresh
+constexpr uint64_t SPLICE_FRAMES = 4; // frames a splice survives without refresh
 constexpr size_t MAX_MISMATCHES = 8;
 
 constexpr uint16_t sprite_key(uint32_t offset) { // offset within 0x600000..0x610000
     return uint16_t(((offset >> 15) & 1) * ENTRIES + ((offset & 0x7fff) >> 4));
 }
 constexpr bool listed(uint32_t offset) { return ((offset & 0x7fff) >> 4) < ENTRIES; }
-}
+} // namespace
 
 const SpriteUnitTable &SpriteUnits::game_table() {
-    static const SpriteUnitTable table{
-        std::span<const EmitUnit *const>(sprite_units::all),
-        std::span<const PcRange>(sprite_units::frame_writers)};
-    return table;
+    static const SpriteUnitTable TABLE{std::span<const EmitUnit *const>(sprite_units::all),
+                                       std::span<const PcRange>(sprite_units::frame_writers)};
+    return TABLE;
 }
 
 const char *SpriteUnits::abort_name(Abort reason) {
     switch (reason) {
-    case Abort::Device: return "device-access";
-    case Abort::ForbiddenWrite: return "forbidden-write";
-    case Abort::Untranslated: return "untranslated-pc";
-    case Abort::Exception: return "exception";
-    case Abort::ResetDevices: return "reset-devices";
-    case Abort::Budget: return "budget";
-    case Abort::Stopped: return "stopped";
-    case Abort::NoNative: return "no-native-blocks";
-    case Abort::Count: break;
+    case Abort::Device:
+        return "device-access";
+    case Abort::ForbiddenWrite:
+        return "forbidden-write";
+    case Abort::Untranslated:
+        return "untranslated-pc";
+    case Abort::Exception:
+        return "exception";
+    case Abort::ResetDevices:
+        return "reset-devices";
+    case Abort::Budget:
+        return "budget";
+    case Abort::Stopped:
+        return "stopped";
+    case Abort::NoNative:
+        return "no-native-blocks";
+    case Abort::Count:
+        break;
     }
     return "none";
 }
 
 SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options options)
-    : machine_(machine), options_(std::move(options)),
-      units_(table.units.begin(), table.units.end()), frame_writers_(table.frame_writers) {
-    sandbox_cpu_.runtime = &machine;
-    page_slot_.fill(-1);
-    capture_slot_.fill(-1);
-    behaviours_.resize(units_.size());
-    report_.units.resize(units_.size());
+    : m_machine(machine), m_options(std::move(options)),
+      m_units(table.units.begin(), table.units.end()), m_frame_writers(table.frame_writers) {
+    m_sandbox_cpu.runtime = &machine;
+    m_page_slot.fill(-1);
+    m_capture_slot.fill(-1);
+    m_behaviours.resize(m_units.size());
+    m_report.units.resize(m_units.size());
     bool writer_owned = false;
-    for (size_t i = 0; i < units_.size(); ++i) {
-        const EmitUnit &unit = *units_[i];
+    for (size_t i = 0; i < m_units.size(); ++i) {
+        const EmitUnit &unit = *m_units[i];
         if (unit.id != i || unit.starts.size() != unit.ends.size())
             throw std::invalid_argument("Malformed emit-unit table");
-        report_.units[i].name = unit.name;
+        m_report.units[i].name = unit.name;
         writer_owned |= unit.owner == UnitOwner::Writer;
         for (size_t s = 0; s < unit.starts.size(); ++s) {
-            hooks_[unit.starts[s]].enters.push_back(unit.id);
-            hooks_[unit.ends[s]].exits.push_back(unit.id);
+            m_hooks[unit.starts[s]].enters.push_back(unit.id);
+            m_hooks[unit.ends[s]].exits.push_back(unit.id);
         }
     }
-    for (const SpriteBehaviour *behaviour : options_.behaviours) {
-        size_t target = units_.size();
-        for (size_t i = 0; i < units_.size(); ++i)
-            if (behaviour->unit == units_[i] || std::strcmp(behaviour->unit->name, units_[i]->name) == 0)
+    for (const SpriteBehaviour *behaviour : m_options.behaviours) {
+        size_t target = m_units.size();
+        for (size_t i = 0; i < m_units.size(); ++i)
+            if (behaviour->unit == m_units[i] ||
+                std::strcmp(behaviour->unit->name, m_units[i]->name) == 0)
                 target = i;
-        if (target == units_.size())
+        if (target == m_units.size())
             throw std::invalid_argument(std::string("Sprite behaviour '") + behaviour->name +
                                         "' targets a unit this game does not declare");
-        behaviours_[target].push_back(behaviour);
+        m_behaviours[target].push_back(behaviour);
     }
-    flicker_by_unit_.assign(units_.size(), nullptr);
-    for (const FlickerShadow *source : options_.flicker_shadows) {
-        size_t target = units_.size();
-        for (size_t i = 0; i < units_.size(); ++i)
-            if (source->unit == units_[i] || std::strcmp(source->unit->name, units_[i]->name) == 0) target = i;
-        if (target == units_.size())
+    m_flicker_by_unit.assign(m_units.size(), nullptr);
+    for (const FlickerShadow *source : m_options.flicker_shadows) {
+        size_t target = m_units.size();
+        for (size_t i = 0; i < m_units.size(); ++i)
+            if (source->unit == m_units[i] ||
+                std::strcmp(source->unit->name, m_units[i]->name) == 0)
+                target = i;
+        if (target == m_units.size())
             throw std::invalid_argument(std::string("Flicker shadow '") + source->name +
                                         "' targets a unit this game does not declare");
-        if (flicker_by_unit_[target])
-            throw std::invalid_argument(std::string("Unit '") + units_[target]->name +
+        if (m_flicker_by_unit[target])
+            throw std::invalid_argument(std::string("Unit '") + m_units[target]->name +
                                         "' declares more than one flicker shadow");
-        flicker_by_unit_[target] = source;
-        has_flicker_ = true;
+        m_flicker_by_unit[target] = source;
+        m_has_flicker = true;
     }
-    if (writer_owned) writer_pc_.assign(0x10000, 0);
-    stack_.reserve(MAX_OPEN);
+    if (writer_owned) m_writer_pc.assign(0x10000, 0);
+    m_stack.reserve(MAX_OPEN);
 }
 SpriteUnits::~SpriteUnits() = default;
 
@@ -104,161 +115,176 @@ uint32_t SpriteUnits::register_value(const f3_cpu &cpu, UnitRegister reg) const 
     return index < 8 ? cpu.d[index] : cpu.a[index - 8];
 }
 uint32_t SpriteUnits::unit_register(const EmitUnit &unit) const {
-    return register_value(machine_.cpu, unit.reg);
+    return register_value(m_machine.cpu, unit.reg);
 }
 uint32_t SpriteUnits::flicker_gate_address(const f3_cpu &cpu, const FlickerShadow &source) const {
     return (register_value(cpu, source.gate_register) + uint32_t(source.gate_offset)) & 0xffffff;
 }
 
 uint32_t SpriteUnits::irq_depth() {
-    const unsigned mask = (machine_.cpu.sr >> 8) & 7;
-    while (!irq_levels_.empty() && mask < irq_levels_.back()) irq_levels_.pop_back();
-    return uint32_t(irq_levels_.size());
+    const unsigned mask = (m_machine.cpu.sr >> 8) & 7;
+    while (!m_irq_levels.empty() && mask < m_irq_levels.back()) m_irq_levels.pop_back();
+    return uint32_t(m_irq_levels.size());
 }
-void SpriteUnits::note_irq(unsigned level) { irq_levels_.push_back(level); }
+void SpriteUnits::note_irq(unsigned level) { m_irq_levels.push_back(level); }
 
 void SpriteUnits::reset() {
-    while (!stack_.empty()) { pool_.push_back(std::move(stack_.back())); stack_.pop_back(); } // not a policy discard
-    irq_levels_.clear();
-    identity_.fill(0);
-    object_.fill(0);
-    flag_.fill(0);
-    splices_.clear();
-    generations_.clear();
-    ordinals_.clear();
-    std::fill(writer_pc_.begin(), writer_pc_.end(), 0u);
-    last_hook_cycles_ = UINT64_MAX;
-    frame_shadow_entries_ = frame_shadow_objects_ = frame_shadow_gate_set_ = 0;
-    last_frame_shadow_ = {};
+    while (!m_stack.empty()) {
+        m_pool.push_back(std::move(m_stack.back()));
+        m_stack.pop_back();
+    } // not a policy discard
+    m_irq_levels.clear();
+    m_identity.fill(0);
+    m_object.fill(0);
+    m_flag.fill(0);
+    m_splices.clear();
+    m_generations.clear();
+    m_ordinals.clear();
+    std::fill(m_writer_pc.begin(), m_writer_pc.end(), 0u);
+    m_last_hook_cycles = UINT64_MAX;
+    m_frame_shadow_entries = m_frame_shadow_objects = m_frame_shadow_gate_set = 0;
+    m_last_frame_shadow = {};
 }
 
 void SpriteUnits::discard_from(size_t index) {
-    while (stack_.size() > index) {
-        pool_.push_back(std::move(stack_.back()));
-        stack_.pop_back();
-        ++report_.discarded;
+    while (m_stack.size() > index) {
+        m_pool.push_back(std::move(m_stack.back()));
+        m_stack.pop_back();
+        ++m_report.discarded;
     }
 }
 void SpriteUnits::close_invocation(size_t index) {
-    pool_.push_back(std::move(stack_[index]));
-    stack_.erase(stack_.begin() + std::ptrdiff_t(index));
+    m_pool.push_back(std::move(m_stack[index]));
+    m_stack.erase(m_stack.begin() + std::ptrdiff_t(index));
 }
 
 // ---- Real-CPU hooks -------------------------------------------------------------------
 
 void SpriteUnits::unit_enter(f3_cpu *cpu, uint32_t unit) {
-    if (cpu != &machine_.cpu || unit >= units_.size()) return; // the sandbox never opens invocations
+    if (cpu != &m_machine.cpu || unit >= m_units.size())
+        return; // the sandbox never opens invocations
     enter_real(unit);
 }
 int SpriteUnits::unit_exit(f3_cpu *cpu, uint32_t unit) {
-    if (cpu == &sandbox_cpu_) {
-        if (unit != sandbox_unit_ || cpu->pc != sandbox_end_pc_ || sandbox_abort_ != Abort::Count) return 0;
-        sandbox_done_ = true;
+    if (cpu == &m_sandbox_cpu) {
+        if (unit != m_sandbox_unit || cpu->pc != m_sandbox_end_pc ||
+            m_sandbox_abort != Abort::Count)
+            return 0;
+        m_sandbox_done = true;
         return 1;
     }
-    if (cpu != &machine_.cpu || unit >= units_.size()) return 0;
+    if (cpu != &m_machine.cpu || unit >= m_units.size()) return 0;
     return exit_real(unit);
 }
 void SpriteUnits::interpreted_instruction(uint32_t pc) {
-    const auto it = hooks_.find(pc);
-    if (it == hooks_.end()) return;
+    const auto it = m_hooks.find(pc);
+    if (it == m_hooks.end()) return;
     // A translated block already fired the hooks for this label before falling back.
-    if (pc == last_hook_pc_ && machine_.cpu.cycles == last_hook_cycles_) return;
-    last_hook_pc_ = pc;
-    last_hook_cycles_ = machine_.cpu.cycles;
+    if (pc == m_last_hook_pc && m_machine.cpu.cycles == m_last_hook_cycles) return;
+    m_last_hook_pc = pc;
+    m_last_hook_cycles = m_machine.cpu.cycles;
     for (uint32_t unit : it->second.exits) exit_real(unit);
     for (uint32_t unit : it->second.enters) enter_real(unit);
 }
 
 void SpriteUnits::enter_real(uint32_t id) {
-    const EmitUnit &unit = *units_[id];
-    const uint32_t pc = machine_.cpu.pc;
-    last_hook_pc_ = pc;
-    last_hook_cycles_ = machine_.cpu.cycles;
+    const EmitUnit &unit = *m_units[id];
+    const uint32_t pc = m_machine.cpu.pc;
+    m_last_hook_pc = pc;
+    m_last_hook_cycles = m_machine.cpu.cycles;
     size_t start = unit.starts.size();
     for (size_t i = 0; i < unit.starts.size(); ++i)
-        if (unit.starts[i] == pc) { start = i; break; }
+        if (unit.starts[i] == pc) {
+            start = i;
+            break;
+        }
     if (start == unit.starts.size()) return;
     open_invocation(unit, start);
 }
 
 void SpriteUnits::open_invocation(const EmitUnit &unit, size_t start) {
     const uint32_t depth = irq_depth();
-    while (!stack_.empty() && stack_.back().irq_depth > depth) discard_from(stack_.size() - 1);
-    for (size_t i = stack_.size(); i-- > 0;)
-        if (stack_[i].unit == unit.id && stack_[i].start_index == start && stack_[i].irq_depth == depth) {
+    while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
+    for (size_t i = m_stack.size(); i-- > 0;)
+        if (m_stack[i].unit == unit.id && m_stack[i].start_index == start &&
+            m_stack[i].irq_depth == depth) {
             discard_from(i); // previous invocation never exited
             break;
         }
-    if (stack_.size() >= MAX_OPEN) {
-        pool_.push_back(std::move(stack_.front()));
-        stack_.erase(stack_.begin());
-        ++report_.discarded;
+    if (m_stack.size() >= MAX_OPEN) {
+        m_pool.push_back(std::move(m_stack.front()));
+        m_stack.erase(m_stack.begin());
+        ++m_report.discarded;
     }
     Invocation invocation;
-    if (!pool_.empty()) { invocation = std::move(pool_.back()); pool_.pop_back(); }
+    if (!m_pool.empty()) {
+        invocation = std::move(m_pool.back());
+        m_pool.pop_back();
+    }
     invocation.unit = unit.id;
     invocation.start_index = uint32_t(start);
     invocation.start_pc = unit.starts[start];
     invocation.address = unit_register(unit) & 0xffffff;
     invocation.irq_depth = depth;
-    invocation.frame = machine_.frame;
+    invocation.frame = m_machine.frame;
     invocation.keys.clear();
     invocation.check.clear();
     invocation.patched.clear();
     invocation.has_patched = false;
-    invocation.flicker = flicker_enabled_ ? flicker_by_unit_[unit.id] : nullptr;
+    invocation.flicker = m_flicker_enabled ? m_flicker_by_unit[unit.id] : nullptr;
     invocation.gate_set = false;
     invocation.shadow_keys.clear();
     if (invocation.flicker) {
-        const uint32_t gate = flicker_gate_address(machine_.cpu, *invocation.flicker);
+        const uint32_t gate = flicker_gate_address(m_machine.cpu, *invocation.flicker);
         invocation.gate_set = (gate - RAM_BASE < RAM_SPAN) &&
-                              (machine_.ram[gate & RAM_MASK] & invocation.flicker->gate_mask) != 0;
+                              (m_machine.ram[gate & RAM_MASK] & invocation.flicker->gate_mask) != 0;
     }
 
     if (unit.owner == UnitOwner::Unit) {
         // A new generation starts when the address had no invocation in the previous frame.
         const uint64_t key = uint64_t(unit.id) << 32 | invocation.address;
-        auto [it, fresh] = generations_.try_emplace(key, Generation{machine_.frame, 1});
+        auto [it, fresh] = m_generations.try_emplace(key, Generation{m_machine.frame, 1});
         if (!fresh) {
-            if (machine_.frame > it->second.last_frame + 1) ++it->second.generation;
-            it->second.last_frame = machine_.frame;
+            if (m_machine.frame > it->second.last_frame + 1) ++it->second.generation;
+            it->second.last_frame = m_machine.frame;
         }
         invocation.identity = sprite_identity_mix(key, it->second.generation);
     } else {
         const uint32_t word = (invocation.address & RAM_MASK) >> 1;
-        const uint32_t writer = writer_pc_.empty() ? 0 : writer_pc_[word];
+        const uint32_t writer = m_writer_pc.empty() ? 0 : m_writer_pc[word];
         // Never-written records fall back to their address so they stay distinguishable.
-        const uint64_t key = uint64_t(unit.id) << 32 | (writer ? writer : invocation.address | 0x80000000u);
-        invocation.identity = sprite_identity_mix(key, ordinals_[key]++);
+        const uint64_t key =
+            uint64_t(unit.id) << 32 | (writer ? writer : invocation.address | 0x80000000u);
+        invocation.identity = sprite_identity_mix(key, m_ordinals[key]++);
     }
-    ++report_.units[unit.id].invocations;
-    ++report_.invocations;
-    if (options_.check) run_replay(unit, invocation, false, invocation.check);
-    if (!behaviours_[unit.id].empty() || invocation.flicker) {
+    ++m_report.units[unit.id].invocations;
+    ++m_report.invocations;
+    if (m_options.check) run_replay(unit, invocation, false, invocation.check);
+    if (!m_behaviours[unit.id].empty() || invocation.flicker) {
         run_replay(unit, invocation, true, invocation.patched);
         invocation.has_patched = true;
     }
-    stack_.push_back(std::move(invocation));
+    m_stack.push_back(std::move(invocation));
 }
 
 int SpriteUnits::exit_real(uint32_t id) {
-    const EmitUnit &unit = *units_[id];
-    const uint32_t pc = machine_.cpu.pc;
-    last_hook_pc_ = pc;
-    last_hook_cycles_ = machine_.cpu.cycles;
+    const EmitUnit &unit = *m_units[id];
+    const uint32_t pc = m_machine.cpu.pc;
+    m_last_hook_pc = pc;
+    m_last_hook_cycles = m_machine.cpu.cycles;
     const uint32_t depth = irq_depth();
-    while (!stack_.empty() && stack_.back().irq_depth > depth) discard_from(stack_.size() - 1);
-    for (size_t i = stack_.size(); i-- > 0;) {
-        Invocation &invocation = stack_[i];
+    while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
+    for (size_t i = m_stack.size(); i-- > 0;) {
+        Invocation &invocation = m_stack[i];
         if (invocation.unit != id || invocation.irq_depth != depth ||
-            unit.ends[invocation.start_index] != pc) continue;
+            unit.ends[invocation.start_index] != pc)
+            continue;
         discard_from(i + 1);
-        finish(stack_[i]);
+        finish(m_stack[i]);
         close_invocation(i);
         return 0;
     }
-    ++report_.unmatched_exits;
+    ++m_report.unmatched_exits;
     return 0;
 }
 
@@ -267,10 +293,11 @@ int SpriteUnits::exit_real(uint32_t id) {
 void SpriteUnits::note_write(uint32_t address, unsigned width) {
     const uint32_t a = address & 0xffffff;
     if (a - RAM_BASE < RAM_SPAN) {
-        if (writer_pc_.empty()) return;
+        if (m_writer_pc.empty()) return;
         const uint32_t offset = a & RAM_MASK;
         const uint32_t last = std::min(offset + width - 1, RAM_MASK);
-        for (uint32_t word = offset >> 1; word <= (last >> 1); ++word) writer_pc_[word] = machine_.cpu.pc;
+        for (uint32_t word = offset >> 1; word <= (last >> 1); ++word)
+            m_writer_pc[word] = m_machine.cpu.pc;
         return;
     }
     for (unsigned i = 0; i < width; ++i)
@@ -282,40 +309,40 @@ void SpriteUnits::sprite_write(uint32_t address) {
     if (!listed(offset)) return;
     const uint16_t key = sprite_key(offset);
     const uint32_t depth = irq_depth();
-    while (!stack_.empty() && stack_.back().irq_depth > depth) discard_from(stack_.size() - 1);
-    if (!stack_.empty() && stack_.back().irq_depth == depth) {
-        Invocation &top = stack_.back();
+    while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
+    if (!m_stack.empty() && m_stack.back().irq_depth == depth) {
+        Invocation &top = m_stack.back();
         auto &keys = top.keys;
         if (keys.empty() || keys.back() != key) keys.push_back(key);
-        if (top.flicker && contains(top.flicker->emit, machine_.cpu.pc) &&
+        if (top.flicker && contains(top.flicker->emit, m_machine.cpu.pc) &&
             (top.shadow_keys.empty() || top.shadow_keys.back() != key))
             top.shadow_keys.push_back(key);
         return;
     }
-    identity_[key] = 0;
-    object_[key] = 0;
-    flag_[key] = 0;
-    if (!options_.check && !discovery_) return;
-    const uint32_t pc = machine_.cpu.pc;
-    StrayWriter *found = last_stray_;
+    m_identity[key] = 0;
+    m_object[key] = 0;
+    m_flag[key] = 0;
+    if (!m_options.check && !m_discovery) return;
+    const uint32_t pc = m_machine.cpu.pc;
+    StrayWriter *found = m_last_stray;
     if (!found || found->pc != pc) {
-        auto [it, fresh] = stray_.try_emplace(pc);
-        found = last_stray_ = &it->second;
+        auto [it, fresh] = m_stray.try_emplace(pc);
+        found = m_last_stray = &it->second;
         if (fresh) {
             found->pc = pc;
-            found->first_frame = machine_.frame;
+            found->first_frame = m_machine.frame;
             found->first_address = address;
-            for (const PcRange &range : frame_writers_) found->accounted |= contains(range, pc);
+            for (const PcRange &range : m_frame_writers) found->accounted |= contains(range, pc);
         }
     }
     ++found->count;
-    if (discovery_ && !found->accounted) discovery_->sprite_stray(pc, address);
+    if (m_discovery && !found->accounted) m_discovery->sprite_stray(pc, address);
 }
 
 // ---- Invocation exit ------------------------------------------------------------------
 
 void SpriteUnits::finish(Invocation &invocation) {
-    UnitStats &stats = report_.units[invocation.unit];
+    UnitStats &stats = m_report.units[invocation.unit];
     if (invocation.keys.empty()) {
         // Nothing drawn this time: any older splice over this unit stays until it ages out.
         if (invocation.check.ok) compare(invocation, invocation.keys);
@@ -335,19 +362,21 @@ void SpriteUnits::finish(Invocation &invocation) {
     }
     for (uint16_t key : keys) {
         const unsigned bank = key >= ENTRIES;
-        identity_[key] = sprite_identity_mix(invocation.identity, (key & (ENTRIES - 1)) - lo[bank]);
-        object_[key] = invocation.identity;
-        flag_[key] = 0;
+        m_identity[key] =
+            sprite_identity_mix(invocation.identity, (key & (ENTRIES - 1)) - lo[bank]);
+        m_object[key] = invocation.identity;
+        m_flag[key] = 0;
     }
-    for (uint16_t key : invocation.shadow_keys) flag_[key] = sprite_flag_shadow;
+    for (uint16_t key : invocation.shadow_keys) m_flag[key] = SPRITE_FLAG_SHADOW;
     if (invocation.check.ok) compare(invocation, keys);
     if (invocation.patched.ok && invocation.patched.shadow_forced)
-        check_flicker(invocation, first_bank, lo[first_bank], size_t(hi[first_bank]) - lo[first_bank] + 1);
+        check_flicker(invocation, first_bank, lo[first_bank],
+                      size_t(hi[first_bank]) - lo[first_bank] + 1);
 
     // Replace splices overlapping what the real span just drew, then add this invocation's.
     for (unsigned bank = 0; bank < 2; ++bank) {
         if (lo[bank] == 0xffff) continue;
-        std::erase_if(splices_, [&](const Splice &s) {
+        std::erase_if(m_splices, [&](const Splice &s) {
             return s.bank == bool(bank) && !(s.last < lo[bank] || s.first > hi[bank]);
         });
     }
@@ -358,17 +387,19 @@ void SpriteUnits::finish(Invocation &invocation) {
     splice.first = lo[bank];
     splice.last = hi[bank];
     splice.identity = invocation.identity;
-    splice.frame = machine_.frame;
-    const uint8_t *real = machine_.graphics.data() + bank * BANK_BYTES + size_t(splice.first) * 16;
+    splice.frame = m_machine.frame;
+    const uint8_t *real =
+        m_machine.graphics.data() + size_t(bank) * BANK_BYTES + size_t(splice.first) * 16;
     splice.real.assign(real, real + (size_t(splice.last) - splice.first + 1) * 16);
     splice.replacement = invocation.patched.dense;
     splice.flags = invocation.patched.dense_flags;
-    const auto at = std::lower_bound(splices_.begin(), splices_.end(), splice, [](const Splice &a, const Splice &b) {
-        return a.bank != b.bank ? a.bank < b.bank : a.first < b.first;
-    });
-    splices_.insert(at, std::move(splice));
+    const auto at = std::lower_bound(
+        m_splices.begin(), m_splices.end(), splice, [](const Splice &a, const Splice &b) {
+            return a.bank != b.bank ? a.bank < b.bank : a.first < b.first;
+        });
+    m_splices.insert(at, std::move(splice));
     ++stats.spliced;
-    ++report_.spliced;
+    ++m_report.spliced;
 }
 
 // Accounts one shadowed unit instance and checks that the replay's tagged entries are exactly
@@ -380,12 +411,14 @@ void SpriteUnits::finish(Invocation &invocation) {
 //  * with no other behaviour patching the unit, forcing the gate only adds the shadow: the
 //    untagged remainder of the replay equals the real entries (byte for byte when the gate was set,
 //    tile codes when it was clear; see below).
-void SpriteUnits::check_flicker(Invocation &invocation, bool bank, uint16_t first, size_t real_count) {
-    FlickerStats &stats = report_.flicker;
+void SpriteUnits::check_flicker(Invocation &invocation, bool bank, uint16_t first,
+                                size_t real_count) {
+    FlickerStats &stats = m_report.flicker;
     const ReplayResult &replay = invocation.patched;
     std::sort(invocation.shadow_keys.begin(), invocation.shadow_keys.end());
-    invocation.shadow_keys.erase(std::unique(invocation.shadow_keys.begin(), invocation.shadow_keys.end()),
-                                 invocation.shadow_keys.end());
+    invocation.shadow_keys.erase(
+        std::unique(invocation.shadow_keys.begin(), invocation.shadow_keys.end()),
+        invocation.shadow_keys.end());
     const size_t real_shadow = invocation.shadow_keys.size();
     ++stats.invocations;
     ++(invocation.gate_set ? stats.gate_set : stats.gate_clear);
@@ -395,34 +428,44 @@ void SpriteUnits::check_flicker(Invocation &invocation, bool bank, uint16_t firs
     if (replay.shadow_entries == 0)
         std::snprintf(detail, sizeof detail, "shadowed object produced no shadow entries");
     else if (invocation.gate_set && real_shadow != replay.shadow_entries)
-        std::snprintf(detail, sizeof detail, "gate set: real shadow-path entries %zu != tagged replay entries %u",
+        std::snprintf(detail, sizeof detail,
+                      "gate set: real shadow-path entries %zu != tagged replay entries %u",
                       real_shadow, replay.shadow_entries);
     else if (!invocation.gate_set && real_shadow != 0)
-        std::snprintf(detail, sizeof detail, "gate clear but the real draw wrote %zu shadow-path entries", real_shadow);
+        std::snprintf(detail, sizeof detail,
+                      "gate clear but the real draw wrote %zu shadow-path entries", real_shadow);
     else {
         size_t lead = 0;
-        while (lead < replay.dense_flags.size() && (replay.dense_flags[lead] & sprite_flag_shadow)) ++lead;
+        while (lead < replay.dense_flags.size() && (replay.dense_flags[lead] & SPRITE_FLAG_SHADOW))
+            ++lead;
         if (lead != replay.shadow_entries)
-            std::snprintf(detail, sizeof detail, "tagged entries are not a leading run (%zu leading of %u)", lead,
+            std::snprintf(detail, sizeof detail,
+                          "tagged entries are not a leading run (%zu leading of %u)", lead,
                           replay.shadow_entries);
-        else if (behaviours_[invocation.unit].empty()) {
+        else if (m_behaviours[invocation.unit].empty()) {
             // The real run holds the shadow only when the game's gate was set.
             const size_t body = replay.dense.size() / 16 - lead;
             const size_t real_body = real_count - real_shadow;
-            const uint8_t *real = machine_.graphics.data() + (bank ? BANK_BYTES : 0) + (size_t(first) + real_shadow) * 16;
+            const uint8_t *real = m_machine.graphics.data() + (bank ? BANK_BYTES : 0) +
+                                  (size_t(first) + real_shadow) * 16;
             if (replay.bank != bank || replay.first != first)
-                std::snprintf(detail, sizeof detail, "replay starts at bank%u entry %u, real draw at bank%u entry %u",
-                              unsigned(replay.bank), unsigned(replay.first), unsigned(bank), unsigned(first));
+                std::snprintf(detail, sizeof detail,
+                              "replay starts at bank%u entry %u, real draw at bank%u entry %u",
+                              unsigned(replay.bank), unsigned(replay.first), unsigned(bank),
+                              unsigned(first));
             else if (body != real_body)
-                std::snprintf(detail, sizeof detail, "replay body has %zu entries, the real draw %zu", body, real_body);
+                std::snprintf(detail, sizeof detail,
+                              "replay body has %zu entries, the real draw %zu", body, real_body);
             else {
                 // Gate set: the replay is the real draw, entry for entry. Gate clear: the shadow path leaves
                 // d1 = 0x300 (0x9cc2) when the body compiles and the body masks colour/priority bits with d1
                 // (0x9f08 pattern), so only the tile codes (word 0) must agree.
                 const size_t width = invocation.gate_set ? 16 : 2;
                 for (size_t at = 0; at < body && !detail[0]; ++at)
-                    if (std::memcmp(replay.dense.data() + (lead + at) * 16, real + at * 16, width) != 0)
-                        std::snprintf(detail, sizeof detail, "replay body entry %zu differs from the real entry (gate %s)",
+                    if (std::memcmp(replay.dense.data() + (lead + at) * 16, real + at * 16,
+                                    width) != 0)
+                        std::snprintf(detail, sizeof detail,
+                                      "replay body entry %zu differs from the real entry (gate %s)",
                                       at, invocation.gate_set ? "set" : "clear");
             }
         }
@@ -430,27 +473,33 @@ void SpriteUnits::check_flicker(Invocation &invocation, bool bank, uint16_t firs
     if (detail[0]) {
         ++stats.violations;
         if (stats.first_violation.empty())
-            stats.first_violation = "frame " + std::to_string(machine_.frame) + " unit_address 0x" +
-                                    [&] { char t[16]; std::snprintf(t, sizeof t, "%06x", invocation.address); return std::string(t); }() +
+            stats.first_violation = "frame " + std::to_string(m_machine.frame) +
+                                    " unit_address 0x" +
+                                    [&] {
+                                        char t[16];
+                                        std::snprintf(t, sizeof t, "%06x", invocation.address);
+                                        return std::string(t);
+                                    }() +
                                     ": " + detail;
     }
     stats.splices += replay.shadow_entries != 0;
-    frame_shadow_entries_ += replay.shadow_entries;
-    ++frame_shadow_objects_;
-    frame_shadow_gate_set_ += invocation.gate_set;
+    m_frame_shadow_entries += replay.shadow_entries;
+    ++m_frame_shadow_objects;
+    m_frame_shadow_gate_set += invocation.gate_set;
 }
 
 void SpriteUnits::compare(Invocation &invocation, const std::vector<uint16_t> &real_keys) {
-    UnitStats &stats = report_.units[invocation.unit];
+    UnitStats &stats = m_report.units[invocation.unit];
     const auto &replay = invocation.check.written;
     char detail[200] = "";
     size_t i = 0, j = 0;
     const auto bytes_at = [&](uint16_t key) {
-        return machine_.graphics.data() + (key >= ENTRIES ? BANK_BYTES : 0) + size_t(key & (ENTRIES - 1)) * 16;
+        return m_machine.graphics.data() + (key >= ENTRIES ? BANK_BYTES : 0) +
+               size_t(key & (ENTRIES - 1)) * 16;
     };
     const auto hex = [](const uint8_t *p) {
         char text[40];
-        for (int k = 0; k < 16; ++k) std::snprintf(text + k * 2, 3, "%02x", p[k]);
+        for (int k = 0; k < 16; ++k) std::snprintf(text + ptrdiff_t(k) * 2, 3, "%02x", p[k]);
         return std::string(text, 32);
     };
     bool equal = true;
@@ -461,60 +510,68 @@ void SpriteUnits::compare(Invocation &invocation, const std::vector<uint16_t> &r
         if (rk == pk) {
             if (std::memcmp(bytes_at(uint16_t(rk)), replay[j].bytes.data(), 16) != 0) {
                 std::snprintf(detail, sizeof detail, "bank%u entry 0x%03x real=%s replay=%s",
-                              unsigned(key >= ENTRIES), key & (ENTRIES - 1), hex(bytes_at(uint16_t(rk))).c_str(),
+                              unsigned(key >= ENTRIES), key & (ENTRIES - 1),
+                              hex(bytes_at(uint16_t(rk))).c_str(),
                               hex(replay[j].bytes.data()).c_str());
                 equal = false;
             }
-            ++i; ++j;
+            ++i;
+            ++j;
         } else if (rk < pk) {
-            std::snprintf(detail, sizeof detail, "bank%u entry 0x%03x written by real span, missing in replay real=%s",
-                          unsigned(key >= ENTRIES), key & (ENTRIES - 1), hex(bytes_at(uint16_t(rk))).c_str());
+            std::snprintf(detail, sizeof detail,
+                          "bank%u entry 0x%03x written by real span, missing in replay real=%s",
+                          unsigned(key >= ENTRIES), key & (ENTRIES - 1),
+                          hex(bytes_at(uint16_t(rk))).c_str());
             equal = false;
         } else {
-            std::snprintf(detail, sizeof detail, "bank%u entry 0x%03x written by replay only replay=%s",
-                          unsigned(key >= ENTRIES), key & (ENTRIES - 1), hex(replay[j].bytes.data()).c_str());
+            std::snprintf(
+                detail, sizeof detail, "bank%u entry 0x%03x written by replay only replay=%s",
+                unsigned(key >= ENTRIES), key & (ENTRIES - 1), hex(replay[j].bytes.data()).c_str());
             equal = false;
         }
     }
     if (equal) {
         ++stats.matched;
-        ++report_.matched;
+        ++m_report.matched;
         return;
     }
     ++stats.mismatched;
-    ++report_.mismatched;
-    if (report_.mismatches.size() < MAX_MISMATCHES)
-        report_.mismatches.push_back({invocation.unit, invocation.start_pc, invocation.address,
-                                      machine_.frame, detail});
+    ++m_report.mismatched;
+    if (m_report.mismatches.size() < MAX_MISMATCHES)
+        m_report.mismatches.push_back(
+            {invocation.unit, invocation.start_pc, invocation.address, m_machine.frame, detail});
 }
 
 // ---- Frame / presentation ---------------------------------------------------------------
 
 void SpriteUnits::frame_end() {
-    ++report_.frames;
-    last_frame_shadow_ = {frame_shadow_entries_, frame_shadow_objects_, frame_shadow_gate_set_};
-    if (frame_shadow_entries_) {
-        ++report_.flicker.frames;
-        report_.flicker.max_frame_entries = std::max<uint64_t>(report_.flicker.max_frame_entries, frame_shadow_entries_);
+    ++m_report.frames;
+    m_last_frame_shadow = {m_frame_shadow_entries, m_frame_shadow_objects, m_frame_shadow_gate_set};
+    if (m_frame_shadow_entries) {
+        ++m_report.flicker.frames;
+        m_report.flicker.max_frame_entries =
+            std::max<uint64_t>(m_report.flicker.max_frame_entries, m_frame_shadow_entries);
     }
-    frame_shadow_entries_ = frame_shadow_objects_ = frame_shadow_gate_set_ = 0;
-    ordinals_.clear();
-    for (size_t i = 0; i < stack_.size();) {
-        if (stack_[i].frame + 1 < machine_.frame) {
+    m_frame_shadow_entries = m_frame_shadow_objects = m_frame_shadow_gate_set = 0;
+    m_ordinals.clear();
+    for (size_t i = 0; i < m_stack.size();) {
+        if (m_stack[i].frame + 1 < m_machine.frame) {
             // Keep stack order: drop this entry only.
-            pool_.push_back(std::move(stack_[i]));
-            stack_.erase(stack_.begin() + std::ptrdiff_t(i));
-            ++report_.discarded;
+            m_pool.push_back(std::move(m_stack[i]));
+            m_stack.erase(m_stack.begin() + std::ptrdiff_t(i));
+            ++m_report.discarded;
         } else ++i;
     }
-    std::erase_if(splices_, [&](const Splice &s) { return s.frame + SPLICE_FRAMES < machine_.frame; });
-    if ((machine_.frame & 0x3ff) == 0)
-        std::erase_if(generations_, [&](const auto &kv) { return kv.second.last_frame + 600 < machine_.frame; });
+    std::erase_if(m_splices,
+                  [&](const Splice &s) { return s.frame + SPLICE_FRAMES < m_machine.frame; });
+    if ((m_machine.frame & 0x3ff) == 0)
+        std::erase_if(m_generations,
+                      [&](const auto &kv) { return kv.second.last_frame + 600 < m_machine.frame; });
 }
 
 SpritePresentation SpriteUnits::presentation() const {
-    view_.clear();
-    for (const Splice &splice : splices_) {
+    m_view.clear();
+    for (const Splice &splice : m_splices) {
         SpriteSplice out;
         out.bank = splice.bank;
         out.first = splice.first;
@@ -523,66 +580,69 @@ SpritePresentation SpriteUnits::presentation() const {
         out.replacement = splice.replacement;
         out.identity = splice.identity;
         out.flags = splice.flags;
-        view_.push_back(out);
+        m_view.push_back(out);
     }
     // Real tagged entries are exposed only while one exists (an empty span keeps decoders on the plain path).
-    const bool any_flag = flicker_enabled_ && std::any_of(flag_.begin(), flag_.end(), [](uint8_t f) { return f != 0; });
-    if (any_flag) flag_view_.assign(flag_.begin(), flag_.end());
-    else flag_view_.clear();
-    return {std::span<const uint64_t>(identity_), std::span<const SpriteSplice>(view_),
-            std::span<const uint64_t>(object_), std::span<const uint8_t>(flag_view_)};
+    const bool any_flag = m_flicker_enabled && std::any_of(m_flag.begin(), m_flag.end(),
+                                                           [](uint8_t f) { return f != 0; });
+    if (any_flag) m_flag_view.assign(m_flag.begin(), m_flag.end());
+    else m_flag_view.clear();
+    return {std::span<const uint64_t>(m_identity), std::span<const SpriteSplice>(m_view),
+            std::span<const uint64_t>(m_object), std::span<const uint8_t>(m_flag_view)};
 }
 
 // ---- Sandbox ------------------------------------------------------------------------
 
 const f3_block *SpriteUnits::find_block(uint32_t pc) const {
     if (pc >= ROM_END || (pc & 1)) return nullptr;
-    const auto &page = machine_.native_pages[pc >> 12];
+    const auto &page = m_machine.native_pages[pc >> 12];
     if (!page.count) return nullptr;
     if (page.dense) {
         const uint32_t offset = pc - page.address;
         return !(offset & 1) && offset < 2u * page.count ? page.first + (offset >> 1) : nullptr;
     }
     const f3_block *end = page.first + page.count;
-    const auto *entry = std::lower_bound(page.first, end, pc,
-        [](const f3_block &block, uint32_t value) { return block.address < value; });
+    const auto *entry =
+        std::lower_bound(page.first, end, pc, [](const f3_block &block, uint32_t value) {
+            return block.address < value;
+        });
     return entry != end && entry->address == pc ? entry : nullptr;
 }
 
 uint8_t SpriteUnits::ram_get(uint32_t offset) const {
-    const int16_t slot = page_slot_[offset / overlay_page];
-    return slot >= 0 ? page_pool_[size_t(slot)][offset % overlay_page] : machine_.ram[offset];
+    const int16_t slot = m_page_slot[offset / OVERLAY_PAGE];
+    return slot >= 0 ? m_page_pool[size_t(slot)][offset % OVERLAY_PAGE] : m_machine.ram[offset];
 }
 void SpriteUnits::ram_put(uint32_t offset, uint8_t value) {
-    int16_t &slot = page_slot_[offset / overlay_page];
+    int16_t &slot = m_page_slot[offset / OVERLAY_PAGE];
     if (slot < 0) {
-        slot = int16_t(touched_pages_.size());
-        if (page_pool_.size() <= size_t(slot)) page_pool_.emplace_back();
-        const uint32_t base = offset - offset % overlay_page;
-        std::memcpy(page_pool_[size_t(slot)].data(), machine_.ram.data() + base, overlay_page);
-        touched_pages_.push_back(uint16_t(offset / overlay_page));
+        slot = int16_t(m_touched_pages.size());
+        if (m_page_pool.size() <= size_t(slot)) m_page_pool.emplace_back();
+        const uint32_t base = offset - offset % OVERLAY_PAGE;
+        std::memcpy(m_page_pool[size_t(slot)].data(), m_machine.ram.data() + base, OVERLAY_PAGE);
+        m_touched_pages.push_back(uint16_t(offset / OVERLAY_PAGE));
     }
-    page_pool_[size_t(slot)][offset % overlay_page] = value;
+    m_page_pool[size_t(slot)][offset % OVERLAY_PAGE] = value;
 }
 
 void SpriteUnits::sandbox_abort(Abort reason) {
-    if (sandbox_abort_ != Abort::Count) return;
-    sandbox_abort_ = reason;
-    sandbox_cpu_.halted = 1; // stops chained native blocks at the next guard
+    if (m_sandbox_abort != Abort::Count) return;
+    m_sandbox_abort = reason;
+    m_sandbox_cpu.halted = 1; // stops chained native blocks at the next guard
 }
 
 uint8_t SpriteUnits::sandbox_read8(uint32_t address) {
     const uint32_t a = address & 0xffffff;
-    if (a < ROM_END) return a < machine_.roms.main.size() ? machine_.roms.main[a] : 0xff;
+    if (a < ROM_END) return a < m_machine.roms.main.size() ? m_machine.roms.main[a] : 0xff;
     if (a - RAM_BASE < RAM_SPAN) return ram_get(a & RAM_MASK);
-    if (a - PALETTE_BASE < PALETTE_SPAN) return machine_.palette[a - PALETTE_BASE];
+    if (a - PALETTE_BASE < PALETTE_SPAN) return m_machine.palette[a - PALETTE_BASE];
     if (a - GRAPHICS_BASE < GRAPHICS_SPAN) {
         const uint32_t offset = a - GRAPHICS_BASE;
         if (offset < SPRITE_SPAN && listed(offset)) {
-            const int16_t slot = capture_slot_[sprite_key(offset)];
-            if (slot >= 0) return capture_[size_t(slot)].bytes[offset & 15];
+            const int16_t slot = m_capture_slot[sprite_key(offset)];
+            if (slot >= 0) return m_capture[size_t(slot)].bytes[offset & 15];
         }
-        return machine_.graphics[offset];
+        return m_machine.graphics[offset];
     }
     sandbox_abort(Abort::Device); // I/O, control, shared RAM, sound, EEPROM, unmapped
     return 0;
@@ -590,56 +650,58 @@ uint8_t SpriteUnits::sandbox_read8(uint32_t address) {
 
 void SpriteUnits::sandbox_write8(uint32_t address, uint8_t value) {
     const uint32_t a = address & 0xffffff;
-    if (a - RAM_BASE < RAM_SPAN) { ram_put(a & RAM_MASK, value); return; }
+    if (a - RAM_BASE < RAM_SPAN) {
+        ram_put(a & RAM_MASK, value);
+        return;
+    }
     if (a - GRAPHICS_BASE < SPRITE_SPAN) {
         const uint32_t offset = a - GRAPHICS_BASE;
         if (!listed(offset)) return; // never displayed, never compared
         const uint16_t key = sprite_key(offset);
-        int16_t &slot = capture_slot_[key];
+        int16_t &slot = m_capture_slot[key];
         if (slot < 0) {
             // Copy-on-first-touch of the whole entry so untouched words match hardware.
             Entry entry{key, {}};
-            std::memcpy(entry.bytes.data(), machine_.graphics.data() + (offset & ~15u), 16);
-            slot = int16_t(capture_.size());
-            capture_.push_back(entry);
+            std::memcpy(entry.bytes.data(), m_machine.graphics.data() + (offset & ~15u), 16);
+            slot = int16_t(m_capture.size());
+            m_capture.push_back(entry);
         }
-        capture_[size_t(slot)].bytes[offset & 15] = value;
-        if (replay_flicker_ && contains(replay_flicker_->emit, sandbox_cpu_.pc))
-            capture_[size_t(slot)].flags |= sprite_flag_shadow;
+        m_capture[size_t(slot)].bytes[offset & 15] = value;
+        if (m_replay_flicker && contains(m_replay_flicker->emit, m_sandbox_cpu.pc))
+            m_capture[size_t(slot)].flags |= SPRITE_FLAG_SHADOW;
         return;
     }
     if (a < ROM_END || a - PALETTE_BASE < PALETTE_SPAN || a - GRAPHICS_BASE < GRAPHICS_SPAN)
         sandbox_abort(Abort::ForbiddenWrite);
-    else
-        sandbox_abort(Abort::Device);
+    else sandbox_abort(Abort::Device);
 }
 
 uint32_t SpriteUnits::sandbox_read(uint32_t address, unsigned width) {
-    if (sandbox_abort_ != Abort::Count) return 0;
+    if (m_sandbox_abort != Abort::Count) return 0;
     uint32_t value = 0;
     for (unsigned i = 0; i < width; ++i) value = value << 8 | sandbox_read8(address + i);
     return value;
 }
 void SpriteUnits::sandbox_write(uint32_t address, uint32_t value, unsigned width) {
-    if (sandbox_abort_ != Abort::Count) return;
+    if (m_sandbox_abort != Abort::Count) return;
     for (unsigned i = 0; i < width; ++i)
         sandbox_write8(address + i, uint8_t(value >> (8 * (width - 1 - i))));
 }
 
 void SpriteUnits::record_abort(uint32_t unit, Abort reason) {
-    ++report_.units[unit].aborted;
-    ++report_.units[unit].aborts[size_t(reason)];
-    ++report_.aborted;
+    ++m_report.units[unit].aborted;
+    ++m_report.units[unit].aborts[size_t(reason)];
+    ++m_report.aborted;
 }
 
 void SpriteUnits::collect(ReplayResult &out, bool dense) {
-    out.written = capture_;
+    out.written = m_capture;
     std::sort(out.written.begin(), out.written.end(),
               [](const Entry &a, const Entry &b) { return a.key < b.key; });
-    if (!dense || capture_.empty()) return;
-    out.bank = capture_.front().key >= ENTRIES; // bank of the first write
+    if (!dense || m_capture.empty()) return;
+    out.bank = m_capture.front().key >= ENTRIES; // bank of the first write
     uint16_t lo = 0xffff, hi = 0;
-    for (const Entry &entry : capture_) {
+    for (const Entry &entry : m_capture) {
         if ((entry.key >= ENTRIES) != out.bank) continue;
         lo = std::min<uint16_t>(lo, entry.key & (ENTRIES - 1));
         hi = std::max<uint16_t>(hi, entry.key & (ENTRIES - 1));
@@ -650,96 +712,114 @@ void SpriteUnits::collect(ReplayResult &out, bool dense) {
     if (out.shadow_forced) out.dense_flags.assign(size_t(hi) - lo + 1, 0);
     for (uint16_t entry = lo; entry <= hi; ++entry) {
         const uint16_t key = uint16_t((out.bank ? ENTRIES : 0) + entry);
-        const int16_t slot = capture_slot_[key];
-        if (slot >= 0 && out.shadow_forced && (capture_[size_t(slot)].flags & sprite_flag_shadow)) {
-            out.dense_flags[entry - lo] = sprite_flag_shadow;
+        const int16_t slot = m_capture_slot[key];
+        if (slot >= 0 && out.shadow_forced &&
+            (m_capture[size_t(slot)].flags & SPRITE_FLAG_SHADOW)) {
+            out.dense_flags[entry - lo] = SPRITE_FLAG_SHADOW;
             ++out.shadow_entries;
         }
-        const uint8_t *source = slot >= 0 ? capture_[size_t(slot)].bytes.data()
-            : machine_.graphics.data() + (out.bank ? BANK_BYTES : 0) + size_t(entry) * 16;
+        const uint8_t *source = slot >= 0 ? m_capture[size_t(slot)].bytes.data()
+                                          : m_machine.graphics.data() +
+                                                (out.bank ? BANK_BYTES : 0) + size_t(entry) * 16;
         std::memcpy(out.dense.data() + size_t(entry - lo) * 16, source, 16);
     }
 }
 
-void SpriteUnits::run_replay(const EmitUnit &unit, const Invocation &invocation, bool patched, ReplayResult &out) {
+void SpriteUnits::run_replay(const EmitUnit &unit, const Invocation &invocation, bool patched,
+                             ReplayResult &out) {
     out.clear();
-    if (!machine_.block_count) {
+    if (!m_machine.block_count) {
         out.reason = Abort::NoNative;
-        ++report_.no_native_skips;
+        ++m_report.no_native_skips;
         return;
     }
     // Reset scratch state, then clone the (flushed) real CPU. The clone is the only CPU
     // that ever executes; Machine state, counters and the real f3_cpu are never touched.
-    for (uint16_t page : touched_pages_) page_slot_[page] = -1;
-    touched_pages_.clear();
-    for (const Entry &entry : capture_) capture_slot_[entry.key] = -1;
-    capture_.clear();
-    f3_cc_flush(&machine_.cpu);
-    sandbox_cpu_ = machine_.cpu;
-    sandbox_cpu_.runtime = &machine_;
-    sandbox_cpu_.pc = unit.starts[invocation.start_index];
-    sandbox_cpu_.stopped = sandbox_cpu_.halted = 0;
-    sandbox_unit_ = unit.id;
-    sandbox_end_pc_ = unit.ends[invocation.start_index];
-    sandbox_done_ = false;
-    sandbox_abort_ = Abort::Count;
-    replay_flicker_ = nullptr;
+    for (uint16_t page : m_touched_pages) m_page_slot[page] = -1;
+    m_touched_pages.clear();
+    for (const Entry &entry : m_capture) m_capture_slot[entry.key] = -1;
+    m_capture.clear();
+    f3_cc_flush(&m_machine.cpu);
+    m_sandbox_cpu = m_machine.cpu;
+    m_sandbox_cpu.runtime = &m_machine;
+    m_sandbox_cpu.pc = unit.starts[invocation.start_index];
+    m_sandbox_cpu.stopped = m_sandbox_cpu.halted = 0;
+    m_sandbox_unit = unit.id;
+    m_sandbox_end_pc = unit.ends[invocation.start_index];
+    m_sandbox_done = false;
+    m_sandbox_abort = Abort::Count;
+    m_replay_flicker = nullptr;
 
     if (patched) {
-        UnitView view(this, [](void *self, uint32_t address, unsigned width) {
-            return static_cast<SpriteUnits *>(self)->sandbox_read(address, width);
-        }, invocation.address, unit.size);
-        PatchView patch(this, [](void *self, uint32_t address, uint32_t value, unsigned width) {
-            auto *units = static_cast<SpriteUnits *>(self);
-            if ((address & 0xffffff) - RAM_BASE < RAM_SPAN) units->sandbox_write(address, value, width);
-        }, invocation.address, unit.size);
+        UnitView view(
+            this,
+            [](void *self, uint32_t address, unsigned width) {
+                return static_cast<SpriteUnits *>(self)->sandbox_read(address, width);
+            },
+            invocation.address, unit.size);
+        PatchView patch(
+            this,
+            [](void *self, uint32_t address, uint32_t value, unsigned width) {
+                auto *units = static_cast<SpriteUnits *>(self);
+                if ((address & 0xffffff) - RAM_BASE < RAM_SPAN)
+                    units->sandbox_write(address, value, width);
+            },
+            invocation.address, unit.size);
         bool any = false;
-        for (const SpriteBehaviour *behaviour : behaviours_[unit.id]) any |= behaviour->apply(view, patch);
+        for (const SpriteBehaviour *behaviour : m_behaviours[unit.id])
+            any |= behaviour->apply(view, patch);
         if (const FlickerShadow *flicker = invocation.flicker; flicker && flicker->applies(view)) {
             // Force the game's parity gate: this object's shadow is emitted whatever the frame.
-            const uint32_t gate = flicker_gate_address(sandbox_cpu_, *flicker);
+            const uint32_t gate = flicker_gate_address(m_sandbox_cpu, *flicker);
             if (gate - RAM_BASE < RAM_SPAN) {
                 sandbox_write(gate, uint8_t(sandbox_read(gate, 1) | flicker->gate_mask), 1);
-                replay_flicker_ = flicker;
+                m_replay_flicker = flicker;
                 out.shadow_forced = true;
                 any = true;
             }
         }
         if (!any) return; // nothing to show differently: keep real entries, not a replay
     }
-    ++report_.replays;
-    ++report_.units[unit.id].replays;
+    ++m_report.replays;
+    ++m_report.units[unit.id].replays;
 
-    const uint64_t limit = sandbox_cpu_.cycles + REPLAY_BUDGET_CYCLES;
-    for (uint32_t blocks = 0; sandbox_abort_ == Abort::Count && !sandbox_done_; ++blocks) {
-        if (blocks >= REPLAY_BUDGET_BLOCKS || sandbox_cpu_.cycles >= limit) { sandbox_abort(Abort::Budget); break; }
-        if (sandbox_cpu_.halted || sandbox_cpu_.stopped || (sandbox_cpu_.sr & 0xc000)) {
+    const uint64_t limit = m_sandbox_cpu.cycles + REPLAY_BUDGET_CYCLES;
+    for (uint32_t blocks = 0; m_sandbox_abort == Abort::Count && !m_sandbox_done; ++blocks) {
+        if (blocks >= REPLAY_BUDGET_BLOCKS || m_sandbox_cpu.cycles >= limit) {
+            sandbox_abort(Abort::Budget);
+            break;
+        }
+        if (m_sandbox_cpu.halted || m_sandbox_cpu.stopped || (m_sandbox_cpu.sr & 0xc000)) {
             sandbox_abort(Abort::Stopped);
             break;
         }
-        const f3_block *block = find_block(sandbox_cpu_.pc);
-        if (!block) { sandbox_abort(Abort::Untranslated); break; }
-        sandbox_cpu_.dispatch_deadline = limit; // chained blocks yield here, never at device events
-        block->execute(&sandbox_cpu_);
+        const f3_block *block = find_block(m_sandbox_cpu.pc);
+        if (!block) {
+            sandbox_abort(Abort::Untranslated);
+            break;
+        }
+        m_sandbox_cpu.dispatch_deadline =
+            limit; // chained blocks yield here, never at device events
+        block->execute(&m_sandbox_cpu);
     }
-    if (sandbox_abort_ != Abort::Count) {
-        replay_flicker_ = nullptr;
-        out.reason = sandbox_abort_;
+    if (m_sandbox_abort != Abort::Count) {
+        m_replay_flicker = nullptr;
+        out.reason = m_sandbox_abort;
         record_abort(unit.id, out.reason);
         return;
     }
-    replay_flicker_ = nullptr;
+    m_replay_flicker = nullptr;
     collect(out, patched);
     out.ok = true;
-    ++report_.units[unit.id].completed;
-    ++report_.completed;
+    ++m_report.units[unit.id].completed;
+    ++m_report.completed;
 }
 
 // ---- Reporting ------------------------------------------------------------------------
 
 SpriteUnits::Report SpriteUnits::report() const {
-    Report result = report_;
-    for (const auto &[pc, stray] : stray_) {
+    Report result = m_report;
+    for (const auto &[pc, stray] : m_stray) {
         result.stray.push_back(stray);
         result.stray_writes += stray.count;
         if (!stray.accounted) result.stray_unaccounted += stray.count;
@@ -756,49 +836,62 @@ bool SpriteUnits::passed(bool allow_aborts) const {
 }
 
 void SpriteUnits::write_summary(std::ostream &out) const {
-    out << "sprite_units: invocations=" << report_.invocations << " replays=" << report_.replays
-        << " completed=" << report_.completed << " splices=" << report_.spliced
-        << " aborts=" << report_.aborted << " discarded=" << report_.discarded
-        << " frames=" << report_.frames << '\n';
-    if (has_flicker_)
-        out << "flicker_shadows: " << (flicker_enabled_ ? "on" : "off") << " shadowed_objects=" << report_.flicker.invocations
-            << " game_emitted=" << report_.flicker.gate_set << " synthesized=" << report_.flicker.gate_clear
-            << " tagged_entries=" << report_.flicker.replay_entries << " frames_with_shadow=" << report_.flicker.frames
-            << " max_frame_entries=" << report_.flicker.max_frame_entries << " violations=" << report_.flicker.violations << '\n';
+    out << "sprite_units: invocations=" << m_report.invocations << " replays=" << m_report.replays
+        << " completed=" << m_report.completed << " splices=" << m_report.spliced
+        << " aborts=" << m_report.aborted << " discarded=" << m_report.discarded
+        << " frames=" << m_report.frames << '\n';
+    if (m_has_flicker)
+        out << "flicker_shadows: " << (m_flicker_enabled ? "on" : "off")
+            << " shadowed_objects=" << m_report.flicker.invocations
+            << " game_emitted=" << m_report.flicker.gate_set
+            << " synthesized=" << m_report.flicker.gate_clear
+            << " tagged_entries=" << m_report.flicker.replay_entries
+            << " frames_with_shadow=" << m_report.flicker.frames
+            << " max_frame_entries=" << m_report.flicker.max_frame_entries
+            << " violations=" << m_report.flicker.violations << '\n';
 }
 
 void SpriteUnits::write_report(std::ostream &out) const {
     const Report r = report();
     out << "sprite units: invocations=" << r.invocations << " replays=" << r.replays
-        << " completed=" << r.completed << " matched=" << r.matched << " mismatched=" << r.mismatched
-        << " aborted=" << r.aborted << " spliced=" << r.spliced << " unmatched_exits=" << r.unmatched_exits
-        << " discarded=" << r.discarded << " no_native_skips=" << r.no_native_skips << '\n';
+        << " completed=" << r.completed << " matched=" << r.matched
+        << " mismatched=" << r.mismatched << " aborted=" << r.aborted << " spliced=" << r.spliced
+        << " unmatched_exits=" << r.unmatched_exits << " discarded=" << r.discarded
+        << " no_native_skips=" << r.no_native_skips << '\n';
     for (const UnitStats &unit : r.units) {
-        out << "  unit " << unit.name << ": invocations=" << unit.invocations << " replays=" << unit.replays
-            << " completed=" << unit.completed << " matched=" << unit.matched
-            << " mismatched=" << unit.mismatched << " aborted=" << unit.aborted
-            << " spliced=" << unit.spliced << " real_entries=" << unit.real_entries << '\n';
+        out << "  unit " << unit.name << ": invocations=" << unit.invocations
+            << " replays=" << unit.replays << " completed=" << unit.completed
+            << " matched=" << unit.matched << " mismatched=" << unit.mismatched
+            << " aborted=" << unit.aborted << " spliced=" << unit.spliced
+            << " real_entries=" << unit.real_entries << '\n';
         for (size_t i = 0; i < unit.aborts.size(); ++i)
-            if (unit.aborts[i]) out << "    abort " << abort_name(Abort(i)) << ": " << unit.aborts[i] << '\n';
+            if (unit.aborts[i])
+                out << "    abort " << abort_name(Abort(i)) << ": " << unit.aborts[i] << '\n';
     }
-    if (has_flicker_) {
+    if (m_has_flicker) {
         const FlickerStats &f = r.flicker;
-        out << "  flicker shadows (" << (flicker_enabled_ ? "enabled" : "disabled") << "): shadowed_objects=" << f.invocations
-            << " gate_set=" << f.gate_set << " gate_clear=" << f.gate_clear << " real_entries=" << f.real_entries
-            << " tagged_entries=" << f.replay_entries << " splices=" << f.splices << " frames=" << f.frames
-            << " max_frame_entries=" << f.max_frame_entries << " violations=" << f.violations << '\n';
+        out << "  flicker shadows (" << (m_flicker_enabled ? "enabled" : "disabled")
+            << "): shadowed_objects=" << f.invocations << " gate_set=" << f.gate_set
+            << " gate_clear=" << f.gate_clear << " real_entries=" << f.real_entries
+            << " tagged_entries=" << f.replay_entries << " splices=" << f.splices
+            << " frames=" << f.frames << " max_frame_entries=" << f.max_frame_entries
+            << " violations=" << f.violations << '\n';
         if (!f.first_violation.empty()) out << "    first violation: " << f.first_violation << '\n';
     }
     char line[96];
     for (const Mismatch &mismatch : r.mismatches) {
-        std::snprintf(line, sizeof line, "pc=0x%06x frame=%llu unit_address=0x%06x", mismatch.start_pc,
-                      static_cast<unsigned long long>(mismatch.frame), mismatch.unit_address);
-        out << "  mismatch " << r.units[mismatch.unit].name << ' ' << line << ' ' << mismatch.detail << '\n';
+        std::snprintf(line, sizeof line, "pc=0x%06x frame=%llu unit_address=0x%06x",
+                      mismatch.start_pc, static_cast<unsigned long long>(mismatch.frame),
+                      mismatch.unit_address);
+        out << "  mismatch " << r.units[mismatch.unit].name << ' ' << line << ' ' << mismatch.detail
+            << '\n';
     }
-    out << "  sprite writes outside units: " << r.stray_writes << " (unaccounted " << r.stray_unaccounted << ")\n";
+    out << "  sprite writes outside units: " << r.stray_writes << " (unaccounted "
+        << r.stray_unaccounted << ")\n";
     for (const StrayWriter &stray : r.stray) {
-        std::snprintf(line, sizeof line, "pc=0x%06x writes=%llu first_frame=%llu first_address=0x%06x",
-                      stray.pc, static_cast<unsigned long long>(stray.count),
+        std::snprintf(line, sizeof line,
+                      "pc=0x%06x writes=%llu first_frame=%llu first_address=0x%06x", stray.pc,
+                      static_cast<unsigned long long>(stray.count),
                       static_cast<unsigned long long>(stray.first_frame), stray.first_address);
         out << "    " << line << (stray.accounted ? " frame_writer" : " UNACCOUNTED") << '\n';
     }

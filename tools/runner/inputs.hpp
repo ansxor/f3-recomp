@@ -28,7 +28,8 @@ class ScriptInputSource : public InputSource {
 public:
     explicit ScriptInputSource(InputScript script);
     static std::unique_ptr<ScriptInputSource> from_file(const std::string &path);
-    static std::unique_ptr<ScriptInputSource> from_text(std::string_view text, const std::string &source = "text");
+    static std::unique_ptr<ScriptInputSource> from_text(std::string_view text,
+                                                        const std::string &source = "text");
     void apply(Machine &machine, uint64_t frame) override;
     const InputScript &script() const { return script_; }
 
@@ -81,4 +82,3 @@ namespace f3rt::test {
 using ScheduleConfig = runner::ScheduleConfig;
 using GameplaySchedule = runner::SeededScheduleInputSource;
 } // namespace f3rt::test
-

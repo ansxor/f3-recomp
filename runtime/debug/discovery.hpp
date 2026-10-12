@@ -35,7 +35,19 @@ namespace f3rt {
 class Machine;
 
 // Graphics-RAM / control-register regions a store can target.
-enum class VideoLayer : uint8_t { Control, Sprites, Pf0, Pf1, Pf2, Pf3, Pf2Alt, Pf3Alt, Text, Lines, Count };
+enum class VideoLayer : uint8_t {
+    Control,
+    Sprites,
+    Pf0,
+    Pf1,
+    Pf2,
+    Pf3,
+    Pf2Alt,
+    Pf3Alt,
+    Text,
+    Lines,
+    Count
+};
 const char *video_layer_name(VideoLayer layer);
 
 // Per-game list of store PCs that already have a documented producer (games/<id>/video/video.cpp).
@@ -51,11 +63,13 @@ public:
     DiscoveryLog &operator=(const DiscoveryLog &) = delete;
 
     // Sprite RAM belongs to the emit-unit accounting (sprite-stray) when the game has units.
-    void set_sprites_accounted_by_units(bool on) { sprites_by_units_ = on; }
+    void set_sprites_accounted_by_units(bool on) { m_sprites_by_units = on; }
     // Also log known producers (tagged known=1) and unit-accounted sprite writes.
     void set_log_all(bool on) {
-        log_all_ = on;
-        if (on) line("# ALL observed writers: known producers are listed with known=1, sprite RAM included");
+        m_log_all = on;
+        if (on)
+            line("# ALL observed writers: known producers are listed with known=1, sprite RAM "
+                 "included");
     }
 
     // Machine::write8 for graphics RAM and control registers (`address` is a full 24-bit bus address).
@@ -86,14 +100,14 @@ private:
     double elapsed() const;
     void line(const std::string &text);
 
-    std::FILE *file_ = nullptr;
-    const Machine &machine_;
-    std::chrono::steady_clock::time_point start_;
-    bool sprites_by_units_ = false, log_all_ = false, finished_ = false;
+    std::FILE *m_file = nullptr;
+    const Machine &m_machine;
+    std::chrono::steady_clock::time_point m_start;
+    bool m_sprites_by_units = false, m_log_all = false, m_finished = false;
     // (category, layer, pc) -> entry. Node-stable, so the one-entry caches below stay valid.
-    std::unordered_map<uint64_t, Entry> entries_;
-    std::vector<std::unique_ptr<Entry>> fallbacks_;
-    std::array<Entry *, size_t(VideoLayer::Count)> last_video_{};
-    Entry *last_stray_ = nullptr;
+    std::unordered_map<uint64_t, Entry> m_entries;
+    std::vector<std::unique_ptr<Entry>> m_fallbacks;
+    std::array<Entry *, size_t(VideoLayer::Count)> m_last_video{};
+    Entry *m_last_stray = nullptr;
 };
 } // namespace f3rt

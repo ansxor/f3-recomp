@@ -16,9 +16,8 @@ namespace f3rt {
 // (row[3 - x/2] >> ((x & 1) * 4)).
 inline void decode_charram_tile(const uint8_t *tile_src, uint8_t *dest) {
     for (int y = 0; y < 8; ++y) {
-        const uint8_t *row = &tile_src[y * 4];
-        for (int x = 0; x < 8; ++x)
-            dest[y * 8 + x] = (row[3 - x / 2] >> ((x & 1) * 4)) & 0x0f;
+        const uint8_t *row = &tile_src[ptrdiff_t(y) * 4];
+        for (int x = 0; x < 8; ++x) dest[y * 8 + x] = (row[3 - x / 2] >> ((x & 1) * 4)) & 0x0f;
     }
 }
 
@@ -45,8 +44,8 @@ struct DecodedSpriteEntry {
     bool flip_x = false, flip_y = false;
     uint8_t pri = 0;
     uint64_t identity = 0; // stable sprite identity from a SpritePresentation; 0 = unknown
-    uint64_t object = 0;   // owning invocation identity (shared by a multi-part object); 0 = unknown
-    uint8_t flags = 0;     // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
+    uint64_t object = 0; // owning invocation identity (shared by a multi-part object); 0 = unknown
+    uint8_t flags = 0;   // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)
@@ -54,7 +53,7 @@ struct DecodedSpriteEntry {
 // `visible_y`/`visible_height` are the FDP scanout crop used for culling.
 // Returns the number of entries written to `out`.
 size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_height,
-                          std::span<DecodedSpriteEntry> out, SpriteRamState &state,
-                          bool apply_flip, const SpritePresentation *presentation = nullptr);
+                          std::span<DecodedSpriteEntry> out, SpriteRamState &state, bool apply_flip,
+                          const SpritePresentation *presentation = nullptr);
 
 } // namespace f3rt

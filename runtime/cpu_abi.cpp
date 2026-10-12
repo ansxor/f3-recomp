@@ -23,53 +23,74 @@ f3rt::Machine &bus(f3_cpu *cpu, uint32_t address, uint32_t width) {
     // time before a mailbox access or reset-line change becomes visible.
     // Include unaligned accesses crossing into a mapped range. Only advance
     // devices here: IRQ entry still belongs to the next instruction boundary.
-    if (end > f3rt::SHARED_BASE && (start < f3rt::SHARED_END ||
-        (start < f3rt::SOUND_RESET_RELEASE + f3rt::SOUND_RESET_WINDOW_SIZE && end > f3rt::SOUND_RESET_RELEASE) ||
-        (start < f3rt::SOUND_RESET_ASSERT + f3rt::SOUND_RESET_WINDOW_SIZE && end > f3rt::SOUND_RESET_ASSERT)))
+    if (end > f3rt::SHARED_BASE &&
+        (start < f3rt::SHARED_END ||
+         (start < f3rt::SOUND_RESET_RELEASE + f3rt::SOUND_RESET_WINDOW_SIZE &&
+          end > f3rt::SOUND_RESET_RELEASE) ||
+         (start < f3rt::SOUND_RESET_ASSERT + f3rt::SOUND_RESET_WINDOW_SIZE &&
+          end > f3rt::SOUND_RESET_ASSERT)))
         m.advance_to(cpu->cycles);
     return m;
 }
 uint32_t &stack(f3_cpu *cpu, uint16_t sr) {
     return !(sr & 0x2000) ? cpu->usp : (sr & 0x1000) ? cpu->msp : cpu->ssp;
 }
-}
+} // namespace
 extern "C" {
 uint8_t f3_read8(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return uint8_t(s->sandbox_read(a, 1));
-    return bus(cpu,a,1).read8(a);
+    return bus(cpu, a, 1).read8(a);
 }
 uint16_t f3_read16(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return uint16_t(s->sandbox_read(a, 2));
-    return bus(cpu,a,2).read16(a);
+    return bus(cpu, a, 2).read16(a);
 }
 uint32_t f3_read32(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return s->sandbox_read(a, 4);
-    return bus(cpu,a,4).read32(a);
+    return bus(cpu, a, 4).read32(a);
 }
 void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_write(a, v, 1); return; }
-    bus(cpu,a,1).write8(a,v);
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_write(a, v, 1);
+        return;
+    }
+    bus(cpu, a, 1).write8(a, v);
 }
 void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_write(a, v, 2); return; }
-    bus(cpu,a,2).write16(a,v);
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_write(a, v, 2);
+        return;
+    }
+    bus(cpu, a, 2).write16(a, v);
 }
 void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_write(a, v, 4); return; }
-    bus(cpu,a,4).write32(a,v);
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_write(a, v, 4);
+        return;
+    }
+    bus(cpu, a, 4).write32(a, v);
 }
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     sr &= 0xf71f; // 68EC020 writable status bits.
     if ((sr & 0x0700) < (cpu->sr & 0x0700)) cpu->dispatch_deadline = 0;
     auto &old_stack = stack(cpu, cpu->sr);
     auto &new_stack = stack(cpu, sr);
-    if (&old_stack != &new_stack) { old_stack = cpu->a[7]; cpu->a[7] = new_stack; }
+    if (&old_stack != &new_stack) {
+        old_stack = cpu->a[7];
+        cpu->a[7] = new_stack;
+    }
     cpu->sr = sr;
     cpu->cc_op = 0;
 }
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_abort(f3rt::SpriteUnits::Abort::Exception); return; }
-    if (vector > 255) { cpu->halted = 1; return; }
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_abort(f3rt::SpriteUnits::Abort::Exception);
+        return;
+    }
+    if (vector > 255) {
+        cpu->halted = 1;
+        return;
+    }
     f3_cc_flush(cpu);
     const uint16_t old_sr = cpu->sr;
     const uint32_t instruction_pc = cpu->pc;
@@ -84,21 +105,27 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
     // Full exception charge, matching the pinned 68EC020 timing model.
     // Generated instructions must not add their normal base charge on this path.
-    static constexpr uint8_t system_cycles[16] = {
-        4, 4, 50, 50, 20, 38, 40, 20, 34, 25, 20, 20, 4, 4, 4, 30
-    };
-    cpu->cycles += vector < 16 ? system_cycles[vector]
-        : vector >= 24 && vector < 32 ? 30
-        : vector >= 32 && vector < 48 ? 24 : 4;
+    static constexpr uint8_t SYSTEM_CYCLES[16] = {4,  4,  50, 50, 20, 38, 40, 20,
+                                                  34, 25, 20, 20, 4,  4,  4,  30};
+    cpu->cycles += vector < 16                   ? SYSTEM_CYCLES[vector]
+                   : vector >= 24 && vector < 32 ? 30
+                   : vector >= 32 && vector < 48 ? 24
+                                                 : 4;
 }
 void f3_reset_devices(f3_cpu *cpu) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_abort(f3rt::SpriteUnits::Abort::ResetDevices); return; }
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_abort(f3rt::SpriteUnits::Abort::ResetDevices);
+        return;
+    }
     auto &m = machine(cpu);
     m.advance_to(cpu->cycles);
     m.reset_devices();
 }
 int f3_boundary(f3_cpu *cpu) {
-    if (auto *s = sandbox(cpu)) { s->sandbox_abort(f3rt::SpriteUnits::Abort::Stopped); return 1; }
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_abort(f3rt::SpriteUnits::Abort::Stopped);
+        return 1;
+    }
     return machine(cpu).boundary();
 }
 int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc) {
@@ -118,11 +145,15 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
     if (!cpu || !cpu->runtime || (count && !blocks)) return 0;
     for (size_t i = 0; i < count; ++i)
         if (!blocks[i].execute || (blocks[i].address & 1) ||
-            (i && blocks[i - 1].address >= blocks[i].address)) return 0;
+            (i && blocks[i - 1].address >= blocks[i].address))
+            return 0;
     auto &m = machine(cpu);
     for (const auto &range : m.excluded_code) {
         const auto *entry = count ? std::lower_bound(blocks, blocks + count, range.start,
-            [](const f3_block &block, uint32_t pc) { return block.address < pc; }) : nullptr;
+                                                     [](const f3_block &block, uint32_t pc) {
+                                                         return block.address < pc;
+                                                     })
+                                  : nullptr;
         if (entry && entry != blocks + count && entry->address < range.end) return 0;
     }
     // Commit only after all validation succeeds: failed re-registration must
@@ -136,8 +167,8 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count) {
         lookup.first = count ? blocks + first : nullptr;
         lookup.count = uint16_t(index - first);
         lookup.address = index != first ? blocks[first].address : 0;
-        lookup.dense = index != first &&
-            blocks[index - 1].address - lookup.address == 2 * (index - first - 1);
+        lookup.dense =
+            index != first && blocks[index - 1].address - lookup.address == 2 * (index - first - 1);
     }
     m.blocks = blocks;
     m.block_count = count;
@@ -149,11 +180,12 @@ int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t 
     for (size_t i = 0; i < count; ++i) {
         const auto &range = ranges[i];
         if ((range.start & 1) || (range.end & 1) || range.start >= range.end ||
-            range.end > f3rt::ROM_END || !range.reason || !*range.reason ||
-            !range.evidence || !*range.evidence ||
-            (i && ranges[i - 1].end > range.start)) return 0;
+            range.end > f3rt::ROM_END || !range.reason || !*range.reason || !range.evidence ||
+            !*range.evidence || (i && ranges[i - 1].end > range.start))
+            return 0;
         if (m.block_count) {
-            const auto *entry = std::lower_bound(m.blocks, m.blocks + m.block_count, range.start,
+            const auto *entry = std::lower_bound(
+                m.blocks, m.blocks + m.block_count, range.start,
                 [](const f3_block &block, uint32_t pc) { return block.address < pc; });
             if (entry != m.blocks + m.block_count && entry->address < range.end) return 0;
         }
@@ -163,7 +195,10 @@ int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t 
 }
 int f3_dispatch(f3_cpu *cpu) {
     if (!cpu || !cpu->runtime || cpu->halted) return 0;
-    if (sandbox(cpu)) { f3_boundary(cpu); return 0; } // replays run blocks directly, never via dispatch
+    if (sandbox(cpu)) {
+        f3_boundary(cpu);
+        return 0;
+    } // replays run blocks directly, never via dispatch
     if (f3_boundary(cpu)) return !cpu->halted;
     auto &m = machine(cpu);
     // Trace must execute instruction by instruction; never defer T0/T1 in a block.
@@ -173,11 +208,11 @@ int f3_dispatch(f3_cpu *cpu) {
             const f3_block *block = nullptr;
             if (page.dense) {
                 const uint32_t offset = cpu->pc - page.address;
-                if (!(offset & 1) && offset < 2u * page.count)
-                    block = page.first + (offset >> 1);
+                if (!(offset & 1) && offset < 2u * page.count) block = page.first + (offset >> 1);
             } else {
                 const f3_block *end = page.first + page.count;
-                const auto *entry = std::lower_bound(page.first, end, cpu->pc,
+                const auto *entry = std::lower_bound(
+                    page.first, end, cpu->pc,
                     [](const f3_block &entry, uint32_t pc) { return entry.address < pc; });
                 if (entry != end && entry->address == cpu->pc) block = entry;
             }
@@ -196,14 +231,17 @@ int f3_dispatch(f3_cpu *cpu) {
         if (physical_pc < range.start) break;
         if (physical_pc < range.end) return f3_fallback(cpu);
     }
-    f3_profile_cold_abort(F3_PROFILE_MAIN,
-        f3rt::crc32(m.roms.main.data(), m.roms.main.size()), cpu->pc);
+    f3_profile_cold_abort(F3ProfileMain, f3rt::crc32(m.roms.main.data(), m.roms.main.size()),
+                          cpu->pc);
 #endif
     return f3_fallback(cpu);
 }
 int f3_fallback(f3_cpu *cpu) {
     // Untranslated or excluded instruction inside a replay: abandon it, never interpret.
-    if (auto *s = sandbox(cpu)) { s->sandbox_abort(f3rt::SpriteUnits::Abort::Untranslated); return 0; }
+    if (auto *s = sandbox(cpu)) {
+        s->sandbox_abort(f3rt::SpriteUnits::Abort::Untranslated);
+        return 0;
+    }
     return machine(cpu).fallback();
 }
 void f3_unit_enter(f3_cpu *cpu, uint32_t unit) {

@@ -10,23 +10,25 @@ namespace f3rt {
 // [video] in games/<game>/config.toml. GameVideo refuses a ROM set whose
 // VideoConfig does not match (game_config::matches).
 namespace geometry {
-inline constexpr unsigned native_width = 320;   // visible columns 46..365 on every game
-inline constexpr unsigned frame_lines = 256;    // scanout lines the sprite/line RAM address
-inline constexpr unsigned first_line = game_config::video.visible_y;
-inline constexpr unsigned height = game_config::video.visible_height;
-inline constexpr unsigned end_line = game_config::visible_end;
-inline constexpr unsigned native_pixels = native_width * height;
+inline constexpr unsigned NATIVE_WIDTH = 320; // visible columns 46..365 on every game
+inline constexpr unsigned FRAME_LINES = 256;  // scanout lines the sprite/line RAM address
+inline constexpr unsigned FIRST_LINE = game_config::video.visible_y;
+inline constexpr unsigned HEIGHT = game_config::video.visible_height;
+inline constexpr unsigned END_LINE = game_config::visible_end;
+inline constexpr unsigned NATIVE_PIXELS = NATIVE_WIDTH * HEIGHT;
+
 } // namespace geometry
 class Machine;
 struct CapturedFrame;
 enum class GameVideoMode { Diagnostic, Game, Compare };
 
 struct GameVideoOptions {
-    static constexpr unsigned max_scale = 4, max_gpu_scale = 8, max_border = 160;
+    static constexpr unsigned MAX_SCALE = 4, MAX_GPU_SCALE = 8, MAX_BORDER = 160;
+
     unsigned scale = 1;
     unsigned border = 0; // Additional native scene columns on EACH side.
-    unsigned width() const { return (geometry::native_width + border * 2) * scale; }
-    unsigned height() const { return geometry::height * scale; }
+    unsigned width() const { return (geometry::NATIVE_WIDTH + border * 2) * scale; }
+    unsigned height() const { return geometry::HEIGHT * scale; }
     bool expanded() const { return scale != 1 || border != 0; }
 };
 
@@ -57,6 +59,7 @@ public:
     size_t state_size() const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
+
 private:
     friend class Machine;
     void materialize_native() const;
@@ -64,6 +67,6 @@ private:
     void render();
     void compare_composite(uint64_t frame);
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Impl> m_impl;
 };
 } // namespace f3rt

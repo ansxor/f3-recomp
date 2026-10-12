@@ -1,4 +1,5 @@
 """Safety-boundary regressions for ROM exclusion proposals (synthetic data)."""
+
 import struct
 import unittest
 
@@ -7,7 +8,7 @@ from tools.rom.exclusions import candidate_ranges, scan_rom, toml_proposals
 
 class ExclusionScannerTests(unittest.TestCase):
     def fixture(self, cpu="main"):
-        base = 0 if cpu == "main" else 0xc00000
+        base = 0 if cpu == "main" else 0xC00000
         rom = bytearray(bytes.fromhex("4afc") * (0x5000 // 2))
         rom[:1024] = b"\xff" * 1024
         struct.pack_into(">II", rom, 0, 0x410000, base + 0x400)
@@ -16,8 +17,7 @@ class ExclusionScannerTests(unittest.TestCase):
         return bytes(rom), {"game": {"id": "synthetic"}}, base
 
     def fill(self, report, start):
-        return next(c for c in report["candidates"] if c["start"] == start
-                    and c["kind"] == "constant_fill")
+        return next(c for c in report["candidates"] if c["start"] == start and c["kind"] == "constant_fill")
 
     def test_fill_alignment_does_not_consume_boundary_or_checksum(self):
         rom, _, _ = self.fixture()
@@ -74,9 +74,14 @@ class ExclusionScannerTests(unittest.TestCase):
         rom, config, _ = self.fixture()
         rom = bytearray(rom)
         rom[0x1000:0x2000] = bytes(range(256)) * 16
-        profile = {"main": {"data_reads": [[0x1000, 0x2000]], "known_data": [
-            {"start": 0x1000, "end": 0x1ffe, "reason": "HLE table", "evidence": "Typed table consumer"},
-        ]}}
+        profile = {
+            "main": {
+                "data_reads": [[0x1000, 0x2000]],
+                "known_data": [
+                    {"start": 0x1000, "end": 0x1FFE, "reason": "HLE table", "evidence": "Typed table consumer"},
+                ],
+            }
+        }
         report = scan_rom(bytes(rom), config, profile=profile)
         candidate = next(c for c in report["candidates"] if c["start"] == 0x1000)
         self.assertEqual(candidate["status"], "rejected")
@@ -94,17 +99,23 @@ class ExclusionScannerTests(unittest.TestCase):
         rom, config, _ = self.fixture()
         rom = bytearray(rom)
         rom[0x1000:0x2000] = b"\x12" * 0x1000
-        profile = {"main": {"known_data": [
-            {"start": 0x1001, "end": 0x2000, "reason": "Descriptor",
-             "evidence": "Typed game-data consumer"},
-        ]}}
+        profile = {
+            "main": {
+                "known_data": [
+                    {"start": 0x1001, "end": 0x2000, "reason": "Descriptor", "evidence": "Typed game-data consumer"},
+                ]
+            }
+        }
         report = scan_rom(bytes(rom), config, profile=profile)
         candidate = next(c for c in report["candidates"] if c["kind"] == "known_data")
         self.assertEqual((candidate["start"], candidate["end"]), (0x1002, 0x2000))
         self.assertTrue(candidate["safe_to_propose"])
         profile["main"]["fetched"] = [[0x1800, 0x1802]]
-        self.assertFalse(next(c for c in scan_rom(bytes(rom), config, profile=profile)["candidates"]
-                              if c["kind"] == "known_data")["safe_to_propose"])
+        self.assertFalse(
+            next(c for c in scan_rom(bytes(rom), config, profile=profile)["candidates"] if c["kind"] == "known_data")[
+                "safe_to_propose"
+            ]
+        )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Structure field analysis: lists every field accessed through an address register."""
+
 from __future__ import annotations
 
 import re
@@ -15,8 +16,7 @@ from .game import (
 )
 
 if TYPE_CHECKING:
-    import argparse
-    from .cli import Out
+    pass
 
 BIT_OPS = {"btst", "bset", "bclr", "bchg"}
 MASK_OPS = {"andi": "clear", "ori": "set", "eori": "flip"}
@@ -34,9 +34,9 @@ def mask_bits(insn, base: str) -> tuple[str, list[int]] | None:
         return None
     size = access_size(insn)
     imm = insn.operands[0].imm & ((1 << (8 * size)) - 1)
-    byte = (imm >> (8 * (size - 1))) & 0xff
+    byte = (imm >> (8 * (size - 1))) & 0xFF
     if base == "andi":
-        byte = ~byte & 0xff
+        byte = ~byte & 0xFF
     return MASK_OPS[base], [b for b in range(8) if (byte >> b) & 1]
 
 
@@ -191,22 +191,21 @@ def follow_routine(
                 if op.mode == "areg-idx" or getattr(op, "index_reg", None):
                     indexed.append(IndexedAccess(pc=pc, entry=entry, insn=insn, op=op))
                 elif op.mode == "areg" and op.role in ("read", "write", "rmw"):
-                    if getattr(op, "postinc", 0) < 0:
-                        offset = op.disp + step - sz
-                    else:
-                        offset = op.disp + step
+                    offset = op.disp + step - sz if getattr(op, "postinc", 0) < 0 else op.disp + step
                     alias = op.reg if op.reg != target_reg else None
-                    accesses.append(Access(
-                        pc=pc,
-                        entry=entry,
-                        offset=offset,
-                        size=sz,
-                        role=op.role,
-                        insn=insn,
-                        reg=op.reg,
-                        alias=alias,
-                        bits=extract_bits(insn, base),
-                    ))
+                    accesses.append(
+                        Access(
+                            pc=pc,
+                            entry=entry,
+                            offset=offset,
+                            size=sz,
+                            role=op.role,
+                            insn=insn,
+                            reg=op.reg,
+                            alias=alias,
+                            bits=extract_bits(insn, base),
+                        )
+                    )
 
 
 def cmd_struct(args) -> None:
@@ -242,7 +241,7 @@ def cmd_struct(args) -> None:
         key = (a.offset, a.size)
         grouped.setdefault(key, []).append(a)
 
-    for (off, sz) in sorted(grouped.keys()):
+    for off, sz in sorted(grouped.keys()):
         matching = grouped[(off, sz)]
         reads = sum(1 for a in matching if a.role == "read")
         writes = sum(1 for a in matching if a.role == "write")

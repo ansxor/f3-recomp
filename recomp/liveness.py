@@ -28,16 +28,17 @@ Soundness rules the table below relies on:
 * Interrupts resume at the same PC and the runtime flushes at IRQ entry, so they
   add no liveness.
 """
+
 from __future__ import annotations
 
 from collections import deque
-from typing import Iterable, Mapping, NamedTuple
+from collections.abc import Iterable, Mapping
+from typing import NamedTuple
 
 import capstone.m68k as m68k
 from capstone import CsInsn
 
-from .emitter import (CCR_ALL, CCR_C, CCR_N, CCR_NZVC, CCR_V, CCR_X, CCR_Z, COND_MAP,
-                      _get_base_mnemonic, static_flow)
+from .emitter import CCR_ALL, CCR_C, CCR_N, CCR_NZVC, CCR_V, CCR_X, CCR_Z, COND_MAP, _get_base_mnemonic, static_flow
 
 
 class FlagEffects(NamedTuple):
@@ -46,6 +47,7 @@ class FlagEffects(NamedTuple):
     ``opaque`` marks instructions whose control flow is not described by
     ``static_flow`` (unknown mnemonic): they end the analysed graph.
     """
+
     reads: int
     writes: int
     opaque: bool = False
@@ -54,45 +56,107 @@ class FlagEffects(NamedTuple):
 NO_FLAGS = FlagEffects(0, 0)
 READS_ALL = FlagEffects(CCR_ALL, 0)
 OPAQUE = FlagEffects(CCR_ALL, 0, True)
-LOGIC = FlagEffects(0, CCR_NZVC)          # N,Z from result; V,C cleared; X kept
-ARITH = FlagEffects(0, CCR_ALL)           # ADD/SUB/NEG: X,N,Z,V,C
-EXTENDED = FlagEffects(CCR_X | CCR_Z, CCR_ALL)   # ADDX/SUBX/NEGX/xBCD: X in, Z sticky
+LOGIC = FlagEffects(0, CCR_NZVC)  # N,Z from result; V,C cleared; X kept
+ARITH = FlagEffects(0, CCR_ALL)  # ADD/SUB/NEG: X,N,Z,V,C
+EXTENDED = FlagEffects(CCR_X | CCR_Z, CCR_ALL)  # ADDX/SUBX/NEGX/xBCD: X in, Z sticky
 
 # Flags each 4-bit condition tests, indexed like f3_eval_cond / COND_MAP.
 _COND_FLAGS = (
-    0, 0,                            # T, F
-    CCR_C | CCR_Z, CCR_C | CCR_Z,    # HI, LS
-    CCR_C, CCR_C,                    # CC, CS
-    CCR_Z, CCR_Z,                    # NE, EQ
-    CCR_V, CCR_V,                    # VC, VS
-    CCR_N, CCR_N,                    # PL, MI
-    CCR_N | CCR_V, CCR_N | CCR_V,    # GE, LT
-    CCR_N | CCR_V | CCR_Z, CCR_N | CCR_V | CCR_Z,   # GT, LE
+    0,
+    0,  # T, F
+    CCR_C | CCR_Z,
+    CCR_C | CCR_Z,  # HI, LS
+    CCR_C,
+    CCR_C,  # CC, CS
+    CCR_Z,
+    CCR_Z,  # NE, EQ
+    CCR_V,
+    CCR_V,  # VC, VS
+    CCR_N,
+    CCR_N,  # PL, MI
+    CCR_N | CCR_V,
+    CCR_N | CCR_V,  # GE, LT
+    CCR_N | CCR_V | CCR_Z,
+    CCR_N | CCR_V | CCR_Z,  # GT, LE
 )
 
 # Neither read nor write CCR. Returns/jumps are boundaries via static_flow.
-_NO_FLAGS = frozenset((
-    'nop', 'bra', 'bsr', 'jmp', 'jsr', 'rts', 'rtd', 'lea', 'pea', 'link', 'unlk',
-    'movea', 'adda', 'suba', 'exg', 'movem', 'movep',
-))
+_NO_FLAGS = frozenset(
+    (
+        "nop",
+        "bra",
+        "bsr",
+        "jmp",
+        "jsr",
+        "rts",
+        "rtd",
+        "lea",
+        "pea",
+        "link",
+        "unlk",
+        "movea",
+        "adda",
+        "suba",
+        "exg",
+        "movem",
+        "movep",
+    )
+)
 # Exception-capable or flag-snapshotting: stacked/stored SR exposes every flag.
-_READS_ALL = frozenset((
-    'reset', 'chk', 'chk2', 'cmp2', 'trapv', 'trap', 'moves', 'movec', 'rte', 'rtr',
-    'stop', 'divu', 'divs', 'illegal',
-))
+_READS_ALL = frozenset(
+    (
+        "reset",
+        "chk",
+        "chk2",
+        "cmp2",
+        "trapv",
+        "trap",
+        "moves",
+        "movec",
+        "rte",
+        "rtr",
+        "stop",
+        "divu",
+        "divs",
+        "illegal",
+    )
+)
 # N,Z from the result, V and C cleared (multiply sets V for the 32-bit form),
 # X preserved. CAS/CAS2/TAS flush and produce through the same lazy ops.
-_LOGIC = frozenset((
-    'moveq', 'ext', 'extb', 'swap', 'clr', 'tst', 'not', 'tas', 'mulu', 'muls',
-    'cas', 'cas2', 'cmp', 'cmpa', 'cmpi', 'cmpm',
-    'bftst', 'bfextu', 'bfchg', 'bfexts', 'bfclr', 'bfffo', 'bfset', 'bfins',
-))
-_BIT_OPS = frozenset(('btst', 'bset', 'bclr', 'bchg'))        # Z only
-_ARITH_DST_AN = frozenset(('add', 'addi', 'addq', 'sub', 'subi', 'subq'))
-_LOGIC_IMM = frozenset(('and', 'andi', 'or', 'ori', 'eor', 'eori'))
-_SHIFT_NOX = frozenset(('asl', 'asr', 'lsl', 'lsr'))
-_ROTATE = frozenset(('rol', 'ror'))
-_ROTATE_X = frozenset(('roxl', 'roxr'))
+_LOGIC = frozenset(
+    (
+        "moveq",
+        "ext",
+        "extb",
+        "swap",
+        "clr",
+        "tst",
+        "not",
+        "tas",
+        "mulu",
+        "muls",
+        "cas",
+        "cas2",
+        "cmp",
+        "cmpa",
+        "cmpi",
+        "cmpm",
+        "bftst",
+        "bfextu",
+        "bfchg",
+        "bfexts",
+        "bfclr",
+        "bfffo",
+        "bfset",
+        "bfins",
+    )
+)
+_BIT_OPS = frozenset(("btst", "bset", "bclr", "bchg"))  # Z only
+_ARITH_DST_AN = frozenset(("add", "addi", "addq", "sub", "subi", "subq"))
+_LOGIC_IMM = frozenset(("and", "andi", "or", "ori", "eor", "eori"))
+_SHIFT_NOX = frozenset(("asl", "asr", "lsl", "lsr"))
+_ROTATE = frozenset(("rol", "ror"))
+_ROTATE_X = frozenset(("roxl", "roxr"))
 
 
 def condition_flags(cond: int) -> int:
@@ -109,7 +173,7 @@ def _shift_effects(mnem: str, ops) -> FlagEffects:
     # whose count is zero modulo 64 preserves X, so X is a conditional write.
     counted = len(ops) == 1 or (ops[0].type == m68k.M68K_OP_IMM and ops[0].imm & 63)
     if mnem in _ROTATE:
-        return LOGIC                                  # X is never affected
+        return LOGIC  # X is never affected
     if mnem in _ROTATE_X:
         return FlagEffects(CCR_X, CCR_ALL if counted else CCR_NZVC)
     return ARITH if counted else FlagEffects(CCR_X, CCR_NZVC)
@@ -122,25 +186,25 @@ def _move_effects(ops) -> FlagEffects:
     for op in ops[:2]:
         if op.type == m68k.M68K_OP_REG:
             if m68k.M68K_REG_D0 <= op.reg <= m68k.M68K_REG_D7:
-                kinds.append('d')
+                kinds.append("d")
             elif m68k.M68K_REG_A0 <= op.reg <= m68k.M68K_REG_A7:
-                kinds.append('a')
+                kinds.append("a")
             elif op.reg == m68k.M68K_REG_CCR:
-                kinds.append('ccr')
+                kinds.append("ccr")
             elif op.reg == m68k.M68K_REG_SR:
-                kinds.append('sr')
+                kinds.append("sr")
             elif op.reg == m68k.M68K_REG_USP:
-                kinds.append('usp')
+                kinds.append("usp")
             else:
                 return OPAQUE
         else:
-            kinds.append('ea')
+            kinds.append("ea")
     source, destination = kinds
-    if source in ('ccr', 'sr', 'usp') or destination in ('sr', 'usp'):
-        return READS_ALL        # MOVE from CCR/SR; privileged forms raise an exception
-    if destination == 'ccr':
+    if source in ("ccr", "sr", "usp") or destination in ("sr", "usp"):
+        return READS_ALL  # MOVE from CCR/SR; privileged forms raise an exception
+    if destination == "ccr":
         return FlagEffects(0, CCR_ALL)
-    if destination == 'a':
+    if destination == "a":
         return NO_FLAGS
     return LOGIC
 
@@ -149,35 +213,34 @@ def _logic_effects(mnem: str, ops) -> FlagEffects:
     if len(ops) < 2:
         return OPAQUE
     destination = ops[1]
-    if destination.type == m68k.M68K_OP_REG and destination.reg in (m68k.M68K_REG_CCR,
-                                                                      m68k.M68K_REG_SR):
+    if destination.type == m68k.M68K_OP_REG and destination.reg in (m68k.M68K_REG_CCR, m68k.M68K_REG_SR):
         if destination.reg == m68k.M68K_REG_SR:
-            return READS_ALL    # privileged; also rewrites mode/mask bits
+            return READS_ALL  # privileged; also rewrites mode/mask bits
         imm = ops[0].imm & CCR_ALL
-        if 'eor' in mnem:
-            return FlagEffects(imm, 0)                 # toggles: depends on old value
-        if 'and' in mnem:
-            return FlagEffects(imm, ~imm & CCR_ALL)    # kept where imm=1, cleared where 0
-        return FlagEffects(~imm & CCR_ALL, imm)        # ORI: set where imm=1, kept where 0
+        if "eor" in mnem:
+            return FlagEffects(imm, 0)  # toggles: depends on old value
+        if "and" in mnem:
+            return FlagEffects(imm, ~imm & CCR_ALL)  # kept where imm=1, cleared where 0
+        return FlagEffects(~imm & CCR_ALL, imm)  # ORI: set where imm=1, kept where 0
     return LOGIC
 
 
 def _bcd_effects(opcode: int) -> FlagEffects:
     # Capstone labels memory UNPK as SBCD; the primary word is unambiguous.
-    form = opcode & 0xf1f0
-    if form in (0xc100, 0x8100):
+    form = opcode & 0xF1F0
+    if form in (0xC100, 0x8100):
         return EXTENDED
     if form in (0x8140, 0x8180):
-        return NO_FLAGS          # PACK/UNPK leave the CCR alone
+        return NO_FLAGS  # PACK/UNPK leave the CCR alone
     return OPAQUE
 
 
 def flag_effects(insn: CsInsn) -> FlagEffects:
     """CCR flags ``insn`` reads and unconditionally writes (see module doc)."""
     opcode = int.from_bytes(insn.bytes[:2], "big")
-    if opcode >> 12 in (10, 15) or opcode == 0x4afc or opcode & 0xfff8 == 0x4848:
-        return READS_ALL        # line A/F, ILLEGAL, BKPT: exception stacks SR
-    if getattr(insn, 'id', 0) == 0:
+    if opcode >> 12 in (10, 15) or opcode == 0x4AFC or opcode & 0xFFF8 == 0x4848:
+        return READS_ALL  # line A/F, ILLEGAL, BKPT: exception stacks SR
+    if getattr(insn, "id", 0) == 0:
         return OPAQUE
     try:
         ops = insn.operands
@@ -187,21 +250,21 @@ def flag_effects(insn: CsInsn) -> FlagEffects:
 
     if mnem in _NO_FLAGS:
         return NO_FLAGS
-    if mnem in _READS_ALL or mnem == 'trapv' or (mnem.startswith('trap') and mnem[4:] in COND_MAP):
+    if mnem in _READS_ALL or mnem == "trapv" or (mnem.startswith("trap") and mnem[4:] in COND_MAP):
         return READS_ALL
     if mnem in _LOGIC:
         return LOGIC
-    if mnem == 'move':
+    if mnem == "move":
         return _move_effects(ops)
     if mnem in _ARITH_DST_AN:
         if len(ops) < 2:
             return OPAQUE
-        return NO_FLAGS if _is_areg(ops[1]) else ARITH     # ADDQ/SUBQ to An: no flags
-    if mnem == 'neg':
+        return NO_FLAGS if _is_areg(ops[1]) else ARITH  # ADDQ/SUBQ to An: no flags
+    if mnem == "neg":
         return ARITH
-    if mnem in ('negx', 'addx', 'subx', 'nbcd'):
+    if mnem in ("negx", "addx", "subx", "nbcd"):
         return EXTENDED
-    if mnem in ('abcd', 'sbcd', 'pack', 'unpk'):
+    if mnem in ("abcd", "sbcd", "pack", "unpk"):
         return _bcd_effects(opcode)
     if mnem in _LOGIC_IMM:
         return _logic_effects(mnem, ops)
@@ -211,13 +274,13 @@ def flag_effects(insn: CsInsn) -> FlagEffects:
         return _shift_effects(mnem, ops) if ops else OPAQUE
     # Branches, DBcc, Scc: exactly the flags the condition tests. DBcc/Scc use
     # their own COND_MAP names (st/sf and dbra name conditions T/F).
-    if mnem.startswith('b') and mnem[1:] in COND_MAP:
+    if mnem.startswith("b") and mnem[1:] in COND_MAP:
         return FlagEffects(_COND_FLAGS[COND_MAP[mnem[1:]]], 0)
-    if mnem.startswith('db') and mnem[2:] in COND_MAP:
+    if mnem.startswith("db") and mnem[2:] in COND_MAP:
         return FlagEffects(_COND_FLAGS[COND_MAP[mnem[2:]]], 0)
-    if mnem in ('st', 'sf'):
+    if mnem in ("st", "sf"):
         return NO_FLAGS
-    if mnem.startswith('s') and mnem[1:] in COND_MAP:
+    if mnem.startswith("s") and mnem[1:] in COND_MAP:
         return FlagEffects(_COND_FLAGS[COND_MAP[mnem[1:]]], 0)
     return OPAQUE
 
@@ -271,8 +334,9 @@ class Liveness:
         return frozenset(writers), open_path
 
 
-def analyse(instructions: Mapping[int, CsInsn], nodes: Iterable[int] | None = None,
-            pinned: Iterable[int] = ()) -> Liveness:
+def analyse(
+    instructions: Mapping[int, CsInsn], nodes: Iterable[int] | None = None, pinned: Iterable[int] = ()
+) -> Liveness:
     """Solve flag liveness for ``nodes`` (default: every decoded instruction).
 
     Successors outside ``nodes`` are not executed natively, so the instruction

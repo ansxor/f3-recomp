@@ -19,9 +19,10 @@ public:
     void save_sound_state(StateWriter &writer) const;
     void load_sound_state(StateReader &reader);
     void sync_main_from_cpu();
+
 private:
-    Machine &machine;
-    std::vector<uint64_t> main_context, sound_context;
-    bool sound_needs_reset = true;
+    Machine &m_machine;
+    std::vector<uint64_t> m_main_context, m_sound_context;
+    bool m_sound_needs_reset = true;
 };
-}
+} // namespace f3rt

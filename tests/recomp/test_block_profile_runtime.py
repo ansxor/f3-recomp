@@ -1,10 +1,11 @@
 """Actual profile persistence survives a frontend changing the process cwd."""
-from pathlib import Path
+
 import os
 import subprocess
 import tempfile
 import unittest
 import zlib
+from pathlib import Path
 
 from recomp.block_profile import read_profile
 
@@ -16,7 +17,7 @@ class RuntimeProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             driver = root / "driver.cpp"
-            driver.write_text(r'''
+            driver.write_text(r"""
 #include "debug/profile.hpp"
 #include "f3rt/block_profile.h"
 #include <cassert>
@@ -46,23 +47,56 @@ int main(int argc, char **argv) {
     assert(!std::filesystem::exists(root / "moved/profiles/run.profile"));
     return 0;
 }
-''')
+""")
             binary = root / "profile-regression"
-            subprocess.run(["uv", "run", "--project", str(ROOT), "--locked", "python",
-                            str(ROOT / "recomp/compile/roms.py"), "--configs",
-                            *map(str, sorted((ROOT / "games").glob("*/config.toml"))),
-                            "--output", str(root / "rom_manifest.hpp")], check=True, cwd=ROOT)
-            subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-deprecated",
-                            "-DF3_PROFILE_INSTRUMENT=1", "-I", str(ROOT / "include"), "-I", str(ROOT / "runtime"),
-                            "-I", str(root),
-                            str(driver), str(ROOT / "runtime/debug/profile.cpp"), str(ROOT / "runtime/rom.cpp"),
-                            str(ROOT / "runtime/third_party/sha1dc/sha1.c"), str(ROOT / "runtime/third_party/sha1dc/ubc_check.c"),
-                            "-lz",
-                            "-o", str(binary)], check=True)
+            subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "--project",
+                    str(ROOT),
+                    "--locked",
+                    "python",
+                    str(ROOT / "recomp/compile/roms.py"),
+                    "--configs",
+                    *map(str, sorted((ROOT / "games").glob("*/config.toml"))),
+                    "--output",
+                    str(root / "rom_manifest.hpp"),
+                ],
+                check=True,
+                cwd=ROOT,
+            )
+            subprocess.run(
+                [
+                    os.environ.get("CXX", "c++"),
+                    "-std=c++20",
+                    "-O2",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wno-deprecated",
+                    "-DF3_PROFILE_INSTRUMENT=1",
+                    "-I",
+                    str(ROOT / "include"),
+                    "-I",
+                    str(ROOT / "runtime"),
+                    "-I",
+                    str(root),
+                    str(driver),
+                    str(ROOT / "runtime/debug/profile.cpp"),
+                    str(ROOT / "runtime/rom.cpp"),
+                    str(ROOT / "runtime/third_party/sha1dc/sha1.c"),
+                    str(ROOT / "runtime/third_party/sha1dc/ubc_check.c"),
+                    "-lz",
+                    "-o",
+                    str(binary),
+                ],
+                check=True,
+            )
             subprocess.run([str(binary), str(root)], check=True)
             profile = read_profile(root / "profiles/run.profile")
             crc = zlib.crc32(bytes.fromhex("4e71"))
-            self.assertEqual(profile.hits, {("main", crc, 0): 9, ("sound", crc, 0xc00000): 4})
+            self.assertEqual(profile.hits, {("main", crc, 0): 9, ("sound", crc, 0xC00000): 4})
 
 
 if __name__ == "__main__":

@@ -40,34 +40,36 @@ public:
     // Continuous loop until stop_requested is true
     void run(std::atomic<bool> &stop_requested);
 
-    bool is_running() const { return running_; }
-    uint16_t bound_port() const { return transport_.bound_port(); }
-    uint16_t http_port() const { return token_server_ ? static_cast<uint16_t>(token_server_->bound_port()) : 0; }
-    const std::array<uint8_t, 32> &private_key() const { return private_key_; }
-    RelayStateMachine &state_machine() { return state_machine_; }
+    bool is_running() const { return m_running; }
+    uint16_t bound_port() const { return m_transport.bound_port(); }
+    uint16_t http_port() const {
+        return m_token_server ? static_cast<uint16_t>(m_token_server->bound_port()) : 0;
+    }
+    const std::array<uint8_t, 32> &private_key() const { return m_private_key; }
+    RelayStateMachine &state_machine() { return m_state_machine; }
 
 private:
     void execute_actions(const std::vector<Action> &actions, double now);
     void process_received_messages(double now);
 
-    RelayConfig config_;
-    std::array<uint8_t, 32> private_key_{};
-    bool running_ = false;
+    RelayConfig m_config;
+    std::array<uint8_t, 32> m_private_key{};
+    bool m_running = false;
 
-    SocketTransport transport_;
-    RelayAdapter adapter_;
-    NetplayConfig netplay_config_;
-    std::unique_ptr<yojimbo::Server> yojimbo_server_;
-    std::unique_ptr<TokenServer> token_server_;
-    RelayStateMachine state_machine_;
-    LogWriter log_writer_;
+    SocketTransport m_transport;
+    RelayAdapter m_adapter;
+    NetplayConfig m_netplay_config;
+    std::unique_ptr<yojimbo::Server> m_yojimbo_server;
+    std::unique_ptr<TokenServer> m_token_server;
+    RelayStateMachine m_state_machine;
+    LogWriter m_log_writer;
 
-    std::array<bool, MAX_CLIENTS> client_connected_prev_{};
+    std::array<bool, MAX_CLIENTS> m_client_connected_prev{};
     struct DelayedDisconnect {
         ClientSlotId slot = -1;
         double deadline = 0.0;
     };
-    std::vector<DelayedDisconnect> pending_disconnects_;
+    std::vector<DelayedDisconnect> m_pending_disconnects;
 };
 
 } // namespace f3rt::netplay

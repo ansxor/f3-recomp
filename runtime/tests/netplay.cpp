@@ -64,7 +64,7 @@ TEST(NetplayContract, ValidationHelpers) {
 
     // Room code validation: exactly 6 characters from alphabet ABCDEFGHJKLMNPQRSTUVWXYZ23456789
     EXPECT_FALSE(validate_room_code(""));
-    EXPECT_FALSE(validate_room_code("ABCDE"));  // 5 chars
+    EXPECT_FALSE(validate_room_code("ABCDE"));   // 5 chars
     EXPECT_FALSE(validate_room_code("ABCDEFG")); // 7 chars
     EXPECT_TRUE(validate_room_code("ABCDEF"));
     EXPECT_TRUE(validate_room_code("XYZ234"));
@@ -121,14 +121,16 @@ TEST(NetplayContract, MessageSerializationRoundTripAndBounds) {
         invalid_zero.count = 0;
         uint8_t buf[256]{};
         yojimbo::WriteStream write_stream(buf, sizeof(buf));
-        EXPECT_FALSE(invalid_zero.Serialize(write_stream)); // count 0 rejected by serialize_int(1, 32)
+        EXPECT_FALSE(
+            invalid_zero.Serialize(write_stream)); // count 0 rejected by serialize_int(1, 32)
     }
     {
         InputsMessage invalid_33;
         invalid_33.count = 33;
         uint8_t buf[256]{};
         yojimbo::WriteStream write_stream(buf, sizeof(buf));
-        EXPECT_FALSE(invalid_33.Serialize(write_stream)); // count 33 rejected by serialize_int(1, 32)
+        EXPECT_FALSE(
+            invalid_33.Serialize(write_stream)); // count 33 rejected by serialize_int(1, 32)
     }
 
     // CreateRoomMessage: input_delay bounds (1..8)
@@ -275,8 +277,9 @@ TEST(NetplayRecorder, InputsTxtRoundTrip) {
     facts.player_index = 1;
     facts.input_delay = 2;
     facts.seed = 0xfedcba9876543210ULL;
-    std::vector<AppliedInputs> frames;
-    for (uint32_t i = 0; i < 300; ++i) frames.push_back({f3rt::LocalInputWord(i * 7), f3rt::LocalInputWord(0xffff - i)});
+    std::vector<AppliedInputs> frames(300);
+    for (uint32_t i = 0; i < 300; ++i)
+        frames[i] = {f3rt::LocalInputWord(i * 7), f3rt::LocalInputWord(0xffff - i)};
 
     InputsFile parsed;
     std::string error;
@@ -286,9 +289,12 @@ TEST(NetplayRecorder, InputsTxtRoundTrip) {
     EXPECT_EQ(header_value(parsed, "frames_between_sync_and_start"), "5");
     EXPECT_EQ(header_value(parsed, "lobby_hold_frames"), "600");
 
-    EXPECT_FALSE(parse_inputs_txt("0 0000 0000\n2 0000 0000\n", parsed, error)); // frame gap rejected
+    EXPECT_FALSE(
+        parse_inputs_txt("0 0000 0000\n2 0000 0000\n", parsed, error)); // frame gap rejected
     const BundleInfo flat = parse_info_json("{\"a\": 1, \"frame\": 1740}");
-    ASSERT_TRUE(flat.frame.has_value());
+    if (!flat.frame.has_value()) {
+        FAIL() << "frame missing from parsed info.json";
+    }
     EXPECT_EQ(*flat.frame, 1740u);
 }
 
@@ -309,7 +315,9 @@ TEST(NetplayRecorder, InfoJsonReadsBundleFields) {
   "reports": [{"frame": 60, "crc": 1, "phase": 0, "hashed_len": 496}]
 })";
     const BundleInfo info = parse_info_json(json);
-    ASSERT_TRUE(info.seed.has_value());
+    if (!info.seed.has_value()) {
+        FAIL() << "seed missing from parsed info.json";
+    }
     EXPECT_EQ(*info.seed, 12345678901234ull);
     EXPECT_EQ(info.frame.value_or(0), 1740u);
     EXPECT_EQ(info.crc_interval.value_or(0), 60u);
@@ -318,10 +326,13 @@ TEST(NetplayRecorder, InfoJsonReadsBundleFields) {
     EXPECT_EQ(info.player_index.value_or(0), 1u);
     EXPECT_EQ(info.machine_gpu.value_or(0), 1u);
     EXPECT_EQ(info.hash_layout.value_or(0), 2u);
-    ASSERT_TRUE(info.audio_backend.has_value());
+    if (!info.audio_backend.has_value()) {
+        FAIL() << "audio_backend missing from parsed info.json";
+    }
     EXPECT_EQ(*info.audio_backend, "Enhanced \"x\"");
 
-    EXPECT_FALSE(parse_info_json("{\"seed\": \"12\"}").seed.has_value()); // wrong JSON type stays absent
+    EXPECT_FALSE(
+        parse_info_json("{\"seed\": \"12\"}").seed.has_value()); // wrong JSON type stays absent
     EXPECT_FALSE(parse_info_json("{}").seed.has_value());
     EXPECT_THROW(parse_info_json("[1]"), std::runtime_error);
 }

@@ -9,4 +9,4 @@ struct GameBoot {
     uint32_t frame_limit;
 };
 const GameBoot *game_boot(); // nullptr when the game provides none
-}
+} // namespace f3rt

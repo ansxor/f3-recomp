@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Write sprite_units.h/.hpp for one game config (no ROM needed)."""
-from pathlib import Path
+
 import argparse
 import sys
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from recomp.sprite_units import parse_sprite_units, render_c_header, render_cpp_header
+# sys.path is patched above so this script can run directly; import must follow it.
+from recomp.sprite_units import parse_sprite_units, render_c_header, render_cpp_header  # noqa: E402
 
 
 def write_if_changed(path: Path, text: str) -> None:

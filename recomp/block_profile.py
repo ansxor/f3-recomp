@@ -1,9 +1,10 @@
 """Versioned address-only execution profiles shared by both native compilers."""
+
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-import zlib
 
 VERSION = 1
 MAX_COUNT = (1 << 64) - 1
@@ -53,8 +54,10 @@ def read_profile(path: Path) -> BlockProfile:
             kind, region, crc_text, address_text, value_text = fields
             if region not in ("main", "sound") or kind not in ("rom", "hit", "miss"):
                 raise ValueError("unknown record")
-            if any(len(value) != 8 or any(c not in "0123456789abcdefABCDEF" for c in value)
-                   for value in (crc_text, address_text)):
+            if any(
+                len(value) != 8 or any(c not in "0123456789abcdefABCDEF" for c in value)
+                for value in (crc_text, address_text)
+            ):
                 raise ValueError("expected eight hex digits")
             crc, address = int(crc_text, 16), int(address_text, 16)
             if kind == "rom":
@@ -88,10 +91,9 @@ def read_profile(path: Path) -> BlockProfile:
     return profile
 
 
-def load_hot(path: Path, region: str, rom: bytes, base: int = 0, *,
-             exclusions=()) -> set[int]:
+def load_hot(path: Path, region: str, rom: bytes, base: int = 0, *, exclusions=()) -> set[int]:
     profile = read_profile(path)
-    crc = zlib.crc32(rom) & 0xffffffff
+    crc = zlib.crc32(rom) & 0xFFFFFFFF
     if profile.roms.get((region, crc)) != (base, len(rom)):
         raise ValueError(f"profile lacks matching {region} ROM CRC {crc:08x}, base {base:08x}, size {len(rom):08x}")
     for kind, rows in (("hit", profile.hits), ("miss", profile.misses)):
@@ -102,6 +104,10 @@ def load_hot(path: Path, region: str, rom: bytes, base: int = 0, *,
                 if excluded.start <= address < excluded.end:
                     raise ValueError(
                         f"profile {kind} targets excluded {cpu} PC {address:#x} in "
-                        f"[{excluded.start:#x}, {excluded.end:#x}): {excluded.reason}")
-    return {address for (cpu, identity, address), count in profile.hits.items()
-            if cpu == region and identity == crc and count}
+                        f"[{excluded.start:#x}, {excluded.end:#x}): {excluded.reason}"
+                    )
+    return {
+        address
+        for (cpu, identity, address), count in profile.hits.items()
+        if cpu == region and identity == crc and count
+    }

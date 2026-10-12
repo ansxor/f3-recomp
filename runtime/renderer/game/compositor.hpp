@@ -17,7 +17,7 @@ struct FrameScene {
     std::span<const SceneRow, 256> rows;
     std::span<const uint8_t> tile_pixels; // playfield asset ROM
     std::span<const uint32_t> colors;     // 8192 xRGB
-    uint32_t layer_mask = all_layers;     // layers outside the mask are treated as disabled
+    uint32_t layer_mask = ALL_LAYERS;     // layers outside the mask are treated as disabled
     bool flipped = false;
     // Expanded presentation: playfield rows go through presented_playfield() (full-resolution
     // alternate maps). Ignored by the fixed native frame, which is always canonical.

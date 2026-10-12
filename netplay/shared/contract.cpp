@@ -8,20 +8,20 @@ NetplayConfig::NetplayConfig() {
     protocolId = PROTOCOL_ID;
     timeout = CONNECT_TOKEN_TIMEOUT_SECONDS;
     maxConnectTokenLifetime = MAX_CONNECT_TOKEN_LIFETIME;
-    numChannels = NUM_NETPLAY_CHANNELS;
+    numChannels = NumNetplayChannels;
 
     // Channel 0: Reliable ordered for control messages, chat, and sync blob data block
-    channel[CHANNEL_CONTROL].type = yojimbo::CHANNEL_TYPE_RELIABLE_ORDERED;
-    channel[CHANNEL_CONTROL].disableBlocks = false;
-    channel[CHANNEL_CONTROL].maxBlockSize = static_cast<int>(MAX_SYNC_BLOB_SIZE);
-    channel[CHANNEL_CONTROL].blockFragmentSize = 1024;
-    channel[CHANNEL_CONTROL].messageResendTime = 0.05f;       // 50 ms
-    channel[CHANNEL_CONTROL].blockFragmentResendTime = 0.1f;   // 100 ms
+    channel[ChannelControl].type = yojimbo::CHANNEL_TYPE_RELIABLE_ORDERED;
+    channel[ChannelControl].disableBlocks = false;
+    channel[ChannelControl].maxBlockSize = static_cast<int>(MAX_SYNC_BLOB_SIZE);
+    channel[ChannelControl].blockFragmentSize = 1024;
+    channel[ChannelControl].messageResendTime = 0.05f;      // 50 ms
+    channel[ChannelControl].blockFragmentResendTime = 0.1f; // 100 ms
 
     // Channel 1: Unreliable unordered for 60 Hz frame inputs
-    channel[CHANNEL_INPUTS].type = yojimbo::CHANNEL_TYPE_UNRELIABLE_UNORDERED;
-    channel[CHANNEL_INPUTS].disableBlocks = true;
-    channel[CHANNEL_INPUTS].maxMessagesPerPacket = static_cast<int>(MAX_INPUTS_COUNT);
+    channel[ChannelInputs].type = yojimbo::CHANNEL_TYPE_UNRELIABLE_UNORDERED;
+    channel[ChannelInputs].disableBlocks = true;
+    channel[ChannelInputs].maxMessagesPerPacket = static_cast<int>(MAX_INPUTS_COUNT);
 }
 
 bool validate_chat_text(std::string_view text) {
@@ -56,16 +56,13 @@ bool validate_player_name(std::string_view name) {
     return true;
 }
 
-bool init_netplay() {
-    return ::InitializeYojimbo();
-}
+bool init_netplay() { return ::InitializeYojimbo(); }
 
-void shutdown_netplay() {
-    ::ShutdownYojimbo();
-}
+void shutdown_netplay() { ::ShutdownYojimbo(); }
 
-std::vector<uint8_t> encode_token_response(uint64_t client_id,
-                                           std::span<const uint8_t, yojimbo::ConnectTokenBytes> token) {
+std::vector<uint8_t>
+encode_token_response(uint64_t client_id,
+                      std::span<const uint8_t, yojimbo::ConnectTokenBytes> token) {
     std::vector<uint8_t> out(TOKEN_RESPONSE_SIZE);
     for (int i = 0; i < 8; ++i) {
         out[i] = static_cast<uint8_t>((client_id >> (i * 8)) & 0xFF);
@@ -74,8 +71,7 @@ std::vector<uint8_t> encode_token_response(uint64_t client_id,
     return out;
 }
 
-bool parse_token_response(std::span<const uint8_t> body,
-                          uint64_t &client_id,
+bool parse_token_response(std::span<const uint8_t> body, uint64_t &client_id,
                           std::array<uint8_t, yojimbo::ConnectTokenBytes> &token) {
     if (body.size() != TOKEN_RESPONSE_SIZE) {
         return false;

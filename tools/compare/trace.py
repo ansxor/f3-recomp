@@ -1,12 +1,13 @@
 """Compare complete sound bus traces, including timing, reads and driver metadata."""
+
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from collections import Counter, deque
 from itertools import zip_longest
-import json
 from pathlib import Path
-import sys
 
 from tools.decode.trace import CommandRing, records
 
@@ -16,7 +17,7 @@ FIELDS = ("tick", "sample", "pc", "address", "value", "kind", "width")
 def describe(row):
     if row is None:
         return None
-    result = dict(zip(FIELDS, row))
+    result = dict(zip(FIELDS, row, strict=True))
     for field in ("pc", "address", "value"):
         result[field] = f"0x{result[field]:x}"
     return result
@@ -29,8 +30,13 @@ def compare_traces(oracle_path: Path, model_path: Path) -> dict:
     total = 0
     for expected, actual in zip_longest(records(oracle_path), records(model_path)):
         if expected != actual:
-            return dict(equal=False, records_compared=total, oracle=describe(expected),
-                        model=describe(actual), recent_commands=list(recent))
+            return dict(
+                equal=False,
+                records_compared=total,
+                oracle=describe(expected),
+                model=describe(actual),
+                recent_commands=list(recent),
+            )
         tick, _, _, address, value, kind, _ = expected
         counts[kind] += 1
         if kind == 1:
@@ -43,12 +49,13 @@ def compare_traces(oracle_path: Path, model_path: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="f3 compare trace",
-        description="Compare complete sound bus traces, including timing, reads and driver metadata."
+        description="Compare complete sound bus traces, including timing, reads and driver metadata.",
     )
     parser.add_argument("oracle", type=Path, help="Oracle sound trace (.sound-trace)")
     parser.add_argument("model", type=Path, help="Model sound trace (.sound-trace)")
-    parser.add_argument("--json", nargs="?", const=True, default=False,
-                        help="Output results in JSON format (optional path to save)")
+    parser.add_argument(
+        "--json", nargs="?", const=True, default=False, help="Output results in JSON format (optional path to save)"
+    )
     args = parser.parse_args(argv)
     try:
         result = compare_traces(args.oracle, args.model)

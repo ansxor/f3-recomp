@@ -5,12 +5,13 @@ or RELOAD slice only after integrity validation. Ordered overlapping lanes are
 intentional. Unwritten region bytes retain fill (default zero, or explicit 255);
 mirror_size repeats the entire physical region, including its sparse contents.
 """
+
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
-from pathlib import Path
 import zlib
+from collections import Counter
+from pathlib import Path
 
 REGIONS = ("rom", "sprites", "sprites_hi", "tiles", "tiles_hi", "sound", "samples", "eeprom")
 
@@ -33,13 +34,20 @@ def region_spec(config: dict, name: str) -> tuple[int, int, list[dict]]:
         lane.setdefault("source_offset", 0)
         lane.setdefault("length", lane["size"] - lane["source_offset"])
         physical_size, source_offset, length, offset, stride, group = (
-            lane[key] for key in ("size", "source_offset", "length", "offset", "stride", "group"))
-        if not all(isinstance(value, int) for value in
-                   (physical_size, source_offset, length, offset, stride, group)):
+            lane[key] for key in ("size", "source_offset", "length", "offset", "stride", "group")
+        )
+        if not all(isinstance(value, int) for value in (physical_size, source_offset, length, offset, stride, group)):
             raise ValueError(f"Invalid {name} lane geometry")
-        if (physical_size <= 0 or source_offset < 0 or length <= 0 or
-                source_offset + length > physical_size or group <= 0 or
-                stride < group or offset < 0 or length % group):
+        if (
+            physical_size <= 0
+            or source_offset < 0
+            or length <= 0
+            or source_offset + length > physical_size
+            or group <= 0
+            or stride < group
+            or offset < 0
+            or length % group
+        ):
             raise ValueError(f"Invalid {name} lane geometry: {lane['file']}")
         if offset + (length // group - 1) * stride + group > size:
             raise ValueError(f"{name} lane exceeds region: {lane['file']}")
@@ -55,8 +63,7 @@ def region_spec(config: dict, name: str) -> tuple[int, int, list[dict]]:
                 if len(lane[key]) != digits:
                     raise ValueError(f"Invalid {key}: {lane['file']}")
                 int(lane[key], 16)
-        identity = tuple(lane.get(key) for key in
-                         ("size", "crc", "sha1", "short_size", "short_crc", "short_sha1"))
+        identity = tuple(lane.get(key) for key in ("size", "crc", "sha1", "short_size", "short_crc", "short_sha1"))
         previous = identities.setdefault(lane["file"], identity)
         if previous != identity:
             raise ValueError(f"Inconsistent physical chip identity: {lane['file']}")
@@ -69,7 +76,7 @@ def region_spec(config: dict, name: str) -> tuple[int, int, list[dict]]:
 def _validate(data: bytes, lane: dict, prefix: str = "") -> None:
     if len(data) != lane[prefix + "size"]:
         raise ValueError(f"ROM chip {lane['file']!r} size mismatch")
-    if zlib.crc32(data) & 0xffffffff != int(lane[prefix + "crc"], 16):
+    if zlib.crc32(data) & 0xFFFFFFFF != int(lane[prefix + "crc"], 16):
         raise ValueError(f"ROM chip {lane['file']!r} CRC32 mismatch")
     if hashlib.sha1(data).hexdigest() != lane[prefix + "sha1"].lower():
         raise ValueError(f"ROM chip {lane['file']!r} SHA1 mismatch")
@@ -95,7 +102,7 @@ def load_region(config: dict, name: str, rom_dir: Path) -> bytes:
         view = memoryview(data)
         for byte in range(group):
             end = offset + byte + (length // group - 1) * stride + 1
-            image[offset + byte:end:stride] = view[start + byte:start + length:group]
+            image[offset + byte : end : stride] = view[start + byte : start + length : group]
         remaining[lane["file"]] -= 1
         if not remaining[lane["file"]]:
             del chips[lane["file"]]

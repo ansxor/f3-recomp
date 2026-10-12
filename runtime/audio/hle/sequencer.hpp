@@ -16,8 +16,9 @@ public:
     void reset(uint64_t tick);
     uint64_t next_tick() const;
     static bool validate(std::span<const uint8_t> sound_rom) noexcept;
+
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Impl> m_impl;
 };
 } // namespace f3rt::hle

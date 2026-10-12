@@ -1,5 +1,6 @@
 """Self-contained HTML call graph: routines as nodes, every edge kind from the static model,
 uncertain control flow routed through the ?dispatch node. No network or external libraries."""
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,9 @@ def routine_listing(g: Game, entry: int) -> str:
         if previous_end is not None and pc != previous_end:
             lines.append("          …")
         notes = annotate(g, pc, insn, states.get(pc))
-        lines.append(f"{h(pc)} {g.evidence(pc):>8}  {insn_text(insn):<36}" + ("  ; " + "; ".join(notes) if notes else ""))
+        lines.append(
+            f"{h(pc)} {g.evidence(pc):>8}  {insn_text(insn):<36}" + ("  ; " + "; ".join(notes) if notes else "")
+        )
         previous_end = pc + insn.size
     return "\n".join(lines)
 
@@ -30,9 +33,13 @@ def build_model(g: Game, with_disassembly: bool) -> dict:
         stores, _ = memory_summary(g, entry)
         hits = max((g.hits.get(g.block_of.get(pc, pc), 0) for pc in routine.pcs), default=0)
         node = {
-            "id": h(entry), "name": routine.name, "kinds": kinds_text(routine.kinds),
+            "id": h(entry),
+            "name": routine.name,
+            "kinds": kinds_text(routine.kinds),
             "root": any(k.startswith("vector") or k in ("entry", "seed") for k in routine.kinds),
-            "uncertain": g.dispatch_hint.get(entry, ""), "n": len(routine.pcs), "hits": hits,
+            "uncertain": g.dispatch_hint.get(entry, ""),
+            "n": len(routine.pcs),
+            "hits": hits,
             "writes": {region: count for region, count in stores.items()},
             "video": sorted(r for r in stores if r in VIDEO_REGIONS),
         }
@@ -40,16 +47,40 @@ def build_model(g: Game, with_disassembly: bool) -> dict:
             node["dis"] = routine_listing(g, entry)
         nodes.append(node)
     unresolved = [e for e in g.edges if e.dst == DISPATCH]
-    nodes.append({"id": "?dispatch", "name": "?dispatch", "kinds": "pseudo", "root": True,
-                  "uncertain": "runtime f3_dispatch: unresolved computed jmp/jsr sites lead here; "
-                               "profile-hit entries with no static predecessor leave from here",
-                  "n": 0, "hits": 0, "writes": {}, "video": [],
-                  "dis": "\n".join(f"{h(e.site)}  in {g.label(e.src):<14} {insn_text(g.code[e.site])}"
-                                   for e in sorted(unresolved, key=lambda e: e.site))})
-    edges = [[("?dispatch" if e.src == DISPATCH else h(e.src)), ("?dispatch" if e.dst == DISPATCH else h(e.dst)),
-              e.kind, h(e.site) if e.site >= 0 else ""] for e in g.edges]
-    return {"game": g.id, "a5": h(g.a5) if g.a5 is not None else None,
-            "profile": g.profile_path.name if g.hits else None, "nodes": nodes, "edges": edges}
+    nodes.append(
+        {
+            "id": "?dispatch",
+            "name": "?dispatch",
+            "kinds": "pseudo",
+            "root": True,
+            "uncertain": "runtime f3_dispatch: unresolved computed jmp/jsr sites lead here; "
+            "profile-hit entries with no static predecessor leave from here",
+            "n": 0,
+            "hits": 0,
+            "writes": {},
+            "video": [],
+            "dis": "\n".join(
+                f"{h(e.site)}  in {g.label(e.src):<14} {insn_text(g.code[e.site])}"
+                for e in sorted(unresolved, key=lambda e: e.site)
+            ),
+        }
+    )
+    edges = [
+        [
+            ("?dispatch" if e.src == DISPATCH else h(e.src)),
+            ("?dispatch" if e.dst == DISPATCH else h(e.dst)),
+            e.kind,
+            h(e.site) if e.site >= 0 else "",
+        ]
+        for e in g.edges
+    ]
+    return {
+        "game": g.id,
+        "a5": h(g.a5) if g.a5 is not None else None,
+        "profile": g.profile_path.name if g.hits else None,
+        "nodes": nodes,
+        "edges": edges,
+    }
 
 
 def write_graph(g: Game, path: Path, with_disassembly: bool = True) -> None:

@@ -6,9 +6,7 @@
 
 namespace f3rt::reference {
 
-Engine::Engine() {
-    std::memset(m_bank_table, 0, sizeof(m_bank_table));
-}
+Engine::Engine() { std::memset(m_bank_table, 0, sizeof(m_bank_table)); }
 
 void Engine::reset() {
     m_es5510.reset();
@@ -87,7 +85,8 @@ void Engine::write8(uint32_t address, uint8_t value) {
             } else {
                 m_bank_table[voice] = (m_bank_table[voice] & 0x00ff) | (uint16_t(value) << 8);
             }
-            m_es5505.set_voice_bank(voice, (m_bank_table[voice] & m_bank_mask) << 20);
+            m_es5505.set_voice_bank(static_cast<int>(voice), (m_bank_table[voice] & m_bank_mask)
+                                                                 << 20);
         }
     }
 }
@@ -106,7 +105,7 @@ void Engine::write16(uint32_t address, uint16_t value) {
         uint32_t voice = (address >> 1) & 0x1f;
         if (voice < ES5505::MAX_VOICES) {
             m_bank_table[voice] = value;
-            m_es5505.set_voice_bank(voice, (value & m_bank_mask) << 20);
+            m_es5505.set_voice_bank(static_cast<int>(voice), (value & m_bank_mask) << 20);
         }
     }
 }
@@ -126,7 +125,7 @@ void Engine::generate_one_frame(const std::array<float, 2> &otis_gain,
     for (unsigned i = 0; i < ES5505::NUM_CHANNELS; ++i)
         channels[i] = std::clamp(float(cursample[i]) / 524288.0f, -1.0f, 1.0f) * otis_gain[i & 1];
     for (unsigned i = 0; i < 6; ++i)
-        m_es5510.ser_w(i, int16_t(int32_t(channels[i + 2] * 32768.0f)));
+        m_es5510.ser_w(static_cast<int>(i), int16_t(int32_t(channels[i + 2] * 32768.0f)));
 
     if (!m_esp_halted) {
         m_es5510.run_once();

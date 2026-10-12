@@ -7,42 +7,44 @@ namespace f3rt::sound_5a7e9117 {
 constexpr uint32_t SOUND_ROM_CRC = 0x5a7e9117;
 
 // ROM addresses (68000 bus, 0xc00000 .. 0xc80000)
-constexpr uint32_t PROGRAM_DATA_BASE = 0xc00134;      // Program data bank 0
-constexpr uint32_t BEND_RANGE_PTR = 0xc085f2;         // Pitch bend range startup parameter
-constexpr uint32_t RATE_TABLE = 0xc089dc;             // Envelope / fade rate multipliers
-constexpr uint32_t PHASE_RATE_TABLE = 0xc08aa4;       // LFO phase rate table
-constexpr uint32_t PAN_TABLE = 0xc08b6c;              // Stereo pan table (128 entries)
-constexpr uint32_t ATTENUATION_TABLE = 0xc08bec;      // Attenuation curve (128 entries)
-constexpr uint32_t VELOCITY_CURVE_TABLE = 0xc08c6c;   // Velocity response curves (512 entries)
-constexpr uint32_t FILTER_TABLE = 0xc08e6c;           // Filter coefficient table
-constexpr uint32_t PITCH_TABLE = 0xc09e6c;            // Pitch frequency table
-constexpr uint32_t PITCH_MOD_TABLE = 0xc0a46c;        // Pitch modulation multipliers
-constexpr uint32_t SPLIT_MODE_TABLE = 0xc0a734;       // Sample split mode control table
-constexpr uint32_t LFO_WAVE_TABLE = 0xc0a73c;         // LFO waveform table
+constexpr uint32_t PROGRAM_DATA_BASE = 0xc00134;         // Program data bank 0
+constexpr uint32_t BEND_RANGE_PTR = 0xc085f2;            // Pitch bend range startup parameter
+constexpr uint32_t RATE_TABLE = 0xc089dc;                // Envelope / fade rate multipliers
+constexpr uint32_t PHASE_RATE_TABLE = 0xc08aa4;          // LFO phase rate table
+constexpr uint32_t PAN_TABLE = 0xc08b6c;                 // Stereo pan table (128 entries)
+constexpr uint32_t ATTENUATION_TABLE = 0xc08bec;         // Attenuation curve (128 entries)
+constexpr uint32_t VELOCITY_CURVE_TABLE = 0xc08c6c;      // Velocity response curves (512 entries)
+constexpr uint32_t FILTER_TABLE = 0xc08e6c;              // Filter coefficient table
+constexpr uint32_t PITCH_TABLE = 0xc09e6c;               // Pitch frequency table
+constexpr uint32_t PITCH_MOD_TABLE = 0xc0a46c;           // Pitch modulation multipliers
+constexpr uint32_t SPLIT_MODE_TABLE = 0xc0a734;          // Sample split mode control table
+constexpr uint32_t LFO_WAVE_TABLE = 0xc0a73c;            // LFO waveform table
 constexpr uint32_t CONTROLLER_DEFAULTS_TABLE = 0xc13556; // Channel controller defaults
-constexpr uint32_t HEAP_BASE_PTR = 0xc15fb6;          // Sample RAM heap base pointer
-constexpr uint32_t HEAP_LIMIT_PTR_A = 0xc15fba;       // Sample RAM heap limit pointer word A
-constexpr uint32_t HEAP_LIMIT_PTR_B = 0xc15fc0;       // Sample RAM heap limit pointer word B
-constexpr uint32_t HEAP_RESERVE_PTR = 0xc15fcc;       // Sample RAM heap reserve size pointer
-constexpr uint32_t HEAP_NEXT_PTR = 0xc15fd8;          // Sample RAM heap next allocation pointer
-constexpr uint32_t NOISE_SEED_PTR = 0xc16f04;         // Random noise generator seed
-constexpr uint32_t NOISE_HISTORY_PTR = 0xc16f0a;      // Random noise generator history
-constexpr uint32_t RESET_START_PTR = 0xc17b60;        // Voice reset start pointer
-constexpr uint32_t RESET_END_PTR = 0xc17b64;          // Voice reset end pointer
-constexpr uint32_t BUDGET_TABLE = 0xc1a56e;           // Voice processing budget table
-constexpr uint32_t SPLIT_TABLE_BASE = 0xc1ae76;       // Sample split key table base
-constexpr uint32_t SPECIAL_SPLIT_TABLE = 0xc1ae84;    // Special sample split table
-constexpr uint32_t SPLIT_DIRECTORY = 0xc1c1e0;        // Sample split directory
-constexpr uint32_t SEQ_STREAM_BASE = 0xc20000;        // Sequence data streams base in ROM
+constexpr uint32_t HEAP_BASE_PTR = 0xc15fb6;             // Sample RAM heap base pointer
+constexpr uint32_t HEAP_LIMIT_PTR_A = 0xc15fba;          // Sample RAM heap limit pointer word A
+constexpr uint32_t HEAP_LIMIT_PTR_B = 0xc15fc0;          // Sample RAM heap limit pointer word B
+constexpr uint32_t HEAP_RESERVE_PTR = 0xc15fcc;          // Sample RAM heap reserve size pointer
+constexpr uint32_t HEAP_NEXT_PTR = 0xc15fd8;             // Sample RAM heap next allocation pointer
+constexpr uint32_t NOISE_SEED_PTR = 0xc16f04;            // Random noise generator seed
+constexpr uint32_t NOISE_HISTORY_PTR = 0xc16f0a;         // Random noise generator history
+constexpr uint32_t RESET_START_PTR = 0xc17b60;           // Voice reset start pointer
+constexpr uint32_t RESET_END_PTR = 0xc17b64;             // Voice reset end pointer
+constexpr uint32_t BUDGET_TABLE = 0xc1a56e;              // Voice processing budget table
+constexpr uint32_t SPLIT_TABLE_BASE = 0xc1ae76;          // Sample split key table base
+constexpr uint32_t SPECIAL_SPLIT_TABLE = 0xc1ae84;       // Special sample split table
+constexpr uint32_t SPLIT_DIRECTORY = 0xc1c1e0;           // Sample split directory
+constexpr uint32_t SEQ_STREAM_BASE = 0xc20000;           // Sequence data streams base in ROM
 
 // Sound ROM relative offsets (within 0x80000 sound image)
-constexpr uint32_t VOLUME_PAN_TABLE_OFFSET = 0xa634;  // Volume/pan attenuation table offset (0xc0a634)
-constexpr uint32_t PRESET_TABLE_OFFSET = 0x1c2d2;     // Effects preset parameter table offset (0xc1c2d2)
+constexpr uint32_t VOLUME_PAN_TABLE_OFFSET =
+    0xa634; // Volume/pan attenuation table offset (0xc0a634)
+constexpr uint32_t PRESET_TABLE_OFFSET =
+    0x1c2d2; // Effects preset parameter table offset (0xc1c2d2)
 
 // Sequencer / Voice parameter record offsets
-constexpr uint32_t VOICE_OWNER_OFFSET = 0x0a;         // Base offset for controller parameters in voice
-constexpr uint32_t PAN_CONTROLLER_OFFSET = 0x1c;      // Pan controller offset in channel record
-constexpr uint32_t HEAP_METADATA_OFFSET = 0x6e9c;     // Metadata offset for heap header
+constexpr uint32_t VOICE_OWNER_OFFSET = 0x0a;     // Base offset for controller parameters in voice
+constexpr uint32_t PAN_CONTROLLER_OFFSET = 0x1c;  // Pan controller offset in channel record
+constexpr uint32_t HEAP_METADATA_OFFSET = 0x6e9c; // Metadata offset for heap header
 
 // Sequence header offsets and sizes
 constexpr uint32_t SEQ_HEADER_SIZE = 0xa8;

@@ -13,49 +13,48 @@ Features:
 
 import argparse
 import os
-import struct
 import sys
 import zipfile
 import zlib
 
 EXPECTED_ROMS = {
     # 68020 program code
-    "e61-13.20": {"crc": 0x0af756a2, "size": 0x80000, "desc": "68020 program byte 0"},
-    "e61-12.19": {"crc": 0x636b3df9, "size": 0x80000, "desc": "68020 program byte 1"},
-    "e61-11.18": {"crc": 0x279a0ee4, "size": 0x80000, "desc": "68020 program byte 2"},
-    "e61-10.17": {"crc": 0xdaabf2b2, "size": 0x80000, "desc": "68020 program byte 3"},
+    "e61-13.20": {"crc": 0x0AF756A2, "size": 0x80000, "desc": "68020 program byte 0"},
+    "e61-12.19": {"crc": 0x636B3DF9, "size": 0x80000, "desc": "68020 program byte 1"},
+    "e61-11.18": {"crc": 0x279A0EE4, "size": 0x80000, "desc": "68020 program byte 2"},
+    "e61-10.17": {"crc": 0xDAABF2B2, "size": 0x80000, "desc": "68020 program byte 3"},
     # Sprites
-    "e61-03.12": {"crc": 0xe8abfc46, "size": 0x200000, "desc": "Sprites byte 0"},
-    "e61-02.08": {"crc": 0x1dc4a164, "size": 0x200000, "desc": "Sprites byte 1"},
-    "e61-01.04": {"crc": 0x6cdd8311, "size": 0x200000, "desc": "Sprites hi plane"},
+    "e61-03.12": {"crc": 0xE8ABFC46, "size": 0x200000, "desc": "Sprites byte 0"},
+    "e61-02.08": {"crc": 0x1DC4A164, "size": 0x200000, "desc": "Sprites byte 1"},
+    "e61-01.04": {"crc": 0x6CDD8311, "size": 0x200000, "desc": "Sprites hi plane"},
     # Tilemap
-    "e61-09.47": {"crc": 0x6ba29987, "size": 0x200000, "desc": "Tiles word 0"},
-    "e61-08.45": {"crc": 0x76c98e14, "size": 0x200000, "desc": "Tiles word 1"},
-    "e61-07.43": {"crc": 0x4a57965d, "size": 0x200000, "desc": "Tiles hi plane"},
+    "e61-09.47": {"crc": 0x6BA29987, "size": 0x200000, "desc": "Tiles word 0"},
+    "e61-08.45": {"crc": 0x76C98E14, "size": 0x200000, "desc": "Tiles word 1"},
+    "e61-07.43": {"crc": 0x4A57965D, "size": 0x200000, "desc": "Tiles hi plane"},
     # Sound 68000 CPU (MAME expects 0x40000 bytes; short dumps are 0x20000 padded with FF)
     "e61-14.32": {
-        "crc": 0x18961bbb,
+        "crc": 0x18961BBB,
         "size": 0x40000,
-        "short_crc": 0xb905f4a7,
+        "short_crc": 0xB905F4A7,
         "short_size": 0x20000,
         "desc": "Sound 68000 code byte 0",
     },
     "e61-15.33": {
-        "crc": 0x2c64557a,
+        "crc": 0x2C64557A,
         "size": 0x40000,
         "short_crc": 0x87909869,
         "short_size": 0x20000,
         "desc": "Sound 68000 code byte 1",
     },
     # Ensoniq audio samples
-    "e61-04.38": {"crc": 0xc27aec0c, "size": 0x200000, "desc": "Ensoniq samples bank 1"},
-    "e61-05.39": {"crc": 0x83920d9d, "size": 0x200000, "desc": "Ensoniq samples bank 2"},
-    "e61-06.40": {"crc": 0x2e717bfe, "size": 0x200000, "desc": "Ensoniq samples bank 3"},
+    "e61-04.38": {"crc": 0xC27AEC0C, "size": 0x200000, "desc": "Ensoniq samples bank 1"},
+    "e61-05.39": {"crc": 0x83920D9D, "size": 0x200000, "desc": "Ensoniq samples bank 2"},
+    "e61-06.40": {"crc": 0x2E717BFE, "size": 0x200000, "desc": "Ensoniq samples bank 3"},
     # Identical F3 motherboard PLDs are available in the supplied Puchi Car set.
-    "pal16l8a-d77-09.ic14": {"crc": 0xb371532b, "size": 0x104, "desc": "F3 board PLD"},
-    "pal16l8a-d77-10.ic28": {"crc": 0x42f59227, "size": 0x104, "desc": "F3 board PLD"},
-    "palce16v8q-d77-11.ic37": {"crc": 0xeacc294e, "size": 0x117, "desc": "F3 board PLD"},
-    "palce16v8q-d77-12.ic48": {"crc": 0xe9920cfe, "size": 0x117, "desc": "F3 board PLD"},
+    "pal16l8a-d77-09.ic14": {"crc": 0xB371532B, "size": 0x104, "desc": "F3 board PLD"},
+    "pal16l8a-d77-10.ic28": {"crc": 0x42F59227, "size": 0x104, "desc": "F3 board PLD"},
+    "palce16v8q-d77-11.ic37": {"crc": 0xEACC294E, "size": 0x117, "desc": "F3 board PLD"},
+    "palce16v8q-d77-12.ic48": {"crc": 0xE9920CFE, "size": 0x117, "desc": "F3 board PLD"},
 }
 
 DEFAULT_SEARCH_PATHS = [
@@ -122,8 +121,9 @@ def verify_and_prepare_roms(available_roms):
     for name, spec in EXPECTED_ROMS.items():
         data = match_rom(name, available_roms)
         if data is None:
-            data = next((v for v in available_roms.values()
-                         if len(v) == spec["size"] and zlib.crc32(v) == spec["crc"]), None)
+            data = next(
+                (v for v in available_roms.values() if len(v) == spec["size"] and zlib.crc32(v) == spec["crc"]), None
+            )
         if data is None:
             reports.append(f"  [MISSING] {name:12s} ({spec['desc']})")
             all_ok = False
@@ -143,7 +143,7 @@ def verify_and_prepare_roms(available_roms):
             if crc == spec["short_crc"]:
                 # Pad with 0x20000 bytes of 0xFF
                 pad_len = spec["size"] - spec["short_size"]
-                padded_data = data + (b"\xFF" * pad_len)
+                padded_data = data + (b"\xff" * pad_len)
                 padded_crc = zlib.crc32(padded_data) & 0xFFFFFFFF
                 if padded_crc == spec["crc"]:
                     reports.append(
@@ -152,14 +152,10 @@ def verify_and_prepare_roms(available_roms):
                     prepared[name] = padded_data
                     continue
                 else:
-                    reports.append(
-                        f"  [ERROR]   {name:12s} padded CRC {padded_crc:08x} != expected {spec['crc']:08x}"
-                    )
+                    reports.append(f"  [ERROR]   {name:12s} padded CRC {padded_crc:08x} != expected {spec['crc']:08x}")
                     all_ok = False
             else:
-                reports.append(
-                    f"  [ERROR]   {name:12s} short CRC {crc:08x} != expected {spec['short_crc']:08x}"
-                )
+                reports.append(f"  [ERROR]   {name:12s} short CRC {crc:08x} != expected {spec['short_crc']:08x}")
                 all_ok = False
         else:
             reports.append(
@@ -185,12 +181,13 @@ def stage_to_dir(prepared_roms, dir_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Verify and stage Land Maker (landmakrj) ROMs for MAME."
-    )
+    parser = argparse.ArgumentParser(description="Verify and stage Land Maker (landmakrj) ROMs for MAME.")
     parser.add_argument("--source", help="Source ROMs directory or zip file")
-    parser.add_argument("--board-source", default="roms/puchicarj",
-                        help="Directory/ZIP with CRC-identical F3 motherboard PLDs (default: roms/puchicarj)")
+    parser.add_argument(
+        "--board-source",
+        default="roms/puchicarj",
+        help="Directory/ZIP with CRC-identical F3 motherboard PLDs (default: roms/puchicarj)",
+    )
     parser.add_argument(
         "--out-zip",
         default="tools/mame/staged_roms/landmakrj.zip",

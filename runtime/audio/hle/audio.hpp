@@ -26,12 +26,13 @@ public:
     Audio::EnhancedStats stats() const;
     void set_observer(std::function<void(const VoiceEvent &)> observer);
     void set_gain_model(Audio::GainModel model);
-    static constexpr size_t state_bytes = 32;
+    static constexpr size_t STATE_BYTES = 32;
     void save(std::span<uint8_t> dst) const;
     void load(std::span<const uint8_t> src);
+
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Impl> m_impl;
 };
 bool validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept;
 } // namespace f3rt::hle

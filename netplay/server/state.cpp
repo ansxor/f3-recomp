@@ -26,8 +26,8 @@ std::string format_iso_now() {
     gmtime_r(&tt, &tm_buf);
 
     std::ostringstream ss;
-    ss << std::put_time(&tm_buf, "%Y-%m-%dT%H:%M:%S")
-       << '.' << std::setfill('0') << std::setw(9) << ms.count() << 'Z';
+    ss << std::put_time(&tm_buf, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(9)
+       << ms.count() << 'Z';
     return ss.str();
 }
 
@@ -94,7 +94,7 @@ SessionSnapshot SessionInternal::make_snapshot() const {
 }
 
 RelayStateMachine::RelayStateMachine(size_t max_rooms)
-    : max_rooms_(std::clamp(max_rooms, size_t{1}, MAX_ROOMS_ALLOWED)) {}
+    : m_max_rooms(std::clamp(max_rooms, size_t{1}, MAX_ROOMS_ALLOWED)) {}
 
 std::string RelayStateMachine::generate_unique_code() {
     std::string code;
@@ -104,7 +104,7 @@ std::string RelayStateMachine::generate_unique_code() {
         for (size_t i = 0; i < ROOM_CODE_LENGTH; ++i) {
             code[i] = ROOM_CODE_ALPHABET[(r >> (i * 5)) & 31];
         }
-        if (!rooms_.contains(code)) {
+        if (!m_rooms.contains(code)) {
             return code;
         }
     }
@@ -113,7 +113,7 @@ std::string RelayStateMachine::generate_unique_code() {
 uint64_t RelayStateMachine::generate_unique_session_id() {
     for (;;) {
         uint64_t id = random_u64();
-        if (id != 0 && !sessions_.contains(id)) {
+        if (id != 0 && !m_sessions.contains(id)) {
             return id;
         }
     }
@@ -125,9 +125,7 @@ void RelayStateMachine::fail_client(ClientSlotId slot, NetplayErrorCode code, st
     on_client_disconnected(slot, "protocol_error", now, out);
 }
 
-void RelayStateMachine::remove_room(std::string_view code) {
-    rooms_.erase(std::string(code));
-}
+void RelayStateMachine::remove_room(std::string_view code) { m_rooms.erase(std::string(code)); }
 
 void RelayStateMachine::maybe_send_go(SessionInternal &sess, std::vector<Action> &out) {
     if (sess.go_sent) {
@@ -144,11 +142,12 @@ void RelayStateMachine::maybe_send_go(SessionInternal &sess, std::vector<Action>
     }
 }
 
-void RelayStateMachine::on_client_connected(ClientSlotId slot, double now, std::vector<Action> & /*out*/) {
+void RelayStateMachine::on_client_connected(ClientSlotId slot, double now,
+                                            std::vector<Action> & /*out*/) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     c = ClientSessionInfo{};
     c.state = ClientState::WaitHello;
     c.deadline = now + HELLO_TIMEOUT_SECONDS;
@@ -159,7 +158,7 @@ void RelayStateMachine::on_client_disconnected(ClientSlotId slot, std::string_vi
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state == ClientState::Disconnected) {
         return;
     }
@@ -169,8 +168,8 @@ void RelayStateMachine::on_client_disconnected(ClientSlotId slot, std::string_vi
     if (c.state == ClientState::InRoomHost && !c.room_code.empty()) {
         remove_room(c.room_code);
     } else if (c.state == ClientState::InSession && c.session_id != 0) {
-        auto it = sessions_.find(c.session_id);
-        if (it != sessions_.end()) {
+        auto it = m_sessions.find(c.session_id);
+        if (it != m_sessions.end()) {
             end_session(it->second, reason, c.role, now, out);
         }
     }
@@ -205,24 +204,26 @@ void RelayStateMachine::end_session(SessionInternal &sess, std::string_view reas
     out.push_back(ActionWriteLog{sess.make_snapshot()});
 
     // Remove session
-    sessions_.erase(sess.id);
+    m_sessions.erase(sess.id);
 }
 
 void RelayStateMachine::on_hello(ClientSlotId slot, std::string_view game_id,
                                  std::span<const uint32_t, ROM_CRCS_COUNT> rom_crcs,
                                  std::span<const uint8_t, BUILD_HASH_SIZE> build_hash,
-                                 std::string_view player_name, double now, std::vector<Action> &out) {
+                                 std::string_view player_name, double now,
+                                 std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::WaitHello) {
         fail_client(slot, NetplayErrorCode::BadMessage, "duplicate or unexpected HELLO", now, out);
         return;
     }
 
     if (!validate_player_name(player_name)) {
-        fail_client(slot, NetplayErrorCode::BadMessage, "player name must be 1 to 24 bytes", now, out);
+        fail_client(slot, NetplayErrorCode::BadMessage, "player name must be 1 to 24 bytes", now,
+                    out);
         return;
     }
 
@@ -246,9 +247,10 @@ void RelayStateMachine::on_create_room(ClientSlotId slot, uint8_t input_delay, u
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::LobbyIdle) {
-        fail_client(slot, NetplayErrorCode::NotInLobby, "already in a room or not in lobby", now, out);
+        fail_client(slot, NetplayErrorCode::NotInLobby, "already in a room or not in lobby", now,
+                    out);
         return;
     }
 
@@ -262,7 +264,7 @@ void RelayStateMachine::on_create_room(ClientSlotId slot, uint8_t input_delay, u
         return;
     }
 
-    if (rooms_.size() >= max_rooms_) {
+    if (m_rooms.size() >= m_max_rooms) {
         fail_client(slot, NetplayErrorCode::ServerFull, "server full", now, out);
         return;
     }
@@ -276,7 +278,7 @@ void RelayStateMachine::on_create_room(ClientSlotId slot, uint8_t input_delay, u
     room.sync_required = (flags & 0x01) != 0;
     room.deadline = now + ROOM_TTL_SECONDS;
 
-    rooms_[code] = room;
+    m_rooms[code] = room;
 
     c.state = ClientState::InRoomHost;
     c.room_code = code;
@@ -286,24 +288,25 @@ void RelayStateMachine::on_create_room(ClientSlotId slot, uint8_t input_delay, u
     out.push_back(ActionSendRoomCreated{slot, code});
 }
 
-void RelayStateMachine::on_join_room(ClientSlotId slot, std::string_view room_code,
-                                     double now, std::vector<Action> &out) {
+void RelayStateMachine::on_join_room(ClientSlotId slot, std::string_view room_code, double now,
+                                     std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::LobbyIdle) {
         fail_client(slot, NetplayErrorCode::NotInLobby, "already in a room", now, out);
         return;
     }
 
     if (!validate_room_code(room_code)) {
-        fail_client(slot, NetplayErrorCode::BadMessage, "room code has invalid characters", now, out);
+        fail_client(slot, NetplayErrorCode::BadMessage, "room code has invalid characters", now,
+                    out);
         return;
     }
 
-    auto it = rooms_.find(std::string(room_code));
-    if (it == rooms_.end()) {
+    auto it = m_rooms.find(std::string(room_code));
+    if (it == m_rooms.end()) {
         fail_client(slot, NetplayErrorCode::RoomNotFound, "room not found", now, out);
         return;
     }
@@ -316,12 +319,13 @@ void RelayStateMachine::on_join_room(ClientSlotId slot, std::string_view room_co
 
     // Verify identity
     if (room.identity != c.identity) {
-        fail_client(slot, NetplayErrorCode::IdentityMismatch, "game, ROM or build differs from host", now, out);
+        fail_client(slot, NetplayErrorCode::IdentityMismatch,
+                    "game, ROM or build differs from host", now, out);
         return;
     }
 
     ClientSlotId host_slot = room.host_slot;
-    auto &host = clients_[host_slot];
+    auto &host = m_clients[host_slot];
 
     uint64_t session_id = generate_unique_session_id();
     uint64_t seed = random_u64();
@@ -338,7 +342,7 @@ void RelayStateMachine::on_join_room(ClientSlotId slot, std::string_view room_co
     sess.started_time = now;
     sess.started_at_iso = format_iso_now();
 
-    sessions_[session_id] = std::move(sess);
+    m_sessions[session_id] = std::move(sess);
     room.session_id = session_id;
 
     // Transition host & joiner to InSession
@@ -354,40 +358,44 @@ void RelayStateMachine::on_join_room(ClientSlotId slot, std::string_view room_co
     c.deadline = 0.0;
 
     // Send MatchStart to both
-    out.push_back(ActionSendMatchStart{host_slot, session_id, seed, 0, room.input_delay, c.player_name});
-    out.push_back(ActionSendMatchStart{slot, session_id, seed, 1, room.input_delay, host.player_name});
+    out.push_back(
+        ActionSendMatchStart{host_slot, session_id, seed, 0, room.input_delay, c.player_name});
+    out.push_back(
+        ActionSendMatchStart{slot, session_id, seed, 1, room.input_delay, host.player_name});
 
     // If sync blob is not required, GO is sent immediately
-    auto sess_it = sessions_.find(session_id);
-    if (sess_it != sessions_.end()) {
+    auto sess_it = m_sessions.find(session_id);
+    if (sess_it != m_sessions.end()) {
         maybe_send_go(sess_it->second, out);
     }
 }
 
-void RelayStateMachine::on_sync_blob(ClientSlotId slot, std::span<const uint8_t> data,
-                                     double now, std::vector<Action> &out) {
+void RelayStateMachine::on_sync_blob(ClientSlotId slot, std::span<const uint8_t> data, double now,
+                                     std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::InSession || c.session_id == 0) {
         fail_client(slot, NetplayErrorCode::BadMessage, "SYNC_BLOB outside a match", now, out);
         return;
     }
 
     if (c.role != 0) {
-        fail_client(slot, NetplayErrorCode::BadMessage, "only the host may send SYNC_BLOB", now, out);
+        fail_client(slot, NetplayErrorCode::BadMessage, "only the host may send SYNC_BLOB", now,
+                    out);
         return;
     }
 
-    auto it = sessions_.find(c.session_id);
-    if (it == sessions_.end()) {
+    auto it = m_sessions.find(c.session_id);
+    if (it == m_sessions.end()) {
         return;
     }
     SessionInternal &sess = it->second;
 
     if (!sess.sync_required) {
-        fail_client(slot, NetplayErrorCode::BadMessage, "room does not require a sync blob", now, out);
+        fail_client(slot, NetplayErrorCode::BadMessage, "room does not require a sync blob", now,
+                    out);
         return;
     }
 
@@ -402,7 +410,8 @@ void RelayStateMachine::on_sync_blob(ClientSlotId slot, std::span<const uint8_t>
     }
 
     if (data.size() < MIN_SYNC_BLOB_SIZE || data.size() > MAX_SYNC_BLOB_SIZE) {
-        fail_client(slot, NetplayErrorCode::BadMessage, "SYNC_BLOB length must be 1 to 2048", now, out);
+        fail_client(slot, NetplayErrorCode::BadMessage, "SYNC_BLOB length must be 1 to 2048", now,
+                    out);
         return;
     }
 
@@ -418,17 +427,18 @@ void RelayStateMachine::on_sync_blob(ClientSlotId slot, std::span<const uint8_t>
 }
 
 void RelayStateMachine::on_inputs(ClientSlotId slot, uint32_t first_frame, uint8_t count,
-                                  std::span<const uint16_t> inputs, double /*now*/, std::vector<Action> &out) {
+                                  std::span<const uint16_t> inputs, double /*now*/,
+                                  std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::InSession || c.session_id == 0) {
         return;
     }
 
-    auto it = sessions_.find(c.session_id);
-    if (it == sessions_.end()) {
+    auto it = m_sessions.find(c.session_id);
+    if (it == m_sessions.end()) {
         return;
     }
     SessionInternal &sess = it->second;
@@ -452,7 +462,8 @@ void RelayStateMachine::on_inputs(ClientSlotId slot, uint32_t first_frame, uint8
         uint16_t val = inputs[i];
         if (f < log.size() && log[f] >= 0 && static_cast<uint16_t>(log[f]) != val) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "inputs from player %d: conflicting input at frame %zu", p, f);
+            std::snprintf(buf, sizeof(buf), "inputs from player %d: conflicting input at frame %zu",
+                          p, f);
             sess.log_proto_err(buf);
             return; // Drop packet completely without changing state or forwarding
         }
@@ -475,12 +486,12 @@ void RelayStateMachine::on_inputs(ClientSlotId slot, uint32_t first_frame, uint8
     }
 }
 
-void RelayStateMachine::on_crc(ClientSlotId slot, uint32_t frame, uint32_t crc,
-                               double now, std::vector<Action> &out) {
+void RelayStateMachine::on_crc(ClientSlotId slot, uint32_t frame, uint32_t crc, double now,
+                               std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::InSession || c.session_id == 0) {
         fail_client(slot, NetplayErrorCode::BadMessage, "CRC outside a match", now, out);
         return;
@@ -490,8 +501,8 @@ void RelayStateMachine::on_crc(ClientSlotId slot, uint32_t frame, uint32_t crc,
         return; // Ignore frames out of range
     }
 
-    auto it = sessions_.find(c.session_id);
-    if (it == sessions_.end()) {
+    auto it = m_sessions.find(c.session_id);
+    if (it == m_sessions.end()) {
         return;
     }
     SessionInternal &sess = it->second;
@@ -545,7 +556,7 @@ void RelayStateMachine::on_result(ClientSlotId slot, uint32_t frame, uint8_t win
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::InSession || c.session_id == 0) {
         fail_client(slot, NetplayErrorCode::BadMessage, "RESULT outside a match", now, out);
         return;
@@ -556,8 +567,8 @@ void RelayStateMachine::on_result(ClientSlotId slot, uint32_t frame, uint8_t win
         return;
     }
 
-    auto it = sessions_.find(c.session_id);
-    if (it == sessions_.end()) {
+    auto it = m_sessions.find(c.session_id);
+    if (it == m_sessions.end()) {
         return;
     }
     SessionInternal &sess = it->second;
@@ -568,12 +579,14 @@ void RelayStateMachine::on_result(ClientSlotId slot, uint32_t frame, uint8_t win
     }
     sess.results[p] = ResultRecord{frame, winner, final_crc};
 
-    if (!sess.results[0].has_value() || !sess.results[1].has_value() || sess.result_ack.has_value()) {
+    const auto &res0 = sess.results[0];
+    const auto &res1 = sess.results[1];
+    if (!res0.has_value() || !res1.has_value() || sess.result_ack.has_value()) {
         return; // Wait for both
     }
 
-    const auto &r0 = *sess.results[0];
-    const auto &r1 = *sess.results[1];
+    const auto &r0 = *res0;
+    const auto &r1 = *res1;
     bool agreed = (r0.frame == r1.frame && r0.winner == r1.winner && r0.final_crc == r1.final_crc);
     uint8_t ack_winner = agreed ? r0.winner : 0xFE;
 
@@ -586,11 +599,12 @@ void RelayStateMachine::on_result(ClientSlotId slot, uint32_t frame, uint8_t win
     }
 }
 
-void RelayStateMachine::on_chat(ClientSlotId slot, std::string_view text, double now, std::vector<Action> &out) {
+void RelayStateMachine::on_chat(ClientSlotId slot, std::string_view text, double now,
+                                std::vector<Action> &out) {
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state != ClientState::InSession || c.session_id == 0) {
         // CHAT before MATCH_START gets Error(NotInLobby) and fatal disconnect
         fail_client(slot, NetplayErrorCode::NotInLobby, "CHAT before MATCH_START", now, out);
@@ -602,8 +616,8 @@ void RelayStateMachine::on_chat(ClientSlotId slot, std::string_view text, double
         return;
     }
 
-    auto it = sessions_.find(c.session_id);
-    if (it == sessions_.end()) {
+    auto it = m_sessions.find(c.session_id);
+    if (it == m_sessions.end()) {
         return;
     }
     SessionInternal &sess = it->second;
@@ -627,10 +641,10 @@ void RelayStateMachine::on_bye(ClientSlotId slot, double now, std::vector<Action
     if (slot < 0 || slot >= static_cast<ClientSlotId>(MAX_CLIENTS)) {
         return;
     }
-    auto &c = clients_[slot];
+    auto &c = m_clients[slot];
     if (c.state == ClientState::InSession && c.session_id != 0) {
-        auto it = sessions_.find(c.session_id);
-        if (it != sessions_.end()) {
+        auto it = m_sessions.find(c.session_id);
+        if (it != m_sessions.end()) {
             end_session(it->second, "bye", c.role, now, out);
         }
     }
@@ -640,7 +654,7 @@ void RelayStateMachine::on_bye(ClientSlotId slot, double now, std::vector<Action
 void RelayStateMachine::tick(double now, std::vector<Action> &out) {
     // 1. Check client timeouts
     for (size_t i = 0; i < MAX_CLIENTS; ++i) {
-        auto &c = clients_[i];
+        auto &c = m_clients[i];
         if (c.state == ClientState::WaitHello && c.deadline > 0.0 && now >= c.deadline) {
             on_client_disconnected(static_cast<ClientSlotId>(i), "timeout_hello", now, out);
         } else if (c.state == ClientState::LobbyIdle && c.deadline > 0.0 && now >= c.deadline) {
@@ -650,17 +664,17 @@ void RelayStateMachine::tick(double now, std::vector<Action> &out) {
 
     // 2. Check room TTLs
     std::vector<std::string> expired_rooms;
-    for (auto &[code, r] : rooms_) {
+    for (auto &[code, r] : m_rooms) {
         if (r.session_id == 0 && r.deadline > 0.0 && now >= r.deadline) {
             expired_rooms.push_back(code);
         }
     }
 
     for (const auto &code : expired_rooms) {
-        auto it = rooms_.find(code);
-        if (it != rooms_.end()) {
+        auto it = m_rooms.find(code);
+        if (it != m_rooms.end()) {
             ClientSlotId host_slot = it->second.host_slot;
-            rooms_.erase(it);
+            m_rooms.erase(it);
             if (host_slot >= 0 && host_slot < static_cast<ClientSlotId>(MAX_CLIENTS)) {
                 // Host is cleanly disconnected without Error
                 on_client_disconnected(host_slot, "expired", now, out);

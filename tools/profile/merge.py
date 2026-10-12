@@ -1,10 +1,11 @@
 """Merge address-only execution profiles into one profile."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from recomp.block_profile import BlockProfile, read_profile
 
@@ -29,7 +30,7 @@ def merge_profiles(inputs: list[Path], output: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="f3 profile merge",
-        description="Union identities/addresses, sum hit and miss counts with uint64 saturation."
+        description="Union identities/addresses, sum hit and miss counts with uint64 saturation.",
     )
     parser.add_argument("--output", type=Path, required=True, help="Output .profile path")
     parser.add_argument("inputs", type=Path, nargs="+", help="Input .profile paths to merge")

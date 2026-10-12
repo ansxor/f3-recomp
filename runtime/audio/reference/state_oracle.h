@@ -13,7 +13,8 @@ extern "C" {
  * and f3rt_sound_core_import in runtime/core_state.c, and updating the size assert
  * below. Snapshots never store pointers. */
 #pragma pack(push, 1)
-typedef struct f3rt_sound_oracle_state {
+typedef struct
+    f3rt_sound_oracle_state { // NOLINT(readability-identifier-naming): C ABI struct used by core_state.c
     uint32_t cpu_type;
     uint32_t dar[16];
     uint32_t dar_save[16];
@@ -44,9 +45,9 @@ typedef struct f3rt_sound_oracle_state {
     uint32_t sr_mask;
     uint32_t instr_mode;
     uint32_t run_mode;
-    int32_t  has_pmmu;
-    int32_t  pmmu_enabled;
-    int32_t  fpu_just_reset;
+    int32_t has_pmmu;
+    int32_t pmmu_enabled;
+    int32_t fpu_just_reset;
     uint32_t reset_cycles;
     uint32_t cyc_bcc_notake_b;
     uint32_t cyc_bcc_notake_w;
@@ -74,8 +75,9 @@ typedef struct f3rt_sound_oracle_state {
 #else
 #define F3RT_STATE_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
-F3RT_STATE_ASSERT(sizeof(f3rt_sound_oracle_state) == 355,
-                  "f3rt_sound_oracle_state size changed: update export/import and snapshot version");
+F3RT_STATE_ASSERT(
+    sizeof(f3rt_sound_oracle_state) == 355,
+    "f3rt_sound_oracle_state size changed: update export/import and snapshot version");
 F3RT_STATE_ASSERT(offsetof(f3rt_sound_oracle_state, mmu_sr) == 352,
                   "f3rt_sound_oracle_state layout changed");
 F3RT_STATE_ASSERT(offsetof(f3rt_sound_oracle_state, sound_needs_reset) == 354,

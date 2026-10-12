@@ -16,10 +16,10 @@ public:
     // Atomically writes log file to <log_dir>/<session_id>.json via .tmp rename
     bool write_log(const SessionSnapshot &snap) const;
 
-    const std::filesystem::path &log_dir() const { return log_dir_; }
+    const std::filesystem::path &log_dir() const { return m_log_dir; }
 
 private:
-    std::filesystem::path log_dir_;
+    std::filesystem::path m_log_dir;
 };
 
 } // namespace f3rt::netplay

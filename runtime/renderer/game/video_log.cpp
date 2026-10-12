@@ -13,7 +13,7 @@ void log_unsupported_video(const char *component, const char *kind, uint64_t fra
     static std::set<std::tuple<const char *, const char *>> seen;
     const std::lock_guard<std::mutex> lock(log_mutex);
     if (!seen.emplace(component, kind).second) return;
-    std::fprintf(stderr, "game-video: unsupported %s %s frame=%llu\n",
-                 component, kind, static_cast<unsigned long long>(frame));
+    std::fprintf(stderr, "game-video: unsupported %s %s frame=%llu\n", component, kind,
+                 static_cast<unsigned long long>(frame));
 }
 } // namespace f3rt

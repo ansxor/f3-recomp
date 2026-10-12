@@ -2,41 +2,75 @@
 
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass, field
 import hashlib
+import itertools
 import json
-from pathlib import Path
 import struct
-import sys
 import tomllib
 import zlib
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import capstone
-from capstone import Cs, CsInsn, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
+from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs, CsInsn
 from capstone.m68k import (
     M68K_AM_ABSOLUTE_DATA_LONG,
     M68K_AM_ABSOLUTE_DATA_SHORT,
     M68K_AM_BRANCH_DISPLACEMENT,
+    M68K_AM_PC_MEMI_POST_INDEX,
+    M68K_AM_PC_MEMI_PRE_INDEX,
     M68K_AM_PCI_DISP,
     M68K_AM_PCI_INDEX_8_BIT_DISP,
     M68K_AM_PCI_INDEX_BASE_DISP,
-    M68K_AM_PC_MEMI_POST_INDEX,
-    M68K_AM_PC_MEMI_PRE_INDEX,
     M68K_OP_BR_DISP,
     M68K_OP_IMM,
 )
-
 
 # 68020 control flow instruction categories
 TERMINAL_MNEMONICS = {"rts", "rte", "rtr", "rtd", "illegal"}
 
 COND_BRANCH_MNEMONICS = {
-    "bcc", "bcs", "beq", "bge", "bgt", "bhi", "ble", "bls", "blt", "bmi",
-    "bne", "bpl", "bvc", "bvs",
-    "dbcc", "dbcs", "dbeq", "dbf", "dbge", "dbgt", "dbhi", "dble", "dbls",
-    "dblt", "dbmi", "dbne", "dbpl", "dbt", "dbvc", "dbvs", "dbra",
-    "fbcc", "fbeq", "fbge", "fbgt", "fble", "fblt", "fbne", "fbnge", "fbnle",
+    "bcc",
+    "bcs",
+    "beq",
+    "bge",
+    "bgt",
+    "bhi",
+    "ble",
+    "bls",
+    "blt",
+    "bmi",
+    "bne",
+    "bpl",
+    "bvc",
+    "bvs",
+    "dbcc",
+    "dbcs",
+    "dbeq",
+    "dbf",
+    "dbge",
+    "dbgt",
+    "dbhi",
+    "dble",
+    "dbls",
+    "dblt",
+    "dbmi",
+    "dbne",
+    "dbpl",
+    "dbt",
+    "dbvc",
+    "dbvs",
+    "dbra",
+    "fbcc",
+    "fbeq",
+    "fbge",
+    "fbgt",
+    "fble",
+    "fblt",
+    "fbne",
+    "fbnge",
+    "fbnle",
 }
 
 CALL_MNEMONICS = {"bsr", "jsr"}
@@ -62,6 +96,7 @@ class Discovery:
     # graphics/CFG consumers must keep the proven edge set.
     indirect_targets: dict[int, list[int]] = field(default_factory=dict)
 
+
 def _parse_int_address(val: int | str) -> int:
     """Parse address given as integer or hex/decimal string."""
     if isinstance(val, int):
@@ -86,20 +121,22 @@ class ExcludeRegion:
 
 def _verify_fill(fill: object, start: int, end: int, base: int, image: bytes | None, cpu: str) -> None:
     value = _parse_int_address(fill) if isinstance(fill, (int, str)) else None
-    if value is None or isinstance(fill, bool) or not 0 <= value <= 0xff:
+    if value is None or isinstance(fill, bool) or not 0 <= value <= 0xFF:
         raise ValueError(f"{cpu} exclusion [{start:#x}, {end:#x}) fill must be a byte value, got {fill!r}")
     if image is None:
         raise ValueError(f"{cpu} exclusion [{start:#x}, {end:#x}) declares fill but no program image was given")
-    span = image[start - base:end - base]
+    span = image[start - base : end - base]
     if span.count(value) != len(span):
         offset = next(i for i, byte in enumerate(span) if byte != value)
         raise ValueError(
             f"{cpu} exclusion [{start:#x}, {end:#x}) fill {value:#04x} contradicted by "
-            f"byte {span[offset]:#04x} at {start + offset:#x}")
+            f"byte {span[offset]:#04x} at {start + offset:#x}"
+        )
 
 
-def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
-                     base: int = 0, image: bytes | None = None) -> list[ExcludeRegion]:
+def parse_exclusions(
+    config: dict, rom_size: int, cpu: str = "main", base: int = 0, image: bytes | None = None
+) -> list[ExcludeRegion]:
     """Parse [[exclude]] records for ``cpu``.
 
     An optional ``fill = 0xNN`` asserts every byte of the interval equals NN in the
@@ -126,13 +163,13 @@ def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
         if "fill" in record:
             _verify_fill(record["fill"], start, end, base, image, cpu)
     regions.sort(key=lambda region: region.start)
-    for previous, region in zip(regions, regions[1:]):
+    for previous, region in itertools.pairwise(regions):
         if previous.end > region.start:
             raise ValueError(f"Overlapping {cpu} exclusions at {region.start:#x}")
     return regions
 
 
-PHYSICAL_ADDRESS_MASK = 0x00ffffff  # 68EC020 24-bit bus: 0xff020000 aliases 0x020000
+PHYSICAL_ADDRESS_MASK = 0x00FFFFFF  # 68EC020 24-bit bus: 0xff020000 aliases 0x020000
 
 
 def exclusion_at(regions: list[ExcludeRegion], pc: int) -> ExcludeRegion | None:
@@ -159,7 +196,8 @@ def _require_included(regions: list[ExcludeRegion], pc: int, source: str) -> Non
     if region is not None:
         raise ValueError(
             f"{source} targets excluded PC {pc:#x} in "
-            f"[{region.start:#x}, {region.end:#x}): {region.reason}; {region.evidence}")
+            f"[{region.start:#x}, {region.end:#x}): {region.reason}; {region.evidence}"
+        )
 
 
 _ROM_KEYS = frozenset({"size", "interleave", "lanes"})
@@ -210,35 +248,26 @@ def load_rom(config_path: str | Path, rom_dir: str | Path) -> tuple[bytes, dict]
 
         lane_path = rom_dir / filename
         if not lane_path.is_file():
-            raise FileNotFoundError(
-                f"Missing ROM lane file '{filename}' in '{rom_dir}' for game '{game_id}'."
-            )
+            raise FileNotFoundError(f"Missing ROM lane file '{filename}' in '{rom_dir}' for game '{game_id}'.")
 
         data = lane_path.read_bytes()
         expected_size = lane.get("size")
         if expected_size is not None and len(data) != expected_size:
             raise ValueError(
-                f"ROM lane '{filename}' size mismatch: expected {expected_size} bytes, "
-                f"got {len(data)} bytes."
+                f"ROM lane '{filename}' size mismatch: expected {expected_size} bytes, got {len(data)} bytes."
             )
 
         expected_crc = lane.get("crc")
         if expected_crc:
             actual_crc = f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
             if actual_crc.lower() != expected_crc.lower():
-                raise ValueError(
-                    f"ROM lane '{filename}' CRC32 mismatch: expected {expected_crc}, "
-                    f"got {actual_crc}."
-                )
+                raise ValueError(f"ROM lane '{filename}' CRC32 mismatch: expected {expected_crc}, got {actual_crc}.")
 
         expected_sha1 = lane.get("sha1")
         if expected_sha1:
             actual_sha1 = hashlib.sha1(data).hexdigest().lower()
             if actual_sha1 != expected_sha1.lower():
-                raise ValueError(
-                    f"ROM lane '{filename}' SHA1 mismatch: expected {expected_sha1}, "
-                    f"got {actual_sha1}."
-                )
+                raise ValueError(f"ROM lane '{filename}' SHA1 mismatch: expected {expected_sha1}, got {actual_sha1}.")
 
         offset = lane.get("offset", 0)
         if not isinstance(offset, int) or not 0 <= offset < interleave:
@@ -276,7 +305,7 @@ def _scan_pci_index_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op
         return []
 
     # Read first 16-bit offset
-    first_off = struct.unpack(">h", rom[table_addr:table_addr + 2])[0]
+    first_off = struct.unpack(">h", rom[table_addr : table_addr + 2])[0]
     if first_off <= 0 or first_off > 0x7000:
         return []
 
@@ -293,7 +322,7 @@ def _scan_pci_index_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op
         ptr = table_addr + i * 2
         if ptr + 2 > len(rom):
             break
-        off = struct.unpack(">h", rom[ptr:ptr + 2])[0]
+        off = struct.unpack(">h", rom[ptr : ptr + 2])[0]
         if off > 0:
             positive_offsets.append(off)
 
@@ -307,7 +336,7 @@ def _scan_pci_index_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op
 
     for i in range(num_entries):
         ptr = table_addr + i * 2
-        off = struct.unpack(">h", rom[ptr:ptr + 2])[0]
+        off = struct.unpack(">h", rom[ptr : ptr + 2])[0]
         if off == -1:
             continue
         target = table_addr + off
@@ -325,10 +354,10 @@ def _scan_absolute_table(rom: bytes, md: capstone.Cs, table_addr: int, destinati
         ptr = table_addr + index * 4
         if ptr < 0 or ptr + 4 > limit:
             break
-        target = (int.from_bytes(rom[ptr:ptr + 4], "big") + destination_offset) & 0xffffffff
+        target = (int.from_bytes(rom[ptr : ptr + 4], "big") + destination_offset) & 0xFFFFFFFF
         if not (0x400 <= target < len(rom)) or target & 1:
             break
-        decoded = list(md.disasm(rom[target:target + 24], target, count=1))
+        decoded = list(md.disasm(rom[target : target + 24], target, count=1))
         if not decoded or decoded[0].id == 0:
             break
         entries.append(target)
@@ -346,9 +375,9 @@ def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> l
     indirect = extension & 7
     if base_size is None or indirect not in (1, 2, 3):
         return []  # Post-indexed indirection is not an indexed pointer table.
-    displacement = int.from_bytes(raw[4:4 + base_size], "big", signed=True)
+    displacement = int.from_bytes(raw[4 : 4 + base_size], "big", signed=True)
     outer_size = {1: 0, 2: 2, 3: 4}[indirect]
-    outer = int.from_bytes(raw[4 + base_size:4 + base_size + outer_size], "big", signed=True)
+    outer = int.from_bytes(raw[4 + base_size : 4 + base_size + outer_size], "big", signed=True)
     table = (0 if extension & 0x80 else insn.address + 2) + displacement
     return _scan_absolute_table(rom, md, table, outer)
 
@@ -356,29 +385,28 @@ def _scan_pc_memi_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> l
 def _scan_register_table(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn) -> list[int]:
     """MOVEA table(PC,Xn),An; JMP (An), or LEA table(PC,Xn),An; JMP ([An])."""
     jump = int.from_bytes(insn.bytes[:2], "big")
-    indirect = (jump & 0xfff8) in (0x4eb0, 0x4ef0)
+    indirect = (jump & 0xFFF8) in (0x4EB0, 0x4EF0)
     if indirect:
         if bytes(insn.bytes[2:]) != b"\x01\x51":
             return []
-    elif (jump & 0xfff8) not in (0x4e90, 0x4ed0):
+    elif (jump & 0xFFF8) not in (0x4E90, 0x4ED0):
         return []
     end = insn.address
-    while end >= insn.address - 2 and rom[end - 2:end] == b"\x4e\x71":
+    while end >= insn.address - 2 and rom[end - 2 : end] == b"\x4e\x71":
         end -= 2
     pc = end - 4
     if pc < 0:
         return []
-    load = int.from_bytes(rom[pc:pc + 2], "big")
-    if (load & 0xf1ff) != (0x41fb if indirect else 0x207b):
+    load = int.from_bytes(rom[pc : pc + 2], "big")
+    if (load & 0xF1FF) != (0x41FB if indirect else 0x207B):
         return []
     if ((load >> 9) & 7) != (jump & 7) or rom[pc + 2] & 1:
         return []
-    table = pc + 2 + int.from_bytes(rom[pc + 3:pc + 4], "big", signed=True)
+    table = pc + 2 + int.from_bytes(rom[pc + 3 : pc + 4], "big", signed=True)
     return _scan_absolute_table(rom, md, table)
 
 
-_DIRECT_TRANSFER_MODES = (M68K_AM_ABSOLUTE_DATA_SHORT, M68K_AM_ABSOLUTE_DATA_LONG,
-                          M68K_AM_PCI_DISP)
+_DIRECT_TRANSFER_MODES = (M68K_AM_ABSOLUTE_DATA_SHORT, M68K_AM_ABSOLUTE_DATA_LONG, M68K_AM_PCI_DISP)
 
 
 def _computed_transfer(insn: capstone.CsInsn) -> bool:
@@ -392,8 +420,7 @@ def _computed_transfer(insn: capstone.CsInsn) -> bool:
     return bool(ops) and ops[-1].address_mode not in _DIRECT_TRANSFER_MODES
 
 
-def _scan_computed_targets(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn,
-                           op: capstone.m68k.M68KOp) -> list[int]:
+def _scan_computed_targets(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn, op: capstone.m68k.M68KOp) -> list[int]:
     """Candidate targets for a computed jmp/jsr, trying every table scanner."""
     scanned = _scan_register_table(rom, md, insn)
     if scanned:
@@ -405,8 +432,9 @@ def _scan_computed_targets(rom: bytes, md: capstone.Cs, insn: capstone.CsInsn,
     return []
 
 
-def _candidate_targets(rom: bytes, instructions: dict[int, capstone.CsInsn],
-                       exclusions: list[ExcludeRegion], scanned: list[int]) -> list[int]:
+def _candidate_targets(
+    rom: bytes, instructions: dict[int, capstone.CsInsn], exclusions: list[ExcludeRegion], scanned: list[int]
+) -> list[int]:
     """Keep even in-ROM targets that are decoded entries outside exclusions."""
     targets = []
     for target in sorted(set(scanned)):
@@ -430,36 +458,38 @@ def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
     roots = []
     # MOVE.L #script,d16(An). Other script roots can be supplied explicitly.
     for pc in range(0, len(rom) - 7, 2):
-        if (int.from_bytes(rom[pc:pc + 2], "big") & 0xf1ff) == 0x217c and \
-                int.from_bytes(rom[pc + 6:pc + 8], "big") == field:
-            roots.append(int.from_bytes(rom[pc + 2:pc + 6], "big"))
+        if (int.from_bytes(rom[pc : pc + 2], "big") & 0xF1FF) == 0x217C and int.from_bytes(
+            rom[pc + 6 : pc + 8], "big"
+        ) == field:
+            roots.append(int.from_bytes(rom[pc + 2 : pc + 6], "big"))
         # Script-table loads may stage through Dn/An and intervening NOPs.
-        word = int.from_bytes(rom[pc:pc + 2], "big")
-        table_store = (word & 0xf1ff) == 0x217b and \
-            int.from_bytes(rom[pc + 4:pc + 6], "big") == field
-        if (word & 0xf1ff) in (0x203b, 0x207b):
+        word = int.from_bytes(rom[pc : pc + 2], "big")
+        table_store = (word & 0xF1FF) == 0x217B and int.from_bytes(rom[pc + 4 : pc + 6], "big") == field
+        if (word & 0xF1FF) in (0x203B, 0x207B):
             store_pc = pc + 4
-            while store_pc < pc + 8 and rom[store_pc:store_pc + 2] == b"\x4e\x71":
+            while store_pc < pc + 8 and rom[store_pc : store_pc + 2] == b"\x4e\x71":
                 store_pc += 2
-            store = int.from_bytes(rom[store_pc:store_pc + 2], "big")
+            store = int.from_bytes(rom[store_pc : store_pc + 2], "big")
             store_base = 0x2148 if word & 0x0040 else 0x2140
-            table_store = (store & 0xf1f8) == store_base and \
-                (store & 7) == (word >> 9) & 7 and \
-                int.from_bytes(rom[store_pc + 2:store_pc + 4], "big") == field
+            table_store = (
+                (store & 0xF1F8) == store_base
+                and (store & 7) == (word >> 9) & 7
+                and int.from_bytes(rom[store_pc + 2 : store_pc + 4], "big") == field
+            )
         if table_store:
-            extension = int.from_bytes(rom[pc + 2:pc + 4], "big")
+            extension = int.from_bytes(rom[pc + 2 : pc + 4], "big")
             if extension & 0x100:
                 continue  # Full-format addressing needs separate metadata.
-            table = pc + 2 + int.from_bytes(rom[pc + 3:pc + 4], "big", signed=True)
+            table = pc + 2 + int.from_bytes(rom[pc + 3 : pc + 4], "big", signed=True)
             for stride in spec.get("pointer_table_strides", [4]):
                 for offset in range(64):
                     entry = table + offset * stride
                     if entry < 0 or entry + 4 > len(rom):
                         break
-                    target = int.from_bytes(rom[entry:entry + 4], "big")
+                    target = int.from_bytes(rom[entry : entry + 4], "big")
                     if target < 0x400 or target + 2 > len(rom) or target & 1:
                         break
-                    operation = int.from_bytes(rom[target:target + 2], "big")
+                    operation = int.from_bytes(rom[target : target + 2], "big")
                     if operation >= len(lengths) or lengths[operation] < 0:
                         break
                     roots.append(target)
@@ -467,21 +497,23 @@ def _extract_script_callbacks(rom: bytes, spec: dict) -> set[int]:
     for table_spec in spec.get("pointer_tables", []):
         table = _parse_int_address(table_spec["table"])
         count = int(table_spec["count"])
-        roots.extend(int.from_bytes(rom[entry:entry + 4], "big")
-                     for entry in range(table, table + count * 4, 4)
-                     if 0 <= entry and entry + 4 <= len(rom))
+        roots.extend(
+            int.from_bytes(rom[entry : entry + 4], "big")
+            for entry in range(table, table + count * 4, 4)
+            if entry >= 0 and entry + 4 <= len(rom)
+        )
     visited, callbacks = set(), set()
     while roots:
         pc = roots.pop()
         while 0x400 <= pc < len(rom) - 1 and not pc & 1 and pc not in visited:
             visited.add(pc)
-            operation = int.from_bytes(rom[pc:pc + 2], "big")
+            operation = int.from_bytes(rom[pc : pc + 2], "big")
             if operation >= len(lengths) or lengths[operation] < 0:
                 break
             end = pc + 2 + lengths[operation]
             if end > len(rom):
                 break
-            target = int.from_bytes(rom[pc + 2:pc + 6], "big")
+            target = int.from_bytes(rom[pc + 2 : pc + 6], "big")
             if operation in code_ops and 0x400 <= target < len(rom) and not target & 1:
                 # A typed bytecode operand is a callback even when its straight-line
                 # prologue exceeds the heuristic validator's instruction limit.
@@ -501,7 +533,7 @@ def _extract_trap1_tasks(rom: bytes, md: capstone.Cs) -> set[int]:
         w = (rom[i] << 8) | rom[i + 1]
         if w == 0x4E41:  # trap #1
             # Look at preceding instructions up to 24 bytes
-            dis = list(md.disasm(rom[max(0, i - 24):i], max(0, i - 24)))
+            dis = list(md.disasm(rom[max(0, i - 24) : i], max(0, i - 24)))
             if not dis:
                 continue
             for ins in reversed(dis):
@@ -529,7 +561,7 @@ def _validate_code_sequence(rom: bytes, md: capstone.Cs, target: int) -> bool:
     while count < 32:
         if cur >= len(rom):
             return False
-        chunk = rom[cur:min(cur + 24, len(rom))]
+        chunk = rom[cur : min(cur + 24, len(rom))]
         dis = list(md.disasm(chunk, cur, count=1))
         if not dis or dis[0].id == 0 or dis[0].size % 2 != 0 or cur + dis[0].size > len(rom):
             return False
@@ -553,15 +585,14 @@ def _extract_lea_move_callbacks(rom: bytes, md: capstone.Cs) -> set[int]:
         w1 = (rom[i] << 8) | rom[i + 1]
         if (w1 & 0xF1FF) == 0x41FA:  # lea disp16(pc), aX
             reg = (w1 >> 9) & 7
-            disp = struct.unpack(">h", rom[i + 2:i + 4])[0]
+            disp = struct.unpack(">h", rom[i + 2 : i + 4])[0]
             target = i + 2 + disp
             if 0x400 <= target < len(rom) and target % 2 == 0:
                 w2 = (rom[i + 4] << 8) | rom[i + 5]
                 # The boot ROM also uses LEA return(pc),An; JMP routine instead
                 # of BSR/RTS during RAM tests before a working stack exists.
-                stores_callback = ((w2 & 0xF000) == 0x2000 and
-                                   ((w2 >> 3) & 7) == 1 and (w2 & 7) == reg)
-                register_link = (w2 & 0xffc0) == 0x4ec0
+                stores_callback = (w2 & 0xF000) == 0x2000 and ((w2 >> 3) & 7) == 1 and (w2 & 7) == reg
+                register_link = (w2 & 0xFFC0) == 0x4EC0
                 if (stores_callback or register_link) and _validate_code_sequence(rom, md, target):
                     callbacks.add(target)
     return callbacks
@@ -611,8 +642,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     scan_jump_tables = discovery_cfg.get("scan_jump_tables", True)
     scan_task_traps = discovery_cfg.get("scan_task_traps", True)
     scan_callbacks = discovery_cfg.get("scan_callbacks", True)
-    inline_string_helpers = {_parse_int_address(pc) for pc in
-                             discovery_cfg.get("inline_string_helpers", [])}
+    inline_string_helpers = {_parse_int_address(pc) for pc in discovery_cfg.get("inline_string_helpers", [])}
     exclusions = parse_exclusions(config, len(rom), image=rom)
 
     proven_seeds: set[int] = set()
@@ -648,14 +678,13 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                 if count < 0 or table < 0 or table + count * 4 > len(rom):
                     raise ValueError(f"Jump table outside ROM: {table:#x}, count {count}")
                 for p in range(table, table + count * 4, 4):
-                    tgt = int.from_bytes(rom[p:p + 4], "big")
+                    tgt = int.from_bytes(rom[p : p + 4], "big")
                     if tgt % 2 == 0 and 0 <= tgt < len(rom):
                         targets.append(tgt)
             explicit_jump_tables[addr] = targets
             _require_included(exclusions, addr, "Configured jump-table instruction")
             for target in targets:
                 _require_included(exclusions, target, f"Configured jump table at {addr:#x}")
-
 
     # 5. Task spawn targets (trap #1)
     if not exhaustive and scan_task_traps:
@@ -667,8 +696,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         cb_seeds = _extract_lea_move_callbacks(rom, md)
         speculative_seeds.update(cb_seeds)
     if not exhaustive:
-        speculative_seeds.update(_extract_script_callbacks(
-            rom, discovery_cfg.get("actor_scripts", {})))
+        speculative_seeds.update(_extract_script_callbacks(rom, discovery_cfg.get("actor_scripts", {})))
 
     # Combined initial worklist
     all_seeds = sorted(proven_seeds | speculative_seeds)
@@ -694,14 +722,19 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         # a bounded coherent-sequence test cannot prove computed-jump coverage.
         for start, end in included_ranges(exclusions, 0, len(rom)):
             for pc in range(start, end, 2):
-                chunk = rom[pc:pc + 24]
+                chunk = rom[pc : pc + 24]
                 # An excluded start does not forbid reading its bytes as an
                 # immediate or operand of an instruction starting outside it.
                 if len(chunk) < 24:
                     chunk = chunk.ljust(24, b"\0")
                 insn = next(md.disasm(chunk, pc, count=1), None)
-                if (insn is None or not insn.id or insn.mnemonic.startswith("dc")
-                        or insn.size % 2 or pc + insn.size > len(rom)):
+                if (
+                    insn is None
+                    or not insn.id
+                    or insn.mnemonic.startswith("dc")
+                    or insn.size % 2
+                    or pc + insn.size > len(rom)
+                ):
                     invalid_pcs.append(pc)
                     continue
                 instructions[pc] = insn
@@ -714,10 +747,13 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                             # Independent data decodes also invent transfers.
                             # Do not infer reachability: the runtime rejects
                             # this target if the instruction actually executes.
-                            excluded_transfers.append({
-                                "pc": f"0x{pc:06x}", "target": f"0x{target:06x}",
-                                "enforcement": "fatal_at_runtime",
-                            })
+                            excluded_transfers.append(
+                                {
+                                    "pc": f"0x{pc:06x}",
+                                    "target": f"0x{target:06x}",
+                                    "enforcement": "fatal_at_runtime",
+                                }
+                            )
                         elif base in CALL_MNEMONICS:
                             functions.add(target)
                     else:
@@ -728,10 +764,14 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                             scanned = _scan_computed_targets(rom, md, insn, insn.operands[-1])
                             if scanned:
                                 exhaustive_candidates[pc] = scanned
-                        unresolved_branches.append({
-                            "pc": f"0x{pc:06x}", "mnemonic": insn.mnemonic,
-                            "op_str": insn.op_str, "reason": "indirect_transfer",
-                        })
+                        unresolved_branches.append(
+                            {
+                                "pc": f"0x{pc:06x}",
+                                "mnemonic": insn.mnemonic,
+                                "op_str": insn.op_str,
+                                "reason": "indirect_transfer",
+                            }
+                        )
 
     while worklist:
         entry = worklist.popleft()
@@ -745,7 +785,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                 break
             _require_included(exclusions, cur_pc, "Recursive code path")
 
-            chunk = rom[cur_pc:min(cur_pc + 24, len(rom))]
+            chunk = rom[cur_pc : min(cur_pc + 24, len(rom))]
             if len(chunk) < 24:
                 chunk = chunk.ljust(24, b"\0")
             override = instruction_decoder(md, rom, cur_pc) if instruction_decoder is not None else None
@@ -757,12 +797,14 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                 or dis[0].size % 2 != 0
                 or cur_pc + dis[0].size > len(rom)
             ):
-                unresolved_branches.append({
-                    "pc": f"0x{cur_pc:06x}",
-                    "mnemonic": "invalid",
-                    "op_str": "decode failure",
-                    "reason": "decode_failure",
-                })
+                unresolved_branches.append(
+                    {
+                        "pc": f"0x{cur_pc:06x}",
+                        "mnemonic": "invalid",
+                        "op_str": "decode failure",
+                        "reason": "decode_failure",
+                    }
+                )
                 break
 
             insn = dis[0]
@@ -828,12 +870,14 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                     if target not in instructions:
                         worklist.append(target)
                 else:
-                    unresolved_branches.append({
-                        "pc": f"0x{cur_pc:06x}",
-                        "mnemonic": insn.mnemonic,
-                        "op_str": insn.op_str,
-                        "reason": "indirect_call",
-                    })
+                    unresolved_branches.append(
+                        {
+                            "pc": f"0x{cur_pc:06x}",
+                            "mnemonic": insn.mnemonic,
+                            "op_str": insn.op_str,
+                            "reason": "indirect_call",
+                        }
+                    )
 
                 # Check if this call is an inline string print helper
                 if target in inline_string_helpers:
@@ -860,12 +904,14 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                     if target not in instructions:
                         worklist.append(target)
                 else:
-                    unresolved_branches.append({
-                        "pc": f"0x{cur_pc:06x}",
-                        "mnemonic": insn.mnemonic,
-                        "op_str": insn.op_str,
-                        "reason": "indirect_branch",
-                    })
+                    unresolved_branches.append(
+                        {
+                            "pc": f"0x{cur_pc:06x}",
+                            "mnemonic": insn.mnemonic,
+                            "op_str": insn.op_str,
+                            "reason": "indirect_branch",
+                        }
+                    )
 
                 if fallthrough not in instructions and fallthrough % 2 == 0:
                     worklist.append(fallthrough)
@@ -902,12 +948,14 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                     if target not in instructions:
                         worklist.append(target)
                 else:
-                    unresolved_branches.append({
-                        "pc": f"0x{cur_pc:06x}",
-                        "mnemonic": insn.mnemonic,
-                        "op_str": insn.op_str,
-                        "reason": "indirect_jump",
-                    })
+                    unresolved_branches.append(
+                        {
+                            "pc": f"0x{cur_pc:06x}",
+                            "mnemonic": insn.mnemonic,
+                            "op_str": insn.op_str,
+                            "reason": "indirect_jump",
+                        }
+                    )
                 break
 
             # Subroutine return / Exception return / Terminal
@@ -958,13 +1006,11 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
                 if t in pc_set:
                     leader_set.add(t)
 
-        if base_mnem in COND_BRANCH_MNEMONICS or base_mnem in CALL_MNEMONICS:
-            if next_pc in pc_set:
-                leader_set.add(next_pc)
+        if (base_mnem in COND_BRANCH_MNEMONICS or base_mnem in CALL_MNEMONICS) and next_pc in pc_set:
+            leader_set.add(next_pc)
 
-        if base_mnem in TERMINAL_MNEMONICS or base_mnem in UNCOND_BRANCH_MNEMONICS:
-            if next_pc in pc_set:
-                leader_set.add(next_pc)
+        if (base_mnem in TERMINAL_MNEMONICS or base_mnem in UNCOND_BRANCH_MNEMONICS) and next_pc in pc_set:
+            leader_set.add(next_pc)
 
     blocks: dict[int, list[int]] = {}
     current_block: list[int] = []
@@ -996,7 +1042,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     # Calculate coverage statistics
     covered = bytearray(len(rom))
     for pc, insn in instructions.items():
-        covered[pc:pc + insn.size] = b"\1" * insn.size
+        covered[pc : pc + insn.size] = b"\1" * insn.size
     total_code_bytes = sum(covered)
     coverage_ratio = total_code_bytes / len(rom) if len(rom) > 0 else 0.0
 
@@ -1009,19 +1055,18 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         end = min(start + bank_size, len(rom))
         bank_pcs = [p for p in instructions if start <= p < end]
         code_bytes = sum(covered[start:end])
-        bank_summary.append({
-            "bank": b,
-            "range": f"0x{start:06x}-0x{end - 1:06x}",
-            "instruction_count": len(bank_pcs),
-            "code_bytes": code_bytes,
-            "classification": "contains_decoded_code" if bank_pcs else "unreached_or_data",
-        })
+        bank_summary.append(
+            {
+                "bank": b,
+                "range": f"0x{start:06x}-0x{end - 1:06x}",
+                "instruction_count": len(bank_pcs),
+                "code_bytes": code_bytes,
+                "classification": "contains_decoded_code" if bank_pcs else "unreached_or_data",
+            }
+        )
 
     if not exhaustive:
-        invalid_pcs = [
-            int(b["pc"], 16) for b in unresolved_branches
-            if b.get("reason") == "decode_failure"
-        ]
+        invalid_pcs = [int(b["pc"], 16) for b in unresolved_branches if b.get("reason") == "decode_failure"]
     aligned_candidate_count = len(rom) // 2 if exhaustive else 0
     aligned_decoded_count = len(instructions)
     aligned_invalid_count = len(invalid_pcs)
@@ -1032,8 +1077,8 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         "coverage_basis": (
             "Exhaustive independent decode at every nonexcluded word-aligned ROM offset; "
             "includes overlapping starts and data, not a reachability classification."
-            if exhaustive else
-            "Unique bytes reachable from vector/config and heuristic seeds, not a proof that undiscovered bytes are data."
+            if exhaustive
+            else "Unique bytes reachable from vector/config and heuristic seeds, not a proof that undiscovered bytes are data."
         ),
         "summary": {
             "rom_size_bytes": len(rom),
@@ -1059,8 +1104,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
         "aligned_invalid_count": aligned_invalid_count,
         "excluded_candidate_count": excluded_candidate_count,
         "exclusions": [
-            {"start": region.start, "end": region.end,
-             "reason": region.reason, "evidence": region.evidence}
+            {"start": region.start, "end": region.end, "reason": region.reason, "evidence": region.evidence}
             for region in exclusions
         ],
         "excluded_transfers": excluded_transfers,

@@ -1,6 +1,7 @@
 """The runtime header and the generator must agree on the generated-code ABI version."""
-from pathlib import Path
+
 import re
+from pathlib import Path
 
 from recomp.generate import _RUNTIME_ABI_VERSION
 

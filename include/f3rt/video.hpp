@@ -8,7 +8,7 @@
 
 namespace f3rt {
 
-constexpr int SCREEN_WIDTH  = 320;
+constexpr int SCREEN_WIDTH = 320;
 constexpr int SCREEN_HEIGHT = 232;
 
 struct VideoLine {
@@ -17,7 +17,6 @@ struct VideoLine {
 };
 struct SceneRow;
 struct VideoConfig;
-
 
 // Standalone TC0630FDP software renderer for configured Taito F3 games
 class Video {
@@ -35,10 +34,8 @@ public:
 
     // Decode 16x16 low 4-bpp tiles; optional high 2-bpp data has half the low size.
     // Region lengths determine the independent sprite/playfield tile counts.
-    bool load_roms(std::span<const uint8_t> sprites,
-                   std::span<const uint8_t> sprites_hi,
-                   std::span<const uint8_t> tilemap,
-                   std::span<const uint8_t> tilemap_hi,
+    bool load_roms(std::span<const uint8_t> sprites, std::span<const uint8_t> sprites_hi,
+                   std::span<const uint8_t> tilemap, std::span<const uint8_t> tilemap_hi,
                    const VideoConfig &config);
 
     // Render one 320-wide frame into output buffer (ARGB8888, configured visible height)
@@ -46,10 +43,8 @@ public:
     // - graphics_ram: 0x40000 bytes BE (0x600000..0x63ffff)
     // - control_regs: 0x20 bytes BE (0x660000..0x66001f, 16 words)
     // - output_argb: span of at least 320 * configured visible_height uint32_t elements
-    void render_frame(std::span<const uint8_t> palette_ram,
-                      std::span<const uint8_t> graphics_ram,
-                      std::span<const uint8_t> control_regs,
-                      std::span<uint32_t> output_argb);
+    void render_frame(std::span<const uint8_t> palette_ram, std::span<const uint8_t> graphics_ram,
+                      std::span<const uint8_t> control_regs, std::span<uint32_t> output_argb);
 
     // Advance / vblank hook:
     // If not called separately, render_frame automatically handles the sprite_lag=1
@@ -68,8 +63,7 @@ public:
     // extended_alt_maps. Nonextended mode exposes maps 0..7 at width 512.
     // PF2/PF3 alternate maps are 4/5 in either capable layout.
     // The returned line is invalidated by the next renderer/inspection call.
-    VideoLine inspect_playfield_line(unsigned layer, int y,
-                                     std::span<const uint8_t> graphics_ram);
+    VideoLine inspect_playfield_line(unsigned layer, int y, std::span<const uint8_t> graphics_ram);
     void prepare_text_inspection(std::span<const uint8_t> graphics_ram);
     VideoLine inspect_text_line(int y, std::span<const uint8_t> graphics_ram);
     // 432x256 indexed plane currently prepared for the next render_frame call.

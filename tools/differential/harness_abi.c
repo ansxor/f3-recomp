@@ -8,13 +8,9 @@ static int s_musashi_initialized = 0;
 static int s_musashi_insn_count = 0;
 static void *s_pristine_context;
 
-void diff_set_active_env(DiffEnv *env) {
-    s_active_env = env;
-}
+void diff_set_active_env(DiffEnv *env) { s_active_env = env; }
 
-DiffEnv *diff_get_active_env(void) {
-    return s_active_env;
-}
+DiffEnv *diff_get_active_env(void) { return s_active_env; }
 
 void diff_env_init(DiffEnv *env) {
     if (!env) return;
@@ -187,19 +183,20 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     cpu->a[7] -= 2;
     f3_write16(cpu, cpu->a[7], old_sr);
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
-    static const uint8_t exception_cycles[16] = {
-        4, 4, 50, 50, 20, 38, 40, 20, 34, 25, 20, 20, 4, 4, 4, 30
-    };
-    cpu->cycles += vector < 16 ? exception_cycles[vector] :
-        vector >= 24 && vector < 32 ? 30 : vector >= 32 && vector < 48 ? 24 : 4;
+    static const uint8_t exception_cycles[16] = {4,  4,  50, 50, 20, 38, 40, 20,
+                                                 34, 25, 20, 20, 4,  4,  4,  30};
+    cpu->cycles += vector < 16                   ? exception_cycles[vector]
+                   : vector >= 24 && vector < 32 ? 30
+                   : vector >= 32 && vector < 48 ? 24
+                                                 : 4;
 }
 
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     if ((sr & 0x0700u) < (cpu->sr & 0x0700u)) cpu->dispatch_deadline = 0;
-    uint32_t *old_stack = !(cpu->sr & 0x2000) ? &cpu->usp :
-        (cpu->sr & 0x1000) ? &cpu->msp : &cpu->ssp;
-    uint32_t *new_stack = !(sr & 0x2000) ? &cpu->usp :
-        (sr & 0x1000) ? &cpu->msp : &cpu->ssp;
+    uint32_t *old_stack = !(cpu->sr & 0x2000)  ? &cpu->usp
+                          : (cpu->sr & 0x1000) ? &cpu->msp
+                                               : &cpu->ssp;
+    uint32_t *new_stack = !(sr & 0x2000) ? &cpu->usp : (sr & 0x1000) ? &cpu->msp : &cpu->ssp;
     if (old_stack != new_stack) {
         *old_stack = cpu->a[7];
         cpu->a[7] = *new_stack;
@@ -234,29 +231,17 @@ unsigned int m68k_read_memory_32(unsigned int address) {
     return (w0 << 16) | w1;
 }
 
-unsigned int m68k_read_immediate_16(unsigned int address) {
-    return m68k_read_memory_16(address);
-}
+unsigned int m68k_read_immediate_16(unsigned int address) { return m68k_read_memory_16(address); }
 
-unsigned int m68k_read_immediate_32(unsigned int address) {
-    return m68k_read_memory_32(address);
-}
+unsigned int m68k_read_immediate_32(unsigned int address) { return m68k_read_memory_32(address); }
 
-unsigned int m68k_read_pcrelative_8(unsigned int address) {
-    return m68k_read_memory_8(address);
-}
+unsigned int m68k_read_pcrelative_8(unsigned int address) { return m68k_read_memory_8(address); }
 
-unsigned int m68k_read_pcrelative_16(unsigned int address) {
-    return m68k_read_memory_16(address);
-}
+unsigned int m68k_read_pcrelative_16(unsigned int address) { return m68k_read_memory_16(address); }
 
-unsigned int m68k_read_pcrelative_32(unsigned int address) {
-    return m68k_read_memory_32(address);
-}
+unsigned int m68k_read_pcrelative_32(unsigned int address) { return m68k_read_memory_32(address); }
 
-unsigned int m68k_read_disassembler_8(unsigned int address) {
-    return m68k_read_memory_8(address);
-}
+unsigned int m68k_read_disassembler_8(unsigned int address) { return m68k_read_memory_8(address); }
 
 unsigned int m68k_read_disassembler_16(unsigned int address) {
     return m68k_read_memory_16(address);
@@ -285,8 +270,10 @@ void m68k_write_memory_16(unsigned int address, unsigned int value) {
 void m68k_write_memory_32(unsigned int address, unsigned int value) {
     address &= 0x00ffffffu;
     diff_env_write_byte(s_active_env, (uint32_t)address, (uint8_t)(value >> 24), false);
-    diff_env_write_byte(s_active_env, (uint32_t)(address + 1), (uint8_t)((value >> 16) & 0xFF), false);
-    diff_env_write_byte(s_active_env, (uint32_t)(address + 2), (uint8_t)((value >> 8) & 0xFF), false);
+    diff_env_write_byte(s_active_env, (uint32_t)(address + 1), (uint8_t)((value >> 16) & 0xFF),
+                        false);
+    diff_env_write_byte(s_active_env, (uint32_t)(address + 2), (uint8_t)((value >> 8) & 0xFF),
+                        false);
     diff_env_write_byte(s_active_env, (uint32_t)(address + 3), (uint8_t)(value & 0xFF), false);
     if (s_active_env && s_active_env->num_writes < MAX_WRITES_PER_CASE) {
         s_active_env->writes[s_active_env->num_writes].address = (uint32_t)address;
@@ -324,12 +311,12 @@ void diff_musashi_setup(void) {
         diff_set_active_env(&setup_env);
 
         /* Vectors: SP=0x00028000 at 0, PC=0x00010000 at 4 */
-        uint8_t vectors[8] = { 0x00, 0x02, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00 };
+        uint8_t vectors[8] = {0x00, 0x02, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00};
         diff_env_write_bytes(&setup_env, 0, vectors, 8);
         static const uint32_t HARNESS_SMOKE_PC = 0x00010000;
         static const uint32_t HARNESS_SMOKE_PC_AFTER_NOP = 0x00010002;
         /* Put NOP (0x4E71) at HARNESS_SMOKE_PC */
-        uint8_t nop[2] = { 0x4E, 0x71 };
+        uint8_t nop[2] = {0x4E, 0x71};
         diff_env_write_bytes(&setup_env, HARNESS_SMOKE_PC, nop, 2);
         m68k_pulse_reset();
         /* Drain all reset cycles without running code */
@@ -341,7 +328,9 @@ void diff_musashi_setup(void) {
         m68k_execute(1);
         uint32_t smoke_pc = m68k_get_reg(NULL, M68K_REG_PC);
         if (s_musashi_insn_count != 1 || smoke_pc != HARNESS_SMOKE_PC_AFTER_NOP) {
-            fprintf(stderr, "FATAL: Musashi smoke test failed! insn_count=%d, pc=0x%08X (expected 1, 0x00010002)\n",
+            fprintf(stderr,
+                    "FATAL: Musashi smoke test failed! insn_count=%d, pc=0x%08X (expected 1, "
+                    "0x00010002)\n",
                     s_musashi_insn_count, smoke_pc);
             exit(1);
         }
@@ -354,16 +343,15 @@ void diff_musashi_setup(void) {
     }
 }
 
-void diff_musashi_run_case(const TestCase *tc, DiffEnv *env,
-                           uint32_t out_d[8], uint32_t out_a[8],
+void diff_musashi_run_case(const TestCase *tc, DiffEnv *env, uint32_t out_d[8], uint32_t out_a[8],
                            uint32_t *out_pc, uint16_t *out_sr) {
     diff_set_active_env(env);
     diff_env_reset(env);
 
     /* Write test initial memory */
     for (size_t i = 0; i < tc->num_mem_init; i++) {
-        diff_env_write_bytes(env, tc->initial_mem[i].address,
-                             tc->initial_mem[i].data, tc->initial_mem[i].size);
+        diff_env_write_bytes(env, tc->initial_mem[i].address, tc->initial_mem[i].data,
+                             tc->initial_mem[i].size);
     }
     /* Write instruction opcode bytes at test_pc */
     diff_env_write_bytes(env, tc->initial_pc, tc->code_bytes, tc->code_size);
@@ -410,8 +398,8 @@ void diff_recomp_run_case(const TestCase *tc, DiffEnv *env, f3_cpu *out_cpu) {
 
     /* Write test initial memory */
     for (size_t i = 0; i < tc->num_mem_init; i++) {
-        diff_env_write_bytes(env, tc->initial_mem[i].address,
-                             tc->initial_mem[i].data, tc->initial_mem[i].size);
+        diff_env_write_bytes(env, tc->initial_mem[i].address, tc->initial_mem[i].data,
+                             tc->initial_mem[i].size);
     }
     /* Write instruction opcode bytes at test_pc */
     diff_env_write_bytes(env, tc->initial_pc, tc->code_bytes, tc->code_size);
@@ -436,20 +424,14 @@ void diff_recomp_run_case(const TestCase *tc, DiffEnv *env, f3_cpu *out_cpu) {
 /* ======================================================================== */
 
 static void format_sr_flags(char *buf, size_t maxlen, uint16_t sr) {
-    snprintf(buf, maxlen, "0x%04X [X=%d N=%d Z=%d V=%d C=%d]",
-             sr,
-             (sr >> 4) & 1,
-             (sr >> 3) & 1,
-             (sr >> 2) & 1,
-             (sr >> 1) & 1,
-             sr & 1);
+    snprintf(buf, maxlen, "0x%04X [X=%d N=%d Z=%d V=%d C=%d]", sr, (sr >> 4) & 1, (sr >> 3) & 1,
+             (sr >> 2) & 1, (sr >> 1) & 1, sr & 1);
 }
 
-bool diff_compare_states(const TestCase *tc,
-                         const DiffEnv *musashi_env, const uint32_t musashi_d[8],
-                         const uint32_t musashi_a[8], uint32_t musashi_pc, uint16_t musashi_sr,
-                         const DiffEnv *recomp_env, const f3_cpu *recomp_cpu,
-                         StateDelta *delta) {
+bool diff_compare_states(const TestCase *tc, const DiffEnv *musashi_env,
+                         const uint32_t musashi_d[8], const uint32_t musashi_a[8],
+                         uint32_t musashi_pc, uint16_t musashi_sr, const DiffEnv *recomp_env,
+                         const f3_cpu *recomp_cpu, StateDelta *delta) {
     (void)tc;
     memset(delta, 0, sizeof(*delta));
     memcpy(delta->musashi_d, musashi_d, sizeof(delta->musashi_d));
@@ -472,10 +454,13 @@ bool diff_compare_states(const TestCase *tc,
     for (int i = 0; i < 8; i++) {
         if (musashi_d[i] != recomp_cpu->d[i]) {
             delta->has_mismatch = true;
-            written = snprintf(desc, rem,
-                               "  D%d: expected 0x%08X (Musashi), got 0x%08X (Recomp) [diff 0x%08X]\n",
-                               i, musashi_d[i], recomp_cpu->d[i], musashi_d[i] ^ recomp_cpu->d[i]);
-            if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+            written = snprintf(
+                desc, rem, "  D%d: expected 0x%08X (Musashi), got 0x%08X (Recomp) [diff 0x%08X]\n",
+                i, musashi_d[i], recomp_cpu->d[i], musashi_d[i] ^ recomp_cpu->d[i]);
+            if (written > 0 && (size_t)written < rem) {
+                desc += written;
+                rem -= (size_t)written;
+            }
         }
     }
 
@@ -483,27 +468,36 @@ bool diff_compare_states(const TestCase *tc,
     for (int i = 0; i < 8; i++) {
         if (musashi_a[i] != recomp_cpu->a[i]) {
             delta->has_mismatch = true;
-            written = snprintf(desc, rem,
-                               "  A%d: expected 0x%08X (Musashi), got 0x%08X (Recomp) [diff 0x%08X]\n",
-                               i, musashi_a[i], recomp_cpu->a[i], musashi_a[i] ^ recomp_cpu->a[i]);
-            if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+            written = snprintf(
+                desc, rem, "  A%d: expected 0x%08X (Musashi), got 0x%08X (Recomp) [diff 0x%08X]\n",
+                i, musashi_a[i], recomp_cpu->a[i], musashi_a[i] ^ recomp_cpu->a[i]);
+            if (written > 0 && (size_t)written < rem) {
+                desc += written;
+                rem -= (size_t)written;
+            }
         }
     }
 
     /* 3. Compare Program Counter */
     if (musashi_pc != recomp_cpu->pc) {
         delta->has_mismatch = true;
-        written = snprintf(desc, rem,
-                           "  PC: expected 0x%08X (Musashi), got 0x%08X (Recomp)\n",
+        written = snprintf(desc, rem, "  PC: expected 0x%08X (Musashi), got 0x%08X (Recomp)\n",
                            musashi_pc, recomp_cpu->pc);
-        if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+        if (written > 0 && (size_t)written < rem) {
+            desc += written;
+            rem -= (size_t)written;
+        }
     }
 
     if (musashi_env->cycles != recomp_cpu->cycles) {
         delta->has_mismatch = true;
         written = snprintf(desc, rem, "  Cycles: expected %llu, got %llu\n",
-            (unsigned long long)musashi_env->cycles, (unsigned long long)recomp_cpu->cycles);
-        if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+                           (unsigned long long)musashi_env->cycles,
+                           (unsigned long long)recomp_cpu->cycles);
+        if (written > 0 && (size_t)written < rem) {
+            desc += written;
+            rem -= (size_t)written;
+        }
     }
 
     /* 4. Compare Canonical Status Register (SR) */
@@ -519,18 +513,23 @@ bool diff_compare_states(const TestCase *tc,
                            "  SR: expected %s (Musashi)\n"
                            "      got      %s (Recomp)\n",
                            m_str, r_str);
-        if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+        if (written > 0 && (size_t)written < rem) {
+            desc += written;
+            rem -= (size_t)written;
+        }
 
         /* Detail individual flag differences */
-        static const char *flag_names[5] = { "C", "V", "Z", "N", "X" };
+        static const char *flag_names[5] = {"C", "V", "Z", "N", "X"};
         for (int bit = 4; bit >= 0; bit--) {
             int m_bit = (musashi_sr >> bit) & 1;
             int r_bit = (recomp_cpu->sr >> bit) & 1;
             if (m_bit != r_bit) {
-                written = snprintf(desc, rem,
-                                   "      flag %s mismatch: Musashi=%d, Recomp=%d\n",
+                written = snprintf(desc, rem, "      flag %s mismatch: Musashi=%d, Recomp=%d\n",
                                    flag_names[bit], m_bit, r_bit);
-                if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+                if (written > 0 && (size_t)written < rem) {
+                    desc += written;
+                    rem -= (size_t)written;
+                }
             }
         }
     }
@@ -538,20 +537,28 @@ bool diff_compare_states(const TestCase *tc,
     /* 5. Compare Memory Writes */
     if (musashi_env->num_writes != recomp_env->num_writes) {
         delta->has_mismatch = true;
-        written = snprintf(desc, rem,
-                           "  Write count mismatch: Musashi wrote %zu times, Recomp wrote %zu times\n",
-                           musashi_env->num_writes, recomp_env->num_writes);
-        if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+        written = snprintf(
+            desc, rem, "  Write count mismatch: Musashi wrote %zu times, Recomp wrote %zu times\n",
+            musashi_env->num_writes, recomp_env->num_writes);
+        if (written > 0 && (size_t)written < rem) {
+            desc += written;
+            rem -= (size_t)written;
+        }
     } else {
         for (size_t w = 0; w < musashi_env->num_writes; w++) {
             const MemWrite *mw = &musashi_env->writes[w];
             const MemWrite *rw = &recomp_env->writes[w];
             if (mw->address != rw->address || mw->size != rw->size || mw->value != rw->value) {
                 delta->has_mismatch = true;
-                written = snprintf(desc, rem,
-                                   "  Write #%zu mismatch: Musashi wrote (0x%08X, sz=%u, val=0x%X) vs Recomp (0x%08X, sz=%u, val=0x%X)\n",
-                                   w, mw->address, mw->size, mw->value, rw->address, rw->size, rw->value);
-                if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+                written =
+                    snprintf(desc, rem,
+                             "  Write #%zu mismatch: Musashi wrote (0x%08X, sz=%u, val=0x%X) vs "
+                             "Recomp (0x%08X, sz=%u, val=0x%X)\n",
+                             w, mw->address, mw->size, mw->value, rw->address, rw->size, rw->value);
+                if (written > 0 && (size_t)written < rem) {
+                    desc += written;
+                    rem -= (size_t)written;
+                }
                 break;
             }
         }
@@ -568,10 +575,13 @@ bool diff_compare_states(const TestCase *tc,
             uint8_t rb = rp ? rp[off] : 0;
             if (mb != rb) {
                 delta->has_mismatch = true;
-                written = snprintf(desc, rem,
-                    "  Memory byte mismatch at 0x%08X: Musashi=0x%02X, Recomp=0x%02X\n",
+                written = snprintf(
+                    desc, rem, "  Memory byte mismatch at 0x%08X: Musashi=0x%02X, Recomp=0x%02X\n",
                     (p << 16) | (uint32_t)off, mb, rb);
-                if (written > 0 && (size_t)written < rem) { desc += written; rem -= (size_t)written; }
+                if (written > 0 && (size_t)written < rem) {
+                    desc += written;
+                    rem -= (size_t)written;
+                }
                 break;
             }
         }

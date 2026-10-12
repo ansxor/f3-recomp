@@ -5,16 +5,28 @@
 
 namespace f3rt {
 enum class UiActionKind {
-    SaveState, LoadState, Screenshot, ApplySettings, ApplyPostprocess, SavePreferences,
-    NetplayHost, NetplayJoin, NetplayLocal, NetplayCancel
+    SaveState,
+    LoadState,
+    Screenshot,
+    ApplySettings,
+    ApplyPostprocess,
+    SavePreferences,
+    NetplayHost,
+    NetplayJoin,
+    NetplayLocal,
+    NetplayCancel
 };
-struct UiAction { UiActionKind kind; unsigned slot = 0; };
+struct UiAction {
+    UiActionKind kind;
+    unsigned slot = 0;
+};
 struct FrontendUiState {
     bool gpu_available = false;
     bool enhanced_audio_available = true;
     std::string status = "Solo", message;
     std::string active_postprocess = "off";
-    std::string active_renderer; // this session's renderer; differs from the saved preference after a restart-only change or a developer --renderer
+    std::string
+        active_renderer; // this session's renderer; differs from the saved preference after a restart-only change or a developer --renderer
     std::string set;
 
     // Netplay
@@ -57,8 +69,9 @@ public:
     void render_cpu(); // after game texture, before SDL_RenderPresent
     // GpuVideo overlay callback: after game blit, before command submission.
     void render_gpu(SDL_GPUCommandBuffer *, SDL_GPUTexture *, Uint32 width, Uint32 height);
+
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Impl> m_impl;
 };
-}
+} // namespace f3rt

@@ -17,11 +17,9 @@
 namespace f3rt {
 namespace {
 
-
 // Decode once only when every byte is contiguous and has no observable bus
 // side effect. All boundary/mirror-wrap cases retain ordered byte accesses.
-template<unsigned Width, bool Write>
-uint8_t *direct_bytes(Machine &m, uint32_t a) {
+template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t a) {
     a &= 0xffffff;
     if constexpr (!Write) {
         if (a <= m.roms.main.size() - Width) return m.roms.main.data() + a;
@@ -30,26 +28,29 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
         const uint32_t offset = a & RAM_MIRROR_MASK;
         if (offset <= m.ram.size() - Width) return m.ram.data() + offset;
     }
-    if (a - PALETTE_BASE <= m.palette.size() - Width)
-        return m.palette.data() + (a - PALETTE_BASE);
+    if (a - PALETTE_BASE <= m.palette.size() - Width) return m.palette.data() + (a - PALETTE_BASE);
     if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
         // Sprite-RAM stores must reach SpriteUnits/sprite_writers (entry attribution), so they take the byte path.
-        if constexpr (Write) if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE) return nullptr;
+        if constexpr (Write)
+            if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE)
+                return nullptr;
         // Discovery logging must see every graphics store byte by byte (PC attribution).
-        if constexpr (Write) if (m.discovery) return nullptr;
+        if constexpr (Write)
+            if (m.discovery) return nullptr;
         return m.graphics.data() + (a - GRAPHICS_BASE);
     }
     if constexpr (!Write) {
-        if (a - SHARED_BASE <= m.shared.size() - Width)
-            return m.shared.data() + (a - SHARED_BASE);
+        if (a - SHARED_BASE <= m.shared.size() - Width) return m.shared.data() + (a - SHARED_BASE);
     }
     return nullptr;
 }
-}
-Machine::Machine(RomSet set) : pixels_(320 * set.video.visible_height),
-    roms(std::move(set)), video(std::make_unique<Video>()),
-    audio(std::make_unique<Audio>()), eeprom(std::make_unique<Eeprom>()) {
-    if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END || roms.main.size() % 4)
+} // namespace
+Machine::Machine(RomSet set)
+    : m_pixels(size_t(320) * set.video.visible_height), roms(std::move(set)),
+      video(std::make_unique<Video>()), audio(std::make_unique<Audio>()),
+      eeprom(std::make_unique<Eeprom>()) {
+    if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
+        roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
     if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Invalid video ROM regions");
@@ -69,14 +70,13 @@ Machine::Machine(RomSet set) : pixels_(320 * set.video.visible_height),
                                         roms.factory_eeprom[2 * i + 1]);
     }
     // Analog ports start at counter zero; resets preserve the serialized counters.
-    if (roms.input.dial)
-        inputs[2] = inputs[3] = 0xffff0000;
+    if (roms.input.dial) inputs[2] = inputs[3] = 0xffff0000;
     reset();
 }
 Machine::~Machine() = default;
 const std::vector<uint32_t> &Machine::native_pixels() const {
     if (game_video) game_video->materialize_native();
-    return pixels_;
+    return m_pixels;
 }
 void Machine::use_native_sound(const f3_block *program, size_t count,
                                std::span<const f3_excluded_range> excluded, uint32_t expected_crc) {
@@ -96,15 +96,15 @@ uint32_t Machine::sound_pc() const {
     return sound_native ? sound_native->pc() : interpreter->sound_pc();
 }
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
-    return (pixels * main_clock + pixel_clock - 1) / pixel_clock;
+    return (pixels * MAIN_CLOCK + PIXEL_CLOCK - 1) / PIXEL_CLOCK;
 }
 void Machine::reset_devices() {
     cpu.dispatch_deadline = 0;
     audio->set_reset(true);
     eeprom->pins(0, cpu.cycles);
     pending_irqs = 0;
-    irq3_at = UINT64_MAX;
-    watchdog_at = cpu.cycles + 3ull * main_clock;
+    m_irq3_at = UINT64_MAX;
+    m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
 }
 void Machine::reset() {
     if (sprite_units) sprite_units->reset();
@@ -112,9 +112,9 @@ void Machine::reset() {
     cpu = {};
     cpu.runtime = this;
     eeprom->reset();
-    frame = hardware_cycles = 0;
+    frame = m_hardware_cycles = 0;
     // Reference beam time zero is VBSTART, not scanline zero.
-    next_vblank = raster_cycle(frame_pixels);
+    m_next_vblank = raster_cycle(FRAME_PIXELS);
     reset_devices();
     audio->reset_board();
     if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
@@ -152,7 +152,8 @@ uint8_t Machine::read8(uint32_t a) {
     if (a < ROM_END) return a < roms.main.size() ? roms.main[a] : 0xff;
     if (a >= RAM_BASE && a < RAM_END) return ram[a & RAM_MIRROR_MASK];
     if (a >= PALETTE_BASE && a < PALETTE_END) return palette[a - PALETTE_BASE];
-    if (a >= IO_BASE && a < IO_END) return uint8_t(input_word((a - IO_BASE) / 4) >> (24 - 8 * (a & 3)));
+    if (a >= IO_BASE && a < IO_END)
+        return uint8_t(input_word((a - IO_BASE) / 4) >> (24 - 8 * (a & 3)));
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) return graphics[a - GRAPHICS_BASE];
     if (a >= SHARED_BASE && a < SHARED_END) return shared[a - SHARED_BASE];
     return 0xff; // MAME unmapped bus value, not physical-board mirror speculation.
@@ -183,7 +184,10 @@ void Machine::write8(uint32_t a, uint8_t v) {
         if (sprite_units) sprite_units->note_write(a, 1);
         return;
     }
-    if (a >= PALETTE_BASE && a < PALETTE_END) { palette[a - PALETTE_BASE] = v; return; }
+    if (a >= PALETTE_BASE && a < PALETTE_END) {
+        palette[a - PALETTE_BASE] = v;
+        return;
+    }
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
         if (discovery) discovery->video_write(cpu.pc, a);
         const uint32_t offset = a - GRAPHICS_BASE;
@@ -194,7 +198,8 @@ void Machine::write8(uint32_t a, uint8_t v) {
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
         if (discovery) discovery->video_write(cpu.pc, a);
-        control[a - CONTROL_BASE] = v; return;
+        control[a - CONTROL_BASE] = v;
+        return;
     }
     if (a >= SHARED_BASE && a < SHARED_END) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
@@ -205,13 +210,27 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if ((a >= SOUND_RESET_RELEASE && a < SOUND_RESET_RELEASE + 4) ||
         (a >= SOUND_RESET_ASSERT && a < SOUND_RESET_ASSERT + 4)) {
         if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
-        audio->set_reset(a >= SOUND_RESET_ASSERT); return;
+        audio->set_reset(a >= SOUND_RESET_ASSERT);
+        return;
     }
     // Watchdog deadline: 3 seconds.
-    if (a >= WATCHDOG && a < WATCHDOG + 4) { watchdog_at = cpu.cycles + 3ull * main_clock; return; }
-    if (a == COIN_BANK0 || a == COIN_BANK1) { coin_write(a == COIN_BANK1, v); return; }
-    if (a == COIN_BANK0 + 1 || a == COIN_BANK1 + 1) { auto &word = coin_word[a == COIN_BANK1 + 1]; word = uint16_t((word & 0xff00) | v); return; }
-    if (a == EEPROM_PINS) { eeprom->pins(v, cpu.cycles); return; }
+    if (a >= WATCHDOG && a < WATCHDOG + 4) {
+        m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
+        return;
+    }
+    if (a == COIN_BANK0 || a == COIN_BANK1) {
+        coin_write(a == COIN_BANK1, v);
+        return;
+    }
+    if (a == COIN_BANK0 + 1 || a == COIN_BANK1 + 1) {
+        auto &word = coin_word[a == COIN_BANK1 + 1];
+        word = uint16_t((word & 0xff00) | v);
+        return;
+    }
+    if (a == EEPROM_PINS) {
+        eeprom->pins(v, cpu.cycles);
+        return;
+    }
     if (a == TIMER_CONTROL) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
     if (a == TIMER_CONTROL + 1) timer_control = uint16_t((timer_control & 0xff00) | v);
     // MAME records this timer control but does not assert timer IRQ5.
@@ -239,22 +258,25 @@ void Machine::write32(uint32_t a, uint32_t v) {
     write16(a + 2, uint16_t(v));
 }
 void Machine::advance_to(uint64_t cycles) {
-    if (cycles < hardware_cycles) throw std::runtime_error("CPU cycle clock moved backwards");
-    while (hardware_cycles < cycles) {
-        const uint64_t event = std::min(next_vblank, irq3_at);
+    if (cycles < m_hardware_cycles) throw std::runtime_error("CPU cycle clock moved backwards");
+    while (m_hardware_cycles < cycles) {
+        const uint64_t event = std::min(m_next_vblank, m_irq3_at);
         const uint64_t end = std::min(cycles, event);
-        audio->advance(uint32_t(end - hardware_cycles));
-        hardware_cycles = end;
-        if (hardware_cycles == next_vblank) {
+        audio->advance(uint32_t(end - m_hardware_cycles));
+        m_hardware_cycles = end;
+        if (m_hardware_cycles == m_next_vblank) {
             if (game_video) game_video->render_frame();
-            else video->render_frame(palette, graphics, control, pixels_);
+            else video->render_frame(palette, graphics, control, m_pixels);
             pending_irqs |= 1u << 2;
-            irq3_at = next_vblank + 10000;
+            m_irq3_at = m_next_vblank + 10000;
             ++frame;
-            next_vblank = raster_cycle((frame + 1) * frame_pixels);
+            m_next_vblank = raster_cycle((frame + 1) * FRAME_PIXELS);
             if (sprite_units) sprite_units->frame_end();
         }
-        if (hardware_cycles == irq3_at) { pending_irqs |= 1u << 3; irq3_at = UINT64_MAX; }
+        if (m_hardware_cycles == m_irq3_at) {
+            pending_irqs |= 1u << 3;
+            m_irq3_at = UINT64_MAX;
+        }
     }
 }
 int Machine::boundary() {
@@ -282,14 +304,14 @@ int Machine::boundary() {
             return 1;
         }
     }
-    if (cpu.cycles >= watchdog_at) {
+    if (cpu.cycles >= m_watchdog_at) {
         reset_devices();
         audio->reset_board();
         if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
         reset_main_cpu();
         return 1;
     }
-    const uint64_t next_event = std::min({next_vblank, irq3_at, watchdog_at});
+    const uint64_t next_event = std::min({m_next_vblank, m_irq3_at, m_watchdog_at});
     if (cpu.stopped) {
         cpu.cycles = next_event;
         advance_to(cpu.cycles);
@@ -305,9 +327,9 @@ int Machine::fallback() {
         if (physical_pc < range.start) break;
         if (physical_pc < range.end) {
             std::ostringstream message;
-            message << "Excluded main CPU instruction at PC 0x" << std::hex << cpu.pc
-                    << " in [0x" << range.start << ", 0x" << range.end << "): "
-                    << range.reason << "; evidence: " << range.evidence;
+            message << "Excluded main CPU instruction at PC 0x" << std::hex << cpu.pc << " in [0x"
+                    << range.start << ", 0x" << range.end << "): " << range.reason
+                    << "; evidence: " << range.evidence;
             cpu.halted = 1;
             throw std::runtime_error(message.str());
         }
@@ -326,9 +348,11 @@ bool Machine::run_frame(bool translated) {
     const uint64_t target = frame + 1;
     while (frame < target && !cpu.halted) {
         if (translated) {
-            if (!f3_dispatch(&cpu)) { audio->finish_frame(); return false; }
-        }
-        else if (!boundary()) {
+            if (!f3_dispatch(&cpu)) {
+                audio->finish_frame();
+                return false;
+            }
+        } else if (!boundary()) {
             // Reference execution must hand MMIO/IRQ changes back at every
             // instruction boundary. Coarse slices alter the ROM boot checks.
             if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
@@ -342,19 +366,13 @@ void Machine::load_eeprom(const std::filesystem::path &p) { eeprom->load(p); }
 void Machine::save_eeprom(const std::filesystem::path &p) const { eeprom->save(p); }
 void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
     if (port >= inputs.size()) throw std::out_of_range("Input port index");
-    if (pressed) inputs[port] &= ~mask; else inputs[port] |= mask;
+    if (pressed) inputs[port] &= ~mask;
+    else inputs[port] |= mask;
 }
 size_t Machine::state_size() const {
-    size_t sz = sizeof(CanonicalF3Cpu) +
-                sizeof(CanonicalMachineClocks) +
-                ram.size() +
-                palette.size() +
-                graphics.size() +
-                control.size() +
-                shared.size() +
-                sizeof(uint32_t) * pixels_.size() +
-                eeprom->state_size() +
-                audio->state_size() +
+    size_t sz = sizeof(CanonicalF3Cpu) + sizeof(CanonicalMachineClocks) + ram.size() +
+                palette.size() + graphics.size() + control.size() + shared.size() +
+                sizeof(uint32_t) * m_pixels.size() + eeprom->state_size() + audio->state_size() +
                 video->state_size();
     if (!audio->is_enhanced_active()) {
         if (sound_native) sz += sound_native->state_size();
@@ -368,7 +386,8 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     const size_t expected = state_size();
     if (dst.size() != expected) {
         throw std::invalid_argument("Machine snapshot save size mismatch: expected " +
-            std::to_string(expected) + ", got " + std::to_string(dst.size()));
+                                    std::to_string(expected) + ", got " +
+                                    std::to_string(dst.size()));
     }
     StateWriter writer(dst);
     // 1. Native CPU
@@ -401,10 +420,10 @@ void Machine::save_state(std::span<uint8_t> dst) const {
 
     // 2. Machine clocks, scheduler, inputs & coins
     CanonicalMachineClocks mcl{};
-    mcl.hardware_cycles = hardware_cycles;
-    mcl.next_vblank = next_vblank;
-    mcl.irq3_at = irq3_at;
-    mcl.watchdog_at = watchdog_at;
+    mcl.hardware_cycles = m_hardware_cycles;
+    mcl.next_vblank = m_next_vblank;
+    mcl.irq3_at = m_irq3_at;
+    mcl.watchdog_at = m_watchdog_at;
     mcl.frame = frame;
     mcl.pending_irqs = pending_irqs;
     mcl.timer_control = timer_control;
@@ -465,7 +484,8 @@ void Machine::load_state(std::span<const uint8_t> src) {
     const size_t expected = state_size();
     if (src.size() != expected) {
         throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
-            std::to_string(expected) + ", got " + std::to_string(src.size()));
+                                    std::to_string(expected) + ", got " +
+                                    std::to_string(src.size()));
     }
     native_pixels();
     if (sprite_units) sprite_units->reset();
@@ -503,10 +523,10 @@ void Machine::load_state(std::span<const uint8_t> src) {
     // 2. Machine clocks, scheduler, inputs & coins
     CanonicalMachineClocks mcl;
     reader.read(mcl);
-    hardware_cycles = mcl.hardware_cycles;
-    next_vblank = mcl.next_vblank;
-    irq3_at = mcl.irq3_at;
-    watchdog_at = mcl.watchdog_at;
+    m_hardware_cycles = mcl.hardware_cycles;
+    m_next_vblank = mcl.next_vblank;
+    m_irq3_at = mcl.irq3_at;
+    m_watchdog_at = mcl.watchdog_at;
     frame = mcl.frame;
     pending_irqs = mcl.pending_irqs;
     timer_control = mcl.timer_control;
@@ -524,7 +544,7 @@ void Machine::load_state(std::span<const uint8_t> src) {
     reader.read_span(std::span<uint8_t, 0x40000>(graphics));
     reader.read_span(std::span<uint8_t, 0x20>(control));
     reader.read_span(std::span<uint8_t, 0x800>(shared));
-    reader.read_span(std::span<uint32_t>(pixels_));
+    reader.read_span(std::span<uint32_t>(m_pixels));
 
     // 4. EEPROM
     eeprom->load_state(reader);
@@ -569,11 +589,11 @@ void Machine::load_state(std::span<const uint8_t> src) {
 
 uint32_t Machine::state_crc() const {
     const size_t sz = state_size();
-    if (state_scratch_.size() != sz) {
-        state_scratch_.resize(sz);
+    if (m_state_scratch.size() != sz) {
+        m_state_scratch.resize(sz);
     }
-    save_state(state_scratch_);
-    return crc32(state_scratch_.data(), state_scratch_.size());
+    save_state(m_state_scratch);
+    return crc32(m_state_scratch.data(), m_state_scratch.size());
 }
 
 static_assert(SnapshotRoot<Machine>);

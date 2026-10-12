@@ -1,4 +1,5 @@
 """pytest fixtures and configuration for f3-recomp tests."""
+
 import sys
 from pathlib import Path
 

@@ -171,21 +171,10 @@ struct ActionWriteLog {
     SessionSnapshot snapshot;
 };
 
-using Action = std::variant<
-    ActionSendWelcome,
-    ActionSendRoomCreated,
-    ActionSendMatchStart,
-    ActionSendGo,
-    ActionSendSyncBlobFwd,
-    ActionSendDesync,
-    ActionSendResultAck,
-    ActionSendChatFwd,
-    ActionSendPeerLeft,
-    ActionSendError,
-    ActionSendInputs,
-    ActionDisconnect,
-    ActionWriteLog
->;
+using Action = std::variant<ActionSendWelcome, ActionSendRoomCreated, ActionSendMatchStart,
+                            ActionSendGo, ActionSendSyncBlobFwd, ActionSendDesync,
+                            ActionSendResultAck, ActionSendChatFwd, ActionSendPeerLeft,
+                            ActionSendError, ActionSendInputs, ActionDisconnect, ActionWriteLog>;
 
 // Token bucket for in-session chat
 struct ChatBucket {
@@ -198,7 +187,8 @@ struct ChatBucket {
         } else {
             double elapsed = now - last_time;
             if (elapsed > 0.0) {
-                tokens = std::min(static_cast<double>(CHAT_BURST), tokens + elapsed * CHAT_REFILL_PER_SEC);
+                tokens = std::min(static_cast<double>(CHAT_BURST),
+                                  tokens + elapsed * CHAT_REFILL_PER_SEC);
             }
         }
         last_time = now;
@@ -292,20 +282,26 @@ public:
 
     // Feed events into state machine; side-effects appended to out_actions
     void on_client_connected(ClientSlotId slot, double now, std::vector<Action> &out);
-    void on_client_disconnected(ClientSlotId slot, std::string_view reason, double now, std::vector<Action> &out);
+    void on_client_disconnected(ClientSlotId slot, std::string_view reason, double now,
+                                std::vector<Action> &out);
 
     void on_hello(ClientSlotId slot, std::string_view game_id,
                   std::span<const uint32_t, ROM_CRCS_COUNT> rom_crcs,
                   std::span<const uint8_t, BUILD_HASH_SIZE> build_hash,
                   std::string_view player_name, double now, std::vector<Action> &out);
 
-    void on_create_room(ClientSlotId slot, uint8_t input_delay, uint8_t flags, double now, std::vector<Action> &out);
-    void on_join_room(ClientSlotId slot, std::string_view room_code, double now, std::vector<Action> &out);
-    void on_sync_blob(ClientSlotId slot, std::span<const uint8_t> data, double now, std::vector<Action> &out);
+    void on_create_room(ClientSlotId slot, uint8_t input_delay, uint8_t flags, double now,
+                        std::vector<Action> &out);
+    void on_join_room(ClientSlotId slot, std::string_view room_code, double now,
+                      std::vector<Action> &out);
+    void on_sync_blob(ClientSlotId slot, std::span<const uint8_t> data, double now,
+                      std::vector<Action> &out);
     void on_inputs(ClientSlotId slot, uint32_t first_frame, uint8_t count,
                    std::span<const uint16_t> inputs, double now, std::vector<Action> &out);
-    void on_crc(ClientSlotId slot, uint32_t frame, uint32_t crc, double now, std::vector<Action> &out);
-    void on_result(ClientSlotId slot, uint32_t frame, uint8_t winner, uint32_t final_crc, double now, std::vector<Action> &out);
+    void on_crc(ClientSlotId slot, uint32_t frame, uint32_t crc, double now,
+                std::vector<Action> &out);
+    void on_result(ClientSlotId slot, uint32_t frame, uint8_t winner, uint32_t final_crc,
+                   double now, std::vector<Action> &out);
     void on_chat(ClientSlotId slot, std::string_view text, double now, std::vector<Action> &out);
     void on_bye(ClientSlotId slot, double now, std::vector<Action> &out);
 
@@ -313,22 +309,24 @@ public:
     void tick(double now, std::vector<Action> &out);
 
     // Query state
-    size_t active_rooms_count() const { return rooms_.size(); }
-    size_t active_sessions_count() const { return sessions_.size(); }
-    const ClientSessionInfo &client_info(ClientSlotId slot) const { return clients_[slot]; }
+    size_t active_rooms_count() const { return m_rooms.size(); }
+    size_t active_sessions_count() const { return m_sessions.size(); }
+    const ClientSessionInfo &client_info(ClientSlotId slot) const { return m_clients[slot]; }
 
 private:
-    void fail_client(ClientSlotId slot, NetplayErrorCode code, std::string_view msg, double now, std::vector<Action> &out);
-    void end_session(SessionInternal &sess, std::string_view reason, int ended_by, double now, std::vector<Action> &out);
+    void fail_client(ClientSlotId slot, NetplayErrorCode code, std::string_view msg, double now,
+                     std::vector<Action> &out);
+    void end_session(SessionInternal &sess, std::string_view reason, int ended_by, double now,
+                     std::vector<Action> &out);
     void remove_room(std::string_view code);
     std::string generate_unique_code();
     uint64_t generate_unique_session_id();
     void maybe_send_go(SessionInternal &sess, std::vector<Action> &out);
 
-    size_t max_rooms_ = MAX_ROOMS_ALLOWED;
-    std::array<ClientSessionInfo, MAX_CLIENTS> clients_{};
-    std::map<std::string, RoomInfo> rooms_;
-    std::map<uint64_t, SessionInternal> sessions_;
+    size_t m_max_rooms = MAX_ROOMS_ALLOWED;
+    std::array<ClientSessionInfo, MAX_CLIENTS> m_clients{};
+    std::map<std::string, RoomInfo> m_rooms;
+    std::map<uint64_t, SessionInternal> m_sessions;
 };
 
 } // namespace f3rt::netplay

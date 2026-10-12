@@ -16,7 +16,8 @@ extern "C" {
  * bits of sr must call f3_cc_flush first. Generated code does not flush at block
  * exits or chains. Runtime writes to SR invalidate cc_op. cycles is a monotonic
  * scheduling clock, not exact timing. */
-typedef struct f3_cpu {
+typedef struct
+    f3_cpu { // NOLINT(readability-identifier-naming): C ABI struct used by generated code
     uint32_t d[8], a[8];
     uint32_t pc, usp, ssp, msp, vbr;
     uint32_t sfc, dfc, cacr, caar;
@@ -32,13 +33,15 @@ typedef struct f3_cpu {
 } f3_cpu;
 
 /* Condition Code Operations for Lazy Evaluation */
+// NOLINTBEGIN(readability-identifier-naming): C ABI enum constants used by generated code
 enum {
-    F3_CC_OP_NONE  = 0,
+    F3_CC_OP_NONE = 0,
     F3_CC_OP_LOGIC = 1,
-    F3_CC_OP_ADD   = 2,
-    F3_CC_OP_SUB   = 3,
-    F3_CC_OP_CMP   = 4,
+    F3_CC_OP_ADD = 2,
+    F3_CC_OP_SUB = 3,
+    F3_CC_OP_CMP = 4
 };
+// NOLINTEND(readability-identifier-naming)
 
 /* CCR Flags bit positions in SR */
 #define F3_CCR_C 0x01u
@@ -105,14 +108,16 @@ static inline void f3_cc_flush(f3_cpu *cpu) {
 }
 
 typedef void (*f3_block_fn)(f3_cpu *cpu);
-typedef struct f3_block {
+typedef struct
+    f3_block { // NOLINT(readability-identifier-naming): C ABI struct used by generated code
     uint32_t address;
     f3_block_fn execute;
 } f3_block;
 
 /* Immutable instruction-start exclusions; end is exclusive. ROM data reads
  * remain legal. Metadata and strings must outlive the CPU. */
-typedef struct f3_excluded_range {
+typedef struct
+    f3_excluded_range { // NOLINT(readability-identifier-naming): C ABI struct used by generated code
     uint32_t start, end;
     const char *reason, *evidence;
 } f3_excluded_range;
@@ -153,6 +158,9 @@ int f3_dispatch(f3_cpu *cpu);
  * flushes pending flags before reading CCR; canonical SR on exit. Return
  * nonzero on success; zero means no fallback is available. */
 int f3_fallback(f3_cpu *cpu);
+/* Musashi bridge (runtime/core_state.c): load/store CPU state around a run. */
+void f3rt_core_import(const f3_cpu *cpu);
+void f3rt_core_export(f3_cpu *cpu);
 
 /* Render-only emit-unit hooks (ABI 4). Generated code calls these at the label
  * of a declared unit start/end PC, after flushing pending flags and before that

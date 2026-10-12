@@ -29,33 +29,25 @@ private:
         double last_time = 0.0;
     };
 
-    int burst_;
-    double refill_per_sec_;
-    size_t max_buckets_;
-    double last_prune_time_ = 0.0;
-    mutable std::mutex mu_;
-    std::unordered_map<std::string, Bucket> buckets_;
+    int m_burst;
+    double m_refill_per_sec;
+    size_t m_max_buckets;
+    double m_last_prune_time = 0.0;
+    mutable std::mutex m_mu;
+    std::unordered_map<std::string, Bucket> m_buckets;
 };
 
 // Signature for connect token generation:
 // Takes (client_id, public_address, protocol_id, private_key_32b, expire_sec, timeout_sec)
 // Returns 2048-byte token or nullopt on failure
 using TokenMintFn = std::function<std::optional<std::array<uint8_t, yojimbo::ConnectTokenBytes>>(
-    uint64_t client_id,
-    const std::string &public_address,
-    uint64_t protocol_id,
-    std::span<const uint8_t, 32> private_key,
-    int expire_sec,
-    int timeout_sec)>;
+    uint64_t client_id, const std::string &public_address, uint64_t protocol_id,
+    std::span<const uint8_t, 32> private_key, int expire_sec, int timeout_sec)>;
 
 // Default Netcode connect token minting function using netcode C API
-std::optional<std::array<uint8_t, yojimbo::ConnectTokenBytes>> default_netcode_mint_fn(
-    uint64_t client_id,
-    const std::string &public_address,
-    uint64_t protocol_id,
-    std::span<const uint8_t, 32> private_key,
-    int expire_sec,
-    int timeout_sec);
+std::optional<std::array<uint8_t, yojimbo::ConnectTokenBytes>>
+default_netcode_mint_fn(uint64_t client_id, const std::string &public_address, uint64_t protocol_id,
+                        std::span<const uint8_t, 32> private_key, int expire_sec, int timeout_sec);
 
 // HTTP Server serving GET /token?v=<PROTOCOL_VERSION>
 class TokenServer {
@@ -81,18 +73,18 @@ public:
     // Stop HTTP server and join thread
     void stop();
 
-    bool is_running() const { return running_; }
-    int bound_port() const { return bound_port_; }
+    bool is_running() const { return m_running; }
+    int bound_port() const { return m_bound_port; }
 
 private:
     struct Impl;
-    Config config_;
-    std::array<uint8_t, 32> private_key_{};
-    TokenMintFn mint_fn_;
-    IpRateLimiter limiter_;
-    std::unique_ptr<Impl> impl_;
-    bool running_ = false;
-    int bound_port_ = 0;
+    Config m_config;
+    std::array<uint8_t, 32> m_private_key{};
+    TokenMintFn m_mint_fn;
+    IpRateLimiter m_limiter;
+    std::unique_ptr<Impl> m_impl;
+    bool m_running = false;
+    int m_bound_port = 0;
 };
 
 } // namespace f3rt::netplay

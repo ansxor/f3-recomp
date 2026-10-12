@@ -18,10 +18,10 @@ namespace {
 
 bool boot_complete(const Machine &m) { return m.cpu.cacr == 1; }
 
-const GameBoot boot{&boot_complete, 1200};
+const GameBoot BOOT{&boot_complete, 1200};
 
 } // namespace
 
-const GameBoot *game_boot() { return &boot; }
+const GameBoot *game_boot() { return &BOOT; }
 
 } // namespace f3rt

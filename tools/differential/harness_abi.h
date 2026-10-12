@@ -90,19 +90,17 @@ DiffEnv *diff_get_active_env(void);
 
 /* Musashi execution harness */
 void diff_musashi_setup(void);
-void diff_musashi_run_case(const TestCase *tc, DiffEnv *env,
-                           uint32_t out_d[8], uint32_t out_a[8],
+void diff_musashi_run_case(const TestCase *tc, DiffEnv *env, uint32_t out_d[8], uint32_t out_a[8],
                            uint32_t *out_pc, uint16_t *out_sr);
 
 /* Recomp execution harness */
 void diff_recomp_run_case(const TestCase *tc, DiffEnv *env, f3_cpu *out_cpu);
 
 /* Compare outcomes and format detailed delta report if any mismatch */
-bool diff_compare_states(const TestCase *tc,
-                         const DiffEnv *musashi_env, const uint32_t musashi_d[8],
-                         const uint32_t musashi_a[8], uint32_t musashi_pc, uint16_t musashi_sr,
-                         const DiffEnv *recomp_env, const f3_cpu *recomp_cpu,
-                         StateDelta *delta);
+bool diff_compare_states(const TestCase *tc, const DiffEnv *musashi_env,
+                         const uint32_t musashi_d[8], const uint32_t musashi_a[8],
+                         uint32_t musashi_pc, uint16_t musashi_sr, const DiffEnv *recomp_env,
+                         const f3_cpu *recomp_cpu, StateDelta *delta);
 
 #ifdef __cplusplus
 }

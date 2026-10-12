@@ -14,27 +14,29 @@ namespace f3rt::hle {
 namespace HWY_NAMESPACE {
 namespace hn = hwy::HWY_NAMESPACE;
 
+namespace {
+// NOLINTNEXTLINE(readability-identifier-naming): Highway HWY_EXPORT/HWY_DYNAMIC_DISPATCH name is part of the dispatch table symbol
 void RenderVoiceBlock(const VoiceBlock &b) {
     if (b.frames == 0 || b.lanes == 0) {
         return;
     }
 
     const hn::ScalableTag<float> d;
-    const size_t N = hn::Lanes(d);
+    const size_t n = hn::Lanes(d);
 
-    for (size_t lane = 0; lane < b.lanes; lane += N) {
-        auto s0 = hn::LoadU(d, b.state + 0 * voice_lane_stride + lane);
-        auto s1 = hn::LoadU(d, b.state + 1 * voice_lane_stride + lane);
-        auto s2 = hn::LoadU(d, b.state + 2 * voice_lane_stride + lane);
-        auto s3 = hn::LoadU(d, b.state + 3 * voice_lane_stride + lane);
+    for (size_t lane = 0; lane < b.lanes; lane += n) {
+        auto s0 = hn::LoadU(d, b.state + 0 * VOICE_LANE_STRIDE + lane);
+        auto s1 = hn::LoadU(d, b.state + 1 * VOICE_LANE_STRIDE + lane);
+        auto s2 = hn::LoadU(d, b.state + 2 * VOICE_LANE_STRIDE + lane);
+        auto s3 = hn::LoadU(d, b.state + 3 * VOICE_LANE_STRIDE + lane);
 
-        auto prev0 = hn::LoadU(d, b.previous + 0 * voice_lane_stride + lane);
-        auto prev1 = hn::LoadU(d, b.previous + 1 * voice_lane_stride + lane);
-        auto prev2 = hn::LoadU(d, b.previous + 2 * voice_lane_stride + lane);
-        auto prev3 = hn::LoadU(d, b.previous + 3 * voice_lane_stride + lane);
+        auto prev0 = hn::LoadU(d, b.previous + 0 * VOICE_LANE_STRIDE + lane);
+        auto prev1 = hn::LoadU(d, b.previous + 1 * VOICE_LANE_STRIDE + lane);
+        auto prev2 = hn::LoadU(d, b.previous + 2 * VOICE_LANE_STRIDE + lane);
+        auto prev3 = hn::LoadU(d, b.previous + 3 * VOICE_LANE_STRIDE + lane);
 
         HWY_ALIGN float modes[64] = {};
-        for (size_t i = 0; i < N; ++i) {
+        for (size_t i = 0; i < n; ++i) {
             modes[i] = static_cast<float>(b.mode[lane + i]);
         }
         const auto m = hn::Load(d, modes);
@@ -43,7 +45,7 @@ void RenderVoiceBlock(const VoiceBlock &b) {
         const auto hp3 = hn::Lt(m, hn::Set(d, 2.0f));
 
         for (size_t f = 0; f < b.frames; ++f) {
-            const size_t o = f * voice_lane_stride + lane;
+            const size_t o = f * VOICE_LANE_STRIDE + lane;
             auto x = hn::LoadU(d, b.input + o);
             const auto a1 = hn::LoadU(d, b.a1 + o);
             const auto a2 = hn::LoadU(d, b.a2 + o);
@@ -83,20 +85,21 @@ void RenderVoiceBlock(const VoiceBlock &b) {
             hn::StoreU(hn::Mul(y3, gr), d, b.out_right + o);
         }
 
-        hn::StoreU(s0, d, b.state + 0 * voice_lane_stride + lane);
-        hn::StoreU(s1, d, b.state + 1 * voice_lane_stride + lane);
-        hn::StoreU(s2, d, b.state + 2 * voice_lane_stride + lane);
-        hn::StoreU(s3, d, b.state + 3 * voice_lane_stride + lane);
+        hn::StoreU(s0, d, b.state + 0 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(s1, d, b.state + 1 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(s2, d, b.state + 2 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(s3, d, b.state + 3 * VOICE_LANE_STRIDE + lane);
 
-        hn::StoreU(prev0, d, b.previous + 0 * voice_lane_stride + lane);
-        hn::StoreU(prev1, d, b.previous + 1 * voice_lane_stride + lane);
-        hn::StoreU(prev2, d, b.previous + 2 * voice_lane_stride + lane);
-        hn::StoreU(prev3, d, b.previous + 3 * voice_lane_stride + lane);
+        hn::StoreU(prev0, d, b.previous + 0 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(prev1, d, b.previous + 1 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(prev2, d, b.previous + 2 * VOICE_LANE_STRIDE + lane);
+        hn::StoreU(prev3, d, b.previous + 3 * VOICE_LANE_STRIDE + lane);
     }
 }
+} // namespace
 
-}  // namespace HWY_NAMESPACE
-}  // namespace f3rt::hle
+} // namespace HWY_NAMESPACE
+} // namespace f3rt::hle
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
@@ -111,5 +114,5 @@ void render_voice_block(const VoiceBlock &b) {
     HWY_DYNAMIC_DISPATCH(RenderVoiceBlock)(b);
 }
 
-}  // namespace f3rt::hle
+} // namespace f3rt::hle
 #endif

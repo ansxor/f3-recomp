@@ -15,7 +15,7 @@ namespace f3rt::netplay {
 
 namespace {
 
-constexpr size_t max_hashed_bytes = 2048;
+constexpr size_t MAX_HASHED_BYTES = 2048;
 
 std::string hex_u64(uint64_t v, int digits) {
     char buf[32];
@@ -87,11 +87,14 @@ BundleInfo parse_info_json(const std::string &json) {
     return info;
 }
 
-std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts, const std::vector<AppliedInputs> &frames) {
+std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts,
+                              const std::vector<AppliedInputs> &frames) {
     std::ostringstream out;
     out << "# f3rt netplay inputs v1\n"
-        << "# '@key value' lines are metadata (machine frames are Machine::frame values); every other line is\n"
-        << "# '<match frame> <P1 word hex> <P2 word hex>' exactly as applied by the lockstep step function.\n"
+        << "# '@key value' lines are metadata (machine frames are Machine::frame values); every "
+           "other line is\n"
+        << "# '<match frame> <P1 word hex> <P2 word hex>' exactly as applied by the lockstep step "
+           "function.\n"
         << "@player_index " << unsigned(facts.player_index) << "\n"
         << "@input_delay " << unsigned(facts.input_delay) << "\n"
         << "@seed " << facts.seed << "\n"
@@ -99,12 +102,14 @@ std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts, 
         << "@edge_machine_frame " << meta.edge_machine_frame << "\n"
         << "@sync_machine_frame " << meta.sync_machine_frame << "\n"
         << "@start_machine_frame " << meta.start_machine_frame << "\n"
-        << "@frames_between_sync_and_start " << (meta.start_machine_frame - meta.sync_machine_frame) << "\n"
+        << "@frames_between_sync_and_start " << (meta.start_machine_frame - meta.sync_machine_frame)
+        << "\n"
         << "@lobby_hold_frames " << meta.lobby_hold_frames << "\n"
         << "@lobby_hold_ms " << static_cast<long long>(meta.lobby_hold_ms) << "\n";
     char line[48];
     for (size_t f = 0; f < frames.size(); ++f) {
-        std::snprintf(line, sizeof line, "%zu %04x %04x\n", f, unsigned(frames[f][0]), unsigned(frames[f][1]));
+        std::snprintf(line, sizeof line, "%zu %04x %04x\n", f, unsigned(frames[f][0]),
+                      unsigned(frames[f][1]));
         out << line;
     }
     return out.str();
@@ -133,12 +138,14 @@ bool parse_inputs_txt(const std::string &text, InputsFile &out, std::string &err
         unsigned p1 = 0, p2 = 0;
         fields >> frame >> std::hex >> p1 >> p2;
         if (fields.fail() || p1 > 0xffff || p2 > 0xffff) {
-            error = "inputs.txt line " + std::to_string(number) + ": expected '<frame> <p1 hex> <p2 hex>'";
+            error = "inputs.txt line " + std::to_string(number) +
+                    ": expected '<frame> <p1 hex> <p2 hex>'";
             return false;
         }
         if (frame != out.frames.size()) {
-            error = "inputs.txt line " + std::to_string(number) + ": frame " + std::to_string(frame) +
-                    " is not the next sequential frame (" + std::to_string(out.frames.size()) + ")";
+            error = "inputs.txt line " + std::to_string(number) + ": frame " +
+                    std::to_string(frame) + " is not the next sequential frame (" +
+                    std::to_string(out.frames.size()) + ")";
             return false;
         }
         out.frames.push_back({LocalInputWord(p1), LocalInputWord(p2)});
@@ -146,7 +153,8 @@ bool parse_inputs_txt(const std::string &text, InputsFile &out, std::string &err
     return true;
 }
 
-std::string header_value(const InputsFile &file, const std::string &key, const std::string &fallback) {
+std::string header_value(const InputsFile &file, const std::string &key,
+                         const std::string &fallback) {
     for (const auto &[k, v] : file.header) {
         if (k == key) return v;
     }
@@ -154,47 +162,47 @@ std::string header_value(const InputsFile &file, const std::string &key, const s
 }
 
 MatchRecorder::MatchRecorder(const GameNetplay *hook, size_t ring_size)
-    : hook_(hook), ring_(std::max<size_t>(ring_size, 2)) {}
+    : m_hook(hook), m_ring(std::max<size_t>(ring_size, 2)) {}
 
 void MatchRecorder::begin_match(Machine &m, uint64_t seed) {
-    seed_ = seed;
+    m_seed = seed;
     meta.start_machine_frame = m.frame;
     meta.machine_gpu = m.game_video != nullptr;
     meta.audio_backend = m.audio ? Audio::backend_name(m.audio->backend()) : "";
     meta.machine_state_bytes = m.state_size();
-    trigger_state_.resize(m.state_size());
-    m.save_state(trigger_state_);
-    inputs_.clear();
+    m_trigger_state.resize(m.state_size());
+    m.save_state(m_trigger_state);
+    m_inputs.clear();
     // Storage is allocated here, once per match: on_report never allocates.
-    for (auto &e : ring_) {
+    for (auto &e : m_ring) {
         e.valid = false;
-        e.hashed.reserve(max_hashed_bytes);
+        e.hashed.reserve(MAX_HASHED_BYTES);
     }
-    next_ = 0;
+    m_next = 0;
 }
 
 void MatchRecorder::record_inputs(uint32_t match_frame, const AppliedInputs &words) {
-    if (match_frame != inputs_.size()) {
+    if (match_frame != m_inputs.size()) {
         // Never happens with the lockstep loop (one step per frame, in order). Keep the log honest if it ever does.
-        inputs_.resize(match_frame);
+        m_inputs.resize(match_frame);
     }
-    inputs_.push_back(words);
+    m_inputs.push_back(words);
 }
 
 uint32_t MatchRecorder::on_report(Machine &m, uint32_t completed_frame) {
-    Entry &e = ring_[next_];
-    next_ = (next_ + 1) % ring_.size();
+    Entry &e = m_ring[m_next];
+    m_next = (m_next + 1) % m_ring.size();
 
     uint32_t crc = 0;
     uint8_t phase = 0;
-    if (hook_ && hook_->sync_hash_region) {
-        uint8_t buf[max_hashed_bytes];
-        const size_t n = hook_->sync_hash_region(m, buf, phase);
+    if (m_hook && m_hook->sync_hash_region) {
+        uint8_t buf[MAX_HASHED_BYTES];
+        const size_t n = m_hook->sync_hash_region(m, buf, phase);
         crc = crc32(buf, n);
         e.hashed.assign(buf, buf + n);
     } else {
         e.hashed.clear();
-        crc = (hook_ && hook_->sync_hash) ? hook_->sync_hash(m) : m.state_crc();
+        crc = (m_hook && m_hook->sync_hash) ? m_hook->sync_hash(m) : m.state_crc();
     }
     e.rec = {completed_frame, crc, phase, uint32_t(e.hashed.size())};
     e.valid = true;
@@ -202,15 +210,17 @@ uint32_t MatchRecorder::on_report(Machine &m, uint32_t completed_frame) {
 }
 
 const MatchRecorder::Entry *MatchRecorder::find(uint32_t frame) const {
-    for (const auto &e : ring_) {
+    for (const auto &e : m_ring) {
         if (e.valid && e.rec.frame == frame) return &e;
     }
     return nullptr;
 }
 
-std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &base_dir, const SessionFacts &facts) {
+std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &base_dir,
+                                                  const SessionFacts &facts) {
     namespace fs = std::filesystem;
-    const fs::path dir = base_dir / (utc_stamp() + "-" + hex_u64(facts.session_id, 16) + "-p" + std::to_string(facts.player_index));
+    const fs::path dir = base_dir / (utc_stamp() + "-" + hex_u64(facts.session_id, 16) + "-p" +
+                                     std::to_string(facts.player_index));
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) throw std::runtime_error("cannot create " + dir.string() + ": " + ec.message());
@@ -219,11 +229,15 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
     bool exact = at != nullptr;
     if (!at) {
         // The DESYNC message can arrive after more reports than the ring holds. Fall back to the newest older report.
-        for (const auto &e : ring_) {
-            if (e.valid && e.rec.frame <= facts.desync_frame && (!at || e.rec.frame > at->rec.frame)) at = &e;
+        for (const auto &e : m_ring) {
+            if (e.valid && e.rec.frame <= facts.desync_frame &&
+                (!at || e.rec.frame > at->rec.frame))
+                at = &e;
         }
     }
-    const Entry *prev = at && at->rec.frame >= facts.crc_interval ? find(at->rec.frame - facts.crc_interval) : nullptr;
+    const Entry *prev = at && at->rec.frame >= facts.crc_interval
+                            ? find(at->rec.frame - facts.crc_interval)
+                            : nullptr;
 
     std::vector<uint8_t> hashed;
     uint32_t cur_len = 0, prev_len = 0;
@@ -236,11 +250,13 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
         }
     }
     write_file(dir / "hashed.bin", hashed.data(), hashed.size());
-    write_file(dir / "trigger.f3s", trigger_state_.data(), trigger_state_.size());
-    write_text(dir / "inputs.txt", format_inputs_txt(meta, facts, inputs_));
+    write_file(dir / "trigger.f3s", m_trigger_state.data(), m_trigger_state.size());
+    write_text(dir / "inputs.txt", format_inputs_txt(meta, facts, m_inputs));
 
-    const uint32_t local_crc = (facts.player_index == 0) ? facts.desync_crc_p1 : facts.desync_crc_p2;
-    const uint32_t remote_crc = (facts.player_index == 0) ? facts.desync_crc_p2 : facts.desync_crc_p1;
+    const uint32_t local_crc =
+        (facts.player_index == 0) ? facts.desync_crc_p1 : facts.desync_crc_p2;
+    const uint32_t remote_crc =
+        (facts.player_index == 0) ? facts.desync_crc_p2 : facts.desync_crc_p1;
 
     yyjson::object j;
     j.emplace("bundle_version", 2);
@@ -276,11 +292,15 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
     j.emplace("frames_between_sync_and_start", meta.start_machine_frame - meta.sync_machine_frame);
     j.emplace("lobby_hold_frames", meta.lobby_hold_frames);
     j.emplace("lobby_hold_ms", static_cast<int64_t>(meta.lobby_hold_ms));
-    j.emplace("matched_frames_recorded", inputs_.size());
+    j.emplace("matched_frames_recorded", m_inputs.size());
     j.emplace("hashed_is_mismatch_frame", at && exact);
-    j.emplace("state_note", "No state snapshot is stored during play. Regenerate the state at any match frame with "
-                            "`f3rt-tool netplay-replay --bundle <this folder> --dump-state FRAME out.f3s` (trigger.f3s + inputs.txt). "
-                            "hashed.bin holds the hashed bytes of the report at hashed_frame followed by the previous report's bytes.");
+    j.emplace(
+        "state_note",
+        "No state snapshot is stored during play. Regenerate the state at any match frame with "
+        "`f3rt-tool netplay-replay --bundle <this folder> --dump-state FRAME out.f3s` (trigger.f3s "
+        "+ inputs.txt). "
+        "hashed.bin holds the hashed bytes of the report at hashed_frame followed by the previous "
+        "report's bytes.");
     j.emplace("hashed_frame", at ? int64_t(at->rec.frame) : int64_t(-1));
     j.emplace("hashed_offset", 0);
     j.emplace("hashed_len", cur_len);
@@ -289,24 +309,29 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
     j.emplace("hashed_prev_len", prev_len);
     for (const auto &[k, v] : meta.extra) j.emplace(k, v, yyjson::copy_string);
 
-    std::vector<const Entry *> sorted;
-    for (const auto &e : ring_) {
-        if (e.valid) sorted.push_back(&e);
+    // Ring slots in frame order, oldest report first, so the output does not depend on
+    // where the next write landed in the ring.
+    std::vector<size_t> sorted;
+    for (size_t i = 0; i < m_ring.size(); ++i) {
+        if (m_ring[i].valid) sorted.push_back(i);
     }
-    std::sort(sorted.begin(), sorted.end(), [](const Entry *a, const Entry *b) { return a->rec.frame < b->rec.frame; });
+    std::sort(sorted.begin(), sorted.end(),
+              [this](size_t a, size_t b) { return m_ring[a].rec.frame < m_ring[b].rec.frame; });
     yyjson::array reports;
-    for (const Entry *e : sorted) {
+    for (size_t i : sorted) {
+        const Entry &e = m_ring[i];
         yyjson::object r;
-        r.emplace("frame", e->rec.frame);
-        r.emplace("crc", e->rec.crc);
-        r.emplace("phase", unsigned(e->rec.phase));
-        r.emplace("hashed_len", e->rec.hashed_len);
+        r.emplace("frame", e.rec.frame);
+        r.emplace("crc", e.rec.crc);
+        r.emplace("phase", unsigned(e.rec.phase));
+        r.emplace("hashed_len", e.rec.hashed_len);
         reports.emplace_back(std::move(r));
     }
     j.emplace("reports", std::move(reports));
 
-    const auto text = j.write(yyjson::WriteFlag::Pretty | yyjson::WriteFlag::PrettyTwoSpaces |
-                              yyjson::WriteFlag::NewlineAtEnd | yyjson::WriteFlag::AllowInvalidUnicode);
+    const auto text =
+        j.write(yyjson::WriteFlag::Pretty | yyjson::WriteFlag::PrettyTwoSpaces |
+                yyjson::WriteFlag::NewlineAtEnd | yyjson::WriteFlag::AllowInvalidUnicode);
     write_text(dir / "info.json", std::string(text));
     return dir;
 }

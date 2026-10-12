@@ -1,6 +1,8 @@
 #pragma once
 
+#include "netplay/shared/default_port.hpp"
 #include "yojimbo.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -12,9 +14,6 @@
 namespace f3rt::netplay {
 constexpr uint16_t PROTOCOL_VERSION = 3;
 constexpr uint64_t PROTOCOL_ID = 0xF3F3'0000'0000'0000ULL | PROTOCOL_VERSION;
-
-// Default network port (TCP for HTTP token endpoint, UDP for game socket)
-constexpr uint16_t DEFAULT_PORT = 7845;
 
 // Token exchange constants
 constexpr std::string_view TOKEN_ROUTE = "/token";
@@ -49,9 +48,9 @@ constexpr size_t MAX_ERROR_MESSAGE_LENGTH = 256;
 
 // Channel definitions
 enum NetplayChannel {
-    CHANNEL_CONTROL = 0, // Reliable ordered: control messages, chat, sync blob
-    CHANNEL_INPUTS  = 1, // Unreliable unordered: inputs
-    NUM_NETPLAY_CHANNELS = 2
+    ChannelControl = 0, // Reliable ordered: control messages, chat, sync blob
+    ChannelInputs = 1,  // Unreliable unordered: inputs
+    NumNetplayChannels = 2
 };
 
 // Error codes
@@ -67,11 +66,11 @@ enum class NetplayErrorCode : uint16_t {
 
 // Token response binary encoding & parsing:
 // Body = u64 client_id (little-endian) + 2048-byte connect token = 2056 bytes exactly.
-std::vector<uint8_t> encode_token_response(uint64_t client_id,
-                                           std::span<const uint8_t, yojimbo::ConnectTokenBytes> token);
+std::vector<uint8_t>
+encode_token_response(uint64_t client_id,
+                      std::span<const uint8_t, yojimbo::ConnectTokenBytes> token);
 
-bool parse_token_response(std::span<const uint8_t> body,
-                          uint64_t &client_id,
+bool parse_token_response(std::span<const uint8_t> body, uint64_t &client_id,
                           std::array<uint8_t, yojimbo::ConnectTokenBytes> &token);
 
 // Validation helpers
@@ -85,26 +84,26 @@ void shutdown_netplay();
 
 // Message Types
 enum NetplayMessageType {
-    MSG_HELLO = 0,
-    MSG_CREATE_ROOM,
-    MSG_JOIN_ROOM,
-    MSG_WELCOME,
-    MSG_ROOM_CREATED,
-    MSG_MATCH_START,
-    MSG_SYNC_BLOB,
-    MSG_SYNC_BLOB_FWD,
-    MSG_GO,
-    MSG_CRC,
-    MSG_DESYNC,
-    MSG_RESULT,
-    MSG_RESULT_ACK,
-    MSG_CHAT,
-    MSG_CHAT_FWD,
-    MSG_PEER_LEFT,
-    MSG_ERROR,
-    MSG_BYE,
-    MSG_INPUTS,
-    NUM_NETPLAY_MESSAGE_TYPES
+    MsgHello = 0,
+    MsgCreateRoom,
+    MsgJoinRoom,
+    MsgWelcome,
+    MsgRoomCreated,
+    MsgMatchStart,
+    MsgSyncBlob,
+    MsgSyncBlobFwd,
+    MsgGo,
+    MsgCrc,
+    MsgDesync,
+    MsgResult,
+    MsgResultAck,
+    MsgChat,
+    MsgChatFwd,
+    MsgPeerLeft,
+    MsgError,
+    MsgBye,
+    MsgInputs,
+    NumNetplayMessageTypes
 };
 
 // --- Messages ---
@@ -118,7 +117,8 @@ struct HelloMessage : public yojimbo::Message {
     HelloMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_string(stream, game_id, sizeof(game_id));
         for (size_t i = 0; i < ROM_CRCS_COUNT; ++i) {
             serialize_uint32(stream, rom_crcs[i]);
@@ -138,7 +138,8 @@ struct CreateRoomMessage : public yojimbo::Message {
     CreateRoomMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         if (Stream::IsWriting && (input_delay < 1 || input_delay > 8)) {
             return false;
         }
@@ -159,7 +160,8 @@ struct JoinRoomMessage : public yojimbo::Message {
     JoinRoomMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_string(stream, room_code, sizeof(room_code));
         return true;
     }
@@ -171,7 +173,8 @@ struct WelcomeMessage : public yojimbo::Message {
     WelcomeMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -184,7 +187,8 @@ struct RoomCreatedMessage : public yojimbo::Message {
     RoomCreatedMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_string(stream, room_code, sizeof(room_code));
         return true;
     }
@@ -202,7 +206,8 @@ struct MatchStartMessage : public yojimbo::Message {
     MatchStartMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_uint64(stream, session_id);
         serialize_uint64(stream, seed);
         serialize_int(stream, player_index, 0, 1);
@@ -218,7 +223,8 @@ struct SyncBlobMessage : public yojimbo::BlockMessage {
     SyncBlobMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -229,7 +235,8 @@ struct SyncBlobFwdMessage : public yojimbo::BlockMessage {
     SyncBlobFwdMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -240,7 +247,8 @@ struct GoMessage : public yojimbo::Message {
     GoMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -254,7 +262,8 @@ struct CrcMessage : public yojimbo::Message {
     CrcMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_uint32(stream, frame);
         serialize_uint32(stream, crc);
         return true;
@@ -271,7 +280,8 @@ struct DesyncMessage : public yojimbo::Message {
     DesyncMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_uint32(stream, frame);
         serialize_uint32(stream, crc_p1);
         serialize_uint32(stream, crc_p2);
@@ -289,7 +299,8 @@ struct ResultMessage : public yojimbo::Message {
     ResultMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_uint32(stream, frame);
         serialize_uint8(stream, winner);
         serialize_uint32(stream, final_crc);
@@ -306,7 +317,8 @@ struct ResultAckMessage : public yojimbo::Message {
     ResultAckMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_bool(stream, agreed);
         serialize_uint8(stream, winner);
         return true;
@@ -321,7 +333,8 @@ struct ChatTextMessage : public yojimbo::Message {
     ChatTextMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_string(stream, text, sizeof(text));
         return true;
     }
@@ -336,7 +349,8 @@ struct ChatFwdMessage : public yojimbo::Message {
     ChatFwdMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_int(stream, from_player, 0, 1);
         serialize_string(stream, text, sizeof(text));
         return true;
@@ -349,7 +363,8 @@ struct PeerLeftMessage : public yojimbo::Message {
     PeerLeftMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -363,7 +378,8 @@ struct ErrorMessage : public yojimbo::Message {
     ErrorMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
         serialize_uint16(stream, code);
         serialize_string(stream, message, sizeof(message));
         return true;
@@ -376,7 +392,8 @@ struct ByeMessage : public yojimbo::Message {
     ByeMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream & /*stream*/) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream & /*stream*/) {
         return true;
     }
 
@@ -391,13 +408,17 @@ struct InputsMessage : public yojimbo::Message {
     InputsMessage() = default;
 
     template <typename Stream>
-    bool Serialize(Stream &stream) {
-        if (Stream::IsWriting && (count < static_cast<int>(MIN_INPUTS_COUNT) || count > static_cast<int>(MAX_INPUTS_COUNT))) {
+    bool Serialize( // NOLINT(readability-identifier-naming): required by Yojimbo message interface
+        Stream &stream) {
+        if (Stream::IsWriting && (count < static_cast<int>(MIN_INPUTS_COUNT) ||
+                                  count > static_cast<int>(MAX_INPUTS_COUNT))) {
             return false;
         }
         serialize_uint32(stream, first_frame);
-        serialize_int(stream, count, static_cast<int>(MIN_INPUTS_COUNT), static_cast<int>(MAX_INPUTS_COUNT));
-        if (Stream::IsReading && (count < static_cast<int>(MIN_INPUTS_COUNT) || count > static_cast<int>(MAX_INPUTS_COUNT))) {
+        serialize_int(stream, count, static_cast<int>(MIN_INPUTS_COUNT),
+                      static_cast<int>(MAX_INPUTS_COUNT));
+        if (Stream::IsReading && (count < static_cast<int>(MIN_INPUTS_COUNT) ||
+                                  count > static_cast<int>(MAX_INPUTS_COUNT))) {
             return false;
         }
         for (int i = 0; i < count; ++i) {
@@ -410,26 +431,26 @@ struct InputsMessage : public yojimbo::Message {
 };
 
 // Message Factory
-YOJIMBO_MESSAGE_FACTORY_START(NetplayMessageFactory, NUM_NETPLAY_MESSAGE_TYPES);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_HELLO, HelloMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_CREATE_ROOM, CreateRoomMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_JOIN_ROOM, JoinRoomMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_WELCOME, WelcomeMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_ROOM_CREATED, RoomCreatedMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_MATCH_START, MatchStartMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_SYNC_BLOB, SyncBlobMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_SYNC_BLOB_FWD, SyncBlobFwdMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_GO, GoMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_CRC, CrcMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_DESYNC, DesyncMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_RESULT, ResultMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_RESULT_ACK, ResultAckMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_CHAT, ChatTextMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_CHAT_FWD, ChatFwdMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_PEER_LEFT, PeerLeftMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_ERROR, ErrorMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_BYE, ByeMessage);
-YOJIMBO_DECLARE_MESSAGE_TYPE(MSG_INPUTS, InputsMessage);
+YOJIMBO_MESSAGE_FACTORY_START(NetplayMessageFactory, NumNetplayMessageTypes);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgHello, HelloMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgCreateRoom, CreateRoomMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgJoinRoom, JoinRoomMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgWelcome, WelcomeMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgRoomCreated, RoomCreatedMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgMatchStart, MatchStartMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgSyncBlob, SyncBlobMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgSyncBlobFwd, SyncBlobFwdMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgGo, GoMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgCrc, CrcMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgDesync, DesyncMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgResult, ResultMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgResultAck, ResultAckMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgChat, ChatTextMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgChatFwd, ChatFwdMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgPeerLeft, PeerLeftMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgError, ErrorMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgBye, ByeMessage);
+YOJIMBO_DECLARE_MESSAGE_TYPE(MsgInputs, InputsMessage);
 YOJIMBO_MESSAGE_FACTORY_FINISH();
 
 // Adapter

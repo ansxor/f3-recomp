@@ -10,30 +10,24 @@
 namespace f3rt {
 namespace {
 
-inline uint16_t read_be16(const uint8_t *p) {
-    return (uint16_t(p[0]) << 8) | uint16_t(p[1]);
-}
+inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
 
 std::string format_layer(const SceneLayer &l) {
     std::ostringstream ss;
-    ss << "{en=" << l.enabled
-       << " pri=" << int(l.priority)
-       << " bm=" << int(l.blend_mode)
-       << " clip_en=" << int(l.clip_enabled)
-       << " clip_inv=" << int(l.clip_inverted)
-       << " clip_mode=" << l.clip_inverse
-       << " b_sel=" << l.blend_select
-       << " mos=" << l.mosaic << "}";
+    ss << "{en=" << l.enabled << " pri=" << int(l.priority) << " bm=" << int(l.blend_mode)
+       << " clip_en=" << int(l.clip_enabled) << " clip_inv=" << int(l.clip_inverted)
+       << " clip_mode=" << l.clip_inverse << " b_sel=" << l.blend_select << " mos=" << l.mosaic
+       << "}";
     return ss.str();
 }
 
 } // namespace
 
 void GameLines::reset() {
-    control_0_.fill(0);
-    control_1_.fill(0);
-    for (auto &line : lines_) line = {};
-    for (auto &row : rows_) row = {};
+    m_control_0.fill(0);
+    m_control_1.fill(0);
+    for (auto &line : m_lines) line = {};
+    for (auto &row : m_rows) row = {};
 }
 
 // Decode line RAM and FDP controls, mirroring Video::read_line_ram. Fields carry
@@ -41,8 +35,8 @@ void GameLines::reset() {
 // in order with a persistent scratch line.
 void GameLines::decode(const VideoRam &vram) {
     for (int i = 0; i < 8; ++i) {
-        control_0_[i] = vram.control_u16(unsigned(i));
-        control_1_[i] = vram.control_u16(unsigned(8 + i));
+        m_control_0[i] = vram.control_u16(unsigned(i));
+        m_control_1[i] = vram.control_u16(unsigned(8 + i));
     }
 
     const uint8_t *lineram = &vram.graphics[OFFS_LINERAM];
@@ -60,29 +54,31 @@ void GameLines::decode(const VideoRam &vram) {
     std::array<uint16_t, 8> latches{};
     auto latched_addr = [&latches](uint8_t section, uint8_t subsection, int y) -> uint32_t {
         const uint16_t latch = latches[section];
-        const uint32_t base = LINERAM_SECTIONS_OFFSET + LINERAM_SECTION_STRIDE * section + LINERAM_SUBSECTION_STRIDE * subsection;
-        if (latch & (1 << (subsection + 4)))
-            return base + LINERAM_BANK_OFFSET + y * 2;
-        else if (latch & (1 << subsection))
-            return base + y * 2;
+        const uint32_t base = LINERAM_SECTIONS_OFFSET + LINERAM_SECTION_STRIDE * section +
+                              LINERAM_SUBSECTION_STRIDE * subsection;
+        if (latch & (1 << (subsection + 4))) return base + LINERAM_BANK_OFFSET + size_t(y) * 2;
+        else if (latch & (1 << subsection)) return base + y * 2;
         return 0;
     };
 
     LineParams line{};
     for (int y = 0; y < 256; ++y) {
         for (int s = 0; s < 8; ++s)
-            latches[s] = read_be16(&lineram[s * LINERAM_LATCH_STRIDE + y * 2]);
+            latches[s] = read_be16(&lineram[s * LINERAM_LATCH_STRIDE + size_t(y) * 2]);
 
         // 4000 (column scroll & clip-plane high bits for PF 2 and 3)
-        for (int i : { 2, 3 }) {
+        for (int i : {2, 3}) {
             if (const uint32_t where = latched_addr(0, uint8_t(i), y)) {
                 const uint16_t colscroll = read_be16(&lineram[where]);
                 // Bit 9 carries the alternate-map select (extended_alt_maps layouts only);
                 // scroll arithmetic masks to 9 bits, so the stored word keeps both.
-                line.pf[i].colscroll = uint16_t(colscroll & 0x1ff) |
-                    (f3rt::game_config::video.extended_alt_maps ? (colscroll & 0x200) : 0);
-                set_clip_upper(line.clip[2 * (i - 2) + 0], (colscroll >> 12) & 1, (colscroll >> 13) & 1);
-                set_clip_upper(line.clip[2 * (i - 2) + 1], (colscroll >> 14) & 1, (colscroll >> 15) & 1);
+                line.pf[i].colscroll = uint16_t(
+                    uint16_t(colscroll & 0x1ff) |
+                    (f3rt::game_config::video.extended_alt_maps ? (colscroll & 0x200) : 0));
+                set_clip_upper(line.clip[2 * (i - 2) + 0], int8_t((colscroll >> 12) & 1),
+                               int8_t((colscroll >> 13) & 1));
+                set_clip_upper(line.clip[2 * (i - 2) + 1], int8_t((colscroll >> 14) & 1),
+                               int8_t((colscroll >> 15) & 1));
             }
         }
 
@@ -90,7 +86,8 @@ void GameLines::decode(const VideoRam &vram) {
         for (int i = 0; i < 4; ++i) {
             if (const uint32_t where = latched_addr(1, uint8_t(i), y)) {
                 const uint16_t clip_lows = read_be16(&lineram[where]);
-                set_clip_lower(line.clip[i], uint8_t(clip_lows & 0xff), uint8_t((clip_lows >> 8) & 0xff));
+                set_clip_lower(line.clip[i], uint8_t(clip_lows & 0xff),
+                               uint8_t((clip_lows >> 8) & 0xff));
             }
         }
 
@@ -101,7 +98,8 @@ void GameLines::decode(const VideoRam &vram) {
             line.pivot.pivot_control = uint8_t((v >> 8) & 0xff);
             for (int group = 0; group < 4; ++group) {
                 const uint8_t blend = uint8_t((v >> (group * 2)) & 3);
-                line.sp[group].mix_value = uint16_t((line.sp[group].mix_value & 0x3fff) | (uint16_t(blend) << 14));
+                line.sp[group].mix_value =
+                    uint16_t((line.sp[group].mix_value & 0x3fff) | (uint16_t(blend) << 14));
                 line.sp[group].blend_mode = blend;
             }
         }
@@ -119,8 +117,7 @@ void GameLines::decode(const VideoRam &vram) {
                 line.pf[pf_num].x_sample_enable = (x_mosaic & (1 << pf_num)) != 0;
             line.palette_15bit = (x_mosaic & 0x4000) == 0;
             line.blur = (x_mosaic & 0x2000) == 0;
-            for (auto &sp : line.sp)
-                sp.x_sample_enable = (x_mosaic & 0x100) != 0;
+            for (auto &sp : line.sp) sp.x_sample_enable = (x_mosaic & 0x100) != 0;
             line.pivot.x_sample_enable = (x_mosaic & 0x200) != 0;
         }
         if (const uint32_t where = latched_addr(2, 3, y))
@@ -134,7 +131,8 @@ void GameLines::decode(const VideoRam &vram) {
         if (const uint32_t where = latched_addr(3, 2, y)) {
             const uint16_t sprite_mix = read_be16(&lineram[where]);
             for (int group = 0; group < 4; ++group) {
-                const uint16_t v = uint16_t((line.sp[group].mix_value & 0xc00f) | ((sprite_mix & 0x3ff) << 4));
+                const uint16_t v =
+                    uint16_t((line.sp[group].mix_value & 0xc00f) | ((sprite_mix & 0x3ff) << 4));
                 line.sp[group].set_mix(v);
                 line.sp[group].blend_select_v = ((sprite_mix >> (12 + group)) & 1) != 0;
             }
@@ -149,7 +147,7 @@ void GameLines::decode(const VideoRam &vram) {
         }
 
         // 8000 (playfield zoom)
-        static constexpr int FIX_Y[] = { 0, 3, 2, 1 };
+        static constexpr int FIX_Y[] = {0, 3, 2, 1};
         for (int i = 0; i < 4; ++i) {
             if (const uint32_t where = latched_addr(4, uint8_t(i), y)) {
                 const uint16_t pf_scale = read_be16(&lineram[where]);
@@ -161,14 +159,14 @@ void GameLines::decode(const VideoRam &vram) {
         // 9000 (playfield palette add)
         for (int i = 0; i < 4; ++i) {
             if (const uint32_t where = latched_addr(5, uint8_t(i), y))
-                line.pf[i].pal_add = read_be16(&lineram[where]) * 16;
+                line.pf[i].pal_add = uint16_t(read_be16(&lineram[where]) * 16);
         }
 
         // A000 (playfield rowscroll)
         for (int i = 0; i < 4; ++i) {
             if (const uint32_t where = latched_addr(6, uint8_t(i), y)) {
                 const int32_t rowscroll = int32_t(read_be16(&lineram[where])) << (8 - 6);
-                line.pf[i].rowscroll = (rowscroll & 0xffffff00) - (rowscroll & 0x000000ff);
+                line.pf[i].rowscroll = int32_t((rowscroll & 0xffffff00) - (rowscroll & 0x000000ff));
             }
         }
 
@@ -178,23 +176,23 @@ void GameLines::decode(const VideoRam &vram) {
                 line.pf[i].set_mix(read_be16(&lineram[where]));
         }
 
-        lines_[y] = line;
+        m_lines[y] = line;
     }
 }
 
 void GameLines::get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const {
-    int16_t sx_raw = int16_t(control_0_[pf_num]);
-    int16_t sy_raw = int16_t(control_0_[pf_num + 4]);
+    int16_t sx_raw = int16_t(m_control_0[pf_num]);
+    int16_t sy_raw = int16_t(m_control_0[pf_num + 4]);
 
-    sy_raw += (1 << 7); // 9.7 fixed point
+    sy_raw = int16_t(sy_raw + (1 << 7)); // 9.7 fixed point
 
     if (flipped) {
-        sx_raw += (320 << 6);
-        sx_raw += ((512 + 192) << 6);
-        sy_raw = -sy_raw;
+        sx_raw = int16_t(sx_raw + (320 << 6));
+        sx_raw = int16_t(sx_raw + ((512 + 192) << 6));
+        sy_raw = int16_t(-sy_raw);
     }
 
-    sx_raw += ((40 - 4 * pf_num) << 6);
+    sx_raw = int16_t(sx_raw + ((40 - 4 * pf_num) << 6));
 
     int32_t sx = int32_t(sx_raw) << (8 - 6);
     int32_t sy = int32_t(sy_raw) << (8 - 7);
@@ -219,13 +217,15 @@ void GameLines::prepare(bool flipped) {
         reg_fx_y[pf] = reg_sy[pf];
     }
 
-    const int16_t text_reg_sx = flipped ? (int16_t(control_1_[4]) - 12) : (-int16_t(control_1_[4]) - 5);
-    const int16_t text_reg_sy = flipped ? int16_t(control_1_[5]) : -int16_t(control_1_[5]);
+    const int16_t text_reg_sx =
+        int16_t(flipped ? (int16_t(m_control_1[4]) - 12) : (-int16_t(m_control_1[4]) - 5));
+    const int16_t text_reg_sy =
+        int16_t(flipped ? int16_t(m_control_1[5]) : -int16_t(m_control_1[5]));
 
     for (unsigned screen_y = 0; screen_y < 256; ++screen_y) {
         const int y = flipped ? (255 - int(screen_y)) : int(screen_y);
-        const auto &line = lines_[y];
-        auto &row = rows_[screen_y];
+        const auto &line = m_lines[y];
+        auto &row = m_rows[screen_y];
 
         // Clips (calibrated oracle l-1/r-2)
         for (int i = 0; i < 4; ++i) {
@@ -269,7 +269,8 @@ void GameLines::prepare(bool flipped) {
             row.sprites[i].clip_enabled = line.sp[i].clip_enable;
             row.sprites[i].clip_inverted = line.sp[i].clip_inv;
             row.sprites[i].clip_inverse = line.sp[i].clip_inv_mode;
-            row.sprites[i].enabled = (line.sp[i].mix_value & 0x2000) != 0 && line.sp[i].blend_mode != 0b00;
+            row.sprites[i].enabled =
+                (line.sp[i].mix_value & 0x2000) != 0 && line.sp[i].blend_mode != 0b00;
             row.sprites[i].blend_select = line.sp[i].blend_select_v;
             row.sprites[i].mosaic = line.sp[i].x_sample_enable;
         }
@@ -281,7 +282,8 @@ void GameLines::prepare(bool flipped) {
             row.playfields[i].layer.clip_enabled = line.pf[i].clip_enable;
             row.playfields[i].layer.clip_inverted = line.pf[i].clip_inv;
             row.playfields[i].layer.clip_inverse = line.pf[i].clip_inv_mode;
-            row.playfields[i].layer.enabled = (line.pf[i].mix_value & 0x2000) != 0 && line.pf[i].blend_mode != 0b11;
+            row.playfields[i].layer.enabled =
+                (line.pf[i].mix_value & 0x2000) != 0 && line.pf[i].blend_mode != 0b11;
             row.playfields[i].layer.blend_select = false;
             row.playfields[i].layer.mosaic = line.pf[i].x_sample_enable;
 
@@ -309,28 +311,31 @@ void GameLines::prepare(bool flipped) {
 }
 
 void GameLines::cull_empty_rows(const GameTiles &tiles) {
-    for (auto &row : rows_)
+    for (auto &row : m_rows)
         for (unsigned i = 0; i < 4; ++i) {
             auto &pf = row.playfields[i];
-            pf.empty_row = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map), unsigned(pf.source_y) & 511);
+            pf.empty_row = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map),
+                                           unsigned(pf.source_y) & 511);
         }
 }
 
 GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolutionAltMaps &maps) {
     AltRowCounts counts;
     if constexpr (f3rt::game_config::video.full_resolution_alt_maps) {
-        for (unsigned y = 0; y < rows_.size(); ++y)
+        for (unsigned y = 0; y < m_rows.size(); ++y)
             for (unsigned i = 2; i < 4; ++i) {
-                auto &pf = rows_[y].playfields[i];
+                auto &pf = m_rows[y].playfields[i];
                 pf.full_res_offset = -1;
                 if (!pf.alt_map || pf.empty_row) continue;
                 // Every map row the scanline can sample: the highest sub-row phase stays below
                 // y_fraction + y_step (expanded sub-rows, GameLines/compositor vertical phase).
-                const int rows_spanned = std::clamp((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
+                const int rows_spanned =
+                    std::clamp((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
                 const unsigned first = unsigned(pf.source_y) & 511;
                 const unsigned last = (first + unsigned(rows_spanned)) & 511;
                 pf.full_res_offset = int16_t(maps.offset(i, first >> 4, last >> 4));
-                if (y < geometry::first_line || y >= geometry::end_line || !pf.layer.enabled) continue;
+                if (y < geometry::FIRST_LINE || y >= geometry::END_LINE || !pf.layer.enabled)
+                    continue;
                 ++(pf.full_res_offset >= 0 ? counts.remapped : counts.fallback);
             }
     }
@@ -339,30 +344,27 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
 
 void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
     prepare(oracle.flipscreen());
-    for (unsigned screen_y = geometry::first_line; screen_y < geometry::end_line; ++screen_y) {
+    for (unsigned screen_y = geometry::FIRST_LINE; screen_y < geometry::END_LINE; ++screen_y) {
         const auto &g = row(screen_y);
         const auto &o = oracle.inspect_scene_row(screen_y);
 
         if (g.background != o.background) {
             std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y
-               << " background mismatch: game 0x" << std::hex << g.background
-               << " vs oracle 0x" << o.background;
+            ss << "Frame " << frame << " row " << screen_y << " background mismatch: game 0x"
+               << std::hex << g.background << " vs oracle 0x" << o.background;
             throw std::runtime_error(ss.str());
         }
 
         if (g.mosaic_period != o.mosaic_period) {
             std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y
-               << " mosaic_period mismatch: game " << int(g.mosaic_period)
-               << " vs oracle " << int(o.mosaic_period);
+            ss << "Frame " << frame << " row " << screen_y << " mosaic_period mismatch: game "
+               << int(g.mosaic_period) << " vs oracle " << int(o.mosaic_period);
             throw std::runtime_error(ss.str());
         }
 
         if (g.bitmap != o.bitmap) {
             std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y
-               << " bitmap mismatch: game " << g.bitmap
+            ss << "Frame " << frame << " row " << screen_y << " bitmap mismatch: game " << g.bitmap
                << " vs oracle " << o.bitmap;
             throw std::runtime_error(ss.str());
         }
@@ -371,8 +373,7 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
             if (g.blend[i] != o.blend[i]) {
                 std::ostringstream ss;
                 ss << "Frame " << frame << " row " << screen_y << " blend[" << i
-                   << "] mismatch: game " << int(g.blend[i])
-                   << " vs oracle " << int(o.blend[i]);
+                   << "] mismatch: game " << int(g.blend[i]) << " vs oracle " << int(o.blend[i]);
                 throw std::runtime_error(ss.str());
             }
             if (g.clips[i].left != o.clips[i].left || g.clips[i].right != o.clips[i].right) {
@@ -385,26 +386,22 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
         }
 
         // Text layer
-        if (g.text.enabled != o.text.enabled ||
-            g.text.priority != o.text.priority ||
-            g.text.blend_mode != o.text.blend_mode ||
-            g.text.clip_enabled != o.text.clip_enabled ||
+        if (g.text.enabled != o.text.enabled || g.text.priority != o.text.priority ||
+            g.text.blend_mode != o.text.blend_mode || g.text.clip_enabled != o.text.clip_enabled ||
             g.text.clip_inverted != o.text.clip_inverted ||
             g.text.clip_inverse != o.text.clip_inverse ||
-            g.text.blend_select != o.text.blend_select ||
-            g.text.mosaic != o.text.mosaic) {
+            g.text.blend_select != o.text.blend_select || g.text.mosaic != o.text.mosaic) {
             std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y
-               << " text layer mismatch: game " << format_layer(g.text)
-               << " vs oracle " << format_layer(o.text);
+            ss << "Frame " << frame << " row " << screen_y << " text layer mismatch: game "
+               << format_layer(g.text) << " vs oracle " << format_layer(o.text);
             throw std::runtime_error(ss.str());
         }
         if (g.text.enabled) {
             if (g.text_x != o.text_x || g.text_y != o.text_y) {
                 std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y
-                   << " text coords mismatch: game (" << g.text_x << ", " << g.text_y
-                   << ") vs oracle (" << o.text_x << ", " << o.text_y << ")";
+                ss << "Frame " << frame << " row " << screen_y << " text coords mismatch: game ("
+                   << g.text_x << ", " << g.text_y << ") vs oracle (" << o.text_x << ", "
+                   << o.text_y << ")";
                 throw std::runtime_error(ss.str());
             }
         }
@@ -421,8 +418,8 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
                 g.sprites[i].mosaic != o.sprites[i].mosaic) {
                 std::ostringstream ss;
                 ss << "Frame " << frame << " row " << screen_y << " sprite[" << i
-                   << "] mismatch: game " << format_layer(g.sprites[i])
-                   << " vs oracle " << format_layer(o.sprites[i]);
+                   << "] mismatch: game " << format_layer(g.sprites[i]) << " vs oracle "
+                   << format_layer(o.sprites[i]);
                 throw std::runtime_error(ss.str());
             }
         }
@@ -441,27 +438,23 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
                 g_pf.layer.mosaic != o_pf.layer.mosaic) {
                 std::ostringstream ss;
                 ss << "Frame " << frame << " row " << screen_y << " PF[" << i
-                   << "] layer mismatch: game " << format_layer(g_pf.layer)
-                   << " vs oracle " << format_layer(o_pf.layer);
+                   << "] layer mismatch: game " << format_layer(g_pf.layer) << " vs oracle "
+                   << format_layer(o_pf.layer);
                 throw std::runtime_error(ss.str());
             }
             if (g_pf.layer.enabled) {
-                if (g_pf.source_x != o_pf.source_x ||
-                    g_pf.source_y != o_pf.source_y ||
-                    g_pf.x_step != o_pf.x_step ||
-                    g_pf.y_step != o_pf.y_step ||
-                    g_pf.y_fraction != o_pf.y_fraction ||
-                    g_pf.palette_add != o_pf.palette_add) {
+                if (g_pf.source_x != o_pf.source_x || g_pf.source_y != o_pf.source_y ||
+                    g_pf.x_step != o_pf.x_step || g_pf.y_step != o_pf.y_step ||
+                    g_pf.y_fraction != o_pf.y_fraction || g_pf.palette_add != o_pf.palette_add) {
                     std::ostringstream ss;
                     ss << "Frame " << frame << " row " << screen_y << " PF[" << i
-                       << "] coords mismatch: game {sx=" << g_pf.source_x
-                       << " sy=" << g_pf.source_y << " step=" << g_pf.x_step
-                       << " y_step=" << g_pf.y_step << " y_phase=" << int(g_pf.y_fraction)
-                       << " pal_add=" << g_pf.palette_add
-                       << "} vs oracle {sx=" << o_pf.source_x
-                       << " sy=" << o_pf.source_y << " step=" << o_pf.x_step
-                       << " y_step=" << o_pf.y_step << " y_phase=" << int(o_pf.y_fraction)
-                       << " pal_add=" << o_pf.palette_add << "}";
+                       << "] coords mismatch: game {sx=" << g_pf.source_x << " sy=" << g_pf.source_y
+                       << " step=" << g_pf.x_step << " y_step=" << g_pf.y_step
+                       << " y_phase=" << int(g_pf.y_fraction) << " pal_add=" << g_pf.palette_add
+                       << "} vs oracle {sx=" << o_pf.source_x << " sy=" << o_pf.source_y
+                       << " step=" << o_pf.x_step << " y_step=" << o_pf.y_step
+                       << " y_phase=" << int(o_pf.y_fraction) << " pal_add=" << o_pf.palette_add
+                       << "}";
                     throw std::runtime_error(ss.str());
                 }
             }
@@ -469,7 +462,9 @@ void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
     }
 }
 
-static void pack_layer(const SceneLayer &s, CanonicalSceneLayer &d) {
+namespace {
+
+void pack_layer(const SceneLayer &s, CanonicalSceneLayer &d) {
     d.priority = s.priority;
     d.blend_mode = s.blend_mode;
     d.clip_enabled = s.clip_enabled;
@@ -480,7 +475,7 @@ static void pack_layer(const SceneLayer &s, CanonicalSceneLayer &d) {
     d.mosaic = s.mosaic ? 1 : 0;
 }
 
-static void unpack_layer(const CanonicalSceneLayer &s, SceneLayer &d) {
+void unpack_layer(const CanonicalSceneLayer &s, SceneLayer &d) {
     d.priority = s.priority;
     d.blend_mode = s.blend_mode;
     d.clip_enabled = s.clip_enabled;
@@ -490,15 +485,15 @@ static void unpack_layer(const CanonicalSceneLayer &s, SceneLayer &d) {
     d.blend_select = s.blend_select != 0;
     d.mosaic = s.mosaic != 0;
 }
+} // namespace
 
 size_t GameLines::state_size() const {
-    return sizeof(CanonicalLineParams) * 256 +
-           sizeof(CanonicalSceneRow) * 256;
+    return sizeof(CanonicalLineParams) * 256 + sizeof(CanonicalSceneRow) * 256;
 }
 
 void GameLines::save_state(StateWriter &writer) const {
     for (size_t i = 0; i < 256; ++i) {
-        const auto &s = lines_[i];
+        const auto &s = m_lines[i];
         CanonicalLineParams d{};
         for (int c = 0; c < 4; ++c) {
             d.clip[c].left = s.clip[c].left;
@@ -543,7 +538,7 @@ void GameLines::save_state(StateWriter &writer) const {
         writer.write(d);
     }
     for (size_t i = 0; i < 256; ++i) {
-        const auto &s = rows_[i];
+        const auto &s = m_rows[i];
         CanonicalSceneRow d{};
         for (int p = 0; p < 4; ++p) {
             pack_layer(s.playfields[p].layer, d.playfields[p].layer);
@@ -574,7 +569,7 @@ void GameLines::load_state(StateReader &reader) {
     for (size_t i = 0; i < 256; ++i) {
         CanonicalLineParams s;
         reader.read(s);
-        auto &d = lines_[i];
+        auto &d = m_lines[i];
         for (int c = 0; c < 4; ++c) {
             d.clip[c].left = s.clip[c].left;
             d.clip[c].right = s.clip[c].right;
@@ -619,7 +614,7 @@ void GameLines::load_state(StateReader &reader) {
     for (size_t i = 0; i < 256; ++i) {
         CanonicalSceneRow s;
         reader.read(s);
-        auto &d = rows_[i];
+        auto &d = m_rows[i];
         for (int p = 0; p < 4; ++p) {
             unpack_layer(s.playfields[p].layer, d.playfields[p].layer);
             d.playfields[p].source_x = s.playfields[p].source_x;

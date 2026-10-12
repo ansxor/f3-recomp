@@ -8,16 +8,14 @@
 
 namespace {
 
-template <typename T>
-void expect_rejected(const T &value, const char *name) {
+template <typename T> void expect_rejected(const T &value, const char *name) {
     f3rt::StateReader reader({reinterpret_cast<const uint8_t *>(&value), sizeof(value)});
     T restored{};
     EXPECT_THROW(reader.read(restored), std::invalid_argument)
         << "ACCEPTED unsafe snapshot: " << name;
 }
 
-template <typename T>
-void expect_round_trip(const T &value) {
+template <typename T> void expect_round_trip(const T &value) {
     std::vector<uint8_t> buffer(sizeof(T));
     f3rt::StateWriter writer(buffer);
     writer.write(value);
@@ -45,22 +43,28 @@ TEST_F(StateValidationTest, MusashiSoundContextUnsafeFieldsRejected) {
     expect_round_trip(sound);
 
     auto bad = sound;
-    bad.s_flag = 0x40000000; bad.nmi_pending = 1;
+    bad.s_flag = 0x40000000;
+    bad.nmi_pending = 1;
     expect_rejected(bad, "sound supervisor stack index");
 
-    bad = sound; bad.m_flag = 0x40000000;
+    bad = sound;
+    bad.m_flag = 0x40000000;
     expect_rejected(bad, "sound master stack index");
 
-    bad = sound; bad.ir = 0x10000;
+    bad = sound;
+    bad.ir = 0x10000;
     expect_rejected(bad, "sound opcode table index");
 
-    bad = sound; bad.int_level = 0xffffffff;
+    bad = sound;
+    bad.int_level = 0xffffffff;
     expect_rejected(bad, "sound interrupt level");
 
-    bad = sound; bad.cpu_type = 0x80000000;
+    bad = sound;
+    bad.cpu_type = 0x80000000;
     expect_rejected(bad, "sound CPU model");
 
-    bad = sound; bad.cyc_movem_w = 0xffffffff;
+    bad = sound;
+    bad.cyc_movem_w = 0xffffffff;
     expect_rejected(bad, "sound instruction timing");
 }
 
@@ -72,7 +76,8 @@ TEST_F(StateValidationTest, AudioSchedulerSnapshotsRejected) {
     audio.sample_accum = uint64_t(1) << 63;
     expect_rejected(audio, "unbounded sample generation");
 
-    audio.sample_accum = 0; audio.cpu_accum = std::numeric_limits<int64_t>::min();
+    audio.sample_accum = 0;
+    audio.cpu_accum = std::numeric_limits<int64_t>::min();
     expect_rejected(audio, "sound deadline arithmetic underflow");
 
     audio.cpu_accum = std::numeric_limits<int64_t>::max();
@@ -81,7 +86,8 @@ TEST_F(StateValidationTest, AudioSchedulerSnapshotsRejected) {
 
 TEST_F(StateValidationTest, ES5505ClocksRejected) {
     f3rt::CanonicalES5505 otis{};
-    otis.master_clock = 15238090; otis.active_voices = 31;
+    otis.master_clock = 15238090;
+    otis.active_voices = 31;
     expect_rejected(otis, "zero OTIS rate");
 
     otis.sample_rate = 1;
@@ -139,7 +145,7 @@ RC_GTEST_PROP(State, ES5505RoundTrip, ()) {
     f3rt::CanonicalES5505 otis{};
     otis.active_voices = *rc::gen::inRange<uint8_t>(0, 32);
     otis.current_page = *rc::gen::inRange<uint8_t>(0, 128);
-    otis.voice_index = *rc::gen::inRange<int8_t>(0, 32);
+    otis.voice_index = *rc::gen::inRange<int32_t>(0, 32);
     otis.master_clock = *rc::gen::inRange<uint32_t>(1000000, 30000000);
     otis.sample_rate = otis.master_clock / (16 * (unsigned(otis.active_voices) + 1));
     for (int i = 0; i < 32; ++i) {

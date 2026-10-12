@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-
 namespace f3rt::runner {
 
 struct SpriteCheckArgs {

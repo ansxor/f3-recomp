@@ -3,19 +3,16 @@
 #include "f3rt/memory_map.hpp"
 #include <cstring>
 
-
 namespace f3rt {
 namespace {
 
 constexpr int H_START = 46;
 constexpr int H_VIS = 320;
 
-inline uint16_t read_be16(const uint8_t *p) {
-    return (uint16_t(p[0]) << 8) | uint16_t(p[1]);
-}
+inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
 
 // Producer axis accumulator shared by X and Y.
-struct sprite_axis {
+struct SpriteAxis {
     int32_t block_scale = 1 << 8;
     int32_t pos = 0, block_pos = 0;
     int16_t global = 0, subglobal = 0;
@@ -25,9 +22,8 @@ struct sprite_axis {
         if (scroll & 0x01) subglobal = new_pos;
         if (scroll & 0x02) global = new_pos;
         if (!(scroll & 0x08)) {
-            new_pos += global;
-            if (!(scroll & 0x04))
-                new_pos += subglobal;
+            new_pos = int16_t(new_pos + global);
+            if (!(scroll & 0x04)) new_pos = int16_t(new_pos + subglobal);
         }
 
         switch (block_ctrl) {
@@ -43,6 +39,8 @@ struct sprite_axis {
         case 0b11:
             pos += block_scale * 16;
             break;
+        default:
+            break;
         }
     }
 };
@@ -50,17 +48,17 @@ struct sprite_axis {
 } // namespace
 
 size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_height,
-                          std::span<DecodedSpriteEntry> out, SpriteRamState &state,
-                          bool apply_flip, const SpritePresentation *presentation) {
-    sprite_axis x, y;
+                          std::span<DecodedSpriteEntry> out, SpriteRamState &state, bool apply_flip,
+                          const SpritePresentation *presentation) {
+    SpriteAxis x, y;
     uint8_t color = 0;
     bool multi = false;
     size_t count = 0;
 
     // One list entry through the hardware state machine. Returns false when the entry is a
     // self-jump (list end). `allow_jump` is false for splice replacements.
-    auto step = [&](const uint8_t *spr, int &offs, bool allow_jump, uint64_t identity, uint64_t object,
-                    uint8_t flags) -> bool {
+    auto step = [&](const uint8_t *spr, int &offs, bool allow_jump, uint64_t identity,
+                    uint64_t object, uint8_t flags) -> bool {
         const uint16_t w0 = read_be16(&spr[0]);
         const uint16_t w1 = read_be16(&spr[2]);
         const uint16_t w2 = read_be16(&spr[4]);
@@ -81,24 +79,23 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         // Sprite list jump bit in word 6
         if (allow_jump && (w6 & 0x8000)) {
             const int new_offs = w6 & 0x03ff;
-            if (new_offs == offs)
-                return false;
+            if (new_offs == offs) return false;
             offs = new_offs - 1;
         }
 
         const uint8_t spritecont = uint8_t(w4 >> 8);
         const bool lock = (spritecont & 0x04) != 0;
-        if (!lock)
-            color = uint8_t(w4 & 0xff);
+        if (!lock) color = uint8_t(w4 & 0xff);
 
         const uint8_t scroll_mode = uint8_t((w2 >> 12) & 0x0f);
-        x.update(scroll_mode, uint16_t(w2 & 0x0fff), multi, uint8_t((spritecont >> 6) & 3), uint8_t(w1 & 0xff));
-        y.update(scroll_mode, uint16_t(w3 & 0x0fff), multi, uint8_t((spritecont >> 4) & 3), uint8_t(w1 >> 8));
+        x.update(scroll_mode, uint16_t(w2 & 0x0fff), multi, uint8_t((spritecont >> 6) & 3),
+                 uint8_t(w1 & 0xff));
+        y.update(scroll_mode, uint16_t(w3 & 0x0fff), multi, uint8_t((spritecont >> 4) & 3),
+                 uint8_t(w1 >> 8));
         multi = (spritecont & 0x08) != 0;
 
         const uint32_t tile = uint32_t(w0) | (uint32_t(w5 & 0x0001) << 16);
-        if (!tile)
-            return true;
+        if (!tile) return true;
 
         const int32_t tx = state.flipscreen ? ((512 << 8) - x.block_scale * 16 - x.pos) : x.pos;
         const int32_t ty = state.flipscreen ? ((256 << 8) - y.block_scale * 16 - y.pos) : y.pos;
@@ -109,8 +106,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             ty > ((visible_y + visible_height - 1) << 8))
             return true;
 
-        if (count >= out.size())
-            return true;
+        if (count >= out.size()) return true;
 
         const bool flip_x = (spritecont & 0x01) != 0;
         const bool flip_y = (spritecont & 0x02) != 0;
@@ -147,8 +143,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         const uint8_t *spr = &spriteram[bank_offset + size_t(offs) * 16];
 
         for (const SpriteSplice &sp : splices) {
-            if (sp.bank != state.bank || sp.first != offs)
-                continue;
+            if (sp.bank != state.bank || sp.first != offs) continue;
             const size_t n = size_t(sp.last) - sp.first + 1;
             if (sp.last < sp.first || sp.last >= 0x400 || sp.real.size() != n * 16 ||
                 std::memcmp(spr, sp.real.data(), n * 16) != 0)
@@ -156,7 +151,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t reps = sp.replacement.size() / 16;
             for (size_t k = 0; k < reps; ++k) {
                 int dummy = offs;
-                step(&sp.replacement[k * 16], dummy, false, sprite_identity_mix(sp.identity, uint32_t(k)), sp.identity,
+                step(&sp.replacement[k * 16], dummy, false,
+                     sprite_identity_mix(sp.identity, uint32_t(k)), sp.identity,
                      k < sp.flags.size() ? sp.flags[k] : uint8_t(0));
             }
             total_sprites += int(n) - 1;
@@ -168,7 +164,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t slot = size_t(state.bank ? 0x400 : 0) + size_t(offs);
             const uint64_t id = slot < identities.size() ? identities[slot] : 0;
             const uint64_t object = slot < objects.size() ? objects[slot] : 0;
-            if (!step(spr, offs, true, id, object, slot < slot_flags.size() ? slot_flags[slot] : uint8_t(0)))
+            if (!step(spr, offs, true, id, object,
+                      slot < slot_flags.size() ? slot_flags[slot] : uint8_t(0)))
                 break;
         }
     next_entry:;

@@ -1,13 +1,13 @@
 """Pixel comparator and frame diff tool for f3rt vs MAME frames."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
-from pathlib import Path
 import struct
 import sys
+from pathlib import Path
 
 
 def parse_raw_buffer(data: bytes, width: int, height: int, pixel_format: str = "bgra") -> bytes:
@@ -47,7 +47,7 @@ def parse_raw_buffer(data: bytes, width: int, height: int, pixel_format: str = "
             rgb_out[dst + 1] = data[src + 1]
             rgb_out[dst + 2] = data[src + 2]
     elif fmt == "rgb":
-        rgb_out[:] = data[:total_pixels * 3]
+        rgb_out[:] = data[: total_pixels * 3]
     elif fmt == "bgr":
         for i in range(total_pixels):
             src = i * 3
@@ -61,8 +61,8 @@ def parse_raw_buffer(data: bytes, width: int, height: int, pixel_format: str = "
 def parse_bmp(data: bytes) -> tuple[bytes, int, int]:
     if len(data) < 54 or data[:2] != b"BM":
         raise ValueError("Not a valid BMP file (missing BM magic)")
-    file_size, pixel_offset = struct.unpack_from("<II", data, 2 + 8)
-    header_size, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
+    _file_size, pixel_offset = struct.unpack_from("<II", data, 2 + 8)
+    _header_size, width, height, planes, bpp, compression = struct.unpack_from("<IiiHHI", data, 14)
     if planes != 1 or compression not in (0, 3) or bpp not in (24, 32):
         raise ValueError(f"Unsupported BMP format: {bpp}bpp, compression {compression}")
 
@@ -104,7 +104,7 @@ def write_bmp(path: str | Path, rgb_data: bytes, width: int, height: int) -> Non
 
     for y in reversed(range(height)):
         row_offset = y * width * 3
-        row = rgb_data[row_offset:row_offset + row_bytes]
+        row = rgb_data[row_offset : row_offset + row_bytes]
         bgr_row = bytearray(row_bytes)
         for x in range(width):
             r = row[x * 3]
@@ -120,8 +120,9 @@ def write_bmp(path: str | Path, rgb_data: bytes, width: int, height: int) -> Non
     path.write_bytes(out)
 
 
-def load_image(filepath: str | Path, default_width: int = 320, default_height: int = 232,
-               pixel_format: str = "bgra") -> tuple[bytes, int, int]:
+def load_image(
+    filepath: str | Path, default_width: int = 320, default_height: int = 232, pixel_format: str = "bgra"
+) -> tuple[bytes, int, int]:
     path = Path(filepath)
     ext = path.suffix.lower()
     data = path.read_bytes()
@@ -137,8 +138,9 @@ def load_image(filepath: str | Path, default_width: int = 320, default_height: i
             return parse_raw_buffer(data, default_width, default_height, pixel_format), default_width, default_height
 
 
-def compare_buffers(ref: bytes, actual: bytes, width: int, height: int, tolerance: int = 0,
-                    amp: int = 8, make_diff: bool = False) -> tuple[dict, bytes | None]:
+def compare_buffers(
+    ref: bytes, actual: bytes, width: int, height: int, tolerance: int = 0, amp: int = 8, make_diff: bool = False
+) -> tuple[dict, bytes | None]:
     if len(ref) != len(actual):
         raise ValueError(f"Buffer length mismatch: {len(ref)} vs {len(actual)}")
 
@@ -262,11 +264,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("actual", help="Rendered f3rt frame file or replay directory")
     parser.add_argument("--width", type=int, default=320, help="Default width for raw buffers (default: 320)")
     parser.add_argument("--height", type=int, default=232, help="Default height for raw buffers (default: 232)")
-    parser.add_argument("--format", default="bgra", choices=["bgra", "argb", "rgba", "rgb", "bgr"],
-                        help="Pixel byte order for raw buffers (default: bgra)")
+    parser.add_argument(
+        "--format",
+        default="bgra",
+        choices=["bgra", "argb", "rgba", "rgb", "bgr"],
+        help="Pixel byte order for raw buffers (default: bgra)",
+    )
     parser.add_argument("--tolerance", type=int, default=0, help="Allowed channel difference threshold (default: 0)")
-    parser.add_argument("--max-error-allowed", type=int, default=0,
-                        help="Max error tolerated before exiting with non-zero exit code (default: 0)")
+    parser.add_argument(
+        "--max-error-allowed",
+        type=int,
+        default=0,
+        help="Max error tolerated before exiting with non-zero exit code (default: 0)",
+    )
     parser.add_argument("--diff", help="Path to write diff BMP visualization")
     parser.add_argument("--diff-amp", type=int, default=8, help="Amplification factor for diff visualization")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
@@ -280,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"Dimension mismatch: reference {rw}x{rh} vs actual {aw}x{ah}")
 
         metrics, diff_bytes = compare_buffers(
-            ref_bytes, act_bytes, rw, rh,
+            ref_bytes,
+            act_bytes,
+            rw,
+            rh,
             tolerance=args.tolerance,
             amp=args.diff_amp,
             make_diff=bool(args.diff),
@@ -290,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
             write_bmp(args.diff, diff_bytes, rw, rh)
             metrics["diff_file"] = args.diff
 
-        has_mismatch = (metrics["mismatches"] > 0 or metrics["max_error"] > args.max_error_allowed)
+        has_mismatch = metrics["mismatches"] > 0 or metrics["max_error"] > args.max_error_allowed
 
         if args.json:
             print(json.dumps(metrics, indent=2))

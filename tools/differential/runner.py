@@ -1,14 +1,14 @@
 """Differential test runner executing lowered C code against Musashi 68EC020."""
+
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
-import shutil
 import subprocess
 import sys
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 try:
@@ -31,11 +31,9 @@ except (ImportError, ValueError):
 
 def _get_capstone_disassembler():
     try:
-        from capstone import Cs, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
+        from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
     except ImportError as exc:
-        raise ImportError(
-            "Capstone 5.0.9 Python binding not found. Ensure dependencies are installed via uv"
-        ) from exc
+        raise ImportError("Capstone 5.0.9 Python binding not found. Ensure dependencies are installed via uv") from exc
 
     md = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
     md.detail = True
@@ -110,10 +108,14 @@ def run_differential(
         insns = list(md.disasm(raw.code_bytes, raw.initial_pc))
         if not insns:
             unsupported_accounting["<decode_failed>"] += 1
-            unsupported_reasons.append({
-                "id": raw.id, "name": raw.name, "bytes": raw.code_bytes.hex(),
-                "reason": "Capstone could not decode instruction"
-            })
+            unsupported_reasons.append(
+                {
+                    "id": raw.id,
+                    "name": raw.name,
+                    "bytes": raw.code_bytes.hex(),
+                    "reason": "Capstone could not decode instruction",
+                }
+            )
             continue
 
         insn = insns[0]
@@ -121,27 +123,35 @@ def run_differential(
         if filter_pattern and filter_pattern.lower() not in insn.mnemonic.lower():
             continue
 
-        selected = insns[:raw.instruction_count]
+        selected = insns[: raw.instruction_count]
         if len(selected) != raw.instruction_count:
             raise ValueError(f"incomplete instruction sequence: {raw.name}")
         lowered = [lower(part) for part in selected]
-        statements = None if any(part is None for part in lowered) else [
-            line for part in lowered for line in ["{", *part, "}"]]
+        statements = (
+            None if any(part is None for part in lowered) else [line for part in lowered for line in ["{", *part, "}"]]
+        )
         if statements is None:
             unsupported_accounting[insn.mnemonic] += 1
-            unsupported_reasons.append({
-                "id": raw.id, "name": raw.name, "mnemonic": insn.mnemonic,
-                "op_str": insn.op_str, "bytes": raw.code_bytes.hex(),
-                "reason": "lower() returned None (unsupported/fallback)"
-            })
+            unsupported_reasons.append(
+                {
+                    "id": raw.id,
+                    "name": raw.name,
+                    "mnemonic": insn.mnemonic,
+                    "op_str": insn.op_str,
+                    "bytes": raw.code_bytes.hex(),
+                    "reason": "lower() returned None (unsupported/fallback)",
+                }
+            )
         else:
-            supported_cases.append(SupportedCase(
-                raw=raw,
-                mnemonic=insn.mnemonic,
-                op_str=insn.op_str,
-                insn_size=sum(part.size for part in selected),
-                statements=statements,
-            ))
+            supported_cases.append(
+                SupportedCase(
+                    raw=raw,
+                    mnemonic=insn.mnemonic,
+                    op_str=insn.op_str,
+                    insn_size=sum(part.size for part in selected),
+                    statements=statements,
+                )
+            )
 
     # Print Supported vs Unsupported Accounting
     supported_by_mnemonic = Counter(c.mnemonic for c in supported_cases)
@@ -211,7 +221,7 @@ def run_differential(
 
         # Code bytes arrays
         for i, sc in enumerate(supported_cases):
-            code_hex = ", ".join(f"0x{b:02X}" for b in sc.raw.code_bytes[:sc.insn_size])
+            code_hex = ", ".join(f"0x{b:02X}" for b in sc.raw.code_bytes[: sc.insn_size])
             f.write(f"static const uint8_t code_bytes_{i:04d}[] = {{ {code_hex} }};\n")
 
         # Array of test cases
@@ -328,14 +338,18 @@ int main(int argc, char **argv) {
         cc,
         "-O1",
         "-g",
-        "-Wall", "-Wextra", "-Werror",
-        "-fsanitize=undefined", "-fno-sanitize-recover=undefined",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fsanitize=undefined",
+        "-fno-sanitize-recover=undefined",
         "-o",
         str(bin_path),
         str(c_source_path),
         str(harness_c),
         str(musashi_info.library_path),
-    ] + inc_flags
+        *inc_flags,
+    ]
 
     if verbose:
         print(f"[runner] Compiling: {' '.join(cmd)}")

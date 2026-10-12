@@ -3,9 +3,9 @@
 #include <cstdint>
 
 namespace f3rt::hle {
-inline constexpr uint32_t sample_rate = 48000;
-inline constexpr uint32_t main_clock = 16000000;
-inline constexpr uint32_t timer_ticks = 16000; // ROM sequencer's observed 1 kHz service.
+inline constexpr uint32_t SAMPLE_RATE = 48000;
+inline constexpr uint32_t MAIN_CLOCK = 16000000;
+inline constexpr uint32_t TIMER_TICKS = 16000; // ROM sequencer's observed 1 kHz service.
 
 // Parameter state, not an emulated channel RAM object. Offsets retain the
 // documented firmware format while unknown musical names remain unasserted.
@@ -34,8 +34,8 @@ public:
     virtual ~VoiceSink() = default;
     virtual void note_on(const Note &note) = 0;
     virtual void note_off(uint64_t instance, uint64_t tick) = 0;
-    virtual void channel_update(uint8_t sequence, uint8_t track,
-                                const Channel &channel, uint64_t tick) = 0;
+    virtual void channel_update(uint8_t sequence, uint8_t track, const Channel &channel,
+                                uint64_t tick) = 0;
     virtual void effect(uint8_t preset, uint64_t tick) = 0;
     virtual void effect_parameter(uint8_t index, uint8_t value, uint64_t tick) = 0;
     virtual void reset(uint64_t tick) = 0;

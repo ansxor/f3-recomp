@@ -9,7 +9,9 @@
 #include <string_view>
 
 namespace f3rt {
-namespace hle { struct VoiceEvent; }
+namespace hle {
+struct VoiceEvent;
+}
 
 class Audio {
 public:
@@ -82,7 +84,7 @@ public:
     // mix (ES5505 /2^19, 0.18 pump input, MB87078 percent/32 twice, 0.5 route) peaks near -25 dBFS
     // on every measured game (1.3k-1.9k of 32768 at game volume), so the output stage is raised 12x
     // (+21.6 dB). Loud passages then reach roughly 0.5-0.6 FS and the existing +/-1 clamp is not hit.
-    static constexpr float output_boost = 12.0f;
+    static constexpr float OUTPUT_BOOST = 12.0f;
 
     // Audio output stream: interleaved stereo (Left, Right)
     // Reference: ES5505 native rate; Enhanced: 48000 Hz.

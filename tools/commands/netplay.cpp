@@ -28,27 +28,32 @@ using namespace f3rt::netplay;
 namespace {
 
 void print_help(const char *) {
-    std::cout << "Usage: f3rt-tool netplay [options]\n\n"
-              << "Deterministic 2-player lockstep netplay client.\n\n"
-              << "Options:\n"
-              << "  --server HOST:PORT     Server address (required, default port 7845)\n"
-              << "  --host                 Host a new room\n"
-              << "  --delay N              Input delay in frames (1-8, default: 2)\n"
-              << "  --join CODE            Join an existing room code\n"
-              << "  --name NAME            Player name (default: player1/player2)\n"
-              << "  --inputs SCRIPT        InputScript file (pre-trigger or solo word)\n"
-              << "  --match-inputs SCRIPT  InputScript file for match frames (with --until-trigger)\n"
-              << "  --until-trigger        Run --inputs locally until 2P versus edge fires, then netplay\n"
-              << "  --frames N             Number of match frames to run (default: 3000)\n"
-              << "  --crc-every N          Report state CRC every N frames (default: 60)\n"
-              << "  --rom-dir DIR          ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
-              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
-              << "  --disable-apply-sync   Joiner negative control: do not apply sync blob\n"
-              << "  --gpu 0|1              Build the machine with GPU game video, like the frontend (default 0)\n"
-              << "  --audio NAME           Audio backend: enhanced | reference (default reference)\n"
-              << "  --desync-dir DIR       On DESYNC write a local diagnostic bundle into DIR/<time>-<session>-p<idx>/\n"
-              << "                         (info.json, hashed.bin, inputs.txt, trigger.f3s). Nothing is sent over the network.\n"
-              << "  --help, -h             Show this help message\n";
+    std::cout
+        << "Usage: f3rt-tool netplay [options]\n\n"
+        << "Deterministic 2-player lockstep netplay client.\n\n"
+        << "Options:\n"
+        << "  --server HOST:PORT     Server address (required, default port 7845)\n"
+        << "  --host                 Host a new room\n"
+        << "  --delay N              Input delay in frames (1-8, default: 2)\n"
+        << "  --join CODE            Join an existing room code\n"
+        << "  --name NAME            Player name (default: player1/player2)\n"
+        << "  --inputs SCRIPT        InputScript file (pre-trigger or solo word)\n"
+        << "  --match-inputs SCRIPT  InputScript file for match frames (with --until-trigger)\n"
+        << "  --until-trigger        Run --inputs locally until 2P versus edge fires, then "
+           "netplay\n"
+        << "  --frames N             Number of match frames to run (default: 3000)\n"
+        << "  --crc-every N          Report state CRC every N frames (default: 60)\n"
+        << "  --rom-dir DIR          ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
+        << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
+        << "  --disable-apply-sync   Joiner negative control: do not apply sync blob\n"
+        << "  --gpu 0|1              Build the machine with GPU game video, like the frontend "
+           "(default 0)\n"
+        << "  --audio NAME           Audio backend: enhanced | reference (default reference)\n"
+        << "  --desync-dir DIR       On DESYNC write a local diagnostic bundle into "
+           "DIR/<time>-<session>-p<idx>/\n"
+        << "                         (info.json, hashed.bin, inputs.txt, trigger.f3s). Nothing is "
+           "sent over the network.\n"
+        << "  --help, -h             Show this help message\n";
 }
 
 } // namespace
@@ -137,7 +142,8 @@ int cmd_netplay(int argc, char **argv) try {
         throw std::runtime_error("Either --host or --join CODE must be specified");
     }
     if (rom_dir.empty()) {
-        throw std::runtime_error("ROM directory must be specified via --rom-dir or F3RT_DEFAULT_ROM_DIR");
+        throw std::runtime_error(
+            "ROM directory must be specified via --rom-dir or F3RT_DEFAULT_ROM_DIR");
     }
 
     if (player_name.empty()) {
@@ -146,7 +152,7 @@ int cmd_netplay(int argc, char **argv) try {
 
     // Parse host and port
     std::string host = server_arg;
-    uint16_t port = netplay::default_port;
+    uint16_t port = netplay::DEFAULT_PORT;
     auto colon = server_arg.rfind(':');
     if (colon != std::string::npos) {
         host = server_arg.substr(0, colon);
@@ -158,7 +164,8 @@ int cmd_netplay(int argc, char **argv) try {
     if (!inputs_path.empty()) {
         auto loaded = InputScript::load(inputs_path);
         if (loaded.has_pokes()) {
-            throw std::runtime_error("Netplay input script contains memory poke rules: " + inputs_path);
+            throw std::runtime_error("Netplay input script contains memory poke rules: " +
+                                     inputs_path);
         }
         input_script = std::move(loaded);
     }
@@ -167,7 +174,8 @@ int cmd_netplay(int argc, char **argv) try {
     if (!match_inputs_path.empty()) {
         auto loaded = InputScript::load(match_inputs_path);
         if (loaded.has_pokes()) {
-            throw std::runtime_error("Match input script contains memory poke rules: " + match_inputs_path);
+            throw std::runtime_error("Match input script contains memory poke rules: " +
+                                     match_inputs_path);
         }
         match_script = std::move(loaded);
     } else if (!until_trigger) {
@@ -181,7 +189,8 @@ int cmd_netplay(int argc, char **argv) try {
     }
     if (!audio_backend.empty()) {
         Audio::Backend backend;
-        if (!Audio::parse_backend(audio_backend, backend)) throw std::runtime_error("--audio must be enhanced or reference");
+        if (!Audio::parse_backend(audio_backend, backend))
+            throw std::runtime_error("--audio must be enhanced or reference");
         machine->audio->set_backend(backend);
     }
     const auto *netplay_hook = f3rt::game_netplay();
@@ -200,7 +209,7 @@ int cmd_netplay(int argc, char **argv) try {
                 p1 = words[0];
                 p2 = words[1];
             }
-            std::array<LocalInputWord, local_player_count> local_words{p1, p2, 0, 0};
+            std::array<LocalInputWord, LOCAL_PLAYER_COUNT> local_words{p1, p2, 0, 0};
             apply_local_inputs(*machine, local_words);
             if (!machine->run_frame(true)) {
                 throw std::runtime_error("Emulation failure while waiting for versus trigger");
@@ -211,7 +220,8 @@ int cmd_netplay(int argc, char **argv) try {
             if (!prev_in_vs && in_vs) {
                 std::cout << "TRIGGER frame=" << machine->frame;
                 if (netplay_hook && netplay_hook->sync_hash) {
-                    std::cout << " sync_hash=0x" << std::hex << netplay_hook->sync_hash(*machine) << std::dec;
+                    std::cout << " sync_hash=0x" << std::hex << netplay_hook->sync_hash(*machine)
+                              << std::dec;
                 }
                 std::cout << "\n";
                 std::cout.flush();
@@ -262,9 +272,7 @@ int cmd_netplay(int argc, char **argv) try {
     }
 
     if (netplay_hook && netplay_hook->sync_hash) {
-        cfg.sync_hash = [&]() -> uint32_t {
-            return netplay_hook->sync_hash(*machine);
-        };
+        cfg.sync_hash = [&]() -> uint32_t { return netplay_hook->sync_hash(*machine); };
     }
 
     netplay::Session session(cfg);
@@ -286,8 +294,7 @@ int cmd_netplay(int argc, char **argv) try {
     }
 
     if (session.state() == netplay::SessionState::Ended) {
-        std::cerr << "Netplay session ended before match start: "
-                  << session.last_error() << "\n";
+        std::cerr << "Netplay session ended before match start: " << session.last_error() << "\n";
         return 1;
     }
 
@@ -295,7 +302,8 @@ int cmd_netplay(int argc, char **argv) try {
     const uint64_t frames_between = (sync_frame == UINT64_MAX) ? 0 : machine->frame - sync_frame;
     std::cout << "NETPLAY_INVARIANT frames_between_sync_and_start=" << frames_between << "\n";
     if (frames_between != 0) {
-        std::cerr << "NETPLAY_INVARIANT_VIOLATION: the machine ran " << frames_between << " frames between sync and start\n";
+        std::cerr << "NETPLAY_INVARIANT_VIOLATION: the machine ran " << frames_between
+                  << " frames between sync and start\n";
         return 1;
     }
 
@@ -304,7 +312,8 @@ int cmd_netplay(int argc, char **argv) try {
     if (!desync_dir.empty()) {
         recorder = std::make_unique<netplay::MatchRecorder>(netplay_hook);
         recorder->meta.trigger_machine_frame = recorder->meta.edge_machine_frame =
-            recorder->meta.sync_machine_frame = (sync_frame == UINT64_MAX) ? machine->frame : sync_frame;
+            recorder->meta.sync_machine_frame =
+                (sync_frame == UINT64_MAX) ? machine->frame : sync_frame;
         recorder->begin_match(*machine, session.seed());
     }
     uint32_t f = 0;
@@ -338,14 +347,17 @@ int cmd_netplay(int argc, char **argv) try {
     }
 
     uint32_t final_crc = machine->state_crc();
-    uint32_t final_sync = (netplay_hook && netplay_hook->sync_hash) ? netplay_hook->sync_hash(*machine) : 0;
+    uint32_t final_sync =
+        (netplay_hook && netplay_hook->sync_hash) ? netplay_hook->sync_hash(*machine) : 0;
 
     if (session.state() == netplay::SessionState::Running) {
-        session.send_result(f, 0xFF, (netplay_hook && netplay_hook->sync_hash) ? final_sync : final_crc);
+        session.send_result(f, 0xFF,
+                            (netplay_hook && netplay_hook->sync_hash) ? final_sync : final_crc);
 
         auto end_wait = std::chrono::steady_clock::now();
         while (std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::steady_clock::now() - end_wait).count() < 1000) {
+                   std::chrono::steady_clock::now() - end_wait)
+                   .count() < 1000) {
             session.poll();
             if (session.state() == netplay::SessionState::Ended) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -355,17 +367,16 @@ int cmd_netplay(int argc, char **argv) try {
         session.poll();
     }
 
-    std::cout << "FINAL frame=" << f << " sync_hash=0x"
-              << std::hex << std::setw(8) << std::setfill('0') << final_sync
-              << " state_crc=0x"
-              << std::setw(8) << std::setfill('0') << final_crc << std::dec << "\n";
-    std::cout << "END reason=" << int(session.end_reason()) << " state=" << int(session.state()) << " error=" << session.last_error() << "\n";
+    std::cout << "FINAL frame=" << f << " sync_hash=0x" << std::hex << std::setw(8)
+              << std::setfill('0') << final_sync << " state_crc=0x" << std::setw(8)
+              << std::setfill('0') << final_crc << std::dec << "\n";
+    std::cout << "END reason=" << int(session.end_reason()) << " state=" << int(session.state())
+              << " error=" << session.last_error() << "\n";
     const auto &desync = session.desync_info();
     if (desync.detected) {
-        std::cout << "DESYNC frame=" << desync.frame << " p1=0x"
-                  << std::hex << std::setw(8) << std::setfill('0') << desync.crc_p1
-                  << " p2=0x" << std::setw(8) << std::setfill('0') << desync.crc_p2
-                  << std::dec << "\n";
+        std::cout << "DESYNC frame=" << desync.frame << " p1=0x" << std::hex << std::setw(8)
+                  << std::setfill('0') << desync.crc_p1 << " p2=0x" << std::setw(8)
+                  << std::setfill('0') << desync.crc_p2 << std::dec << "\n";
     }
     if (desync.detected && recorder) {
         netplay::SessionFacts facts;
@@ -383,7 +394,8 @@ int cmd_netplay(int argc, char **argv) try {
         facts.desync_crc_p2 = desync.crc_p2;
         recorder->meta.stall_count = session.stats().stall_count;
         try {
-            std::cout << "DESYNC_BUNDLE " << recorder->write_bundle(desync_dir, facts).string() << "\n";
+            std::cout << "DESYNC_BUNDLE " << recorder->write_bundle(desync_dir, facts).string()
+                      << "\n";
         } catch (const std::exception &e) {
             std::cerr << "Could not write desync bundle: " << e.what() << "\n";
         }

@@ -27,24 +27,28 @@
 
 namespace f3rt::netplay {
 
-using AppliedInputs = std::array<LocalInputWord, 2>; // P1 port, P2 port exactly as applied to the machine
+using AppliedInputs =
+    std::array<LocalInputWord, 2>; // P1 port, P2 port exactly as applied to the machine
 
 // Facts the frontend / tool know and the recorder cannot. All frame numbers are Machine::frame values.
 struct MatchMeta {
-    uint64_t trigger_machine_frame = 0;   // lobby trigger / --until-trigger frame (local snapshot point)
-    uint64_t edge_machine_frame = 0;      // frame at which in_versus first held (apply_sync / capture_sync point)
-    uint64_t sync_machine_frame = 0;      // frame at which capture_sync / apply_sync ran
-    uint64_t start_machine_frame = 0;     // frame at match frame 0 (state in trigger.f3s)
-    uint64_t lobby_hold_frames = 0;       // frames run under lobby_hold_frame
-    double lobby_hold_ms = 0;             // wall time the lobby hold lasted
-    uint64_t clock_resyncs = 0;           // frontend pacing counters at write time
+    uint64_t trigger_machine_frame =
+        0; // lobby trigger / --until-trigger frame (local snapshot point)
+    uint64_t edge_machine_frame =
+        0; // frame at which in_versus first held (apply_sync / capture_sync point)
+    uint64_t sync_machine_frame = 0;  // frame at which capture_sync / apply_sync ran
+    uint64_t start_machine_frame = 0; // frame at match frame 0 (state in trigger.f3s)
+    uint64_t lobby_hold_frames = 0;   // frames run under lobby_hold_frame
+    double lobby_hold_ms = 0;         // wall time the lobby hold lasted
+    uint64_t clock_resyncs = 0;       // frontend pacing counters at write time
     uint64_t audio_queue_drops = 0;
     uint64_t stall_count = 0;
     // Machine configuration the state files belong to (filled by begin_match); netplay-replay must build the same one.
     bool machine_gpu = false;
-    std::string audio_backend;     // Audio::backend_name
+    std::string audio_backend; // Audio::backend_name
     uint64_t machine_state_bytes = 0;
-    std::vector<std::pair<std::string, std::string>> extra; // free-form key/value, written to info.json
+    std::vector<std::pair<std::string, std::string>>
+        extra; // free-form key/value, written to info.json
 };
 
 struct SessionFacts {
@@ -71,14 +75,17 @@ struct InputsFile {
     std::vector<std::pair<std::string, std::string>> header; // "@key value" lines, in order
     std::vector<AppliedInputs> frames;                       // index = match frame
 };
-std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts, const std::vector<AppliedInputs> &frames);
+std::string format_inputs_txt(const MatchMeta &meta, const SessionFacts &facts,
+                              const std::vector<AppliedInputs> &frames);
 bool parse_inputs_txt(const std::string &text, InputsFile &out, std::string &error);
-std::string header_value(const InputsFile &file, const std::string &key, const std::string &fallback = {});
+std::string header_value(const InputsFile &file, const std::string &key,
+                         const std::string &fallback = {});
 
 // info.json, written by MatchRecorder::write_bundle and read back by `f3rt-tool netplay-replay` (cpp-yyjson).
 // A key that is missing or has the wrong JSON type stays nullopt.
 struct BundleInfo {
-    std::optional<uint64_t> seed, frame, crc_interval, hashed_len, recorded_crc, player_index, machine_gpu, hash_layout;
+    std::optional<uint64_t> seed, frame, crc_interval, hashed_len, recorded_crc, player_index,
+        machine_gpu, hash_layout;
     std::optional<std::string> audio_backend;
 };
 // Throws std::runtime_error if `json` is not valid JSON or its top level is not an object.
@@ -101,10 +108,11 @@ public:
     MatchMeta meta;
 
     // Writes <base_dir>/<UTC timestamp>-<session>-p<idx>/ and returns its path. Throws std::runtime_error on I/O failure.
-    std::filesystem::path write_bundle(const std::filesystem::path &base_dir, const SessionFacts &facts);
+    std::filesystem::path write_bundle(const std::filesystem::path &base_dir,
+                                       const SessionFacts &facts);
 
-    const std::vector<AppliedInputs> &inputs() const { return inputs_; }
-    const std::vector<uint8_t> &trigger_state() const { return trigger_state_; }
+    const std::vector<AppliedInputs> &inputs() const { return m_inputs; }
+    const std::vector<uint8_t> &trigger_state() const { return m_trigger_state; }
 
 private:
     struct Entry {
@@ -112,12 +120,12 @@ private:
         ReportRecord rec;
         std::vector<uint8_t> hashed;
     };
-    const GameNetplay *hook_;
-    std::vector<Entry> ring_;
-    size_t next_ = 0;
-    std::vector<uint8_t> trigger_state_;
-    std::vector<AppliedInputs> inputs_;
-    uint64_t seed_ = 0;
+    const GameNetplay *m_hook;
+    std::vector<Entry> m_ring;
+    size_t m_next = 0;
+    std::vector<uint8_t> m_trigger_state;
+    std::vector<AppliedInputs> m_inputs;
+    uint64_t m_seed = 0;
 
     const Entry *find(uint32_t frame) const;
 };

@@ -3,15 +3,12 @@
 Pins static analysis queries and runtime facts that AI agents and human analysts
 rely on, so changes to the static tracker or commands do not silently alter them.
 """
-from pathlib import Path
-import os
-import shutil
-import sys
+
 import tempfile
 import unittest
+from pathlib import Path
 
-from tools.analysis import f3a, cli  # noqa: E402
-
+from tools.analysis import cli, f3a
 
 COIN_START_MASH_SCRIPT = """# coin, then start every 90 frames, then mash
 700+20 coin
@@ -52,6 +49,7 @@ def has_game_executable(game_id: str, instrumented: bool = False) -> bool:
 
 # ---------------------------------------------------------------- static: commandw
 
+
 @unittest.skipUnless(has_game_roms("commandw"), "commandw ROMs missing")
 class CommandwStaticFactsTests(unittest.TestCase):
     @classmethod
@@ -63,31 +61,46 @@ class CommandwStaticFactsTests(unittest.TestCase):
         # ROM table at 0xa372 consists of 4 bytes [0x0, 0x80, 0xc0, 0xe0],
         # which form 2 big-endian words [0x0080, 0xc0e0].
         # Code of sub_00a376 begins immediately after at 0xa376.
-        rom_bytes = list(self.g.rom(0xa372, 4))
-        self.assertEqual(rom_bytes, [0x00, 0x80, 0xc0, 0xe0])
-        words = self.g.words(0xa372, 2)
-        self.assertEqual(words, [0x80, 0xc0e0])
+        rom_bytes = list(self.g.rom(0xA372, 4))
+        self.assertEqual(rom_bytes, [0x00, 0x80, 0xC0, 0xE0])
+        words = self.g.words(0xA372, 2)
+        self.assertEqual(words, [0x80, 0xC0E0])
 
-        res = self.g.dis(0xa372, data="words")
+        res = self.g.dis(0xA372, data="words")
         self.assertEqual(len(res), 1)
-        self.assertEqual(res[0].values, [0x80, 0xc0e0])
+        self.assertEqual(res[0].values, [0x80, 0xC0E0])
         self.assertTrue(any("table ends at 0x00a376" in note for note in res.notes))
 
     def test_dis_2ff42_data_words_stops_at_code(self):
         # dis 0x2ff42 --data words decodes 17 words and terminates at 0x02ff64
         # where code of sub_02ff64 begins.
-        res = self.g.dis(0x2ff42, data="words")
+        res = self.g.dis(0x2FF42, data="words")
         total_words = sum(len(r.values) for r in res)
         self.assertEqual(total_words, 17)
         flattened = [v for r in res for v in r.values]
         expected_words = [
-            0x40, 0x40, 0x40, 0x40, 0x50, 0x80, 0x80, 0x1,
-            0x1, 0x10, 0x1, 0x1, 0x1, 0x1, 0x18, 0x1, 0x40,
+            0x40,
+            0x40,
+            0x40,
+            0x40,
+            0x50,
+            0x80,
+            0x80,
+            0x1,
+            0x1,
+            0x10,
+            0x1,
+            0x1,
+            0x1,
+            0x1,
+            0x18,
+            0x1,
+            0x40,
         ]
         self.assertEqual(flattened, expected_words)
-        self.assertEqual(self.g.words(0x2ff42, 17), expected_words)
+        self.assertEqual(self.g.words(0x2FF42, 17), expected_words)
         self.assertTrue(any("table ends at 0x02ff64" in note for note in res.notes))
-        self.assertIn(0x2ff64, self.g.core.routines)
+        self.assertIn(0x2FF64, self.g.core.routines)
 
     def test_vectors(self):
         # commandw 68k vector table: 26 non-default vectors
@@ -97,7 +110,7 @@ class CommandwStaticFactsTests(unittest.TestCase):
         self.assertEqual(by_num[1].name, "reset")
         self.assertEqual(by_num[1].address, 0x400)
         self.assertEqual(by_num[26].name, "irq2")
-        self.assertEqual(by_num[26].address, 0x673a)
+        self.assertEqual(by_num[26].address, 0x673A)
         self.assertEqual(by_num[27].name, "irq3")
         self.assertEqual(by_num[27].address, 0x6716)
 
@@ -108,10 +121,11 @@ class CommandwStaticFactsTests(unittest.TestCase):
         # 4 sites touch bit 2 of byte +1 via an address register (3 in sub_02fed6, 1 in sub_0349b2)
         self.assertEqual(len(res), 4)
         pcs = [r.pc for r in res]
-        self.assertEqual(pcs, [0x2feda, 0x2ff10, 0x2ff36, 0x349de])
+        self.assertEqual(pcs, [0x2FEDA, 0x2FF10, 0x2FF36, 0x349DE])
         for r in res:
             self.assertEqual(r.role, "rmw")
         self.assertEqual([r.routine for r in res], ["sub_02fed6", "sub_02fed6", "sub_02fed6", "sub_0349b2"])
+
     def test_writes_region_sprites_ranges(self):
         # writes --region sprites --ranges: store-PC ranges per routine
         res = self.g.writes(region=["sprites"], ranges=True)
@@ -145,7 +159,7 @@ class CommandwStaticFactsTests(unittest.TestCase):
         self.assertEqual(sizes, [4, 4, 2, 2, 2, 4, 4, 2, 2, 2, 4, 4, 2, 2, 2])
         self.assertTrue(any("span: +0x00..+0x5a" in note for note in res.notes))
         self.assertEqual(min(r.offset for r in res), 0x00)
-        self.assertEqual(max(r.offset + r.size for r in res), 0x5a)
+        self.assertEqual(max(r.offset + r.size for r in res), 0x5A)
         r0 = res[0]
         self.assertEqual(r0.offset, 0)
         self.assertEqual(r0.size, 4)
@@ -161,6 +175,7 @@ class CommandwStaticFactsTests(unittest.TestCase):
 
 # ---------------------------------------------------------------- static: landmakrj
 
+
 @unittest.skipUnless(has_game_roms("landmakrj"), "landmakrj ROMs missing")
 class LandmakrjStaticFactsTests(unittest.TestCase):
     @classmethod
@@ -170,15 +185,15 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
     def test_dis_40aa_data_offsets_jump_table(self):
         # landmakrj 0x40a6 has `jmp $40aa(pc, d0.w)`.
         # dis 0x40aa --data offsets decodes 24 offset-table entries.
-        res = self.g.dis(0x40aa, data="offsets")
+        res = self.g.dis(0x40AA, data="offsets")
         self.assertEqual(len(res), 24)
         # Verify specific index -> target pairs observed from real output
         self.assertEqual(res[0].index, 0)
-        self.assertEqual(res[0].target, 0x40da)
+        self.assertEqual(res[0].target, 0x40DA)
         self.assertEqual(res[0].value, 0x30)
 
         self.assertEqual(res[1].index, 1)
-        self.assertEqual(res[1].target, 0x40ea)
+        self.assertEqual(res[1].target, 0x40EA)
         self.assertEqual(res[1].value, 0x40)
 
         self.assertEqual(res[5].index, 5)
@@ -187,19 +202,19 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
 
         self.assertEqual(res[17].index, 17)
         self.assertEqual(res[17].target, 0x4180)
-        self.assertEqual(res[17].value, 0xd6)
+        self.assertEqual(res[17].value, 0xD6)
 
         self.assertEqual(res[23].index, 23)
-        self.assertEqual(res[23].target, 0x41b4)
-        self.assertEqual(res[23].value, 0x10a)
+        self.assertEqual(res[23].target, 0x41B4)
+        self.assertEqual(res[23].value, 0x10A)
 
         self.assertTrue(any("table ends at 0x0040da" in note for note in res.notes))
 
     def test_dis_3ee6_shared_by_35_routines(self):
         # 0x003ee6 is code inside sub_0a2118, shared by 35 routines
-        res = self.g.dis(0x3ee6)
+        res = self.g.dis(0x3EE6)
         self.assertTrue(any("shared by 35 routines" in note for note in res.notes))
-        self.assertEqual(len(self.g.core.owners[0x3ee6]), 35)
+        self.assertEqual(len(self.g.core.owners[0x3EE6]), 35)
 
     def test_writes_sub_00431a_placed_stores(self):
         # sub_00431a has 16 stores to sprites (8 to 0x600000, 8 to 0x608000), all placed
@@ -221,7 +236,7 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
         self.assertGreaterEqual(len(repeats), 1)
 
         # Check candidate hit counts exist on candidate rows
-        site_953f6 = next((r for r in site_rows if r.site == 0x0953f6), None)
+        site_953f6 = next((r for r in site_rows if r.site == 0x0953F6), None)
         self.assertIsNotNone(site_953f6)
         self.assertIn("sub_095e7c", site_953f6.candidate_hits)
         self.assertGreater(site_953f6.candidate_hits["sub_095e7c"], 0)
@@ -229,17 +244,16 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
     def test_xref_a5_global_and_writes(self):
         # xref a5-0x60ac resolves to 0x401f54 and includes writes in sub_08e20c
         target_addr = self.g.address("a5-0x60ac")
-        self.assertEqual(target_addr, 0x401f54)
+        self.assertEqual(target_addr, 0x401F54)
 
         res = self.g.xref("a5-0x60ac")
         sub_8e20c_addr = self.g.address("sub_08e20c")
         writes_in_8e20c = [
-            r for r in res
-            if self.g.core.routine_of(r.pc) == sub_8e20c_addr and r.role in ("write", "rmw")
+            r for r in res if self.g.core.routine_of(r.pc) == sub_8e20c_addr and r.role in ("write", "rmw")
         ]
         # Pinned write PCs in sub_08e20c
         write_pcs = sorted(r.pc for r in writes_in_8e20c)
-        self.assertEqual(write_pcs, [0x8e414, 0x8e484, 0x8e59e, 0x8e5be, 0x8e5da])
+        self.assertEqual(write_pcs, [0x8E414, 0x8E484, 0x8E59E, 0x8E5BE, 0x8E5DA])
 
     def test_flow_path_to_sub_08e9c6(self):
         # flow sub_08e9c6 --path 4 reaches it from sub_08e20c via sub_08e8b8 and sub_08e9c0
@@ -251,30 +265,44 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
         self.assertEqual(self.g.core.routine_of(row.chain[0]["site"]), sub_8e20c_addr)
 
         to_addrs = [self.g.address(step["to"]) for step in row.chain]
-        self.assertEqual(to_addrs, [0x8e8b8, 0x8e9c0, 0x8e9c6])
+        self.assertEqual(to_addrs, [0x8E8B8, 0x8E9C0, 0x8E9C6])
 
         # Step 0: call @ 0x8e62e -> sub_08e8b8
-        self.assertEqual(row.chain[0]["site"], 0x8e62e)
+        self.assertEqual(row.chain[0]["site"], 0x8E62E)
         self.assertEqual(row.chain[0]["kind"], "call")
         # Step 1: call @ 0x8e8e6 -> sub_08e9c0
-        self.assertEqual(row.chain[1]["site"], 0x8e8e6)
+        self.assertEqual(row.chain[1]["site"], 0x8E8E6)
         self.assertEqual(row.chain[1]["kind"], "call")
         # Step 2: fall @ 0x8e9c0 -> sub_08e9c6
-        self.assertEqual(row.chain[2]["site"], 0x8e9c0)
+        self.assertEqual(row.chain[2]["site"], 0x8E9C0)
         self.assertEqual(row.chain[2]["kind"], "fall")
 
     def test_yield_tasks_and_resume_points(self):
         # landmakrj yield traps: 4, 5, 6, 7
         self.assertEqual(sorted(self.g.core.yield_traps.keys()), [4, 5, 6, 7])
         # sub_08e20c (address 0x08e20c) has kinds task, seed, ref
-        r = self.g.core.routines[0x08e20c]
+        r = self.g.core.routines[0x08E20C]
         self.assertIn("task", r.kinds)
         self.assertEqual(r.kinds, {"task", "seed", "ref"})
         # 14 resume points belonging to sub_08e20c, including 0x08e4f4, 0x08e332, 0x08e788
-        resume_points = sorted(pc for pc, target in self.g.core.resume_points.items() if target == 0x08e20c)
+        resume_points = sorted(pc for pc, target in self.g.core.resume_points.items() if target == 0x08E20C)
         self.assertEqual(len(resume_points), 14)
-        expected = [0x8e20e, 0x8e276, 0x8e306, 0x8e332, 0x8e3e4, 0x8e402, 0x8e404,
-                    0x8e442, 0x8e4be, 0x8e4f4, 0x8e532, 0x8e788, 0x8e7b8, 0x8e7c2]
+        expected = [
+            0x8E20E,
+            0x8E276,
+            0x8E306,
+            0x8E332,
+            0x8E3E4,
+            0x8E402,
+            0x8E404,
+            0x8E442,
+            0x8E4BE,
+            0x8E4F4,
+            0x8E532,
+            0x8E788,
+            0x8E7B8,
+            0x8E7C2,
+        ]
         self.assertEqual(resume_points, expected)
 
     def test_writes_stack_arg_stores(self):
@@ -282,26 +310,30 @@ class LandmakrjStaticFactsTests(unittest.TestCase):
         res = self.g.writes("sub_005614", "sub_0056ae", "sub_005726", "sub_00581c")
         self.assertEqual(len(res), 7)
         pcs = [r.pc for r in res]
-        expected_pcs = [0x5646, 0x56d6, 0x5756, 0x5758, 0x583a, 0x5840, 0x5846]
+        expected_pcs = [0x5646, 0x56D6, 0x5756, 0x5758, 0x583A, 0x5840, 0x5846]
         self.assertEqual(pcs, expected_pcs)
         for r in res:
             self.assertEqual(r.region, "stack-arg")
         arg_offsets = {r.pc: r.arg_offset for r in res}
-        self.assertEqual(arg_offsets, {
-            0x5646: 8,
-            0x56d6: 8,
-            0x5756: 8,
-            0x5758: 8,
-            0x583a: 10,
-            0x5840: 10,
-            0x5846: 10,
-        })
+        self.assertEqual(
+            arg_offsets,
+            {
+                0x5646: 8,
+                0x56D6: 8,
+                0x5756: 8,
+                0x5758: 8,
+                0x583A: 10,
+                0x5840: 10,
+                0x5846: 10,
+            },
+        )
         # writes --region video --ranges reports the count of stack argument stores
         res_ranges = self.g.writes(video=True, ranges=True)
         self.assertTrue(any("7 stores in 4 routines go through stack arguments" in note for note in res_ranges.notes))
 
 
 # ---------------------------------------------------------------- runtime: landmakrj
+
 
 @unittest.skipUnless(has_game_executable("landmakrj"), "landmakrj executable missing")
 class LandmakrjRuntimeFactsTests(unittest.TestCase):
@@ -322,10 +354,9 @@ class LandmakrjRuntimeFactsTests(unittest.TestCase):
             self.assertEqual(row.target, "sub_09d72a")
             self.assertTrue(row.reached)
             self.assertEqual(row.frame, 1414)
-            self.assertEqual(row.pc, 0x09d762)
+            self.assertEqual(row.pc, 0x09D762)
 
-    @unittest.skipUnless(has_game_executable("landmakrj", instrumented=True),
-                         "landmakrj instrumented build missing")
+    @unittest.skipUnless(has_game_executable("landmakrj", instrumented=True), "landmakrj instrumented build missing")
     def test_run_instrumented_watch_until_sub_08e9c6(self):
         # With instrumented build: --inputs ten-wins-poke.txt --watch 0x08e62e --until sub_08e9c6
         # reaches sub_08e9c6 at frame 7287 and 0x08e62e executes at frame 7286.
@@ -334,8 +365,9 @@ class LandmakrjRuntimeFactsTests(unittest.TestCase):
             script_file.write_text(TEN_WINS_POKE_SCRIPT)
 
             out_dir = Path(tmpdir) / "run_watch_out"
-            run = self.g.run(frames=8000, inputs=str(script_file), watch=["0x08e62e"],
-                             until=["sub_08e9c6"], out=str(out_dir))
+            run = self.g.run(
+                frames=8000, inputs=str(script_file), watch=["0x08e62e"], until=["sub_08e9c6"], out=str(out_dir)
+            )
 
             until_rows = run.log.where(target="sub_08e9c6")
             self.assertGreater(len(until_rows), 0)
@@ -420,8 +452,8 @@ class LandmakrjRuntimeFactsTests(unittest.TestCase):
 
 # ---------------------------------------------------------------- runtime: landmakrj (indirect)
 
-@unittest.skipUnless(has_game_executable("landmakrj", instrumented=True),
-                     "landmakrj instrumented build missing")
+
+@unittest.skipUnless(has_game_executable("landmakrj", instrumented=True), "landmakrj instrumented build missing")
 class LandmakrjIndirectRuntimeFactsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -451,14 +483,14 @@ class LandmakrjIndirectRuntimeFactsTests(unittest.TestCase):
         site_rows = [r for r in flow_res if r.get("direction") == "site"]
 
         # site 0x003f30 observed target sub_0a811e is not a static candidate
-        site_3f30 = next((r for r in site_rows if r.site == 0x003f30), None)
+        site_3f30 = next((r for r in site_rows if r.site == 0x003F30), None)
         self.assertIsNotNone(site_3f30)
         self.assertIn("sub_0a811e", site_3f30.observed)
         self.assertNotIn("sub_0a811e", site_3f30.candidates)
         self.assertIn(f"sub_0a811e x{site_3f30.observed['sub_0a811e']} (not a static candidate)", site_3f30.line)
 
         # site 0x0040a6 observed targets are inside the site's own routine (local)
-        site_40a6 = next((r for r in site_rows if r.site == 0x0040a6), None)
+        site_40a6 = next((r for r in site_rows if r.site == 0x0040A6), None)
         self.assertIsNotNone(site_40a6)
         self.assertGreater(len(site_40a6.observed), 0)
         for target, count in site_40a6.observed.items():

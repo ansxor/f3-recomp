@@ -24,6 +24,7 @@ caveats with the rows, capped at 60 lines when displayed or printed; `.text` is 
 `.show(n)` prints n lines. Errors the CLI would print raise F3AError. `g.core` is the underlying
 analysis (analysis.game.Game) for anything the commands do not expose.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,9 +35,10 @@ import re
 from pathlib import Path
 
 from . import cli
-from .game import Game as Core, canonical
+from .game import Game as Core
+from .game import canonical
 
-__all__ = ["game", "open_run", "help_text", "F3AError", "Row", "Result", "Game", "Run"]
+__all__ = ["F3AError", "Game", "Result", "Row", "Run", "game", "help_text", "open_run"]
 
 
 class F3AError(Exception):
@@ -45,7 +47,8 @@ class F3AError(Exception):
 
 class Row:
     """One output row: prints as the CLI line; fields as attributes (row.pc) or items (row["pc"])."""
-    __slots__ = ("line", "fields")
+
+    __slots__ = ("fields", "line")
 
     def __init__(self, line: str, fields: dict):
         self.line, self.fields = line, fields
@@ -68,6 +71,7 @@ class Row:
 
 class Result(list):
     """Rows of one command, plus the notes (headers, caveats, footers) in output order."""
+
     SHOWN = 60
 
     def __init__(self, rows=(), items=None):
@@ -82,10 +86,12 @@ class Result(list):
     def text(self) -> str:
         return "\n".join(item if isinstance(item, str) else item.line for item in self.items)
 
-    def where(self, predicate=None, **equal) -> "Result":
+    def where(self, predicate=None, **equal) -> Result:
         """Rows matching a predicate and/or field values (row.region == "sprites"); notes are kept."""
+
         def keep(row: Row) -> bool:
             return (predicate is None or predicate(row)) and all(row.get(k) == v for k, v in equal.items())
+
         kept = [row for row in self if keep(row)]
         ids = {id(row) for row in kept}
         return Result(kept, [i for i in self.items if isinstance(i, str) or id(i) in ids])
@@ -100,8 +106,10 @@ class Result(list):
         lines = self.text.splitlines()
         if len(lines) <= self.SHOWN:
             return self.text
-        return "\n".join(lines[:self.SHOWN]) + f"\n… {len(lines) - self.SHOWN} more lines ({len(self)} rows); " \
+        return (
+            "\n".join(lines[: self.SHOWN]) + f"\n… {len(lines) - self.SHOWN} more lines ({len(self)} rows); "
             "result.text for all, result.show(n), result.where(...) to filter"
+        )
 
     def show(self, lines: int | None = None) -> None:
         """Print the whole output, or its first `lines` lines."""
@@ -159,8 +167,11 @@ def _argv(command: str, positional, options: dict) -> list[str]:
         option = "--" + key.rstrip("_").replace("_", "-")  # from_ → --from (Python keywords)
         action = by_option.get(option)
         if action is None:
-            names = sorted(s[2:].replace("-", "_") + ("_" if keyword.iskeyword(s[2:]) else "")
-                           for s in by_option if s.startswith("--") and s != "--help")
+            names = sorted(
+                s[2:].replace("-", "_") + ("_" if keyword.iskeyword(s[2:]) else "")
+                for s in by_option
+                if s.startswith("--") and s != "--help"
+            )
             raise F3AError(f"{command} has no option {key!r}; options: {', '.join(names)}")
         if value is None or value is False:
             continue
@@ -215,11 +226,16 @@ def _call(command: str, positional=(), options: dict | None = None, core: Core |
 
 
 # ---------------------------------------------------------------- static analysis
-_GAMES: dict[tuple, "Game"] = {}
+_GAMES: dict[tuple, Game] = {}
 
 
-def game(game_id: str, rom_dir: str | None = None, profile: str | None = None, symbols: str | None = None,
-         a5: int | None = None) -> "Game":
+def game(
+    game_id: str,
+    rom_dir: str | None = None,
+    profile: str | None = None,
+    symbols: str | None = None,
+    a5: int | None = None,
+) -> Game:
     """The analysed program of games/<game_id> (cached per kernel; arguments as the CLI's)."""
     key = (game_id, rom_dir, profile, symbols, a5)
     if key not in _GAMES:
@@ -229,8 +245,14 @@ def game(game_id: str, rom_dir: str | None = None, profile: str | None = None, s
 
 class Game:
     def __init__(self, game_id: str, rom_dir=None, profile=None, symbols=None, a5=None):
-        namespace = argparse.Namespace(game=game_id, global_game=None, rom_dir=rom_dir, profile=profile,
-                                       symbols=symbols, a5=hex(a5) if isinstance(a5, int) else a5)
+        namespace = argparse.Namespace(
+            game=game_id,
+            global_game=None,
+            rom_dir=rom_dir,
+            profile=profile,
+            symbols=symbols,
+            a5=hex(a5) if isinstance(a5, int) else a5,
+        )
         try:
             self.core: Core = cli.load(namespace)
         except SystemExit as stop:
@@ -238,8 +260,10 @@ class Game:
         self.id = game_id
 
     def __repr__(self) -> str:
-        return f"f3a.game({self.id!r}): {len(self.core.routines)} routines, a5={hex(self.core.a5 or 0)}, " \
-               f"profile={'yes' if self.core.hits else 'no'}"
+        return (
+            f"f3a.game({self.id!r}): {len(self.core.routines)} routines, a5={hex(self.core.a5 or 0)}, "
+            f"profile={'yes' if self.core.hits else 'no'}"
+        )
 
     def call(self, command: str, *positional, **options) -> Result:
         """Any CLI command by name: g.call("xref", "a5-0x7cd7", sort="hits")."""
@@ -272,15 +296,15 @@ class Game:
     def discover(self, log=None, **options) -> Result:
         return self.call("discover", *([str(log)] if log else []), **options)
 
-    def run(self, out: str | Path | None = None, **options) -> "Run":
+    def run(self, out: str | Path | None = None, **options) -> Run:
         """Headless run (options as `f3a run`); returns the Run, whose .log is the run's output."""
         frames = options.get("frames", 1200)
         out = Path(out) if out else cli.default_out(self.core, f"lib{frames}")
         log = self.call("run", out=str(out), **options)
         return Run(out, self, log)
+
     def profile(self, **options) -> Result:
         return self.call("profile", **options)
-
 
     def address(self, text) -> int:
         """Resolve a5-0x7cd7, irq2, sub_009b32, symbols or hex text to an address."""
@@ -292,27 +316,29 @@ class Game:
     def rom(self, address, size: int) -> bytes:
         """Program ROM bytes."""
         address = self.address(address)
-        return bytes(self.core.rom[address:address + size])
+        return bytes(self.core.rom[address : address + size])
 
     def words(self, address, count: int, signed: bool = False) -> list[int]:
         """count big-endian words from ROM (tables; signed=True for offset tables)."""
         data = self.rom(address, 2 * count)
-        return [int.from_bytes(data[i:i + 2], "big", signed=signed) for i in range(0, len(data), 2)]
+        return [int.from_bytes(data[i : i + 2], "big", signed=signed) for i in range(0, len(data), 2)]
 
     def longs(self, address, count: int) -> list[int]:
         """count big-endian longs from ROM (pointer tables)."""
         data = self.rom(address, 4 * count)
-        return [int.from_bytes(data[i:i + 4], "big") for i in range(0, len(data), 4)]
+        return [int.from_bytes(data[i : i + 4], "big") for i in range(0, len(data), 4)]
 
 
 for _name in ("vectors", "dis", "xref", "flow", "writes", "struct", "graph", "mametap", "discover", "run", "profile"):
     _method = getattr(Game, _name)
-    _method.__doc__ = (f"`f3a {_name}` as a call: positional arguments as the CLI's, long options as keywords "
-                       f"(dump_every=1, from_=...). The command's help:\n\n" + help_text(_name))
+    _method.__doc__ = (
+        f"`f3a {_name}` as a call: positional arguments as the CLI's, long options as keywords "
+        f"(dump_every=1, from_=...). The command's help:\n\n" + help_text(_name)
+    )
 
 
 # ---------------------------------------------------------------- dumps
-def open_run(path: str | Path, game_id: str | None = None) -> "Run":
+def open_run(path: str | Path, game_id: str | None = None) -> Run:
     """An existing `f3a run --out` directory (its game is recorded there by `f3a run`)."""
     path = Path(path)
     if game_id is None:
@@ -327,7 +353,8 @@ def open_run(path: str | Path, game_id: str | None = None) -> "Run":
 
 class Record:
     """One record of a frame dump: r.b/w/l(offset) read big-endian unsigned values."""
-    __slots__ = ("frame", "index", "address", "bytes")
+
+    __slots__ = ("address", "bytes", "frame", "index")
 
     def __init__(self, frame: int, index: int, address: int, data: bytes):
         self.frame, self.index, self.address, self.bytes = frame, index, address, data
@@ -336,10 +363,11 @@ class Record:
         return self.bytes[offset]
 
     def w(self, offset: int) -> int:
-        return int.from_bytes(self.bytes[offset:offset + 2], "big")
+        return int.from_bytes(self.bytes[offset : offset + 2], "big")
 
-    def l(self, offset: int) -> int:
-        return int.from_bytes(self.bytes[offset:offset + 4], "big")
+    # `l` is the long-access accessor of the public run/record API (run.l, .l fields); the name is user-facing.
+    def l(self, offset: int) -> int:  # noqa: E743
+        return int.from_bytes(self.bytes[offset : offset + 4], "big")
 
     def __repr__(self) -> str:
         return f"frame {self.frame} [{self.index}] {self.address:#08x}  {self.bytes[:32].hex(' ', 2)}"
@@ -394,7 +422,7 @@ class Run:
         key = (frame, name)
         if key not in self._cache:
             try:
-                (n, path), = cli.load_frames(self.path, f"{frame}:{frame}")
+                ((_n, path),) = cli.load_frames(self.path, f"{frame}:{frame}")
                 self._cache[key] = (path / name).read_bytes()
             except (SystemExit, ValueError):
                 raise F3AError(f"frame {frame} is not dumped under {self.path}") from None
@@ -409,7 +437,7 @@ class Run:
             name, offset = cli.dump_location(address)
         except SystemExit as stop:
             raise F3AError(str(stop.code).removeprefix("f3a: ")) from None
-        return self._file(frame, name)[offset:offset + size]
+        return self._file(frame, name)[offset : offset + size]
 
     def b(self, frame: int, address) -> int:
         return self.mem(frame, address, 1)[0]
@@ -417,7 +445,8 @@ class Run:
     def w(self, frame: int, address) -> int:
         return int.from_bytes(self.mem(frame, address, 2), "big")
 
-    def l(self, frame: int, address) -> int:
+    # `l` is the long-access accessor of the public dump API, mirroring w(); the name is user-facing.
+    def l(self, frame: int, address) -> int:  # noqa: E743
         return int.from_bytes(self.mem(frame, address, 4), "big")
 
     def series(self, address, size: int = 1, frames=None) -> list[tuple[int, int]]:
@@ -427,8 +456,10 @@ class Run:
     def table(self, base, stride: int, count: int, frame: int, size: int | None = None) -> list[Record]:
         """count records of `size` (default stride) bytes from base in one frame."""
         base = self.game.address(base) if not isinstance(base, int) else base
-        return [Record(frame, k, base + k * stride, self.mem(frame, base + k * stride, size or stride))
-                for k in range(count)]
+        return [
+            Record(frame, k, base + k * stride, self.mem(frame, base + k * stride, size or stride))
+            for k in range(count)
+        ]
 
 
 for _name in ("records", "sprites"):

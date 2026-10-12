@@ -16,7 +16,7 @@ public:
     // Exact exclusion complement, or sorted nonexcluded retained entries in slim builds.
     SoundNative(Machine &machine, const f3_block *blocks, size_t block_count,
                 std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
-    ~SoundNative();
+    ~SoundNative() = default;
 
     SoundNative(const SoundNative &) = delete;
     SoundNative &operator=(const SoundNative &) = delete;

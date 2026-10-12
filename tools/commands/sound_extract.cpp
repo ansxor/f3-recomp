@@ -20,27 +20,33 @@ namespace f3rt::tool {
 namespace {
 
 void print_help(const char *prog) {
-    std::cout << "Usage: " << prog << " sound-extract [options]\n\n"
-              << "Standalone sound extraction and stimulus injection tool (Taito F3).\n\n"
-              << "Options:\n"
-              << "  --rom-dir DIR          Path to ROM directory\n"
-              << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
-              << "  --packet HEX           Inject length-prefixed packet at event origin (can be repeated)\n"
-              << "  --at SECONDS:HEX       Schedule packet injection at SECONDS from event origin (can be repeated)\n"
-              << "  --seconds DURATION     Duration in seconds to advance audio after event origin (default: 5.0)\n"
-              << "  --boot-frames N        Interpreted main CPU boot frames before freezing (default: 900, ~15.3s)\n"
-              << "  --sound-trace FILE     Record lossless bus sound trace from cold boot (F3SND2 format)\n"
-              << "  --wav FILE             Save generated stereo 16-bit PCM audio as WAV\n"
-              << "  --wav-window full|event\n"
-              << "                         full: record cold boot through extraction (default)\n"
-              << "                         event: record only from event time origin onward\n"
-              << "  --sound-driver oracle|native\n"
-              << "                         oracle: interpreted 68000 sound CPU (default)\n"
-              << "                         native: statically compiled 68000 driver via f3_sound_blocks\n"
-              << "  --audio-backend reference|enhanced (default reference; enhanced uses no sound CPU)\n"
-              << "  --hle-events FILE      Save HLE voice start/release/stop/parameter CSV\n"
-              << "  --json                 Output machine-readable JSON result\n"
-              << "  --help, -h             Show this help message\n";
+    std::cout
+        << "Usage: " << prog << " sound-extract [options]\n\n"
+        << "Standalone sound extraction and stimulus injection tool (Taito F3).\n\n"
+        << "Options:\n"
+        << "  --rom-dir DIR          Path to ROM directory\n"
+        << "  --set SET              ROM set name (default: " F3RT_DEFAULT_SET ")\n"
+        << "  --packet HEX           Inject length-prefixed packet at event origin (can be "
+           "repeated)\n"
+        << "  --at SECONDS:HEX       Schedule packet injection at SECONDS from event origin (can "
+           "be repeated)\n"
+        << "  --seconds DURATION     Duration in seconds to advance audio after event origin "
+           "(default: 5.0)\n"
+        << "  --boot-frames N        Interpreted main CPU boot frames before freezing (default: "
+           "900, ~15.3s)\n"
+        << "  --sound-trace FILE     Record lossless bus sound trace from cold boot (F3SND2 "
+           "format)\n"
+        << "  --wav FILE             Save generated stereo 16-bit PCM audio as WAV\n"
+        << "  --wav-window full|event\n"
+        << "                         full: record cold boot through extraction (default)\n"
+        << "                         event: record only from event time origin onward\n"
+        << "  --sound-driver oracle|native\n"
+        << "                         oracle: interpreted 68000 sound CPU (default)\n"
+        << "                         native: statically compiled 68000 driver via f3_sound_blocks\n"
+        << "  --audio-backend reference|enhanced (default reference; enhanced uses no sound CPU)\n"
+        << "  --hle-events FILE      Save HLE voice start/release/stop/parameter CSV\n"
+        << "  --json                 Output machine-readable JSON result\n"
+        << "  --help, -h             Show this help message\n";
 }
 
 } // namespace
@@ -77,7 +83,8 @@ int cmd_sound_extract(int argc, char **argv) try {
             const std::string text = value();
             size_t end = 0;
             duration_seconds = std::stod(text, &end);
-            if (end != text.size() || duration_seconds <= 0.0 || std::isnan(duration_seconds) || std::isinf(duration_seconds)) {
+            if (end != text.size() || duration_seconds <= 0.0 || std::isnan(duration_seconds) ||
+                std::isinf(duration_seconds)) {
                 throw std::runtime_error("--seconds must be a positive number");
             }
         } else if (arg == "--boot-frames") {
@@ -100,7 +107,8 @@ int cmd_sound_extract(int argc, char **argv) try {
             sound_explicit = true;
             cfg.sound_driver = value();
             if (cfg.sound_driver != "oracle" && cfg.sound_driver != "native") {
-                throw std::runtime_error("Invalid --sound-driver '" + cfg.sound_driver + "': must be 'oracle' or 'native'");
+                throw std::runtime_error("Invalid --sound-driver '" + cfg.sound_driver +
+                                         "': must be 'oracle' or 'native'");
             }
         } else if (arg == "--audio-backend") {
             const std::string name = value();
@@ -124,24 +132,25 @@ int cmd_sound_extract(int argc, char **argv) try {
     }
     const bool enhanced = (cfg.audio_backend == Audio::Backend::Enhanced);
     if (enhanced && (sound_explicit || !cfg.sound_trace_path.empty())) {
-        throw std::runtime_error("Enhanced audio does not execute a sound driver or emit CPU bus traces");
+        throw std::runtime_error(
+            "Enhanced audio does not execute a sound driver or emit CPU bus traces");
     }
     if (!enhanced && !cfg.hle_events_path.empty()) {
         throw std::runtime_error("--hle-events requires --audio-backend enhanced");
     }
 
-    std::stable_sort(scheduled.begin(), scheduled.end(), [](const auto &a, const auto &b) {
-        return a.time_seconds < b.time_seconds;
-    });
+    std::stable_sort(scheduled.begin(), scheduled.end(),
+                     [](const auto &a, const auto &b) { return a.time_seconds < b.time_seconds; });
 
-    if (duration_seconds > double(UINT64_MAX / Machine::main_clock)) {
+    if (duration_seconds > double(UINT64_MAX / Machine::MAIN_CLOCK)) {
         throw std::runtime_error("Duration exceeds the trace clock range");
     }
     const uint64_t duration_ticks =
-        static_cast<uint64_t>(std::round(duration_seconds * double(Machine::main_clock)));
+        static_cast<uint64_t>(std::round(duration_seconds * double(Machine::MAIN_CLOCK)));
     if (!duration_ticks) throw std::runtime_error("Duration is shorter than one main clock tick");
     if (!scheduled.empty() && scheduled.back().tick >= duration_ticks) {
-        throw std::runtime_error("Every scheduled packet must be earlier than --seconds after clock rounding");
+        throw std::runtime_error(
+            "Every scheduled packet must be earlier than --seconds after clock rounding");
     }
 
     const auto start_time = std::chrono::steady_clock::now();
@@ -159,7 +168,8 @@ int cmd_sound_extract(int argc, char **argv) try {
     for (uint64_t f = 0; f < boot_frames; ++f) {
         if (!m.run_frame(/*translated=*/false) || m.cpu.halted) {
             std::ostringstream error;
-            error << "Main CPU halted during boot at frame " << m.frame << " PC 0x" << std::hex << m.cpu.pc;
+            error << "Main CPU halted during boot at frame " << m.frame << " PC 0x" << std::hex
+                  << m.cpu.pc;
             throw std::runtime_error(error.str());
         }
         runner.drain_audio(record_boot_wav);
@@ -175,26 +185,30 @@ int cmd_sound_extract(int argc, char **argv) try {
     {
         uint32_t wait_cycles = 0;
         const uint32_t max_wait = 16000000;
-        while (runner::RingBufferState::read_consumer(m) != runner::RingBufferState::read_producer(m) && wait_cycles < max_wait) {
-            constexpr uint32_t step = 1000;
-            m.audio->advance(step);
-            m.cpu.cycles += step;
-            wait_cycles += step;
+        while (runner::RingBufferState::read_consumer(m) !=
+                   runner::RingBufferState::read_producer(m) &&
+               wait_cycles < max_wait) {
+            constexpr uint32_t STEP = 1000;
+            m.audio->advance(STEP);
+            m.cpu.cycles += STEP;
+            wait_cycles += STEP;
             if (wait_cycles % 16000 == 0) runner.drain_audio(record_boot_wav);
         }
         runner.drain_audio(record_boot_wav);
-        if (runner::RingBufferState::read_consumer(m) != runner::RingBufferState::read_producer(m)) {
-            throw std::runtime_error("Sound CPU consumer did not synchronize with producer before freeze");
+        if (runner::RingBufferState::read_consumer(m) !=
+            runner::RingBufferState::read_producer(m)) {
+            throw std::runtime_error(
+                "Sound CPU consumer did not synchronize with producer before freeze");
         }
     }
 
     const uint64_t event_origin_cycles = m.audio->clock_ticks();
-    const double event_origin_seconds = double(event_origin_cycles) / double(Machine::main_clock);
+    const double event_origin_seconds = double(event_origin_cycles) / double(Machine::MAIN_CLOCK);
     const uint64_t event_origin_sample = m.audio->generated_frames();
 
     if (!json_output) {
-        std::cout << "Event time origin: " << std::fixed << std::setprecision(6) << event_origin_seconds
-                  << " s (cycles=" << event_origin_cycles
+        std::cout << "Event time origin: " << std::fixed << std::setprecision(6)
+                  << event_origin_seconds << " s (cycles=" << event_origin_cycles
                   << ", sample=" << event_origin_sample << ")\n";
     }
 
@@ -207,7 +221,7 @@ int cmd_sound_extract(int argc, char **argv) try {
     size_t next_packet_idx = 0;
     size_t packets_published = 0;
     uint64_t cycles_since_last_drain = 0;
-    constexpr uint64_t drain_interval = 16000;
+    constexpr uint64_t DRAIN_INTERVAL = 16000;
 
     while (current_cycles < target_end_cycles) {
         while (next_packet_idx < scheduled.size()) {
@@ -215,7 +229,8 @@ int cmd_sound_extract(int argc, char **argv) try {
             uint64_t due_cycle = event_origin_cycles + sp.tick;
             if (current_cycles < due_cycle) break;
             if (runner::RingBufferState::available_bytes(m) < sp.packet.size()) {
-                throw std::runtime_error("Mailbox full at scheduled tick; space commands farther apart");
+                throw std::runtime_error(
+                    "Mailbox full at scheduled tick; space commands farther apart");
             }
             runner::publish_packet(m, sp.packet, current_cycles);
             ++packets_published;
@@ -235,7 +250,7 @@ int cmd_sound_extract(int argc, char **argv) try {
         m.cpu.cycles = current_cycles;
         cycles_since_last_drain += slice;
 
-        if (cycles_since_last_drain >= drain_interval) {
+        if (cycles_since_last_drain >= DRAIN_INTERVAL) {
             runner.drain_audio(true);
             cycles_since_last_drain = 0;
         }
@@ -248,30 +263,27 @@ int cmd_sound_extract(int argc, char **argv) try {
     const double elapsed_seconds = std::chrono::duration<double>(elapsed).count();
 
     if (json_output) {
-        std::cout << "{\"status\":\"SUCCESS\",\"backend\":\"" << Audio::backend_name(cfg.audio_backend)
-                  << "\",\"driver\":\"" << (enhanced ? "none" : cfg.sound_driver)
-                  << "\",\"set\":\"" << cfg.set
-                  << "\",\"packets\":" << packets_published
-                  << ",\"duration\":" << duration_seconds
+        std::cout << "{\"status\":\"SUCCESS\",\"backend\":\""
+                  << Audio::backend_name(cfg.audio_backend) << "\",\"driver\":\""
+                  << (enhanced ? "none" : cfg.sound_driver) << "\",\"set\":\"" << cfg.set
+                  << "\",\"packets\":" << packets_published << ",\"duration\":" << duration_seconds
                   << ",\"audio_frames\":" << runner.audio_frames()
                   << ",\"audio_peak\":" << runner.audio_peak()
-                  << ",\"nonzero_samples\":" << runner.nonzero_samples()
-                  << ",\"sound_pc\":\"0x" << std::hex << m.sound_pc() << std::dec << "\""
+                  << ",\"nonzero_samples\":" << runner.nonzero_samples() << ",\"sound_pc\":\"0x"
+                  << std::hex << m.sound_pc() << std::dec << "\""
                   << ",\"wall_time\":" << elapsed_seconds
                   << ",\"event_origin_seconds\":" << event_origin_seconds
-                  << ",\"event_origin_cycles\":" << event_origin_cycles
-                  << "}\n";
+                  << ",\"event_origin_cycles\":" << event_origin_cycles << "}\n";
     } else {
         std::cout << "SUCCESS backend=" << Audio::backend_name(cfg.audio_backend)
-                  << " driver=" << (enhanced ? "none" : cfg.sound_driver)
-                  << " set=" << cfg.set
-                  << " packets=" << packets_published
-                  << " duration=" << std::fixed << std::setprecision(3) << duration_seconds << "s"
+                  << " driver=" << (enhanced ? "none" : cfg.sound_driver) << " set=" << cfg.set
+                  << " packets=" << packets_published << " duration=" << std::fixed
+                  << std::setprecision(3) << duration_seconds << "s"
                   << " audio_frames=" << runner.audio_frames()
                   << " audio_peak=" << runner.audio_peak()
-                  << " nonzero_samples=" << runner.nonzero_samples()
-                  << " sound_pc=0x" << std::hex << m.sound_pc() << std::dec
-                  << " wall_time=" << std::fixed << std::setprecision(2) << elapsed_seconds << "s\n";
+                  << " nonzero_samples=" << runner.nonzero_samples() << " sound_pc=0x" << std::hex
+                  << m.sound_pc() << std::dec << " wall_time=" << std::fixed << std::setprecision(2)
+                  << elapsed_seconds << "s\n";
     }
 
     return 0;

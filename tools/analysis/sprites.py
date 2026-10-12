@@ -10,13 +10,14 @@ w2/w3 x/y (12-bit signed) with scroll mode in w2 bits 12-15; w3 bit 15 command; 
 sprite control (bit 0 flip x, 1 flip y, 2 colour lock, 3 multi/continue block, 4-5 y block
 control, 6-7 x block control), w4 low byte colour (bits 6-7 = priority); w6 jump.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 
 def _signed12(value: int) -> int:
-    value &= 0xfff
+    value &= 0xFFF
     return value - 0x1000 if value & 0x800 else value
 
 
@@ -73,14 +74,23 @@ def decode(spriteram: bytes, bank: int = 0, limit: int = 0x400) -> tuple[list[En
     color = 0
     multi = False
     entries: list[Entry] = []
-    summary = {"start_bank": bank, "end": None, "jumps": 0, "commands": 0, "drawn": 0, "visited": 0,
-               "banks_read": [], "switches": [], "last_used": None}
+    summary = {
+        "start_bank": bank,
+        "end": None,
+        "jumps": 0,
+        "commands": 0,
+        "drawn": 0,
+        "visited": 0,
+        "banks_read": [],
+        "switches": [],
+        "last_used": None,
+    }
     offs = 0
     visited = 0
     while offs < 0x400 and visited < limit:
         visited += 1
         base = bank * 0x8000 + offs * 16
-        words = tuple(int.from_bytes(spriteram[base + 2 * i:base + 2 * i + 2], "big") for i in range(8))
+        words = tuple(int.from_bytes(spriteram[base + 2 * i : base + 2 * i + 2], "big") for i in range(8))
         w0, w1, w2, w3, w4, w5, w6, _ = words
         notes = []
         this_bank = bank
@@ -93,12 +103,14 @@ def decode(spriteram: bytes, bank: int = 0, limit: int = 0x400) -> tuple[list[En
             if (w5 & 1) != bank:
                 summary["switches"].append((bank, offs, w5 & 1))
             bank = w5 & 1
-            notes.append(f"command: bank {bank}, flipscreen {int(bool(w5 & 0x2000))}, "
-                         f"extra planes {(w5 >> 8) & 3}, trails {int(bool(w5 & 2))}")
+            notes.append(
+                f"command: bank {bank}, flipscreen {int(bool(w5 & 0x2000))}, "
+                f"extra planes {(w5 >> 8) & 3}, trails {int(bool(w5 & 2))}"
+            )
         slot = offs
         end = False
         if w6 & 0x8000:
-            target = w6 & 0x3ff
+            target = w6 & 0x3FF
             if target == offs:
                 notes.append("list end (jump to itself)")
                 end = True
@@ -107,18 +119,32 @@ def decode(spriteram: bytes, bank: int = 0, limit: int = 0x400) -> tuple[list[En
                 notes.append(f"jump to {target:#05x}")
                 offs = target - 1
         control = w4 >> 8
-        scroll = (w2 >> 12) & 0xf
+        scroll = (w2 >> 12) & 0xF
         if not end:
             if not control & 4:
-                color = w4 & 0xff
-            x.update(scroll, w2, multi, (control >> 6) & 3, w1 & 0xff)
+                color = w4 & 0xFF
+            x.update(scroll, w2, multi, (control >> 6) & 3, w1 & 0xFF)
             y.update(scroll, w3, multi, (control >> 4) & 3, w1 >> 8)
             multi = bool(control & 8)
         tile = w0 | (w5 & 1) << 16
         drawn = bool(tile) and not end
         summary["drawn"] += drawn
-        entries.append(Entry(slot, this_bank, words, tile, color, x.pos / 256, y.pos / 256,
-                             x.block_scale, y.block_scale, control, drawn, notes))
+        entries.append(
+            Entry(
+                slot,
+                this_bank,
+                words,
+                tile,
+                color,
+                x.pos / 256,
+                y.pos / 256,
+                x.block_scale,
+                y.block_scale,
+                control,
+                drawn,
+                notes,
+            )
+        )
         if end:
             summary["end"] = slot
             break
@@ -130,4 +156,4 @@ def decode(spriteram: bytes, bank: int = 0, limit: int = 0x400) -> tuple[list[En
 def control_text(control: int) -> str:
     flags = [name for bit, name in ((1, "fx"), (2, "fy"), (4, "lock"), (8, "multi")) if control & bit]
     blocks = f"bx{(control >> 6) & 3}by{(control >> 4) & 3}"
-    return ",".join(flags + [blocks])
+    return ",".join([*flags, blocks])

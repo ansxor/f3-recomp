@@ -15,9 +15,9 @@ public:
     bool open(const std::string &host, uint16_t port);
     void close();
 
-    bool is_open() const { return fd_ >= 0; }
-    int fd() const { return fd_; }
-    uint16_t bound_port() const { return bound_port_; }
+    bool is_open() const { return m_fd >= 0; }
+    int fd() const { return m_fd; }
+    uint16_t bound_port() const { return m_bound_port; }
 
     // Poll socket for readable data. Returns >0 if readable, 0 on timeout, <0 on error.
     int poll(int timeout_ms) const;
@@ -27,29 +27,28 @@ public:
     int receive_packet(yojimbo::Address &from, uint8_t *data, int max_bytes);
 
 private:
-    int fd_ = -1;
-    uint16_t bound_port_ = 0;
+    int m_fd = -1;
+    uint16_t m_bound_port = 0;
 };
 
 // Relay Adapter enabling custom packet I/O
 class RelayAdapter : public NetplayAdapter {
 public:
-    explicit RelayAdapter(SocketTransport &transport) : transport_(transport) {}
+    explicit RelayAdapter(SocketTransport &transport) : m_transport(transport) {}
 
-    bool UseCustomPacketIO() const override {
-        return true;
+    bool UseCustomPacketIO() const override { return true; }
+
+    void SendPacket(const yojimbo::Address &to, const uint8_t *packet_data,
+                    int packet_bytes) override {
+        m_transport.send_packet(to, packet_data, packet_bytes);
     }
 
-    void SendPacket(const yojimbo::Address &to, const uint8_t *packetData, int packetBytes) override {
-        transport_.send_packet(to, packetData, packetBytes);
-    }
-
-    int ReceivePacket(yojimbo::Address &from, uint8_t *packetData, int maxPacketBytes) override {
-        return transport_.receive_packet(from, packetData, maxPacketBytes);
+    int ReceivePacket(yojimbo::Address &from, uint8_t *packet_data, int max_packet_bytes) override {
+        return m_transport.receive_packet(from, packet_data, max_packet_bytes);
     }
 
 private:
-    SocketTransport &transport_;
+    SocketTransport &m_transport;
 };
 
 } // namespace f3rt::netplay

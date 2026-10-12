@@ -13,4 +13,4 @@ bool wait_macos_motion_pacing(void *pacing);
 bool poll_macos_motion_pacing(void *pacing);
 double macos_motion_callback_hz(void *pacing);
 double macos_motion_requested_hz(void *pacing);
-}
+} // namespace f3rt

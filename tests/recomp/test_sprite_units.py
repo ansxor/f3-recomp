@@ -1,12 +1,12 @@
 """Emit-unit config parsing, header rendering, digest and generator hooks."""
-from pathlib import Path
-from types import SimpleNamespace
+
 import json
 import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
-from recomp.sprite_units import (
-    canonical, digest, guard_lines, parse_sprite_units, render_c_header, render_cpp_header)
+from recomp.sprite_units import canonical, digest, guard_lines, parse_sprite_units, render_c_header, render_cpp_header
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,7 +21,7 @@ def cfg(units=None, ranges=None):
 
 
 def unit(**overrides):
-    base = {"name": "objects", "start": 0x400, "end": 0x40a, "unit": "a6", "size": 0x80}
+    base = {"name": "objects", "start": 0x400, "end": 0x40A, "unit": "a6", "size": 0x80}
     base.update(overrides)
     return base
 
@@ -32,13 +32,14 @@ class ParseTests(unittest.TestCase):
             parse_sprite_units(config)
 
     def test_defaults_and_scalar_lists(self):
-        spec = parse_sprite_units(cfg([unit(), {"name": "q", "start": [2, 4], "end": [6, 8],
-                                                "unit": "d3", "owner": "writer"}]))
+        spec = parse_sprite_units(
+            cfg([unit(), {"name": "q", "start": [2, 4], "end": [6, 8], "unit": "d3", "owner": "writer"}])
+        )
         self.assertEqual([u.id for u in spec.units], [0, 1])
         self.assertEqual(spec.units[0].starts, (0x400,))
         self.assertEqual((spec.units[1].size, spec.units[1].owner), (0, "writer"))
         self.assertEqual(spec.hook_pcs()[0], {0x400: [0], 2: [1], 4: [1]})
-        self.assertEqual(spec.hook_pcs()[1], {0x40a: [0], 6: [1], 8: [1]})
+        self.assertEqual(spec.hook_pcs()[1], {0x40A: [0], 6: [1], 8: [1]})
 
     def test_empty_config(self):
         spec = parse_sprite_units({})
@@ -46,14 +47,14 @@ class ParseTests(unittest.TestCase):
 
     def test_errors(self):
         self.rejects(cfg([unit(start=0x401)]), "must be even")
-        self.rejects(cfg([unit(end=0x40b)]), "must be even")
-        self.rejects(cfg([unit(start=[0x400, 0x500], end=[0x40a])]), "start has 2 entries, end has 1")
+        self.rejects(cfg([unit(end=0x40B)]), "must be even")
+        self.rejects(cfg([unit(start=[0x400, 0x500], end=[0x40A])]), "start has 2 entries, end has 1")
         self.rejects(cfg([unit(), unit()]), "duplicate emit unit name")
         self.rejects(cfg([unit(unit="a7")]), "unit register")
         self.rejects(cfg([unit(unit="sp")]), "unit register")
         self.rejects(cfg([unit(name="1bad")]), "invalid unit name")
         self.rejects(cfg([unit(name="all")]), "invalid unit name")
-        self.rejects(cfg([unit(start=0x40a, end=0x400)]), "must be below")
+        self.rejects(cfg([unit(start=0x40A, end=0x400)]), "must be below")
         self.rejects(cfg([unit(size=-1)]), "size")
         self.rejects(cfg([unit(owner="both")]), "owner")
         self.rejects(cfg([unit(extra=1)]), "unknown keys")
@@ -64,8 +65,7 @@ class ParseTests(unittest.TestCase):
         self.rejects(cfg(ranges=[[0x40]]), r"\[first, last\]")
 
     def test_frame_writer_last_may_be_odd(self):
-        self.assertEqual(parse_sprite_units(cfg(ranges=[[0x4400, 0x4421]])).frame_writers,
-                         ((0x4400, 0x4421),))
+        self.assertEqual(parse_sprite_units(cfg(ranges=[[0x4400, 0x4421]])).frame_writers, ((0x4400, 0x4421),))
 
 
 class DigestTests(unittest.TestCase):
@@ -73,13 +73,15 @@ class DigestTests(unittest.TestCase):
         base = parse_sprite_units(cfg([unit()], [[0x10, 0x20]]))
         again = parse_sprite_units(cfg([unit()], [[0x10, 0x20]]))
         self.assertEqual(digest(base), digest(again))
-        for changed in (cfg([unit(size=0x40)], [[0x10, 0x20]]),
-                        cfg([unit(end=0x40c)], [[0x10, 0x20]]),
-                        cfg([unit(unit="a5")], [[0x10, 0x20]]),
-                        cfg([unit(owner="writer")], [[0x10, 0x20]]),
-                        cfg([unit(name="renamed")], [[0x10, 0x20]]),
-                        cfg([unit()], [[0x10, 0x22]]),
-                        cfg([unit()], None)):
+        for changed in (
+            cfg([unit(size=0x40)], [[0x10, 0x20]]),
+            cfg([unit(end=0x40C)], [[0x10, 0x20]]),
+            cfg([unit(unit="a5")], [[0x10, 0x20]]),
+            cfg([unit(owner="writer")], [[0x10, 0x20]]),
+            cfg([unit(name="renamed")], [[0x10, 0x20]]),
+            cfg([unit()], [[0x10, 0x22]]),
+            cfg([unit()], None),
+        ):
             self.assertNotEqual(digest(base), digest(parse_sprite_units(changed)))
 
     def test_digest_independent_of_unrelated_config(self):
@@ -104,20 +106,29 @@ class RenderTests(unittest.TestCase):
         self.assertIn("namespace f3rt::sprite_units {", text)
 
     def test_units(self):
-        spec = parse_sprite_units(cfg(
-            [unit(), {"name": "queue", "start": [2, 4], "end": [6, 8], "unit": "d0",
-                      "owner": "writer", "size": 18}], [[0x10, 0x21]]))
+        spec = parse_sprite_units(
+            cfg(
+                [
+                    unit(),
+                    {"name": "queue", "start": [2, 4], "end": [6, 8], "unit": "d0", "owner": "writer", "size": 18},
+                ],
+                [[0x10, 0x21]],
+            )
+        )
         header = render_c_header(spec)
         self.assertIn("#define F3_SPRITE_UNIT_COUNT 2\n", header)
         text = render_cpp_header(spec)
         for expected in (
-                'EmitUnit objects{0u, "objects", detail::objects_starts, detail::objects_ends, '
-                'UnitRegister::A6, 128u, UnitOwner::Unit}',
-                'EmitUnit queue{1u, "queue", detail::queue_starts, detail::queue_ends, '
-                'UnitRegister::D0, 18u, UnitOwner::Writer}',
-                "queue_starts{0x2u, 0x4u}", "queue_ends{0x6u, 0x8u}",
-                "all{&objects, &queue}", "PcRange{0x10u, 0x21u}",
-                "static_assert(valid_units()"):
+            'EmitUnit objects{0u, "objects", detail::objects_starts, detail::objects_ends, '
+            "UnitRegister::A6, 128u, UnitOwner::Unit}",
+            'EmitUnit queue{1u, "queue", detail::queue_starts, detail::queue_ends, '
+            "UnitRegister::D0, 18u, UnitOwner::Writer}",
+            "queue_starts{0x2u, 0x4u}",
+            "queue_ends{0x6u, 0x8u}",
+            "all{&objects, &queue}",
+            "PcRange{0x10u, 0x21u}",
+            "static_assert(valid_units()",
+        ):
             self.assertIn(expected, text)
 
     def test_guard_lines(self):
@@ -143,9 +154,10 @@ class GeneratorHookTests(unittest.TestCase):
     def setUpClass(cls):
         try:
             import tomllib  # noqa: F401  (recomp.generate needs Python 3.11)
-            from capstone import Cs, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
+
+            from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
         except ImportError:
-            raise unittest.SkipTest("tomllib/capstone unavailable")
+            raise unittest.SkipTest("tomllib/capstone unavailable") from None
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         # 0x400: MOVEQ #-1,D0; ADDQ.W #1,D0; MOVEQ #1,D1; MOVEQ #2,D2; MOVEQ #3,D3
@@ -154,11 +166,13 @@ class GeneratorHookTests(unittest.TestCase):
         cls.instructions = {i.address: i for i in decoder.disasm(cls.code, 0x400)}
 
     def discovery(self):
-        return SimpleNamespace(instructions=dict(self.instructions),
-                               blocks={0x400: list(self.instructions)}, invalid_pcs=[], report={})
+        return SimpleNamespace(
+            instructions=dict(self.instructions), blocks={0x400: list(self.instructions)}, invalid_pcs=[], report={}
+        )
 
     def generate(self, config, **kwargs):
         from recomp.generate import generate
+
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
             report = generate(self.rom, self.discovery(), out, config, **kwargs)
@@ -166,28 +180,28 @@ class GeneratorHookTests(unittest.TestCase):
             return report, files, json.loads((out / "lowering.json").read_text())
 
     def test_hooks_at_labels(self):
-        config = cfg([unit(start=0x402, end=0x406, unit="a1"),
-                      unit(name="second", start=0x406, end=0x408, unit="d1")], [[0x400, 0x404]])
+        config = cfg(
+            [unit(start=0x402, end=0x406, unit="a1"), unit(name="second", start=0x406, end=0x408, unit="d1")],
+            [[0x400, 0x404]],
+        )
         # Unit 0 ends at 0x406 where unit 1 starts: exit must precede enter.
-        report, files, lowering = self.generate(config)
+        _report, files, lowering = self.generate(config)
         spec = parse_sprite_units(config)
         block = files["blocks_0000.c"]
         self.assertIn(guard_lines(spec), block)
         self.assertNotIn("sprite_units.h", files["program.c"])
         label = block.index("L_000406: {")
-        body = block[label:block.index("F3_PROFILE_HIT_MAIN", label)]
+        body = block[label : block.index("F3_PROFILE_HIT_MAIN", label)]
         self.assertLess(body.index("F3_UNIT_EXIT(cpu, 0);"), body.index("F3_UNIT_ENTER(cpu, 1);"))
-        start = block[block.index("L_000402: {"):]
+        start = block[block.index("L_000402: {") :]
         self.assertLess(start.index("F3_UNIT_ENTER(cpu, 0);"), start.index("F3_PROFILE_HIT_MAIN"))
-        self.assertEqual(lowering["emit_units"]["units"]["objects"],
-                         {"id": 0, "enter_hooks": 1, "exit_hooks": 1})
+        self.assertEqual(lowering["emit_units"]["units"]["objects"], {"id": 0, "enter_hooks": 1, "exit_hooks": 1})
         self.assertEqual(lowering["emit_units"]["frame_writer_ranges"], 1)
         self.assertEqual(lowering["runtime_abi_version"], 5)
 
     def test_no_units_emits_no_hooks(self):
         _, files, lowering = self.generate({})
-        self.assertFalse(any("sprite_units.h" in text or "F3_UNIT_" in text
-                             for text in files.values()))
+        self.assertFalse(any("sprite_units.h" in text or "F3_UNIT_" in text for text in files.values()))
         self.assertEqual(lowering["emit_units"]["units"], {})
 
     def test_undecoded_pc_is_an_error(self):
@@ -201,6 +215,7 @@ class GeneratorHookTests(unittest.TestCase):
     def test_slim_profile_must_retain_hooks(self):
         # Retention is checked before emission, so the profile loader is stubbed.
         import recomp.block_profile as block_profile
+
         original = block_profile.load_hot
         block_profile.load_hot = lambda *args, **kwargs: {0x400, 0x402}
         try:
@@ -208,9 +223,15 @@ class GeneratorHookTests(unittest.TestCase):
                 profile = Path(directory) / "p"
                 profile.write_text("")
                 from recomp.generate import generate
+
                 with self.assertRaisesRegex(ValueError, "not retained"):
-                    generate(self.rom, self.discovery(), Path(directory) / "out",
-                             cfg([unit(start=0x402, end=0x406)]), profile_slim=profile)
+                    generate(
+                        self.rom,
+                        self.discovery(),
+                        Path(directory) / "out",
+                        cfg([unit(start=0x402, end=0x406)]),
+                        profile_slim=profile,
+                    )
         finally:
             block_profile.load_hot = original
 

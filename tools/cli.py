@@ -1,4 +1,5 @@
 """Unified CLI dispatcher for f3 tools."""
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,9 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("analyze", help="Static and headless dynamic game analysis (f3a)", add_help=False)
     subparsers.add_parser("compare", help="Compare frames, audio, or sound traces", add_help=False)
     subparsers.add_parser("decode", help="Decode binary traces", add_help=False)
-    subparsers.add_parser("differential", help="Instruction-level differential test harness against Musashi", add_help=False)
+    subparsers.add_parser(
+        "differential", help="Instruction-level differential test harness against Musashi", add_help=False
+    )
     subparsers.add_parser("profile", help="Execution profile management", add_help=False)
     subparsers.add_parser("rom", help="ROM structure and exclusion analysis", add_help=False)
     subparsers.add_parser("gameplay-seeds", help="Seeded headless gameplay regression runner", add_help=False)
@@ -33,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "analyze":
         from tools.analysis.cli import main as analyze_main
+
         try:
             analyze_main(rest)
             return 0
@@ -57,12 +61,15 @@ def main(argv: list[str] | None = None) -> int:
         compare_args = rest[1:]
         if target == "frames":
             from tools.compare.frames import main as frames_main
+
             return frames_main(compare_args)
         elif target == "audio":
             from tools.compare.audio import main as audio_main
+
             return audio_main(compare_args)
         elif target == "trace":
             from tools.compare.trace import main as trace_main
+
             return trace_main(compare_args)
         else:
             compare_parser.error(f"unknown comparison target: {target}")
@@ -83,33 +90,41 @@ def main(argv: list[str] | None = None) -> int:
         decode_args = rest[1:]
         if target == "trace":
             from tools.decode.trace import main as trace_decode_main
+
             return trace_decode_main(decode_args)
         else:
             decode_parser.error(f"unknown decode target: {target}")
 
     elif cmd == "differential":
         from tools.differential.runner import run_differential
+
         diff_parser = argparse.ArgumentParser(
             prog="f3 differential",
             description="Instruction-level differential self-test using Musashi 68EC020 reference core.",
         )
         from pathlib import Path
-        diff_parser.add_argument("--musashi", type=Path, default=None,
-                                 help="Path to Musashi source directory containing m68k.h")
-        diff_parser.add_argument("--output", type=Path, default=Path("build/differential"),
-                                 help="Output directory (default: build/differential)")
-        diff_parser.add_argument("--cases", type=int, default=500,
-                                 help="Number of test cases to generate (default: 500)")
-        diff_parser.add_argument("--seed", type=int, default=42,
-                                 help="Deterministic PRNG seed (default: 42)")
-        diff_parser.add_argument("--instructions", type=Path, default=None,
-                                 help="Optional path to external instructions JSON")
-        diff_parser.add_argument("--filter", type=str, default=None,
-                                 help="Optional filter substring for mnemonic")
-        diff_parser.add_argument("--compile-only", action="store_true",
-                                 help="Only generate and compile, do not execute")
-        diff_parser.add_argument("-v", "--verbose", action="store_true",
-                                 help="Enable verbose output")
+
+        diff_parser.add_argument(
+            "--musashi", type=Path, default=None, help="Path to Musashi source directory containing m68k.h"
+        )
+        diff_parser.add_argument(
+            "--output",
+            type=Path,
+            default=Path("build/differential"),
+            help="Output directory (default: build/differential)",
+        )
+        diff_parser.add_argument(
+            "--cases", type=int, default=500, help="Number of test cases to generate (default: 500)"
+        )
+        diff_parser.add_argument("--seed", type=int, default=42, help="Deterministic PRNG seed (default: 42)")
+        diff_parser.add_argument(
+            "--instructions", type=Path, default=None, help="Optional path to external instructions JSON"
+        )
+        diff_parser.add_argument("--filter", type=str, default=None, help="Optional filter substring for mnemonic")
+        diff_parser.add_argument(
+            "--compile-only", action="store_true", help="Only generate and compile, do not execute"
+        )
+        diff_parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
         args = diff_parser.parse_args(rest)
         try:
             return run_differential(
@@ -142,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         profile_args = rest[1:]
         if action == "merge":
             from tools.profile.merge import main as profile_merge_main
+
             return profile_merge_main(profile_args)
         else:
             profile_parser.error(f"unknown profile action: {action}")
@@ -162,12 +178,14 @@ def main(argv: list[str] | None = None) -> int:
         rom_args = rest[1:]
         if action == "exclusions":
             from tools.rom.exclusions import main as rom_exclusions_main
+
             return rom_exclusions_main(rom_args)
         else:
             rom_parser.error(f"unknown rom action: {action}")
 
     elif cmd == "gameplay-seeds":
         from tools.gameplay_seeds import main as gameplay_seeds_main
+
         return gameplay_seeds_main(rest)
 
     else:

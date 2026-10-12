@@ -5,8 +5,7 @@
 
 namespace f3rt::netplay {
 
-LogWriter::LogWriter(std::filesystem::path log_dir)
-    : log_dir_(std::move(log_dir)) {}
+LogWriter::LogWriter(std::filesystem::path log_dir) : m_log_dir(std::move(log_dir)) {}
 
 std::string LogWriter::serialize_snapshot_json(const SessionSnapshot &snap) {
     yyjson::object j;
@@ -65,8 +64,9 @@ std::string LogWriter::serialize_snapshot_json(const SessionSnapshot &snap) {
     // Results: array of 2 entries (object or null)
     yyjson::array results_arr;
     for (int p = 0; p < 2; ++p) {
-        if (snap.results[p].has_value()) {
-            const auto &r = *snap.results[p];
+        const auto &res = snap.results[p];
+        if (res.has_value()) {
+            const auto &r = *res;
             yyjson::object r_obj;
             r_obj.emplace("frame", r.frame);
             r_obj.emplace("winner", unsigned(r.winner));
@@ -129,13 +129,13 @@ std::string LogWriter::serialize_snapshot_json(const SessionSnapshot &snap) {
 
 bool LogWriter::write_log(const SessionSnapshot &snap) const {
     std::error_code ec;
-    std::filesystem::create_directories(log_dir_, ec);
+    std::filesystem::create_directories(m_log_dir, ec);
     if (ec) {
         return false;
     }
 
-    std::filesystem::path target_path = log_dir_ / (snap.session_id_hex + ".json");
-    std::filesystem::path tmp_path = log_dir_ / (snap.session_id_hex + ".json.tmp");
+    std::filesystem::path target_path = m_log_dir / (snap.session_id_hex + ".json");
+    std::filesystem::path tmp_path = m_log_dir / (snap.session_id_hex + ".json.tmp");
     std::string json_data = serialize_snapshot_json(snap);
 
     {

@@ -11,6 +11,7 @@ Relevant bits are reported for byte/word determinants (bits whose value changes 
 A determinant with about one distinct key per sample proves nothing (an ID or a pointer) and is
 skipped: every reported key must repeat on average (`support` = samples per key).
 """
+
 from __future__ import annotations
 
 import ast
@@ -18,19 +19,19 @@ import re
 from dataclasses import dataclass
 from itertools import combinations
 
-MIN_SUPPORT = 4.0     # samples per distinct determinant key
-MAX_KEYS = 64         # pair/residual searches only use fields with at most this many distinct values
+MIN_SUPPORT = 4.0  # samples per distinct determinant key
+MAX_KEYS = 64  # pair/residual searches only use fields with at most this many distinct values
 
 
 @dataclass
 class Relation:
-    kind: str              # single | pair | residual
-    fields: tuple          # ((off, size), ...) determinant fields; residual: (base, *determinants)
-    keys: int              # distinct determinant keys
+    kind: str  # single | pair | residual
+    fields: tuple  # ((off, size), ...) determinant fields; residual: (base, *determinants)
+    keys: int  # distinct determinant keys
     samples: int
-    form: str              # closed form or "lookup"
-    mapping: dict          # key -> value (value = T, or T - base for residuals)
-    bits: tuple = ()       # per determinant: mask of bits that matter
+    form: str  # closed form or "lookup"
+    mapping: dict  # key -> value (value = T, or T - base for residuals)
+    bits: tuple = ()  # per determinant: mask of bits that matter
 
 
 def field_name(field: tuple[int, int]) -> str:
@@ -46,7 +47,7 @@ def columns(rows: list[bytes], length: int, target: tuple[int, int]) -> dict[tup
         for off in range(0, length - size + 1, 1 if size == 1 else 2):
             if off < t_off + t_size and t_off < off + size:
                 continue
-            values = [int.from_bytes(r[off:off + size], "big") for r in rows]
+            values = [int.from_bytes(r[off : off + size], "big") for r in rows]
             if len(set(values)) > 1:
                 cols[(off, size)] = values
     return cols
@@ -54,7 +55,7 @@ def columns(rows: list[bytes], length: int, target: tuple[int, int]) -> dict[tup
 
 def determines(keys: list, values: list[int]) -> dict | None:
     mapping: dict = {}
-    for k, v in zip(keys, values):
+    for k, v in zip(keys, values, strict=True):
         if mapping.setdefault(k, v) != v:
             return None
     return mapping
@@ -99,8 +100,11 @@ def rom_table(mapping: dict, size: int, rom: bytes) -> str:
             base = pos - k0 * scale
             if base < 0:
                 continue
-            if all(base + k * scale + size <= len(rom)
-                   and int.from_bytes(rom[base + k * scale:base + k * scale + size], "big") == v for k, v in items):
+            if all(
+                base + k * scale + size <= len(rom)
+                and int.from_bytes(rom[base + k * scale : base + k * scale + size], "big") == v
+                for k, v in items
+            ):
                 found.append((base, scale))
         if found:
             break
@@ -111,12 +115,14 @@ def rom_table(mapping: dict, size: int, rom: bytes) -> str:
     return f"T == ROM[{base:#08x} + F*{scale}] ({size}-byte table){more}"
 
 
-def search(rows: list[bytes], length: int, target: tuple[int, int], rom: bytes, limit: int = 12) -> tuple[list[Relation], dict]:
+def search(
+    rows: list[bytes], length: int, target: tuple[int, int], rom: bytes, limit: int = 12
+) -> tuple[list[Relation], dict]:
     """Relations for the target field across sample records (rows are record bytes)."""
     t_off, t_size = target
     modulus = 1 << (8 * t_size)
     rows = list(dict.fromkeys(rows))  # identical records add no evidence
-    t_values = [int.from_bytes(r[t_off:t_off + t_size], "big") for r in rows]
+    t_values = [int.from_bytes(r[t_off : t_off + t_size], "big") for r in rows]
     info = {"samples": len(rows), "distinct": len(set(t_values))}
     if info["distinct"] < 2:
         return [], info
@@ -137,8 +143,11 @@ def search(rows: list[bytes], length: int, target: tuple[int, int], rom: bytes, 
 
     def relation(kind: str, fields: tuple, determinant: tuple, values_t: list[int], form_prefix: str = "T") -> Relation:
         masks, mapping = reduce_keys([cols[f] for f in determinant], [8 * f[1] for f in determinant], values_t)
-        form = closed_form(mapping, t_size, rom).replace("T ==", f"{form_prefix} ==") if len(determinant) == 1 \
+        form = (
+            closed_form(mapping, t_size, rom).replace("T ==", f"{form_prefix} ==")
+            if len(determinant) == 1
             else "lookup"
+        )
         return Relation(kind, fields, len(mapping), n, form, mapping, masks)
 
     known: list[tuple] = []
@@ -153,10 +162,14 @@ def search(rows: list[bytes], length: int, target: tuple[int, int], rom: bytes, 
     def pair_relations(values_t: list[int], exclude: set, seen: list[tuple]) -> list[tuple]:
         out = []
         for f1, f2 in combinations([f for f in small if f not in exclude], 2):
-            if redundant((f1, f2), seen) or covers(f1, f2) or covers(f2, f1) \
-                    or any(len(k) == 1 and covers(k[0], f1) and covers(k[0], f2) for k in seen):
+            if (
+                redundant((f1, f2), seen)
+                or covers(f1, f2)
+                or covers(f2, f1)
+                or any(len(k) == 1 and covers(k[0], f1) and covers(k[0], f2) for k in seen)
+            ):
                 continue
-            keys = list(zip(cols[f1], cols[f2]))
+            keys = list(zip(cols[f1], cols[f2], strict=True))
             if support_ok(keys) and determines(keys, values_t) is not None:
                 out.append((len(set(keys)), f1, f2))
                 seen.append((f1, f2))
@@ -170,11 +183,11 @@ def search(rows: list[bytes], length: int, target: tuple[int, int], rom: bytes, 
     for field, values in cols.items():
         if field[1] != t_size or (field,) in known:
             continue
-        residual = [(t - v) % modulus for t, v in zip(t_values, values)]
+        residual = [(t - v) % modulus for t, v in zip(t_values, values, strict=True)]
         spread = len(set(residual))
         if spread < info["distinct"]:
             bases.append((spread, field, residual))
-    for spread, base, residual in sorted(bases)[:3]:
+    for _spread, base, residual in sorted(bases)[:3]:
         seen: list[tuple] = []
         prefix = f"T - {field_name(base)}"
         for field, values in cols.items():
@@ -198,7 +211,7 @@ def reduce_keys(columns_: list[list[int]], widths: list[int], values: list[int])
     masks = [(1 << w) - 1 for w in widths]
 
     def keys(trial: list[int]) -> list:
-        return [tuple(v & m for v, m in zip(row, trial)) for row in zip(*columns_)]
+        return [tuple(v & m for v, m in zip(row, trial, strict=True)) for row in zip(*columns_, strict=True)]
 
     for i, width in enumerate(widths):
         for bit in range(width):
@@ -238,24 +251,29 @@ def compile_expr(text: str, rom: bytes):
 
         @staticmethod
         def w(address: int) -> int:
-            return int.from_bytes(rom[address:address + 2], "big") if 0 <= address < len(rom) - 1 else -1
+            return int.from_bytes(rom[address : address + 2], "big") if 0 <= address < len(rom) - 1 else -1
 
+        # `l` is the long-access accessor of the record expression language (rom.l(addr)); the name is user-facing.
         @staticmethod
-        def l(address: int) -> int:
-            return int.from_bytes(rom[address:address + 4], "big") if 0 <= address < len(rom) - 3 else -1
+        def l(address: int) -> int:  # noqa: E743
+            return int.from_bytes(rom[address : address + 4], "big") if 0 <= address < len(rom) - 3 else -1
 
     source = FIELD_TOKEN.sub(lambda m: f"F({int(m.group(1), 0)}, {sizes[m.group(2)]})", text.strip())
     try:
         tree = ast.parse(source, mode="eval")
     except SyntaxError as error:
-        raise SystemExit(f"f3a: bad record expression {text!r}: {error.msg} (fields are written +0x2a.w)")
+        raise SystemExit(f"f3a: bad record expression {text!r}: {error.msg} (fields are written +0x2a.w)") from error
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare) and len(node.ops) > 1:
-            raise SystemExit(f"f3a: {text!r} contains a chained comparison ({ast.unparse(node)}); Python reads "
-                             "`a != b & c != d` as `a != (b & c) != d`. Parenthesise and join with `and`/`or`")
+            raise SystemExit(
+                f"f3a: {text!r} contains a chained comparison ({ast.unparse(node)}); Python reads "
+                "`a != b & c != d` as `a != (b & c) != d`. Parenthesise and join with `and`/`or`"
+            )
         if isinstance(node, ast.Name) and node.id not in NAMES:
-            raise SystemExit(f"f3a: {text!r}: unknown name {node.id!r}; available: fields +OFF.b/.w/.l, "
-                             "rom.b/w/l(addr), " + ", ".join(sorted(n for n in NAMES if n not in ("F", "rom"))))
+            raise SystemExit(
+                f"f3a: {text!r}: unknown name {node.id!r}; available: fields +OFF.b/.w/.l, "
+                "rom.b/w/l(addr), " + ", ".join(sorted(n for n in NAMES if n not in ("F", "rom")))
+            )
         if isinstance(node, (ast.Lambda, ast.ListComp, ast.GeneratorExp, ast.DictComp, ast.SetComp, ast.NamedExpr)):
             raise SystemExit(f"f3a: {text!r}: {type(node).__name__} is not supported in record expressions")
     body = tree.body
@@ -265,15 +283,20 @@ def compile_expr(text: str, rom: bytes):
         sides = tuple(compile(ast.Expression(side), "<side>", "eval") for side in (left, right))
         if isinstance(left, ast.Call) and getattr(left.func, "id", "") == "F":
             modulus = 1 << (8 * left.args[1].value)
-            tree = ast.Expression(ast.Compare(
-                left=ast.BinOp(ast.BinOp(left, ast.Sub(), right), ast.Mod(), ast.Constant(modulus)),
-                ops=[ast.Eq()], comparators=[ast.Constant(0)]))
+            tree = ast.Expression(
+                ast.Compare(
+                    left=ast.BinOp(ast.BinOp(left, ast.Sub(), right), ast.Mod(), ast.Constant(modulus)),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(0)],
+                )
+            )
             ast.fix_missing_locations(tree)
     code = compile(tree, "<expr>", "eval")
 
     def evaluate(row: bytes, expr=code) -> int:
         def F(off: int, size: int) -> int:
-            return int.from_bytes(row[off:off + size], "big")
+            return int.from_bytes(row[off : off + size], "big")
+
         return eval(expr, {"__builtins__": {}}, {"F": F, "rom": Rom, **HELPERS})
 
     evaluate.sides = sides

@@ -1,15 +1,22 @@
 """Compare PCM16 stereo WAVs with one fixed latency correction, not time warping."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
-def compare_audio(reference_path: Path, candidate_path: Path, start: float = 18.0,
-                  end: float | None = None, window: float = 2.0, max_lag: float = 0.25,
-                  lag_arg: float | None = None) -> dict:
+def compare_audio(
+    reference_path: Path,
+    candidate_path: Path,
+    start: float = 18.0,
+    end: float | None = None,
+    window: float = 2.0,
+    max_lag: float = 0.25,
+    lag_arg: float | None = None,
+) -> dict:
     try:
         import numpy as np
         from scipy import signal
@@ -60,8 +67,8 @@ def compare_audio(reference_path: Path, candidate_path: Path, start: float = 18.
         raise ValueError("Need a nonnegative start/lag limit and one complete positive-duration window")
 
     if lag_arg is None:
-        ref_win = ref_samples[start_samp:start_samp + window_samp]
-        actual_win = cand_samples[start_samp:start_samp + window_samp]
+        ref_win = ref_samples[start_samp : start_samp + window_samp]
+        actual_win = cand_samples[start_samp : start_samp + window_samp]
         channel = int(np.argmax(np.sum(ref_win * ref_win, axis=0)))
         if not np.any(ref_win[:, channel]) or not np.any(actual_win[:, channel]):
             raise ValueError("Calibration window is silent; choose --start or an explicit --lag")
@@ -89,16 +96,19 @@ def compare_audio(reference_path: Path, candidate_path: Path, start: float = 18.
         "start_seconds": start_samp / rate,
         "end_seconds": total_end / rate,
         "resampling": "scipy.resample_poly" if rate != cand_rate else "none",
-        "aggregate": compute_metrics(ref_samples[start_samp:total_end],
-                                     cand_samples[start_samp + lag:total_end + lag]),
+        "aggregate": compute_metrics(
+            ref_samples[start_samp:total_end], cand_samples[start_samp + lag : total_end + lag]
+        ),
         "windows": [],
     }
     for offset in range(start_samp, total_end, window_samp):
         stop = min(offset + window_samp, total_end)
-        report["windows"].append({
-            "start_seconds": offset / rate,
-            **compute_metrics(ref_samples[offset:stop], cand_samples[offset + lag:stop + lag])
-        })
+        report["windows"].append(
+            {
+                "start_seconds": offset / rate,
+                **compute_metrics(ref_samples[offset:stop], cand_samples[offset + lag : stop + lag]),
+            }
+        )
     return report
 
 
@@ -107,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="f3 compare audio",
         description="Compare PCM16 stereo WAVs with one fixed latency correction.",
         epilog="Output is metrics, not a pass/fail verdict. Exit status 0 means the comparison ran; "
-               "2 means an error (bad arguments or unreadable input)."
+        "2 means an error (bad arguments or unreadable input).",
     )
     parser.add_argument("reference", type=Path, help="Reference WAV file")
     parser.add_argument("candidate", type=Path, help="Candidate WAV file")
@@ -116,15 +126,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--window", type=float, default=2.0)
     parser.add_argument("--max-lag", type=float, default=0.25)
     parser.add_argument("--lag", type=float, help="Explicit fixed candidate lag in seconds")
-    parser.add_argument("--json", nargs="?", const=True, default=False,
-                        help="Output results in JSON format (optional path to save)")
+    parser.add_argument(
+        "--json", nargs="?", const=True, default=False, help="Output results in JSON format (optional path to save)"
+    )
     args = parser.parse_args(argv)
 
     try:
         report = compare_audio(
-            args.reference, args.candidate,
-            start=args.start, end=args.end,
-            window=args.window, max_lag=args.max_lag,
+            args.reference,
+            args.candidate,
+            start=args.start,
+            end=args.end,
+            window=args.window,
+            max_lag=args.max_lag,
             lag_arg=args.lag,
         )
     except ImportError as err:

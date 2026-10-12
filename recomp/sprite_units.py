@@ -5,11 +5,12 @@ This module is the single parser for the schema: recomp/compile/sprite_units.py
 renders the C/C++ headers from it and recomp/generate.py plants the hooks and
 the digest guard from it, so both sides always agree on ids and PCs.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import zlib
+from dataclasses import dataclass
 
 REGISTERS = tuple(f"d{i}" for i in range(8)) + tuple(f"a{i}" for i in range(7))
 OWNERS = ("unit", "writer")
@@ -17,16 +18,75 @@ _UNIT_KEYS = {"name", "start", "end", "unit", "size", "owner"}
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 # Names the generated namespace already defines, plus C++ keywords that a plain
 # `inline constexpr EmitUnit <name>` would not survive.
-_RESERVED = {"all", "frame_writers", "digest", "detail",
-             "alignas", "alignof", "asm", "auto", "bool", "break", "case", "catch",
-             "char", "class", "concept", "const", "constexpr", "continue", "default",
-             "delete", "do", "double", "else", "enum", "explicit", "export", "extern",
-             "false", "float", "for", "friend", "goto", "if", "inline", "int", "long",
-             "namespace", "new", "noexcept", "nullptr", "operator", "private",
-             "protected", "public", "register", "requires", "return", "short",
-             "signed", "sizeof", "static", "struct", "switch", "template", "this",
-             "throw", "true", "try", "typedef", "typename", "union", "unsigned",
-             "using", "virtual", "void", "volatile", "while"}
+_RESERVED = {
+    "all",
+    "frame_writers",
+    "digest",
+    "detail",
+    "alignas",
+    "alignof",
+    "asm",
+    "auto",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "concept",
+    "const",
+    "constexpr",
+    "continue",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "float",
+    "for",
+    "friend",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "namespace",
+    "new",
+    "noexcept",
+    "nullptr",
+    "operator",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "requires",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typedef",
+    "typename",
+    "union",
+    "unsigned",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "while",
+}
 _MAX_PC = 1 << 24
 
 
@@ -92,8 +152,7 @@ def parse_sprite_units(config: dict) -> SpriteUnitsSpec:
             if key not in raw:
                 raise ValueError(f"video.emit_units[{index}]: missing '{key}'")
         name = raw["name"]
-        if (not isinstance(name, str) or not _IDENTIFIER.match(name)
-                or name in _RESERVED):
+        if not isinstance(name, str) or not _IDENTIFIER.match(name) or name in _RESERVED:
             raise ValueError(f"video.emit_units[{index}]: invalid unit name {name!r}")
         if name in names:
             raise ValueError(f"duplicate emit unit name {name!r}")
@@ -105,7 +164,7 @@ def parse_sprite_units(config: dict) -> SpriteUnitsSpec:
             raise ValueError(f"{where}: start has {len(starts)} entries, end has {len(ends)}")
         if len(set(starts)) != len(starts) or len(set(ends)) != len(ends):
             raise ValueError(f"{where}: duplicate start or end PC")
-        for start, end in zip(starts, ends):
+        for start, end in zip(starts, ends, strict=True):
             if start >= end:
                 raise ValueError(f"{where}: start {start:#x} must be below end {end:#x}")
         reg = raw["unit"]
@@ -124,8 +183,11 @@ def parse_sprite_units(config: dict) -> SpriteUnitsSpec:
         raise ValueError("video.frame_writers must be a table with only 'ranges'")
     writers: list[tuple[int, int]] = []
     for index, raw in enumerate(writers_table.get("ranges", [])):
-        if (not isinstance(raw, list) or len(raw) != 2
-                or any(isinstance(v, bool) or not isinstance(v, int) for v in raw)):
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 2
+            or any(isinstance(v, bool) or not isinstance(v, int) for v in raw)
+        ):
             raise ValueError(f"video.frame_writers.ranges[{index}] must be [first, last]")
         first, last = raw
         # `last` is inclusive and may name the final byte of a word.
@@ -140,30 +202,35 @@ def canonical(spec: SpriteUnitsSpec) -> str:
     units = ";".join(
         f"{u.name}|{','.join(f'{pc:x}' for pc in u.starts)}|"
         f"{','.join(f'{pc:x}' for pc in u.ends)}|{u.reg}|{u.size}|{u.owner}"
-        for u in spec.units)
+        for u in spec.units
+    )
     writers = ",".join(f"{a:x}-{b:x}" for a, b in spec.frame_writers)
     return f"units:{units}\nframe_writers:{writers}\n"
 
 
 def digest(spec: SpriteUnitsSpec) -> int:
-    return zlib.crc32(canonical(spec).encode("ascii")) & 0xffffffff
+    return zlib.crc32(canonical(spec).encode("ascii")) & 0xFFFFFFFF
 
 
 def guard_lines(spec: SpriteUnitsSpec) -> str:
     """C text for every generated file that contains a unit hook."""
-    return ('#include "sprite_units.h"\n'
-            f'#if F3_SPRITE_UNITS_DIGEST != 0x{digest(spec):08x}u\n'
-            '#error "Generated program and sprite_units.h describe different emit units"\n'
-            '#endif\n')
+    return (
+        '#include "sprite_units.h"\n'
+        f"#if F3_SPRITE_UNITS_DIGEST != 0x{digest(spec):08x}u\n"
+        '#error "Generated program and sprite_units.h describe different emit units"\n'
+        "#endif\n"
+    )
 
 
 _BANNER = "/* Generated by recomp/compile/sprite_units.py from config.toml. Do not commit. */\n"
 
 
 def render_c_header(spec: SpriteUnitsSpec) -> str:
-    return (_BANNER + "#ifndef F3_SPRITE_UNITS_H\n#define F3_SPRITE_UNITS_H\n"
-            f"#define F3_SPRITE_UNITS_DIGEST 0x{digest(spec):08x}u\n"
-            f"#define F3_SPRITE_UNIT_COUNT {len(spec.units)}\n#endif\n")
+    return (
+        _BANNER + "#ifndef F3_SPRITE_UNITS_H\n#define F3_SPRITE_UNITS_H\n"
+        f"#define F3_SPRITE_UNITS_DIGEST 0x{digest(spec):08x}u\n"
+        f"#define F3_SPRITE_UNIT_COUNT {len(spec.units)}\n#endif\n"
+    )
 
 
 def _array(values, fmt) -> str:
@@ -171,28 +238,41 @@ def _array(values, fmt) -> str:
 
 
 def render_cpp_header(spec: SpriteUnitsSpec) -> str:
-    out = [_BANNER, "#pragma once\n", "#include <array>\n#include <cstddef>\n#include <cstdint>\n",
-           '#include "f3rt/emit_unit.hpp"\n#include "sprite_units.h"\n\n',
-           "namespace f3rt::sprite_units {\n\n"]
+    out = [
+        _BANNER,
+        "#pragma once\n",
+        "#include <array>\n#include <cstddef>\n#include <cstdint>\n",
+        '#include "f3rt/emit_unit.hpp"\n#include "sprite_units.h"\n\n',
+        "namespace f3rt::sprite_units {\n\n",
+    ]
     if spec.units:
         out.append("namespace detail {\n")
         for unit in spec.units:
             n = len(unit.starts)
-            out.append(f"inline constexpr std::array<uint32_t, {n}> {unit.name}_starts{{"
-                       f"{_array(unit.starts, lambda v: f'0x{v:x}u')}}};\n")
-            out.append(f"inline constexpr std::array<uint32_t, {n}> {unit.name}_ends{{"
-                       f"{_array(unit.ends, lambda v: f'0x{v:x}u')}}};\n")
+            out.append(
+                f"inline constexpr std::array<uint32_t, {n}> {unit.name}_starts{{"
+                f"{_array(unit.starts, lambda v: f'0x{v:x}u')}}};\n"
+            )
+            out.append(
+                f"inline constexpr std::array<uint32_t, {n}> {unit.name}_ends{{"
+                f"{_array(unit.ends, lambda v: f'0x{v:x}u')}}};\n"
+            )
         out.append("} // namespace detail\n\n")
     for unit in spec.units:
         out.append(
             f'inline constexpr EmitUnit {unit.name}{{{unit.id}u, "{unit.name}", '
             f"detail::{unit.name}_starts, detail::{unit.name}_ends, "
             f"UnitRegister::{unit.reg.upper()}, {unit.size}u, "
-            f"UnitOwner::{unit.owner.capitalize()}}};\n")
-    out.append(f"\ninline constexpr std::array<const EmitUnit *, {len(spec.units)}> all{{"
-               f"{_array(spec.units, lambda u: '&' + u.name)}}};\n")
-    out.append(f"inline constexpr std::array<PcRange, {len(spec.frame_writers)}> "
-               f"frame_writers{{{_array(spec.frame_writers, lambda r: f'PcRange{{0x{r[0]:x}u, 0x{r[1]:x}u}}')}}};\n")
+            f"UnitOwner::{unit.owner.capitalize()}}};\n"
+        )
+    out.append(
+        f"\ninline constexpr std::array<const EmitUnit *, {len(spec.units)}> all{{"
+        f"{_array(spec.units, lambda u: '&' + u.name)}}};\n"
+    )
+    out.append(
+        f"inline constexpr std::array<PcRange, {len(spec.frame_writers)}> "
+        f"frame_writers{{{_array(spec.frame_writers, lambda r: f'PcRange{{0x{r[0]:x}u, 0x{r[1]:x}u}}')}}};\n"
+    )
     out.append("inline constexpr uint32_t digest = F3_SPRITE_UNITS_DIGEST;\n\n")
     out.append(
         "constexpr bool valid_units() {\n"
@@ -206,8 +286,9 @@ def render_cpp_header(spec: SpriteUnitsSpec) -> str:
         "    }\n"
         "    return true;\n"
         "}\n"
-        "static_assert(valid_units(), \"emit unit ids must equal their index; PCs even, start < end, "
-        "starts/ends of equal arity\");\n"
-        f"static_assert(all.size() == F3_SPRITE_UNIT_COUNT, \"unit count mismatch\");\n\n"
-        "} // namespace f3rt::sprite_units\n")
+        'static_assert(valid_units(), "emit unit ids must equal their index; PCs even, start < end, '
+        'starts/ends of equal arity");\n'
+        'static_assert(all.size() == F3_SPRITE_UNIT_COUNT, "unit count mismatch");\n\n'
+        "} // namespace f3rt::sprite_units\n"
+    )
     return "".join(out)

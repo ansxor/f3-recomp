@@ -4,9 +4,9 @@
 namespace f3rt::runner {
 
 void apply_gameplay_word(Machine &m, uint16_t word) {
-    constexpr std::array<uint32_t, 7> masks{1, 2, 4, 8, 1, 2, 4};
+    constexpr std::array<uint32_t, 7> MASKS{1, 2, 4, 8, 1, 2, 4};
     for (unsigned i = 0; i < 7; ++i) {
-        m.set_input(i < 4 ? 1 : 0, masks[i], (word & (1u << i)) != 0);
+        m.set_input(i < 4 ? 1 : 0, MASKS[i], (word & (1u << i)) != 0);
     }
     m.set_input(0, 0x1000, (word & 0x80) != 0);
     if ((word & 0x100) != 0) {
@@ -16,14 +16,14 @@ void apply_gameplay_word(Machine &m, uint16_t word) {
     }
 }
 
-ScriptInputSource::ScriptInputSource(InputScript script)
-    : script_(std::move(script)) {}
+ScriptInputSource::ScriptInputSource(InputScript script) : script_(std::move(script)) {}
 
 std::unique_ptr<ScriptInputSource> ScriptInputSource::from_file(const std::string &path) {
     return std::make_unique<ScriptInputSource>(InputScript::load(path));
 }
 
-std::unique_ptr<ScriptInputSource> ScriptInputSource::from_text(std::string_view text, const std::string &source) {
+std::unique_ptr<ScriptInputSource> ScriptInputSource::from_text(std::string_view text,
+                                                                const std::string &source) {
     return std::make_unique<ScriptInputSource>(InputScript::parse(text, source));
 }
 
@@ -48,11 +48,10 @@ void SeededScheduleInputSource::reset() {
 }
 
 void SeededScheduleInputSource::advance_internal(uint64_t f) {
-    bool p1_coin = (f >= config_.p1_coin_frame &&
-                    f < config_.p1_coin_frame + config_.p1_coin_duration);
-    bool p2_coin = config_.versus &&
-                   (f >= config_.p2_coin_frame &&
-                    f < config_.p2_coin_frame + config_.p2_coin_duration);
+    bool p1_coin =
+        (f >= config_.p1_coin_frame && f < config_.p1_coin_frame + config_.p1_coin_duration);
+    bool p2_coin = config_.versus && (f >= config_.p2_coin_frame &&
+                                      f < config_.p2_coin_frame + config_.p2_coin_duration);
 
     bool p1_start = false;
     if (f >= config_.start_begin && f < config_.start_end) {

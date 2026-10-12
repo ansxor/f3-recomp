@@ -19,9 +19,10 @@ API_AVAILABLE(macos(14.0))
 
 @implementation F3MotionDisplayClock
 - (void)requestScreenRate {
-    const double maximum = self.window.screen.maximumFramesPerSecond;
+    const double maximum = static_cast<double>(self.window.screen.maximumFramesPerSecond);
     if (maximum > 0 && maximum != self.requestedHz) {
-        self.link.preferredFrameRateRange = CAFrameRateRangeMake(maximum, maximum, maximum);
+        const float rate = static_cast<float>(maximum);
+        self.link.preferredFrameRateRange = CAFrameRateRangeMake(rate, rate, rate);
         self.requestedHz = maximum;
         self.firstTimestamp = 0;
         self.lastTimestamp = 0;
@@ -32,7 +33,8 @@ API_AVAILABLE(macos(14.0))
 - (void)tick:(CADisplayLink *)sender {
     ++self.ticks;
     const double timestamp = sender.timestamp;
-    if (self.lastTimestamp == 0 || timestamp <= self.lastTimestamp || timestamp - self.lastTimestamp > 0.1) {
+    if (self.lastTimestamp == 0 || timestamp <= self.lastTimestamp ||
+        timestamp - self.lastTimestamp > 0.1) {
         self.firstTimestamp = timestamp;
         self.intervals = 0;
         self.measuredHz = 0;
@@ -88,7 +90,10 @@ bool wait_macos_motion_pacing(void *pacing) {
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, remaining, true);
         }
         clock.seenTicks = clock.ticks;
-        if (clock.ticks == before) { clock.measuredHz = 0; return false; }
+        if (clock.ticks == before) {
+            clock.measuredHz = 0;
+            return false;
+        }
         return true;
     }
     return false;
@@ -116,4 +121,4 @@ double macos_motion_requested_hz(void *pacing) {
     }
     return 0;
 }
-}
+} // namespace f3rt

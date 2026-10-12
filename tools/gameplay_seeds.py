@@ -1,11 +1,12 @@
 """Run strict-native gameplay regression across multiple seeds; any failed seed fails the run."""
+
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def find_default_binary() -> Path | None:
@@ -24,11 +25,11 @@ def find_default_binary() -> Path | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="f3 gameplay-seeds",
-        description="Run strict-native gameplay regression across multiple seeds."
+        prog="f3 gameplay-seeds", description="Run strict-native gameplay regression across multiple seeds."
     )
-    parser.add_argument("--binary", type=Path, default=None,
-                        help="Path to f3rt-tool binary (or f3rt-gameplay-regression)")
+    parser.add_argument(
+        "--binary", type=Path, default=None, help="Path to f3rt-tool binary (or f3rt-gameplay-regression)"
+    )
     parser.add_argument("--rom-dir", type=Path)
     parser.add_argument("--seeds", type=int, nargs="+", default=list(range(1, 9)))
     parser.add_argument("--frames", type=int, default=40000)
@@ -43,11 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.video_diff_every <= 0 or not 1 <= args.video_layer_mask <= 511:
         parser.error("video interval must be positive and layer mask must select bits 0..8")
 
-    binary = (args.binary.resolve() if args.binary else find_default_binary())
+    binary = args.binary.resolve() if args.binary else find_default_binary()
     if not binary or not binary.is_file():
         parser.error("f3rt-tool executable not found; build target f3rt-tool first or specify --binary")
 
-    is_f3rt_tool = ("f3rt-tool" in binary.name)
+    is_f3rt_tool = "f3rt-tool" in binary.name
 
     if args.dump_captures_dir:
         args.dump_captures_dir.mkdir(parents=True, exist_ok=True)
@@ -61,8 +62,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.rom_dir:
             command += ["--rom-dir", str(args.rom_dir)]
         if args.video_diff:
-            command += ["--video-diff", "--video-layer-mask", str(args.video_layer_mask),
-                        "--video-diff-every", str(args.video_diff_every)]
+            command += [
+                "--video-diff",
+                "--video-layer-mask",
+                str(args.video_layer_mask),
+                "--video-diff-every",
+                str(args.video_diff_every),
+            ]
         if args.dump_captures_dir:
             command += ["--surface", str(args.dump_captures_dir / f"seed_{seed}.bmp")]
         print(f"seed={seed} requested_frames={args.frames}", flush=True)

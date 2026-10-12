@@ -8,7 +8,8 @@
 namespace f3rt {
 
 // Per-entry render flags of a splice replacement (SpriteSplice::flags, DecodedSpriteEntry::flags).
-inline constexpr uint8_t sprite_flag_shadow = 1; // flicker shadow: the game's own shadow emit path wrote it
+inline constexpr uint8_t SPRITE_FLAG_SHADOW =
+    1; // flicker shadow: the game's own shadow emit path wrote it
 
 // Replace bank entries [first, last] with `replacement` while decoding, if and only
 // if the bank still holds exactly `real` there (content validation makes stale
@@ -18,7 +19,7 @@ struct SpriteSplice {
     uint16_t first = 0, last = 0;         // inclusive entry indices within the bank (0..0x3ff)
     std::span<const uint8_t> real;        // (last - first + 1) * 16 bytes captured at unit exit
     std::span<const uint8_t> replacement; // n * 16 raw entries; jump words inside are ignored
-    uint64_t identity = 0;                // invocation identity; entry k gets sprite_identity_mix(identity, k)
+    uint64_t identity = 0; // invocation identity; entry k gets sprite_identity_mix(identity, k)
     // Parallel to `replacement` (one byte per 16-byte entry, sprite_flag_*); empty = no flags.
     std::span<const uint8_t> flags;
 };
@@ -34,7 +35,9 @@ struct SpritePresentation {
     // Parallel to `identity`: sprite_flag_* of the real entry (shadow entries written by a
     // flicker shadow's emit path); empty = no tagged real entries. Splice entries use SpriteSplice::flags.
     std::span<const uint8_t> flags;
-    bool empty() const { return identity.empty() && splices.empty() && object.empty() && flags.empty(); }
+    bool empty() const {
+        return identity.empty() && splices.empty() && object.empty() && flags.empty();
+    }
 };
 
 // Stable per-entry identity derived from an invocation identity; never returns 0.

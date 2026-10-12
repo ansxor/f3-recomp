@@ -28,8 +28,7 @@
 namespace f3rt::runner {
 
 std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_dir,
-                                               const std::string &set,
-                                               bool enable_gpu,
+                                               const std::string &set, bool enable_gpu,
                                                unsigned gpu_scale) {
     if (rom_dir.empty()) {
         throw std::runtime_error("ROM directory must be specified");
@@ -41,7 +40,8 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
         throw std::runtime_error("f3_generated_register failed to register recompiled blocks");
     }
 #else
-    throw std::runtime_error("Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
+    throw std::runtime_error(
+        "Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
 #endif
 #if defined(F3RT_SOUND_GENERATED)
     machine->use_native_sound(f3_sound_blocks, f3_sound_block_count,
@@ -92,7 +92,8 @@ std::vector<uint8_t> parse_hex(std::string_view hex_str) {
     }
 
     if (bytes.size() < 2) {
-        throw std::runtime_error("Packet too short (minimum 2 bytes: length prefix and opcode): " + std::string(hex_str));
+        throw std::runtime_error("Packet too short (minimum 2 bytes: length prefix and opcode): " +
+                                 std::string(hex_str));
     }
     if (bytes[0] != bytes.size()) {
         std::ostringstream ss;
@@ -106,7 +107,8 @@ std::vector<uint8_t> parse_hex(std::string_view hex_str) {
 ScheduledPacket parse_at_schedule(std::string_view spec) {
     auto colon = spec.find(':');
     if (colon == std::string_view::npos) {
-        throw std::runtime_error("Malformed --at specification (expected SECONDS:HEX): " + std::string(spec));
+        throw std::runtime_error("Malformed --at specification (expected SECONDS:HEX): " +
+                                 std::string(spec));
     }
     std::string sec_str(spec.substr(0, colon));
     std::string hex_str(spec.substr(colon + 1));
@@ -116,16 +118,18 @@ ScheduledPacket parse_at_schedule(std::string_view spec) {
         sec = std::stod(sec_str, &idx);
         if (idx != sec_str.size()) throw std::invalid_argument("trailing characters");
     } catch (const std::exception &e) {
-        throw std::runtime_error("Invalid seconds in --at schedule '" + std::string(spec) + "': " + e.what());
+        throw std::runtime_error("Invalid seconds in --at schedule '" + std::string(spec) +
+                                 "': " + e.what());
     }
     if (sec < 0.0 || std::isnan(sec) || std::isinf(sec)) {
-        throw std::runtime_error("Scheduled time in --at must be non-negative: " + std::string(spec));
+        throw std::runtime_error("Scheduled time in --at must be non-negative: " +
+                                 std::string(spec));
     }
     auto packet = parse_hex(hex_str);
-    if (sec > double(UINT64_MAX / Machine::main_clock)) {
+    if (sec > double(UINT64_MAX / Machine::MAIN_CLOCK)) {
         throw std::runtime_error("Scheduled time exceeds the trace clock range");
     }
-    return ScheduledPacket{sec, std::move(packet), uint64_t(std::round(sec * Machine::main_clock))};
+    return ScheduledPacket{sec, std::move(packet), uint64_t(std::round(sec * Machine::MAIN_CLOCK))};
 }
 
 void publish_packet(Machine &m, const std::vector<uint8_t> &pkt, uint64_t current_cycles) {
@@ -147,8 +151,7 @@ void publish_packet(Machine &m, const std::vector<uint8_t> &pkt, uint64_t curren
     m.write8(MAIN_MAILBOX_PRODUCER_L, uint8_t(new_prod_d & 0xff));
 }
 
-MachineRunner::MachineRunner(RunnerConfig config)
-    : config_(std::move(config)) {
+MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
     if (config_.rom_dir.empty()) {
         throw std::runtime_error("ROM directory must be specified");
     }
@@ -173,14 +176,15 @@ MachineRunner::MachineRunner(RunnerConfig config)
         if (!config_.hle_events_path.empty()) {
             auto events = std::make_shared<std::ofstream>(config_.hle_events_path);
             if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
-            *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,right,k1,k2,loop,reverse\n";
+            *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,"
+                       "right,k1,k2,loop,reverse\n";
             machine_->audio->set_hle_observer([events](const hle::VoiceEvent &e) {
                 *events << unsigned(e.kind) << ',' << e.instance << ',' << e.tick << ','
-                        << unsigned(e.sequence) << ',' << unsigned(e.track) << ',' << unsigned(e.key) << ','
-                        << unsigned(e.layer) << ',' << unsigned(e.output_pair) << ','
-                        << e.sample_start << ',' << e.sample_end << ',' << e.frequency << ','
-                        << e.left_volume << ',' << e.right_volume << ',' << e.k1 << ',' << e.k2 << ','
-                        << e.loop << ',' << e.reverse << '\n';
+                        << unsigned(e.sequence) << ',' << unsigned(e.track) << ','
+                        << unsigned(e.key) << ',' << unsigned(e.layer) << ','
+                        << unsigned(e.output_pair) << ',' << e.sample_start << ',' << e.sample_end
+                        << ',' << e.frequency << ',' << e.left_volume << ',' << e.right_volume
+                        << ',' << e.k1 << ',' << e.k2 << ',' << e.loop << ',' << e.reverse << '\n';
             });
         }
     } else if (config_.sound_driver == "native") {
@@ -199,7 +203,8 @@ MachineRunner::MachineRunner(RunnerConfig config)
 
     if (config_.video_diff) {
 #if defined(F3RT_GAME_VIDEO)
-        if (!config_.video_diff_every || !config_.video_layer_mask || (config_.video_layer_mask & ~511u)) {
+        if (!config_.video_diff_every || !config_.video_layer_mask ||
+            (config_.video_layer_mask & ~511u)) {
             throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
         }
         machine_->game_video = std::make_unique<GameVideo>(*machine_);
@@ -214,7 +219,8 @@ MachineRunner::MachineRunner(RunnerConfig config)
             throw std::runtime_error("f3_generated_register failed to register recompiled blocks");
         }
 #else
-        throw std::runtime_error("Strict native mode requires compiled generated blocks (F3RT_GENERATED)");
+        throw std::runtime_error(
+            "Strict native mode requires compiled generated blocks (F3RT_GENERATED)");
 #endif
     }
 }
@@ -237,7 +243,8 @@ void MachineRunner::drain_audio(bool record_to_wav) {
     }
 }
 
-bool MachineRunner::run_frames(uint64_t target_frames, std::function<bool(uint64_t frame)> per_frame_cb) {
+bool MachineRunner::run_frames(uint64_t target_frames,
+                               const std::function<bool(uint64_t frame)> &per_frame_cb) {
     while (machine_->frame < target_frames) {
         if (profile_) profile_->tick();
 

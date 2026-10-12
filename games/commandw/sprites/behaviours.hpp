@@ -16,7 +16,6 @@ constexpr uint32_t COMMANDW_PC_SHADOW_EMIT_START = 0x9b32;
 constexpr uint32_t COMMANDW_PC_SHADOW_EMIT_END = 0x9d31;
 constexpr int32_t COMMANDW_FRAME_COUNTER_PARITY_A5_OFFSET = -0x7cd7;
 
-
 // Draw every object at its full-detail (LoD 0) mip level.
 //
 // Object records (a6 = 0x410000 + k * 0x80, the `objects` unit, span 0x9a3c..0x9a6c):
@@ -31,16 +30,21 @@ constexpr int32_t COMMANDW_FRAME_COUNTER_PARITY_A5_OFFSET = -0x7cd7;
 // 0x9b32/0x9d32. Patching class to 0 and $2 to $2a therefore draws the L0 tiles at
 // the zoom the unscaled projection yields, i.e. the on-screen size the coarse level
 // was scaled up to cover.
-F3RT_SPRITE_BEHAVIOUR(full_detail, sprite_units::objects,
+F3RT_SPRITE_BEHAVIOUR(
+    FULL_DETAIL, sprite_units::objects,
     "Draws objects at the full-detail mip level instead of the distance-selected level",
     [](const Unit<sprite_units::objects> &object, Patch<sprite_units::objects> &patch) {
-        if (!(object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & 0x0c) || !object.u16<COMMANDW_OBJ_FULL_DETAIL_DESCRIPTOR_OFFSET>()) return false;
-        patch.u8<COMMANDW_OBJ_FLAGS_OFFSET>(uint8_t(object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & ~0x0c));
-        patch.u16<COMMANDW_OBJ_DRAWN_DESCRIPTOR_OFFSET>(object.u16<COMMANDW_OBJ_FULL_DETAIL_DESCRIPTOR_OFFSET>());
+        if (!(object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & 0x0c) ||
+            !object.u16<COMMANDW_OBJ_FULL_DETAIL_DESCRIPTOR_OFFSET>())
+            return false;
+        patch.u8<COMMANDW_OBJ_FLAGS_OFFSET>(
+            uint8_t(object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & ~0x0c));
+        patch.u16<COMMANDW_OBJ_DRAWN_DESCRIPTOR_OFFSET>(
+            object.u16<COMMANDW_OBJ_FULL_DETAIL_DESCRIPTOR_OFFSET>());
         return true;
     });
 
-inline constexpr std::array<const SpriteBehaviour *, 1> behaviours{&full_detail};
+inline constexpr std::array<const SpriteBehaviour *, 1> BEHAVIOURS{&FULL_DETAIL};
 
 // Shadows under objects are drawn translucent by flicker: the game emits the shadow entries only
 // on alternate frames of its own frame counter.
@@ -55,11 +59,14 @@ inline constexpr std::array<const SpriteBehaviour *, 1> behaviours{&full_detail}
 // gates it. The source forces the parity bit in the replay (shadows exist every frame, tagged) and
 // tags every entry written by PCs 0x9b32..0x9d31 (the subroutines called from the span at
 // 0xa30e/0xa31e only adjust a0/a2 and write no sprite RAM).
-F3RT_FLICKER_SHADOW(object_shadow, sprite_units::objects,
+F3RT_FLICKER_SHADOW(
+    OBJECT_SHADOW, sprite_units::objects,
     "Object shadows: byte1 bit 7 of the record, emitted by the game only on odd counter parity",
-    COMMANDW_PC_SHADOW_EMIT_START, COMMANDW_PC_SHADOW_EMIT_END, UnitRegister::A5, COMMANDW_FRAME_COUNTER_PARITY_A5_OFFSET, 0x01,
-    [](const Unit<sprite_units::objects> &object) { return (object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & 0x80) != 0; });
+    COMMANDW_PC_SHADOW_EMIT_START, COMMANDW_PC_SHADOW_EMIT_END, UnitRegister::A5,
+    COMMANDW_FRAME_COUNTER_PARITY_A5_OFFSET, 0x01, [](const Unit<sprite_units::objects> &object) {
+        return (object.u8<COMMANDW_OBJ_FLAGS_OFFSET>() & 0x80) != 0;
+    });
 
-inline constexpr std::array<const FlickerShadow *, 1> flicker_shadows{&object_shadow};
+inline constexpr std::array<const FlickerShadow *, 1> FLICKER_SHADOWS{&OBJECT_SHADOW};
 
 } // namespace f3rt::game_sprites

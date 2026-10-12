@@ -15,16 +15,16 @@ struct VideoRam {
     std::span<const uint8_t> graphics; // 0x40000 bytes
     std::span<const uint8_t> control;  // 0x20 bytes
     uint64_t frame = 0;                // Machine::frame + 1; diagnostics only
-    uint16_t u16(uint32_t offset) const {
+    uint16_t u16(size_t offset) const {
         return uint16_t(uint16_t(graphics[offset]) << 8 | graphics[offset + 1]);
     }
-    uint16_t control_u16(unsigned index) const {
+    uint16_t control_u16(size_t index) const {
         return uint16_t(uint16_t(control[index * 2]) << 8 | control[index * 2 + 1]);
     }
 };
 
 // A scene component decoded from video RAM at VBSTART.
-template<class T>
+template <class T>
 concept SceneSource = requires(T &t, const VideoRam &vram) {
     t.reset();
     t.decode(vram);
@@ -38,11 +38,11 @@ constexpr uint32_t wrap_tile_index(uint32_t code, uint32_t count) {
 }
 
 // Hardware display-list limit: canonical (serialized) sprite lists never exceed it.
-inline constexpr size_t max_hardware_sprites = 1024;
+inline constexpr size_t MAX_HARDWARE_SPRITES = 1024;
 // Render-only presented list (unit splices): full-detail splices expand spliced objects ~17x
 // (measured peak 1300 presented sprites in Command War attract), so it needs its own capacity.
 // Overflow is counted (GameVideo::report), never silent.
-inline constexpr size_t max_presented_sprites = 4096;
+inline constexpr size_t MAX_PRESENTED_SPRITES = 4096;
 
 struct ScenePixel {
     uint16_t palette = 0;
@@ -65,8 +65,8 @@ struct SceneSprite {
     // GPU presenter picks its visibility per presented frame. Excluded from equality like `identity`.
     bool shadow = false;
     bool operator==(const SceneSprite &o) const {
-        return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y && tile == o.tile &&
-               palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;
+        return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y &&
+               tile == o.tile && palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;
     }
 };
 
@@ -97,14 +97,14 @@ struct ScenePlayfield {
     bool empty_row = false;
     // Render-only presentation hint, derived each frame (GameLines::resolve_full_resolution_alt),
     // never serialized and never compared with the oracle: for an alt_map row, the offset c in
-    // [0, pf_map_width_px) with alt(x, y) == main((2x + c) mod pf_map_width_px, y) for every tile
+    // [0, PF_MAP_WIDTH_PX) with alt(x, y) == main((2x + c) mod PF_MAP_WIDTH_PX, y) for every tile
     // row the scanline samples; -1 = none (the canonical alternate-map sampling stands).
     // Consumed only through presented_playfield().
     int16_t full_res_offset = -1;
 };
 
 // Playfield map width in texels (64 columns of 16).
-inline constexpr unsigned pf_map_width_px = 1024;
+inline constexpr unsigned PF_MAP_WIDTH_PX = 1024;
 
 // The presented (expanded GPU/CPU output) view of one playfield row. With
 // game_config::video.full_resolution_alt_maps, an alt_map row that has a solved full-resolution
@@ -118,7 +118,7 @@ constexpr ScenePlayfield presented_playfield(const ScenePlayfield &p) {
             q.alt_map = false;
             q.x_step = p.x_step * 2;
             q.source_x = int32_t((uint32_t(p.source_x) * 2u + (uint32_t(p.full_res_offset) << 8)) &
-                                 (pf_map_width_px * 256u - 1u));
+                                 (PF_MAP_WIDTH_PX * 256u - 1u));
             return q;
         }
     }
@@ -134,19 +134,24 @@ struct SceneClip {
 // --video-layer-mask: 0..3 playfields, 4..7 sprites, 8 text. Values are fixed.
 enum class LayerId : uint8_t { Pf0, Pf1, Pf2, Pf3, Sp0, Sp1, Sp2, Sp3, Text };
 enum class LayerKind : uint8_t { Playfield, Sprite, Text };
-inline constexpr unsigned layer_count = 9;
-inline constexpr uint32_t all_layers = (1u << layer_count) - 1;
+inline constexpr unsigned LAYER_COUNT = 9;
+inline constexpr uint32_t ALL_LAYERS = (1u << LAYER_COUNT) - 1;
 static_assert(unsigned(LayerId::Text) == 8);
 
 constexpr uint32_t layer_bit(LayerId id) { return 1u << unsigned(id); }
 constexpr LayerKind kind(LayerId id) {
-    return unsigned(id) < 4 ? LayerKind::Playfield : id == LayerId::Text ? LayerKind::Text : LayerKind::Sprite;
+    return unsigned(id) < 4      ? LayerKind::Playfield
+           : id == LayerId::Text ? LayerKind::Text
+                                 : LayerKind::Sprite;
 }
 constexpr unsigned sub_index(LayerId id) {
     switch (kind(id)) {
-    case LayerKind::Playfield: return unsigned(id);
-    case LayerKind::Sprite: return unsigned(id) - unsigned(LayerId::Sp0);
-    case LayerKind::Text: return 0;
+    case LayerKind::Playfield:
+        return unsigned(id);
+    case LayerKind::Sprite:
+        return unsigned(id) - unsigned(LayerId::Sp0);
+    case LayerKind::Text:
+        return 0;
     }
     return 0;
 }
@@ -160,20 +165,20 @@ struct LayerInfo {
     uint16_t width, height;
     const char *domain; // sampling-domain suffix; reports print "<width>x<height>-<domain>"
 };
-inline constexpr std::array<LayerInfo, layer_count> layer_info{{
+inline constexpr std::array<LayerInfo, LAYER_COUNT> LAYER_INFO{{
     {"pf0", 1024, 512, "indexed-texture"},
     {"pf1", 1024, 512, "indexed-texture"},
     {"pf2", 1024, 512, "indexed-texture"},
     {"pf3", 1024, 512, "indexed-texture"},
-    {"sp0", geometry::native_width, geometry::height, "next-sprite-plane"},
-    {"sp1", geometry::native_width, geometry::height, "next-sprite-plane"},
-    {"sp2", geometry::native_width, geometry::height, "next-sprite-plane"},
-    {"sp3", geometry::native_width, geometry::height, "next-sprite-plane"},
+    {"sp0", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
+    {"sp1", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
+    {"sp2", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
+    {"sp3", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
     {"text", 512, 512, "indexed-texture"},
 }};
 // Layers with scroll geometry (playfields and text).
-inline constexpr std::array<LayerId, 5> scrolled_layers{
-    LayerId::Pf0, LayerId::Pf1, LayerId::Pf2, LayerId::Pf3, LayerId::Text};
+inline constexpr std::array<LayerId, 5> SCROLLED_LAYERS{LayerId::Pf0, LayerId::Pf1, LayerId::Pf2,
+                                                        LayerId::Pf3, LayerId::Text};
 
 struct SceneRow {
     std::array<ScenePlayfield, 4> playfields{};
@@ -181,9 +186,12 @@ struct SceneRow {
     SceneLayer text;
     const SceneLayer &layer(LayerId id) const {
         switch (kind(id)) {
-        case LayerKind::Playfield: return playfields[sub_index(id)].layer;
-        case LayerKind::Sprite: return sprites[sub_index(id)];
-        case LayerKind::Text: break;
+        case LayerKind::Playfield:
+            return playfields[sub_index(id)].layer;
+        case LayerKind::Sprite:
+            return sprites[sub_index(id)];
+        case LayerKind::Text:
+            break;
         }
         return text;
     }

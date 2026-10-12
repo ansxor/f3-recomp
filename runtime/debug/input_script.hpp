@@ -28,10 +28,10 @@ public:
     static InputScript load(const std::string &path);
     // Words for emulated frame `frame` (1-based: Machine::frame + 1 before run_frame).
     // Mash state advances with the frame; going backwards replays from the start.
-    std::array<LocalInputWord, local_player_count> words(uint64_t frame);
+    std::array<LocalInputWord, LOCAL_PLAYER_COUNT> words(uint64_t frame);
     // Applies the poke rules active at `frame` to main RAM (call right before run_frame).
     void poke(Machine &machine, uint64_t frame) const;
-    size_t rules() const { return rules_.size(); }
+    size_t rules() const { return m_rules.size(); }
     bool has_pokes() const;
 
 private:
@@ -47,6 +47,6 @@ private:
         std::vector<unsigned> keys;
         LocalInputWord held = 0;
     };
-    std::vector<Rule> rules_;
+    std::vector<Rule> m_rules;
 };
-}
+} // namespace f3rt

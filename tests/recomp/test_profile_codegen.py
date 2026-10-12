@@ -1,24 +1,27 @@
 """Execute hot/cold transitions and shared exceptions using synthetic ROMs."""
-from pathlib import Path
-from types import SimpleNamespace
-import os
+
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 import zlib
+from pathlib import Path
+from types import SimpleNamespace
 
-from capstone import Cs, CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020
+from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
+
 from recomp.block_profile import BlockProfile
-from recomp.generate import generate
 from recomp.compile.sound import compile_sound_rom
+from recomp.generate import generate
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def execute(output, report, driver):
     path = output / "driver.c"
-    path.write_text(r'''
+    path.write_text(
+        r"""
 #include <f3rt/cpu_abi.h>
 int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc) {
     (void)cpu; (void)size; (void)crc; return 1;
@@ -28,12 +31,32 @@ static size_t registered_exclusion_count;
 int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count) {
     (void)cpu; registered_exclusions=ranges; registered_exclusion_count=count; return 1;
 }
-''' + driver)
+"""
+        + driver
+    )
     binary = output / "driver"
-    subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                    "-DF3_PROFILE_INSTRUMENT=1", "-I", str(ROOT), "-I", str(ROOT / "include"),
-                    "-I", str(output), str(path), *(str(output / name) for name in report["source_files"]),
-                    "-o", str(binary)], check=True)
+    subprocess.run(
+        [
+            os.environ.get("CC", "cc"),
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DF3_PROFILE_INSTRUMENT=1",
+            "-I",
+            str(ROOT),
+            "-I",
+            str(ROOT / "include"),
+            "-I",
+            str(output),
+            str(path),
+            *(str(output / name) for name in report["source_files"]),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
     subprocess.run([str(binary)], check=True)
 
 
@@ -49,14 +72,15 @@ class CodegenProfileTests(unittest.TestCase):
             root = Path(directory)
             profile = root / "entries.profile"
             crc = zlib.crc32(rom)
-            BlockProfile({("main", crc): (0, len(rom))},
-                         {("main", crc, 0x400): 1, ("main", crc, 0x404): 1}).write(profile)
+            BlockProfile({("main", crc): (0, len(rom))}, {("main", crc, 0x400): 1, ("main", crc, 0x404): 1}).write(
+                profile
+            )
             for mode in ("baseline", "tiers", "slim"):
                 with self.subTest(mode=mode):
                     output = root / mode
                     options = {} if mode == "baseline" else {"profile_" + mode: profile}
                     report = generate(rom, discovery, output, {"discovery": {"coverage": "all_aligned"}}, **options)
-                    driver = r'''
+                    driver = r"""
 #include <assert.h>
 #include "program.h"
 #include <f3rt/block_profile.h>
@@ -92,7 +116,7 @@ int main(void) {
     assert(dispatch(&cpu)); assert(counts[0x404/2]==UINT64_MAX);
     return 0;
 }
-'''
+"""
                     execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + driver)
 
     def test_main_shared_exception_entries_remain_counted_once_in_each_mode(self):
@@ -102,14 +126,19 @@ int main(void) {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             profile = root / "entries.profile"
-            BlockProfile({("main", crc): (0, len(rom))},
-                         {("main", crc, 0): 1, ("main", crc, 4): 1}).write(profile)
+            BlockProfile({("main", crc): (0, len(rom))}, {("main", crc, 0): 1, ("main", crc, 4): 1}).write(profile)
             for mode in ("baseline", "tiers", "slim"):
                 with self.subTest(mode=mode):
                     output = root / mode
                     options = {} if mode == "baseline" else {"profile_" + mode: profile}
                     report = generate(rom, discovery, output, {"discovery": {"coverage": "all_aligned"}}, **options)
-                    execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + r'''
+                    execute(
+                        output,
+                        report,
+                        "#define SLIM "
+                        + str(int(mode == "slim"))
+                        + "\n"
+                        + r"""
 #include <assert.h>
 #include "program.h"
 #include <f3rt/block_profile.h>
@@ -135,40 +164,54 @@ int main(void) {
     assert(counts[0]==1 && counts[1]==(SLIM ? 0u : 1u) && counts[2]==1);
     return 0;
 }
-''')
+""",
+                    )
 
     def test_main_exclusions_preserve_tier_complement_and_slim_exception_subset(self):
         rom = bytes.fromhex("70017202a000a000a001f000")
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         instructions = {insn.address: insn for insn in decoder.disasm(rom[:4], 0)}
-        discovery = SimpleNamespace(instructions=instructions, blocks={},
-                                    invalid_pcs=[6, 8, 10], report={})
-        config = {"discovery": {"coverage": "all_aligned"}, "exclude": [
-            {"start": 4, "end": 6, "reason": "synthetic data", "evidence": "fixture"}]}
+        discovery = SimpleNamespace(instructions=instructions, blocks={}, invalid_pcs=[6, 8, 10], report={})
+        config = {
+            "discovery": {"coverage": "all_aligned"},
+            "exclude": [{"start": 4, "end": 6, "reason": "synthetic data", "evidence": "fixture"}],
+        }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             profile = root / "entries.profile"
             crc = zlib.crc32(rom)
-            BlockProfile({("main", crc): (0, len(rom))},
-                         {("main", crc, 0): 1, ("main", crc, 6): 1}).write(profile)
+            BlockProfile({("main", crc): (0, len(rom))}, {("main", crc, 0): 1, ("main", crc, 6): 1}).write(profile)
             for mode in ("tiers", "slim"):
                 with self.subTest(mode=mode):
                     output = root / mode
-                    report = generate(rom, discovery, output, config,
-                                      **{"profile_" + mode: profile})
+                    report = generate(rom, discovery, output, config, **{"profile_" + mode: profile})
                     retained = 2 if mode == "slim" else 5
-                    self.assertEqual((report["original_entries"], report["retained_entries"],
-                                      report["registered_entries"], report["hot_entries"],
-                                      report["cold_entries"], report["excluded_entries"]),
-                                     (5, retained, retained, 2, 3, 1))
-                    self.assertEqual(report["exception_entries"],
-                                     {10: 1} if mode == "slim" else {10: 2, 11: 1})
+                    self.assertEqual(
+                        (
+                            report["original_entries"],
+                            report["retained_entries"],
+                            report["registered_entries"],
+                            report["hot_entries"],
+                            report["cold_entries"],
+                            report["excluded_entries"],
+                        ),
+                        (5, retained, retained, 2, 3, 1),
+                    )
+                    self.assertEqual(report["exception_entries"], {10: 1} if mode == "slim" else {10: 2, 11: 1})
                     inventory = json.loads((output / "profile_inventory.json").read_text())
                     self.assertEqual(inventory["entries"], [0, 2, 6, 8, 10])
-                    self.assertEqual((inventory["retained_entries"], inventory["hot_entries"],
-                                      inventory["cold_entries"]), (retained, 2, 3))
-                    execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + r'''
+                    self.assertEqual(
+                        (inventory["retained_entries"], inventory["hot_entries"], inventory["cold_entries"]),
+                        (retained, 2, 3),
+                    )
+                    execute(
+                        output,
+                        report,
+                        "#define SLIM "
+                        + str(int(mode == "slim"))
+                        + "\n"
+                        + r"""
 #include <assert.h>
 #include "program.h"
 #include <f3rt/block_profile.h>
@@ -204,15 +247,18 @@ int main(void) {
     assert(counts[4]==(SLIM ? 0u : 1u) && counts[5]==(SLIM ? 0u : 1u));
     return 0;
 }
-''')
+""",
+                    )
 
     def test_main_rejects_excluded_discovery_and_profile_records_before_emission(self):
         rom = bytes.fromhex("7001a000")
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         instruction = next(decoder.disasm(rom[:2], 0))
-        config = {"discovery": {"coverage": "all_aligned"}, "exclude": [
-            {"start": 2, "end": 4, "reason": "synthetic data", "evidence": "fixture"}]}
+        config = {
+            "discovery": {"coverage": "all_aligned"},
+            "exclude": [{"start": 2, "end": 4, "reason": "synthetic data", "evidence": "fixture"}],
+        }
         crc = zlib.crc32(rom)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -220,25 +266,25 @@ int main(void) {
                 with self.subTest(kind=kind):
                     discovery = SimpleNamespace(
                         instructions={0: instruction, **({2: instruction} if kind == "decoded" else {})},
-                        blocks={}, invalid_pcs=[2] if kind == "invalid" else [], report={})
+                        blocks={},
+                        invalid_pcs=[2] if kind == "invalid" else [],
+                        report={},
+                    )
                     output = root / kind
                     with self.assertRaises(ValueError):
                         generate(rom, discovery, output, config)
                     self.assertFalse((output / "program.c").exists())
-            discovery = SimpleNamespace(instructions={0: instruction}, blocks={},
-                                        invalid_pcs=[], report={})
+            discovery = SimpleNamespace(instructions={0: instruction}, blocks={}, invalid_pcs=[], report={})
             for mode in ("tiers", "slim"):
                 for kind in ("hit", "miss"):
                     with self.subTest(mode=mode, kind=kind):
-                        profile = BlockProfile({("main", crc): (0, len(rom))},
-                                               {("main", crc, 0): 1})
+                        profile = BlockProfile({("main", crc): (0, len(rom))}, {("main", crc, 0): 1})
                         rows = profile.hits if kind == "hit" else profile.misses
                         rows["main", crc, 2] = 1
                         path = root / "contradictory.profile"
                         profile.write(path)
                         with self.assertRaises(ValueError):
-                            generate(rom, discovery, root / (mode + kind), config,
-                                     **{"profile_" + mode: path})
+                            generate(rom, discovery, root / (mode + kind), config, **{"profile_" + mode: path})
 
     def test_sound_shared_exceptions_are_counted_once_and_slim_table_is_sparse(self):
         rom = bytes.fromhex("4e714e71a000f0004afc")
@@ -246,14 +292,15 @@ int main(void) {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             profile = root / "entries.profile"
-            BlockProfile({("sound", crc): (0xc00000, len(rom))},
-                         {("sound", crc, 0xc00000): 1, ("sound", crc, 0xc00004): 1}).write(profile)
+            BlockProfile(
+                {("sound", crc): (0xC00000, len(rom))}, {("sound", crc, 0xC00000): 1, ("sound", crc, 0xC00004): 1}
+            ).write(profile)
             for mode in ("baseline", "tiers", "slim"):
                 with self.subTest(mode=mode):
                     output = root / mode
                     options = {} if mode == "baseline" else {"profile_" + mode: profile}
                     report = compile_sound_rom(rom, output, **options)
-                    driver = r'''
+                    driver = r"""
 #include <assert.h>
 #include "sound_program.h"
 #include <f3rt/block_profile.h>
@@ -278,36 +325,53 @@ int main(void) {
     if(SLIM) assert(!counts[1] && !counts[3] && !counts[4]);
     return 0;
 }
-'''
+"""
                     execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + driver)
 
     def test_sound_exclusions_preserve_tier_complement_and_slim_shared_exceptions(self):
         rom = bytes.fromhex("4e714e71a000a001a002f000")
-        base = 0xc00000
+        base = 0xC00000
         crc = zlib.crc32(rom)
-        config = {"exclude": [{"cpu": "sound", "start": base + 4, "end": base + 6,
-                                "reason": "synthetic data", "evidence": "fixture"}]}
+        config = {
+            "exclude": [
+                {"cpu": "sound", "start": base + 4, "end": base + 6, "reason": "synthetic data", "evidence": "fixture"}
+            ]
+        }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "entries.profile"
-            BlockProfile({("sound", crc): (base, len(rom))},
-                         {("sound", crc, base): 1, ("sound", crc, base + 6): 1}).write(path)
+            BlockProfile(
+                {("sound", crc): (base, len(rom))}, {("sound", crc, base): 1, ("sound", crc, base + 6): 1}
+            ).write(path)
             for mode in ("tiers", "slim"):
                 with self.subTest(mode=mode):
                     output = root / mode
-                    report = compile_sound_rom(rom, output, config=config,
-                                               **{"profile_" + mode: path})
+                    report = compile_sound_rom(rom, output, config=config, **{"profile_" + mode: path})
                     retained = 2 if mode == "slim" else 5
-                    self.assertEqual((report["original_entries"], report["retained_entries"],
-                                      report["compiled_entries"], report["hot_entries"],
-                                      report["cold_entries"], report["excluded_words"]),
-                                     (5, retained, retained, 2, 3, 1))
+                    self.assertEqual(
+                        (
+                            report["original_entries"],
+                            report["retained_entries"],
+                            report["compiled_entries"],
+                            report["hot_entries"],
+                            report["cold_entries"],
+                            report["excluded_words"],
+                        ),
+                        (5, retained, retained, 2, 3, 1),
+                    )
                     inventory = json.loads((output / "profile_inventory.json").read_text())
-                    self.assertEqual(inventory["entries"],
-                                     [base + offset for offset in (0, 2, 6, 8, 10)])
-                    self.assertEqual((inventory["retained_entries"], inventory["hot_entries"],
-                                      inventory["cold_entries"]), (retained, 2, 3))
-                    execute(output, report, "#define SLIM " + str(int(mode == "slim")) + "\n" + r'''
+                    self.assertEqual(inventory["entries"], [base + offset for offset in (0, 2, 6, 8, 10)])
+                    self.assertEqual(
+                        (inventory["retained_entries"], inventory["hot_entries"], inventory["cold_entries"]),
+                        (retained, 2, 3),
+                    )
+                    execute(
+                        output,
+                        report,
+                        "#define SLIM "
+                        + str(int(mode == "slim"))
+                        + "\n"
+                        + r"""
 #include <assert.h>
 #include "sound_program.h"
 #include <f3rt/block_profile.h>
@@ -337,29 +401,31 @@ int main(void) {
     assert(counts[4]==(SLIM ? 0u : 1u) && counts[5]==(SLIM ? 0u : 1u));
     return 0;
 }
-''')
+""",
+                    )
 
     def test_sound_rejects_contradictory_profiles_and_excluded_vectors(self):
         rom = bytes.fromhex("4e714e71a000")
-        base = 0xc00000
+        base = 0xC00000
         crc = zlib.crc32(rom)
-        config = {"exclude": [{"cpu": "sound", "start": base + 4, "end": base + 6,
-                                "reason": "synthetic data", "evidence": "fixture"}]}
+        config = {
+            "exclude": [
+                {"cpu": "sound", "start": base + 4, "end": base + 6, "reason": "synthetic data", "evidence": "fixture"}
+            ]
+        }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for mode in ("tiers", "slim"):
                 for kind in ("hit", "miss"):
-                    for address in (base + 4, base + 5, 0x01c00004, 0x01c00005):
+                    for address in (base + 4, base + 5, 0x01C00004, 0x01C00005):
                         with self.subTest(mode=mode, kind=kind, address=address):
-                            profile = BlockProfile({("sound", crc): (base, len(rom))},
-                                                   {("sound", crc, base): 1})
+                            profile = BlockProfile({("sound", crc): (base, len(rom))}, {("sound", crc, base): 1})
                             rows = profile.hits if kind == "hit" else profile.misses
                             rows["sound", crc, address] = 1
                             path = root / "contradictory.profile"
                             profile.write(path)
                             with self.assertRaises(ValueError):
-                                compile_sound_rom(rom, root / (mode + kind), config=config,
-                                                  **{"profile_" + mode: path})
+                                compile_sound_rom(rom, root / (mode + kind), config=config, **{"profile_" + mode: path})
             for address in (base + 4, base + 5):
                 with self.subTest(vector=address):
                     vector_rom = bytes.fromhex("4e714e71") + address.to_bytes(4, "big")

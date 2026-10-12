@@ -6,7 +6,7 @@
 #include <span>
 
 namespace f3rt {
-inline constexpr unsigned motion_layer_mask = 0x80000000u;
+inline constexpr unsigned MOTION_LAYER_MASK = 0x80000000u;
 struct MotionInterpolationStats {
     unsigned sprites = 0, playfield_rows = 0, text_rows = 0;
     // Native-pair census, independent of alpha and repeated apply calls.
@@ -33,7 +33,7 @@ struct MotionState {
         std::array<int32_t, 4> phase{};    // playfield source_y * 256 + y_fraction
         int32_t text_x = 0, text_y = 0;
     };
-    std::array<int32_t, CapturedFrame::max_sprites> sprite_x{}, sprite_y{};
+    std::array<int32_t, CapturedFrame::MAX_SPRITES> sprite_x{}, sprite_y{};
     std::array<Row, 256> rows{};
 };
 struct MotionResult {
@@ -46,10 +46,12 @@ class GpuMotionHistory {
 public:
     // Only options.border matters: it bounds layer clip ranges exactly as the
     // GPU encoder does, so history compares the same visible ranges.
-    explicit GpuMotionHistory(GameVideoOptions options = {}) noexcept : border_(int(options.border)) {}
+    explicit GpuMotionHistory(GameVideoOptions options = {}) noexcept
+        : m_border(int(options.border)) {}
     void capture(const CapturedFrame &frame, uint64_t frame_id) noexcept;
     void reset() noexcept;
     MotionResult apply(const CapturedFrame &frame, float alpha) const noexcept;
+
 private:
     struct Sprite {
         SceneSprite value;
@@ -58,20 +60,20 @@ private:
     };
     struct Row {
         SceneRow scene;
-        std::array<LayerId, layer_count> order{};
-        std::array<bool, 5> valid{}; // scrolled_layers: enabled, unmosaiced, sane clips
+        std::array<LayerId, LAYER_COUNT> order{};
+        std::array<bool, 5> valid{}; // SCROLLED_LAYERS: enabled, unmosaiced, sane clips
         std::array<int32_t, 10> delta{};
         std::array<bool, 10> eligible{};
     };
     ClipRanges ranges(const SceneRow &row, LayerId id) const noexcept;
     bool same_controls(const SceneRow &a, const SceneRow &b, LayerId id) const noexcept;
-    std::array<Sprite, CapturedFrame::max_sprites> sprites_{};
-    std::array<Row, geometry::height> rows_{};
-    uint64_t frame_ = 0;
-    unsigned sprite_count_ = 0;
-    uint8_t pen_mask_ = 0;
-    int border_ = 0;
-    bool captured_ = false, paired_ = false;
-    MotionInterpolationStats pair_stats_{};
+    std::array<Sprite, CapturedFrame::MAX_SPRITES> m_sprites{};
+    std::array<Row, geometry::HEIGHT> m_rows{};
+    uint64_t m_frame = 0;
+    unsigned m_sprite_count = 0;
+    uint8_t m_pen_mask = 0;
+    int m_border = 0;
+    bool m_captured = false, m_paired = false;
+    MotionInterpolationStats m_pair_stats{};
 };
 } // namespace f3rt

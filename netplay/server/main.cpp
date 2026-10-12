@@ -2,6 +2,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <string>
 
@@ -9,23 +10,23 @@ namespace {
 
 std::atomic<bool> g_stop_requested{false};
 
-void signal_handler(int) {
-    g_stop_requested = true;
-}
+void signal_handler(int) { g_stop_requested = true; }
 
 void print_usage(const char *prog) {
-    std::cout << "Usage: " << prog << " [flags]\n\n"
-              << "Two-player netplay relay (protocol v3).\n\n"
-              << "Flags:\n"
-              << "  --port <port>             Listen port for HTTP token endpoint (TCP) and game socket (UDP) (default 7845)\n"
-              << "  --public-address <addr>   Advertised public address HOST:PORT (default 127.0.0.1:<port>)\n"
-              << "  --logdir <dir>            Directory for per-session JSON logs (default ./netplay-logs)\n"
-              << "  --max-rooms <n>           Maximum number of concurrent rooms (1 to 32, default 32)\n";
+    std::cout
+        << "Usage: " << prog << " [flags]\n\n"
+        << "Two-player netplay relay (protocol v3).\n\n"
+        << "Flags:\n"
+        << "  --port <port>             Listen port for HTTP token endpoint (TCP) and game socket "
+           "(UDP) (default 7845)\n"
+        << "  --public-address <addr>   Advertised public address HOST:PORT (default "
+           "127.0.0.1:<port>)\n"
+        << "  --logdir <dir>            Directory for per-session JSON logs (default "
+           "./netplay-logs)\n"
+        << "  --max-rooms <n>           Maximum number of concurrent rooms (1 to 32, default 32)\n";
 }
 
-} // namespace
-
-int main(int argc, char *argv[]) {
+int run_server(int argc, char *argv[]) {
     f3rt::netplay::RelayConfig config;
     bool explicit_public_address = false;
 
@@ -35,14 +36,15 @@ int main(int argc, char *argv[]) {
             print_usage(argv[0]);
             return 0;
         } else if (arg == "--port" && i + 1 < argc) {
-            config.port = static_cast<uint16_t>(std::atoi(argv[++i]));
+            config.port = static_cast<uint16_t>(std::strtol(argv[++i], nullptr, 10));
         } else if (arg == "--public-address" && i + 1 < argc) {
             config.public_address = argv[++i];
             explicit_public_address = true;
         } else if (arg == "--logdir" && i + 1 < argc) {
             config.logdir = argv[++i];
         } else if (arg == "--max-rooms" && i + 1 < argc) {
-            config.max_rooms = std::clamp(std::atoi(argv[++i]), 1, 32);
+            const long parsed = std::strtol(argv[++i], nullptr, 10);
+            config.max_rooms = std::clamp(static_cast<int>(parsed), 1, 32);
         } else {
             std::cerr << "Unknown flag: " << arg << "\n";
             print_usage(argv[0]);
@@ -64,16 +66,29 @@ int main(int argc, char *argv[]) {
     }
 
     const std::string shown_public = explicit_public_address
-        ? config.public_address
-        : "127.0.0.1:" + std::to_string(server.bound_port());
-    std::cout << "netplay-server: port " << server.bound_port()
-              << ", public-address " << shown_public
-              << ", logdir " << config.logdir
-              << ", max-rooms " << config.max_rooms << std::endl;
+                                         ? config.public_address
+                                         : "127.0.0.1:" + std::to_string(server.bound_port());
+    std::cout << "netplay-server: port " << server.bound_port() << ", public-address "
+              << shown_public << ", logdir " << config.logdir << ", max-rooms " << config.max_rooms
+              << '\n';
 
     server.run(g_stop_requested);
 
     server.stop();
     f3rt::netplay::shutdown_netplay();
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) {
+    try {
+        return run_server(argc, argv);
+    } catch (const std::exception &e) {
+        std::cerr << "netplay-server: fatal: " << e.what() << "\n";
+        return 1;
+    } catch (...) {
+        std::cerr << "netplay-server: fatal: unknown exception\n";
+        return 1;
+    }
 }

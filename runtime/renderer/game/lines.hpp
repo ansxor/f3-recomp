@@ -22,13 +22,15 @@ public:
     // After prepare(): flag playfield rows whose sampled map row holds no tile codes.
     void cull_empty_rows(const class GameTiles &tiles);
     // Presented alt-map rows (PF2/PF3 alt_map rows that draw) over the visible scanlines.
-    struct AltRowCounts { uint64_t remapped = 0, fallback = 0; };
+    struct AltRowCounts {
+        uint64_t remapped = 0, fallback = 0;
+    };
     // After cull_empty_rows(): set ScenePlayfield::full_res_offset on every alt_map row whose sampled
     // tile rows all have a common exact full-resolution twin (FullResolutionAltMaps). Render-only;
     // canonical row fields are untouched. No-op unless game_config::video.full_resolution_alt_maps.
     AltRowCounts resolve_full_resolution_alt(const class FullResolutionAltMaps &maps);
-    const SceneRow &row(unsigned scanout_y) const { return rows_[scanout_y & 255]; }
-    std::span<const SceneRow, 256> rows() const { return rows_; }
+    const SceneRow &row(unsigned scanout_y) const { return m_rows[scanout_y & 255]; }
+    std::span<const SceneRow, 256> rows() const { return m_rows; }
     void compare_rows(const Video &oracle, uint64_t frame);
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
@@ -121,11 +123,11 @@ private:
         std::array<LinePlayfield, 4> pf{};
     };
 
-    std::array<LineParams, 256> lines_{};
-    std::array<SceneRow, 256> rows_{};
+    std::array<LineParams, 256> m_lines{};
+    std::array<SceneRow, 256> m_rows{};
 
-    std::array<uint16_t, 8> control_0_{};
-    std::array<uint16_t, 8> control_1_{};
+    std::array<uint16_t, 8> m_control_0{};
+    std::array<uint16_t, 8> m_control_1{};
 
     void get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const;
 };

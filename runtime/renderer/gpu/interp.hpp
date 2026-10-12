@@ -9,7 +9,8 @@
 namespace f3rt {
 enum class VideoInterpolation { Off, Linear, Fit };
 enum class InterpolationFields : uint8_t { None = 0, Geometry = 1, Palette = 2, All = 3 };
-inline std::optional<InterpolationFields> parse_interpolation_fields(std::string_view value) noexcept {
+inline std::optional<InterpolationFields>
+parse_interpolation_fields(std::string_view value) noexcept {
     if (value == "none") return InterpolationFields::None;
     if (value == "geometry") return InterpolationFields::Geometry;
     if (value == "palette") return InterpolationFields::Palette;
@@ -18,16 +19,26 @@ inline std::optional<InterpolationFields> parse_interpolation_fields(std::string
 }
 inline constexpr const char *interpolation_fields_name(InterpolationFields fields) noexcept {
     switch (fields) {
-    case InterpolationFields::None: return "none";
-    case InterpolationFields::Geometry: return "geometry";
-    case InterpolationFields::Palette: return "palette";
-    case InterpolationFields::All: return "geometry,palette";
+    case InterpolationFields::None:
+        return "none";
+    case InterpolationFields::Geometry:
+        return "geometry";
+    case InterpolationFields::Palette:
+        return "palette";
+    case InterpolationFields::All:
+        return "geometry,palette";
     }
     return "unknown";
 }
 enum class InterpolationReason {
-    Off, NativeScale, Oracle, NoEffect, InvalidRows, DiscreteBoundary,
-    PaletteDiscontinuity, Applied
+    Off,
+    NativeScale,
+    Oracle,
+    NoEffect,
+    InvalidRows,
+    DiscreteBoundary,
+    PaletteDiscontinuity,
+    Applied
 };
 struct LayerInterpolationStats {
     InterpolationReason reason = InterpolationReason::NoEffect;
@@ -43,13 +54,13 @@ struct InterpolationStats {
 // Native-anchored polynomial increments for one playfield row; the canonical
 // frame stays unchanged. Each triple is the cubic's (c1, c2, c3); a triple is
 // zero unless its flag is set.
-inline constexpr uint32_t interpolation_source = F3_INTERP_FLAG_SOURCE;
-inline constexpr uint32_t interpolation_zoom = F3_INTERP_FLAG_ZOOM;
-inline constexpr uint32_t interpolation_vertical = F3_INTERP_FLAG_VERTICAL;
-inline constexpr uint32_t interpolation_palette = F3_INTERP_FLAG_PALETTE;
+inline constexpr uint32_t INTERPOLATION_SOURCE = F3_INTERP_FLAG_SOURCE;
+inline constexpr uint32_t INTERPOLATION_ZOOM = F3_INTERP_FLAG_ZOOM;
+inline constexpr uint32_t INTERPOLATION_VERTICAL = F3_INTERP_FLAG_VERTICAL;
+inline constexpr uint32_t INTERPOLATION_PALETTE = F3_INTERP_FLAG_PALETTE;
 struct PlayfieldCoefficients {
-    uint8_t flags = 0;             // interpolation_* bits
-    uint16_t palette_stride = 0;   // bank stride, meaningful with interpolation_palette
+    uint8_t flags = 0;           // interpolation_* bits
+    uint16_t palette_stride = 0; // bank stride, meaningful with interpolation_palette
     std::array<float, 3> source{}, zoom{}, vertical{}, palette{};
 };
 struct InterpolationCoefficients {
@@ -60,8 +71,10 @@ struct InterpolationAnalysis {
     InterpolationCoefficients coefficients;
 };
 // Motion-effective geometry comes from `motion` (null: the canonical frame).
-InterpolationAnalysis analyze_gpu_interpolation(const CapturedFrame &frame, GameVideoOptions options,
-    VideoInterpolation mode, InterpolationFields fields, const MotionState *motion,
-    std::span<const uint64_t> tile_pen_masks) noexcept;
+InterpolationAnalysis analyze_gpu_interpolation(const CapturedFrame &frame,
+                                                GameVideoOptions options, VideoInterpolation mode,
+                                                InterpolationFields fields,
+                                                const MotionState *motion,
+                                                std::span<const uint64_t> tile_pen_masks) noexcept;
 const char *interpolation_reason_name(InterpolationReason reason) noexcept;
 } // namespace f3rt
