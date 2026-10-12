@@ -879,6 +879,7 @@ int main(int argc, char **argv) try {
     Sdl sdl;
     int pixel_width = 0, pixel_height = 0;
     uint32_t audio_rate = m.audio->sample_rate();
+    int audio_target_bytes = 0; // steady-state SDL queue depth; set when the device opens
     if (!headless) {
         check(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | (sound ? SDL_INIT_AUDIO : 0)));
 #ifdef F3RT_GPU
@@ -929,6 +930,18 @@ int main(int argc, char **argv) try {
             sdl.audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr,
                                                   nullptr);
             check(sdl.audio != nullptr);
+            // The device pulls whole periods while frames arrive every 1/59 s; the queue must hold a period plus a frame
+            // at the worst phase of those two clocks, and one more period absorbs scheduling jitter.
+            SDL_AudioSpec device_spec;
+            int device_frames = 0;
+            check(SDL_GetAudioDeviceFormat(SDL_GetAudioStreamDevice(sdl.audio), &device_spec,
+                                           &device_frames));
+            const uint64_t period_frames =
+                uint64_t(device_frames) * audio_rate / uint64_t(device_spec.freq);
+            const uint64_t emulated_frame_frames = uint64_t(audio_rate) *
+                                                   f3rt::Machine::FRAME_PIXELS /
+                                                   f3rt::Machine::PIXEL_CLOCK;
+            audio_target_bytes = int((2 * period_frames + emulated_frame_frames) * 4);
             check(SDL_ResumeAudioStreamDevice(sdl.audio));
             check(SDL_SetAudioStreamGain(sdl.audio, volume));
         }
@@ -982,6 +995,8 @@ int main(int argc, char **argv) try {
     constexpr int MAX_AUDIO_QUEUE_MS = 50, MAX_CATCHUP_MS = 50;
     uint64_t audio_queue_drops = 0, clock_resyncs = 0, audio_queue_sum = 0, audio_queue_samples = 0,
              audio_queue_max = 0;
+    double audio_queue_average = audio_target_bytes;
+    std::vector<int16_t> audio_silence;
     const auto start = std::chrono::steady_clock::now();
     // Fast boot: run the power-on frames unthrottled with no presentation and discarded
     // audio, from a locally generated initialised EEPROM and optionally a cached
@@ -1101,15 +1116,36 @@ int main(int argc, char **argv) try {
         }
         if (wav) wav->append(std::span(samples.data(), count * 2));
         if (sdl.audio) {
-            // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the picture.
-            // Past the latency cap, drop the stale backlog so new sound plays now.
-            if (throttle && SDL_GetAudioStreamQueued(sdl.audio) >
-                                int(audio_rate * 4 * MAX_AUDIO_QUEUE_MS / 1000)) {
-                check(SDL_ClearAudioStream(sdl.audio));
-                ++audio_queue_drops;
+            int backlog = SDL_GetAudioStreamQueued(sdl.audio);
+            check(backlog >= 0);
+            if (throttle) {
+                // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the
+                // picture. Past the latency cap, drop the stale backlog so new sound plays now.
+                if (backlog > audio_target_bytes + int(audio_rate * 4 * MAX_AUDIO_QUEUE_MS / 1000)) {
+                    check(SDL_ClearAudioStream(sdl.audio));
+                    ++audio_queue_drops;
+                    backlog = 0;
+                }
+                // An empty queue (start, after a drop or an underrun) is already silent; lead the chunk with
+                // silence up to the target instead of letting the device run dry on every period until it refills.
+                const int chunk_bytes = int(count * 4);
+                if (backlog == 0) audio_queue_average = audio_target_bytes;
+                if (backlog == 0 && chunk_bytes < audio_target_bytes) {
+                    audio_silence.assign(size_t(audio_target_bytes - chunk_bytes) / 2, 0);
+                    check(SDL_PutAudioStreamData(sdl.audio, audio_silence.data(),
+                                                 audio_target_bytes - chunk_bytes));
+                }
             }
             check(SDL_PutAudioStreamData(sdl.audio, samples.data(), int(count * 4)));
             const uint64_t queued = uint64_t(SDL_GetAudioStreamQueued(sdl.audio));
+            if (throttle) {
+                // Frames are paced by the system clock and consumed by the device clock; hold the queue at the target
+                // by nudging the playback rate (at most 0.5%, inaudible) against a ~1 s average of its depth.
+                audio_queue_average += (double(queued) - audio_queue_average) / 64.0;
+                const double error = std::clamp(
+                    (audio_queue_average - audio_target_bytes) / audio_target_bytes, -1.0, 1.0);
+                check(SDL_SetAudioStreamFrequencyRatio(sdl.audio, float(1.0 + 0.005 * error)));
+            }
             audio_queue_sum += queued;
             ++audio_queue_samples;
             audio_queue_max = std::max(audio_queue_max, queued);

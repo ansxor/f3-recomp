@@ -17,6 +17,9 @@ constexpr uint32_t NATIVE_RATE = 15238090u / (16u * 32u);
 constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
 constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 12 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
+// Declick tail: a cut voice's last output decays with a 4 ms time constant (exp(-1 / (0.004 * 48000))).
+constexpr float TAIL_DECAY = 0.99480519f;
+static_assert(SAMPLE_RATE == 48000, "TAIL_DECAY assumes 48 kHz");
 int16_t s16(uint32_t x) { return int16_t(uint16_t(x)); }
 int s8(uint32_t x) { return int(int8_t(uint8_t(x))); }
 uint16_t word(const uint8_t *p) { return uint16_t((uint16_t(p[0]) << 8) | p[1]); }
@@ -120,6 +123,9 @@ struct Synth::Impl {
         unsigned gain_frames = 0;
         double step_left = 0, step_right = 0;
         GainSegment left_segment{}, right_segment{};
+        // Last rendered output and the pair bus it went to; handed to the declick tail when the voice is cut.
+        float out_left = 0, out_right = 0;
+        uint8_t out_pair = 0;
         bool active = false, released = false, direct = false, reverse = false;
         bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
              hardware_valid = false;
@@ -179,6 +185,13 @@ struct Synth::Impl {
     alignas(64) uint8_t mode[32]{};
     alignas(64) uint8_t lane_voice[32]{};
     alignas(64) uint8_t lane_pair[32]{};
+    // A cut voice (sample end, steal, envelope stop, reset) leaves its last output on its bus and lets it decay
+    // instead of stepping to zero. inject[] places cuts that happen inside a block at their frame.
+    std::array<float, 8> tail{};
+    alignas(64) float inject[VOICE_BLOCK_FRAMES * 8]{};
+    std::array<size_t, 32> lane_end{};
+    std::array<float, 32> lane_prev_left{}, lane_prev_right{};
+    bool tail_active = false, injected = false, voice_rendering = false;
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
         if (r.size() != SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE ||
@@ -734,13 +747,25 @@ struct Synth::Impl {
         if (buffering_events) buffered_events.push_back({current_frame, current_voice, e});
         else observer(e);
     }
+    // Outside block rendering the next rendered frame continues from the voice's last output. Inside it, render()
+    // injects the value at the cut frame from the block's own output.
+    void cut_output(Voice &v) {
+        if (!voice_rendering && v.out_pair && (v.out_left != 0.f || v.out_right != 0.f)) {
+            tail[v.out_pair * 2u] += v.out_left;
+            tail[v.out_pair * 2u + 1] += v.out_right;
+            tail_active = true;
+        }
+        v.out_left = v.out_right = 0;
+    }
     void stop(Voice &v, uint64_t at) {
         if (v.active && !v.sample_finished) emit(v, VoiceEvent::Kind::Stop, at);
+        if (v.active) cut_output(v);
         v.active = false;
     }
     void end_sample(Voice &v, uint64_t at) {
         if (v.allocation) {
             emit(v, VoiceEvent::Kind::Stop, at);
+            cut_output(v);
             v.sample_finished = true;
         } else stop(v, at);
     }
@@ -1154,6 +1179,21 @@ struct Synth::Impl {
         }
         return exact;
     }
+    void mix_tail(float *output, size_t frames) {
+        for (size_t r = 0; r < frames; ++r) {
+            float *out = output + r * 8;
+            for (unsigned b = 2; b < 8; ++b) { // pair 0 is never mixed
+                if (injected) tail[b] += inject[r * 8 + b];
+                out[b] += tail[b];
+                tail[b] *= TAIL_DECAY;
+            }
+        }
+        injected = false;
+        // Below 2^-24 of full scale the tail is far under one output LSB.
+        tail_active = std::any_of(tail.begin(), tail.end(),
+                                  [](float x) { return std::abs(x) > 6e-8f; });
+        if (!tail_active) tail.fill(0.f);
+    }
     void render(float *output, size_t frames) {
         if (!output && frames) throw std::invalid_argument("Null HLE output buffer");
         if (!frames) return;
@@ -1191,8 +1231,13 @@ struct Synth::Impl {
                     Voice &v = voices[vi];
                     if (!v.active) continue;
                     const size_t lane = count++;
+                    if (v.out_pair != v.pair) cut_output(v); // rerouted: the old bus decays
+                    voice_rendering = true;
                     lane_voice[lane] = uint8_t(vi);
                     lane_pair[lane] = v.pair;
+                    lane_end[lane] = chunk_frames;
+                    lane_prev_left[lane] = v.out_left;
+                    lane_prev_right[lane] = v.out_right;
                     mode[lane] = v.filter.mode;
                     for (unsigned s = 0; s < 4; ++s) {
                         state[s * VOICE_LANE_STRIDE + lane] = v.filter.state[s];
@@ -1201,6 +1246,7 @@ struct Synth::Impl {
                     current_voice = vi;
                     const double length = v.end - v.start, increment = v.increment;
                     auto fill_remaining = [&](size_t start_row) {
+                        lane_end[lane] = start_row;
                         for (size_t rem = start_row; rem < chunk_frames; ++rem) {
                             const size_t idx = rem * VOICE_LANE_STRIDE + lane;
                             input[idx] = 0.f;
@@ -1395,6 +1441,7 @@ struct Synth::Impl {
                         }
                     }
                 }
+                voice_rendering = false;
                 const size_t lanes =
                     count == 0 ? 0
                                : ((count + VOICE_LANE_MULTIPLE - 1) / VOICE_LANE_MULTIPLE) *
@@ -1433,14 +1480,36 @@ struct Synth::Impl {
                     };
                     render_voice_block(block);
                     for (size_t lane = 0; lane < count; ++lane) {
-                        if (lane_pair[lane] == 0) continue;
-                        const unsigned pair_left = unsigned(lane_pair[lane]) * 2;
+                        Voice &v = voices[lane_voice[lane]];
+                        const unsigned pair = lane_pair[lane];
+                        const size_t end = lane_end[lane];
+                        if (pair == 0) {
+                            v.out_left = v.out_right = 0;
+                            v.out_pair = 0;
+                            continue;
+                        }
+                        const unsigned pair_left = pair * 2;
                         const unsigned pair_right = pair_left + 1;
                         for (size_t r = 0; r < chunk_frames; ++r) {
                             float *out = output + (chunk_start + r) * 8;
                             out[pair_left] += out_left[r * VOICE_LANE_STRIDE + lane];
                             out[pair_right] += out_right[r * VOICE_LANE_STRIDE + lane];
                         }
+                        const float last_left =
+                            end ? out_left[(end - 1) * VOICE_LANE_STRIDE + lane] : lane_prev_left[lane];
+                        const float last_right = end ? out_right[(end - 1) * VOICE_LANE_STRIDE + lane]
+                                                     : lane_prev_right[lane];
+                        if (end < chunk_frames) {
+                            if (!injected) std::fill_n(inject, chunk_frames * 8, 0.f);
+                            injected = true;
+                            inject[end * 8 + pair_left] += last_left;
+                            inject[end * 8 + pair_right] += last_right;
+                            v.out_left = v.out_right = 0;
+                        } else {
+                            v.out_left = last_left;
+                            v.out_right = last_right;
+                        }
+                        v.out_pair = uint8_t(pair);
                     }
                     for (size_t lane = 0; lane < count; ++lane) {
                         Voice &v = voices[lane_voice[lane]];
@@ -1450,6 +1519,7 @@ struct Synth::Impl {
                         }
                     }
                 }
+                if (tail_active || injected) mix_tail(output + chunk_start * 8, chunk_frames);
             }
             if (observer) {
                 buffering_events = false;
