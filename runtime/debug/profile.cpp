@@ -84,7 +84,7 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
         for (auto row = m_hits.begin(); row != m_hits.end();) {
             const auto [region, crc, address] = row->first;
             if (crc == m_crcs[region]) {
-                m_counts[region][(address - bases[region]) / 2] = row->second;
+                m_counts[region][(address - BASES[region]) / 2] = row->second;
                 row = m_hits.erase(row);
             } else ++row;
         }

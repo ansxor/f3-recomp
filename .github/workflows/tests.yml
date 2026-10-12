@@ -75,4 +75,7 @@ jobs:
         with:
           enable-cache: true
       - name: Run Python tests
+        # clang has musttail (GCC < 15 does not), so cross-function chaining tests run.
+        env:
+          CC: clang
         run: uv run pytest

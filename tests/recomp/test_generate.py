@@ -393,6 +393,23 @@ def _run_driver(output: Path, report: dict, body: str) -> None:
     subprocess.run([str(executable)], check=True)
 
 
+def _has_musttail() -> bool:
+    """Whether $CC chains across block functions; without musttail F3_CHAIN is a plain return."""
+    probe = subprocess.run(
+        [os.environ.get("CC", "cc"), "-std=c11", "-E", "-dM", "-x", "c", "-"],
+        input="#if defined(__has_attribute)\n#if __has_attribute(musttail)\n#define F3_PROBE_MUSTTAIL 1\n#endif\n#endif\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return "F3_PROBE_MUSTTAIL" in probe.stdout
+
+
+requires_musttail = unittest.skipUnless(
+    _has_musttail(), "compiler lacks musttail; F3_CHAIN degrades to a plain return"
+)
+
+
 def _synthetic(decoder, chunks):
     """Decode (address, hex) chunks and pack them into one discovery object."""
     instructions = {}
@@ -510,6 +527,7 @@ int main(void) {
 """,
             )
 
+    @requires_musttail
     def test_cross_function_transfer_chains_but_trace_or_stop_refuses(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
@@ -612,6 +630,7 @@ int main(void) {
 
 
 class IndirectChainTests(unittest.TestCase):
+    @requires_musttail
     def test_table_indexes_chain_in_one_call_with_dispatcher_cycle_sum(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
