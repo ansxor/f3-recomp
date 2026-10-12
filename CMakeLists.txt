@@ -362,7 +362,7 @@ if(F3_SOUND_GENERATED_DIR)
 endif()
 
 string(REPLACE ";" "\n" _inputs_txt "${F3_SIMULATION_SOURCES}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt" "${_inputs_txt}\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt" CONTENT "${_inputs_txt}\n" @ONLY)
 
 add_custom_command(
     OUTPUT "${F3_GENERATED_CONFIG_DIR}/build_identity.hpp"

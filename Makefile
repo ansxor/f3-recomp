@@ -76,6 +76,7 @@ configure: rom-check
 
 build: configure
 	cmake --build $(call shq,$(BUILD_DIR)) $(JOBS_ARG)
+	@printf 'build ok: %s is up to date (GAME=%s)\n' $(call shq,$(BUILD_DIR)) $(call shq,$(GAME))
 
 test: build
 	ctest --test-dir $(call shq,$(BUILD_DIR)) --output-on-failure $(JOBS_ARG)
