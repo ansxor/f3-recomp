@@ -127,6 +127,8 @@ void f3_write8(f3_cpu *cpu, uint32_t address, uint8_t value);
 void f3_write16(f3_cpu *cpu, uint32_t address, uint16_t value);
 void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value);
 
+/* Only the memory callbacks above accept pending lazy flags; every callback
+ * below requires canonical SR (generated code flushes first). */
 /* Called before lookup at block boundaries. Nonzero: do not execute the
  * previously selected block (IRQ changed PC, STOP, halt). Any caller reading
  * CCR bits of sr must flush pending flags via f3_cc_flush first. Dispatch must

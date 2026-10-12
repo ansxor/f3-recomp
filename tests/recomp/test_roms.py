@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import zlib
 
-from recomp.roms import load_region
+from recomp.roms import load_region, region_spec
 
 
 def lane(name, data, offset=0, stride=1, group=1):
@@ -14,6 +14,14 @@ def lane(name, data, offset=0, stride=1, group=1):
 
 
 class RomRegionTests(unittest.TestCase):
+    def test_size_zero_region_is_absent_plane_not_a_chip_file(self):
+        config = {"tiles_hi": {"size": 0, "lanes": []}}
+        self.assertEqual(region_spec(config, "tiles_hi"), (0, 0, []))
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(load_region(config, "tiles_hi", Path(directory)), b"")
+        with self.assertRaisesRegex(ValueError, "exceeds region"):
+            region_spec({"tiles_hi": {"size": 0, "lanes": [lane("fake", bytes(4))]}}, "tiles_hi")
+
     def test_grouped_tile_lanes_and_sparse_zero_samples(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

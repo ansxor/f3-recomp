@@ -1,4 +1,5 @@
 #include "audio/hle/audio.hpp"
+#include "f3rt/memory_map.hpp"
 #include "audio/hle/effects.hpp"
 #include "audio/hle/sequencer.hpp"
 #include "audio/hle/synth.hpp"
@@ -178,8 +179,8 @@ struct AudioEngine::Impl : VoiceSink {
     }
     void shared_write(uint32_t offset) {
         if (held) return;
-        if (offset == 0x481) {
-            const uint16_t producer = uint16_t((uint16_t(shared[0x480]) << 8 | shared[0x481]) & 0x7fe);
+        if (offset == MAILBOX_PRODUCER_L) {
+            const uint16_t producer = uint16_t((uint16_t(shared[MAILBOX_PRODUCER_H]) << 8 | shared[MAILBOX_PRODUCER_L]) & 0x7fe);
             unsigned consumed = 0;
             while (consumer != producer && consumed < 1024) {
                 const unsigned index = consumer >> 1;
@@ -188,13 +189,13 @@ struct AudioEngine::Impl : VoiceSink {
                 if (length < 2 || length > available) break;
                 Packet p; p.tick = clock;
                 if (length <= p.bytes.size()) {
-                    for (unsigned n = 0; n < length; ++n) p.bytes[n] = shared[(index + n) & 0x3ff];
+                    for (unsigned n = 0; n < length; ++n) p.bytes[n] = shared[(index + n) & MAILBOX_RING_MASK];
                     record(p);
                 }
                 consumer = uint16_t((consumer + length * 2) & 0x7ff); consumed += length;
             }
-            shared[0x482] = uint8_t(consumer >> 8); shared[0x483] = uint8_t(consumer);
-        } else if (offset == 0x7fa || offset == 0x7fb) {
+            shared[MAILBOX_CONSUMER_H] = uint8_t(consumer >> 8); shared[MAILBOX_CONSUMER_L] = uint8_t(consumer);
+        } else if (offset == MAILBOX_GAIN_CH0 || offset == MAILBOX_GAIN_CH1) {
             Message m; m.kind = Message::Gain; m.tick = clock;
             m.value = shared[offset]; m.channel = uint8_t(offset & 1); push(m);
         }
@@ -215,8 +216,8 @@ void AudioEngine::set_reset(bool asserted) {
         p.consumer = 0;
         Message m; m.kind = Message::Reset; m.tick = p.clock; p.push(m);
     } else {
-        p.shared_write(0x7fa);
-        p.shared_write(0x7fb);
+        p.shared_write(MAILBOX_GAIN_CH0);
+        p.shared_write(MAILBOX_GAIN_CH1);
     }
 }
 void AudioEngine::shared_write(uint32_t offset) { impl_->shared_write(offset); }

@@ -1,7 +1,7 @@
 ---
 title: Sound board section (68000, ES5505 OTIS, ES5510 ESP, MC68681 DUART)
 created: 2026-10-09
-updated: 2026-10-10
+updated: 2026-10-11
 type: hardware
 tags: [audio, cpu, memory-map, reset, pcb]
 sources:
@@ -17,6 +17,10 @@ sources:
   - raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt
   - raw/tests/2026-10-10-otis-esp-routing-experiments.md
   - raw/tests/2026-10-10-enhanced-effects-hardware-routing.md
+  - raw/docs/runtime-audio-es5505.md
+  - raw/docs/runtime-audio-es5510.md
+  - raw/docs/runtime-audio-duart-and-gain.md
+  - raw/docs/runtime-audio-mailbox.md
 games: []
 addresses: [0x00C00000, 0x00C80000, 0x00C80100, 0x00300000]
 status: hypothesis
@@ -149,3 +153,12 @@ Address-bit patterns `a` real, `A` byte select, `.` don't care.^[raw/docs/taito-
 
 - `audiocpu.txt` lists the 68000's pins: `~DTACK` pulled up (R8), `~BGACK`, `~HALT`, `~RESET`, `~BERR`, `~IPL0-2` and `MODE` have pulldowns (RB3); `~AVEC` pin 23 listed without a source.^[raw/docs/taito-f3/audiocpu.txt]
 - How the IPL lines are driven (including the DUART's IRQ → level 6) is not traced in the notes; see [[hardware/interrupts]] for the main CPU's side.
+
+## Runtime-model detail pages
+
+These pages describe how this runtime models each chip and how the Land Maker driver uses it. They are
+MAME-derived model and ROM-analysis documentation, not board observations, and none of them overrides the
+confirmed routing above: [[hardware/es5505-otis]] (registers, banks), [[hardware/es5510-esp]] (host
+interface, instruction format, effects inventory), [[hardware/duart-and-volume]] (1 ms driver tick, ESP
+halt, MB87078, master-volume timing), [[hardware/sound-mailbox]] (command ring and framing).
+^[raw/docs/runtime-audio-es5505.md] ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/runtime-audio-duart-and-gain.md] ^[raw/docs/runtime-audio-mailbox.md]

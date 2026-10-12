@@ -135,3 +135,32 @@ Touched: docs/notes/raw/tests/landmakrj-desync-695b-frame540.md, docs/notes/rout
 ## [2026-10-11] update | landmakrj RNG reseed keyed on round index; 0x400826 consumer audit
 Audit of `0x400826` (xref plus a 2P 18,000-frame watch run): readers are `sub_001468` (LCG; idle loop `$19f8` via `sub_001174` advances it, the drift source), `sub_093462` @0x0935d4 (copies the word into BOTH players' bag seeds, once per round, ~12 frames after the stage pick), `round_task` @0x08e470 (stage step `((rng&3)+1+prev)&7` into 0x401f54), `sub_08e84c` (sound pick), `sub_0915d2` (tile/palette), `sub_0a04d0` (dice roll `rng&0x7f + table[0x4000d0][0x401f54] + 0x401f7a`, script opcode 2; role unconfirmed, Haiku read as CPU AI), and a ~40-entry `dc.l $1468` callback table (unresolved). `sub_093a1c` swaps the word with the player seed and restores it, so after init it does not consume the global. Wins sum `0x401f6a+0x401f6c` is 0/1/2 at the stage picks at frames 2631/4983/11043 and is updated 2 frames before each pick. `on_match_frame` now keys on `seed ^ (wins_sum * prime)` instead of `match_frame`: a pure function of the server seed and synced RAM, rollback-safe. Side effect: the word is constant within a round, so the `sub_0a04d0` roll and cosmetic readers repeat per round. Verified: tests/test_netplay.py 6 passed, 16,000-frame two-peer match equal sync_hash, no DESYNC. Not observed: a round-end inside that run, and rounds that end without a winner.
 Touched: games/landmakrj/netplay/netplay.cpp, docs/site/developer/netplay/index.md, docs/notes/log.md.
+
+## [2026-10-11] ingest | runtime documentation migrated into the wiki (sound hardware model, ROM layout, video producers, boot/EEPROM, MAME parity)
+docs/site and docs/developer are being deleted, so their reverse-engineering content was moved here. Provenance is stated on every
+page: most of it is MAME-derived runtime modelling, ROM static analysis and runtime test records, not board observation, and nothing
+overrides 12's board observations (OTIS to ESP routing stays confirmed on hardware/sound). New pages are `hypothesis`. Own checks
+against the supplied ROM files (stored as raw/tests records with the exact script and output): main image sha256 matches SCHEMA; FF
+fills are exact (`[0x702f,0x10000)`, `[0x11b362,0x1ffffe)`, sound `[0xc1e45a,0xc20000)`, `[0xc39a30,0xc80000)`); main word `0x1ffffe` =
+`0x0001`; sound image CRC32 `5a7e9117`; sound length table `0xc13260` and handler table `0xc1323e` match the documented commands; 27
+sequences in both directories (header stride 0xa8); main selector table `0x6bde` has 0x60 entries. Dropped or downgraded: the claim
+that Land Maker "sets output gain at ~780 frames" is only arithmetic (13.2338 s x 58.94 Hz = 780.05; `boot.cpp` measures boot completion at
+frames 781/478, not gain); the 27 sequences / 206 tracks / 24,470 events and 100 programs (79 layered) come from deleted
+`tools/hle_sequence.py` / `hle_instruments.py` and only the 27 was reproduced. Not migrated: binary-size, GPU-performance and
+optimization measurements, ABI history, recompiler design rationale. SCHEMA gained tags `rom-layout, eeprom, netplay, sound-driver,
+mailbox`, a provenance note for runtime-derived docs, and its bus-map pointer now targets hardware/memory-map.
+Touched: docs/notes/SCHEMA.md, docs/notes/index.md, docs/notes/log.md, docs/notes/games/landmakrj.md (new `## ROM layout`, boot/EEPROM,
+routine index), docs/notes/games/commandw.md, docs/notes/hardware/sound.md, docs/notes/hardware/fda.md (palette precision section),
+docs/notes/hardware/es5505-otis.md, docs/notes/hardware/es5510-esp.md, docs/notes/hardware/duart-and-volume.md,
+docs/notes/hardware/sound-mailbox.md, docs/notes/routines/landmakrj-000041d0-sprite-list-writers.md,
+docs/notes/routines/landmakrj-000a8e0c-display-object-loop.md, docs/notes/routines/landmakrj-00005cd8-line-ram-producers.md,
+docs/notes/routines/commandw-00009a0e-object-loop.md, docs/notes/routines/landmakrj-000030be-sound-selector-dispatch.md,
+docs/notes/routines/landmakrj-00c12ecc-sound-command-dispatch.md, docs/notes/routines/landmakrj-00c10da0-sound-timer-irq.md,
+docs/notes/routines/landmakrj-00c14730-sequence-event-decode.md, docs/notes/routines/landmakrj-0008edde-versus-mode-transition.md
+(shipped v4 hook, round-keyed reseed), docs/notes/comparisons/runtime-vs-mame-attract-capture.md, and new raw files: raw/docs/runtime-audio-{es5505,es5510,duart-and-gain,mailbox,sequences}.md,
+raw/docs/runtime-hle-audio-rom-protocol.md, raw/docs/runtime-game-config-reference.md, raw/docs/runtime-video-producers.md,
+raw/docs/runtime-sprite-units-commandw.md, raw/docs/runtime-eeprom-and-fast-boot.md, raw/docs/runtime-decisions-rom-set-identity.md,
+raw/docs/landmakrj-config-{excerpts,entry-points,lanes}.toml.txt, raw/emu-source/{landmakrj-video,landmakrj-boot,landmakrj-netplay}.cpp.txt,
+raw/emu-source/commandw-sprite-behaviours.hpp.txt, raw/emu-source/runtime-fdp-palette15-blur.cpp.txt, raw/tests/landmakrj-{ff-fill-extents,
+rom-exclusion-profile,mame-attract-capture-parity,seed5-sound-trace,sound-rom-structure-check,sound-image-crc,main-sound-selector-table-check,
+video-survey-fallbacks,sprite-census,rng-reseed-audit}.md, raw/tests/landmakr-vs-landmakrj-config-diff.md.

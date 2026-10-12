@@ -105,7 +105,9 @@ def compare_audio(reference_path: Path, candidate_path: Path, start: float = 18.
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="f3 compare audio",
-        description="Compare PCM16 stereo WAVs with one fixed latency correction."
+        description="Compare PCM16 stereo WAVs with one fixed latency correction.",
+        epilog="Output is metrics, not a pass/fail verdict. Exit status 0 means the comparison ran; "
+               "2 means an error (bad arguments or unreadable input)."
     )
     parser.add_argument("reference", type=Path, help="Reference WAV file")
     parser.add_argument("candidate", type=Path, help="Candidate WAV file")

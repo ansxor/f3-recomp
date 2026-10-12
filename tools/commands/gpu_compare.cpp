@@ -1,4 +1,5 @@
 #include "commands.hpp"
+#include "f3rt/memory_map.hpp"
 #include "../runner/runner.hpp"
 #include "../runner/inputs.hpp"
 #include "f3rt/machine.hpp"
@@ -33,6 +34,7 @@
 
 namespace f3rt::tool {
 namespace {
+constexpr unsigned PALETTE_SP3_ENTRY_BASE = 0x1c00;
 using Clock = std::chrono::steady_clock;
 constexpr std::array<const char *, f3rt::layer_count + 1> names = [] {
     std::array<const char *, f3rt::layer_count + 1> result{};
@@ -573,8 +575,8 @@ void put_sprite_entry(std::span<uint8_t> graphics, size_t offset, const SpriteEn
 // that resets the retained sprite state, the descriptors, and a self-jump
 // terminator. The game writes the same RAM, so this is the same data path.
 void write_sprite_list(f3rt::Machine &m, std::span<const SpriteEntry> list, uint16_t command = 0) {
-    std::fill(m.graphics.begin(), m.graphics.begin() + 0x10000, 0);
-    for (size_t bank : {size_t(0), size_t(0x8000)}) {
+    std::fill(m.graphics.begin(), m.graphics.begin() + f3rt::SPRITE_RAM_SIZE, 0);
+    for (size_t bank : {size_t(0), size_t(f3rt::SPRITE_BANK_STRIDE)}) {
         size_t entry = 0;
         put_sprite_entry(m.graphics, bank + entry * 16, SpriteEntry{}, command);
         ++entry;
@@ -591,15 +593,15 @@ void inject(Harness &h, unsigned kind) {
         // Line RAM bitmap pivot: latch section-2 sub-0 for the visible rows and
         // set the pivot control bits the decoder reads as bitmap mode.
         for (unsigned y = f3rt::geometry::first_line; y < f3rt::geometry::end_line; ++y) {
-            put16(m.graphics, 0x20400 + y * 2, 1);
-            put16(m.graphics, 0x26000 + y * 2, 0x2000);
+            put16(m.graphics, f3rt::OFFS_LINERAM + 2 * f3rt::LINERAM_LATCH_STRIDE + y * 2, 1);
+            put16(m.graphics, f3rt::OFFS_LINERAM + f3rt::LINERAM_SECTIONS_OFFSET + 2 * f3rt::LINERAM_SECTION_STRIDE + y * 2, 0x2000);
         }
     } else {
         // Sprite command entry: word 3 bit 15 marks it, word 5 carries trails
         // (bit 1) or flipscreen (bit 13). Both banks are patched because the
         // active bank is retained hardware state.
         const uint16_t command = kind == 1 ? 0x0002 : 0x2000;
-        for (size_t bank : {size_t(0), size_t(0x8000)}) {
+        for (size_t bank : {size_t(0), size_t(f3rt::SPRITE_BANK_STRIDE)}) {
             put16(m.graphics, bank + 6, 0x8000);
             put16(m.graphics, bank + 10, command);
             for (size_t slot = 1; slot < f3rt::max_hardware_sprites; ++slot) {
@@ -766,7 +768,7 @@ void verify_sprite_boundaries(Harness &h) {
         // when gameplay has not populated these two palette banks.
         for (unsigned bank = 0; bank < 2; ++bank)
             for (unsigned pen = 1; pen < 16; ++pen) {
-                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
+                const unsigned at = (PALETTE_SP3_ENTRY_BASE + bank * 16 + pen) * 4;
                 m.palette[at + 1] = uint8_t(bank ? 32 : 224);
                 m.palette[at + 2] = uint8_t(pen * 15);
                 m.palette[at + 3] = uint8_t(bank ? 224 : 32);
@@ -1037,7 +1039,7 @@ void verify_deferred_native(Harness &h) {
         }
         for (unsigned bank = 0; bank < 2; ++bank)
             for (unsigned pen = 1; pen < 16; ++pen) {
-                const unsigned at = (0x1c00 + bank * 16 + pen) * 4;
+                const unsigned at = (PALETTE_SP3_ENTRY_BASE + bank * 16 + pen) * 4;
                 m.palette[at + 1] = uint8_t(bank ? 32 : 200);
                 m.palette[at + 2] = uint8_t(64 + frame * 16);
                 m.palette[at + 3] = uint8_t(pen * 11);

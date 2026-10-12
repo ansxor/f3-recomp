@@ -383,6 +383,8 @@ void SoundNative::load_state(StateReader &reader) {
     m_reset_cycles = st.reset_cycles;
 }
 
+static_assert(Snapshotable<SoundNative>);
+
 } // namespace f3rt
 
 extern "C" {

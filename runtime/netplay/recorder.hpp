@@ -7,7 +7,13 @@
 //   - a small ring of the last few CRC reports, each with the exact bytes the hash covered.
 // The state at the mismatch frame is not kept: `f3rt-tool netplay-replay --dump-state` regenerates it from trigger.f3s
 // and inputs.txt.
-// On DESYNC, write_bundle() turns that into a folder a developer can diff offline (see docs/site/guide/netplay.md).
+// On DESYNC, write_bundle() writes `<settings>/netplay-desync/<UTC>-<session_id>-p<player>/` containing:
+//   info.json    mismatch frame, local/remote CRCs, seed, input delay, hash phase, player and names,
+//                build hash, room code, stall/clock-resync counters, regeneration note, report list
+//   hashed.bin   hashed bytes of the report at hashed_frame, then those of the previous report
+//   inputs.txt   every applied input word pair (both ports) plus the trigger/sync/start frame numbers
+//   trigger.f3s  this peer's machine state at match frame 0
+// The ring holds the last 8 reports by default (ring_size); nothing is written until DESYNC.
 #include "f3rt/game_netplay.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/netplay.hpp"

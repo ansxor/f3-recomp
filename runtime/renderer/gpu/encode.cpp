@@ -17,6 +17,10 @@ static_assert(F3_SCENE_SPRITES + F3_SCENE_SPRITE_COUNT * F3_SCENE_SPRITE_STRIDE 
 static_assert(F3_SCENE_INTERP == F3_SCENE_WORD_COUNT);
 static_assert(4 * F3_INTERP_PF_STRIDE == F3_SCENE_INTERP_ROW_STRIDE);
 static_assert(F3_SCENE_INTERP + F3_SCENE_ROW_COUNT * F3_SCENE_INTERP_ROW_STRIDE == F3_SCENE_INTERP_WORD_COUNT);
+// scene.glsl LAYER_COUNT/LAYER_SP0/LAYER_TEXT come from these macros: they must track LayerId.
+static_assert(F3_SCENE_LAYER_COUNT == layer_count);
+static_assert(F3_SCENE_LAYER_SP0 == unsigned(LayerId::Sp0));
+static_assert(F3_SCENE_LAYER_TEXT == unsigned(LayerId::Text));
 static_assert(F3_ROW_ORDER + layer_count <= F3_ROW_MOTION_TEXT_X && F3_ROW_MOTION_TEXT_Y < F3_ROW_LAYERS);
 static_assert(F3_LAYER_CLIPS + 2 * 16 == F3_LAYER_STRIDE);
 static_assert(F3_ROW_LAYERS + layer_count * F3_LAYER_STRIDE == F3_ROW_PF);

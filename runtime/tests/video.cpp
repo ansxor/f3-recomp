@@ -12,6 +12,30 @@
 #include <vector>
 
 namespace {
+// Graphics-RAM sub-tables, as offsets from f3rt::GRAPHICS_BASE.
+constexpr uint32_t LINE_LATCH_TABLE = 0x20400;
+constexpr uint32_t LINE_MODE_TABLE = 0x26400;
+constexpr uint32_t LINE_BACKGROUND_TABLE = 0x26600;
+constexpr uint32_t LINE_MODE_ALT_TABLE = 0x26c00;
+constexpr uint32_t LINE_SELECT_TABLE = 0x26200;
+constexpr uint32_t LINE_TABLE_20800 = 0x20800;
+constexpr uint32_t LINE_TABLE_28600 = 0x28600;
+constexpr uint32_t PF_ROW_TABLE_24000 = 0x24000;
+constexpr uint32_t PF_ROW_TABLE_24400 = 0x24400;
+constexpr uint32_t PF_ROW_TABLE_24600 = 0x24600;
+constexpr uint32_t PF_ROW_STRIDE = 0x200;
+constexpr uint32_t PF_SELECT_TABLE = 0x20e00;
+constexpr uint32_t PF_ALT_ENABLE_0 = 0x2b400;
+constexpr uint32_t PF_ALT_ENABLE_1 = 0x2b600;
+constexpr uint32_t PF_MAP_STRIDE = 0x1000;
+constexpr uint32_t PF_EXT_MAP_STRIDE = 0x2000;
+constexpr uint32_t PF_MAP2_BASE = f3rt::OFFS_PLAYFIELDS + 2 * PF_MAP_STRIDE;
+constexpr uint32_t PF_EXT_ALT_BASE = 0x1a000;
+// Sprite and high-plane ROM offsets of the second sprite bank (Command War).
+constexpr size_t SPRITE_ROM_BANK1 = 0x400000;
+constexpr size_t HIGH_PLANE_ROM_BANK1 = 0x200000;
+// Game tile cell table offset within graphics RAM (test fixture).
+constexpr uint32_t GAME_TILE_CELLS = 0x12000;
 void set_word(std::vector<uint8_t> &bytes, size_t at, uint16_t value) {
     bytes[at] = uint8_t(value >> 8);
     bytes[at + 1] = uint8_t(value);
@@ -49,11 +73,11 @@ TEST(Video, RomPlaneLoading4BppAndCustomVisibleScanline) {
     std::vector<uint32_t> pixels(320 * 224);
     set_color(palette, 4, 0x00112233);
     set_color(palette, 8, 0x00445566);
-    set_word(graphics, 0x20400 + 31 * 2, 12);
-    set_word(graphics, 0x26600 + 31 * 2, 1);
-    set_word(graphics, 0x26400 + 31 * 2, 0x6000);
-    set_word(graphics, 0x20400 + 32 * 2, 8);
-    set_word(graphics, 0x26600 + 32 * 2, 2);
+    set_word(graphics, LINE_LATCH_TABLE + 31 * 2, 12);
+    set_word(graphics, LINE_BACKGROUND_TABLE + 31 * 2, 1);
+    set_word(graphics, LINE_MODE_TABLE + 31 * 2, 0x6000);
+    set_word(graphics, LINE_LATCH_TABLE + 32 * 2, 8);
+    set_word(graphics, LINE_BACKGROUND_TABLE + 32 * 2, 2);
     set_word(graphics, 0, 1);
     set_word(graphics, 4, 46);
     set_word(graphics, 6, 31);
@@ -116,15 +140,15 @@ TEST(Video, CustomGeometryAndFdaPaletteBlur) {
     set_color(palette, 20, 0x00abcdef);
 
     const auto line = [&](unsigned y, uint16_t latch, uint16_t mode, uint16_t background) {
-        set_word(graphics, 0x20400 + y * 2, latch);
-        set_word(graphics, 0x26400 + y * 2, mode);
-        set_word(graphics, 0x26600 + y * 2, background);
+        set_word(graphics, LINE_LATCH_TABLE + y * 2, latch);
+        set_word(graphics, LINE_MODE_TABLE + y * 2, mode);
+        set_word(graphics, LINE_BACKGROUND_TABLE + y * 2, background);
     };
     line(32, 12, 0x2000, 1);
     line(33, 8, 0x6000, 2);
     line(34, 12, 0x6000, 3);
     line(35, 0x48, 0x6000, 4);
-    set_word(graphics, 0x26c00 + 35 * 2, 0x2000);
+    set_word(graphics, LINE_MODE_ALT_TABLE + 35 * 2, 0x2000);
     line(36, 8, 0, 0);
     line(37, 8, 0, 5);
     line(38, 12, 0, 1);
@@ -147,8 +171,8 @@ TEST(Video, SecondSpriteBankHighPlanes) {
     f3rt::Video video;
     f3rt::VideoConfig config{0, 1, 32, 224};
     std::vector<uint8_t> sprites(0x800000, 0), tiles(0x200000, 0), high(0x400000, 0);
-    sprites[0x400000] = 0x65;
-    high[0x200000] = 3;
+    sprites[SPRITE_ROM_BANK1] = 0x65;
+    high[HIGH_PLANE_ROM_BANK1] = 3;
     EXPECT_TRUE(video.load_roms(sprites, high, tiles, {}, config))
         << "Command War's second sprite bank loads";
     EXPECT_TRUE(video.sprite_tiles()[32768 * 256] == 0x35 && video.sprite_tiles()[32768 * 256 + 1] == 6)
@@ -171,7 +195,7 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     std::vector<uint32_t> pixels(320 * 256 + 1, 0xdeadbeef);
     for (unsigned map = 0; map < 8; ++map)
         for (unsigned cell = 0; cell < 1024; ++cell)
-            set_word(graphics, 0x10000 + map * 0x1000 + cell * 4 + 2, uint16_t(map + 5));
+            set_word(graphics, f3rt::OFFS_PLAYFIELDS + map * PF_MAP_STRIDE + cell * 4 + 2, uint16_t(map + 5));
     auto line = video.inspect_playfield_line(4, 511, graphics);
     EXPECT_TRUE(line.palette.size() == 512 && line.palette[0] == 5 && line.palette[511] == 5)
         << "Nonextended alternate map 4 uses its own 32-column base and count-correct tile wrapping";
@@ -179,16 +203,16 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     EXPECT_EQ(line.palette[0], 3)
         << "Last nonextended physical map remains independently addressable";
 
-    for (unsigned cell = 0; cell < 1024; ++cell) set_word(graphics, 0x12000 + cell * 4 + 2, 0);
+    for (unsigned cell = 0; cell < 1024; ++cell) set_word(graphics, PF_MAP2_BASE + cell * 4 + 2, 0);
     for (unsigned y = 0; y < 3; ++y) {
-        set_word(graphics, 0x20000 + y * 2, 4);
-        set_word(graphics, 0x24400 + y * 2, y == 1 ? 0x200 : 0);
+        set_word(graphics, f3rt::OFFS_LINERAM + y * 2, 4);
+        set_word(graphics, PF_ROW_TABLE_24400 + y * 2, y == 1 ? 0x200 : 0);
     }
-    set_word(graphics, 0x20400, 6);
-    set_word(graphics, 0x26200, 0xff00);
-    set_word(graphics, 0x26400, 0x6000);
-    set_word(graphics, 0x20e00, 4);
-    set_word(graphics, 0x2b400, 0x2001);
+    set_word(graphics, LINE_LATCH_TABLE, 6);
+    set_word(graphics, LINE_SELECT_TABLE, 0xff00);
+    set_word(graphics, LINE_MODE_TABLE, 0x6000);
+    set_word(graphics, PF_SELECT_TABLE, 4);
+    set_word(graphics, PF_ALT_ENABLE_0, 0x2001);
     palette[5 * 4 + 1] = 0x12;
     palette[5 * 4 + 2] = 0x34;
     palette[5 * 4 + 3] = 0x56;
@@ -197,11 +221,11 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
         << "Latched alternate-map selection changes visible pixels and row-usage gating per scanline";
     EXPECT_EQ(pixels[320 * 256], 0xdeadbeef) << "Full-height crop writes exactly 256 rows";
 
-    set_word(graphics, 0x20e00, 12);
-    set_word(graphics, 0x2b400, 0);
-    set_word(graphics, 0x2b600, 0x2001);
-    set_word(graphics, 0x20000, 8);
-    set_word(graphics, 0x24600, 0x200);
+    set_word(graphics, PF_SELECT_TABLE, 12);
+    set_word(graphics, PF_ALT_ENABLE_0, 0);
+    set_word(graphics, PF_ALT_ENABLE_1, 0x2001);
+    set_word(graphics, f3rt::OFFS_LINERAM, 8);
+    set_word(graphics, PF_ROW_TABLE_24600, 0x200);
     palette[4 + 1] = 0x65;
     palette[4 + 2] = 0x43;
     palette[4 + 3] = 0x21;
@@ -234,8 +258,8 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     config = {0, 0, 24, 232, true};
     EXPECT_TRUE(video.load_roms(sprites, {}, tiles, {}, config)) << "Extended geometry accepts independent counts";
     graphics.fill(0);
-    set_word(graphics, 0x10000 + 63 * 4 + 2, 9);
-    set_word(graphics, 0x10000 + 64 * 4 + 2, 7);
+    set_word(graphics, f3rt::OFFS_PLAYFIELDS + 63 * 4 + 2, 9);
+    set_word(graphics, f3rt::OFFS_PLAYFIELDS + 64 * 4 + 2, 7);
     line = video.inspect_playfield_line(0, 0, graphics);
     EXPECT_TRUE(line.palette.size() == 1024 && line.palette[1008] == 5)
         << "Extended map spans all 64 columns";
@@ -252,10 +276,10 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     palette.fill(0);
     for (unsigned map = 4; map < 6; ++map)
         for (unsigned cell = 0; cell < 2048; ++cell)
-            set_word(graphics, 0x10000 + map * 0x2000 + cell * 4 + 2, uint16_t(map + 5));
-    set_word(graphics, 0x1a000 + 63 * 4 + 2, 7);
-    set_word(graphics, 0x1a000 + 64 * 4 + 2, 8);
-    set_word(graphics, 0x1a000 + (31 * 64 + 63) * 4 + 2, 9);
+            set_word(graphics, f3rt::OFFS_PLAYFIELDS + map * PF_EXT_MAP_STRIDE + cell * 4 + 2, uint16_t(map + 5));
+    set_word(graphics, PF_EXT_ALT_BASE + 63 * 4 + 2, 7);
+    set_word(graphics, PF_EXT_ALT_BASE + 64 * 4 + 2, 8);
+    set_word(graphics, PF_EXT_ALT_BASE + (31 * 64 + 63) * 4 + 2, 9);
     line = video.inspect_playfield_line(5, 0, graphics);
     EXPECT_TRUE(line.palette.size() == 1024 && line.palette[0] == 1 && line.palette[1008] == 3)
         << "Extended map 5 has its own native 64-column base and count wrapping";
@@ -268,16 +292,16 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
 
     for (unsigned pen = 1; pen <= 5; ++pen) palette[pen * 4 + 3] = uint8_t(pen * 0x11);
     for (unsigned pf = 2; pf <= 3; ++pf) {
-        set_word(graphics, 0x20e00, uint16_t(1u << pf));
-        set_word(graphics, 0x2b400, pf == 2 ? 0x2001 : 0);
-        set_word(graphics, 0x2b600, pf == 3 ? 0x2001 : 0);
+        set_word(graphics, PF_SELECT_TABLE, uint16_t(1u << pf));
+        set_word(graphics, PF_ALT_ENABLE_0, pf == 2 ? 0x2001 : 0);
+        set_word(graphics, PF_ALT_ENABLE_1, pf == 3 ? 0x2001 : 0);
         for (unsigned y = 0; y < 4; ++y) {
-            set_word(graphics, 0x20000 + y * 2, y == 2 ? 0 : uint16_t(1u << pf));
-            set_word(graphics, 0x24000 + pf * 0x200 + y * 2, y == 1 ? 0x200 : 0);
+            set_word(graphics, f3rt::OFFS_LINERAM + y * 2, y == 2 ? 0 : uint16_t(1u << pf));
+            set_word(graphics, PF_ROW_TABLE_24000 + pf * PF_ROW_STRIDE + y * 2, y == 1 ? 0x200 : 0);
         }
-        set_word(graphics, 0x20400, 6);
-        set_word(graphics, 0x26200, 0xff00);
-        set_word(graphics, 0x26400, 0x6000);
+        set_word(graphics, LINE_LATCH_TABLE, 6);
+        set_word(graphics, LINE_SELECT_TABLE, 0xff00);
+        set_word(graphics, LINE_MODE_TABLE, 0x6000);
         video.render_frame(palette, graphics, control, pixels);
         const uint32_t alternate = pf == 2 ? 0xff000055 : 0xff000011;
         EXPECT_TRUE(pixels[0] == 0xff000000 && pixels[320] == alternate &&
@@ -293,12 +317,12 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
 
     set_word(control, 6, uint16_t((1016 - 28) * 64));
     set_word(control, 14, uint16_t(-128));
-    set_word(graphics, 0x20800, 8);
-    set_word(graphics, 0x28600, 0);
-    set_word(graphics, 0x20000, 8);
-    set_word(graphics, 0x24600, 0x3ff);
-    set_word(graphics, 0x20002, 8);
-    set_word(graphics, 0x24602, 0x200);
+    set_word(graphics, LINE_TABLE_20800, 8);
+    set_word(graphics, LINE_TABLE_28600, 0);
+    set_word(graphics, f3rt::OFFS_LINERAM, 8);
+    set_word(graphics, PF_ROW_TABLE_24600, 0x3ff);
+    set_word(graphics, f3rt::OFFS_LINERAM + 2, 8);
+    set_word(graphics, PF_ROW_TABLE_24600 + 2, 0x200);
     video.render_frame(palette, graphics, control, pixels);
     EXPECT_TRUE(pixels[0] == 0xff000055 && pixels[8] == 0xff000011 && pixels[320] == 0xff000033)
         << "Extended alternate scanout wraps x at 1024 and y at 512 without a 32-column mask";
@@ -309,7 +333,7 @@ TEST(Video, GameTileObservation) {
     std::vector<uint8_t> graphics(0x40000, 0);
     std::array<uint8_t, 0x20> control{};
     const auto store = [&](unsigned cell, uint16_t attributes, uint16_t code) {
-        const unsigned at = 0x12000 + cell * 4;
+        const unsigned at = GAME_TILE_CELLS + cell * 4;
         graphics[at] = uint8_t(attributes >> 8);
         graphics[at + 1] = uint8_t(attributes);
         graphics[at + 2] = uint8_t(code >> 8);
@@ -355,7 +379,7 @@ TEST(Video, GameTileRowSampling) {
             cell.attributes = uint16_t((i & 0x1ff) | (uint16_t((i >> 9) & 1) << 9) |
                 (uint16_t((i >> 2) & 1) << 10) | (uint16_t(i & 1) << 14) | (uint16_t((i >> 1) & 1) << 15));
             cell.code = uint16_t(0x8000 | (i & 63));
-            const unsigned at = 0x10000 + layer * 0x2000 + i * 4;
+            const unsigned at = f3rt::OFFS_PLAYFIELDS + layer * f3rt::PLAYFIELD_LAYER_SIZE + i * 4;
             graphics[at] = uint8_t(cell.attributes >> 8);
             graphics[at + 1] = uint8_t(cell.attributes);
             graphics[at + 2] = uint8_t(cell.code >> 8);
@@ -424,11 +448,10 @@ TEST(Video, GameLineVramCarryForward) {
         graphics[offset] = uint8_t(value >> 8);
         graphics[offset + 1] = uint8_t(value);
     };
-    constexpr unsigned lineram = 0x20000;
-    word(lineram + 0x400 + 0, 1 << 3);  // line 0 latches subsection 3
-    word(lineram + 0x6600, 0x1234);
-    word(lineram + 0x400 + 4, 1 << 3);  // line 2 latches it again with a new value
-    word(lineram + 0x6604, 0x00ff);
+    word(LINE_LATCH_TABLE + 0, 1 << 3);  // line 0 latches subsection 3
+    word(LINE_BACKGROUND_TABLE, 0x1234);
+    word(LINE_LATCH_TABLE + 4, 1 << 3);  // line 2 latches it again with a new value
+    word(LINE_BACKGROUND_TABLE + 4, 0x00ff);
     f3rt::GameLines scene;
     f3rt::VideoRam vram{graphics, control, 0};
     scene.decode(vram);
@@ -446,16 +469,16 @@ TEST(Video, GameTextVramDecode) {
         graphics[offset] = uint8_t(value >> 8);
         graphics[offset + 1] = uint8_t(value);
     };
-    word(0x1c000, uint16_t((3 << 9) | 0x12));
-    graphics[0x1e000 + 0x12 * 32 + 3] = 0x05;
+    word(f3rt::OFFS_TEXTRAM_MAP, uint16_t((3 << 9) | 0x12));
+    graphics[f3rt::OFFS_TEXTRAM_GLYPHS + 0x12 * 32 + 3] = 0x05;
     f3rt::GameText scene;
     f3rt::VideoRam vram{graphics, control, 0};
     scene.decode(vram);
     const auto px = scene.pixel(0, 0, false);
     EXPECT_TRUE(px.palette == 3 * 16 + 5 && px.flags == 0x10)
         << "Text map and glyph RAM decode palette base and pen";
-    word(0x1c000 + 2, uint16_t((2 << 9) | 0x0100 | 0x8000 | 0x21));
-    graphics[0x1e000 + 0x21 * 32 + 24] = 0x9a;
+    word(f3rt::OFFS_TEXTRAM_MAP + 2, uint16_t((2 << 9) | 0x0100 | 0x8000 | 0x21));
+    graphics[f3rt::OFFS_TEXTRAM_GLYPHS + 0x21 * 32 + 24] = 0x9a;
     scene.decode(vram);
     const auto flipped = scene.pixel(8, 1, false);
     EXPECT_TRUE(flipped.palette == 2 * 16 + 9 && flipped.flags == 0x10)
@@ -478,15 +501,15 @@ RC_GTEST_PROP(Video, GameTextFlipMirrorsTexels, ()) {
 
     // In text-map cell (0, 0): glyph 0, palette_code, flip_x (bit 8), flip_y (bit 15).
     const uint16_t map_word = uint16_t((palette_code << 9) | (flip_x ? 0x0100 : 0) | (flip_y ? 0x8000 : 0));
-    graphics[0x1c000] = uint8_t(map_word >> 8);
-    graphics[0x1c001] = uint8_t(map_word);
+    graphics[f3rt::OFFS_TEXTRAM_MAP] = uint8_t(map_word >> 8);
+    graphics[f3rt::OFFS_TEXTRAM_MAP + 1] = uint8_t(map_word);
 
     // Populate glyph 0 in glyph RAM (0x1e000) with a unique non-zero pen for each (gx, gy) in 8x8:
     // Raw glyph RAM layout: pixel (gx, gy) is nibble (gx & 1) of byte gy*4 + (3 - gx/2).
     for (unsigned gy = 0; gy < 8; ++gy) {
         for (unsigned gx = 0; gx < 8; ++gx) {
             const uint8_t pen = uint8_t(((gy * 8 + gx) % 15) + 1);
-            const size_t byte_idx = 0x1e000 + gy * 4 + (3 - gx / 2);
+            const size_t byte_idx = f3rt::OFFS_TEXTRAM_GLYPHS + gy * 4 + (3 - gx / 2);
             const unsigned shift = (gx & 1) * 4;
             graphics[byte_idx] = uint8_t((graphics[byte_idx] & ~(0x0f << shift)) | (pen << shift));
         }
@@ -526,9 +549,9 @@ RC_GTEST_PROP(Video, Color15BitUnpackingInvariant, ()) {
     std::vector<uint32_t> pixels(320 * 224);
 
     // Scanline 32 programmed to 15-bit mode (latch 12, mode 0x2000, background palette 1).
-    set_word(graphics, 0x20400 + 32 * 2, 12);
-    set_word(graphics, 0x26400 + 32 * 2, 0x2000);
-    set_word(graphics, 0x26600 + 32 * 2, 0);
+    set_word(graphics, LINE_LATCH_TABLE + 32 * 2, 12);
+    set_word(graphics, LINE_MODE_TABLE + 32 * 2, 0x2000);
+    set_word(graphics, LINE_BACKGROUND_TABLE + 32 * 2, 0);
 
     // Background color 0 stored in lower 16 bits of 32-bit palette entry 0
     palette[0] = 0;

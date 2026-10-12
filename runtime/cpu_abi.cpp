@@ -1,4 +1,5 @@
 #include "f3rt/cpu_abi.h"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/block_profile.h"
 #include "sprites/units.hpp"
@@ -22,9 +23,9 @@ f3rt::Machine &bus(f3_cpu *cpu, uint32_t address, uint32_t width) {
     // time before a mailbox access or reset-line change becomes visible.
     // Include unaligned accesses crossing into a mapped range. Only advance
     // devices here: IRQ entry still belongs to the next instruction boundary.
-    if (end > 0xc00000 && (start < 0xc00800 ||
-        (start < 0xc80004 && end > 0xc80000) ||
-        (start < 0xc80104 && end > 0xc80100)))
+    if (end > f3rt::SHARED_BASE && (start < f3rt::SHARED_END ||
+        (start < f3rt::SOUND_RESET_RELEASE + f3rt::SOUND_RESET_WINDOW_SIZE && end > f3rt::SOUND_RESET_RELEASE) ||
+        (start < f3rt::SOUND_RESET_ASSERT + f3rt::SOUND_RESET_WINDOW_SIZE && end > f3rt::SOUND_RESET_ASSERT)))
         m.advance_to(cpu->cycles);
     return m;
 }
@@ -148,7 +149,7 @@ int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t 
     for (size_t i = 0; i < count; ++i) {
         const auto &range = ranges[i];
         if ((range.start & 1) || (range.end & 1) || range.start >= range.end ||
-            range.end > 0x200000 || !range.reason || !*range.reason ||
+            range.end > f3rt::ROM_END || !range.reason || !*range.reason ||
             !range.evidence || !*range.evidence ||
             (i && ranges[i - 1].end > range.start)) return 0;
         if (m.block_count) {
@@ -166,7 +167,7 @@ int f3_dispatch(f3_cpu *cpu) {
     if (f3_boundary(cpu)) return !cpu->halted;
     auto &m = machine(cpu);
     // Trace must execute instruction by instruction; never defer T0/T1 in a block.
-    if (!(cpu->sr & 0xc000) && cpu->pc < 0x200000 && m.block_count) {
+    if (!(cpu->sr & 0xc000) && cpu->pc < f3rt::ROM_END && m.block_count) {
         const auto &page = m.native_pages[cpu->pc >> 12];
         if (page.count) {
             const f3_block *block = nullptr;

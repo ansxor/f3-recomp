@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/hle/events.hpp"
+#include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -48,7 +49,7 @@ class Effects {
     bool bypassed_ = true;
 
     float table(unsigned index) const {
-        const size_t p = 0xa634 + std::min(index, 127u) * 2;
+        const size_t p = sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET + std::min(index, 127u) * 2;
         return float(uint16_t(uint16_t(rom_[p]) << 8 | rom_[p + 1])) / 32768.f;
     }
     void update() {
@@ -249,7 +250,7 @@ public:
     void select(uint8_t preset) {
         if (preset >= 13) return;
         // c0f504 restores the ten bytes in reverse order into c84a+2*n.
-        for (unsigned n = 0; n < 10; ++n) parameters_[n] = rom_[0x1c2d2 + preset * 16 + 15 - n];
+        for (unsigned n = 0; n < 10; ++n) parameters_[n] = rom_[sound_5a7e9117::PRESET_TABLE_OFFSET + preset * 16 + 15 - n];
         update();
     }
     void parameter(uint8_t index, uint8_t value) {

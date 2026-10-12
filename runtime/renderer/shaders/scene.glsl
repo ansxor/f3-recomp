@@ -16,9 +16,9 @@ const uint ROW_STRIDE = F3_SCENE_ROW_STRIDE;
 const uint SPRITES = F3_SCENE_SPRITES;
 // Layer numbering mirrors LayerId in runtime/renderer/game/scene.hpp: 0..3 PF0..PF3,
 // 4..7 SP0..SP3, 8 text. Mask bit n selects layer n.
-const uint LAYER_COUNT = 9u;
-const uint LAYER_SP0 = 4u;
-const uint LAYER_TEXT = 8u;
+const uint LAYER_COUNT = F3_SCENE_LAYER_COUNT;
+const uint LAYER_SP0 = F3_SCENE_LAYER_SP0;
+const uint LAYER_TEXT = F3_SCENE_LAYER_TEXT;
 // ROM tile index wrap: power-of-two ROMs mask, others take the remainder (GameTiles/raster_sprites twin).
 uint wrap_tile(uint code, uint count) { return (count & (count - 1u)) == 0u ? code & (count - 1u) : code % count; }
 uint byte_pen(uint packed, uint offset) { return (packed >> ((offset & 3u) * 8u)) & 255u; }

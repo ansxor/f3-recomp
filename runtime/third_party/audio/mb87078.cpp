@@ -116,4 +116,6 @@ void MB87078::load_state(StateReader &reader) {
     gain_recalc();
 }
 
+static_assert(Snapshotable<MB87078>);
+
 } // namespace f3rt

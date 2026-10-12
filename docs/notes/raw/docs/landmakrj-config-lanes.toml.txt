@@ -1,0 +1,76 @@
+---
+source_url: games/landmakrj/config.toml
+ingested: 2026-10-11
+sha256: dbed6e728bc6e87a3133358c7030a1706a6caec99f3c29fba232dab0feed2ba4
+game: landmakrj
+rom_sha256: aa050f39f5810c90bc20d1e3ed1c2510b1df067242535ad80aa86b3d174d49bc
+captured_with: "this runtime, snapshot 2026-10-11"
+---
+<!-- excerpt: games/landmakrj/config.toml lines 1-38 (snapshot) -->
+[game]
+name = "Land Maker (Japan)"
+id = "landmakrj"
+platform = "taito_f3"
+pref_dir = "f3rt"
+
+[rom]
+size = 2097152 # 2 MiB (0x200000)
+interleave = 4
+
+# 4 x 524288 (0x80000) byte lanes interleaved at offsets 0, 1, 2, 3
+[[rom.lanes]]
+file = "e61-13.20"
+offset = 0
+size = 524288
+crc = "0af756a2"
+sha1 = "2dadac6873f2491ee77703f07f00dde2aa909355"
+
+[[rom.lanes]]
+file = "e61-12.19"
+offset = 1
+size = 524288
+crc = "636b3df9"
+sha1 = "78a5bf4977bb90d710942188ce5016f3df499feb"
+
+[[rom.lanes]]
+file = "e61-11.18"
+offset = 2
+size = 524288
+crc = "279a0ee4"
+sha1 = "08380286737b33db76a79b27d0df5faba17dfb96"
+
+[[rom.lanes]]
+file = "e61-10.17"
+offset = 3
+size = 524288
+crc = "daabf2b2"
+sha1 = "dbfbe38841fc2f937052353eff1202790d364b9f"
+
+<!-- excerpt: games/landmakrj/config.toml lines 203-229 ([sound] lanes, snapshot) -->
+size = 4194304
+fill = 0
+
+[[tiles.lanes]]
+file = "e61-09.47"
+offset = 0
+size = 2097152
+crc = "6ba29987"
+sha1 = "b63c12523e19da66b3ca07c3548ac81bf57b59a1"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e61-08.45"
+offset = 2
+size = 2097152
+crc = "76c98e14"
+sha1 = "c021c325ab4ae410fa54e2eab61d34318867432b"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 2097152
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e61-07.43"

@@ -1,10 +1,10 @@
 ---
 title: Land Maker versus mode transition (sub_08edde)
 created: 2026-10-10
-updated: 2026-10-10
+updated: 2026-10-11
 type: routine
 tags: [game-loop, task-system]
-sources: [raw/tests/landmakrj-desync-695b-frame540.md, raw/tests/landmakrj-lobby-tail-desync-and-flash.md, raw/tests/landmakrj-2p-versus-trigger-runs.md, raw/disasm/landmakrj-0008edde-versus-mode-transition.md, raw/tests/landmakrj-differential-sync-experiment.md]
+sources: [raw/tests/landmakrj-desync-695b-frame540.md, raw/tests/landmakrj-lobby-tail-desync-and-flash.md, raw/tests/landmakrj-2p-versus-trigger-runs.md, raw/disasm/landmakrj-0008edde-versus-mode-transition.md, raw/tests/landmakrj-differential-sync-experiment.md, raw/emu-source/landmakrj-netplay.cpp.txt, raw/tests/landmakrj-rng-reseed-audit.md]
 games: [landmakrj]
 addresses: [0x0008EDDE, 0x0008EE06, 0x0008F0D6, 0x0008F79A, 0x0009242C, 0x00401F6E, 0x00401F53, 0x00401F7E, 0x00401F5C, 0x00401F6A, 0x00401F6C, 0x00401F70]
 status: hypothesis
@@ -70,7 +70,7 @@ In a verified 15,000-frame two-match run: ^[raw/tests/landmakrj-2p-versus-trigge
 
 An empirical differential experiment evaluated lockstep determinism between peers starting with different attract durations and cycle phases: ^[raw/tests/landmakrj-differential-sync-experiment.md]
 - **Idle-loop RNG drift mechanism**: The 68EC020 idle loop at ROM `$19f8` spins on spare cycles waiting for VBlank, calling ROM `$1468` to advance `0x400826`. Without per-frame reseeding, sub-frame cycle deadline phase differences cause `0x400826` to drift over the 1,380 frames of character select, making `0x401f54` (stage theme) diverge at step 1380 and piece generation diverge at step 1516. ^[raw/tests/landmakrj-differential-sync-experiment.md]
-- **Spec 5 / Spec 6C (Minimal 78-byte sync + per-frame reseed)**: Overwriting `0x400826` before each frame via `splitmix32(shared_seed ^ match_frame)` erases idle-loop drift before cooperative tasks run. Combined with syncing 78 bytes at the trigger, gameplay and piece generation achieve **100% byte-exact parity across all 8,000 frames of a full match**. ^[raw/tests/landmakrj-differential-sync-experiment.md]
+- **Spec 5 / Spec 6C (Minimal 78-byte sync + per-frame reseed)**: Overwriting `0x400826` before each frame via `splitmix32(shared_seed ^ match_frame)` erases idle-loop drift before cooperative tasks run (the shipped hook later changed the key, see "Shipped hook" below). Combined with syncing 78 bytes at the trigger, gameplay and piece generation achieve **100% byte-exact parity across all 8,000 frames of a full match**. ^[raw/tests/landmakrj-differential-sync-experiment.md]
 - **96-byte Netplay Sync List (Spec 7, verified across full match)**:
   1. `0x400090..0x40009f` (16 bytes): Credits and coin chute subsystem (credits counter `0x400090`, partial coins `0x400092`/`0x40009e`, debounce states `0x400096`/`0x40009a`). Overwritten on connect with Host's values so continue/challenger permissions and on-screen "CREDIT N" text stay identical.
   2. `0x401f40..0x401f83` (68 bytes): Mode/match block (`0x401f40` game state, `0x401f53` players active/sel, `0x401f54` stage word, `0x401f5c` round winner, `0x401f6a`/`0x401f6c` round wins, `0x401f6e` versus latch, `0x401f70` match over, `0x401f7e` join latch).
@@ -80,6 +80,35 @@ An empirical differential experiment evaluated lockstep determinism between peer
   6. `0x40fc58..0x40fc59` (2 bytes): Match rounds setting word (`(0x40fc58 >> 1) + 1` = target wins).
 - **Desync detection hash**: Because sound CPU registers, audio clocks, and unused graphics/palette RAM retain attract residues, whole-machine `Machine::state_crc()` differs between peers. Netplay desync detection must hash the gameplay-critical block `0x401f40..0x402130` (496 bytes). ^[raw/tests/landmakrj-differential-sync-experiment.md]
 - **Reference oracle**: Test A (full host snapshot transfer via `Machine::save_state` / `load_state`, 3.47 MB) was verified as the reference oracle, confirming that full state restoration also achieves 100% byte-exact parity. ^[raw/tests/landmakrj-differential-sync-experiment.md]
+
+## Shipped hook (sync version 4) and the round-keyed reseed
+
+Snapshot of `games/landmakrj/netplay/netplay.cpp` taken 2026-10-11; the experiments above are the history
+that led to it. ^[raw/emu-source/landmakrj-netplay.cpp.txt]
+- **Sync blob**: version byte `0x04` plus 527 payload bytes = 528 bytes: credits `0x400090` (16 B), operator
+  settings `0x4000cb` (13 B: coinage, free play, difficulty/2P enable, cabinet, coin mode, continue, demo sound,
+  free-play config, options), the whole gameplay block `0x401f40..0x40212f` (496 B) and the rounds word
+  `0x40fc58` (2 B). Screen flip `0x40013e` is deliberately not synced (presentation only). The earlier 78/96/109 B
+  sets were too small because player-structure residue differed per peer (see the frame 540 desync below).
+  ^[raw/emu-source/landmakrj-netplay.cpp.txt] ^[raw/tests/landmakrj-desync-695b-frame540.md]
+- **Reseed**: `on_match_frame` writes `0x400826` before every lockstepped frame from
+  `key = seed ^ (round_index * 0x100000001b3)`, `round_index = word(0x401f6a) + word(0x401f6c)`, value
+  `splitmix32(key)`. It depends only on the shared seed and synced RAM, so it survives a snapshot restore, and the
+  word is constant within a round. ^[raw/emu-source/landmakrj-netplay.cpp.txt]
+- **Audit of `0x400826` readers** (xref plus a 2P 18,000-frame watch run; secondhand record): `sub_001468` (the LCG;
+  the idle loop `$19f8` via `sub_001174` advances it, the drift source), `sub_093462` at `0x0935d4` (copies the word into
+  both players' bag seeds, once per round about 12 frames after the stage pick), `round_task` at `0x08e470` (stage
+  step `((rng & 3) + 1 + prev) & 7` into `0x401f54`), `sub_08e84c` (sound pick), `sub_0915d2` (tile/palette),
+  `sub_0a04d0` (dice roll `rng & 0x7f + table[0x4000d0][0x401f54] + 0x401f7a`, script opcode 2, role unconfirmed) and
+  a roughly 40-entry `dc.l $1468` callback table (unresolved). `sub_093a1c` swaps the word with the player seed and
+  restores it. The wins sum is 0/1/2 at the stage picks at frames 2631/4983/11043 and is updated about 2 frames
+  before each pick. ^[raw/tests/landmakrj-rng-reseed-audit.md]
+- **Side effect / open**: the `sub_0a04d0` roll and cosmetic readers repeat per round; a round ending without a
+  winner would repeat the previous key. Not observed: a round end inside the 16,000-frame two-peer check.
+  ^[raw/tests/landmakrj-rng-reseed-audit.md]
+- **Desync hash**: CRC32 over 522 bytes, ungated from the first report: the 496 B block minus five cosmetic/residue
+  bytes (`0x401f85`, `0x401fa1`, `0x402033`, `0x4020db`, `0x4020f7`; 491 B) plus credits (16), settings (13) and the
+  rounds word (2). ^[raw/emu-source/landmakrj-netplay.cpp.txt]
 
 ## Lobby hold and un-commit hooks
 
@@ -120,3 +149,5 @@ bool trigger(uint16_t prev_word, uint16_t now_word) {
     return prev_word == 0 && now_word == 1;
 }
 ```
+
+Game page: [[games/landmakrj]].

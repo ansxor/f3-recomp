@@ -1,5 +1,6 @@
 #pragma once
 
+#include "f3rt/memory_map.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>

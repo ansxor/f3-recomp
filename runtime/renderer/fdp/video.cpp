@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Bryan McPhail, ywy, 12Me21, f3rt authors
 #include "f3rt/video.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
 #include "renderer/game/scene.hpp"
@@ -26,13 +27,10 @@ constexpr int NUM_PLAYFIELDS   = 4;
 constexpr int NUM_SPRITEGROUPS = 4;
 constexpr int NUM_CLIPPLANES   = 4;
 
-constexpr uint32_t OFFS_SPRITERAM = 0x00000; // 0x10000 bytes
-constexpr uint32_t OFFS_PF_RAM    = 0x10000; // 0x0c000 bytes
-constexpr uint32_t OFFS_TEXTRAM   = 0x1c000; // 0x02000 bytes
-constexpr uint32_t OFFS_CHARRAM   = 0x1e000; // 0x02000 bytes
-constexpr uint32_t OFFS_LINERAM   = 0x20000; // 0x10000 bytes
-constexpr uint32_t OFFS_PIVOT_RAM = 0x30000; // 0x10000 bytes
-constexpr uint32_t GRAPHICS_RAM_SIZE = 0x40000;
+constexpr uint32_t OFFS_PF_RAM    = OFFS_PLAYFIELDS;
+constexpr uint32_t OFFS_TEXTRAM   = OFFS_TEXTRAM_MAP;
+constexpr uint32_t OFFS_CHARRAM   = OFFS_TEXTRAM_GLYPHS;
+constexpr uint32_t OFFS_PIVOT_RAM = OFFS_PIVOT;
 
 inline uint16_t read_be16(const uint8_t *p) {
     return (uint16_t(p[0]) << 8) | uint16_t(p[1]);
@@ -272,7 +270,7 @@ struct Video::Impl {
     size_t sprite_count = 0;
     std::array<uint16_t, 432 * 256> sprite_framebuffer{};
     std::array<uint8_t, 256> sprite_pri_row_usage{};
-    std::array<uint8_t, 0x10000> buffered_spriteram{};
+    std::array<uint8_t, SPRITE_RAM_SIZE> buffered_spriteram{};
     bool has_buffered_spriteram = false;
 
     bool flipscreen = false;
@@ -320,7 +318,7 @@ struct Video::Impl {
     }
     size_t state_size() const {
         return sizeof(CanonicalVideo) +
-               0x10000 +
+               SPRITE_RAM_SIZE +
                sizeof(uint16_t) * 432 * 256 +
                256;
     }
@@ -354,7 +352,7 @@ struct Video::Impl {
             dst.scale_y = src.scale_y;
         }
         writer.write(st);
-        writer.write_bytes(buffered_spriteram.data(), 0x10000);
+        writer.write_bytes(buffered_spriteram.data(), SPRITE_RAM_SIZE);
         writer.write_bytes(sprite_framebuffer.data(), sizeof(uint16_t) * 432 * 256);
         writer.write_bytes(sprite_pri_row_usage.data(), 256);
     }
@@ -392,7 +390,7 @@ struct Video::Impl {
             dst.scale_x = src.scale_x;
             dst.scale_y = src.scale_y;
         }
-        reader.read_bytes(buffered_spriteram.data(), 0x10000);
+        reader.read_bytes(buffered_spriteram.data(), SPRITE_RAM_SIZE);
         reader.read_bytes(sprite_framebuffer.data(), sizeof(uint16_t) * 432 * 256);
         reader.read_bytes(sprite_pri_row_usage.data(), 256);
     }
@@ -500,7 +498,7 @@ struct Video::Impl {
         }
 
         // Textram: 64x64 tiles (1 word per tile)
-        for (int offset = 0; offset < 0x1000; ++offset) {
+        for (int offset = 0; offset < TEXTRAM_TILES; ++offset) {
             uint16_t vram_tile = read_be16(&textram[offset * 2]);
             if ((vram_tile & 0xff) != 0) {
                 int row = (offset >> 6) & 0x3f;
@@ -579,10 +577,10 @@ struct Video::Impl {
 
     void read_line_ram(f3_line_inf &line, int y, const uint8_t *lineram) {
         auto latched_addr = [lineram, y](uint8_t section, uint8_t subsection) -> uint32_t {
-            uint16_t latches = read_be16(&lineram[section * 0x200 + y * 2]);
-            uint32_t base = 0x4000 + 0x1000 * section + 0x200 * subsection;
+            uint16_t latches = read_be16(&lineram[section * LINERAM_LATCH_STRIDE + y * 2]);
+            uint32_t base = LINERAM_SECTIONS_OFFSET + LINERAM_SECTION_STRIDE * section + LINERAM_SUBSECTION_STRIDE * subsection;
             if (latches & (1 << (subsection + 4)))
-                return base + 0x800 + y * 2;
+                return base + LINERAM_BANK_OFFSET + y * 2;
             else if (latches & (1 << subsection))
                 return base + y * 2;
             return 0;
@@ -731,7 +729,7 @@ struct Video::Impl {
         cache.last_y = y;
 
         const int columns = config.extend ? 64 : 32;
-        const uint32_t layer_base = pf_num * (config.extend ? 0x2000 : 0x1000);
+        const uint32_t layer_base = pf_num * (config.extend ? PLAYFIELD_LAYER_SIZE : PLAYFIELD_STANDARD_LAYER_SIZE);
         const int tile_row = (y / 16) & 31;
         const int in_y = y % 16;
 
@@ -1205,8 +1203,8 @@ bool Video::load_roms(std::span<const uint8_t> sprites,
 }
 
 void Video::set_active_spriteram(std::span<const uint8_t> spriteram) {
-    if (spriteram.size() >= 0x10000) {
-        std::memcpy(m_impl->buffered_spriteram.data(), spriteram.data(), 0x10000);
+    if (spriteram.size() >= SPRITE_RAM_SIZE) {
+        std::memcpy(m_impl->buffered_spriteram.data(), spriteram.data(), SPRITE_RAM_SIZE);
         m_impl->has_buffered_spriteram = true;
         // Parse and pre-render into sprite framebuffer
         m_impl->get_sprite_info(m_impl->buffered_spriteram.data());
@@ -1218,7 +1216,7 @@ void Video::vblank(std::span<const uint8_t> graphics_ram) {
     if (graphics_ram.size() >= GRAPHICS_RAM_SIZE) {
         m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
         m_impl->draw_sprites();
-        std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM], 0x10000);
+        std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM], SPRITE_RAM_SIZE);
         m_impl->has_buffered_spriteram = true;
     }
 }
@@ -1227,7 +1225,7 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
                          std::span<const uint8_t> graphics_ram,
                          std::span<const uint8_t> control_regs,
                          std::span<uint32_t> output_argb) {
-    if (palette_ram.size() < 0x8000 || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
+    if (palette_ram.size() < PALETTE_RAM_SIZE || graphics_ram.size() < GRAPHICS_RAM_SIZE ||
         control_regs.size() < 0x20 || output_argb.size() < SCREEN_WIDTH * m_impl->config.visible_height) {
         return;
     }
@@ -1255,7 +1253,7 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
         m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
         m_impl->draw_sprites();
     }
-    std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM], 0x10000);
+    std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM], SPRITE_RAM_SIZE);
     m_impl->has_buffered_spriteram = true;
 }
 
@@ -1315,6 +1313,7 @@ size_t Video::state_size() const {
 }
 
 void Video::save_state(std::span<uint8_t> dst) const {
+    static_assert(Snapshotable<Impl>);
     if (dst.size() != state_size()) {
         throw std::invalid_argument("Video::save_state size mismatch");
     }
@@ -1335,5 +1334,7 @@ void Video::load_state(std::span<const uint8_t> src) {
         throw std::logic_error("Video::load_state remaining unread bytes");
     }
 }
+
+static_assert(SnapshotRoot<Video>);
 
 } // namespace f3rt

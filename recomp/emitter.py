@@ -465,6 +465,19 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
     when none of the flags they write is live; the default keeps all of it.
 
     Returns None if the instruction is unsupported (signaling fallback to Musashi).
+
+    Contract every handler keeps: decode all operands before returning
+    statements; return None for unsupported operand forms; capture aliased
+    source values before the destination changes; guest memory only through
+    f3_read*/f3_write* ABI callbacks; keep untouched bits of a partial data
+    register; sign-extend where the instruction requires it; keep X current
+    while NZVC stays pending; f3_cc_flush before any call that needs canonical
+    SR; update pc and cumulative cycles on normal completion; return after an
+    exception or terminal control op. Use unsigned arithmetic for guest
+    wraparound and guard host division/shift edge cases. A helper that changes
+    only Z must materialize pending flags first; a full NZVC producer can
+    replace them without a flush. Synthetic test instructions use bytes from a
+    documented encoding, not copied game data.
     """
     opcode = int.from_bytes(insn.bytes[:2], "big")
     # The board's EC020 has no coprocessor. Capstone can give F-line bytes

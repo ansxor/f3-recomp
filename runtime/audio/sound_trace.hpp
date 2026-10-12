@@ -1,16 +1,17 @@
 #pragma once
+#include "f3rt/memory_map.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 
 namespace f3rt {
 class Machine;
-// Sound trace bus monitoring range [SOUND_TRACE_BUS_BEGIN, SOUND_TRACE_BUS_END).
-// Captures sound hardware registers, ES5505/ES5510, DUART, volume, and mailbox.
-constexpr uint32_t SOUND_TRACE_BUS_BEGIN = 0x140000;
-constexpr uint32_t SOUND_TRACE_BUS_END = 0x340004;
 
 // Lossless bus observation; decoding is offline and never reads device registers.
+// File: 8-byte header "F3SND2\0\0", then 32-byte little-endian records:
+//   0 u64 time (main CPU cycles for MainWrite, else audio clock_ticks())
+//   8 u64 audio generated_frames()   16 u32 pc   20 u32 address   24 u32 value
+//   28 u8 kind (Kind: MainWrite=1 SoundRead=2 SoundWrite=3 Reset=4 End=5)   29 u8 width   30-31 zero
 class SoundTrace {
 public:
     enum Kind : uint8_t { MainWrite = 1, SoundRead = 2, SoundWrite = 3, Reset = 4, End = 5 };

@@ -54,45 +54,73 @@ entry_points = [0x55c2, 0x5614, 0x56ae, 0x5a22, 0x5a5e, 0x5a9a, 0x5af4,
     0xfe620, 0xfefe6, 0xff0fa, 0x91506, 0x98dba, 0x9217c, 0x99b5a,
     0x9a6e6, 0x9a8de, 0x99f86, 0x9acbe, 0x9ad3e, 0x9a252, 0x9a28a, 0x9a2f6]
 
-# Instruction starts only; all ROM bytes remain available to data reads.
+# Exclusions remove instruction starts only; every ROM byte stays readable as data.
+# Each interval below is half-open. Rationale and evidence (self-contained):
+#   - "fill = 0xff" is verified against the CPU's program image at load: any
+#     differing byte is a generation error, so the FF claims cannot go stale.
+#   - Data banks are not proven by entropy. Evidence is: no rooted instruction
+#     start, entry or control reference inside; native profile runs over seeds
+#     1-8 x 20000 frames; eight-seed parity gates. Absence of sampled execution
+#     is not a universal proof; an excluded destination fails loudly at runtime.
+#   - Counterexample: excluding main 0x2000..0x3000 on entropy alone (7.69
+#     bits/byte) generated fine but broke strict-native at PC 0x2f84. Never
+#     exclude a range on entropy alone.
+# Layout context: docs/notes/games/landmakrj.md, section "## ROM layout".
+
+# Main interior FF padding.
 [[exclude]]
 start = 0x007030
 end = 0x010000
+fill = 0xff
 reason = "Interior FF fill"
-evidence = "Verified program image: every byte is FF; seeded native gates documented in docs/developer/BINSIZE-EXCLUDE.md"
+evidence = "fill = 0xff verified against the program image at load; eight-seed native parity gates passed"
 
+# Main trailing FF padding; the final checksum word at 0x1ffffe is not FF and stays included.
 [[exclude]]
 start = 0x11b362
 end = 0x1ffffe
+fill = 0xff
 reason = "Trailing FF fill, preserving the final checksum word"
-evidence = "Verified program image: every byte is FF; seeded native gates documented in docs/developer/BINSIZE-EXCLUDE.md"
+evidence = "fill = 0xff verified against the program image at load; eight-seed native parity gates passed"
 
+# Sound interior FF padding below the sequence bank.
 [[exclude]]
 cpu = "sound"
 start = 0xc1e45a
 end = 0xc20000
+fill = 0xff
 reason = "Interior sound-program FF fill"
-evidence = "Verified 5a7e9117 sound image: every byte is FF; native WAV gates documented in docs/developer/BINSIZE-EXCLUDE.md"
+evidence = "fill = 0xff verified against the sound image at load; eight-seed native WAV gates passed"
 
+# Sound trailing FF padding, including unpopulated chip halves.
 [[exclude]]
 cpu = "sound"
 start = 0xc39a30
 end = 0xc80000
+fill = 0xff
 reason = "Trailing sound-program FF fill, including unpopulated chip halves"
-evidence = "Verified 5a7e9117 sound image: every byte is FF; native WAV gates documented in docs/developer/BINSIZE-EXCLUDE.md"
+evidence = "fill = 0xff verified against the sound image at load; eight-seed native WAV gates passed"
 
+# Main graphics/script-table data bank. No rooted instruction starts, entries or
+# control references inside. Native profile, seeds 1-8 x 20000 frames: 0 fetched
+# bytes and 147,494 of 425,984 bank bytes read (data reads only). Eight-seed parity
+# gates passed. Not a universal proof: unsampled indirect paths would fail loudly.
 [[exclude]]
 start = 0x020000
 end = 0x088000
 reason = "Graphics/script-table data bank"
-evidence = "No rooted instruction starts, entries or rooted control references; native fetch/data profile and eight-seed parity gates in docs/developer/BINSIZE-EXCLUDE.md; absence of sampled execution is not a universal proof"
+evidence = "No rooted starts/entries/control refs; seeds 1-8 x 20000 frames: 0 fetched, 147,494/425,984 bytes read; eight-seed parity gates passed"
 
+# Sound sequence/header data bank, read by the sound driver's sequence readers.
+# No rooted instruction starts or code references. Native profile, seeds 1-8 x
+# 20000 frames: 0 fetched bytes and 31,834 of 105,008 bank bytes read. Eight-seed
+# WAV gates passed.
 [[exclude]]
 cpu = "sound"
 start = 0xc20000
 end = 0xc39a30
 reason = "Sound sequence/header data bank"
-evidence = "No rooted instruction starts or code references; sequence-bank readers documented in docs/SOUND-DRIVER.md; native fetch/data profile and eight-seed WAV gates in docs/developer/BINSIZE-EXCLUDE.md"
+evidence = "No rooted starts or code refs; seeds 1-8 x 20000 frames: 0 fetched, 31,834/105,008 bytes read; eight-seed WAV gates passed"
 
 [video]
 rotation = 0
@@ -101,7 +129,13 @@ extend = true
 visible_y = 24
 visible_height = 232
 
-# Emit units (see docs/site/reference/game-config.md).
+# Emit units: [[video.emit_units]] declares a span of game code (start..end PCs,
+# each an even decoded instruction; `unit` = register holding the object address
+# at start; optional `size`, `owner`) that draws one object or queue record into
+# sprite RAM. It gives the runtime stable sprite identity and sandbox replay of
+# the game's own native code; emulated state, CRCs, cycles and native block counts
+# are unchanged. [video.frame_writers] lists inclusive PC ranges that write sprite
+# RAM outside any unit; `f3rt-tool sprite-check` fails on any other outside write.
 # Display-object loop at 0xa8e0c: a3 = display object, `jmp ([$8,a3])` enters
 # its draw handler, which returns via a4 = 0xa8e40. Object size is not yet known.
 [[video.emit_units]]

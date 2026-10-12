@@ -12,7 +12,7 @@ Taito F3 package system:
 - Video: TC0630FDP, which handles playfields PF1–PF4, text, line RAM, sprites and the palette.
 - Sound: a 68000 sound CPU with an ES5505 sample player and an ES5510 DSP. It talks to the main CPU
   through shared RAM at `0xc00000`.
-- Bus map and register names: `runtime/machine.cpp`, `runtime/renderer/` and `docs/site/`.
+- Bus map and register names: [[hardware/memory-map]], `runtime/machine.cpp` and `runtime/renderer/`.
 
 ## Games
 
@@ -64,6 +64,11 @@ Static disassembly is `doc`-level evidence: it shows what the code can do, not w
 that uses `poke` lines shows that code is reachable, not that normal play reaches it; say so on the
 page. Save the exact command and the `inputs.txt` with every run output stored in `raw/`.
 
+Text copied from this repository's runtime documentation (`raw/docs/runtime-*.md`) describes the
+MAME-derived device models and ROM analysis of this runtime. It is `doc` evidence about the runtime, not
+about the board. Matching MAME output is compatibility evidence only, and none of it outranks a board
+observation by 12 (see `.omp/rules/hardware-observation-over-mame.md`).
+
 ## raw/ frontmatter
 
 ```yaml
@@ -81,7 +86,7 @@ captured_with:       # e.g. "tools/f3a (git <short sha>)", "MAME 0.27x", "hardwa
 
 cpu, video, sprite, tilemap, text, line-ram, palette, blend, clip, audio, io, input, interrupt,
 timing, vblank, reset, memory-map, pcb, game-loop, task-system, object-system, dispatch, rng,
-scoring, emulator-bug, undocumented
+scoring, emulator-bug, undocumented, rom-layout, eeprom, netplay, sound-driver, mailbox
 
 `pcb` covers board wiring, chip pinouts and clocks. Third-party hardware notes ingested under
 `raw/docs/taito-f3/` (12Me21/taito-f3) are `doc` evidence even where they report oscilloscope or

@@ -9,9 +9,15 @@ extern "C" {
 #endif
 
 /* Enter another generated block function without returning to the runtime
- * dispatcher. The caller must have already proven the pending dispatch would
- * be a no-op (see docs/developer/DECISIONS.md): pc names a table entry, the
- * CPU is running, trace bits are clear, and cpu->cycles < dispatch_deadline.
+ * dispatcher. The guard emitted before this (recomp/generate.py) proves the
+ * skipped dispatch would be a no-op: pc names a table entry, the CPU is
+ * neither stopped nor halted, cpu->cycles < dispatch_deadline (no vblank,
+ * IRQ3 or watchdog event is due, so runtime boundary() would fire nothing and
+ * republish the same deadline), and trace bits are clear. The trace-bit term
+ * is emitted only for transfers that leave the function or target a
+ * non-sequential address; a same-function fall-through is a bare goto. Every
+ * path that sets the deadline back to 0 (IRQ-mask lowering, reset) is in
+ * runtime, so the guard needs no further state.
  *
  * The expansion must stay a tail call: the block functions are mutually
  * recursive, so a plain (non-tail) call would grow the host stack without

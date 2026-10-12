@@ -129,6 +129,6 @@ private:
 
     void get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const;
 };
-static_assert(SceneSource<GameLines> && Snapshotable<GameLines>);
+static_assert(SceneSource<GameLines>);
 
 } // namespace f3rt

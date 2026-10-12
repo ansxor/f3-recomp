@@ -1,4 +1,5 @@
 #include "renderer/game/lines.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/video.hpp"
 #include "renderer/game/tiles.hpp"
 #include "state_io.hpp"
@@ -44,7 +45,7 @@ void GameLines::decode(const VideoRam &vram) {
         control_1_[i] = vram.control_u16(unsigned(8 + i));
     }
 
-    const uint8_t *lineram = &vram.graphics[0x20000];
+    const uint8_t *lineram = &vram.graphics[OFFS_LINERAM];
 
     auto set_clip_upper = [](LineClip &c, int8_t left, int8_t right) {
         c.left = int16_t((c.left & 0xff) | (int16_t(left) << 8));
@@ -59,9 +60,9 @@ void GameLines::decode(const VideoRam &vram) {
     std::array<uint16_t, 8> latches{};
     auto latched_addr = [&latches](uint8_t section, uint8_t subsection, int y) -> uint32_t {
         const uint16_t latch = latches[section];
-        const uint32_t base = 0x4000 + 0x1000 * section + 0x200 * subsection;
+        const uint32_t base = LINERAM_SECTIONS_OFFSET + LINERAM_SECTION_STRIDE * section + LINERAM_SUBSECTION_STRIDE * subsection;
         if (latch & (1 << (subsection + 4)))
-            return base + 0x800 + y * 2;
+            return base + LINERAM_BANK_OFFSET + y * 2;
         else if (latch & (1 << subsection))
             return base + y * 2;
         return 0;
@@ -70,7 +71,7 @@ void GameLines::decode(const VideoRam &vram) {
     LineParams line{};
     for (int y = 0; y < 256; ++y) {
         for (int s = 0; s < 8; ++s)
-            latches[s] = read_be16(&lineram[s * 0x200 + y * 2]);
+            latches[s] = read_be16(&lineram[s * LINERAM_LATCH_STRIDE + y * 2]);
 
         // 4000 (column scroll & clip-plane high bits for PF 2 and 3)
         for (int i : { 2, 3 }) {
@@ -642,5 +643,7 @@ void GameLines::load_state(StateReader &reader) {
         d.bitmap = s.bitmap != 0;
     }
 }
+
+static_assert(Snapshotable<GameLines>);
 
 } // namespace f3rt

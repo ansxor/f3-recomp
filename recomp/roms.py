@@ -16,6 +16,7 @@ REGIONS = ("rom", "sprites", "sprites_hi", "tiles", "tiles_hi", "sound", "sample
 
 
 def region_spec(config: dict, name: str) -> tuple[int, int, list[dict]]:
+    # size 0 means the plane is absent (no lanes); never declare a fake chip file for it.
     region = config.get(name, {"size": 0, "lanes": []}) if name == "eeprom" else config[name]
     size, fill = region["size"], region.get("fill", 0)
     if not isinstance(size, int) or size < 0 or fill not in (0, 255):

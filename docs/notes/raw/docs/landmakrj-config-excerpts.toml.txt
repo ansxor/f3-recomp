@@ -1,0 +1,159 @@
+---
+source_url: games/{landmakrj,landmakr,commandw}/config.toml
+ingested: 2026-10-11
+sha256: d697a62aab27d2878efa1ed84c8e983e8b5334f467be1dc3fa5430338ca2afcf
+game: landmakrj
+rom_sha256: aa050f39f5810c90bc20d1e3ed1c2510b1df067242535ad80aa86b3d174d49bc
+captured_with: "this runtime, snapshot 2026-10-11"
+---
+<!-- excerpt: games/landmakrj/config.toml lines 57-131 ([[exclude]], emit units, frame writers) -->
+# Exclusions remove instruction starts only; every ROM byte stays readable as data.
+# Each interval below is half-open. Rationale and evidence (self-contained):
+#   - "fill = 0xff" is verified against the CPU's program image at load: any
+#     differing byte is a generation error, so the FF claims cannot go stale.
+#   - Data banks are not proven by entropy. Evidence is: no rooted instruction
+#     start, entry or control reference inside; native profile runs over seeds
+#     1-8 x 20000 frames; eight-seed parity gates. Absence of sampled execution
+#     is not a universal proof; an excluded destination fails loudly at runtime.
+#   - Counterexample: excluding main 0x2000..0x3000 on entropy alone (7.69
+#     bits/byte) generated fine but broke strict-native at PC 0x2f84. Never
+#     exclude a range on entropy alone.
+# Layout context: docs/notes/games/landmakrj.md, section "## ROM layout".
+
+# Main interior FF padding.
+[[exclude]]
+start = 0x007030
+end = 0x010000
+fill = 0xff
+reason = "Interior FF fill"
+evidence = "fill = 0xff verified against the program image at load; eight-seed native parity gates passed"
+
+# Main trailing FF padding; the final checksum word at 0x1ffffe is not FF and stays included.
+[[exclude]]
+start = 0x11b362
+end = 0x1ffffe
+fill = 0xff
+reason = "Trailing FF fill, preserving the final checksum word"
+evidence = "fill = 0xff verified against the program image at load; eight-seed native parity gates passed"
+
+# Sound interior FF padding below the sequence bank.
+[[exclude]]
+cpu = "sound"
+start = 0xc1e45a
+end = 0xc20000
+fill = 0xff
+reason = "Interior sound-program FF fill"
+evidence = "fill = 0xff verified against the sound image at load; eight-seed native WAV gates passed"
+
+# Sound trailing FF padding, including unpopulated chip halves.
+[[exclude]]
+cpu = "sound"
+start = 0xc39a30
+end = 0xc80000
+fill = 0xff
+reason = "Trailing sound-program FF fill, including unpopulated chip halves"
+evidence = "fill = 0xff verified against the sound image at load; eight-seed native WAV gates passed"
+
+# Main graphics/script-table data bank. No rooted instruction starts, entries or
+# control references inside. Native profile, seeds 1-8 x 20000 frames: 0 fetched
+# bytes and 147,494 of 425,984 bank bytes read (data reads only). Eight-seed parity
+# gates passed. Not a universal proof: unsampled indirect paths would fail loudly.
+[[exclude]]
+start = 0x020000
+end = 0x088000
+reason = "Graphics/script-table data bank"
+evidence = "No rooted starts/entries/control refs; seeds 1-8 x 20000 frames: 0 fetched, 147,494/425,984 bytes read; eight-seed parity gates passed"
+
+# Sound sequence/header data bank, read by the sound driver's sequence readers.
+# No rooted instruction starts or code references. Native profile, seeds 1-8 x
+# 20000 frames: 0 fetched bytes and 31,834 of 105,008 bank bytes read. Eight-seed
+# WAV gates passed.
+[[exclude]]
+cpu = "sound"
+start = 0xc20000
+end = 0xc39a30
+reason = "Sound sequence/header data bank"
+evidence = "No rooted starts or code refs; seeds 1-8 x 20000 frames: 0 fetched, 31,834/105,008 bytes read; eight-seed WAV gates passed"
+
+[video]
+rotation = 0
+sprite_lag = 1
+extend = true
+visible_y = 24
+visible_height = 232
+
+<!-- excerpt: games/landmakr/config.toml lines 1-44 (World lanes, config-only discovery) -->
+[game]
+name = "Land Maker (World)"
+id = "landmakr"
+platform = "taito_f3"
+
+[rom]
+size = 2097152 # 2 MiB (0x200000)
+interleave = 4
+
+# 4 x 524288 (0x80000) byte lanes interleaved at offsets 0, 1, 2, 3
+[[rom.lanes]]
+file = "e61-19.20"
+offset = 0
+size = 524288
+crc = "f92eccd0"
+sha1 = "88e836390be1ca08c578080662d17007a9e0bcc3"
+
+[[rom.lanes]]
+file = "e61-18.19"
+offset = 1
+size = 524288
+crc = "5a26c9e0"
+sha1 = "e7f09722f6b7a459248c2c8ad0a2695365cc78dc"
+
+[[rom.lanes]]
+file = "e61-17.18"
+offset = 2
+size = 524288
+crc = "710776a8"
+sha1 = "669aa086e7a5faedd90407e558c01bf5f0869790"
+
+[[rom.lanes]]
+file = "e61-16.17"
+offset = 3
+size = 524288
+crc = "b073cda9"
+sha1 = "a8b713c3e17e431b5789a70d6f9b0e0a6b02624a"
+
+[discovery]
+# Config-only: World lanes were not supplied, so no Japan-specific addresses.
+entry_points = []
+scan_jump_tables = true
+scan_task_traps = true
+scan_callbacks = true
+
+<!-- excerpt: games/commandw/config.toml lines 250-277 (emit unit and frame writers) -->
+# Emit units: [[video.emit_units]] declares a span of game code (start..end PCs,
+# each an even decoded instruction; `unit` = register holding the object address
+# at start; `size` = bytes behaviours may access there; `owner`) that draws one
+# object or queue record into sprite RAM, giving the runtime stable sprite identity
+# and sandbox replay of the game's native code; emulated state, CRCs, cycles and
+# native block counts are unchanged. [video.frame_writers] lists inclusive PC
+# ranges that write sprite RAM outside any unit. The object loop at 0x9a0e
+# sets a6 = object (0x410000 + k*0x80). Per object, 0xa1c8 projects, 0xa334
+# rescales zoom and 0x9b32 compiles sprite entries through a4; 0x9a6c is the
+# loop's `lea $80(a6),a6`, so [0x9a3c,0x9a6c) draws exactly one object.
+[[video.emit_units]]
+name = "objects"
+start = 0x9a3c
+end = 0x9a6c
+unit = "a6"
+size = 0x80
+owner = "unit"
+# Sprite-RAM writers that run outside any unit. Evidence: f3rt-tool sprite-check (--frames 6000
+# attract) attributes every outside write to these PCs; replays of the object unit are
+# bit-exact, so nothing else draws.
+#   0x9984..0x9a00   per-frame list head: command-entry words at 0x600324/0x600334 (both
+#                    banks) selected by -$8000(a5); first_frame 585
+#   0x9a74..0x9af6   tail padding clears after the object loop (a4 +=16 stores) and the
+#                    final command word at 0x9aea/0x9af0
+#   0x00440..0x0045c boot: clears the whole sprite RAM (`move.l d0,(a0)+` at 0x45a)
+#   0x00540..0x00592 mode init: clears both banks (0x556, 0x568), copies the 8-long
+#                    initial entries from 0x644 (0x580, 0x590)
+#   0x00a9e..0x00aee initial list head/tail words of both banks (0xaa4..0xaec)

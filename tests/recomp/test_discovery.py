@@ -1,8 +1,15 @@
 """Synthetic-ROM regressions for callback and bytecode discovery (no game data)."""
+import hashlib
+from pathlib import Path
 import struct
+import tempfile
+import tomllib
 import unittest
+import zlib
 
-from recomp.discovery import discover
+from recomp.discovery import discover, exclusion_at, load_rom, parse_exclusions
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 class ActorDiscoveryTests(unittest.TestCase):
@@ -262,6 +269,108 @@ class ExclusionTests(unittest.TestCase):
                     discover(bytes(rom), {**config, "exclude": [invalid]})
         with self.assertRaisesRegex(ValueError, "Overlapping"):
             discover(bytes(rom), {**config, "exclude": config["exclude"] * 2})
+
+
+def _exclusion(**fields):
+    return {"exclude": [{"start": 0x800, "end": 0x1000, "reason": "r", "evidence": "e", **fields}]}
+
+
+class ExclusionContractTests(unittest.TestCase):
+    def test_aliased_24_bit_bus_target_is_excluded(self):
+        regions = parse_exclusions(_exclusion(), 0x2000)
+        self.assertIsNotNone(exclusion_at(regions, 0x800))
+        self.assertIs(exclusion_at(regions, 0xff000800), exclusion_at(regions, 0x800))
+        self.assertIsNone(exclusion_at(regions, 0xff001000))
+        regions = parse_exclusions(_exclusion(start=0x020000, end=0x088000), 0x200000)
+        self.assertIsNotNone(exclusion_at(regions, 0xff020000))
+
+    def test_fill_matching_image_passes(self):
+        image = bytes([0xff]) * 0x2000
+        regions = parse_exclusions(_exclusion(fill=0xff), len(image), image=image)
+        self.assertEqual((regions[0].start, regions[0].end), (0x800, 0x1000))
+
+    def test_fill_contradicted_by_image_fails(self):
+        image = bytearray([0xff]) * 0x2000
+        image[0xa02] = 0x00
+        with self.assertRaisesRegex(ValueError, r"fill 0xff contradicted by byte 0x00 at 0xa02"):
+            parse_exclusions(_exclusion(fill=0xff), len(image), image=bytes(image))
+
+    def test_fill_honours_cpu_base_and_requires_image(self):
+        base = 0xc00000
+        image = bytearray(0x2000)
+        record = _exclusion(start=base + 0x800, end=base + 0x1000, cpu="sound", fill=0)
+        parse_exclusions(record, len(image), cpu="sound", base=base, image=bytes(image))
+        image[0x900] = 1
+        with self.assertRaisesRegex(ValueError, "contradicted"):
+            parse_exclusions(record, len(image), cpu="sound", base=base, image=bytes(image))
+        with self.assertRaisesRegex(ValueError, "no program image"):
+            parse_exclusions(record, len(image), cpu="sound", base=base)
+
+    def test_fill_must_be_a_byte(self):
+        image = bytes(0x2000)
+        for fill in (256, -1, True, 1.5):
+            with self.subTest(fill=fill):
+                with self.assertRaisesRegex(ValueError, "fill must be a byte value"):
+                    parse_exclusions(_exclusion(fill=fill), len(image), image=image)
+
+
+class LoadRomUnknownKeyTests(unittest.TestCase):
+    CHIP = bytes(range(16))
+
+    def config_text(self, rom_extra="", lane_extra=""):
+        crc = f"{zlib.crc32(self.CHIP):08x}"
+        sha1 = hashlib.sha1(self.CHIP).hexdigest()
+        lanes = "".join(
+            f'[[rom.lanes]]\nfile = "lane{i}"\noffset = {i}\nsize = 16\ncrc = "{crc}"\nsha1 = "{sha1}"\n{lane_extra}\n'
+            for i in range(4))
+        return f'[game]\nid = "synthetic"\n[rom]\nsize = 64\ninterleave = 4\n{rom_extra}\n{lanes}'
+
+    def load(self, **extras):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for i in range(4):
+                root.joinpath(f"lane{i}").write_bytes(self.CHIP)
+            config = root / "config.toml"
+            config.write_text(self.config_text(**extras))
+            return load_rom(config, root)
+
+    def test_known_keys_load(self):
+        rom, _ = self.load()
+        self.assertEqual(len(rom), 64)
+
+    def test_unknown_rom_key_names_file_and_key(self):
+        with self.assertRaisesRegex(ValueError, r"config\.toml.*\['bogus'\].*\[rom\]"):
+            self.load(rom_extra="bogus = 1")
+
+    def test_unknown_lane_key_names_file_and_key(self):
+        with self.assertRaisesRegex(ValueError, r"config\.toml.*\['typo'\].*\[\[rom\.lanes\]\]"):
+            self.load(lane_extra="typo = 1")
+
+    def test_every_game_config_uses_only_known_rom_keys(self):
+        from recomp.discovery import _ROM_KEYS, _ROM_LANE_KEYS
+        configs = sorted((REPO / "games").glob("*/config.toml"))
+        self.assertTrue(configs)
+        for path in configs:
+            rom = tomllib.loads(path.read_text("utf-8"))["rom"]
+            with self.subTest(game=path.parent.name):
+                self.assertLessEqual(set(rom), _ROM_KEYS)
+                for lane in rom["lanes"]:
+                    self.assertLessEqual(set(lane), _ROM_LANE_KEYS)
+
+    def test_landmakrj_ff_fills_match_real_program_images(self):
+        rom_dir = REPO / "roms" / "landmakrj"
+        config_path = REPO / "games" / "landmakrj" / "config.toml"
+        if not rom_dir.is_dir():
+            self.skipTest("landmakrj ROM directory missing")
+        from recomp.compile.sound import load_sound_rom
+        rom, config = load_rom(config_path, rom_dir)
+        main = parse_exclusions(config, len(rom), image=rom)
+        sound_rom = load_sound_rom(rom_dir, config)
+        sound = parse_exclusions(config, len(sound_rom), cpu="sound", base=0xc00000, image=sound_rom)
+        filled = [r for r in config["exclude"] if "fill" in r]
+        self.assertEqual(len(filled), 4)
+        self.assertEqual(len(main) + len(sound), len(config["exclude"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,7 +50,7 @@ def generate(rom: bytes, discovery, output: Path, config: dict,
         raise ValueError("block and shard sizes must be positive")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    exclusions = parse_exclusions(config, len(rom))
+    exclusions = parse_exclusions(config, len(rom), image=rom)
     for kind, pcs in (("instruction start", discovery.instructions),
                       ("invalid PC", discovery.invalid_pcs)):
         for pc in pcs:

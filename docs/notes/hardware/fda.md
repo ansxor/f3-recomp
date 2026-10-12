@@ -1,10 +1,10 @@
 ---
 title: TC0650FDA (color RAM and blender)
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-11
 type: hardware
 tags: [video, palette, blend, pcb]
-sources: [raw/docs/taito-f3/website/fda.html, raw/docs/taito-f3/fda.txt, raw/docs/taito-f3/probe-fda.txt, raw/docs/taito-f3/website/fdp/blend.html, raw/docs/taito-f3/website/fdp/alpha.html, raw/docs/taito-f3/line-ram.txt, raw/docs/taito-f3/chips.txt, raw/docs/taito-f3/draw.txt, raw/docs/taito-f3/fdp.txt, raw/emu-source/mame-0.289/taito_f3_v.cpp, raw/emu-source/mame-0.289/taito_f3.cpp]
+sources: [raw/docs/taito-f3/website/fda.html, raw/docs/taito-f3/fda.txt, raw/docs/taito-f3/probe-fda.txt, raw/docs/taito-f3/website/fdp/blend.html, raw/docs/taito-f3/website/fdp/alpha.html, raw/docs/taito-f3/line-ram.txt, raw/docs/taito-f3/chips.txt, raw/docs/taito-f3/draw.txt, raw/docs/taito-f3/fdp.txt, raw/emu-source/mame-0.289/taito_f3_v.cpp, raw/emu-source/mame-0.289/taito_f3.cpp, raw/docs/runtime-game-config-reference.md, raw/emu-source/runtime-fdp-palette15-blur.cpp.txt]
 games: []
 addresses: [0x00440000]
 status: hypothesis
@@ -106,3 +106,26 @@ The FDA has 100 pins. Groups (full table with the author's "?" marks: [raw](../r
 - Which CPU data bits reach which color RAM chip, and the real palette word layout on the bus, are
   not determined by these notes. ^[raw/docs/taito-f3/website/fda.html]
 - Behaviour of FDA modes 2/3 and of the "legacy" mode is untested/unemulated (see the contradiction above). ^[raw/docs/taito-f3/website/fdp/lineram.html] ^[raw/emu-source/mame-0.289/taito_f3_v.cpp]
+
+## Palette precision as this runtime implements it (hypothesis, not a board observation)
+
+- Palette precision is dynamic FDA state, not a per-game constant: latched line RAM `$6400` bit 14 is
+  active-low "15-bit" selection versus 24-bit, and bit 13 is active-low blur (0 = blur). This is the
+  `line-ram.txt`/MAME polarity, the opposite of the website table's "0,1 = disabled" reading in the
+  contradiction above; the runtime follows the first reading and this does not settle which is right.
+  ^[raw/docs/runtime-game-config-reference.md] ^[raw/docs/taito-f3/line-ram.txt]
+- 15-bit format `RRRRGGGGBBBBRGBx`: the top nibble of each colour is bits 15-12 / 11-8 / 7-4 and the "fifth"
+  channel bits are word bits 3 (R), 2 (G), 1 (B); a channel becomes `nibble * 16 + fifth * 8`, i.e. the
+  five-bit value is shifted, not replicated. The runtime's per-pixel conversion `color15()` in
+  `runtime/renderer/fdp/video.cpp` (read 2026-10-11) implements exactly this. Pen masks come from tile
+  attributes and sprite commands. ^[raw/docs/runtime-game-config-reference.md] ^[raw/emu-source/runtime-fdp-palette15-blur.cpp.txt]
+- The runtime tests only bit 14 (and 13); bit 15 of the `fda` field (modes 2/3, "no blending, half pixels
+  displayed separately") is not modelled, so a line with bit 15 set and bit 14 clear is treated as 15-bit.
+  MAME instead hard-codes 12-bit palettes for four games (see above); the runtime's source for its dynamic
+  choice is y-ack's FDA research branch of MAME, cited by the runtime documentation, not a measurement.
+  ^[raw/docs/runtime-game-config-reference.md]
+- Per-line `$6400` bits are consumed where the line is decoded (`line.palette_15bit = (word & 0x4000) == 0`,
+  `line.blur = (word & 0x2000) == 0`); mosaic bit 9 of the same word is the highcolor/pivot ambiguity on
+  [[hardware/highcolor-layer]]. Blur is implemented as a two-pixel average with the previous pixel.
+  ^[raw/emu-source/runtime-fdp-palette15-blur.cpp.txt]
+  If 12 or the user has board observations of the FDA mode/blur bits, they supersede this section.

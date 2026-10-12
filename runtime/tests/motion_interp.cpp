@@ -1,5 +1,6 @@
 #include "renderer/gpu/motion.hpp"
 #include "renderer/decode.hpp"
+#include "f3rt/memory_map.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
@@ -46,7 +47,7 @@ void write_entry(uint8_t *p, const Entry &e) {
 }
 
 void put_entry(std::vector<uint8_t> &ram, unsigned bank, unsigned index, const Entry &e) {
-    write_entry(&ram[bank * 0x8000 + index * 16], e);
+    write_entry(&ram[bank * f3rt::SPRITE_BANK_STRIDE + index * 16], e);
 }
 
 std::vector<f3rt::DecodedSpriteEntry> decode(const std::vector<uint8_t> &ram,

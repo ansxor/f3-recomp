@@ -2290,8 +2290,8 @@ def build_parser() -> argparse.ArgumentParser:
                    "mainram.bin,graphics.bin); the rest are deleted after the run to save space (~1 MB/frame "
                    "otherwise). rendered.png keeps a PNG of the screen (rendered.bmp converted)")
     p.add_argument("--inputs", help="input script for the game's --inputs (coin, start, held controls, seeded "
-                   "mashing, main-RAM pokes per frame range); copied into the run directory as inputs.txt. Format: "
-                   "docs/developer/WORKFLOWS.md (Scripted input)")
+                   "mashing, main-RAM pokes per frame range); copied into the run directory as inputs.txt. Grammar: "
+                   "runtime/debug/input_script.hpp")
     p.add_argument("--until", action="append", metavar="ROUTINE[,ROUTINE]",
                    help="stop as soon as every listed routine has run and report the frame each first did. Without "
                    "--watch a routine counts when it stores to video/control RAM (implies --all-writers); with "

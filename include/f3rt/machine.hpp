@@ -1,5 +1,6 @@
 #pragma once
 #include "f3rt/cpu_abi.h"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
 #include <array>
 #include <cstdint>

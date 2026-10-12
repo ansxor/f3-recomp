@@ -1,4 +1,5 @@
 #include "discovery.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
 #include "sprites/units.hpp"
 #include <algorithm>
@@ -7,8 +8,8 @@
 
 namespace f3rt {
 namespace {
-constexpr uint32_t graphics_base = 0x600000, control_base = 0x660000, control_end = 0x660040;
-constexpr uint32_t pf_begin = 0x10000, text_begin = 0x1c000, lines_begin = 0x20000;
+constexpr uint32_t graphics_base = GRAPHICS_BASE, control_base = CONTROL_BASE, control_end = CONTROL_EXTENDED_END;
+constexpr uint32_t pf_begin = OFFS_PLAYFIELDS, text_begin = OFFS_TEXTRAM_MAP, lines_begin = OFFS_LINERAM;
 
 const char *category_name(int category) {
     static constexpr const char *names[] = {"sprite-stray", "video-write", "video-fallback"};
@@ -20,12 +21,12 @@ const char *category_name(int category) {
 VideoLayer classify(uint32_t address) {
     if (address - control_base < control_end - control_base) return VideoLayer::Control;
     const uint32_t offset = address - graphics_base;
-    if (offset >= 0x40000) return VideoLayer::Count;
+    if (offset >= GRAPHICS_RAM_SIZE) return VideoLayer::Count;
     if (offset < pf_begin) return VideoLayer::Sprites;
     if (offset < text_begin) {
         constexpr VideoLayer maps[] = {VideoLayer::Pf0, VideoLayer::Pf1, VideoLayer::Pf2,
                                        VideoLayer::Pf3, VideoLayer::Pf2Alt, VideoLayer::Pf3Alt};
-        return maps[(offset - pf_begin) / 0x2000];
+        return maps[(offset - pf_begin) / PLAYFIELD_LAYER_SIZE];
     }
     return offset < lines_begin ? VideoLayer::Text : VideoLayer::Lines;
 }

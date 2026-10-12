@@ -79,6 +79,6 @@ private:
     bool presented_submitted_valid_ = false, presented_current_valid_ = false;
     bool presented_overflow_ = false; // last decode filled the presented list to capacity
 };
-static_assert(SceneSource<GameSprites> && Snapshotable<GameSprites>);
+static_assert(SceneSource<GameSprites>);
 
 } // namespace f3rt

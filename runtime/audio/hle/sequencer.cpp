@@ -1,4 +1,6 @@
 #include "audio/hle/sequencer.hpp"
+#include "f3rt/memory_map.hpp"
+#include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -7,7 +9,7 @@
 
 namespace f3rt::hle {
 namespace {
-constexpr uint32_t rom_base = 0xc00000, stream_base = 0xc20000;
+constexpr uint32_t rom_base = SOUND_ROM_BASE, stream_base = sound_5a7e9117::SEQ_STREAM_BASE;
 constexpr size_t slots = 100, track_count = 8, note_capacity = 4096;
 constexpr uint16_t no_note = 0xffff;
 [[noreturn]] void invalid(const char *message) { throw std::runtime_error(message); }
@@ -70,14 +72,14 @@ struct Sequencer::Impl {
     uint64_t serial = 0;
 
     explicit Impl(std::span<const uint8_t> image, VoiceSink &output) : rom(image), sink(output) {
-        if (rom.size() != 0x80000) invalid("HLE requires a 512 KiB padded sound ROM");
+        if (rom.size() != SOUND_ROM_SIZE) invalid("HLE requires a 512 KiB padded sound ROM");
         const uint32_t stream_limit = rom_base + uint32_t(rom.size());
         const uint32_t header_rel = u32(stream_base);
         if (header_rel < 8 + slots * 4 || (header_rel & 1) || stream_base + header_rel >= stream_limit)
             invalid("unsupported HLE sequence bank layout");
         const uint32_t header = stream_base + header_rel;
         const uint32_t header_size = u32(header);
-        if (header_size < 8 + slots * 2 + 0xa8 || header + header_size > stream_limit)
+        if (header_size < 8 + slots * 2 + sound_5a7e9117::SEQ_HEADER_SIZE || header + header_size > stream_limit)
             invalid("unsupported HLE sequence bank layout");
         for (size_t id = 0; id < slots; ++id) {
             const uint32_t relative = u32(stream_base + 8 + uint32_t(id) * 4);
@@ -87,28 +89,29 @@ struct Sequencer::Impl {
                 invalid("invalid HLE sequence extent");
             auto &song = data[id];
             const uint16_t header_offset = u16(header + 8 + uint32_t(id) * 2);
-            if (header_offset < 208 || uint32_t(header_offset) + 0xa8 > u32(header))
+            if (header_offset < 208 || uint32_t(header_offset) + sound_5a7e9117::SEQ_HEADER_SIZE > u32(header))
                 invalid("invalid HLE sequence header");
             const uint32_t h = header + header_offset;
             song.present = true;
-            song.flags = byte(h + 1); song.rate = byte(h + 0x1e);
-            song.bars = u16(h + 0x12);
-            const uint8_t exponent = byte(h + 0x15);
+            song.flags = byte(h + 1); song.rate = byte(h + sound_5a7e9117::SEQ_HEADER_RATE_OFFSET);
+            song.bars = u16(h + sound_5a7e9117::SEQ_HEADER_BARS_OFFSET);
+            const uint8_t exponent = byte(h + sound_5a7e9117::SEQ_HEADER_TIME_SIG_EXP_OFFSET);
             if (exponent > 8) invalid("unsupported HLE time signature");
-            song.ticks_per_bar = uint16_t((384u >> exponent) * byte(h + 0x14));
-            song.loop_start = u32(h + 0x16); song.loop_end = u32(h + 0x1a);
-            song.linked = byte(h + 0xa6);
+            song.ticks_per_bar = uint16_t((384u >> exponent) * byte(h + sound_5a7e9117::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET));
+            song.loop_start = u32(h + sound_5a7e9117::SEQ_HEADER_LOOP_START_OFFSET); song.loop_end = u32(h + sound_5a7e9117::SEQ_HEADER_LOOP_END_OFFSET);
+            song.linked = byte(h + sound_5a7e9117::SEQ_HEADER_LINKED_OFFSET);
             for (size_t t = 0; t < track_count; ++t) {
                 auto &channel = song.initial[t];
                 // c13d1e/c13ca4 restore even-offset controller defaults from c13556.
                 for (uint32_t index = 0; index <= 0x14; index += 2)
-                    channel.parameters[0x0a + index] = byte(0xc13556 + index);
-                const uint32_t record = h + 0x20 + uint32_t(t) * 14;
+                    channel.parameters[sound_5a7e9117::VOICE_OWNER_OFFSET + index] = byte(sound_5a7e9117::CONTROLLER_DEFAULTS_TABLE + index);
+                const uint32_t record = h + sound_5a7e9117::SEQ_HEADER_TRACKS_OFFSET + uint32_t(t) * sound_5a7e9117::SEQ_TRACK_RECORD_SIZE;
                 for (uint32_t n = 0; n < 14; ++n) channel.parameters[0x2a + n] = byte(record + n);
                 channel.program = u16(record);
                 channel.parameters[4] = uint8_t(channel.program >> 8);
                 channel.parameters[5] = uint8_t(channel.program);
-                for (const auto pair : {std::array<size_t, 2>{0x20, 0x2c}, {0x26, 0x2d},
+                for (const auto pair : {std::array<size_t, 2>{sound_5a7e9117::CHANNEL_PARAM_VOLUME, sound_5a7e9117::CHANNEL_PARAM_VOLUME_RECORD},
+                                        {sound_5a7e9117::CHANNEL_PARAM_PAN, sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD},
                                         {0x1a, 0x2e}, {0x1c, 0x2f}, {0x33, 0x30}})
                     channel.parameters[pair[0]] = channel.parameters[pair[1]];
             }
@@ -329,10 +332,10 @@ struct Sequencer::Impl {
         auto &channel = state[id].tracks[track_id].channel;
         const uint8_t op = event.opcode, value = event.operand & 0x7f;
         if (op >= 0xb0 && op < 0xd9) {
-            const size_t offset = 0x0a + (op - 0xb0) * 2;
+            const size_t offset = sound_5a7e9117::VOICE_OWNER_OFFSET + (op - 0xb0) * 2;
             if (offset >= channel.parameters.size()) invalid("HLE controller outside channel parameter record");
             channel.parameters[offset] = value;
-            if (offset == 0x1c) channel.parameters[offset] = uint8_t(value - 0x40);
+            if (offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET) channel.parameters[offset] = uint8_t(value - 0x40);
         } else if (op == 0xd9) selector(channel, value);
         else if (op >= 0x58 && op < 0xb0) invalid("HLE key continuation absent from supplied data");
         else if (op == 0xda || op == 0xdb) invalid("HLE special-track control absent from supplied data");
@@ -497,7 +500,7 @@ struct Sequencer::Impl {
             break;
         case 0x87:
             for (size_t t = 0; t < track_count; ++t) if (s.tracks[t].live) {
-                s.tracks[t].channel.parameters[0x26] = s.tracks[t].channel.parameters[0x2d] = p[3];
+                s.tracks[t].channel.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN] = s.tracks[t].channel.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD] = p[3];
                 update(id, t, tick);
             }
             break;
@@ -505,7 +508,7 @@ struct Sequencer::Impl {
         case 0x89: {
             s.volume = uint16_t(uint16_t(p[3]) << 8 | uint8_t(s.volume)); s.fade_target = p[4];
             const int16_t difference = int16_t(uint16_t(uint8_t(p[4] - p[3])) << 8);
-            const int16_t multiplier = int16_t(u16(0xc089dc + uint32_t(p[5]) * 2));
+            const int16_t multiplier = int16_t(u16(sound_5a7e9117::RATE_TABLE + uint32_t(p[5]) * 2));
             const int32_t product = int32_t(difference) * multiplier;
             s.fade_step = int16_t(uint32_t(product) * 2 >> 16);
             for (size_t t = 0; t < track_count; ++t) if (s.tracks[t].live) update(id, t, tick);
@@ -516,14 +519,14 @@ struct Sequencer::Impl {
             if (!logical || logical > track_count || !s.tracks[logical - 1].live) return;
             const size_t t = logical - 1; auto &track = s.tracks[t];
             if (op == 0x8a || op == 0x8b) {
-                const size_t offset = op == 0x8a ? 0x20 : 0x26;
+                const size_t offset = op == 0x8a ? sound_5a7e9117::CHANNEL_PARAM_VOLUME : sound_5a7e9117::CHANNEL_PARAM_PAN;
                 track.channel.parameters[offset] = p[4];
-                track.channel.parameters[op == 0x8a ? 0x2c : 0x2d] = p[4];
+                track.channel.parameters[op == 0x8a ? sound_5a7e9117::CHANNEL_PARAM_VOLUME_RECORD : sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD] = p[4];
                 update(id, t, tick);
             } else if (op == 0x8c) {
-                const size_t offset = 0x0a + size_t(p[4]) * 2;
+                const size_t offset = sound_5a7e9117::VOICE_OWNER_OFFSET + size_t(p[4]) * 2;
                 if (offset >= track.channel.parameters.size()) invalid("mailbox HLE controller outside parameter record");
-                track.channel.parameters[offset] = offset == 0x1c ? uint8_t(p[5] - 0x40) : p[5];
+                track.channel.parameters[offset] = offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET ? uint8_t(p[5] - 0x40) : p[5];
                 update(id, t, tick);
             } else if (op == 0x8d) {
                 select_program(track.channel, uint16_t(uint16_t(p[4]) << 8 | p[5])); update(id, t, tick);

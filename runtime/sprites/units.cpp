@@ -10,13 +10,12 @@
 
 namespace f3rt {
 namespace {
-// Main bus map subset used by the sandbox (mirrors machine.cpp; sizes are exclusive spans).
-constexpr uint32_t ROM_END = 0x200000;
-constexpr uint32_t RAM_BASE = 0x400000, RAM_SPAN = 0x40000, RAM_MASK = 0x1ffff;
-constexpr uint32_t PALETTE_BASE = 0x440000, PALETTE_SPAN = 0x8000;
-constexpr uint32_t GRAPHICS_BASE = 0x600000, GRAPHICS_SPAN = 0x40000;
-constexpr uint32_t SPRITE_SPAN = 0x10000;       // two 0x8000 banks; only entries 0..0x3ff of each are listed
-constexpr uint32_t BANK_BYTES = 0x8000, ENTRIES = 0x400;
+// Main bus map subset used by the sandbox (derived from memory_map.hpp; spans are exclusive).
+constexpr uint32_t RAM_SPAN = RAM_END - RAM_BASE, RAM_MASK = RAM_MIRROR_MASK;
+constexpr uint32_t PALETTE_SPAN = PALETTE_RAM_SIZE;
+constexpr uint32_t GRAPHICS_SPAN = GRAPHICS_RAM_SIZE;
+constexpr uint32_t SPRITE_SPAN = SPRITE_RAM_SIZE;
+constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE, ENTRIES = 0x400;
 constexpr uint64_t REPLAY_BUDGET_CYCLES = 1000000;
 constexpr uint32_t REPLAY_BUDGET_BLOCKS = 500000;
 constexpr size_t MAX_OPEN = 8;

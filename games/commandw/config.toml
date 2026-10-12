@@ -247,7 +247,13 @@ full_resolution_alt_maps = true
 visible_y = 32
 visible_height = 224
 
-# Emit units (see docs/site/reference/game-config.md): the object loop at 0x9a0e
+# Emit units: [[video.emit_units]] declares a span of game code (start..end PCs,
+# each an even decoded instruction; `unit` = register holding the object address
+# at start; `size` = bytes behaviours may access there; `owner`) that draws one
+# object or queue record into sprite RAM, giving the runtime stable sprite identity
+# and sandbox replay of the game's native code; emulated state, CRCs, cycles and
+# native block counts are unchanged. [video.frame_writers] lists inclusive PC
+# ranges that write sprite RAM outside any unit. The object loop at 0x9a0e
 # sets a6 = object (0x410000 + k*0x80). Per object, 0xa1c8 projects, 0xa334
 # rescales zoom and 0x9b32 compiles sprite entries through a4; 0x9a6c is the
 # loop's `lea $80(a6),a6`, so [0x9a3c,0x9a6c) draws exactly one object.

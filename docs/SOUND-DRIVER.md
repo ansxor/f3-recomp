@@ -190,7 +190,7 @@ do not need the final operand ignore it. The fade handler reads four operands
 despite accepting length seven; do not invent a meaning for its final byte.
 87/8a/8b alter balance/volume fields. The apparent 90 continuation store does
 not target the note node: `$c1310e` pops the return PC into A3 and jumps to it.
-See [HLE-AUDIO.md](developer/HLE-AUDIO.md) for direct ROM decoding and effects measurements.
+Enhanced-audio (HLE) ROM decoding and effects measurements: see `docs/notes/raw/docs/runtime-hle-audio-rom-protocol.md` and `docs/notes/raw/tests/2026-10-10-enhanced-effects-hardware-routing.md`.
 
 Sequence bit 7 is **not** a universal ignored flag: `$c12c30/$c12cb8/$c12cea`
 implement extra selection/state behavior. `$c12de6` also follows linked

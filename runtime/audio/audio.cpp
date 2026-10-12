@@ -2,6 +2,7 @@
 // Incorporates ES5505 OTIS, ES5510 DSP, MC68681 DUART, MB87078 Volume, and ESQPUMP
 
 #include "f3rt/audio.hpp"
+#include "f3rt/memory_map.hpp"
 
 #include "audio/reference/engine.hpp"
 #include "third_party/audio/mb87078.hpp"
@@ -79,7 +80,7 @@ struct Audio::Impl {
     Impl()
         : m_work_ram(WORK_RAM_SIZE, 0)
         , m_shared_ram(nullptr)
-        , m_shared_ram_size(0x800)
+        , m_shared_ram_size(SHARED_RAM_SIZE)
         , m_reset_asserted(true)
         , m_cpu_accum(0)
         , m_duart_accum(0)
@@ -213,14 +214,14 @@ struct Audio::Impl {
         address &= 0x00ffffff;
 
         // Work RAM (0x000000 - 0x03ffff, mirrored 4 times)
-        if (address < 0x040000) {
-            return m_work_ram[address & 0xffff];
+        if (address < SOUND_RAM_END) {
+            return m_work_ram[address & SOUND_RAM_MASK];
         }
 
         // Shared DPRAM (0x140000 - 0x140fff, 8-bit even byte lane)
-        if (address >= 0x140000 && address < 0x141000) {
+        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
             if ((address & 1) == 0) {
-                uint32_t idx = (address - 0x140000) >> 1;
+                uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
                 return (m_shared_ram && idx < m_shared_ram_size) ? m_shared_ram[idx] : 0xff;
             }
             return 0xff;
@@ -232,7 +233,7 @@ struct Audio::Impl {
         }
 
         // MC68681 DUART (0x280000 - 0x28001f, 8-bit odd byte lane)
-        if (address >= 0x280000 && address < 0x280020) {
+        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
             if (address & 1) {
                 return m_duart.read((address >> 1) & 0x0f);
             }
@@ -240,7 +241,7 @@ struct Audio::Impl {
         }
 
         // MB87078 Electronic Volume (0x340000 - 0x340003, 8-bit even byte lane)
-        if (address >= 0x340000 && address < 0x340004) {
+        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
             if ((address & 1) == 0) {
                 uint32_t offset = (address >> 1) & 1;
                 return m_volume.read(offset ^ 1);
@@ -249,14 +250,14 @@ struct Audio::Impl {
         }
 
         // Sound Program ROM (0xc00000 - 0xc7ffff, linearly mapped 512KB)
-        if (address >= 0xc00000 && address < 0xc80000) {
-            uint32_t off = address - 0xc00000;
+        if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
+            uint32_t off = address - SOUND_ROM_BASE;
             return (off < m_sound_rom.size()) ? m_sound_rom[off] : 0xff;
         }
 
         // Work RAM mirror (0xff0000 - 0xffffff)
-        if (address >= 0xff0000) {
-            return m_work_ram[address & 0xffff];
+        if (address >= SOUND_RAM_HIGH_BASE) {
+            return m_work_ram[address & SOUND_RAM_MASK];
         }
 
         return 0xff;
@@ -266,14 +267,14 @@ struct Audio::Impl {
         address &= 0x00fffffe;
 
         // Work RAM
-        if (address < 0x040000) {
+        if (address < SOUND_RAM_END) {
             uint32_t off = address & 0xfffe;
             return (uint16_t(m_work_ram[off]) << 8) | m_work_ram[off + 1];
         }
 
         // Shared DPRAM (even byte has data, odd byte unmapped)
-        if (address >= 0x140000 && address < 0x141000) {
-            uint32_t idx = (address - 0x140000) >> 1;
+        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
+            uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
             uint8_t data = (m_shared_ram && idx < m_shared_ram_size) ? m_shared_ram[idx] : 0xff;
             return (uint16_t(data) << 8) | 0xff;
         }
@@ -284,19 +285,19 @@ struct Audio::Impl {
         }
 
         // MC68681 DUART (odd byte has data)
-        if (address >= 0x280000 && address < 0x280020) {
+        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
             return m_duart.read((address >> 1) & 0x0f);
         }
 
         // MB87078 Electronic Volume
-        if (address >= 0x340000 && address < 0x340004) {
+        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
             uint32_t offset = (address >> 1) & 1;
             return uint16_t(m_volume.read(offset ^ 1)) << 8;
         }
 
         // Sound Program ROM
-        if (address >= 0xc00000 && address < 0xc80000) {
-            uint32_t off = address - 0xc00000;
+        if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
+            uint32_t off = address - SOUND_ROM_BASE;
             if (off + 1 < m_sound_rom.size()) {
                 return (uint16_t(m_sound_rom[off]) << 8) | m_sound_rom[off + 1];
             }
@@ -304,7 +305,7 @@ struct Audio::Impl {
         }
 
         // Work RAM mirror
-        if (address >= 0xff0000) {
+        if (address >= SOUND_RAM_HIGH_BASE) {
             uint32_t off = address & 0xfffe;
             return (uint16_t(m_work_ram[off]) << 8) | m_work_ram[off + 1];
         }
@@ -320,15 +321,15 @@ struct Audio::Impl {
         address &= 0x00ffffff;
 
         // Work RAM
-        if (address < 0x040000) {
-            m_work_ram[address & 0xffff] = value;
+        if (address < SOUND_RAM_END) {
+            m_work_ram[address & SOUND_RAM_MASK] = value;
             return;
         }
 
         // Shared DPRAM (even byte only)
-        if (address >= 0x140000 && address < 0x141000) {
+        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
             if ((address & 1) == 0) {
-                uint32_t idx = (address - 0x140000) >> 1;
+                uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
                 if (m_shared_ram && idx < m_shared_ram_size) {
                     m_shared_ram[idx] = value;
                 }
@@ -343,7 +344,7 @@ struct Audio::Impl {
         }
 
         // MC68681 DUART (odd byte only)
-        if (address >= 0x280000 && address < 0x280020) {
+        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
             if (address & 1) {
                 m_duart.write((address >> 1) & 0x0f, value);
             }
@@ -351,7 +352,7 @@ struct Audio::Impl {
         }
 
         // MB87078 Volume (even byte only)
-        if (address >= 0x340000 && address < 0x340004) {
+        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
             if ((address & 1) == 0) {
                 uint32_t offset = (address >> 1) & 1;
                 m_volume.write(offset ^ 1, value);
@@ -360,8 +361,8 @@ struct Audio::Impl {
         }
 
         // Work RAM mirror
-        if (address >= 0xff0000) {
-            m_work_ram[address & 0xffff] = value;
+        if (address >= SOUND_RAM_HIGH_BASE) {
+            m_work_ram[address & SOUND_RAM_MASK] = value;
             return;
         }
     }
@@ -370,7 +371,7 @@ struct Audio::Impl {
         address &= 0x00fffffe;
 
         // Work RAM
-        if (address < 0x040000) {
+        if (address < SOUND_RAM_END) {
             uint32_t off = address & 0xfffe;
             m_work_ram[off] = (value >> 8) & 0xff;
             m_work_ram[off + 1] = value & 0xff;
@@ -378,8 +379,8 @@ struct Audio::Impl {
         }
 
         // Shared DPRAM
-        if (address >= 0x140000 && address < 0x141000) {
-            uint32_t idx = (address - 0x140000) >> 1;
+        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
+            uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
             if (m_shared_ram && idx < m_shared_ram_size) {
                 m_shared_ram[idx] = (value >> 8) & 0xff;
             }
@@ -393,20 +394,20 @@ struct Audio::Impl {
         }
 
         // MC68681 DUART
-        if (address >= 0x280000 && address < 0x280020) {
+        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
             m_duart.write((address >> 1) & 0x0f, value & 0xff);
             return;
         }
 
         // MB87078 Volume
-        if (address >= 0x340000 && address < 0x340004) {
+        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
             uint32_t offset = (address >> 1) & 1;
             m_volume.write(offset ^ 1, (value >> 8) & 0xff);
             return;
         }
 
         // Work RAM mirror
-        if (address >= 0xff0000) {
+        if (address >= SOUND_RAM_HIGH_BASE) {
             uint32_t off = address & 0xfffe;
             m_work_ram[off] = (value >> 8) & 0xff;
             m_work_ram[off + 1] = value & 0xff;
@@ -719,6 +720,7 @@ size_t Audio::state_size() const {
 }
 
 void Audio::save_state(std::span<uint8_t> dst) const {
+    static_assert(Snapshotable<Impl>);
     if (m_impl->m_hle) { m_impl->m_hle->save(dst); return; }
     if (dst.size() != state_size()) {
         throw std::invalid_argument("Audio::save_state size mismatch");
@@ -741,4 +743,6 @@ void Audio::load_state(std::span<const uint8_t> src) {
         throw std::logic_error("Audio::load_state remaining unread bytes");
     }
 }
+
+static_assert(SnapshotRoot<Audio>);
 } // namespace f3rt

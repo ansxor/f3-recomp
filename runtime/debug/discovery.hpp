@@ -11,7 +11,17 @@
 //   video-fallback  game renderer fell back to the FDP/oracle frame, with the component and reason.
 // With `--discovery-all` (set_log_all) known producers are logged too (tagged `known=1`) and sprite RAM
 // writes are logged as video-write even when emit units account for them: an observed writer map.
-// Format: docs/developer/WORKFLOWS.md ("Discovery log").
+// Format: text, one event per line, flushed on each write; `#` lines are comments.
+//   NEW <category> <fields>        first sighting of a (category, key); known=1 when logged under --discovery-all
+//   REPEAT <category> <key> count=N  hit count reached 10, 100, 1000, ...
+//   SUM <category> <fields> count=N  summary written by finish(), then `# TOTAL`
+// Fields are key=value; PCs/addresses are 24-bit hex; frame is 1-based (Machine::frame + 1);
+// t is wall seconds since start; counts are byte writes; no screenshot is taken (the frame
+// buffer completes only at VBSTART and capture differs per renderer).
+// Triage: sprite-stray -> add the PC to [video.frame_writers] with evidence if it is frame
+// setup/clear, else extend or add [[video.emit_units]]; video-write -> add the PC to the game's
+// video_writer_known once understood; video-fallback -> only with --renderer enhanced or a
+// developer renderer. unit-replay-abort and unit-stats appear only in the summary.
 #include <array>
 #include <chrono>
 #include <cstdint>

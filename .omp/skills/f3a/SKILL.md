@@ -10,7 +10,7 @@ discovery, and checks them with headless runs of the real runtime. Static output
 can do. Runs show what it does. A claim is not finished until a run supports it, or it is marked
 `[INFERENCE]`.
 
-Reference: `docs/developer/WORKFLOWS.md`, sections "Game analysis (`uv run f3 analyze`)" and "Scripted input".
+Input-script grammar: the header comment of `runtime/debug/input_script.hpp`.
 Shared findings: `docs/notes/`, through the `re-wiki` skill (`skill://re-wiki`).
 
 ## Start
@@ -75,7 +75,8 @@ one doing the frame work; check the hit counts.
 - Static: `writes --region sprites --ranges`, or `--region 0x660000-0x66001f`. Stack-argument stores
   in routines with no static callers are reported as `stack-arg` (`--unresolved` / `--ranges` note).
 - Observed: `run --all-writers --out D`, then `discover D --ranges`. Filter with `--unknown-only`
-  to highlight video.cpp coverage gaps.
+  to highlight video.cpp coverage gaps. `--all-writers` passes `--discovery-all`, so the log holds the
+  full observed writer map (known writers tagged `known=1`, sprite writes included).
 - The two disagree when the static pass cannot place a pointer (`unknown`/`mixed` rows) or when a
   writer runs only in gameplay (see "Reaching code" below).
 
@@ -97,7 +98,8 @@ Headless runs show attract mode unless the run presses buttons.
 
 - `run --inputs SCRIPT` presses buttons from a script. Rule lines are `700+20 coin`,
   `1200-end mash seed=3`, `2000-2100 p2 right+b1` or `3000-end poke 0x401f54.w=10`. Frames are
-  1-based, the same numbers as dumps and logs.
+  1-based, the same numbers as dumps and logs. The full grammar (mash options, key names) is in
+  `runtime/debug/input_script.hpp`; do not restate it from memory.
 - `--until sub_a,sub_b` stops once the targets have run. Without `--watch` it only sees routines that
   write video or control RAM.
 - `--watch PC,...` logs the frames in which any instruction, such as a branch target, executes. It
@@ -119,6 +121,25 @@ needs) with evidence. In practice:
 - Rare gates (10 round wins, a 1-in-128 random draw) needed `poke`, and then took 3–4 runs.
 
 A poke run shows the code is reachable, not that normal play reaches it. Say so wherever you use it.
+Pokes write main RAM only (`0x400000..0x41ffff`; `xref a5-0xNNNN` prints an a5 global's absolute
+address). A range rewrites the value at the start of every frame, so the game can still change it
+within the frame. Pokes are host/offline-only: netplay rejects scripts that contain them. Any `--inputs`
+script turns fast boot off, so frame numbers stay those of a cold boot.
+
+## Discovery log (playing a game for unhandled video writers)
+
+Play normally (all screens), or `f3a run --all-writers`, with `--discovery-log FILE`. It is observe-only
+(cycles, native blocks and CRCs unchanged). Frames are 1-based; `f3rt-tool sprite-check` prints 0-based
+`Machine::frame`. Triage each `NEW` line by category:
+- `sprite-stray`: sprite-RAM write outside every emit unit from a PC not in `[video.frame_writers]`.
+  If the PC is frame setup/clear, add it to `frame_writers` with evidence; otherwise extend or add a
+  `[[video.emit_units]]` entry. Needs strict native execution and a game that declares emit units.
+- `video-write layer=...`: a store from a PC that `games/<id>/video/video.cpp` `video_writer_known` does
+  not list. Add the PC to that list only once you understand what it writes.
+- `video-fallback`: the game renderer used the FDP oracle (component, reason); only with
+  `--renderer enhanced` or a developer game/compare renderer.
+- Summary only: `unit-replay-abort`, `unit-stats`. Replay mismatches need `f3rt-tool sprite-check`.
+`discover LOG --ranges` prints the observed writers per layer and routine.
 
 ## Traps
 
@@ -131,6 +152,18 @@ A poke run shows the code is reachable, not that normal play reaches it. Say so 
   `--all-writers`.
 - Stack-argument stores in routines with no callers show up as `stack-arg` (not missing coverage of
   executed code).
+
+## Profiles, names and regression
+
+- `profiles/landmakrj.profile` (and `.indirect`) is frozen because it feeds code-generation tiers;
+  `f3a profile --game landmakrj` refuses to overwrite it, so pass `--out FILE` (it also writes
+  `FILE.indirect`). For other games a profile only feeds analysis counts; new runs merge into it unless
+  `--replace`, and `--build` makes the instrumented build first.
+- `games/<id>/analysis/symbols.toml` overrides the names taken from the notes.
+- `f3a mametap --write LO:HI --frames N --run` logs MAME stores/loads with the executing PC
+  (landmakrj ROMs only).
+- Regression suite for the tool itself: `uv run pytest tests/tools/test_f3a.py` (skips what the machine
+  lacks: ROMs, builds).
 
 ## Finishing
 

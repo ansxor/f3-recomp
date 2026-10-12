@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -129,6 +130,32 @@ public:
 private:
     const uint8_t *m_ptr;
     size_t m_remaining;
+};
+
+// Machine snapshot serialization contract:
+// On the success path, state_size/save_state/load_state must not heap-allocate.
+// They serialize into the caller's buffer, which is sized by state_size(), using
+// StateWriter/StateReader and packed fixed-size Canonical* records. state_size()
+// is fixed for a configured machine. Callers own the buffer and may allocate it
+// once (save-slot files in runtime/frontend/state.hpp, the netplay trigger
+// snapshot); per-frame snapshot paths reuse it. Error paths may allocate
+// (exception messages). No host pointers or padding exist in serialized records;
+// diagnostic counters (native_blocks, fallback_instructions) are not serialized;
+// save/load run at frame boundaries on the emulation thread.
+template <typename T>
+concept Snapshotable = requires(const T &c, T &t, StateWriter &w, StateReader &r) {
+    { c.state_size() } -> std::same_as<size_t>;
+    c.save_state(w);
+    t.load_state(r);
+};
+
+// Span-level snapshot root: top-level subsystems (Machine, Audio, Video,
+// GameVideo) that serialize into caller-provided memory spans.
+template <typename T>
+concept SnapshotRoot = requires(const T &c, T &t, std::span<uint8_t> dst, std::span<const uint8_t> src) {
+    { c.state_size() } -> std::same_as<size_t>;
+    c.save_state(dst);
+    t.load_state(src);
 };
 
 #pragma pack(push, 1)
@@ -499,6 +526,43 @@ struct CanonicalGameVideoHeader {
 };
 
 #pragma pack(pop)
+
+// Packed snapshot layout pins. A size change means the on-disk/netplay snapshot
+// format changed: update save/load, state_size and the snapshot version together.
+// Snapshots never store pointers.
+static_assert(sizeof(CanonicalF3Cpu) == 135, "CanonicalF3Cpu snapshot layout changed");
+static_assert(sizeof(CanonicalMachineClocks) == 108, "CanonicalMachineClocks snapshot layout changed");
+static_assert(sizeof(CanonicalEeprom) == 157, "CanonicalEeprom snapshot layout changed");
+static_assert(sizeof(CanonicalMC68681Tx) == 19, "CanonicalMC68681Tx snapshot layout changed");
+static_assert(sizeof(CanonicalMC68681) == 66, "CanonicalMC68681 snapshot layout changed");
+static_assert(sizeof(CanonicalMB87078) == 14, "CanonicalMB87078 snapshot layout changed");
+static_assert(sizeof(CanonicalES5505Voice) == 98, "CanonicalES5505Voice snapshot layout changed");
+static_assert(sizeof(CanonicalES5505) == 3281, "CanonicalES5505 snapshot layout changed");
+static_assert(sizeof(CanonicalES5510Alu) == 19, "CanonicalES5510Alu snapshot layout changed");
+static_assert(sizeof(CanonicalES5510MulAcc) == 30, "CanonicalES5510MulAcc snapshot layout changed");
+static_assert(sizeof(CanonicalES5510Ram) == 6, "CanonicalES5510Ram snapshot layout changed");
+static_assert(sizeof(CanonicalES5510Registers) == 171, "CanonicalES5510Registers snapshot layout changed");
+static_assert(sizeof(CanonicalAudioCore) == 135, "CanonicalAudioCore snapshot layout changed");
+static_assert(sizeof(CanonicalSoundNative) == 140, "CanonicalSoundNative snapshot layout changed");
+static_assert(sizeof(CanonicalTempsprite) == 24, "CanonicalTempsprite snapshot layout changed");
+static_assert(sizeof(CanonicalVideo) == 24938, "CanonicalVideo snapshot layout changed");
+static_assert(sizeof(CanonicalSceneSprite) == 19, "CanonicalSceneSprite snapshot layout changed");
+static_assert(sizeof(CanonicalSceneLayer) == 8, "CanonicalSceneLayer snapshot layout changed");
+static_assert(sizeof(CanonicalScenePlayfield) == 27, "CanonicalScenePlayfield snapshot layout changed");
+static_assert(sizeof(CanonicalSceneClip) == 4, "CanonicalSceneClip snapshot layout changed");
+static_assert(sizeof(CanonicalSceneRow) == 176, "CanonicalSceneRow snapshot layout changed");
+static_assert(sizeof(CanonicalLinePivot) == 12, "CanonicalLinePivot snapshot layout changed");
+static_assert(sizeof(CanonicalLineSprite) == 9, "CanonicalLineSprite snapshot layout changed");
+static_assert(sizeof(CanonicalLinePlayfield) == 24, "CanonicalLinePlayfield snapshot layout changed");
+static_assert(sizeof(CanonicalLineParams) == 167, "CanonicalLineParams snapshot layout changed");
+static_assert(sizeof(CanonicalGameVideoHeader) == 20, "CanonicalGameVideoHeader snapshot layout changed");
+static_assert(offsetof(CanonicalF3Cpu, pc) == 64, "CanonicalF3Cpu layout changed");
+static_assert(offsetof(CanonicalF3Cpu, sr) == 100, "CanonicalF3Cpu layout changed");
+static_assert(offsetof(CanonicalF3Cpu, cc_op) == 116, "CanonicalF3Cpu layout changed");
+static_assert(offsetof(CanonicalF3Cpu, cycles) == 119, "CanonicalF3Cpu layout changed");
+static_assert(offsetof(CanonicalF3Cpu, dispatch_deadline) == 127, "CanonicalF3Cpu layout changed");
+static_assert(sizeof(CanonicalSoundOracle) == sizeof(f3rt_sound_oracle_state), "oracle snapshot alias changed");
+
 inline void require_state(bool valid, std::source_location where = std::source_location::current()) {
     if (!valid) throw std::invalid_argument(std::string("Snapshot field outside canonical representation: ") +
         where.function_name() + ":" + std::to_string(where.line()));

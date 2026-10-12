@@ -1,5 +1,6 @@
 // license:BSD-3-Clause
 #include "renderer/decode.hpp"
+#include "f3rt/memory_map.hpp"
 #include <cstring>
 
 
@@ -142,7 +143,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
     int total_sprites = 0;
     for (int offs = 0; offs < 0x400 && total_sprites < 0x400; ++offs) {
         total_sprites++;
-        const uint32_t bank_offset = state.bank ? 0x8000 : 0x0000;
+        const uint32_t bank_offset = state.bank ? SPRITE_BANK_STRIDE : 0x0000;
         const uint8_t *spr = &spriteram[bank_offset + size_t(offs) * 16];
 
         for (const SpriteSplice &sp : splices) {

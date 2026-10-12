@@ -275,9 +275,11 @@ Machine &require_matching_video(Machine &machine) {
                                  "differs from the geometry this build was configured for");
     return machine;
 }
-static_assert(game_config::video.extend, "the game scene renderer decodes 64-column extended playfields only");
-static_assert(game_config::video.rotation == 0, "the game scene renderer does not rotate the scanout");
-static_assert(game_config::video.sprite_lag == 1, "GameVideo latches sprites with exactly one frame of lag");
+#if F3RT_GAME_VIDEO
+static_assert(game_config::video.extend, "GameVideo decodes 64-column extended playfields only (video.extend = true)");
+static_assert(game_config::video.rotation == 0, "GameVideo does not rotate the scanout (video.rotation == 0)");
+static_assert(game_config::video.sprite_lag == 1, "GameVideo latches sprites with exactly one frame of lag (video.sprite_lag == 1)");
+#endif
 } // namespace
 
 GameVideo::GameVideo(Machine &machine, GameVideoMode mode, GameVideoOptions options)
@@ -367,6 +369,7 @@ void GameVideo::render_frame() {
             std::copy(state.pixels.begin(), state.pixels.end(), m.pixels_.begin());
         // Keep only the oracle's sprite lag current, so an unsupported future
         // frame can use its exact visible result without rerunning the CPU.
+        // Do not remove: without it, a fallback frame's sprite lag is wrong.
         m.video->vblank(m.graphics);
     } else {
         // The game composite is retained across oracle fallback frames, even
@@ -642,6 +645,7 @@ size_t GameVideo::state_size() const {
     return impl_->state_size();
 }
 void GameVideo::save_state(std::span<uint8_t> dst) const {
+    static_assert(Snapshotable<Impl>);
     if (dst.size() != state_size()) {
         throw std::invalid_argument("GameVideo::save_state size mismatch");
     }
@@ -673,4 +677,6 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
         throw std::logic_error("GameVideo::load_state remaining unread bytes");
     }
 }
+
+static_assert(SnapshotRoot<GameVideo>);
 } // namespace f3rt

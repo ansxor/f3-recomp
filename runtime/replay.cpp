@@ -7,6 +7,12 @@
 #include <iostream>
 
 namespace {
+// F3AUD2 trace (tools/mame/README.md): 8-byte header "F3AUD2\0\0", then 16-byte little-endian records:
+//   u64 timestamp (16 MHz ticks), u32 sound-bus address, u16 data, u16 byte-lane mask.
+//   mask 0xffff writes data as 16 bits; otherwise 0xff00 writes data>>8 to address and
+//   0x00ff writes data&0xff to address+1. Address RECORD_RESET resets the sound board; RECORD_END ends the stream.
+constexpr uint32_t RECORD_END = 0xffffffffu;
+constexpr uint32_t RECORD_RESET = 0xfffffffeu;
 int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
                  const std::filesystem::path &output) {
     std::ifstream input(trace, std::ios::binary);
@@ -42,8 +48,8 @@ int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
         const auto address = uint32_t(little(record.data() + 8, 4));
         const auto data = uint16_t(little(record.data() + 12, 2));
         const auto mask = uint16_t(little(record.data() + 14, 2));
-        if (address == 0xffffffff) { ended = true; break; }
-        if (address == 0xfffffffe) { audio.reset_board(); continue; }
+        if (address == RECORD_END) { ended = true; break; }
+        if (address == RECORD_RESET) { audio.reset_board(); continue; }
         if (mask == 0xffff) audio.write16(address, data);
         else {
             if (mask & 0xff00) audio.write8(address, uint8_t(data >> 8));

@@ -557,6 +557,7 @@ int main(int argc,char **argv) try {
         throw std::runtime_error("--video-interp must be off, linear or fit");
     if(video_interp!="off" && video_backend!="gpu")throw std::runtime_error("--video-interp requires --renderer enhanced or compare-gpu");
     if(motion_interp && video_backend!="gpu")throw std::runtime_error("--motion-interp requires --renderer enhanced or compare-gpu");
+    if(motion_interp && allow_fallback)throw std::runtime_error("--motion-interp requires a strict-native title build with no interpreter fallback (--allow-fallback, and the f3rt-run default, are refused)");
     if(postprocess!="off" && postprocess!="crt" && postprocess!="user")
         throw std::runtime_error("--postprocess must be off, crt or user");
     if(postprocess!="off" && video_backend!="gpu")

@@ -1,4 +1,5 @@
 #include "audio/reference/engine.hpp"
+#include "f3rt/memory_map.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -20,24 +21,24 @@ void Engine::set_sample_rom(const uint16_t *rom_words, size_t word_count) {
 
 bool Engine::is_mapped(uint32_t address) const {
     address &= 0x00ffffff;
-    return (address >= 0x200000 && address < 0x200020) ||
-           (address >= 0x260000 && address < 0x260200) ||
-           (address >= 0x300000 && address < 0x300040);
+    return (address >= SOUND_ES5505_BASE && address < SOUND_ES5505_END) ||
+           (address >= SOUND_ES5510_BASE && address < SOUND_ES5510_END) ||
+           (address >= SOUND_BANK_TABLE_BASE && address < SOUND_BANK_TABLE_END);
 }
 
 uint8_t Engine::read8(uint32_t address) {
     address &= 0x00ffffff;
-    if (address >= 0x200000 && address < 0x200020) {
+    if (address >= SOUND_ES5505_BASE && address < SOUND_ES5505_END) {
         uint16_t w = m_es5505.read((address >> 1) & 0x0f);
         return (address & 1) ? uint8_t(w & 0xff) : uint8_t(w >> 8);
     }
-    if (address >= 0x260000 && address < 0x260200) {
+    if (address >= SOUND_ES5510_BASE && address < SOUND_ES5510_END) {
         if (address & 1) {
             return m_es5510.host_r((address >> 1) & 0xff);
         }
         return 0x00;
     }
-    if (address >= 0x300000 && address < 0x300040) {
+    if (address >= SOUND_BANK_TABLE_BASE && address < SOUND_BANK_TABLE_END) {
         uint32_t voice = (address >> 1) & 0x1f;
         uint16_t val = (voice < ES5505::MAX_VOICES) ? m_bank_table[voice] : 0;
         return (address & 1) ? uint8_t(val & 0xff) : uint8_t(val >> 8);
@@ -47,13 +48,13 @@ uint8_t Engine::read8(uint32_t address) {
 
 uint16_t Engine::read16(uint32_t address) {
     address &= 0x00ffffff;
-    if (address >= 0x200000 && address < 0x200020) {
+    if (address >= SOUND_ES5505_BASE && address < SOUND_ES5505_END) {
         return m_es5505.read((address >> 1) & 0x0f);
     }
-    if (address >= 0x260000 && address < 0x260200) {
+    if (address >= SOUND_ES5510_BASE && address < SOUND_ES5510_END) {
         return uint16_t(m_es5510.host_r((address >> 1) & 0xff));
     }
-    if (address >= 0x300000 && address < 0x300040) {
+    if (address >= SOUND_BANK_TABLE_BASE && address < SOUND_BANK_TABLE_END) {
         uint32_t voice = (address >> 1) & 0x1f;
         return (voice < ES5505::MAX_VOICES) ? m_bank_table[voice] : 0;
     }
@@ -66,19 +67,19 @@ uint32_t Engine::read32(uint32_t address) {
 
 void Engine::write8(uint32_t address, uint8_t value) {
     address &= 0x00ffffff;
-    if (address >= 0x200000 && address < 0x200020) {
+    if (address >= SOUND_ES5505_BASE && address < SOUND_ES5505_END) {
         uint16_t mem_mask = (address & 1) ? 0x00ff : 0xff00;
         uint16_t data = (address & 1) ? value : uint16_t(uint16_t(value) << 8);
         m_es5505.write((address >> 1) & 0x0f, data, mem_mask);
         return;
     }
-    if (address >= 0x260000 && address < 0x260200) {
+    if (address >= SOUND_ES5510_BASE && address < SOUND_ES5510_END) {
         if (address & 1) {
             m_es5510.host_w((address >> 1) & 0xff, value);
         }
         return;
     }
-    if (address >= 0x300000 && address < 0x300040) {
+    if (address >= SOUND_BANK_TABLE_BASE && address < SOUND_BANK_TABLE_END) {
         uint32_t voice = (address >> 1) & 0x1f;
         if (voice < ES5505::MAX_VOICES) {
             if (address & 1) {
@@ -93,15 +94,15 @@ void Engine::write8(uint32_t address, uint8_t value) {
 
 void Engine::write16(uint32_t address, uint16_t value) {
     address &= 0x00ffffff;
-    if (address >= 0x200000 && address < 0x200020) {
+    if (address >= SOUND_ES5505_BASE && address < SOUND_ES5505_END) {
         m_es5505.write((address >> 1) & 0x0f, value, 0xffff);
         return;
     }
-    if (address >= 0x260000 && address < 0x260200) {
+    if (address >= SOUND_ES5510_BASE && address < SOUND_ES5510_END) {
         m_es5510.host_w((address >> 1) & 0xff, uint8_t(value & 0xff));
         return;
     }
-    if (address >= 0x300000 && address < 0x300040) {
+    if (address >= SOUND_BANK_TABLE_BASE && address < SOUND_BANK_TABLE_END) {
         uint32_t voice = (address >> 1) & 0x1f;
         if (voice < ES5505::MAX_VOICES) {
             m_bank_table[voice] = value;

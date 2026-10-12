@@ -2,6 +2,7 @@
 
 #include "inputs.hpp"
 #include "f3rt/machine.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/audio.hpp"
 #include "capture_io.hpp"
 #include "debug/profile.hpp"
@@ -27,12 +28,12 @@ std::vector<uint8_t> parse_hex(std::string_view hex_str);
 ScheduledPacket parse_at_schedule(std::string_view spec);
 
 struct RingBufferState {
-    static constexpr size_t RING_SIZE = 1024;
+    static constexpr size_t RING_SIZE = MAILBOX_RING_SIZE;
     static uint16_t read_producer(const Machine &m) {
-        return (uint16_t(m.shared[0x480]) << 8) | m.shared[0x481];
+        return (uint16_t(m.shared[MAILBOX_PRODUCER_H]) << 8) | m.shared[MAILBOX_PRODUCER_L];
     }
     static uint16_t read_consumer(const Machine &m) {
-        return (uint16_t(m.shared[0x482]) << 8) | m.shared[0x483];
+        return (uint16_t(m.shared[MAILBOX_CONSUMER_H]) << 8) | m.shared[MAILBOX_CONSUMER_L];
     }
     static size_t available_bytes(const Machine &m) {
         uint16_t prod_d = read_producer(m);

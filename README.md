@@ -23,9 +23,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --target landmakr -j 4
 ```
 
-For other games, set `-DF3_GAME=rayforce` (or `commandw`, `ridingf`) with a separate build directory. See [build options](docs/site/reference/build-options.md).
+For other games, set `-DF3_GAME=rayforce` (or `commandw`, `ridingf`) with a separate build directory. Build variables (`F3_GAME`, `F3_ROM_DIR`) are defined in `CMakeLists.txt`.
 
-Or use the Make shortcuts, which wrap these commands: `make build GAME=rayforce`, `make test GAME=rayforce`, `make list-games`. Run `make help` for all targets. See [getting started](docs/site/guide/getting-started.md#make-shortcuts).
+Or use the Make shortcuts, which wrap these commands: `make build GAME=rayforce`, `make test GAME=rayforce`, `make list-games`. Run `make help` for all targets.
 
 ## Running
 
@@ -33,7 +33,7 @@ Or use the Make shortcuts, which wrap these commands: `make build GAME=rayforce`
 ./build/landmakr --rom-dir /path/to/roms/landmakr --eeprom build/landmakr.nv
 ```
 
-Run with `--help` for all command-line options, or see the [CLI reference](docs/site/reference/cli.md). Controls and input mapping are documented in the [input guide](docs/site/guide/input.md).
+Run with `--help` for all command-line options.
 
 ## Features
 
@@ -51,11 +51,9 @@ The following ROM sets have tested native builds:
 
 ## Documentation
 
-- [Full documentation](https://ansxor.github.io/f3-recomp/) — Guides, reference, and developer docs
-- [CLI reference](docs/site/reference/cli.md)
-- [Video guide](docs/site/guide/video.md)
-- [Sound guide](docs/site/guide/sound.md)
-- [Developer evidence](docs/developer/README.md)
+- `make help` lists build, test and run targets; each program's `--help` lists its options.
+- [docs/notes/](docs/notes/index.md): per-routine, hardware, quirk and measurement notes for the supported games.
+- [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md): Land Maker sound-driver semantics and native/oracle comparison.
 
 ## Credits
 

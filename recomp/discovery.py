@@ -84,8 +84,27 @@ class ExcludeRegion:
     evidence: str
 
 
+def _verify_fill(fill: object, start: int, end: int, base: int, image: bytes | None, cpu: str) -> None:
+    value = _parse_int_address(fill) if isinstance(fill, (int, str)) else None
+    if value is None or isinstance(fill, bool) or not 0 <= value <= 0xff:
+        raise ValueError(f"{cpu} exclusion [{start:#x}, {end:#x}) fill must be a byte value, got {fill!r}")
+    if image is None:
+        raise ValueError(f"{cpu} exclusion [{start:#x}, {end:#x}) declares fill but no program image was given")
+    span = image[start - base:end - base]
+    if span.count(value) != len(span):
+        offset = next(i for i, byte in enumerate(span) if byte != value)
+        raise ValueError(
+            f"{cpu} exclusion [{start:#x}, {end:#x}) fill {value:#04x} contradicted by "
+            f"byte {span[offset]:#04x} at {start + offset:#x}")
+
+
 def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
-                     base: int = 0) -> list[ExcludeRegion]:
+                     base: int = 0, image: bytes | None = None) -> list[ExcludeRegion]:
+    """Parse [[exclude]] records for ``cpu``.
+
+    An optional ``fill = 0xNN`` asserts every byte of the interval equals NN in the
+    CPU's program ``image`` (loaded at ``base``); a differing byte is an error.
+    """
     regions = []
     records = config.get("exclude", [])
     if not isinstance(records, list):
@@ -104,6 +123,8 @@ def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
             if not isinstance(record.get(key), str) or not record[key].strip():
                 raise ValueError(f"Exclusion [{start:#x}, {end:#x}) requires nonempty {key}")
         regions.append(ExcludeRegion(start, end, record["reason"], record["evidence"]))
+        if "fill" in record:
+            _verify_fill(record["fill"], start, end, base, image, cpu)
     regions.sort(key=lambda region: region.start)
     for previous, region in zip(regions, regions[1:]):
         if previous.end > region.start:
@@ -111,7 +132,11 @@ def parse_exclusions(config: dict, rom_size: int, cpu: str = "main",
     return regions
 
 
+PHYSICAL_ADDRESS_MASK = 0x00ffffff  # 68EC020 24-bit bus: 0xff020000 aliases 0x020000
+
+
 def exclusion_at(regions: list[ExcludeRegion], pc: int) -> ExcludeRegion | None:
+    pc &= PHYSICAL_ADDRESS_MASK
     for region in regions:
         if pc < region.start:
             break
@@ -137,6 +162,16 @@ def _require_included(regions: list[ExcludeRegion], pc: int, source: str) -> Non
             f"[{region.start:#x}, {region.end:#x}): {region.reason}; {region.evidence}")
 
 
+_ROM_KEYS = frozenset({"size", "interleave", "lanes"})
+_ROM_LANE_KEYS = frozenset({"file", "offset", "size", "crc", "sha1"})
+
+
+def _reject_unknown_keys(table: dict, allowed: frozenset[str], where: str, config_path: Path) -> None:
+    unknown = sorted(set(table) - allowed)
+    if unknown:
+        raise ValueError(f"Config '{config_path}': unknown key(s) {unknown} in {where}")
+
+
 def load_rom(config_path: str | Path, rom_dir: str | Path) -> tuple[bytes, dict]:
     """Load and verify ROM lanes according to game config, returning interleaved bytes and config.
 
@@ -151,6 +186,7 @@ def load_rom(config_path: str | Path, rom_dir: str | Path) -> tuple[bytes, dict]
     rom_cfg = config.get("rom")
     if not rom_cfg:
         raise ValueError(f"Config '{config_path}' is missing [rom] section.")
+    _reject_unknown_keys(rom_cfg, _ROM_KEYS, "[rom]", config_path)
 
     total_size = rom_cfg.get("size")
     if not isinstance(total_size, int) or total_size <= 0:
@@ -167,6 +203,7 @@ def load_rom(config_path: str | Path, rom_dir: str | Path) -> tuple[bytes, dict]
     seen_offsets = set()
 
     for lane in lanes:
+        _reject_unknown_keys(lane, _ROM_LANE_KEYS, "[[rom.lanes]]", config_path)
         filename = lane.get("file")
         if not filename:
             raise ValueError(f"Lane definition in '{config_path}' is missing 'file' name.")
@@ -576,7 +613,7 @@ def discover(rom: bytes, config: dict, instruction_decoder=None) -> Discovery:
     scan_callbacks = discovery_cfg.get("scan_callbacks", True)
     inline_string_helpers = {_parse_int_address(pc) for pc in
                              discovery_cfg.get("inline_string_helpers", [])}
-    exclusions = parse_exclusions(config, len(rom))
+    exclusions = parse_exclusions(config, len(rom), image=rom)
 
     proven_seeds: set[int] = set()
     speculative_seeds: set[int] = set()

@@ -39,12 +39,12 @@ uint16_t read_word(f3rt::Eeprom &e, uint64_t now) {
 
 void send_bit(f3rt::Machine &m, bool bit) {
     const uint8_t pins = 0x10 | (bit ? 4 : 0);
-    m.write8(0x4a0013, pins);
-    m.write8(0x4a0013, pins | 8);
+    m.write8(f3rt::EEPROM_PINS, pins);
+    m.write8(f3rt::EEPROM_PINS, pins | 8);
 }
 
 void command(f3rt::Machine &m, unsigned word) {
-    m.write8(0x4a0013, 0);
+    m.write8(f3rt::EEPROM_PINS, 0);
     for (int bit = 8; bit >= 0; --bit)
         send_bit(m, (word >> bit) & 1);
 }
@@ -53,14 +53,14 @@ void serial_write(f3rt::Machine &m, unsigned address, uint16_t value) {
     command(m, 0x140 | address);
     for (int bit = 15; bit >= 0; --bit)
         send_bit(m, (value >> bit) & 1);
-    m.write8(0x4a0013, 0);
+    m.write8(f3rt::EEPROM_PINS, 0);
 }
 
 uint16_t read_word(f3rt::Machine &m) {
     uint16_t value = 0;
     for (int i = 0; i < 16; ++i) {
         send_bit(m, false);
-        value = uint16_t((value << 1) | (m.read8(0x4a0000) & 1));
+        value = uint16_t((value << 1) | (m.read8(f3rt::IO_BASE) & 1));
     }
     return value;
 }
@@ -85,7 +85,7 @@ TEST(Eeprom, FactoryDefaultsAndSerialWrap) {
     roms.factory_eeprom[127] = 0xdc;
     auto m = std::make_unique<f3rt::Machine>(std::move(roms));
     command(*m, 0x1bf);
-    EXPECT_FALSE(m->read8(0x4a0000) & 1)
+    EXPECT_FALSE(m->read8(f3rt::IO_BASE) & 1)
         << "Factory EEPROM read exposes the serial dummy bit through the input port";
     const uint16_t w0 = read_word(*m);
     const uint16_t w1 = read_word(*m);
@@ -94,7 +94,7 @@ TEST(Eeprom, FactoryDefaultsAndSerialWrap) {
         << "Factory EEPROM seeds all addresses big-endian before initial reset, including serial wrap";
 
     command(*m, 0x130);
-    m->write8(0x4a0013, 0); // EWEN
+    m->write8(f3rt::EEPROM_PINS, 0); // EWEN
     serial_write(*m, 0, 0xa65c);
     m->cpu.cycles += 28000;
     m->reset();
@@ -134,7 +134,7 @@ TEST(Eeprom, UserImageOverrideAndPersistence) {
         << "Explicit user EEPROM image overrides factory and prior guest contents across reset";
 
     command(*m, 0x130);
-    m->write8(0x4a0013, 0);
+    m->write8(f3rt::EEPROM_PINS, 0);
     serial_write(*m, 0, 0xd42e);
     m->cpu.cycles += 28000;
     m->reset();

@@ -1,6 +1,6 @@
 // f3rt-tool netplay-replay: offline replay and diff of netplay desync bundles.
 //
-// A bundle (see docs/site/guide/netplay.md) holds this peer's machine state at match frame 0 (trigger.f3s) and every input
+// A bundle (written by MatchRecorder::write_bundle, runtime/netplay/recorder.hpp) holds this peer's machine state at match frame 0 (trigger.f3s) and every input
 // word pair it applied (inputs.txt). Replaying those through run_lockstep_frame - the same function the live session
 // uses - reproduces the peer's match locally, so:
 //   * one bundle: verify the replay reproduces the recorded hash bytes / full state at the mismatch frame

@@ -1,12 +1,17 @@
 #ifndef F3RT_STATE_ORACLE_H
 #define F3RT_STATE_ORACLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* Packed snapshot image of the Musashi core (m68ki_cpu). Adding an m68ki_cpu field
+ * that affects execution requires adding it here, to both f3rt_sound_core_export
+ * and f3rt_sound_core_import in runtime/core_state.c, and updating the size assert
+ * below. Snapshots never store pointers. */
 #pragma pack(push, 1)
 typedef struct f3rt_sound_oracle_state {
     uint32_t cpu_type;
@@ -63,6 +68,18 @@ typedef struct f3rt_sound_oracle_state {
     uint8_t sound_needs_reset;
 } f3rt_sound_oracle_state;
 #pragma pack(pop)
+
+#ifdef __cplusplus
+#define F3RT_STATE_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define F3RT_STATE_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+F3RT_STATE_ASSERT(sizeof(f3rt_sound_oracle_state) == 355,
+                  "f3rt_sound_oracle_state size changed: update export/import and snapshot version");
+F3RT_STATE_ASSERT(offsetof(f3rt_sound_oracle_state, mmu_sr) == 352,
+                  "f3rt_sound_oracle_state layout changed");
+F3RT_STATE_ASSERT(offsetof(f3rt_sound_oracle_state, sound_needs_reset) == 354,
+                  "f3rt_sound_oracle_state layout changed");
 
 void f3rt_sound_core_export(const void *context, f3rt_sound_oracle_state *dst);
 void f3rt_sound_core_import(void *context, const f3rt_sound_oracle_state *src);

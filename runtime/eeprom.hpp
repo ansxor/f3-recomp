@@ -123,4 +123,5 @@ private:
         }
     }
 };
+static_assert(Snapshotable<Eeprom>);
 }

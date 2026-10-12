@@ -10,7 +10,16 @@ using f3test::fixture;
 
 namespace {
 using Words = std::array<f3rt::LocalInputWord, f3rt::local_player_count>;
-constexpr uint32_t ports[] = {0x4a0002, 0x4a0006, 0x4a0012, 0x4a0016};
+// Input MMIO lines, as offsets from f3rt::IO_BASE.
+constexpr uint32_t IO_SYSTEM = f3rt::IO_BASE;
+constexpr uint32_t IO_SYSTEM_LANE1 = f3rt::IO_BASE + 0x01;
+constexpr uint32_t INPUT_PORT_P1 = f3rt::IO_BASE + 0x02;
+constexpr uint32_t INPUT_PORT_P2 = f3rt::IO_BASE + 0x06;
+constexpr uint32_t INPUT_PORT_P3 = f3rt::IO_BASE + 0x12;
+constexpr uint32_t INPUT_PORT_P4 = f3rt::IO_BASE + 0x16;
+constexpr uint32_t DIAL_COUNTER_A = f3rt::IO_BASE + 0x08;
+constexpr uint32_t DIAL_COUNTER_B = f3rt::IO_BASE + 0x0c;
+constexpr uint32_t ports[] = {INPUT_PORT_P1, INPUT_PORT_P2, INPUT_PORT_P3, INPUT_PORT_P4};
 constexpr uint16_t button_masks[4][4] = {
     {0x0001, 0x0002, 0x0004, 0x0008}, {0x0010, 0x0020, 0x0040, 0x0080},
     {0x0100, 0x0200, 0x0400, 0x0800}, {0x1000, 0x2000, 0x4000, 0x8000}};
@@ -27,17 +36,17 @@ TEST(Input, LocalControlsActiveLowMapping) {
         auto roms = fixture();
         roms.input.six_button = six_button;
         auto m = std::make_unique<f3rt::Machine>(std::move(roms));
-        m->write16(0x4a0004, 0x0ba6);
-        m->write16(0x4a0014, 0x0975);
+        m->write16(f3rt::COIN_BANK0, 0x0ba6);
+        m->write16(f3rt::COIN_BANK1, 0x0975);
         const auto expect = [&](const std::array<uint16_t, 4> &low, uint8_t system) {
             for (unsigned port = 0; port < low.size(); ++port)
                 EXPECT_EQ(m->read16(ports[port]), low[port])
                     << "Local controls reach only their physical active-low MMIO lines";
-            EXPECT_EQ(m->read8(0x4a0000) & 0xfe, system)
+            EXPECT_EQ(m->read8(IO_SYSTEM) & 0xfe, system)
                 << "Coins and test reach both system-byte MMIO lanes without pinning EEPROM DO";
-            EXPECT_EQ(m->read8(0x4a0001) & 0xfe, system)
+            EXPECT_EQ(m->read8(IO_SYSTEM_LANE1) & 0xfe, system)
                 << "Coins and test reach both system-byte MMIO lanes without pinning EEPROM DO";
-            EXPECT_TRUE(m->read16(0x4a0004) == 0x0ba6 && m->read16(0x4a0014) == 0x0975)
+            EXPECT_TRUE(m->read16(f3rt::COIN_BANK0) == 0x0ba6 && m->read16(f3rt::COIN_BANK1) == 0x0975)
                 << "Applying controls preserves both readable coin-counter banks";
         };
         const unsigned players = six_button ? 2 : f3rt::local_player_count;
@@ -80,22 +89,22 @@ TEST(Input, DialNibblePackingAndDirectionCancellation) {
         roms.input.dial = true;
         auto m = std::make_unique<f3rt::Machine>(std::move(roms));
         const auto expect = [&](uint32_t first, uint32_t second) {
-            EXPECT_TRUE(m->read32(0x4a0008) == first && m->read32(0x4a000c) == second)
+            EXPECT_TRUE(m->read32(DIAL_COUNTER_A) == first && m->read32(DIAL_COUNTER_B) == second)
                 << "Both twelve-bit dial counters expose the native big-endian nibble-packed MMIO words";
         };
         expect(0xffff0000, 0xffff0000);
         f3rt::apply_local_inputs(*m, {4, 8, 0, 0});
         expect(0xffffe0ff, 0xffff2000);
-        EXPECT_TRUE(m->read8(0x4a000a) == 0xe0 && m->read8(0x4a000b) == 0xff &&
-                    m->read16(0x4a000e) == 0x2000 && m->read16(0x4a0006) == 0xff7b)
+        EXPECT_TRUE(m->read8(DIAL_COUNTER_A + 2) == 0xe0 && m->read8(DIAL_COUNTER_A + 3) == 0xff &&
+                    m->read16(DIAL_COUNTER_B + 2) == 0x2000 && m->read16(INPUT_PORT_P2) == 0xff7b)
             << "Dial arrows also reach each player's real native joystick bits and byte lanes";
         f3rt::apply_local_inputs(*m, {});
         expect(0xffffe0ff, 0xffff2000);
-        EXPECT_EQ(m->read16(0x4a0006), 0xffff)
+        EXPECT_EQ(m->read16(INPUT_PORT_P2), 0xffff)
             << "Neutral input releases joystick lines without clearing dial history";
         f3rt::apply_local_inputs(*m, {0xc, 0xc, 0, 0});
         expect(0xffffe0ff, 0xffff2000);
-        EXPECT_EQ(m->read16(0x4a0006), 0xff33)
+        EXPECT_EQ(m->read16(INPUT_PORT_P2), 0xff33)
             << "Opposite arrows cancel counter motion while preserving native joystick inputs";
         f3rt::apply_local_inputs(*m, {8, 4, 0, 0});
         expect(0xffff0000, 0xffff0000);
@@ -132,15 +141,15 @@ TEST(Input, DialNibblePackingAndDirectionCancellation) {
 
 TEST(Input, CoinCounterRisingEdge) {
     auto m = std::make_unique<f3rt::Machine>(fixture());
-    m->write8(0x4a0004, 0x04);
-    m->write8(0x4a0004, 0x04);
+    m->write8(f3rt::COIN_BANK0, 0x04);
+    m->write8(f3rt::COIN_BANK0, 0x04);
     EXPECT_EQ(m->coin_count[0], 1) << "Coin counter rising-edge only";
 }
 
 TEST(Input, StartButtonActiveLow) {
     auto m = std::make_unique<f3rt::Machine>(fixture());
     m->set_input(0, 0x1000, true);
-    EXPECT_FALSE(m->read32(0x4a0000) & 0x1000) << "Active-low start input";
+    EXPECT_FALSE(m->read32(IO_SYSTEM) & 0x1000) << "Active-low start input";
 }
 
 // RapidCheck property: Local input bit packing preserves active-low invariant on port lines.

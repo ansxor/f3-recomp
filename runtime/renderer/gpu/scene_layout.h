@@ -49,6 +49,11 @@
 #define F3_ROW_MOTION_TEXT_X 14u // 24.8 text scroll; read only with the motion layer-mask bit
 #define F3_ROW_MOTION_TEXT_Y 15u
 
+// Layer numbering of LayerId (runtime/renderer/game/scene.hpp). scene.glsl takes LAYER_COUNT,
+// LAYER_SP0 and LAYER_TEXT from these; encode.cpp static_asserts them against LayerId.
+#define F3_SCENE_LAYER_COUNT 9u
+#define F3_SCENE_LAYER_SP0 4u
+#define F3_SCENE_LAYER_TEXT 8u
 // Layer blocks: nine per row, indexed by LayerId (0..3 PF, 4..7 SP, 8 text).
 #define F3_ROW_LAYERS 16u
 #define F3_LAYER_STRIDE 34u

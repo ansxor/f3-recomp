@@ -871,4 +871,6 @@ void ES5510::load_state(StateReader &reader) {
     reader.read_bytes(m_dram.get(), sizeof(int16_t) * DRAM_SIZE);
 }
 
+static_assert(Snapshotable<ES5510>);
+
 } // namespace f3rt

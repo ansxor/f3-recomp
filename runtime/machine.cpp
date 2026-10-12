@@ -1,4 +1,5 @@
 #include "f3rt/machine.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
@@ -15,29 +16,7 @@
 
 namespace f3rt {
 namespace {
-// Main 68020 bus map (Taito F3). *_END bounds are exclusive.
-constexpr uint32_t ROM_END = 0x200000;              // program ROM window, 2 MiB
-constexpr uint32_t RAM_BASE = 0x400000;             // work RAM
-constexpr uint32_t RAM_END = 0x440000;              // 128 KiB RAM mirrored across 256 KiB
-constexpr uint32_t RAM_MIRROR_MASK = 0x1ffff;
-constexpr uint32_t PALETTE_BASE = 0x440000;         // palette RAM
-constexpr uint32_t PALETTE_END = 0x448000;
-constexpr uint32_t IO_BASE = 0x4a0000;              // TC0640FIO: inputs on read, below on write
-constexpr uint32_t IO_END = 0x4a0020;
-constexpr uint32_t WATCHDOG = 0x4a0000;             // 4 bytes; any write kicks the watchdog
-constexpr uint32_t COIN_BANK0 = 0x4a0004;           // lockout/counter byte; +1 is the word's low byte
-constexpr uint32_t COIN_BANK1 = 0x4a0014;
-constexpr uint32_t EEPROM_PINS = 0x4a0013;          // serial EEPROM clock/data/select
-constexpr uint32_t TIMER_CONTROL = 0x4c0000;        // 16-bit, big-endian
-// Graphics RAM sub-regions: video.cpp OFFS_* (sprites, playfields, text, glyphs, line, pivot).
-constexpr uint32_t GRAPHICS_BASE = 0x600000;
-constexpr uint32_t GRAPHICS_END = 0x640000;
-constexpr uint32_t CONTROL_BASE = 0x660000;         // PF0-3 X/Y scroll, then pivot/text regs
-constexpr uint32_t CONTROL_END = 0x660020;
-constexpr uint32_t SHARED_BASE = 0xc00000;          // RAM shared with the sound CPU
-constexpr uint32_t SHARED_END = 0xc00800;
-constexpr uint32_t SOUND_RESET_RELEASE = 0xc80000;  // 4 bytes; write releases sound CPU reset
-constexpr uint32_t SOUND_RESET_ASSERT = 0xc80100;   // 4 bytes; write holds sound CPU in reset
+
 
 // Decode once only when every byte is contiguous and has no observable bus
 // side effect. All boundary/mirror-wrap cases retain ordered byte accesses.
@@ -55,7 +34,7 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
         return m.palette.data() + (a - PALETTE_BASE);
     if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
         // Sprite-RAM stores must reach SpriteUnits/sprite_writers (entry attribution), so they take the byte path.
-        if constexpr (Write) if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < 0x10000) return nullptr;
+        if constexpr (Write) if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE) return nullptr;
         // Discovery logging must see every graphics store byte by byte (PC attribution).
         if constexpr (Write) if (m.discovery) return nullptr;
         return m.graphics.data() + (a - GRAPHICS_BASE);
@@ -70,7 +49,7 @@ uint8_t *direct_bytes(Machine &m, uint32_t a) {
 Machine::Machine(RomSet set) : pixels_(320 * set.video.visible_height),
     roms(std::move(set)), video(std::make_unique<Video>()),
     audio(std::make_unique<Audio>()), eeprom(std::make_unique<Eeprom>()) {
-    if (roms.main.size() < 0x400 || roms.main.size() > ROM_END || roms.main.size() % 4)
+    if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END || roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
     if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Invalid video ROM regions");
@@ -208,7 +187,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
         if (discovery) discovery->video_write(cpu.pc, a);
         const uint32_t offset = a - GRAPHICS_BASE;
-        if (sprite_writers && offset < 0x10000) (*sprite_writers)[offset >> 4] = cpu.pc;
+        if (sprite_writers && offset < SPRITE_RAM_SIZE) (*sprite_writers)[offset >> 4] = cpu.pc;
         graphics[offset] = v;
         if (sprite_units) sprite_units->note_write(a, 1);
         return;
@@ -596,4 +575,6 @@ uint32_t Machine::state_crc() const {
     save_state(state_scratch_);
     return crc32(state_scratch_.data(), state_scratch_.size());
 }
+
+static_assert(SnapshotRoot<Machine>);
 } // namespace f3rt

@@ -136,15 +136,15 @@ void publish_packet(Machine &m, const std::vector<uint8_t> &pkt, uint64_t curren
     m.cpu.cycles = current_cycles;
 
     for (size_t i = 0; i < pkt.size(); ++i) {
-        uint32_t ring_addr = 0xc00000 + ((prod_byte + i) & 0x3ff);
+        uint32_t ring_addr = SHARED_BASE + ((prod_byte + i) & MAILBOX_RING_MASK);
         m.write8(ring_addr, pkt[i]);
     }
 
     size_t next_prod_byte = (prod_byte + pkt.size()) & 0x3ff;
     uint16_t new_prod_d = uint16_t((next_prod_byte * 2) & 0x7fe);
 
-    m.write8(0xc00480, uint8_t(new_prod_d >> 8));
-    m.write8(0xc00481, uint8_t(new_prod_d & 0xff));
+    m.write8(MAIN_MAILBOX_PRODUCER_H, uint8_t(new_prod_d >> 8));
+    m.write8(MAIN_MAILBOX_PRODUCER_L, uint8_t(new_prod_d & 0xff));
 }
 
 MachineRunner::MachineRunner(RunnerConfig config)

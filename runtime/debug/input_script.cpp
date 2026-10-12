@@ -1,4 +1,5 @@
 #include "debug/input_script.hpp"
+#include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
 
 #include <charconv>
@@ -84,7 +85,7 @@ InputScript InputScript::parse(std::string_view text, const std::string &source)
             if (!rule.poke_size) throw std::runtime_error(where + ": poke size must be .b, .w or .l");
             const uint64_t address = number(spec.substr(0, dot), where);
             const uint64_t value = number(spec.substr(equals + 1), where);
-            if (address < 0x400000 || address + rule.poke_size > 0x420000)
+            if (address < RAM_BASE || address + rule.poke_size > RAM_PHYSICAL_END)
                 throw std::runtime_error(where + ": poke address must be main RAM 0x400000..0x41ffff "
                                          "(a5 globals: f3a xref a5-0xNNNN prints the absolute address)");
             if (rule.poke_size < 4 && value >> (8 * rule.poke_size))
@@ -155,7 +156,7 @@ void InputScript::poke(Machine &machine, uint64_t frame) const {
     for (const Rule &rule : rules_) {
         if (!rule.poke_size || frame < rule.begin || frame > rule.end) continue;
         for (unsigned i = 0; i < rule.poke_size; ++i)
-            machine.ram[rule.poke_address - 0x400000 + i] = uint8_t(rule.poke_value >> (8 * (rule.poke_size - 1 - i)));
+            machine.ram[rule.poke_address - RAM_BASE + i] = uint8_t(rule.poke_value >> (8 * (rule.poke_size - 1 - i)));
     }
 }
 bool InputScript::has_pokes() const {

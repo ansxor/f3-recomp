@@ -1,5 +1,7 @@
 #include "audio/hle/synth.hpp"
 #include "audio/hle/voice_kernel.hpp"
+#include "f3rt/memory_map.hpp"
+#include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
 #include <bit>
 #include <array>
@@ -156,59 +158,59 @@ struct Synth::Impl {
     alignas(64) uint8_t lane_pair[32]{};
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
-        if (r.size() != 0x80000 || s.size() < 0x80000 || !std::has_single_bit(s.size()))
+        if (r.size() != SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE || !std::has_single_bit(s.size()))
             throw std::runtime_error("HLE requires mapped sound and power-of-two sample ROM regions");
-        board_bank_mask = (samples.size() >= 0x100000) ? unsigned((samples.size() / 0x100000) - 1) : 0;
+        board_bank_mask = (samples.size() >= sound_5a7e9117::SAMPLE_BANK_SIZE) ? unsigned((samples.size() / sound_5a7e9117::SAMPLE_BANK_SIZE) - 1) : 0;
         metadata.reserve(0x10000);
         frame_ticks.reserve(1024);
         buffered_events.reserve(32);
         decode_banks();
         // c15fb4..c15fde heap header overlaps bankc8 sample0. Decode the boot
         // operands rather than assuming sample metadata remains ROM-identical.
-        uint32_t heap_base=rw(0xc15fb6);
-        uint32_t heap_limit=longword(rom_pointer(0xc15fba,4))+longword(rom_pointer(0xc15fc0,4));
-        uint32_t heap_size=heap_limit-heap_base-longword(rom_pointer(0xc15fcc,4));
-        uint32_t heap_next=longword(rom_pointer(0xc15fd8,4));
-        if (heap_base >= 0x6e9c && heap_base - 0x6e9c + 8 <= metadata.size()) {
+        uint32_t heap_base=rw(sound_5a7e9117::HEAP_BASE_PTR);
+        uint32_t heap_limit=longword(rom_pointer(sound_5a7e9117::HEAP_LIMIT_PTR_A,4))+longword(rom_pointer(sound_5a7e9117::HEAP_LIMIT_PTR_B,4));
+        uint32_t heap_size=heap_limit-heap_base-longword(rom_pointer(sound_5a7e9117::HEAP_RESERVE_PTR,4));
+        uint32_t heap_next=longword(rom_pointer(sound_5a7e9117::HEAP_NEXT_PTR,4));
+        if (heap_base >= sound_5a7e9117::HEAP_METADATA_OFFSET && heap_base - sound_5a7e9117::HEAP_METADATA_OFFSET + 8 <= metadata.size()) {
             for(unsigned i=0;i<4;++i){
-                metadata[heap_base-0x6e9c+i]=uint8_t(heap_size>>(24-i*8));
-                metadata[heap_base-0x6e9c+4+i]=uint8_t(heap_next>>(24-i*8));
+                metadata[heap_base-sound_5a7e9117::HEAP_METADATA_OFFSET+i]=uint8_t(heap_size>>(24-i*8));
+                metadata[heap_base-sound_5a7e9117::HEAP_METADATA_OFFSET+4+i]=uint8_t(heap_next>>(24-i*8));
             }
         }
         cache_programs();
-        for (unsigned i=0;i<rates.size();++i) rates[i]=rw(0xc089dc+2*i);
-        for (unsigned i=0;i<phase_rates.size();++i) phase_rates[i]=rw(0xc08aa4+2*i);
-        for (unsigned i=0;i<filters.size();++i) filters[i]=rw(0xc08e6c+2*i);
-        for (unsigned i=0;i<pitches.size();++i) pitches[i]=rw(0xc09e6c+2*i);
-        bend_range=uint8_t(rw(0xc085f2)); // ROM startup address/value pair cf64,0002.
-        reset_start=((uint32_t(rw(0xc17b60))<<16)|rw(0xc17b62))&0x1fffffe0;
-        reset_end=((uint32_t(rw(0xc17b64))<<16)|rw(0xc17b66))&0x1fffffe0;
-        for (unsigned i=0;i<128;++i) { attenuation[i]=rb(0xc08bec+i); pan[i]=rb(0xc08b6c+i); }
-        for (unsigned i=0;i<512;++i) velocity_curves[i]=rb(0xc08c6c+i);
-        for (unsigned i=0;i<12;++i) budgets[i]=rb(0xc1a56e + i);
+        for (unsigned i=0;i<rates.size();++i) rates[i]=rw(sound_5a7e9117::RATE_TABLE+2*i);
+        for (unsigned i=0;i<phase_rates.size();++i) phase_rates[i]=rw(sound_5a7e9117::PHASE_RATE_TABLE+2*i);
+        for (unsigned i=0;i<filters.size();++i) filters[i]=rw(sound_5a7e9117::FILTER_TABLE+2*i);
+        for (unsigned i=0;i<pitches.size();++i) pitches[i]=rw(sound_5a7e9117::PITCH_TABLE+2*i);
+        bend_range=uint8_t(rw(sound_5a7e9117::BEND_RANGE_PTR)); // ROM startup address/value pair cf64,0002.
+        reset_start=((uint32_t(rw(sound_5a7e9117::RESET_START_PTR))<<16)|rw(sound_5a7e9117::RESET_START_PTR+2))&0x1fffffe0;
+        reset_end=((uint32_t(rw(sound_5a7e9117::RESET_END_PTR))<<16)|rw(sound_5a7e9117::RESET_END_PTR+2))&0x1fffffe0;
+        for (unsigned i=0;i<128;++i) { attenuation[i]=rb(sound_5a7e9117::ATTENUATION_TABLE+i); pan[i]=rb(sound_5a7e9117::PAN_TABLE+i); }
+        for (unsigned i=0;i<512;++i) velocity_curves[i]=rb(sound_5a7e9117::VELOCITY_CURVE_TABLE+i);
+        for (unsigned i=0;i<12;++i) budgets[i]=rb(sound_5a7e9117::BUDGET_TABLE + i);
         for (unsigned i=0;i<256;++i) {
             gain[i]=float((((i&15)|16)<<11)>>(16-(i>>4)))/2048;
         }
         reset(0);
     }
     uint8_t rb(uint32_t a) const {
-        if (a<0xc00000 || a>=0xc80000) throw std::runtime_error("HLE immutable ROM address out of range");
-        return rom[a-0xc00000];
+        if (a<SOUND_ROM_BASE || a>=SOUND_ROM_END) throw std::runtime_error("HLE immutable ROM address out of range");
+        return rom[a-SOUND_ROM_BASE];
     }
     uint16_t rw(uint32_t a) const { return uint16_t((uint16_t(rb(a))<<8)|rb(a+1)); }
     const uint8_t *rom_pointer(uint32_t a, size_t bytes) const {
-        if (a<0xc00000 || bytes>rom.size() || a-0xc00000>rom.size()-bytes)
+        if (a<SOUND_ROM_BASE || bytes>rom.size() || a-SOUND_ROM_BASE>rom.size()-bytes)
             throw std::runtime_error("HLE descriptor exceeds sound ROM");
-        return rom.data()+a-0xc00000;
+        return rom.data()+a-SOUND_ROM_BASE;
     }
     void append_word(uint16_t w) { metadata.push_back(uint8_t(w>>8)); metadata.push_back(uint8_t(w)); }
     void decode_banks() {
         // c0b4a4..c0b610: immutable PCM metadata, including expanded flag word.
-        const size_t num_banks = std::min(size_t(16), samples.size() / 0x80000);
+        const size_t num_banks = std::min(size_t(16), samples.size() / sound_5a7e9117::SAMPLE_HALF_BANK_SIZE);
         for (unsigned b=0;b<num_banks;++b) {
-            unsigned at=0, base=b*0x80000;
+            unsigned at=0, base=b*sound_5a7e9117::SAMPLE_HALF_BANK_SIZE;
             auto sample_word=[&]() {
-                if (at>=0x80000 || base+at>=samples.size()) throw std::runtime_error("HLE sample metadata exceeds half-bank");
+                if (at>=sound_5a7e9117::SAMPLE_HALF_BANK_SIZE || base+at>=samples.size()) throw std::runtime_error("HLE sample metadata exceeds half-bank");
                 return samples[base+at++];
             };
             uint16_t flag=sample_word(); bool packed=(flag&0x8000)!=0;
@@ -237,16 +239,16 @@ struct Synth::Impl {
                 for (unsigned j=0;j<7;++j) append_word(data_word());
                 if (metadata[begin+5]==127) break;
             }
-            uint16_t tag=(base+0x7ffff<samples.size())?samples[base+0x7ffff]:0; bank.tag=uint8_t(packed?tag>>8:tag);
+            uint16_t tag=(base+sound_5a7e9117::SAMPLE_TAG_PROBE_OFFSET<samples.size())?samples[base+sound_5a7e9117::SAMPLE_TAG_PROBE_OFFSET]:0; bank.tag=uint8_t(packed?tag>>8:tag);
         }
     }
     void cache_programs() {
         for(unsigned id=0;id<programs.size();++id){
-            unsigned index=id,column=0;uint32_t base=0xc00134;
-            if(index>=80){base+=0x3fc0;index-=80;if(index>=10){index-=10;++column;}}
+            unsigned index=id,column=0;uint32_t base=sound_5a7e9117::PROGRAM_DATA_BASE;
+            if(index>=80){base+=sound_5a7e9117::PROGRAM_COLUMN_STRIDE;index-=80;if(index>=10){index-=10;++column;}}
             if(index>=40){index-=40;++column;}
-            ProgramData &data=programs[id];data.base=rom_pointer(base+index*0x198+column,0x198);
-            data.enabled=data.base[0x196]>>5;data.sample_banks.fill(-1);
+            ProgramData &data=programs[id];data.base=rom_pointer(base+index*sound_5a7e9117::PROGRAM_RECORD_STRIDE+column,sound_5a7e9117::PROGRAM_RECORD_STRIDE);
+            data.enabled=data.base[sound_5a7e9117::PROGRAM_ENABLED_OFFSET]>>5;data.sample_banks.fill(-1);
             auto find_bank=[&](uint8_t tag){
                 int8_t result=-2;
                 for(unsigned b=0;b<banks.size();++b)if(banks[b].count && banks[b].tag==tag)result=int8_t(b);
@@ -254,9 +256,9 @@ struct Synth::Impl {
             };
             if(!data.enabled){
                 const uint8_t *p=data.base;uint32_t mask=0;
-                for(unsigned i=0;i<4;++i)mask=(mask<<8)|p[0x154+2*i];
-                if(p[0x15c]=='X'&&p[0x15e]=='E')
-                    for(unsigned i=0;i<17;++i)if(mask&(1u<<i))data.sample_banks[i]=find_bank(p[0x160]);
+                for(unsigned i=0;i<4;++i)mask=(mask<<8)|p[sound_5a7e9117::PROGRAM_BANK_MASK_OFFSET+2*i];
+                if(p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_0]=='X'&&p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_1]=='E')
+                    for(unsigned i=0;i<17;++i)if(mask&(1u<<i))data.sample_banks[i]=find_bank(p[sound_5a7e9117::PROGRAM_DEFAULT_BANK_OFFSET]);
             }else{
                 for(unsigned layer=0;layer<3;++layer){
                     const uint8_t *p=data.base+layer*0x76;unsigned marker=0,tag=0;
@@ -289,7 +291,7 @@ struct Synth::Impl {
         } else {
             selector=uint8_t(board_bank_mask * 2);
             if(id>120)throw std::runtime_error("HLE ROM split ID exceeds table");
-            uint32_t address=uint32_t(0xc1ae76+int16_t(rw(0xc1c1e0+id*2)));
+            uint32_t address=uint32_t(sound_5a7e9117::SPLIT_TABLE_BASE+int16_t(rw(sound_5a7e9117::SPLIT_DIRECTORY+id*2)));
             data=rom_pointer(address,14);available=rom.size()-size_t(data-rom.data());
         }
         unsigned key=uint8_t(pitch>>8);
@@ -307,7 +309,7 @@ struct Synth::Impl {
         v.glide_destination=destination;
         if(!rate_index){v.glide=0;v.glide_target=destination;return;}
         int difference=s16(destination-v.glide_target);
-        v.glide=s16((int64_t(difference)*s16(rw(0xc089dc+2*rate_index))*2)>>16);
+        v.glide=s16((int64_t(difference)*s16(rw(sound_5a7e9117::RATE_TABLE+2*rate_index))*2)>>16);
         if(!v.glide)v.glide_target=destination;
     }
     void advance_glide(Voice &v) {
@@ -387,7 +389,7 @@ struct Synth::Impl {
         unsigned wave=((p[0x6a]&15)<<8)|(v.lfo_phase>>8);
         int modulation=source(v,p[0x64]&15);
         int depth=std::clamp(int(v.lfo_depth)+modulation,0,32767);
-        v.lfo=s16((depth*int(s8(rb(0xc0a73c+wave))))>>7);
+        v.lfo=s16((depth*int(s8(rb(sound_5a7e9117::LFO_WAVE_TABLE+wave))))>>7);
     }
     void update_random(Voice &v) {
         if(--v.random_countdown)return;
@@ -401,8 +403,8 @@ struct Synth::Impl {
     }
     void parameters(Voice &v,bool initial,uint64_t at,bool notify=true) {
         const uint8_t *p=v.patch;const Channel &c=v.owner.channel;
-        int common=attenuation[c.parameters[0x20]&127]+attenuation[c.sequence_volume&127];
-        if(c.parameters[0x14])common+=uint8_t(c.parameters[0x14]+127);
+        int common=attenuation[c.parameters[sound_5a7e9117::CHANNEL_PARAM_VOLUME]&127]+attenuation[c.sequence_volume&127];
+        if(c.parameters[sound_5a7e9117::CHANNEL_PARAM_EXPRESSION])common+=uint8_t(c.parameters[sound_5a7e9117::CHANNEL_PARAM_EXPRESSION]+127);
         int pan_position;
         if(v.direct){
             int curve=(p[0x12]>>6)*128+v.owner.velocity;
@@ -410,9 +412,9 @@ struct Synth::Impl {
             int scale=s16(0x4000-(128-velocity_curves[unsigned(curve)])*sensitivity)>>6;
             if(initial){
                 Envelope &e=v.envelope[2];e.position=(uint32_t(uint16_t((p[0x10]&127)*scale))<<16)|0x7fff;
-                e.slope=-s16(rw(0xc089dc+2*(p[0]&127)));e.target=(uint32_t(uint16_t((e.position>>16)^0x8000)))<<16;
+                e.slope=-s16(rw(sound_5a7e9117::RATE_TABLE+2*(p[0]&127)));e.target=(uint32_t(uint16_t((e.position>>16)^0x8000)))<<16;
             }
-            pan_position=c.parameters[0x26]==128?((p[0x12]&15)^8)<<3:(s8(c.parameters[0x26])>>1)+64;
+            pan_position=c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN]==128?((p[0x12]&15)^8)<<3:(s8(c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN])>>1)+64;
             int level=(v.envelope[2].level()>>5)+((p[0x10]&128)?0xa8:0);
             v.left_volume=volume_target((common+pan[unsigned(127-pan_position)])*4+level,0xfa0);
             v.right_volume=volume_target((common+pan[unsigned(pan_position)])*4+level,0xfa0);
@@ -426,7 +428,7 @@ struct Synth::Impl {
                 int factor=s8(p[0x62]);int value=(x*factor)>>15;if(factor>=0)value-=factor;base=(value+127)*2;
             }
             base+=attenuation[p[0x5e]&127]+((p[0x5e]&128)?43:0)+common+attenuation[v.weight&127];
-            int pan_value=s8(c.parameters[0x26]);if(pan_value<=-127)pan_value=s8(p[0x4e]&0xf0);
+            int pan_value=s8(c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN]);if(pan_value<=-127)pan_value=s8(p[0x4e]&0xf0);
             pan_position=(pan_value>>1)+64;
             int env=v.envelope[2].level()>>5;
             v.left_volume=volume_target((base+pan[unsigned(127-pan_position)])*4+env,0x1b64);
@@ -440,10 +442,10 @@ struct Synth::Impl {
             v.k1=coefficient(first);v.k2=coefficient(second,(p[0x44]&128)?0:1024);
             int pitch_env=s16(v.envelope[0].level()-((p[0xc]&127)<<8));
             int64_t pitch_mod=int64_t(pitch_env)*s8(p[0x40])+int64_t(v.lfo)*s8(p[0x42]);
-            int depth=s8(p[0x46]);int multiplier=rw(0xc0a46c+unsigned(std::abs(depth))*2);
+            int depth=s8(p[0x46]);int multiplier=rw(sound_5a7e9117::PITCH_MOD_TABLE+unsigned(std::abs(depth))*2);
             if(depth<0)multiplier=-s16(multiplier);
             pitch_mod+=(int64_t(source(v,p[0x44]&15))*multiplier)>>4;
-            int bend=s16(parameter_word(c,0xa)-0x4000);
+            int bend=s16(parameter_word(c,sound_5a7e9117::VOICE_OWNER_OFFSET)-0x4000);
             pitch_mod>>=4;pitch_mod+=int64_t(bend)*bend_range;pitch_mod>>=6;
             v.pitch=s16(v.glide_target+v.split.tuning+int(pitch_mod));
             if(v.split.mode&128){
@@ -545,7 +547,7 @@ struct Synth::Impl {
             uint8_t velocity=v.owner.velocity;
             v.owner=n;v.owner.velocity=velocity;v.released=false;
             int16_t destination=s16(((patch[0x48]&128)?kernel:60)*256+s8(patch[0x3e])*2+(patch[0x3c]<<8));
-            set_glide(v,destination,prog[0x17e]);
+            set_glide(v,destination,prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET]);
             parameters(v,false,n.tick);return;
         }
         stop(v,n.tick);v=Voice{};v.owner=n;v.patch=patch;v.layer=uint8_t(layer);
@@ -553,20 +555,20 @@ struct Synth::Impl {
         v.weight=uint8_t(weight);v.serial=++serial;
         if(direct){
             int key=(patch[2]&128)?uint8_t(kernel-patch[10]+60):60;
-            key=s8(key+s8(n.channel.parameters[0x35])+s8(patch[6]));
+            key=s8(key+s8(n.channel.parameters[sound_5a7e9117::CHANNEL_PARAM_TRANSPOSE])+s8(patch[6]));
             v.pitch=s16(std::clamp(key*256,0,0x7f00)|((patch[8]&15)<<4));
         }else{
             v.glide_target=s16(((patch[0x48]&128)?kernel:60)*256+s8(patch[0x3e])*2+(patch[0x3c]<<8));
             v.pitch=std::clamp(int(v.glide_target),0,0x7f00);
-            if(prog[0x17e]&&(mode==2||prior_found)){
+            if(prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET]&&(mode==2||prior_found)){
                 int16_t destination=v.glide_target;
-                v.glide_target=prior_found?s16(prior_pitch):s16(uint8_t(n.channel.parameters[0x22]+patch[0x3c])*256);
-                set_glide(v,destination,prog[0x17e]);
+                v.glide_target=prior_found?s16(prior_pitch):s16(uint8_t(n.channel.parameters[sound_5a7e9117::CHANNEL_PARAM_PITCH]+patch[0x3c])*256);
+                set_glide(v,destination,prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET]);
             }
             for(unsigned i=0;i<3;++i)initialize_envelope(v.envelope[i],patch+i*20,v,i==2);
             v.lfo_target=int16_t((patch[0x66]&127)<<8);
             v.lfo_phase=(patch[0x66]&128)?0:noise;
-            v.lfo_step=int16_t((uint32_t(v.lfo_target)*rw(0xc089dc+(patch[0x6a]&0xf0)))>>16);
+            v.lfo_step=int16_t((uint32_t(v.lfo_target)*rw(sound_5a7e9117::RATE_TABLE+(patch[0x6a]&0xf0)))>>16);
             v.filter.mode=uint8_t((patch[0x44]>>6)&3);
             unsigned period=(patch[0x64]&0xf0)>>1;
             period=(period|(period>>4));v.random_period=v.random_countdown=uint16_t((-int(period))&127);
@@ -577,7 +579,7 @@ struct Synth::Impl {
         unsigned id=(direct?patch[4]:patch[0x6c])&127;
         if(direct&&id==0x78)throw std::runtime_error("ROM direct sample78 enters infinite branch c1968e");
         uint32_t bit=uint32_t(v.selector&1)<<28;unsigned board=((v.selector>>1)&board_bank_mask)<<20;
-        uint8_t control=(!direct&&id>=0x6f&&id<0x78)?0x0b:rb(0xc0a734+v.split.mode);
+        uint8_t control=(!direct&&id>=0x6f&&id<0x78)?0x0b:rb(sound_5a7e9117::SPLIT_MODE_TABLE+v.split.mode);
         v.reverse=((direct?patch[4]:patch[0x6c])&128)&&id<0x54;
         if(v.reverse)control=0x43;
         uint32_t start=v.reverse?v.split.accumulator:v.split.start;
@@ -589,7 +591,7 @@ struct Synth::Impl {
             uint32_t d0=patch[0x72];
             uint32_t d1=std::min(uint32_t(d0+patch[0x70]),0xfau);
             d0*=14;d1*=14;
-            const uint32_t split_table=0xc1ae84;
+            const uint32_t split_table=sound_5a7e9117::SPECIAL_SPLIT_TABLE;
             uint32_t d4=longword(rom_pointer(split_table+d0+2,4));
             if(d4==0x1dcaa07f){
                 d0+=14;
@@ -597,12 +599,12 @@ struct Synth::Impl {
                 if(d0==d1)d1+=14;
             }
             uint32_t d5=longword(rom_pointer(split_table+d1+2,4));
-            if(d5==0x1dcaa07f)d5=longword(rom_pointer(split_table+d1+0x14,4));
+            if(d5==0x1dcaa07f)d5=longword(rom_pointer(split_table+d1+sound_5a7e9117::SPLIT_RECORD_STRIDE,4));
             v.reverse=(patch[0x6c]&128)!=0;
             control=v.reverse?0x4b:0x0b;
             start=d4;end=d5;
             phase=v.reverse?d5:d4;
-            if(v.reverse)start+=0x800;
+            if(v.reverse)start+=sound_5a7e9117::REVERSE_START_OFFSET;
         }
         v.loop=(control&8)!=0;v.bidirectional=(control&16)!=0;
         v.start=double(board)+double((start|bit)&0x1fffffe0)/512;
@@ -661,7 +663,7 @@ struct Synth::Impl {
         if(v.direct){
             if(v.patch[0]&128)return;
             Envelope &e=v.envelope[2];e.done=false;e.position&=0xffff0000;
-            e.slope=wrap_product(-int64_t(0x7f00)*s16(rw(0xc089dc+2*(v.patch[2]&127)))*2);
+            e.slope=wrap_product(-int64_t(0x7f00)*s16(rw(sound_5a7e9117::RATE_TABLE+2*(v.patch[2]&127)))*2);
             e.target=e.slope<=0?0x80000000:0;e.stage=4;
         }else{
             for(Envelope &e:v.envelope){if(e.flags&64)continue;e.done=false;e.stage=4;segment(e,0,e.rates[3]);}
@@ -689,7 +691,7 @@ struct Synth::Impl {
         for(Pending &p:pending)p.active=false;
         for(unsigned i=0;i<32;++i){next[i]=uint8_t((i+1)%32);voice_prev[i]=uint8_t((i+31)%32);}
         tick=at;tick_remainder=0;timer=(at/timer_ticks+1)*timer_ticks;cursor=0;budget_slot=0;
-        noise=rw(0xc16f04);noise_history=rw(0xc16f0a);
+        noise=rw(sound_5a7e9117::NOISE_SEED_PTR);noise_history=rw(sound_5a7e9117::NOISE_HISTORY_PTR);
         serial=0;buffered_events.clear();buffering_events=false;
     }
     void service(uint64_t at) {

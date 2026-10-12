@@ -497,4 +497,6 @@ void MC68681::load_state(StateReader &reader) {
     update_interrupts();
 }
 
+static_assert(Snapshotable<MC68681>);
+
 } // namespace f3rt

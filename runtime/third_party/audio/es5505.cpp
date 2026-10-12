@@ -686,4 +686,6 @@ void ES5505::load_state(StateReader &reader) {
     }
 }
 
+static_assert(Snapshotable<ES5505>);
+
 } // namespace f3rt

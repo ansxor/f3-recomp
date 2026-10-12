@@ -23,23 +23,11 @@ struct VideoRam {
     }
 };
 
-class StateWriter;
-class StateReader;
-
 // A scene component decoded from video RAM at VBSTART.
 template<class T>
 concept SceneSource = requires(T &t, const VideoRam &vram) {
     t.reset();
     t.decode(vram);
-};
-
-// A component serialized into machine snapshots; components rebuilt
-// purely from video RAM are not.
-template<class T>
-concept Snapshotable = requires(const T &c, T &t, StateWriter &w, StateReader &r) {
-    { c.state_size() } -> std::same_as<size_t>;
-    c.save_state(w);
-    t.load_state(r);
 };
 
 // Tile index within an asset ROM of `count` 16x16 tiles (the ROM decides the

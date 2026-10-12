@@ -4,13 +4,21 @@
 
 ## Games
 
-- [[games/landmakrj]] (hypothesis) — Land Maker: tool setup, input scripts, routine index
-- [[games/commandw]] (hypothesis) — Command War: tool setup, findings awaiting ingest
+- [[games/landmakrj]] (hypothesis) — Land Maker: tool setup, input scripts, ROM layout (FF fills, data banks, Japan vs World), boot/EEPROM, routine index
+- [[games/commandw]] (hypothesis) — Command War: tool setup, object loop index, findings awaiting ingest
 
 ## Routines
 
 - [[routines/landmakrj-0008e20c-round-task]] (hypothesis) — round task; the round-end gate opens at 0x401f54 ≥ 10 (or ≥ 3)
 - [[routines/landmakrj-0008edde-versus-mode-transition]] (hypothesis) — versus mode latch and 2P join transition; word 0x401f6e transitions 0 -> 1
+- [[routines/landmakrj-000041d0-sprite-list-writers]] (hypothesis) — sprite-list setup, single/grid/scaled compilers, deferred draw queue, boot RAM self-test
+- [[routines/landmakrj-000a8e0c-display-object-loop]] (hypothesis) — display-object loop and object sprite helpers
+- [[routines/landmakrj-00005cd8-line-ram-producers]] (hypothesis) — per-layer producer PCs, effect scenes (PF2 water, PF0 wave, alpha) and fallback conditions
+- [[routines/commandw-00009a0e-object-loop]] (hypothesis) — Command War object loop, LoD fields, shadow-flicker gate, other sprite-RAM writers
+- [[routines/landmakrj-000030be-sound-selector-dispatch]] (hypothesis) — main-side sound selector table (96 selectors) and descriptor types
+- [[routines/landmakrj-00c12ecc-sound-command-dispatch]] (hypothesis) — sound driver packet framing and command set 0x20/0x21/0x80..0x90
+- [[routines/landmakrj-00c10da0-sound-timer-irq]] (hypothesis) — 1 ms DUART tick, sequence accumulator (625 threshold), software envelopes
+- [[routines/landmakrj-00c14730-sequence-event-decode]] (hypothesis) — sequence stream/header banks, event classes, programs, sample splits
 
 ## Hardware: board and CPU side
 
@@ -43,6 +51,10 @@
 - [[hardware/interrupts]] (hypothesis) — main CPU IRQ levels 2/3/5, int5 timer at 0x4C0000, MAME's model
 - [[hardware/fio]] (hypothesis) — TC0640FIO port map: inputs, dials, coin counters/lockouts, EEPROM, watchdog/reset
 - [[hardware/sound]] (hypothesis) — sound 68000 map; confirmed OTIS→ESP wiring and Enhanced hardware-routing test
+- [[hardware/es5505-otis]] (hypothesis) — runtime ES5505 model: registers, CR bits, banking at 0x300000, sample ROM layout
+- [[hardware/es5510-esp]] (hypothesis) — runtime ES5510 model: host interface, instruction format, DUART halt, Land Maker effects inventory
+- [[hardware/duart-and-volume]] (hypothesis) — DUART 1 ms timer and ESP halt, MB87078, host gain stages, when the game sets master volume
+- [[hardware/sound-mailbox]] (hypothesis) — shared RAM byte lanes, 1024-byte command ring with doubled indices, packet framing
 
 ## Quirks
 
@@ -63,3 +75,4 @@
 - [[comparisons/hardware-vs-mame-video]] (hypothesis) — notes vs MAME 0.289: sprites, tilemaps/pivot, line RAM, blend/priority/clip/mosaic/colour
 - [[comparisons/hardware-vs-mame-system]] (hypothesis) — notes vs MAME 0.289: clocks/raster, interrupts 2/3/5, address map, FIO/input
 - [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing; Enhanced now follows it while Reference retains MAME routing
+- [[comparisons/runtime-vs-mame-attract-capture]] (hypothesis) — 25 attract frames identical to MAME (1,856,000 pixels), capture protocol, MAME revision, limits

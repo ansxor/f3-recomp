@@ -281,4 +281,6 @@ void GameSprites::load_state(StateReader &reader) {
     presented_submitted_valid_ = presented_current_valid_ = false;
 }
 
+static_assert(Snapshotable<GameSprites>);
+
 } // namespace f3rt

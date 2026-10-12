@@ -1,0 +1,81 @@
+---
+source_url: runtime/renderer/fdp/video.cpp
+ingested: 2026-10-11
+sha256: 4bfd1c35f81a8439a68c60f2b9904393d2a893b8435d298e6356133bbc164cd5
+game: landmakrj
+rom_sha256: aa050f39f5810c90bc20d1e3ed1c2510b1df067242535ad80aa86b3d174d49bc
+captured_with: "this runtime, snapshot 2026-10-11"
+---
+<!-- excerpt: runtime/renderer/fdp/video.cpp lines 631-640 (line RAM $6400 bit decode) -->
+            }
+            for (auto &sp : line.sp) {
+                sp.x_sample_enable = (x_mosaic & 0x100) != 0;
+            }
+            line.pivot.x_sample_enable = (x_mosaic & 0x200) != 0;
+            line.palette_15bit = (x_mosaic & 0x4000) == 0;
+            line.blur = (x_mosaic & 0x2000) == 0;
+        }
+        if (uint32_t where = latched_addr(2, 3)) {
+            line.bg_palette = read_be16(&lineram[where]);
+
+<!-- excerpt: runtime/renderer/fdp/video.cpp lines 941-1000 (render_line: 15-bit conversion, blend, blur) -->
+    template<bool palette15>
+    void render_line(uint32_t *dst, const mix_pix &z, const uint8_t *palette_ram, bool blur) {
+        for (unsigned int x = H_START; x < H_START + H_VIS; ++x) {
+            uint32_t s_pal = z.src_pal[x] & 0x1fff;
+            uint32_t d_pal = z.dst_pal[x] & 0x1fff;
+
+            uint32_t s_col = read_be32(&palette_ram[s_pal * 4]);
+            uint32_t d_col = read_be32(&palette_ram[d_pal * 4]);
+            if constexpr (palette15) {
+                // FDA: RRRRGGGGBBBBRGBx; five-bit channels are shifted, not replicated.
+                const auto color15 = [](uint32_t color) {
+                    return ((color & 0xf000u) << 8) | ((color & 8u) << 16) |
+                           ((color & 0x0f00u) << 4) | ((color & 4u) << 9) |
+                           (color & 0x00f0u) | ((color & 2u) << 2);
+                };
+                s_col = color15(s_col);
+                d_col = color15(d_col);
+            }
+
+            uint16_t r1 = (s_col >> 16) & 0xff;
+            uint16_t g1 = (s_col >> 8) & 0xff;
+            uint16_t b1 = s_col & 0xff;
+
+            uint16_t r2 = (d_col >> 16) & 0xff;
+            uint16_t g2 = (d_col >> 8) & 0xff;
+            uint16_t b2 = d_col & 0xff;
+
+            r1 *= z.src_blend[x];
+            g1 *= z.src_blend[x];
+            b1 *= z.src_blend[x];
+
+            r2 *= z.dst_blend[x];
+            g2 *= z.dst_blend[x];
+            b2 *= z.dst_blend[x];
+
+            r1 += r2;
+            g1 += g2;
+            b1 += b2;
+
+            r1 >>= 3;
+            g1 >>= 3;
+            b1 >>= 3;
+
+            r1 = std::min<uint16_t>(r1, 255);
+            g1 = std::min<uint16_t>(g1, 255);
+            b1 = std::min<uint16_t>(b1, 255);
+
+            dst[x - H_START] = 0xff000000 | (uint32_t(r1) << 16) | (uint32_t(g1) << 8) | uint32_t(b1);
+        }
+        if (blur) {
+            uint32_t previous = 0;
+            for (int x = 0; x < H_VIS; ++x) {
+                const uint32_t color = dst[x];
+                const uint32_t rb = (((color & 0x00ff00ffu) + (previous & 0x00ff00ffu)) >> 1) & 0x00ff00ffu;
+                const uint32_t g = (((color & 0x0000ff00u) + (previous & 0x0000ff00u)) >> 1) & 0x0000ff00u;
+                dst[x] = 0xff000000u | rb | g;
+                previous = color;
+            }
+        }
+    }

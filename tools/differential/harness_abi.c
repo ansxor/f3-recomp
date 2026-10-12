@@ -326,20 +326,21 @@ void diff_musashi_setup(void) {
         /* Vectors: SP=0x00028000 at 0, PC=0x00010000 at 4 */
         uint8_t vectors[8] = { 0x00, 0x02, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00 };
         diff_env_write_bytes(&setup_env, 0, vectors, 8);
-        /* Put NOP (0x4E71) at 0x00010000 */
+        static const uint32_t HARNESS_SMOKE_PC = 0x00010000;
+        static const uint32_t HARNESS_SMOKE_PC_AFTER_NOP = 0x00010002;
+        /* Put NOP (0x4E71) at HARNESS_SMOKE_PC */
         uint8_t nop[2] = { 0x4E, 0x71 };
-        diff_env_write_bytes(&setup_env, 0x00010000, nop, 2);
-
+        diff_env_write_bytes(&setup_env, HARNESS_SMOKE_PC, nop, 2);
         m68k_pulse_reset();
         /* Drain all reset cycles without running code */
         m68k_execute(1);
 
         /* Smoke verification: run exactly 1 NOP and assert PC advances to 0x00010002 */
-        m68k_set_reg(M68K_REG_PC, 0x00010000);
+        m68k_set_reg(M68K_REG_PC, HARNESS_SMOKE_PC);
         s_musashi_insn_count = 0;
         m68k_execute(1);
         uint32_t smoke_pc = m68k_get_reg(NULL, M68K_REG_PC);
-        if (s_musashi_insn_count != 1 || smoke_pc != 0x00010002) {
+        if (s_musashi_insn_count != 1 || smoke_pc != HARNESS_SMOKE_PC_AFTER_NOP) {
             fprintf(stderr, "FATAL: Musashi smoke test failed! insn_count=%d, pc=0x%08X (expected 1, 0x00010002)\n",
                     s_musashi_insn_count, smoke_pc);
             exit(1);
