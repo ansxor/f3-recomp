@@ -15,9 +15,6 @@ on:
       - 'tools/**'
       - 'tests/**'
       - 'netplay/**'
-      - 'vcpkg.json'
-      - 'vcpkg-configuration.json'
-      - 'vcpkg'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
@@ -32,9 +29,6 @@ on:
       - 'tools/**'
       - 'tests/**'
       - 'netplay/**'
-      - 'vcpkg.json'
-      - 'vcpkg-configuration.json'
-      - 'vcpkg'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -55,20 +49,17 @@ jobs:
         game: [commandw, bubblemj]
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch vcpkg submodule
-        id: vcpkg
-        run: |
-          git submodule update --init vcpkg
-          echo "commit=$(git rev-parse HEAD:vcpkg)" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
-      - name: Cache vcpkg binaries
+        # Prebuilt distro packages; CPM builds the rest from source (cmake/dependencies.cmake).
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev libgtest-dev
+      - name: Cache CPM sources
         uses: actions/cache@v4
         with:
-          path: ~/.cache/vcpkg/archives
+          path: ~/.cache/CPM
+          key: cpm-${{ hashFiles('cmake/dependencies.cmake', 'cmake/CPM.cmake') }}
       - name: Configure
         run: cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
       - name: Build runtime unit tests

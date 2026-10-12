@@ -53,13 +53,15 @@ source notices. All four original notice paragraphs are retained verbatim
 in third_party/musashi/softfloat source files, and the legal overview is in
 third_party/musashi/softfloat/README.txt. No modifications to SoftFloat code.
 
-Linked from the vcpkg submodule (vcpkg.json), not vendored: SDL3 (zlib
+Linked via CPM.cmake (cmake/dependencies.cmake), not vendored: SDL3 (zlib
 license), Dear ImGui (MIT), Google Highway (Apache-2.0 or BSD-3-Clause),
 zlib (zlib license), Yojimbo / netcode / reliable / serialize (BSD-3-Clause,
 Glenn Fiedler and Rowan Claude), bundled libsodium (ISC), bundled TLSF (BSD-2-Clause),
 cpp-httplib (MIT), yyjson (MIT), cpp-yyjson (MIT); tests only: GoogleTest (BSD-3-Clause),
-RapidCheck (BSD-2-Clause). Each package's license is installed by vcpkg to
-vcpkg_installed/<triplet>/share/<package>/copyright in the build directory.
+RapidCheck (BSD-2-Clause); GPU shader tools only, when not installed: glslang
+(BSD-3-Clause and others), SPIRV-Cross (Apache-2.0); zlib may be built from
+zlib-ng (zlib license). Packages built from source keep their license files in
+the CPM source cache (CPM_SOURCE_CACHE, default ~/.cache/CPM).
 No ROMs, generated game code, decoded graphics, or captured game media are
 included in the committed runtime sources.
 

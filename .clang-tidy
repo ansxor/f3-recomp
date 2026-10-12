@@ -9,7 +9,7 @@ Checks: >
   readability-identifier-naming
 WarningsAsErrors: ''
 HeaderFilterRegex: '(include|runtime|netplay|games)/'
-ExcludeHeaderFilterRegex: '(third_party|vcpkg_installed)/'
+ExcludeHeaderFilterRegex: '(third_party|_deps|\.cache/CPM)/'
 CheckOptions:
   bugprone-misplaced-widening-cast.CheckImplicitCasts: false
   bugprone-sizeof-expression.WarnOnSizeOfIntegerExpression: true

@@ -93,7 +93,6 @@ def find_rom_dir() -> Path | None:
 
 def find_tool_binary() -> Path | None:
     candidates = [
-        ROOT / "build-vcpkg/f3rt-tool",
         ROOT / "build-landmakrj/f3rt-tool",
         ROOT / "build/f3rt-tool",
     ]
@@ -105,7 +104,6 @@ def find_tool_binary() -> Path | None:
 
 def find_or_build_server_binary() -> tuple[list[str], Path | None]:
     candidates = [
-        ROOT / "build-vcpkg/f3-netplay-server",
         ROOT / "build/netplay-server",
     ]
     for c in candidates:

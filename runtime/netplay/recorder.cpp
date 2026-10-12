@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 
@@ -197,7 +198,7 @@ uint32_t MatchRecorder::on_report(Machine &m, uint32_t completed_frame) {
     uint8_t phase = 0;
     if (m_hook && m_hook->sync_hash_region) {
         uint8_t buf[MAX_HASHED_BYTES];
-        const size_t n = m_hook->sync_hash_region(m, buf, phase);
+        const size_t n = m_hook->sync_hash_region(m, std::span<uint8_t>(buf, MAX_HASHED_BYTES), phase);
         crc = crc32(buf, n);
         e.hashed.assign(buf, buf + n);
     } else {

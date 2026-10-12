@@ -1,29 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
 option(F3RT_SDL "Build SDL3 frontend" ON)
-option(F3RT_GPU "Build SDL3 GPU presentation (offline SPIR-V/MSL shader tools required)" ON)
+option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
-# Every C/C++ dependency comes from the vcpkg submodule in manifest mode (vcpkg.json).
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-    set(_f3_vcpkg_toolchain "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
-    if(NOT EXISTS "${_f3_vcpkg_toolchain}")
-        message(FATAL_ERROR "vcpkg submodule missing. Run: git submodule update --init vcpkg")
-    endif()
-    set(CMAKE_TOOLCHAIN_FILE "${_f3_vcpkg_toolchain}" CACHE FILEPATH "vcpkg toolchain")
-endif()
-set(VCPKG_MANIFEST_FEATURES "")
-if(F3RT_SDL)
-    list(APPEND VCPKG_MANIFEST_FEATURES frontend)
-    if(F3RT_GPU)
-        list(APPEND VCPKG_MANIFEST_FEATURES gpu)
-    endif()
-endif()
-if(BUILD_TESTING)
-    list(APPEND VCPKG_MANIFEST_FEATURES tests)
-endif()
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(cmake/dependencies.cmake)
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -283,7 +266,6 @@ target_compile_definitions(f3rt_musashi PRIVATE M68K_EMULATE_030=0 M68K_EMULATE_
 add_custom_target(f3rt_musashi_generated DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.h)
 add_dependencies(f3rt_musashi f3rt_musashi_generated)
 
-find_package(ZLIB REQUIRED)
 file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 # A game opts into the de-HLE'd GameVideo scene by providing games/<game>/video/.
 file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
@@ -413,13 +395,8 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
-# Google Highway: runtime-dispatched SIMD for the HLE voice kernel.
-find_package(hwy CONFIG REQUIRED)
-find_package(cpp_yyjson CONFIG REQUIRED)
 target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy cpp_yyjson::cpp_yyjson)
 target_link_libraries(f3rt PUBLIC f3-netplay-shared)
-find_package(Yojimbo CONFIG REQUIRED)
-find_package(httplib CONFIG REQUIRED)
 
 add_library(f3-netplay-shared STATIC
     netplay/shared/contract.cpp
@@ -445,7 +422,6 @@ add_executable(f3-netplay-server
 target_link_libraries(f3-netplay-server PRIVATE f3-netplay-relay)
 
 if(BUILD_TESTING)
-    find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
     add_executable(f3-netplay-relay-test
         netplay/server/tests/relay_test.cpp
@@ -506,8 +482,6 @@ if(F3_GENERATED_DIR)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_GENERATED=1)
 endif()
 if(F3RT_SDL)
-    find_package(SDL3 CONFIG REQUIRED)
-    find_package(imgui CONFIG REQUIRED)
     add_library(f3rt-ui STATIC runtime/frontend/settings.cpp runtime/frontend/ui.cpp)
     target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(f3rt-ui PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
@@ -530,8 +504,6 @@ if(F3RT_SDL)
     endif()
     if(F3RT_GPU)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
-        find_program(F3_GLSLANG glslangValidator REQUIRED)
-        find_program(F3_SPIRV_CROSS spirv-cross REQUIRED)
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
         add_custom_command(OUTPUT "${VIDEO_SHADER_HEADER}"
             COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
@@ -543,6 +515,7 @@ if(F3RT_SDL)
                 runtime/renderer/shaders/sprite.frag runtime/renderer/shaders/scene.frag
                 runtime/renderer/shaders/scene_interp.frag runtime/renderer/shaders/scene_body.glsl
                 runtime/renderer/shaders/postprocess.frag runtime/renderer/gpu/scene_layout.h
+                ${F3_SHADER_TOOL_TARGETS}
             VERBATIM)
         add_library(f3rt-gpu STATIC runtime/renderer/gpu/video.cpp runtime/renderer/gpu/encode.cpp runtime/renderer/gpu/interp.cpp runtime/renderer/gpu/motion.cpp "${VIDEO_SHADER_HEADER}")
         if(APPLE)
@@ -582,9 +555,7 @@ include(CTest)
 if(BUILD_TESTING)
     add_test(NAME game-geometry-literals COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake)
-    find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
-    find_package(rapidcheck CONFIG REQUIRED)
 
     add_library(f3rt-test-support STATIC runtime/tests/support.cpp runtime/renderer/gpu/motion.cpp)
     target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt_musashi f3rt-runner GTest::gtest rapidcheck_gtest)

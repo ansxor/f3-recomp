@@ -9,8 +9,14 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 **macOS:**
 ```sh
 brew install cmake ninja uv
-git submodule update --init vcpkg
+# Optional: prebuilt libraries/tools, used instead of source builds when present.
+brew install sdl3 highway yyjson cpp-httplib googletest glslang spirv-cross
 ```
+
+C/C++ dependencies come from [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) (`cmake/dependencies.cmake`).
+Installed packages (Homebrew, distro, Vulkan SDK) are linked as-is; anything missing is fetched at a
+pinned tag and built from source, with sources cached in `~/.cache/CPM` across build directories.
+Pass `-DCPM_DOWNLOAD_ALL=ON` to ignore installed packages.
 
 **Build steps** (using your own legally obtained ROMs):
 

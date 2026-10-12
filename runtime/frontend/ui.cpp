@@ -6,6 +6,7 @@
 #include "imgui_impl_sdlgpu3.h"
 #endif
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <stdexcept>
 

@@ -1,4 +1,5 @@
 #include "relay.hpp"
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
