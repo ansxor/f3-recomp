@@ -1,7 +1,7 @@
 ---
 title: Land Maker sound driver command dispatch (c12ecc) and command set
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 type: routine
 tags: [audio, dispatch, sound-driver, mailbox]
 sources:
@@ -11,11 +11,12 @@ sources:
   - raw/tests/landmakrj-sound-rom-structure-check.md
   - raw/tests/landmakrj-seed5-sound-trace.md
   - raw/tests/landmakrj-sound-image-crc.md
+  - raw/disasm/landmakrj-sound-driver-excerpts.md
 games: [landmakrj]
-addresses: [0x00C12ECC, 0x00C0B414, 0x00C1323E, 0x00C13260, 0x00C13072, 0x00C141CE]
+addresses: [0x00C12ECC, 0x00C0B414, 0x00C1323E, 0x00C13260, 0x00C13072, 0x00C141CE, 0x00C12F1A, 0x00C12C30, 0x00C12CB8, 0x00C12CEA, 0x00C12DE6, 0x00C130D2, 0x00C14330, 0x00C130DA, 0x00C11DCE, 0x00C130EA, 0x00C140D6]
 status: hypothesis
 evidence:
-  - {kind: doc, ref: raw/docs/runtime-audio-mailbox.md, note: "command table derived from sound-ROM analysis in docs/SOUND-DRIVER.md; the runtime documentation did not re-derive it"}
+  - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "disassembly of opcode handlers 82 ($c12f1a->$c12c30), 8c ($c130d2->$c14330), 8d ($c130da->$c11dce), 8e ($c130ea->$c140d6), sequence bit 7 selection, and alias chain walk $c12de6"}
   - {kind: test, ref: raw/tests/landmakrj-sound-rom-structure-check.md, note: "0xc13260 length table and 0xc1323e handler table read from the ROM image and matching the table below"}
   - {kind: trace, ref: raw/tests/landmakrj-seed5-sound-trace.md, note: "seed-5 trace: 852 packets published, consumed and dispatched; every non-startup ES5505 start has a RAM-linked source command"}
 contradictions: []
@@ -25,8 +26,8 @@ supersedes: []
 # Sound driver command dispatch
 
 Sound-CPU address space (`0xc00000` ROM window). The ROM is the Japan sound program, CRC32 `5a7e9117` of the
-assembled 0x80000-byte image (recomputed from the lane files). ^[raw/docs/runtime-audio-sequences.md] ^[raw/tests/landmakrj-sound-image-crc.md] Full driver evidence lives in
-`docs/SOUND-DRIVER.md` (stays in the repository); this page keeps the command grammar and addresses
+assembled 0x80000-byte image (recomputed from the lane files). ^[raw/docs/runtime-audio-sequences.md] ^[raw/tests/landmakrj-sound-image-crc.md]
+Disassembly excerpts and handler targets are verified in ^[raw/disasm/landmakrj-sound-driver-excerpts.md]; this page keeps the command grammar and addresses
 needed to read packets. Framing and the ring are on [[hardware/sound-mailbox]]; the main-side producer is
 [[routines/landmakrj-000030be-sound-selector-dispatch]].
 
@@ -59,7 +60,7 @@ ROM and agree with the documented handlers and lengths; the table entries are 16
 | `0x21` | 4 | parameter, value | store byte at `$c84a + 2*parameter` (`$c0b47e`) |
 | `0x80` | 3 | sequence | stop and restart, non-looping (`$c12f20`, start `$c12ce0`) |
 | `0x81` | 3 | sequence | stop and restart, looping (`$c12f26`, start `$c12ce6`) |
-| `0x82` | 3 | sequence | stop and remove (`$c12f1a`) |
+| `0x82` | 3 | sequence | stop and remove active sequence (`$c12f1a` branches to `$c12c30`) |
 | `0x83` | 3 | sequence | rate to zero, release track notes (`$c12f2c`) |
 | `0x84` | 3 | sequence | restore saved rate (`$c12f42`) |
 | `0x85` | 5 | sequence, pos hi, pos lo | seek (`$c1301a`) |
@@ -69,9 +70,9 @@ ROM and agree with the documented handlers and lengths; the table entries are 16
 | `0x89` | 7 | sequence, start, end, rate index, unused | fade with multiplier table (`$c12fcc`) |
 | `0x8a` | 5 | sequence, track, value | channel `+0x20/+0x2c` (`$c130c6`) |
 | `0x8b` | 5 | sequence, track, value | channel `+0x26/+0x2d` (`$c130ba`) |
-| `0x8c` | 6 | sequence, track, index, value | controller routine (`$c130d2`) |
-| `0x8d` | 6 | sequence, track, program hi, program lo | select instrument for a track (`$c130da`) |
-| `0x8e` | 6 | sequence, track, key, velocity | sustained note, duration `$7fff` (`$c130ea`) |
+| `0x8c` | 6 | sequence, track, index, value | doubles index and dispatches controller via `$c14330` (`$c130d2`) |
+| `0x8d` | 6 | sequence, track, program hi, program lo | select track program via `$c11dce` (`$c130da`) |
+| `0x8e` | 6 | sequence, track, key, velocity | writes key at `$c130f0`, duration `$7fff`, branches to note factory `$c140d6` (`$c130ea`) |
 | `0x8f` | 5 | sequence, track, key | release the first matching note (`$c1313c`, release `$c141ce`) |
 | `0x90` | 6 | sequence, track, key, value | pops return PC into A3 (`$c1310e`); matching path attempts a write to ROM `$c1314e` (ignored by the bus), no effect on note pressure (`$c13146`) |
 
@@ -86,6 +87,13 @@ ROM and agree with the documented handlers and lengths; the table entries are 16
 - Bit 7 of the sequence number is not always ignored: selection lists 7/14/18/24 need the high bit
   (`81 07` is silent; `81 87` selects child 4, then child 5 at the section boundary). Mailbox starts first
   stop/reset the selection. ^[raw/docs/runtime-hle-audio-rom-protocol.md]
+- Sequence control details in disassembly:
+  - Opcode 82 handler `$c12f1a` calls packet arg fetcher `$c12f08` and branches directly to `$c12c30` to stop and remove the active sequence. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  - Sequence bit 7 extra selection and state: `$c12c30`, `$c12cb8` and `$c12cea` all test and clear bit 7 of sequence ID `d0` (`bclr.b #7, d0`) to branch into specialized selection and reset logic. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  - Linked sequence alias chains: `$c12de6` executes the current sequence handler via `jsr (a6)` and loops calling `$c12dfe`, which fetches the sequence header offset through `$c158cc` and inspects header byte `+$a6(a3)` to traverse linked sequence aliases. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  - Opcode 8d handler `$c130da` fetches arguments via `$c13072`, packs program bytes into `d0`, and branches to `$c11dce` to select the track instrument program. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  - Opcode 8c handler `$c130d2` doubles controller index `d3` (`lsl.w #1, d3`) and branches directly to controller dispatcher `$c14330`. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  - Opcode 8e handler `$c130ea` writes key `d3` to `$14(a4)` (`$c130f0`), velocity `d4` to `$15(a4)` (`$c130f4`), duration `$7fff` to `$e(a4)` (`$c130fc`), and branches to note factory `$c140d6` at `$c1310a`. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
 
 Example packets (valid): `038108` (loop sequence 8), `04860874` (volume `0x74`), `068d01074002`
 (program `0x4002`, track 7), `068e01072768` (key `0x27`, velocity `0x68`), `058f010727` (release).

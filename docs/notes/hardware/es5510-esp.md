@@ -1,7 +1,7 @@
 ---
 title: ES5510 (ESP) host interface, instruction format and DUART halt, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 type: hardware
 tags: [audio, memory-map, undocumented]
 sources:
@@ -11,12 +11,14 @@ sources:
   - raw/docs/runtime-audio-duart-and-gain.md
   - raw/docs/otis-esp-dac-routing-2026-10-09.txt
   - raw/emu-source/mame-0.289/taito_en.cpp
+  - raw/disasm/landmakrj-sound-driver-excerpts.md
 games: [landmakrj]
-addresses: [0x00240000, 0x00260000]
+addresses: [0x00240000, 0x00260000, 0x00C0F430, 0x00C0F482, 0x00C0F4BC, 0x00C1C2D2]
 status: hypothesis
 evidence:
   - {kind: doc, ref: raw/docs/runtime-audio-es5510.md, note: "runtime documentation of the MAME-derived ES5510 port (Christian Brunschen's core); pipeline and arithmetic are implementation behaviour, not silicon measurements"}
   - {kind: doc, ref: raw/docs/runtime-hle-audio-rom-protocol.md, note: "effects inventory read from the Land Maker sound ROM"}
+  - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "ROM disassembly of DSP worker queue post at $c0f430 to $fb28, effects configuration pointer calculation at $c0f482, and configuration worker routine $c0f4bc"}
 contradictions:
   - "Register window: sound-address.txt decodes 0x240000 (see [[hardware/sound]]); the runtime and MAME use 0x260000-0x2601ff. Same chip select; no real disagreement."
 supersedes: []
@@ -45,7 +47,8 @@ hardware routing. ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/otis-esp-dac-ro
   instruction number, repeating per instruction; registers load the same way through `0xa0`.
   ^[raw/docs/runtime-audio-es5510.md]
 - Effects configuration load: routines `0xc19982`/`0xc19998` write typed blocks through these host commits;
-  the effects worker is posted by `0xc0f430` and selected by `0xc0f4bc`. ^[raw/docs/runtime-audio-sequences.md]
+  the effects worker is posted to task queue `$fb28` by `$c0f430` (TRAP #9) and selected/dispatched by
+  routine `$c0f4bc`. ^[raw/docs/runtime-audio-sequences.md] ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
 
 ## State and instructions
 
@@ -70,8 +73,14 @@ model use OP6 as ESPHALT. See [[hardware/duart-and-volume]]. ^[raw/emu-source/ma
 ## Land Maker effects inventory (ROM-derived, hypothesis)
 
 - Thirteen effect configurations at `0xc1c2d2` (16-byte stride) select eleven ESP programs through the
-  pointer table at `0xc1c3a2`; mailbox command `0x20` selects a configuration, `0x21` stores a parameter
-  byte at `0xc84a + 2*parameter`. ^[raw/docs/runtime-audio-sequences.md] ^[raw/docs/runtime-hle-audio-rom-protocol.md]
+  pointer table at `0xc1c3a2`. ^[raw/docs/runtime-audio-sequences.md] ^[raw/docs/runtime-hle-audio-rom-protocol.md]
+  The apparent contradiction between `$c0f482` and `$c0f4bc` in earlier driver notes is resolved by ROM
+  disassembly: `$c0f482` is the arithmetic helper that multiplies configuration index `d0` by 16 (`mulu.w #$10, d0`)
+  and calculates pointer `a4 = $c1c2d2 + 16*d0`, while `$c0f4bc` is the higher-level worker routine that calls
+  `$c0f440` (which calls `$c0f482`), stores pointer `a4` at `$d78c.w` and ID at `$d790.w`, and dispatches the DSP
+  loader. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
+  Mailbox command `0x20` selects a configuration and queues the effects worker to queue `$fb28`; `0x21` stores a
+  parameter byte at `0xc84a + 2*parameter`. ^[raw/docs/runtime-audio-sequences.md] ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
 - A seed-5 6000-frame oracle capture holds one `20 0b` selection (configuration 11 selects ESP program 6 at
   `0xc1d4d4`, instruction CRC `cdcfa577`) and parameter writes 0..9 with values
   30,58,73,32,37,0,40,43,18,32; boot loads configuration 0. This is an observed inventory, not every game

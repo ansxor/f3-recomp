@@ -1,7 +1,7 @@
 ---
 title: Sound-board DUART timer, ESP halt output and MB87078 volume, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 type: hardware
 tags: [audio, interrupt, timing, memory-map]
 sources:
@@ -13,12 +13,14 @@ sources:
   - raw/emu-source/mame-0.289/taito_en.cpp
   - raw/docs/runtime-hle-audio-rom-protocol.md
   - raw/tests/2026-10-10-otis-esp-routing-experiments.md
+  - raw/disasm/landmakrj-sound-driver-excerpts.md
 games: [landmakrj]
-addresses: [0x00280000, 0x00340000, 0x00C007F8]
+addresses: [0x00280000, 0x00340000, 0x00C007F8, 0x00C10E22]
 status: hypothesis
 evidence:
   - {kind: doc, ref: raw/docs/runtime-audio-duart-and-gain.md, note: "runtime documentation of the MC68681 and MB87078 models and the host mixer"}
   - {kind: trace, ref: raw/tests/landmakrj-seed5-sound-trace.md, note: "IRQ read spacing 16,000 main ticks and gain-request time from the seed-5 cold-boot trace"}
+  - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "ROM disassembly of DUART initialization at $c10e22 programming counter $07d0, ACR $60, IMR $2b"}
 contradictions:
   - "DUART output pins: duart.txt marks OP0-OP7 unused; MAME and the runtime use OP6 as ESPHALT. Already listed on [[hardware/sound]]."
 supersedes: []
@@ -42,12 +44,12 @@ Board wiring and the confirmed routing are on [[hardware/sound]]; the ESP side i
 - Timer mode (`ACR` bit 6): `ACR` bits 5-4 pick the source (0 = IP2 1 MHz, 1 = IP2/16, 2 = 4 MHz crystal,
   3 = crystal/16); the counter-ready bit sets every second expiry in the model, so the interrupt period is
   two counter periods. ^[raw/docs/runtime-audio-duart-and-gain.md]
-- Land Maker programs counter preset `0x07d0` (2000), `ACR = 0x60` (timer, 4 MHz crystal) and
-  `IMR = 0x2b`: 2000 ticks of 4 MHz is 0.5 ms per counter period, so 1 ms (16,000 main ticks) per
-  interrupt. The seed-5 trace's modal spacing of actual IRQ reads is 16,000 main ticks.
-  ^[raw/docs/runtime-audio-sequences.md] ^[raw/tests/landmakrj-seed5-sound-trace.md]
-  The ROM also contains an alternate initialisation with counter `0x09c4` that the observed 32-voice mode
-  does not use. ^[raw/docs/runtime-audio-sequences.md]
+- Land Maker DUART initialization routine `$c10e22` programs counter preset `0x07d0` (2000) at `$c10e66..$c10e6a`,
+  `ACR = 0x60` (timer, 4 MHz crystal) at `$c10e6e`, and `IMR = 0x2b` at `$c10e76`: 2000 ticks of 4 MHz is 0.5 ms per
+  counter period, so 1 ms (16,000 main ticks) per interrupt. The seed-5 trace's modal spacing of actual IRQ reads is
+  16,000 main ticks. ^[raw/disasm/landmakrj-sound-driver-excerpts.md] ^[raw/docs/runtime-audio-sequences.md] ^[raw/tests/landmakrj-seed5-sound-trace.md]
+  At `$c10e5c..$c10e66` the routine loads default counter `0x09c4`, tests `$d528.w`, and overrides with `0x07d0` for the
+  observed 32-voice mode. ^[raw/disasm/landmakrj-sound-driver-excerpts.md] ^[raw/docs/runtime-audio-sequences.md]
 - Output pins: the model passes `OPR ^ 0xff` to the output callback; OP6 high means the ESP is halted
   (reset state). Writing `0x40` to `0x28001d` (set) releases the ESP, to `0x28001f` (reset) halts it.
   ^[raw/docs/runtime-audio-duart-and-gain.md]

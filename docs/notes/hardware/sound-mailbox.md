@@ -1,7 +1,7 @@
 ---
 title: Main to sound CPU mailbox (shared dual-port RAM, command ring)
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 type: hardware
 tags: [audio, io, memory-map, mailbox]
 sources:
@@ -10,11 +10,13 @@ sources:
   - raw/tests/landmakrj-sound-rom-structure-check.md
   - raw/docs/taito-f3/sound-address.txt
   - raw/emu-source/mame-0.289/taito_f3.cpp
+  - raw/disasm/landmakrj-sound-driver-excerpts.md
 games: [landmakrj]
 addresses: [0x00C00000, 0x00C003FF, 0x00C00480, 0x00C00482, 0x00C007F8, 0x00140000]
 status: hypothesis
 evidence:
-  - {kind: doc, ref: raw/docs/runtime-audio-mailbox.md, note: "runtime documentation; ring layout and packet format were taken from ROM-driver analysis (docs/SOUND-DRIVER.md) and the sound-extraction tools"}
+  - {kind: doc, ref: raw/docs/runtime-audio-mailbox.md, note: "runtime documentation; ring layout and packet format were taken from ROM-driver analysis and the sound-extraction tools"}
+  - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "ROM disassembly of main ring writers and sound packet consumer"}
   - {kind: test, ref: raw/tests/landmakrj-sound-rom-structure-check.md, note: "command length table at 0xc13260 read from the ROM matches the documented packet lengths"}
 contradictions: []
 supersedes: []
@@ -24,10 +26,8 @@ supersedes: []
 
 How the main CPU hands commands to the sound CPU through the shared 2 KiB dual-port RAM. The RAM and its
 decode are on [[hardware/sound]] (main `0xc00000-0xc007ff`, sound `0x140000`, even bytes); this page is
-what the Land Maker software does on top of it. The ring layout comes from ROM driver analysis in this
-repository (`docs/SOUND-DRIVER.md`), not from the board. ^[raw/docs/runtime-audio-mailbox.md]
-The full driver grammar is also in `docs/SOUND-DRIVER.md`; the command table is in
-[[routines/landmakrj-00c12ecc-sound-command-dispatch]].
+what the Land Maker software does on top of it. The ring layout comes from ROM driver analysis, not from the board. ^[raw/docs/runtime-audio-mailbox.md]
+The full command table and handler dispatch are in [[routines/landmakrj-00c12ecc-sound-command-dispatch]]. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
 
 ## Byte lanes and handshake
 

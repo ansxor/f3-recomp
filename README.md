@@ -53,7 +53,6 @@ The following ROM sets have tested native builds:
 
 - `make help` lists build, test and run targets; each program's `--help` lists its options.
 - [docs/notes/](docs/notes/index.md): per-routine, hardware, quirk and measurement notes for the supported games.
-- [docs/SOUND-DRIVER.md](docs/SOUND-DRIVER.md): Land Maker sound-driver semantics and native/oracle comparison.
 
 ## Credits
 

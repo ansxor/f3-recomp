@@ -145,6 +145,9 @@ class Decoder:
             return
         if kind not in (2, 3):
             raise ValueError(f"Unknown trace kind {kind}")
+        # Sound consumes a packet at $c11116 and dispatches it later ($c12ecc high commands,
+        # $c0b414 effects commands) from a task queue. CommandRing matches both by ring offset
+        # in FIFO occurrence order (oldest pending packet at that offset), never the newest submitted.
         if kind == 2 and pc == 0xc11116:
             yield base | dict(event="command_consumed", **self.commands.consume(address, value))
         if kind == 2 and pc in (0xc12ecc, 0xc0b414):

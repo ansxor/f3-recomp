@@ -19,6 +19,7 @@
 - [[routines/landmakrj-00c12ecc-sound-command-dispatch]] (hypothesis) — sound driver packet framing and command set 0x20/0x21/0x80..0x90
 - [[routines/landmakrj-00c10da0-sound-timer-irq]] (hypothesis) — 1 ms DUART tick, sequence accumulator (625 threshold), software envelopes
 - [[routines/landmakrj-00c14730-sequence-event-decode]] (hypothesis) — sequence stream/header banks, event classes, programs, sample splits
+- [[routines/landmakrj-00c1748e-voice-allocation]] (hypothesis) — voice search, priority exhaustion, legato reuse, OTIS setup and voice silencing
 
 ## Hardware: board and CPU side
 

@@ -1,7 +1,7 @@
 ---
 title: Land Maker (Japan) — landmakrj
 created: 2026-10-09
-updated: 2026-10-11
+updated: 2026-10-12
 type: game
 tags: [game-loop, video, rom-layout, eeprom, sound-driver]
 sources:
@@ -20,8 +20,9 @@ sources:
   - raw/tests/landmakrj-seed5-sound-trace.md
   - raw/emu-source/landmakrj-boot.cpp.txt
   - raw/docs/runtime-eeprom-and-fast-boot.md
+  - raw/disasm/landmakrj-sound-driver-excerpts.md
 games: [landmakrj]
-addresses: [0x00007030, 0x00010000, 0x00020000, 0x00088000, 0x0011B362, 0x001FFFFE, 0x00C1E45A, 0x00C20000, 0x00C39A30, 0x00C80000]
+addresses: [0x00007030, 0x00010000, 0x00020000, 0x00088000, 0x0011B362, 0x001FFFFE, 0x00C1089E, 0x00C1E45A, 0x00C20000, 0x00C39A30, 0x00C80000]
 status: hypothesis
 evidence: []
 contradictions: []
@@ -77,7 +78,7 @@ offset 0, `e61-12.19` at 1, `e61-11.18` at 2, `e61-10.17` at 3); the assembled i
 **Sound program (sound CPU `0xc00000..0xc80000`, 512 KiB).** Two 128 KiB dumps (`e61-14.32`, `e61-15.33`) are
 FF-padded to 256 KiB each and interleaved (stride 2); the padded lanes have CRC32 `18961bbb` and `2c64557a`
 and the assembled image `5a7e9117`. ^[raw/docs/landmakrj-config-lanes.toml.txt] ^[raw/tests/landmakrj-ff-fill-extents.md] ^[raw/tests/landmakrj-sound-image-crc.md]
-
+The sound reset vector at image offset 4 is `$c1089e`, where execution begins by clearing registers and zeroing RAM. ^[raw/disasm/landmakrj-sound-driver-excerpts.md]
 | Interval | What | Evidence |
 |---|---|---|
 | `0xc1e45a..0xc20000` | FF fill | exact FF run ^[raw/tests/landmakrj-ff-fill-extents.md] |
@@ -141,12 +142,12 @@ sound and sample sections of both files are identical apart from one trailing bl
 - [[routines/landmakrj-00c12ecc-sound-command-dispatch]]: sound command packet set (hypothesis)
 - [[routines/landmakrj-00c10da0-sound-timer-irq]]: sound 1 ms DUART tick and sequence tick (hypothesis)
 - [[routines/landmakrj-00c14730-sequence-event-decode]]: sequence/header/program formats (hypothesis)
-
+- [[routines/landmakrj-00c1748e-voice-allocation]]: voice search, priority exhaustion, legato reuse, OTIS setup and voice silencing (hypothesis)
 ## Evidence and comparisons
 
 - [[comparisons/runtime-vs-mame-attract-capture]]: 25 attract frames match MAME exactly; what that does and does not show.
 - Sound hardware pages: [[hardware/sound-mailbox]], [[hardware/duart-and-volume]], [[hardware/es5505-otis]],
-  [[hardware/es5510-esp]]. The overlapping repository document `docs/SOUND-DRIVER.md` stays in the repo.
+  [[hardware/es5510-esp]], backed by ROM driver excerpts in ^[raw/disasm/landmakrj-sound-driver-excerpts.md].
 - Seed-5 sound trace: 6000 frames gave 12,258,121 identical native versus interpreted driver records and
   3,029,425 PCM frames (see [[routines/landmakrj-00c10da0-sound-timer-irq]]). ^[raw/tests/landmakrj-seed5-sound-trace.md]
 
