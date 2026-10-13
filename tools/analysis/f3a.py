@@ -183,12 +183,11 @@ def _argv(command: str, positional, options: dict) -> list[str]:
             argv += [option, f"{value}:{value}"]  # frames=600 → just frame 600
         elif isinstance(value, (list, tuple)):
             if isinstance(action, argparse._AppendAction):
-                for item in value:
-                    argv += [option, _text(item, action)]
+                argv += [f"{option}={_text(item, action)}" for item in value]
             else:
                 argv += [option] + [_text(item, action) for item in value]
         else:
-            argv += [option, _text(value, action)]
+            argv.append(f"{option}={_text(value, action)}")  # `=` keeps values like -0x10 from parsing as options
     return argv
 
 
