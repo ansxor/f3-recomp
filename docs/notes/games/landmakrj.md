@@ -1,9 +1,9 @@
 ---
 title: Land Maker (Japan) — landmakrj
 created: 2026-10-09
-updated: 2026-10-12
+updated: 2026-10-15
 type: game
-tags: [game-loop, video, rom-layout, eeprom, sound-driver]
+tags: [game-loop, video, rom-layout, eeprom, sound-driver, object-system, rng]
 sources:
   - raw/tests/landmakrj-round-gate-watch.md
   - raw/tests/landmakrj-2p-versus-trigger-runs.md
@@ -21,8 +21,9 @@ sources:
   - raw/emu-source/landmakrj-boot.cpp.txt
   - raw/docs/runtime-eeprom-and-fast-boot.md
   - raw/disasm/landmakrj-sound-driver-excerpts.md
+  - raw/tests/landmakrj-board-and-piece-queue-probe.md
 games: [landmakrj]
-addresses: [0x00007030, 0x00010000, 0x00020000, 0x00088000, 0x0011B362, 0x001FFFFE, 0x00C1089E, 0x00C1E45A, 0x00C20000, 0x00C39A30, 0x00C80000]
+addresses: [0x00007030, 0x00010000, 0x00020000, 0x00088000, 0x0011B362, 0x001FFFFE, 0x00C1089E, 0x00C1E45A, 0x00C20000, 0x00C39A30, 0x00C80000, 0x004073B6, 0x00407676, 0x00407376, 0x00407636, 0x00402034, 0x00402036, 0x004020DC, 0x004020DE]
 status: hypothesis
 evidence: []
 contradictions: []
@@ -131,6 +132,26 @@ sound and sample sections of both files are identical apart from one trailing bl
 - Fast boot (the runtime runs the boot frames unpresented) and the boot-state cache are host features, not
   game behaviour; they are only noted here so the 478/781 numbers are not confused with them.
 
+## Gameplay RAM (board and piece queue)
+
+Hypotheses from two 1P-versus-CPU runs (gameplay about frames 1750..3700, `0x401f40` = 0x0100 and
+`0x401f53` = 1) and static disassembly. `a5` = 0x408000. Details and encoding:
+[[routines/landmakrj-0009c854-board-cells]] and [[routines/landmakrj-00093a1c-piece-generator]].
+^[raw/tests/landmakrj-board-and-piece-queue-probe.md]
+
+| Read per frame | P1 | P2 |
+|---|---|---|
+| Board + launcher rows (640 B, 8 cells x 4 B per row, row stride 0x20) | 0x407376..0x4075f5 | 0x407636..0x4078b5 |
+| Block in hand / NEXT colour (words, +0x90 / +0x92) | 0x402034 / 0x402036 | 0x4020dc / 0x4020de |
+| Colour mask (optional, bit = code >> 1) | 0x40715c | 0x40715e |
+| Shot/held object pointer (optional, +0x50) | 0x401ff4 | 0x40209c |
+
+- Cell `FF TT PPPP`: TT 0x00 empty, 0xff wall, 0x8N/0x9N block with colour code N, 0xb0..0xb6 special; PPPP is the
+  block object's low address word. Row 0 starts at 0x4073b6 / 0x407676; do not read P2 beyond row 17.
+  ^[raw/tests/landmakrj-board-and-piece-queue-probe.md]
+- The piece queue has two slots and no bag. The colour is chosen from the colours present on the player's board.
+  ^[raw/tests/landmakrj-board-and-piece-queue-probe.md]
+
 ## Routine index
 
 - [[routines/landmakrj-0008e20c-round-task]]: round task and its round-end gate (hypothesis)
@@ -143,6 +164,8 @@ sound and sample sections of both files are identical apart from one trailing bl
 - [[routines/landmakrj-00c10da0-sound-timer-irq]]: sound 1 ms DUART tick and sequence tick (hypothesis)
 - [[routines/landmakrj-00c14730-sequence-event-decode]]: sequence/header/program formats (hypothesis)
 - [[routines/landmakrj-00c1748e-voice-allocation]]: voice search, priority exhaustion, legato reuse, OTIS setup and voice silencing (hypothesis)
+- [[routines/landmakrj-0009c854-board-cells]]: board init, per-player cell grid layout and cell encoding (hypothesis)
+- [[routines/landmakrj-00093a1c-piece-generator]]: piece queue shift and colour generator (hypothesis)
 ## Evidence and comparisons
 
 - [[comparisons/runtime-vs-mame-attract-capture]]: 25 attract frames match MAME exactly; what that does and does not show.

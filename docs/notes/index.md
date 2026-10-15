@@ -20,6 +20,8 @@
 - [[routines/landmakrj-00c10da0-sound-timer-irq]] (hypothesis) — 1 ms DUART tick, sequence accumulator (625 threshold), software envelopes
 - [[routines/landmakrj-00c14730-sequence-event-decode]] (hypothesis) — sequence stream/header banks, event classes, programs, sample splits
 - [[routines/landmakrj-00c1748e-voice-allocation]] (hypothesis) — voice search, priority exhaustion, legato reuse, OTIS setup and voice silencing
+- [[routines/landmakrj-0009c854-board-cells]] (hypothesis) — block board layout: per-player 8x4-byte cell grid at 0x4073b6/0x407676, cell encoding `FF TT PPPP`, walls, honeycomb playable cells
+- [[routines/landmakrj-00093a1c-piece-generator]] (hypothesis) — two-slot piece queue (+0x90/+0x92), `sub_0938f2` shift, `sub_093a1c` colour generator, per-player seed
 
 ## Hardware: board and CPU side
 
