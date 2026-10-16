@@ -661,6 +661,13 @@ TEST(Audio, AudioMixerBoardGainAndMute) {
         audio.advance(538);
         EXPECT_EQ(audio.render(pcm.data(), 1), 1) << "One complete audio sample is available";
     };
+    // Default gain model is SingleStage (hardware MB87078 post-DAC analog attenuation).
+    sample();
+    EXPECT_TRUE(pcm[0] == 2142 && pcm[1] == 2142)
+        << "Default SingleStage gain model matches post-DAC analog attenuation";
+
+    // Test MameRouting model
+    audio.set_gain_model(f3rt::Audio::GainModel::MameRouting);
     sample();
     EXPECT_TRUE(pcm[0] == 20925 && pcm[1] == 20925) << "Board gain and signed PCM normalization";
     audio.write8(f3rt::SOUND_VOLUME_BASE, 2);
@@ -791,11 +798,11 @@ RC_GTEST_PROP(Audio, SoundMulsSignedProductInvariant, ()) {
 }
 
 // Behaviour test: verify hardware OTIS->ESP PCB wiring in Effects mixer
-// (docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt, 12's 5505-5510.txt note):
-// - Pair 3 (buses 6/7) -> dry output with no echo/tail
-// - Pair 1 (buses 2/3) -> reverb path (diffused tail after input stops)
-// - Pair 2 (buses 4/5) -> ~274.8 ms cross-delay echo
+// (docs/notes/raw/docs/taito-f3/5505-5510.txt, 12's oscilloscope trace through TC0660FCM):
 // - Pair 0 (buses 0/1) -> silent (physically unconnected on board)
+// - Pair 1 (buses 2/3) -> dry output (ESP ch 0 serio0; decays to ~0 after brief filter response)
+// - Pair 2 (buses 4/5) -> ~274.8 ms cross-delay echo (ESP ch 1 serio1)
+// - Pair 3 (buses 6/7) -> reverb path (ESP ch 2 serio2; diffused tail after input stops)
 TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
     std::vector<uint8_t> sound_rom(0x20000, 0);
     for (int i = 0; i < 128; ++i) {
@@ -828,40 +835,40 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
         EXPECT_EQ(peak, 0.0f) << "OTIS pair 0 must produce silence (unconnected on PCB)";
     }
 
-    // 2. OTIS Pair 3 (buses 6/7) reaches dry output with no echo or tail
+    // 2. OTIS Pair 1 (buses 2/3) reaches dry output with no echo or reverb tail
     {
         f3rt::hle::Effects fx(sound_rom);
         fx.select(11);
         constexpr size_t N = 1000;
         std::vector<float> buses(8 * N, 0.0f);
         std::vector<float> stereo(2 * N, 0.0f);
-        buses[0 * 8 + 6] = 1.0f;
-        buses[0 * 8 + 7] = 0.5f;
+        buses[0 * 8 + 2] = 1.0f;
+        buses[0 * 8 + 3] = 0.5f;
         fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
-        EXPECT_GT(stereo[0], 0.0f) << "OTIS pair 3 must reach dry output";
-        EXPECT_GT(stereo[1], 0.0f) << "OTIS pair 3 must reach dry output";
+        EXPECT_GT(stereo[0], 0.0f) << "OTIS pair 1 must reach dry output";
+        EXPECT_GT(stereo[1], 0.0f) << "OTIS pair 1 must reach dry output";
         float subsequent_peak = 0.0f;
-        for (size_t f = 1; f < N; ++f) {
+        for (size_t f = 64; f < N; ++f) {
             subsequent_peak =
                 std::max({subsequent_peak, std::abs(stereo[f * 2]), std::abs(stereo[f * 2 + 1])});
         }
-        EXPECT_EQ(subsequent_peak, 0.0f) << "OTIS pair 3 must have no echo or reverb tail";
+        EXPECT_LT(subsequent_peak, 0.002f) << "OTIS pair 1 must have no echo or reverb tail";
     }
 
-    // 3. OTIS Pair 1 (buses 2/3) reaches the reverb path (diffused tail after input stops)
+    // 3. OTIS Pair 3 (buses 6/7) reaches the reverb path (diffused tail after input stops)
     {
         f3rt::hle::Effects fx(sound_rom);
         fx.select(11);
         constexpr size_t N = 2000;
         std::vector<float> buses(8 * N, 0.0f);
         std::vector<float> stereo(2 * N, 0.0f);
-        buses[0 * 8 + 2] = 1.0f;
+        buses[0 * 8 + 6] = 1.0f;
         fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
         float tail_energy = 0.0f;
         for (size_t f = 100; f < N; ++f) {
             tail_energy += std::abs(stereo[f * 2]) + std::abs(stereo[f * 2 + 1]);
         }
-        EXPECT_GT(tail_energy, 0.01f) << "OTIS pair 1 must produce a diffused reverb tail";
+        EXPECT_GT(tail_energy, 0.01f) << "OTIS pair 3 must produce a diffused reverb tail";
     }
 
     // 4. OTIS Pair 2 (buses 4/5) produces ~274.8 ms cross-delay echo

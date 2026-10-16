@@ -96,8 +96,9 @@ public:
     // without waiting. Never blocks on the Enhanced worker. Callers needing a
     // complete, deterministic stream must finish with the blocking render.
     size_t render_ready(int16_t *interleaved_stereo, size_t max_frames);
-    // Default matches the observed MAME board mix; SingleStage is an explicit
-    // unverified analog-gain experiment, not an asserted board schematic.
+    // Default SingleStage matches hardware MB87078 post-DAC analog attenuation
+    // (docs/notes/raw/docs/taito-f3/list.txt:265-280); MameRouting is retained
+    // for MAME comparison.
     void set_gain_model(GainModel model);
 
     // State snapshot serialization

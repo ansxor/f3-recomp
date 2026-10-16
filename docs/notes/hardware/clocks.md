@@ -1,10 +1,10 @@
 ---
 title: F3 oscillators and clock distribution
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-15
 type: hardware
 tags: [pcb, timing, cpu, video, audio]
-sources: [raw/docs/taito-f3/list.txt, raw/docs/taito-f3/mbv.txt, raw/docs/taito-f3/website/cart.html, raw/docs/taito-f3/pal9.txt, raw/docs/taito-f3/fcm.txt, raw/emu-source/mame-0.289/taito_f3.cpp, raw/emu-source/mame-0.289/taito_f3.h, raw/emu-source/mame-0.289/taito_en.cpp]
+sources: [raw/docs/taito-f3/list.txt, raw/docs/taito-f3/clocks.txt, raw/docs/taito-f3/5505-5510.txt, raw/docs/taito-f3/mbv.txt, raw/docs/taito-f3/website/cart.html, raw/docs/taito-f3/pal9.txt, raw/docs/taito-f3/fcm.txt, raw/emu-source/mame-0.289/taito_f3.cpp, raw/emu-source/mame-0.289/taito_f3.h, raw/emu-source/mame-0.289/taito_en.cpp]
 games: []
 addresses: []
 status: hypothesis
@@ -12,6 +12,8 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/list.txt, note: "traced clock nets: oscillator outputs, dividers, buffers"}
   - {kind: doc, ref: raw/docs/taito-f3/website/cart.html, note: "clock pins on the cartridge connector with figures"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_f3.cpp, note: "MAME screen clock 26.686 MHz / 4 and CPU clock constants"}
+  - {kind: doc, ref: raw/docs/taito-f3/clocks.txt, note: "summary of master clocks (main CPU 15.23809 MHz, audio CPU 15.23809 MHz, OTIS 15.23809 MHz, ESP 8 MHz, DUART 4 MHz) and audio clocks (BCLK 3.8095225 MHz, sample rate ~29.76189453 kHz)"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "oscilloscope timing: BCLK 128 cycles per LRCLK period (16 high, 112 low)"}
 contradictions:
   - "Main CPU clock: MAME's machine config uses F3_MAIN_CLK = 16 MHz (taito_f3.h) while MAME's own board comment and 12Me21's cartridge notes give 15.23809 MHz (30.47618 MHz / 2). The notes route the 16 MHz oscillator only to clkbuf and the 5701, not to the CPU."
   - "ES5510 clock: 12Me21's list.txt and MAME's board comment say 8 MHz; taito_en.cpp constructs ES5510 from a 10 MHz XTAL (comment: 'from Gun Buster schematics')."
@@ -61,6 +63,15 @@ The 7 MHz tap (26.686 / 4 = 6.6715 MHz) is MAME's pixel clock: `set_raw(26.686_M
 - MAME's DUART: `16_MHz_XTAL / 4` (4 MHz) with counters at 16/2/8 and 16/2/16 MHz; the board comment lists 68681 pins 2/32/36/38/39 as 500 kHz/4 MHz/1 MHz/1 MHz/500 kHz, agreeing. ^[raw/emu-source/mame-0.289/taito_en.cpp] ^[raw/emu-source/mame-0.289/taito_f3.cpp]
 - MAME's board comment lists ESP clocks: pin 1 8.000 MHz, pins 4–6 2.6686 MHz, pins 9–10 29.7623 kHz, pin 16 3.8095225 MHz. ^[raw/emu-source/mame-0.289/taito_f3.cpp] 
 - OTIS `E` output ("3.8MHz otis e", pin 30, "input divided by 8") drives ic21 pin 3 (the voice bank counter clock), pal8 pin 8, pal4.17, ic30, FCM pin 48 and pin 122, 5701 pin 12; low means OTIS is accessing sound memory. ^[raw/docs/taito-f3/list.txt] MAME's sound pump runs at `30.47618 MHz / (2*16*32)` ≈ 29.76 kHz, matching the 29.7623 kHz ESP figure in the board comment. ^[raw/emu-source/mame-0.289/taito_en.cpp] ^[raw/emu-source/mame-0.289/taito_f3.cpp]
+
+### Audio serial clocks (BCLK and sample rate)
+
+`clocks.txt` summarizes the audio clock domain: ^[raw/docs/taito-f3/clocks.txt]
+- **Main / Audio CPU / OTIS master clock:** 15.23809 MHz. ^[raw/docs/taito-f3/clocks.txt]
+- **ESP master clock:** 8 MHz. ^[raw/docs/taito-f3/clocks.txt]
+- **DUART clock:** 4 MHz. ^[raw/docs/taito-f3/clocks.txt]
+- **Audio BCLK:** 3.8095225 MHz (`otis.12 → esp.16, dr2.8, c8.2, dac.1, fcm.49`). This is exactly 15.23809 MHz / 4. ^[raw/docs/taito-f3/clocks.txt; raw/docs/taito-f3/list.txt]
+- **Audio sample rate:** ~29.76189453 kHz (`bclk / 128`). Oscilloscope measurements in `5505-5510.txt` establish that LRCLK has a period of 128 BCLK cycles (16 bits high left sample, 112 bits low right sample, with the first 16 bits containing real data). ^[raw/docs/taito-f3/clocks.txt; raw/docs/taito-f3/5505-5510.txt]
 
 ## Video sync
 

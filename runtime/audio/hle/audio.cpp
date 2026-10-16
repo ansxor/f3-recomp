@@ -57,7 +57,7 @@ struct AudioEngine::Impl : VoiceSink {
     Sequencer sequencer;
     uint64_t worker_tick = 0, worker_frames = 0;
     std::array<float, 2> gain{1.f, 1.f};
-    Audio::GainModel gain_model = Audio::GainModel::MameRouting;
+    Audio::GainModel gain_model = Audio::GainModel::SingleStage;
     mutable std::mutex mutex;
     mutable std::condition_variable wake, completed;
     std::array<Message, QUEUE_SIZE> queue{};

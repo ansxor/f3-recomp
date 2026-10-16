@@ -54,7 +54,7 @@ struct Audio::Impl {
     MC68681 m_duart;
     MB87078 m_volume;
 
-    Audio::GainModel m_gain_model = Audio::GainModel::MameRouting;
+    Audio::GainModel m_gain_model = Audio::GainModel::SingleStage;
     std::array<float, 2> m_volume_gain{1.0f, 1.0f};
     std::array<float, 2> m_otis_gain{}, m_output_gain{};
 

@@ -15,11 +15,10 @@ namespace f3rt::hle {
 namespace {
 constexpr uint32_t NATIVE_RATE = 15238090u / (16u * 32u);
 constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
-constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 12 / 1000;
+constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
-// Declick tail: a cut voice's last output decays with a 4 ms time constant (exp(-1 / (0.004 * 48000))).
-constexpr float TAIL_DECAY = 0.99480519f;
-static_assert(SAMPLE_RATE == 48000, "TAIL_DECAY assumes 48 kHz");
+// Declick tail: a cut voice's last output decays with a 2 ms time constant (exp(-1 / (0.002 * SAMPLE_RATE))).
+const float TAIL_DECAY = std::exp(-1.0f / (0.002f * float(SAMPLE_RATE)));
 int16_t s16(uint32_t x) { return int16_t(uint16_t(x)); }
 int s8(uint32_t x) { return int(int8_t(uint8_t(x))); }
 uint16_t word(const uint8_t *p) { return uint16_t((uint16_t(p[0]) << 8) | p[1]); }

@@ -8,6 +8,9 @@
 #include <vector>
 
 namespace f3rt::hle {
+constexpr size_t scale_tap(size_t n) {
+    return std::max<size_t>(1, (n * size_t(SAMPLE_RATE) + 24000) / 48000);
+}
 // A measured, deliberately non-bit-exact replacement for the factory DSP.
 // No DSP instructions, registers, device emulator or captured audio are used.
 class Effects {
@@ -34,10 +37,18 @@ class Effects {
     };
     std::span<const uint8_t> m_rom;
     std::array<uint8_t, 10> m_parameters{};
-    std::array<Line, 8> m_comb{{Line(1613), Line(1733), Line(1867), Line(1999), Line(1637),
-                                Line(1759), Line(1901), Line(2027)}};
-    std::array<Line, 4> m_diffuse{{Line(241), Line(379), Line(263), Line(401)}};
-    std::array<Line, 2> m_delay{{Line(96000), Line(96000)}};
+    static constexpr size_t K_DELAY_BUFFER_SIZE = f3rt::hle::scale_tap(96000);
+    static constexpr size_t K_BUCKET_COUNT = 16;
+    static constexpr size_t K_BUCKET_SIZE = f3rt::hle::scale_tap(6000); // 16 * K_BUCKET_SIZE = K_DELAY_BUFFER_SIZE
+    static constexpr size_t scale_tap(size_t n) { return f3rt::hle::scale_tap(n); }
+
+    std::array<Line, 8> m_comb{{Line(f3rt::hle::scale_tap(1613)), Line(f3rt::hle::scale_tap(1733)),
+                                Line(f3rt::hle::scale_tap(1867)), Line(f3rt::hle::scale_tap(1999)),
+                                Line(f3rt::hle::scale_tap(1637)), Line(f3rt::hle::scale_tap(1759)),
+                                Line(f3rt::hle::scale_tap(1901)), Line(f3rt::hle::scale_tap(2027))}};
+    std::array<Line, 4> m_diffuse{{Line(f3rt::hle::scale_tap(241)), Line(f3rt::hle::scale_tap(379)),
+                                   Line(f3rt::hle::scale_tap(263)), Line(f3rt::hle::scale_tap(401))}};
+    std::array<Line, 2> m_delay{{Line(K_DELAY_BUFFER_SIZE), Line(K_DELAY_BUFFER_SIZE)}};
     float m_decay = .7f, m_damping = .25f, m_feedback = .45f;
     float m_delay_samples = 13188, m_wet_delay = .65f, m_dry_delay = .35f;
     float m_wet_reverb = .25f, m_dry_reverb = .92f;
@@ -48,14 +59,12 @@ class Effects {
     // For wet contribution < 0.25 int16 LSB, line_peak < 0.25 / 1.89e6 ~= 1.32e-7.
     // We choose 1e-8f (~0.019 LSB max), safely decaying into silence well before int16 truncation.
     static constexpr float K_THRESHOLD = 1e-8f;
-    static constexpr size_t K_BUCKET_COUNT = 16;
-    static constexpr size_t K_BUCKET_SIZE = 6000; // 16 * 6000 = 96000 frames (longest delay line)
 
     std::array<float, K_BUCKET_COUNT> m_bucket_peaks{};
     size_t m_bucket_frames = 0;
     size_t m_bucket_idx = 0;
     float m_current_bucket_peak = 0.f;
-    uint64_t m_silent_frames = 96000;
+    uint64_t m_silent_frames = K_DELAY_BUFFER_SIZE;
     bool m_bypassed = true;
 
     float table(unsigned index) const {
@@ -189,22 +198,23 @@ class Effects {
     }
 
     // Physical PCB wiring from OTIS (ES5505) to ESP (ES5510) observed on hardware by researcher "12":
-    // - docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt
-    // - docs/notes/comparisons/hardware-vs-mame-audio-routing.md
+    // - docs/notes/raw/docs/taito-f3/5505-5510.txt (12's oscilloscope trace through TC0660FCM:
+    //   OTIS ch 0 -> NC; OTIS ch 1 -> ESP ch 0 serio0 [Dry];
+    //   OTIS ch 2 -> ESP ch 1 serio1 [Delay]; OTIS ch 3 -> ESP ch 2 serio2 [Reverb];
+    //   ESP ch 3 serio3 -> DAC).
     //
-    // Hardware wiring (swapping pairs 1 and 3 relative to MAME, dropping pair 0):
+    // Hardware wiring:
     // - OTIS pair 0 (ch 0/1, buses 0/1): unconnected (nc) -> silent, reaches nothing.
-    // - OTIS pair 1 (ch 2/3, buses 2/3): feeds ESP inputs 4/5 (serio3) -> reverb send.
-    // - OTIS pair 2 (ch 4/5, buses 4/5): feeds ESP inputs 2/3 (serio2) -> delay send.
-    // - OTIS pair 3 (ch 6/7, buses 6/7): feeds ESP inputs 0/1 (serio1) -> dry output.
-    // ESP inputs 0/1 pass dry; inputs 2/3 provide cross-delay; inputs 4/5 provide reverb.
-    static constexpr size_t K_BUS_DRY_L = 6;
-    static constexpr size_t K_BUS_DRY_R = 7;
+    // - OTIS pair 1 (ch 2/3, buses 2/3): feeds ESP ch 0 serio0 -> dry output.
+    // - OTIS pair 2 (ch 4/5, buses 4/5): feeds ESP ch 1 serio1 -> delay send.
+    // - OTIS pair 3 (ch 6/7, buses 6/7): feeds ESP ch 2 serio2 -> reverb send.
+    // ESP ch 0 serio0 passes dry; ch 1 serio1 provides cross-delay; ch 2 serio2 provides reverb.
+    static constexpr size_t K_BUS_DRY_L = 2;
+    static constexpr size_t K_BUS_DRY_R = 3;
     static constexpr size_t K_BUS_DELAY_L = 4;
     static constexpr size_t K_BUS_DELAY_R = 5;
-    static constexpr size_t K_BUS_REVERB_L = 2;
-    static constexpr size_t K_BUS_REVERB_R = 3;
-
+    static constexpr size_t K_BUS_REVERB_L = 6;
+    static constexpr size_t K_BUS_REVERB_R = 7;
     float render_delay_block(size_t chunk, const float *buses,
                              const std::array<float, 2> &input_gain, float *reverb_in0,
                              float *reverb_in1, float *dry_term0, float *dry_term1) {
@@ -218,18 +228,18 @@ class Effects {
         float peak = 0.f;
 
         for (size_t f = 0; f < chunk; ++f) {
-            const float p0 = float(cur0 + 96000) - length;
+            const float p0 = float(cur0 + K_DELAY_BUFFER_SIZE) - length;
             const size_t base0 = size_t(p0);
             const float frac0 = p0 - float(base0);
-            const size_t idx0 = base0 >= 96000 ? base0 - 96000 : base0;
-            const size_t next0 = idx0 + 1 == 96000 ? 0 : idx0 + 1;
+            const size_t idx0 = base0 >= K_DELAY_BUFFER_SIZE ? base0 - K_DELAY_BUFFER_SIZE : base0;
+            const size_t next0 = idx0 + 1 == K_DELAY_BUFFER_SIZE ? 0 : idx0 + 1;
             const float echo0 = d_s0[idx0] * (1 - frac0) + d_s0[next0] * frac0;
 
-            const float p1 = float(cur1 + 96000) - length;
+            const float p1 = float(cur1 + K_DELAY_BUFFER_SIZE) - length;
             const size_t base1 = size_t(p1);
             const float frac1 = p1 - float(base1);
-            const size_t idx1 = base1 >= 96000 ? base1 - 96000 : base1;
-            const size_t next1 = idx1 + 1 == 96000 ? 0 : idx1 + 1;
+            const size_t idx1 = base1 >= K_DELAY_BUFFER_SIZE ? base1 - K_DELAY_BUFFER_SIZE : base1;
+            const size_t next1 = idx1 + 1 == K_DELAY_BUFFER_SIZE ? 0 : idx1 + 1;
             const float echo1 = d_s1[idx1] * (1 - frac1) + d_s1[next1] * frac1;
 
             const float send_d0 = buses[f * 8 + K_BUS_DELAY_L] * input_gain[0];
@@ -237,7 +247,7 @@ class Effects {
             low0 += .75f * (send_d0 - low0);
             const float w0 = low0 + m_feedback * echo1;
             d_s0[cur0] = w0;
-            if (++cur0 == 96000) cur0 = 0;
+            if (++cur0 == K_DELAY_BUFFER_SIZE) cur0 = 0;
 
             reverb_in0[f] = send_r0 + send_d0 * .25f + echo0 * .2f;
             const float dry0 = buses[f * 8 + K_BUS_DRY_L] * input_gain[0];
@@ -249,7 +259,7 @@ class Effects {
             low1 += .75f * (send_d1 - low1);
             const float w1 = low1 + m_feedback * echo0;
             d_s1[cur1] = w1;
-            if (++cur1 == 96000) cur1 = 0;
+            if (++cur1 == K_DELAY_BUFFER_SIZE) cur1 = 0;
 
             reverb_in1[f] = send_r1 + send_d1 * .25f + echo1 * .2f;
             const float dry1 = buses[f * 8 + K_BUS_DRY_R] * input_gain[1];
@@ -266,8 +276,78 @@ class Effects {
         return peak;
     }
 
+    // Post-DAC analog reconstruction filter and DC blocker
+    std::array<float, 2> m_dc_x1{0.f, 0.f};
+    std::array<float, 2> m_dc_y1{0.f, 0.f};
+    std::array<float, 2> m_lp_z1{0.f, 0.f};
+    std::array<float, 2> m_lp_z2{0.f, 0.f};
+    float m_filter_r = 0.f;
+    float m_lp_b0 = 0.f, m_lp_b1 = 0.f, m_lp_b2 = 0.f;
+    float m_lp_a1 = 0.f, m_lp_a2 = 0.f;
+
+    void init_post_filter() {
+        constexpr float PI = 3.14159265358979323846f;
+        const float fs = float(SAMPLE_RATE);
+        m_filter_r = std::exp(-2.0f * PI * 20.0f / fs);
+        const float K = std::tan(PI * 13800.0f / fs);
+        const float norm = 1.0f / (1.0f + std::sqrt(2.0f) * K + K * K);
+        m_lp_b0 = K * K * norm;
+        m_lp_b1 = 2.0f * m_lp_b0;
+        m_lp_b2 = m_lp_b0;
+        m_lp_a1 = 2.0f * (K * K - 1.0f) * norm;
+        m_lp_a2 = (1.0f - std::sqrt(2.0f) * K + K * K) * norm;
+    }
+
+    void post_filter(float *stereo, size_t frames) {
+        if (frames == 0) return;
+        const bool silent_filter =
+            (std::abs(m_dc_x1[0]) < K_THRESHOLD && std::abs(m_dc_x1[1]) < K_THRESHOLD &&
+             std::abs(m_dc_y1[0]) < K_THRESHOLD && std::abs(m_dc_y1[1]) < K_THRESHOLD &&
+             std::abs(m_lp_z1[0]) < K_THRESHOLD && std::abs(m_lp_z1[1]) < K_THRESHOLD &&
+             std::abs(m_lp_z2[0]) < K_THRESHOLD && std::abs(m_lp_z2[1]) < K_THRESHOLD);
+        if (silent_filter) {
+            bool all_zero = true;
+            for (size_t i = 0; i < frames * 2; ++i) {
+                if (stereo[i] != 0.f) {
+                    all_zero = false;
+                    break;
+                }
+            }
+            if (all_zero) return;
+        }
+
+        const float R = m_filter_r;
+        const float b0 = m_lp_b0, b1 = m_lp_b1, b2 = m_lp_b2;
+        const float a1 = m_lp_a1, a2 = m_lp_a2;
+
+        for (size_t f = 0; f < frames; ++f) {
+            for (size_t ch = 0; ch < 2; ++ch) {
+                const float x = stereo[f * 2 + ch];
+                const float hp = x - m_dc_x1[ch] + R * m_dc_y1[ch];
+                m_dc_x1[ch] = x;
+                m_dc_y1[ch] = hp;
+
+                const float y = b0 * hp + m_lp_z1[ch];
+                m_lp_z1[ch] = b1 * hp - a1 * y + m_lp_z2[ch];
+                m_lp_z2[ch] = b2 * hp - a2 * y;
+
+                stereo[f * 2 + ch] = y;
+            }
+        }
+
+        for (size_t ch = 0; ch < 2; ++ch) {
+            if (std::abs(m_dc_x1[ch]) < K_THRESHOLD) m_dc_x1[ch] = 0.f;
+            if (std::abs(m_dc_y1[ch]) < K_THRESHOLD) m_dc_y1[ch] = 0.f;
+            if (std::abs(m_lp_z1[ch]) < K_THRESHOLD) m_lp_z1[ch] = 0.f;
+            if (std::abs(m_lp_z2[ch]) < K_THRESHOLD) m_lp_z2[ch] = 0.f;
+        }
+    }
+
 public:
-    explicit Effects(std::span<const uint8_t> rom) : m_rom(rom) { reset(); }
+    explicit Effects(std::span<const uint8_t> rom) : m_rom(rom) {
+        init_post_filter();
+        reset();
+    }
     void select(uint8_t preset) {
         if (preset >= 13) return;
         // c0f504 restores the ten bytes in reverse order into c84a+2*n.
@@ -288,7 +368,11 @@ public:
         m_bucket_peaks.fill(0.f);
         m_current_bucket_peak = 0.f;
         m_bucket_frames = 0;
-        m_silent_frames = 96000;
+        m_silent_frames = K_DELAY_BUFFER_SIZE;
+        m_dc_x1.fill(0.f);
+        m_dc_y1.fill(0.f);
+        m_lp_z1.fill(0.f);
+        m_lp_z2.fill(0.f);
         m_bypassed = true;
         select(0);
     }
@@ -316,6 +400,7 @@ public:
                     stereo[f * 2 + 0] = dry0 * output_gain[0] * .5f;
                     stereo[f * 2 + 1] = dry1 * output_gain[1] * .5f;
                 }
+                post_filter(stereo, frames);
                 return;
             }
             m_bypassed = false;
@@ -363,7 +448,9 @@ public:
             offset += chunk;
         }
 
-        if (m_silent_frames >= 96000) {
+        post_filter(stereo, frames);
+
+        if (m_silent_frames >= K_DELAY_BUFFER_SIZE) {
             float peak = m_current_bucket_peak;
             for (float b : m_bucket_peaks) peak = std::max(peak, b);
             if (peak < K_THRESHOLD) {
