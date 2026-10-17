@@ -26,6 +26,7 @@ struct RomSet {
     VideoConfig video;
     std::string pref_dir;
     InputConfig input;
+    bool sound_bankswitch = false;
     std::vector<uint8_t> main, sprites, sprites_hi, tiles, tiles_hi, sound, samples;
     // Optional immutable 128-byte factory image; guest writes never alter ROM assets.
     std::vector<uint8_t> factory_eeprom;

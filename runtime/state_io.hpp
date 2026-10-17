@@ -360,6 +360,7 @@ struct CanonicalAudioCore {
     uint8_t reset_asserted;
     uint8_t esp_halted;
     uint8_t gain_model;
+    uint8_t cpubank2;
     float volume_gain[2];
     float otis_gain[2];
     float output_gain[2];
@@ -540,7 +541,7 @@ static_assert(sizeof(CanonicalES5510MulAcc) == 30, "CanonicalES5510MulAcc snapsh
 static_assert(sizeof(CanonicalES5510Ram) == 6, "CanonicalES5510Ram snapshot layout changed");
 static_assert(sizeof(CanonicalES5510Registers) == 171,
               "CanonicalES5510Registers snapshot layout changed");
-static_assert(sizeof(CanonicalAudioCore) == 135, "CanonicalAudioCore snapshot layout changed");
+static_assert(sizeof(CanonicalAudioCore) == 136, "CanonicalAudioCore snapshot layout changed");
 static_assert(sizeof(CanonicalSoundNative) == 140, "CanonicalSoundNative snapshot layout changed");
 static_assert(sizeof(CanonicalTempsprite) == 24, "CanonicalTempsprite snapshot layout changed");
 static_assert(sizeof(CanonicalVideo) == 24938, "CanonicalVideo snapshot layout changed");
@@ -610,7 +611,7 @@ template <> inline void validate_state_value(const CanonicalEeprom &s) {
 }
 template <> inline void validate_state_value(const CanonicalAudioCore &s) {
     require_state(s.rb_count <= 32768 && s.gain_model <= 1 && s.reset_asserted <= 1 &&
-                  s.esp_halted <= 1 && s.sample_accum < 16000000 && s.duart_accum < 4 &&
+                  s.esp_halted <= 1 && s.cpubank2 <= 31 && s.sample_accum < 16000000 && s.duart_accum < 4 &&
                   s.cpu_accum < 16000000 && s.cpu_accum >= -16000000LL * 1024);
 }
 template <> inline void validate_state_value(const CanonicalES5505 &s) {

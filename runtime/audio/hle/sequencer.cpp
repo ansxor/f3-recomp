@@ -41,7 +41,7 @@ struct TrackState {
 };
 struct SongState {
     std::array<TrackState, TRACK_COUNT> tracks;
-    bool active = false, looping = false, rate_override = false;
+    bool active = false, rate_override = false;
     uint8_t selected = 0, phase = 0, arrangement_owner = 0, fade_target = 127;
     uint16_t rate = 0, saved_rate = 0, accumulator = 0;
     uint16_t volume = 0x7fff;
@@ -72,10 +72,12 @@ struct Sequencer::Impl {
     uint16_t free_head = 0;
     uint64_t now = 0, timer = TIMER_TICKS, fade_timer = uint64_t(12) * TIMER_TICKS;
     uint64_t serial = 0;
+    uint8_t current_bank = 1;
 
-    explicit Impl(std::span<const uint8_t> image, VoiceSink &output) : rom(image), sink(output) {
-        if (rom.size() != SOUND_ROM_SIZE) invalid("HLE requires a 512 KiB padded sound ROM");
-        const uint32_t stream_limit = ROM_BASE + uint32_t(rom.size());
+    void load_bank(uint8_t bank) {
+        current_bank = bank;
+        for (auto &song : data) song = SongData{};
+        const uint32_t stream_limit = ROM_BASE + 0x80000;
         const uint32_t header_rel = u32(STREAM_BASE);
         if (header_rel < 8 + SLOTS * 4 || (header_rel & 1) ||
             STREAM_BASE + header_rel >= stream_limit)
@@ -141,12 +143,26 @@ struct Sequencer::Impl {
                 parse_track(song.tracks[t], start + offsets[t] + 4, bound);
             }
         }
+    }
+
+    explicit Impl(std::span<const uint8_t> image, VoiceSink &output) : rom(image), sink(output) {
+        if (rom.size() < SOUND_ROM_SIZE) invalid("HLE requires at least a 512 KiB padded sound ROM");
+        load_bank(1);
         init_pool();
     }
     uint8_t byte(uint32_t address) const {
-        if (address < ROM_BASE || address - ROM_BASE >= rom.size())
+        if (address < ROM_BASE || address >= ROM_BASE + 0x80000)
             invalid("HLE ROM read outside image");
-        return rom[address - ROM_BASE];
+        uint32_t off = address - ROM_BASE;
+        if (rom.size() > SOUND_ROM_SIZE) {
+            if (address >= 0xc20000 && address < 0xc40000) {
+                off = uint32_t(current_bank) * 0x20000 + (address - 0xc20000);
+            } else if (address >= 0xc40000) {
+                off = 0x40000 + (address - 0xc40000);
+            }
+        }
+        if (off >= rom.size()) invalid("HLE ROM read outside image");
+        return rom[off];
     }
     uint16_t u16(uint32_t address) const {
         return uint16_t(uint16_t(byte(address)) << 8 | byte(address + 1));
@@ -175,6 +191,13 @@ struct Sequencer::Impl {
                 if (!e.duration) e.duration = operand();
                 const auto velocity = uint8_t(e.operand >> 8 & 0x7c);
                 e.velocity = velocity ? uint8_t(velocity | velocity >> 5) : 1;
+            } else if (e.opcode < 0xb0) {
+                e.key = uint8_t(e.opcode - 0x58);
+                e.operand = operand();
+                e.duration = e.operand & 0x3ff;
+                if (!e.duration) e.duration = 1;
+                const auto velocity = uint8_t(e.operand & 0x7f);
+                e.velocity = velocity ? velocity : 1;
             } else if (e.opcode < 0xdc) e.operand = operand();
             else if (e.opcode == 0xdc) {
                 invalid("relative-note references are absent from supported ROM bank");
@@ -303,21 +326,19 @@ struct Sequencer::Impl {
         if (const uint8_t child = selected_child(id)) stop(child, tick);
         state[id].phase = 0;
     }
-    void start(uint8_t id, bool looping, uint64_t tick) {
+    void start(uint8_t id, uint64_t tick) {
         if (!data[id].present) return;
         const uint8_t phase = state[id].phase;
         stop(id, tick);
         auto &s = state[id];
         s = {};
         s.active = true;
-        s.looping = looping;
         s.rate = s.saved_rate = data[id].rate;
         s.phase = phase;
         // An ordinary start never interprets the selection list in track 10.
         initialize_tracks(id, id, tick);
     }
-    uint8_t arrangement_next(uint8_t id, bool looping, uint64_t tick,
-                             const SongState *previous = nullptr) {
+    uint8_t arrangement_next(uint8_t id, uint64_t tick, const SongState *previous = nullptr) {
         auto &s = state[id];
         const auto &list = data[id].tracks[10].events;
         // c12bea/c12d0e: 100 is a loop-selection marker, not a playable phase.
@@ -339,7 +360,7 @@ struct Sequencer::Impl {
                 invalid("invalid HLE arrangement selection");
             s.arrangement_repeat = e.arrangement[3] & 0x7f;
             if (state[child].active) return child;
-            start(child, looping, tick);
+            start(child, tick);
             auto &next = state[child];
             next.arrangement_owner = id;
             next.transpose_mask = e.arrangement[2];
@@ -406,7 +427,6 @@ struct Sequencer::Impl {
             if (offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET)
                 channel.parameters[offset] = uint8_t(value - 0x40);
         } else if (op == 0xd9) selector(channel, value);
-        else if (op >= 0x58 && op < 0xb0) invalid("HLE key continuation absent from supplied data");
         else if (op == 0xda || op == 0xdb)
             invalid("HLE special-track control absent from supplied data");
         else if (op == 0xe8) invalid("HLE notification absent from supplied data");
@@ -448,7 +468,7 @@ struct Sequencer::Impl {
                     track.ended = true;
                     break;
                 }
-                if (event.opcode < 0x58) {
+                if (event.opcode < 0xb0) {
                     if (!silent)
                         onset(id, t, event.key, event.velocity, event.duration,
                               (uint64_t(1) << 63) | ++serial, tick);
@@ -492,15 +512,14 @@ struct Sequencer::Impl {
                 repeat_done = owner.arrangement_repeat == 0;
             }
             if (repeat_done) {
-                const uint8_t child = arrangement_next(s.arrangement_owner, true, tick, &s);
+                const uint8_t child = arrangement_next(s.arrangement_owner, tick, &s);
                 if (child != id) {
                     stop(id, tick);
                     return;
                 }
             }
             initialize_tracks(id, id, tick);
-        } else if (s.looping) initialize_tracks(id, s.selected, tick);
-        else finish(id, tick);
+        } else finish(id, tick);
     }
     void advance(uint64_t tick) {
         if (tick < now) invalid("HLE sequencer clock moved backwards");
@@ -574,7 +593,7 @@ struct Sequencer::Impl {
         if (selection && arranged(id)) {
             if (op == 0x80 || op == 0x81) {
                 stop_selected(id, tick);
-                arrangement_next(id, op == 0x81, tick);
+                arrangement_next(id, tick);
                 return;
             }
             if (op == 0x82) {
@@ -588,7 +607,7 @@ struct Sequencer::Impl {
         }
         auto &s = state[id];
         if (op == 0x80 || op == 0x81) {
-            start(id, op == 0x81, tick);
+            start(id, tick);
             return;
         }
         if (op == 0x82) {
@@ -606,7 +625,7 @@ struct Sequencer::Impl {
             s.rate = s.saved_rate;
             break;
         case 0x85: {
-            if (!s.active) start(id, true, tick);
+            if (!s.active) start(id, tick);
             for (auto &track : s.tracks) release_track(track, tick);
             initialize_tracks(id, id, tick);
             const uint32_t position = uint32_t(p[3]) << 8 | p[4];
@@ -711,10 +730,18 @@ void Sequencer::reset(uint64_t tick) {
     m_impl->previous_key = {};
     m_impl->timer = tick + TIMER_TICKS;
     m_impl->fade_timer = tick + uint64_t(12) * TIMER_TICKS;
+    if (m_impl->current_bank != 1) {
+        m_impl->load_bank(1);
+    }
     m_impl->sink.reset(tick);
+}
+void Sequencer::set_bank(uint8_t bank, [[maybe_unused]] uint64_t tick) {
+    if (m_impl->current_bank == bank) return;
+    m_impl->load_bank(bank);
 }
 uint64_t Sequencer::next_tick() const { return std::min(m_impl->timer, m_impl->fade_timer); }
 bool Sequencer::validate(std::span<const uint8_t> sound_rom) noexcept {
+    if (sound_rom.size() < SOUND_ROM_SIZE) return false;
     try {
         struct NullSink : VoiceSink {
             void note_on(const Note &) override {}

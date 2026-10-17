@@ -56,6 +56,7 @@ public:
     std::unique_ptr<Interpreter> interpreter;
     std::unique_ptr<SoundTrace> sound_trace;
     std::unique_ptr<SoundNative> sound_native;
+    bool sound_bankswitch = false;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff,
                                    0xffffffff, 0xffffffff, 0xffffffff};
     uint8_t system_inputs = 0xff; // EEPROMIN: service/test, four coins, active low.

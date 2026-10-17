@@ -48,7 +48,7 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
 Machine::Machine(RomSet set)
     : m_pixels(size_t(320) * set.video.visible_height), roms(std::move(set)),
       video(std::make_unique<Video>()), audio(std::make_unique<Audio>()),
-      eeprom(std::make_unique<Eeprom>()) {
+      eeprom(std::make_unique<Eeprom>()), sound_bankswitch(roms.sound_bankswitch) {
     if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
         roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
@@ -231,11 +231,29 @@ void Machine::write8(uint32_t a, uint8_t v) {
         eeprom->pins(v, cpu.cycles);
         return;
     }
+    if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
+        uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
+        bool low16 = (a & 2) != 0;
+        uint32_t idx = (offset << 1) & 0x1e;
+        if (low16) idx += 1;
+        if (idx >= 8) idx -= 8;
+        audio->set_sound_bank(idx);
+        return;
+    }
     if (a == TIMER_CONTROL) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
     if (a == TIMER_CONTROL + 1) timer_control = uint16_t((timer_control & 0xff00) | v);
     // MAME records this timer control but does not assert timer IRQ5.
 }
 void Machine::write16(uint32_t a, uint16_t v) {
+    if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
+        uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
+        bool low16 = (a & 2) != 0;
+        uint32_t idx = (offset << 1) & 0x1e;
+        if (low16) idx += 1;
+        if (idx >= 8) idx -= 8;
+        audio->set_sound_bank(idx);
+        return;
+    }
     if (auto *p = direct_bytes<2, true>(*this, a)) {
         p[0] = uint8_t(v >> 8);
         p[1] = uint8_t(v);
@@ -246,6 +264,13 @@ void Machine::write16(uint32_t a, uint16_t v) {
     write8(a + 1, uint8_t(v));
 }
 void Machine::write32(uint32_t a, uint32_t v) {
+    if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
+        uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
+        uint32_t idx = ((offset << 1) & 0x1e) + 1;
+        if (idx >= 8) idx -= 8;
+        audio->set_sound_bank(idx);
+        return;
+    }
     if (auto *p = direct_bytes<4, true>(*this, a)) {
         p[0] = uint8_t(v >> 24);
         p[1] = uint8_t(v >> 16);

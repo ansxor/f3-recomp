@@ -26,6 +26,7 @@ struct CapturedFrame {
     unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
     uint8_t pen_mask = 15;
+    bool flipped = false;
     // Oracle-fallback frame: only native_pixels (320 x geometry::HEIGHT ARGB) is meaningful.
     bool fallback = true;
     std::array<uint32_t, geometry::NATIVE_PIXELS> native_pixels{};
@@ -34,7 +35,7 @@ struct CapturedFrame {
     // CPU compositor view. `tile_pixels` is the playfield asset ROM. Expanded outputs of this view are
     // presented (FrameScene::presented); the native frame composed from it is canonical.
     FrameScene scene(std::span<const uint8_t> tile_pixels, uint32_t layer_mask = ALL_LAYERS) const {
-        return {tiles, text, rows, tile_pixels, colors, layer_mask, false, true};
+        return {tiles, text, rows, tile_pixels, colors, layer_mask, flipped, true};
     }
 };
 

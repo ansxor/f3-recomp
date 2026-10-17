@@ -103,6 +103,10 @@ constexpr uint32_t SOUND_DUART_END = 0x280020;
 constexpr uint32_t SOUND_BANK_TABLE_BASE = 0x300000; // ES5505 voice sample bank mapping table
 constexpr uint32_t SOUND_BANK_TABLE_END = 0x300040;
 
+// Main CPU sound program bankswitch window (0x300000 - 0x30007f)
+constexpr uint32_t MAIN_SOUND_BANKSWITCH_BASE = 0x300000;
+constexpr uint32_t MAIN_SOUND_BANKSWITCH_END = 0x300080;
+
 constexpr uint32_t SOUND_VOLUME_BASE = 0x340000; // MB87078 electronic volume (8-bit even byte lane)
 constexpr uint32_t SOUND_VOLUME_END = 0x340004;
 

@@ -22,11 +22,11 @@ SoundNative::SoundNative(Machine &machine, const f3_block *blocks, size_t block_
 #endif
 {
     const auto &rom_bytes = m_machine.roms.sound;
-    m_rom_crc = crc32(rom_bytes.data(), rom_bytes.size());
-    if (rom_bytes.size() != ROM_SIZE || m_rom_crc != expected_crc) {
+    m_rom_crc = crc32(rom_bytes.data(), std::min(rom_bytes.size(), size_t(ROM_SIZE)));
+    if (rom_bytes.size() < ROM_SIZE || m_rom_crc != expected_crc) {
         char buf[128];
         snprintf(buf, sizeof(buf),
-                 "SoundNative: sound ROM mismatch: size %zu, CRC 0x%08x (expected %u, 0x%08x)",
+                 "SoundNative: sound ROM mismatch: size %zu, CRC 0x%08x (expected at least %u, 0x%08x)",
                  rom_bytes.size(), m_rom_crc, ROM_SIZE, expected_crc);
         throw std::runtime_error(buf);
     }

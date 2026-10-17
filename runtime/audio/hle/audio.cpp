@@ -38,7 +38,7 @@ struct Packet {
     std::span<const uint8_t> data() const { return {bytes.data(), bytes[0]}; }
 };
 struct Message {
-    enum Kind { Command, Advance, Reset, Gain } kind = Advance;
+    enum Kind { Command, Advance, Reset, Gain, Bank } kind = Advance;
     Packet packet;
     uint64_t tick = 0;
     uint8_t value = 0, channel = 0;
@@ -57,7 +57,7 @@ struct AudioEngine::Impl : VoiceSink {
     Sequencer sequencer;
     uint64_t worker_tick = 0, worker_frames = 0;
     std::array<float, 2> gain{1.f, 1.f};
-    Audio::GainModel gain_model = Audio::GainModel::MameRouting;
+    Audio::GainModel gain_model = Audio::GainModel::SingleStage;
     mutable std::mutex mutex;
     mutable std::condition_variable wake, completed;
     std::array<Message, QUEUE_SIZE> queue{};
@@ -183,6 +183,11 @@ struct AudioEngine::Impl : VoiceSink {
                     break;
                 case Message::Reset:
                     sequencer.reset(worker_tick);
+                    synth.set_bank(1); // the sound CPU's cold-boot bank, as in sequencer.reset
+                    break;
+                case Message::Bank:
+                    sequencer.set_bank(m.value, worker_tick);
+                    synth.set_bank(m.value);
                     break;
                 case Message::Gain:
                     gain[m.channel] = std::pow(10.f, -.5f * float(63 - (m.value & 63)) / 20.f);
@@ -270,6 +275,14 @@ void AudioEngine::set_reset(bool asserted) {
         p.shared_write(MAILBOX_GAIN_CH0);
         p.shared_write(MAILBOX_GAIN_CH1);
     }
+}
+void AudioEngine::set_bank(uint8_t bank) {
+    auto &p = *m_impl;
+    Message m;
+    m.kind = Message::Bank;
+    m.tick = p.clock;
+    m.value = bank;
+    p.push(m);
 }
 void AudioEngine::shared_write(uint32_t offset) { m_impl->shared_write(offset); }
 void AudioEngine::finish_frame() { m_impl->submit(m_impl->clock); }

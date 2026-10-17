@@ -1,7 +1,7 @@
 ---
 title: ES5505 (OTIS) register model and sample banking, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-15
 type: hardware
 tags: [audio, memory-map, undocumented]
 sources:
@@ -10,12 +10,17 @@ sources:
   - raw/docs/taito-f3/otis-bank.txt
   - raw/emu-source/mame-0.289/taito_en.cpp
   - raw/docs/runtime-audio-sequences.md
+  - raw/docs/taito-f3/5505-5510.txt
+  - raw/docs/taito-f3/clocks.txt
+  - raw/docs/taito-f3/list.txt
 games: [landmakrj]
 addresses: [0x00200000, 0x00300000]
 status: hypothesis
 evidence:
   - {kind: doc, ref: raw/docs/runtime-audio-es5505.md, note: "runtime documentation of the MAME-derived ES5505 model; not a board measurement"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_en.cpp, note: "MAME bank register and clock wiring"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "12's oscilloscope signal tracing: Host Serial Control register $63 (Sony slave mode), serial protocol sharing BCLK/WCLK/LRCLK, OTIS channels 1..3 via FCM to ESP 0..2, and 128 BCLK LRCLK timing"}
+  - {kind: doc, ref: raw/docs/taito-f3/clocks.txt, note: "audio BCLK 3.8095225 MHz and sample rate ~29.76189453 kHz (BCLK/128)"}
 contradictions:
   - "Bank mechanism: otis-bank.txt (12Me21) reads banks out of a dual-port RAM through a counter driven by OTIS E/BS; the runtime and MAME model a per-voice bank table written by the sound CPU at 0x300000. Both agree on the CPU-side address; the board-level readout path is not modelled."
 supersedes: []
@@ -74,6 +79,13 @@ board observation; the confirmed OTIS to ESP routing is on [[hardware/sound]]. B
   (the F3 pump rate in [[hardware/sound]]). ^[raw/docs/runtime-audio-es5505.md]
 - Chip reset stops every voice (`CR` stop bits, volumes `0x80`, `ACT` = 31); the runtime's board reset
   deliberately does not reset OTIS voices. ^[raw/docs/runtime-audio-es5505.md]
+
+## Serial audio interface and hardware interconnect
+
+- **Host Serial Control register:** Initialized to `$63` `[01100011]`: Sony slave mode, SER3 configured as output, SER0–2 configured as inputs. ^[raw/docs/taito-f3/5505-5510.txt]
+- **Clocks:** Three audio serial clocks are shared across all channels: BCLK (3.8095225 MHz on otis.12), WCLK (otis.10), and LRCLK (otis.11). BCLK is 15.23809 MHz / 4. ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/taito-f3/clocks.txt; raw/docs/taito-f3/list.txt]
+- **LRCLK timing & rate:** LRCLK cycle length is 128 BCLK cycles: 16 bits high (left sample) and 112 bits low (right sample, with only the first 16 bits containing active data). At 3.8095225 MHz BCLK, the resulting audio sample rate is `3809522.5 / 128` ≈ 29.76189453 kHz. ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/taito-f3/clocks.txt]
+- **Physical interconnect:** OTIS channel 0 (ser0, pin 6) is unused (NC). Channel 1 (ser1, pin 7), channel 2 (ser2, pin 8), and channel 3 (ser3, pin 9) connect through the TC0660FCM (which replaces a 74x174 4x D flip-flop clocked by BCLK) to ESP serial inputs 0, 1, and 2 (pins 15, 14, 13). ^[raw/docs/taito-f3/5505-5510.txt]
 
 Unverified here: none of the `FC`, filter-coefficient or envelope behaviour above was checked against
 silicon. Next: [[hardware/es5510-esp]].

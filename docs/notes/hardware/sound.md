@@ -1,7 +1,7 @@
 ---
 title: Sound board section (68000, ES5505 OTIS, ES5510 ESP, MC68681 DUART)
 created: 2026-10-09
-updated: 2026-10-11
+updated: 2026-10-16
 type: hardware
 tags: [audio, cpu, memory-map, reset, pcb]
 sources:
@@ -11,12 +11,15 @@ sources:
   - raw/docs/taito-f3/duart.txt
   - raw/docs/taito-f3/otis-bank.txt
   - raw/docs/taito-f3/list.txt
+  - raw/docs/taito-f3/5505-5510.txt
+  - raw/docs/taito-f3/clocks.txt
   - raw/emu-source/mame-0.289/taito_en.cpp
   - raw/emu-source/mame-0.289/taito_f3.cpp
   - raw/docs/otis-esp-dac-routing-2026-10-09.txt
   - raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt
   - raw/tests/2026-10-10-otis-esp-routing-experiments.md
   - raw/tests/2026-10-10-enhanced-effects-hardware-routing.md
+  - raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md
   - raw/docs/runtime-audio-es5505.md
   - raw/docs/runtime-audio-es5510.md
   - raw/docs/runtime-audio-duart-and-gain.md
@@ -28,9 +31,12 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/sound-address.txt, note: "sound CPU address decode"}
   - {kind: doc, ref: raw/docs/taito-f3/otis-bank.txt, note: "bank counter/flip-flop wiring (ic21, ic22, ic30)"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_en.cpp, note: "sound 68000 map, clocks, DUART I/O, OTIS banking"}
-  - {kind: test, ref: raw/docs/otis-esp-dac-routing-2026-10-09.txt, note: "12's reported hardware continuity check for OTIS SER3 → ESP serio1; relayed and vouched for by the user"}
+  - {kind: doc, ref: raw/docs/otis-esp-dac-routing-2026-10-09.txt, note: "12's initial board-routing relay (with reversed ESP serio0..3 numbering); historical context"}
   - {kind: test, ref: raw/tests/2026-10-10-otis-esp-routing-experiments.md, note: "runtime ESP microprogram instrumentation and OTIS pair muting/gain experiments"}
   - {kind: test, ref: raw/tests/2026-10-10-enhanced-effects-hardware-routing.md, note: "Enhanced hardware-routing test and 2400-frame Land Maker measurement"}
+  - {kind: measurement, ref: raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md, note: "two PCB recordings (Kirameki sound test 0x187 and sound code 1) vs the MAME-derived emulation and HLE: output level, L/R order, reverb tail"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "12's oscilloscope signal tracing from OTIS through FCM to ESP and DAC, Host Serial Control and SERMODE registers, FCM 74x174/74x373 replacement, and 128-BCLK LRCLK timing"}
+  - {kind: doc, ref: raw/docs/taito-f3/clocks.txt, note: "audio BCLK 3.8095225 MHz and sample rate ~29.76189453 kHz (BCLK/128)"}
 contradictions:
   - "ES5510 clock: list.txt shows an 8 MHz clock from counter ic18 (generator unknown); MAME uses 10 MHz (from Gun Buster schematics)."
   - "DUART OP6 -> ESPHALT in MAME; duart.txt marks all output pins OP0-OP7 as 'nc? unused'."
@@ -38,7 +44,7 @@ contradictions:
   - "Sound RAM size/mirroring: notes' decode has 64 KiB repeating over 0x000000-0x07ffff and 0xf80000-0xffffff; MAME maps 64 KiB at 0x000000 mirrored to 0x03ffff, plus 0xff0000-0xffffff."
   - "ES5510 register window: notes decode 0x240000 (bits 17-16 don't care); MAME maps 0x260000-0x2601ff; same chip select, no real disagreement."
   - "otis-bank.txt says 'otis e = input divided by 8' for 3.8 MHz yet list.txt shows the 15 MHz clock on otis.34; 15.238/8 = 1.9 MHz, so either the OTIS input is the 30 MHz clock or the E ratio differs; the notes do not resolve this."
-  - "12's earlier speculative SER1→ESP SER0, SER2→SER1, SER3→SER2 map in raw/docs/otis-esp-dac-routing-2026-10-09-followup.txt is superseded by the later raw/docs/otis-esp-dac-routing-2026-10-09.txt pin map; the latter still has ESP pin 13 assigned to both serio1 and serio0."
+  - "Earlier 2026-10-09 relay (otis-esp-dac-routing-2026-10-09.txt) numbered ESP serio0..3 pins in reverse order, producing an apparent 1<->3 index swap; resolved by 12's oscilloscope signal tracing in 5505-5510.txt confirming OTIS ser1..3 -> ESP serio0..2 and ESP serio3 -> DAC."
 supersedes: []
 ---
 
@@ -48,35 +54,43 @@ The F3 audio side is a separate 68000 with an Ensoniq ES5505 ("OTIS") sample pla
 
 ## OTIS → ESP → DAC serial routing (confirmed)
 
-12's board observation reports OTIS channel 0 unconnected, channel 1 → ESP channel 3, channel 2 → ESP channel 2, channel 3 → ESP channel 1, and ESP channel 0 → DAC. The user explicitly states these reportings match hardware; this is confirmed hardware routing. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+Oscilloscope signal tracing by 12 (`5505-5510.txt`) confirms the physical serial audio routing between the ES5505 (OTIS), TC0660FCM, ES5510 (ESP), and TDA1543 DAC:
 
 | Source | Destination | Status |
 |---|---|---|
-| OTIS channel 0 | unconnected | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
-| OTIS channel 1 | ESP channel 3 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
-| OTIS channel 2 | ESP channel 2 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
-| OTIS channel 3 | ESP channel 1 | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
-| ESP channel 0 | DAC | Confirmed by 12's board report, vouched for by user. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt] |
+| OTIS channel 0 (`otis.6`, `ser0`) | unconnected (`nc`) | Confirmed by 12's oscilloscope signal tracing. ^[raw/docs/taito-f3/5505-5510.txt] |
+| OTIS channel 1 (`otis.7`, `ser1`) | ESP channel 0 (`esp.15`, `serio0`) via FCM | Confirmed by 12's oscilloscope signal tracing. ^[raw/docs/taito-f3/5505-5510.txt] |
+| OTIS channel 2 (`otis.8`, `ser2`) | ESP channel 1 (`esp.14`, `serio1`) via FCM | Confirmed by 12's oscilloscope signal tracing. ^[raw/docs/taito-f3/5505-5510.txt] |
+| OTIS channel 3 (`otis.9`, `ser3`) | ESP channel 2 (`esp.13`, `serio2`) via FCM | Confirmed by 12's oscilloscope signal tracing. ^[raw/docs/taito-f3/5505-5510.txt] |
+| ESP channel 3 (`esp.12`, `serio3`) | TDA1543 DAC (`dac.3`, data) via FCM | Confirmed by 12's oscilloscope signal tracing. ^[raw/docs/taito-f3/5505-5510.txt] |
 
-In MAME pump terms, OTIS pair 1 → serial inputs 4/5, pair 2 → 2/3, pair 3 → 0/1, pair 0 → nothing. MAME instead routes straight through and includes pair 0's Aux bypass, so MAME does not match hardware. The Reference backend copies MAME's routing and likewise does not match. ^[raw/emu-source/mame-0.289/taito_en.cpp L261-L269; raw/docs/otis-esp-dac-routing-2026-10-09.txt]
+In the earlier 2026-10-09 note (`otis-esp-dac-routing-2026-10-09.txt`), 12 had numbered ESP pins 12–15 in reverse order (`serio3..serio0` instead of `serio0..serio3`), producing an apparent 1↔3 index swap description (`OTIS ch 1 -> ESP ch 3, OTIS ch 3 -> ESP ch 1, ESP ch 0 -> DAC`). In `5505-5510.txt`, 12 corrected the pin-to-channel labels against the ES5510 datasheet (where pin 15 is `SERI/O0` and pin 12 is `SERI/O3`). The physical pin connections (`otis.7` → `esp.15`, `otis.8` → `esp.14`, `otis.9` → `esp.13`, `esp.12` → `dac.3`) are identical across both notes; `5505-5510.txt` confirms the corrected channel numbering. ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/otis-esp-dac-routing-2026-10-09.txt]
 
-Enhanced now implements the hardware routing: pair 3 (channels 6/7) → ESP inputs 0/1, dry; pair 2 (channels 4/5) → inputs 2/3, delay; pair 1 (channels 2/3) → inputs 4/5, reverb; pair 0 (channels 0/1) is silent. Reference remains unchanged and follows MAME. The runtime routing test and render measurement are documented in [[comparisons/hardware-vs-mame-audio-routing]]. ^[raw/tests/2026-10-10-enhanced-effects-hardware-routing.md]
+In MAME pump and runtime HLE terms:
+- OTIS Pair 1 (`buses 2/3`, `ser1`) feeds ESP channel 0 (`serio0`), which the sound ROM microprogram passes through directly as dry output.
+- OTIS Pair 2 (`buses 4/5`, `ser2`) feeds ESP channel 1 (`serio1`), used for delay echo.
+- OTIS Pair 3 (`buses 6/7`, `ser3`) feeds ESP channel 2 (`serio2`), used for reverb.
+- OTIS Pair 0 (`buses 0/1`, `ser0`) is physically unconnected on the PCB (`nc`) and produces silence.
+- ESP channel 3 (`serio3`) outputs serial stereo audio to the TDA1543 DAC.
 
-12's `chips.txt` ES5510 pin labels (pins 12–15 = SER3..SER0, from the ES5510 datasheet) and `fcm.txt` labels differ from channel numbering in 12's routing note. This contradiction is flagged for the user/12; the hardware wiring conclusion above stands regardless of pin-label interpretation. The `5505-5510.txt` note is absent from the submodule pinned at a070cbd; it was added upstream in eaa5a0a and is cited through the submodule provenance record without changing the pin. ^[raw/docs/taito-f3.md]
+MAME (`taito_en.cpp`, `esqpump.cpp`) wires Pairs 1, 2, 3 to the same ESP inputs (`1->0, 2->1, 3->2`). Where MAME differs from the board: it routes unconnected OTIS Pair 0 around the ESP into the output sum (aux bypass), it scales the ESP result and the bypass by a 0.5 pump route gain, it applies MB87078 volume twice, and it does not exchange L/R. The runtime therefore outputs the ESP result alone, without the bypass and without the 0.5: with that change the MAME-derived emulation's song RMS is within 0.2 dB of two PCB recordings (before: 5.8 and 7.0 dB too low; HLE after the same change: within 1.6 dB). HLE (`runtime/audio/hle/effects.hpp`) routes Pair 1 (`buses 2/3`) to Dry (ESP ch 0), Pair 2 (`4/5`) to Delay (ESP ch 1), Pair 3 (`6/7`) to Reverb (ESP ch 2), and drops Pair 0 (`buses 0/1`). ^[raw/emu-source/mame-0.289/taito_en.cpp L250-L269; raw/docs/taito-f3/5505-5510.txt; raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
 
-12 remarked that this is the second 1↔3 index swap found on F3. No other such index-routing swap is recorded in the current wiki; the other instance has not yet been recorded. ^[raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+`5505-5510.txt` further documents:
+- **Register presets:** OTIS Host Serial Control register is set to `$63` `[01100011]` (Sony slave mode, SER3 output, SER0–2 inputs); ESP SERMODE register is set to `$07F8` `[0000011111111000]` ("normal"). ^[raw/docs/taito-f3/5505-5510.txt]
+- **FCM logic replacement:** The TC0660FCM replaces a 74x174 4x D flip-flop for the serial audio channels (OTIS outputs connect to D, ESP inputs to Q, clocked by OTIS BCLK) and a 74x373 8x transparent latch buffering ESP RAM data/address lines (D inputs from ESP RA/D pins, Q outputs to RAM, GATE driving clock). ^[raw/docs/taito-f3/5505-5510.txt]
+- **DAC timing & phase:** The serial protocol is "Sony" (similar to I2S). DATA transitions on the BCLK rising edge (half a cycle earlier than I2S); LRCLK transitions on the BCLK falling edge. The LRCLK frame length is 128 BCLK cycles (16 bits high = left sample, 112 bits low = right sample, with only the first 16 bits containing real data; LRCLK phase is backwards from I2S). The TDA1543 DAC expects real I2S left/right meanings, so its output would seem backwards from the internal OTIS/ESP channels. The updated `5505-5510.txt` (submodule revision 9927deb) states: "I don't have confirmation of the pinout of the stereo audio output connector (labelled "S") so i can't confirm whether the final output uses the otis/esp ordering or the dac ordering. but probably it is the former, based on hardware recordings i have heard (assuming their stereo was connected and recorded correctly) and based on mame." The earlier revision (d95fddf) instead concluded the channels were not swapped back after the DAC. The runtime exchanges left and right once in `Audio::render`; the basis is the PCB recording of Kirameki 0x187, whose per-octave left/right balance matches the exchanged order (0.27 dB RMS error against 3.65 dB without the exchange); the recording of sound code 1 is nearly centred and does not discriminate. Recording wiring is unknown. ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/taito-f3/list.txt; raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
 
-Earlier analysis hypothesized reversed register↔pin numbering, under which MAME would already match hardware, and claimed 12's swap would break the mix. Both claims are refuted by the hardware observation and user's confirmation; they remain recorded in [[comparisons/hardware-vs-mame-audio-routing]]. ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt; raw/docs/otis-esp-routing-12-remark-2026-10-10.txt]
+12's earlier remark regarding a "second 1↔3 index swap" arose from the preliminary reversed pin labeling of `serio3..serio0` in the 2026-10-09 relay; with the datasheet-aligned pin numbering in `5505-5510.txt`, no index swap exists between OTIS and ESP serial channels. Earlier analysis conjecturing reversed register↔pin numbering or predicting mix breakage is superseded by the hardware observations in `5505-5510.txt`. ^[raw/docs/otis-esp-routing-12-remark-2026-10-10.txt; raw/docs/taito-f3/5505-5510.txt]
 
 ## Runtime routing experiments
 
 In commandw and landmakrj, runtime instrumentation found loaded ESP programs reading SER0, SER1, and SER2 and writing stereo output only to SER3. Pair muting changed output samples in the tested runtime; these results do not override the hardware-observed routing. ^[raw/tests/2026-10-10-otis-esp-routing-experiments.md]
 
-Enhanced now implements the hardware wiring: pair 3 (channels 6/7) → ESP inputs 0/1, dry; pair 2 (channels 4/5) → inputs 2/3, delay; pair 1 (channels 2/3) → inputs 4/5, reverb; pair 0 (channels 0/1) is silent. Reference remains unchanged and follows MAME. The routing behavior and 2400-frame Land Maker render are recorded in the runtime test note. ^[raw/tests/2026-10-10-enhanced-effects-hardware-routing.md]
+HLE implements the confirmed hardware wiring: Pair 1 (channels 2/3) → ESP ch 0 (Dry), Pair 2 (channels 4/5) → ESP ch 1 (Delay), Pair 3 (channels 6/7) → ESP ch 2 (Reverb), while Pair 0 (channels 0/1) is silent (unconnected on hardware). The reference engine feeds the ESP the same way and, like the board, outputs the ESP result alone. Against two PCB recordings the MAME-derived emulation's end-of-song reverb tail is 5.3 dB too low on average and its output too correlated between channels; the cause is not identified. The measurements are in the 2026-10-16 note. ^[raw/tests/2026-10-10-enhanced-effects-hardware-routing.md; raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
 
 Changing emulated OTIS→ESP gain from 0.18 to 1.0 raised Command War RMS by 5.55× in the test; whether physical hardware carries unity-gain words remains unestablished. ^[raw/tests/2026-10-10-otis-esp-routing-experiments.md]
 
-See [[comparisons/hardware-vs-mame-audio-routing]] for the full comparison and [[hardware/board]] for chip inventory. ^[raw/docs/otis-esp-routing-12-remark-2026-10-10.txt; raw/tests/2026-10-10-otis-esp-routing-experiments.md]
+See [[comparisons/hardware-vs-mame-audio-routing]] for the full comparison and [[hardware/board]] for chip inventory. ^[raw/docs/taito-f3/5505-5510.txt; raw/tests/2026-10-10-otis-esp-routing-experiments.md]
 
 ## Main-CPU view
 
@@ -147,7 +161,7 @@ Address-bit patterns `a` real, `A` byte select, `.` don't care.^[raw/docs/taito-
 
 ## Volume
 
-- MB87078 electronic volume; byte writes at `$340000` (even bytes, notes) or `0x340000-0x340003` high byte (MAME, offset XOR 1 into `data_w`); gain writes with offset ≥ 2 scale ES5505 outputs and pump outputs by `data/32`.^[raw/docs/taito-f3/sound-address.txt] ^[raw/emu-source/mame-0.289/taito_en.cpp]
+- MB87078 electronic volume; byte writes at `$340000` (even bytes, notes) or `0x340000-0x340003` high byte (MAME, offset XOR 1 into `data_w`); gain writes with offset ≥ 2 scale ES5505 outputs and pump outputs by `data/32` in MAME's two-stage volume model (`MameRouting`). On hardware, the MB87078 provides post-DAC analog attenuation (`list.txt:265-280`); the runtime's default gain model is now `SingleStage` (single analog stage after ESP/DAC), while `MameRouting` is retained for MAME comparison.^[raw/docs/taito-f3/sound-address.txt] ^[raw/emu-source/mame-0.289/taito_en.cpp] ^[raw/docs/taito-f3/list.txt]
 
 ## Sound-CPU pinout
 

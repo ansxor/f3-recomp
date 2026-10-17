@@ -374,7 +374,8 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
                 phase = ty * 256;
                 previous_phase = pty * 256;
             }
-            const bool jump_x = motion_delta(px, x, (playfield ? 1024 : 512) * 256);
+            const bool jump_x = motion_delta(
+                px, x, (playfield ? (game_config::video.extend ? 1024 : 512) : 512) * 256);
             const bool jump_y = motion_delta(previous_phase, phase, 512 * 256);
             now.eligible[size_t(i) * 2] = controls && valid_x && jump_x;
             now.eligible[i * 2 + 1] = controls && valid_y && jump_y;

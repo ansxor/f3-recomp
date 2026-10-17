@@ -3,9 +3,14 @@
 #include <cstdint>
 
 namespace f3rt::hle {
-inline constexpr uint32_t SAMPLE_RATE = 48000;
+// The voice and effects stages run on the ES5505 output grid (15238090 / (16 * 32) = 29761 Hz) and the
+// engine outputs at that rate.
+inline constexpr uint32_t SAMPLE_RATE = 29761;
 inline constexpr uint32_t MAIN_CLOCK = 16000000;
 inline constexpr uint32_t TIMER_TICKS = 16000; // ROM sequencer's observed 1 kHz service.
+// Sound CPU cycles (16 MHz) the real driver spends per started voice while a sequencer pulse starts several
+// notes; see DriverClock in note_timing.hpp and docs/notes/raw/tests/2026-10-16-kirameki-187-clap-dynamics.md.
+inline constexpr uint32_t DRIVER_KEYON_CYCLES = 20408;
 
 // Parameter state, not an emulated channel RAM object. Offsets retain the
 // documented firmware format while unknown musical names remain unasserted.

@@ -43,8 +43,9 @@ constexpr unsigned ALTERNATE_MAPS = GameTiles::MAP_COUNT - 4;
 // with an exact full-resolution twin sample the main map at twice the step. Motion keeps moving such a
 // row horizontally (the remap is linear in source_x); a row whose vertical phase moved samples map rows
 // the twin was not solved for, so it keeps the canonical alternate map.
-void encode_row(const SceneRow &r, const MotionState::Row *motion, bool presented, int16_t left,
-                int16_t right, uint32_t *at) {
+void encode_row(const SceneRow &r, const GameText &text, bool flipped,
+                const MotionState::Row *motion, bool presented, int16_t left, int16_t right,
+                uint32_t *at) {
     std::array<ScenePlayfield, 4> pf = r.playfields;
     std::array<bool, 4> moved_y{};
     for (unsigned i = 0; i < 4; ++i) {
@@ -70,7 +71,11 @@ void encode_row(const SceneRow &r, const MotionState::Row *motion, bool presente
         uint32_t *la = at + F3_ROW_LAYERS + size_t(i) * F3_LAYER_STRIDE;
         la[F3_LAYER_FLAGS] = layer_flags(l);
         if (i < 4 && pf[i].alt_map) la[F3_LAYER_FLAGS] |= F3_LAYER_ALT_MAP;
+        if (i < 4 && game_config::video.extend) la[F3_LAYER_FLAGS] |= F3_LAYER_EXTEND;
         if (i < 4 && r.playfields[i].empty_row) la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
+        const int text_y_adj = flipped ? (511 - r.text_y) : r.text_y;
+        if (i == unsigned(LayerId::Text) && !text.row_used(unsigned(text_y_adj)))
+            la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
         const auto clips = clip_ranges(r, l, left, right);
         la[F3_LAYER_CLIP_COUNT] = clips.count;
         for (unsigned c = 0; c < clips.count; ++c) {
@@ -138,7 +143,7 @@ void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionSt
         const auto alt_cells = frame.tiles.cells(alternate ? l + 2 : l);
         uint32_t *dst =
             w + F3_SCENE_PF_CELLS + size_t(l) * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE;
-        for (unsigned i = 0; i < F3_SCENE_PF_LAYER_CELLS; ++i) {
+        for (unsigned i = 0; i < cells.size(); ++i) {
             dst[size_t(i) * 2] = cells[i];
             dst[i * 2 + 1] = alternate ? alt_cells[i] : 0;
         }
@@ -153,8 +158,9 @@ void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionSt
                 F3_SCENE_PALETTE_WORDS * sizeof(uint32_t));
     const int16_t left = int16_t(46 - int(options.border)), right = int16_t(366 + options.border);
     for (unsigned y = 0; y < F3_SCENE_ROW_COUNT; ++y)
-        encode_row(frame.rows[y], motion ? &motion->rows[y] : nullptr, options.expanded(), left,
-                   right, w + F3_SCENE_ROWS + size_t(y) * F3_SCENE_ROW_STRIDE);
+        encode_row(frame.rows[y], frame.text, frame.flipped,
+                   motion ? &motion->rows[y] : nullptr, options.expanded(), left, right,
+                   w + F3_SCENE_ROWS + size_t(y) * F3_SCENE_ROW_STRIDE);
     for (unsigned i = 0; i < frame.sprite_count; ++i) {
         const auto &s = frame.sprites[i];
         uint32_t *at = w + F3_SCENE_SPRITES + size_t(i) * F3_SCENE_SPRITE_STRIDE;

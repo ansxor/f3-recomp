@@ -18,15 +18,15 @@ constexpr uint32_t PF_BEGIN = OFFS_PLAYFIELDS; // PF0 data
 
 void GameTiles::decode(const VideoRam &vram) {
     for (unsigned layer = 0; layer < m_maps.size(); ++layer) {
-        const uint32_t base = PF_BEGIN + layer * PLAYFIELD_LAYER_SIZE;
+        const uint32_t base = PF_BEGIN + layer * MAP_STRIDE;
         for (unsigned i = 0; i < m_maps[layer].size(); ++i) {
             const uint32_t at = base + i * 4;
             m_maps[layer][i] = uint32_t(vram.u16(at)) << 16 | vram.u16(at + 2);
         }
         m_row_used[layer] = 0;
         for (unsigned row = 0; row < 32; ++row)
-            for (unsigned column = 0; column < 64; ++column)
-                if (uint16_t(m_maps[layer][row * 64 + column])) {
+            for (unsigned column = 0; column < COLUMNS; ++column)
+                if (uint16_t(m_maps[layer][row * COLUMNS + column])) {
                     m_row_used[layer] |= 1u << row;
                     break;
                 }

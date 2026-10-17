@@ -103,8 +103,8 @@ struct ScenePlayfield {
     int16_t full_res_offset = -1;
 };
 
-// Playfield map width in texels (64 columns of 16).
-inline constexpr unsigned PF_MAP_WIDTH_PX = 1024;
+// Playfield map width in texels (64 columns of 16 in extended mode, 32 columns in standard mode).
+inline constexpr unsigned PF_MAP_WIDTH_PX = game_config::video.extend ? 1024 : 512;
 
 // The presented (expanded GPU/CPU output) view of one playfield row. With
 // game_config::video.full_resolution_alt_maps, an alt_map row that has a solved full-resolution
@@ -165,11 +165,12 @@ struct LayerInfo {
     uint16_t width, height;
     const char *domain; // sampling-domain suffix; reports print "<width>x<height>-<domain>"
 };
+inline constexpr unsigned PF_LAYER_WIDTH = game_config::video.extend ? 1024 : 512;
 inline constexpr std::array<LayerInfo, LAYER_COUNT> LAYER_INFO{{
-    {"pf0", 1024, 512, "indexed-texture"},
-    {"pf1", 1024, 512, "indexed-texture"},
-    {"pf2", 1024, 512, "indexed-texture"},
-    {"pf3", 1024, 512, "indexed-texture"},
+    {"pf0", PF_LAYER_WIDTH, 512, "indexed-texture"},
+    {"pf1", PF_LAYER_WIDTH, 512, "indexed-texture"},
+    {"pf2", PF_LAYER_WIDTH, 512, "indexed-texture"},
+    {"pf3", PF_LAYER_WIDTH, 512, "indexed-texture"},
     {"sp0", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
     {"sp1", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},
     {"sp2", geometry::NATIVE_WIDTH, geometry::HEIGHT, "next-sprite-plane"},

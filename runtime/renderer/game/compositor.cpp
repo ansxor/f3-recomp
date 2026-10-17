@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <iostream>
 #include <stdexcept>
 
 namespace f3rt {
@@ -19,7 +20,7 @@ struct PixelMix {
 };
 void mix(PixelMix &pixel, const SceneLayer &layer, uint16_t color, bool select,
          const std::array<uint8_t, 4> &blend) {
-    if (!color || layer.blend_mode == pixel.source_mode) return;
+    if (layer.blend_mode == pixel.source_mode) return;
     if (layer.priority > pixel.source_priority) {
         unsigned slot = unsigned(select);
         if (layer.blend_mode == 1 || layer.blend_mode == 2) {
@@ -120,9 +121,12 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
         std::array<bool, LAYER_COUNT> active;
         for (unsigned i = 0; i < LAYER_COUNT; ++i) {
             const LayerId id{uint8_t(i)};
+            const int text_y_adj = flipped ? (511 - row.text_y) : row.text_y;
+            const bool empty =
+                (kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row) ||
+                (id == LayerId::Text && !text.row_used(unsigned(text_y_adj)));
             active[i] =
-                row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 &&
-                !(kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row);
+                row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 && !empty;
         }
         std::array<ClipRanges, LAYER_COUNT> clips;
         for (LayerId id : order)
@@ -190,7 +194,7 @@ void compose_rows(const SceneJob &job, unsigned begin, unsigned end) noexcept {
                                 source = tile_sampler.pixel(x);
                             }
                             select = (source.flags & 1) != 0;
-                            if (!(source.flags & 0x10) || !source.palette) continue;
+                            if (!(source.flags & 0x10)) continue;
                             source.palette = uint16_t(source.palette + pf.palette_add);
                         } else if (layer_kind == LayerKind::Sprite) {
                             if constexpr (EXPANDED) {
