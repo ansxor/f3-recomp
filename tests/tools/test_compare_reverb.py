@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import numpy as np
 import pytest
-from scipy import signal
-from scipy.io import wavfile
 
-from tools.compare import reverb
+np = pytest.importorskip("numpy")
+signal = pytest.importorskip("scipy.signal")
+wavfile = pytest.importorskip("scipy.io.wavfile")
+
+from tools.compare import reverb  # noqa: E402
 
 RATE = 29762
 
