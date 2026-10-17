@@ -124,6 +124,7 @@ struct Synth::Impl {
         bool active = false, released = false, direct = false, reverse = false;
         bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
              hardware_valid = false;
+        uint64_t release_serial = 0;
     };
     struct Pending {
         Note note{};
@@ -837,8 +838,14 @@ struct Synth::Impl {
             for (bool released : std::array<bool, 2>{true, false}) {
                 Voice *old = nullptr;
                 for (Voice &v : voices)
-                    if (v.released == released && (klass == 128 || v.priority == klass))
-                        if (!old || v.serial < old->serial) old = &v;
+                    if (v.released == released && (klass == 128 || v.priority == klass)) {
+                        if (!old) old = &v;
+                        else {
+                            const uint64_t v_k = released ? v.release_serial : v.serial;
+                            const uint64_t o_k = released ? old->release_serial : old->serial;
+                            if (v_k < o_k) old = &v;
+                        }
+                    }
                 if (old) {
                     unsigned index = unsigned(old - voices.data());
                     stop(*old, n.tick);
@@ -1108,6 +1115,7 @@ struct Synth::Impl {
     void release(Voice &v, uint64_t at) {
         if (v.released) return;
         v.released = true;
+        v.release_serial = ++serial;
         emit(v, VoiceEvent::Kind::Release, at);
         if (v.direct) {
             if (v.patch[0] & 128) return;
@@ -1389,9 +1397,13 @@ struct Synth::Impl {
                             }
                             const size_t index = size_t(v.position);
                             const double fraction = v.position - double(index);
-                            const double first = sample(index);
+                            const double first =
+                                (!v.loop && v.reverse && index < size_t(v.start)) ? 0.0 : sample(index);
+                            const double second =
+                                (!v.loop && !v.reverse && index + 1 >= size_t(v.end)) ? 0.0
+                                                                                      : sample(index + 1);
                             const size_t idx = r * VOICE_LANE_STRIDE + lane;
-                            input[idx] = float(first + (sample(index + 1) - first) * fraction);
+                            input[idx] = float(first + (second - first) * fraction);
                             v.filter.advance();
                             a1[idx] = float(v.filter.a1);
                             a2[idx] = float(v.filter.a2);

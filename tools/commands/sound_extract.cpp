@@ -140,6 +140,8 @@ struct SoundProfile {
 constexpr SoundProfile SOUND_PROFILES[] = {
     // Kirameki Star Road: request 0x0018e0, SOUND TEST handler 0x0035aa (play at 0x003640..0x003690).
     {"kirameki", 0x0018e0, 0x00394c, 0x02e8c0, 0x407cc8},
+    // Land Maker: request 0x00308c, selector base pointer 0x40014c.
+    {"landmakrj", 0x00308c, 0, 0, 0x40014c},
 };
 
 const SoundProfile *find_profile(const std::string &set) {
@@ -539,21 +541,23 @@ int cmd_sound_extract(int argc, char **argv) try {
                     m->write16(0x416112, uint16_t(*bank_override));
                 }
 
-                if (profile && !routine_override) {
+                if (profile && !routine_override && profile->selector_base_ptr) {
                     // descriptor of the code in the game's selector table
                     const uint32_t base = m->read32(profile->selector_base_ptr);
                     const uint32_t desc = m->read32(base + code * 4);
                     res.descriptor.reserve(8);
                     for (uint32_t i = 0; i < 8; ++i) res.descriptor.push_back(m->read8(desc + i));
                     res.descriptor_type = res.descriptor[0];
-                    run_routine(*m, {profile->category, std::nullopt, uint16_t(code)});
-                    res.category = int(m->cpu.d[1] & 0xffff);
-                    if (!no_prelude && res.category <= 1) {
-                        run_routine(*m, {profile->prelude, std::nullopt, uint16_t(code)});
-                        const uint32_t first = m->cpu.d[0] & 0xffff, second = m->cpu.d[1] & 0xffff;
-                        // restore the post-snapshot stack/regs for the requests below
-                        res.calls.push_back(request_code(*m, request_routine, first));
-                        res.calls.push_back(request_code(*m, request_routine, second));
+                    if (profile->category) {
+                        run_routine(*m, {profile->category, std::nullopt, uint16_t(code)});
+                        res.category = int(m->cpu.d[1] & 0xffff);
+                        if (!no_prelude && res.category <= 1 && profile->prelude) {
+                            run_routine(*m, {profile->prelude, std::nullopt, uint16_t(code)});
+                            const uint32_t first = m->cpu.d[0] & 0xffff, second = m->cpu.d[1] & 0xffff;
+                            // restore the post-snapshot stack/regs for the requests below
+                            res.calls.push_back(request_code(*m, request_routine, first));
+                            res.calls.push_back(request_code(*m, request_routine, second));
+                        }
                     }
                 }
                 res.calls.push_back(request_code(*m, request_routine, code));

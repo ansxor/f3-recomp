@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
@@ -184,5 +185,43 @@ TEST(HleAudio, StateAndSequencing) {
         std::array<float, 8> unused{};
         f.audio.render(unused.data(), 4);
         EXPECT_EQ(before_drain, f.save()) << "host PCM drain changed main HLE state";
+    }
+
+    // 6. Non-looping sample end boundary interpolation: reaching the end address must not
+    // interpolate past the sample end into unrelated adjacent ROM words (percussion clicks).
+    {
+        Fixture f(rom);
+        f.packet({3, 0x81, 0x56});
+        std::vector<int16_t> pcm;
+        for (int frame = 0; frame < 20; ++frame) {
+            const auto s = f.step();
+            pcm.insert(pcm.end(), s.begin(), s.end());
+        }
+        const size_t n_samples = pcm.size() / 2;
+        int big_spikes = 0;
+        for (size_t ch = 0; ch < 2; ++ch) {
+            for (size_t i = 1; i + 1 < n_samples; ++i) {
+                const int d2 = int(pcm[(i + 1) * 2 + ch]) - 2 * int(pcm[i * 2 + ch]) +
+                               int(pcm[(i - 1) * 2 + ch]);
+                if (std::abs(d2) > 300) {
+                    double sum_sq = 0.0;
+                    int count = 0;
+                    const size_t start = (i > 32) ? i - 32 : 0;
+                    const size_t end = std::min(n_samples, i + 33);
+                    for (size_t j = start; j < end; ++j) {
+                        if (j + 1 < n_samples && j > 0 && j != i) {
+                            const int loc_d2 = int(pcm[(j + 1) * 2 + ch]) -
+                                               2 * int(pcm[j * 2 + ch]) +
+                                               int(pcm[(j - 1) * 2 + ch]);
+                            sum_sq += double(loc_d2) * loc_d2;
+                            ++count;
+                        }
+                    }
+                    const double local_rms = (count > 0) ? std::sqrt(sum_sq / count) : 1.0;
+                    if (std::abs(d2) > 8.0 * std::max(local_rms, 1.0)) ++big_spikes;
+                }
+            }
+        }
+        EXPECT_EQ(big_spikes, 0) << "non-looping sample end produced transient click spikes";
     }
 }
