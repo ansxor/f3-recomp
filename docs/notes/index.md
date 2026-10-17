@@ -77,5 +77,5 @@
 
 - [[comparisons/hardware-vs-mame-video]] (hypothesis) — notes vs MAME 0.289: sprites, tilemaps/pivot, line RAM, blend/priority/clip/mosaic/colour
 - [[comparisons/hardware-vs-mame-system]] (hypothesis) — notes vs MAME 0.289: clocks/raster, interrupts 2/3/5, address map, FIO/input
-- [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing (OTIS 1..3 to ESP 0..2, ESP 3 to DAC, OTIS 0 NC), MAME Aux bypass bug, HLE routing
+- [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing (OTIS 1..3 to ESP 0..2, ESP 3 to DAC, OTIS 0 NC), MAME aux bypass and 0.5 route removed (PCB-level match), L/R order, HLE routing
 - [[comparisons/runtime-vs-mame-attract-capture]] (hypothesis) — 25 attract frames identical to MAME (1,856,000 pixels), capture protocol, MAME revision, limits

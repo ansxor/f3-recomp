@@ -1,0 +1,39 @@
+# Parameter-to-GPR sweep (reads which ES5510 GPRs a preset row byte drives). Kept as a script text; run as
+#   python sweep.py ROW        (ROW = preset row 0..12 whose program and parameters are copied into preset 5)
+# It needs (a) a ROM copy directory /tmp/rcROW with the sound ROM files e44-20.51/e44-21.52 rewritten per run and
+# symlinks to the other kirameki ROM files, (b) a TEMPORARY edit of runtime/rom.cpp and
+# runtime/audio/reference/native/sound_native.cpp that skips the CRC/SHA checks when F3RT_SKIP_CRC is set (reverted
+# afterwards; the patched ROM fails the manifest check), (c) kirameki sound code 413 (packet 032005 = select preset 5).
+# Each run copies row ROW over row 5 (bytes 5..15 = program index and p0..p9 in forward order: p_j = row byte 6 + j),
+# changes one byte by +1 and +16, runs `f3rt-tool sound-extract ... --audio-backend reference --sound-driver native
+# --sound-trace`, replays the trace with tools/compare/esp_graph.py and prints the GPRs that changed.
+import sys,subprocess,os,json
+sys.path.insert(0,'/home/answer/Workspace/f3-recomp/tools/compare')
+import esp_graph as g
+R='/home/answer/Workspace/f3-recomp/'
+A=bytearray(open(R+'roms/kirameki/e44-20.51','rb').read()); B=bytearray(open(R+'roms/kirameki/e44-21.52','rb').read())
+img=bytearray(len(A)*2); img[0::2]=A; img[1::2]=B
+ROW=0x1c2d2
+def run(src_row,changes):
+    im=bytearray(img)
+    row=bytearray(im[ROW+src_row*16:ROW+src_row*16+16])
+    for n,v in changes: row[15-n]=v
+    im[ROW+5*16:ROW+5*16+16]=row
+    a=bytearray(im[0::2]); b=bytearray(im[1::2])
+    open('/tmp/rc'+TAG+'/e44-20.51','wb').write(a); open('/tmp/rc'+TAG+'/e44-21.52','wb').write(b)
+    env=dict(os.environ,F3RT_SKIP_CRC='1')
+    subprocess.run([R+'build-kirameki/f3rt-tool','sound-extract','--rom-dir','/tmp/rc'+TAG,'--bank','1','--sound','413','--seconds','3','--audio-backend','reference','--sound-driver','native','--sound-trace','/tmp/esp3/sw'+TAG+'.trace','--wav','/tmp/esp3/sw'+TAG+'.wav'],env=env,capture_output=True)
+    e=g.Esp(); e.replay_trace('/tmp/esp3/sw'+TAG+'.trace')
+    return list(e.g[:0xc0]),[e.instr[i] for i in range(90)]
+src=int(sys.argv[1])
+TAG=str(src)
+os.makedirs('/tmp/rc'+TAG,exist_ok=True)
+base,bi=run(src,[])
+params=[img[ROW+src*16+15-n] for n in range(10)]
+print('row',src,'params',params,'program instr1',hex(bi[1]))
+for n in range(10):
+    for delta in (1,16):
+        v=params[n]+delta if params[n]<200 else params[n]-delta
+        gp,_=run(src,[(n,v)])
+        ch=[(i,round(g.real(base[i]),5),round(g.real(gp[i]),5)) for i in range(0xc0) if base[i]!=gp[i]]
+        print(f'j{9-n} (row byte {15-n}) {params[n]}->{v}:',ch,flush=True)

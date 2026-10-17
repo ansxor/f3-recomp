@@ -1,7 +1,7 @@
 ---
 title: ES5510 (ESP) host interface, instruction format and DUART halt, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-15
+updated: 2026-10-16
 type: hardware
 tags: [audio, memory-map, undocumented]
 sources:
@@ -36,8 +36,7 @@ The ESP is the effects DSP behind the OTIS. Everything here describes the MAME-d
 it is not an independent measurement of silicon. ^[raw/docs/runtime-audio-es5510.md] How the OTIS channels
 reach the ESP inputs and DAC on the board is **confirmed hardware routing from 12's board observation**
 and lives on [[hardware/sound]] and [[comparisons/hardware-vs-mame-audio-routing]]; nothing below argues
-with it. The runtime's Reference backend still feeds the ESP the MAME way, and HLE follows the
-hardware routing (OTIS Pair 1 -> ESP ch 0 Dry, Pair 2 -> ESP ch 1 Delay, Pair 3 -> ESP ch 2 Reverb, Pair 0 -> NC). ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/taito-f3/5505-5510.txt]
+with it. The runtime's Reference backend feeds the ESP the MAME way, which equals the hardware routing for the three inputs, and both backends follow it (OTIS Pair 1 -> ESP ch 0 Dry, Pair 2 -> ESP ch 1 Delay, Pair 3 -> ESP ch 2 Reverb, Pair 0 -> NC). ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/taito-f3/5505-5510.txt]
 
 ## Host interface (sound CPU)
 

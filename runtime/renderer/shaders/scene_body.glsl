@@ -135,7 +135,8 @@ uint shade(ivec2 pos, bool plane_b) {
 #endif
             if (index < LAYER_SP0) {
                 uint pf = row + F3_ROW_PF + index * F3_PF_STRIDE;
-                int x = floor_scale((int(scene.words[pf + F3_PF_SOURCE_X]) * s + (q - 46 * s) * int(scene.words[pf + F3_PF_X_STEP])) >> 8, s) & 1023;
+                bool extend = (flags & F3_LAYER_EXTEND) != 0u;
+                int x = floor_scale((int(scene.words[pf + F3_PF_SOURCE_X]) * s + (q - 46 * s) * int(scene.words[pf + F3_PF_X_STEP])) >> 8, s) & (extend ? 1023 : 511);
 #ifdef VIDEO_INTERP
                 uint metadata = INTERPOLATION + (params.geometry.x + uint(native_y)) * INTERPOLATION_ROW_STRIDE +
                     index * INTERPOLATION_PF_STRIDE;
@@ -148,7 +149,7 @@ uint shade(ivec2 pos, bool plane_b) {
                         source = interpolated_field(metadata + F3_INTERP_SOURCE, source, fraction);
                     if ((interp_flags & F3_INTERP_FLAG_ZOOM) != 0u)
                         step = interpolated_field(metadata + F3_INTERP_ZOOM, step, fraction);
-                    x = int(floor((source + float(q - 46 * s) / float(s) * step) / 256.0)) & 1023;
+                    x = int(floor((source + float(q - 46 * s) / float(s) * step) / 256.0)) & (extend ? 1023 : 511);
                 }
 #endif
                 int fy = truncate_scale(int(scene.words[pf + F3_PF_Y_FRACTION]) * s + sub_y * int(scene.words[pf + F3_PF_Y_STEP]), s);
@@ -161,7 +162,7 @@ uint shade(ivec2 pos, bool plane_b) {
 #endif
                 // Raw 4-byte PF cell (bit layout shared with GameTiles::RowSampler,
                 // see runtime/renderer/game/tiles.hpp): attributes<<16 | code.
-                uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * 64 + x / 16)) * 2u +
+                uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * (extend ? 64 : 32) + x / 16)) * 2u +
                     ((flags & F3_LAYER_ALT_MAP) != 0u ? 1u : 0u);
                 uint packed = scene.words[cell];
                 uint attr = packed >> 16u;

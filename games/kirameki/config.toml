@@ -1,0 +1,232 @@
+# Pinned manifest: https://github.com/mamedev/mame/blob/cfc4760a3be9c5a79846b19b6a573cb38459fa7e/src/mame/taito/taito_f3.cpp
+# ROM_START(kirameki); physical bytes identified by size, CRC32 and SHA1.
+[game]
+name = "Kirameki Star Road (Ver 2.10J 1997/08/29)"
+id = "kirameki"
+platform = "taito_f3"
+
+[rom]
+# Populated main CPU image (MAME reserves 0x200000 bytes).
+size = 2097152
+interleave = 4
+
+[[rom.lanes]]
+file = "e44-19.20"
+offset = 0
+size = 524288
+crc = "2f3b239a"
+sha1 = "fb79955eba377d429ece04553251146b406143b1"
+
+[[rom.lanes]]
+file = "e44-18.19"
+offset = 1
+size = 524288
+crc = "3137c8bc"
+sha1 = "5f5cb47e214fe116cf985e847fa8340cf2ea5a64"
+
+[[rom.lanes]]
+file = "e44-17.18"
+offset = 2
+size = 524288
+crc = "5905cd20"
+sha1 = "52545622d3c7a31a9e95ab48e7251f1eae2c25b4"
+
+[[rom.lanes]]
+file = "e44-16.17"
+offset = 3
+size = 524288
+crc = "5e9ac3fd"
+sha1 = "3c45707d0d260961df99249978c7e8f51dd1720e"
+
+[discovery]
+coverage = "all_aligned"
+
+[sprites]
+size = 12582912
+fill = 0
+
+[[sprites.lanes]]
+file = "e44-06.12"
+offset = 0
+size = 4194304
+crc = "80526d58"
+sha1 = "d32bf1e6494848b6e258b747245742310398be22"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e44-04.8"
+offset = 1
+size = 4194304
+crc = "28c7c295"
+sha1 = "90189ae26833499218b2236d48ce500a2eea3235"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e44-05.11"
+offset = 8388608
+size = 2097152
+crc = "0fbc2b26"
+sha1 = "0edd67213a9eba15fff0931a07608f9523ae1d95"
+stride = 2
+group = 1
+
+[[sprites.lanes]]
+file = "e44-03.7"
+offset = 8388609
+size = 2097152
+crc = "d9e63fb0"
+sha1 = "f2d8c30a4aaa2090673d5d2b1071e586a05c0236"
+stride = 2
+group = 1
+
+[sprites_hi]
+size = 6291456
+fill = 0
+
+[[sprites_hi.lanes]]
+file = "e44-02.4"
+offset = 0
+size = 4194304
+crc = "5481efde"
+sha1 = "560a1b8acf672781e912dca51599b5aa4d69520a"
+stride = 1
+group = 1
+
+[[sprites_hi.lanes]]
+file = "e44-01.3"
+offset = 4194304
+size = 2097152
+crc = "c4bdf727"
+sha1 = "793a22a30ef44db818cfac96ff8e9d2f99cb672f"
+stride = 1
+group = 1
+
+[tiles]
+size = 6291456
+fill = 0
+
+[[tiles.lanes]]
+file = "e44-14.47"
+offset = 0
+size = 2097152
+crc = "4597c034"
+sha1 = "3c16c20969df9e439d42a89e649146319df1b996"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e44-12.45"
+offset = 2
+size = 2097152
+crc = "7160a181"
+sha1 = "d4a351f38219694d6545b4c502c0ba0a7f0bdfd0"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e44-13.46"
+offset = 4194304
+size = 1048576
+crc = "0b016c4e"
+sha1 = "670d1741376cf929adad3c5e45f921ed4b317d31"
+stride = 4
+group = 2
+
+[[tiles.lanes]]
+file = "e44-11.44"
+offset = 4194306
+size = 1048576
+crc = "34d84143"
+sha1 = "d553ab2da9188b1881f70802637d46574a42787e"
+stride = 4
+group = 2
+
+[tiles_hi]
+size = 3145728
+fill = 0
+
+[[tiles_hi.lanes]]
+file = "e44-10.43"
+offset = 0
+size = 2097152
+crc = "326f738e"
+sha1 = "29c0c870341345eba10993446fecee08b6f13027"
+stride = 1
+group = 1
+
+[[tiles_hi.lanes]]
+file = "e44-09.42"
+offset = 2097152
+size = 1048576
+crc = "a8e68eb7"
+sha1 = "843bbb8a61bd4b9cbb14c7242281ce0c83c432ff"
+stride = 1
+group = 1
+
+[sound]
+# Mapped sound program at 0xc00000; omit unused MAME 0x100000 prefix.
+# 1 MiB program (e44-20 / e44-21) + 2 MiB banked sequences (e44-15).
+size = 3145728
+fill = 0
+base = 12582912
+bankswitch = true
+
+[[sound.lanes]]
+file = "e44-20.51"
+offset = 0
+size = 524288
+crc = "4df7e051"
+sha1 = "db0f5758458764a1c04116d5d5bbb20d4d36c875"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e44-21.52"
+offset = 1
+size = 524288
+crc = "d31b94b8"
+sha1 = "41ee381d10254dc6e7163c5f353568539a96fc20"
+stride = 2
+group = 1
+
+[[sound.lanes]]
+file = "e44-15.53"
+offset = 1048576
+size = 2097152
+crc = "5043b608"
+sha1 = "a328b8cc27ba1620a75a17cdf8571e217c42b9fd"
+word_swap = true
+
+[samples]
+# ROM_REGION16_BE: high-byte chips, zero low bytes and unpopulated banks.
+size = 16777216
+fill = 0
+
+[[samples.lanes]]
+file = "e44-07.38"
+offset = 0
+size = 4194304
+crc = "a9e28544"
+sha1 = "0dc3e1755a93fda310d26ed5f95dd211c05e579e"
+stride = 2
+group = 1
+
+[[samples.lanes]]
+file = "e44-08.39"
+offset = 8388608
+size = 4194304
+crc = "33ba3037"
+sha1 = "b4bbc4198929938607c444edf159ff40f53235d7"
+stride = 2
+group = 1
+
+[video]
+# Pinned f3_config_table: extend false, sprite lag 1.
+# Screen geometry: f3_224a (visarea x=46..365, y=31..254 -> visible_y=31, visible_height=224).
+rotation = 0
+sprite_lag = 1
+extend = false
+visible_y = 31
+visible_height = 224

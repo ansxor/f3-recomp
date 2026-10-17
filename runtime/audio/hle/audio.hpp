@@ -15,6 +15,7 @@ public:
     uint64_t clock() const;
     bool is_reset() const;
     void set_reset(bool asserted);
+    void set_bank(uint8_t bank);
     void shared_write(uint32_t offset);
     void finish_frame();
     void flush() const;

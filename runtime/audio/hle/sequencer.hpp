@@ -14,6 +14,7 @@ public:
     void command(std::span<const uint8_t> packet, uint64_t command_instance, uint64_t tick);
     void advance_to(uint64_t tick);
     void reset(uint64_t tick);
+    void set_bank(uint8_t bank, uint64_t tick);
     uint64_t next_tick() const;
     static bool validate(std::span<const uint8_t> sound_rom) noexcept;
 

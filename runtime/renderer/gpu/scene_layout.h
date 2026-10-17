@@ -68,6 +68,7 @@
 #define F3_LAYER_SELECT_SHIFT 7u
 #define F3_LAYER_MOSAIC 256u
 #define F3_LAYER_ALT_MAP 512u // playfield rows sampling the alternate map (word 1 of the cell slot)
+#define F3_LAYER_EXTEND 1024u // playfield 64 columns (extend=true) vs 32 columns (extend=false)
 
 // Playfield geometry blocks: four per row, after the layer blocks.
 #define F3_ROW_PF 322u

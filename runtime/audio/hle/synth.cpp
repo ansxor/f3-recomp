@@ -1,4 +1,5 @@
 #include "audio/hle/synth.hpp"
+#include "audio/hle/note_timing.hpp"
 #include "audio/hle/voice_kernel.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
@@ -17,8 +18,6 @@ constexpr uint32_t NATIVE_RATE = 15238090u / (16u * 32u);
 constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
 constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
-// Declick tail: a cut voice's last output decays with a 2 ms time constant (exp(-1 / (0.002 * SAMPLE_RATE))).
-const float TAIL_DECAY = std::exp(-1.0f / (0.002f * float(SAMPLE_RATE)));
 int16_t s16(uint32_t x) { return int16_t(uint16_t(x)); }
 int s8(uint32_t x) { return int(int8_t(uint8_t(x))); }
 uint16_t word(const uint8_t *p) { return uint16_t((uint16_t(p[0]) << 8) | p[1]); }
@@ -122,9 +121,6 @@ struct Synth::Impl {
         unsigned gain_frames = 0;
         double step_left = 0, step_right = 0;
         GainSegment left_segment{}, right_segment{};
-        // Last rendered output and the pair bus it went to; handed to the declick tail when the voice is cut.
-        float out_left = 0, out_right = 0;
-        uint8_t out_pair = 0;
         bool active = false, released = false, direct = false, reverse = false;
         bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
              hardware_valid = false;
@@ -135,7 +131,7 @@ struct Synth::Impl {
         const uint8_t *patch = nullptr;
         uint64_t tick = 0;
         uint8_t layer = 0;
-        bool active = false, release_trigger = false;
+        bool active = false, release_trigger = false, direct = false;
     };
     std::span<const uint8_t> rom;
     std::span<const uint16_t> samples;
@@ -143,7 +139,9 @@ struct Synth::Impl {
     std::array<Bank, 16> banks{};
     std::array<Voice, 32> voices{};
     std::array<Pending, 96> pending{};
-    std::array<ProgramData, 256> programs{};
+    DriverClock driver_clock;
+    NoteQueue<Pending, 96> queue; // notes the driver clock pushed past their request tick
+    std::array<ProgramData, 1024> programs{};
     std::array<uint8_t, 32> next{}, voice_prev{};
     std::array<uint16_t, 128> rates{};
     std::array<uint16_t, 256> phase_rates{};
@@ -184,16 +182,9 @@ struct Synth::Impl {
     alignas(64) uint8_t mode[32]{};
     alignas(64) uint8_t lane_voice[32]{};
     alignas(64) uint8_t lane_pair[32]{};
-    // A cut voice (sample end, steal, envelope stop, reset) leaves its last output on its bus and lets it decay
-    // instead of stepping to zero. inject[] places cuts that happen inside a block at their frame.
-    std::array<float, 8> tail{};
-    alignas(64) float inject[VOICE_BLOCK_FRAMES * 8]{};
-    std::array<size_t, 32> lane_end{};
-    std::array<float, 32> lane_prev_left{}, lane_prev_right{};
-    bool tail_active = false, injected = false, voice_rendering = false;
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
-        if (r.size() != SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE ||
+        if (r.size() < SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE ||
             !std::has_single_bit(s.size()))
             throw std::runtime_error(
                 "HLE requires mapped sound and power-of-two sample ROM regions");
@@ -250,16 +241,37 @@ struct Synth::Impl {
         }
         reset(0);
     }
+    uint8_t m_cpubank2 = 1;
+    void set_bank(uint8_t b) { m_cpubank2 = b; }
     uint8_t rb(uint32_t a) const {
         if (a < SOUND_ROM_BASE || a >= SOUND_ROM_END)
             throw std::runtime_error("HLE immutable ROM address out of range");
-        return rom[a - SOUND_ROM_BASE];
+        uint32_t off = a - SOUND_ROM_BASE;
+        if (rom.size() > SOUND_ROM_SIZE) {
+            if (a >= 0xc20000 && a < 0xc40000) {
+                off = uint32_t(m_cpubank2) * 0x20000 + (a - 0xc20000);
+            } else if (a >= 0xc40000) {
+                off = 0x40000 + (a - 0xc40000);
+            }
+        }
+        if (off >= rom.size()) return 0xff;
+        return rom[off];
     }
     uint16_t rw(uint32_t a) const { return uint16_t((uint16_t(rb(a)) << 8) | rb(a + 1)); }
     const uint8_t *rom_pointer(uint32_t a, size_t bytes) const {
-        if (a < SOUND_ROM_BASE || bytes > rom.size() || a - SOUND_ROM_BASE > rom.size() - bytes)
+        if (a < SOUND_ROM_BASE || a + bytes > SOUND_ROM_END)
             throw std::runtime_error("HLE descriptor exceeds sound ROM");
-        return rom.data() + a - SOUND_ROM_BASE;
+        uint32_t off = a - SOUND_ROM_BASE;
+        if (rom.size() > SOUND_ROM_SIZE) {
+            if (a >= 0xc20000 && a < 0xc40000) {
+                off = uint32_t(m_cpubank2) * 0x20000 + (a - 0xc20000);
+            } else if (a >= 0xc40000) {
+                off = 0x40000 + (a - 0xc40000);
+            }
+        }
+        if (off + bytes > rom.size())
+            throw std::runtime_error("HLE descriptor exceeds sound ROM");
+        return rom.data() + off;
     }
     void append_word(uint16_t w) {
         metadata.push_back(uint8_t(w >> 8));
@@ -323,62 +335,96 @@ struct Synth::Impl {
             bank.tag = uint8_t(packed ? tag >> 8 : tag);
         }
     }
+    static constexpr unsigned program_slot(uint16_t id) {
+        return (((id >> 14) & 3) * 256) | (id & 0xff);
+    }
     void cache_programs() {
-        for (unsigned id = 0; id < programs.size(); ++id) {
-            unsigned index = id, column = 0;
-            uint32_t base = sound_5a7e9117::PROGRAM_DATA_BASE;
-            if (index >= 80) {
-                base += sound_5a7e9117::PROGRAM_COLUMN_STRIDE;
-                index -= 80;
-                if (index >= 10) {
-                    index -= 10;
+        constexpr uint32_t BASES[4] = {
+            sound_5a7e9117::PROGRAM_DATA_BASE, // 0x0000: 0xc00134
+            sound_5a7e9117::PROGRAM_DATA_BASE, // 0x4000: 0xc00134
+            0xc7b050,                          // 0x8000: 0xc7b050
+            0xc760a0,                          // 0xc000: 0xc760a0
+        };
+        auto find_bank = [&](uint8_t tag) {
+            int8_t result = -2;
+            for (unsigned b = 0; b < banks.size(); ++b)
+                if (banks[b].count && banks[b].tag == tag) result = int8_t(b);
+            return result;
+        };
+        for (unsigned bank_idx = 0; bank_idx < 4; ++bank_idx) {
+            const uint32_t table_base = BASES[bank_idx];
+            const bool populated =
+                (table_base >= SOUND_ROM_BASE) &&
+                (table_base - SOUND_ROM_BASE + sound_5a7e9117::PROGRAM_RECORD_STRIDE <= rom.size()) &&
+                (rom[table_base - SOUND_ROM_BASE + 2] != 0xff ||
+                 rom[table_base - SOUND_ROM_BASE + 3] != 0xff);
+            for (unsigned id = 0; id < 256; ++id) {
+                const unsigned slot = bank_idx * 256 + id;
+                ProgramData &data = programs[slot];
+                data.sample_banks.fill(-1);
+                if (!populated) {
+                    data.base = nullptr;
+                    data.enabled = 0;
+                    continue;
+                }
+                unsigned index = id, column = 0;
+                uint32_t base = table_base;
+                if (index >= 80) {
+                    base += sound_5a7e9117::PROGRAM_COLUMN_STRIDE;
+                    index -= 80;
+                    if (index >= 10) {
+                        index -= 10;
+                        ++column;
+                    }
+                }
+                if (index >= 40) {
+                    index -= 40;
                     ++column;
                 }
-            }
-            if (index >= 40) {
-                index -= 40;
-                ++column;
-            }
-            ProgramData &data = programs[id];
-            data.base = rom_pointer(base + index * sound_5a7e9117::PROGRAM_RECORD_STRIDE + column,
-                                    sound_5a7e9117::PROGRAM_RECORD_STRIDE);
-            data.enabled = data.base[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
-            data.sample_banks.fill(-1);
-            auto find_bank = [&](uint8_t tag) {
-                int8_t result = -2;
-                for (unsigned b = 0; b < banks.size(); ++b)
-                    if (banks[b].count && banks[b].tag == tag) result = int8_t(b);
-                return result;
-            };
-            if (!data.enabled) {
-                const uint8_t *p = data.base;
-                uint32_t mask = 0;
-                for (unsigned i = 0; i < 4; ++i)
-                    mask =
-                        (mask << 8) | p[sound_5a7e9117::PROGRAM_BANK_MASK_OFFSET + size_t(2) * i];
-                if (p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_0] == 'X' &&
-                    p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_1] == 'E')
-                    for (unsigned i = 0; i < 17; ++i)
-                        if (mask & (1u << i))
-                            data.sample_banks[i] =
-                                find_bank(p[sound_5a7e9117::PROGRAM_DEFAULT_BANK_OFFSET]);
-            } else {
-                for (unsigned layer = 0; layer < 3; ++layer) {
-                    const uint8_t *p = data.base + size_t(layer) * 0x76;
-                    unsigned marker = 0, tag = 0;
-                    for (unsigned i = 0; i < 16; i += 2) {
-                        if (p[i] & 128) marker |= 1u << i;
-                        if (p[20 + i] & 128) tag |= 1u << (i / 2);
+                const uint32_t addr = base + index * sound_5a7e9117::PROGRAM_RECORD_STRIDE + column;
+                if (addr - SOUND_ROM_BASE + sound_5a7e9117::PROGRAM_RECORD_STRIDE > rom.size()) {
+                    data.base = nullptr;
+                    data.enabled = 0;
+                    continue;
+                }
+                data.base = rom.data() + (addr - SOUND_ROM_BASE);
+                data.enabled = data.base[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
+                if (!data.enabled) {
+                    const uint8_t *p = data.base;
+                    uint32_t mask = 0;
+                    for (unsigned i = 0; i < 4; ++i)
+                        mask =
+                            (mask << 8) | p[sound_5a7e9117::PROGRAM_BANK_MASK_OFFSET + size_t(2) * i];
+                    if (p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_0] == 'X' &&
+                        p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_1] == 'E')
+                        for (unsigned i = 0; i < 17; ++i)
+                            if (mask & (1u << i))
+                                data.sample_banks[i] =
+                                    find_bank(p[sound_5a7e9117::PROGRAM_DEFAULT_BANK_OFFSET]);
+                } else {
+                    for (unsigned layer = 0; layer < 3; ++layer) {
+                        const uint8_t *p = data.base + size_t(layer) * 0x76;
+                        unsigned marker = 0, tag = 0;
+                        for (unsigned i = 0; i < 16; i += 2) {
+                            if (p[i] & 128) marker |= 1u << i;
+                            if (p[20 + i] & 128) tag |= 1u << (i / 2);
+                        }
+                        if (marker == 0x5515) data.sample_banks[layer] = find_bank(uint8_t(tag));
                     }
-                    if (marker == 0x5515) data.sample_banks[layer] = find_bank(uint8_t(tag));
                 }
             }
         }
     }
     const uint8_t *program(uint16_t id) const {
         if (id == 0xffff) return nullptr;
-        if (id & 0x8000) throw std::runtime_error("HLE program selects unpopulated sound ROM bank");
-        return programs[id & 255].base;
+        const unsigned slot = program_slot(id);
+        const auto *base = programs[slot].base;
+        if (!base) {
+            if (id & 0x8000)
+                throw std::runtime_error("HLE program selects unpopulated sound ROM bank");
+            return nullptr;
+        }
+        return base;
     }
     Split split_for(const uint8_t *patch, unsigned layer, bool direct, int pitch, uint8_t &selector,
                     uint16_t program_id) const {
@@ -390,7 +436,7 @@ struct Synth::Impl {
         // sample_banks holds signed sentinels (-1 = unset, -2 = missing), so the sign
         // extension is intended.
         // NOLINTNEXTLINE(bugprone-signed-char-misuse): sign extension is intentional
-        int bank = static_cast<int>(programs[program_id & 255].sample_banks[layer]);
+        int bank = static_cast<int>(programs[program_slot(program_id)].sample_banks[layer]);
         if (bank == -2) throw std::runtime_error("HLE instrument names missing sample bank");
         const uint8_t *data = nullptr;
         size_t available = 0;
@@ -492,6 +538,15 @@ struct Synth::Impl {
             segment(e, uint16_t(e.levels[1] - 0x1400), e.rates[0] - 10);
         } else segment(e, e.levels[1], e.rates[0]);
     }
+    // c1983c: ramp the level to 0 at the patch's release rate (patch +2).
+    void start_direct_release(Envelope &e, const Voice &v) {
+        e.done = false;
+        e.position &= 0xffff0000;
+        e.slope = wrap_product(-int64_t(0x7f00) *
+                               s16(rw(sound_5a7e9117::RATE_TABLE + 2 * (v.patch[2] & 127))) * 2);
+        e.target = e.slope <= 0 ? 0x80000000 : 0;
+        e.stage = 4;
+    }
     bool update_envelope(Voice &v, unsigned which) {
         Envelope &e = v.envelope[which];
         if (e.done) return false;
@@ -500,13 +555,14 @@ struct Synth::Impl {
         if (e.slope <= 0) level ^= 0x8000;
         e.position = uint32_t(level) << 16;
         if (v.direct) {
-            if (v.released) {
+            // Timer expiry dispatches on the envelope stage (c1971c -> stage routine), not on note-off: stage 0 starts the
+            // release ramp (c1983c: ends the voice if the level's top byte is already 0), stage 4 ends the voice (c19888).
+            // A patch whose note-off is ignored (patch[0] bit 7) still decays when its timer expires.
+            if (e.stage == 4 || (e.position >> 24) == 0) {
                 e.done = true;
                 return true;
             }
-            e.slope = 0;
-            e.target = e.position;
-            e.done = true;
+            start_direct_release(e, v);
             return false;
         }
         if (e.stage == 4) {
@@ -634,7 +690,7 @@ struct Synth::Impl {
                 volume_target((common + pan[unsigned(127 - pan_position)]) * 4 + level, 0xfa0);
             v.right_volume =
                 volume_target((common + pan[unsigned(pan_position)]) * 4 + level, 0xfa0);
-            int filter_index = p[0xe] * 4 + ((p[0xe] & 15) * v.owner.velocity >> 9);
+            int filter_index = direct_filter_index(p[0xe], v.owner.velocity);
             v.k1 = v.k2 = coefficient(filter_index);
         } else {
             int amp_source = source(v, p[0x60] & 15), base;
@@ -746,25 +802,13 @@ struct Synth::Impl {
         if (buffering_events) buffered_events.push_back({current_frame, current_voice, e});
         else observer(e);
     }
-    // Outside block rendering the next rendered frame continues from the voice's last output. Inside it, render()
-    // injects the value at the cut frame from the block's own output.
-    void cut_output(Voice &v) {
-        if (!voice_rendering && v.out_pair && (v.out_left != 0.f || v.out_right != 0.f)) {
-            tail[v.out_pair * 2u] += v.out_left;
-            tail[v.out_pair * 2u + 1] += v.out_right;
-            tail_active = true;
-        }
-        v.out_left = v.out_right = 0;
-    }
     void stop(Voice &v, uint64_t at) {
         if (v.active && !v.sample_finished) emit(v, VoiceEvent::Kind::Stop, at);
-        if (v.active) cut_output(v);
         v.active = false;
     }
     void end_sample(Voice &v, uint64_t at) {
         if (v.allocation) {
             emit(v, VoiceEvent::Kind::Stop, at);
-            cut_output(v);
             v.sample_finished = true;
         } else stop(v, at);
     }
@@ -995,18 +1039,43 @@ struct Synth::Impl {
         emit(v, VoiceEvent::Kind::Start, n.tick, &onset);
         if (!direct) emit(v, VoiceEvent::Kind::Parameters, n.tick);
     }
+    // Starts a layer at `start`: now when the driver is idle, otherwise through the queue so that the voice,
+    // its envelopes and its events carry the delayed tick.
+    void launch(const Note &n, const uint8_t *prog, const uint8_t *patch, unsigned layer, bool direct,
+                uint64_t start) {
+        if (start == n.tick && queue.empty()) {
+            begin(n, prog, patch, layer, direct);
+            return;
+        }
+        Pending q{n, prog, patch, start, uint8_t(layer), true, false, direct};
+        if (!queue.push(q, n.instance, n.tick, start))
+            throw std::runtime_error("HLE driver key-on queue exhausted");
+    }
+    void service_queue(uint64_t limit) {
+        queue.service(
+            limit,
+            [&](const Pending &q, uint64_t start) {
+                Note n = q.note;
+                n.tick = start;
+                begin(n, q.program, q.patch, q.layer, q.direct);
+            },
+            [&](uint64_t instance, uint64_t at) {
+                for (Voice &v : voices)
+                    if (v.active && v.owner.instance == instance) release(v, at);
+            });
+    }
     void note_on(const Note &submitted) {
         Note n = submitted;
         n.velocity &= 127; // c16faa clears the velocity flag bit.
         const uint8_t *prog = program(n.channel.program);
         if (!prog) return;
-        unsigned enabled = programs[n.channel.program & 255].enabled;
+        unsigned enabled = programs[program_slot(n.channel.program)].enabled;
         if (!enabled) {
             int key = s8(uint8_t(n.kernel_key + n.channel.parameters[0x35]));
             for (unsigned i = 0; i < 17; ++i) {
                 const uint8_t *p = prog + size_t(i) * 20;
                 if (key >= s8(p[10]) && key <= s8(p[12])) {
-                    begin(n, prog, p, i, true);
+                    launch(n, prog, p, i, true, driver_clock.start(n.tick, 1));
                     return;
                 }
             }
@@ -1014,6 +1083,10 @@ struct Synth::Impl {
         }
         if ((n.channel.parameters[0x32] & 0x30) == 0x30) return;
         if (n.channel.parameters[0x1c]) enabled = n.channel.parameters[0x1c];
+        unsigned immediate = 0;
+        for (unsigned layer = 0; layer < 3; ++layer)
+            if ((enabled & (1u << layer)) && !prog[size_t(layer) * 0x76 + 0x74]) ++immediate;
+        const uint64_t start = immediate ? driver_clock.start(n.tick, immediate) : n.tick;
         for (unsigned layer = 3; layer--;) {
             if (!(enabled & (1u << layer))) continue;
             const uint8_t *p = prog + size_t(layer) * 0x76;
@@ -1029,7 +1102,7 @@ struct Synth::Impl {
                          uint8_t(layer),
                          true,
                          p[0x74] == 0xfb};
-            } else begin(n, prog, p, layer, false);
+            } else launch(n, prog, p, layer, false, start);
         }
     }
     void release(Voice &v, uint64_t at) {
@@ -1038,14 +1111,7 @@ struct Synth::Impl {
         emit(v, VoiceEvent::Kind::Release, at);
         if (v.direct) {
             if (v.patch[0] & 128) return;
-            Envelope &e = v.envelope[2];
-            e.done = false;
-            e.position &= 0xffff0000;
-            e.slope =
-                wrap_product(-int64_t(0x7f00) *
-                             s16(rw(sound_5a7e9117::RATE_TABLE + 2 * (v.patch[2] & 127))) * 2);
-            e.target = e.slope <= 0 ? 0x80000000 : 0;
-            e.stage = 4;
+            start_direct_release(v.envelope[2], v);
         } else {
             for (Envelope &e : v.envelope) {
                 if (e.flags & 64) continue;
@@ -1073,6 +1139,7 @@ struct Synth::Impl {
         }
     }
     void note_off(uint64_t instance, uint64_t at) {
+        queue.note_off(instance, at);
         for (Pending &p : pending)
             if (p.active && p.note.instance == instance) {
                 if (p.release_trigger) {
@@ -1086,6 +1153,9 @@ struct Synth::Impl {
             if (v.active && v.owner.instance == instance) release(v, at);
     }
     void channel_update(uint8_t sequence, uint8_t track, const Channel &c, uint64_t at) {
+        queue.for_each([&](Pending &q) {
+            if (q.note.sequence == sequence && q.note.track == track) q.note.channel = c;
+        });
         for (Pending &p : pending)
             if (p.active && p.note.sequence == sequence && p.note.track == track)
                 p.note.channel = c;
@@ -1101,6 +1171,8 @@ struct Synth::Impl {
             v = Voice{};
         }
         for (Pending &p : pending) p.active = false;
+        queue.clear();
+        driver_clock.reset(at);
         for (unsigned i = 0; i < 32; ++i) {
             next[i] = uint8_t((i + 1) % 32);
             voice_prev[i] = uint8_t((i + 31) % 32);
@@ -1122,7 +1194,7 @@ struct Synth::Impl {
                 Note n = p.note;
                 n.tick = p.tick;
                 p.active = false;
-                begin(n, p.program, p.patch, p.layer, false);
+                launch(n, p.program, p.patch, p.layer, false, driver_clock.start(n.tick, 1));
             }
         unsigned count = budgets[budget_slot];
         budget_slot = uint8_t((budget_slot + 1) % 12);
@@ -1178,21 +1250,6 @@ struct Synth::Impl {
         }
         return exact;
     }
-    void mix_tail(float *output, size_t frames) {
-        for (size_t r = 0; r < frames; ++r) {
-            float *out = output + r * 8;
-            for (unsigned b = 2; b < 8; ++b) { // pair 0 is never mixed
-                if (injected) tail[b] += inject[r * 8 + b];
-                out[b] += tail[b];
-                tail[b] *= TAIL_DECAY;
-            }
-        }
-        injected = false;
-        // Below 2^-24 of full scale the tail is far under one output LSB.
-        tail_active = std::any_of(tail.begin(), tail.end(),
-                                  [](float x) { return std::abs(x) > 6e-8f; });
-        if (!tail_active) tail.fill(0.f);
-    }
     void render(float *output, size_t frames) {
         if (!output && frames) throw std::invalid_argument("Null HLE output buffer");
         if (!frames) return;
@@ -1208,15 +1265,22 @@ struct Synth::Impl {
         const double samples_limit = double(samples.size());
         size_t frame_start = 0;
         while (frame_start < frames) {
-            if (timer <= frame_ticks[frame_start]) {
-                tick = frame_ticks[frame_start];
-                while (timer <= tick) {
+            const uint64_t now = frame_ticks[frame_start];
+            for (;;) {
+                const bool timer_due = timer <= now;
+                const uint64_t queued = queue.next_event();
+                const bool queue_due = queued <= now;
+                if (!timer_due && !queue_due) break;
+                tick = now;
+                if (queue_due && (!timer_due || queued <= timer)) service_queue(timer_due ? timer : now);
+                else {
                     service(timer);
                     timer += TIMER_TICKS;
                 }
             }
             size_t frame_end = frame_start + 1;
-            while (frame_end < frames && frame_ticks[frame_end] < timer) ++frame_end;
+            const uint64_t horizon = std::min(timer, queue.next_event());
+            while (frame_end < frames && frame_ticks[frame_end] < horizon) ++frame_end;
             std::fill_n(output + frame_start * 8, (frame_end - frame_start) * 8, 0.f);
             if (observer) {
                 buffering_events = true;
@@ -1230,13 +1294,8 @@ struct Synth::Impl {
                     Voice &v = voices[vi];
                     if (!v.active) continue;
                     const size_t lane = count++;
-                    if (v.out_pair != v.pair) cut_output(v); // rerouted: the old bus decays
-                    voice_rendering = true;
                     lane_voice[lane] = uint8_t(vi);
                     lane_pair[lane] = v.pair;
-                    lane_end[lane] = chunk_frames;
-                    lane_prev_left[lane] = v.out_left;
-                    lane_prev_right[lane] = v.out_right;
                     mode[lane] = v.filter.mode;
                     for (unsigned s = 0; s < 4; ++s) {
                         state[s * VOICE_LANE_STRIDE + lane] = v.filter.state[s];
@@ -1245,7 +1304,6 @@ struct Synth::Impl {
                     current_voice = vi;
                     const double length = v.end - v.start, increment = v.increment;
                     auto fill_remaining = [&](size_t start_row) {
-                        lane_end[lane] = start_row;
                         for (size_t rem = start_row; rem < chunk_frames; ++rem) {
                             const size_t idx = rem * VOICE_LANE_STRIDE + lane;
                             input[idx] = 0.f;
@@ -1440,7 +1498,6 @@ struct Synth::Impl {
                         }
                     }
                 }
-                voice_rendering = false;
                 const size_t lanes =
                     count == 0 ? 0
                                : ((count + VOICE_LANE_MULTIPLE - 1) / VOICE_LANE_MULTIPLE) *
@@ -1479,36 +1536,14 @@ struct Synth::Impl {
                     };
                     render_voice_block(block);
                     for (size_t lane = 0; lane < count; ++lane) {
-                        Voice &v = voices[lane_voice[lane]];
-                        const unsigned pair = lane_pair[lane];
-                        const size_t end = lane_end[lane];
-                        if (pair == 0) {
-                            v.out_left = v.out_right = 0;
-                            v.out_pair = 0;
-                            continue;
-                        }
-                        const unsigned pair_left = pair * 2;
+                        if (lane_pair[lane] == 0) continue;
+                        const unsigned pair_left = unsigned(lane_pair[lane]) * 2;
                         const unsigned pair_right = pair_left + 1;
                         for (size_t r = 0; r < chunk_frames; ++r) {
                             float *out = output + (chunk_start + r) * 8;
                             out[pair_left] += out_left[r * VOICE_LANE_STRIDE + lane];
                             out[pair_right] += out_right[r * VOICE_LANE_STRIDE + lane];
                         }
-                        const float last_left =
-                            end ? out_left[(end - 1) * VOICE_LANE_STRIDE + lane] : lane_prev_left[lane];
-                        const float last_right = end ? out_right[(end - 1) * VOICE_LANE_STRIDE + lane]
-                                                     : lane_prev_right[lane];
-                        if (end < chunk_frames) {
-                            if (!injected) std::fill_n(inject, chunk_frames * 8, 0.f);
-                            injected = true;
-                            inject[end * 8 + pair_left] += last_left;
-                            inject[end * 8 + pair_right] += last_right;
-                            v.out_left = v.out_right = 0;
-                        } else {
-                            v.out_left = last_left;
-                            v.out_right = last_right;
-                        }
-                        v.out_pair = uint8_t(pair);
                     }
                     for (size_t lane = 0; lane < count; ++lane) {
                         Voice &v = voices[lane_voice[lane]];
@@ -1518,7 +1553,6 @@ struct Synth::Impl {
                         }
                     }
                 }
-                if (tail_active || injected) mix_tail(output + chunk_start * 8, chunk_frames);
             }
             if (observer) {
                 buffering_events = false;
@@ -1552,6 +1586,7 @@ void Synth::channel_update(uint8_t sequence, uint8_t track, const Channel &c, ui
     m_impl->channel_update(sequence, track, c, tick);
 }
 void Synth::reset(uint64_t tick) { m_impl->reset(tick); }
+void Synth::set_bank(uint8_t bank) { m_impl->set_bank(bank); }
 void Synth::render(float *output, size_t frames) { m_impl->render(output, frames); }
 void Synth::set_observer(std::function<void(const VoiceEvent &)> observer) {
     m_impl->observer = std::move(observer);
