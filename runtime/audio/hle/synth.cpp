@@ -1,6 +1,7 @@
 #include "audio/hle/synth.hpp"
 #include "audio/hle/note_timing.hpp"
 #include "audio/hle/faust/generated/voice_filter.hpp"
+#include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
@@ -20,10 +21,10 @@ constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
 // Frames per voice-filter block: each active voice runs one faust::VoiceFilterDsp::compute() per block.
 constexpr size_t VOICE_BLOCK_FRAMES = 64;
-int16_t s16(uint32_t x) { return int16_t(uint16_t(x)); }
-int s8(uint32_t x) { return int(int8_t(uint8_t(x))); }
-uint16_t word(const uint8_t *p) { return uint16_t((uint16_t(p[0]) << 8) | p[1]); }
-uint32_t longword(const uint8_t *p) { return (uint32_t(word(p)) << 16) | word(p + 2); }
+using f3rt::s16;
+using f3rt::s8;
+inline uint16_t word(const uint8_t *p) { return read_be16(p); }
+inline uint32_t longword(const uint8_t *p) { return read_be32(p); }
 uint16_t parameter_word(const Channel &c, unsigned i) { return word(c.parameters.data() + i); }
 int32_t wrap_product(int64_t x) { return int32_t(uint32_t(x)); }
 uint16_t volume_target(int value, int threshold) {

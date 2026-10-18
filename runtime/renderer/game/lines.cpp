@@ -1,4 +1,5 @@
 #include "renderer/game/lines.hpp"
+#include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/video.hpp"
 #include "renderer/game/tiles.hpp"
@@ -9,8 +10,6 @@
 
 namespace f3rt {
 namespace {
-
-inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
 
 std::string format_layer(const SceneLayer &l) {
     std::ostringstream ss;

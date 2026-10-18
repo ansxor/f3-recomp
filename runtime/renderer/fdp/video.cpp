@@ -1,6 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Bryan McPhail, ywy, 12Me21, f3rt authors
 #include "f3rt/video.hpp"
+#include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
@@ -31,12 +32,6 @@ constexpr uint32_t OFFS_PF_RAM = OFFS_PLAYFIELDS;
 constexpr uint32_t OFFS_TEXTRAM = OFFS_TEXTRAM_MAP;
 constexpr uint32_t OFFS_CHARRAM = OFFS_TEXTRAM_GLYPHS;
 constexpr uint32_t OFFS_PIVOT_RAM = OFFS_PIVOT;
-
-inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
-
-inline uint32_t read_be32(const uint8_t *p) {
-    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
-}
 
 inline int mosaic(int x, uint8_t sample) {
     if (sample <= 1) return x;

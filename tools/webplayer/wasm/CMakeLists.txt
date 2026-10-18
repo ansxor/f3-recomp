@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(f3hle CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(F3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
