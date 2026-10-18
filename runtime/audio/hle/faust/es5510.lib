@@ -1,235 +1,187 @@
-// ES5510 (ESP) effects programs of the Taito F3 sound board, as FAUST.
+// Building blocks of the ES5510 effects programs (reverb.dsp, chorus.dsp, echo.dsp, hall.dsp).
 //
-// The C++ these replace was reverse-engineered from flat fixed-point MAC microcode, so the graphs below are
-// what the microcode computes once its algebraic expansion is undone: Schroeder all-pass loops nested inside
-// each other, with a few multi-tap reads of the loop nodes. The HLE reproduces the loaded programs as they run
-// in the reference backend (every delay is a (read offset - write offset) / 256 distance in the DSP's delay RAM,
-// every gain a GPR of the program); docs/notes/raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md sections 8
-// and 9 list them and tools/compare/esp_graph.py verify checks them against the emulated ES5510.
+// Every program takes three stereo buses and returns the DAC pair plus a level:
+//   dry_l, dry_r      straight to the DAC
+//   fx_l, fx_r        the effect bus: chorus or echo input, or reverb input
+//   send_l, send_r    the reverb send
+//   -> out_l, out_r, peak    peak: the largest internal level; the host bypasses a program while it is silent
 //
-// Conventions used in every diagram and comment of this library and of reverb.dsp, chorus.dsp, echo.dsp, hall.dsp:
-//   frame t        one OTIS/ESP sample frame (29761 Hz); the DSP executes its whole program every frame.
-//   z-D            D frames ago: x@D in FAUST, "get(t, D)" of a delay RAM segment in the old C++.
-//   latch          a GPR written at the end of frame t and read at frame t+1 (C++ m_g..): one frame of delay, ' (mem).
-//   "C++: name"    the member of the C++ class this port replaced (delay RAM rings m_w48 .., latched registers
-//                  m_g89 ..; git history before the FAUST port); the W<n> / G<n> names are the node and GPR names of
-//                  the decoded graph (tools/compare/esp_graph.py graph) and of a hardware trace.
-//   ~ loops        FAUST's A ~ B feeds B(A) back with an implicit one-sample delay. Where the C++ already carried
-//                  the value to the next frame through a latched register, that latch IS this delay and the loop
-//                  keeps the full delay (the modulated taps); where the C++ read a ring D frames back with no latch,
-//                  the loop contains @(D - 1). A network nested n all-pass loops deep sees its input n samples
-//                  late (the delays in between are shortened to make up for it, so every delay between two
-//                  taps of the same block stays exact); only a signal that varies in time, the LFO, has to be
-//                  delayed by the same n (see ap3_tap).
-//
-// Delay RAM contents are never "put" and "get": every delay is an @ on the signal that was written to the ring.
+// Conventions:
+//   frame    one sample at 29762 Hz; all delays are in frames.
+//   x'       x one frame late: computed this frame, used on the next.
+//   A ~ B    FAUST feedback: B's output returns to A's input one frame late. That frame is part of the loop's
+//            delay, so a D-frame delay line inside a loop is written @(D - 1).
 
 // ---------------------------------------------------------------------------------------------------------
-// Plumbing
+// Helpers
 // ---------------------------------------------------------------------------------------------------------
 bus(n) = par(i, n, _);
 max3(a, b, c) = max(a, max(b, c));
-// Hardware-style saturation of a 24 bit fixed point register to [-1, 1).
-sat(x) = max(-1.0, min(1.0, x));
+saturate(x) = max(-1.0, min(1.0, x));
 
-// Gains of the nested all-pass blocks. The microcode shows them only through products: with an inner gain of 0.25 and
-// an outer gain a the coefficients read 0.9375 = 1 - 0.25^2, 0.0625 = 0.25^2, 0.125 = 0.25*a (a = 0.5) and
-// 0.75 = 1 - a^2. Reverb, Chorus and Echo have a fixed a = 0.5; Hall has a = hall_a = (p0 + 7)/128.
-inner_gain = 0.25;
-tank_a = 0.5;
+nested_gain = 0.25;      // gain of every all-pass nested inside another one
+tank_outer_gain = 0.5;   // outer gain of the tank's nested blocks
 
 // ---------------------------------------------------------------------------------------------------------
-// Schroeder all-pass around an arbitrary network.
+// Schroeder all-pass around an arbitrary inner network.
 //
-//   x ──►(+)── w ──┬─────────────► [ N ] ──┬── d ──►(+)──► y      w = x + g*d      d = N(w)      y = d - g*w
-//         ▲        │                       │         ▲                              = (1 - g^2)*d - g*x
-//         └── g ◄──┼───────────────────────┘         │
-//                  └──────────── -g ──────────────────┘
+//   x ──►(+)── node ──┬──────► [ inner ] ──┬── returned ──►(+)──► y
+//         ▲           │                    │                ▲
+//         └── gain ◄──┼────────────────────┘                │
+//                     └─────────── -gain ───────────────────┘
 //
-// For a pure delay N = z^-D this is the textbook Schroeder all-pass H = (z^-D - g) / (1 - g z^-D); it stays
-// all-pass whenever N is, which is how the ES5510 programs nest all-pass blocks inside each other (Gardner).
-// The one-sample delay that ~ puts in the loop is part of N: N holds D - 1 samples where the C++ ring was D long.
+// With a delay line inside, this is the textbook all-pass (z^-D - g) / (1 - g z^-D). It stays all-pass for any
+// all-pass inner network, which is how the blocks below nest.
 //
-// ap_wrap(g, N)    N: 1 -> 1, result: x -> y.
-// ap_wrap_p(g, N)  N: 1 -> 2 (d, probe): the second output of N is carried out of the loop untouched; result:
-//                  x -> (y, probe). The tank monitors the inner all-pass delay read of block B this way.
+// allpass_wrap(gain, inner)          inner: 1 -> 1;  x -> y
+// allpass_wrap_probe(gain, inner)    inner: 1 -> 2;  x -> (y, probe): inner's second output leaves the loop as is
 // ---------------------------------------------------------------------------------------------------------
-ap_wrap(g, N) = (loop ~ _) : (!, _)
+allpass_wrap(gain, inner) = (loop ~ _) : (!, _)
 with {
-    loop(fb, x) = w, y
+    loop(node_prev, x) = node, y
     with {
-        d = fb : N;
-        w = x + g*d;
-        y = d - g*w;
+        returned = node_prev : inner;
+        node = x + gain*returned;
+        y = returned - gain*node;
     };
 };
 
-ap_wrap_p(g, N) = (loop ~ _) : (!, _, _)
+allpass_wrap_probe(gain, inner) = (loop ~ _) : (!, _, _)
 with {
-    loop(fb, x) = fb : N : \(d, p).(w, y, p
+    loop(node_prev, x) = node_prev : inner : \(returned, probe).(node, y, probe
     with {
-        w = x + g*d;
-        y = d - g*w;
+        node = x + gain*returned;
+        y = returned - gain*node;
     });
 };
 
-// One stage: a ring of D frames (the node written this frame, read D frames later).
-//   C++: m_w64 (168) and m_w69 (276) of the diffuser pair; Hall wd (dd1) and w1 (dd2).
-ap1(g, D) = ap_wrap(g, @(D - 1));
+// All-pass around a delay line.
+allpass(gain, delay) = allpass_wrap(gain, @(delay - 1));
 
-// Single-nested block: outer all-pass a around [inner all-pass g around a ring of dr, then a ring of dq].
-//
-//   x ─► AP(a)[ ─► AP(g)[ dr ] ─► dq ] ─► y
-//
-//   C++ block B: m_w88 (dr = 1369, the inner node), m_w87 (dq = 549, the inner all-pass output), m_w85 (y);
-//   Hall bq / br / bout. The probe of ap2_probe is the inner delay read ("r" = m_w88.get(t, 1369)).
-ap2(a, g, dq, dr) = ap_wrap(a, ap_wrap(g, @(dr - 1)) : @(dq - 1));
-ap2_probe(a, g, dq, dr) = ap_wrap_p(a, ap_wrap_p(g, @(dr - 1) <: (_, _)) : (@(dq - 1), _));
+// x ─► AP(outer_gain)[ AP(inner_gain)[ inner_delay ] ─► outer_delay ] ─► y
+// The probe variant also outputs the inner delay line's output.
+nested_allpass(outer_gain, inner_gain, outer_delay, inner_delay) =
+    allpass_wrap(outer_gain, allpass_wrap(inner_gain, @(inner_delay - 1)) : @(outer_delay - 1));
+nested_allpass_probe(outer_gain, inner_gain, outer_delay, inner_delay) =
+    allpass_wrap_probe(outer_gain, allpass_wrap_probe(inner_gain, @(inner_delay - 1) <: (_, _)) : (@(outer_delay - 1), _));
 
-// Double-nested block: outer all-pass a around [middle all-pass g around [inner all-pass g around N3, then a ring
-// of dc], then a ring of da]. N3 is whatever closes the innermost loop: the modulated tap of the innermost node
-// (tank, Hall), or the left echo line (Echo program, where that all-pass is open).
-//
-//   x ─► AP(a)[ ─► AP(g)[ ─► AP(g)[ N3 ] ─► dc ] ─► da ] ─► y
-//
-//   C++ block A: m_w54 (innermost node; Hall o4), m_w53 (dc = 696; Hall cn), m_w50 (da = 1012; Hall an) and
-//   m_w48 (y; Hall o2).
-ap3(a, g, da, dc, N3) = ap_wrap(a, ap_wrap(g, ap_wrap(g, N3) : @(dc - 1)) : @(da - 1));
+// x ─► AP(outer_gain)[ AP(inner_gain)[ AP(inner_gain)[ core ] ─► middle_delay ] ─► outer_delay ] ─► y
+// `core` closes the innermost loop: modulated_core or external_core.
+double_nested_allpass(outer_gain, inner_gain, outer_delay, middle_delay, core) =
+    allpass_wrap(outer_gain, allpass_wrap(inner_gain, allpass_wrap(inner_gain, core) : @(middle_delay - 1)) : @(outer_delay - 1));
 
-// Where N3 reads its own node (Reverb, Chorus, Hall): the interpolated tap of the innermost node at base + depth*x
-// frames, x the LFO C value (the first output of lfo_c). Each enclosing ap_wrap hands its inner network the loop
-// signal one sample late (made up for in the @(D - 1) of its N), so a node n loops deep is the C++ node n frames
-// late; the innermost node of ap3 is two loops deep. The C++ latched the tap one frame after it read the LFO
-// and the depth, hence both of three frames ago: the modulation has to stay aligned with the signal it modulates.
-ap3_tap(base, x) = (_, base + (depth*x)@3) : itap(1100);
-// Where the innermost all-pass is open (Echo): m is the return, which the C++ latched (m_g91) and which enters
-// the loop two loops deep, i.e. two frames late.
-ap3_open(m) = (!, m@2);
+// Each allpass_wrap hands its inner network the loop signal one frame late (its delay lines are one frame
+// shorter to make up for it), so the core of double_nested_allpass sees the loop two frames late. A signal
+// entering the core from outside the loops is delayed to match.
+//
+// modulated_core(center, lfo_x): the innermost node read back through an interpolated tap at
+// center + lfo_depth*lfo_x frames. The tap is read one frame after its LFO value, hence 3 frames in all.
+modulated_core(center, lfo_x) = (_, center + (lfo_depth*lfo_x)@3) : interpolated_tap(1100);
+// external_core(return_signal): the innermost loop is open and return_signal is fed in instead.
+external_core(return_signal) = (!, return_signal@2);
 
 // ---------------------------------------------------------------------------------------------------------
-// ES5510 interpolated tap (C++ Ring::tap): two adjacent frames weighted by the fractional delay,
-//   (s, d) -> s@floor(d) + frac(d) * (s@(floor(d) + 1) - s@floor(d)),    d < 0 reads silence.
-// D bounds d in frames (the delay memory is next_pow2(D + 2)). Inside a ~ loop s is the loop signal, which has
-// already been delayed by one sample: the tap sits floor(d) + 1 frames behind the node written this frame,
-// which is the latched GPR (m_g91 .. m_g131) of the C++.
+// (signal, delay) -> signal `delay` frames ago, linearly interpolated between the two neighbouring frames.
+// A negative delay reads silence; max_delay sizes the delay memory. Inside a ~ loop the signal already arrives
+// one frame late, so the tap lands floor(delay) + 1 frames behind the value written this frame.
 // ---------------------------------------------------------------------------------------------------------
-itap(D) = \(s, d).(select2(d >= 0.0, 0.0, a + f*(b - a))
+interpolated_tap(max_delay) = \(signal, delay).(select2(delay >= 0.0, 0.0, near + fraction*(far - near))
 with {
-    dd = max(0.0, min(D, d));
-    i = int(dd);
-    f = dd - i;
-    a = s@i;
-    b = s@(i + 1);
+    clamped = max(0.0, min(max_delay, delay));
+    whole = int(clamped);
+    fraction = clamped - whole;
+    near = signal@whole;
+    far = signal@(whole + 1);
 });
 
 // ---------------------------------------------------------------------------------------------------------
-// Sine LFOs. An ES5510 LFO is a GPR pair (x, y) the microcode rotates by eps every frame; the DSP executes its
-// whole program every frame, so the phase advances through silence. C++ keeps the phase of the frames it did not
-// run (auto-bypass) as the offset ph (hi + lo: float controls carrying a double), applied as a fixed rotation.
-//
-//   lfo(eps, ph) -> (x, y, xn, yn)   state before / after the frame's rotation, both rotated by ph
-//   first frame (1, 0) -> (c, s) -> ...      C++ Lfo::x / Lfo::y read before / after Lfo::step()
+// Quadrature sine LFO: a (cos, sin) pair starting at (1, 0), rotated by `rate` radians every frame and then by a
+// fixed `phase` (how the host advances the LFO over frames it did not compute).
+// Outputs (x, y, next_x, next_y): the pair before and after this frame's step.
 // ---------------------------------------------------------------------------------------------------------
-rot(c, s) = \(x, y).(x*c - y*s, x*s + y*c);
-lfo(eps, ph) = (state ~ bus(2)) : route(4, 4, (1, 3), (2, 4), (3, 1), (4, 2)) : (rot(cos(ph), sin(ph)), rot(cos(ph), sin(ph)))
+rotate(cos_a, sin_a) = \(x, y).(x*cos_a - y*sin_a, x*sin_a + y*cos_a);
+quadrature_lfo(rate, phase) = (step ~ bus(2)) : route(4, 4, (1, 3), (2, 4), (3, 1), (4, 2))
+                            : (rotate(cos(phase), sin(phase)), rotate(cos(phase), sin(phase)))
 with {
-    c = cos(eps);
-    s = sin(eps);
-    // (xn, yn) of frame t-1 is the state at the start of frame t; (1, 0) before the first frame.
-    state(tx, ty) = xn, yn, x, y
+    cos_rate = cos(rate);
+    sin_rate = sin(rate);
+    step(prev_x, prev_y) = next_x, next_y, x, y
     with {
-        x = tx + (1 - 1');
-        y = ty;
-        xn = x*c - y*s;
-        yn = x*s + y*c;
+        x = prev_x + (1 - 1');   // (1, 0) on the first frame
+        y = prev_y;
+        next_x = x*cos_rate - y*sin_rate;
+        next_y = x*sin_rate + y*cos_rate;
     };
 };
 
 // ---------------------------------------------------------------------------------------------------------
-// Controls. Labels are the names of the old C++ members the coefficients were computed into; the C++ update()
-// still maps the ROM preset row (p0..p9) to them. Only a control a program uses appears in its class.
+// Controls written by the host (effects.hpp); the string is the host's key.
 // ---------------------------------------------------------------------------------------------------------
-// p8 / p9 gains: G125 = table(127 - p8), G124 = table(p8), G123 = table(127 - p9), G122 = table(p9).
-chorus_out       = hslider("chorus_out", 0.9695, 0, 1, 0.0001);
-chorus_to_reverb = hslider("chorus_to_reverb", 0.2448, 0, 1, 0.0001);
-dry_send         = hslider("dry_send", 0.9695, 0, 1, 0.0001);
-send             = hslider("send", 0.2448, 0, 1, 0.0001);
-// Loop decay G110, damping G1 (m_decay, m_damp) and LFO C depth in frames.
-decay = hslider("decay", 0.25, 0, 1, 0.0001);
-damp  = hslider("damp", 0.3125, 0, 1, 0.0001);
-depth = hslider("depth", 8, 0, 128, 0.001);
+fx_direct      = hslider("chorus_out", 0.9695, 0, 1, 0.0001);         // fx -> DAC
+fx_to_reverb   = hslider("chorus_to_reverb", 0.2448, 0, 1, 0.0001);   // fx -> reverb
+send_direct    = hslider("dry_send", 0.9695, 0, 1, 0.0001);           // send -> DAC
+send_to_reverb = hslider("send", 0.2448, 0, 1, 0.0001);               // send -> reverb
 
-// Reverb tank constants of the Reverb, Chorus and Echo programs (C++ Tank).
-tank_scale = hslider("scale", 0.7071, 0, 2, 0.0001);   // G59 * G4 (Chorus/Echo) or ASR * G4 (Reverb)
-tank_leak  = hslider("leak", 0.0075, 0, 1, 0.0001);    // G3
-tank_c1    = hslider("c1", 0.00703, 0, 1, 0.00001);    // G108 / 8
-tank_c2    = hslider("c2", 0.04922, 0, 1, 0.00001);    // G108 * 0.875
-tank_g     = hslider("g", 0.4, 0, 2, 0.0001);          // G8, gain of the 168 / 276 diffusers
-tap_l0 = hslider("tap_l0", 0.13333, -2, 2, 0.0001);    // wet weights of W48 / W68 / W85 at 384 / 4 / 26
-tap_l1 = hslider("tap_l1", 0.66667, -2, 2, 0.0001);
-tap_l2 = hslider("tap_l2", 0.46667, -2, 2, 0.0001);
-tap_r0 = hslider("tap_r0", 0.13333, -2, 2, 0.0001);    // ... and W48 / W68 / W85 at 1105 / 242 / 180
-tap_r1 = hslider("tap_r1", 0.66667, -2, 2, 0.0001);
-tap_r2 = hslider("tap_r2", 0.66667, -2, 2, 0.0001);
+decay     = hslider("decay", 0.25, 0, 1, 0.0001);    // reverb loop feedback
+damping   = hslider("damp", 0.3125, 0, 1, 0.0001);   // low-pass in the reverb loop
+lfo_depth = hslider("depth", 8, 0, 128, 0.001);      // tank LFO modulation depth, frames
 
-// LFO C (reverb tank modulated tap; Hall), chorus LFOs A and B. Rates and the phase accumulated while the
-// program was bypassed are doubles split into two floats (hi + lo): a float rate would drift out of tolerance.
-lfo_c = lfo(hslider("lfo_c_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_c_eps_lo", 0, -1e-6, 1e-6, 1e-15),
-            hslider("lfo_c_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_c_ph_lo", 0, -1e-6, 1e-6, 1e-15));
-lfo_a = lfo(hslider("lfo_a_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_a_eps_lo", 0, -1e-6, 1e-6, 1e-15),
-            hslider("lfo_a_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_a_ph_lo", 0, -1e-6, 1e-6, 1e-15));
-lfo_b = lfo(hslider("lfo_b_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_b_eps_lo", 0, -1e-6, 1e-6, 1e-15),
-            hslider("lfo_b_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_b_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+// Reverb tank constants.
+tank_input_gain      = hslider("scale", 0.7071, 0, 2, 0.0001);
+tank_input_smoothing = hslider("leak", 0.0075, 0, 1, 0.0001);     // one-pole on the tank input
+return_lowpass1_gain = hslider("c1", 0.00703, 0, 1, 0.00001);
+return_lowpass2_gain = hslider("c2", 0.04922, 0, 1, 0.00001);
+diffuser_gain        = hslider("g", 0.4, 0, 2, 0.0001);
+left_late_gain       = hslider("tap_l0", 0.13333, -2, 2, 0.0001);
+left_diffused_gain   = hslider("tap_l1", 0.66667, -2, 2, 0.0001);
+left_early_gain      = hslider("tap_l2", 0.46667, -2, 2, 0.0001);
+right_late_gain      = hslider("tap_r0", 0.13333, -2, 2, 0.0001);
+right_diffused_gain  = hslider("tap_r1", 0.66667, -2, 2, 0.0001);
+right_early_gain     = hslider("tap_r2", 0.66667, -2, 2, 0.0001);
+
+// LFO rate (radians per frame) and phase (radians), each a double sent as two floats (hi + lo): a float rate drifts.
+tank_lfo    = quadrature_lfo(hslider("lfo_c_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_c_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_c_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_c_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+chorus_lfo1 = quadrature_lfo(hslider("lfo_a_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_a_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_a_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_a_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+chorus_lfo2 = quadrature_lfo(hslider("lfo_b_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_b_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_b_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_b_ph_lo", 0, -1e-6, 1e-6, 1e-15));
 
 // ---------------------------------------------------------------------------------------------------------
-// Reverb tank of the Reverb, Chorus and Echo programs: mono, a 1105 frame loop around a diffuser pair and two
-// nested all-pass blocks. Nodes are named as in the decoded graph (W<instruction>) and as the old C++ rings.
+// Reverb tank of the Reverb, Chorus and Echo programs: mono in, stereo out. A 1105-frame loop runs through a
+// diffuser pair and two nested all-pass blocks; the output is six weighted taps of three nodes.
 //
-//   m ─► u = scale*(1 - leak)*m + leak*u'                                              C++ m_g67 (= u')
+//   reverb_in ─► input gain, smoothing ─► tank_in ─►(+)─► loop_input
+//                                                    ▲
+//   loop_return ─► decay, damping, low-passes ───────┘
 //
-//   ret ─┬─ poles ─► G70, G71 (latched one-pole filters of ret)                           C++ m_g70, m_g71
-//        └────────────────────────────────┐
-//   u ──────────────────────────────────► v = u + decay*((1-damp)*ret + damp*G70) + c1*G70 + c2*G71
-//                                          │
-//   diffusers    v ─► AP(g, 168) ─► AP(g, 276) ─► W68 ─┬─ @4   ─► wet_l                    C++ m_w64, m_w69 -> m_w68
-//                                                       ├─ @242 ─► wet_r
-//                                                       └─ @755 ─┐
-//   block B      ┌──────────────────────────────────────────────┘                       C++ m_w88 (1369), m_w87 (549), m_w85
-//                └─► AP(a=.5)[ AP(.25)[ 1369 ] 549 ] ─► W85 ─┬─ @26  ─► wet_l
-//                         probe r = the inner delay read     ├─ @180 ─► wet_r
-//                                                            └─ @242 ─┐
-//   block A      ┌─────────────────────────────────────────────────────┘                C++ m_w54 (N3), m_w53 (696), m_w50 (1012), m_w48
-//                └─► AP(.5)[ AP(.25)[ AP(.25)[ N3 ] 696 ] 1012 ] ─► W48 ─┬─ @384 ─► wet_l
-//                                                                         └─ @1105 = ret ─► loop (and wet_r)
+//   loop_input ─► allpass(168) ─► allpass(276) ─► diffused
+//   diffused@755 ─► nested_allpass(outer 549, inner 1369) ─► early
+//   early@242    ─► double_nested_allpass(outer 1012, middle 696, core) ─► late
+//   loop_return = late@1105
 //
-//   N3 closes the innermost loop (m_g91, latched): the modulated tap of its own node (Reverb, Chorus: ap3_tap) or
-//   the left echo line (Echo: ap3_open).
+//   wet taps: diffused@4, @242    early@26, @180    late@384, @1105
 //
-//   tank(N3): m -> (wet_l, wet_r, peak)
-//     wet_l = tap_l0*W48@384 + tap_l1*W68@4   + tap_l2*W85@26      C++ m_g89 before its latch (the caller latches)
-//     wet_r = tap_r0*W48@1105 + tap_r1*W68@242 + tap_r2*W85@180    C++ m_g90 before its latch
-//     peak  = max |wet_l, wet_r, r, ret, G71|: the levels the old C++ watched to decide that the tank is silent
-//             (r = m_w88@1369, ret = m_w48@1105; effects.hpp compares the largest of them with K_THRESHOLD).
-// The diffuser gain, decay, damping and the tap weights are controls written by Effects::update().
+// tank(core): reverb_in -> (wet_l, wet_r, peak)
 // ---------------------------------------------------------------------------------------------------------
-tank(N3) = (*(tank_scale*(1 - tank_leak)) : (+ ~ *(tank_leak))) : (loop ~ @(1104)) : (!, _, _, _)
+tank(core) = (*(tank_input_gain*(1 - tank_input_smoothing)) : (+ ~ *(tank_input_smoothing))) : (loop ~ @(1104)) : (!, _, _, _)
 with {
-    // ret = W48@1105: the ~ delay is the first frame, @(1104) the rest.
-    loop(ret, u) = v : ap1(tank_g, 168) : ap1(tank_g, 276) : \(w68).(                // C++ m_w64, m_w69 -> m_w68
-        w68@755 : ap2_probe(tank_a, inner_gain, 549, 1369) : \(w85, r).(                      // C++ m_w88 (r), m_w87, m_w85
-            w85@242 : ap3(tank_a, inner_gain, 1012, 696, N3) : \(w48).(                       // C++ m_w54, m_w53, m_w50, m_w48
-                w48, wet_l, wet_r, peak
+    // loop_return = late@1105: one frame from ~, 1104 from @.
+    loop(loop_return, tank_in) = loop_input : allpass(diffuser_gain, 168) : allpass(diffuser_gain, 276) : \(diffused).(
+        diffused@755 : nested_allpass_probe(tank_outer_gain, nested_gain, 549, 1369) : \(early, early_inner).(
+            early@242 : double_nested_allpass(tank_outer_gain, nested_gain, 1012, 696, core) : \(late).(
+                late, wet_l, wet_r, peak
                 with {
-                    wet_l = tap_l0*w48@384 + tap_l1*w68@4 + tap_l2*w85@26;
-                    wet_r = tap_r0*ret + tap_r1*w68@242 + tap_r2*w85@180;
-                    peak = max(max(abs(wet_l), abs(wet_r)), max3(abs(r), abs(ret), abs(n71)));
+                    wet_l = left_late_gain*late@384 + left_diffused_gain*diffused@4 + left_early_gain*early@26;
+                    wet_r = right_late_gain*loop_return + right_diffused_gain*diffused@242 + right_early_gain*early@180;
+                    peak = max(max(abs(wet_l), abs(wet_r)), max3(abs(early_inner), abs(loop_return), abs(lowpass2_next)));
                 })))
     with {
-        // Damping poles of the loop return: G70' = .625*ret + .375*G70, G71' = .125*G70 + .875*G71 (latched).
-        n70 = ret*0.625 : (+ ~ *(0.375));
-        g70 = n70';
-        n71 = g70*0.125 : (+ ~ *(0.875));
-        g71 = n71';
-        v = u + decay*((1 - damp)*ret + damp*g70) + tank_c1*g70 + tank_c2*g71;
+        // Two one-pole low-passes of the loop return, each used one frame late.
+        lowpass1_next = loop_return*0.625 : (+ ~ *(0.375));
+        lowpass1 = lowpass1_next';
+        lowpass2_next = lowpass1*0.125 : (+ ~ *(0.875));
+        lowpass2 = lowpass2_next';
+        loop_input = tank_in + decay*((1 - damping)*loop_return + damping*lowpass1) + return_lowpass1_gain*lowpass1 + return_lowpass2_gain*lowpass2;
     };
 };

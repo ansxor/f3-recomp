@@ -37,8 +37,8 @@ static_assert(SAMPLE_RATE == 29762, "effect delay lengths are in ES5510 frames (
 //
 // The signal processing lives in FAUST (runtime/audio/hle/faust/): es5510.lib holds the all-pass networks, the
 // interpolated tap, the LFO and the shared reverb tank, and reverb.dsp / chorus.dsp / echo.dsp / hall.dsp /
-// dc_blocker.dsp are the programs, each with a signal-flow diagram and the names of the registers and delay RAM
-// segments the earlier C++ used. The headers under faust/generated/ are committed; the faust-regen target
+// dc_blocker.dsp are the programs, each with a signal-flow diagram and descriptive signal-flow names rather
+// than decoded register names. The headers under faust/generated/ are committed; the faust-regen target
 // rebuilds them (normal builds never run faust). This class keeps what is not signal processing: reading the
 // preset table and the program pointer, mapping p0..p9 to the programs' controls (update()), routing the OTIS
 // buses, the auto-bypass and the LFO phase of bypassed frames.
