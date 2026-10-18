@@ -14,7 +14,7 @@
 
 namespace f3rt::hle {
 namespace {
-constexpr uint32_t NATIVE_RATE = 15238090u / (16u * 32u);
+constexpr uint32_t NATIVE_RATE = (15238090u + 8u * 32u) / (16u * 32u);
 constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
 constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
@@ -118,7 +118,7 @@ struct Synth::Impl {
         int16_t random = 0, previous_random = 0, pitch = 0, glide = 0, glide_target = 0,
                 glide_destination = 0;
         uint8_t layer = 0, selector = 14, pair = 0, priority = 0, allocation = 0;
-        uint8_t effective_key = 0, weight = 127, pressure = 0;
+        uint8_t effective_key = 0, weight = 127, pressure = 0, slot = 0;
         unsigned gain_frames = 0;
         double step_left = 0, step_right = 0;
         GainSegment left_segment{}, right_segment{};
@@ -804,6 +804,16 @@ struct Synth::Impl {
         }
         e.loop = v.loop;
         e.reverse = v.reverse;
+        e.slot = v.slot;
+        e.sounding_key = v.effective_key;
+        e.velocity = v.owner.velocity;
+        e.filter_mode = v.filter.mode;
+        e.direct = v.direct;
+        e.program = v.owner.channel.program;
+        e.pitch = v.pitch;
+        e.glide = v.glide_target;
+        e.lfo = v.lfo;
+        for (unsigned i = 0; i < 3; ++i) e.env[i] = v.envelope[i].level();
         if (buffering_events) buffered_events.push_back({current_frame, current_voice, e});
         else observer(e);
     }
@@ -924,6 +934,7 @@ struct Synth::Impl {
         }
         stop(v, n.tick);
         v = Voice{};
+        v.slot = uint8_t(index);
         voice_filters[index].instanceClear();
         v.owner = n;
         v.patch = patch;
@@ -1179,9 +1190,10 @@ struct Synth::Impl {
             }
     }
     void reset(uint64_t at) {
-        for (Voice &v : voices) {
-            stop(v, at);
-            v = Voice{};
+        for (unsigned i = 0; i < 32; ++i) {
+            stop(voices[i], at);
+            voices[i] = Voice{};
+            voices[i].slot = uint8_t(i);
         }
         for (Pending &p : pending) p.active = false;
         queue.clear();
@@ -1538,6 +1550,176 @@ struct Synth::Impl {
         tick = cur_tick;
         tick_remainder = cur_rem;
     }
+
+    std::vector<SplitInfo> get_splits(unsigned id, int bank, bool reverse_sample) const {
+        std::vector<SplitInfo> splits;
+        if (id >= 0x78) return splits;
+        uint8_t selector = 0;
+        const uint8_t *data = nullptr;
+        size_t available = 0;
+        if (bank >= 0 && unsigned(bank) < banks.size() && banks[unsigned(bank)].count) {
+            const Bank &b = banks[unsigned(bank)];
+            selector = uint8_t(bank);
+            if (id >= b.count) return splits;
+            size_t offset = b.offset + size_t(int16_t(word(metadata.data() + b.offset + 2 + size_t(id) * 14)));
+            if (offset + 14 > metadata.size()) return splits;
+            data = metadata.data() + offset;
+            available = metadata.size() - offset;
+        } else {
+            selector = uint8_t(board_bank_mask * 2);
+            if (id > 120) return splits;
+            uint32_t address = uint32_t(sound_5a7e9117::SPLIT_TABLE_BASE + int16_t(rw(sound_5a7e9117::SPLIT_DIRECTORY + id * 2)));
+            if (address < SOUND_ROM_BASE || address + 14 > SOUND_ROM_END) return splits;
+            data = rom_pointer(address, 14);
+            available = rom.size() - size_t(data - rom.data());
+        }
+        uint32_t bit = uint32_t(selector & 1) << 28;
+        unsigned board = ((selector >> 1) & board_bank_mask) << 20;
+        uint8_t prev_cutoff = 0;
+        for (size_t i = 0; i + 14 <= available; i += 14) {
+            Split s = Split::read(data + i);
+            SplitInfo sp;
+            sp.key_low = prev_cutoff;
+            sp.key_high = s.cutoff;
+            prev_cutoff = uint8_t(std::min<int>(255, int(s.cutoff) + 1));
+            sp.tuning = s.tuning;
+            sp.loop_mode = s.mode;
+            sp.accumulator = s.accumulator;
+            sp.start = s.start;
+            sp.end = s.end;
+            uint8_t control = rb(sound_5a7e9117::SPLIT_MODE_TABLE + s.mode);
+            sp.reverse = reverse_sample;
+            if (sp.reverse) control = 0x43;
+            sp.loop = (control & 8) != 0;
+            sp.bidirectional = (control & 16) != 0;
+            uint32_t start_addr = sp.reverse ? s.accumulator : s.start;
+            uint32_t phase_addr = sp.reverse ? s.end : s.accumulator;
+            uint32_t end_addr = s.end;
+            sp.start_word = uint32_t(double(board) + double((start_addr | bit) & 0x1fffffe0) / 512);
+            sp.end_word = uint32_t(double(board) + double((end_addr | bit) & 0x1fffffe0) / 512);
+            sp.phase_word = uint32_t(double(board) + double((phase_addr | bit) & 0x1fffffff) / 512);
+            splits.push_back(sp);
+            if (s.cutoff >= 127) break;
+        }
+        return splits;
+    }
+
+    EnvelopeInfo decode_envelope(const uint8_t *p) const {
+        EnvelopeInfo env{};
+        for (unsigned i = 0; i < 4; ++i) {
+            env.levels[i] = p[i * 4] & 127;
+            env.rates[i] = p[i * 4 + 2] & 127;
+        }
+        env.key_rate = int8_t(s8((p[16] & 15) << 4) >> 4);
+        env.velocity_curve = (p[16] >> 4) & 3;
+        env.one_shot = (p[16] & 0x40) != 0;
+        env.loop = (p[16] & 0x80) != 0;
+        env.vel_level = p[18] >> 4;
+        env.vel_attack = p[18] & 15;
+        return env;
+    }
+
+    std::optional<ProgramInfo> describe_program(uint16_t id) const {
+        if (id == 0xffff) return std::nullopt;
+        const unsigned slot = program_slot(id);
+        if (slot >= programs.size()) return std::nullopt;
+        const auto &entry = programs[slot];
+        if (!entry.base) return std::nullopt;
+        const uint8_t *prog = entry.base;
+        ProgramInfo info;
+        info.id = id;
+        info.enabled_mask = prog[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
+        info.glide_rate = prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET];
+        if (!info.enabled_mask) {
+            info.kind = ProgramInfo::Kind::Direct;
+            info.regions.reserve(17);
+            for (unsigned idx = 0; idx < 17; ++idx) {
+                const uint8_t *p = prog + size_t(idx) * 20;
+                DirectRegionInfo r{};
+                r.index = uint8_t(idx);
+                std::copy_n(p, 20, r.raw.data());
+                r.decay_rate = p[0] & 127;
+                r.ignore_note_off = (p[0] & 128) != 0;
+                r.release_rate = p[2] & 127;
+                r.root_key_relative = (p[2] & 128) != 0;
+                r.sample_id = p[4] & 127;
+                r.reverse = (p[4] & 128) != 0;
+                r.transposition = s8(p[6]);
+                r.fine_pitch = p[8] & 15;
+                r.sensitivity = p[8] >> 4;
+                r.key_low = s8(p[10]);
+                r.key_high = s8(p[12]);
+                r.filter_index = p[0x0e];
+                r.level = p[0x10] & 127;
+                r.level_plus_168 = (p[0x10] & 128) != 0;
+                r.pan = p[0x12] & 15;
+                r.pair_choice = (p[0x12] >> 4) & 3;
+                r.velocity_curve = p[0x12] >> 6;
+                int bank = static_cast<int>(entry.sample_banks[idx]);
+                r.splits = get_splits(r.sample_id, bank, r.reverse);
+                info.regions.push_back(std::move(r));
+            }
+        } else {
+            info.kind = ProgramInfo::Kind::Layered;
+            for (unsigned layer_idx = 0; layer_idx < 3; ++layer_idx) {
+                LayerInfo &layer = info.layers[layer_idx];
+                layer.index = uint8_t(layer_idx);
+                layer.enabled = (info.enabled_mask & (1u << layer_idx)) != 0;
+                const uint8_t *patch = prog + size_t(layer_idx) * 0x76;
+                std::copy_n(patch, 0x76, layer.raw.data());
+                for (unsigned e = 0; e < 3; ++e) {
+                    layer.envelope[e] = decode_envelope(patch + size_t(e) * 20);
+                }
+                layer.base_pitch = patch[0x3c];
+                layer.base_fine = s8(patch[0x3e]);
+                layer.use_played_key = (patch[0x48] & 128) != 0;
+                layer.pitch_envelope_depth = s8(patch[0x40]);
+                layer.pitch_envelope_offset = patch[0x0c] & 127;
+                layer.lfo_pitch_depth = s8(patch[0x42]);
+                layer.pitch_source = patch[0x44] & 15;
+                layer.allocation_mode = (patch[0x44] >> 4) & 3;
+                layer.filter_mode = (patch[0x44] >> 6) & 3;
+                layer.k2_bank = (patch[0x44] & 128) != 0;
+                layer.pitch_source_depth = s8(patch[0x46]);
+                layer.k1_base = patch[0x48] & 127;
+                layer.k1_key = s8(patch[0x4a]);
+                layer.k1_envelope = s8(patch[0x4c]);
+                layer.filter_source = patch[0x4e] & 15;
+                layer.default_pan = patch[0x4e] & 0xf0;
+                layer.filter_source_depth = s8(patch[0x50]);
+                layer.k2_base = patch[0x52] & 127;
+                layer.k2_apply_source = (patch[0x52] & 128) != 0;
+                layer.k2_key = s8(patch[0x54]);
+                layer.k2_envelope = s8(patch[0x56]);
+                layer.weight_amount = s8(patch[0x58]);
+                layer.weight_low = patch[0x5a];
+                layer.weight_high = patch[0x5c];
+                layer.level = patch[0x5e] & 127;
+                layer.level_plus_43 = (patch[0x5e] & 128) != 0;
+                layer.amplitude_source = patch[0x60] & 15;
+                layer.pair_choice = (patch[0x60] >> 4) & 3;
+                layer.priority = patch[0x60] & 0xc0;
+                layer.amplitude_source_depth = s8(patch[0x62]);
+                layer.lfo_source = patch[0x64] & 15;
+                layer.random_period = (patch[0x64] & 0xf0) >> 4;
+                layer.lfo_depth = patch[0x66] & 127;
+                layer.lfo_phase_reset = (patch[0x66] & 128) != 0;
+                layer.lfo_rate_index = patch[0x68];
+                layer.lfo_wave = patch[0x6a] & 15;
+                layer.lfo_fade_rate = patch[0x6a] >> 4;
+                layer.sample_id = patch[0x6c] & 127;
+                layer.reverse = (patch[0x6c] & 128) != 0;
+                layer.velocity_gate = s8(patch[0x6e]);
+                layer.start_source = patch[0x6e] & 15;
+                layer.start_amount = s8(patch[0x70]);
+                layer.start_offset = patch[0x72];
+                layer.delay_ticks = patch[0x74];
+                int bank = static_cast<int>(entry.sample_banks[layer_idx]);
+                layer.splits = get_splits(layer.sample_id, bank, layer.reverse);
+            }
+        }
+        return info;
+    }
 };
 
 Synth::Synth(std::span<const uint8_t> sound, std::span<const uint16_t> samples)
@@ -1554,6 +1736,10 @@ void Synth::render(float *output, size_t frames) { m_impl->render(output, frames
 void Synth::set_observer(std::function<void(const VoiceEvent &)> observer) {
     m_impl->observer = std::move(observer);
 }
+std::optional<ProgramInfo> Synth::describe_program(uint16_t program) const {
+    return m_impl->describe_program(program);
+}
+uint8_t Synth::bend_range() const { return m_impl->bend_range; }
 bool Synth::validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
     try {
         Synth synth(sound, samples);

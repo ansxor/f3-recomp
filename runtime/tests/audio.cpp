@@ -1473,7 +1473,7 @@ float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
     std::uniform_real_distribution<float> coef(0.01f, 0.99f), pole(0.f, 1.f), gain(0.f, 1.f),
         sample(-32768.f, 32767.f);
     f3rt::hle::faust::VoiceFilterDsp dsp;
-    dsp.init(29761);
+    dsp.init(29762);
     f3rt::hle::faust::Controls controls(dsp);
     float *mode_zone = controls.zone("mode");
     VoiceFilterRef ref;
@@ -1508,7 +1508,7 @@ float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
 float voice_filter_dc(int mode) {
     constexpr int CH = 64;
     f3rt::hle::faust::VoiceFilterDsp dsp;
-    dsp.init(29761);
+    dsp.init(29762);
     f3rt::hle::faust::Controls controls(dsp);
     *controls.zone("mode") = float(mode);
     float in[6][CH], out[2][CH];

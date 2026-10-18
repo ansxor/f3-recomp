@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/hle/events.hpp"
+#include "audio/hle/observe.hpp"
 #include "audio/hle/faust/generated/chorus.hpp"
 #include "audio/hle/faust/generated/dc_blocker.hpp"
 #include "audio/hle/faust/generated/echo.hpp"
@@ -18,7 +19,7 @@
 #include <string_view>
 
 namespace f3rt::hle {
-static_assert(SAMPLE_RATE == 29761, "effect delay lengths are in ES5510 frames (the OTIS/ESP sample rate)");
+static_assert(SAMPLE_RATE == 29762, "effect delay lengths are in ES5510 frames (the OTIS/ESP sample rate)");
 
 // Substitute for the ES5510 effects programs. The sound ROM holds a table of program pointers (0xc1c3a2) and a
 // preset table (0xc1c2d2, 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15
@@ -463,6 +464,39 @@ public:
     Program program() const { return m_program; }
     // True while the auto-bypass skips the loaded program (silent sends and nothing audible left in it).
     bool bypassed() const { return m_bypassed; }
+    EffectsInfo info() const {
+        EffectsInfo out{};
+        switch (m_program) {
+        case Program::None: out.program = EffectsProgram::None; break;
+        case Program::Reverb: out.program = EffectsProgram::Reverb; break;
+        case Program::Hall: out.program = EffectsProgram::Hall; break;
+        case Program::Chorus: out.program = EffectsProgram::Chorus; break;
+        case Program::Echo: out.program = EffectsProgram::Echo; break;
+        case Program::Mute: out.program = EffectsProgram::Mute; break;
+        }
+        out.preset = m_preset;
+        out.p = m_parameters;
+        out.decay = m_decay;
+        out.damp = m_damp;
+        out.feedback = m_feedback;
+        out.send = m_send;
+        out.dry_send = m_dry_send;
+        out.chorus_to_reverb = m_chorus_to_reverb;
+        out.chorus_out = m_chorus_out;
+        out.lfo_a = m_eps_a;
+        out.lfo_b = m_eps_b;
+        out.lfo_c = m_eps_c;
+        out.lfo_depth_frames = m_lfo_depth;
+        out.echo_frames = m_echo;
+        out.mod_center = m_mod_center;
+        out.enhance = m_enhance;
+        out.hall_a = m_hall_a;
+        out.hall_g = m_hall_g;
+        out.hall_g2 = m_hall_g2;
+        out.hall_g108 = m_hall_g108;
+        out.bypassed = m_bypassed;
+        return out;
+    }
     void reset() {
         for (Program program : {Program::Reverb, Program::Chorus, Program::Echo, Program::Hall}) clear_program(program);
         m_bucket_peaks.fill(0.f);

@@ -3,9 +3,10 @@
 #include <cstdint>
 
 namespace f3rt::hle {
-// The voice and effects stages run on the ES5505 output grid (15238090 / (16 * 32) = 29761 Hz) and the
-// engine outputs at that rate.
-inline constexpr uint32_t SAMPLE_RATE = 29761;
+// The voice and effects stages run on the ES5505 output grid (clock rate 15238090 Hz, 32 voices:
+// 15238090 / (16 * 32) = 29761 + 229/256 = 29761.89453125 Hz, rounded to 29762 Hz per 12's
+// PCB observation over MAME's integer-truncation bug) and the engine outputs at that rate.
+inline constexpr uint32_t SAMPLE_RATE = 29762;
 inline constexpr uint32_t MAIN_CLOCK = 16000000;
 inline constexpr uint32_t TIMER_TICKS = 16000; // ROM sequencer's observed 1 kHz service.
 // Sound CPU cycles (16 MHz) the real driver spends per started voice while a sequencer pulse starts several
@@ -54,5 +55,17 @@ struct VoiceEvent {
     uint32_t sample_start = 0, sample_end = 0;
     uint16_t frequency = 0, left_volume = 0, right_volume = 0, k1 = 0, k2 = 0;
     bool loop = false, reverse = false;
+
+    // Milestone 2 fields populated by Synth::Impl::emit:
+    uint8_t slot = 0;               // ES5505 voice slot index 0..31
+    uint8_t sounding_key = 0;       // Voice.effective_key 21..108 (after key transpose)
+    uint8_t velocity = 0;           // Note velocity
+    uint8_t filter_mode = 0;        // Voice.filter.mode 0..3
+    bool direct = false;            // Direct/key-region voice vs layered voice
+    uint16_t program = 0;           // Channel program id (bits 14..15 bank, low byte program)
+    int16_t pitch = 0;              // Current voice pitch (1/256 semitone)
+    int16_t glide = 0;              // Glide target pitch
+    int16_t lfo = 0;                // LFO output
+    std::array<int16_t, 3> env{};   // Envelope generator levels 0..2 (pitch, filter, amplitude)
 };
 } // namespace f3rt::hle

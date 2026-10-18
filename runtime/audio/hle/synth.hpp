@@ -1,8 +1,10 @@
 #pragma once
 #include "audio/hle/events.hpp"
+#include "audio/hle/observe.hpp"
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace f3rt::hle {
@@ -29,6 +31,8 @@ public:
     void set_bank(uint8_t bank);
     void render(float *interleaved_eight_channels, size_t frames);
     void set_observer(std::function<void(const VoiceEvent &)> observer);
+    std::optional<ProgramInfo> describe_program(uint16_t program) const;
+    uint8_t bend_range() const;
     static bool validate(std::span<const uint8_t> sound_rom,
                          std::span<const uint16_t> sample_words) noexcept;
 

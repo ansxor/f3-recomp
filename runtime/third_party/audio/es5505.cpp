@@ -105,7 +105,7 @@ void ES5505::reset() {
     m_mode = 0x7f8;
     m_voice_index = 0;
 
-    m_sample_rate = m_master_clock / (16 * (m_active_voices + 1));
+    m_sample_rate = (m_master_clock + 8 * (m_active_voices + 1)) / (16 * (m_active_voices + 1));
     if (m_sample_rate_cb) {
         m_sample_rate_cb(m_sample_rate);
     }
@@ -483,7 +483,7 @@ void ES5505::reg_write_low(Voice *voice, uint32_t offset, uint16_t data, uint16_
     case 0x0d: // ACT
         if (mem_mask & 0x00ff) {
             m_active_voices = data & 0x1f;
-            m_sample_rate = m_master_clock / (16 * (m_active_voices + 1));
+            m_sample_rate = (m_master_clock + 8 * (m_active_voices + 1)) / (16 * (m_active_voices + 1));
             if (m_sample_rate_cb) {
                 m_sample_rate_cb(m_sample_rate);
             }
@@ -537,7 +537,7 @@ void ES5505::reg_write_high(Voice *voice, uint32_t offset, uint16_t data, uint16
     case 0x0d: // ACT
         if (mem_mask & 0x00ff) {
             m_active_voices = data & 0x1f;
-            m_sample_rate = m_master_clock / (16 * (m_active_voices + 1));
+            m_sample_rate = (m_master_clock + 8 * (m_active_voices + 1)) / (16 * (m_active_voices + 1));
             if (m_sample_rate_cb) {
                 m_sample_rate_cb(m_sample_rate);
             }
@@ -563,7 +563,7 @@ void ES5505::reg_write_test(Voice *voice, uint32_t offset, uint16_t data, uint16
     case 0x0d: // ACT
         if (mem_mask & 0x00ff) {
             m_active_voices = data & 0x1f;
-            m_sample_rate = m_master_clock / (16 * (m_active_voices + 1));
+            m_sample_rate = (m_master_clock + 8 * (m_active_voices + 1)) / (16 * (m_active_voices + 1));
             if (m_sample_rate_cb) {
                 m_sample_rate_cb(m_sample_rate);
             }

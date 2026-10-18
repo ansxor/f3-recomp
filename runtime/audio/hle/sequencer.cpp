@@ -25,6 +25,7 @@ struct TrackData {
 struct SongData {
     bool present = false;
     uint8_t flags = 0, rate = 0;
+    uint8_t numerator = 0, exponent = 0;
     uint16_t bars = 0, ticks_per_bar = 0;
     uint32_t loop_start = 0, loop_end = 0;
     std::array<Channel, TRACK_COUNT> initial{};
@@ -73,6 +74,7 @@ struct Sequencer::Impl {
     uint64_t now = 0, timer = TIMER_TICKS, fade_timer = uint64_t(12) * TIMER_TICKS;
     uint64_t serial = 0;
     uint8_t current_bank = 1;
+    SequenceObserver *observer = nullptr;
 
     void load_bank(uint8_t bank) {
         current_bank = bank;
@@ -105,8 +107,9 @@ struct Sequencer::Impl {
             song.bars = u16(h + sound_5a7e9117::SEQ_HEADER_BARS_OFFSET);
             const uint8_t exponent = byte(h + sound_5a7e9117::SEQ_HEADER_TIME_SIG_EXP_OFFSET);
             if (exponent > 8) invalid("unsupported HLE time signature");
-            song.ticks_per_bar = uint16_t(
-                (384u >> exponent) * byte(h + sound_5a7e9117::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET));
+            song.exponent = exponent;
+            song.numerator = byte(h + sound_5a7e9117::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET);
+            song.ticks_per_bar = uint16_t((384u >> exponent) * song.numerator);
             song.loop_start = u32(h + sound_5a7e9117::SEQ_HEADER_LOOP_START_OFFSET);
             song.loop_end = u32(h + sound_5a7e9117::SEQ_HEADER_LOOP_END_OFFSET);
             song.linked = byte(h + sound_5a7e9117::SEQ_HEADER_LINKED_OFFSET);
@@ -244,6 +247,7 @@ struct Sequencer::Impl {
             track.physical = 0;
         }
         s.active = false;
+        if (observer) observer->section_end(id, SectionEnd::Stopped, tick);
     }
     void finish(uint8_t id, uint64_t tick) {
         // Natural end parks the sequencer but retains allocated track/channel
@@ -252,6 +256,7 @@ struct Sequencer::Impl {
         auto &s = state[id];
         for (auto &track : s.tracks) release_track(track, tick);
         s.rate = 0;
+        if (observer) observer->section_end(id, SectionEnd::Finished, tick);
     }
     void update(uint8_t id, size_t track, uint64_t tick) {
         auto &channel = state[id].tracks[track].channel;
@@ -309,6 +314,22 @@ struct Sequencer::Impl {
             if (track.live) update(owner, t, tick);
         }
         if (!s.rate_override) s.saved_rate = s.rate = song.rate;
+        if (observer) {
+            SectionInfo info;
+            info.owner = owner;
+            info.sequence = selected;
+            info.phase = state[owner].phase;
+            info.repeat_index = state[owner].arrangement_repeat;
+            info.bars = song.bars;
+            info.ticks_per_bar = song.ticks_per_bar;
+            info.numerator = song.numerator;
+            info.exponent = song.exponent;
+            info.rate = s.rate;
+            info.transpose = s.transpose;
+            info.transpose_mask = s.transpose_mask;
+            observer->section_start(info, tick);
+            observer->bar(owner, 0, tick);
+        }
         events(owner, tick, false, true);
     }
     bool arranged(uint8_t id) const {
@@ -350,6 +371,7 @@ struct Sequencer::Impl {
                 for (size_t n = 0; n < list.size(); ++n)
                     if (list[n].opcode == 0xe7 && list[n].arrangement[3] == 100)
                         s.phase = uint8_t(n + 1);
+                if (observer) observer->arrangement_wrap(id, s.phase, tick);
                 if (!s.phase) return 0;
                 continue;
             }
@@ -482,6 +504,10 @@ struct Sequencer::Impl {
         auto &s = state[id];
         if (!s.active) return;
         ++s.position;
+        const auto &song = data[s.selected];
+        if (observer && song.ticks_per_bar > 0 && s.position % song.ticks_per_bar == 0) {
+            observer->bar(id, s.position / song.ticks_per_bar, tick);
+        }
         for (size_t t = 0; t < TRACK_COUNT; ++t) {
             auto &track = s.tracks[t];
             uint16_t *link = &track.head;
@@ -497,7 +523,6 @@ struct Sequencer::Impl {
         events(id, tick, silent);
         // c14cc0..c14d12 performs the header's bar-boundary transition even
         // when an individual track has one final tick beyond that boundary.
-        const auto &song = data[s.selected];
         const uint32_t boundary = uint32_t(song.bars) * song.ticks_per_bar;
         bool finished = boundary ? s.position >= boundary : s.conductor_ended;
         if (!boundary)
@@ -511,6 +536,7 @@ struct Sequencer::Impl {
                 --owner.arrangement_repeat;
                 repeat_done = owner.arrangement_repeat == 0;
             }
+            if (observer) observer->section_end(id, repeat_done ? SectionEnd::Boundary : SectionEnd::Repeat, tick);
             if (repeat_done) {
                 const uint8_t child = arrangement_next(s.arrangement_owner, tick, &s);
                 if (child != id) {
@@ -620,9 +646,11 @@ struct Sequencer::Impl {
             s.rate = 0;
             s.rate_override = true;
             for (auto &track : s.tracks) release_track(track, tick);
+            if (observer) observer->rate_change(id, 0, tick);
             break;
         case 0x84:
             s.rate = s.saved_rate;
+            if (observer) observer->rate_change(id, s.rate, tick);
             break;
         case 0x85: {
             if (!s.active) start(id, tick);
@@ -652,6 +680,7 @@ struct Sequencer::Impl {
         case 0x88:
             s.rate = s.saved_rate = p[3];
             s.rate_override = true;
+            if (observer) observer->rate_change(id, s.rate, tick);
             break;
         case 0x89: {
             s.volume = uint16_t(uint16_t(p[3]) << 8 | uint8_t(s.volume));
@@ -711,6 +740,39 @@ struct Sequencer::Impl {
         }
         }
     }
+    bool sequences_running() const {
+        for (const auto &s : state) {
+            if (s.active && s.rate > 0) return true;
+        }
+        return false;
+    }
+    std::optional<SequenceInfo> describe(uint8_t id) const {
+        if (id >= SLOTS || !data[id].present) return std::nullopt;
+        const auto &song = data[id];
+        SequenceInfo info;
+        info.id = id;
+        info.arranged = arranged(id);
+        if (info.arranged) {
+            info.arrangement_entries = uint32_t(song.tracks[10].events.size());
+        }
+        info.flags = song.flags;
+        info.rate = song.rate;
+        info.linked = song.linked;
+        info.numerator = song.numerator;
+        info.exponent = song.exponent;
+        info.bars = song.bars;
+        info.ticks_per_bar = song.ticks_per_bar;
+        info.header_loop_start = song.loop_start;
+        info.header_loop_end = song.loop_end;
+        for (size_t t = 0; t < TRACK_COUNT; ++t) {
+            SequenceTrackInfo track;
+            track.track = uint8_t(t + 1);
+            track.events = uint32_t(song.tracks[t + 1].events.size());
+            track.initial_program = song.initial[t].program;
+            info.tracks.push_back(track);
+        }
+        return info;
+    }
 };
 
 Sequencer::Sequencer(std::span<const uint8_t> rom, VoiceSink &sink)
@@ -740,6 +802,9 @@ void Sequencer::set_bank(uint8_t bank, [[maybe_unused]] uint64_t tick) {
     m_impl->load_bank(bank);
 }
 uint64_t Sequencer::next_tick() const { return std::min(m_impl->timer, m_impl->fade_timer); }
+void Sequencer::set_observer(SequenceObserver *observer) { m_impl->observer = observer; }
+bool Sequencer::sequences_running() const { return m_impl->sequences_running(); }
+std::optional<SequenceInfo> Sequencer::describe(uint8_t id) const { return m_impl->describe(id); }
 bool Sequencer::validate(std::span<const uint8_t> sound_rom) noexcept {
     if (sound_rom.size() < SOUND_ROM_SIZE) return false;
     try {

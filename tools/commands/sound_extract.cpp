@@ -1,8 +1,8 @@
 #include "commands.hpp"
 #include "../runner/runner.hpp"
+#include "../runner/sound/capture.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/audio.hpp"
-#include "interpreter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,7 +52,7 @@ void print_help(const char *prog) {
         << "  --no-prelude           Call only the request routine with CODE. By default the\n"
         << "                         game's SOUND TEST sequence is replayed: music codes first\n"
         << "                         request the two setup codes the test menu derives from CODE\n"
-        << "                         (kirameki: effect preset and parameters)\n"
+        << "                         (typically the effect preset and parameters)\n"
         << "  --seconds DURATION     Packet mode: audio duration (default 5.0). Sound-code mode:\n"
         << "                         maximum length per code, which caps looping music\n"
         << "                         (default 20.0)\n"
@@ -83,142 +83,16 @@ void print_help(const char *prog) {
         << "  --help, -h             Show this help message\n";
 }
 
-uint32_t parse_number(std::string_view text) {
-    std::string s(text);
-    int base = 10;
-    if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
-        base = 16;
-        s.erase(0, 2);
-    } else if (!s.empty() && s[0] == '$') {
-        base = 16;
-        s.erase(0, 1);
-    }
-    if (s.empty() || s[0] == '-' || s[0] == '+') throw std::runtime_error("Invalid number: " + std::string(text));
-    size_t end = 0;
-    const unsigned long value = std::stoul(s, &end, base);
-    if (end != s.size() || value > UINT32_MAX)
-        throw std::runtime_error("Invalid number: " + std::string(text));
-    return uint32_t(value);
-}
-
-std::pair<uint32_t, uint32_t> parse_range(std::string_view text) {
-    const auto dash = text.find('-');
-    if (dash == std::string_view::npos) {
-        const uint32_t v = parse_number(text);
-        return {v, v};
-    }
-    const uint32_t first = parse_number(text.substr(0, dash));
-    const uint32_t last = parse_number(text.substr(dash + 1));
-    if (first > last) throw std::runtime_error("Range start exceeds end: " + std::string(text));
-    return {first, last};
-}
-
-std::string hex_bytes(const std::vector<uint8_t> &bytes) {
-    std::string out;
-    char buf[3];
-    for (uint8_t b : bytes) {
-        std::snprintf(buf, sizeof buf, "%02x", b);
-        out += buf;
-    }
-    return out;
-}
-
-// How a game turns a sound code into mailbox packets on the main CPU. All addresses are main-CPU
-// ROM/RAM addresses of routines the game itself executes; nothing here re-encodes packets.
-struct SoundProfile {
-    const char *set;
-    // void request(word code): word argument on the stack, writes packets to the ring buffer.
-    uint32_t request;
-    // d0 = code -> d1 = category; the sound test runs the prelude for categories <= 1.
-    uint32_t category;
-    // d0 = code -> d0, d1 = the two setup codes the sound test requests before the code.
-    uint32_t prelude;
-    // RAM longword holding the base of the selector pointer table (descriptor per code).
-    uint32_t selector_base_ptr;
-};
-
-constexpr SoundProfile SOUND_PROFILES[] = {
-    // Kirameki Star Road: request 0x0018e0, SOUND TEST handler 0x0035aa (play at 0x003640..0x003690).
-    {"kirameki", 0x0018e0, 0x00394c, 0x02e8c0, 0x407cc8},
-    // Land Maker: request 0x00308c, selector base pointer 0x40014c.
-    {"landmakrj", 0x00308c, 0, 0, 0x40014c},
-};
-
-const SoundProfile *find_profile(const std::string &set) {
-    for (const auto &p : SOUND_PROFILES)
-        if (set == p.set) return &p;
-    return nullptr;
-}
-
-// Runs a main-CPU routine to its return in the interpreter. The machine must be frozen at a frame
-// boundary; the caller's snapshot restore removes every side effect on game RAM.
-struct RoutineCall {
-    uint32_t address = 0;
-    std::optional<uint16_t> stack_word;
-    std::optional<uint16_t> d0;
-};
-
-constexpr uint32_t RETURN_SENTINEL = 0x000200; // ROM address that is never executed here
-
-void run_routine(Machine &m, const RoutineCall &call) {
-    auto &cpu = m.cpu;
-    cpu.stopped = 0;
-    uint32_t sp = cpu.a[7];
-    if (call.stack_word) {
-        sp -= 2;
-        m.write16(sp, *call.stack_word);
-    }
-    sp -= 4;
-    m.write32(sp, RETURN_SENTINEL);
-    cpu.a[7] = sp;
-    if (call.d0) cpu.d[0] = *call.d0;
-    cpu.pc = call.address;
-    for (unsigned guard = 0; cpu.pc != RETURN_SENTINEL; ++guard) {
-        if (guard > 1000000 || cpu.halted) {
-            std::ostringstream e;
-            e << "Main routine 0x" << std::hex << call.address << " did not return (pc=0x"
-              << cpu.pc << ")";
-            throw std::runtime_error(e.str());
-        }
-        m.interpreter->run_main(1);
-    }
-    // Pop the caller-pushed argument like `addq.l #2, a7`.
-    cpu.a[7] = cpu.a[7] + (call.stack_word ? 2u : 0u);
-}
-
-// Bytes appended to the mailbox ring between two producer snapshots.
-std::vector<uint8_t> ring_bytes_between(const Machine &m, uint16_t before, uint16_t after) {
-    std::vector<uint8_t> bytes;
-    size_t from = (before / 2) & MAILBOX_RING_MASK;
-    const size_t to = (after / 2) & MAILBOX_RING_MASK;
-    while (from != to) {
-        bytes.push_back(m.shared[from]);
-        from = (from + 1) & MAILBOX_RING_MASK;
-    }
-    return bytes;
-}
-
-struct CodeCall {
-    uint32_t code;
-    std::vector<uint8_t> bytes;
-};
-
-// Requests `code` through the game's routine and returns the exact ring bytes it produced.
-CodeCall request_code(Machine &m, uint32_t routine, uint32_t code) {
-    const uint16_t before = runner::RingBufferState::read_producer(m);
-    run_routine(m, {routine, uint16_t(code), std::nullopt});
-    const uint16_t after = runner::RingBufferState::read_producer(m);
-    return {code, ring_bytes_between(m, before, after)};
-}
+using runner::CodeCall;
+using runner::hex_bytes;
+using runner::parse_number;
+using runner::parse_range;
 
 struct SoundResult {
     uint32_t code = 0;
     std::string status = "ok"; // ok | silent | no-packets | error
     std::string error;
-    int category = -1;
-    int descriptor_type = -1;
-    std::vector<uint8_t> descriptor;
-    std::vector<CodeCall> calls;
+    runner::SoundTestCapture test; // category, descriptor and the requests the sound test made
     double seconds = 0;
     int peak = 0;
     std::string file;
@@ -397,10 +271,10 @@ int cmd_sound_extract(int argc, char **argv) try {
             "Every scheduled packet must be earlier than --seconds after clock rounding");
     }
 
-    const SoundProfile *profile = nullptr;
+    const runner::SoundProfile *profile = nullptr;
     uint32_t request_routine = 0;
     if (code_mode) {
-        profile = find_profile(cfg.set);
+        profile = runner::find_sound_profile(cfg.set);
         if (routine_override) request_routine = *routine_override;
         else if (profile) request_routine = profile->request;
         else
@@ -419,46 +293,7 @@ int cmd_sound_extract(int argc, char **argv) try {
     const bool record_boot_wav = !code_mode && (cfg.wav_window == "full");
 
     // Interpreted boot to a frozen machine whose sound side has consumed every pending packet.
-    auto boot = [&]() {
-        auto runner = std::make_unique<runner::MachineRunner>(cfg);
-        auto &m = runner->machine();
-        if (enhanced && !m.audio->backend_available(Audio::Backend::Enhanced)) {
-            throw std::runtime_error("Enhanced audio is not supported for this game");
-        }
-        for (uint64_t f = 0; f < boot_frames; ++f) {
-            if (!m.run_frame(/*translated=*/false) || m.cpu.halted) {
-                std::ostringstream error;
-                error << "Main CPU halted during boot at frame " << m.frame << " PC 0x" << std::hex
-                      << m.cpu.pc;
-                throw std::runtime_error(error.str());
-            }
-            runner->drain_audio(record_boot_wav);
-        }
-        if (m.audio->is_reset()) {
-            throw std::runtime_error("Sound CPU is still held in reset; increase --boot-frames");
-        }
-        m.cpu.cycles = m.audio->clock_ticks();
-        uint32_t wait_cycles = 0;
-        const uint32_t max_wait = 16000000;
-        while (runner::RingBufferState::read_consumer(m) !=
-                   runner::RingBufferState::read_producer(m) &&
-               wait_cycles < max_wait) {
-            constexpr uint32_t STEP = 1000;
-            m.audio->advance(STEP);
-            m.cpu.cycles += STEP;
-            wait_cycles += STEP;
-            if (wait_cycles % 16000 == 0) runner->drain_audio(record_boot_wav);
-        }
-        runner->drain_audio(record_boot_wav);
-        if (runner::RingBufferState::read_consumer(m) !=
-            runner::RingBufferState::read_producer(m)) {
-            throw std::runtime_error(
-                "Sound CPU consumer did not synchronize with producer before freeze");
-        }
-        return runner;
-    };
-
-    auto runner = boot();
+    auto runner = runner::boot_to_freeze(cfg, boot_frames, record_boot_wav);
     auto *m = &runner->machine();
 
     const uint64_t event_origin_cycles = m->audio->clock_ticks();
@@ -473,33 +308,14 @@ int cmd_sound_extract(int argc, char **argv) try {
 
     if (code_mode) {
         const uint32_t rate = m->audio->sample_rate();
-        std::vector<uint8_t> snapshot(m->state_size());
-        m->save_state(snapshot);
-        const uint64_t boot_commands = enhanced ? m->audio->enhanced_stats().commands : 0;
+        const runner::PostBootSnapshot snapshot = runner::take_post_boot_snapshot(*m);
         if (!json_output && enhanced)
-            std::cout << "HLE commands before freeze: " << boot_commands << '\n';
-        if (enhanced) {
-            // A reset pulse rewinds the HLE read pointer to ring byte 0, so the packets the game
-            // sent during boot (effect preset/parameters, stop-all) are re-parsed together with the
-            // new request and the HLE ends in exactly the post-boot state. That needs the ring to
-            // still hold the whole boot stream: count its packets and compare with the engine's.
-            const size_t end = (runner::RingBufferState::read_producer(*m) / 2) & MAILBOX_RING_MASK;
-            uint64_t packets = 0;
-            for (size_t at = 0; at < end;) {
-                const uint8_t length = m->shared[at];
-                if (length < 2 || at + length > end) {
-                    packets = UINT64_MAX;
-                    break;
-                }
-                at += length;
-                ++packets;
-            }
-            if (packets != boot_commands)
-                throw std::runtime_error(
-                    "Boot mailbox ring no longer holds the whole boot packet stream (" +
-                    std::to_string(packets) + " parsed, " + std::to_string(boot_commands) +
-                    " sent); cannot restore the HLE post-boot state");
-        }
+            std::cout << "HLE commands before freeze: " << snapshot.boot_commands << '\n';
+        // A reset pulse rewinds the HLE read pointer to ring byte 0, so the packets the game sent
+        // during boot (effect preset/parameters, stop-all) are re-parsed together with the new
+        // request and the HLE ends in exactly the post-boot state. That needs the ring to still
+        // hold the whole boot stream; the check throws when it does not.
+        if (enhanced) runner::boot_packet_stream(*m, snapshot.boot_commands);
         std::filesystem::path effective_out_dir = out_dir;
         if (bank_override && !out_dir.empty()) {
             char bdir[32];
@@ -518,52 +334,21 @@ int cmd_sound_extract(int argc, char **argv) try {
             res.code = code;
             std::vector<int16_t> pcm; // interleaved stereo
             try {
-                if (enhanced) {
-                    // The HLE sequencer, synth and effects run on a worker thread outside the
-                    // machine snapshot, and a reused worker renders the same request differently
-                    // (its absolute clock and DSP history carry over). Every code therefore gets
-                    // a new machine, hence a new worker, restored from the post-boot snapshot;
-                    // a worker that failed on an earlier code is discarded the same way.
-                    runner = std::make_unique<runner::MachineRunner>(cfg);
-                    m = &runner->machine();
-                    m->load_state(snapshot);
-                    m->audio->set_reset(true);
-                    m->audio->set_reset(false);
-                } else {
-                    m->load_state(snapshot); // the reference sound CPU and chips are in the snapshot
-                }
-                m->cpu.cycles = m->audio->clock_ticks();
+                // The HLE sequencer, synth and effects run on a worker thread outside the machine
+                // snapshot, and a reused worker renders the same request differently (its absolute
+                // clock and DSP history carry over). Every code therefore gets a new machine, hence
+                // a new worker, restored from the post-boot snapshot; a worker that failed on an
+                // earlier code is discarded the same way.
+                runner::restore_post_boot(runner, cfg, snapshot);
+                m = &runner->machine();
 
-                if (bank_override) {
-                    // Apply bank switch via main bus write at 0x300000 + 2*bank like $144f8 does
-                    m->write16(0x300000 + (*bank_override) * 2, 0);
-                    m->write16(0x416114, uint16_t(*bank_override));
-                    m->write16(0x416112, uint16_t(*bank_override));
-                }
+                if (bank_override) runner::apply_sound_bank(*m, profile, *bank_override);
 
-                if (profile && !routine_override && profile->selector_base_ptr) {
-                    // descriptor of the code in the game's selector table
-                    const uint32_t base = m->read32(profile->selector_base_ptr);
-                    const uint32_t desc = m->read32(base + code * 4);
-                    res.descriptor.reserve(8);
-                    for (uint32_t i = 0; i < 8; ++i) res.descriptor.push_back(m->read8(desc + i));
-                    res.descriptor_type = res.descriptor[0];
-                    if (profile->category) {
-                        run_routine(*m, {profile->category, std::nullopt, uint16_t(code)});
-                        res.category = int(m->cpu.d[1] & 0xffff);
-                        if (!no_prelude && res.category <= 1 && profile->prelude) {
-                            run_routine(*m, {profile->prelude, std::nullopt, uint16_t(code)});
-                            const uint32_t first = m->cpu.d[0] & 0xffff, second = m->cpu.d[1] & 0xffff;
-                            // restore the post-snapshot stack/regs for the requests below
-                            res.calls.push_back(request_code(*m, request_routine, first));
-                            res.calls.push_back(request_code(*m, request_routine, second));
-                        }
-                    }
-                }
-                res.calls.push_back(request_code(*m, request_routine, code));
+                runner::capture_sound_test(*m, routine_override ? nullptr : profile,
+                                           request_routine, code, no_prelude, res.test);
 
                 bool any = false;
-                for (const auto &c : res.calls) any = any || !c.bytes.empty();
+                for (const auto &c : res.test.calls) any = any || !c.bytes.empty();
                 if (!any) res.status = "no-packets";
 
                 const uint64_t origin = m->audio->clock_ticks();
@@ -624,8 +409,8 @@ int cmd_sound_extract(int argc, char **argv) try {
                 res.file = path.filename().string();
             }
             if (!json_output)
-                std::cout << "code " << code << " " << res.status << " category=" << res.category
-                          << " type=" << res.descriptor_type << " seconds=" << std::fixed
+                std::cout << "code " << code << " " << res.status << " category=" << res.test.category
+                          << " type=" << res.test.descriptor_type << " seconds=" << std::fixed
                           << std::setprecision(3) << res.seconds << " peak=" << res.peak
                           << (res.error.empty() ? "" : "  ERROR: " + res.error) << '\n';
             results.push_back(std::move(res));
@@ -635,22 +420,22 @@ int cmd_sound_extract(int argc, char **argv) try {
             std::ofstream csv(effective_out_dir / "index.csv");
             csv << "code,status,category,descriptor_type,descriptor,seconds,peak,file,calls,error\n";
             for (const auto &r : results)
-                csv << r.code << ',' << r.status << ',' << r.category << ',' << r.descriptor_type
-                    << ',' << hex_bytes(r.descriptor) << ',' << std::fixed << std::setprecision(3)
-                    << r.seconds << ',' << r.peak << ',' << r.file << ',' << calls_text(r.calls)
+                csv << r.code << ',' << r.status << ',' << r.test.category << ',' << r.test.descriptor_type
+                    << ',' << hex_bytes(r.test.descriptor) << ',' << std::fixed << std::setprecision(3)
+                    << r.seconds << ',' << r.peak << ',' << r.file << ',' << calls_text(r.test.calls)
                     << ",\"" << json_escape(r.error) << "\"\n";
             std::ofstream js(effective_out_dir / "index.json");
             js << "[\n";
             for (size_t i = 0; i < results.size(); ++i) {
                 const auto &r = results[i];
                 js << " {\"code\":" << r.code << ",\"status\":\"" << r.status
-                   << "\",\"category\":" << r.category << ",\"descriptor_type\":"
-                   << r.descriptor_type << ",\"descriptor\":\"" << hex_bytes(r.descriptor)
+                   << "\",\"category\":" << r.test.category << ",\"descriptor_type\":"
+                   << r.test.descriptor_type << ",\"descriptor\":\"" << hex_bytes(r.test.descriptor)
                    << "\",\"seconds\":" << std::fixed << std::setprecision(3) << r.seconds
                    << ",\"peak\":" << r.peak << ",\"file\":\"" << r.file << "\",\"calls\":[";
-                for (size_t c = 0; c < r.calls.size(); ++c)
-                    js << (c ? "," : "") << "{\"code\":" << r.calls[c].code << ",\"bytes\":\""
-                       << hex_bytes(r.calls[c].bytes) << "\"}";
+                for (size_t c = 0; c < r.test.calls.size(); ++c)
+                    js << (c ? "," : "") << "{\"code\":" << r.test.calls[c].code << ",\"bytes\":\""
+                       << hex_bytes(r.test.calls[c].bytes) << "\"}";
                 js << "],\"error\":\"" << json_escape(r.error) << "\"}" << (i + 1 < results.size() ? "," : "")
                    << '\n';
             }
@@ -676,7 +461,7 @@ int cmd_sound_extract(int argc, char **argv) try {
             if (r.status != "ok")
                 std::cout << "  code " << r.code << ": " << r.status
                           << (r.error.empty() ? "" : " (" + r.error + ")")
-                          << " packets=" << calls_text(r.calls) << '\n';
+                          << " packets=" << calls_text(r.test.calls) << '\n';
         return failed ? 1 : 0;
     }
 
