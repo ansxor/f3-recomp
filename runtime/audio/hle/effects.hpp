@@ -1,14 +1,21 @@
 #pragma once
 #include "audio/hle/events.hpp"
+#include "audio/hle/faust/generated/chorus.hpp"
+#include "audio/hle/faust/generated/dc_blocker.hpp"
+#include "audio/hle/faust/generated/echo.hpp"
+#include "audio/hle/faust/generated/hall.hpp"
+#include "audio/hle/faust/generated/reverb.hpp"
+#include "audio/hle/faust/support.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <vector>
+#include <string_view>
 
 namespace f3rt::hle {
 static_assert(SAMPLE_RATE == 29761, "effect delay lengths are in ES5510 frames (the OTIS/ESP sample rate)");
@@ -18,7 +25,7 @@ static_assert(SAMPLE_RATE == 29761, "effect delay lengths are in ES5510 frames (
 // are the ten parameters p0..p9 in the order the sound commands set them. A preset loads the program its pointer
 // names; programs are identified here by that pointer, so the selection does not depend on the game. Five
 // programs are decoded (every program the three profiled games Kirameki, Land Maker and Command War select) and
-// each has its own graph below; any other program throws instead of being approximated.
+// each has its own graph; any other program throws instead of being approximated.
 // Delay lengths, gains and topology are the ones of the loaded program as it runs in the reference backend:
 // every delay is a (read offset - write offset) / 256 distance inside the DSP's single 64K-word delay RAM,
 // every gain is a GPR of the program, and each graph reproduces the emulated ES5510 impulse response to about
@@ -27,12 +34,18 @@ static_assert(SAMPLE_RATE == 29761, "effect delay lengths are in ES5510 frames (
 // parameter mappings, which were read by patching preset rows in a ROM copy and diffing the GPRs.
 // No DSP instructions or sampled audio are stored.
 //
+// The signal processing lives in FAUST (runtime/audio/hle/faust/): es5510.lib holds the all-pass networks, the
+// interpolated tap, the LFO and the shared reverb tank, and reverb.dsp / chorus.dsp / echo.dsp / hall.dsp /
+// dc_blocker.dsp are the programs, each with a signal-flow diagram and the names of the registers and delay RAM
+// segments the earlier C++ used. The headers under faust/generated/ are committed; the faust-regen target
+// rebuilds them (normal builds never run faust). This class keeps what is not signal processing: reading the
+// preset table and the program pointer, mapping p0..p9 to the programs' controls (update()), routing the OTIS
+// buses, the auto-bypass and the LFO phase of bypassed frames.
+//
 //   serio0 (OTIS pair 1, buses 2/3): dry in every program.
 //   serio1 (pair 2, buses 4/5) and serio2 (pair 3, buses 6/7) feed a reverb.
 //   Reverb (0xc1c836, Command War preset 1): serio1 and serio2 go to the reverb and to the output on the same
-//     frame; the reverb tank is mono: a 1105 frame loop return with decay/damping -> all-pass pair (168, 276)
-//     -> nested all-pass block B (755/549/1369) -> nested all-pass block A (1012/696/242 plus an LFO-modulated
-//     921 frame tap); left and right wet outputs are different taps of the loop nodes.
+//     frame; the reverb tank is mono (nested all-pass blocks around a 1105 frame loop, see es5510.lib).
 //   Chorus (0xc1d171, Kirameki preset 5): the same tank; serio1 is a 4-tap interpolated stereo chorus
 //     (taps 70/303 L and 261/428 R frames, +-40 frames, two LFOs) with cross-fed feedback, its output feeds
 //     the reverb.
@@ -45,6 +58,12 @@ static_assert(SAMPLE_RATE == 29761, "effect delay lengths are in ES5510 frames (
 //     output is low-passed and injected into the other side's input with gain p0/128.
 //   Mute (0xc1ce1b, Kirameki preset 4): the program is a single END, the DAC gets nothing.
 //   DAC L/R = dry + table(127-p8) * serio1 path + table(127-p9) * serio2 + reverb taps.
+//
+// LFOs: the ES5510 LFOs are GPR pairs the microcode rotates every frame, and the DSP executes its whole program
+// every frame whatever the input is (ES5510::run_once() once per frame, runtime/audio/reference/engine.cpp:131),
+// so an LFO phase keeps advancing through silence. Here too: every LFO advances by its rate on every frame,
+// including the frames the auto-bypass does not compute; the phase restarts at (1, 0) only when a program is
+// loaded (select() of a different program) and on reset().
 class Effects {
 public:
     enum class Program : uint8_t { None, Reverb, Hall, Chorus, Echo, Mute };
@@ -54,87 +73,102 @@ public:
                               K_PTR_CHORUS = 0xc1d171, K_PTR_ECHO = 0xc1d4d4;
 
 private:
-    // Delay RAM segment: power-of-two ring addressed by the frame counter. get(t, d) is the value written
-    // d frames before frame t (d = 0 is the value written this frame).
-    struct Ring {
-        std::vector<float> v;
-        uint32_t mask;
-        explicit Ring(uint32_t n) : v(n, 0.f), mask(n - 1) {}
-        float get(uint32_t t, uint32_t d) const { return v[(t - d) & mask]; }
-        void put(uint32_t t, float x) { v[t & mask] = x; }
-        // ES5510 interpolated tap: two adjacent frames weighted by the fractional delay. Delays below zero
-        // read the far end of the ring in the hardware (no signal), here silence.
-        float tap(uint32_t t, float d) const {
-            if (d < 0.f) return 0.f;
-            const uint32_t i = uint32_t(d);
-            const float f = d - float(i);
-            const float a = get(t, i), b = get(t, i + 1);
-            return a + f * (b - a);
-        }
-        void clear() { std::fill(v.begin(), v.end(), 0.f); }
-    };
-    // Ring sizes are the next power of two above the longest read distance of each segment.
-    Ring m_w48{2048}, m_w50{1024}, m_w53{1024}, m_w54{1024}; // nested all-pass block A (1105/1012/696/~921)
-    Ring m_w64{256}, m_w69{512}, m_w68{1024};                // diffuser pair (168, 276) and its output
-    Ring m_w85{256}, m_w87{1024}, m_w88{2048};               // nested all-pass block B (755, 549, 1369)
-    Ring m_w29{512}, m_w34{512};                              // chorus lines, left / right (taps <= 469)
-    Ring m_echo_l{32768}, m_echo_r{32768};                    // echo lines (p2 * 112 <= 28560, 256 * p1 + 9 <= 32521)
+    // A FAUST control zone, assigned from update().
+    class Zone {
+    public:
+        Zone(const faust::Controls &controls, std::string_view label) : m_zone(controls.zone(label)) {}
+        Zone(const Zone &) = delete;
+        Zone &operator=(const Zone &) = delete;
+        void operator=(float value) const { *m_zone = value; }
 
-    // One side of the Hall program: diffuser pair, nested all-pass block B, nested all-pass block A.
-    struct HallChain {
-        Ring wd{256}, w1{256}, wo{1024};          // diffuser pair and its output
-        Ring bq{512}, br{1024}, bout{256};        // block B
-        Ring an{1024}, cn{512}, o2{1024}, o4{1024}; // block A, output node, modulated-tap node
-        uint16_t dd1, dd2, dp, dq, dr, da, db, dc;  // delays
-        HallChain(uint16_t d1, uint16_t d2, uint16_t p, uint16_t q, uint16_t r, uint16_t a, uint16_t b, uint16_t c)
-            : dd1(d1), dd2(d2), dp(p), dq(q), dr(r), da(a), db(b), dc(c) {}
-        void step(uint32_t t, float v, float a, float g, float g2, float mod) {
-            const float d1 = wd.get(t, dd1), d2 = w1.get(t, dd2);
-            const float o1 = -g * v + (1.f - g * g) * d1;
-            wd.put(t, v + g * d1);
-            w1.put(t, o1 + g2 * d2);
-            wo.put(t, (1.f - g2 * g2) * d2 - g2 * o1);
-            const float p = wo.get(t, dp), q = bq.get(t, dq), r = br.get(t, dr);
-            bout.put(t, -a * p + (1.f - a * a) * q);
-            bq.put(t, -.25f * p - .25f * a * q + .9375f * r);
-            br.put(t, .25f * r + p + a * q);
-            const float x = an.get(t, da), y = bout.get(t, db), z = cn.get(t, dc);
-            o2.put(t, (1.f - a * a) * x - a * y);
-            an.put(t, -.25f * a * x + .9375f * z - .25f * y);
-            cn.put(t, -.25f * a * x - .0625f * z - .25f * y + .9375f * mod);
-            o4.put(t, a * x + .25f * z + y + .25f * mod);
-        }
-        void clear() {
-            for (Ring *ring : {&wd, &w1, &wo, &bq, &br, &bout, &an, &cn, &o2, &o4}) ring->clear();
-        }
+    private:
+        FAUSTFLOAT *m_zone;
     };
-    HallChain m_hall_x{88, 141, 628, 232, 874, 650, 214, 369}; // right input chain
-    HallChain m_hall_y{102, 168, 449, 335, 836, 617, 145, 424}; // left input chain
 
-    // Registers carried to the next frame (ES5510 GPRs, one frame of latency).
-    float m_g115 = 0, m_g116 = 0;                          // serio1 path outputs (programs Chorus and Echo)
-    float m_g128 = 0, m_g129 = 0, m_g130 = 0, m_g131 = 0;  // chorus taps
-    float m_g105 = 0, m_g111 = 0, m_g112 = 0, m_g113 = 0;  // echo taps and enhancer state
-    float m_g67 = 0, m_g70 = 0, m_g71 = 0;                 // reverb input leak and the two in-loop damping poles
-    float m_g89 = 0, m_g90 = 0, m_g91 = 0;                 // reverb output taps L/R, modulated tap of block A
-    float m_hu_l = 0, m_hu_r = 0, m_hlp_y1 = 0, m_hlp_y2 = 0, m_hlp_x1 = 0, m_hlp_x2 = 0; // Hall input and low-pass states
-    float m_hmod_x = 0, m_hmod_y = 0;                      // Hall modulated taps
-    uint32_t m_t = 0;
-
-    // Sine LFOs (GPR pairs): (x, y) rotated by eps each frame.
-    struct Lfo {
-        double x = 1.0, y = 0.0, c = 1.0, s = 0.0;
-        void set_rate(double eps) { c = std::cos(eps); s = std::sin(eps); }
-        void step() {
-            const double nx = x * c - y * s;
-            y = x * s + y * c;
-            x = nx;
+    // Sine LFO of a program. FAUST rotates the GPR pair by eps every frame it computes; the frames it does not
+    // compute (auto-bypass) are carried as a phase offset (double, mod 2 pi) that rotates the LFO output. The
+    // rate and the offset are doubles (a float rate shifts the phase by up to 8e-5 rad in 30 s, 0.01 frame of
+    // delay at the deepest modulation), passed through the float controls as the sum of two floats.
+    class Lfo {
+    public:
+        Lfo(const faust::Controls &controls, std::string_view name)
+            : m_eps_hi(controls, "lfo_" + std::string(name) + "_eps_hi"),
+              m_eps_lo(controls, "lfo_" + std::string(name) + "_eps_lo"),
+              m_ph_hi(controls, "lfo_" + std::string(name) + "_ph_hi"),
+              m_ph_lo(controls, "lfo_" + std::string(name) + "_ph_lo") {}
+        void set_rate(double eps) {
+            m_eps = eps;
+            write(eps, m_eps_hi, m_eps_lo);
         }
+        // Frames the DSP did not compute: the LFO rotates by frames * eps.
+        void skip(uint64_t frames) {
+            m_phase = std::fmod(m_phase + double(frames) * m_eps, 2.0 * 3.14159265358979323846);
+            write(m_phase, m_ph_hi, m_ph_lo);
+        }
+        void restart() {
+            m_phase = 0.0;
+            write(0.0, m_ph_hi, m_ph_lo);
+        }
+
+    private:
+        static void write(double value, const Zone &hi, const Zone &lo) {
+            const float high = float(value);
+            hi = high;
+            lo = float(value - double(high));
+        }
+        Zone m_eps_hi, m_eps_lo, m_ph_hi, m_ph_lo;
+        double m_eps = 0.0, m_phase = 0.0;
     };
-    Lfo m_lfo_a, m_lfo_b, m_lfo_c;
+
+    // A FAUST program instance, its control zones and the LFOs it has.
+    template <class Dsp> struct Instance {
+        Dsp dsp;
+        faust::Controls controls{dsp};
+        Instance() { dsp.init(SAMPLE_RATE); }
+        Instance(const Instance &) = delete;
+        Instance &operator=(const Instance &) = delete;
+    };
+    // Controls every ES5510 program has (p8 / p9 gains, loop decay and damping, LFO C depth).
+    template <class Dsp> struct Common : Instance<Dsp> {
+        Zone chorus_out{this->controls, "chorus_out"}, dry_send{this->controls, "dry_send"},
+            chorus_to_reverb{this->controls, "chorus_to_reverb"}, send{this->controls, "send"},
+            decay{this->controls, "decay"}, damp{this->controls, "damp"}, depth{this->controls, "depth"};
+        Lfo lfo_c{this->controls, "c"};
+    };
+    // The Reverb, Chorus and Echo programs share the reverb tank and its constants.
+    template <class Dsp> struct Tank : Common<Dsp> {
+        Zone scale{this->controls, "scale"}, leak{this->controls, "leak"}, c1{this->controls, "c1"},
+            c2{this->controls, "c2"}, g{this->controls, "g"}, tap_l0{this->controls, "tap_l0"},
+            tap_l1{this->controls, "tap_l1"}, tap_l2{this->controls, "tap_l2"}, tap_r0{this->controls, "tap_r0"},
+            tap_r1{this->controls, "tap_r1"}, tap_r2{this->controls, "tap_r2"};
+    };
+    struct ReverbProgram : Tank<faust::ReverbDsp> {};
+    template <class Dsp> struct FeedbackProgram : Tank<Dsp> {
+        Zone feedback{this->controls, "feedback"}, sin_mix{this->controls, "sin_mix"},
+            cos_mix{this->controls, "cos_mix"};
+    };
+    struct ChorusProgram : FeedbackProgram<faust::ChorusDsp> {
+        Lfo lfo_a{controls, "a"}, lfo_b{controls, "b"};
+    };
+    struct EchoProgram : FeedbackProgram<faust::EchoDsp> {
+        Zone echo{controls, "echo"}, mod_center{controls, "mod_center"}, enhance{controls, "enhance"};
+    };
+    struct HallProgram : Common<faust::HallDsp> {
+        Zone a{controls, "hall_a"}, g{controls, "hall_g"}, g2{controls, "hall_g2"}, g108{controls, "hall_g108"};
+    };
+    struct DcBlocker : Instance<faust::DcBlockerDsp> {
+        Zone gain_l{controls, "gain_l"}, gain_r{controls, "gain_r"}, r{controls, "r"};
+    };
+    // The generated classes hold their delay memory inline (about 900 KB for all four), so each instance is
+    // allocated once, when the Effects is constructed, and never moves: the control zones point into it.
+    std::unique_ptr<ReverbProgram> m_reverb = std::make_unique<ReverbProgram>();
+    std::unique_ptr<ChorusProgram> m_chorus = std::make_unique<ChorusProgram>();
+    std::unique_ptr<EchoProgram> m_echo_program = std::make_unique<EchoProgram>();
+    std::unique_ptr<HallProgram> m_hall = std::make_unique<HallProgram>();
+    std::unique_ptr<DcBlocker> m_dc = std::make_unique<DcBlocker>();
 
     // Reverb tank constants of the Reverb/Chorus/Echo programs (GPR values of the decoded programs).
-    struct Tank {
+    struct TankConstants {
         float scale = .7071f;   // input scale: G59 * G4 (Chorus/Echo) or ASR * G4 (Reverb)
         float leak = .0075f;    // G3: one-pole leak of the mono input, gain (1 - leak) * scale
         float c1 = .00703f, c2 = .04922f; // G108 / 8 and G108 * 0.875: recirculation through the damping poles
@@ -142,14 +176,15 @@ private:
         float tap_l[3] = {.13333f, .66667f, .46667f}; // wet weights of W48 / W68 / W85 at 384/4/26 (L)
         float tap_r[3] = {.13333f, .66667f, .66667f}; // ... and 1105/242/180 (R)
     };
-    Tank m_tank;
+    TankConstants m_tank;
 
     // Parameter-dependent coefficients (update()).
     Program m_program = Program::None;
-    float m_decay = .25f, m_damp = .3125f, m_cos_mix = 1.f, m_sin_mix = 0.f, m_feedback = 0.f;
+    float m_decay = .25f, m_damp = .3125f, m_feedback = 0.f, m_sin_mix = 0.f, m_cos_mix = 1.f;
     float m_send = .2448f, m_dry_send = .9695f, m_chorus_to_reverb = .2448f, m_chorus_out = .9695f;
     float m_echo = 7168.f, m_mod_center = .49f, m_enhance = .00683594f;
     float m_hall_a = .5f, m_hall_g = .65625f, m_hall_g2 = .52295f, m_hall_g108 = .04689f, m_lfo_depth = 8.f;
+    double m_eps_a = 0.0, m_eps_b = 0.0, m_eps_c = 0.0; // LFO rates, rad per frame
 
     std::span<const uint8_t> m_rom;
     std::array<uint8_t, 10> m_parameters{};
@@ -157,6 +192,8 @@ private:
     static constexpr size_t K_DELAY_BUFFER_SIZE = 96000ull * SAMPLE_RATE / 48000;
     static constexpr size_t K_BUCKET_COUNT = 16;
     static constexpr size_t K_BUCKET_SIZE = 6000ull * SAMPLE_RATE / 48000; // 16 * K_BUCKET_SIZE ~ K_DELAY_BUFFER_SIZE
+    // Frames per FAUST compute() call (the caller renders at most 256 at a time).
+    static constexpr size_t K_CHUNK = 256;
 
     // Silence threshold: maximum output gain is Audio::output_boost (12.0) * route (3.2) = 38.4 and the wet
     // path gain is bounded by ~3.0, so a line peak below 1e-8 is under 0.02 int16 LSB at the output.
@@ -200,11 +237,11 @@ private:
         m_cos_mix = table(127 - angle);
         m_feedback = std::clamp(float(int8_t(m_parameters[1])) / 128.f, -.95f, .95f);
         m_damp = float(m_parameters[6] >> 4) / 16.f;
-        m_lfo_c.set_rate(4864.0 / Q23);
+        m_eps_c = 4864.0 / Q23;
         m_lfo_depth = 8.f;
         switch (m_program) {
         case Program::Reverb: {
-            m_tank = Tank{};
+            m_tank = TankConstants{};
             m_tank.scale = .5f;
             m_tank.leak = .0703125f;
             const float g108 = float(m_parameters[1]) / 128.f;
@@ -214,18 +251,18 @@ private:
             m_tank.tap_l[0] = .125f; m_tank.tap_l[1] = .625f; m_tank.tap_l[2] = .4375f;
             m_tank.tap_r[0] = .125f; m_tank.tap_r[1] = .625f; m_tank.tap_r[2] = .625f;
             m_decay = std::min(float(m_parameters[0]) / 128.f, .9f);
-            m_lfo_c.set_rate(lfo_rate(196.608));
+            m_eps_c = lfo_rate(196.608);
             m_lfo_depth = float(m_parameters[3]) / 2.f;
             break;
         }
         case Program::Chorus:
-            m_tank = Tank{};
+            m_tank = TankConstants{};
             m_decay = std::min(float(m_parameters[0]) / 128.f, .9f);
-            m_lfo_a.set_rate(lfo_rate(196.608));
-            m_lfo_b.set_rate(lfo_rate(296.4));
+            m_eps_a = lfo_rate(196.608);
+            m_eps_b = lfo_rate(296.4);
             break;
         case Program::Echo:
-            m_tank = Tank{};
+            m_tank = TankConstants{};
             m_decay = .25f;
             m_damp = .3125f;
             m_echo = float(m_parameters[2]) * 112.f;
@@ -238,132 +275,72 @@ private:
             m_hall_g108 = float(m_parameters[1]) / 128.f;
             m_hall_g = float(m_parameters[7]) / 128.f;
             m_hall_g2 = .796875f * m_hall_g;
-            m_lfo_c.set_rate(lfo_rate(196.608));
+            m_eps_c = lfo_rate(196.608);
             m_lfo_depth = float(m_parameters[3]) / 2.f;
             break;
         case Program::Mute:
         case Program::None:
             break;
         }
+        write_controls();
     }
 
-    // One ES5510 frame of the Reverb, Chorus and Echo programs. a0/a1/a2 = serio0/1/2 (L, R) inputs; returns the
-    // DAC pair in out[0..1] and the largest internal level through peak.
-    void frame(const float *a0, const float *a1, const float *a2, float *out, float &peak) {
-        const uint32_t t = m_t++;
-        const Tank &tk = m_tank;
-        // serio1 path output (the program's own latency: none in program 0, one frame in programs 5 and 6).
-        const float d_l = m_program == Program::Reverb ? a1[0] : m_g115;
-        const float d_r = m_program == Program::Reverb ? a1[1] : m_g116;
-        out[0] = a0[0] + m_chorus_out * d_l + m_dry_send * a2[0] + m_g89;
-        out[1] = a0[1] + m_chorus_out * d_r + m_dry_send * a2[1] + m_g90;
-
-        // Front end lines written this frame.
-        float xe = a1[0], y = 0.f;
-        if (m_program == Program::Chorus) {
-            m_w29.put(t, a1[0] + m_feedback * m_g130);
-            m_w34.put(t, a1[1] + m_feedback * m_g129);
-        } else if (m_program == Program::Echo) {
-            m_g113 = .75f * m_g113 + m_enhance * m_g112;
-            xe = a1[0] + m_g113;
-            y = std::clamp(4.f * std::clamp(4.f * a1[0], -1.f, 1.f), -1.f, 1.f);
-            m_echo_l.put(t, xe + m_feedback * m_g111);
-            m_echo_r.put(t, a1[1] + m_feedback * m_g105);
-        }
-
-        // Reverb input: mono sum of the send and the serio1 path, with the one-pole leak of the last input.
-        const float u = tk.scale * (1.f - tk.leak) * (m_chorus_to_reverb * (d_l + d_r) + m_send * (a2[0] + a2[1])) +
-                        tk.leak * m_g67;
-        // Loop return through the decay gain and the two damping poles.
-        const float ret = m_w48.get(t, 1105);
-        const float v = u + m_decay * ((1.f - m_damp) * ret + m_damp * m_g70) + tk.c1 * m_g70 + tk.c2 * m_g71;
-        // Diffuser pair: all-pass 168 and 276 frames, gain g, (1 - g^2) on the delayed branch.
-        const float g = tk.g, h = 1.f - tk.g * tk.g;
-        const float d1 = m_w64.get(t, 168), d2 = m_w69.get(t, 276);
-        m_w64.put(t, v + g * d1);
-        m_w69.put(t, -g * v + h * d1 + g * d2);
-        m_w68.put(t, g * g * v - g * h * d1 + h * d2);
-        // Nested all-pass block B (755 / 549 / 1369).
-        const float p = m_w68.get(t, 755), q = m_w87.get(t, 549), r = m_w88.get(t, 1369);
-        m_w85.put(t, -.5f * p + .75f * q);
-        m_w87.put(t, -.25f * p - .125f * q + .9375f * r);
-        m_w88.put(t, .25f * r + p + .5f * q);
-        // Nested all-pass block A (1012 / 696 / 242 and the modulated tap latched last frame).
-        const float a = m_w50.get(t, 1012), b = m_w85.get(t, 242), c = m_w53.get(t, 696);
-        m_w48.put(t, .75f * a - .5f * b);
-        m_w50.put(t, -.125f * a + .9375f * c - .25f * b);
-        m_w53.put(t, -.125f * a - .0625f * c - .25f * b + .9375f * m_g91);
-        m_w54.put(t, .5f * a + .25f * c + b + .25f * m_g91);
-
-        // LFOs: depth uses C before its update (program order); A and B (Chorus) after theirs.
-        const float xc = float(m_lfo_c.x);
-        m_lfo_c.step();
-        if (m_program == Program::Chorus) {
-            m_lfo_a.step();
-            m_lfo_b.step();
-            const float xa = float(m_lfo_a.x), ya = float(m_lfo_a.y), xb = float(m_lfo_b.x), yb = float(m_lfo_b.y);
-            const float n128 = m_w29.tap(t, 70.f + 40.f * xa), n129 = m_w29.tap(t, 303.f + 40.f * xb);
-            const float n130 = m_w34.tap(t, 261.f + 40.f * ya), n131 = m_w34.tap(t, 428.f + 40.f * yb);
-            m_g115 = m_sin_mix * .7071f * (m_g128 + m_g129) + m_cos_mix * a1[0];
-            m_g116 = m_sin_mix * .7071f * (m_g130 + m_g131) + m_cos_mix * a1[1];
-            m_g128 = n128;
-            m_g129 = n129;
-            m_g130 = n130;
-            m_g131 = n131;
-            m_g91 = m_w54.tap(t, 921.f + m_lfo_depth * xc);
-        } else if (m_program == Program::Echo) {
-            m_g115 = m_sin_mix * .7071f * m_g105 + m_cos_mix * xe;
-            m_g116 = m_sin_mix * .7071f * m_g111 + m_cos_mix * a1[1];
-            m_g105 = m_echo_l.tap(t, m_echo - .00390625f); // the hardware tap sits one fraction step (1/256 frame) short
-            m_g111 = m_echo_r.get(t, uint32_t(m_echo));
-            m_g112 = std::clamp(2.f * y - .5f * y * y * y, -1.f, 1.f);
-            m_g91 = m_echo_l.tap(t, m_mod_center + m_lfo_depth * xc);
-        } else {
-            m_g91 = m_w54.tap(t, 921.f + m_lfo_depth * xc);
-        }
-        // Wet taps and damping poles latched for the next frame.
-        m_g89 = tk.tap_l[0] * m_w48.get(t, 384) + tk.tap_l[1] * m_w68.get(t, 4) + tk.tap_l[2] * m_w85.get(t, 26);
-        m_g90 = tk.tap_r[0] * m_w48.get(t, 1105) + tk.tap_r[1] * m_w68.get(t, 242) + tk.tap_r[2] * m_w85.get(t, 180);
-        const float n70 = .625f * ret + .375f * m_g70;
-        const float n71 = .125f * m_g70 + .875f * m_g71;
-        m_g67 = u;
-        m_g70 = n70;
-        m_g71 = n71;
-        peak = std::max({peak, std::abs(m_g89), std::abs(m_g90), std::abs(m_g115), std::abs(m_g116), std::abs(r),
-                         std::abs(ret), std::abs(m_g71), std::abs(m_g113), std::abs(m_g105), std::abs(m_g111)});
+    template <class P> void write_common(P &p) {
+        p.chorus_out = m_chorus_out;
+        p.dry_send = m_dry_send;
+        p.chorus_to_reverb = m_chorus_to_reverb;
+        p.send = m_send;
+        p.decay = m_decay;
+        p.damp = m_damp;
+        p.depth = m_lfo_depth;
+        p.lfo_c.set_rate(m_eps_c);
     }
-
-    // One ES5510 frame of the Hall program (two cross-coupled chains, the serio1 and serio2 sums enter per side).
-    void frame_hall(const float *a0, const float *a1, const float *a2, float *out, float &peak) {
-        const uint32_t t = m_t++;
-        out[0] = a0[0] + m_chorus_out * a1[0] + m_dry_send * a2[0] + m_g89;
-        out[1] = a0[1] + m_chorus_out * a1[1] + m_dry_send * a2[1] + m_g90;
-        const float damp = m_damp;
-        const float vx = .5f * m_hu_r + m_decay * m_hlp_x1 + m_hall_g108 * m_hlp_x2;
-        const float vy = .5f * m_hu_l + m_decay * m_hlp_y1 + m_hall_g108 * m_hlp_y2;
-        m_hall_x.step(t, vx, m_hall_a, m_hall_g, m_hall_g2, m_hmod_x);
-        m_hall_y.step(t, vy, m_hall_a, m_hall_g, m_hall_g2, m_hmod_y);
-        const float leak = .0078125f;
-        const float ul = leak * m_hu_l + (1.f - leak) * (m_chorus_to_reverb * a1[0] + m_send * a2[0]);
-        const float ur = leak * m_hu_r + (1.f - leak) * (m_chorus_to_reverb * a1[1] + m_send * a2[1]);
-        const float w13 = m_hall_x.o2.get(t, 7), w44 = m_hall_y.o2.get(t, 675);
-        m_hlp_y1 = (1.f - damp) * w13 + damp * m_hlp_y1;
-        m_hlp_y2 = .125f * w13 + .875f * m_hlp_y2;
-        m_hlp_x1 = (1.f - damp) * w44 + damp * m_hlp_x1;
-        m_hlp_x2 = .125f * w44 + .875f * m_hlp_x2;
-        const float xc = float(m_lfo_c.x);
-        m_lfo_c.step();
-        const float d90 = 611.f + m_lfo_depth * xc;
-        m_hmod_x = m_hall_x.o4.tap(t, d90);
-        m_hmod_y = m_hall_y.o4.tap(t, d90 - 136.f);
-        m_g89 = .125f * m_hall_x.o2.get(t, 3) + .4375f * m_hall_x.bout.get(t, 163) +
-                .9375f * m_hall_x.wo.get(t, 101) - .4375f * m_hall_y.bout.get(t, 131);
-        m_g90 = -.4375f * m_hall_x.bout.get(t, 74) + .125f * m_hall_y.o2.get(t, 225) +
-                .4375f * m_hall_y.bout.get(t, 10) + .5f * m_hall_y.wo.get(t, 1);
-        m_hu_l = ul;
-        m_hu_r = ur;
-        peak = std::max({peak, std::abs(m_g89), std::abs(m_g90), std::abs(w13), std::abs(w44), std::abs(m_hlp_x2),
-                         std::abs(m_hlp_y2)});
+    template <class P> void write_tank(P &p) {
+        write_common(p);
+        p.scale = m_tank.scale;
+        p.leak = m_tank.leak;
+        p.c1 = m_tank.c1;
+        p.c2 = m_tank.c2;
+        p.g = m_tank.g;
+        p.tap_l0 = m_tank.tap_l[0];
+        p.tap_l1 = m_tank.tap_l[1];
+        p.tap_l2 = m_tank.tap_l[2];
+        p.tap_r0 = m_tank.tap_r[0];
+        p.tap_r1 = m_tank.tap_r[1];
+        p.tap_r2 = m_tank.tap_r[2];
+    }
+    template <class P> void write_feedback(P &p) {
+        write_tank(p);
+        p.feedback = m_feedback;
+        p.sin_mix = m_sin_mix;
+        p.cos_mix = m_cos_mix;
+    }
+    // Writes the coefficients update() computed into the zones of the loaded program.
+    void write_controls() {
+        switch (m_program) {
+        case Program::Reverb: write_tank(*m_reverb); break;
+        case Program::Chorus:
+            write_feedback(*m_chorus);
+            m_chorus->lfo_a.set_rate(m_eps_a);
+            m_chorus->lfo_b.set_rate(m_eps_b);
+            break;
+        case Program::Echo:
+            write_feedback(*m_echo_program);
+            m_echo_program->echo = m_echo;
+            m_echo_program->mod_center = m_mod_center;
+            m_echo_program->enhance = m_enhance;
+            break;
+        case Program::Hall:
+            write_common(*m_hall);
+            m_hall->a = m_hall_a;
+            m_hall->g = m_hall_g;
+            m_hall->g2 = m_hall_g2;
+            m_hall->g108 = m_hall_g108;
+            break;
+        case Program::Mute:
+        case Program::None:
+            break;
+        }
     }
 
     // Physical PCB wiring from OTIS (ES5505) to ESP (ES5510), 12's oscilloscope trace through TC0660FCM
@@ -380,42 +357,62 @@ private:
     static constexpr size_t K_BUS_REVERB_L = 6;
     static constexpr size_t K_BUS_REVERB_R = 7;
 
-    // DC blocker state
-    std::array<float, 2> m_dc_x1{0.f, 0.f};
-    std::array<float, 2> m_dc_y1{0.f, 0.f};
-    // Output DC blocker (one pole, 20 Hz). There is no analog low-pass: the PCB recording keeps its
-    // top end up to 14.7 kHz (docs/notes/raw/tests/2026-10-16-kirameki-187-clap-dynamics.md).
-    float m_dc_r = 0.f;
-    void init_dc_blocker() { m_dc_r = std::exp(-2.0f * 3.14159265358979323846f * 20.0f / float(SAMPLE_RATE)); }
+    // Output DC blocker (one pole, 20 Hz) written to the dc_blocker.dsp control "r".
+    void init_dc_blocker() {
+        m_dc->r = std::exp(-2.0f * 3.14159265358979323846f * 20.0f / float(SAMPLE_RATE));
+    }
 
-    void dc_block(float *stereo, size_t frames) {
-        if (frames == 0) return;
-        const float R = m_dc_r;
-        for (size_t f = 0; f < frames; ++f) {
-            for (size_t ch = 0; ch < 2; ++ch) {
-                const float x = stereo[f * 2 + ch];
-                const float y = x - m_dc_x1[ch] + R * m_dc_y1[ch];
-                m_dc_x1[ch] = x;
-                m_dc_y1[ch] = y;
-                stereo[f * 2 + ch] = y;
-            }
-        }
-        for (size_t ch = 0; ch < 2; ++ch) {
-            if (std::abs(m_dc_x1[ch]) < K_THRESHOLD) m_dc_x1[ch] = 0.f;
-            if (std::abs(m_dc_y1[ch]) < K_THRESHOLD) m_dc_y1[ch] = 0.f;
+    // Runs the loaded program over n frames: planar inputs a0l a0r a1l a1r a2l a2r, outputs DAC L, DAC R, peak.
+    void compute_program(int n, FAUSTFLOAT **in, FAUSTFLOAT **out) {
+        switch (m_program) {
+        case Program::Reverb: m_reverb->dsp.compute(n, in, out); break;
+        case Program::Chorus: m_chorus->dsp.compute(n, in, out); break;
+        case Program::Echo: m_echo_program->dsp.compute(n, in, out); break;
+        case Program::Hall: m_hall->dsp.compute(n, in, out); break;
+        case Program::Mute:
+        case Program::None: break;
         }
     }
 
-    void silence_state() {
-        for (Ring *ring : {&m_w29, &m_w34, &m_w48, &m_w50, &m_w53, &m_w54, &m_w64, &m_w69, &m_w68, &m_w85,
-                           &m_w87, &m_w88, &m_echo_l, &m_echo_r})
-            ring->clear();
-        m_hall_x.clear();
-        m_hall_y.clear();
-        m_g115 = m_g116 = m_g128 = m_g129 = m_g130 = m_g131 = 0.f;
-        m_g105 = m_g111 = m_g112 = m_g113 = 0.f;
-        m_g67 = m_g70 = m_g71 = m_g89 = m_g90 = m_g91 = 0.f;
-        m_hu_l = m_hu_r = m_hlp_y1 = m_hlp_y2 = m_hlp_x1 = m_hlp_x2 = m_hmod_x = m_hmod_y = 0.f;
+    // Program load and reset: clear the delay memory and state of the DSPs and restart the LFOs at (1, 0).
+    void clear_program(Program program) {
+        switch (program) {
+        case Program::Reverb:
+            m_reverb->dsp.instanceClear();
+            m_reverb->lfo_c.restart();
+            break;
+        case Program::Chorus:
+            m_chorus->dsp.instanceClear();
+            m_chorus->lfo_a.restart();
+            m_chorus->lfo_b.restart();
+            m_chorus->lfo_c.restart();
+            break;
+        case Program::Echo:
+            m_echo_program->dsp.instanceClear();
+            m_echo_program->lfo_c.restart();
+            break;
+        case Program::Hall:
+            m_hall->dsp.instanceClear();
+            m_hall->lfo_c.restart();
+            break;
+        case Program::Mute:
+        case Program::None: break;
+        }
+    }
+    // Frames the loaded program was not computed (auto-bypass): every LFO keeps rotating.
+    void skip_lfos(uint64_t frames) {
+        switch (m_program) {
+        case Program::Reverb: m_reverb->lfo_c.skip(frames); break;
+        case Program::Chorus:
+            m_chorus->lfo_a.skip(frames);
+            m_chorus->lfo_b.skip(frames);
+            m_chorus->lfo_c.skip(frames);
+            break;
+        case Program::Echo: m_echo_program->lfo_c.skip(frames); break;
+        case Program::Hall: m_hall->lfo_c.skip(frames); break;
+        case Program::Mute:
+        case Program::None: break;
+        }
     }
 
     uint32_t rom_u32(size_t offset) const {
@@ -428,6 +425,10 @@ public:
         init_dc_blocker();
         reset();
     }
+    // The FAUST instances keep pointers to their own members (control zones).
+    Effects(const Effects &) = delete;
+    Effects &operator=(const Effects &) = delete;
+
     // Loads a preset: reads its parameters and the program it names. Throws std::runtime_error for a program
     // that has not been decoded (the DSP would run something this model does not reproduce).
     void select(uint8_t preset) {
@@ -448,10 +449,7 @@ public:
         // Row bytes 6..15 are p0..p9 in the order the sound commands set them (confirmed by diffing the DSP
         // registers after patching row bytes).
         for (unsigned n = 0; n < 10; ++n) m_parameters[n] = m_rom[row + 6 + n];
-        if (program != m_program) {
-            silence_state();
-            m_lfo_a = m_lfo_b = m_lfo_c = Lfo{};
-        }
+        if (program != m_program) clear_program(program);
         m_program = program;
         m_preset = preset;
         update();
@@ -463,16 +461,15 @@ public:
         }
     }
     Program program() const { return m_program; }
+    // True while the auto-bypass skips the loaded program (silent sends and nothing audible left in it).
+    bool bypassed() const { return m_bypassed; }
     void reset() {
-        silence_state();
-        m_lfo_a = m_lfo_b = m_lfo_c = Lfo{};
-        m_t = 0;
+        for (Program program : {Program::Reverb, Program::Chorus, Program::Echo, Program::Hall}) clear_program(program);
         m_bucket_peaks.fill(0.f);
         m_current_bucket_peak = 0.f;
         m_bucket_frames = 0;
         m_silent_frames = K_DELAY_BUFFER_SIZE;
-        m_dc_x1.fill(0.f);
-        m_dc_y1.fill(0.f);
+        m_dc->dsp.instanceClear();
         m_bypassed = true;
         m_program = Program::None;
         m_parameters.fill(0);
@@ -484,7 +481,6 @@ public:
         if (m_program == Program::Mute) {
             // A single END: the DSP never writes serio3, the DAC input stays at its last (constant) value.
             std::fill(stereo, stereo + frames * 2, 0.f);
-            m_t += uint32_t(frames);
             return;
         }
 
@@ -497,18 +493,37 @@ public:
             }
         }
 
+        m_dc->gain_l = output_gain[0];
+        m_dc->gain_r = output_gain[1];
+        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 6> input;
+        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 3> output;
+        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 2> blocked;
+        FAUSTFLOAT *in[6], *out[3], *dc_out[2];
+        for (size_t n = 0; n < 6; ++n) in[n] = input[n].data();
+        for (size_t n = 0; n < 3; ++n) out[n] = output[n].data();
+        for (size_t n = 0; n < 2; ++n) dc_out[n] = blocked[n].data();
+        const auto interleave = [&](size_t offset, size_t n) {
+            for (size_t f = 0; f < n; ++f) {
+                stereo[(offset + f) * 2 + 0] = dc_out[0][f];
+                stereo[(offset + f) * 2 + 1] = dc_out[1][f];
+            }
+        };
+
         if (m_bypassed || m_program == Program::None) {
             if (silent_sends || m_program == Program::None) {
-                // All state is zero (or no program is loaded): only the dry path is audible. Time still
-                // advances so the LFO phase and ring addressing stay consistent with a running DSP.
-                m_t += uint32_t(frames);
-                for (size_t f = 0; f < frames; ++f) {
-                    const float dry0 = buses[f * 8 + K_BUS_DRY_L] * input_gain[0];
-                    const float dry1 = buses[f * 8 + K_BUS_DRY_R] * input_gain[1];
-                    stereo[f * 2 + 0] = dry0 * output_gain[0];
-                    stereo[f * 2 + 1] = dry1 * output_gain[1];
+                // Nothing audible is left in the program (or none is loaded): only the dry path is heard. The DSP
+                // is not computed, but its LFOs keep rotating (see the class comment).
+                skip_lfos(frames);
+                for (size_t offset = 0; offset < frames; offset += K_CHUNK) {
+                    const size_t n = std::min(K_CHUNK, frames - offset);
+                    for (size_t f = 0; f < n; ++f) {
+                        const float *bus = buses + (offset + f) * 8;
+                        in[0][f] = bus[K_BUS_DRY_L] * input_gain[0];
+                        in[1][f] = bus[K_BUS_DRY_R] * input_gain[1];
+                    }
+                    m_dc->dsp.compute(int(n), in, dc_out);
+                    interleave(offset, n);
                 }
-                dc_block(stereo, frames);
                 return;
             }
             m_bypassed = false;
@@ -521,35 +536,37 @@ public:
             m_silent_frames += frames;
         }
 
-        const bool hall = m_program == Program::Hall;
-        for (size_t f = 0; f < frames; ++f) {
-            const float *bus = buses + f * 8;
-            const float a0[2] = {bus[K_BUS_DRY_L] * input_gain[0], bus[K_BUS_DRY_R] * input_gain[1]};
-            const float a1[2] = {bus[K_BUS_DELAY_L] * input_gain[0], bus[K_BUS_DELAY_R] * input_gain[1]};
-            const float a2[2] = {bus[K_BUS_REVERB_L] * input_gain[0], bus[K_BUS_REVERB_R] * input_gain[1]};
-            float out[2];
-            if (hall) {
-                frame_hall(a0, a1, a2, out, m_current_bucket_peak);
-            } else {
-                frame(a0, a1, a2, out, m_current_bucket_peak);
+        for (size_t offset = 0; offset < frames; offset += K_CHUNK) {
+            const size_t n = std::min(K_CHUNK, frames - offset);
+            for (size_t f = 0; f < n; ++f) {
+                const float *bus = buses + (offset + f) * 8;
+                in[0][f] = bus[K_BUS_DRY_L] * input_gain[0];
+                in[1][f] = bus[K_BUS_DRY_R] * input_gain[1];
+                in[2][f] = bus[K_BUS_DELAY_L] * input_gain[0];
+                in[3][f] = bus[K_BUS_DELAY_R] * input_gain[1];
+                in[4][f] = bus[K_BUS_REVERB_L] * input_gain[0];
+                in[5][f] = bus[K_BUS_REVERB_R] * input_gain[1];
             }
-            stereo[f * 2 + 0] = out[0] * output_gain[0];
-            stereo[f * 2 + 1] = out[1] * output_gain[1];
-            if (++m_bucket_frames >= K_BUCKET_SIZE) {
-                m_bucket_peaks[m_bucket_idx] = m_current_bucket_peak;
-                m_bucket_idx = (m_bucket_idx + 1) % K_BUCKET_COUNT;
-                m_current_bucket_peak = 0.f;
-                m_bucket_frames = 0;
+            compute_program(int(n), in, out);
+            for (size_t f = 0; f < n; ++f) {
+                m_current_bucket_peak = std::max(m_current_bucket_peak, out[2][f]);
+                if (++m_bucket_frames >= K_BUCKET_SIZE) {
+                    m_bucket_peaks[m_bucket_idx] = m_current_bucket_peak;
+                    m_bucket_idx = (m_bucket_idx + 1) % K_BUCKET_COUNT;
+                    m_current_bucket_peak = 0.f;
+                    m_bucket_frames = 0;
+                }
             }
+            m_dc->dsp.compute(int(n), out, dc_out);
+            interleave(offset, n);
         }
-
-        dc_block(stereo, frames);
 
         if (m_silent_frames >= K_DELAY_BUFFER_SIZE) {
             float peak = m_current_bucket_peak;
             for (float bp : m_bucket_peaks) peak = std::max(peak, bp);
             if (peak < K_THRESHOLD) {
-                silence_state();
+                // Everything the detector watches is under 0.02 LSB: the state is not cleared (it would only
+                // drop that residue), the program is just not computed until a send arrives.
                 m_bucket_peaks.fill(0.f);
                 m_current_bucket_peak = 0.f;
                 m_bucket_frames = 0;

@@ -1,7 +1,7 @@
 ---
 title: ES5510 (ESP) host interface, instruction format and DUART halt, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-16
+updated: 2026-10-18
 type: hardware
 tags: [audio, memory-map, undocumented]
 sources:
@@ -16,6 +16,7 @@ sources:
   - raw/docs/taito-f3/clocks.txt
   - raw/docs/taito-f3/chips.txt
   - raw/docs/taito-f3/list.txt
+  - raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md
 games: [landmakrj]
 addresses: [0x00240000, 0x00260000, 0x00C0F430, 0x00C0F482, 0x00C0F4BC, 0x00C1C2D2]
 status: hypothesis
@@ -104,6 +105,12 @@ model use OP6 as ESPHALT. See [[hardware/duart-and-volume]]. ^[raw/emu-source/ma
 - The isolated-model measurement of the cross-delay is 8177 samples at 29761 Hz (about 274.8 ms) with
   feedback about 0.45; this measures the MAME-derived model, not the board. ^[raw/docs/runtime-hle-audio-rom-protocol.md]
   The command and driver side of the effects worker is on [[routines/landmakrj-00c12ecc-sound-command-dispatch]].
+
+## HLE substitute programs and LFO behaviour (hypothesis)
+
+- The HLE audio backend does not run ES5510 microcode: it reproduces the five decoded programs (ROM pointers 0, 1/2, 4, 5, 6) from their signal graphs. The signal processing is FAUST in `runtime/audio/hle/faust/` (`es5510.lib` with the all-pass networks, interpolated tap, LFO and reverb tank; `reverb.dsp`, `chorus.dsp`, `echo.dsp`, `hall.dsp`, `dc_blocker.dsp`), the generated C++ headers are committed; preset parsing, the p0..p9 mapping, bus routing and the auto-bypass stay in `runtime/audio/hle/effects.hpp`. Each stage carries a signal-flow diagram and the names of the delay RAM segments and GPRs of the decoded program for cross-reference with a hardware trace. ^[raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
+- Reading of the microcode: the expanded coefficients of the tank (0.9375 = 1 - 0.25^2, 0.0625 = 0.25^2, 0.75 = 1 - 0.5^2, 0.125 = 0.25 * 0.5) are Schroeder all-pass loops nested inside each other (outer gain a = 0.5, inner gains 0.25) whose delay element is replaced by the inner network; the 168/276 diffuser pair is two plain all-pass stages with gain G8. This is a re-reading of the decoded graph, not new evidence. ^[raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
+- Hypothesis: the ES5510 LFOs are GPR pairs the microcode rotates once per executed program pass, and a pass runs on every sample frame whatever the input level is: the reference backend calls `run_once()` once per output frame whenever the DUART ESPHALT pin is not asserted and never tests the input, each call restarting the program at `pc = 0`. An LFO phase therefore keeps advancing through silence. The HLE follows this: every LFO advances by its rate on every frame, including the frames its auto-bypass does not compute (a phase offset carried next to the DSP), and restarts at (x, y) = (1, 0) only when a different program is loaded or on reset. Before 2026-10-18 the HLE froze the phase while bypassed. Not measured on hardware. ^[raw/docs/runtime-audio-es5510.md]
 
 Open: none of the instruction semantics (overflow, skip flags, I/O cycles) are verified against a real
 chip. The existing runtime tests exercised the model, not hardware. ^[raw/docs/runtime-audio-es5510.md]

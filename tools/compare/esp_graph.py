@@ -16,7 +16,8 @@ The trace's ES5510 host writes are replayed into a pure-Python integer port of
              with ``dbase`` falling by one address per frame, so a read sees the write of the instruction whose
              offset is d * 256 lower, d frames ago); coefficients are printed as real numbers;
 ``verify``   the HLE graph of the loaded program (``Model`` for the ROM programs 0, 5 and 6, ``Model1`` for programs 1/2;
-             the equations in runtime/audio/hle/effects.hpp) against the port, on an impulse, with the port's LFO
+             the equations in runtime/audio/hle/faust/es5510.lib, reverb.dsp, chorus.dsp, echo.dsp and hall.dsp)
+             against the port, on an impulse, with the port's LFO
              registers fed to the model; prints the error against the port's output;
 ``programs`` every program the driver loaded during the trace and whether it is one of the decoded ones.
 
@@ -475,7 +476,8 @@ class Esp:
 
 
 # --------------------------------------------------------------------------------------------------------------
-# The HLE graphs. Mirror Effects::frame() in runtime/audio/hle/effects.hpp. Three programs are decoded: the
+# The HLE graphs. Mirror the FAUST programs in runtime/audio/hle/faust/ (es5510.lib: all-pass networks and the shared
+# tank; reverb.dsp, chorus.dsp, echo.dsp, hall.dsp: the per-program front ends). Three programs are decoded: the
 # ROM pointer-table programs 0 (reverb only), 5 (chorus + reverb) and 6 (ping-pong echo + enhancer + reverb).
 # --------------------------------------------------------------------------------------------------------------
 # Reverb tank constants per program (GPR-derived, see the note): input scale k, input leak, loop-filter terms

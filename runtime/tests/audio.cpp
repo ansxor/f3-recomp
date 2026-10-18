@@ -5,7 +5,7 @@
 #include "audio/hle/events.hpp"
 #include "audio/hle/note_timing.hpp"
 #include "audio/hle/synth.hpp"
-#include "audio/hle/voice_kernel.hpp"
+#include "audio/hle/faust/generated/voice_filter.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
@@ -16,9 +16,11 @@
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -1198,6 +1200,62 @@ TEST(Audio, ReverbDecayFollowsP0) {
     EXPECT_GT(long_decay[1], mid[1] * 4) << "a larger p0 must ring longer";
 }
 
+// The ES5510 executes its whole program on every sample frame whatever the input is, so the phase of its LFOs
+// keeps advancing through silence. The auto-bypass (silent sends and nothing audible left in the program) must
+// therefore be invisible: after the sends resume, a run that bypassed produces the same output as a run that
+// never did (here kept awake by a sub-audible send). The chorus program has all three LFOs; with p0 = 0 and no
+// echo feedback its tail (the nested all-pass blocks ring down at about -30 dB per half second) is below the
+// silence threshold after about 5 s, so the quiet period is 8 s.
+TEST(Audio, EffectsAutoBypassKeepsLfoPhaseRunning) {
+    const uint8_t params[10] = {0, 0, 40, 26, 37, 0, 0x68, 64, 32, 39};
+    const auto sound_rom = effects_test_rom(5, 5, params);
+    f3rt::hle::Effects bypassing(sound_rom), awake(sound_rom);
+    bypassing.select(5);
+    awake.select(5);
+
+    constexpr size_t BLOCK = 4000, SILENT_BLOCKS = 60, BURST = 3000, TAIL = 20000;
+    const auto run = [&](f3rt::hle::Effects &fx, float whisper) {
+        std::vector<float> out;
+        const auto render = [&](const std::vector<float> &buses) {
+            std::vector<float> stereo(buses.size() / 4);
+            fx.mix(buses.data(), stereo.data(), buses.size() / 8, {1.0f, 1.0f}, {1.0f, 1.0f});
+            out.insert(out.end(), stereo.begin(), stereo.end());
+        };
+        std::vector<float> buses(8 * BLOCK, 0.0f);
+        for (size_t bus = 2; bus < 8; ++bus) buses[bus] = 0.5f; // an impulse on every input
+        render(buses);
+        std::fill(buses.begin(), buses.end(), 0.0f);
+        // The quiet period: a send of 1e-9 on every frame keeps the effect awake; zero lets it bypass.
+        for (size_t f = 0; f < BLOCK; ++f) buses[f * 8 + 4] = buses[f * 8 + 6] = whisper;
+        for (size_t block = 0; block < SILENT_BLOCKS; ++block) render(buses);
+        const size_t resumed = out.size() / 2;
+        const bool slept = fx.bypassed();
+        // After the quiet period: a burst of noise on every input, then its tail.
+        uint32_t seed = 12345;
+        std::vector<float> burst(8 * (BURST + TAIL), 0.0f);
+        for (size_t f = 0; f < BURST; ++f)
+            for (size_t bus = 2; bus < 8; ++bus) {
+                seed = seed * 1664525u + 1013904223u;
+                burst[f * 8 + bus] = 0.4f * (float(seed >> 8) / float(1 << 24) - 0.5f);
+            }
+        render(burst);
+        return std::tuple{out, resumed, slept};
+    };
+    const auto [bypassed_out, resumed, bypassed_slept] = run(bypassing, 0.0f);
+    const auto [awake_out, resumed_awake, awake_slept] = run(awake, 1e-9f);
+    ASSERT_EQ(resumed, resumed_awake);
+    ASSERT_TRUE(bypassed_slept) << "the quiet period must have ended in an auto-bypass";
+    ASSERT_FALSE(awake_slept);
+
+    float peak = 0.0f, worst = 0.0f;
+    for (size_t i = resumed * 2; i < awake_out.size(); ++i) {
+        peak = std::max(peak, std::abs(awake_out[i]));
+        worst = std::max(worst, std::abs(awake_out[i] - bypassed_out[i]));
+    }
+    ASSERT_GT(peak, 0.1f);
+    EXPECT_LT(worst, peak * 1e-6f) << "output after an auto-bypass must match a run that never bypassed";
+}
+
 // Direct-voice filter index, derived from the sound driver (c195a4-c195d0) and checked against its key-on
 // register writes in the Kirameki 0x187 diagnosis (clap p0e=165: K1/K2 0xfa40/0xfa70 = index 947/948;
 // pad p0e=101 vel 70/115/119: 579/691-692/702; p0e=179 vel 123: 900). The note-on routine at c17b94 stores
@@ -1373,63 +1431,118 @@ TEST(HleNoteTiming, FullQueueRefusesInsteadOfDropping) {
     EXPECT_TRUE(queue.push(3, 3, 0, 30));
 }
 
-TEST(Audio, VoiceBlockFilterModesMatchES5505Hardware) {
-    constexpr size_t FRAMES = 32;
-    constexpr size_t STRIDE = f3rt::hle::VOICE_LANE_STRIDE;
-    alignas(64) float input[FRAMES * STRIDE]{};
-    alignas(64) float a1[FRAMES * STRIDE]{};
-    alignas(64) float a2[FRAMES * STRIDE]{};
-    alignas(64) float high_pole[FRAMES * STRIDE]{};
-    alignas(64) float gain_left[FRAMES * STRIDE]{};
-    alignas(64) float gain_right[FRAMES * STRIDE]{};
-    alignas(64) float state[4 * STRIDE]{};
-    alignas(64) float previous[4 * STRIDE]{};
-    alignas(64) float out_left[FRAMES * STRIDE]{};
-    alignas(64) float out_right[FRAMES * STRIDE]{};
-    uint8_t mode[STRIDE]{};
+namespace {
 
-    const uint16_t k1 = 20000;
-    const uint16_t k2 = 45000;
-    const float a1_val = float((k1 & 0xfff0) / 65536.0);
-    const float a2_val = float((k2 & 0xfff0) / 65536.0);
-    const float hp_val = float((1.0 + (k2 & 0xfff0) / 65536.0) * 0.5);
+// Scalar reference for the voice filter: the four-stage recursion, one frame at a time, in float.
+struct VoiceFilterRef {
+    float s[4]{}, p[4]{};
+    void frame(int mode, float x, float a1, float a2, float hp, float gl, float gr, float &L,
+               float &R) {
+        float y0 = a1 * (x - s[0]) + s[0];
+        p[0] = x;
+        s[0] = y0;
+        x = y0;
+        float y1 = a1 * (x - s[1]) + s[1];
+        p[1] = x;
+        s[1] = y1;
+        x = y1;
+        float as2 = mode == 2 ? a2 : a1;
+        float lp2 = as2 * (x - s[2]) + s[2];
+        float hp2 = hp * s[2] + (x - p[2]);
+        float y2 = mode == 0 ? hp2 : lp2;
+        p[2] = x;
+        s[2] = y2;
+        x = y2;
+        float lp3 = a2 * (x - s[3]) + s[3];
+        float hp3 = hp * s[3] + (x - p[3]);
+        float y3 = mode < 2 ? hp3 : lp3;
+        p[3] = x;
+        s[3] = y3;
+        L = y3 * gl;
+        R = y3 * gr;
+    }
+};
 
-    for (size_t f = 0; f < FRAMES; ++f) {
-        for (size_t lane = 0; lane < 4; ++lane) {
-            const size_t idx = f * STRIDE + lane;
-            input[idx] = float((f + 1) * 1000);
-            a1[idx] = a1_val;
-            a2[idx] = a2_val;
-            high_pole[idx] = hp_val;
-            gain_left[idx] = 1.0f;
-            gain_right[idx] = 1.0f;
+// Runs `chunks` blocks of 64 frames of random controls through the DSP and the reference, with
+// mode_of(chunk) selecting each block's mode. Returns the largest output error relative to the
+// largest output magnitude.
+template <class ModeOf>
+float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
+    constexpr int CH = 64;
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> coef(0.01f, 0.99f), pole(0.f, 1.f), gain(0.f, 1.f),
+        sample(-32768.f, 32767.f);
+    f3rt::hle::faust::VoiceFilterDsp dsp;
+    dsp.init(29761);
+    f3rt::hle::faust::Controls controls(dsp);
+    float *mode_zone = controls.zone("mode");
+    VoiceFilterRef ref;
+    float in[6][CH]{}, out[2][CH]{};
+    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
+    float *outs[2] = {out[0], out[1]};
+    float peak = 0.f, err = 0.f;
+    for (int k = 0; k < chunks; ++k) {
+        const int mode = mode_of(k);
+        *mode_zone = float(mode);
+        for (int r = 0; r < CH; ++r) {
+            in[0][r] = sample(rng);
+            in[1][r] = coef(rng);
+            in[2][r] = coef(rng);
+            in[3][r] = pole(rng);
+            in[4][r] = gain(rng);
+            in[5][r] = gain(rng);
+        }
+        dsp.compute(CH, ins, outs);
+        for (int r = 0; r < CH; ++r) {
+            float L = 0.f, R = 0.f;
+            ref.frame(mode, in[0][r], in[1][r], in[2][r], in[3][r], in[4][r], in[5][r], L, R);
+            peak = std::max({peak, std::fabs(L), std::fabs(R)});
+            err = std::max({err, std::fabs(out[0][r] - L), std::fabs(out[1][r] - R)});
         }
     }
-    for (size_t lane = 0; lane < 4; ++lane) {
-        mode[lane] = uint8_t(lane);
-    }
+    return peak > 0.f ? err / peak : err;
+}
 
-    f3rt::hle::VoiceBlock b{
-        .frames = FRAMES,
-        .lanes = f3rt::hle::VOICE_LANE_MULTIPLE,
-        .input = input,
-        .a1 = a1,
-        .a2 = a2,
-        .high_pole = high_pole,
-        .gain_left = gain_left,
-        .gain_right = gain_right,
-        .mode = mode,
-        .state = state,
-        .previous = previous,
-        .out_left = out_left,
-        .out_right = out_right,
-    };
-    f3rt::hle::render_voice_block(b);
-
-    for (size_t lane = 0; lane < 4; ++lane) {
-        EXPECT_NE(out_left[(FRAMES - 1) * STRIDE + lane], 0.0f);
-        EXPECT_TRUE(std::isfinite(out_left[(FRAMES - 1) * STRIDE + lane]));
+// Settles a constant input (1000 through unity gains, a1 0.2, a2 0.7, high pole 0.5) and returns
+// the settled left output.
+float voice_filter_dc(int mode) {
+    constexpr int CH = 64;
+    f3rt::hle::faust::VoiceFilterDsp dsp;
+    dsp.init(29761);
+    f3rt::hle::faust::Controls controls(dsp);
+    *controls.zone("mode") = float(mode);
+    float in[6][CH], out[2][CH];
+    for (int r = 0; r < CH; ++r) {
+        in[0][r] = 1000.f;
+        in[1][r] = 0.2f;
+        in[2][r] = 0.7f;
+        in[3][r] = 0.5f;
+        in[4][r] = 1.f;
+        in[5][r] = 1.f;
     }
+    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
+    float *outs[2] = {out[0], out[1]};
+    for (int k = 0; k < 2000; ++k) dsp.compute(CH, ins, outs);
+    return out[0][CH - 1];
+}
+
+}  // namespace
+
+TEST(Audio, VoiceFilterDspMatchesScalarRecursion) {
+    for (int mode = 0; mode < 4; ++mode) {
+        EXPECT_LT(voice_filter_error(1234u + unsigned(mode), 256, [mode](int) { return mode; }),
+                  1e-5f)
+            << "mode " << mode;
+    }
+    EXPECT_LT(voice_filter_error(99u, 256, [](int k) { return (k * 7 + k / 3) % 4; }), 1e-5f)
+        << "mixed modes";
+}
+
+TEST(Audio, VoiceFilterDcGainPerMode) {
+    EXPECT_NEAR(voice_filter_dc(0), 0.f, 1e-3f);
+    EXPECT_NEAR(voice_filter_dc(1), 0.f, 1e-3f);
+    EXPECT_NEAR(voice_filter_dc(2), 1000.f, 1e-2f);
+    EXPECT_NEAR(voice_filter_dc(3), 1000.f, 1e-2f);
 }
 
 TEST(Audio, DirectVoiceFilterIndexMatchesDriverMath) {

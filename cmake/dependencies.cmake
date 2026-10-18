@@ -25,14 +25,6 @@ if(NOT TARGET ZLIB::ZLIB)
     add_library(ZLIB::ZLIB ALIAS zlib-ng)
 endif()
 
-# Google Highway: runtime-dispatched SIMD for the HLE voice kernel.
-CPMFindPackage(NAME hwy GITHUB_REPOSITORY google/highway GIT_TAG 1.4.0 VERSION 1.4.0
-    OPTIONS "HWY_ENABLE_TESTS OFF" "HWY_ENABLE_EXAMPLES OFF" "HWY_ENABLE_CONTRIB OFF"
-        "HWY_ENABLE_INSTALL OFF")
-if(NOT TARGET hwy::hwy)
-    add_library(hwy::hwy ALIAS hwy)
-endif()
-
 CPMFindPackage(NAME yyjson GITHUB_REPOSITORY ibireme/yyjson GIT_TAG 0.12.0 VERSION 0.12.0
     OPTIONS "YYJSON_BUILD_TESTS OFF" "YYJSON_INSTALL OFF")
 if(NOT TARGET yyjson::yyjson)

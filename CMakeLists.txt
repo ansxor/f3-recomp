@@ -7,6 +7,14 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(cmake/dependencies.cmake)
+include(cmake/faust.cmake)
+f3rt_faust_dsp(NAME voice_filter CLASS VoiceFilterDsp)
+# ES5510 effects programs: double precision (the LFO is a rotation of a GPR pair whose rate a float would drift).
+f3rt_faust_dsp(NAME reverb CLASS ReverbDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME chorus CLASS ChorusDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME echo CLASS EchoDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME hall CLASS HallDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME dc_blocker CLASS DcBlockerDsp OPTIONS -double)
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -299,7 +307,7 @@ set(F3RT_CORE_SOURCES
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/audio/hle/audio.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/synth.cpp runtime/audio/hle/voice_kernel.cpp
+    runtime/audio/hle/audio.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/synth.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
     ${AUDIO_SOURCES}
@@ -386,6 +394,8 @@ add_dependencies(f3rt f3rt_build_identity)
 # use "sprites/<name>" to avoid basename ambiguity.
 target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
     PRIVATE runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
+# Unmodified FAUST architecture headers. System includes keep their warnings out of our builds.
+target_include_directories(f3rt SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/faust")
 # A game opts into sprite behaviours by providing games/<game>/sprites/behaviours.hpp.
 # Header-only registry: sprites/behaviours.cpp includes it, so no static registrar
 # can be dead-stripped from the archive. Not under video/, which would enable GameVideo.
@@ -395,7 +405,7 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy cpp_yyjson::cpp_yyjson)
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
 target_link_libraries(f3rt PUBLIC f3-netplay-shared)
 
 add_library(f3-netplay-shared STATIC

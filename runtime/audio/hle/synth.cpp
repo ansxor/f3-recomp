@@ -1,6 +1,6 @@
 #include "audio/hle/synth.hpp"
 #include "audio/hle/note_timing.hpp"
-#include "audio/hle/voice_kernel.hpp"
+#include "audio/hle/faust/generated/voice_filter.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
@@ -18,6 +18,8 @@ constexpr uint32_t NATIVE_RATE = 15238090u / (16u * 32u);
 constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
 constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
+// Frames per voice-filter block: each active voice runs one faust::VoiceFilterDsp::compute() per block.
+constexpr size_t VOICE_BLOCK_FRAMES = 64;
 int16_t s16(uint32_t x) { return int16_t(uint16_t(x)); }
 int s8(uint32_t x) { return int(int8_t(uint8_t(x))); }
 uint16_t word(const uint8_t *p) { return uint16_t((uint16_t(p[0]) << 8) | p[1]); }
@@ -50,7 +52,6 @@ struct Envelope {
     }
 };
 struct Filter {
-    std::array<float, 4> state{}, previous{};
     double a1 = 1, a2 = 1, target1 = 1, target2 = 1;
     double high_pole = 1, target_high_pole = 1;
     unsigned ramp = 0;
@@ -170,19 +171,18 @@ struct Synth::Impl {
     uint8_t cursor = 0, budget_slot = 0, bend_range = 0;
     unsigned board_bank_mask = 0;
     uint32_t reset_start = 0, reset_end = 0;
-    alignas(64) float input[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float a1[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float a2[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float high_pole[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float gain_left[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float gain_right[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float out_left[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float out_right[VOICE_BLOCK_FRAMES * VOICE_LANE_STRIDE]{};
-    alignas(64) float state[4 * 32]{};
-    alignas(64) float previous[4 * 32]{};
-    alignas(64) uint8_t mode[32]{};
-    alignas(64) uint8_t lane_voice[32]{};
-    alignas(64) uint8_t lane_pair[32]{};
+    // Voices render one at a time, so one block of scratch serves all of them.
+    alignas(64) float input[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float a1[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float a2[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float high_pole[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float gain_left[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float gain_right[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float out_left[VOICE_BLOCK_FRAMES]{};
+    alignas(64) float out_right[VOICE_BLOCK_FRAMES]{};
+    // Filter state lives in each voice's DSP instance; it persists across blocks and is cleared on note start.
+    std::array<faust::VoiceFilterDsp, 32> voice_filters{};
+    std::array<float *, 32> mode_zone{};
 
     Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
         if (r.size() < SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE ||
@@ -195,6 +195,10 @@ struct Synth::Impl {
         metadata.reserve(0x10000);
         frame_ticks.reserve(1024);
         buffered_events.reserve(32);
+        for (size_t i = 0; i < voice_filters.size(); ++i) {
+            voice_filters[i].init(int(SAMPLE_RATE));
+            mode_zone[i] = faust::Controls(voice_filters[i]).zone("mode");
+        }
         decode_banks();
         // c15fb4..c15fde heap header overlaps bankc8 sample0. Decode the boot
         // operands rather than assuming sample metadata remains ROM-identical.
@@ -920,6 +924,7 @@ struct Synth::Impl {
         }
         stop(v, n.tick);
         v = Voice{};
+        voice_filters[index].instanceClear();
         v.owner = n;
         v.patch = patch;
         v.layer = uint8_t(layer);
@@ -1297,23 +1302,17 @@ struct Synth::Impl {
             for (size_t chunk_start = frame_start; chunk_start < frame_end;
                  chunk_start += VOICE_BLOCK_FRAMES) {
                 const size_t chunk_frames = std::min(VOICE_BLOCK_FRAMES, frame_end - chunk_start);
-                size_t count = 0;
+                float *ins[6] = {input, a1, a2, high_pole, gain_left, gain_right};
+                float *outs[2] = {out_left, out_right};
                 for (unsigned vi = 0; vi < 32; ++vi) {
                     Voice &v = voices[vi];
                     if (!v.active) continue;
-                    const size_t lane = count++;
-                    lane_voice[lane] = uint8_t(vi);
-                    lane_pair[lane] = v.pair;
-                    mode[lane] = v.filter.mode;
-                    for (unsigned s = 0; s < 4; ++s) {
-                        state[s * VOICE_LANE_STRIDE + lane] = v.filter.state[s];
-                        previous[s * VOICE_LANE_STRIDE + lane] = v.filter.previous[s];
-                    }
+                    const unsigned pair = v.pair;
+                    *mode_zone[vi] = float(v.filter.mode);
                     current_voice = vi;
                     const double length = v.end - v.start, increment = v.increment;
                     auto fill_remaining = [&](size_t start_row) {
-                        for (size_t rem = start_row; rem < chunk_frames; ++rem) {
-                            const size_t idx = rem * VOICE_LANE_STRIDE + lane;
+                        for (size_t idx = start_row; idx < chunk_frames; ++idx) {
                             input[idx] = 0.f;
                             gain_left[idx] = 0.f;
                             gain_right[idx] = 0.f;
@@ -1380,13 +1379,12 @@ struct Synth::Impl {
                                 }
                             }
                             if (v.sample_finished) {
-                                const size_t idx = r * VOICE_LANE_STRIDE + lane;
-                                input[idx] = 0.f;
-                                gain_left[idx] = 0.f;
-                                gain_right[idx] = 0.f;
-                                a1[idx] = float(v.filter.a1);
-                                a2[idx] = float(v.filter.a2);
-                                high_pole[idx] = float(v.filter.high_pole);
+                                input[r] = 0.f;
+                                gain_left[r] = 0.f;
+                                gain_right[r] = 0.f;
+                                a1[r] = float(v.filter.a1);
+                                a2[r] = float(v.filter.a2);
+                                high_pole[r] = float(v.filter.high_pole);
                                 ++r;
                                 continue;
                             }
@@ -1402,20 +1400,19 @@ struct Synth::Impl {
                             const double second =
                                 (!v.loop && !v.reverse && index + 1 >= size_t(v.end)) ? 0.0
                                                                                       : sample(index + 1);
-                            const size_t idx = r * VOICE_LANE_STRIDE + lane;
-                            input[idx] = float(first + (second - first) * fraction);
+                            input[r] = float(first + (second - first) * fraction);
                             v.filter.advance();
-                            a1[idx] = float(v.filter.a1);
-                            a2[idx] = float(v.filter.a2);
-                            high_pole[idx] = float(v.filter.high_pole);
+                            a1[r] = float(v.filter.a1);
+                            a2[r] = float(v.filter.a2);
+                            high_pole[r] = float(v.filter.high_pole);
                             if (v.gain_dirty) {
                                 v.left_gain = interpolated_gain(v.left);
                                 v.right_gain = interpolated_gain(v.right);
                                 v.gain_dirty = false;
                             }
                             const float scale = 1.f / 524288.f;
-                            gain_left[idx] = v.left_gain * scale;
-                            gain_right[idx] = v.right_gain * scale;
+                            gain_left[r] = v.left_gain * scale;
+                            gain_right[r] = v.right_gain * scale;
                             v.position += v.reverse ? -increment : increment;
                             if (!v.reverse && v.position > v.end) {
                                 if (!v.loop || length <= 0) {
@@ -1454,7 +1451,7 @@ struct Synth::Impl {
                                 const double step_l = v.step_left, step_r = v.step_right;
                                 const float scale = 1.f / 524288.f;
                                 for (size_t k = 0; k < n; ++k) {
-                                    const size_t idx = (r + k) * VOICE_LANE_STRIDE + lane;
+                                    const size_t idx = r + k;
                                     const size_t i = size_t(pos);
                                     const double frac = pos - double(i);
                                     const double a = int16_t(samples[i]),
@@ -1490,7 +1487,7 @@ struct Synth::Impl {
                                 const float gl = v.left_gain * (1.f / 524288.f);
                                 const float gr = v.right_gain * (1.f / 524288.f);
                                 for (size_t k = 0; k < n; ++k) {
-                                    const size_t idx = (r + k) * VOICE_LANE_STRIDE + lane;
+                                    const size_t idx = r + k;
                                     const size_t i = size_t(pos);
                                     const double frac = pos - double(i);
                                     const double a = int16_t(samples[i]),
@@ -1509,59 +1506,13 @@ struct Synth::Impl {
                             r += n;
                         }
                     }
-                }
-                const size_t lanes =
-                    count == 0 ? 0
-                               : ((count + VOICE_LANE_MULTIPLE - 1) / VOICE_LANE_MULTIPLE) *
-                                     VOICE_LANE_MULTIPLE;
-                for (size_t lane = count; lane < lanes; ++lane) {
-                    mode[lane] = 3;
-                    for (unsigned s = 0; s < 4; ++s) {
-                        state[s * VOICE_LANE_STRIDE + lane] = 0.f;
-                        previous[s * VOICE_LANE_STRIDE + lane] = 0.f;
-                    }
-                    for (size_t r = 0; r < chunk_frames; ++r) {
-                        const size_t idx = r * VOICE_LANE_STRIDE + lane;
-                        input[idx] = 0.f;
-                        gain_left[idx] = 0.f;
-                        gain_right[idx] = 0.f;
-                        a1[idx] = 0.f;
-                        a2[idx] = 0.f;
-                        high_pole[idx] = 0.f;
-                    }
-                }
-                if (count > 0) {
-                    const VoiceBlock block{
-                        .frames = chunk_frames,
-                        .lanes = lanes,
-                        .input = input,
-                        .a1 = a1,
-                        .a2 = a2,
-                        .high_pole = high_pole,
-                        .gain_left = gain_left,
-                        .gain_right = gain_right,
-                        .mode = mode,
-                        .state = state,
-                        .previous = previous,
-                        .out_left = out_left,
-                        .out_right = out_right,
-                    };
-                    render_voice_block(block);
-                    for (size_t lane = 0; lane < count; ++lane) {
-                        if (lane_pair[lane] == 0) continue;
-                        const unsigned pair_left = unsigned(lane_pair[lane]) * 2;
-                        const unsigned pair_right = pair_left + 1;
-                        for (size_t r = 0; r < chunk_frames; ++r) {
-                            float *out = output + (chunk_start + r) * 8;
-                            out[pair_left] += out_left[r * VOICE_LANE_STRIDE + lane];
-                            out[pair_right] += out_right[r * VOICE_LANE_STRIDE + lane];
-                        }
-                    }
-                    for (size_t lane = 0; lane < count; ++lane) {
-                        Voice &v = voices[lane_voice[lane]];
-                        for (unsigned s = 0; s < 4; ++s) {
-                            v.filter.state[s] = state[s * VOICE_LANE_STRIDE + lane];
-                            v.filter.previous[s] = previous[s * VOICE_LANE_STRIDE + lane];
+                    voice_filters[vi].compute(int(chunk_frames), ins, outs);
+                    if (pair != 0) {
+                        const unsigned pair_left = pair * 2;
+                        for (size_t k = 0; k < chunk_frames; ++k) {
+                            float *row = output + (chunk_start + k) * 8;
+                            row[pair_left] += out_left[k];
+                            row[pair_left + 1] += out_right[k];
                         }
                     }
                 }

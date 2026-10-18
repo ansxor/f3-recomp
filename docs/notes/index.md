@@ -55,7 +55,7 @@
 - [[hardware/fio]] (hypothesis) — TC0640FIO port map: inputs, dials, coin counters/lockouts, EEPROM, watchdog/reset
 - [[hardware/sound]] (hypothesis) — sound 68000 map; confirmed OTIS/FCM/ESP/DAC serial interconnect, register presets, and 128-BCLK LRCLK timing
 - [[hardware/es5505-otis]] (hypothesis) — runtime ES5505 model: registers, CR bits, Sony slave mode, banking at 0x300000, sample ROM layout
-- [[hardware/es5510-esp]] (hypothesis) — runtime ES5510 model: host interface, SERMODE, instruction format, DUART halt, Land Maker effects inventory
+- [[hardware/es5510-esp]] (hypothesis) — runtime ES5510 model: host interface, SERMODE, instruction format, DUART halt, Land Maker effects inventory, HLE FAUST programs and LFO-through-silence hypothesis
 - [[hardware/duart-and-volume]] (hypothesis) — DUART 1 ms timer and ESP halt, MB87078, SingleStage default gain model, when the game sets master volume
 - [[hardware/sound-mailbox]] (hypothesis) — shared RAM byte lanes, 1024-byte command ring with doubled indices, packet framing
 
