@@ -12,6 +12,80 @@ namespace {
 constexpr uint32_t ROM_BASE = SOUND_ROM_BASE, STREAM_BASE = sound_5a7e9117::SEQ_STREAM_BASE;
 constexpr size_t SLOTS = 100, TRACK_COUNT = 8, NOTE_CAPACITY = 4096;
 constexpr uint16_t NO_NOTE = 0xffff;
+constexpr uint16_t NO_PROGRAM = 0xffff;
+
+// ROM bus addresses & offsets
+constexpr uint32_t BANKED_WINDOW_BASE = 0xc20000;
+constexpr uint32_t BANKED_WINDOW_END = 0xc40000;
+constexpr uint32_t BANKED_OVERFLOW_BASE = 0xc40000;
+constexpr uint32_t BANK_PAGE_SIZE = 0x20000;
+constexpr uint32_t BANK_OVERFLOW_OFFSET = 0x40000;
+constexpr uint32_t SOUND_ROM_IMAGE_SIZE = 0x80000;
+
+// Channel parameter record offsets
+constexpr size_t PARAM_PROGRAM_H = 0x04;
+constexpr size_t PARAM_PROGRAM_L = 0x05;
+constexpr size_t PARAM_OWNER = sound_5a7e9117::VOICE_OWNER_OFFSET;
+constexpr size_t PARAM_MOD_1A = 0x1a;
+constexpr size_t PARAM_MOD_1C = 0x1c;
+constexpr size_t PARAM_PREVIOUS_KEY = 0x22;
+constexpr size_t PARAM_PROGRAM_RECORD_BASE = 0x2a;
+constexpr size_t PARAM_MOD_2E = 0x2e;
+constexpr size_t PARAM_MOD_2F = 0x2f;
+constexpr size_t PARAM_MOD_30 = 0x30;
+constexpr size_t PARAM_FLAGS = 0x32;
+constexpr size_t PARAM_SELECTOR = 0x33;
+
+// Selector threshold / bit constants
+constexpr uint8_t SELECTOR_FLAG_EXTENDED = 0x40;
+constexpr uint8_t SELECTOR_BANK_BASE = 0x7c;
+constexpr uint8_t SELECTOR_INTERNAL_MIN = 0x64;
+constexpr uint8_t SELECTOR_INTERNAL_MAX = 0x7b;
+constexpr uint8_t SELECTOR_SPECIAL_7B = 0x7b;
+
+constexpr uint8_t PAN_CENTER = 0x40;
+
+// Packet / Mailbox opcodes
+constexpr uint8_t CMD_EFFECT_PRESET = 0x20;
+constexpr uint8_t CMD_EFFECT_PARAM = 0x21;
+constexpr uint8_t CMD_OP_MIN = 0x80;
+constexpr uint8_t CMD_OP_MAX = 0x90;
+constexpr uint8_t CMD_START = 0x80;
+constexpr uint8_t CMD_START_REPEAT = 0x81;
+constexpr uint8_t CMD_STOP = 0x82;
+constexpr uint8_t CMD_PAUSE = 0x83;
+constexpr uint8_t CMD_RESUME = 0x84;
+constexpr uint8_t CMD_SEEK = 0x85;
+constexpr uint8_t CMD_SEQUENCE_VOLUME = 0x86;
+constexpr uint8_t CMD_SEQUENCE_PAN = 0x87;
+constexpr uint8_t CMD_SEQUENCE_RATE = 0x88;
+constexpr uint8_t CMD_SEQUENCE_FADE = 0x89;
+constexpr uint8_t CMD_CHANNEL_VOLUME = 0x8a;
+constexpr uint8_t CMD_CHANNEL_PAN = 0x8b;
+constexpr uint8_t CMD_CHANNEL_PARAM = 0x8c;
+constexpr uint8_t CMD_CHANNEL_PROGRAM = 0x8d;
+constexpr uint8_t CMD_DIRECT_NOTE_ON = 0x8e;
+constexpr uint8_t CMD_DIRECT_NOTE_OFF = 0x8f;
+constexpr uint8_t CMD_NOP = 0x90;
+
+// Sequence track event opcodes
+constexpr uint8_t EV_NOTE_SHORT_MAX = 0x58;
+constexpr uint8_t EV_NOTE_LONG_MAX = 0xb0;
+constexpr uint8_t EV_NOTE_KEY_OFFSET = 0x58;
+constexpr uint8_t EV_CONTROLLER_MIN = 0xb0;
+constexpr uint8_t EV_CONTROLLER_MAX = 0xd9;
+constexpr uint8_t EV_PROGRAM_SELECTOR = 0xd9;
+constexpr uint8_t EV_SPECIAL_TRACK_DA = 0xda;
+constexpr uint8_t EV_SPECIAL_TRACK_DB = 0xdb;
+constexpr uint8_t EV_RELATIVE_NOTE = 0xdc;
+constexpr uint8_t EV_DELAY = 0xe6;
+constexpr uint8_t EV_ARRANGEMENT = 0xe7;
+constexpr uint8_t EV_NOTIFICATION = 0xe8;
+constexpr uint8_t EV_END = 0xe9;
+
+// Arrangement marker
+constexpr uint16_t ARRANGEMENT_LOOP_MARKER = 100;
+
 [[noreturn]] void invalid(const char *message) { throw std::runtime_error(message); }
 struct Event {
     uint32_t address = 0, delay = 0;
@@ -79,7 +153,7 @@ struct Sequencer::Impl {
     void load_bank(uint8_t bank) {
         current_bank = bank;
         for (auto &song : data) song = SongData{};
-        const uint32_t stream_limit = ROM_BASE + 0x80000;
+        const uint32_t stream_limit = ROM_BASE + SOUND_ROM_IMAGE_SIZE;
         const uint32_t header_rel = u32(STREAM_BASE);
         if (header_rel < 8 + SLOTS * 4 || (header_rel & 1) ||
             STREAM_BASE + header_rel >= stream_limit)
@@ -117,21 +191,21 @@ struct Sequencer::Impl {
                 auto &channel = song.initial[t];
                 // c13d1e/c13ca4 restore even-offset controller defaults from c13556.
                 for (uint32_t index = 0; index <= 0x14; index += 2)
-                    channel.parameters[sound_5a7e9117::VOICE_OWNER_OFFSET + index] =
+                    channel.parameters[PARAM_OWNER + index] =
                         byte(sound_5a7e9117::CONTROLLER_DEFAULTS_TABLE + index);
                 const uint32_t record = h + sound_5a7e9117::SEQ_HEADER_TRACKS_OFFSET +
                                         uint32_t(t) * sound_5a7e9117::SEQ_TRACK_RECORD_SIZE;
-                for (uint32_t n = 0; n < 14; ++n) channel.parameters[0x2a + n] = byte(record + n);
+                for (uint32_t n = 0; n < 14; ++n) channel.parameters[PARAM_PROGRAM_RECORD_BASE + n] = byte(record + n);
                 channel.program = u16(record);
-                channel.parameters[4] = uint8_t(channel.program >> 8);
-                channel.parameters[5] = uint8_t(channel.program);
+                channel.parameters[PARAM_PROGRAM_H] = uint8_t(channel.program >> 8);
+                channel.parameters[PARAM_PROGRAM_L] = uint8_t(channel.program);
                 for (const auto pair :
                      {std::array<size_t, 2>{sound_5a7e9117::CHANNEL_PARAM_VOLUME,
                                             sound_5a7e9117::CHANNEL_PARAM_VOLUME_RECORD},
                       {sound_5a7e9117::CHANNEL_PARAM_PAN, sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD},
-                      {0x1a, 0x2e},
-                      {0x1c, 0x2f},
-                      {0x33, 0x30}})
+                      {PARAM_MOD_1A, PARAM_MOD_2E},
+                      {PARAM_MOD_1C, PARAM_MOD_2F},
+                      {PARAM_SELECTOR, PARAM_MOD_30}})
                     channel.parameters[pair[0]] = channel.parameters[pair[1]];
             }
             std::array<uint32_t, 11> offsets{};
@@ -154,14 +228,14 @@ struct Sequencer::Impl {
         init_pool();
     }
     uint8_t byte(uint32_t address) const {
-        if (address < ROM_BASE || address >= ROM_BASE + 0x80000)
+        if (address < ROM_BASE || address >= ROM_BASE + SOUND_ROM_IMAGE_SIZE)
             invalid("HLE ROM read outside image");
         uint32_t off = address - ROM_BASE;
         if (rom.size() > SOUND_ROM_SIZE) {
-            if (address >= 0xc20000 && address < 0xc40000) {
-                off = uint32_t(current_bank) * 0x20000 + (address - 0xc20000);
-            } else if (address >= 0xc40000) {
-                off = 0x40000 + (address - 0xc40000);
+            if (address >= BANKED_WINDOW_BASE && address < BANKED_WINDOW_END) {
+                off = uint32_t(current_bank) * BANK_PAGE_SIZE + (address - BANKED_WINDOW_BASE);
+            } else if (address >= BANKED_OVERFLOW_BASE) {
+                off = BANK_OVERFLOW_OFFSET + (address - BANKED_OVERFLOW_BASE);
             }
         }
         if (off >= rom.size()) invalid("HLE ROM read outside image");
@@ -187,33 +261,33 @@ struct Sequencer::Impl {
                 p += 2;
                 return word;
             };
-            if (e.opcode < 0x58) {
+            if (e.opcode < EV_NOTE_SHORT_MAX) {
                 e.key = e.opcode;
                 e.operand = operand();
                 e.duration = e.operand & 0x3ff;
                 if (!e.duration) e.duration = operand();
                 const auto velocity = uint8_t(e.operand >> 8 & 0x7c);
                 e.velocity = velocity ? uint8_t(velocity | velocity >> 5) : 1;
-            } else if (e.opcode < 0xb0) {
-                e.key = uint8_t(e.opcode - 0x58);
+            } else if (e.opcode < EV_NOTE_LONG_MAX) {
+                e.key = uint8_t(e.opcode - EV_NOTE_KEY_OFFSET);
                 e.operand = operand();
                 e.duration = e.operand & 0x3ff;
                 if (!e.duration) e.duration = 1;
                 const auto velocity = uint8_t(e.operand & 0x7f);
                 e.velocity = velocity ? velocity : 1;
-            } else if (e.opcode < 0xdc) e.operand = operand();
-            else if (e.opcode == 0xdc) {
+            } else if (e.opcode < EV_RELATIVE_NOTE) e.operand = operand();
+            else if (e.opcode == EV_RELATIVE_NOTE) {
                 invalid("relative-note references are absent from supported ROM bank");
-            } else if (e.opcode == 0xe6) {
+            } else if (e.opcode == EV_DELAY) {
                 e.operand = operand();
                 e.delay = e.operand | (uint16_t(token << 1) & 0x8000);
-            } else if (e.opcode == 0xe7) {
+            } else if (e.opcode == EV_ARRANGEMENT) {
                 for (auto &word : e.arrangement) word = operand();
                 e.delay = 0;
-            } else if (e.opcode == 0xe8 || e.opcode == 0xe9) e.delay = 0;
+            } else if (e.opcode == EV_NOTIFICATION || e.opcode == EV_END) e.delay = 0;
             else invalid("unsupported HLE sequence opcode");
             out.events.push_back(e);
-            if (e.opcode == 0xe9) {
+            if (e.opcode == EV_END) {
                 finished = true;
                 break;
             }
@@ -265,21 +339,21 @@ struct Sequencer::Impl {
     }
     void select_program(Channel &channel, uint16_t program) {
         channel.program = program;
-        channel.parameters[4] = uint8_t(program >> 8);
-        channel.parameters[5] = uint8_t(program);
+        channel.parameters[PARAM_PROGRAM_H] = uint8_t(program >> 8);
+        channel.parameters[PARAM_PROGRAM_L] = uint8_t(program);
     }
     void selector(Channel &channel, uint8_t value) {
-        channel.parameters[0x33] = value;
-        if (value >= 0x64 && value < 0x7b) return;
-        if (value == 0x7b) {
-            channel.parameters[0x32] |= 0x40;
+        channel.parameters[PARAM_SELECTOR] = value;
+        if (value >= SELECTOR_INTERNAL_MIN && value < SELECTOR_INTERNAL_MAX) return;
+        if (value == SELECTOR_SPECIAL_7B) {
+            channel.parameters[PARAM_FLAGS] |= SELECTOR_FLAG_EXTENDED;
             return;
         }
-        if (value >= 0x7c) {
-            channel.bank = value - 0x7c;
+        if (value >= SELECTOR_BANK_BASE) {
+            channel.bank = value - SELECTOR_BANK_BASE;
             return;
         }
-        channel.parameters[0x32] &= uint8_t(~0x40);
+        channel.parameters[PARAM_FLAGS] &= uint8_t(~SELECTOR_FLAG_EXTENDED);
         select_program(channel, uint16_t(uint16_t(channel.bank) << 14 | value));
         // c144e2 passes the channel with bit7 set: c0edda clears bank after selection.
         channel.bank = 0;
@@ -297,7 +371,7 @@ struct Sequencer::Impl {
             auto &track = s.tracks[t];
             release_track(track, tick);
             track.channel = song.initial[t];
-            if (track.channel.program != 0xffff && !track.physical) {
+            if (track.channel.program != NO_PROGRAM && !track.physical) {
                 for (uint8_t n = 56; n; --n)
                     if (!channel_used[n]) {
                         track.physical = n;
@@ -305,11 +379,11 @@ struct Sequencer::Impl {
                         break;
                     }
             }
-            track.channel.parameters[0x22] = previous_key[track.physical];
+            track.channel.parameters[PARAM_PREVIOUS_KEY] = previous_key[track.physical];
             track.cursor = 0;
             track.countdown = 1;
             track.live = track.physical && !song.tracks[t + 1].events.empty() &&
-                         track.channel.program != 0xffff;
+                         track.channel.program != NO_PROGRAM;
             track.ended = !track.live;
             if (track.live) update(owner, t, tick);
         }
@@ -334,14 +408,14 @@ struct Sequencer::Impl {
     }
     bool arranged(uint8_t id) const {
         const auto &events = data[id].tracks[10].events;
-        return !events.empty() && events.front().opcode == 0xe7;
+        return !events.empty() && events.front().opcode == EV_ARRANGEMENT;
     }
     uint8_t selected_child(uint8_t id) const {
         const auto &s = state[id];
         const auto &events = data[id].tracks[10].events;
         if (!s.phase || s.phase > events.size()) return 0;
         const auto &e = events[s.phase - 1];
-        return e.opcode == 0xe7 && e.arrangement[3] != 100 ? uint8_t(e.arrangement[0]) : 0;
+        return e.opcode == EV_ARRANGEMENT && e.arrangement[3] != ARRANGEMENT_LOOP_MARKER ? uint8_t(e.arrangement[0]) : 0;
     }
     void stop_selected(uint8_t id, uint64_t tick) {
         if (const uint8_t child = selected_child(id)) stop(child, tick);
@@ -366,17 +440,17 @@ struct Sequencer::Impl {
         // At the terminator, return to the phase following the last marker.
         for (size_t attempt = 0; attempt <= list.size(); ++attempt) {
             ++s.phase;
-            if (s.phase > list.size() || list[s.phase - 1].opcode == 0xe9) {
+            if (s.phase > list.size() || list[s.phase - 1].opcode == EV_END) {
                 s.phase = 0;
                 for (size_t n = 0; n < list.size(); ++n)
-                    if (list[n].opcode == 0xe7 && list[n].arrangement[3] == 100)
+                    if (list[n].opcode == EV_ARRANGEMENT && list[n].arrangement[3] == ARRANGEMENT_LOOP_MARKER)
                         s.phase = uint8_t(n + 1);
                 if (observer) observer->arrangement_wrap(id, s.phase, tick);
                 if (!s.phase) return 0;
                 continue;
             }
             const auto &e = list[s.phase - 1];
-            if (e.arrangement[3] == 100) continue;
+            if (e.arrangement[3] == ARRANGEMENT_LOOP_MARKER) continue;
             const uint8_t child = uint8_t(e.arrangement[0]);
             if (!child || e.arrangement[0] >= SLOTS || !data[child].present)
                 invalid("invalid HLE arrangement selection");
@@ -406,11 +480,11 @@ struct Sequencer::Impl {
                uint64_t instance, uint64_t tick, bool transpose = true) {
         auto &s = state[id];
         auto &track = s.tracks[track_id];
-        if (!track.live || track.channel.program == 0xffff) return;
+        if (!track.live || track.channel.program == NO_PROGRAM) return;
         int effective = key;
         if (transpose && (s.transpose_mask & (1u << track_id))) {
             effective += s.transpose;
-            if (effective < 0 || effective >= 0x58) return; // c141b6/c141bc.
+            if (effective < 0 || effective >= EV_NOTE_SHORT_MAX) return; // c141b6/c141bc.
         }
         if (free_head == NO_NOTE) invalid("HLE note bookkeeping pool exhausted");
         const uint16_t index = free_head;
@@ -435,25 +509,25 @@ struct Sequencer::Impl {
         sink.note_on(note);
         // c172c2 consumes the previous key; c1723e stores the new factory key
         // only after all instrument layers have received their onset context.
-        track.channel.parameters[0x22] = n.kernel_key;
+        track.channel.parameters[PARAM_PREVIOUS_KEY] = n.kernel_key;
         previous_key[track.physical] = n.kernel_key;
     }
     void control(uint8_t id, size_t track_id, const Event &event, uint64_t tick, bool silent) {
         auto &channel = state[id].tracks[track_id].channel;
         const uint8_t op = event.opcode, value = event.operand & 0x7f;
-        if (op >= 0xb0 && op < 0xd9) {
-            const size_t offset = sound_5a7e9117::VOICE_OWNER_OFFSET + (op - 0xb0) * 2;
+        if (op >= EV_CONTROLLER_MIN && op < EV_CONTROLLER_MAX) {
+            const size_t offset = PARAM_OWNER + (op - EV_CONTROLLER_MIN) * 2;
             if (offset >= channel.parameters.size())
                 invalid("HLE controller outside channel parameter record");
             channel.parameters[offset] = value;
             if (offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET)
-                channel.parameters[offset] = uint8_t(value - 0x40);
-        } else if (op == 0xd9) selector(channel, value);
-        else if (op == 0xda || op == 0xdb)
+                channel.parameters[offset] = uint8_t(value - PAN_CENTER);
+        } else if (op == EV_PROGRAM_SELECTOR) selector(channel, value);
+        else if (op == EV_SPECIAL_TRACK_DA || op == EV_SPECIAL_TRACK_DB)
             invalid("HLE special-track control absent from supplied data");
-        else if (op == 0xe8) invalid("HLE notification absent from supplied data");
-        else if (op != 0xe6 && op != 0xe9) invalid("unsupported HLE track control");
-        if (!silent && op < 0xe6) update(id, track_id, tick);
+        else if (op == EV_NOTIFICATION) invalid("HLE notification absent from supplied data");
+        else if (op != EV_DELAY && op != EV_END) invalid("unsupported HLE track control");
+        if (!silent && op < EV_DELAY) update(id, track_id, tick);
     }
     void events(uint8_t id, uint64_t tick, bool silent, bool initial = false) {
         auto &s = state[id];
@@ -466,11 +540,11 @@ struct Sequencer::Impl {
             const auto &stream = song.tracks[0].events;
             while (s.conductor < stream.size()) {
                 const auto &event = stream[s.conductor++];
-                if (event.opcode == 0xe9) {
+                if (event.opcode == EV_END) {
                     s.conductor_ended = true;
                     break;
                 }
-                if (event.opcode != 0xe6) invalid("unsupported HLE conductor control");
+                if (event.opcode != EV_DELAY) invalid("unsupported HLE conductor control");
                 s.conductor_countdown = event.delay;
                 if (event.delay) break;
             }
@@ -486,11 +560,11 @@ struct Sequencer::Impl {
             const auto &stream = song.tracks[t + 1].events;
             while (track.cursor < stream.size()) {
                 const auto &event = stream[track.cursor++];
-                if (event.opcode == 0xe9) {
+                if (event.opcode == EV_END) {
                     track.ended = true;
                     break;
                 }
-                if (event.opcode < 0xb0) {
+                if (event.opcode < EV_NOTE_LONG_MAX) {
                     if (!silent)
                         onset(id, t, event.key, event.velocity, event.duration,
                               (uint64_t(1) << 63) | ++serial, tick);
@@ -586,20 +660,20 @@ struct Sequencer::Impl {
         advance(tick);
         if (p.size() < 2 || p[0] != p.size()) invalid("invalid HLE length-prefixed packet");
         const uint8_t op = p[1];
-        if (op == 0x20) {
+        if (op == CMD_EFFECT_PRESET) {
             if (p.size() != 3) return;
             if (p[2] < 13) sink.effect(p[2], tick);
             return;
         }
-        if (op == 0x21) {
+        if (op == CMD_EFFECT_PARAM) {
             if (p.size() != 4) return;
             sink.effect_parameter(p[2], p[3], tick);
             return;
         }
-        if (op < 0x80 || op > 0x90) return; // Firmware dispatcher consumes rejected opcodes.
+        if (op < CMD_OP_MIN || op > CMD_OP_MAX) return; // Firmware dispatcher consumes rejected opcodes.
         constexpr std::array<uint8_t, 17> LENGTHS{3, 3, 3, 3, 3, 5, 4, 4, 4,
                                                   7, 5, 5, 6, 6, 6, 5, 6};
-        if (p.size() != LENGTHS[op - 0x80]) return;
+        if (p.size() != LENGTHS[op - CMD_OP_MIN]) return;
         const bool selection = p[2] & 0x80;
         uint8_t id = p[2] & 0x7f;
         if (id >= SLOTS) return;
@@ -617,12 +691,12 @@ struct Sequencer::Impl {
     void apply(uint8_t op, uint8_t id, bool selection, std::span<const uint8_t> p,
                uint64_t instance, uint64_t tick) {
         if (selection && arranged(id)) {
-            if (op == 0x80 || op == 0x81) {
+            if (op == CMD_START || op == CMD_START_REPEAT) {
                 stop_selected(id, tick);
                 arrangement_next(id, tick);
                 return;
             }
-            if (op == 0x82) {
+            if (op == CMD_STOP) {
                 stop_selected(id, tick);
                 return;
             }
@@ -632,27 +706,27 @@ struct Sequencer::Impl {
             return;
         }
         auto &s = state[id];
-        if (op == 0x80 || op == 0x81) {
+        if (op == CMD_START || op == CMD_START_REPEAT) {
             start(id, tick);
             return;
         }
-        if (op == 0x82) {
+        if (op == CMD_STOP) {
             stop(id, tick);
             return;
         }
-        if (!s.active && op != 0x85) return;
+        if (!s.active && op != CMD_SEEK) return;
         switch (op) {
-        case 0x83:
+        case CMD_PAUSE:
             s.rate = 0;
             s.rate_override = true;
             for (auto &track : s.tracks) release_track(track, tick);
             if (observer) observer->rate_change(id, 0, tick);
             break;
-        case 0x84:
+        case CMD_RESUME:
             s.rate = s.saved_rate;
             if (observer) observer->rate_change(id, s.rate, tick);
             break;
-        case 0x85: {
+        case CMD_SEEK: {
             if (!s.active) start(id, tick);
             for (auto &track : s.tracks) release_track(track, tick);
             initialize_tracks(id, id, tick);
@@ -662,13 +736,13 @@ struct Sequencer::Impl {
             s.rate = 0;
             break;
         }
-        case 0x86:
+        case CMD_SEQUENCE_VOLUME:
             s.volume = uint16_t(uint16_t(p[3]) << 8 | uint8_t(s.volume));
             s.fade_step = 0;
             for (size_t t = 0; t < TRACK_COUNT; ++t)
                 if (s.tracks[t].live) update(id, t, tick);
             break;
-        case 0x87:
+        case CMD_SEQUENCE_PAN:
             for (size_t t = 0; t < TRACK_COUNT; ++t)
                 if (s.tracks[t].live) {
                     s.tracks[t].channel.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN] =
@@ -677,12 +751,12 @@ struct Sequencer::Impl {
                     update(id, t, tick);
                 }
             break;
-        case 0x88:
+        case CMD_SEQUENCE_RATE:
             s.rate = s.saved_rate = p[3];
             s.rate_override = true;
             if (observer) observer->rate_change(id, s.rate, tick);
             break;
-        case 0x89: {
+        case CMD_SEQUENCE_FADE: {
             s.volume = uint16_t(uint16_t(p[3]) << 8 | uint8_t(s.volume));
             s.fade_target = p[4];
             const int16_t difference = int16_t(uint16_t(uint8_t(p[4] - p[3])) << 8);
@@ -699,29 +773,29 @@ struct Sequencer::Impl {
             if (!logical || logical > TRACK_COUNT || !s.tracks[logical - 1].live) return;
             const size_t t = logical - 1;
             auto &track = s.tracks[t];
-            if (op == 0x8a || op == 0x8b) {
-                const size_t offset = op == 0x8a ? sound_5a7e9117::CHANNEL_PARAM_VOLUME
-                                                 : sound_5a7e9117::CHANNEL_PARAM_PAN;
+            if (op == CMD_CHANNEL_VOLUME || op == CMD_CHANNEL_PAN) {
+                const size_t offset = op == CMD_CHANNEL_VOLUME ? sound_5a7e9117::CHANNEL_PARAM_VOLUME
+                                                               : sound_5a7e9117::CHANNEL_PARAM_PAN;
                 track.channel.parameters[offset] = p[4];
-                track.channel.parameters[op == 0x8a ? sound_5a7e9117::CHANNEL_PARAM_VOLUME_RECORD
-                                                    : sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD] =
+                track.channel.parameters[op == CMD_CHANNEL_VOLUME ? sound_5a7e9117::CHANNEL_PARAM_VOLUME_RECORD
+                                                                  : sound_5a7e9117::CHANNEL_PARAM_PAN_RECORD] =
                     p[4];
                 update(id, t, tick);
-            } else if (op == 0x8c) {
-                const size_t offset = sound_5a7e9117::VOICE_OWNER_OFFSET + size_t(p[4]) * 2;
+            } else if (op == CMD_CHANNEL_PARAM) {
+                const size_t offset = PARAM_OWNER + size_t(p[4]) * 2;
                 if (offset >= track.channel.parameters.size())
                     invalid("mailbox HLE controller outside parameter record");
                 track.channel.parameters[offset] =
-                    offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET ? uint8_t(p[5] - 0x40) : p[5];
+                    offset == sound_5a7e9117::PAN_CONTROLLER_OFFSET ? uint8_t(p[5] - PAN_CENTER) : p[5];
                 update(id, t, tick);
-            } else if (op == 0x8d) {
+            } else if (op == CMD_CHANNEL_PROGRAM) {
                 select_program(track.channel, uint16_t(uint16_t(p[4]) << 8 | p[5]));
                 update(id, t, tick);
-            } else if (op == 0x8e) {
+            } else if (op == CMD_DIRECT_NOTE_ON) {
                 if (instance & (uint64_t(1) << 63))
                     invalid("direct-note instance uses reserved music ID bit");
                 onset(id, t, p[4], p[5], 0x7fff, instance, tick, false);
-            } else if (op == 0x8f) {
+            } else if (op == CMD_DIRECT_NOTE_OFF) {
                 uint16_t *link = &track.head;
                 while (*link != NO_NOTE) {
                     const uint16_t n = *link;
@@ -732,7 +806,7 @@ struct Sequencer::Impl {
                     }
                     link = &notes[n].next;
                 }
-            } else if (op == 0x90) {
+            } else if (op == CMD_NOP) {
                 // c1310e retains return-PC c13148 in A3; c13148 writes 6(A3)
                 // = ROM c1314e, not note RAM. The board ignores this ROM write.
             }
