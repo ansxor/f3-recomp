@@ -3,6 +3,8 @@ option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
+# compile_commands.json for clangd and other LSP servers; `make compdb` links it to the root.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

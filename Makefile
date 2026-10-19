@@ -11,7 +11,7 @@ FRAMES     ?= 600
 JOBS       ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help list-games rom-check configure build test run smoke headless clean distclean netplay-server
+.PHONY: help list-games rom-check configure build test run smoke headless clean distclean netplay-server compdb
 
 # Single-quote a value for the shell so paths with spaces or quotes survive.
 shq = '$(subst ','\'',$(1))'
@@ -43,6 +43,7 @@ help:
 	@echo "  distclean   rm -rf BUILD_DIR (only if it holds a CMakeCache.txt)"
 	@echo "  list-games  ROM sets under roms/ that have games/SET/config.toml"
 	@echo "  netplay-server  build the netplay relay into build/netplay-server"
+	@echo "  compdb      link BUILD_DIR/compile_commands.json to the root for clangd/LSP"
 	@echo "  help        this table"
 	@echo ""
 	@echo "Variables (override on the command line):"
@@ -63,6 +64,12 @@ netplay-server:
 	@mkdir -p build
 	cmake --build $(call shq,$(BUILD_DIR)) --target f3-netplay-server
 	cp -f $(call shq,$(BUILD_DIR))/f3-netplay-server build/netplay-server
+
+# clangd finds /compile_commands.json at the root; point it at the BUILD_DIR that `configure` wrote.
+compdb:
+	@test -f $(call shq,$(BUILD_DIR))/compile_commands.json || { printf 'error: %s/compile_commands.json is missing; run make configure first\n' $(call shq,$(BUILD_DIR)) >&2; exit 1; }
+	ln -sfn $(call shq,$(BUILD_DIR))/compile_commands.json compile_commands.json
+	@printf 'compile_commands.json -> %s\n' $(call shq,$(BUILD_DIR))
 rom-check:
 	@test -d $(call shq,$(ROM_DIR)) || { printf 'error: ROM directory %s does not exist (GAME=%s). Set ROM_DIR=/path/to/roms/%s, or pick a set from make list-games.\n' $(call shq,$(ROM_DIR)) $(call shq,$(GAME)) $(call shq,$(GAME)) >&2; exit 1; }
 
