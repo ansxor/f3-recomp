@@ -13,7 +13,8 @@
 #include <thread>
 
 namespace f3rt::hle {
-static_assert(Audio::OUTPUT_BOOST == OUTPUT_BOOST, "Core and Audio must share the output stage gain");
+static_assert(Audio::OUTPUT_BOOST == OUTPUT_BOOST,
+              "Core and Audio must share the output stage gain");
 namespace {
 constexpr size_t QUEUE_SIZE = 4096, PCM_CAPACITY = 32768;
 struct Packet {
@@ -259,11 +260,6 @@ Audio::EnhancedStats AudioEngine::stats() const { return {m_impl->command_count,
 void AudioEngine::set_observer(std::function<void(const VoiceEvent &)> observer) {
     flush();
     m_impl->core.set_voice_observer(std::move(observer));
-}
-void AudioEngine::set_gain_model(Audio::GainModel model) {
-    flush();
-    m_impl->core.set_gain_model(model == Audio::GainModel::MameRouting ? GainModel::MameRouting
-                                                                        : GainModel::SingleStage);
 }
 void AudioEngine::save(std::span<uint8_t> dst) const {
     if (dst.size() != STATE_BYTES) throw std::invalid_argument("HLE state size mismatch");

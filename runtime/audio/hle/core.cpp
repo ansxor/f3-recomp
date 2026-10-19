@@ -18,7 +18,6 @@ struct Core::Impl : VoiceSink {
     Sequencer sequencer;
     uint64_t worker_tick = 0, worker_frames = 0;
     std::array<float, 2> gain{1.f, 1.f};
-    GainModel gain_model = GainModel::SingleStage;
     PcmSink *sink = nullptr;
     TraceTap *trace = nullptr;
     std::function<void(const VoiceEvent &)> voice_observer;
@@ -70,15 +69,15 @@ struct Core::Impl : VoiceSink {
         std::array<float, size_t(BLOCK_FRAMES) * 2> stereo;
         std::array<float, 2> input, output;
         for (unsigned ch = 0; ch < 2; ++ch) {
-            const float route = float(std::lround(gain[ch] * 100.f)) / 32.f;
-            input[ch] = .18f * (gain_model == GainModel::MameRouting ? route : 1.f);
-            output[ch] = OUTPUT_BOOST * (gain_model == GainModel::MameRouting ? route : gain[ch]);
+            input[ch] = .18f;
+            output[ch] = OUTPUT_BOOST * gain[ch];
         }
         while (worker_frames < end) {
             const size_t n = size_t(std::min<uint64_t>(BLOCK_FRAMES, end - worker_frames));
             synth.render(buses.data(), n);
             effects.mix(buses.data(), stereo.data(), n, input, output);
-            if (trace) trace->mix_block(worker_frames, buses.data(), stereo.data(), n, input, output);
+            if (trace)
+                trace->mix_block(worker_frames, buses.data(), stereo.data(), n, input, output);
             if (sink) sink->write(stereo.data(), n);
             worker_frames += n;
         }
@@ -101,7 +100,6 @@ Core::Core(std::span<const uint8_t> sound_rom, std::span<const uint16_t> sample_
 Core::~Core() = default;
 
 void Core::set_pcm_sink(PcmSink *sink) { m_impl->sink = sink; }
-void Core::set_gain_model(GainModel model) { m_impl->gain_model = model; }
 void Core::set_voice_observer(std::function<void(const VoiceEvent &)> observer) {
     m_impl->voice_observer = std::move(observer);
     m_impl->update_synth_observer();
@@ -146,7 +144,8 @@ void Core::set_bank(uint8_t page, uint64_t tick) {
 void Core::set_gain(unsigned channel, uint8_t raw, uint64_t tick) {
     advance(tick);
     m_impl->gain[channel & 1] = std::pow(10.f, -.5f * float(63 - (raw & 63)) / 20.f);
-    if (m_impl->trace) m_impl->trace->gain(channel, raw, m_impl->gain[channel & 1], m_impl->worker_tick);
+    if (m_impl->trace)
+        m_impl->trace->gain(channel, raw, m_impl->gain[channel & 1], m_impl->worker_tick);
 }
 
 // Flush-to-zero and denormals-are-zero prevent decaying reverb/filter tails from becoming subnormal.

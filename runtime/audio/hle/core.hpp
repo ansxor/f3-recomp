@@ -16,7 +16,6 @@ namespace f3rt::hle {
 
 // Output stage gain, shared by the reference and enhanced backends (== Audio::OUTPUT_BOOST; hle/audio.cpp asserts it).
 inline constexpr float OUTPUT_BOOST = 12.0f;
-enum class GainModel : uint8_t { MameRouting, SingleStage };
 
 // Receives rendered stereo frames in render order, in blocks of 1..Core::BLOCK_FRAMES frames.
 class PcmSink {
@@ -42,7 +41,6 @@ public:
     // ---- configuration. Call only while no other Core call is running (AudioEngine: after flush()).
     // nullptr drops the rendered frames (fast-forward); the engine state evolves identically.
     void set_pcm_sink(PcmSink *sink);
-    void set_gain_model(GainModel model);
     void set_voice_observer(std::function<void(const VoiceEvent &)> observer);
 
     // ---- time. Worker timebase: 16 MHz ticks since construction, monotonic. A tick argument smaller than tick() is

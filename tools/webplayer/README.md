@@ -84,9 +84,8 @@ advance_worker(tick): while (worker_tick < tick) {
                           next = min(tick, sequencer.next_tick());
                           render_until(next); sequencer.advance_to(next); worker_tick = next; }
 render_until(tick):   end = floor(tick*29762/16e6) computed as tick/M*S + tick%M*S/M;
-                      per ch: route = lround(gain[ch]*100)/32;
-                              input[ch]  = .18 * (MameRouting ? route : 1)
-                              output[ch] = OUTPUT_BOOST * (MameRouting ? route : gain[ch])
+                      per ch: input[ch]  = .18;
+                              output[ch] = OUTPUT_BOOST * gain[ch];
                       while (worker_frames < end) { n = min(256, end - worker_frames);
                           synth.render(buses, n); effects.mix(buses, stereo, n, input, output);
                           append n stereo frames to the PCM ring; worker_frames += n; }
@@ -107,7 +106,6 @@ order stays OTIS/ESP; the single left/right exchange stays in `Audio::render` (n
 ```cpp
 // runtime/audio/hle/core.hpp   (namespace f3rt::hle; includes only events.hpp, observe.hpp and <std>; Synth/Sequencer/Effects stay behind a pimpl)
 inline constexpr float OUTPUT_BOOST = 12.0f;   // == Audio::OUTPUT_BOOST (static_assert in hle/audio.cpp)
-enum class GainModel : uint8_t { MameRouting, SingleStage };   // default SingleStage, as AudioEngine::Impl
 
 class PcmSink {                                 // called per block of 1..256 frames, in render order
 public:
@@ -123,7 +121,6 @@ public:
 
     // Output / configuration. Call only while no advance() is running (native: after AudioEngine::flush()).
     void set_pcm_sink(PcmSink *sink);               // nullptr: frames are rendered and dropped (fast-forward)
-    void set_gain_model(GainModel model);
     void set_voice_observer(std::function<void(const VoiceEvent &)> observer);  // existing --hle-events path
     void set_trace(TraceTap *tap);                  // native exporter only; nullptr = off (section 4.6). M2: declared, not defined yet
 
@@ -165,8 +162,8 @@ leave the `Core` in an unspecified state (the AudioEngine worker already latches
 and does today's ring write and overflow drop; `generated` is stored from `core.frames()` after each Core call
 (it is only polled). Worker `run()`: `Command -> core.command(p.data(), p.instance, m.tick)`, `Reset ->
 core.reset(m.tick)`, `Bank -> core.set_bank(m.value, m.tick)`, `Gain -> core.set_gain(m.channel, m.value,
-m.tick)`, `Advance -> core.advance(m.tick)`. `AudioEngine::set_observer/set_gain_model` call `flush()` then the
-matching `Core` setter (`Audio::GainModel` is converted to `hle::GainModel`). **Native output must stay
+m.tick)`, `Advance -> core.advance(m.tick)`. `AudioEngine::set_observer` calls `flush()` then the
+matching `Core` setter. **Native output must stay
 bit-identical** (acceptance A1).
 
 ### 2.3 Headers outside the HLE directory and how they are isolated
@@ -175,7 +172,7 @@ Complete include audit of `runtime/audio/hle/*`:
 
 | Header | Pulled in by | Used for | Handling |
 |---|---|---|---|
-| `f3rt/audio.hpp` (-> `f3rt/memory_map.hpp`, `<functional>`, `<memory>`, `<span>`, `<string_view>`) | `hle/audio.hpp` | `Audio::OUTPUT_BOOST`, `Audio::GainModel`, `Audio::EnhancedStats` | Only the `AudioEngine` wrapper keeps it. `Core` declares `hle::OUTPUT_BOOST` and `hle::GainModel`; `hle/audio.cpp` has `static_assert(Audio::OUTPUT_BOOST == hle::OUTPUT_BOOST)` and converts the enum. `core.hpp` never includes it. |
+| `f3rt/audio.hpp` (-> `f3rt/memory_map.hpp`, `<functional>`, `<memory>`, `<span>`, `<string_view>`) | `hle/audio.hpp` | `Audio::OUTPUT_BOOST`, `Audio::EnhancedStats` | Only the `AudioEngine` wrapper keeps it. `Core` declares `hle::OUTPUT_BOOST`; `hle/audio.cpp` has `static_assert(Audio::OUTPUT_BOOST == hle::OUTPUT_BOOST)`. `core.hpp` never includes it. |
 | `f3rt/memory_map.hpp` | `sequencer.cpp`, `synth.cpp` (`SOUND_ROM_BASE/END/SIZE`), `audio.cpp` (`MAILBOX_*`) | constants | Header has only `<cstddef>/<cstdint>`: usable in the WASM build as is (`-I include`). `MAILBOX_*` use stays in `audio.cpp`, not in `Core`. |
 | `<xmmintrin.h>`, `<pmmintrin.h>` | `audio.cpp` (`enable_ftz_daz`) | FTZ/DAZ | Moves to `core.cpp` as `Core::enable_flush_denormals()` under `#if (defined(__x86_64__) \|\| defined(_M_X64) \|\| defined(__SSE__)) && !defined(__EMSCRIPTEN__)` / `#elif defined(__aarch64__)` / else empty. WASM has no FTZ/DAZ (section 7). |
 | `<thread>`, `<mutex>`, `<condition_variable>`, `<atomic>`, `<exception>` | `audio.cpp` only | worker | Stay in `audio.cpp`; `sequencer.cpp`, `synth.cpp`, `effects.hpp`, `events.hpp`, `note_timing.hpp`, `core.cpp` use none. |

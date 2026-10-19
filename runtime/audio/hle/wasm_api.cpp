@@ -180,7 +180,6 @@ int f3hle_start(f3hle_engine *e, const uint8_t *replay, uint32_t replay_bytes) {
         e->core.reset();
         e->core = std::make_unique<f3rt::hle::Core>(e->sound_rom, e->sample_words);
         e->core->set_pcm_sink(&e->fifo);
-        e->core->set_gain_model(f3rt::hle::GainModel::SingleStage);
         f3rt::hle::replay(*e->core, e->replay_data);
         e->faulted = false;
         clear_error();
@@ -215,7 +214,6 @@ int f3hle_rewind(f3hle_engine *e) {
         e->core.reset();
         e->core = std::make_unique<f3rt::hle::Core>(e->sound_rom, e->sample_words);
         e->core->set_pcm_sink(&e->fifo);
-        e->core->set_gain_model(f3rt::hle::GainModel::SingleStage);
         f3rt::hle::replay(*e->core, e->replay_data);
         clear_error();
         return 0;

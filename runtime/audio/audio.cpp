@@ -681,10 +681,6 @@ uint32_t Audio::sample_rate() const {
 }
 
 void Audio::set_gain_model(GainModel model) {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->set_gain_model(model);
-        return;
-    }
     m_impl->m_gain_model = model;
     m_impl->update_gains();
 }
