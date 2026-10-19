@@ -65,8 +65,8 @@ struct Core::Impl : VoiceSink {
 
     void render_until(uint64_t tick) {
         const uint64_t end = frames_at(tick);
-        std::array<float, size_t(BLOCK_FRAMES) * 8> buses;
-        std::array<float, size_t(BLOCK_FRAMES) * 2> stereo;
+        BusBlock buses;
+        StereoBlock stereo;
         std::array<float, 2> input, output;
         for (unsigned ch = 0; ch < 2; ++ch) {
             input[ch] = .18f;
@@ -74,8 +74,10 @@ struct Core::Impl : VoiceSink {
         }
         while (worker_frames < end) {
             const size_t n = size_t(std::min<uint64_t>(BLOCK_FRAMES, end - worker_frames));
-            synth.render(buses.data(), n);
-            effects.mix(buses.data(), stereo.data(), n, input, output);
+            buses.resize(n);
+            stereo.resize(n);
+            synth.render(buses.subspan(0, n));
+            effects.mix(buses, stereo, input, output);
             if (trace)
                 trace->mix_block(worker_frames, buses.data(), stereo.data(), n, input, output);
             if (sink) sink->write(stereo.data(), n);

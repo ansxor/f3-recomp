@@ -87,7 +87,7 @@ render_until(tick):   end = floor(tick*29762/16e6) computed as tick/M*S + tick%M
                       per ch: input[ch]  = .18;
                               output[ch] = OUTPUT_BOOST * gain[ch];
                       while (worker_frames < end) { n = min(256, end - worker_frames);
-                          synth.render(buses, n); effects.mix(buses, stereo, n, input, output);
+                          synth.render(buses, n); effects.mix(buses, stereo, input, output);
                           append n stereo frames to the PCM ring; worker_frames += n; }
 Command: sequencer.command(packet, instance, worker_tick)
 Reset:   sequencer.reset(worker_tick) [-> sink.reset: synth.reset(t); effects.reset(); gain = {1,1}];

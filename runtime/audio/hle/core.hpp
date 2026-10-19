@@ -3,6 +3,7 @@
 // command / reset / bank / gain handling of the former AudioEngine worker. No thread, mutex, SDL, Machine or mailbox
 // dependency: AudioEngine wraps it with a thread and the mailbox, the WASM build and the native web-player exporter use
 // it directly, so there is one implementation of the mixing path (tools/webplayer/README.md, section 2).
+#include "audio/hle/block.hpp"
 #include "audio/hle/events.hpp"
 #include "audio/hle/observe.hpp"
 #include <cstddef>
@@ -29,7 +30,7 @@ protected:
 
 class Core final {
 public:
-    static constexpr size_t BLOCK_FRAMES = 256;
+    static constexpr size_t BLOCK_FRAMES = f3rt::hle::BLOCK_FRAMES;
 
     // `sound_rom` and `sample_words` must outlive the Core. Throws std::runtime_error when the ROM is not supported
     // (the checks of hle::validate()).

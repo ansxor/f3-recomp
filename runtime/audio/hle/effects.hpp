@@ -1,4 +1,5 @@
 #pragma once
+#include "audio/hle/block.hpp"
 #include "audio/hle/events.hpp"
 #include "audio/hle/observe.hpp"
 #include "audio/hle/faust/generated/chorus.hpp"
@@ -344,20 +345,6 @@ private:
         }
     }
 
-    // Physical PCB wiring from OTIS (ES5505) to ESP (ES5510), 12's oscilloscope trace through TC0660FCM
-    // (docs/notes/raw/docs/taito-f3/5505-5510.txt): OTIS ser0 -> NC; ser1 -> ESP serio0;
-    // ser2 -> serio1; ser3 -> serio2; ESP serio3 -> DAC. This is MAME esqpump's order.
-    // - OTIS pair 0 (ch 0/1, buses 0/1): unconnected (nc) -> silent, reaches nothing.
-    // - OTIS pair 1 (ch 2/3, buses 2/3): feeds ESP serio0 -> dry output.
-    // - OTIS pair 2 (ch 4/5, buses 4/5): feeds ESP serio1 -> chorus / echo / direct (and the reverb).
-    // - OTIS pair 3 (ch 6/7, buses 6/7): feeds ESP serio2 -> reverb send.
-    static constexpr size_t K_BUS_DRY_L = 2;
-    static constexpr size_t K_BUS_DRY_R = 3;
-    static constexpr size_t K_BUS_DELAY_L = 4;
-    static constexpr size_t K_BUS_DELAY_R = 5;
-    static constexpr size_t K_BUS_REVERB_L = 6;
-    static constexpr size_t K_BUS_REVERB_R = 7;
-
     // Output DC blocker (one pole, 20 Hz) written to the dc_blocker.dsp control "r".
     void init_dc_blocker() {
         m_dc->r = std::exp(-2.0f * 3.14159265358979323846f * 20.0f / float(SAMPLE_RATE));
@@ -509,19 +496,23 @@ public:
         m_parameters.fill(0);
         update();
     }
-    void mix(const float *buses, float *stereo, size_t frames,
+    void mix(BusSpan bus_in, MutableStereoSpan stereo_out,
              const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+        const size_t frames = bus_in.size();
         if (frames == 0) return;
+        if (stereo_out.size() < frames) {
+            throw std::invalid_argument("Effects::mix: destination buffer smaller than source");
+        }
         if (m_program == Program::Mute) {
             // A single END: the DSP never writes serio3, the DAC input stays at its last (constant) value.
-            std::fill(stereo, stereo + frames * 2, 0.f);
+            std::fill(stereo_out.data(), stereo_out.data() + frames * 2, 0.f);
             return;
         }
 
         bool silent_sends = true;
         for (size_t f = 0; f < frames; ++f) {
-            if (buses[f * 8 + K_BUS_DELAY_L] != 0.f || buses[f * 8 + K_BUS_DELAY_R] != 0.f ||
-                buses[f * 8 + K_BUS_REVERB_L] != 0.f || buses[f * 8 + K_BUS_REVERB_R] != 0.f) {
+            if (bus_in[f, OtisBus::DelayL] != 0.f || bus_in[f, OtisBus::DelayR] != 0.f ||
+                bus_in[f, OtisBus::ReverbL] != 0.f || bus_in[f, OtisBus::ReverbR] != 0.f) {
                 silent_sends = false;
                 break;
             }
@@ -529,17 +520,13 @@ public:
 
         m_dc->gain_l = output_gain[0];
         m_dc->gain_r = output_gain[1];
-        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 6> input;
-        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 3> output;
-        std::array<std::array<FAUSTFLOAT, K_CHUNK>, 2> blocked;
-        FAUSTFLOAT *in[6], *out[3], *dc_out[2];
-        for (size_t n = 0; n < 6; ++n) in[n] = input[n].data();
-        for (size_t n = 0; n < 3; ++n) out[n] = output[n].data();
-        for (size_t n = 0; n < 2; ++n) dc_out[n] = blocked[n].data();
+        PlanarAudioBlock<6, K_CHUNK> in;
+        PlanarAudioBlock<3, K_CHUNK> out;
+        PlanarAudioBlock<2, K_CHUNK> dc_out;
         const auto interleave = [&](size_t offset, size_t n) {
             for (size_t f = 0; f < n; ++f) {
-                stereo[(offset + f) * 2 + 0] = dc_out[0][f];
-                stereo[(offset + f) * 2 + 1] = dc_out[1][f];
+                stereo_out[offset + f, StereoChannel::Left] = dc_out[0][f];
+                stereo_out[offset + f, StereoChannel::Right] = dc_out[1][f];
             }
         };
 
@@ -550,12 +537,8 @@ public:
                 skip_lfos(frames);
                 for (size_t offset = 0; offset < frames; offset += K_CHUNK) {
                     const size_t n = std::min(K_CHUNK, frames - offset);
-                    for (size_t f = 0; f < n; ++f) {
-                        const float *bus = buses + (offset + f) * 8;
-                        in[0][f] = bus[K_BUS_DRY_L] * input_gain[0];
-                        in[1][f] = bus[K_BUS_DRY_R] * input_gain[1];
-                    }
-                    m_dc->dsp.compute(int(n), in, dc_out);
+                    in = bus_in.subspan(offset, n).dry() * input_gain;
+                    m_dc->dsp.compute(int(n), in.data(), dc_out.data());
                     interleave(offset, n);
                 }
                 return;
@@ -572,16 +555,8 @@ public:
 
         for (size_t offset = 0; offset < frames; offset += K_CHUNK) {
             const size_t n = std::min(K_CHUNK, frames - offset);
-            for (size_t f = 0; f < n; ++f) {
-                const float *bus = buses + (offset + f) * 8;
-                in[0][f] = bus[K_BUS_DRY_L] * input_gain[0];
-                in[1][f] = bus[K_BUS_DRY_R] * input_gain[1];
-                in[2][f] = bus[K_BUS_DELAY_L] * input_gain[0];
-                in[3][f] = bus[K_BUS_DELAY_R] * input_gain[1];
-                in[4][f] = bus[K_BUS_REVERB_L] * input_gain[0];
-                in[5][f] = bus[K_BUS_REVERB_R] * input_gain[1];
-            }
-            compute_program(int(n), in, out);
+            in = bus_in.subspan(offset, n) * input_gain;
+            compute_program(int(n), in.data(), out.data());
             for (size_t f = 0; f < n; ++f) {
                 m_current_bucket_peak = std::max(m_current_bucket_peak, out[2][f]);
                 if (++m_bucket_frames >= K_BUCKET_SIZE) {
@@ -591,7 +566,7 @@ public:
                     m_bucket_frames = 0;
                 }
             }
-            m_dc->dsp.compute(int(n), out, dc_out);
+            m_dc->dsp.compute(int(n), out.data(), dc_out.data());
             interleave(offset, n);
         }
 
@@ -607,6 +582,16 @@ public:
                 m_bypassed = true;
             }
         }
+    }
+    void mix(const BusBlock &buses, StereoBlock &stereo,
+             const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+        stereo.resize(buses.size());
+        mix(buses.span(), stereo.span(), input_gain, output_gain);
+    }
+    void mix(BusSpan buses, StereoBlock &stereo,
+             const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+        stereo.resize(buses.size());
+        mix(buses, stereo.span(), input_gain, output_gain);
     }
 };
 } // namespace f3rt::hle

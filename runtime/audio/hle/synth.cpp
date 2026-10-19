@@ -1,133 +1,29 @@
 #include "audio/hle/synth.hpp"
+#include "audio/hle/sound_bank.hpp"
+#include "audio/hle/voice.hpp"
 #include "audio/hle/note_timing.hpp"
 #include "audio/hle/faust/generated/voice_filter.hpp"
 #include "f3rt/bytes.hpp"
-#include "f3rt/memory_map.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
-#include <bit>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace f3rt::hle {
+using sound_5a7e9117::program_slot;
+
 namespace {
-constexpr uint32_t NATIVE_RATE = (15238090u + 8u * 32u) / (16u * 32u);
-constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
-constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
-constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
 // Frames per voice-filter block: each active voice runs one faust::VoiceFilterDsp::compute() per block.
 constexpr size_t VOICE_BLOCK_FRAMES = 64;
 using f3rt::s16;
 using f3rt::s8;
-inline uint16_t word(const uint8_t *p) { return read_be16(p); }
 inline uint32_t longword(const uint8_t *p) { return read_be32(p); }
-uint16_t parameter_word(const Channel &c, unsigned i) { return word(c.parameters.data() + i); }
-int32_t wrap_product(int64_t x) { return int32_t(uint32_t(x)); }
-uint16_t volume_target(int value, int threshold) {
-    value = s16(value - threshold);
-    return value <= 0 ? 0x0ff0 : uint16_t(std::min(0xfff0, value * 48 + 0xff0));
-}
-struct Split {
-    int16_t tuning = 0;
-    uint32_t accumulator = 0, start = 0, end = 0;
-    uint8_t cutoff = 0, mode = 0;
-    static Split read(const uint8_t *p) {
-        return {s16(word(p)), longword(p + 2), longword(p + 6), longword(p + 10), p[5], p[9]};
-    }
-};
-struct Envelope {
-    uint32_t position = 0, target = 0;
-    int32_t slope = 0;
-    std::array<uint16_t, 4> levels{};
-    std::array<uint8_t, 4> rates{};
-    uint8_t flags = 0, stage = 0;
-    bool intermediate = false, done = false;
-    int16_t level() const { return s16(position >> 16); }
-    bool advance() {
-        position += uint32_t(slope);
-        return int32_t(position - target) >= 0;
-    }
-};
-struct Filter {
-    double a1 = 1, a2 = 1, target1 = 1, target2 = 1;
-    double high_pole = 1, target_high_pole = 1;
-    unsigned ramp = 0;
-    uint8_t mode = 3;
-    uint16_t last_k1 = 0, last_k2 = 0;
-    void targets(uint16_t k1, uint16_t k2, bool initial) {
-        if (!initial && k1 == last_k1 && k2 == last_k2) return;
-        last_k1 = k1;
-        last_k2 = k2;
-        // Preserve native pole positions in continuous time, not device
-        // register/clock execution. Quantization masks come from ROM's format.
-        target1 = 1 - std::pow(1 - double(k1 & 0xfff0) / 65536, RATE_RATIO);
-        target2 = 1 - std::pow(1 - double(k2 & 0xfff0) / 65536, RATE_RATIO);
-        // Native highpass pole is (1+k/65536)/2. Converting its
-        // pole rather than cutoff-Hz guesses keeps low-k differences.
-        target_high_pole = std::pow((1 + double(k2 & 0xfff0) / 65536) * 0.5, RATE_RATIO);
-        if (initial) {
-            a1 = target1;
-            a2 = target2;
-            high_pole = target_high_pole;
-            ramp = 0;
-        } else ramp = FILTER_RAMP;
-    }
-    void advance() {
-        if (ramp) {
-            a1 += (target1 - a1) / ramp;
-            a2 += (target2 - a2) / ramp;
-            high_pole += (target_high_pole - high_pole) / ramp;
-            --ramp;
-        }
-    }
-};
 } // namespace
 
 struct Synth::Impl {
-    struct Bank {
-        uint8_t tag = 0, count = 0;
-        uint32_t offset = 0, probe = 0;
-    };
-    struct ProgramData {
-        const uint8_t *base = nullptr;
-        std::array<int8_t, 17> sample_banks{};
-        uint8_t enabled = 0;
-    };
-    // Volume ramp gain, stepped linearly while the ramp stays inside one gain-table interval.
-    struct GainSegment {
-        double value = 0, slope = 0;
-        unsigned frames = 0;
-    };
-    struct Voice {
-        Note owner{};
-        const uint8_t *patch = nullptr;
-        Split split{};
-        std::array<Envelope, 3> envelope{};
-        Filter filter{};
-        double position = 0, start = 0, end = 0, increment = 0;
-        double left = 0, right = 0, target_left = 0, target_right = 0;
-        float left_gain = 0, right_gain = 0;
-        bool gain_dirty = true;
-        uint64_t serial = 0;
-        uint16_t frequency = 0, left_volume = 0, right_volume = 0, k1 = 0, k2 = 0;
-        int16_t lfo = 0, lfo_depth = 0, lfo_target = 0, lfo_step = 0;
-        uint16_t lfo_phase = 0, random_countdown = 0, random_period = 0;
-        int16_t random = 0, previous_random = 0, pitch = 0, glide = 0, glide_target = 0,
-                glide_destination = 0;
-        uint8_t layer = 0, selector = 14, pair = 0, priority = 0, allocation = 0;
-        uint8_t effective_key = 0, weight = 127, pressure = 0, slot = 0;
-        unsigned gain_frames = 0;
-        double step_left = 0, step_right = 0;
-        GainSegment left_segment{}, right_segment{};
-        bool active = false, released = false, direct = false, reverse = false;
-        bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
-             hardware_valid = false;
-        uint64_t release_serial = 0;
-    };
     struct Pending {
         Note note{};
         const uint8_t *program = nullptr;
@@ -136,24 +32,12 @@ struct Synth::Impl {
         uint8_t layer = 0;
         bool active = false, release_trigger = false, direct = false;
     };
-    std::span<const uint8_t> rom;
-    std::span<const uint16_t> samples;
-    std::vector<uint8_t> metadata;
-    std::array<Bank, 16> banks{};
+    SoundBank bank;
     std::array<Voice, 32> voices{};
     std::array<Pending, 96> pending{};
     DriverClock driver_clock;
     NoteQueue<Pending, 96> queue; // notes the driver clock pushed past their request tick
-    std::array<ProgramData, 1024> programs{};
     std::array<uint8_t, 32> next{}, voice_prev{};
-    std::array<uint16_t, 128> rates{};
-    std::array<uint16_t, 256> phase_rates{};
-    std::array<uint16_t, 2048> filters{};
-    std::array<uint16_t, 768> pitches{};
-    std::array<uint8_t, 128> attenuation{}, pan{};
-    std::array<uint8_t, 512> velocity_curves{};
-    std::array<float, 256> gain{};
-    std::array<uint8_t, 12> budgets{};
     std::function<void(const VoiceEvent &)> observer;
     struct BufferedEvent {
         size_t frame = 0;
@@ -169,9 +53,7 @@ struct Synth::Impl {
     uint32_t tick_remainder = 0;
     uint16_t noise = 0;
     uint16_t noise_history = 0;
-    uint8_t cursor = 0, budget_slot = 0, bend_range = 0;
-    unsigned board_bank_mask = 0;
-    uint32_t reset_start = 0, reset_end = 0;
+    uint8_t cursor = 0, budget_slot = 0;
     // Voices render one at a time, so one block of scratch serves all of them.
     alignas(64) float input[VOICE_BLOCK_FRAMES]{};
     alignas(64) float a1[VOICE_BLOCK_FRAMES]{};
@@ -179,380 +61,22 @@ struct Synth::Impl {
     alignas(64) float high_pole[VOICE_BLOCK_FRAMES]{};
     alignas(64) float gain_left[VOICE_BLOCK_FRAMES]{};
     alignas(64) float gain_right[VOICE_BLOCK_FRAMES]{};
-    alignas(64) float out_left[VOICE_BLOCK_FRAMES]{};
-    alignas(64) float out_right[VOICE_BLOCK_FRAMES]{};
+    alignas(64) PlanarAudioBlock<2, VOICE_BLOCK_FRAMES> filter_out;
     // Filter state lives in each voice's DSP instance; it persists across blocks and is cleared on note start.
     std::array<faust::VoiceFilterDsp, 32> voice_filters{};
     std::array<float *, 32> mode_zone{};
 
-    Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : rom(r), samples(s) {
-        if (r.size() < SOUND_ROM_SIZE || s.size() < SOUND_ROM_SIZE ||
-            !std::has_single_bit(s.size()))
-            throw std::runtime_error(
-                "HLE requires mapped sound and power-of-two sample ROM regions");
-        board_bank_mask = (samples.size() >= sound_5a7e9117::SAMPLE_BANK_SIZE)
-                              ? unsigned((samples.size() / sound_5a7e9117::SAMPLE_BANK_SIZE) - 1)
-                              : 0;
-        metadata.reserve(0x10000);
+    Impl(std::span<const uint8_t> r, std::span<const uint16_t> s) : bank(r, s) {
         frame_ticks.reserve(1024);
         buffered_events.reserve(32);
         for (size_t i = 0; i < voice_filters.size(); ++i) {
             voice_filters[i].init(int(SAMPLE_RATE));
             mode_zone[i] = faust::Controls(voice_filters[i]).zone("mode");
         }
-        decode_banks();
-        // c15fb4..c15fde heap header overlaps bankc8 sample0. Decode the boot
-        // operands rather than assuming sample metadata remains ROM-identical.
-        uint32_t heap_base = rw(sound_5a7e9117::HEAP_BASE_PTR);
-        uint32_t heap_limit = longword(rom_pointer(sound_5a7e9117::HEAP_LIMIT_PTR_A, 4)) +
-                              longword(rom_pointer(sound_5a7e9117::HEAP_LIMIT_PTR_B, 4));
-        uint32_t heap_size =
-            heap_limit - heap_base - longword(rom_pointer(sound_5a7e9117::HEAP_RESERVE_PTR, 4));
-        uint32_t heap_next = longword(rom_pointer(sound_5a7e9117::HEAP_NEXT_PTR, 4));
-        if (heap_base >= sound_5a7e9117::HEAP_METADATA_OFFSET &&
-            heap_base - sound_5a7e9117::HEAP_METADATA_OFFSET + 8 <= metadata.size()) {
-            for (unsigned i = 0; i < 4; ++i) {
-                metadata[heap_base - sound_5a7e9117::HEAP_METADATA_OFFSET + i] =
-                    uint8_t(heap_size >> (24 - i * 8));
-                metadata[heap_base - sound_5a7e9117::HEAP_METADATA_OFFSET + 4 + i] =
-                    uint8_t(heap_next >> (24 - i * 8));
-            }
-        }
-        cache_programs();
-        for (unsigned i = 0; i < rates.size(); ++i)
-            rates[i] = rw(sound_5a7e9117::RATE_TABLE + 2 * i);
-        for (unsigned i = 0; i < phase_rates.size(); ++i)
-            phase_rates[i] = rw(sound_5a7e9117::PHASE_RATE_TABLE + 2 * i);
-        for (unsigned i = 0; i < filters.size(); ++i)
-            filters[i] = rw(sound_5a7e9117::FILTER_TABLE + 2 * i);
-        for (unsigned i = 0; i < pitches.size(); ++i)
-            pitches[i] = rw(sound_5a7e9117::PITCH_TABLE + 2 * i);
-        bend_range = uint8_t(
-            rw(sound_5a7e9117::BEND_RANGE_PTR)); // ROM startup address/value pair cf64,0002.
-        reset_start = ((uint32_t(rw(sound_5a7e9117::RESET_START_PTR)) << 16) |
-                       rw(sound_5a7e9117::RESET_START_PTR + 2)) &
-                      0x1fffffe0;
-        reset_end = ((uint32_t(rw(sound_5a7e9117::RESET_END_PTR)) << 16) |
-                     rw(sound_5a7e9117::RESET_END_PTR + 2)) &
-                    0x1fffffe0;
-        for (unsigned i = 0; i < 128; ++i) {
-            attenuation[i] = rb(sound_5a7e9117::ATTENUATION_TABLE + i);
-            pan[i] = rb(sound_5a7e9117::PAN_TABLE + i);
-        }
-        for (unsigned i = 0; i < 512; ++i)
-            velocity_curves[i] = rb(sound_5a7e9117::VELOCITY_CURVE_TABLE + i);
-        for (unsigned i = 0; i < 12; ++i) budgets[i] = rb(sound_5a7e9117::BUDGET_TABLE + i);
-        for (unsigned i = 0; i < 256; ++i) {
-            gain[i] = float((((i & 15) | 16) << 11) >> (16 - (i >> 4))) / 2048;
-        }
         reset(0);
     }
-    uint8_t m_cpubank2 = 1;
-    void set_bank(uint8_t b) { m_cpubank2 = b; }
-    uint8_t rb(uint32_t a) const {
-        if (a < SOUND_ROM_BASE || a >= SOUND_ROM_END)
-            throw std::runtime_error("HLE immutable ROM address out of range");
-        uint32_t off = a - SOUND_ROM_BASE;
-        if (rom.size() > SOUND_ROM_SIZE) {
-            if (a >= 0xc20000 && a < 0xc40000) {
-                off = uint32_t(m_cpubank2) * 0x20000 + (a - 0xc20000);
-            } else if (a >= 0xc40000) {
-                off = 0x40000 + (a - 0xc40000);
-            }
-        }
-        if (off >= rom.size()) return 0xff;
-        return rom[off];
-    }
-    uint16_t rw(uint32_t a) const { return uint16_t((uint16_t(rb(a)) << 8) | rb(a + 1)); }
-    const uint8_t *rom_pointer(uint32_t a, size_t bytes) const {
-        if (a < SOUND_ROM_BASE || a + bytes > SOUND_ROM_END)
-            throw std::runtime_error("HLE descriptor exceeds sound ROM");
-        uint32_t off = a - SOUND_ROM_BASE;
-        if (rom.size() > SOUND_ROM_SIZE) {
-            if (a >= 0xc20000 && a < 0xc40000) {
-                off = uint32_t(m_cpubank2) * 0x20000 + (a - 0xc20000);
-            } else if (a >= 0xc40000) {
-                off = 0x40000 + (a - 0xc40000);
-            }
-        }
-        if (off + bytes > rom.size())
-            throw std::runtime_error("HLE descriptor exceeds sound ROM");
-        return rom.data() + off;
-    }
-    void append_word(uint16_t w) {
-        metadata.push_back(uint8_t(w >> 8));
-        metadata.push_back(uint8_t(w));
-    }
-    void decode_banks() {
-        // c0b4a4..c0b610: immutable PCM metadata, including expanded flag word.
-        const size_t num_banks =
-            std::min(size_t(16), samples.size() / sound_5a7e9117::SAMPLE_HALF_BANK_SIZE);
-        for (unsigned b = 0; b < num_banks; ++b) {
-            unsigned at = 0, base = b * sound_5a7e9117::SAMPLE_HALF_BANK_SIZE;
-            auto sample_word = [&]() {
-                if (at >= sound_5a7e9117::SAMPLE_HALF_BANK_SIZE || base + at >= samples.size())
-                    throw std::runtime_error("HLE sample metadata exceeds half-bank");
-                return samples[base + at++];
-            };
-            uint16_t flag = sample_word();
-            bool packed = (flag & 0x8000) != 0;
-            auto data_word = [&]() {
-                if (!packed) return sample_word();
-                uint16_t hi = sample_word();
-                return uint16_t((hi & 0xff00) | (sample_word() >> 8));
-            };
-            Bank &bank = banks[b];
-            bank.offset = uint32_t(metadata.size());
-            append_word(flag);
-            unsigned last = 0;
-            bool valid = true;
-            for (;;) {
-                uint16_t offset = data_word();
-                append_word(offset);
-                if (!offset) break;
-                unsigned limit = packed ? offset * 2 + 4 : offset + 8;
-                if (limit <= at * 2 || limit % 14) {
-                    valid = false;
-                    break;
-                }
-                last = packed ? offset * 2 : offset;
-                if (packed) {
-                    metadata[metadata.size() - 2] = uint8_t((offset + 1) >> 8);
-                    metadata.back() = uint8_t(offset + 1);
-                }
-                ++bank.count;
-                for (unsigned j = 0; j < 6; ++j) append_word(data_word());
-            }
-            bank.probe = (at * 2 << 8) | ((b & 1) << 28);
-            if (!valid || !last) {
-                bank.count = 0;
-                continue;
-            }
-            while (at * 2 < last) append_word(data_word());
-            if (at * 2 != last) throw std::runtime_error("HLE split metadata is not aligned");
-            for (;;) {
-                size_t begin = metadata.size();
-                for (unsigned j = 0; j < 7; ++j) append_word(data_word());
-                if (metadata[begin + 5] == 127) break;
-            }
-            uint16_t tag = (base + sound_5a7e9117::SAMPLE_TAG_PROBE_OFFSET < samples.size())
-                               ? samples[base + sound_5a7e9117::SAMPLE_TAG_PROBE_OFFSET]
-                               : 0;
-            bank.tag = uint8_t(packed ? tag >> 8 : tag);
-        }
-    }
-    static constexpr unsigned program_slot(uint16_t id) {
-        return (((id >> 14) & 3) * 256) | (id & 0xff);
-    }
-    void cache_programs() {
-        constexpr uint32_t BASES[4] = {
-            sound_5a7e9117::PROGRAM_DATA_BASE, // 0x0000: 0xc00134
-            sound_5a7e9117::PROGRAM_DATA_BASE, // 0x4000: 0xc00134
-            0xc7b050,                          // 0x8000: 0xc7b050
-            0xc760a0,                          // 0xc000: 0xc760a0
-        };
-        auto find_bank = [&](uint8_t tag) {
-            int8_t result = -2;
-            for (unsigned b = 0; b < banks.size(); ++b)
-                if (banks[b].count && banks[b].tag == tag) result = int8_t(b);
-            return result;
-        };
-        for (unsigned bank_idx = 0; bank_idx < 4; ++bank_idx) {
-            const uint32_t table_base = BASES[bank_idx];
-            const bool populated =
-                (table_base >= SOUND_ROM_BASE) &&
-                (table_base - SOUND_ROM_BASE + sound_5a7e9117::PROGRAM_RECORD_STRIDE <= rom.size()) &&
-                (rom[table_base - SOUND_ROM_BASE + 2] != 0xff ||
-                 rom[table_base - SOUND_ROM_BASE + 3] != 0xff);
-            for (unsigned id = 0; id < 256; ++id) {
-                const unsigned slot = bank_idx * 256 + id;
-                ProgramData &data = programs[slot];
-                data.sample_banks.fill(-1);
-                if (!populated) {
-                    data.base = nullptr;
-                    data.enabled = 0;
-                    continue;
-                }
-                unsigned index = id, column = 0;
-                uint32_t base = table_base;
-                if (index >= 80) {
-                    base += sound_5a7e9117::PROGRAM_COLUMN_STRIDE;
-                    index -= 80;
-                    if (index >= 10) {
-                        index -= 10;
-                        ++column;
-                    }
-                }
-                if (index >= 40) {
-                    index -= 40;
-                    ++column;
-                }
-                const uint32_t addr = base + index * sound_5a7e9117::PROGRAM_RECORD_STRIDE + column;
-                if (addr - SOUND_ROM_BASE + sound_5a7e9117::PROGRAM_RECORD_STRIDE > rom.size()) {
-                    data.base = nullptr;
-                    data.enabled = 0;
-                    continue;
-                }
-                data.base = rom.data() + (addr - SOUND_ROM_BASE);
-                data.enabled = data.base[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
-                if (!data.enabled) {
-                    const uint8_t *p = data.base;
-                    uint32_t mask = 0;
-                    for (unsigned i = 0; i < 4; ++i)
-                        mask =
-                            (mask << 8) | p[sound_5a7e9117::PROGRAM_BANK_MASK_OFFSET + size_t(2) * i];
-                    if (p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_0] == 'X' &&
-                        p[sound_5a7e9117::PROGRAM_MAGIC_OFFSET_1] == 'E')
-                        for (unsigned i = 0; i < 17; ++i)
-                            if (mask & (1u << i))
-                                data.sample_banks[i] =
-                                    find_bank(p[sound_5a7e9117::PROGRAM_DEFAULT_BANK_OFFSET]);
-                } else {
-                    for (unsigned layer = 0; layer < 3; ++layer) {
-                        const uint8_t *p = data.base + size_t(layer) * 0x76;
-                        unsigned marker = 0, tag = 0;
-                        for (unsigned i = 0; i < 16; i += 2) {
-                            if (p[i] & 128) marker |= 1u << i;
-                            if (p[20 + i] & 128) tag |= 1u << (i / 2);
-                        }
-                        if (marker == 0x5515) data.sample_banks[layer] = find_bank(uint8_t(tag));
-                    }
-                }
-            }
-        }
-    }
-    const uint8_t *program(uint16_t id) const {
-        if (id == 0xffff) return nullptr;
-        const unsigned slot = program_slot(id);
-        const auto *base = programs[slot].base;
-        if (!base) {
-            if (id & 0x8000)
-                throw std::runtime_error("HLE program selects unpopulated sound ROM bank");
-            return nullptr;
-        }
-        return base;
-    }
-    Split split_for(const uint8_t *patch, unsigned layer, bool direct, int pitch, uint8_t &selector,
-                    uint16_t program_id) const {
-        unsigned id = (direct ? patch[4] : patch[0x6c]) & 127;
-        if (!direct && id >= 0x78) {
-            selector = uint8_t(board_bank_mask * 2);
-            return Split{};
-        }
-        // sample_banks holds signed sentinels (-1 = unset, -2 = missing), so the sign
-        // extension is intended.
-        // NOLINTNEXTLINE(bugprone-signed-char-misuse): sign extension is intentional
-        int bank = static_cast<int>(programs[program_slot(program_id)].sample_banks[layer]);
-        if (bank == -2) throw std::runtime_error("HLE instrument names missing sample bank");
-        const uint8_t *data = nullptr;
-        size_t available = 0;
-        if (bank >= 0) {
-            const Bank &b = banks[unsigned(bank)];
-            selector = uint8_t(bank);
-            if (id >= b.count) throw std::runtime_error("HLE sample ID exceeds external directory");
-            size_t offset =
-                b.offset + size_t(int16_t(word(metadata.data() + b.offset + 2 + size_t(id) * 14)));
-            if (offset + 14 > metadata.size())
-                throw std::runtime_error("HLE sample offset exceeds metadata");
-            data = metadata.data() + offset;
-            available = metadata.size() - offset;
-        } else {
-            selector = uint8_t(board_bank_mask * 2);
-            if (id > 120) throw std::runtime_error("HLE ROM split ID exceeds table");
-            uint32_t address = uint32_t(sound_5a7e9117::SPLIT_TABLE_BASE +
-                                        int16_t(rw(sound_5a7e9117::SPLIT_DIRECTORY + id * 2)));
-            data = rom_pointer(address, 14);
-            available = rom.size() - size_t(data - rom.data());
-        }
-        unsigned key = uint8_t(pitch >> 8);
-        for (size_t i = 0; i + 14 <= available; i += 14) {
-            Split result = Split::read(data + i);
-            if (key <= result.cutoff) return result;
-        }
-        throw std::runtime_error("HLE sample splits do not cover key");
-    }
-    uint16_t frequency(int pitch) const {
-        pitch = std::clamp(int(s16(pitch)), -0x4800, 0x5400);
-        unsigned shifts = 0;
-        uint32_t result;
-        if (pitch < 0) {
-            while (pitch < 0) {
-                pitch += 0xc00;
-                ++shifts;
-            }
-            result = pitches[unsigned(pitch >> 2)] >> shifts;
-        } else {
-            while (pitch >= 0xc00) {
-                pitch -= 0xc00;
-                ++shifts;
-            }
-            result = uint32_t(pitches[unsigned(pitch >> 2)]) << shifts;
-        }
-        return uint16_t(result) & 0xfffe;
-    }
-    uint16_t rate(int r) const { return rates[unsigned(std::clamp(r, 0, 99))]; }
-    void set_glide(Voice &v, int16_t destination, unsigned rate_index) {
-        v.glide_destination = destination;
-        if (!rate_index) {
-            v.glide = 0;
-            v.glide_target = destination;
-            return;
-        }
-        int difference = s16(destination - v.glide_target);
-        v.glide = s16(
-            (int64_t(difference) * s16(rw(sound_5a7e9117::RATE_TABLE + 2 * rate_index)) * 2) >> 16);
-        if (!v.glide) v.glide_target = destination;
-    }
-    void advance_glide(Voice &v) {
-        if (!v.glide) return;
-        int current = s16(v.glide_target + v.glide);
-        if ((v.glide > 0 && current >= v.glide_destination) ||
-            (v.glide < 0 && current <= v.glide_destination)) {
-            current = v.glide_destination;
-            v.glide = 0;
-        }
-        v.glide_target = s16(current);
-    }
-    void segment(Envelope &e, unsigned target, int r) {
-        int difference = s16(target - uint16_t(e.level()));
-        if (difference) {
-            e.slope = wrap_product(int64_t(difference) * s16(rate(r)) * 2);
-            e.position &= 0xffff0000;
-        } else {
-            e.slope = -s16(rate(r));
-            e.position = (e.position & 0xffff0000) | 0x7fff;
-        }
-        e.target = uint32_t(uint16_t(target ^ (e.slope <= 0 ? 0x8000 : 0))) << 16;
-    }
-    void initialize_envelope(Envelope &e, const uint8_t *p, const Voice &v, bool amplitude) {
-        e = {};
-        e.flags = p[16];
-        unsigned index = ((p[16] & 0x30) << 3) + v.owner.velocity;
-        int gain_scale = int(p[18] >> 4) * 8 + int(p[18] >> 5);
-        int scale = s16(0x4000 - (128 - velocity_curves[index]) * gain_scale) >> 6;
-        for (unsigned i = 0; i < 4; ++i) e.levels[i] = uint16_t((p[size_t(i) * 4] & 127) * scale);
-        int nibble = s8((p[16] & 15) << 4) >> 4;
-        int key_scale = -(s16((int(v.effective_key) - 64) * nibble * 18) >> 6);
-        int vel_rate = (p[18] & 15) * 9 * v.owner.velocity >> 7;
-        e.rates[0] = uint8_t(std::clamp(int(p[2] & 127) - vel_rate, 0, 99));
-        e.rates[1] = uint8_t(std::clamp(int(p[6] & 127) + key_scale, 0, 99));
-        e.rates[2] = uint8_t(std::clamp(int(p[10] & 127) + key_scale, 0, 99));
-        e.rates[3] = uint8_t(p[14] & 127);
-        e.position = uint32_t(e.levels[0]) << 16;
-        if (amplitude && s16(e.levels[1] - e.levels[0]) > 0x3000 && e.rates[0] > 20) {
-            e.intermediate = true;
-            segment(e, uint16_t(e.levels[1] - 0x1400), e.rates[0] - 10);
-        } else segment(e, e.levels[1], e.rates[0]);
-    }
+    void set_bank(uint8_t b) { bank.set_bank(b); }
     // c1983c: ramp the level to 0 at the patch's release rate (patch +2).
-    void start_direct_release(Envelope &e, const Voice &v) {
-        e.done = false;
-        e.position &= 0xffff0000;
-        e.slope = wrap_product(-int64_t(0x7f00) *
-                               s16(rw(sound_5a7e9117::RATE_TABLE + 2 * (v.patch[2] & 127))) * 2);
-        e.target = e.slope <= 0 ? 0x80000000 : 0;
-        e.stage = 4;
-    }
     bool update_envelope(Voice &v, unsigned which) {
         Envelope &e = v.envelope[which];
         if (e.done) return false;
@@ -568,7 +92,7 @@ struct Synth::Impl {
                 e.done = true;
                 return true;
             }
-            start_direct_release(e, v);
+            start_direct_release(e, v, bank);
             return false;
         }
         if (e.stage == 4) {
@@ -577,18 +101,18 @@ struct Synth::Impl {
         }
         if (e.intermediate) {
             e.intermediate = false;
-            segment(e, e.levels[1], e.rates[0]);
+            segment(e, e.levels[1], e.rates[0], bank);
             return false;
         }
         ++e.stage;
-        if (e.stage == 1) segment(e, e.levels[2], e.rates[1]);
-        else if (e.stage == 2) segment(e, e.levels[3], e.rates[2]);
+        if (e.stage == 1) segment(e, e.levels[2], e.rates[1], bank);
+        else if (e.stage == 2) segment(e, e.levels[3], e.rates[2], bank);
         else if (e.flags & 0x40) {
             e.stage = 4;
-            segment(e, 0, e.rates[3]);
+            segment(e, 0, e.rates[3], bank);
         } else if (e.flags & 0x80) {
             e.stage = 0;
-            segment(e, e.levels[1], e.rates[0]);
+            segment(e, e.levels[1], e.rates[0], bank);
             if (which == 2 && (v.patch[0x6c] & 127) < 0x54) {
                 v.position = v.reverse ? v.end : accumulator_start(v);
                 if (v.sample_finished) {
@@ -602,90 +126,23 @@ struct Synth::Impl {
         }
         return false;
     }
-    int16_t source(const Voice &v, unsigned selector) const {
-        switch (selector & 15) {
-        case 0:
-            return v.lfo;
-        case 1:
-            return v.envelope[0].level();
-        case 2:
-            return v.envelope[1].level();
-        case 3:
-            return v.envelope[2].level();
-        case 4:
-            return v.random;
-        case 5:
-            return v.previous_random;
-        case 6:
-            return s16(v.owner.velocity * 257);
-        case 7:
-            return s16((int(v.effective_key) - 60) * 256);
-        case 8:
-            return s16(parameter_word(v.owner.channel, 0x1a));
-        case 9:
-            return s16(parameter_word(v.owner.channel, 0x12));
-        case 10:
-            return s16(parameter_word(v.owner.channel, 0x0a));
-        case 11:
-            return s16(parameter_word(v.owner.channel, 0x10));
-        case 12:
-            return s16(parameter_word(v.owner.channel, 0x0c));
-        case 13:
-            return s16(v.pressure * 256);
-        case 14:
-            return 0x7fff;
-        case 15:
-            return 0;
-        default:
-            break;
-        }
-        return 0;
-    }
-    double accumulator_start(const Voice &v) const {
-        uint32_t address = (v.split.accumulator | ((v.selector & 1) << 28)) & 0x1fffff00;
-        return double((v.selector >> 1) << 20) + double(address) / 512;
-    }
-    void update_lfo(Voice &v) {
-        const uint8_t *p = v.patch;
-        v.lfo_depth = s16(v.lfo_depth + v.lfo_step);
-        if (uint16_t(v.lfo_depth) > uint16_t(v.lfo_target)) {
-            v.lfo_step = 0;
-            v.lfo_depth = v.lfo_target;
-        }
-        unsigned phase_index = p[0x68];
-        v.lfo_phase = uint16_t(v.lfo_phase + phase_rates[phase_index]);
-        unsigned wave = ((p[0x6a] & 15) << 8) | (v.lfo_phase >> 8);
-        int modulation = source(v, p[0x64] & 15);
-        int depth = std::clamp(int(v.lfo_depth) + modulation, 0, 32767);
-        v.lfo = s16((depth * int(s8(rb(sound_5a7e9117::LFO_WAVE_TABLE + wave)))) >> 7);
-    }
-    void update_random(Voice &v) {
-        if (--v.random_countdown) return;
-        v.random_countdown = v.random_period;
-        noise_history = uint16_t(noise_history + noise);
-        noise = uint16_t(noise + noise_history);
-        v.random = s16(noise); // previous_random retains the onset value.
-    }
-    uint16_t coefficient(int value, unsigned bank = 0) const {
-        unsigned index = unsigned(std::clamp(value, 0, 1023)) + bank;
-        return uint16_t(filters[index] << 4) & 0xfff0;
-    }
     void parameters(Voice &v, bool initial, uint64_t at, bool notify = true) {
         const uint8_t *p = v.patch;
         const Channel &c = v.owner.channel;
-        int common = attenuation[c.parameters[sound_5a7e9117::CHANNEL_PARAM_VOLUME] & 127] +
-                     attenuation[c.sequence_volume & 127];
+        int common = bank.attenuation[c.parameters[sound_5a7e9117::CHANNEL_PARAM_VOLUME] & 127] +
+                     bank.attenuation[c.sequence_volume & 127];
         if (c.parameters[sound_5a7e9117::CHANNEL_PARAM_EXPRESSION])
             common += uint8_t(c.parameters[sound_5a7e9117::CHANNEL_PARAM_EXPRESSION] + 127);
         int pan_position;
         if (v.direct) {
             int curve = (p[0x12] >> 6) * 128 + v.owner.velocity;
             int sensitivity = (p[8] >> 4) * 8 + (p[8] >> 5);
-            int scale = s16(0x4000 - (128 - velocity_curves[unsigned(curve)]) * sensitivity) >> 6;
+            int scale =
+                s16(0x4000 - (128 - bank.velocity_curves[unsigned(curve)]) * sensitivity) >> 6;
             if (initial) {
                 Envelope &e = v.envelope[2];
                 e.position = (uint32_t(uint16_t((p[0x10] & 127) * scale)) << 16) | 0x7fff;
-                e.slope = -s16(rw(sound_5a7e9117::RATE_TABLE + 2 * (p[0] & 127)));
+                e.slope = -s16(bank.rom.read_u16(sound_5a7e9117::RATE_TABLE + 2 * (p[0] & 127)));
                 e.target = (uint32_t(uint16_t((e.position >> 16) ^ 0x8000))) << 16;
             }
             pan_position = c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN] == 128
@@ -693,11 +150,11 @@ struct Synth::Impl {
                                : (s8(c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN]) >> 1) + 64;
             int level = (v.envelope[2].level() >> 5) + ((p[0x10] & 128) ? 0xa8 : 0);
             v.left_volume =
-                volume_target((common + pan[unsigned(127 - pan_position)]) * 4 + level, 0xfa0);
+                volume_target((common + bank.pan[unsigned(127 - pan_position)]) * 4 + level, 0xfa0);
             v.right_volume =
-                volume_target((common + pan[unsigned(pan_position)]) * 4 + level, 0xfa0);
+                volume_target((common + bank.pan[unsigned(pan_position)]) * 4 + level, 0xfa0);
             int filter_index = direct_filter_index(p[0xe], v.owner.velocity);
-            v.k1 = v.k2 = coefficient(filter_index);
+            v.k1 = v.k2 = bank.coefficient(filter_index);
         } else {
             int amp_source = source(v, p[0x60] & 15), base;
             if ((p[0x60] & 15) == 15) base = 254;
@@ -708,15 +165,16 @@ struct Synth::Impl {
                 if (factor >= 0) value -= factor;
                 base = (value + 127) * 2;
             }
-            base += attenuation[p[0x5e] & 127] + ((p[0x5e] & 128) ? 43 : 0) + common +
-                    attenuation[v.weight & 127];
+            base += bank.attenuation[p[0x5e] & 127] + ((p[0x5e] & 128) ? 43 : 0) + common +
+                    bank.attenuation[v.weight & 127];
             int pan_value = s8(c.parameters[sound_5a7e9117::CHANNEL_PARAM_PAN]);
             if (pan_value <= -127) pan_value = s8(p[0x4e] & 0xf0);
             pan_position = (pan_value >> 1) + 64;
             int env = v.envelope[2].level() >> 5;
             v.left_volume =
-                volume_target((base + pan[unsigned(127 - pan_position)]) * 4 + env, 0x1b64);
-            v.right_volume = volume_target((base + pan[unsigned(pan_position)]) * 4 + env, 0x1b64);
+                volume_target((base + bank.pan[unsigned(127 - pan_position)]) * 4 + env, 0x1b64);
+            v.right_volume =
+                volume_target((base + bank.pan[unsigned(pan_position)]) * 4 + env, 0x1b64);
             int filter_env = v.envelope[1].level();
             int key = int(v.effective_key) - 60;
             int first = (filter_env * s8(p[0x4c]) + source(v, p[0x4e] & 15) * s8(p[0x50])) >> 12;
@@ -727,17 +185,18 @@ struct Synth::Impl {
                          12;
             second += (key * s8(p[0x54])) >> 3;
             second += (p[0x52] & 127) * 8;
-            v.k1 = coefficient(first);
-            v.k2 = coefficient(second, (p[0x44] & 128) ? 0 : 1024);
+            v.k1 = bank.coefficient(first);
+            v.k2 = bank.coefficient(second, (p[0x44] & 128) ? 0 : 1024);
             int pitch_env = s16(v.envelope[0].level() - ((p[0xc] & 127) << 8));
             int64_t pitch_mod = int64_t(pitch_env) * s8(p[0x40]) + int64_t(v.lfo) * s8(p[0x42]);
             int depth = s8(p[0x46]);
-            int multiplier = rw(sound_5a7e9117::PITCH_MOD_TABLE + unsigned(std::abs(depth)) * 2);
+            int multiplier =
+                bank.rom.read_u16(sound_5a7e9117::PITCH_MOD_TABLE + unsigned(std::abs(depth)) * 2);
             if (depth < 0) multiplier = -s16(multiplier);
             pitch_mod += (int64_t(source(v, p[0x44] & 15)) * multiplier) >> 4;
             int bend = s16(parameter_word(c, sound_5a7e9117::VOICE_OWNER_OFFSET) - 0x4000);
             pitch_mod >>= 4;
-            pitch_mod += int64_t(bend) * bend_range;
+            pitch_mod += int64_t(bend) * bank.bend_range;
             pitch_mod >>= 6;
             v.pitch = s16(v.glide_target + v.split.tuning + int(pitch_mod));
             if (v.split.mode & 128) {
@@ -745,14 +204,14 @@ struct Synth::Impl {
                 amount = std::clamp(amount + (p[0x72] << 8), 0, 32767);
                 int delta = s16((int64_t(amount) * s16(v.split.accumulator >> 16)) >> 16);
                 int span = int16_t(uint16_t((v.split.end - v.split.start) >> 4));
-                uint32_t offset = uint32_t(uint32_t(uint16_t(span)) * frequency(delta)) >> 6;
+                uint32_t offset = uint32_t(uint32_t(uint16_t(span)) * bank.frequency(delta)) >> 6;
                 uint32_t start = (v.split.end - offset) | uint32_t((v.selector & 1) << 28);
                 v.start = double((v.selector >> 1) << 20) + double(start & 0x1fffffe0) / 512;
                 v.pitch = s16(v.pitch + delta);
             }
-            v.frequency = frequency(v.pitch);
+            v.frequency = bank.frequency(v.pitch);
         }
-        if (v.direct) v.frequency = frequency(v.pitch + v.split.tuning);
+        if (v.direct) v.frequency = bank.frequency(v.pitch + v.split.tuning);
         v.increment = double(v.frequency) * NATIVE_RATE / (1024.0 * SAMPLE_RATE);
         unsigned choice = c.parameters[0x31];
         if (choice >= 3) {
@@ -881,22 +340,10 @@ struct Synth::Impl {
         next[i] = cursor;
         voice_prev[cursor] = uint8_t(i);
     }
-    int key_weight(const uint8_t *p, int key) const {
-        int amount = s8(p[0x58]), lo = p[0x5a], hi = p[0x5c];
-        if (amount == -128) return key < lo || key > hi ? -1 : 127;
-        if (amount < 0) {
-            if (key <= lo) return 127;
-            if (key >= hi) return 127 + amount;
-            return hi <= lo ? 127 : 127 + amount + (-amount) * (hi - key) / (hi - lo);
-        }
-        if (key >= hi) return 127;
-        if (key <= lo) return 127 - amount;
-        return hi <= lo ? 127 : 127 - amount + amount * (key - lo) / (hi - lo);
-    }
     void begin(const Note &n, const uint8_t *prog, const uint8_t *patch, unsigned layer,
                bool direct) {
         int kernel = uint8_t(n.kernel_key + n.channel.parameters[0x35]);
-        int weight = direct ? 127 : key_weight(patch, kernel);
+        int weight = direct ? 127 : bank.key_weight(patch, kernel);
         if (weight < 0) return;
         if (!direct) {
             int threshold = s8(patch[0x6e]);
@@ -929,7 +376,7 @@ struct Synth::Impl {
             v.released = false;
             int16_t destination = s16(((patch[0x48] & 128) ? kernel : 60) * 256 +
                                       s8(patch[0x3e]) * 2 + (patch[0x3c] << 8));
-            set_glide(v, destination, prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET]);
+            set_glide(v, destination, prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET], bank);
             parameters(v, false, n.tick);
             return;
         }
@@ -963,15 +410,16 @@ struct Synth::Impl {
                         : s16(uint8_t(n.channel.parameters[sound_5a7e9117::CHANNEL_PARAM_PITCH] +
                                       patch[0x3c]) *
                               256);
-                set_glide(v, destination, prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET]);
+                set_glide(v, destination, prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET], bank);
             }
             for (unsigned i = 0; i < 3; ++i)
-                initialize_envelope(v.envelope[i], patch + size_t(i) * 20, v, i == 2);
+                initialize_envelope(v.envelope[i], patch + size_t(i) * 20, v, i == 2, bank);
             v.lfo_target = int16_t((patch[0x66] & 127) << 8);
             v.lfo_phase = (patch[0x66] & 128) ? 0 : noise;
-            v.lfo_step = int16_t(
-                (uint32_t(v.lfo_target) * rw(sound_5a7e9117::RATE_TABLE + (patch[0x6a] & 0xf0))) >>
-                16);
+            v.lfo_step =
+                int16_t((uint32_t(v.lfo_target) *
+                         bank.rom.read_u16(sound_5a7e9117::RATE_TABLE + (patch[0x6a] & 0xf0))) >>
+                        16);
             v.filter.mode = uint8_t((patch[0x44] >> 6) & 3);
             unsigned period = (patch[0x64] & 0xf0) >> 1;
             period = (period | (period >> 4));
@@ -980,15 +428,15 @@ struct Synth::Impl {
             noise = uint16_t(noise + noise_history);
             v.random = v.previous_random = s16(noise);
         }
-        v.split = split_for(patch, layer, direct, v.pitch, v.selector, n.channel.program);
+        v.split = bank.split_for(patch, layer, direct, v.pitch, v.selector, n.channel.program);
         unsigned id = (direct ? patch[4] : patch[0x6c]) & 127;
         if (direct && id == 0x78)
             throw std::runtime_error("ROM direct sample78 enters infinite branch c1968e");
         uint32_t bit = uint32_t(v.selector & 1) << 28;
-        unsigned board = ((v.selector >> 1) & board_bank_mask) << 20;
+        unsigned board = ((v.selector >> 1) & bank.board_bank_mask) << 20;
         uint8_t control = (!direct && id >= 0x6f && id < 0x78)
                               ? 0x0b
-                              : rb(sound_5a7e9117::SPLIT_MODE_TABLE + v.split.mode);
+                              : bank.rom.read_byte(sound_5a7e9117::SPLIT_MODE_TABLE + v.split.mode);
         v.reverse = ((direct ? patch[4] : patch[0x6c]) & 128) && id < 0x54;
         if (v.reverse) control = 0x43;
         uint32_t start = v.reverse ? v.split.accumulator : v.split.start;
@@ -1002,16 +450,16 @@ struct Synth::Impl {
             d0 *= 14;
             d1 *= 14;
             const uint32_t split_table = sound_5a7e9117::SPECIAL_SPLIT_TABLE;
-            uint32_t d4 = longword(rom_pointer(split_table + d0 + 2, 4));
+            uint32_t d4 = longword(bank.rom.pointer(split_table + d0 + 2, 4));
             if (d4 == 0x1dcaa07f) {
                 d0 += 14;
-                d4 = longword(rom_pointer(split_table + d0 + 2, 4));
+                d4 = longword(bank.rom.pointer(split_table + d0 + 2, 4));
                 if (d0 == d1) d1 += 14;
             }
-            uint32_t d5 = longword(rom_pointer(split_table + d1 + 2, 4));
+            uint32_t d5 = longword(bank.rom.pointer(split_table + d1 + 2, 4));
             if (d5 == 0x1dcaa07f)
                 d5 = longword(
-                    rom_pointer(split_table + d1 + sound_5a7e9117::SPLIT_RECORD_STRIDE, 4));
+                    bank.rom.pointer(split_table + d1 + sound_5a7e9117::SPLIT_RECORD_STRIDE, 4));
             v.reverse = (patch[0x6c] & 128) != 0;
             control = v.reverse ? 0x4b : 0x0b;
             start = d4;
@@ -1039,13 +487,13 @@ struct Synth::Impl {
             // unchanged, including when the physical slot was previously free.
             v.boundary = true;
             v.loop = true;
-            v.start = double(board) + (old_hardware ? old_start : double(reset_start) / 512);
-            v.end = double(board) + (old_hardware ? old_end : double(reset_end) / 512);
-            v.position = double(board) + double(banks[v.selector].probe & 0x1fffffff) / 512;
+            v.start = double(board) + (old_hardware ? old_start : double(bank.reset_start) / 512);
+            v.end = double(board) + (old_hardware ? old_end : double(bank.reset_end) / 512);
+            v.position = double(board) + double(bank.banks[v.selector].probe & 0x1fffffff) / 512;
         }
         v.active = v.hardware_valid = true;
         move_before_cursor(index);
-        if (!direct) update_lfo(v);
+        if (!direct) update_lfo(v, bank);
         parameters(v, true, n.tick);
         std::array<uint16_t, 4> onset{v.left_volume, v.right_volume, v.k1, v.k2};
         if (!direct) {
@@ -1055,8 +503,8 @@ struct Synth::Impl {
                 v.active = false;
                 return;
             }
-            update_lfo(v);
-            update_random(v);
+            update_lfo(v, bank);
+            update_random(v, noise, noise_history);
             advance_glide(v);
             parameters(v, false, n.tick, false); // c181da calls c18372 before key-on.
         }
@@ -1065,8 +513,8 @@ struct Synth::Impl {
     }
     // Starts a layer at `start`: now when the driver is idle, otherwise through the queue so that the voice,
     // its envelopes and its events carry the delayed tick.
-    void launch(const Note &n, const uint8_t *prog, const uint8_t *patch, unsigned layer, bool direct,
-                uint64_t start) {
+    void launch(const Note &n, const uint8_t *prog, const uint8_t *patch, unsigned layer,
+                bool direct, uint64_t start) {
         if (start == n.tick && queue.empty()) {
             begin(n, prog, patch, layer, direct);
             return;
@@ -1091,9 +539,9 @@ struct Synth::Impl {
     void note_on(const Note &submitted) {
         Note n = submitted;
         n.velocity &= 127; // c16faa clears the velocity flag bit.
-        const uint8_t *prog = program(n.channel.program);
+        const uint8_t *prog = bank.program(n.channel.program);
         if (!prog) return;
-        unsigned enabled = programs[program_slot(n.channel.program)].enabled;
+        unsigned enabled = bank.programs[program_slot(n.channel.program)].enabled;
         if (!enabled) {
             int key = s8(uint8_t(n.kernel_key + n.channel.parameters[0x35]));
             for (unsigned i = 0; i < 17; ++i) {
@@ -1136,13 +584,13 @@ struct Synth::Impl {
         emit(v, VoiceEvent::Kind::Release, at);
         if (v.direct) {
             if (v.patch[0] & 128) return;
-            start_direct_release(v.envelope[2], v);
+            start_direct_release(v.envelope[2], v, bank);
         } else {
             for (Envelope &e : v.envelope) {
                 if (e.flags & 64) continue;
                 e.done = false;
                 e.stage = 4;
-                segment(e, 0, e.rates[3]);
+                segment(e, 0, e.rates[3], bank);
             }
             if (!(v.envelope[2].flags & 64) && v.envelope[2].level() == 0) {
                 stop(v, at);
@@ -1208,8 +656,8 @@ struct Synth::Impl {
         timer = (at / TIMER_TICKS + 1) * TIMER_TICKS;
         cursor = 0;
         budget_slot = 0;
-        noise = rw(sound_5a7e9117::NOISE_SEED_PTR);
-        noise_history = rw(sound_5a7e9117::NOISE_HISTORY_PTR);
+        noise = bank.rom.read_u16(sound_5a7e9117::NOISE_SEED_PTR);
+        noise_history = bank.rom.read_u16(sound_5a7e9117::NOISE_HISTORY_PTR);
         serial = 0;
         buffered_events.clear();
         buffering_events = false;
@@ -1222,7 +670,7 @@ struct Synth::Impl {
                 p.active = false;
                 launch(n, p.program, p.patch, p.layer, false, driver_clock.start(n.tick, 1));
             }
-        unsigned count = budgets[budget_slot];
+        unsigned count = bank.budgets[budget_slot];
         budget_slot = uint8_t((budget_slot + 1) % 12);
         while (count--) {
             unsigned index = cursor;
@@ -1233,8 +681,8 @@ struct Synth::Impl {
             if (v.direct) ended = update_envelope(v, 2);
             else {
                 for (unsigned i = 0; i < 3; ++i) ended |= update_envelope(v, i);
-                update_lfo(v);
-                update_random(v);
+                update_lfo(v, bank);
+                update_random(v, noise, noise_history);
             }
             if (ended) {
                 stop(v, at);
@@ -1245,39 +693,188 @@ struct Synth::Impl {
         }
     }
     double sample(size_t at) const {
-        if (samples.empty()) return 0;
-        return int16_t(samples[at & (samples.size() - 1)]);
+        if (bank.samples.empty()) return 0;
+        return int16_t(bank.samples[at & (bank.samples.size() - 1)]);
     }
-    float interpolated_gain(double encoded) const {
-        double index = std::clamp(encoded / 256.0, 0.0, 255.0);
-        unsigned i = unsigned(index);
-        return float(gain[i] + (gain[std::min(i + 1, 255u)] - gain[i]) * (index - i));
-    }
-    // gain[] is linear between adjacent entries and ramps move the encoded
-    // volume by a constant step, so a running sum tracks interpolated_gain (to
-    // double rounding) until the ramp crosses into the next table interval.
-    float ramp_gain(double encoded, double step, GainSegment &s) const {
-        if (s.frames) {
-            --s.frames;
-            s.value += s.slope;
-            return float(s.value);
+    void render_voice_block(Voice &v, size_t chunk_start, size_t chunk_frames,
+                            double samples_limit) {
+        const double length = v.end - v.start, increment = v.increment;
+        auto fill_remaining = [&](size_t start_row) {
+            for (size_t idx = start_row; idx < chunk_frames; ++idx) {
+                input[idx] = 0.f;
+                gain_left[idx] = 0.f;
+                gain_right[idx] = 0.f;
+                a1[idx] = float(v.filter.a1);
+                a2[idx] = float(v.filter.a2);
+                high_pole[idx] = float(v.filter.high_pole);
+            }
+        };
+        size_t r = 0;
+        while (r < chunk_frames) {
+            size_t n = 0;
+            const bool ramping = v.gain_frames > 0;
+            if (!v.sample_finished && v.filter.ramp == 0 &&
+                (!ramping ||
+                 (v.left_segment.frames > 0 && v.right_segment.frames > 0 && v.gain_frames > 1))) {
+                bool pos_ok = false;
+                double pos_bound = 0;
+                if (!v.reverse) {
+                    if (v.position >= 0 && v.position < samples_limit - 1 &&
+                        v.end < samples_limit - 1) {
+                        if (increment > 0) {
+                            pos_bound = std::floor((v.end - v.position) / increment) - 1.0;
+                            pos_ok = (pos_bound >= 1.0);
+                        }
+                    }
+                } else {
+                    if (v.position >= 0 && v.start >= 0 && v.position < samples_limit - 1) {
+                        if (increment > 0) {
+                            pos_bound = std::floor((v.position - v.start) / increment) - 1.0;
+                            pos_ok = (pos_bound >= 1.0);
+                        }
+                    }
+                }
+                if (pos_ok) {
+                    n = chunk_frames - r;
+                    if (ramping) {
+                        n = std::min(n, size_t(v.left_segment.frames));
+                        n = std::min(n, size_t(v.right_segment.frames));
+                        n = std::min(n, size_t(v.gain_frames - 1));
+                    }
+                    n = std::min(n, size_t(pos_bound));
+                }
+            }
+            const bool slow = n < 1;
+            if (slow) {
+                const size_t frame = chunk_start + r;
+                current_frame = frame;
+                const uint64_t frame_tick = frame_ticks[frame];
+                if (v.gain_frames) {
+                    v.left += v.step_left;
+                    v.right += v.step_right;
+                    if (!--v.gain_frames) {
+                        v.left = v.target_left;
+                        v.right = v.target_right;
+                        v.gain_dirty = true;
+                    } else {
+                        v.left_gain = ramp_gain(v.left, v.step_left, v.left_segment);
+                        v.right_gain = ramp_gain(v.right, v.step_right, v.right_segment);
+                        v.gain_dirty = false;
+                    }
+                }
+                if (v.sample_finished) {
+                    input[r] = 0.f;
+                    gain_left[r] = 0.f;
+                    gain_right[r] = 0.f;
+                    a1[r] = float(v.filter.a1);
+                    a2[r] = float(v.filter.a2);
+                    high_pole[r] = float(v.filter.high_pole);
+                    ++r;
+                    continue;
+                }
+                if (v.position < 0 || v.position >= samples_limit) {
+                    stop(v, frame_tick);
+                    fill_remaining(r);
+                    break;
+                }
+                const size_t index = size_t(v.position);
+                const double fraction = v.position - double(index);
+                const double first =
+                    (!v.loop && v.reverse && index < size_t(v.start)) ? 0.0 : sample(index);
+                const double second =
+                    (!v.loop && !v.reverse && index + 1 >= size_t(v.end)) ? 0.0 : sample(index + 1);
+                input[r] = interpolate_sample(first, second, fraction);
+                v.filter.advance();
+                a1[r] = float(v.filter.a1);
+                a2[r] = float(v.filter.a2);
+                high_pole[r] = float(v.filter.high_pole);
+                if (v.gain_dirty) {
+                    v.left_gain = interpolated_gain(v.left);
+                    v.right_gain = interpolated_gain(v.right);
+                    v.gain_dirty = false;
+                }
+                const float scale = 1.f / 524288.f;
+                gain_left[r] = v.left_gain * scale;
+                gain_right[r] = v.right_gain * scale;
+                if (advance_voice_position(v.position, v.reverse, increment, v.start, v.end, length,
+                                           v.loop, v.bidirectional) == SampleAdvance::Ended) {
+                    end_sample(v, frame_tick);
+                    fill_remaining(r + 1);
+                    break;
+                }
+                ++r;
+            } else {
+                const float a1c = float(v.filter.a1);
+                const float a2c = float(v.filter.a2);
+                const float hpc = float(v.filter.high_pole);
+                double pos = v.position;
+                const double inc = v.reverse ? -increment : increment;
+                if (ramping) {
+                    double v_left = v.left, v_right = v.right;
+                    double seg_l_val = v.left_segment.value;
+                    const double seg_l_slope = v.left_segment.slope;
+                    double seg_r_val = v.right_segment.value;
+                    const double seg_r_slope = v.right_segment.slope;
+                    const double step_l = v.step_left, step_r = v.step_right;
+                    const float scale = 1.f / 524288.f;
+                    for (size_t k = 0; k < n; ++k) {
+                        const size_t idx = r + k;
+                        const size_t i = size_t(pos);
+                        const double frac = pos - double(i);
+                        input[idx] = interpolate_sample(int16_t(bank.samples[i]),
+                                                        int16_t(bank.samples[i + 1]), frac);
+                        pos += inc;
+                        a1[idx] = a1c;
+                        a2[idx] = a2c;
+                        high_pole[idx] = hpc;
+                        v_left += step_l;
+                        v_right += step_r;
+                        seg_l_val += seg_l_slope;
+                        seg_r_val += seg_r_slope;
+                        gain_left[idx] = float(seg_l_val) * scale;
+                        gain_right[idx] = float(seg_r_val) * scale;
+                    }
+                    v.left = v_left;
+                    v.right = v_right;
+                    v.left_segment.frames -= unsigned(n);
+                    v.left_segment.value = seg_l_val;
+                    v.right_segment.frames -= unsigned(n);
+                    v.right_segment.value = seg_r_val;
+                    v.gain_frames -= unsigned(n);
+                    v.left_gain = float(seg_l_val);
+                    v.right_gain = float(seg_r_val);
+                    v.gain_dirty = false;
+                } else {
+                    if (v.gain_dirty) {
+                        v.left_gain = interpolated_gain(v.left);
+                        v.right_gain = interpolated_gain(v.right);
+                        v.gain_dirty = false;
+                    }
+                    const float gl = v.left_gain * (1.f / 524288.f);
+                    const float gr = v.right_gain * (1.f / 524288.f);
+                    for (size_t k = 0; k < n; ++k) {
+                        const size_t idx = r + k;
+                        const size_t i = size_t(pos);
+                        const double frac = pos - double(i);
+                        input[idx] = interpolate_sample(int16_t(bank.samples[i]),
+                                                        int16_t(bank.samples[i + 1]), frac);
+                        pos += inc;
+                        a1[idx] = a1c;
+                        a2[idx] = a2c;
+                        high_pole[idx] = hpc;
+                        gain_left[idx] = gl;
+                        gain_right[idx] = gr;
+                    }
+                }
+                v.position = pos;
+                current_frame = chunk_start + r + n - 1;
+                r += n;
+            }
         }
-        const float exact = interpolated_gain(encoded);
-        const double index = encoded / 256.0;
-        if (index > 0 && index < 255) {
-            const unsigned i = unsigned(index);
-            const double per_frame = step / 256.0, delta = double(gain[i + 1]) - gain[i];
-            s.value = gain[i] + delta * (index - i);
-            s.slope = delta * per_frame;
-            const double room = per_frame > 0   ? (double(i + 1) - index) / per_frame
-                                : per_frame < 0 ? (index - double(i)) / -per_frame
-                                                : 1e9;
-            s.frames = room > 2 ? unsigned(std::min(room, 1e6)) - 1 : 0;
-        }
-        return exact;
     }
-    void render(float *output, size_t frames) {
-        if (!output && frames) throw std::invalid_argument("Null HLE output buffer");
+
+    void render(MutableAudioBlockSpan<8> buses) {
+        const size_t frames = buses.size();
         if (!frames) return;
         if (frame_ticks.size() < frames) frame_ticks.resize(frames);
         uint64_t cur_tick = tick;
@@ -1288,7 +885,7 @@ struct Synth::Impl {
             cur_tick += cur_rem / SAMPLE_RATE;
             cur_rem %= SAMPLE_RATE;
         }
-        const double samples_limit = double(samples.size());
+        const double samples_limit = double(bank.samples.size());
         size_t frame_start = 0;
         while (frame_start < frames) {
             const uint64_t now = frame_ticks[frame_start];
@@ -1298,7 +895,8 @@ struct Synth::Impl {
                 const bool queue_due = queued <= now;
                 if (!timer_due && !queue_due) break;
                 tick = now;
-                if (queue_due && (!timer_due || queued <= timer)) service_queue(timer_due ? timer : now);
+                if (queue_due && (!timer_due || queued <= timer))
+                    service_queue(timer_due ? timer : now);
                 else {
                     service(timer);
                     timer += TIMER_TICKS;
@@ -1307,7 +905,7 @@ struct Synth::Impl {
             size_t frame_end = frame_start + 1;
             const uint64_t horizon = std::min(timer, queue.next_event());
             while (frame_end < frames && frame_ticks[frame_end] < horizon) ++frame_end;
-            std::fill_n(output + frame_start * 8, (frame_end - frame_start) * 8, 0.f);
+            std::fill_n(buses.data() + frame_start * 8, (frame_end - frame_start) * 8, 0.f);
             if (observer) {
                 buffering_events = true;
                 buffered_events.clear();
@@ -1316,217 +914,17 @@ struct Synth::Impl {
                  chunk_start += VOICE_BLOCK_FRAMES) {
                 const size_t chunk_frames = std::min(VOICE_BLOCK_FRAMES, frame_end - chunk_start);
                 float *ins[6] = {input, a1, a2, high_pole, gain_left, gain_right};
-                float *outs[2] = {out_left, out_right};
                 for (unsigned vi = 0; vi < 32; ++vi) {
                     Voice &v = voices[vi];
                     if (!v.active) continue;
-                    const unsigned pair = v.pair;
                     *mode_zone[vi] = float(v.filter.mode);
                     current_voice = vi;
-                    const double length = v.end - v.start, increment = v.increment;
-                    auto fill_remaining = [&](size_t start_row) {
-                        for (size_t idx = start_row; idx < chunk_frames; ++idx) {
-                            input[idx] = 0.f;
-                            gain_left[idx] = 0.f;
-                            gain_right[idx] = 0.f;
-                            a1[idx] = float(v.filter.a1);
-                            a2[idx] = float(v.filter.a2);
-                            high_pole[idx] = float(v.filter.high_pole);
-                        }
-                    };
-                    size_t r = 0;
-                    while (r < chunk_frames) {
-                        size_t n = 0;
-                        const bool ramping = v.gain_frames > 0;
-                        if (!v.sample_finished && v.filter.ramp == 0 &&
-                            (!ramping || (v.left_segment.frames > 0 && v.right_segment.frames > 0 &&
-                                          v.gain_frames > 1))) {
-                            bool pos_ok = false;
-                            double pos_bound = 0;
-                            if (!v.reverse) {
-                                if (v.position >= 0 && v.position < samples_limit - 1 &&
-                                    v.end < samples_limit - 1) {
-                                    if (increment > 0) {
-                                        pos_bound =
-                                            std::floor((v.end - v.position) / increment) - 1.0;
-                                        pos_ok = (pos_bound >= 1.0);
-                                    } else pos_ok = true;
-                                }
-                            } else {
-                                if (v.start >= 0 && v.position >= 0 &&
-                                    v.position < samples_limit - 1) {
-                                    if (increment > 0) {
-                                        pos_bound =
-                                            std::floor((v.position - v.start) / increment) - 1.0;
-                                        pos_ok = (pos_bound >= 1.0);
-                                    } else pos_ok = true;
-                                }
-                            }
-                            if (pos_ok) {
-                                n = chunk_frames - r;
-                                if (ramping) {
-                                    n = std::min(n, size_t(v.left_segment.frames));
-                                    n = std::min(n, size_t(v.right_segment.frames));
-                                    n = std::min(n, size_t(v.gain_frames - 1));
-                                }
-                                if (increment > 0 && pos_bound < double(n)) n = size_t(pos_bound);
-                            }
-                        }
-                        const bool slow = n < 1;
-                        if (slow) {
-                            const size_t frame = chunk_start + r;
-                            current_frame = frame;
-                            const uint64_t frame_tick = frame_ticks[frame];
-                            if (v.gain_frames) {
-                                v.left += v.step_left;
-                                v.right += v.step_right;
-                                if (!--v.gain_frames) {
-                                    v.left = v.target_left;
-                                    v.right = v.target_right;
-                                    v.gain_dirty = true;
-                                } else {
-                                    v.left_gain = ramp_gain(v.left, v.step_left, v.left_segment);
-                                    v.right_gain =
-                                        ramp_gain(v.right, v.step_right, v.right_segment);
-                                    v.gain_dirty = false;
-                                }
-                            }
-                            if (v.sample_finished) {
-                                input[r] = 0.f;
-                                gain_left[r] = 0.f;
-                                gain_right[r] = 0.f;
-                                a1[r] = float(v.filter.a1);
-                                a2[r] = float(v.filter.a2);
-                                high_pole[r] = float(v.filter.high_pole);
-                                ++r;
-                                continue;
-                            }
-                            if (v.position < 0 || v.position >= samples_limit) {
-                                stop(v, frame_tick);
-                                fill_remaining(r);
-                                break;
-                            }
-                            const size_t index = size_t(v.position);
-                            const double fraction = v.position - double(index);
-                            const double first =
-                                (!v.loop && v.reverse && index < size_t(v.start)) ? 0.0 : sample(index);
-                            const double second =
-                                (!v.loop && !v.reverse && index + 1 >= size_t(v.end)) ? 0.0
-                                                                                      : sample(index + 1);
-                            input[r] = float(first + (second - first) * fraction);
-                            v.filter.advance();
-                            a1[r] = float(v.filter.a1);
-                            a2[r] = float(v.filter.a2);
-                            high_pole[r] = float(v.filter.high_pole);
-                            if (v.gain_dirty) {
-                                v.left_gain = interpolated_gain(v.left);
-                                v.right_gain = interpolated_gain(v.right);
-                                v.gain_dirty = false;
-                            }
-                            const float scale = 1.f / 524288.f;
-                            gain_left[r] = v.left_gain * scale;
-                            gain_right[r] = v.right_gain * scale;
-                            v.position += v.reverse ? -increment : increment;
-                            if (!v.reverse && v.position > v.end) {
-                                if (!v.loop || length <= 0) {
-                                    end_sample(v, frame_tick);
-                                    fill_remaining(r + 1);
-                                    break;
-                                }
-                                if (v.bidirectional) {
-                                    v.position = v.end - (v.position - v.end);
-                                    v.reverse = true;
-                                } else v.position = v.start + std::fmod(v.position - v.end, length);
-                            } else if (v.reverse && v.position < v.start) {
-                                if (!v.loop || length <= 0) {
-                                    end_sample(v, frame_tick);
-                                    fill_remaining(r + 1);
-                                    break;
-                                }
-                                if (v.bidirectional) {
-                                    v.position = v.start + (v.start - v.position);
-                                    v.reverse = false;
-                                } else v.position = v.end - std::fmod(v.start - v.position, length);
-                            }
-                            ++r;
-                        } else {
-                            const float a1c = float(v.filter.a1);
-                            const float a2c = float(v.filter.a2);
-                            const float hpc = float(v.filter.high_pole);
-                            double pos = v.position;
-                            const double inc = v.reverse ? -increment : increment;
-                            if (ramping) {
-                                double v_left = v.left, v_right = v.right;
-                                double seg_l_val = v.left_segment.value;
-                                const double seg_l_slope = v.left_segment.slope;
-                                double seg_r_val = v.right_segment.value;
-                                const double seg_r_slope = v.right_segment.slope;
-                                const double step_l = v.step_left, step_r = v.step_right;
-                                const float scale = 1.f / 524288.f;
-                                for (size_t k = 0; k < n; ++k) {
-                                    const size_t idx = r + k;
-                                    const size_t i = size_t(pos);
-                                    const double frac = pos - double(i);
-                                    const double a = int16_t(samples[i]),
-                                                 b = int16_t(samples[i + 1]);
-                                    input[idx] = float(a + (b - a) * frac);
-                                    pos += inc;
-                                    a1[idx] = a1c;
-                                    a2[idx] = a2c;
-                                    high_pole[idx] = hpc;
-                                    v_left += step_l;
-                                    v_right += step_r;
-                                    seg_l_val += seg_l_slope;
-                                    seg_r_val += seg_r_slope;
-                                    gain_left[idx] = float(seg_l_val) * scale;
-                                    gain_right[idx] = float(seg_r_val) * scale;
-                                }
-                                v.left = v_left;
-                                v.right = v_right;
-                                v.left_segment.frames -= unsigned(n);
-                                v.left_segment.value = seg_l_val;
-                                v.right_segment.frames -= unsigned(n);
-                                v.right_segment.value = seg_r_val;
-                                v.gain_frames -= unsigned(n);
-                                v.left_gain = float(seg_l_val);
-                                v.right_gain = float(seg_r_val);
-                                v.gain_dirty = false;
-                            } else {
-                                if (v.gain_dirty) {
-                                    v.left_gain = interpolated_gain(v.left);
-                                    v.right_gain = interpolated_gain(v.right);
-                                    v.gain_dirty = false;
-                                }
-                                const float gl = v.left_gain * (1.f / 524288.f);
-                                const float gr = v.right_gain * (1.f / 524288.f);
-                                for (size_t k = 0; k < n; ++k) {
-                                    const size_t idx = r + k;
-                                    const size_t i = size_t(pos);
-                                    const double frac = pos - double(i);
-                                    const double a = int16_t(samples[i]),
-                                                 b = int16_t(samples[i + 1]);
-                                    input[idx] = float(a + (b - a) * frac);
-                                    pos += inc;
-                                    a1[idx] = a1c;
-                                    a2[idx] = a2c;
-                                    high_pole[idx] = hpc;
-                                    gain_left[idx] = gl;
-                                    gain_right[idx] = gr;
-                                }
-                            }
-                            v.position = pos;
-                            current_frame = chunk_start + r + n - 1;
-                            r += n;
-                        }
-                    }
-                    voice_filters[vi].compute(int(chunk_frames), ins, outs);
-                    if (pair != 0) {
-                        const unsigned pair_left = pair * 2;
-                        for (size_t k = 0; k < chunk_frames; ++k) {
-                            float *row = output + (chunk_start + k) * 8;
-                            row[pair_left] += out_left[k];
-                            row[pair_left + 1] += out_right[k];
-                        }
+
+                    render_voice_block(v, chunk_start, chunk_frames, samples_limit);
+
+                    voice_filters[vi].compute(int(chunk_frames), ins, filter_out.data());
+                    if (auto bus = otis_target_bus(v.pair)) {
+                        buses.subspan(chunk_start, chunk_frames).slice(*bus) += filter_out;
                     }
                 }
             }
@@ -1542,7 +940,7 @@ struct Synth::Impl {
                     buffered_events.clear();
                 }
             }
-            float *sub_out = output + frame_start * 8;
+            float *sub_out = buses.data() + frame_start * 8;
             const size_t sub_floats = (frame_end - frame_start) * 8;
             for (size_t i = 0; i < sub_floats; ++i)
                 sub_out[i] = std::clamp(sub_out[i], -1.f, 1.f - 1.f / 524288.f);
@@ -1552,174 +950,8 @@ struct Synth::Impl {
         tick_remainder = cur_rem;
     }
 
-    std::vector<SplitInfo> get_splits(unsigned id, int bank, bool reverse_sample) const {
-        std::vector<SplitInfo> splits;
-        if (id >= 0x78) return splits;
-        uint8_t selector = 0;
-        const uint8_t *data = nullptr;
-        size_t available = 0;
-        if (bank >= 0 && unsigned(bank) < banks.size() && banks[unsigned(bank)].count) {
-            const Bank &b = banks[unsigned(bank)];
-            selector = uint8_t(bank);
-            if (id >= b.count) return splits;
-            size_t offset = b.offset + size_t(int16_t(word(metadata.data() + b.offset + 2 + size_t(id) * 14)));
-            if (offset + 14 > metadata.size()) return splits;
-            data = metadata.data() + offset;
-            available = metadata.size() - offset;
-        } else {
-            selector = uint8_t(board_bank_mask * 2);
-            if (id > 120) return splits;
-            uint32_t address = uint32_t(sound_5a7e9117::SPLIT_TABLE_BASE + int16_t(rw(sound_5a7e9117::SPLIT_DIRECTORY + id * 2)));
-            if (address < SOUND_ROM_BASE || address + 14 > SOUND_ROM_END) return splits;
-            data = rom_pointer(address, 14);
-            available = rom.size() - size_t(data - rom.data());
-        }
-        uint32_t bit = uint32_t(selector & 1) << 28;
-        unsigned board = ((selector >> 1) & board_bank_mask) << 20;
-        uint8_t prev_cutoff = 0;
-        for (size_t i = 0; i + 14 <= available; i += 14) {
-            Split s = Split::read(data + i);
-            SplitInfo sp;
-            sp.key_low = prev_cutoff;
-            sp.key_high = s.cutoff;
-            prev_cutoff = uint8_t(std::min<int>(255, int(s.cutoff) + 1));
-            sp.tuning = s.tuning;
-            sp.loop_mode = s.mode;
-            sp.accumulator = s.accumulator;
-            sp.start = s.start;
-            sp.end = s.end;
-            uint8_t control = rb(sound_5a7e9117::SPLIT_MODE_TABLE + s.mode);
-            sp.reverse = reverse_sample;
-            if (sp.reverse) control = 0x43;
-            sp.loop = (control & 8) != 0;
-            sp.bidirectional = (control & 16) != 0;
-            uint32_t start_addr = sp.reverse ? s.accumulator : s.start;
-            uint32_t phase_addr = sp.reverse ? s.end : s.accumulator;
-            uint32_t end_addr = s.end;
-            sp.start_word = uint32_t(double(board) + double((start_addr | bit) & 0x1fffffe0) / 512);
-            sp.end_word = uint32_t(double(board) + double((end_addr | bit) & 0x1fffffe0) / 512);
-            sp.phase_word = uint32_t(double(board) + double((phase_addr | bit) & 0x1fffffff) / 512);
-            splits.push_back(sp);
-            if (s.cutoff >= 127) break;
-        }
-        return splits;
-    }
-
-    EnvelopeInfo decode_envelope(const uint8_t *p) const {
-        EnvelopeInfo env{};
-        for (unsigned i = 0; i < 4; ++i) {
-            env.levels[i] = p[i * 4] & 127;
-            env.rates[i] = p[i * 4 + 2] & 127;
-        }
-        env.key_rate = int8_t(s8((p[16] & 15) << 4) >> 4);
-        env.velocity_curve = (p[16] >> 4) & 3;
-        env.one_shot = (p[16] & 0x40) != 0;
-        env.loop = (p[16] & 0x80) != 0;
-        env.vel_level = p[18] >> 4;
-        env.vel_attack = p[18] & 15;
-        return env;
-    }
-
     std::optional<ProgramInfo> describe_program(uint16_t id) const {
-        if (id == 0xffff) return std::nullopt;
-        const unsigned slot = program_slot(id);
-        if (slot >= programs.size()) return std::nullopt;
-        const auto &entry = programs[slot];
-        if (!entry.base) return std::nullopt;
-        const uint8_t *prog = entry.base;
-        ProgramInfo info;
-        info.id = id;
-        info.enabled_mask = prog[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
-        info.glide_rate = prog[sound_5a7e9117::PROGRAM_GLIDE_OFFSET];
-        if (!info.enabled_mask) {
-            info.kind = ProgramInfo::Kind::Direct;
-            info.regions.reserve(17);
-            for (unsigned idx = 0; idx < 17; ++idx) {
-                const uint8_t *p = prog + size_t(idx) * 20;
-                DirectRegionInfo r{};
-                r.index = uint8_t(idx);
-                std::copy_n(p, 20, r.raw.data());
-                r.decay_rate = p[0] & 127;
-                r.ignore_note_off = (p[0] & 128) != 0;
-                r.release_rate = p[2] & 127;
-                r.root_key_relative = (p[2] & 128) != 0;
-                r.sample_id = p[4] & 127;
-                r.reverse = (p[4] & 128) != 0;
-                r.transposition = s8(p[6]);
-                r.fine_pitch = p[8] & 15;
-                r.sensitivity = p[8] >> 4;
-                r.key_low = s8(p[10]);
-                r.key_high = s8(p[12]);
-                r.filter_index = p[0x0e];
-                r.level = p[0x10] & 127;
-                r.level_plus_168 = (p[0x10] & 128) != 0;
-                r.pan = p[0x12] & 15;
-                r.pair_choice = (p[0x12] >> 4) & 3;
-                r.velocity_curve = p[0x12] >> 6;
-                int bank = static_cast<int>(entry.sample_banks[idx]);
-                r.splits = get_splits(r.sample_id, bank, r.reverse);
-                info.regions.push_back(std::move(r));
-            }
-        } else {
-            info.kind = ProgramInfo::Kind::Layered;
-            for (unsigned layer_idx = 0; layer_idx < 3; ++layer_idx) {
-                LayerInfo &layer = info.layers[layer_idx];
-                layer.index = uint8_t(layer_idx);
-                layer.enabled = (info.enabled_mask & (1u << layer_idx)) != 0;
-                const uint8_t *patch = prog + size_t(layer_idx) * 0x76;
-                std::copy_n(patch, 0x76, layer.raw.data());
-                for (unsigned e = 0; e < 3; ++e) {
-                    layer.envelope[e] = decode_envelope(patch + size_t(e) * 20);
-                }
-                layer.base_pitch = patch[0x3c];
-                layer.base_fine = s8(patch[0x3e]);
-                layer.use_played_key = (patch[0x48] & 128) != 0;
-                layer.pitch_envelope_depth = s8(patch[0x40]);
-                layer.pitch_envelope_offset = patch[0x0c] & 127;
-                layer.lfo_pitch_depth = s8(patch[0x42]);
-                layer.pitch_source = patch[0x44] & 15;
-                layer.allocation_mode = (patch[0x44] >> 4) & 3;
-                layer.filter_mode = (patch[0x44] >> 6) & 3;
-                layer.k2_bank = (patch[0x44] & 128) != 0;
-                layer.pitch_source_depth = s8(patch[0x46]);
-                layer.k1_base = patch[0x48] & 127;
-                layer.k1_key = s8(patch[0x4a]);
-                layer.k1_envelope = s8(patch[0x4c]);
-                layer.filter_source = patch[0x4e] & 15;
-                layer.default_pan = patch[0x4e] & 0xf0;
-                layer.filter_source_depth = s8(patch[0x50]);
-                layer.k2_base = patch[0x52] & 127;
-                layer.k2_apply_source = (patch[0x52] & 128) != 0;
-                layer.k2_key = s8(patch[0x54]);
-                layer.k2_envelope = s8(patch[0x56]);
-                layer.weight_amount = s8(patch[0x58]);
-                layer.weight_low = patch[0x5a];
-                layer.weight_high = patch[0x5c];
-                layer.level = patch[0x5e] & 127;
-                layer.level_plus_43 = (patch[0x5e] & 128) != 0;
-                layer.amplitude_source = patch[0x60] & 15;
-                layer.pair_choice = (patch[0x60] >> 4) & 3;
-                layer.priority = patch[0x60] & 0xc0;
-                layer.amplitude_source_depth = s8(patch[0x62]);
-                layer.lfo_source = patch[0x64] & 15;
-                layer.random_period = (patch[0x64] & 0xf0) >> 4;
-                layer.lfo_depth = patch[0x66] & 127;
-                layer.lfo_phase_reset = (patch[0x66] & 128) != 0;
-                layer.lfo_rate_index = patch[0x68];
-                layer.lfo_wave = patch[0x6a] & 15;
-                layer.lfo_fade_rate = patch[0x6a] >> 4;
-                layer.sample_id = patch[0x6c] & 127;
-                layer.reverse = (patch[0x6c] & 128) != 0;
-                layer.velocity_gate = s8(patch[0x6e]);
-                layer.start_source = patch[0x6e] & 15;
-                layer.start_amount = s8(patch[0x70]);
-                layer.start_offset = patch[0x72];
-                layer.delay_ticks = patch[0x74];
-                int bank = static_cast<int>(entry.sample_banks[layer_idx]);
-                layer.splits = get_splits(layer.sample_id, bank, layer.reverse);
-            }
-        }
-        return info;
+        return bank.describe_program(id);
     }
 };
 
@@ -1733,14 +965,14 @@ void Synth::channel_update(uint8_t sequence, uint8_t track, const Channel &c, ui
 }
 void Synth::reset(uint64_t tick) { m_impl->reset(tick); }
 void Synth::set_bank(uint8_t bank) { m_impl->set_bank(bank); }
-void Synth::render(float *output, size_t frames) { m_impl->render(output, frames); }
+void Synth::render(MutableAudioBlockSpan<8> buses) { m_impl->render(buses); }
 void Synth::set_observer(std::function<void(const VoiceEvent &)> observer) {
     m_impl->observer = std::move(observer);
 }
 std::optional<ProgramInfo> Synth::describe_program(uint16_t program) const {
     return m_impl->describe_program(program);
 }
-uint8_t Synth::bend_range() const { return m_impl->bend_range; }
+uint8_t Synth::bend_range() const { return m_impl->bank.bend_range; }
 bool Synth::validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
     try {
         Synth synth(sound, samples);

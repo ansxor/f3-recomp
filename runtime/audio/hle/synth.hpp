@@ -1,4 +1,5 @@
 #pragma once
+#include "audio/hle/block.hpp"
 #include "audio/hle/events.hpp"
 #include "audio/hle/observe.hpp"
 #include <cstddef>
@@ -29,7 +30,7 @@ public:
     void channel_update(uint8_t sequence, uint8_t track, const Channel &channel, uint64_t tick);
     void reset(uint64_t tick);
     void set_bank(uint8_t bank);
-    void render(float *interleaved_eight_channels, size_t frames);
+    void render(MutableAudioBlockSpan<8> buses);
     void set_observer(std::function<void(const VoiceEvent &)> observer);
     std::optional<ProgramInfo> describe_program(uint16_t program) const;
     uint8_t bend_range() const;

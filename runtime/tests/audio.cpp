@@ -902,7 +902,7 @@ static std::vector<float> effects_impulse(f3rt::hle::Effects &fx, size_t bus, si
     std::vector<float> buses(8 * frames, 0.0f);
     std::vector<float> stereo(2 * frames, 0.0f);
     buses[bus] = 1.0f;
-    fx.mix(buses.data(), stereo.data(), frames, {1.0f, 1.0f}, {1.0f, 1.0f});
+    fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
     return stereo;
 }
 
@@ -929,7 +929,7 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
             buses[f * 8 + 0] = 1.0f;
             buses[f * 8 + 1] = 1.0f;
         }
-        fx.mix(buses.data(), stereo.data(), N, {1.0f, 1.0f}, {1.0f, 1.0f});
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
         float peak = 0.0f;
         for (float s : stereo) peak = std::max(peak, std::abs(s));
         EXPECT_EQ(peak, 0.0f) << "OTIS pair 0 must produce silence (unconnected on PCB)";
@@ -944,7 +944,7 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
         std::vector<float> stereo(2 * N, 0.0f);
         buses[0 * 8 + 2] = 1.0f;
         buses[0 * 8 + 3] = 0.5f;
-        fx.mix(buses.data(), stereo.data(), N, {1.0f, 1.0f}, {1.0f, 1.0f});
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
         EXPECT_GT(stereo[0], 0.0f) << "OTIS pair 1 must reach dry output";
         EXPECT_GT(stereo[1], 0.0f) << "OTIS pair 1 must reach dry output";
         float subsequent_peak = 0.0f;
@@ -1042,7 +1042,7 @@ TEST(Audio, ChorusProgramGraphMatchesDecodedProgram) {
         std::vector<float> stereo(2 * N, 0.0f);
         buses[0 * 8 + 6] = 1.0f;
         buses[0 * 8 + 7] = 1.0f;
-        fx.mix(buses.data(), stereo.data(), N, {1.0f, 1.0f}, {1.0f, 1.0f});
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
         double l2 = 0, r2 = 0, lr = 0, side2 = 0;
         for (size_t f = 200; f < N; ++f) {
             float l = stereo[f * 2], r = stereo[f * 2 + 1];
@@ -1175,7 +1175,7 @@ TEST(Audio, MuteProgramSilencesEverything) {
     fx.select(4);
     ASSERT_EQ(fx.program(), f3rt::hle::Effects::Program::Mute);
     std::vector<float> buses(8 * 500, 1.0f), stereo(2 * 500, 1.0f);
-    fx.mix(buses.data(), stereo.data(), 500, {1.0f, 1.0f}, {1.0f, 1.0f});
+    fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
     for (float v : stereo) ASSERT_EQ(v, 0.f);
 }
 
@@ -1218,7 +1218,7 @@ TEST(Audio, EffectsAutoBypassKeepsLfoPhaseRunning) {
         std::vector<float> out;
         const auto render = [&](const std::vector<float> &buses) {
             std::vector<float> stereo(buses.size() / 4);
-            fx.mix(buses.data(), stereo.data(), buses.size() / 8, {1.0f, 1.0f}, {1.0f, 1.0f});
+            fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
             out.insert(out.end(), stereo.begin(), stereo.end());
         };
         std::vector<float> buses(8 * BLOCK, 0.0f);
@@ -1549,4 +1549,147 @@ TEST(Audio, DirectVoiceFilterIndexMatchesDriverMath) {
     EXPECT_EQ(f3rt::hle::direct_filter_index(101, 115), 692);
     EXPECT_EQ(f3rt::hle::direct_filter_index(248, 127), 1501);
     EXPECT_EQ(f3rt::hle::direct_filter_index(0, 100), 0);
+}
+
+TEST(Audio, AudioBlockAlignmentAndMultiSubscript) {
+    using namespace f3rt::hle;
+    static_assert(alignof(BusBlock) == 64, "BusBlock must be 64-byte aligned for SIMD");
+    static_assert(alignof(StereoBlock) == 64, "StereoBlock must be 64-byte aligned for SIMD");
+    static_assert(BusBlock::K_CHANNELS == 8);
+    static_assert(StereoBlock::K_CHANNELS == 2);
+    static_assert(BusBlock::K_MAX_FRAMES == 256);
+
+    BusBlock buses;
+    buses.resize(100);
+    EXPECT_EQ(buses.size(), 100);
+    EXPECT_EQ(buses.capacity(), 256);
+
+    // C++23 multi-subscript with enum
+    buses[10, OtisBus::DryL] = 0.75f;
+    buses[10, OtisBus::ReverbR] = -0.5f;
+    EXPECT_EQ((buses[10, OtisBus::DryL]), 0.75f);
+    EXPECT_EQ((buses[10, OtisBus::ReverbR]), -0.5f);
+
+    // Numeric multi-subscript matches enum index
+    EXPECT_EQ((buses[10, static_cast<size_t>(OtisBus::DryL)]), 0.75f);
+    EXPECT_EQ((buses[10, static_cast<size_t>(OtisBus::ReverbR)]), -0.5f);
+
+    // Single-subscript frame span
+    auto frame10 = buses[10];
+    EXPECT_EQ(frame10.size(), 8);
+    EXPECT_EQ(frame10[static_cast<size_t>(OtisBus::DryL)], 0.75f);
+    EXPECT_EQ(frame10[static_cast<size_t>(OtisBus::ReverbR)], -0.5f);
+
+    // Non-owning BusSpan and MutableStereoSpan
+    BusSpan bus_span = buses.span();
+    EXPECT_EQ(bus_span.size(), 100);
+    EXPECT_EQ((bus_span[10, OtisBus::DryL]), 0.75f);
+
+    StereoBlock stereo;
+    stereo.resize(100);
+    stereo[10, StereoChannel::Left] = 1.0f;
+    stereo[10, StereoChannel::Right] = 2.0f;
+    EXPECT_EQ((stereo[10, StereoChannel::Left]), 1.0f);
+    EXPECT_EQ((stereo[10, StereoChannel::Right]), 2.0f);
+}
+
+TEST(Audio, EffectsMixAudioBlockOverload) {
+    using namespace f3rt::hle;
+    const uint8_t params[10] = {30, 58, 73, 32, 37, 0, 40, 43, 18, 32};
+    const auto sound_rom = effects_test_rom(11, 6, params);
+
+    Effects fx(sound_rom);
+    fx.select(11);
+
+    BusBlock buses;
+    buses.resize(BLOCK_FRAMES);
+    buses[0, OtisBus::DryL] = 1.0f;
+    buses[0, OtisBus::DryR] = 0.5f;
+
+    StereoBlock stereo;
+    fx.mix(buses, stereo, {1.0f, 1.0f}, {1.0f, 1.0f});
+
+    EXPECT_EQ(stereo.size(), BLOCK_FRAMES);
+    EXPECT_GT((stereo[0, StereoChannel::Left]), 0.0f);
+    EXPECT_GT((stereo[0, StereoChannel::Right]), 0.0f);
+}
+
+TEST(Audio, PlanarAudioBlockAndScaledBusSubspan) {
+    using namespace f3rt::hle;
+
+    BusBlock buses;
+    buses.resize(32);
+    for (size_t f = 0; f < 32; ++f) {
+        buses[f, OtisBus::DryL] = 1.0f + float(f);
+        buses[f, OtisBus::DryR] = 2.0f + float(f);
+        buses[f, OtisBus::DelayL] = 3.0f + float(f);
+        buses[f, OtisBus::DelayR] = 4.0f + float(f);
+        buses[f, OtisBus::ReverbL] = 5.0f + float(f);
+        buses[f, OtisBus::ReverbR] = 6.0f + float(f);
+    }
+
+    const std::array<float, 2> gain = {0.5f, 2.0f};
+    PlanarAudioBlock<6, 32> in;
+
+    // Test full active bus assignment
+    in = buses.span().subspan(4, 16) * gain;
+    EXPECT_FLOAT_EQ(in[0][0], (1.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[1][0], (2.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[2][0], (3.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[3][0], (4.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[4][0], (5.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[5][0], (6.0f + 4.0f) * 2.0f);
+
+    // Clear and test dry-only slice assignment
+    in.storage[2][0] = 99.0f;
+    in.storage[4][0] = 99.0f;
+    in = buses.span().subspan(4, 16).dry() * gain;
+    EXPECT_FLOAT_EQ(in[0][0], (1.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[1][0], (2.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[2][0], 99.0f); // untouched
+    EXPECT_FLOAT_EQ(in[4][0], 99.0f); // untouched
+}
+
+TEST(Audio, MutableBusSliceAccumulateAndOtisTargetBus) {
+    using namespace f3rt::hle;
+
+    EXPECT_EQ(otis_target_bus(0), std::nullopt);
+    EXPECT_EQ(otis_target_bus(1), BusSelect::Dry);
+    EXPECT_EQ(otis_target_bus(2), BusSelect::Delay);
+    EXPECT_EQ(otis_target_bus(3), BusSelect::Reverb);
+    EXPECT_EQ(otis_target_bus(4), std::nullopt);
+
+    BusBlock buses;
+    buses.resize(16);
+    buses.fill(0.0f);
+
+    PlanarAudioBlock<2, 16> planar;
+    for (size_t f = 0; f < 16; ++f) {
+        planar[0][f] = 10.0f + float(f);
+        planar[1][f] = 20.0f + float(f);
+    }
+
+    // Accumulate planar stereo into Dry
+    buses.subspan(0, 16).dry() += planar;
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DryL]), 10.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DryR]), 20.0f);
+    EXPECT_FLOAT_EQ((buses[5, OtisBus::DryL]), 15.0f);
+    EXPECT_FLOAT_EQ((buses[5, OtisBus::DryR]), 25.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayL]), 0.0f);
+
+    // Accumulate again with slice(BusSelect::Delay)
+    buses.subspan(0, 16).slice(BusSelect::Delay) += planar;
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayL]), 10.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayR]), 20.0f);
+
+    // Test interleaved stereo accumulation
+    StereoBlock stereo;
+    stereo.resize(16);
+    for (size_t f = 0; f < 16; ++f) {
+        stereo[f, StereoChannel::Left] = 1.0f;
+        stereo[f, StereoChannel::Right] = 2.0f;
+    }
+    buses.subspan(0, 16).reverb() += stereo.span();
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbL]), 1.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbR]), 2.0f);
 }

@@ -1,4 +1,7 @@
 #include "audio/hle/sequencer.hpp"
+#include "audio/hle/rom_view.hpp"
+#include "audio/hle/voice_pool.hpp"
+#include "audio/hle/note_pool.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include <algorithm>
@@ -15,8 +18,6 @@ constexpr uint32_t ROM_BASE = SOUND_ROM_BASE;
 constexpr uint32_t STREAM_BASE = sound_5a7e9117::SEQ_STREAM_BASE;
 constexpr size_t SLOTS = 100;
 constexpr size_t TRACK_COUNT = 8;
-constexpr size_t NOTE_CAPACITY = 4096;
-constexpr uint16_t NO_NOTE = 0xffff;
 constexpr uint16_t NO_PROGRAM = 0xffff;
 
 // Song track stream layout
@@ -24,16 +25,7 @@ constexpr size_t CONDUCTOR_STREAM_INDEX = 0;
 constexpr size_t FIRST_MUSIC_STREAM_INDEX = 1;
 constexpr size_t ARRANGEMENT_STREAM_INDEX = 10;
 constexpr size_t TOTAL_SONG_STREAMS = 11;
-constexpr uint8_t MAX_PHYSICAL_CHANNEL = 56;
 constexpr uint16_t TEMPO_ACCUMULATOR_THRESHOLD = 625;
-
-// ROM bus addresses & offsets
-constexpr uint32_t BANKED_WINDOW_BASE = 0xc20000;
-constexpr uint32_t BANKED_WINDOW_END = 0xc40000;
-constexpr uint32_t BANKED_OVERFLOW_BASE = 0xc40000;
-constexpr uint32_t BANK_PAGE_SIZE = 0x20000;
-constexpr uint32_t BANK_OVERFLOW_OFFSET = 0x40000;
-constexpr uint32_t SOUND_ROM_IMAGE_SIZE = 0x80000;
 
 // Channel parameter record offsets
 constexpr size_t PARAM_PROGRAM_H = 0x04;
@@ -180,43 +172,6 @@ struct SongData {
     std::array<Channel, TRACK_COUNT> initial{};
     std::array<TrackData, TOTAL_SONG_STREAMS> tracks{};
     uint8_t linked = 0;
-};
-
-class RomView {
-public:
-    RomView(std::span<const uint8_t> image, uint8_t bank) noexcept : m_rom(image), m_bank(bank) {}
-
-    uint8_t read_byte(uint32_t address) const {
-        if (address < ROM_BASE || address >= ROM_BASE + SOUND_ROM_IMAGE_SIZE) {
-            invalid("HLE ROM read outside image");
-        }
-
-        uint32_t off = address - ROM_BASE;
-        if (m_rom.size() > SOUND_ROM_SIZE) {
-            if (address >= BANKED_WINDOW_BASE && address < BANKED_WINDOW_END) {
-                off = uint32_t(m_bank) * BANK_PAGE_SIZE + (address - BANKED_WINDOW_BASE);
-            } else if (address >= BANKED_OVERFLOW_BASE) {
-                off = BANK_OVERFLOW_OFFSET + (address - BANKED_OVERFLOW_BASE);
-            }
-        }
-
-        if (off >= m_rom.size()) {
-            invalid("HLE ROM read outside image");
-        }
-        return m_rom[off];
-    }
-
-    uint16_t read_u16(uint32_t address) const {
-        return uint16_t((uint16_t(read_byte(address)) << 8) | read_byte(address + 1));
-    }
-
-    uint32_t read_u32(uint32_t address) const {
-        return (uint32_t(read_u16(address)) << 16) | read_u16(address + 2);
-    }
-
-private:
-    std::span<const uint8_t> m_rom;
-    uint8_t m_bank;
 };
 
 TrackData parse_track_stream(const RomView &rom, uint32_t p, uint32_t end) {
@@ -411,128 +366,6 @@ std::array<SongData, SLOTS> parse_sound_bank(const RomView &rom) {
 
 // =============================================================================
 // Hardware Resource Pools (Voices & Active Notes)
-// =============================================================================
-
-struct ActiveNote {
-    uint64_t instance = 0;
-    uint16_t next = NO_NOTE;
-    uint16_t remaining = 0;
-    uint8_t key = 0;
-    uint8_t kernel_key = 0;
-};
-
-class PhysicalVoicePool {
-public:
-    // c128a8 allocates channels 56..1. Their previous-key byte survives
-    // sequence destruction; portamento must not use logical-track history.
-    void reset() noexcept {
-        m_used.fill(false);
-        m_previous_key.fill(0);
-    }
-
-    uint8_t allocate() noexcept {
-        for (uint8_t ch = MAX_PHYSICAL_CHANNEL; ch > 0; --ch) {
-            if (!m_used[ch]) {
-                m_used[ch] = true;
-                return ch;
-            }
-        }
-        return 0;
-    }
-
-    void release(uint8_t ch) noexcept {
-        if (ch > 0 && ch < m_used.size()) {
-            m_used[ch] = false;
-        }
-    }
-
-    uint8_t previous_key(uint8_t ch) const noexcept { return m_previous_key[ch]; }
-
-    void set_previous_key(uint8_t ch, uint8_t key) noexcept { m_previous_key[ch] = key; }
-
-private:
-    std::array<bool, MAX_PHYSICAL_CHANNEL + 1> m_used{};
-    std::array<uint8_t, MAX_PHYSICAL_CHANNEL + 1> m_previous_key{};
-};
-
-class NotePool {
-public:
-    NotePool() noexcept { reset(); }
-
-    void reset() noexcept {
-        m_free_head = 0;
-        for (uint16_t n = 0; n < NOTE_CAPACITY; ++n) {
-            m_notes[n] = {};
-            m_notes[n].next = (n + 1 == NOTE_CAPACITY) ? NO_NOTE : uint16_t(n + 1);
-        }
-    }
-
-    void allocate_note(uint16_t &track_head, uint64_t instance, uint8_t key, uint8_t kernel_key,
-                       uint16_t duration) {
-        if (m_free_head == NO_NOTE) {
-            invalid("HLE note bookkeeping pool exhausted");
-        }
-        const uint16_t index = m_free_head;
-        m_free_head = m_notes[index].next;
-
-        auto &n = m_notes[index];
-        n.instance = instance;
-        n.key = key;
-        n.kernel_key = kernel_key;
-        n.remaining = duration;
-        n.next = track_head;
-        track_head = index;
-    }
-
-    void release_all(uint16_t &track_head, VoiceSink &sink, uint64_t tick) {
-        while (track_head != NO_NOTE) {
-            const uint16_t n = track_head;
-            track_head = m_notes[n].next;
-            release_single(n, sink, tick);
-        }
-    }
-
-    void release_matching_key(uint16_t &track_head, uint8_t kernel_key, VoiceSink &sink,
-                              uint64_t tick) {
-        uint16_t *link = &track_head;
-        while (*link != NO_NOTE) {
-            const uint16_t n = *link;
-            if (m_notes[n].kernel_key == kernel_key) {
-                *link = m_notes[n].next;
-                release_single(n, sink, tick);
-                break;
-            }
-            link = &m_notes[n].next;
-        }
-    }
-
-    void step_durations(uint16_t &track_head, VoiceSink &sink, uint64_t tick) {
-        uint16_t *link = &track_head;
-        while (*link != NO_NOTE) {
-            const uint16_t n = *link;
-            if (m_notes[n].remaining) {
-                --m_notes[n].remaining;
-            }
-            if (!m_notes[n].remaining) {
-                *link = m_notes[n].next;
-                release_single(n, sink, tick);
-            } else {
-                link = &m_notes[n].next;
-            }
-        }
-    }
-
-private:
-    void release_single(uint16_t index, VoiceSink &sink, uint64_t tick) {
-        sink.note_off(m_notes[index].instance, tick);
-        m_notes[index].next = m_free_head;
-        m_free_head = index;
-    }
-
-    std::array<ActiveNote, NOTE_CAPACITY> m_notes{};
-    uint16_t m_free_head = 0;
-};
-
 // =============================================================================
 // Sequencer State Machine Models (TrackState & SongState)
 // =============================================================================
