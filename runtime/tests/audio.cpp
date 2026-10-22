@@ -2,9 +2,12 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
 #include "audio/hle/effects.hpp"
+#include "audio/hle/clock.hpp"
 #include "audio/hle/events.hpp"
 #include "audio/hle/note_timing.hpp"
-#include "audio/hle/synth.hpp"
+#include "audio/hle/mailbox.hpp"
+#include "audio/hle/patch.hpp"
+#include "audio/hle/pulse_timer.hpp"
 #include "audio/hle/faust/generated/voice_filter.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "interpreter.hpp"
@@ -1268,6 +1271,123 @@ TEST(HleAudio, DirectVoiceFilterIndexMatchesDriver) {
     EXPECT_EQ(f3rt::hle::direct_filter_index(101, 119), 702);
     EXPECT_EQ(f3rt::hle::direct_filter_index(179, 123), 901);
     EXPECT_EQ(f3rt::hle::direct_filter_index(0, 127), 0);
+}
+
+// The clock and the pulse timer are the only schedulers: one 1 kHz grid feeds the voice ring, the sequence tempo
+// pulse and the sequence fade pulse.
+namespace {
+using f3rt::hle::Clock;
+using f3rt::hle::PulseTimer;
+using f3rt::hle::TIMER_TICKS;
+
+struct TickRecorder final : Clock::Listener {
+    std::vector<uint64_t> ticks;
+    void clock_tick(uint64_t tick) override { ticks.push_back(tick); }
+};
+
+struct PulseRecorder final : PulseTimer::Listener {
+    std::vector<uint64_t> ticks;
+    std::vector<uint8_t> tags;
+    void pulse(uint64_t tick, uint8_t tag) override {
+        ticks.push_back(tick);
+        tags.push_back(tag);
+    }
+};
+} // namespace
+
+TEST(HleServices, ClockTicksEveryMillisecond) {
+    EXPECT_EQ(TIMER_TICKS, 16000u);
+    TickRecorder recorder;
+    Clock clock;
+    clock.add(recorder);
+    EXPECT_EQ(clock.next_tick(), uint64_t(TIMER_TICKS));
+    for (unsigned i = 0; i < 3; ++i) clock.advance_one();
+    EXPECT_EQ(recorder.ticks, (std::vector<uint64_t>{16000, 32000, 48000}));
+    EXPECT_EQ(clock.next_tick(), uint64_t(64000));
+    clock.reset(100000);
+    clock.advance_one();
+    EXPECT_EQ(recorder.ticks.back(), 112000u);
+}
+
+TEST(HleServices, PulseTimerListeners) {
+    PulseTimer beat{625, 120};
+    PulseRecorder first, second;
+    beat.add(first, 3);
+    beat.add(second, 7);
+    for (unsigned i = 0; i < 12; ++i) beat.clock_tick(uint64_t(i + 1) * TIMER_TICKS);
+    EXPECT_EQ(first.ticks, (std::vector<uint64_t>{96000, 176000}));
+    EXPECT_EQ(first.tags, (std::vector<uint8_t>{3, 3}));
+    EXPECT_EQ(second.ticks, first.ticks) << "every listener of a timer fires";
+    EXPECT_EQ(second.tags, (std::vector<uint8_t>{7, 7}));
+
+    PulseTimer fade{12, 1};
+    PulseRecorder pulses;
+    fade.add(pulses, 0xff);
+    for (unsigned i = 0; i < 24; ++i) fade.clock_tick(uint64_t(i + 1) * TIMER_TICKS);
+    EXPECT_EQ(pulses.ticks, (std::vector<uint64_t>{192000, 384000}));
+
+    fade.set_step(0);
+    for (unsigned i = 0; i < 24; ++i) fade.clock_tick(uint64_t(25 + i) * TIMER_TICKS);
+    EXPECT_EQ(pulses.ticks.size(), 2u) << "a stopped timer does not pulse";
+}
+
+TEST(HleServices, MailboxPreservesEventOrderAndRejectsOverflow) {
+    using f3rt::hle::Event;
+    using f3rt::hle::Mailbox;
+    using f3rt::hle::NoteOffEvent;
+    using f3rt::hle::NoteOnEvent;
+    using f3rt::hle::TrackEvent;
+    using f3rt::hle::TrackEventKind;
+
+    Mailbox mailbox;
+    EXPECT_TRUE(mailbox.empty());
+    NoteOnEvent on;
+    on.instance = 11;
+    on.tick = 22;
+    on.program = 33;
+    NoteOffEvent off;
+    off.instance = 44;
+    TrackEvent volume;
+    volume.kind = TrackEventKind::Volume;
+    volume.value = 55;
+    mailbox.push(on);
+    mailbox.push(off);
+    mailbox.push(volume);
+
+    std::vector<int> order;
+    mailbox.drain([&](const Event &event) {
+        if (const auto *n = std::get_if<NoteOnEvent>(&event)) {
+            EXPECT_EQ(n->instance, 11u);
+            EXPECT_EQ(n->tick, 22u);
+            EXPECT_EQ(n->program, 33u);
+            order.push_back(1);
+        } else if (const auto *o = std::get_if<NoteOffEvent>(&event)) {
+            EXPECT_EQ(o->instance, 44u);
+            order.push_back(2);
+        } else if (const auto *t = std::get_if<TrackEvent>(&event)) {
+            EXPECT_EQ(t->kind, TrackEventKind::Volume);
+            EXPECT_EQ(t->value, 55u);
+            order.push_back(3);
+        } else {
+            ADD_FAILURE() << "unexpected event alternative";
+            order.push_back(0);
+        }
+    });
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3})) << "drain is FIFO";
+    EXPECT_TRUE(mailbox.empty());
+
+    mailbox.clear();
+    EXPECT_TRUE(mailbox.empty());
+    for (size_t i = 0; i < Mailbox::CAPACITY; ++i) mailbox.push(off);
+    EXPECT_EQ(Mailbox::CAPACITY, 1024u);
+    try {
+        mailbox.push(off);
+        FAIL() << "a full mailbox must reject the push";
+    } catch (const std::runtime_error &e) {
+        EXPECT_STREQ(e.what(), "HLE mailbox full");
+    }
+    mailbox.clear();
+    EXPECT_NO_THROW(mailbox.push(off));
 }
 
 // The sound driver starts the voices of one sequencer pulse one after another (about 20k CPU cycles each on the

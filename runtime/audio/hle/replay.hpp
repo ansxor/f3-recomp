@@ -1,7 +1,6 @@
 #pragma once
-// F3RP replay script: the engine-visible effect of the game's sound-test request, as the web player and the exporter
-// replay it (tools/webplayer/README.md, section 3). One implementation of the format: encode_replay() writes it,
-// replay() reads it and drives a fresh Core.
+// F3RP replay script: the engine-visible effect of the game's sound-test request. One implementation of the format:
+// encode_replay() writes it, replay() reads it and drives a fresh Core.
 //
 //   u8[4] "F3RP"  u8 version = 1  u8 reserved = 0  u16le item_count
 //   items: u8 op, payload

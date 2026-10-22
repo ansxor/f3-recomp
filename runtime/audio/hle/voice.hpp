@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/hle/events.hpp"
+#include "audio/hle/patch.hpp"
 #include "audio/hle/sound_bank.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "f3rt/bytes.hpp"
@@ -7,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 
 namespace f3rt::hle {
 
@@ -19,9 +21,6 @@ constexpr double RATE_RATIO = double(NATIVE_RATE) / SAMPLE_RATE;
 constexpr unsigned VOLUME_RAMP = SAMPLE_RATE * 4 / 1000;
 constexpr unsigned FILTER_RAMP = SAMPLE_RATE * 3 / 1000;
 
-constexpr uint16_t parameter_word(const Channel &c, unsigned i) noexcept {
-    return read_be16(c.parameters.data() + i);
-}
 constexpr int32_t wrap_product(int64_t x) noexcept { return int32_t(uint32_t(x)); }
 constexpr uint16_t volume_target(int value, int threshold) noexcept {
     value = s16(value - threshold);
@@ -150,10 +149,19 @@ struct Filter {
     }
 };
 
+struct Track;
+
 struct Voice {
-    Note owner{};
-    const uint8_t *patch = nullptr;
+    NoteOnEvent owner{};
+    const Patch *patch = nullptr;
+    Track *track = nullptr;
+    uint32_t filter_epoch = 0;
     Split split{};
+    // envelope[] slots, in EnvelopeRole order.
+    static constexpr unsigned pitch_envelope = std::to_underlying(EnvelopeRole::Pitch);
+    static constexpr unsigned filter_envelope = std::to_underlying(EnvelopeRole::Filter);
+    static constexpr unsigned amplitude_envelope = std::to_underlying(EnvelopeRole::Amplitude);
+    static_assert(pitch_envelope == 0 && filter_envelope == 1 && amplitude_envelope == 2);
     std::array<Envelope, 3> envelope{};
     Filter filter{};
     double position = 0, start = 0, end = 0, increment = 0;
@@ -161,17 +169,20 @@ struct Voice {
     float left_gain = 0, right_gain = 0;
     bool gain_dirty = true;
     uint64_t serial = 0;
-    uint16_t frequency = 0, left_volume = 0, right_volume = 0, k1 = 0, k2 = 0;
+    uint16_t frequency = 0, left_volume = 0, right_volume = 0;
+
+    uint16_t filter_cutoff_low = 0;  //!< k1 register
+    uint16_t filter_cutoff_high = 0; //!< k2 register
     int16_t lfo = 0, lfo_depth = 0, lfo_target = 0, lfo_step = 0;
     uint16_t lfo_phase = 0, random_countdown = 0, random_period = 0;
     int16_t random = 0, previous_random = 0, pitch = 0, glide = 0, glide_target = 0,
             glide_destination = 0;
-    uint8_t layer = 0, selector = 14, pair = 0, priority = 0, allocation = 0;
+    uint8_t selector = 14, pair = 0, priority = 0, allocation = 0;
     uint8_t effective_key = 0, weight = 127, pressure = 0, slot = 0;
     unsigned gain_frames = 0;
     double step_left = 0, step_right = 0;
     GainSegment left_segment{}, right_segment{};
-    bool active = false, released = false, direct = false, reverse = false;
+    bool active = false, released = false, reverse = false;
     bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
          hardware_valid = false;
     uint64_t release_serial = 0;
@@ -189,97 +200,47 @@ inline void segment(Envelope &e, unsigned target, int r, const SoundBank &bank) 
     e.target = uint32_t(uint16_t(target ^ (e.slope <= 0 ? 0x8000 : 0))) << 16;
 }
 
-inline void initialize_envelope(Envelope &e, const uint8_t *p, const Voice &v, bool amplitude,
+template <EnvelopeRole Role>
+inline void initialize_envelope(Envelope &e, EnvelopePatch<Role> patch, const Voice &v,
                                 const SoundBank &bank) {
     e = {};
-    e.flags = p[16];
-    unsigned index = ((p[16] & 0x30) << 3) + v.owner.velocity;
-    int gain_scale = int(p[18] >> 4) * 8 + int(p[18] >> 5);
+    e.flags = patch.flags();
+    unsigned index = velocity_curve_index(patch.velocity_curve(), v.owner.velocity);
+    int gain_scale = velocity_level_scale(patch.velocity_level());
     int scale = s16(0x4000 - (128 - bank.velocity_curves[index]) * gain_scale) >> 6;
-    for (unsigned i = 0; i < 4; ++i) e.levels[i] = uint16_t((p[size_t(i) * 4] & 127) * scale);
-    int nibble = s8((p[16] & 15) << 4) >> 4;
-    int key_scale = -(s16((int(v.effective_key) - 64) * nibble * 18) >> 6);
-    int vel_rate = (p[18] & 15) * 9 * v.owner.velocity >> 7;
-    e.rates[0] = uint8_t(std::clamp(int(p[2] & 127) - vel_rate, 0, 99));
-    e.rates[1] = uint8_t(std::clamp(int(p[6] & 127) + key_scale, 0, 99));
-    e.rates[2] = uint8_t(std::clamp(int(p[10] & 127) + key_scale, 0, 99));
-    e.rates[3] = uint8_t(p[14] & 127);
+    for (unsigned i = 0; i < 4; ++i) e.levels[i] = uint16_t(patch.level(i) * scale);
+    int key_scale = -(s16((int(v.effective_key) - 64) * patch.key_rate() * 18) >> 6);
+    int vel_rate = patch.velocity_attack() * 9 * v.owner.velocity >> 7;
+    e.rates[0] = uint8_t(std::clamp(int(patch.rate(0)) - vel_rate, 0, 99));
+    e.rates[1] = uint8_t(std::clamp(int(patch.rate(1)) + key_scale, 0, 99));
+    e.rates[2] = uint8_t(std::clamp(int(patch.rate(2)) + key_scale, 0, 99));
+    e.rates[3] = patch.rate(3);
     e.position = uint32_t(e.levels[0]) << 16;
-    if (amplitude && s16(e.levels[1] - e.levels[0]) > 0x3000 && e.rates[0] > 20) {
-        e.intermediate = true;
-        segment(e, uint16_t(e.levels[1] - 0x1400), e.rates[0] - 10, bank);
-    } else segment(e, e.levels[1], e.rates[0], bank);
+    if constexpr (Role == EnvelopeRole::Amplitude) {
+        if (s16(e.levels[1] - e.levels[0]) > 0x3000 && e.rates[0] > 20) {
+            e.intermediate = true;
+            segment(e, uint16_t(e.levels[1] - 0x1400), e.rates[0] - 10, bank);
+            return;
+        }
+    }
+    segment(e, e.levels[1], e.rates[0], bank);
 }
 
-// c1983c: ramp the level to 0 at the patch's release rate (patch +2).
+// c1983c: ramp the level to 0 at the direct region's release rate.
 inline void start_direct_release(Envelope &e, const Voice &v, const SoundBank &bank) {
     e.done = false;
     e.position &= 0xffff0000;
     e.slope = wrap_product(
         -int64_t(0x7f00) *
-        s16(bank.rom.read_u16(sound_5a7e9117::RATE_TABLE + 2 * (v.patch[2] & 127))) * 2);
+        s16(bank.rom.read_u16(sound_5a7e9117::RATE_TABLE + 2 * v.patch->direct().release_rate())) *
+        2);
     e.target = e.slope <= 0 ? 0x80000000 : 0;
     e.stage = 4;
-}
-
-inline int16_t source(const Voice &v, unsigned selector) {
-    switch (selector & 15) {
-    case 0:
-        return v.lfo;
-    case 1:
-        return v.envelope[0].level();
-    case 2:
-        return v.envelope[1].level();
-    case 3:
-        return v.envelope[2].level();
-    case 4:
-        return v.random;
-    case 5:
-        return v.previous_random;
-    case 6:
-        return s16(v.owner.velocity * 257);
-    case 7:
-        return s16((int(v.effective_key) - 60) * 256);
-    case 8:
-        return s16(parameter_word(v.owner.channel, 0x1a));
-    case 9:
-        return s16(parameter_word(v.owner.channel, 0x12));
-    case 10:
-        return s16(parameter_word(v.owner.channel, 0x0a));
-    case 11:
-        return s16(parameter_word(v.owner.channel, 0x10));
-    case 12:
-        return s16(parameter_word(v.owner.channel, 0x0c));
-    case 13:
-        return s16(v.pressure * 256);
-    case 14:
-        return 0x7fff;
-    case 15:
-        return 0;
-    default:
-        break;
-    }
-    return 0;
 }
 
 inline double accumulator_start(const Voice &v) noexcept {
     uint32_t address = (v.split.accumulator | ((v.selector & 1) << 28)) & 0x1fffff00;
     return double((v.selector >> 1) << 20) + double(address) / 512;
-}
-
-inline void update_lfo(Voice &v, const SoundBank &bank) {
-    const uint8_t *p = v.patch;
-    v.lfo_depth = s16(v.lfo_depth + v.lfo_step);
-    if (uint16_t(v.lfo_depth) > uint16_t(v.lfo_target)) {
-        v.lfo_step = 0;
-        v.lfo_depth = v.lfo_target;
-    }
-    unsigned phase_index = p[0x68];
-    v.lfo_phase = uint16_t(v.lfo_phase + bank.phase_rates[phase_index]);
-    unsigned wave = ((p[0x6a] & 15) << 8) | (v.lfo_phase >> 8);
-    int modulation = source(v, p[0x64] & 15);
-    int depth = std::clamp(int(v.lfo_depth) + modulation, 0, 32767);
-    v.lfo = s16((depth * int(s8(bank.rom.read_byte(sound_5a7e9117::LFO_WAVE_TABLE + wave)))) >> 7);
 }
 
 inline void update_random(Voice &v, uint16_t &noise, uint16_t &noise_history) {

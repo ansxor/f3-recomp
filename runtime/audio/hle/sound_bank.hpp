@@ -1,5 +1,5 @@
 #pragma once
-#include "audio/hle/observe.hpp"
+#include "audio/hle/patch.hpp"
 #include "audio/hle/rom_view.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "f3rt/bytes.hpp"
@@ -9,7 +9,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -80,29 +79,82 @@ public:
     }
 
     void set_bank(uint8_t bank) noexcept { rom.set_bank(bank); }
-    uint8_t bank() const noexcept { return rom.bank(); }
 
     const ProgramData &program_data(unsigned slot) const noexcept { return programs[slot]; }
 
-    const uint8_t *program(uint16_t id) const {
-        if (id == 0xffff) return nullptr;
-        const unsigned slot = program_slot(id);
-        const auto *base = programs[slot].base;
-        if (!base) {
-            if (id & 0x8000)
-                throw std::runtime_error("HLE program selects unpopulated sound ROM bank");
-            return nullptr;
-        }
-        return base;
-    }
-
-    Split split_for(const uint8_t *patch, unsigned layer, bool direct, int pitch, uint8_t &selector,
+    Split split_for(Layer patch, unsigned layer, int pitch, uint8_t &selector,
                     uint16_t program_id) const {
-        unsigned id = (direct ? patch[4] : patch[0x6c]) & 127;
-        if (!direct && id >= 0x78) {
+        if (patch.sample().table()) {
             selector = uint8_t(board_bank_mask * 2);
             return Split{};
         }
+        return split_lookup(patch.sample_id(), layer, pitch, selector, program_id);
+    }
+
+    Split split_for(DirectPatch patch, unsigned layer, int pitch, uint8_t &selector,
+                    uint16_t program_id) const {
+        return split_lookup(patch.sample_id(), layer, pitch, selector, program_id);
+    }
+
+    int key_weight(Layer patch, int key) const noexcept {
+        int amount = patch.weight_amount(), lo = patch.weight_low(), hi = patch.weight_high();
+        if (amount == -128) return key < lo || key > hi ? -1 : 127;
+        if (amount < 0) {
+            if (key <= lo) return 127;
+            if (key >= hi) return 127 + amount;
+            return hi <= lo ? 127 : 127 + amount + (-amount) * (hi - key) / (hi - lo);
+        }
+        if (key >= hi) return 127;
+        if (key <= lo) return 127 - amount;
+        return hi <= lo ? 127 : 127 - amount + amount * (key - lo) / (hi - lo);
+    }
+
+    uint16_t frequency(int pitch) const noexcept {
+        pitch = std::clamp(int(s16(pitch)), -0x4800, 0x5400);
+        unsigned shifts = 0;
+        uint32_t result;
+        if (pitch < 0) {
+            while (pitch < 0) {
+                pitch += 0xc00;
+                ++shifts;
+            }
+            result = pitches[unsigned(pitch >> 2)] >> shifts;
+        } else {
+            while (pitch >= 0xc00) {
+                pitch -= 0xc00;
+                ++shifts;
+            }
+            result = uint32_t(pitches[unsigned(pitch >> 2)]) << shifts;
+        }
+        return uint16_t(result) & 0xfffe;
+    }
+
+    uint16_t rate(int r) const noexcept { return rates[unsigned(std::clamp(r, 0, 99))]; }
+
+    uint16_t coefficient(int value, unsigned b = 0) const noexcept {
+        unsigned index = unsigned(std::clamp(value, 0, 1023)) + b;
+        return uint16_t(filters[index] << 4) & 0xfff0;
+    }
+
+    RomView rom;
+    std::span<const uint16_t> samples;
+    std::vector<uint8_t> metadata;
+    std::array<Bank, 16> banks{};
+    std::array<ProgramData, 1024> programs{};
+    std::array<uint16_t, 128> rates{};
+    std::array<uint16_t, 256> phase_rates{};
+    std::array<uint16_t, 2048> filters{};
+    std::array<uint16_t, 768> pitches{};
+    std::array<uint8_t, 128> attenuation{}, pan{};
+    std::array<uint8_t, 512> velocity_curves{};
+    std::array<uint8_t, 12> budgets{};
+    uint8_t bend_range = 0;
+    unsigned board_bank_mask = 0;
+    uint32_t reset_start = 0, reset_end = 0;
+
+private:
+    Split split_lookup(uint8_t id, unsigned layer, int pitch, uint8_t &selector,
+                       uint16_t program_id) const {
         int bank_idx = static_cast<int>(programs[program_slot(program_id)].sample_banks[layer]);
         if (bank_idx == -2) throw std::runtime_error("HLE instrument names missing sample bank");
         const uint8_t *data = nullptr;
@@ -135,68 +187,6 @@ public:
         throw std::runtime_error("HLE sample splits do not cover key");
     }
 
-    uint16_t frequency(int pitch) const noexcept {
-        pitch = std::clamp(int(s16(pitch)), -0x4800, 0x5400);
-        unsigned shifts = 0;
-        uint32_t result;
-        if (pitch < 0) {
-            while (pitch < 0) {
-                pitch += 0xc00;
-                ++shifts;
-            }
-            result = pitches[unsigned(pitch >> 2)] >> shifts;
-        } else {
-            while (pitch >= 0xc00) {
-                pitch -= 0xc00;
-                ++shifts;
-            }
-            result = uint32_t(pitches[unsigned(pitch >> 2)]) << shifts;
-        }
-        return uint16_t(result) & 0xfffe;
-    }
-
-    uint16_t rate(int r) const noexcept { return rates[unsigned(std::clamp(r, 0, 99))]; }
-
-    uint16_t coefficient(int value, unsigned b = 0) const noexcept {
-        unsigned index = unsigned(std::clamp(value, 0, 1023)) + b;
-        return uint16_t(filters[index] << 4) & 0xfff0;
-    }
-
-    int key_weight(const uint8_t *p, int key) const noexcept {
-        int amount = s8(p[0x58]), lo = p[0x5a], hi = p[0x5c];
-        if (amount == -128) return key < lo || key > hi ? -1 : 127;
-        if (amount < 0) {
-            if (key <= lo) return 127;
-            if (key >= hi) return 127 + amount;
-            return hi <= lo ? 127 : 127 + amount + (-amount) * (hi - key) / (hi - lo);
-        }
-        if (key >= hi) return 127;
-        if (key <= lo) return 127 - amount;
-        return hi <= lo ? 127 : 127 - amount + amount * (key - lo) / (hi - lo);
-    }
-
-    std::optional<ProgramInfo> describe_program(uint16_t id) const {
-        return sound_5a7e9117::describe_program(rom, metadata, banks, programs, board_bank_mask,
-                                                id);
-    }
-
-    RomView rom;
-    std::span<const uint16_t> samples;
-    std::vector<uint8_t> metadata;
-    std::array<Bank, 16> banks{};
-    std::array<ProgramData, 1024> programs{};
-    std::array<uint16_t, 128> rates{};
-    std::array<uint16_t, 256> phase_rates{};
-    std::array<uint16_t, 2048> filters{};
-    std::array<uint16_t, 768> pitches{};
-    std::array<uint8_t, 128> attenuation{}, pan{};
-    std::array<uint8_t, 512> velocity_curves{};
-    std::array<uint8_t, 12> budgets{};
-    uint8_t bend_range = 0;
-    unsigned board_bank_mask = 0;
-    uint32_t reset_start = 0, reset_end = 0;
-
-private:
     void append_word(uint16_t w) {
         metadata.push_back(uint8_t(w >> 8));
         metadata.push_back(uint8_t(w));
@@ -311,7 +301,7 @@ private:
                     continue;
                 }
                 data.base = rom.data() + (addr - SOUND_ROM_BASE);
-                data.enabled = data.base[sound_5a7e9117::PROGRAM_ENABLED_OFFSET] >> 5;
+                data.enabled = Program{data.base}.enabled();
                 if (!data.enabled) {
                     const uint8_t *p = data.base;
                     uint32_t mask = 0;

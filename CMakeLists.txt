@@ -310,7 +310,9 @@ set(F3RT_CORE_SOURCES
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
     runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/audio/hle/replay.cpp
-    runtime/audio/hle/sequencer.cpp runtime/audio/hle/synth.cpp
+    runtime/audio/hle/sequencer.cpp runtime/audio/hle/program_service.cpp
+    runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
+    runtime/audio/hle/synthesis.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
     ${AUDIO_SOURCES}
@@ -480,8 +482,7 @@ if(F3_ROM_DIR)
 endif()
 target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
-add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/webplayer_export.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp
-    tools/webplayer/bundle.cpp tools/webplayer/discovery.cpp tools/webplayer/json.cpp tools/webplayer/trace_recorder.cpp tools/webplayer/driver.cpp)
+add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
 # A game opts into sound-extract/music-export by providing games/<game>/sound/profile.cpp, which
 # registers its sound request path under its set id. Every game's profile is linked into every
 # build, so any set can be extracted from any build.
@@ -490,8 +491,7 @@ target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
 target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
 target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
-    F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-    F3RT_WEBPLAYER_SITE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools/webplayer/site")
+    F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 if(F3_ROM_DIR)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
 endif()
@@ -592,9 +592,7 @@ if(BUILD_TESTING)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
     endforeach()
     # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
-    target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp runtime/tests/webplayer_test.cpp
-        tools/webplayer/bundle.cpp tools/webplayer/json.cpp tools/webplayer/trace_recorder.cpp)
-    target_include_directories(f3rt-test-audio PRIVATE tools)
+    target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)

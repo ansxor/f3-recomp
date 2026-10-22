@@ -1,16 +1,14 @@
 #pragma once
-// Single-threaded HLE audio core: Synth + Effects + Sequencer, the tick -> frame render loop, the gain math and the
-// command / reset / bank / gain handling of the former AudioEngine worker. No thread, mutex, SDL, Machine or mailbox
-// dependency: AudioEngine wraps it with a thread and the mailbox, the WASM build and the native web-player exporter use
-// it directly, so there is one implementation of the mixing path (tools/webplayer/README.md, section 2).
+// Single-threaded HLE audio core: the synthesis services, Effects and Sequencer, the tick -> frame render loop, the
+// gain math and the command / reset / bank / gain handling of the former AudioEngine worker. No thread, mutex, SDL,
+// Machine or mailbox dependency: AudioEngine wraps it with a thread and the mailbox, so there is one implementation of
+// the mixing path.
 #include "audio/hle/block.hpp"
 #include "audio/hle/events.hpp"
-#include "audio/hle/observe.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <span>
 
 namespace f3rt::hle {
@@ -46,9 +44,8 @@ public:
 
     // ---- time. Worker timebase: 16 MHz ticks since construction, monotonic. A tick argument smaller than tick() is
     // clamped to tick().
-    uint64_t tick() const;       // sequencer events up to and including this tick have fired
-    uint64_t frames() const;     // frames handed to the sink so far
-    uint64_t next_boundary() const; // next sequencer timer tick (1 kHz service or 12 ms fade timer)
+    uint64_t tick() const;          // sequencer events up to and including this tick have fired
+    uint64_t frames() const;        // frames handed to the sink so far
     // floor(tick * SAMPLE_RATE / MAIN_CLOCK), overflow-free.
     static uint64_t frames_at(uint64_t tick);
 
@@ -62,13 +59,10 @@ public:
     // `raw` = mailbox byte 0x7fa (channel 0) / 0x7fb (channel 1); only raw & 63 is used.
     void set_gain(unsigned channel, uint8_t raw, uint64_t tick);
 
-    // ---- diagnostics/exporter API (observe.hpp)
-    void set_trace(TraceTap *tap);
-    EffectsInfo effects_info() const;
-    std::optional<ProgramInfo> describe_program(uint16_t program) const;
-    std::optional<SequenceInfo> describe_sequence(uint8_t id) const;
-    bool sequences_running() const;
-    uint8_t bend_range() const;
+
+    // Throws-nothing check that the ROM and samples can be driven by the HLE core.
+    static bool validate(std::span<const uint8_t> sound_rom,
+                         std::span<const uint16_t> sample_words) noexcept;
 
     // Sets flush-to-zero and denormals-are-zero on the calling thread (x86 SSE, aarch64 FPCR); no-op elsewhere,
     // including WebAssembly. Core never calls it: the thread driving the Core does.

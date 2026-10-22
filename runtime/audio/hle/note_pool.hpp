@@ -54,18 +54,21 @@ public:
         }
     }
 
-    template <typename Sink>
-    void release_matching_key(uint16_t &track_head, uint8_t kernel_key, Sink &sink, uint64_t tick) {
+    // Unlinks the first note of `kernel_key` and returns its instance id (0 when none). No sink: the caller releases
+    // the voice itself.
+    uint64_t release_matching_key(uint16_t &track_head, uint8_t kernel_key) {
         uint16_t *link = &track_head;
         while (*link != NO_NOTE) {
             const uint16_t n = *link;
             if (m_notes[n].kernel_key == kernel_key) {
                 *link = m_notes[n].next;
-                release_single(n, sink, tick);
-                break;
+                const uint64_t instance = m_notes[n].instance;
+                release_entry(n);
+                return instance;
             }
             link = &m_notes[n].next;
         }
+        return 0;
     }
 
     template <typename Sink> void step_durations(uint16_t &track_head, Sink &sink, uint64_t tick) {
@@ -85,10 +88,14 @@ public:
     }
 
 private:
-    template <typename Sink> void release_single(uint16_t index, Sink &sink, uint64_t tick) {
-        sink.note_off(m_notes[index].instance, tick);
+    void release_entry(uint16_t index) {
         m_notes[index].next = m_free_head;
         m_free_head = index;
+    }
+
+    template <typename Sink> void release_single(uint16_t index, Sink &sink, uint64_t tick) {
+        sink.note_off(m_notes[index].instance, tick);
+        release_entry(index);
     }
 
     std::array<ActiveNote, NOTE_CAPACITY> m_notes{};

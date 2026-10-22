@@ -1,7 +1,6 @@
 #pragma once
 #include "audio/hle/block.hpp"
 #include "audio/hle/events.hpp"
-#include "audio/hle/observe.hpp"
 #include "audio/hle/faust/generated/chorus.hpp"
 #include "audio/hle/faust/generated/dc_blocker.hpp"
 #include "audio/hle/faust/generated/echo.hpp"
@@ -20,7 +19,8 @@
 #include <string_view>
 
 namespace f3rt::hle {
-static_assert(SAMPLE_RATE == 29762, "effect delay lengths are in ES5510 frames (the OTIS/ESP sample rate)");
+static_assert(SAMPLE_RATE == 29762,
+              "effect delay lengths are in ES5510 frames (the OTIS/ESP sample rate)");
 
 // Substitute for the ES5510 effects programs. The sound ROM holds a table of program pointers (0xc1c3a2) and a
 // preset table (0xc1c2d2, 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15
@@ -78,7 +78,8 @@ private:
     // A FAUST control zone, assigned from update().
     class Zone {
     public:
-        Zone(const faust::Controls &controls, std::string_view label) : m_zone(controls.zone(label)) {}
+        Zone(const faust::Controls &controls, std::string_view label)
+            : m_zone(controls.zone(label)) {}
         Zone(const Zone &) = delete;
         Zone &operator=(const Zone &) = delete;
         void operator=(float value) const { *m_zone = value; }
@@ -134,15 +135,17 @@ private:
     template <class Dsp> struct Common : Instance<Dsp> {
         Zone chorus_out{this->controls, "chorus_out"}, dry_send{this->controls, "dry_send"},
             chorus_to_reverb{this->controls, "chorus_to_reverb"}, send{this->controls, "send"},
-            decay{this->controls, "decay"}, damp{this->controls, "damp"}, depth{this->controls, "depth"};
+            decay{this->controls, "decay"}, damp{this->controls, "damp"},
+            depth{this->controls, "depth"};
         Lfo lfo_c{this->controls, "c"};
     };
     // The Reverb, Chorus and Echo programs share the reverb tank and its constants.
     template <class Dsp> struct Tank : Common<Dsp> {
         Zone scale{this->controls, "scale"}, leak{this->controls, "leak"}, c1{this->controls, "c1"},
             c2{this->controls, "c2"}, g{this->controls, "g"}, tap_l0{this->controls, "tap_l0"},
-            tap_l1{this->controls, "tap_l1"}, tap_l2{this->controls, "tap_l2"}, tap_r0{this->controls, "tap_r0"},
-            tap_r1{this->controls, "tap_r1"}, tap_r2{this->controls, "tap_r2"};
+            tap_l1{this->controls, "tap_l1"}, tap_l2{this->controls, "tap_l2"},
+            tap_r0{this->controls, "tap_r0"}, tap_r1{this->controls, "tap_r1"},
+            tap_r2{this->controls, "tap_r2"};
     };
     struct ReverbProgram : Tank<faust::ReverbDsp> {};
     template <class Dsp> struct FeedbackProgram : Tank<Dsp> {
@@ -153,10 +156,12 @@ private:
         Lfo lfo_a{controls, "a"}, lfo_b{controls, "b"};
     };
     struct EchoProgram : FeedbackProgram<faust::EchoDsp> {
-        Zone echo{controls, "echo"}, mod_center{controls, "mod_center"}, enhance{controls, "enhance"};
+        Zone echo{controls, "echo"}, mod_center{controls, "mod_center"},
+            enhance{controls, "enhance"};
     };
     struct HallProgram : Common<faust::HallDsp> {
-        Zone a{controls, "hall_a"}, g{controls, "hall_g"}, g2{controls, "hall_g2"}, g108{controls, "hall_g108"};
+        Zone a{controls, "hall_a"}, g{controls, "hall_g"}, g2{controls, "hall_g2"},
+            g108{controls, "hall_g108"};
     };
     struct DcBlocker : Instance<faust::DcBlockerDsp> {
         Zone gain_l{controls, "gain_l"}, gain_r{controls, "gain_r"}, r{controls, "r"};
@@ -171,11 +176,13 @@ private:
 
     // Reverb tank constants of the Reverb/Chorus/Echo programs (GPR values of the decoded programs).
     struct TankConstants {
-        float scale = .7071f;   // input scale: G59 * G4 (Chorus/Echo) or ASR * G4 (Reverb)
-        float leak = .0075f;    // G3: one-pole leak of the mono input, gain (1 - leak) * scale
-        float c1 = .00703f, c2 = .04922f; // G108 / 8 and G108 * 0.875: recirculation through the damping poles
-        float g = .4f;          // all-pass gain of the 168/276 pair (G8), (1 - g^2) = G10
-        float tap_l[3] = {.13333f, .66667f, .46667f}; // wet weights of W48 / W68 / W85 at 384/4/26 (L)
+        float scale = .7071f; // input scale: G59 * G4 (Chorus/Echo) or ASR * G4 (Reverb)
+        float leak = .0075f;  // G3: one-pole leak of the mono input, gain (1 - leak) * scale
+        float c1 = .00703f,
+              c2 = .04922f; // G108 / 8 and G108 * 0.875: recirculation through the damping poles
+        float g = .4f;      // all-pass gain of the 168/276 pair (G8), (1 - g^2) = G10
+        float tap_l[3] = {.13333f, .66667f,
+                          .46667f}; // wet weights of W48 / W68 / W85 at 384/4/26 (L)
         float tap_r[3] = {.13333f, .66667f, .66667f}; // ... and 1105/242/180 (R)
     };
     TankConstants m_tank;
@@ -185,7 +192,8 @@ private:
     float m_decay = .25f, m_damp = .3125f, m_feedback = 0.f, m_sin_mix = 0.f, m_cos_mix = 1.f;
     float m_send = .2448f, m_dry_send = .9695f, m_chorus_to_reverb = .2448f, m_chorus_out = .9695f;
     float m_echo = 7168.f, m_mod_center = .49f, m_enhance = .00683594f;
-    float m_hall_a = .5f, m_hall_g = .65625f, m_hall_g2 = .52295f, m_hall_g108 = .04689f, m_lfo_depth = 8.f;
+    float m_hall_a = .5f, m_hall_g = .65625f, m_hall_g2 = .52295f, m_hall_g108 = .04689f,
+          m_lfo_depth = 8.f;
     double m_eps_a = 0.0, m_eps_b = 0.0, m_eps_c = 0.0; // LFO rates, rad per frame
 
     std::span<const uint8_t> m_rom;
@@ -193,7 +201,8 @@ private:
     uint8_t m_preset = 0;
     static constexpr size_t K_DELAY_BUFFER_SIZE = 96000ull * SAMPLE_RATE / 48000;
     static constexpr size_t K_BUCKET_COUNT = 16;
-    static constexpr size_t K_BUCKET_SIZE = 6000ull * SAMPLE_RATE / 48000; // 16 * K_BUCKET_SIZE ~ K_DELAY_BUFFER_SIZE
+    static constexpr size_t K_BUCKET_SIZE =
+        6000ull * SAMPLE_RATE / 48000; // 16 * K_BUCKET_SIZE ~ K_DELAY_BUFFER_SIZE
     // Frames per FAUST compute() call (the caller renders at most 256 at a time).
     static constexpr size_t K_CHUNK = 256;
 
@@ -229,7 +238,9 @@ private:
     //     0.0703 for p6 = 94, Hall 0.0078 for p6 = 143, Chorus/Echo 0.0075).
     void update() {
         constexpr double Q23 = 8388608.0;
-        const auto lfo_rate = [&](double slope) { return std::max(0.0, slope * (double(m_parameters[2]) - 15.0)) / Q23; };
+        const auto lfo_rate = [&](double slope) {
+            return std::max(0.0, slope * (double(m_parameters[2]) - 15.0)) / Q23;
+        };
         m_chorus_to_reverb = table(m_parameters[8]);
         m_chorus_out = table(127 - m_parameters[8]);
         m_send = table(m_parameters[9]);
@@ -250,8 +261,12 @@ private:
             m_tank.c1 = g108 / 8.f;
             m_tank.c2 = g108 * .875f;
             m_tank.g = float(m_parameters[7]) / 128.f;
-            m_tank.tap_l[0] = .125f; m_tank.tap_l[1] = .625f; m_tank.tap_l[2] = .4375f;
-            m_tank.tap_r[0] = .125f; m_tank.tap_r[1] = .625f; m_tank.tap_r[2] = .625f;
+            m_tank.tap_l[0] = .125f;
+            m_tank.tap_l[1] = .625f;
+            m_tank.tap_l[2] = .4375f;
+            m_tank.tap_r[0] = .125f;
+            m_tank.tap_r[1] = .625f;
+            m_tank.tap_r[2] = .625f;
             m_decay = std::min(float(m_parameters[0]) / 128.f, .9f);
             m_eps_c = lfo_rate(196.608);
             m_lfo_depth = float(m_parameters[3]) / 2.f;
@@ -320,7 +335,9 @@ private:
     // Writes the coefficients update() computed into the zones of the loaded program.
     void write_controls() {
         switch (m_program) {
-        case Program::Reverb: write_tank(*m_reverb); break;
+        case Program::Reverb:
+            write_tank(*m_reverb);
+            break;
         case Program::Chorus:
             write_feedback(*m_chorus);
             m_chorus->lfo_a.set_rate(m_eps_a);
@@ -353,12 +370,21 @@ private:
     // Runs the loaded program over n frames: planar inputs a0l a0r a1l a1r a2l a2r, outputs DAC L, DAC R, peak.
     void compute_program(int n, FAUSTFLOAT **in, FAUSTFLOAT **out) {
         switch (m_program) {
-        case Program::Reverb: m_reverb->dsp.compute(n, in, out); break;
-        case Program::Chorus: m_chorus->dsp.compute(n, in, out); break;
-        case Program::Echo: m_echo_program->dsp.compute(n, in, out); break;
-        case Program::Hall: m_hall->dsp.compute(n, in, out); break;
+        case Program::Reverb:
+            m_reverb->dsp.compute(n, in, out);
+            break;
+        case Program::Chorus:
+            m_chorus->dsp.compute(n, in, out);
+            break;
+        case Program::Echo:
+            m_echo_program->dsp.compute(n, in, out);
+            break;
+        case Program::Hall:
+            m_hall->dsp.compute(n, in, out);
+            break;
         case Program::Mute:
-        case Program::None: break;
+        case Program::None:
+            break;
         }
     }
 
@@ -384,28 +410,36 @@ private:
             m_hall->lfo_c.restart();
             break;
         case Program::Mute:
-        case Program::None: break;
+        case Program::None:
+            break;
         }
     }
     // Frames the loaded program was not computed (auto-bypass): every LFO keeps rotating.
     void skip_lfos(uint64_t frames) {
         switch (m_program) {
-        case Program::Reverb: m_reverb->lfo_c.skip(frames); break;
+        case Program::Reverb:
+            m_reverb->lfo_c.skip(frames);
+            break;
         case Program::Chorus:
             m_chorus->lfo_a.skip(frames);
             m_chorus->lfo_b.skip(frames);
             m_chorus->lfo_c.skip(frames);
             break;
-        case Program::Echo: m_echo_program->lfo_c.skip(frames); break;
-        case Program::Hall: m_hall->lfo_c.skip(frames); break;
+        case Program::Echo:
+            m_echo_program->lfo_c.skip(frames);
+            break;
+        case Program::Hall:
+            m_hall->lfo_c.skip(frames);
+            break;
         case Program::Mute:
-        case Program::None: break;
+        case Program::None:
+            break;
         }
     }
 
     uint32_t rom_u32(size_t offset) const {
-        return uint32_t(m_rom[offset]) << 24 | uint32_t(m_rom[offset + 1]) << 16 | uint32_t(m_rom[offset + 2]) << 8 |
-               m_rom[offset + 3];
+        return uint32_t(m_rom[offset]) << 24 | uint32_t(m_rom[offset + 1]) << 16 |
+               uint32_t(m_rom[offset + 2]) << 8 | m_rom[offset + 3];
     }
 
 public:
@@ -425,11 +459,21 @@ public:
         const uint32_t pointer = rom_u32(K_PROGRAM_TABLE_OFFSET + size_t(m_rom[row + 5]) * 4);
         Program program;
         switch (pointer) {
-        case K_PTR_REVERB: program = Program::Reverb; break;
-        case K_PTR_HALL: program = Program::Hall; break;
-        case K_PTR_CHORUS: program = Program::Chorus; break;
-        case K_PTR_ECHO: program = Program::Echo; break;
-        case K_PTR_MUTE: program = Program::Mute; break;
+        case K_PTR_REVERB:
+            program = Program::Reverb;
+            break;
+        case K_PTR_HALL:
+            program = Program::Hall;
+            break;
+        case K_PTR_CHORUS:
+            program = Program::Chorus;
+            break;
+        case K_PTR_ECHO:
+            program = Program::Echo;
+            break;
+        case K_PTR_MUTE:
+            program = Program::Mute;
+            break;
         default:
             throw std::runtime_error("ES5510 program at " + std::to_string(pointer) + " (preset " +
                                      std::to_string(preset) + ") is not decoded");
@@ -451,41 +495,9 @@ public:
     Program program() const { return m_program; }
     // True while the auto-bypass skips the loaded program (silent sends and nothing audible left in it).
     bool bypassed() const { return m_bypassed; }
-    EffectsInfo info() const {
-        EffectsInfo out{};
-        switch (m_program) {
-        case Program::None: out.program = EffectsProgram::None; break;
-        case Program::Reverb: out.program = EffectsProgram::Reverb; break;
-        case Program::Hall: out.program = EffectsProgram::Hall; break;
-        case Program::Chorus: out.program = EffectsProgram::Chorus; break;
-        case Program::Echo: out.program = EffectsProgram::Echo; break;
-        case Program::Mute: out.program = EffectsProgram::Mute; break;
-        }
-        out.preset = m_preset;
-        out.p = m_parameters;
-        out.decay = m_decay;
-        out.damp = m_damp;
-        out.feedback = m_feedback;
-        out.send = m_send;
-        out.dry_send = m_dry_send;
-        out.chorus_to_reverb = m_chorus_to_reverb;
-        out.chorus_out = m_chorus_out;
-        out.lfo_a = m_eps_a;
-        out.lfo_b = m_eps_b;
-        out.lfo_c = m_eps_c;
-        out.lfo_depth_frames = m_lfo_depth;
-        out.echo_frames = m_echo;
-        out.mod_center = m_mod_center;
-        out.enhance = m_enhance;
-        out.hall_a = m_hall_a;
-        out.hall_g = m_hall_g;
-        out.hall_g2 = m_hall_g2;
-        out.hall_g108 = m_hall_g108;
-        out.bypassed = m_bypassed;
-        return out;
-    }
     void reset() {
-        for (Program program : {Program::Reverb, Program::Chorus, Program::Echo, Program::Hall}) clear_program(program);
+        for (Program program : {Program::Reverb, Program::Chorus, Program::Echo, Program::Hall})
+            clear_program(program);
         m_bucket_peaks.fill(0.f);
         m_current_bucket_peak = 0.f;
         m_bucket_frames = 0;
@@ -496,8 +508,8 @@ public:
         m_parameters.fill(0);
         update();
     }
-    void mix(BusSpan bus_in, MutableStereoSpan stereo_out,
-             const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+    void mix(BusSpan bus_in, MutableStereoSpan stereo_out, const std::array<float, 2> &input_gain,
+             const std::array<float, 2> &output_gain) {
         const size_t frames = bus_in.size();
         if (frames == 0) return;
         if (stereo_out.size() < frames) {
@@ -583,13 +595,13 @@ public:
             }
         }
     }
-    void mix(const BusBlock &buses, StereoBlock &stereo,
-             const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+    void mix(const BusBlock &buses, StereoBlock &stereo, const std::array<float, 2> &input_gain,
+             const std::array<float, 2> &output_gain) {
         stereo.resize(buses.size());
         mix(buses.span(), stereo.span(), input_gain, output_gain);
     }
-    void mix(BusSpan buses, StereoBlock &stereo,
-             const std::array<float, 2> &input_gain, const std::array<float, 2> &output_gain) {
+    void mix(BusSpan buses, StereoBlock &stereo, const std::array<float, 2> &input_gain,
+             const std::array<float, 2> &output_gain) {
         stereo.resize(buses.size());
         mix(buses, stereo.span(), input_gain, output_gain);
     }

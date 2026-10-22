@@ -1,4 +1,4 @@
-// hle::Core and the F3RP replay script (tools/webplayer/README.md, sections 2 and 3):
+// hle::Core and the F3RP replay script:
 //  * ReplayCodec.*  encoder layout and malformed-script rejection; need no ROM (synthetic sound ROM with no songs).
 //  * HleCore.*      A2 (AudioEngine vs Core + replay, bit-exact), the encode->replay round trip and A3 (chunk invariance
 //                   property). They load sets from the directories next to F3_ROM_DIR (kirameki, landmakrj) and skip
@@ -218,7 +218,7 @@ const std::vector<Song> &songs() {
 // Kirameki's boot leaves its preset/parameters to the prelude; its post-boot gain bytes were 48/48 (verified:
 // the replay matches sound-extract's WAV of 0x187 sample for sample with them).
 struct Inputs {
-    ReplayScript script;   // what the exporter would write
+    ReplayScript script;   // the F3RP script of the same requests
     Packets ring_calls;    // the request bytes, one entry per request (the mailbox path writes them as they are)
     const Boot *boot = nullptr;
 };
@@ -454,12 +454,12 @@ TEST(HleCore, EngineAndCoreReplayAreBitExact) {
 
 // ---- A3: how the caller slices time ------------------------------------------------------------------------------------
 //
-// advance() always splits at the sequencer timer ticks (every 16000 ticks from the reset), so a schedule whose targets
+// advance() always splits at the clock ticks (every 16000 ticks from the reset), so a schedule whose targets
 // are multiples of TIMER_TICKS produces exactly the render calls of the canonical 1 ms stepping: bit-exact (property
 // 1). A target inside a millisecond adds a render call, and Effects::mix keeps per-call state (the auto-bypass decision
 // and the LFO phase it carries while bypassed), so a sub-millisecond schedule is not bit-exact: it agrees to within
 // float rounding noise (property 2; measured on Kirameki 0x187 with 1-frame steps: 20 of 238088 floats differ, by at
-// most 1.5e-8, none after int16 conversion). The WASM ABI and the exporter always step on the timer grid.
+// most 1.5e-8, none after int16 conversion).
 struct ChunkItem {
     std::string name;
     const SetRom *set;
@@ -568,121 +568,3 @@ TEST(HleCore, ArbitraryStepsAgreeWithinFloatNoise) {
         RC_ASSERT(worst <= 1e-6f);
     });
 }
-
-// ---- A4: instrumentation neutrality and query methods -----------------------------------------------------------------
-
-struct FullTap final : TraceTap {
-    size_t note_ons = 0, note_offs = 0, updates = 0, effects = 0, params = 0, resets = 0;
-    size_t voices = 0, commands = 0, gains = 0, mix_blocks = 0;
-    size_t sections = 0, bars = 0, rate_changes = 0, wraps = 0;
-
-    void note_on(const Note &) override { ++note_ons; }
-    void note_off(uint64_t, uint64_t) override { ++note_offs; }
-    void channel_update(uint8_t, uint8_t, const Channel &, uint64_t) override { ++updates; }
-    void effect(uint8_t, uint64_t) override { ++effects; }
-    void effect_parameter(uint8_t, uint8_t, uint64_t) override { ++params; }
-    void reset(uint64_t) override { ++resets; }
-    void voice(const VoiceEvent &v) override {
-        ++voices;
-        EXPECT_LE(v.slot, 31u);
-        if (v.kind == VoiceEvent::Kind::Start) {
-            EXPECT_LE(v.sounding_key, 108u);
-            EXPECT_GE(v.sounding_key, 21u);
-        }
-    }
-    void command(std::span<const uint8_t>, uint64_t, uint64_t) override { ++commands; }
-    void gain(unsigned, uint8_t, float, uint64_t) override { ++gains; }
-    void mix_block(uint64_t, const float *, const float *, size_t, const std::array<float, 2> &,
-                   const std::array<float, 2> &) override { ++mix_blocks; }
-    void section_start(const SectionInfo &, uint64_t) override { ++sections; }
-    void bar(uint8_t, uint32_t, uint64_t) override { ++bars; }
-    void rate_change(uint8_t, uint16_t, uint64_t) override { ++rate_changes; }
-    void arrangement_wrap(uint8_t, uint8_t, uint64_t) override { ++wraps; }
-};
-
-TEST(HleCore, InstrumentationNeutralityAndQueries) {
-    for (const size_t index : {size_t(0), size_t(4)}) {
-        const Song &song = songs()[index];
-        SCOPED_TRACE(std::string(song.set) + " " + song.name);
-        std::string why;
-        const auto *set = load_set(song.set, why);
-        if (!set) {
-            GTEST_LOG_(INFO) << "skipped " << song.set << ": " << why;
-            continue;
-        }
-        const auto in = inputs_for(song);
-        const auto script_bytes = encode_replay(in.script);
-        constexpr unsigned SLICES = 400; // 4 s
-
-        std::vector<float> pcm_clean;
-        on_worker_thread([&] {
-            Core core(set->rom.sound, set->words);
-            Collect sink;
-            core.set_pcm_sink(&sink);
-            replay(core, script_bytes);
-            for (unsigned s = 1; s <= SLICES; ++s) core.advance(uint64_t(s) * 160000);
-            pcm_clean = std::move(sink.pcm);
-        });
-
-        std::vector<float> pcm_tapped;
-        FullTap tap;
-        size_t raw_voice_events = 0;
-        on_worker_thread([&] {
-            Core core(set->rom.sound, set->words);
-            Collect sink;
-            core.set_pcm_sink(&sink);
-            core.set_trace(&tap);
-            core.set_voice_observer([&](const VoiceEvent &) { ++raw_voice_events; });
-            replay(core, script_bytes);
-
-            EXPECT_TRUE(core.sequences_running());
-            EXPECT_GT(core.bend_range(), 0u);
-            const auto fx = core.effects_info();
-            EXPECT_NE(fx.program, EffectsProgram::None);
-            const auto seq = core.describe_sequence(in.script.packets.back()[2] & 0x7f);
-            EXPECT_TRUE(seq.has_value());
-            if (seq) {
-                EXPECT_GT(seq->ticks_per_bar, 0u);
-                EXPECT_EQ(seq->tracks.size(), 8u);
-            }
-
-            for (unsigned s = 1; s <= SLICES; ++s) core.advance(uint64_t(s) * 160000);
-            pcm_tapped = std::move(sink.pcm);
-        });
-
-        ASSERT_FALSE(pcm_clean.empty());
-        EXPECT_TRUE(same_bits(pcm_clean, pcm_tapped));
-        EXPECT_GT(tap.note_ons, 0u);
-        EXPECT_GT(tap.voices, 0u);
-        EXPECT_GT(raw_voice_events, 0u);
-        EXPECT_EQ(tap.voices, raw_voice_events);
-        EXPECT_GT(tap.mix_blocks, 0u);
-        EXPECT_GT(tap.sections, 0u);
-        EXPECT_GT(tap.bars, 0u);
-        EXPECT_GT(tap.commands, 0u);
-    }
-}
-
-TEST(HleCore, DescribeProgramDirectAndLayered) {
-    std::string why;
-    const auto *set = load_set("kirameki", why);
-    if (!set) GTEST_SKIP() << why;
-    Core core(set->rom.sound, set->words);
-
-    EXPECT_FALSE(core.describe_program(0xffff).has_value());
-
-    const auto p0 = core.describe_program(0);
-    ASSERT_TRUE(p0.has_value());
-    EXPECT_EQ(p0->id, 0u);
-    if (p0->kind == ProgramInfo::Kind::Layered) {
-        EXPECT_EQ(p0->layers.size(), 3u);
-        bool has_splits = false;
-        for (const auto &layer : p0->layers) {
-            if (!layer.splits.empty()) has_splits = true;
-        }
-        EXPECT_TRUE(has_splits);
-    } else if (p0->kind == ProgramInfo::Kind::Direct) {
-        EXPECT_EQ(p0->regions.size(), 17u);
-    }
-}
-

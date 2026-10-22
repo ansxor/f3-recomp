@@ -7,7 +7,6 @@ int cmd_gpu_compare(int argc, char **argv);
 int cmd_motion(int argc, char **argv);
 int cmd_sound_extract(int argc, char **argv);
 int cmd_sprite_check(int argc, char **argv);
-int cmd_webplayer_export(int argc, char **argv);
 int cmd_netplay(int argc, char **argv);
 int cmd_netplay_replay(int argc, char **argv);
 

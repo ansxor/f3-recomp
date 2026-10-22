@@ -21,8 +21,6 @@ public:
         : m_rom(image), m_bank(bank) {}
 
     void set_bank(uint8_t bank) noexcept { m_bank = bank; }
-    uint8_t bank() const noexcept { return m_bank; }
-    std::span<const uint8_t> span() const noexcept { return m_rom; }
     const uint8_t *data() const noexcept { return m_rom.data(); }
     size_t size() const noexcept { return m_rom.size(); }
 

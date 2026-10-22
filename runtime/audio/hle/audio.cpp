@@ -1,8 +1,6 @@
 #include "audio/hle/audio.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/core.hpp"
-#include "audio/hle/sequencer.hpp"
-#include "audio/hle/synth.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -294,6 +292,6 @@ void AudioEngine::load(std::span<const uint8_t> src) {
     m_impl->held = src[18] != 0;
 }
 bool validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
-    return Sequencer::validate(sound) && Synth::validate(sound, samples);
+    return Core::validate(sound, samples);
 }
 } // namespace f3rt::hle

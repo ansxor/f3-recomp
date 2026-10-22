@@ -12,7 +12,7 @@ namespace f3rt::hle {
 // servicing the 1 kHz timer interrupt, so the Nth voice of a busy pulse sounds later than the first. The clock
 // models that single resource: a request made at `tick` for `voices` voices starts at max(tick, busy) and
 // keeps the driver busy for voices * DRIVER_KEYON_CYCLES afterwards. Requests are made in the order the driver
-// handles them (pulse order, track-major), which is the order Synth::note_on is called in.
+// handles them (pulse order, track-major), which is the order VoiceService::note_on is called in.
 class DriverClock {
 public:
     uint64_t start(uint64_t tick, unsigned voices) {
@@ -60,10 +60,6 @@ public:
             e.has_off = true;
             e.off = at + (e.start - std::min(e.start, e.origin));
         }
-    }
-    template <class F> void for_each(F &&f) {
-        for (Entry &e : m_entries)
-            if (e.state != State::Free) f(e.payload);
     }
     void clear() {
         for (Entry &e : m_entries) e.state = State::Free;
