@@ -4,6 +4,7 @@
 // Machine or mailbox dependency: AudioEngine wraps it with a thread and the mailbox, so there is one implementation of
 // the mixing path.
 #include "audio/hle/block.hpp"
+#include "audio/hle/command.hpp"
 #include "audio/hle/events.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -55,8 +56,8 @@ public:
 
     // ---- inputs. Each one first runs advance(tick) and then applies at tick().
     void advance(uint64_t tick);
-    // `packet` = [length, opcode, args...] with length == packet.size(); throws std::runtime_error when invalid.
-    void command(std::span<const uint8_t> packet, uint64_t instance, uint64_t tick);
+    // Applies one parsed mailbox command packet at tick(). See CommandPacket::parse for the framing rules.
+    void command(const CommandPacket &packet, uint64_t instance, uint64_t tick);
     void reset(uint64_t tick);
     // `page` = the value Machine passes to Audio::set_sound_bank.
     void set_bank(uint8_t page, uint64_t tick);

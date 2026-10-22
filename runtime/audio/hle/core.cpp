@@ -210,7 +210,7 @@ uint64_t Core::frames() const { return m_impl->worker_frames; }
 uint64_t Core::frames_at(uint64_t tick) { return Impl::frames_at(tick); }
 
 void Core::advance(uint64_t tick) { m_impl->advance_worker(std::max(m_impl->worker_tick, tick)); }
-void Core::command(std::span<const uint8_t> packet, uint64_t instance, uint64_t tick) {
+void Core::command(const CommandPacket &packet, uint64_t instance, uint64_t tick) {
     advance(tick);
     m_impl->sequencer.command(packet, instance, m_impl->worker_tick);
     m_impl->dispatch_mailbox();

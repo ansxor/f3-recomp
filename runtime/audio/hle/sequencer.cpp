@@ -4,7 +4,10 @@
 #include "f3rt/memory_map.hpp"
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <stdexcept>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace f3rt::hle {
@@ -18,29 +21,6 @@ constexpr size_t CONDUCTOR_STREAM_INDEX = 0;
 constexpr size_t FIRST_MUSIC_STREAM_INDEX = 1;
 constexpr size_t ARRANGEMENT_STREAM_INDEX = 10;
 constexpr size_t TOTAL_SONG_STREAMS = 11;
-
-// Packet / Mailbox opcodes
-constexpr uint8_t CMD_EFFECT_PRESET = 0x20;
-constexpr uint8_t CMD_EFFECT_PARAM = 0x21;
-constexpr uint8_t CMD_OP_MIN = 0x80;
-constexpr uint8_t CMD_OP_MAX = 0x90;
-constexpr uint8_t CMD_START = 0x80;
-constexpr uint8_t CMD_START_REPEAT = 0x81;
-constexpr uint8_t CMD_STOP = 0x82;
-constexpr uint8_t CMD_PAUSE = 0x83;
-constexpr uint8_t CMD_RESUME = 0x84;
-constexpr uint8_t CMD_SEEK = 0x85;
-constexpr uint8_t CMD_SEQUENCE_VOLUME = 0x86;
-constexpr uint8_t CMD_SEQUENCE_PAN = 0x87;
-constexpr uint8_t CMD_SEQUENCE_RATE = 0x88;
-constexpr uint8_t CMD_SEQUENCE_FADE = 0x89;
-constexpr uint8_t CMD_TRACK_VOLUME = 0x8a;
-constexpr uint8_t CMD_TRACK_PAN = 0x8b;
-constexpr uint8_t CMD_TRACK_PARAM = 0x8c;
-constexpr uint8_t CMD_TRACK_PROGRAM = 0x8d;
-constexpr uint8_t CMD_DIRECT_NOTE_ON = 0x8e;
-constexpr uint8_t CMD_DIRECT_NOTE_OFF = 0x8f;
-constexpr uint8_t CMD_NOP = 0x90;
 
 // Sequence track event opcodes
 constexpr uint8_t EV_NOTE_SHORT_MAX = 0x58;
@@ -62,34 +42,20 @@ constexpr uint16_t ARRANGEMENT_LOOP_MARKER = 100;
 
 [[noreturn]] inline void invalid(const char *message) { throw std::runtime_error(message); }
 
-constexpr uint8_t expected_sequence_command_length(uint8_t op) noexcept {
-    switch (op) {
-    case CMD_START:
-    case CMD_START_REPEAT:
-    case CMD_STOP:
-    case CMD_PAUSE:
-    case CMD_RESUME:
-        return 3;
-    case CMD_SEQUENCE_VOLUME:
-    case CMD_SEQUENCE_PAN:
-    case CMD_SEQUENCE_RATE:
-        return 4;
-    case CMD_SEEK:
-    case CMD_TRACK_VOLUME:
-    case CMD_TRACK_PAN:
-    case CMD_DIRECT_NOTE_OFF:
-        return 5;
-    case CMD_TRACK_PARAM:
-    case CMD_TRACK_PROGRAM:
-    case CMD_DIRECT_NOTE_ON:
-    case CMD_NOP:
-        return 6;
-    case CMD_SEQUENCE_FADE:
-        return 7;
-    default:
-        return 0;
-    }
-}
+// The sequence-addressed commands share the alias walk and the active-sequence gate; these express that
+// over the CommandPacket alternative types.
+template <class T>
+concept AddressedCommand = requires(const T &command) {
+    { command.sequence } -> std::convertible_to<SequenceRef>;
+};
+
+template <class T>
+concept TrackAddressedCommand =
+    AddressedCommand<T> && requires(const T &command) { command.track; };
+
+template <class T>
+inline constexpr bool IS_START =
+    std::is_same_v<T, SequenceStart> || std::is_same_v<T, SequenceStartRepeat>;
 
 // =============================================================================
 // Pure Bit-Decoding Helpers
@@ -330,8 +296,8 @@ std::array<SongData, SONG_SLOTS> parse_sound_bank(const RomView &rom) {
 enum class SequenceStatus : uint8_t {
     Stopped, // completely inactive; no physical tracks held
     Playing, // active and advancing the tempo pulse (when rate > 0)
-    Paused,  // halted via CMD_PAUSE; retains tracks and resumes via CMD_RESUME
-    Parked,  // halted at natural end or after CMD_SEEK; retains tracks for direct commands
+    Paused,  // halted via SequencePause; retains tracks and resumes via SequenceResume
+    Parked,  // halted at natural end or after SequenceSeek; retains tracks for direct commands
 };
 
 // Sequencing position and tempo. The track records, the note bookkeeping and the volume mix live in TrackService.
@@ -415,35 +381,85 @@ struct Sequencer::Impl {
         data = parse_sound_bank(RomView{rom, current_bank});
     }
 
-    void dispatch_command_packet(std::span<const uint8_t> p, uint64_t instance, uint64_t tick) {
-        if (p.size() < 2 || p[0] != p.size()) {
-            invalid("invalid HLE length-prefixed packet");
+    void dispatch_command(const CommandPacket &packet, uint64_t instance, uint64_t tick) {
+        const Command &command = packet.command();
+        switch (packet.opcode()) {
+        case EffectPreset::OPCODE:
+            dispatch_command(std::get<EffectPreset>(command), instance, tick);
+            return;
+        case EffectParameter::OPCODE:
+            dispatch_command(std::get<EffectParameter>(command), instance, tick);
+            return;
+        case SequenceStart::OPCODE:
+            dispatch_command(std::get<SequenceStart>(command), instance, tick);
+            return;
+        case SequenceStartRepeat::OPCODE:
+            dispatch_command(std::get<SequenceStartRepeat>(command), instance, tick);
+            return;
+        case SequenceStop::OPCODE:
+            dispatch_command(std::get<SequenceStop>(command), instance, tick);
+            return;
+        case SequencePause::OPCODE:
+            dispatch_command(std::get<SequencePause>(command), instance, tick);
+            return;
+        case SequenceResume::OPCODE:
+            dispatch_command(std::get<SequenceResume>(command), instance, tick);
+            return;
+        case SequenceSeek::OPCODE:
+            dispatch_command(std::get<SequenceSeek>(command), instance, tick);
+            return;
+        case SequenceVolume::OPCODE:
+            dispatch_command(std::get<SequenceVolume>(command), instance, tick);
+            return;
+        case SequencePan::OPCODE:
+            dispatch_command(std::get<SequencePan>(command), instance, tick);
+            return;
+        case SequenceRate::OPCODE:
+            dispatch_command(std::get<SequenceRate>(command), instance, tick);
+            return;
+        case SequenceFade::OPCODE:
+            dispatch_command(std::get<SequenceFade>(command), instance, tick);
+            return;
+        case TrackVolume::OPCODE:
+            dispatch_command(std::get<TrackVolume>(command), instance, tick);
+            return;
+        case TrackPan::OPCODE:
+            dispatch_command(std::get<TrackPan>(command), instance, tick);
+            return;
+        case TrackController::OPCODE:
+            dispatch_command(std::get<TrackController>(command), instance, tick);
+            return;
+        case TrackProgram::OPCODE:
+            dispatch_command(std::get<TrackProgram>(command), instance, tick);
+            return;
+        case DirectNoteOn::OPCODE:
+            dispatch_command(std::get<DirectNoteOn>(command), instance, tick);
+            return;
+        case DirectNoteOff::OPCODE:
+            dispatch_command(std::get<DirectNoteOff>(command), instance, tick);
+            return;
+        case Nop::OPCODE:
+            dispatch_command(std::get<Nop>(command), instance, tick);
+            return;
+        default:
+            // Ignored: an unknown opcode or a payload length the driver rejects.
+            return;
         }
+    }
 
-        const uint8_t op = p[1];
-        if (op == CMD_EFFECT_PRESET) {
-            if (p.size() == 3 && p[2] < 13) {
-                mailbox.push(EffectEvent{EffectEvent::Kind::Preset, tick, p[2]});
-            }
-            return;
+    void dispatch_command(const EffectPreset &command, uint64_t, uint64_t tick) {
+        if (command.preset < 13) {
+            mailbox.push(EffectEvent{EffectEvent::Kind::Preset, tick, command.preset});
         }
-        if (op == CMD_EFFECT_PARAM) {
-            if (p.size() == 4) {
-                mailbox.push(EffectEvent{EffectEvent::Kind::Parameter, tick, 0, p[2], p[3]});
-            }
-            return;
-        }
+    }
 
-        // Firmware dispatcher consumes rejected opcodes.
-        if (op < CMD_OP_MIN || op > CMD_OP_MAX) {
-            return;
-        }
-        if (p.size() != expected_sequence_command_length(op)) {
-            return;
-        }
+    void dispatch_command(const EffectParameter &command, uint64_t, uint64_t tick) {
+        mailbox.push(EffectEvent{EffectEvent::Kind::Parameter, tick, 0, command.index, command.value});
+    }
 
-        const bool selection = (p[2] & 0x80) != 0;
-        uint8_t id = p[2] & 0x7f;
+    template <AddressedCommand C>
+    void dispatch_command(const C &command, uint64_t instance, uint64_t tick) {
+        uint8_t id = command.sequence.id;
         if (id >= SONG_SLOTS) {
             return;
         }
@@ -455,7 +471,7 @@ struct Sequencer::Impl {
                 invalid("cyclic HLE linked sequence alias");
             }
             visited[id] = true;
-            execute_sequence_command(op, id, selection, p, instance, tick);
+            execute_sequence_command(command, id, instance, tick);
             if (!data[id].present || !data[id].linked) {
                 break;
             }
@@ -470,93 +486,81 @@ struct Sequencer::Impl {
     // 2. Mailbox Command Execution
     // -------------------------------------------------------------------------
 
-    void execute_sequence_command(uint8_t op, uint8_t id, bool selection,
-                                  std::span<const uint8_t> p, uint64_t instance, uint64_t tick) {
-        if (selection && is_arranged(id)) {
-            if (op == CMD_START || op == CMD_START_REPEAT) {
+    template <AddressedCommand C> static C cleared_selection(C command) noexcept {
+        command.sequence.selection = false;
+        return command;
+    }
+
+    template <AddressedCommand C>
+    void execute_sequence_command(const C &command, uint8_t id, uint64_t instance, uint64_t tick) {
+        if (command.sequence.selection && is_arranged(id)) {
+            if constexpr (IS_START<C>) {
                 stop_selected_child(id, tick);
                 advance_arrangement(id, tick);
                 return;
-            }
-            if (op == CMD_STOP) {
+            } else if constexpr (std::is_same_v<C, SequenceStop>) {
                 stop_selected_child(id, tick);
                 return;
+            } else {
+                if (const uint8_t child = selected_child(id)) {
+                    execute_sequence_command(cleared_selection(command), child, instance, tick);
+                }
+                return;
             }
-            if (const uint8_t child = selected_child(id)) {
-                execute_sequence_command(op, child, false, p, instance, tick);
-            }
-            return;
         }
 
         auto &s = state[id];
-        if (op == CMD_START || op == CMD_START_REPEAT) {
+        if constexpr (IS_START<C>) {
             start_sequence(id, tick);
             return;
         }
-        if (op == CMD_STOP) {
+        if constexpr (std::is_same_v<C, SequenceStop>) {
             stop_sequence(id, tick);
             return;
         }
-        if (!s.is_active() && op != CMD_SEEK) {
-            return;
+        if constexpr (!std::is_same_v<C, SequenceSeek>) {
+            if (!s.is_active()) {
+                return;
+            }
         }
 
-        switch (op) {
-        case CMD_PAUSE:
+        if constexpr (std::is_same_v<C, SequencePause>) {
             s.pause_playback();
             beats[id].set_step(0);
             tracks.release_notes(id, tick);
-            break;
-
-        case CMD_RESUME:
+        } else if constexpr (std::is_same_v<C, SequenceResume>) {
             s.resume_playback();
             beats[id].set_step(s.rate);
-            break;
-
-        case CMD_SEEK: {
+        } else if constexpr (std::is_same_v<C, SequenceSeek>) {
             if (!s.is_active()) {
                 start_sequence(id, tick);
             }
             initialize_tracks(id, id, tick);
-            const uint32_t target_pulses = (uint32_t(p[3]) << 8) | p[4];
-            for (uint64_t n = 0; n < target_pulses && s.is_active(); ++n) {
+            for (uint64_t n = 0; n < command.position && s.is_active(); ++n) {
                 tick_sequence(id, tick, /*silent=*/true);
             }
             finish_sequence(id, tick);
-            break;
-        }
-
-        case CMD_SEQUENCE_VOLUME:
-            mailbox.push(TrackEvent{TrackEventKind::SequenceVolume, tick, id, 0, 0, p[3]});
-            break;
-
-        case CMD_SEQUENCE_PAN:
-            mailbox.push(TrackEvent{TrackEventKind::SequencePan, tick, id, 0, 0, p[3]});
-            break;
-
-        case CMD_SEQUENCE_RATE:
-            s.override_rate(p[3]);
+        } else if constexpr (std::is_same_v<C, SequenceVolume>) {
+            mailbox.push(TrackEvent{TrackEventKind::SequenceVolume, tick, id, 0, 0, command.volume});
+        } else if constexpr (std::is_same_v<C, SequencePan>) {
+            mailbox.push(TrackEvent{TrackEventKind::SequencePan, tick, id, 0, 0, command.value});
+        } else if constexpr (std::is_same_v<C, SequenceRate>) {
+            s.override_rate(command.rate);
             beats[id].set_step(s.rate);
-            break;
-
-        case CMD_SEQUENCE_FADE: {
+        } else if constexpr (std::is_same_v<C, SequenceFade>) {
             const RomView rom_view{rom, current_bank};
-            const auto multiplier =
-                int16_t(rom_view.read_u16(sound_5a7e9117::RATE_TABLE + uint32_t(p[5]) * 2));
-            mailbox.push(TrackEvent{TrackEventKind::SequenceFade, tick, id, 0, 0, 0, 0, p[3], p[4],
-                                    multiplier});
-            break;
-        }
-
-        default:
-            execute_track_command(op, id, p, instance, tick);
-            break;
+            const auto multiplier = int16_t(
+                rom_view.read_u16(sound_5a7e9117::RATE_TABLE + uint32_t(command.rate_index) * 2));
+            mailbox.push(TrackEvent{TrackEventKind::SequenceFade, tick, id, 0, 0, 0, 0,
+                                    command.start, command.target, multiplier});
+        } else if constexpr (TrackAddressedCommand<C>) {
+            execute_track_command(command, id, instance, tick);
         }
     }
 
-    void execute_track_command(uint8_t op, uint8_t id, std::span<const uint8_t> p,
-                               uint64_t instance, uint64_t tick) {
-        const uint8_t logical = p[3];
+    template <TrackAddressedCommand C>
+    void execute_track_command(const C &command, uint8_t id, uint64_t instance, uint64_t tick) {
+        const uint8_t logical = command.track;
         if (!logical || logical > TRACK_COUNT) {
             return;
         }
@@ -566,42 +570,26 @@ struct Sequencer::Impl {
             return;
         }
 
-        switch (op) {
-        case CMD_TRACK_VOLUME:
-            mailbox.push(TrackEvent{TrackEventKind::Volume, tick, id, t, 0, p[4]});
-            break;
-
-        case CMD_TRACK_PAN:
-            mailbox.push(TrackEvent{TrackEventKind::Pan, tick, id, t, 0, p[4]});
-            break;
-
-        case CMD_TRACK_PARAM:
-            mailbox.push(TrackEvent{TrackEventKind::Controller, tick, id, t, p[4], p[5]});
-            break;
-
-        case CMD_TRACK_PROGRAM:
-            mailbox.push(TrackEvent{TrackEventKind::Program, tick, id, t, 0, 0,
-                                    uint16_t((uint16_t(p[4]) << 8) | p[5])});
-            break;
-
-        case CMD_DIRECT_NOTE_ON:
+        if constexpr (std::is_same_v<C, TrackVolume>) {
+            mailbox.push(TrackEvent{TrackEventKind::Volume, tick, id, t, 0, command.value});
+        } else if constexpr (std::is_same_v<C, TrackPan>) {
+            mailbox.push(TrackEvent{TrackEventKind::Pan, tick, id, t, 0, command.value});
+        } else if constexpr (std::is_same_v<C, TrackController>) {
+            mailbox.push(
+                TrackEvent{TrackEventKind::Controller, tick, id, t, command.index, command.value});
+        } else if constexpr (std::is_same_v<C, TrackProgram>) {
+            mailbox.push(TrackEvent{TrackEventKind::Program, tick, id, t, 0, 0, command.program});
+        } else if constexpr (std::is_same_v<C, DirectNoteOn>) {
             if (instance & (uint64_t(1) << 63)) {
                 invalid("direct-note instance uses reserved music ID bit");
             }
-            trigger_note(id, t, p[4], p[5], 0x7fff, instance, tick, /*transpose=*/false);
-            break;
-
-        case CMD_DIRECT_NOTE_OFF:
-            mailbox.push(ReleaseKeyEvent{tick, id, t, uint8_t(p[4] + 21)});
-            break;
-
-        case CMD_NOP:
+            trigger_note(id, t, command.key, command.velocity, 0x7fff, instance, tick,
+                         /*transpose=*/false);
+        } else if constexpr (std::is_same_v<C, DirectNoteOff>) {
+            mailbox.push(ReleaseKeyEvent{tick, id, t, uint8_t(command.key + 21)});
+        } else if constexpr (std::is_same_v<C, Nop>) {
             // c1310e retains return-PC c13148 in A3; c13148 writes 6(A3)
             // = ROM c1314e, not note RAM. The board ignores this ROM write.
-            break;
-
-        default:
-            break;
         }
     }
 
@@ -951,8 +939,8 @@ Sequencer::Sequencer(std::span<const uint8_t> rom, Mailbox &mailbox, TrackServic
 
 Sequencer::~Sequencer() = default;
 
-void Sequencer::command(std::span<const uint8_t> packet, uint64_t instance, uint64_t tick) {
-    m_impl->dispatch_command_packet(packet, instance, tick);
+void Sequencer::command(const CommandPacket &packet, uint64_t instance, uint64_t tick) {
+    m_impl->dispatch_command(packet, instance, tick);
 }
 
 void Sequencer::reset(uint64_t tick) {

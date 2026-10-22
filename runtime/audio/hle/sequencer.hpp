@@ -1,4 +1,5 @@
 #pragma once
+#include "audio/hle/command.hpp"
 #include "audio/hle/events.hpp"
 #include "audio/hle/mailbox.hpp"
 #include "audio/hle/pulse_timer.hpp"
@@ -17,7 +18,7 @@ public:
     ~Sequencer();
     Sequencer(const Sequencer &) = delete;
     Sequencer &operator=(const Sequencer &) = delete;
-    void command(std::span<const uint8_t> packet, uint64_t command_instance, uint64_t tick);
+    void command(const CommandPacket &packet, uint64_t command_instance, uint64_t tick);
     void reset(uint64_t tick);
     void set_bank(uint8_t bank, uint64_t tick);
     // The per-sequence tempo pulses. Step 0 while the sequence is not playing.

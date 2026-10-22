@@ -183,7 +183,7 @@ const Boot &boot_of(const std::string &set) {
     uint64_t parsed = 0;
     for (auto &packet : split_packets(boot.ring)) {
         ++parsed;
-        if (packet.size() <= REPLAY_MAX_PACKET) boot.packets.push_back(std::move(packet));
+        if (packet.size() <= CommandPacket::MAX_BYTES) boot.packets.push_back(std::move(packet));
     }
     boot.commands = m.audio->enhanced_stats().commands;
     if (parsed != boot.commands) throw std::runtime_error("boot ring does not hold the whole boot packet stream");
@@ -421,7 +421,8 @@ TEST(HleCore, EncodeReplayRoundTripMatchesManualCalls) {
         core.set_gain(1, in.script.gain_raw[1], 0);
         core.set_bank(*in.script.page, 0);
         uint64_t serial = 0;
-        for (const auto &packet : in.script.packets) core.command(packet, ++serial, 0);
+        for (const auto &packet : in.script.packets)
+            core.command(CommandPacket::parse(packet), ++serial, 0);
         for (unsigned slice = 1; slice <= 200; ++slice) core.advance(uint64_t(slice) * 160000);
         manual = std::move(sink.pcm);
     });

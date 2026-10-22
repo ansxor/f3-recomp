@@ -11,8 +11,9 @@ constexpr size_t MAX_ITEMS = 0xffff;
     throw std::invalid_argument(std::string("malformed F3RP replay script: ") + what);
 }
 void check_packet(std::span<const uint8_t> packet) {
-    if (packet.size() < 2 || packet.size() > REPLAY_MAX_PACKET || packet[0] != packet.size())
-        throw std::invalid_argument("replay packet must be 2.." + std::to_string(REPLAY_MAX_PACKET) +
+    if (packet.size() < 2 || packet.size() > CommandPacket::MAX_BYTES || packet[0] != packet.size())
+        throw std::invalid_argument("replay packet must be 2.." +
+                                    std::to_string(CommandPacket::MAX_BYTES) +
                                     " bytes long and start with its own length");
 }
 } // namespace
@@ -68,7 +69,8 @@ void replay(Core &core, std::span<const uint8_t> script) {
             if (at >= script.size()) malformed("truncated PACKET");
             const size_t n = script[at++];
             if (at + n > script.size()) malformed("truncated PACKET payload");
-            if (n < 2 || n > REPLAY_MAX_PACKET || script[at] != n) malformed("invalid PACKET length");
+            if (n < 2 || n > CommandPacket::MAX_BYTES || script[at] != n)
+                malformed("invalid PACKET length");
             at += n;
             break;
         }
@@ -89,7 +91,7 @@ void replay(Core &core, std::span<const uint8_t> script) {
         case OP_BANK: core.set_bank(script[at++], 0); break;
         default: { // OP_PACKET
             const size_t n = script[at++];
-            core.command(script.subspan(at, n), ++serial, 0);
+            core.command(CommandPacket::parse(script.subspan(at, n)), ++serial, 0);
             at += n;
             break;
         }

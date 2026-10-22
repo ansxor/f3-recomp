@@ -15,15 +15,10 @@ static_assert(Audio::OUTPUT_BOOST == OUTPUT_BOOST,
               "Core and Audio must share the output stage gain");
 namespace {
 constexpr size_t QUEUE_SIZE = 4096, PCM_CAPACITY = 32768;
-struct Packet {
-    std::array<uint8_t, 8> bytes{};
-    uint64_t tick = 0, instance = 0;
-    std::span<const uint8_t> data() const { return {bytes.data(), bytes[0]}; }
-};
 struct Message {
     enum Kind { Command, Advance, Reset, Gain, Bank } kind = Advance;
-    Packet packet;
-    uint64_t tick = 0;
+    CommandPacket packet;
+    uint64_t tick = 0, instance = 0;
     uint8_t value = 0, channel = 0;
 };
 } // namespace
@@ -117,7 +112,7 @@ struct AudioEngine::Impl : PcmSink {
                 }
                 switch (m.kind) {
                 case Message::Command:
-                    core.command(m.packet.data(), m.packet.instance, m.tick);
+                    core.command(m.packet, m.instance, m.tick);
                     break;
                 case Message::Reset:
                     core.reset(m.tick);
@@ -148,14 +143,15 @@ struct AudioEngine::Impl : PcmSink {
             wake.notify_all();
         }
     }
-    void record(Packet p) {
+    void record(CommandPacket packet, uint64_t tick) {
         ++command_count;
-        p.instance = ++serial;
+        const uint64_t instance = ++serial;
         if (serial >> 63) throw std::overflow_error("HLE instance IDs exhausted");
         Message m;
         m.kind = Message::Command;
-        m.packet = p;
-        m.tick = p.tick;
+        m.packet = std::move(packet);
+        m.tick = tick;
+        m.instance = instance;
         push(m);
     }
     void shared_write(uint32_t offset) {
@@ -169,12 +165,11 @@ struct AudioEngine::Impl : PcmSink {
                 const uint8_t length = shared[index];
                 const unsigned available = ((producer - consumer) & 0x7ff) >> 1;
                 if (length < 2 || length > available) break;
-                Packet p;
-                p.tick = clock;
-                if (length <= p.bytes.size()) {
+                if (length <= CommandPacket::MAX_BYTES) {
+                    std::array<uint8_t, CommandPacket::MAX_BYTES> bytes{};
                     for (unsigned n = 0; n < length; ++n)
-                        p.bytes[n] = shared[(index + n) & MAILBOX_RING_MASK];
-                    record(p);
+                        bytes[n] = shared[(index + n) & MAILBOX_RING_MASK];
+                    record(CommandPacket::parse(std::span(bytes).first(length)), clock);
                 }
                 consumer = uint16_t((consumer + length * 2) & 0x7ff);
                 consumed += length;
