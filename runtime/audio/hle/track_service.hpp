@@ -4,12 +4,15 @@
 #include "audio/hle/mailbox.hpp"
 #include "audio/hle/note_pool.hpp"
 #include "audio/hle/pulse_timer.hpp"
-#include "audio/hle/voice_pool.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
 namespace f3rt::hle {
+
+// The sound CPU's channel table (c128a8): 56 physical channels, allocated 56..1. A track holds one while its
+// sequence is active; the previous-key byte outlives release, so portamento must not use logical-track history.
+inline constexpr uint8_t MAX_TRACK_CHANNEL = 56;
 
 // The parameters a sequence header supplies for one track: the 0x38-byte record the firmware keeps per track, the
 // selected program id and the program-selector bank.
@@ -65,7 +68,8 @@ public:
     // Note-offs only: the physical channels and the track records stay.
     void release_notes(uint8_t sequence, uint64_t tick);
     void copy_mix(uint8_t from, uint8_t to) noexcept;
-    uint8_t previous_key(uint8_t physical) const noexcept { return m_physical.previous_key(physical); }
+    // The channel's last factory key: read when a sequence restarts, before any of its voices exist.
+    uint8_t previous_key(uint8_t channel) const noexcept { return m_channel_previous_key[channel]; }
 
     // ---- event application, called only by the mailbox dispatcher.
     void apply(const NoteOnEvent &event);
@@ -90,6 +94,8 @@ private:
     void note_pulse(uint8_t sequence, uint64_t tick);
     void fade_pulse(uint64_t tick);
     void set_sequence_volume(uint8_t sequence, uint8_t volume) noexcept;
+    uint8_t allocate_channel() noexcept;
+    void release_channel(uint8_t channel) noexcept;
 
     Mailbox &m_mailbox;
     MailboxNoteSink m_sink{m_mailbox};
@@ -97,7 +103,8 @@ private:
     std::array<bool, SONG_SLOTS> m_active{};
     std::array<Mix, SONG_SLOTS> m_mix{};
     NotePool m_notes{};
-    PhysicalVoicePool m_physical{};
+    std::array<bool, MAX_TRACK_CHANNEL + 1> m_channel_used{};
+    std::array<uint8_t, MAX_TRACK_CHANNEL + 1> m_channel_previous_key{};
     PulseTimer m_fade{12, 1};
 };
 

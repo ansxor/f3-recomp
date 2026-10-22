@@ -21,8 +21,23 @@ void TrackService::reset() noexcept {
     m_active = {};
     m_mix = {};
     m_notes.reset();
-    m_physical.reset();
+    m_channel_used.fill(false);
+    m_channel_previous_key.fill(0);
     m_fade.reset();
+}
+
+uint8_t TrackService::allocate_channel() noexcept {
+    for (uint8_t channel = MAX_TRACK_CHANNEL; channel > 0; --channel) {
+        if (!m_channel_used[channel]) {
+            m_channel_used[channel] = true;
+            return channel;
+        }
+    }
+    return 0;
+}
+
+void TrackService::release_channel(uint8_t channel) noexcept {
+    if (channel > 0 && channel <= MAX_TRACK_CHANNEL) m_channel_used[channel] = false;
 }
 
 void TrackService::start_sequence(uint8_t sequence,
@@ -31,7 +46,7 @@ void TrackService::start_sequence(uint8_t sequence,
     auto &list = m_tracks[sequence];
     for (Track &t : list) m_notes.release_all(t.head, m_sink, tick);
     for (Track &t : list) {
-        if (t.physical) m_physical.release(t.physical);
+        if (t.physical) release_channel(t.physical);
         t.physical = 0;
     }
     reset_mix(sequence);
@@ -39,7 +54,7 @@ void TrackService::start_sequence(uint8_t sequence,
     for (size_t i = 0; i < TRACK_COUNT; ++i) {
         Track &t = list[i];
         t.config = initial[i];
-        if (t.config.program != NO_PROGRAM) t.physical = m_physical.allocate();
+        if (t.config.program != NO_PROGRAM) t.physical = allocate_channel();
         t.cursor = 0;
         t.countdown = 1;
         t.status = TrackStatus::Inactive;
@@ -51,7 +66,7 @@ void TrackService::start_sequence(uint8_t sequence,
 void TrackService::stop_sequence(uint8_t sequence, uint64_t tick) {
     for (Track &t : m_tracks[sequence]) {
         m_notes.release_all(t.head, m_sink, tick);
-        if (t.physical) m_physical.release(t.physical);
+        if (t.physical) release_channel(t.physical);
         t.physical = 0;
     }
     m_active[sequence] = false;
@@ -125,7 +140,7 @@ void TrackService::apply(const TrackEvent &event) {
 
     case TrackEventKind::PreviousKey:
         t.config.parameters.set_previous_key(event.value);
-        m_physical.set_previous_key(t.physical, event.value);
+        m_channel_previous_key[t.physical] = event.value;
         break;
 
     case TrackEventKind::SequenceVolume: {

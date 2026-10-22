@@ -1,5 +1,9 @@
 # Log
 
+## [2026-10-22] refactor | Sound-CPU channel table inlined into TrackService
+`runtime/audio/hle/voice_pool.hpp` (`PhysicalVoicePool`) is gone. The 56-entry channel table and its per-channel previous-key bytes are now `TrackService` private state next to `Track::physical`: `allocate_channel()`/`release_channel()` plus `m_channel_used`/`m_channel_previous_key`. Semantics unchanged: channels allocate 56..1, exhaustion returns 0, and release leaves the previous-key byte in place so a later sequence that reuses the channel inherits it (restart key reads still happen in `initialize_tracks` before any voice exists). Verified: full build; `f3rt-test-audio` 63/63 on kirameki and 61/61 on landmakrj, including the bit-exact HLE core renders.
+Touched: runtime/audio/hle/track_service.hpp, runtime/audio/hle/track_service.cpp, runtime/audio/hle/voice_pool.hpp (deleted), docs/notes/log.md.
+
 ## [2026-10-22] chore | HLE voice-event observer is a build option; HLE replay codec moved to runtime/debug
 Added `F3RT_HLE_EVENTS` (CMake, default ON). At 0 the `VoiceService` observer, `emit`, render-time event buffer and the `Audio::set_hle_observer` chain are not compiled; `--hle-events` reports that the build lacks the observer and the game HLE audio tests are not built. Moved the F3RP sound-test script from `runtime/audio/hle/replay.{hpp,cpp}` to `runtime/debug/`. Verified: `f3rt-tool`, `f3rt-test-audio` and `f3rt-replay` build with the option ON and OFF; 61 vs 60 audio tests pass (the difference is the game observer test); Land Maker 0x0a extraction WAVs are byte-identical between the two builds. Touched: CMakeLists.txt, include/f3rt/audio.hpp, runtime/audio/audio.cpp, runtime/audio/hle/{audio,core,voice_service}.{hpp,cpp}, runtime/audio/hle/events.hpp, runtime/debug/replay.{hpp,cpp}, runtime/tests/hle_core.cpp, tools/runner/runner.cpp, tools/commands/sound_extract.cpp, log.md.
 
