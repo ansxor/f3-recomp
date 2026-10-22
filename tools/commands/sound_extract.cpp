@@ -78,7 +78,9 @@ void print_help(const char *prog) {
         << "  --sound-driver oracle|native\n"
         << "                         reference backend only. oracle: interpreted 68000 sound CPU\n"
         << "                         (default), native: statically compiled 68000 driver\n"
+#if F3RT_HLE_EVENTS
         << "  --hle-events FILE      Save HLE voice start/release/stop/parameter CSV\n"
+#endif
         << "  --json                 Output machine-readable JSON result\n"
         << "  --help, -h             Show this help message\n";
 }
@@ -220,7 +222,11 @@ int cmd_sound_extract(int argc, char **argv) try {
                 throw std::runtime_error("--audio-backend must be enhanced or reference");
             }
         } else if (arg == "--hle-events") {
+#if F3RT_HLE_EVENTS
             cfg.hle_events_path = value();
+#else
+            throw std::runtime_error("--hle-events requires a build with F3RT_HLE_EVENTS=ON");
+#endif
         } else if (arg == "--json") {
             json_output = true;
         } else if (arg == "--help" || arg == "-h") {

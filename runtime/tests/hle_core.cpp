@@ -6,7 +6,7 @@
 //                   interpreted boot runs (about 5 s) the first time it is needed.
 #include "audio/hle/audio.hpp"
 #include "audio/hle/core.hpp"
-#include "audio/hle/replay.hpp"
+#include "debug/replay.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
 #include <gtest/gtest.h>

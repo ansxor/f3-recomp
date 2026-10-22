@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
+option(F3RT_HLE_EVENTS "Compile the HLE voice-event observer used by --hle-events and the HLE audio tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
 # compile_commands.json for clangd and other LSP servers; `make compdb` links it to the root.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -309,7 +310,7 @@ set(F3RT_CORE_SOURCES
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/audio/hle/replay.cpp
+    runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/debug/replay.cpp
     runtime/audio/hle/sequencer.cpp runtime/audio/hle/patch.cpp runtime/audio/hle/program_service.cpp
     runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
     runtime/audio/hle/synthesis.cpp
@@ -451,6 +452,12 @@ endif()
 target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_HLE_EVENTS)
+    # PUBLIC: the headers hide set_hle_observer/VoiceEvent plumbing when this is 0.
+    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=1)
+else()
+    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=0)
+endif()
 if(F3RT_GAME_VIDEO)
     # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
     target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
@@ -587,6 +594,10 @@ if(BUILD_TESTING)
     endif()
     foreach(area video input input_script eeprom cpu sprites audio motion_interp state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
+        if(NOT F3RT_HLE_EVENTS)
+            # The game audio tests read VoiceEvents; the observer is compiled out in this configuration.
+            list(FILTER GAME_AREA_TEST_SOURCES EXCLUDE REGEX "/tests/audio[^/]*\\.cpp$")
+        endif()
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
@@ -604,7 +615,7 @@ if(BUILD_TESTING)
         add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
     endif()
     file(GLOB GAME_HLE_AUDIO_TEST CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/audio*.cpp")
-    if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST)
+    if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST AND F3RT_HLE_EVENTS)
         add_test(NAME hle-audio COMMAND f3rt-test-audio --gtest_filter=HleAudio.*)
     endif()
     if(TARGET f3rt-ui)

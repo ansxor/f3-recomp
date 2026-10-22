@@ -199,9 +199,11 @@ Core::Core(std::span<const uint8_t> sound_rom, std::span<const uint16_t> sample_
 Core::~Core() = default;
 
 void Core::set_pcm_sink(PcmSink *sink) { m_impl->sink = sink; }
+#if F3RT_HLE_EVENTS
 void Core::set_voice_observer(std::function<void(const VoiceEvent &)> observer) {
     m_impl->voices.set_observer(std::move(observer));
 }
+#endif
 
 uint64_t Core::tick() const { return m_impl->worker_tick; }
 uint64_t Core::frames() const { return m_impl->worker_frames; }

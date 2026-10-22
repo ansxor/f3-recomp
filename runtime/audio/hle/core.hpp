@@ -7,7 +7,9 @@
 #include "audio/hle/events.hpp"
 #include <cstddef>
 #include <cstdint>
+#if F3RT_HLE_EVENTS
 #include <functional>
+#endif
 #include <memory>
 #include <span>
 
@@ -40,7 +42,9 @@ public:
     // ---- configuration. Call only while no other Core call is running (AudioEngine: after flush()).
     // nullptr drops the rendered frames (fast-forward); the engine state evolves identically.
     void set_pcm_sink(PcmSink *sink);
+#if F3RT_HLE_EVENTS
     void set_voice_observer(std::function<void(const VoiceEvent &)> observer);
+#endif
 
     // ---- time. Worker timebase: 16 MHz ticks since construction, monotonic. A tick argument smaller than tick() is
     // clamped to tick().

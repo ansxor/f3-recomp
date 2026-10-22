@@ -1,4 +1,4 @@
-#include "audio/hle/replay.hpp"
+#include "debug/replay.hpp"
 #include <stdexcept>
 #include <string>
 

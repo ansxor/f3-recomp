@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <variant>
 
+// CMake option F3RT_HLE_EVENTS: the voice-event observer behind --hle-events and the HLE audio tests. 0 compiles
+// the observer, VoiceService::emit and its render-time buffer out; the audio path is unaffected either way.
+#ifndef F3RT_HLE_EVENTS
+#define F3RT_HLE_EVENTS 0
+#endif
+
 namespace f3rt::hle {
 // The voice and effects stages run on the ES5505 output grid (clock rate 15238090 Hz, 32 voices:
 // 15238090 / (16 * 32) = 29761 + 229/256 = 29761.89453125 Hz, rounded to 29762 Hz per 12's

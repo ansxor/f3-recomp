@@ -8,6 +8,11 @@
 #include <span>
 #include <string_view>
 
+// Must match the definition f3rt was built with (propagated PUBLIC from CMake). 0 hides set_hle_observer.
+#ifndef F3RT_HLE_EVENTS
+#define F3RT_HLE_EVENTS 0
+#endif
+
 namespace f3rt {
 namespace hle {
 struct VoiceEvent;
@@ -31,8 +36,10 @@ public:
     void shared_write(uint32_t offset);
     void finish_frame();
     EnhancedStats enhanced_stats() const;
+#if F3RT_HLE_EVENTS
     // Diagnostic callback executes on the worker, never on the main CPU.
     void set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer);
+#endif
     Audio();
     ~Audio();
 

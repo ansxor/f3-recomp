@@ -567,10 +567,12 @@ Audio::EnhancedStats Audio::enhanced_stats() const {
     }
     return EnhancedStats{};
 }
+#if F3RT_HLE_EVENTS
 void Audio::set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer) {
     if (!m_impl->m_hle) throw std::logic_error("HLE observer requires HLE backend");
     m_impl->m_hle->set_observer(std::move(observer));
 }
+#endif
 
 void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
     if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");

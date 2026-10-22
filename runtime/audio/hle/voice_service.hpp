@@ -10,8 +10,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#if F3RT_HLE_EVENTS
 #include <functional>
 #include <vector>
+#endif
 
 namespace f3rt::hle {
 
@@ -27,7 +29,9 @@ public:
     VoiceService(const VoiceService &) = delete;
     VoiceService &operator=(const VoiceService &) = delete;
 
+#if F3RT_HLE_EVENTS
     void set_observer(std::function<void(const VoiceEvent &)> observer);
+#endif
     void reset(uint64_t tick);
 
     // Starts every patch of the note at its driver start tick (or schedules its delay/release trigger).
@@ -53,11 +57,18 @@ public:
     void stop(Voice &voice, uint64_t tick);
     void end_sample(Voice &voice, uint64_t tick);
 
+#if F3RT_HLE_EVENTS
     // Render-time events are buffered and delivered in (frame, voice) order once the render call is over.
     void begin_render();
     void finish_render();
     void set_render_voice(unsigned voice) { m_current_voice = voice; }
     void set_render_frame(size_t frame) { m_current_frame = frame; }
+#else
+    void begin_render() {}
+    void finish_render() {}
+    void set_render_voice(unsigned) {}
+    void set_render_frame(size_t) {}
+#endif
 
 private:
     struct Pending {
@@ -67,6 +78,7 @@ private:
         uint64_t tick = 0;
         bool active = false, release_trigger = false;
     };
+#if F3RT_HLE_EVENTS
     struct BufferedEvent {
         size_t frame = 0;
         unsigned voice = 0;
@@ -80,14 +92,18 @@ private:
             : left_volume(voice.left_volume), right_volume(voice.right_volume),
               k1(voice.filter_cutoff_low), k2(voice.filter_cutoff_high) {}
     };
+#endif
 
     void begin(const NoteOnEvent &note, const Patch &patch, Track &track, uint64_t at);
     void launch(const NoteOnEvent &note, const Patch &patch, Track &track, uint64_t start);
     void release(Voice &voice, uint64_t tick);
     void release_instance(uint64_t instance, uint64_t tick);
+#if F3RT_HLE_EVENTS
     void emit(const Voice &voice, VoiceEvent::Kind kind, uint64_t tick,
               const Onset *onset = nullptr);
-    void parameters(Voice &voice, bool initial, uint64_t tick, bool notify = true);
+#endif
+    void parameters(Voice &voice, bool initial, [[maybe_unused]] uint64_t tick,
+                    [[maybe_unused]] bool notify = true);
     void move_before_cursor(unsigned index);
     unsigned allocate(const NoteOnEvent &note, const Patch &patch, unsigned priority,
                       AllocationMode mode);
@@ -103,11 +119,13 @@ private:
     uint64_t m_serial = 0;
     uint64_t m_tick = TIMER_TICKS;
     uint32_t m_filter_epoch = 0;
+#if F3RT_HLE_EVENTS
     std::function<void(const VoiceEvent &)> m_observer;
     std::vector<BufferedEvent> m_buffered;
     bool m_buffering = false;
     size_t m_current_frame = 0;
     unsigned m_current_voice = 0;
+#endif
 };
 
 } // namespace f3rt::hle

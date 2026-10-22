@@ -6,13 +6,17 @@
 namespace f3rt::hle {
 
 VoiceService::VoiceService(SoundBank &bank) : m_bank(bank) {
+#if F3RT_HLE_EVENTS
     m_buffered.reserve(32);
+#endif
     reset(0);
 }
 
+#if F3RT_HLE_EVENTS
 void VoiceService::set_observer(std::function<void(const VoiceEvent &)> observer) {
     m_observer = std::move(observer);
 }
+#endif
 
 void VoiceService::reset(uint64_t tick) {
     for (uint8_t i = 0; i < 32; ++i) {
@@ -33,10 +37,13 @@ void VoiceService::reset(uint64_t tick) {
     m_noise.value = m_bank.rom.read_u16(sound_5a7e9117::NOISE_SEED_PTR);
     m_noise.history = m_bank.rom.read_u16(sound_5a7e9117::NOISE_HISTORY_PTR);
     m_serial = 0;
+#if F3RT_HLE_EVENTS
     m_buffered.clear();
     m_buffering = false;
+#endif
 }
 
+#if F3RT_HLE_EVENTS
 void VoiceService::emit(const Voice &v, VoiceEvent::Kind kind, uint64_t tick, const Onset *onset) {
     if (!m_observer) return;
     VoiceEvent e{};
@@ -93,10 +100,14 @@ void VoiceService::finish_render() {
     for (const BufferedEvent &event : m_buffered) m_observer(event.event);
     m_buffered.clear();
 }
+#endif
 
-void VoiceService::parameters(Voice &v, bool initial, uint64_t tick, bool notify) {
+void VoiceService::parameters(Voice &v, bool initial, [[maybe_unused]] uint64_t tick,
+                              [[maybe_unused]] bool notify) {
     v.parameters(initial);
+#if F3RT_HLE_EVENTS
     if (!initial && notify) emit(v, VoiceEvent::Kind::Parameters, tick);
+#endif
 }
 
 void VoiceService::move_before_cursor(unsigned i) {
@@ -207,15 +218,21 @@ void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, Track &track,
     // Ring admission, then the opening step: a layered voice steps once here, a direct voice waits for the ring.
     move_before_cursor(v.slot);
     parameters(v, true, at, false);
+#if F3RT_HLE_EVENTS
     const Onset onset{v};
+#endif
     const OnsetStep step = v.onset(m_noise);
+#if F3RT_HLE_EVENTS
     if (step.restarted) emit(v, VoiceEvent::Kind::Start, at);
+#endif
     if (step.ended) {
         v.active = false;
         return;
     }
+#if F3RT_HLE_EVENTS
     emit(v, VoiceEvent::Kind::Start, at, &onset);
     if (step.parameters) emit(v, VoiceEvent::Kind::Parameters, at);
+#endif
 }
 
 void VoiceService::launch(const NoteOnEvent &n, const Patch &patch, Track &track, uint64_t start) {
@@ -232,18 +249,24 @@ void VoiceService::release(Voice &v, uint64_t tick) {
     if (v.released) return;
     v.released = true;
     v.release_serial = ++m_serial;
+#if F3RT_HLE_EVENTS
     emit(v, VoiceEvent::Kind::Release, tick);
+#endif
     if (v.release()) stop(v, tick);
 }
 
-void VoiceService::stop(Voice &voice, uint64_t tick) {
+void VoiceService::stop(Voice &voice, [[maybe_unused]] uint64_t tick) {
+#if F3RT_HLE_EVENTS
     if (voice.active && !voice.sample_finished) emit(voice, VoiceEvent::Kind::Stop, tick);
+#endif
     voice.active = false;
 }
 
 void VoiceService::end_sample(Voice &voice, uint64_t tick) {
     if (voice.allocation) {
+#if F3RT_HLE_EVENTS
         emit(voice, VoiceEvent::Kind::Stop, tick);
+#endif
         voice.sample_finished = true;
     } else stop(voice, tick);
 }
@@ -332,7 +355,9 @@ void VoiceService::service() {
         Voice &v = m_voices[index];
         if (!v.active) continue;
         const EnvelopeTick step = v.step(m_noise);
+#if F3RT_HLE_EVENTS
         if (step.restarted) emit(v, VoiceEvent::Kind::Start, tick);
+#endif
         if (step.ended) {
             stop(v, tick);
             continue;

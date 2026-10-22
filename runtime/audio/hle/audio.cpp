@@ -255,10 +255,12 @@ uint64_t AudioEngine::generated() const {
     return m_impl->generated.load(std::memory_order_relaxed);
 }
 Audio::EnhancedStats AudioEngine::stats() const { return {m_impl->command_count, generated()}; }
+#if F3RT_HLE_EVENTS
 void AudioEngine::set_observer(std::function<void(const VoiceEvent &)> observer) {
     flush();
     m_impl->core.set_voice_observer(std::move(observer));
 }
+#endif
 void AudioEngine::save(std::span<uint8_t> dst) const {
     if (dst.size() != STATE_BYTES) throw std::invalid_argument("HLE state size mismatch");
     std::fill(dst.begin(), dst.end(), 0);
