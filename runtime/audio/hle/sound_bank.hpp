@@ -91,7 +91,7 @@ public:
         return split_lookup(patch.sample_id(), layer, pitch, selector, program_id);
     }
 
-    Split split_for(DirectPatch patch, unsigned layer, int pitch, uint8_t &selector,
+    Split split_for(DirectRegion patch, unsigned layer, int pitch, uint8_t &selector,
                     uint16_t program_id) const {
         return split_lookup(patch.sample_id(), layer, pitch, selector, program_id);
     }

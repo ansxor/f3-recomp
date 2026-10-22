@@ -3,6 +3,7 @@
 #include "audio/hle/sound_bank.hpp"
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace f3rt::hle {
 
@@ -34,8 +35,9 @@ public:
 
 private:
     const SoundBank &m_bank;
-    std::array<Patch, 1024 * size_t(Program::layer_count)> m_layers{};
-    std::array<Patch, 1024 * size_t(Program::region_count)> m_regions{};
+    // PatchList hands out pointers into these tables: reserve the exact size once and never grow them.
+    std::vector<LayerPatch> m_layers;
+    std::vector<DirectPatch> m_regions;
 };
 
 } // namespace f3rt::hle

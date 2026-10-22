@@ -310,7 +310,7 @@ set(F3RT_CORE_SOURCES
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
     runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/audio/hle/replay.cpp
-    runtime/audio/hle/sequencer.cpp runtime/audio/hle/program_service.cpp
+    runtime/audio/hle/sequencer.cpp runtime/audio/hle/patch.cpp runtime/audio/hle/program_service.cpp
     runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
     runtime/audio/hle/synthesis.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp

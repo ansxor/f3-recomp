@@ -151,6 +151,11 @@ struct Filter {
 
 struct Track;
 
+// The driver's two shared noise words.
+struct NoiseState {
+    uint16_t value = 0, history = 0;
+};
+
 struct Voice {
     NoteOnEvent owner{};
     const Patch *patch = nullptr;
@@ -186,6 +191,17 @@ struct Voice {
     bool loop = false, bidirectional = false, boundary = false, sample_finished = false,
          hardware_valid = false;
     uint64_t release_serial = 0;
+
+    // The patch owns the kind-specific behavior; the voice exposes one interface for it.
+    void initialize(const NoteStart &start, NoiseState &noise, const PriorWindow &prior) {
+        patch->initialize(*this, start, noise);
+        patch->address(*this, prior);
+    }
+    void parameters(bool initial) { patch->parameters(*this, initial); }
+    void retarget(int kernel, const Program &program) { patch->retarget(*this, kernel, program); }
+    EnvelopeTick step(NoiseState &noise) { return patch->step(*this, noise); }
+    OnsetStep onset(NoiseState &noise) { return patch->onset(*this, noise); }
+    bool release() { return patch->release(*this); }
 };
 
 inline void segment(Envelope &e, unsigned target, int r, const SoundBank &bank) {
@@ -226,29 +242,17 @@ inline void initialize_envelope(Envelope &e, EnvelopePatch<Role> patch, const Vo
     segment(e, e.levels[1], e.rates[0], bank);
 }
 
-// c1983c: ramp the level to 0 at the direct region's release rate.
-inline void start_direct_release(Envelope &e, const Voice &v, const SoundBank &bank) {
-    e.done = false;
-    e.position &= 0xffff0000;
-    e.slope = wrap_product(
-        -int64_t(0x7f00) *
-        s16(bank.rom.read_u16(sound_5a7e9117::RATE_TABLE + 2 * v.patch->direct().release_rate())) *
-        2);
-    e.target = e.slope <= 0 ? 0x80000000 : 0;
-    e.stage = 4;
-}
-
 inline double accumulator_start(const Voice &v) noexcept {
     uint32_t address = (v.split.accumulator | ((v.selector & 1) << 28)) & 0x1fffff00;
     return double((v.selector >> 1) << 20) + double(address) / 512;
 }
 
-inline void update_random(Voice &v, uint16_t &noise, uint16_t &noise_history) {
+inline void update_random(Voice &v, NoiseState &noise) {
     if (--v.random_countdown) return;
     v.random_countdown = v.random_period;
-    noise_history = uint16_t(noise_history + noise);
-    noise = uint16_t(noise + noise_history);
-    v.random = s16(noise); // previous_random retains the onset value.
+    noise.history = uint16_t(noise.history + noise.value);
+    noise.value = uint16_t(noise.value + noise.history);
+    v.random = s16(noise.value); // previous_random retains the onset value.
 }
 
 inline void set_glide(Voice &v, int16_t destination, unsigned rate_index, const SoundBank &bank) {

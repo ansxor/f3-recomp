@@ -88,7 +88,6 @@ private:
     void emit(const Voice &voice, VoiceEvent::Kind kind, uint64_t tick,
               const Onset *onset = nullptr);
     void parameters(Voice &voice, bool initial, uint64_t tick, bool notify = true);
-    bool update_envelope(Voice &voice, unsigned which, uint64_t tick);
     void move_before_cursor(unsigned index);
     unsigned allocate(const NoteOnEvent &note, const Patch &patch, unsigned priority,
                       AllocationMode mode);
@@ -100,7 +99,7 @@ private:
     NoteQueue<Pending, 96> m_queue;
     std::array<uint8_t, 32> m_next{}, m_prev{};
     uint8_t m_cursor = 0, m_budget_slot = 0;
-    uint16_t m_noise = 0, m_noise_history = 0;
+    NoiseState m_noise{};
     uint64_t m_serial = 0;
     uint64_t m_tick = TIMER_TICKS;
     uint32_t m_filter_epoch = 0;

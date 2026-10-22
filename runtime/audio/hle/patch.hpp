@@ -5,9 +5,10 @@
 namespace f3rt::hle {
 
 // A Program is one 0x198-byte instrument. A nonzero enable mask holds three Layer
-// records. A zero mask holds seventeen DirectPatch key regions. Voice::direct
-// selects which of those a voice stored. Every field sits on an even byte. The
-// odd bytes are unread.
+// records. A zero mask holds seventeen DirectRegion key regions. ProgramService
+// turns each record into a LayerPatch or a DirectPatch, and the voice runs the
+// behavior the record's kind selects. Every field sits on an even byte. The odd
+// bytes are unread.
 
 enum class EnvelopeRole : uint8_t { Pitch = 0, Filter = 1, Amplitude = 2 };
 
@@ -232,7 +233,7 @@ struct Layer {
     constexpr bool starts_on_release() const noexcept { return bytes[At::delay] == 0xfb; }
 };
 
-struct DirectPatch {
+struct DirectRegion {
     struct At {
         static constexpr size_t size = 20;
         static constexpr size_t decay = 0x00;
@@ -250,8 +251,8 @@ struct DirectPatch {
     static constexpr size_t size = At::size;
     const uint8_t *bytes = nullptr;
 
-    constexpr DirectPatch() noexcept = default;
-    constexpr explicit DirectPatch(const uint8_t *bytes) noexcept : bytes(bytes) {}
+    constexpr DirectRegion() noexcept = default;
+    constexpr explicit DirectRegion(const uint8_t *bytes) noexcept : bytes(bytes) {}
 
     constexpr uint8_t decay_rate() const noexcept { return bytes[At::decay] & 127; }
     constexpr bool ignore_note_off() const noexcept { return (bytes[At::decay] & 128) != 0; }
@@ -311,32 +312,142 @@ struct Program {
     constexpr Layer layer(unsigned index) const noexcept {
         return Layer{bytes + index * Layer::size};
     }
-    constexpr DirectPatch region(unsigned index) const noexcept {
-        return DirectPatch{bytes + index * DirectPatch::size};
+    constexpr DirectRegion region(unsigned index) const noexcept {
+        return DirectRegion{bytes + index * DirectRegion::size};
     }
 };
 
-// The stable per-voice patch record ProgramService returns. `bytes` names the Layer or DirectPatch record that
-// `is_direct` selects; `program` is the containing Program record, which carries the glide rate and the layer
-// layout. VoiceService reads only this record, so no service needs to know which layout a program uses.
-struct Patch {
-    const uint8_t *bytes = nullptr;   // Layer or DirectPatch record
-    const uint8_t *program = nullptr; // containing Program record (glide/layout)
-    uint8_t layer_index = 0;          // layer 0..2, or direct region 0..16
-    bool is_direct = false;
-    uint8_t delay_ticks = 0;
-    bool starts_on_release = false;
+class SoundBank;
+struct Voice;
+struct NoteOnEvent;
+struct NoiseState;
 
-    constexpr Patch() noexcept = default;
-    constexpr Patch(const uint8_t *bytes, const uint8_t *program, uint8_t layer_index,
-                    bool is_direct, uint8_t delay_ticks = 0,
-                    bool starts_on_release = false) noexcept
-        : bytes(bytes), program(program), layer_index(layer_index), is_direct(is_direct),
-          delay_ticks(delay_ticks), starts_on_release(starts_on_release) {}
+// Where the previous note left this physical slot's sample window. A probe sample keeps it.
+struct PriorWindow {
+    double start = 0, end = 0;
+    bool valid = false;
+};
 
-    constexpr Layer layer() const noexcept { return Layer{bytes}; }
-    constexpr DirectPatch direct() const noexcept { return DirectPatch{bytes}; }
-    constexpr Program program_view() const noexcept { return Program{program}; }
+// A note being started, after the track's allocation decision.
+struct NoteStart {
+    const NoteOnEvent &event;
+    int kernel = 0;
+    int transpose = 0;
+    AllocationMode mode = AllocationMode::Poly;
+    int prior_pitch = 0;
+    bool prior_found = false;
+    const Program &program;
+};
+
+// One envelope advance: whether the voice ends, and whether a looping amplitude envelope restarted the sample.
+struct EnvelopeTick {
+    bool ended = false, restarted = false;
+};
+
+// The extra work a layered voice does on admission: a direct voice waits for the ring.
+struct OnsetStep {
+    bool ended = false, restarted = false, parameters = false;
+};
+
+// The behavior of one program record. A LayerPatch runs three envelopes, an LFO and glide; a DirectPatch runs one
+// amplitude envelope with a fixed velocity response. ProgramService owns both kinds; VoiceService and Voice start,
+// step and release a voice without asking which kind it holds. Every patch is constructed with the bank that owns
+// its program bytes, so there is no empty patch state.
+class Patch {
+public:
+    Patch(const SoundBank &bank, const uint8_t *program, uint8_t index, uint8_t delay_ticks,
+          bool starts_on_release) noexcept
+        : m_bank(bank), m_program(program), m_index(index), m_delay_ticks(delay_ticks),
+          m_starts_on_release(starts_on_release) {}
+    virtual ~Patch() = default;
+
+    const SoundBank &bank() const noexcept { return m_bank; }
+    constexpr Program program() const noexcept { return Program{m_program}; }
+    constexpr uint8_t index() const noexcept { return m_index; } // layer 0..2, or region 0..16
+    constexpr uint8_t delay_ticks() const noexcept { return m_delay_ticks; }
+    constexpr bool starts_on_release() const noexcept { return m_starts_on_release; }
+
+    virtual bool layered() const noexcept = 0;
+    virtual AllocationMode allocation() const noexcept = 0;
+    virtual unsigned priority() const noexcept = 0;
+    // Key weight, or -1 when this note is gated out of the patch.
+    virtual int weight(const NoteOnEvent &note, int kernel) const = 0;
+    // Whether an active voice of the same layer slot may be taken over for legato or retrigger.
+    virtual bool reuses(const Voice &voice) const noexcept = 0;
+
+    // Pitch, envelopes and LFO for the new voice; then its split and sample window.
+    virtual void initialize(Voice &voice, const NoteStart &start, NoiseState &noise) const = 0;
+    virtual void address(Voice &voice, const PriorWindow &prior) const = 0;
+    // Legato re-entry of a still-running voice: the new key's pitch becomes the glide destination.
+    virtual void retarget(Voice &voice, int kernel, const Program &program) const = 0;
+
+    virtual EnvelopeTick step(Voice &voice, NoiseState &noise) const = 0;
+    virtual OnsetStep onset(Voice &voice, NoiseState &noise) const = 0;
+    virtual void parameters(Voice &voice, bool initial) const = 0;
+    // True when the release ends the voice immediately.
+    virtual bool release(Voice &voice) const = 0;
+
+private:
+    const SoundBank &m_bank;
+    const uint8_t *m_program = nullptr;
+    uint8_t m_index = 0;
+    uint8_t m_delay_ticks = 0;
+    bool m_starts_on_release = false;
+};
+
+class LayerPatch final : public Patch {
+public:
+    LayerPatch(Layer view, const SoundBank &bank, const uint8_t *program, uint8_t index,
+               uint8_t delay_ticks, bool starts_on_release) noexcept
+        : Patch(bank, program, index, delay_ticks, starts_on_release), m_view(view) {}
+
+    bool layered() const noexcept override { return true; }
+    AllocationMode allocation() const noexcept override { return m_view.allocation(); }
+    unsigned priority() const noexcept override { return m_view.priority(); }
+    int weight(const NoteOnEvent &note, int kernel) const override;
+    bool reuses(const Voice &voice) const noexcept override;
+
+    void initialize(Voice &voice, const NoteStart &start, NoiseState &noise) const override;
+    void address(Voice &voice, const PriorWindow &prior) const override;
+    void retarget(Voice &voice, int kernel, const Program &program) const override;
+
+    EnvelopeTick step(Voice &voice, NoiseState &noise) const override;
+    OnsetStep onset(Voice &voice, NoiseState &noise) const override;
+    void parameters(Voice &voice, bool initial) const override;
+    bool release(Voice &voice) const override;
+
+private:
+    EnvelopeTick advance_envelopes(Voice &voice) const;
+    EnvelopeTick advance(Voice &voice, unsigned which) const;
+
+    Layer m_view{};
+};
+
+class DirectPatch final : public Patch {
+public:
+    DirectPatch(DirectRegion view, const SoundBank &bank, const uint8_t *program,
+                uint8_t index) noexcept
+        : Patch(bank, program, index, 0, false), m_view(view) {}
+
+    constexpr bool contains_key(int key) const noexcept { return m_view.contains(key); }
+
+    bool layered() const noexcept override { return false; }
+    AllocationMode allocation() const noexcept override { return AllocationMode::Poly; }
+    unsigned priority() const noexcept override { return 64; }
+    int weight(const NoteOnEvent &note, int kernel) const override;
+    bool reuses(const Voice &) const noexcept override { return false; }
+
+    void initialize(Voice &voice, const NoteStart &start, NoiseState &noise) const override;
+    void address(Voice &voice, const PriorWindow &prior) const override;
+    void retarget(Voice &, int, const Program &) const override {}
+
+    EnvelopeTick step(Voice &voice, NoiseState &noise) const override;
+    OnsetStep onset(Voice &voice, NoiseState &noise) const override;
+    void parameters(Voice &voice, bool initial) const override;
+    bool release(Voice &voice) const override;
+
+private:
+    DirectRegion m_view{};
 };
 
 // Filter-table index of a direct (key-region) voice, as the sound driver computes it at c195a4-c195d0:

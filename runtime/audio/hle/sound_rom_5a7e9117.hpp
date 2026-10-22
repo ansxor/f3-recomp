@@ -155,7 +155,7 @@ constexpr unsigned program_slot(uint16_t id) noexcept {
 namespace {
 using hle_patch = f3rt::hle::Layer::At;
 using hle_program = f3rt::hle::Program::At;
-using hle_direct = f3rt::hle::DirectPatch::At;
+using hle_direct = f3rt::hle::DirectRegion::At;
 static_assert(hle_patch::size == LAYER_RECORD_STRIDE);
 static_assert(hle_patch::pitch_envelope == LAYER_ENV_PITCH_OFFSET);
 static_assert(hle_patch::filter_envelope == LAYER_ENV_FILTER_OFFSET);
