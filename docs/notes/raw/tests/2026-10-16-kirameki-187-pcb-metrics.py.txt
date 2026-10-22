@@ -1,0 +1,275 @@
+# Analysis scripts and diagnostic patch for 2026-10-16-kirameki-187-pcb-stereo-reverb.md.
+# Split on the '##### file:' markers (same directory, python files named as marked). Run with
+#   uv run --group analysis python <script>   (needs numpy, scipy, ffmpeg for the FLAC)
+# Renders: f3rt-tool sound-extract --rom-dir roms/kirameki --bank 1 --sound 0x187 --seconds 24 --tail 4 --out-dir DIR  (HLE)
+#          ... --audio-backend reference --sound-driver native ...                                                  (MAME-derived emulation)
+#          same with --sound 1 --seconds 12 for the second recording.
+# Diagnostic-only patch (not in the tree; env switches added temporarily to runtime/audio/reference/engine.cpp and
+# runtime/audio/hle/effects.hpp, removed afterwards):
+#   engine.cpp, after computing channels[]: F3_EXP_IMP=<pair>: zero all channels and put 0.12 FS on channel pair*2 at frame 16.0*29761;
+#     F3_EXP_PERM=abc: ESP ser pair s <- OTIS pair abc[s]; F3_EXP_LRSW=bitmask: swap L/R of ESP input pair s; F3_EXP_ONLY=k: keep OTIS pair k only;
+#     F3_EXP_NOHALF / F3_EXP_INGAIN=k: output x2 / OTIS->ESP input gain x k (output compensated); F3_EXP_DUMP=file: dump ES5510 instructions+GPRs at 20 s.
+#   effects.hpp: F3_EXP_IMP=<pair>: replace buses by one impulse (0.6667) at 16.0 s; F3_EXP_HDECAY / F3_EXP_HWET / F3_EXP_HDAMP: override m_decay,
+#     m_wet_reverb (multiplier), m_damping after update().
+#   Added for the parameter trace: es5510.cpp host_w cases 0xa0/0xc0/0xe0 fprintf the register/instruction writes when F3_EXP_GPRLOG is set;
+#     effects.hpp parameter()/select() fprintf EFXP/EFXS when F3_EXP_EFXLOG is set (run with f3rt-tool gameplay --audio-backend enhanced);
+#     Effects constructor prints old/new decay and damping for the 13 ROM presets under F3_EXP_PRESETS; F3_EXP_XFEED=x feeds x of the opposite
+#     channel's reverb send into each reverb input and F3_EXP_HDECAY overrides m_decay (stereo-width test).
+#   Packet-mode parameter sweep: f3rt-tool sound-extract ... --audio-backend reference --sound-driver native --packet 032005 --packet 0421<idx><val> ...
+##### file: metrics.py
+"""PCB vs candidate stereo/wet metrics. usage: metrics.py pcb.flac|wav name=dir_or_wav ..."""
+import sys, numpy as np, subprocess, tempfile, os
+from scipy import signal
+from scipy.io import wavfile
+R0=29762
+def load(p):
+    if p.endswith('.flac'):
+        t=tempfile.mktemp(suffix='.wav'); subprocess.run(['ffmpeg','-y','-loglevel','error','-i',p,t],check=True); p=t
+    r,s=wavfile.read(p); s=s.astype(float)/32768
+    return signal.resample_poly(s,R0,r,axis=0) if r!=R0 else s
+def corr(a,b): return float(a@b/np.sqrt((a@a)*(b@b)+1e-30))
+def onset(x): return int(np.nonzero(np.abs(x).max(1)>0.003)[0][0])
+def db(x): return 10*np.log10(x+1e-20)
+def seg(x,o,t0,t1): return x[o+int(t0*R0):o+int(t1*R0)]
+def metrics(x,o,lagfix=0):
+    m={}
+    a=seg(x,o,3,19.5); L,R=a[:,0],a[:,1]
+    m['rms_L_dB']=db(L@L/len(L)); m['rms_R_dB']=db(R@R/len(R))
+    m['LR_corr']=corr(L,R)
+    M=L+R;S=L-R; m['S/M_dB']=db(S@S/(M@M))
+    # lagged inter-channel xcorr beyond 5 ms (reverb-like cross-feed)
+    l=L-L.mean(); r=R-R.mean()
+    cc=signal.correlate(r,l,'full',method='fft')/np.sqrt((l@l)*(r@r)); lg=signal.correlation_lags(len(r),len(l))
+    k=(lg>150)&(lg<3000); m['xcorr_L->R_5-100ms']=float(np.abs(cc[k]).max())
+    k=(lg<-150)&(lg>-3000); m['xcorr_R->L_5-100ms']=float(np.abs(cc[k]).max())
+    # tail after song end (end = last sample > -45 dBFS in 100ms envelope near 19.8s)
+    pre=seg(x,o,17.5,19.7); pe=(pre**2).mean()
+    w=int(.2*R0); tl=[db((seg(x,o,t,t+.2)**2).mean())-db(pe) for t in (19.9,20.1,20.3,20.5,20.9,21.3)]
+    m['tail_rel_dB@19.9,20.1,20.3,20.5,20.9,21.3']=[round(v,1) for v in tl]
+    # third-octave-ish band balance: energy 0-1k,1-4k,4-8k,8k+ relative to total
+    f,P=signal.welch(a[:,0]+a[:,1],R0,nperseg=4096); tot=P.sum()
+    m['band_dB(<1k,1-4k,4-8k,>8k)']=[round(float(db(P[(f>=lo)&(f<hi)].sum()/tot)),1) for lo,hi in ((0,1000),(1000,4000),(4000,8000),(8000,15000))]
+    return m
+def pcb_vs(pcb,x,op,ox):
+    out=[]
+    for t0 in range(3,19,3):
+        n=3*R0; a=pcb[op+t0*R0:op+t0*R0+n]; M=a.sum(1)
+        c0=ox+t0*R0-2500; b=x[c0:c0+n+5000]
+        cc=signal.correlate(b.sum(1),M,'valid',method='fft'); k=int(np.argmax(cc)); bb=b[k:k+n]
+        Sa=a[:,0]-a[:,1]; Sb=bb[:,0]-bb[:,1]
+        out.append((corr(M,bb.sum(1)),corr(Sa,Sb)))
+    return np.mean([o[0] for o in out]),np.mean([o[1] for o in out])
+if __name__=='__main__':
+    pcb=load(sys.argv[1]); op=onset(pcb)
+    print('PCB',metrics(pcb,op))
+    for arg in sys.argv[2:]:
+        name,p=arg.split('=')
+        if os.path.isdir(p): p=p+'/bank_01/391.wav'
+        x=load(p); ox=onset(x); mc,sc=pcb_vs(pcb,x,op,ox)
+        print(name,{'Mcorr':round(mc,3),'Scorr':round(sc,3)},metrics(x,ox))
+##### file: ana3.py
+import sys,numpy as np
+from scipy import signal
+from metrics import load,R0
+sos=signal.butter(2,20,'hp',fs=R0,output='sos')
+def prep(p): 
+    x=load(p); return signal.sosfilt(sos,x,axis=0)
+def curve(p,t_lo=None,t_hi=None):
+    x=prep(p); w=int(.05*R0); n=(len(x)-w)//w
+    d=np.array([10*np.log10((x[i*w:i*w+w]**2).mean()+1e-14) for i in range(n)])
+    return x,d
+def report(label,p,t_lo,t_hi):
+    x,d=curve(p); w=.05; lo=int(t_lo/w); hi=min(int(t_hi/w),len(d))
+    ref=np.median(d[lo:hi]); idx=[i for i in range(lo,hi) if d[i]>ref-12]; end=idx[-1]
+    seg=x[int((end-40)*w*R0):int((end-4)*w*R0)]; lvl=10*np.log10((seg**2).mean()); chan=10*np.log10((seg**2).mean(0))
+    tail=[round(float(d[end+k]-lvl),1) for k in range(1,25,2)]
+    # L/R energy balance and correlation
+    L,R=seg[:,0],seg[:,1]; c=float(L@R/np.sqrt((L@L)*(R@R)))
+    print(f"{label:12s} lvl={lvl:6.1f}dB L/R={chan[0]:.1f}/{chan[1]:.1f} LRcorr={c:.3f} end={end*w:.2f}s tail(+.05..+1.2s step .1)={tail}")
+if __name__=='__main__':
+    spec=sys.argv[1:]
+    for a in spec:
+        label,p,lo,hi=a.split(',',3)[0],a.split(',')[1],float(a.split(',')[2]),float(a.split(',')[3])
+        report(label,p,lo,hi)
+##### file: sc.py
+import sys,glob,numpy as np
+from scipy import signal
+from ana3 import prep
+from metrics import R0
+W=0.05
+def env(x):
+    w=int(W*R0); n=len(x)//w
+    return 10*np.log10((x[:n*w].reshape(n,w,2)**2).mean((1,2))+1e-14)
+SONG={'B':dict(pcb='/home/answer/Downloads/kirameki-sound-1-1.wav',lo=2.0),'A':dict(pcb='/home/answer/Downloads/kirameki-sound-1-187.flac',lo=0.0)}
+cache={}
+def pcbinfo(k):
+    if k in cache: return cache[k]
+    x=prep(SONG[k]['pcb']); d=env(x)
+    lo=int(SONG[k]['lo']/W); on=next(i for i in range(lo,len(d)) if d[i]>-50)
+    p90=np.percentile(d[on:],90); idx=[i for i in range(on,len(d)) if d[i]>p90-20]
+    # end = last above threshold before the first long gap (>1s) following onset
+    end=on
+    for i in idx:
+        if i-end>20 and end>on: break
+        end=i
+    cache[k]=(x,d,on,end); return cache[k]
+def ours_onset(d): return next(i for i in range(len(d)) if d[i]>-50)
+def score(path,k):
+    px,pd,pon,pend=pcbinfo(k); x=prep(path); d=env(x); oon=ours_onset(d)
+    # fine lag via mono xcorr over 4 s starting 3 s after onset
+    if k=='B': return score_noalign(path,k,px,pd,pon,pend,x,d,oon)
+    n=int(4*R0); a=px[int((pon+60)*W*R0):][:n].sum(1)
+    c0=int((oon+60)*W*R0)-20000; b=x[c0:c0+n+40000].sum(1); cc=signal.correlate(b,a,'valid',method='fft'); lag=int(np.argmax(cc))-20000
+    off=(pon*W*R0)-(oon*W*R0)-lag   # pcb sample = ours sample + off
+    p90=np.percentile(d[oon:],90); idx=[i for i in range(oon,len(d)) if d[i]>p90-20]; oend=oon
+    for i in idx:
+        if i-oend>20 and oend>oon: break
+        oend=i
+    seg_p=px[int((pend-40)*W*R0):int((pend-4)*W*R0)]; seg_o=x[int((oend-40)*W*R0):int((oend-4)*W*R0)]
+    lp=10*np.log10((seg_p**2).mean()); lo_=10*np.log10((seg_o**2).mean())
+    def lrc(s): L,R=s[:,0],s[:,1]; return float(L@R/np.sqrt((L@L)*(R@R)))
+    tp=[pd[pend+k_]-lp for k_ in range(1,25,2)]; to=[d[oend+k_]-lo_ for k_ in range(1,25,2)]
+    # waveform correlation over 6 s of song, aligned
+    n2=int(6*R0); s0=int((pon+80)*W*R0); ap=px[s0:s0+n2]; ao=x[int(s0-off):int(s0-off)+n2]
+    def cr(u,v): return float(u@v/np.sqrt((u@u)*(v@v)+1e-30))
+    asis=(cr(ap[:,0],ao[:,0])+cr(ap[:,1],ao[:,1]))/2; sw=(cr(ap[:,0],ao[:,1])+cr(ap[:,1],ao[:,0]))/2
+    return dict(lvl=lo_-lp,lrc=lrc(seg_o)-lrc(seg_p),tail=float(np.mean(np.array(to)-np.array(tp))),tailabs=float(np.mean(np.abs(np.array(to)-np.array(tp)))),wf_asis=asis,wf_sw=sw,lag=lag)
+def score_noalign(path,k,px,pd,pon,pend,x,d,oon):
+    p90=np.percentile(d[oon:],90); idx=[i for i in range(oon,len(d)) if d[i]>p90-20]; oend=oon
+    for i in idx:
+        if i-oend>20 and oend>oon: break
+        oend=i
+    seg_p=px[int((pend-40)*W*R0):int((pend-4)*W*R0)]; seg_o=x[int((oend-40)*W*R0):int((oend-4)*W*R0)]
+    lp=10*np.log10((seg_p**2).mean()); lo_=10*np.log10((seg_o**2).mean())
+    def lrc(s): L,R=s[:,0],s[:,1]; return float(L@R/np.sqrt((L@L)*(R@R)))
+    tp=[pd[pend+k_]-lp for k_ in range(1,25,2)]; to=[d[oend+k_]-lo_ for k_ in range(1,25,2)]
+    return dict(lvl=lo_-lp,lrc=lrc(seg_o)-lrc(seg_p),tail=float(np.mean(np.array(to)-np.array(tp))),tailabs=float(np.mean(np.abs(np.array(to)-np.array(tp)))),wf_asis=0.0,wf_sw=0.0,lag=0,oend=oend*W)
+
+if __name__=='__main__':
+    for p in sys.argv[1:]:
+        k='B' if p.rsplit('/',3)[-3].endswith('_c1') or '001.wav' in p else 'A'
+        r=score(p,k); print(p.split('/')[-3],k,{a:round(b,3) for a,b in r.items()})
+
+##### file: hscore.py
+import sys,glob,numpy as np
+from sc import *
+def tailcurve(f,k):
+    x=prep(f); d=env(x); oon=ours_onset(d); p90=np.percentile(d[oon:],90); idx=[i for i in range(oon,len(d)) if d[i]>p90-20]; oend=oon
+    for i in idx:
+        if i-oend>20 and oend>oon: break
+        oend=i
+    s=x[int((oend-40)*W*R0):int((oend-4)*W*R0)]; lo=10*np.log10((s**2).mean())
+    L,R=s[:,0],s[:,1]; c=float(L@R/np.sqrt((L@L)*(R@R)))
+    dd=np.concatenate([d,np.full(100,-110.0)]); return np.array([dd[oend+j]-lo for j in range(1,25,2)]),lo,c
+def pcbtail(k):
+    px,pd,pon,pend=pcbinfo(k); seg=px[int((pend-40)*W*R0):int((pend-4)*W*R0)]; lp=10*np.log10((seg**2).mean())
+    L,R=seg[:,0],seg[:,1]; c=float(L@R/np.sqrt((L@L)*(R@R)))
+    return np.array([pd[pend+j]-lp for j in range(1,25,2)]),lp,c
+if __name__=='__main__':
+    pa,la,ca=pcbtail('A'); pb,lb,cb=pcbtail('B')
+    rows=[]
+    for d in sorted(glob.glob('/tmp/m/v/x_*_A')):
+        tag=d.split('/')[-1][:-2]; fa=glob.glob(d+'/bank_01/*.wav'); fb=glob.glob(f'/tmp/m/v/{tag}_B/bank_01/*.wav')
+        if not fa or not fb: continue
+        ta,lA,cA=tailcurve(fa[0],'A'); tb,lB,cB=tailcurve(fb[0],'B')
+        ea=float(np.mean(np.abs(np.maximum(ta,-80)-pa))); eb=float(np.mean(np.abs(np.maximum(tb,-80)-pb)))
+        rows.append((ea+eb,tag,ea,eb,float(np.mean(ta-pa)),float(np.mean(tb-pb)),cA-ca,cB-cb,lA-la,lB-lb))
+    rows.sort()
+    print('tag cost errA errB biasA biasB dLRcorrA dLRcorrB dLvlA dLvlB')
+    for r in rows: print(r[1],*[round(v,2) for v in r[0:1]+r[2:]])
+##### file: final_tab.py
+import numpy as np
+from hscore import tailcurve,pcbtail
+from scipy import signal
+from sc import *
+rows=[('MAME-derived emulation, before (0.5 route + pair-0 bypass)','v/a187_base/bank_01/391.wav','v/b1_base/bank_01/001.wav'),
+ ('MAME-derived emulation, after (no 0.5, no bypass)','v/fin_ref_A/bank_01/391.wav','v/fin_ref_B/bank_01/001.wav'),
+ ('HLE, after routing/level fix, formula decay','v/f_hle_A/bank_01/391.wav','v/f_hle_B/bank_01/001.wav'),
+ ('HLE, final (decay .90 for preset 5)','v/fin2_hle_A/bank_01/391.wav','v/fin2_hle_B/bank_01/001.wav')]
+pa,la,ca=pcbtail('A'); pb,lb,cb=pcbtail('B')
+print('PCB  A: lvl %.1f LRcorr %.3f tail %s'%(la,ca,np.round(pa,1)))
+print('PCB  B: lvl %.1f LRcorr %.3f tail %s'%(lb,cb,np.round(pb,1)))
+for name,fa,fb in rows:
+    ta,lA,cA=tailcurve(fa,'A'); tb,lB,cB=tailcurve(fb,'B')
+    ea=np.mean(np.abs(np.maximum(ta,-80)-pa)); eb=np.mean(np.abs(np.maximum(tb,-80)-pb))
+    # absolute RMS level during song (HP) in dBFS over 3 s mid-song
+    def rms(f,k):
+        x=prep(f); d=env(x); oon=ours_onset(d); s=x[int((oon+60)*W*R0):int((oon+60)*W*R0)+int(8*R0)]; return 10*np.log10((s**2).mean())
+    def prms(k):
+        px,pd,pon,pend=pcbinfo(k); s=px[int((pon+60)*W*R0):int((pon+60)*W*R0)+int(8*R0)]; return 10*np.log10((s**2).mean())
+    print(f"{name}\n   A: RMS err {lA-la:+.1f} dB, LRcorr {cA:.3f}, tail mean|err| {ea:.1f} dB, tail {np.round(ta,1)}\n   B: RMS err {lB-lb:+.1f} dB, LRcorr {cB:.3f}, tail mean|err| {eb:.1f} dB, tail {np.round(tb,1)}")
+##### file: bandlr.py
+import numpy as np
+from scipy import signal
+from sc import *
+edges=[100,200,400,800,1600,3200,6400,12000]
+def lrdiff(x,o,dur=5.0):
+    s=x[int(o):int(o+dur*R0)]
+    f,P=signal.welch(s,R0,nperseg=4096,axis=0)
+    return np.array([10*np.log10(P[(f>=lo)&(f<hi),0].sum()/P[(f>=lo)&(f<hi),1].sum()) for lo,hi in zip(edges[:-1],edges[1:])])
+for k,files in (('A',{'ref':'/tmp/m/v/fin_ref_A/bank_01/391.wav','hle':'/tmp/m/v/fin_hle_A/bank_01/391.wav'}),('B',{'ref':'/tmp/m/v/fin_ref_B/bank_01/001.wav','hle':'/tmp/m/v/fin_hle_B/bank_01/001.wav'})):
+    px,pd,pon,pend=pcbinfo(k); p=lrdiff(px,(pon+60)*W*R0)
+    print(k,'PCB  L/R dB per octave band',np.round(p,1))
+    for n,f in files.items():
+        x=prep(f); d=env(x); oon=ours_onset(d); o=lrdiff(x,(oon+60)*W*R0)
+        # candidate orders: file is after Audio::render swap ("as-is"); swapped = undo
+        print(f"   {n} as-is {np.round(o,1)} rms err {np.sqrt(np.mean((o-p)**2)):.2f} | swapped {np.round(-o,1)} rms err {np.sqrt(np.mean((-o-p)**2)):.2f}")
+##### file: order2.py
+"""Channel order on a recording: per-window lag-fit correlation, as-is vs swapped (windows of 0.6 s, local lag search)."""
+import sys,numpy as np
+from scipy import signal
+from sc import *
+def run(label,path,k,t0s):
+    px,pd,pon,pend=pcbinfo(k); x=prep(path); d=env(x); oon=ours_onset(d)
+    n=int(.6*R0); asis=[];sw=[]
+    for t in t0s:
+        ps=int((pon*W+t)*R0); a=px[ps:ps+n]
+        cs=int((oon*W+t)*R0)-3000; b=x[cs:cs+n+6000]
+        best=None
+        for ch in range(2):
+            pass
+        m=a.sum(1); cc=signal.correlate(b.sum(1),m,'valid',method='fft')
+        cum=np.concatenate([[0],np.cumsum(b.sum(1)**2)]); en=cum[n:]-cum[:-n]
+        ncc=cc/np.sqrt((m@m)*en+1e-20); kbest=int(np.argmax(ncc))
+        bb=b[kbest:kbest+n]
+        def cr(u,v): return float(u@v/np.sqrt((u@u)*(v@v)+1e-30))
+        asis.append((cr(a[:,0],bb[:,0])+cr(a[:,1],bb[:,1]))/2); sw.append((cr(a[:,0],bb[:,1])+cr(a[:,1],bb[:,0]))/2)
+    asis=np.array(asis); sw=np.array(sw)
+    print(f"{label:10s} as-is {asis.mean():.3f}  swapped {sw.mean():.3f}  swapped-better windows {(sw>asis).sum()}/{len(asis)}")
+if __name__=='__main__':
+    for lab,p,k in (('ref_A','/tmp/m/v/fin_ref_A/bank_01/391.wav','A'),('hle_A','/tmp/m/v/fin_hle_A/bank_01/391.wav','A'),('ref_B','/tmp/m/v/fin_ref_B/bank_01/001.wav','B'),('hle_B','/tmp/m/v/fin_hle_B/bank_01/001.wav','B')):
+        run(lab,p,k,np.arange(2,7.2,0.5) if k=='B' else np.arange(3,18,1.0))
+##### file: edc.py
+import sys,numpy as np
+from metrics import load,R0
+def resp(path):
+    x=load(path); pk=np.abs(x).max(1); i0=int(np.argmax(pk>0.2*pk.max())); a=x[i0:]
+    n=min(len(a),int(2.6*R0)); a=a[:n]; a=a-a[-int(.5*R0):].mean(0) if n>R0 else a
+    return a
+def edc(a,times=(0.01,0.05,0.1,0.2,0.3,0.5,0.75,1,1.5,2,3,4)):
+    E=(a**2).sum(1); tot=E.sum(); c=np.cumsum(E[::-1])[::-1]
+    return [round(float(10*np.log10(c[min(int(t*R0),len(c)-1)]/tot+1e-20)),1) for t in times]
+if __name__=='__main__':
+    print('EDC re total at t = .01 .05 .1 .2 .3 .5 .75 1 1.5 2 3 4 s')
+    for p in sys.argv[1:]:
+        a=resp(p); tot=(a**2).sum(0)
+        print(f"{p.split('/')[-4]:14s} len={len(a)/R0:.2f}s  E_L/E_R={10*np.log10(tot[0]/(tot[1]+1e-20)+1e-20):+.1f} dB  direct peak L={np.abs(a[:20,0]).max():.3f} R={np.abs(a[:20,1]).max():.3f} EDC={edc(a)}")
+##### file: fit.py
+import sys,glob,numpy as np
+from edc import resp
+from metrics import R0
+def feats(p):
+    a=resp(p); E=(a**2).sum(1); n=len(E)
+    tot=E.sum(); direct=E[:int(.01*R0)].sum(); 
+    tail=E[int(.03*R0):].sum()
+    c=np.cumsum(E[::-1])[::-1]
+    def e(t): return 10*np.log10(c[min(int(t*R0),n-1)]/tot+1e-20)
+    # decay rate of the instantaneous envelope between .3s and 1.5s (dB/s) via smoothed power
+    w=int(.1*R0); pw=np.array([E[i:i+w].sum() for i in range(0,min(n,int(3*R0))-w,w)]); db=10*np.log10(pw+1e-20)
+    t=np.arange(len(db))*.1
+    m=(t>=.3)&(t<=1.5); slope=np.polyfit(t[m],db[m],1)[0]
+    lr=a[:,0]**2; rr=a[:,1]**2
+    return dict(direct_dB=round(float(10*np.log10(direct/tot)),1),tail_dB=round(float(10*np.log10(tail/tot)),1),slope_dBps=round(float(slope),1),edc_05=round(float(e(.5)),1),edc_1=round(float(e(1)),1),edc_2=round(float(e(2)),1),LoverR=round(float(10*np.log10(a[:,0]@a[:,0]/(a[:,1]@a[:,1]+1e-20)+1e-20)),1))
+if __name__=='__main__':
+    for p in sys.argv[1:]:
+        print(p.split('/')[-3],feats(p))

@@ -1,9 +1,6 @@
 #include "audio/hle/audio.hpp"
 #include "f3rt/memory_map.hpp"
-#include "audio/hle/effects.hpp"
-#include "audio/hle/sequencer.hpp"
-#include "audio/hle/synth.hpp"
-#include <cmath>
+#include "audio/hle/core.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -12,39 +9,20 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
-#if defined(__x86_64__) || defined(_M_X64) || defined(__SSE__)
-#include <xmmintrin.h>
-#include <pmmintrin.h>
-#endif
 
 namespace f3rt::hle {
+static_assert(Audio::OUTPUT_BOOST == OUTPUT_BOOST,
+              "Core and Audio must share the output stage gain");
 namespace {
-// Flush-to-zero and denormals-are-zero prevent decaying reverb/filter tails from becoming subnormal.
-static void enable_ftz_daz() {
-#if defined(__x86_64__) || defined(_M_X64) || defined(__SSE__)
-    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-#elif defined(__aarch64__)
-    uint64_t fpcr;
-    __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
-    fpcr |= (1ULL << 24);
-    __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
-#endif
-}
 constexpr size_t QUEUE_SIZE = 4096, PCM_CAPACITY = 32768;
-struct Packet {
-    std::array<uint8_t, 8> bytes{};
-    uint64_t tick = 0, instance = 0;
-    std::span<const uint8_t> data() const { return {bytes.data(), bytes[0]}; }
-};
 struct Message {
-    enum Kind { Command, Advance, Reset, Gain } kind = Advance;
-    Packet packet;
-    uint64_t tick = 0;
+    enum Kind { Command, Advance, Reset, Gain, Bank } kind = Advance;
+    CommandPacket packet;
+    uint64_t tick = 0, instance = 0;
     uint8_t value = 0, channel = 0;
 };
 } // namespace
-struct AudioEngine::Impl : VoiceSink {
+struct AudioEngine::Impl : PcmSink {
     uint8_t *shared;
     uint64_t clock = 0, command_count = 0, serial = 0;
     // Playback is monotonic even when a slot load changes emulated time.
@@ -52,12 +30,8 @@ struct AudioEngine::Impl : VoiceSink {
     uint16_t consumer = 0;
     bool held = true;
 
-    Synth synth;
-    Effects effects;
-    Sequencer sequencer;
-    uint64_t worker_tick = 0, worker_frames = 0;
-    std::array<float, 2> gain{1.f, 1.f};
-    Audio::GainModel gain_model = Audio::GainModel::MameRouting;
+    // Owned by the worker thread; the main thread touches it only after flush() (observer, gain model).
+    Core core;
     mutable std::mutex mutex;
     mutable std::condition_variable wake, completed;
     std::array<Message, QUEUE_SIZE> queue{};
@@ -71,11 +45,12 @@ struct AudioEngine::Impl : VoiceSink {
     std::thread worker;
 
     Impl(std::span<const uint8_t> rom, std::span<const uint16_t> samples, uint8_t *ram)
-        : shared(ram), synth(rom, samples), effects(rom), sequencer(rom, *this) {
+        : shared(ram), core(rom, samples) {
         if (!shared) throw std::invalid_argument("HLE requires shared RAM");
+        core.set_pcm_sink(this);
         worker = std::thread([this] { run(); });
     }
-    ~Impl() override {
+    ~Impl() {
         {
             std::lock_guard lock(mutex);
             stopping = true;
@@ -84,19 +59,16 @@ struct AudioEngine::Impl : VoiceSink {
         completed.notify_all();
         worker.join();
     }
-    void note_on(const Note &n) override { synth.note_on(n); }
-    void note_off(uint64_t id, uint64_t tick) override { synth.note_off(id, tick); }
-    void channel_update(uint8_t s, uint8_t t, const Channel &c, uint64_t tick) override {
-        synth.channel_update(s, t, c, tick);
-    }
-    void effect(uint8_t preset, uint64_t) override { effects.select(preset); }
-    void effect_parameter(uint8_t index, uint8_t value, uint64_t) override {
-        effects.parameter(index, value);
-    }
-    void reset(uint64_t tick) override {
-        synth.reset(tick);
-        effects.reset();
-        gain.fill(1.f);
+    // Core's PcmSink: runs on the worker, once per rendered block.
+    void write(const float *stereo, size_t n) override {
+        std::lock_guard lock(pcm_mutex);
+        for (size_t i = 0; i < n; ++i) {
+            const size_t pos = size_t(pcm_write % PCM_CAPACITY) * 2;
+            pcm[pos] = stereo[i * 2];
+            pcm[pos + 1] = stereo[i * 2 + 1];
+            ++pcm_write;
+        }
+        if (pcm_write - pcm_read > PCM_CAPACITY) pcm_read = pcm_write - PCM_CAPACITY;
     }
     void push(const Message &m) {
         std::unique_lock lock(mutex);
@@ -124,46 +96,8 @@ struct AudioEngine::Impl : VoiceSink {
         completed.wait(lock, [&] { return done >= target || failure; });
         if (failure) std::rethrow_exception(failure);
     }
-    void render_until(uint64_t tick) {
-        const uint64_t end =
-            tick / MAIN_CLOCK * SAMPLE_RATE + tick % MAIN_CLOCK * SAMPLE_RATE / MAIN_CLOCK;
-        std::array<float, size_t(256) * 8> buses;
-        std::array<float, size_t(256) * 2> stereo;
-        std::array<float, 2> input, output;
-        for (unsigned ch = 0; ch < 2; ++ch) {
-            const float route = float(std::lround(gain[ch] * 100.f)) / 32.f;
-            input[ch] = .18f * (gain_model == Audio::GainModel::MameRouting ? route : 1.f);
-            output[ch] = Audio::OUTPUT_BOOST *
-                         (gain_model == Audio::GainModel::MameRouting ? route : gain[ch]);
-        }
-        while (worker_frames < end) {
-            const size_t n = size_t(std::min<uint64_t>(256, end - worker_frames));
-            synth.render(buses.data(), n);
-            effects.mix(buses.data(), stereo.data(), n, input, output);
-            {
-                std::lock_guard lock(pcm_mutex);
-                for (size_t i = 0; i < n; ++i) {
-                    const size_t pos = size_t(pcm_write % PCM_CAPACITY) * 2;
-                    pcm[pos] = stereo[i * 2];
-                    pcm[pos + 1] = stereo[i * 2 + 1];
-                    ++pcm_write;
-                }
-                if (pcm_write - pcm_read > PCM_CAPACITY) pcm_read = pcm_write - PCM_CAPACITY;
-            }
-            worker_frames += n;
-        }
-        generated.store(worker_frames, std::memory_order_relaxed);
-    }
-    void advance_worker(uint64_t tick) {
-        while (worker_tick < tick) {
-            const uint64_t next = std::min(tick, sequencer.next_tick());
-            render_until(next);
-            sequencer.advance_to(next);
-            worker_tick = next;
-        }
-    }
     void run() noexcept {
-        enable_ftz_daz();
+        Core::enable_flush_denormals();
         try {
             for (;;) {
                 Message m;
@@ -176,20 +110,24 @@ struct AudioEngine::Impl : VoiceSink {
                     ticket = popped;
                     completed.notify_all();
                 }
-                advance_worker(std::max(worker_tick, m.tick));
                 switch (m.kind) {
                 case Message::Command:
-                    sequencer.command(m.packet.data(), m.packet.instance, worker_tick);
+                    core.command(m.packet, m.instance, m.tick);
                     break;
                 case Message::Reset:
-                    sequencer.reset(worker_tick);
+                    core.reset(m.tick);
+                    break;
+                case Message::Bank:
+                    core.set_bank(m.value, m.tick);
                     break;
                 case Message::Gain:
-                    gain[m.channel] = std::pow(10.f, -.5f * float(63 - (m.value & 63)) / 20.f);
+                    core.set_gain(m.channel, m.value, m.tick);
                     break;
                 case Message::Advance:
+                    core.advance(m.tick);
                     break;
                 }
+                generated.store(core.frames(), std::memory_order_relaxed);
                 {
                     std::lock_guard lock(mutex);
                     done = ticket;
@@ -205,14 +143,15 @@ struct AudioEngine::Impl : VoiceSink {
             wake.notify_all();
         }
     }
-    void record(Packet p) {
+    void record(CommandPacket packet, uint64_t tick) {
         ++command_count;
-        p.instance = ++serial;
+        const uint64_t instance = ++serial;
         if (serial >> 63) throw std::overflow_error("HLE instance IDs exhausted");
         Message m;
         m.kind = Message::Command;
-        m.packet = p;
-        m.tick = p.tick;
+        m.packet = std::move(packet);
+        m.tick = tick;
+        m.instance = instance;
         push(m);
     }
     void shared_write(uint32_t offset) {
@@ -226,12 +165,11 @@ struct AudioEngine::Impl : VoiceSink {
                 const uint8_t length = shared[index];
                 const unsigned available = ((producer - consumer) & 0x7ff) >> 1;
                 if (length < 2 || length > available) break;
-                Packet p;
-                p.tick = clock;
-                if (length <= p.bytes.size()) {
+                if (length <= CommandPacket::MAX_BYTES) {
+                    std::array<uint8_t, CommandPacket::MAX_BYTES> bytes{};
                     for (unsigned n = 0; n < length; ++n)
-                        p.bytes[n] = shared[(index + n) & MAILBOX_RING_MASK];
-                    record(p);
+                        bytes[n] = shared[(index + n) & MAILBOX_RING_MASK];
+                    record(CommandPacket::parse(std::span(bytes).first(length)), clock);
                 }
                 consumer = uint16_t((consumer + length * 2) & 0x7ff);
                 consumed += length;
@@ -271,6 +209,14 @@ void AudioEngine::set_reset(bool asserted) {
         p.shared_write(MAILBOX_GAIN_CH1);
     }
 }
+void AudioEngine::set_bank(uint8_t bank) {
+    auto &p = *m_impl;
+    Message m;
+    m.kind = Message::Bank;
+    m.tick = p.clock;
+    m.value = bank;
+    p.push(m);
+}
 void AudioEngine::shared_write(uint32_t offset) { m_impl->shared_write(offset); }
 void AudioEngine::finish_frame() { m_impl->submit(m_impl->clock); }
 void AudioEngine::flush() const { m_impl->flush(); }
@@ -304,14 +250,12 @@ uint64_t AudioEngine::generated() const {
     return m_impl->generated.load(std::memory_order_relaxed);
 }
 Audio::EnhancedStats AudioEngine::stats() const { return {m_impl->command_count, generated()}; }
+#if F3RT_HLE_EVENTS
 void AudioEngine::set_observer(std::function<void(const VoiceEvent &)> observer) {
     flush();
-    m_impl->synth.set_observer(std::move(observer));
+    m_impl->core.set_voice_observer(std::move(observer));
 }
-void AudioEngine::set_gain_model(Audio::GainModel model) {
-    flush();
-    m_impl->gain_model = model;
-}
+#endif
 void AudioEngine::save(std::span<uint8_t> dst) const {
     if (dst.size() != STATE_BYTES) throw std::invalid_argument("HLE state size mismatch");
     std::fill(dst.begin(), dst.end(), 0);
@@ -333,7 +277,7 @@ void AudioEngine::load(std::span<const uint8_t> src) {
         for (unsigned b = 0; b < 8; ++b) words[w] = words[w] << 8 | src[w * 8 + b];
     m_impl->flush();
     m_impl->clock_epoch = words[0];
-    m_impl->playback_epoch = m_impl->worker_tick;
+    m_impl->playback_epoch = m_impl->core.tick();
     m_impl->submitted_tick = words[0];
     {
         std::lock_guard lock(m_impl->pcm_mutex);
@@ -345,6 +289,6 @@ void AudioEngine::load(std::span<const uint8_t> src) {
     m_impl->held = src[18] != 0;
 }
 bool validate(std::span<const uint8_t> sound, std::span<const uint16_t> samples) noexcept {
-    return Sequencer::validate(sound) && Synth::validate(sound, samples);
+    return Core::validate(sound, samples);
 }
 } // namespace f3rt::hle

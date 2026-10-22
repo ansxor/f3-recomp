@@ -1,7 +1,7 @@
 ---
 title: ES5510 (ESP) host interface, instruction format and DUART halt, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-12
+updated: 2026-10-18
 type: hardware
 tags: [audio, memory-map, undocumented]
 sources:
@@ -12,6 +12,11 @@ sources:
   - raw/docs/otis-esp-dac-routing-2026-10-09.txt
   - raw/emu-source/mame-0.289/taito_en.cpp
   - raw/disasm/landmakrj-sound-driver-excerpts.md
+  - raw/docs/taito-f3/5505-5510.txt
+  - raw/docs/taito-f3/clocks.txt
+  - raw/docs/taito-f3/chips.txt
+  - raw/docs/taito-f3/list.txt
+  - raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md
 games: [landmakrj]
 addresses: [0x00240000, 0x00260000, 0x00C0F430, 0x00C0F482, 0x00C0F4BC, 0x00C1C2D2]
 status: hypothesis
@@ -19,6 +24,8 @@ evidence:
   - {kind: doc, ref: raw/docs/runtime-audio-es5510.md, note: "runtime documentation of the MAME-derived ES5510 port (Christian Brunschen's core); pipeline and arithmetic are implementation behaviour, not silicon measurements"}
   - {kind: doc, ref: raw/docs/runtime-hle-audio-rom-protocol.md, note: "effects inventory read from the Land Maker sound ROM"}
   - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "ROM disassembly of DSP worker queue post at $c0f430 to $fb28, effects configuration pointer calculation at $c0f482, and configuration worker routine $c0f4bc"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "12's oscilloscope signal tracing: SERMODE $07F8, serial inputs 0..2 from OTIS 1..3 via FCM, serial output 3 via FCM to TDA1543 DAC, and FCM 74x174/74x373 latch replacement"}
+  - {kind: doc, ref: raw/docs/taito-f3/clocks.txt, note: "ESP master clock 8 MHz, audio serial bit clock 3.8095225 MHz, sample rate ~29.76189453 kHz"}
 contradictions:
   - "Register window: sound-address.txt decodes 0x240000 (see [[hardware/sound]]); the runtime and MAME use 0x260000-0x2601ff. Same chip select; no real disagreement."
 supersedes: []
@@ -30,8 +37,7 @@ The ESP is the effects DSP behind the OTIS. Everything here describes the MAME-d
 it is not an independent measurement of silicon. ^[raw/docs/runtime-audio-es5510.md] How the OTIS channels
 reach the ESP inputs and DAC on the board is **confirmed hardware routing from 12's board observation**
 and lives on [[hardware/sound]] and [[comparisons/hardware-vs-mame-audio-routing]]; nothing below argues
-with it. The runtime's Reference backend still feeds the ESP the MAME way, and Enhanced follows the
-hardware routing. ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/otis-esp-dac-routing-2026-10-09.txt]
+with it. The runtime's Reference backend feeds the ESP the MAME way, which equals the hardware routing for the three inputs, and both backends follow it (OTIS Pair 1 -> ESP ch 0 Dry, Pair 2 -> ESP ch 1 Delay, Pair 3 -> ESP ch 2 Reverb, Pair 0 -> NC). ^[raw/docs/runtime-audio-es5510.md] ^[raw/docs/taito-f3/5505-5510.txt]
 
 ## Host interface (sound CPU)
 
@@ -70,6 +76,14 @@ the output-reset register (`0x28001f`). ^[raw/docs/runtime-audio-duart-and-gain.
 contradiction on [[hardware/sound]]: 12Me21's `duart.txt` marks OP0-OP7 as unused, while MAME and this
 model use OP6 as ESPHALT. See [[hardware/duart-and-volume]]. ^[raw/emu-source/mame-0.289/taito_en.cpp]
 
+## Serial audio interface and board interconnect
+
+- **SERMODE register:** Initialized to `$07F8` `[0000011111111000]` ("normal"). ^[raw/docs/taito-f3/5505-5510.txt]
+- **Serial channels & routing:** ESP serial port 0 (serio0, pin 15) inputs from OTIS channel 1; serial port 1 (serio1, pin 14) inputs from OTIS channel 2; serial port 2 (serio2, pin 13) inputs from OTIS channel 3; serial port 3 (serio3, pin 12) outputs serial audio to DAC pin 3 (data). All four lines pass through the TC0660FCM (which replaces a 74x174 4x D flip-flop clocked by BCLK). ^[raw/docs/taito-f3/5505-5510.txt]
+- **Clocks:** ESP CLKIN (pin 1) runs at 8 MHz from the `ic18.2 → dr2.1 → esp.1` net. Audio serial clocks shared with OTIS: BCLK (pin 16, 3.8095225 MHz), LRCLK (pin 17, 128 BCLK cycles per frame), and WCLK (pin 18). Audio sample rate is ~29.76189453 kHz (`bclk / 128`). ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/taito-f3/clocks.txt; raw/docs/taito-f3/list.txt]
+- **Delay RAM latch:** The TC0660FCM replaces a 74x373 8x transparent latch between the ESP's RA/D pins (pins 62–78) and delay RAM, with ESP GATE (pin 5, fcm.79) driving the latch clock. ^[raw/docs/taito-f3/5505-5510.txt; raw/docs/taito-f3/list.txt]
+- **Board control nets:** `esp halt` on pin 36 (connected via dr2.7 to pal8.12); `esp cs/as` on pins 45/46; `esp/otis rw` on pin 48 (5701 pin 16); and host data bus `esp hdb0..hdb7` on pins 44..37. ^[raw/docs/taito-f3/list.txt]
+
 ## Land Maker effects inventory (ROM-derived, hypothesis)
 
 - Thirteen effect configurations at `0xc1c2d2` (16-byte stride) select eleven ESP programs through the
@@ -91,6 +105,12 @@ model use OP6 as ESPHALT. See [[hardware/duart-and-volume]]. ^[raw/emu-source/ma
 - The isolated-model measurement of the cross-delay is 8177 samples at 29761 Hz (about 274.8 ms) with
   feedback about 0.45; this measures the MAME-derived model, not the board. ^[raw/docs/runtime-hle-audio-rom-protocol.md]
   The command and driver side of the effects worker is on [[routines/landmakrj-00c12ecc-sound-command-dispatch]].
+
+## HLE substitute programs and LFO behaviour (hypothesis)
+
+- The HLE audio backend does not run ES5510 microcode: it reproduces the five decoded programs (ROM pointers 0, 1/2, 4, 5, 6) from their signal graphs. The signal processing is FAUST in `runtime/audio/hle/faust/` (`es5510.lib` with the all-pass networks, interpolated tap, LFO and reverb tank; `reverb.dsp`, `chorus.dsp`, `echo.dsp`, `hall.dsp`, `dc_blocker.dsp`), the generated C++ headers are committed; preset parsing, the p0..p9 mapping, bus routing and the auto-bypass stay in `runtime/audio/hle/effects.hpp`. Each stage carries a signal-flow diagram and uses descriptive signal-flow names rather than decoded register names (the mapping from FAUST nodes to registers survives in commit `5cb929d` and in the raw reverb notes). ^[raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
+- Reading of the microcode: the expanded coefficients of the tank (0.9375 = 1 - 0.25^2, 0.0625 = 0.25^2, 0.75 = 1 - 0.5^2, 0.125 = 0.25 * 0.5) are Schroeder all-pass loops nested inside each other (outer gain a = 0.5, inner gains 0.25) whose delay element is replaced by the inner network; the 168/276 diffuser pair is two plain all-pass stages with gain G8. This is a re-reading of the decoded graph, not new evidence. ^[raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md]
+- Hypothesis: the ES5510 LFOs are GPR pairs the microcode rotates once per executed program pass, and a pass runs on every sample frame whatever the input level is: the reference backend calls `run_once()` once per output frame whenever the DUART ESPHALT pin is not asserted and never tests the input, each call restarting the program at `pc = 0`. An LFO phase therefore keeps advancing through silence. The HLE follows this: every LFO advances by its rate on every frame, including the frames its auto-bypass does not compute (a phase offset carried next to the DSP), and restarts at (x, y) = (1, 0) only when a different program is loaded or on reset. Before 2026-10-18 the HLE froze the phase while bypassed. Not measured on hardware. ^[raw/docs/runtime-audio-es5510.md]
 
 Open: none of the instruction semantics (overflow, skip flags, I/O cycles) are verified against a real
 chip. The existing runtime tests exercised the model, not hardware. ^[raw/docs/runtime-audio-es5510.md]

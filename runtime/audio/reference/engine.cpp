@@ -134,8 +134,11 @@ void Engine::generate_one_frame(const std::array<float, 2> &otis_gain,
     int16_t main_l = m_es5510.ser_r(6);
     int16_t main_r = m_es5510.ser_r(7);
 
-    const float out_l = (float(main_l) / 32768.0f + channels[0]) * 0.5f * output_gain[0];
-    const float out_r = (float(main_r) / 32768.0f + channels[1]) * 0.5f * output_gain[1];
+    // OTIS ser0 (pair 0) is not connected on the board and ESP serio3 feeds the DAC directly
+    // (docs/notes/raw/docs/taito-f3/5505-5510.txt), so the output is the ESP result alone. MAME's
+    // pump sums an aux bypass of pair 0 and halves both with its 0.5 route gain; the board has neither.
+    const float out_l = float(main_l) / 32768.0f * output_gain[0];
+    const float out_r = float(main_r) / 32768.0f * output_gain[1];
 
     push_frame(out_l, out_r);
 }

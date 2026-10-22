@@ -8,6 +8,11 @@
 #include <span>
 #include <string_view>
 
+// Must match the definition f3rt was built with (propagated PUBLIC from CMake). 0 hides set_hle_observer.
+#ifndef F3RT_HLE_EVENTS
+#define F3RT_HLE_EVENTS 0
+#endif
+
 namespace f3rt {
 namespace hle {
 struct VoiceEvent;
@@ -31,8 +36,10 @@ public:
     void shared_write(uint32_t offset);
     void finish_frame();
     EnhancedStats enhanced_stats() const;
+#if F3RT_HLE_EVENTS
     // Diagnostic callback executes on the worker, never on the main CPU.
     void set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer);
+#endif
     Audio();
     ~Audio();
 
@@ -61,6 +68,10 @@ public:
     // boot vectors; preserve RAM, OTIS state, and the continuous audio clock.
     void reset_board();
 
+    // Sound CPU program ROM banking (0xc20000 - 0xc3ffff window, default page 1)
+    void set_sound_bank(uint32_t page);
+    uint32_t sound_bank() const;
+
     // Sound 68000 bus handlers (called by Musashi memory map bridge)
     uint8_t read8(uint32_t address);
     uint16_t read16(uint32_t address);
@@ -80,10 +91,11 @@ public:
     uint64_t clock_ticks() const;
     uint64_t generated_frames() const;
 
-    // Final output gain after the board mix, shared by reference and enhanced audio. The MAME-equivalent
-    // mix (ES5505 /2^19, 0.18 pump input, MB87078 percent/32 twice, 0.5 route) peaks near -25 dBFS
-    // on every measured game (1.3k-1.9k of 32768 at game volume), so the output stage is raised 12x
-    // (+21.6 dB). Loud passages then reach roughly 0.5-0.6 FS and the existing +/-1 clamp is not hit.
+    // Final output gain after the board mix, shared by reference and enhanced audio. The board mix
+    // (ES5505 /2^19, 0.18 ESP input, ESP serio3 straight to the DAC; no pair-0 bypass, no 0.5 pump
+    // route) leaves music at about -41 dBFS RMS, so the output stage is raised 12x (+21.6 dB).
+    // With it Kirameki sound test 0x187 renders at -19.9 dBFS RMS against -19.8 dBFS on the PCB
+    // recording and peaks at 0.68 FS, so the +/-1 clamp is not hit.
     static constexpr float OUTPUT_BOOST = 12.0f;
 
     // Audio output stream: interleaved stereo (Left, Right)
@@ -96,8 +108,9 @@ public:
     // without waiting. Never blocks on the Enhanced worker. Callers needing a
     // complete, deterministic stream must finish with the blocking render.
     size_t render_ready(int16_t *interleaved_stereo, size_t max_frames);
-    // Default matches the observed MAME board mix; SingleStage is an explicit
-    // unverified analog-gain experiment, not an asserted board schematic.
+    // Default SingleStage matches hardware MB87078 post-DAC analog attenuation
+    // (docs/notes/raw/docs/taito-f3/list.txt:265-280); MameRouting is retained
+    // for MAME comparison.
     void set_gain_model(GainModel model);
 
     // State snapshot serialization

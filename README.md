@@ -10,13 +10,20 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 ```sh
 brew install cmake ninja uv
 # Optional: prebuilt libraries/tools, used instead of source builds when present.
-brew install sdl3 highway yyjson cpp-httplib googletest glslang spirv-cross
+brew install sdl3 yyjson cpp-httplib googletest glslang spirv-cross
 ```
 
 C/C++ dependencies come from [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) (`cmake/dependencies.cmake`).
 Installed packages (Homebrew, distro, Vulkan SDK) are linked as-is; anything missing is fetched at a
 pinned tag and built from source, with sources cached in `~/.cache/CPM` across build directories.
 Pass `-DCPM_DOWNLOAD_ALL=ON` to ignore installed packages.
+
+FAUST 2.x is not needed to build: the DSP headers under `runtime/audio/hle/faust/generated/` are
+checked in, and without a FAUST compiler (the default) no build runs it. If one is configured
+(`-DFAUST_EXECUTABLE=<path to faust>`, or `faust` on `PATH` when configuring), ordinary builds also
+run it for any header older than its `.dsp`, `architecture.hpp` or `.lib` inputs, then recompile the
+code that includes it. `cmake --build <build-dir> --target faust-regen` does the same on request and
+leaves up-to-date headers alone; touch the `.dsp` (or delete the header) to force one.
 
 **Build steps** (using your own legally obtained ROMs):
 

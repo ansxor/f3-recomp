@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 namespace f3rt {
@@ -25,6 +26,14 @@ inline int16_t clamp16(int32_t val) {
     if (val > 32767) return 32767;
     if (val < -32768) return -32768;
     return int16_t(val);
+}
+
+
+// Both backends produce OTIS/ESP channel order; the final output exchanges left and right once.
+// This is the only place the exchange is applied.
+template <typename T> size_t swap_dac_channels(T *interleaved_stereo, size_t frames) {
+    for (size_t i = 0; i < frames; ++i) std::swap(interleaved_stereo[i * 2], interleaved_stereo[i * 2 + 1]);
+    return frames;
 }
 
 } // namespace
@@ -54,11 +63,12 @@ struct Audio::Impl {
     MC68681 m_duart;
     MB87078 m_volume;
 
-    Audio::GainModel m_gain_model = Audio::GainModel::MameRouting;
+    Audio::GainModel m_gain_model = Audio::GainModel::SingleStage;
     std::array<float, 2> m_volume_gain{1.0f, 1.0f};
     std::array<float, 2> m_otis_gain{}, m_output_gain{};
 
     bool m_reset_asserted;
+    uint32_t m_cpubank2 = 1;
 
     std::function<int(int cycles)> m_cpu_runner;
     std::function<void(bool asserted)> m_reset_cb;
@@ -124,6 +134,7 @@ struct Audio::Impl {
     void reset_board() {
         set_reset(true);
         m_cpu_accum = 0;
+        m_cpubank2 = 1;
         m_duart.reset();
         m_reference.reset();
         m_volume.reset();
@@ -239,9 +250,16 @@ struct Audio::Impl {
             return 0xff;
         }
 
-        // Sound Program ROM (0xc00000 - 0xc7ffff, linearly mapped 512KB)
+        // Sound Program ROM (0xc00000 - 0xc7ffff, banked via cpubank2)
         if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
             uint32_t off = address - SOUND_ROM_BASE;
+            if (m_sound_rom.size() > 0x80000) {
+                if (address >= 0xc20000 && address < 0xc40000) {
+                    off = m_cpubank2 * 0x20000 + (address - 0xc20000);
+                } else if (address >= 0xc40000) {
+                    off = 0x40000 + (address - 0xc40000);
+                }
+            }
             return (off < m_sound_rom.size()) ? m_sound_rom[off] : 0xff;
         }
 
@@ -287,11 +305,7 @@ struct Audio::Impl {
 
         // Sound Program ROM
         if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
-            uint32_t off = address - SOUND_ROM_BASE;
-            if (off + 1 < m_sound_rom.size()) {
-                return (uint16_t(m_sound_rom[off]) << 8) | m_sound_rom[off + 1];
-            }
-            return 0xffff;
+            return (uint16_t(read8(address)) << 8) | read8(address + 1);
         }
 
         // Work RAM mirror
@@ -424,6 +438,7 @@ struct Audio::Impl {
         core.reset_asserted = m_reset_asserted ? 1 : 0;
         core.esp_halted = m_reference.esp_halted() ? 1 : 0;
         core.gain_model = uint8_t(m_gain_model);
+        core.cpubank2 = uint8_t(m_cpubank2);
         core.volume_gain[0] = m_volume_gain[0];
         core.volume_gain[1] = m_volume_gain[1];
         core.otis_gain[0] = m_otis_gain[0];
@@ -472,6 +487,7 @@ struct Audio::Impl {
         m_reset_asserted = core.reset_asserted != 0;
         m_reference.set_esp_halted(core.esp_halted != 0);
         m_gain_model = Audio::GainModel(core.gain_model);
+        m_cpubank2 = core.cpubank2;
         m_volume_gain[0] = core.volume_gain[0];
         m_volume_gain[1] = core.volume_gain[1];
         m_otis_gain[0] = core.otis_gain[0];
@@ -551,10 +567,12 @@ Audio::EnhancedStats Audio::enhanced_stats() const {
     }
     return EnhancedStats{};
 }
+#if F3RT_HLE_EVENTS
 void Audio::set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer) {
     if (!m_impl->m_hle) throw std::logic_error("HLE observer requires HLE backend");
     m_impl->m_hle->set_observer(std::move(observer));
 }
+#endif
 
 void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
     if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");
@@ -665,10 +683,6 @@ uint32_t Audio::sample_rate() const {
 }
 
 void Audio::set_gain_model(GainModel model) {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->set_gain_model(model);
-        return;
-    }
     m_impl->m_gain_model = model;
     m_impl->update_gains();
 }
@@ -680,7 +694,9 @@ size_t Audio::available_frames() const {
 }
 
 size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle) return m_impl->m_hle->render(interleaved_stereo, max_frames);
+    if (m_impl->m_hle)
+        return swap_dac_channels(interleaved_stereo,
+                                 m_impl->m_hle->render(interleaved_stereo, max_frames));
     std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
     size_t frames = std::min(max_frames, m_impl->m_rb_count);
     for (size_t i = 0; i < frames; i++) {
@@ -692,11 +708,13 @@ size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
         interleaved_stereo[i * 2 + 1] = clamp16(int32_t(std::clamp(r, -1.0f, 1.0f) * 32768.0f));
     }
     m_impl->m_rb_count -= frames;
-    return frames;
+    return swap_dac_channels(interleaved_stereo, frames);
 }
 
 size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle) return m_impl->m_hle->render(interleaved_stereo, max_frames);
+    if (m_impl->m_hle)
+        return swap_dac_channels(interleaved_stereo,
+                                 m_impl->m_hle->render(interleaved_stereo, max_frames));
     std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
     size_t frames = std::min(max_frames, m_impl->m_rb_count);
     for (size_t i = 0; i < frames; i++) {
@@ -705,17 +723,30 @@ size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
         m_impl->m_rb_read_pos = (m_impl->m_rb_read_pos + 1) % Impl::RING_BUFFER_CAPACITY;
     }
     m_impl->m_rb_count -= frames;
-    return frames;
+    return swap_dac_channels(interleaved_stereo, frames);
 }
 
 size_t Audio::render_ready(int16_t *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle) return m_impl->m_hle->render_ready(interleaved_stereo, max_frames);
+    if (m_impl->m_hle)
+        return swap_dac_channels(interleaved_stereo,
+                                 m_impl->m_hle->render_ready(interleaved_stereo, max_frames));
     return render(interleaved_stereo, max_frames);
 }
 
 size_t Audio::state_size() const {
     if (m_impl->m_hle) return hle::AudioEngine::STATE_BYTES;
     return m_impl->state_size();
+}
+
+void Audio::set_sound_bank(uint32_t page) {
+    m_impl->m_cpubank2 = page;
+    if (m_impl->m_hle) {
+        m_impl->m_hle->set_bank(uint8_t(page));
+    }
+}
+
+uint32_t Audio::sound_bank() const {
+    return m_impl->m_cpubank2;
 }
 
 void Audio::save_state(std::span<uint8_t> dst) const {

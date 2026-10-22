@@ -2,7 +2,13 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
 #include "audio/hle/effects.hpp"
+#include "audio/hle/clock.hpp"
 #include "audio/hle/events.hpp"
+#include "audio/hle/note_timing.hpp"
+#include "audio/hle/mailbox.hpp"
+#include "audio/hle/patch.hpp"
+#include "audio/hle/pulse_timer.hpp"
+#include "audio/hle/faust/generated/voice_filter.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
@@ -13,9 +19,11 @@
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -116,6 +124,66 @@ TEST(Audio, SoundResetReleaseOrdering) {
     m->boundary();
     EXPECT_TRUE(m->audio->read8(SND_WORK_BYTE) == 0x11 && m->shared[1] == 0x5a)
         << "Sound CPU executes the mailbox program after reset release";
+}
+
+TEST(Audio, SoundBankswitchIndexMapping) {
+    auto m = make_sound_machine();
+    EXPECT_EQ(m->audio->sound_bank(), 1u);
+
+    // When sound_bankswitch is disabled (default for unbanked games), writes are ignored
+    m->sound_bankswitch = false;
+    m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 2 * 4, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 1u);
+
+    // Enable bankswitch (kirameki)
+    m->sound_bankswitch = true;
+
+    // 16-bit word writes (move.w): addr = 0x300000 + bank * 2
+    // Banks 1..7 map to pages 1..7
+    for (uint32_t bank = 1; bank <= 7; ++bank) {
+        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
+        EXPECT_EQ(m->audio->sound_bank(), bank) << "16-bit write for bank " << bank;
+    }
+
+    // Banks 8..15 wrap with idx -= 8 -> pages 0..7
+    for (uint32_t bank = 8; bank <= 15; ++bank) {
+        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
+        EXPECT_EQ(m->audio->sound_bank(), bank - 8) << "16-bit write for bank " << bank;
+    }
+
+    // Banks 16..31 map to pages 8..23
+    for (uint32_t bank = 16; bank <= 31; ++bank) {
+        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
+        EXPECT_EQ(m->audio->sound_bank(), bank - 8) << "16-bit write for bank " << bank;
+    }
+
+    // 8-bit byte writes (move.b)
+    // High byte of word 0 (0x300000) -> bank 0 -> page 0
+    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 0u);
+    // Low byte of word 0 (0x300001) -> bank 0 -> page 0
+    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 1, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 0u);
+    // High byte of word 1 (0x300002) -> bank 1 -> page 1
+    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 2, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 1u);
+    // Low byte of word 1 (0x300003) -> bank 1 -> page 1
+    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 3, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 1u);
+    // Bank 16 (0x300000 + 32 = 0x300020): word 16 -> idx 16 -> page 8
+    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 32, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 8u);
+
+    // 32-bit dword writes (move.l)
+    // Dword 0 touches low 16 bits (bank 1) -> page 1
+    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 1u);
+    // Dword 1 touches bank 3 -> page 3
+    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 4, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 3u);
+    // Dword 8 (offset 0x20 = 32) touches bank 17 -> idx 17 -> page 9
+    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 32, 0);
+    EXPECT_EQ(m->audio->sound_bank(), 9u);
 }
 
 TEST(Audio, MailboxWidthWrites) {
@@ -653,37 +721,57 @@ TEST(Audio, AudioMixerBoardGainAndMute) {
     audio.write16(f3rt::OTIS_PAGE, 0x20);
     for (unsigned reg = 1; reg <= 6; ++reg) audio.write16(otis_reg(reg), 0x0800);
     audio.write16(f3rt::OTIS_PAGE, 0);
-    audio.write16(otis_reg(8), 0xff00);
-    audio.write16(otis_reg(9), 0xff00);
-    audio.write16(otis_reg(0), 0x0c00); // Constant sample, all poles lowpass, auxiliary pair.
+    audio.write16(otis_reg(8), 0xef00);
+    audio.write16(otis_reg(9), 0xef00);
+    audio.write16(otis_reg(0), 0x0d00); // Constant sample, all poles lowpass, OTIS pair 1 (ESP ser0).
+    // OTIS pair 0 is not wired on the board and the DAC is fed by ESP serio3 alone, so the board mix is
+    // observed through a pass-through ESP program: ser3 <- ser0 for both sides, then END.
+    const auto esp_reg = [](uint32_t reg) { return f3rt::SOUND_ES5510_BASE + 2 * reg + 1; };
+    const auto esp_instruction = [&](unsigned index, uint64_t word) {
+        for (unsigned byte = 0; byte < 6; ++byte)
+            audio.write8(esp_reg(0x03 + byte), uint8_t(word >> (40 - 8 * byte)));
+        audio.write8(esp_reg(0xc0), uint8_t(index));
+    };
+    esp_instruction(0, 0x0000ebf19000ULL); // MOV ser3l(241), ser0l(235)
+    esp_instruction(1, 0x0000eaf09000ULL); // MOV ser3r(240), ser0r(234)
+    esp_instruction(2, 0x00000000f000ULL); // END
+    audio.write8(duart_reg(14), 0x40);     // DUART OP6 low: ESP runs
     std::array<int16_t, 2> pcm{};
     const auto sample = [&] {
         audio.advance(538);
         EXPECT_EQ(audio.render(pcm.data(), 1), 1) << "One complete audio sample is available";
     };
+    // Default gain model is SingleStage (hardware MB87078 post-DAC analog attenuation).
+    sample();
+    EXPECT_TRUE(pcm[0] == 2136 && pcm[1] == 2136)
+        << "Default SingleStage gain model matches post-DAC analog attenuation";
+
+    // Test MameRouting model
+    audio.set_gain_model(f3rt::Audio::GainModel::MameRouting);
     sample();
     EXPECT_TRUE(pcm[0] == 20925 && pcm[1] == 20925) << "Board gain and signed PCM normalization";
     audio.write8(f3rt::SOUND_VOLUME_BASE, 2);
     audio.write8(f3rt::SOUND_VOLUME_BASE + 2, 0);
     sample();
-    EXPECT_TRUE(pcm[0] == 0 && pcm[1] == 20925) << "Left volume mute preserves the right channel";
+    EXPECT_TRUE(pcm[0] == 20925 && pcm[1] == 0)
+        << "Channel-0 volume mute follows its data through the DAC swap and preserves channel 1";
     audio.write8(f3rt::SOUND_VOLUME_BASE, 7);
     audio.write8(f3rt::SOUND_VOLUME_BASE + 2, 0x33);
     sample();
-    EXPECT_TRUE(pcm[0] == 0 && pcm[1] == 5231)
+    EXPECT_TRUE(pcm[0] == 5231 && pcm[1] == 0)
         << "Minus-six-dB control applies both baseline gain stages";
     audio.set_gain_model(f3rt::Audio::GainModel::SingleStage);
     sample();
-    EXPECT_TRUE(pcm[0] == 0 && pcm[1] == 1073)
+    EXPECT_TRUE(pcm[0] == 1070 && pcm[1] == 0)
         << "Single-stage gain is distinct and preserves channel mute";
     audio.set_reset(false);
     audio.set_reset(true);
     sample();
-    EXPECT_TRUE(pcm[0] == 0 && pcm[1] == 1073)
+    EXPECT_TRUE(pcm[0] == 1070 && pcm[1] == 0)
         << "CPU-line reset preserves attenuation and playing OTIS voices";
     audio.reset_board();
     sample();
-    EXPECT_TRUE(pcm[0] == 2142 && pcm[1] == 2142)
+    EXPECT_TRUE(pcm[0] == 2136 && pcm[1] == 2136)
         << "Board reset restores volume without resetting OTIS voices";
 }
 
@@ -790,26 +878,48 @@ RC_GTEST_PROP(Audio, SoundMulsSignedProductInvariant, ()) {
     RC_ASSERT((result.sr & 0x1f) == expected_flags);
 }
 
-// Behaviour test: verify hardware OTIS->ESP PCB wiring in Effects mixer
-// (docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt, 12's 5505-5510.txt note):
-// - Pair 3 (buses 6/7) -> dry output with no echo/tail
-// - Pair 1 (buses 2/3) -> reverb path (diffused tail after input stops)
-// - Pair 2 (buses 4/5) -> ~274.8 ms cross-delay echo
-// - Pair 0 (buses 0/1) -> silent (physically unconnected on board)
-TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
+// ES5510 volume/pan table stand-in: table(i) = i / 127, so gains are exactly checkable. `program` is the ROM
+// program-pointer-table index the preset row names (byte 5): the table holds the real pointers, so index 0 is the
+// Reverb program, 1 and 2 the Hall program, 3 an undecoded program, 4 Mute, 5 Chorus, 6 Echo. Row bytes 6..15 are
+// p0..p9.
+static std::vector<uint8_t> effects_test_rom(unsigned preset, unsigned program, const uint8_t (&params)[10]) {
     std::vector<uint8_t> sound_rom(0x20000, 0);
     for (int i = 0; i < 128; ++i) {
         const uint16_t val = uint16_t(std::round(i / 127.0 * 32767.0));
         sound_rom[f3rt::sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET + i * 2] = val >> 8;
         sound_rom[f3rt::sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET + i * 2 + 1] = val & 0xff;
     }
-    const uint8_t params[10] = {30, 58, 73, 32, 37, 0, 40, 43, 18, 32};
-    for (int n = 0; n < 10; ++n) {
-        sound_rom[f3rt::sound_5a7e9117::PRESET_TABLE_OFFSET + 11 * 16 + 15 - n] = params[n];
-    }
+    static constexpr uint32_t pointers[11] = {0xc1c836, 0xc1c4e2, 0xc1c4e2, 0xc1cb19, 0xc1ce1b, 0xc1d171,
+                                              0xc1d4d4, 0xc1d823, 0xc1db8a, 0xc1de02, 0xc1e10b};
+    for (int i = 0; i < 11; ++i)
+        for (int k = 0; k < 4; ++k)
+            sound_rom[f3rt::hle::Effects::K_PROGRAM_TABLE_OFFSET + i * 4 + k] = uint8_t(pointers[i] >> (24 - 8 * k));
+    sound_rom[f3rt::sound_5a7e9117::PRESET_TABLE_OFFSET + preset * 16 + 5] = uint8_t(program);
+    for (int n = 0; n < 10; ++n)
+        sound_rom[f3rt::sound_5a7e9117::PRESET_TABLE_OFFSET + preset * 16 + 6 + n] = params[n];
+    return sound_rom;
+}
 
-    const std::array<float, 2> in_gain{1.0f, 1.0f};
-    const std::array<float, 2> out_gain{1.0f, 1.0f};
+// Renders `frames` frames of an impulse (value 1 at frame 0) on one bus; returns interleaved stereo.
+static std::vector<float> effects_impulse(f3rt::hle::Effects &fx, size_t bus, size_t frames) {
+    std::vector<float> buses(8 * frames, 0.0f);
+    std::vector<float> stereo(2 * frames, 0.0f);
+    buses[bus] = 1.0f;
+    fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
+    return stereo;
+}
+
+// Behaviour test: verify hardware OTIS->ESP PCB wiring in Effects mixer
+// (docs/notes/raw/docs/taito-f3/5505-5510.txt, 12's oscilloscope trace through TC0660FCM) with the
+// echo program (ROM program 6, Land Maker preset 11; docs/notes/raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md
+// section 9):
+// - Pair 0 (buses 0/1) -> silent (physically unconnected on board)
+// - Pair 1 (buses 2/3) -> dry output (ESP serio0), no tail
+// - Pair 2 (buses 4/5) -> ping-pong echo at p2 * 112 frames (ESP serio1)
+// - Pair 3 (buses 6/7) -> reverb path (ESP serio2; diffused tail after input stops)
+TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
+    const uint8_t params[10] = {30, 58, 73, 32, 37, 0, 40, 43, 18, 32};
+    const auto sound_rom = effects_test_rom(11, 6, params);
 
     // 1. OTIS Pair 0 (buses 0/1) produces silence
     {
@@ -822,57 +932,49 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
             buses[f * 8 + 0] = 1.0f;
             buses[f * 8 + 1] = 1.0f;
         }
-        fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
         float peak = 0.0f;
         for (float s : stereo) peak = std::max(peak, std::abs(s));
         EXPECT_EQ(peak, 0.0f) << "OTIS pair 0 must produce silence (unconnected on PCB)";
     }
 
-    // 2. OTIS Pair 3 (buses 6/7) reaches dry output with no echo or tail
+    // 2. OTIS Pair 1 (buses 2/3) reaches dry output with no echo or reverb tail
     {
         f3rt::hle::Effects fx(sound_rom);
         fx.select(11);
-        constexpr size_t N = 1000;
-        std::vector<float> buses(8 * N, 0.0f);
-        std::vector<float> stereo(2 * N, 0.0f);
-        buses[0 * 8 + 6] = 1.0f;
-        buses[0 * 8 + 7] = 0.5f;
-        fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
-        EXPECT_GT(stereo[0], 0.0f) << "OTIS pair 3 must reach dry output";
-        EXPECT_GT(stereo[1], 0.0f) << "OTIS pair 3 must reach dry output";
-        float subsequent_peak = 0.0f;
-        for (size_t f = 1; f < N; ++f) {
-            subsequent_peak =
-                std::max({subsequent_peak, std::abs(stereo[f * 2]), std::abs(stereo[f * 2 + 1])});
-        }
-        EXPECT_EQ(subsequent_peak, 0.0f) << "OTIS pair 3 must have no echo or reverb tail";
-    }
-
-    // 3. OTIS Pair 1 (buses 2/3) reaches the reverb path (diffused tail after input stops)
-    {
-        f3rt::hle::Effects fx(sound_rom);
-        fx.select(11);
-        constexpr size_t N = 2000;
+        constexpr size_t N = 3000;
         std::vector<float> buses(8 * N, 0.0f);
         std::vector<float> stereo(2 * N, 0.0f);
         buses[0 * 8 + 2] = 1.0f;
-        fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
-        float tail_energy = 0.0f;
-        for (size_t f = 100; f < N; ++f) {
-            tail_energy += std::abs(stereo[f * 2]) + std::abs(stereo[f * 2 + 1]);
+        buses[0 * 8 + 3] = 0.5f;
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
+        EXPECT_GT(stereo[0], 0.0f) << "OTIS pair 1 must reach dry output";
+        EXPECT_GT(stereo[1], 0.0f) << "OTIS pair 1 must reach dry output";
+        float subsequent_peak = 0.0f;
+        for (size_t f = 64; f < N; ++f) {
+            subsequent_peak =
+                std::max({subsequent_peak, std::abs(stereo[f * 2]), std::abs(stereo[f * 2 + 1])});
         }
-        EXPECT_GT(tail_energy, 0.01f) << "OTIS pair 1 must produce a diffused reverb tail";
+        EXPECT_LT(subsequent_peak, 0.004f) << "OTIS pair 1 must have no echo or reverb tail";
     }
 
-    // 4. OTIS Pair 2 (buses 4/5) produces ~274.8 ms cross-delay echo
+    // 3. OTIS Pair 3 (buses 6/7) reaches the reverb path (diffused tail after input stops)
     {
         f3rt::hle::Effects fx(sound_rom);
         fx.select(11);
-        constexpr size_t N = 20000; // ~416 ms at 48 kHz
-        std::vector<float> buses(8 * N, 0.0f);
-        std::vector<float> stereo(2 * N, 0.0f);
-        buses[0 * 8 + 4] = 1.0f;
-        fx.mix(buses.data(), stereo.data(), N, in_gain, out_gain);
+        const auto stereo = effects_impulse(fx, 6, 2000);
+        float tail_energy = 0.0f;
+        for (size_t f = 100; f < 2000; ++f) tail_energy += std::abs(stereo[f * 2]) + std::abs(stereo[f * 2 + 1]);
+        EXPECT_GT(tail_energy, 0.01f) << "OTIS pair 3 must produce a diffused reverb tail";
+    }
+
+    // 4. OTIS Pair 2 (buses 4/5) produces the echo at p2 * 112 = 8176 frames (274.7 ms): the left impulse comes
+    // back on the left line (the right line then returns it on the right after another 8176 frames).
+    {
+        f3rt::hle::Effects fx(sound_rom);
+        fx.select(11);
+        constexpr size_t N = 12500; // ~420 ms at 29.761 kHz
+        const auto stereo = effects_impulse(fx, 4, N);
         size_t echo_peak_frame = 0;
         float echo_peak = 0.0f;
         for (size_t f = 1000; f < N; ++f) {
@@ -882,7 +984,832 @@ TEST(Audio, EnhancedEffectsRoutingMatchesHardwareWiring) {
             }
         }
         EXPECT_GT(echo_peak, 0.05f) << "OTIS pair 2 must produce a delay echo";
-        const double echo_ms = double(echo_peak_frame) / 48000.0 * 1000.0;
-        EXPECT_NEAR(echo_ms, 274.8, 1.0) << "OTIS pair 2 echo must occur at ~274.8 ms";
+        EXPECT_NEAR(double(echo_peak_frame), 8176.0 + 1.0, 2.0) << "echo must return after p2 * 112 frames";
     }
+}
+
+// Program 6 (echo): the echo time follows p2 (p2 * 112 frames), the cross feedback p1/128 returns the echo
+// on the other channel after a second period, and a loud input is not boosted by the enhancer.
+TEST(Audio, EchoProgramTimingAndFeedbackMatchDecodedGraph) {
+    const uint8_t mixed[10] = {30, 64, 40, 32, 37, 0, 8, 43, 18, 32}; // p1 = 64: feedback 0.5; p2 = 40: 4480 frames
+    const auto rom2 = effects_test_rom(11, 6, mixed);
+    f3rt::hle::Effects fx2(rom2);
+    fx2.select(11);
+    EXPECT_EQ(fx2.program(), f3rt::hle::Effects::Program::Echo);
+    constexpr size_t N = 14000;
+    // p6 low nibble 8 -> sin = 0.74: the echo is audible at the output.
+    const auto s2 = effects_impulse(fx2, 4, N);
+    const auto peak_in = [&](size_t ch, size_t from, size_t to) {
+        float peak = 0;
+        for (size_t f = from; f < to; ++f) peak = std::max(peak, std::abs(s2[f * 2 + ch]));
+        return peak;
+    };
+    const float first = peak_in(0, 4475, 4490), cross = peak_in(1, 8955, 8970), second = peak_in(0, 13435, 13450);
+    EXPECT_GT(first, 0.05f) << "echo returns at p2 * 112 frames on the same side";
+    EXPECT_GT(cross, first * 0.3f) << "feedback 0.5 returns the echo on the other side after a second period";
+    EXPECT_LT(peak_in(0, 2000, 4400), first * 0.2f) << "no echo before p2 * 112 frames";
+    EXPECT_GT(second, 0.f);
+}
+
+// Program 5 (chorus, Kirameki): the interpolated taps land between 30 and 345 frames on the left line, the
+// direct send is table(127 - p9) on the same frame, and the wet taps fire at frames 5 (L) and 243 (R).
+TEST(Audio, ChorusProgramGraphMatchesDecodedProgram) {
+    const uint8_t params[10] = {40, 0, 20, 26, 37, 0, 0x68, 64, 32, 39};
+    const auto sound_rom = effects_test_rom(5, 5, params);
+    // p9 = 127: table(127 - p9) = 0 removes the direct send so the wet taps are measured alone.
+    const uint8_t wet_only_params[10] = {40, 0, 20, 26, 37, 0, 0x68, 64, 32, 127};
+    const auto wet_only_rom = effects_test_rom(5, 5, wet_only_params);
+    {
+        f3rt::hle::Effects fx(sound_rom);
+        fx.select(5);
+        const auto stereo = effects_impulse(fx, 6, 1000);
+        EXPECT_NEAR(stereo[0], (127.f - 39.f) / 127.f, 1e-4f) << "direct send gain is table(127 - p9)";
+        EXPECT_EQ(stereo[1], 0.f) << "the right dry output of a left-only send is silent on frame 0";
+    }
+    {
+        f3rt::hle::Effects fx(wet_only_rom);
+        fx.select(5);
+        const auto stereo = effects_impulse(fx, 6, 1000);
+        for (size_t f = 1; f < 5; ++f)
+            EXPECT_EQ(stereo[f * 2], 0.f) << "left wet taps cannot fire before frame 5 (frame " << f << ")";
+        EXPECT_NE(stereo[5 * 2], 0.f) << "first left wet tap at frame 5";
+        for (size_t f = 0; f < 243; ++f)
+            EXPECT_EQ(stereo[f * 2 + 1], 0.f) << "right wet taps cannot fire before frame 243 (frame " << f << ")";
+        EXPECT_NE(stereo[243 * 2 + 1], 0.f) << "first right wet tap at frame 243";
+    }
+    {
+        f3rt::hle::Effects fx(sound_rom);
+        fx.select(5);
+        constexpr size_t N = 6000;
+        std::vector<float> buses(8 * N, 0.0f);
+        std::vector<float> stereo(2 * N, 0.0f);
+        buses[0 * 8 + 6] = 1.0f;
+        buses[0 * 8 + 7] = 1.0f;
+        fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
+        double l2 = 0, r2 = 0, lr = 0, side2 = 0;
+        for (size_t f = 200; f < N; ++f) {
+            float l = stereo[f * 2], r = stereo[f * 2 + 1];
+            l2 += l * l;
+            r2 += r * r;
+            lr += l * r;
+            side2 += (l - r) * (l - r);
+        }
+        double corr = lr / std::sqrt(l2 * r2 + 1e-20);
+        EXPECT_LT(corr, 0.50) << "Center-panned reverb send must produce decorrelated stereo tail";
+        EXPECT_GT(side2, 0.01) << "Center-panned reverb send must produce side channel energy";
+    }
+    {
+        // Pair 2 is the chorus: taps within 30..345 frames (left line), none of the dry impulse much later.
+        f3rt::hle::Effects fx(sound_rom);
+        fx.select(5);
+        const auto stereo = effects_impulse(fx, 4, 3000);
+        float tap_peak = 0.f, late_peak = 0.f;
+        for (size_t f = 30; f < 350; ++f) tap_peak = std::max(tap_peak, std::abs(stereo[f * 2]));
+        for (size_t f = 1500; f < 3000; ++f) late_peak = std::max(late_peak, std::abs(stereo[f * 2]));
+        EXPECT_GT(tap_peak, 0.05f) << "pair 2 must produce chorus taps within 12 ms";
+        EXPECT_LT(late_peak, tap_peak * 0.3f) << "the chorus must not produce a long echo";
+    }
+}
+
+// Reverb program (Command War preset 1, ROM program 0): serio1 reaches the output on the same frame with
+// table(127 - p8) (no chorus or echo); p0 is the loop decay G110 = p0/128.
+TEST(Audio, ReverbProgramPassesSerio1DirectlyAndDecaysWithP0) {
+    const uint8_t params[10] = {32, 9, 40, 16, 53, 0, 94, 52, 58, 58};
+    const auto sound_rom = effects_test_rom(1, 0, params);
+    f3rt::hle::Effects fx(sound_rom);
+    fx.select(1);
+    EXPECT_EQ(fx.program(), f3rt::hle::Effects::Program::Reverb);
+    const auto stereo = effects_impulse(fx, 4, 2000);
+    EXPECT_NEAR(stereo[0], (127.f - 58.f) / 127.f, 1e-4f) << "serio1 direct gain is table(127 - p8) on frame 0";
+    double late = 0;
+    for (size_t f = 100; f < 2000; ++f) late += std::abs(stereo[f * 2]);
+    EXPECT_GT(late, 0.01) << "serio1 also feeds the reverb in program 0";
+
+    const auto tail = [&](uint8_t p0) {
+        const uint8_t pp[10] = {p0, 9, 40, 16, 53, 0, 94, 52, 58, 58};
+        const auto rom = effects_test_rom(1, 0, pp);
+        f3rt::hle::Effects f(rom);
+        f.select(1);
+        const auto s = effects_impulse(f, 6, 20000);
+        double e = 0;
+        for (size_t i = 10000; i < 20000; ++i) e += double(s[i * 2]) * s[i * 2] + double(s[i * 2 + 1]) * s[i * 2 + 1];
+        return e;
+    };
+    EXPECT_GT(tail(64), tail(32) * 3) << "a larger p0 rings longer";
+}
+
+// Decoded programs are selected from the program pointer the ROM's preset row names (byte 5), not from the
+// preset number, and an undecoded program must fail loudly instead of reusing another program's graph.
+TEST(Audio, EffectsProgramSelectionComesFromRomAndRejectsUndecoded) {
+    const uint8_t params[10] = {40, 0, 20, 26, 37, 0, 104, 64, 32, 39};
+    using Program = f3rt::hle::Effects::Program;
+    const auto program_of = [&](unsigned preset, unsigned index) {
+        const auto rom = effects_test_rom(preset, index, params);
+        f3rt::hle::Effects fx(rom);
+        fx.select(uint8_t(preset));
+        return fx.program();
+    };
+    EXPECT_EQ(program_of(2, 5), Program::Chorus) << "preset 2 naming pointer 5";
+    EXPECT_EQ(program_of(7, 0), Program::Reverb);
+    EXPECT_EQ(program_of(7, 1), Program::Hall);
+    EXPECT_EQ(program_of(7, 2), Program::Hall) << "pointer table entries 1 and 2 are the same program";
+    EXPECT_EQ(program_of(7, 4), Program::Mute);
+    EXPECT_EQ(program_of(7, 6), Program::Echo);
+    for (unsigned undecoded : {3u, 7u, 8u, 9u, 10u}) {
+        const auto rom = effects_test_rom(5, undecoded, params);
+        f3rt::hle::Effects fx(rom);
+        EXPECT_THROW(fx.select(5), std::runtime_error) << "ROM program " << undecoded;
+        EXPECT_EQ(fx.program(), Program::None) << "a rejected preset leaves no program loaded";
+    }
+}
+
+// Hall program (Kirameki presets 0 and 2, ROM programs 1/2): two cross-coupled chains. serio1 and serio2 are
+// per side (a left-only send enters the left chain only), the serio2 direct gain is table(127 - p9), p0 sets
+// the decay and the all-pass coefficient (p0 + 7)/128, and the wet output stays silent until the diffusers
+// have delivered: the first right wet tap is latched at frame 2 (output at frame 3).
+TEST(Audio, HallProgramGraphMatchesDecodedProgram) {
+    const uint8_t params[10] = {56, 6, 32, 16, 37, 0, 143, 84, 32, 32}; // Kirameki preset 0
+    const auto sound_rom = effects_test_rom(0, 2, params);
+    f3rt::hle::Effects fx(sound_rom);
+    fx.select(0);
+    ASSERT_EQ(fx.program(), f3rt::hle::Effects::Program::Hall);
+    const auto stereo = effects_impulse(fx, 6, 30000);
+    EXPECT_NEAR(stereo[0], (127.f - 32.f) / 127.f, 1e-4f) << "serio2 direct gain is table(127 - p9)";
+    EXPECT_EQ(stereo[1], 0.f);
+    for (size_t f = 1; f < 3; ++f) {
+        EXPECT_EQ(stereo[f * 2 + 1], 0.f) << "no right wet before frame 3 (frame " << f << ")";
+    }
+    EXPECT_NE(stereo[3 * 2 + 1], 0.f) << "first right wet tap (chain Y output node, 1 frame back) at frame 3";
+    double early = 0, late = 0, l2 = 0, r2 = 0, lr = 0;
+    for (size_t f = 0; f < 6000; ++f)
+        early += double(stereo[f * 2]) * stereo[f * 2] + double(stereo[f * 2 + 1]) * stereo[f * 2 + 1];
+    for (size_t f = 24000; f < 30000; ++f) {
+        const double l = stereo[f * 2], r = stereo[f * 2 + 1];
+        late += l * l + r * r;
+        l2 += l * l;
+        r2 += r * r;
+        lr += l * r;
+    }
+    EXPECT_GT(early, 0.01);
+    EXPECT_LT(late, early * 1e-3) << "the figure-eight loop must decay (-30 dB after 0.8 s)";
+    EXPECT_GT(l2, 0.0) << "the left chain's output reaches the right chain: both sides ring";
+    EXPECT_GT(r2, 0.0);
+    EXPECT_LT(std::abs(lr) / std::sqrt(l2 * r2 + 1e-30), 0.9) << "sides are different taps";
+
+    // p0 = decay: a larger p0 rings longer.
+    const auto late_energy = [&](uint8_t p0) {
+        const uint8_t pp[10] = {p0, 6, 32, 16, 37, 0, 143, 84, 32, 32};
+        const auto rom = effects_test_rom(0, 2, pp);
+        f3rt::hle::Effects f(rom);
+        f.select(0);
+        const auto s = effects_impulse(f, 6, 30000);
+        double e = 0;
+        for (size_t i = 15000; i < 30000; ++i) e += double(s[i * 2]) * s[i * 2] + double(s[i * 2 + 1]) * s[i * 2 + 1];
+        return e;
+    };
+    EXPECT_GT(late_energy(70), late_energy(40) * 4);
+}
+
+// Mute program (Kirameki preset 4): a single END, nothing reaches the DAC, not even the dry input.
+TEST(Audio, MuteProgramSilencesEverything) {
+    const uint8_t params[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const auto sound_rom = effects_test_rom(4, 4, params);
+    f3rt::hle::Effects fx(sound_rom);
+    fx.select(4);
+    ASSERT_EQ(fx.program(), f3rt::hle::Effects::Program::Mute);
+    std::vector<float> buses(8 * 500, 1.0f), stereo(2 * 500, 1.0f);
+    fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
+    for (float v : stereo) ASSERT_EQ(v, 0.f);
+}
+
+// Loop decay in program 5 is G110 = p0 / 128 (the loop return goes through it): the tank must decay, a
+// larger p0 must ring longer, and p0 = 0 leaves only the small p0-independent recirculation.
+TEST(Audio, ReverbDecayFollowsP0) {
+    const auto tail_energy = [](uint8_t p0) {
+        const uint8_t params[10] = {p0, 0, 20, 26, 37, 0, 0x68, 64, 32, 39};
+        const auto sound_rom = effects_test_rom(5, 5, params);
+        f3rt::hle::Effects fx(sound_rom);
+        fx.select(5);
+        constexpr size_t N = 60000;
+        const auto stereo = effects_impulse(fx, 6, N);
+        double early = 0, late = 0;
+        for (size_t f = 0; f < 6000; ++f) early += double(stereo[f * 2]) * stereo[f * 2] + double(stereo[f * 2 + 1]) * stereo[f * 2 + 1];
+        for (size_t f = 30000; f < N; ++f) late += double(stereo[f * 2]) * stereo[f * 2] + double(stereo[f * 2 + 1]) * stereo[f * 2 + 1];
+        return std::array<double, 2>{early, late};
+    };
+    const auto open = tail_energy(0), mid = tail_energy(40), long_decay = tail_energy(90);
+    EXPECT_LT(open[1], open[0] * 1e-5) << "p0 = 0 must decay at least 50 dB faster than the nominal tank";
+    EXPECT_LT(mid[1], mid[0] * 1e-3) << "the tank must decay below -30 dB after 1 s";
+    EXPECT_GT(long_decay[1], mid[1] * 4) << "a larger p0 must ring longer";
+}
+
+// The ES5510 executes its whole program on every sample frame whatever the input is, so the phase of its LFOs
+// keeps advancing through silence. The auto-bypass (silent sends and nothing audible left in the program) must
+// therefore be invisible: after the sends resume, a run that bypassed produces the same output as a run that
+// never did (here kept awake by a sub-audible send). The chorus program has all three LFOs; with p0 = 0 and no
+// echo feedback its tail (the nested all-pass blocks ring down at about -30 dB per half second) is below the
+// silence threshold after about 5 s, so the quiet period is 8 s.
+TEST(Audio, EffectsAutoBypassKeepsLfoPhaseRunning) {
+    const uint8_t params[10] = {0, 0, 40, 26, 37, 0, 0x68, 64, 32, 39};
+    const auto sound_rom = effects_test_rom(5, 5, params);
+    f3rt::hle::Effects bypassing(sound_rom), awake(sound_rom);
+    bypassing.select(5);
+    awake.select(5);
+
+    constexpr size_t BLOCK = 4000, SILENT_BLOCKS = 60, BURST = 3000, TAIL = 20000;
+    const auto run = [&](f3rt::hle::Effects &fx, float whisper) {
+        std::vector<float> out;
+        const auto render = [&](const std::vector<float> &buses) {
+            std::vector<float> stereo(buses.size() / 4);
+            fx.mix(f3rt::hle::BusSpan(buses), f3rt::hle::MutableStereoSpan(stereo), {1.0f, 1.0f}, {1.0f, 1.0f});
+            out.insert(out.end(), stereo.begin(), stereo.end());
+        };
+        std::vector<float> buses(8 * BLOCK, 0.0f);
+        for (size_t bus = 2; bus < 8; ++bus) buses[bus] = 0.5f; // an impulse on every input
+        render(buses);
+        std::fill(buses.begin(), buses.end(), 0.0f);
+        // The quiet period: a send of 1e-9 on every frame keeps the effect awake; zero lets it bypass.
+        for (size_t f = 0; f < BLOCK; ++f) buses[f * 8 + 4] = buses[f * 8 + 6] = whisper;
+        for (size_t block = 0; block < SILENT_BLOCKS; ++block) render(buses);
+        const size_t resumed = out.size() / 2;
+        const bool slept = fx.bypassed();
+        // After the quiet period: a burst of noise on every input, then its tail.
+        uint32_t seed = 12345;
+        std::vector<float> burst(8 * (BURST + TAIL), 0.0f);
+        for (size_t f = 0; f < BURST; ++f)
+            for (size_t bus = 2; bus < 8; ++bus) {
+                seed = seed * 1664525u + 1013904223u;
+                burst[f * 8 + bus] = 0.4f * (float(seed >> 8) / float(1 << 24) - 0.5f);
+            }
+        render(burst);
+        return std::tuple{out, resumed, slept};
+    };
+    const auto [bypassed_out, resumed, bypassed_slept] = run(bypassing, 0.0f);
+    const auto [awake_out, resumed_awake, awake_slept] = run(awake, 1e-9f);
+    ASSERT_EQ(resumed, resumed_awake);
+    ASSERT_TRUE(bypassed_slept) << "the quiet period must have ended in an auto-bypass";
+    ASSERT_FALSE(awake_slept);
+
+    float peak = 0.0f, worst = 0.0f;
+    for (size_t i = resumed * 2; i < awake_out.size(); ++i) {
+        peak = std::max(peak, std::abs(awake_out[i]));
+        worst = std::max(worst, std::abs(awake_out[i] - bypassed_out[i]));
+    }
+    ASSERT_GT(peak, 0.1f);
+    EXPECT_LT(worst, peak * 1e-6f) << "output after an auto-bypass must match a run that never bypassed";
+}
+
+// Direct-voice filter index, derived from the sound driver (c195a4-c195d0) and checked against its key-on
+// register writes in the Kirameki 0x187 diagnosis (clap p0e=165: K1/K2 0xfa40/0xfa70 = index 947/948;
+// pad p0e=101 vel 70/115/119: 579/691-692/702; p0e=179 vel 123: 900). The note-on routine at c17b94 stores
+// the velocity in both bytes of voice+8 (velocity * 257); the second note-start routine at c192ee stores
+// only the high byte (velocity * 256), which gives the index one lower in some cases (947, 691, 900).
+TEST(HleAudio, DirectVoiceFilterIndexMatchesDriver) {
+    EXPECT_EQ(f3rt::hle::direct_filter_index(165, 115), 948);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(101, 70), 579);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(101, 115), 692);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(101, 119), 702);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(179, 123), 901);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(0, 127), 0);
+}
+
+// The clock and the pulse timer are the only schedulers: one 1 kHz grid feeds the voice ring, the sequence tempo
+// pulse and the sequence fade pulse.
+namespace {
+using f3rt::hle::Clock;
+using f3rt::hle::PulseTimer;
+using f3rt::hle::TIMER_TICKS;
+
+struct TickRecorder final : Clock::Listener {
+    std::vector<uint64_t> ticks;
+    void clock_tick(uint64_t tick) override { ticks.push_back(tick); }
+};
+
+struct PulseRecorder final : PulseTimer::Listener {
+    std::vector<uint64_t> ticks;
+    std::vector<uint8_t> tags;
+    void pulse(uint64_t tick, uint8_t tag) override {
+        ticks.push_back(tick);
+        tags.push_back(tag);
+    }
+};
+} // namespace
+
+TEST(HleServices, ClockTicksEveryMillisecond) {
+    EXPECT_EQ(TIMER_TICKS, 16000u);
+    TickRecorder recorder;
+    Clock clock;
+    clock.add(recorder);
+    EXPECT_EQ(clock.next_tick(), uint64_t(TIMER_TICKS));
+    for (unsigned i = 0; i < 3; ++i) clock.advance_one();
+    EXPECT_EQ(recorder.ticks, (std::vector<uint64_t>{16000, 32000, 48000}));
+    EXPECT_EQ(clock.next_tick(), uint64_t(64000));
+    clock.reset(100000);
+    clock.advance_one();
+    EXPECT_EQ(recorder.ticks.back(), 112000u);
+}
+
+TEST(HleServices, PulseTimerListeners) {
+    PulseTimer beat{625, 120};
+    PulseRecorder first, second;
+    beat.add(first, 3);
+    beat.add(second, 7);
+    for (unsigned i = 0; i < 12; ++i) beat.clock_tick(uint64_t(i + 1) * TIMER_TICKS);
+    EXPECT_EQ(first.ticks, (std::vector<uint64_t>{96000, 176000}));
+    EXPECT_EQ(first.tags, (std::vector<uint8_t>{3, 3}));
+    EXPECT_EQ(second.ticks, first.ticks) << "every listener of a timer fires";
+    EXPECT_EQ(second.tags, (std::vector<uint8_t>{7, 7}));
+
+    PulseTimer fade{12, 1};
+    PulseRecorder pulses;
+    fade.add(pulses, 0xff);
+    for (unsigned i = 0; i < 24; ++i) fade.clock_tick(uint64_t(i + 1) * TIMER_TICKS);
+    EXPECT_EQ(pulses.ticks, (std::vector<uint64_t>{192000, 384000}));
+
+    fade.set_step(0);
+    for (unsigned i = 0; i < 24; ++i) fade.clock_tick(uint64_t(25 + i) * TIMER_TICKS);
+    EXPECT_EQ(pulses.ticks.size(), 2u) << "a stopped timer does not pulse";
+}
+
+TEST(HleServices, MailboxPreservesEventOrderAndRejectsOverflow) {
+    using f3rt::hle::Event;
+    using f3rt::hle::Mailbox;
+    using f3rt::hle::NoteOffEvent;
+    using f3rt::hle::NoteOnEvent;
+    using f3rt::hle::TrackEvent;
+    using f3rt::hle::TrackEventKind;
+
+    Mailbox mailbox;
+    EXPECT_TRUE(mailbox.empty());
+    NoteOnEvent on;
+    on.instance = 11;
+    on.tick = 22;
+    on.program = 33;
+    NoteOffEvent off;
+    off.instance = 44;
+    TrackEvent volume;
+    volume.kind = TrackEventKind::Volume;
+    volume.value = 55;
+    mailbox.push(on);
+    mailbox.push(off);
+    mailbox.push(volume);
+
+    std::vector<int> order;
+    mailbox.drain([&](const Event &event) {
+        if (const auto *n = std::get_if<NoteOnEvent>(&event)) {
+            EXPECT_EQ(n->instance, 11u);
+            EXPECT_EQ(n->tick, 22u);
+            EXPECT_EQ(n->program, 33u);
+            order.push_back(1);
+        } else if (const auto *o = std::get_if<NoteOffEvent>(&event)) {
+            EXPECT_EQ(o->instance, 44u);
+            order.push_back(2);
+        } else if (const auto *t = std::get_if<TrackEvent>(&event)) {
+            EXPECT_EQ(t->kind, TrackEventKind::Volume);
+            EXPECT_EQ(t->value, 55u);
+            order.push_back(3);
+        } else {
+            ADD_FAILURE() << "unexpected event alternative";
+            order.push_back(0);
+        }
+    });
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3})) << "drain is FIFO";
+    EXPECT_TRUE(mailbox.empty());
+
+    mailbox.clear();
+    EXPECT_TRUE(mailbox.empty());
+    for (size_t i = 0; i < Mailbox::CAPACITY; ++i) mailbox.push(off);
+    EXPECT_EQ(Mailbox::CAPACITY, 1024u);
+    try {
+        mailbox.push(off);
+        FAIL() << "a full mailbox must reject the push";
+    } catch (const std::runtime_error &e) {
+        EXPECT_STREQ(e.what(), "HLE mailbox full");
+    }
+    mailbox.clear();
+    EXPECT_NO_THROW(mailbox.push(off));
+}
+
+// The sound driver starts the voices of one sequencer pulse one after another (about 20k CPU cycles each on the
+// 16 MHz sound CPU, measured on the Kirameki 0x187 trace); HLE models that as a busy clock plus a start queue.
+namespace {
+using f3rt::hle::DRIVER_KEYON_CYCLES;
+using f3rt::hle::DriverClock;
+using f3rt::hle::NoteQueue;
+
+struct Started {
+    uint64_t instance, tick;
+};
+struct Released {
+    uint64_t instance, tick;
+};
+// Plays a queue to `limit` in one service call and records begin/release order.
+template <class Q> void drain(Q &q, uint64_t limit, std::vector<Started> &begun, std::vector<Released> &released) {
+    q.service(
+        limit, [&](const uint64_t &instance, uint64_t start) { begun.push_back({instance, start}); },
+        [&](uint64_t instance, uint64_t tick) { released.push_back({instance, tick}); });
+}
+} // namespace
+
+TEST(HleNoteTiming, SimultaneousNotesStartOneCostApartInRequestOrder) {
+    DriverClock clock;
+    const uint64_t tick = 1'000'000;
+    for (unsigned k = 0; k < 19; ++k) EXPECT_EQ(clock.start(tick, 1), tick + uint64_t(k) * DRIVER_KEYON_CYCLES);
+    // A busy driver also delays a later pulse that arrives before it has finished.
+    EXPECT_EQ(clock.start(tick + f3rt::hle::TIMER_TICKS, 1), tick + 19ull * DRIVER_KEYON_CYCLES);
+}
+
+TEST(HleNoteTiming, LayersOfOneNoteShareAStartAndCostOneSlotEach) {
+    DriverClock clock;
+    EXPECT_EQ(clock.start(500, 2), 500u);
+    EXPECT_EQ(clock.start(500, 3), 500u + 2ull * DRIVER_KEYON_CYCLES);
+    EXPECT_EQ(clock.start(500, 1), 500u + 5ull * DRIVER_KEYON_CYCLES);
+    EXPECT_EQ(clock.busy_until(), 500u + 6ull * DRIVER_KEYON_CYCLES);
+}
+
+TEST(HleNoteTiming, IdleDriverStartsOnTheRequestTick) {
+    DriverClock clock;
+    EXPECT_EQ(clock.start(1000, 1), 1000u);
+    const uint64_t later = 1000 + 10ull * DRIVER_KEYON_CYCLES;
+    EXPECT_EQ(clock.start(later, 4), later);
+    clock.reset(77);
+    EXPECT_EQ(clock.start(77, 1), 77u);
+}
+
+TEST(HleNoteTiming, QueueStartsEveryNoteOnceInStartOrder) {
+    NoteQueue<uint64_t, 32> queue;
+    DriverClock clock;
+    const uint64_t tick = 2'000'000;
+    // Request order is the driver's order; instances 1..19.
+    for (uint64_t i = 1; i <= 19; ++i) ASSERT_TRUE(queue.push(i, i, tick, clock.start(tick, 1)));
+    std::vector<Started> begun;
+    std::vector<Released> released;
+    // Service in uneven slices: nothing may start early, nothing may start twice.
+    drain(queue, tick - 1, begun, released);
+    EXPECT_TRUE(begun.empty());
+    drain(queue, tick + 3ull * DRIVER_KEYON_CYCLES, begun, released);
+    ASSERT_EQ(begun.size(), 4u);
+    drain(queue, tick + 100ull * DRIVER_KEYON_CYCLES, begun, released);
+    ASSERT_EQ(begun.size(), 19u);
+    drain(queue, tick + 200ull * DRIVER_KEYON_CYCLES, begun, released);
+    ASSERT_EQ(begun.size(), 19u);
+    for (uint64_t i = 0; i < 19; ++i) {
+        EXPECT_EQ(begun[i].instance, i + 1);
+        EXPECT_EQ(begun[i].tick, tick + i * DRIVER_KEYON_CYCLES);
+    }
+    EXPECT_TRUE(released.empty());
+    EXPECT_TRUE(queue.empty());
+}
+
+TEST(HleNoteTiming, EqualStartsKeepRequestOrder) {
+    NoteQueue<uint64_t, 8> queue;
+    for (uint64_t i = 1; i <= 5; ++i) ASSERT_TRUE(queue.push(i, i, 10, 500));
+    std::vector<Started> begun;
+    std::vector<Released> released;
+    drain(queue, 500, begun, released);
+    ASSERT_EQ(begun.size(), 5u);
+    for (uint64_t i = 0; i < 5; ++i) EXPECT_EQ(begun[i].instance, i + 1);
+}
+
+TEST(HleNoteTiming, NoteOffBeforeQueuedStartStillPlaysTheNoteThenReleasesIt) {
+    NoteQueue<uint64_t, 8> queue;
+    const uint64_t tick = 100'000, start = tick + 5ull * DRIVER_KEYON_CYCLES;
+    ASSERT_TRUE(queue.push(7, 7, tick, start));
+    // The sequencer ends the note 3000 cycles after it asked for it, long before the driver gets to it.
+    queue.note_off(7, tick + 3000);
+    std::vector<Started> begun;
+    std::vector<Released> released;
+    drain(queue, start - 1, begun, released);
+    EXPECT_TRUE(begun.empty());
+    EXPECT_TRUE(released.empty());
+    EXPECT_EQ(queue.next_event(), start);
+    drain(queue, start, begun, released);
+    ASSERT_EQ(begun.size(), 1u) << "the queued note was dropped";
+    EXPECT_EQ(begun[0].tick, start);
+    EXPECT_TRUE(released.empty()) << "released before its length had elapsed";
+    EXPECT_EQ(queue.next_event(), start + 3000);
+    drain(queue, start + 3000, begun, released);
+    ASSERT_EQ(released.size(), 1u);
+    EXPECT_EQ(released[0].instance, 7u);
+    EXPECT_EQ(released[0].tick, start + 3000) << "note length not preserved";
+    EXPECT_TRUE(queue.empty());
+}
+
+TEST(HleNoteTiming, ZeroLengthNoteBeginsBeforeItsRelease) {
+    NoteQueue<uint64_t, 8> queue;
+    ASSERT_TRUE(queue.push(3, 3, 5000, 9000));
+    queue.note_off(3, 5000);
+    std::vector<uint64_t> order;
+    queue.service(
+        100000, [&](const uint64_t &, uint64_t tick) { order.push_back(tick * 2); },
+        [&](uint64_t, uint64_t tick) { order.push_back(tick * 2 + 1); });
+    ASSERT_EQ(order.size(), 2u);
+    EXPECT_EQ(order[0], 9000u * 2);
+    EXPECT_EQ(order[1], 9000u * 2 + 1);
+}
+
+TEST(HleNoteTiming, NoteOffAfterStartOrForOtherInstancesLeavesQueueAlone) {
+    NoteQueue<uint64_t, 8> queue;
+    ASSERT_TRUE(queue.push(1, 1, 0, 100));
+    ASSERT_TRUE(queue.push(2, 2, 0, 200));
+    queue.note_off(99, 50); // unknown instance
+    std::vector<Started> begun;
+    std::vector<Released> released;
+    drain(queue, 150, begun, released);
+    ASSERT_EQ(begun.size(), 1u);
+    queue.note_off(1, 160); // already running: Synth releases the live voice itself
+    drain(queue, 1000, begun, released);
+    EXPECT_EQ(begun.size(), 2u);
+    EXPECT_TRUE(released.empty());
+    EXPECT_TRUE(queue.empty());
+}
+
+TEST(HleNoteTiming, EveryLayerOfAnInstanceIsReleasedAndNoneLost) {
+    NoteQueue<uint64_t, 16> queue;
+    for (uint64_t layer = 0; layer < 3; ++layer) ASSERT_TRUE(queue.push(layer, 42, 1000, 4000));
+    ASSERT_TRUE(queue.push(10, 43, 1000, 4000 + 3ull * DRIVER_KEYON_CYCLES));
+    queue.note_off(42, 1500);
+    std::vector<Started> begun;
+    std::vector<Released> released;
+    drain(queue, 1'000'000, begun, released);
+    EXPECT_EQ(begun.size(), 4u);
+    EXPECT_EQ(released.size(), 3u);
+    for (const Released &r : released) {
+        EXPECT_EQ(r.instance, 42u);
+        EXPECT_EQ(r.tick, 4500u);
+    }
+}
+
+TEST(HleNoteTiming, FullQueueRefusesInsteadOfDropping) {
+    NoteQueue<uint64_t, 2> queue;
+    EXPECT_TRUE(queue.push(1, 1, 0, 10));
+    EXPECT_TRUE(queue.push(2, 2, 0, 20));
+    EXPECT_FALSE(queue.push(3, 3, 0, 30));
+    EXPECT_EQ(queue.size(), 2u);
+    queue.clear();
+    EXPECT_TRUE(queue.empty());
+    EXPECT_TRUE(queue.push(3, 3, 0, 30));
+}
+
+namespace {
+
+// Scalar reference for the voice filter: the four-stage recursion, one frame at a time, in float.
+struct VoiceFilterRef {
+    float s[4]{}, p[4]{};
+    void frame(int mode, float x, float a1, float a2, float hp, float gl, float gr, float &L,
+               float &R) {
+        float y0 = a1 * (x - s[0]) + s[0];
+        p[0] = x;
+        s[0] = y0;
+        x = y0;
+        float y1 = a1 * (x - s[1]) + s[1];
+        p[1] = x;
+        s[1] = y1;
+        x = y1;
+        float as2 = mode == 2 ? a2 : a1;
+        float lp2 = as2 * (x - s[2]) + s[2];
+        float hp2 = hp * s[2] + (x - p[2]);
+        float y2 = mode == 0 ? hp2 : lp2;
+        p[2] = x;
+        s[2] = y2;
+        x = y2;
+        float lp3 = a2 * (x - s[3]) + s[3];
+        float hp3 = hp * s[3] + (x - p[3]);
+        float y3 = mode < 2 ? hp3 : lp3;
+        p[3] = x;
+        s[3] = y3;
+        L = y3 * gl;
+        R = y3 * gr;
+    }
+};
+
+// Runs `chunks` blocks of 64 frames of random controls through the DSP and the reference, with
+// mode_of(chunk) selecting each block's mode. Returns the largest output error relative to the
+// largest output magnitude.
+template <class ModeOf>
+float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
+    constexpr int CH = 64;
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> coef(0.01f, 0.99f), pole(0.f, 1.f), gain(0.f, 1.f),
+        sample(-32768.f, 32767.f);
+    f3rt::hle::faust::VoiceFilterDsp dsp;
+    dsp.init(29762);
+    f3rt::hle::faust::Controls controls(dsp);
+    float *mode_zone = controls.zone("mode");
+    VoiceFilterRef ref;
+    float in[6][CH]{}, out[2][CH]{};
+    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
+    float *outs[2] = {out[0], out[1]};
+    float peak = 0.f, err = 0.f;
+    for (int k = 0; k < chunks; ++k) {
+        const int mode = mode_of(k);
+        *mode_zone = float(mode);
+        for (int r = 0; r < CH; ++r) {
+            in[0][r] = sample(rng);
+            in[1][r] = coef(rng);
+            in[2][r] = coef(rng);
+            in[3][r] = pole(rng);
+            in[4][r] = gain(rng);
+            in[5][r] = gain(rng);
+        }
+        dsp.compute(CH, ins, outs);
+        for (int r = 0; r < CH; ++r) {
+            float L = 0.f, R = 0.f;
+            ref.frame(mode, in[0][r], in[1][r], in[2][r], in[3][r], in[4][r], in[5][r], L, R);
+            peak = std::max({peak, std::fabs(L), std::fabs(R)});
+            err = std::max({err, std::fabs(out[0][r] - L), std::fabs(out[1][r] - R)});
+        }
+    }
+    return peak > 0.f ? err / peak : err;
+}
+
+// Settles a constant input (1000 through unity gains, a1 0.2, a2 0.7, high pole 0.5) and returns
+// the settled left output.
+float voice_filter_dc(int mode) {
+    constexpr int CH = 64;
+    f3rt::hle::faust::VoiceFilterDsp dsp;
+    dsp.init(29762);
+    f3rt::hle::faust::Controls controls(dsp);
+    *controls.zone("mode") = float(mode);
+    float in[6][CH], out[2][CH];
+    for (int r = 0; r < CH; ++r) {
+        in[0][r] = 1000.f;
+        in[1][r] = 0.2f;
+        in[2][r] = 0.7f;
+        in[3][r] = 0.5f;
+        in[4][r] = 1.f;
+        in[5][r] = 1.f;
+    }
+    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
+    float *outs[2] = {out[0], out[1]};
+    for (int k = 0; k < 2000; ++k) dsp.compute(CH, ins, outs);
+    return out[0][CH - 1];
+}
+
+}  // namespace
+
+TEST(Audio, VoiceFilterDspMatchesScalarRecursion) {
+    for (int mode = 0; mode < 4; ++mode) {
+        EXPECT_LT(voice_filter_error(1234u + unsigned(mode), 256, [mode](int) { return mode; }),
+                  1e-5f)
+            << "mode " << mode;
+    }
+    EXPECT_LT(voice_filter_error(99u, 256, [](int k) { return (k * 7 + k / 3) % 4; }), 1e-5f)
+        << "mixed modes";
+}
+
+TEST(Audio, VoiceFilterDcGainPerMode) {
+    EXPECT_NEAR(voice_filter_dc(0), 0.f, 1e-3f);
+    EXPECT_NEAR(voice_filter_dc(1), 0.f, 1e-3f);
+    EXPECT_NEAR(voice_filter_dc(2), 1000.f, 1e-2f);
+    EXPECT_NEAR(voice_filter_dc(3), 1000.f, 1e-2f);
+}
+
+TEST(Audio, DirectVoiceFilterIndexMatchesDriverMath) {
+    EXPECT_EQ(f3rt::hle::direct_filter_index(101, 115), 692);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(248, 127), 1501);
+    EXPECT_EQ(f3rt::hle::direct_filter_index(0, 100), 0);
+}
+
+TEST(Audio, AudioBlockAlignmentAndMultiSubscript) {
+    using namespace f3rt::hle;
+    static_assert(alignof(BusBlock) == 64, "BusBlock must be 64-byte aligned for SIMD");
+    static_assert(alignof(StereoBlock) == 64, "StereoBlock must be 64-byte aligned for SIMD");
+    static_assert(BusBlock::K_CHANNELS == 8);
+    static_assert(StereoBlock::K_CHANNELS == 2);
+    static_assert(BusBlock::K_MAX_FRAMES == 256);
+
+    BusBlock buses;
+    buses.resize(100);
+    EXPECT_EQ(buses.size(), 100);
+    EXPECT_EQ(buses.capacity(), 256);
+
+    // C++23 multi-subscript with enum
+    buses[10, OtisBus::DryL] = 0.75f;
+    buses[10, OtisBus::ReverbR] = -0.5f;
+    EXPECT_EQ((buses[10, OtisBus::DryL]), 0.75f);
+    EXPECT_EQ((buses[10, OtisBus::ReverbR]), -0.5f);
+
+    // Numeric multi-subscript matches enum index
+    EXPECT_EQ((buses[10, static_cast<size_t>(OtisBus::DryL)]), 0.75f);
+    EXPECT_EQ((buses[10, static_cast<size_t>(OtisBus::ReverbR)]), -0.5f);
+
+    // Single-subscript frame span
+    auto frame10 = buses[10];
+    EXPECT_EQ(frame10.size(), 8);
+    EXPECT_EQ(frame10[static_cast<size_t>(OtisBus::DryL)], 0.75f);
+    EXPECT_EQ(frame10[static_cast<size_t>(OtisBus::ReverbR)], -0.5f);
+
+    // Non-owning BusSpan and MutableStereoSpan
+    BusSpan bus_span = buses.span();
+    EXPECT_EQ(bus_span.size(), 100);
+    EXPECT_EQ((bus_span[10, OtisBus::DryL]), 0.75f);
+
+    StereoBlock stereo;
+    stereo.resize(100);
+    stereo[10, StereoChannel::Left] = 1.0f;
+    stereo[10, StereoChannel::Right] = 2.0f;
+    EXPECT_EQ((stereo[10, StereoChannel::Left]), 1.0f);
+    EXPECT_EQ((stereo[10, StereoChannel::Right]), 2.0f);
+}
+
+TEST(Audio, EffectsMixAudioBlockOverload) {
+    using namespace f3rt::hle;
+    const uint8_t params[10] = {30, 58, 73, 32, 37, 0, 40, 43, 18, 32};
+    const auto sound_rom = effects_test_rom(11, 6, params);
+
+    Effects fx(sound_rom);
+    fx.select(11);
+
+    BusBlock buses;
+    buses.resize(BLOCK_FRAMES);
+    buses[0, OtisBus::DryL] = 1.0f;
+    buses[0, OtisBus::DryR] = 0.5f;
+
+    StereoBlock stereo;
+    fx.mix(buses, stereo, {1.0f, 1.0f}, {1.0f, 1.0f});
+
+    EXPECT_EQ(stereo.size(), BLOCK_FRAMES);
+    EXPECT_GT((stereo[0, StereoChannel::Left]), 0.0f);
+    EXPECT_GT((stereo[0, StereoChannel::Right]), 0.0f);
+}
+
+TEST(Audio, PlanarAudioBlockAndScaledBusSubspan) {
+    using namespace f3rt::hle;
+
+    BusBlock buses;
+    buses.resize(32);
+    for (size_t f = 0; f < 32; ++f) {
+        buses[f, OtisBus::DryL] = 1.0f + float(f);
+        buses[f, OtisBus::DryR] = 2.0f + float(f);
+        buses[f, OtisBus::DelayL] = 3.0f + float(f);
+        buses[f, OtisBus::DelayR] = 4.0f + float(f);
+        buses[f, OtisBus::ReverbL] = 5.0f + float(f);
+        buses[f, OtisBus::ReverbR] = 6.0f + float(f);
+    }
+
+    const std::array<float, 2> gain = {0.5f, 2.0f};
+    PlanarAudioBlock<6, 32> in;
+
+    // Test full active bus assignment
+    in = buses.span().subspan(4, 16) * gain;
+    EXPECT_FLOAT_EQ(in[0][0], (1.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[1][0], (2.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[2][0], (3.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[3][0], (4.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[4][0], (5.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[5][0], (6.0f + 4.0f) * 2.0f);
+
+    // Clear and test dry-only slice assignment
+    in.storage[2][0] = 99.0f;
+    in.storage[4][0] = 99.0f;
+    in = buses.span().subspan(4, 16).dry() * gain;
+    EXPECT_FLOAT_EQ(in[0][0], (1.0f + 4.0f) * 0.5f);
+    EXPECT_FLOAT_EQ(in[1][0], (2.0f + 4.0f) * 2.0f);
+    EXPECT_FLOAT_EQ(in[2][0], 99.0f); // untouched
+    EXPECT_FLOAT_EQ(in[4][0], 99.0f); // untouched
+}
+
+TEST(Audio, MutableBusSliceAccumulateAndOtisTargetBus) {
+    using namespace f3rt::hle;
+
+    EXPECT_EQ(otis_target_bus(0), std::nullopt);
+    EXPECT_EQ(otis_target_bus(1), BusSelect::Dry);
+    EXPECT_EQ(otis_target_bus(2), BusSelect::Delay);
+    EXPECT_EQ(otis_target_bus(3), BusSelect::Reverb);
+    EXPECT_EQ(otis_target_bus(4), std::nullopt);
+
+    BusBlock buses;
+    buses.resize(16);
+    buses.fill(0.0f);
+
+    PlanarAudioBlock<2, 16> planar;
+    for (size_t f = 0; f < 16; ++f) {
+        planar[0][f] = 10.0f + float(f);
+        planar[1][f] = 20.0f + float(f);
+    }
+
+    // Accumulate planar stereo into Dry
+    buses.subspan(0, 16).dry() += planar;
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DryL]), 10.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DryR]), 20.0f);
+    EXPECT_FLOAT_EQ((buses[5, OtisBus::DryL]), 15.0f);
+    EXPECT_FLOAT_EQ((buses[5, OtisBus::DryR]), 25.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayL]), 0.0f);
+
+    // Accumulate again with slice(BusSelect::Delay)
+    buses.subspan(0, 16).slice(BusSelect::Delay) += planar;
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayL]), 10.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::DelayR]), 20.0f);
+
+    // Test interleaved stereo accumulation
+    StereoBlock stereo;
+    stereo.resize(16);
+    for (size_t f = 0; f < 16; ++f) {
+        stereo[f, StereoChannel::Left] = 1.0f;
+        stereo[f, StereoChannel::Right] = 2.0f;
+    }
+    buses.subspan(0, 16).reverb() += stereo.span();
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbL]), 1.0f);
+    EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbR]), 2.0f);
 }

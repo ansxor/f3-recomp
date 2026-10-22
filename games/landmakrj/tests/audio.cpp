@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
@@ -104,7 +105,7 @@ TEST(HleAudio, StateAndSequencing) {
         guest.load(host.save());
         guest.packet({6, 0x8e, 1, 1, 39, 104});
         const auto samples = guest.step();
-        EXPECT_EQ(samples.size(), 1600u) << "adopted clock stalled or burst HLE playback";
+        EXPECT_EQ(samples.size(), size_t(2 * f3rt::hle::SAMPLE_RATE / 60)) << "adopted clock stalled or burst HLE playback";
         EXPECT_TRUE(std::any_of(samples.begin(), samples.end(), [](int16_t v) { return v != 0; }))
             << "adopted state lost future HLE commands";
     }
@@ -186,41 +187,41 @@ TEST(HleAudio, StateAndSequencing) {
         EXPECT_EQ(before_drain, f.save()) << "host PCM drain changed main HLE state";
     }
 
-    // 6. A voice cut while audible (sample end, envelope stop) decays instead of stepping to zero.
-    // At each Stop, the largest sample-to-sample change in the 2 ms after it may not exceed the largest in the
-    // 2 ms before it by more than a quarter: a hard cut jumps by the voice's whole last output.
+    // 6. Non-looping sample end boundary interpolation: reaching the end address must not
+    // interpolate past the sample end into unrelated adjacent ROM words (percussion clicks).
     {
-        size_t checked = 0;
-        for (uint8_t key = 24; key <= 96; key += 3) {
-            Fixture f(rom);
-            std::vector<int16_t> pcm;
-            f.packet({6, 0x8e, 1, 1, key, 127});
-            for (int frame = 0; frame < 120; ++frame) {
-                const auto out = f.step();
-                pcm.insert(pcm.end(), out.begin(), out.end());
-            }
-            for (const auto &e : f.events) {
-                if (e.kind != Kind::Stop) continue;
-                // Rendered frames start after the fixture's first 800-frame step; 3 frames per 1000 ticks at 48 kHz.
-                const int64_t at = int64_t(e.tick * 3 / 1000) - 800;
-                constexpr int64_t window = 96;
-                if (at - window < 1 || (at + window) * 2 > int64_t(pcm.size())) continue;
-                auto largest = [&](int64_t from, int64_t to) {
-                    int peak = 0;
-                    for (int64_t i = from; i < to; ++i)
-                        for (int c = 0; c < 2; ++c)
-                            peak = std::max(peak, std::abs(pcm[size_t(i * 2 + c)] -
-                                                           pcm[size_t((i - 1) * 2 + c)]));
-                    return peak;
-                };
-                const int before = largest(at - window, at), after = largest(at, at + window);
-                if (before < 64) continue; // already inaudible when it stopped
-                ++checked;
-                EXPECT_LE(after, before + before / 4 + 8)
-                    << "key " << int(key) << " stop at frame " << at << " stepped: before=" << before
-                    << " after=" << after;
+        Fixture f(rom);
+        f.packet({3, 0x81, 0x56});
+        std::vector<int16_t> pcm;
+        for (int frame = 0; frame < 20; ++frame) {
+            const auto s = f.step();
+            pcm.insert(pcm.end(), s.begin(), s.end());
+        }
+        const size_t n_samples = pcm.size() / 2;
+        int big_spikes = 0;
+        for (size_t ch = 0; ch < 2; ++ch) {
+            for (size_t i = 1; i + 1 < n_samples; ++i) {
+                const int d2 = int(pcm[(i + 1) * 2 + ch]) - 2 * int(pcm[i * 2 + ch]) +
+                               int(pcm[(i - 1) * 2 + ch]);
+                if (std::abs(d2) > 300) {
+                    double sum_sq = 0.0;
+                    int count = 0;
+                    const size_t start = (i > 32) ? i - 32 : 0;
+                    const size_t end = std::min(n_samples, i + 33);
+                    for (size_t j = start; j < end; ++j) {
+                        if (j + 1 < n_samples && j > 0 && j != i) {
+                            const int loc_d2 = int(pcm[(j + 1) * 2 + ch]) -
+                                               2 * int(pcm[j * 2 + ch]) +
+                                               int(pcm[(j - 1) * 2 + ch]);
+                            sum_sq += double(loc_d2) * loc_d2;
+                            ++count;
+                        }
+                    }
+                    const double local_rms = (count > 0) ? std::sqrt(sum_sq / count) : 1.0;
+                    if (std::abs(d2) > 8.0 * std::max(local_rms, 1.0)) ++big_spikes;
+                }
             }
         }
-        EXPECT_GT(checked, 0u) << "no audible voice cut was exercised";
+        EXPECT_EQ(big_spikes, 0) << "non-looping sample end produced transient click spikes";
     }
 }

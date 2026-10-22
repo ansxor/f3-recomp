@@ -1,5 +1,6 @@
 // license:BSD-3-Clause
 #include "renderer/decode.hpp"
+#include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
 #include <cstring>
 
@@ -8,8 +9,6 @@ namespace {
 
 constexpr int H_START = 46;
 constexpr int H_VIS = 320;
-
-inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
 
 // Producer axis accumulator shared by X and Y.
 struct SpriteAxis {

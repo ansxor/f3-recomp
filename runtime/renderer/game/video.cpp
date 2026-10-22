@@ -14,6 +14,7 @@
 #include "sprites/units.hpp"
 #include <algorithm>
 #include <array>
+#include <iostream>
 #include <ostream>
 #include <sstream>
 #include <stdexcept>
@@ -118,6 +119,7 @@ struct GameVideo::Impl {
         frame.shadow_count = unsigned(std::count_if(current.begin(), current.end(),
                                                     [](const SceneSprite &s) { return s.shadow; }));
         frame.pen_mask = sprites.pen_mask();
+        frame.flipped = sprites.flipped();
         const auto &palette = machine.palette;
         for (unsigned i = 0; i < frame.colors.size(); ++i)
             frame.colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) |
@@ -301,8 +303,6 @@ Machine &require_matching_video(Machine &machine) {
     return machine;
 }
 #if F3RT_GAME_VIDEO
-static_assert(game_config::video.extend,
-              "GameVideo decodes 64-column extended playfields only (video.extend = true)");
 static_assert(game_config::video.rotation == 0,
               "GameVideo does not rotate the scanout (video.rotation == 0)");
 static_assert(game_config::video.sprite_lag == 1,
@@ -601,7 +601,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
             throw std::runtime_error(error.str());
         }
     }
-    if constexpr (game_config::video.extended_alt_maps) {
+    if constexpr (!game_config::video.extend || game_config::video.extended_alt_maps) {
         for (unsigned alt = 0; alt < 2; ++alt) {
             const LayerId id = playfield(2 + alt);
             if (!(layer_mask & layer_bit(id))) continue;
@@ -677,7 +677,7 @@ void GameVideo::report(std::ostream &output) const {
                << " compared_pixels=" << m_impl->frames[layer] * pixels
                << " pixel_mismatches=" << m_impl->mismatches[layer] << '\n';
     }
-    if constexpr (game_config::video.extended_alt_maps) {
+    if constexpr (!game_config::video.extend || game_config::video.extended_alt_maps) {
         for (unsigned alt = 0; alt < 2; ++alt) {
             if (!m_impl->alt_frames[alt]) continue;
             const auto &info = LAYER_INFO[unsigned(LayerId::Pf2) + alt];

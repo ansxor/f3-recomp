@@ -1,7 +1,7 @@
 ---
 title: Sound-board DUART timer, ESP halt output and MB87078 volume, as implemented by this runtime
 created: 2026-10-11
-updated: 2026-10-12
+updated: 2026-10-15
 type: hardware
 tags: [audio, interrupt, timing, memory-map]
 sources:
@@ -14,6 +14,7 @@ sources:
   - raw/docs/runtime-hle-audio-rom-protocol.md
   - raw/tests/2026-10-10-otis-esp-routing-experiments.md
   - raw/disasm/landmakrj-sound-driver-excerpts.md
+  - raw/docs/taito-f3/list.txt
 games: [landmakrj]
 addresses: [0x00280000, 0x00340000, 0x00C007F8, 0x00C10E22]
 status: hypothesis
@@ -21,6 +22,7 @@ evidence:
   - {kind: doc, ref: raw/docs/runtime-audio-duart-and-gain.md, note: "runtime documentation of the MC68681 and MB87078 models and the host mixer"}
   - {kind: trace, ref: raw/tests/landmakrj-seed5-sound-trace.md, note: "IRQ read spacing 16,000 main ticks and gain-request time from the seed-5 cold-boot trace"}
   - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "ROM disassembly of DUART initialization at $c10e22 programming counter $07d0, ACR $60, IMR $2b"}
+  - {kind: doc, ref: raw/docs/taito-f3/list.txt, note: "audio analog output chain: MB87078 post-DAC analog volume control"}
 contradictions:
   - "DUART output pins: duart.txt marks OP0-OP7 unused; MAME and the runtime use OP6 as ESPHALT. Already listed on [[hardware/sound]]."
 supersedes: []
@@ -72,12 +74,7 @@ Board wiring and the confirmed routing are on [[hardware/sound]]; the ESP side i
 
 ## Host mixer gain (runtime implementation, not a board claim)
 
-- The default gain model applies the volume twice (before the ESP input at `0.18 * route`, and after the
-  ESP at `route`), where `route` is the modelled gain as a percentage divided by 32 (3.125 at 0 dB).
-  The alternative `SingleStage` model is an unverified experiment. A fixed host output boost of 12
-  (+21.6 dB) is applied after the DSP because the MAME-equivalent mix peaks near -25 dBFS. The source
-  lines `0.18f` and `output_boost` were seen in `runtime/audio/audio.cpp` on 2026-10-11.
-  ^[raw/docs/runtime-audio-duart-and-gain.md]
+- The default gain model is now `SingleStage`, which models single-stage analog attenuation after the ESP/DAC (grounded in the physical board wiring in `raw/docs/taito-f3/list.txt:265-280` where the MB87078 attenuates post-DAC analog signals). In `SingleStage`, OTIS-to-ESP input gain is fixed at `0.18` and physical attenuation is applied post-DAC. The baseline `MameRouting` model, which applied volume twice (before the ESP input at `0.18 * route` and after the pump at `route`, where `route` is the modelled gain percentage divided by 32), is retained for MAME comparison. A fixed host output boost of 12 (+21.6 dB) is applied after the DSP because the baseline mix peaks near -25 dBFS. The source lines `0.18f` and `output_boost` were seen in `runtime/audio/audio.cpp` on 2026-10-11. ^[raw/docs/runtime-audio-duart-and-gain.md; raw/docs/taito-f3/list.txt]
 - Changing OTIS to ESP gain from 0.18 to 1.0 raised Command War RMS by 5.55x in a test; whether the
   physical board carries unity-gain words is unestablished (see [[hardware/sound]]). ^[raw/tests/2026-10-10-otis-esp-routing-experiments.md]
 

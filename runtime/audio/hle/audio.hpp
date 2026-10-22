@@ -15,6 +15,7 @@ public:
     uint64_t clock() const;
     bool is_reset() const;
     void set_reset(bool asserted);
+    void set_bank(uint8_t bank);
     void shared_write(uint32_t offset);
     void finish_frame();
     void flush() const;
@@ -24,8 +25,9 @@ public:
     size_t render_ready(int16_t *stereo, size_t frames);
     uint64_t generated() const;
     Audio::EnhancedStats stats() const;
+#if F3RT_HLE_EVENTS
     void set_observer(std::function<void(const VoiceEvent &)> observer);
-    void set_gain_model(Audio::GainModel model);
+#endif
     static constexpr size_t STATE_BYTES = 32;
     void save(std::span<uint8_t> dst) const;
     void load(std::span<const uint8_t> src);

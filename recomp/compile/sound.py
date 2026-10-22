@@ -258,9 +258,9 @@ def load_sound_rom(rom_dir: Path, config: dict) -> bytes:
     from recomp.roms import load_region
 
     rom = load_region(config, "sound", rom_dir)
-    if len(rom) != 0x80000:
+    if len(rom) < 0x80000:
         raise ValueError("Sound manifest must cover the 512 KiB CPU window")
-    return rom
+    return rom[:0x80000]
 
 
 def compile_sound_rom(

@@ -2,11 +2,22 @@ cmake_minimum_required(VERSION 3.24)
 option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
+option(F3RT_HLE_EVENTS "Compile the HLE voice-event observer used by --hle-events and the HLE audio tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
+# compile_commands.json for clangd and other LSP servers; `make compdb` links it to the root.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(cmake/dependencies.cmake)
+include(cmake/faust.cmake)
+f3rt_faust_dsp(NAME voice_filter CLASS VoiceFilterDsp)
+# ES5510 effects programs: double precision (the LFO is a rotation of a GPR pair whose rate a float would drift).
+f3rt_faust_dsp(NAME reverb CLASS ReverbDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME chorus CLASS ChorusDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME echo CLASS EchoDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME hall CLASS HallDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
+f3rt_faust_dsp(NAME dc_blocker CLASS DcBlockerDsp OPTIONS -double)
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -299,7 +310,11 @@ set(F3RT_CORE_SOURCES
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/audio/hle/audio.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/synth.cpp runtime/audio/hle/voice_kernel.cpp
+    runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/debug/replay.cpp
+    runtime/audio/hle/command.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/patch.cpp
+    runtime/audio/hle/program_service.cpp
+    runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
+    runtime/audio/hle/synthesis.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
     ${AUDIO_SOURCES}
@@ -386,6 +401,8 @@ add_dependencies(f3rt f3rt_build_identity)
 # use "sprites/<name>" to avoid basename ambiguity.
 target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
     PRIVATE runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
+# Unmodified FAUST architecture headers. System includes keep their warnings out of our builds.
+target_include_directories(f3rt SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/faust")
 # A game opts into sprite behaviours by providing games/<game>/sprites/behaviours.hpp.
 # Header-only registry: sprites/behaviours.cpp includes it, so no static registrar
 # can be dead-stripped from the archive. Not under video/, which would enable GameVideo.
@@ -395,7 +412,7 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB hwy::hwy cpp_yyjson::cpp_yyjson)
+target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
 target_link_libraries(f3rt PUBLIC f3-netplay-shared)
 
 add_library(f3-netplay-shared STATIC
@@ -436,6 +453,12 @@ endif()
 target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_HLE_EVENTS)
+    # PUBLIC: the headers hide set_hle_observer/VoiceEvent plumbing when this is 0.
+    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=1)
+else()
+    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=0)
+endif()
 if(F3RT_GAME_VIDEO)
     # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
     target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
@@ -459,7 +482,7 @@ if(F3_SOUND_GENERATED_DIR)
         endif()
     endif()
 endif()
-add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp)
+add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp tools/runner/sound/capture.cpp)
 target_include_directories(f3rt-runner PUBLIC tools/runner runtime include "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(f3rt-runner PUBLIC f3rt)
 if(F3_ROM_DIR)
@@ -468,9 +491,15 @@ endif()
 target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
 add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
+# A game opts into sound-extract/music-export by providing games/<game>/sound/profile.cpp, which
+# registers its sound request path under its set id. Every game's profile is linked into every
+# build, so any set can be extracted from any build.
+file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
+target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
 target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
-target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
+target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
+    F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 if(F3_ROM_DIR)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
 endif()
@@ -564,12 +593,18 @@ if(BUILD_TESTING)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    foreach(area video input input_script eeprom cpu sprites audio motion_interp state netplay)
+    foreach(area video input input_script eeprom cpu sprites audio motion_interp state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
+        if(NOT F3RT_HLE_EVENTS)
+            # The game audio tests read VoiceEvents; the observer is compiled out in this configuration.
+            list(FILTER GAME_AREA_TEST_SOURCES EXCLUDE REGEX "/tests/audio[^/]*\\.cpp$")
+        endif()
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
     endforeach()
+    # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
+    target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)
@@ -581,8 +616,8 @@ if(BUILD_TESTING)
         add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
     endif()
     file(GLOB GAME_HLE_AUDIO_TEST CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/audio*.cpp")
-    if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST)
-        add_test(NAME hle-audio COMMAND f3rt-test-audio --gtest_filter=HleAudio.StateAndSequencing)
+    if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST AND F3RT_HLE_EVENTS)
+        add_test(NAME hle-audio COMMAND f3rt-test-audio --gtest_filter=HleAudio.*)
     endif()
     if(TARGET f3rt-ui)
         add_executable(f3rt-test-frontend runtime/tests/frontend.cpp)

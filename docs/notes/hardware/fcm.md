@@ -1,10 +1,10 @@
 ---
 title: TC0660FCM (FCM) and the AS/DSACK gating
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-15
 type: hardware
 tags: [pcb, memory-map, interrupt, cpu, io]
-sources: [raw/docs/taito-f3/fcm.txt, raw/docs/taito-f3/website/fcm.html, raw/docs/taito-f3/list.txt, raw/docs/taito-f3/ic9.txt, raw/docs/taito-f3/address-mapping.txt, raw/docs/taito-f3/pal1.txt, raw/docs/taito-f3/pal2.txt]
+sources: [raw/docs/taito-f3/fcm.txt, raw/docs/taito-f3/website/fcm.html, raw/docs/taito-f3/5505-5510.txt, raw/docs/taito-f3/list.txt, raw/docs/taito-f3/ic9.txt, raw/docs/taito-f3/address-mapping.txt, raw/docs/taito-f3/pal1.txt, raw/docs/taito-f3/pal2.txt]
 games: []
 addresses: []
 status: hypothesis
@@ -12,6 +12,7 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/fcm.txt, note: "FCM pin-by-pin trace (pins marked '?' on the html page are inferred from PCB traces and die photos)"}
   - {kind: doc, ref: raw/docs/taito-f3/list.txt, note: "ic64/ic65 netlist and the notes' reasoning about fcm.109"}
   - {kind: doc, ref: raw/docs/taito-f3/website/fcm.html, note: "pinout table with i/o/nc direction guesses"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "FCM replaces a 74x174 4x D flip-flop for OTIS/ESP/DAC serial lines and a 74x373 transparent latch for ESP RAM"}
 contradictions:
   - "fcm.txt labels pins 119/128 'cart.C04 (clock?)' and fcm.html labels them 'fdp.118 (vsync)'; the cartridge page says C04, fdp.118, fcm.119, fcm.128 and pal7.3 are one net, so these are not a real conflict."
   - "list.txt connects fcm.109 to ic64.9 and fcm.html says 'ic64.9' as an input; the notes' text says the FCM 'perhaps' answers with DSACK once it sees this signal go low, which is a guess, not an observed behaviour."
@@ -53,7 +54,11 @@ Pin directions come from PCB traces and die photos (cell markers `i?`, `o?`, `io
 | 62–78 (even/odd) | ESP RAM address (a0..a7)/data (d9..d16) | data/address latch for the ESP's RAM ^[raw/docs/taito-f3/fcm.txt] |
 | 79 | esp.5 (gate) | ^[raw/docs/taito-f3/fcm.txt] |
 
-So the FCM also carries the OTIS/ESP serial audio stream to the DAC and buffers ESP RAM addressing; these audio-bus pins are covered more fully on [[hardware/sound]]. ^[raw/docs/taito-f3/website/fcm.html]
+`5505-5510.txt` explains that the FCM integrates standard TTL glue logic in the audio section:
+- **Audio serial channels (pins 49, 51–58):** The FCM replaces a 74x174 4x D flip-flop. OTIS output channels (ser1 on pin 51, ser2 on pin 53, ser3 on pin 55) connect to D inputs, and ESP input channels (serio0 on pin 52, serio1 on pin 54, serio2 on pin 56) connect to Q outputs. ESP serio3 (pin 57) connects to D and DAC data (pin 58) connects to Q. The flip-flop is clocked by OTIS BCLK (pin 49). ^[raw/docs/taito-f3/5505-5510.txt]
+- **ESP delay RAM buffering (pins 62–79):** The FCM replaces a 74x373 8x transparent latch between the ESP's RA/D pins (pins 62–78) and the external delay RAM, with ESP GATE (pin 79) driving the latch clock. ^[raw/docs/taito-f3/5505-5510.txt]
+
+These audio-bus nets are covered in [[hardware/sound]] and [[hardware/es5510-esp]].
 
 ## What the FCM decodes
 

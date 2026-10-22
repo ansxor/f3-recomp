@@ -718,6 +718,10 @@ int main(int argc, char **argv) try {
         if (!(cli_preferences & Interpolation)) video_interp = "off";
         if (!(cli_preferences & Fields)) video_interp_fields = "geometry";
         if (!(cli_preferences & MotionInterp)) motion_interp = false;
+    } else if (video_backend != "gpu") {
+        if (!(cli_preferences & Scale)) video_scale = "1";
+        if (!(cli_preferences & Interpolation)) video_interp = "off";
+        if (!(cli_preferences & MotionInterp)) motion_interp = false;
     }
     if (cli_preferences & SoundBackend) {
         f3rt::Audio::Backend parsed;

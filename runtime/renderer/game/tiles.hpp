@@ -1,5 +1,6 @@
 #pragma once
 #include "f3rt/game_video.hpp"
+#include "f3rt/memory_map.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
@@ -30,12 +31,18 @@ namespace f3rt {
 //   (wrap_tile_index; MAME y-ack/fdp-collapse tc0630fdp.cpp wraps modulo the gfx element count).
 class GameTiles {
 public:
+    static constexpr unsigned COLUMNS = f3rt::game_config::video.extend ? 64 : 32;
+    static constexpr unsigned CELLS_PER_MAP = COLUMNS * 32;
+    static constexpr unsigned MAP_WIDTH_PX = COLUMNS * 16;
+    static constexpr size_t MAP_STRIDE =
+        f3rt::game_config::video.extend ? PLAYFIELD_LAYER_SIZE : PLAYFIELD_STANDARD_LAYER_SIZE;
+
     // A compose layer/subrow owns this sampler; it decodes raw cells on demand.
     class RowSampler {
     public:
         RowSampler() = default;
         ScenePixel pixel(int x) {
-            const unsigned wrapped_x = (unsigned(x) & 1023) ^ m_screen_flip;
+            const unsigned wrapped_x = (unsigned(x) & (MAP_WIDTH_PX - 1)) ^ m_screen_flip;
             const unsigned column = wrapped_x / 16;
             if (column != m_column) {
                 const uint32_t cell = m_cells[column];
@@ -50,8 +57,8 @@ public:
                 m_blend = uint8_t((attributes >> 9) & 1);
                 m_column = column;
             }
-            // column is at most 63, so the branch above always binds m_pens first;
-            // m_column starts at 64, which no column matches.
+            // column is at most COLUMNS - 1, so the branch above always binds m_pens first;
+            // m_column starts at COLUMNS, which no column matches.
             // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): m_pens bound above
             const uint8_t pen = m_pens[(wrapped_x & 15) ^ m_flip_x] & m_pen_mask;
             return {uint16_t(m_palette + pen), uint8_t((pen ? 0x10 : 0) | m_blend)};
@@ -62,18 +69,20 @@ public:
         const uint32_t *m_cells = nullptr;
         const uint8_t *m_tiles = nullptr;
         const uint8_t *m_pens = nullptr;
-        unsigned m_y = 0, m_screen_flip = 0, m_column = 64;
+        unsigned m_y = 0, m_screen_flip = 0, m_column = COLUMNS;
         uint32_t m_tile_count = 1;
         uint16_t m_palette = 0;
         uint8_t m_pen_mask = 0, m_flip_x = 0, m_blend = 0;
     };
 
     void reset();
-    // Copy the four raw PF layers from video RAM at VBSTART. Shared; defined in
+    // Copy the raw PF layers from video RAM at VBSTART. Shared; defined in
     // runtime/renderer/game/tiles.cpp.
     void decode(const VideoRam &vram);
     // Physical map count: 4, or 6 with alternate PF2/PF3 maps.
-    static constexpr unsigned MAP_COUNT = f3rt::game_config::video.extended_alt_maps ? 6 : 4;
+    // In standard mode (!extend), PF2/PF3 can select alternate maps (maps 4/5) via line RAM bit 0x200.
+    static constexpr unsigned MAP_COUNT =
+        (!f3rt::game_config::video.extend || f3rt::game_config::video.extended_alt_maps) ? 6 : 4;
     static constexpr unsigned physical_map(unsigned layer, bool alt) {
         return layer + (alt ? 2 : 0);
     }
@@ -82,14 +91,14 @@ public:
         const unsigned map = physical_map(layer, alt);
         const unsigned wrapped_y = (unsigned(y) & 511) ^ (flipped ? 511 : 0);
         RowSampler sampler;
-        sampler.m_cells = m_maps[map].data() + size_t((wrapped_y / 16)) * 64;
+        sampler.m_cells = m_maps[map].data() + size_t((wrapped_y / 16)) * COLUMNS;
         sampler.m_tiles = tiles.data();
         sampler.m_tile_count = uint32_t(tiles.size() / 256);
         sampler.m_y = wrapped_y & 15;
-        sampler.m_screen_flip = flipped ? 1023 : 0;
+        sampler.m_screen_flip = flipped ? (MAP_WIDTH_PX - 1) : 0;
         return sampler;
     }
-    // Raw cells of one layer (2048, row-major 64x32), for snapshot consumers.
+    // Raw cells of one layer (row-major COLUMNS x 32), for snapshot consumers.
     // Hardware row-usage cull (FDP update_row_usages): a map row whose 32+ tile code words are
     // all zero is not drawn at all, even when its attributes select visible pens. `source_y` is the
     // playfield source row (ScenePlayfield::source_y, 0..511), before global flip.
@@ -97,8 +106,8 @@ public:
         return (m_row_used[map] >> ((source_y >> 4) & 31)) & 1;
     }
     // `map` is a physical map index (0..MAP_COUNT).
-    std::span<const uint32_t, 2048> cells(unsigned map) const { return m_maps[map]; }
-    std::span<uint32_t, 2048> cells(unsigned map) { return m_maps[map]; }
+    std::span<const uint32_t, CELLS_PER_MAP> cells(unsigned map) const { return m_maps[map]; }
+    std::span<uint32_t, CELLS_PER_MAP> cells(unsigned map) { return m_maps[map]; }
     ScenePixel playfield_pixel(unsigned layer, int x, int y, bool flipped,
                                std::span<const uint8_t> tiles, bool alt = false) const {
         return row_sampler(layer, y, flipped, tiles, alt).pixel(x);
@@ -107,7 +116,7 @@ public:
 private:
     friend class GameVideo;
     // Raw 4-byte cell per 16x16 tile: attributes in the high word, code low.
-    std::array<std::array<uint32_t, 2048>, MAP_COUNT> m_maps{};
+    std::array<std::array<uint32_t, CELLS_PER_MAP>, MAP_COUNT> m_maps{};
     std::array<uint32_t, MAP_COUNT> m_row_used{}; // bit r: map row r has a nonzero tile code
 };
 static_assert(SceneSource<GameTiles>);

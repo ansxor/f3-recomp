@@ -173,6 +173,7 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
 
     if (config_.audio_backend == Audio::Backend::Enhanced) {
         machine_->audio->set_backend(Audio::Backend::Enhanced);
+#if F3RT_HLE_EVENTS
         if (!config_.hle_events_path.empty()) {
             auto events = std::make_shared<std::ofstream>(config_.hle_events_path);
             if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
@@ -187,6 +188,10 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
                         << ',' << e.k1 << ',' << e.k2 << ',' << e.loop << ',' << e.reverse << '\n';
             });
         }
+#else
+        if (!config_.hle_events_path.empty())
+            throw std::runtime_error("--hle-events requires a build with F3RT_HLE_EVENTS=ON");
+#endif
     } else if (config_.sound_driver == "native") {
 #if defined(F3RT_SOUND_GENERATED)
         machine_->use_native_sound(f3_sound_blocks, f3_sound_block_count,

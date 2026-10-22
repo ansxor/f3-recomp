@@ -1,0 +1,8 @@
+# clangd settings. The compile database is /compile_commands.json, a symlink made by `make compdb`
+# (after `make configure GAME=...`). Each build-*/ tree has its own copy; the symlink picks one.
+
+# Build trees hold generated and vendored sources (vcpkg, SDL, generated/ code); don't background-index them.
+If:
+  PathMatch: .*/build[^/]*/.*
+Index:
+  Background: Skip

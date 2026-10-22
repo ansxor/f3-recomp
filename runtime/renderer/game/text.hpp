@@ -47,6 +47,12 @@ public:
         return {uint16_t(((word >> 9) & 0x3f) * 16 + pen), uint8_t(pen ? 0x10 : 0)};
     }
 
+    // Hardware row-usage cull (FDP textram_row_usage): a text row whose 64 tile codes are
+    // all zero is not drawn at all, even when attributes select visible pens.
+    bool row_used(unsigned y) const {
+        return (m_row_used >> ((y >> 3) & 63)) & 1;
+    }
+
     // Raw snapshot regions (see above), for snapshot consumers.
     std::span<const uint16_t, 4096> map() const { return m_map; }
     std::span<uint16_t, 4096> map() { return m_map; }
@@ -57,6 +63,7 @@ private:
     friend class GameVideo;
     std::array<uint16_t, 4096> m_map{};
     std::array<uint8_t, 0x2000> m_glyph_ram{};
+    uint64_t m_row_used = 0; // bit r: text row r has a nonzero tile code
 };
 static_assert(SceneSource<GameText>);
 

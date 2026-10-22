@@ -1,4 +1,5 @@
 #include "renderer/game/lines.hpp"
+#include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/video.hpp"
 #include "renderer/game/tiles.hpp"
@@ -9,8 +10,6 @@
 
 namespace f3rt {
 namespace {
-
-inline uint16_t read_be16(const uint8_t *p) { return (uint16_t(p[0]) << 8) | uint16_t(p[1]); }
 
 std::string format_layer(const SceneLayer &l) {
     std::ostringstream ss;
@@ -70,11 +69,13 @@ void GameLines::decode(const VideoRam &vram) {
         for (int i : {2, 3}) {
             if (const uint32_t where = latched_addr(0, uint8_t(i), y)) {
                 const uint16_t colscroll = read_be16(&lineram[where]);
-                // Bit 9 carries the alternate-map select (extended_alt_maps layouts only);
+                // Bit 9 carries the alternate-map select (standard mode or extended_alt_maps);
                 // scroll arithmetic masks to 9 bits, so the stored word keeps both.
                 line.pf[i].colscroll = uint16_t(
                     uint16_t(colscroll & 0x1ff) |
-                    (f3rt::game_config::video.extended_alt_maps ? (colscroll & 0x200) : 0));
+                    ((!f3rt::game_config::video.extend || f3rt::game_config::video.extended_alt_maps)
+                         ? (colscroll & 0x200)
+                         : 0));
                 set_clip_upper(line.clip[2 * (i - 2) + 0], int8_t((colscroll >> 12) & 1),
                                int8_t((colscroll >> 13) & 1));
                 set_clip_upper(line.clip[2 * (i - 2) + 1], int8_t((colscroll >> 14) & 1),

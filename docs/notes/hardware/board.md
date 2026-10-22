@@ -1,10 +1,10 @@
 ---
 title: F3 motherboard chip inventory
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-15
 type: hardware
 tags: [pcb, reset, cpu, memory-map]
-sources: [raw/docs/taito-f3/mbv.txt, raw/docs/taito-f3/chips.txt, raw/docs/taito-f3/parts.txt, raw/docs/taito-f3/list.txt, raw/docs/taito-f3/graphics-ram-chips.txt, raw/docs/taito-f3/ic9.txt, raw/docs/taito-f3/website/schematics.html, raw/docs/taito-f3/website/connectors.html, raw/emu-source/mame-0.289/taito_f3.cpp]
+sources: [raw/docs/taito-f3/mbv.txt, raw/docs/taito-f3/chips.txt, raw/docs/taito-f3/parts.txt, raw/docs/taito-f3/list.txt, raw/docs/taito-f3/5505-5510.txt, raw/docs/taito-f3/clocks.txt, raw/docs/taito-f3/graphics-ram-chips.txt, raw/docs/taito-f3/ic9.txt, raw/docs/taito-f3/website/schematics.html, raw/docs/taito-f3/website/connectors.html, raw/emu-source/mame-0.289/taito_f3.cpp]
 games: []
 addresses: []
 status: hypothesis
@@ -12,6 +12,7 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/mbv.txt, note: "designator table across three board revisions (New / Single / Orange), part numbers and roles"}
   - {kind: doc, ref: raw/docs/taito-f3/list.txt, note: "net lists traced from the PCB: reset path, clock buffers, ic64/ic65"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_f3.cpp, note: "MAME's PCB ASCII diagram and device list"}
+  - {kind: doc, ref: raw/docs/taito-f3/5505-5510.txt, note: "FCM replaces a 74x174 4x D flip-flop for OTIS/ESP/DAC serial lines and a 74x373 transparent latch for ESP RAM"}
 contradictions:
   - "MAME's machine config clocks the 68EC020 from a 16 MHz XTAL (F3_MAIN_CLK), while its own PCB comment and 12Me21's cartridge pinout give 15.23809 MHz (30.47618 MHz / 2). See [[hardware/clocks]]."
 supersedes: []
@@ -39,11 +40,15 @@ Summary of the chips on the F3 main board, from 12Me21's PCB tracing. Full pin l
 | ic28 | ic21 (Orange ic9) | duart | MC68681P | serial communication ^[raw/docs/taito-f3/mbv.txt] |
 | ic36 | ic62 | — | 93C46CB1 | serial EEPROM ^[raw/docs/taito-f3/mbv.txt] |
 | ic35 | ic55 | — | MB3771 | power-supply monitor ^[raw/docs/taito-f3/mbv.txt] |
-| ic52 | ic79 | dac | TDA1543 | audio DAC ^[raw/docs/taito-f3/mbv.txt] |
+| ic52 | ic79 | dac | TDA1543 | audio DAC (pins counted in zig-zag order) ^[raw/docs/taito-f3/mbv.txt] ^[raw/docs/taito-f3/chips.txt] |
+| ic53, ic54 | — | — | MC33174 [P] / MC33274 [AP] | quad op-amps in DAC analog reconstruction/gain filter ^[raw/docs/taito-f3/chips.txt] ^[raw/docs/taito-f3/list.txt] |
+| — | — | — | TA8221A [H] | 30W BTL dual audio power amplifier ^[raw/docs/taito-f3/chips.txt] |
 
 `mbv.txt` lists only two designators for ic37, so which older board ic63 belongs to is unclear. ^[raw/docs/taito-f3/mbv.txt]
 
 Support logic (New designator → part → role): ic1 MC74HC08AN CPU clock driver; ic9 SN74LS08N (sprite-framebuffer-related AND gates); ic18 MC74F163AN DUART clock divider; ic19 MC74F74N video clock divider; ic20 MC74F244N clock driver; ic21 MC74F74N and ic22 MC74F161AN voice-bank counter; ic64 MC74F74N and ic65 SN74F04N CPU/FDP access gating ("??" in the notes). ^[raw/docs/taito-f3/mbv.txt] The PALs (ic2, ic3, ic23–ic25, ic29, ic33, ic43) are covered in [[hardware/pal-decoders]].
+
+In the audio and ESP subsystems, the TC0660FCM (ic4) consolidates standard discrete logic: it replaces a 74x174 4x D flip-flop for the serial PCM channels between OTIS, ESP, and DAC (clocked by OTIS BCLK), and replaces a 74x373 8x transparent latch between ESP RA/D pins and ESP delay RAM (clocked by ESP GATE). ^[raw/docs/taito-f3/5505-5510.txt]
 
 ## RAM chips
 

@@ -54,16 +54,33 @@ in third_party/musashi/softfloat source files, and the legal overview is in
 third_party/musashi/softfloat/README.txt. No modifications to SoftFloat code.
 
 Linked via CPM.cmake (cmake/dependencies.cmake), not vendored: SDL3 (zlib
-license), Dear ImGui (MIT), Google Highway (Apache-2.0 or BSD-3-Clause),
-zlib (zlib license), Yojimbo / netcode / reliable / serialize (BSD-3-Clause,
-Glenn Fiedler and Rowan Claude), bundled libsodium (ISC), bundled TLSF (BSD-2-Clause),
-cpp-httplib (MIT), yyjson (MIT), cpp-yyjson (MIT); tests only: GoogleTest (BSD-3-Clause),
-RapidCheck (BSD-2-Clause); GPU shader tools only, when not installed: glslang
-(BSD-3-Clause and others), SPIRV-Cross (Apache-2.0); zlib may be built from
-zlib-ng (zlib license). Packages built from source keep their license files in
-the CPM source cache (CPM_SOURCE_CACHE, default ~/.cache/CPM).
+license), Dear ImGui (MIT), zlib (zlib license),
+Yojimbo / netcode / reliable / serialize (BSD-3-Clause, Glenn Fiedler and
+Rowan Claude), bundled libsodium (ISC), bundled TLSF (BSD-2-Clause),
+cpp-httplib (MIT), yyjson (MIT), cpp-yyjson (MIT); tests only: GoogleTest
+(BSD-3-Clause), RapidCheck (BSD-2-Clause); GPU shader tools only, when not
+installed: glslang (BSD-3-Clause and others), SPIRV-Cross (Apache-2.0); zlib
+may be built from zlib-ng (zlib license). Packages built from source keep
+their license files in the CPM source cache (CPM_SOURCE_CACHE, default
+~/.cache/CPM).
 No ROMs, generated game code, decoded graphics, or captured game media are
 included in the committed runtime sources.
+
+FAUST 2.88.0 (https://faust.grame.fr): third_party/faust/faust/{export.h, dsp/dsp.h, gui/UI.h,
+gui/meta.h} are FAUST's architecture headers, copied byte-for-byte and unmodified from
+architecture/faust/ (copyright GRAME, Centre National de Creation Musicale). third_party/faust/
+COPYING.txt is FAUST's COPYING.txt, which carries the LGPL-2.1 text. The headers are licensed under
+the GNU Lesser General Public License, version 2.1 or (at your option) any later version, with the
+FAUST architecture exception: "As a special exception, you may create a larger work that contains
+this FAUST architecture section and distribute that work under terms of your choice, so long as
+this FAUST architecture section is not modified."
+The FAUST compiler (LGPL-2.1 or later) is build-time only: the faust-regen target
+(cmake/faust.cmake) runs it to write the checked-in runtime/audio/hle/faust/generated/*.hpp. It is
+not linked into or shipped with f3rt. The generated headers contain the compiler's output for our
+.dsp sources and our architecture.hpp; they #include the vendored headers and copy no text from
+them. The DSP sources import no FAUST standard library; the only import is the in-repo
+runtime/audio/hle/faust/es5510.lib. runtime/audio/hle/faust/support.hpp (Controls, the
+name-to-zone registry) is project code, not derived from FAUST.
 
 third_party/sha1dc: SHA-1 with collision detection, https://github.com/cr-marcstevens/sha1collisiondetection
 revision a06f1adbe5522f3c939cd6a3f13d5ec7f4c1a988 (MIT, Marc Stevens and Dan Shumow; license in third_party/sha1dc/LICENSE.txt). Unmodified lib/ sources.

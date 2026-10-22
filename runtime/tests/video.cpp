@@ -34,8 +34,12 @@ constexpr uint32_t PF_EXT_ALT_BASE = 0x1a000;
 // Sprite and high-plane ROM offsets of the second sprite bank (Command War).
 constexpr size_t SPRITE_ROM_BANK1 = 0x400000;
 constexpr size_t HIGH_PLANE_ROM_BANK1 = 0x200000;
-// Game tile cell table offset within graphics RAM (test fixture).
+#ifdef F3RT_GAME_VIDEO
+// Game tile cell table offset within graphics RAM (test fixture: layer 1).
+constexpr uint32_t GAME_TILE_CELLS = f3rt::OFFS_PLAYFIELDS + 1 * f3rt::GameTiles::MAP_STRIDE;
+#else
 constexpr uint32_t GAME_TILE_CELLS = 0x12000;
+#endif
 void set_word(std::vector<uint8_t> &bytes, size_t at, uint16_t value) {
     bytes[at] = uint8_t(value >> 8);
     bytes[at + 1] = uint8_t(value);
@@ -388,7 +392,7 @@ TEST(Video, GameTileRowSampling) {
     struct RawCell {
         uint16_t attributes, code;
     };
-    std::array<std::array<RawCell, 2048>, 4> cells{};
+    std::array<std::array<RawCell, f3rt::GameTiles::CELLS_PER_MAP>, 4> cells{};
     for (unsigned layer = 0; layer < cells.size(); ++layer)
         for (unsigned i = 0; i < cells[layer].size(); ++i) {
             auto &cell = cells[layer][i];
@@ -397,7 +401,7 @@ TEST(Video, GameTileRowSampling) {
                                        (uint16_t((i >> 1) & 1) << 15));
             cell.code = uint16_t(0x8000 | (i & 63));
             const unsigned at =
-                f3rt::OFFS_PLAYFIELDS + layer * f3rt::PLAYFIELD_LAYER_SIZE + size_t(i) * 4;
+                f3rt::OFFS_PLAYFIELDS + layer * f3rt::GameTiles::MAP_STRIDE + size_t(i) * 4;
             graphics[at] = uint8_t(cell.attributes >> 8);
             graphics[at + 1] = uint8_t(cell.attributes);
             graphics[at + 2] = uint8_t(cell.code >> 8);
@@ -410,11 +414,16 @@ TEST(Video, GameTileRowSampling) {
         for (bool flipped : {false, true})
             for (int y : {-513, -512, -1, 0, 15, 16, 511, 512}) {
                 auto sampler = scene.row_sampler(layer, y, flipped, assets);
-                for (int x : {0, 15, 16, 17, 17, 31, 32, 1023, 1024, -1, -16, -17, -1024, -1025,
-                              511, 256, 0, 1023}) {
-                    const unsigned sx = (unsigned(x) & 1023) ^ (flipped ? 1023 : 0);
+                for (int x : {0, 15, 16, 17, 17, 31, 32, int(f3rt::GameTiles::MAP_WIDTH_PX - 1),
+                              int(f3rt::GameTiles::MAP_WIDTH_PX), -1, -16, -17,
+                              -int(f3rt::GameTiles::MAP_WIDTH_PX),
+                              -int(f3rt::GameTiles::MAP_WIDTH_PX + 1), 511, 256, 0,
+                              int(f3rt::GameTiles::MAP_WIDTH_PX - 1)}) {
+                    const unsigned sx = (unsigned(x) & (f3rt::GameTiles::MAP_WIDTH_PX - 1)) ^
+                                        (flipped ? (f3rt::GameTiles::MAP_WIDTH_PX - 1) : 0);
                     const unsigned sy = (unsigned(y) & 511) ^ (flipped ? 511 : 0);
-                    const auto &cell = cells[layer][(sy / 16) * 64 + sx / 16];
+                    const auto &cell =
+                        cells[layer][(sy / 16) * f3rt::GameTiles::COLUMNS + sx / 16];
                     const unsigned palette_code = cell.attributes & 0x1ff;
                     const unsigned pen_mask =
                         (((cell.attributes >> 10) & 3 & ~cell.attributes) << 4) | 15;

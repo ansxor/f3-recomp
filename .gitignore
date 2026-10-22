@@ -14,6 +14,7 @@ diffs/
 nvram/
 cfg/
 *.wav
+*.flac
 netplay-logs/
 # Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
 *.profile
@@ -42,3 +43,7 @@ Testing/
 /_deps/
 /lib*.a
 /f3rt-*
+# Doxygen output and its local, regenerable config (`doxygen -g`, then INPUT = runtime)
+/html/
+/latex/
+/Doxyfile

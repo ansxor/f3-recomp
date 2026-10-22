@@ -33,6 +33,9 @@ def region_spec(config: dict, name: str) -> tuple[int, int, list[dict]]:
         lane.setdefault("offset", 0)
         lane.setdefault("source_offset", 0)
         lane.setdefault("length", lane["size"] - lane["source_offset"])
+        lane.setdefault("word_swap", False)
+        if not isinstance(lane["word_swap"], bool):
+            raise ValueError(f"Invalid {name} word_swap: {lane['file']}")
         physical_size, source_offset, length, offset, stride, group = (
             lane[key] for key in ("size", "source_offset", "length", "offset", "stride", "group")
         )
@@ -99,10 +102,19 @@ def load_region(config: dict, name: str, rom_dir: Path) -> bytes:
             chips[lane["file"]] = data
         offset, stride, group = (lane[key] for key in ("offset", "stride", "group"))
         start, length = lane["source_offset"], lane["length"]
+        word_swap = lane.get("word_swap", False)
         view = memoryview(data)
-        for byte in range(group):
-            end = offset + byte + (length // group - 1) * stride + 1
-            image[offset + byte : end : stride] = view[start + byte : start + length : group]
+        if word_swap:
+            if group != 1 or stride != 1 or length % 2 != 0:
+                raise ValueError("word_swap requires group=1, stride=1 and even length")
+            swapped = bytearray(length)
+            swapped[0::2] = view[start + 1 : start + length : 2]
+            swapped[1::2] = view[start : start + length : 2]
+            image[offset : offset + length] = swapped
+        else:
+            for byte in range(group):
+                end = offset + byte + (length // group - 1) * stride + 1
+                image[offset + byte : end : stride] = view[start + byte : start + length : group]
         remaining[lane["file"]] -= 1
         if not remaining[lane["file"]]:
             del chips[lane["file"]]

@@ -25,11 +25,11 @@
 
 ## Hardware: board and CPU side
 
-- [[hardware/board]] (hypothesis) — chip inventory across board revisions, RAM chips, jumpers, reset/watchdog/MB3771 power-monitor path
-- [[hardware/clocks]] (hypothesis) — 26.686 / 30.47618 / 16 MHz oscillators, pixel and half-pixel clocks, 15.238 MHz CPU net, ESP and DUART clocks
+- [[hardware/board]] (hypothesis) — chip inventory across board revisions, RAM chips, analog op-amps/TA8221A, FCM logic replacement, reset/watchdog/MB3771
+- [[hardware/clocks]] (hypothesis) — 26.686 / 30.47618 / 16 MHz oscillators, pixel clocks, 15.238 MHz CPU net, audio BCLK (3.81 MHz) and sample rate (29.76 kHz)
 - [[hardware/cartridge]] (hypothesis) — connector ports A–D: CPU bus and program ROM, OTIS sample bus, FDP graphics ROM bus, audio CPU bus
 - [[hardware/pal-decoders]] (hypothesis) — PAL equations: address decode (pal1/2/15), vblank sequencing (pal7), graphics ROM and audio PALs
-- [[hardware/fcm]] (hypothesis) — TC0660FCM role, decoded ranges, AS/DSACK gating through ic64/ic65/ic9
+- [[hardware/fcm]] (hypothesis) — TC0660FCM role, decoded ranges, AS/DSACK gating, 74x174 audio flip-flop and 74x373 ESP RAM latch replacement
 - [[hardware/memory-map]] (hypothesis) — 68EC020 bus map with answering chip, mirrors, freeze-on-unmapped, MAME f3_map() side by side
 
 ## Hardware: video
@@ -53,10 +53,10 @@
 
 - [[hardware/interrupts]] (hypothesis) — main CPU IRQ levels 2/3/5, int5 timer at 0x4C0000, MAME's model
 - [[hardware/fio]] (hypothesis) — TC0640FIO port map: inputs, dials, coin counters/lockouts, EEPROM, watchdog/reset
-- [[hardware/sound]] (hypothesis) — sound 68000 map; confirmed OTIS→ESP wiring and Enhanced hardware-routing test
-- [[hardware/es5505-otis]] (hypothesis) — runtime ES5505 model: registers, CR bits, banking at 0x300000, sample ROM layout
-- [[hardware/es5510-esp]] (hypothesis) — runtime ES5510 model: host interface, instruction format, DUART halt, Land Maker effects inventory
-- [[hardware/duart-and-volume]] (hypothesis) — DUART 1 ms timer and ESP halt, MB87078, host gain stages, when the game sets master volume
+- [[hardware/sound]] (hypothesis) — sound 68000 map; confirmed OTIS/FCM/ESP/DAC serial interconnect, register presets, and 128-BCLK LRCLK timing
+- [[hardware/es5505-otis]] (hypothesis) — runtime ES5505 model: registers, CR bits, Sony slave mode, banking at 0x300000, sample ROM layout
+- [[hardware/es5510-esp]] (hypothesis) — runtime ES5510 model: host interface, SERMODE, instruction format, DUART halt, Land Maker effects inventory, HLE FAUST programs and LFO-through-silence hypothesis
+- [[hardware/duart-and-volume]] (hypothesis) — DUART 1 ms timer and ESP halt, MB87078, SingleStage default gain model, when the game sets master volume
 - [[hardware/sound-mailbox]] (hypothesis) — shared RAM byte lanes, 1024-byte command ring with doubled indices, packet framing
 
 ## Quirks
@@ -77,5 +77,5 @@
 
 - [[comparisons/hardware-vs-mame-video]] (hypothesis) — notes vs MAME 0.289: sprites, tilemaps/pivot, line RAM, blend/priority/clip/mosaic/colour
 - [[comparisons/hardware-vs-mame-system]] (hypothesis) — notes vs MAME 0.289: clocks/raster, interrupts 2/3/5, address map, FIO/input
-- [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing; Enhanced now follows it while Reference retains MAME routing
+- [[comparisons/hardware-vs-mame-audio-routing]] (confirmed) — confirmed hardware routing (OTIS 1..3 to ESP 0..2, ESP 3 to DAC, OTIS 0 NC), MAME aux bypass and 0.5 route removed (PCB-level match), L/R order, HLE routing
 - [[comparisons/runtime-vs-mame-attract-capture]] (hypothesis) — 25 attract frames identical to MAME (1,856,000 pixels), capture protocol, MAME revision, limits

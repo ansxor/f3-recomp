@@ -1,0 +1,187 @@
+// Building blocks of the ES5510 effects programs (reverb.dsp, chorus.dsp, echo.dsp, hall.dsp).
+//
+// Every program takes three stereo buses and returns the DAC pair plus a level:
+//   dry_l, dry_r      straight to the DAC
+//   fx_l, fx_r        the effect bus: chorus or echo input, or reverb input
+//   send_l, send_r    the reverb send
+//   -> out_l, out_r, peak    peak: the largest internal level; the host bypasses a program while it is silent
+//
+// Conventions:
+//   frame    one sample at 29762 Hz; all delays are in frames.
+//   x'       x one frame late: computed this frame, used on the next.
+//   A ~ B    FAUST feedback: B's output returns to A's input one frame late. That frame is part of the loop's
+//            delay, so a D-frame delay line inside a loop is written @(D - 1).
+
+// ---------------------------------------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------------------------------------
+bus(n) = par(i, n, _);
+max3(a, b, c) = max(a, max(b, c));
+saturate(x) = max(-1.0, min(1.0, x));
+
+nested_gain = 0.25;      // gain of every all-pass nested inside another one
+tank_outer_gain = 0.5;   // outer gain of the tank's nested blocks
+
+// ---------------------------------------------------------------------------------------------------------
+// Schroeder all-pass around an arbitrary inner network.
+//
+//   x ──►(+)── node ──┬──────► [ inner ] ──┬── returned ──►(+)──► y
+//         ▲           │                    │                ▲
+//         └── gain ◄──┼────────────────────┘                │
+//                     └─────────── -gain ───────────────────┘
+//
+// With a delay line inside, this is the textbook all-pass (z^-D - g) / (1 - g z^-D). It stays all-pass for any
+// all-pass inner network, which is how the blocks below nest.
+//
+// allpass_wrap(gain, inner)          inner: 1 -> 1;  x -> y
+// allpass_wrap_probe(gain, inner)    inner: 1 -> 2;  x -> (y, probe): inner's second output leaves the loop as is
+// ---------------------------------------------------------------------------------------------------------
+allpass_wrap(gain, inner) = (loop ~ _) : (!, _)
+with {
+    loop(node_prev, x) = node, y
+    with {
+        returned = node_prev : inner;
+        node = x + gain*returned;
+        y = returned - gain*node;
+    };
+};
+
+allpass_wrap_probe(gain, inner) = (loop ~ _) : (!, _, _)
+with {
+    loop(node_prev, x) = node_prev : inner : \(returned, probe).(node, y, probe
+    with {
+        node = x + gain*returned;
+        y = returned - gain*node;
+    });
+};
+
+// All-pass around a delay line.
+allpass(gain, delay) = allpass_wrap(gain, @(delay - 1));
+
+// x ─► AP(outer_gain)[ AP(inner_gain)[ inner_delay ] ─► outer_delay ] ─► y
+// The probe variant also outputs the inner delay line's output.
+nested_allpass(outer_gain, inner_gain, outer_delay, inner_delay) =
+    allpass_wrap(outer_gain, allpass_wrap(inner_gain, @(inner_delay - 1)) : @(outer_delay - 1));
+nested_allpass_probe(outer_gain, inner_gain, outer_delay, inner_delay) =
+    allpass_wrap_probe(outer_gain, allpass_wrap_probe(inner_gain, @(inner_delay - 1) <: (_, _)) : (@(outer_delay - 1), _));
+
+// x ─► AP(outer_gain)[ AP(inner_gain)[ AP(inner_gain)[ core ] ─► middle_delay ] ─► outer_delay ] ─► y
+// `core` closes the innermost loop: modulated_core or external_core.
+double_nested_allpass(outer_gain, inner_gain, outer_delay, middle_delay, core) =
+    allpass_wrap(outer_gain, allpass_wrap(inner_gain, allpass_wrap(inner_gain, core) : @(middle_delay - 1)) : @(outer_delay - 1));
+
+// Each allpass_wrap hands its inner network the loop signal one frame late (its delay lines are one frame
+// shorter to make up for it), so the core of double_nested_allpass sees the loop two frames late. A signal
+// entering the core from outside the loops is delayed to match.
+//
+// modulated_core(center, lfo_x): the innermost node read back through an interpolated tap at
+// center + lfo_depth*lfo_x frames. The tap is read one frame after its LFO value, hence 3 frames in all.
+modulated_core(center, lfo_x) = (_, center + (lfo_depth*lfo_x)@3) : interpolated_tap(1100);
+// external_core(return_signal): the innermost loop is open and return_signal is fed in instead.
+external_core(return_signal) = (!, return_signal@2);
+
+// ---------------------------------------------------------------------------------------------------------
+// (signal, delay) -> signal `delay` frames ago, linearly interpolated between the two neighbouring frames.
+// A negative delay reads silence; max_delay sizes the delay memory. Inside a ~ loop the signal already arrives
+// one frame late, so the tap lands floor(delay) + 1 frames behind the value written this frame.
+// ---------------------------------------------------------------------------------------------------------
+interpolated_tap(max_delay) = \(signal, delay).(select2(delay >= 0.0, 0.0, near + fraction*(far - near))
+with {
+    clamped = max(0.0, min(max_delay, delay));
+    whole = int(clamped);
+    fraction = clamped - whole;
+    near = signal@whole;
+    far = signal@(whole + 1);
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Quadrature sine LFO: a (cos, sin) pair starting at (1, 0), rotated by `rate` radians every frame and then by a
+// fixed `phase` (how the host advances the LFO over frames it did not compute).
+// Outputs (x, y, next_x, next_y): the pair before and after this frame's step.
+// ---------------------------------------------------------------------------------------------------------
+rotate(cos_a, sin_a) = \(x, y).(x*cos_a - y*sin_a, x*sin_a + y*cos_a);
+quadrature_lfo(rate, phase) = (step ~ bus(2)) : route(4, 4, (1, 3), (2, 4), (3, 1), (4, 2))
+                            : (rotate(cos(phase), sin(phase)), rotate(cos(phase), sin(phase)))
+with {
+    cos_rate = cos(rate);
+    sin_rate = sin(rate);
+    step(prev_x, prev_y) = next_x, next_y, x, y
+    with {
+        x = prev_x + (1 - 1');   // (1, 0) on the first frame
+        y = prev_y;
+        next_x = x*cos_rate - y*sin_rate;
+        next_y = x*sin_rate + y*cos_rate;
+    };
+};
+
+// ---------------------------------------------------------------------------------------------------------
+// Controls written by the host (effects.hpp); the string is the host's key.
+// ---------------------------------------------------------------------------------------------------------
+fx_direct      = hslider("chorus_out", 0.9695, 0, 1, 0.0001);         // fx -> DAC
+fx_to_reverb   = hslider("chorus_to_reverb", 0.2448, 0, 1, 0.0001);   // fx -> reverb
+send_direct    = hslider("dry_send", 0.9695, 0, 1, 0.0001);           // send -> DAC
+send_to_reverb = hslider("send", 0.2448, 0, 1, 0.0001);               // send -> reverb
+
+decay     = hslider("decay", 0.25, 0, 1, 0.0001);    // reverb loop feedback
+damping   = hslider("damp", 0.3125, 0, 1, 0.0001);   // low-pass in the reverb loop
+lfo_depth = hslider("depth", 8, 0, 128, 0.001);      // tank LFO modulation depth, frames
+
+// Reverb tank constants.
+tank_input_gain      = hslider("scale", 0.7071, 0, 2, 0.0001);
+tank_input_smoothing = hslider("leak", 0.0075, 0, 1, 0.0001);     // one-pole on the tank input
+return_lowpass1_gain = hslider("c1", 0.00703, 0, 1, 0.00001);
+return_lowpass2_gain = hslider("c2", 0.04922, 0, 1, 0.00001);
+diffuser_gain        = hslider("g", 0.4, 0, 2, 0.0001);
+left_late_gain       = hslider("tap_l0", 0.13333, -2, 2, 0.0001);
+left_diffused_gain   = hslider("tap_l1", 0.66667, -2, 2, 0.0001);
+left_early_gain      = hslider("tap_l2", 0.46667, -2, 2, 0.0001);
+right_late_gain      = hslider("tap_r0", 0.13333, -2, 2, 0.0001);
+right_diffused_gain  = hslider("tap_r1", 0.66667, -2, 2, 0.0001);
+right_early_gain     = hslider("tap_r2", 0.66667, -2, 2, 0.0001);
+
+// LFO rate (radians per frame) and phase (radians), each a double sent as two floats (hi + lo): a float rate drifts.
+tank_lfo    = quadrature_lfo(hslider("lfo_c_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_c_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_c_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_c_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+chorus_lfo1 = quadrature_lfo(hslider("lfo_a_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_a_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_a_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_a_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+chorus_lfo2 = quadrature_lfo(hslider("lfo_b_eps_hi", 0, -1, 1, 1e-9) + hslider("lfo_b_eps_lo", 0, -1e-6, 1e-6, 1e-15),
+                             hslider("lfo_b_ph_hi", 0, -7, 7, 1e-9) + hslider("lfo_b_ph_lo", 0, -1e-6, 1e-6, 1e-15));
+
+// ---------------------------------------------------------------------------------------------------------
+// Reverb tank of the Reverb, Chorus and Echo programs: mono in, stereo out. A 1105-frame loop runs through a
+// diffuser pair and two nested all-pass blocks; the output is six weighted taps of three nodes.
+//
+//   reverb_in ─► input gain, smoothing ─► tank_in ─►(+)─► loop_input
+//                                                    ▲
+//   loop_return ─► decay, damping, low-passes ───────┘
+//
+//   loop_input ─► allpass(168) ─► allpass(276) ─► diffused
+//   diffused@755 ─► nested_allpass(outer 549, inner 1369) ─► early
+//   early@242    ─► double_nested_allpass(outer 1012, middle 696, core) ─► late
+//   loop_return = late@1105
+//
+//   wet taps: diffused@4, @242    early@26, @180    late@384, @1105
+//
+// tank(core): reverb_in -> (wet_l, wet_r, peak)
+// ---------------------------------------------------------------------------------------------------------
+tank(core) = (*(tank_input_gain*(1 - tank_input_smoothing)) : (+ ~ *(tank_input_smoothing))) : (loop ~ @(1104)) : (!, _, _, _)
+with {
+    // loop_return = late@1105: one frame from ~, 1104 from @.
+    loop(loop_return, tank_in) = loop_input : allpass(diffuser_gain, 168) : allpass(diffuser_gain, 276) : \(diffused).(
+        diffused@755 : nested_allpass_probe(tank_outer_gain, nested_gain, 549, 1369) : \(early, early_inner).(
+            early@242 : double_nested_allpass(tank_outer_gain, nested_gain, 1012, 696, core) : \(late).(
+                late, wet_l, wet_r, peak
+                with {
+                    wet_l = left_late_gain*late@384 + left_diffused_gain*diffused@4 + left_early_gain*early@26;
+                    wet_r = right_late_gain*loop_return + right_diffused_gain*diffused@242 + right_early_gain*early@180;
+                    peak = max(max(abs(wet_l), abs(wet_r)), max3(abs(early_inner), abs(loop_return), abs(lowpass2_next)));
+                })))
+    with {
+        // Two one-pole low-passes of the loop return, each used one frame late.
+        lowpass1_next = loop_return*0.625 : (+ ~ *(0.375));
+        lowpass1 = lowpass1_next';
+        lowpass2_next = lowpass1*0.125 : (+ ~ *(0.875));
+        lowpass2 = lowpass2_next';
+        loop_input = tank_in + decay*((1 - damping)*loop_return + damping*lowpass1) + return_lowpass1_gain*lowpass1 + return_lowpass2_gain*lowpass2;
+    };
+};

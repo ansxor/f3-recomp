@@ -90,6 +90,7 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
     roms.video = game->video;
     roms.pref_dir = std::string(game->pref_dir);
     roms.input = game->input;
+    roms.sound_bankswitch = game->sound_bankswitch;
     const std::array regions = {&roms.main,    &roms.sprites,       &roms.sprites_hi,
                                 &roms.tiles,   &roms.tiles_hi,      &roms.sound,
                                 &roms.samples, &roms.factory_eeprom};
@@ -117,9 +118,16 @@ RomSet RomSet::load(const std::filesystem::path &dir, const std::string &set) {
                 bytes = &physical;
             }
             size_t destination = entry.offset;
-            for (size_t i = 0; i < entry.length; i += entry.group, destination += entry.stride)
-                std::copy_n(bytes->data() + entry.source_offset + i, entry.group,
-                            region.data() + static_cast<std::ptrdiff_t>(destination));
+            if (entry.word_swap) {
+                for (size_t i = 0; i + 1 < entry.length; i += 2, destination += 2) {
+                    region[destination] = (*bytes)[entry.source_offset + i + 1];
+                    region[destination + 1] = (*bytes)[entry.source_offset + i];
+                }
+            } else {
+                for (size_t i = 0; i < entry.length; i += entry.group, destination += entry.stride)
+                    std::copy_n(bytes->data() + entry.source_offset + i, entry.group,
+                                region.data() + static_cast<std::ptrdiff_t>(destination));
+            }
             const bool used_again = std::any_of(
                 spec.chips.begin() + static_cast<std::ptrdiff_t>(lane + 1), spec.chips.end(),
                 [file](const auto &next) { return file == next.file; });

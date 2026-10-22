@@ -100,9 +100,9 @@ def generate(configs: list[Path], output: Path) -> None:
         '#include "f3rt/rom.hpp"\n#include <array>\n#include <span>\n#include <string_view>\n',
         "namespace f3rt::rom_manifest {\n",
         "struct Chip { const char *file; size_t size; uint32_t crc; const char *sha1; size_t short_size; "
-        "uint32_t short_crc; const char *short_sha1; size_t offset, stride, group, source_offset, length; };\n",
+        "uint32_t short_crc; const char *short_sha1; size_t offset, stride, group, source_offset, length; bool word_swap; };\n",
         "struct Region { size_t size, mapped_size; uint8_t fill; std::span<const Chip> chips; };\n",
-        "struct Game { std::string_view id; std::string_view pref_dir; VideoConfig video; InputConfig input; std::array<Region, 8> regions; };\n",
+        "struct Game { std::string_view id; std::string_view pref_dir; VideoConfig video; InputConfig input; bool sound_bankswitch; std::array<Region, 8> regions; };\n",
     ]
     games = []
     ids = set()
@@ -127,6 +127,7 @@ def generate(configs: list[Path], output: Path) -> None:
                     f"0x{chip.get('short_crc', '0')}u",
                     json.dumps(chip.get("short_sha1", "")),
                     *(str(chip[key]) for key in ("offset", "stride", "group", "source_offset", "length")),
+                    "true" if chip.get("word_swap", False) else "false",
                 ]
                 lines.append("    { " + ", ".join(values) + " },\n")
             lines.append("}};\n")
@@ -137,8 +138,9 @@ def generate(configs: list[Path], output: Path) -> None:
         vid_settings = video_settings(config, path)[1]
         in_settings = input_settings(config, path)[1]
         pref_dir = config.get("game", {}).get("pref_dir", identity)
+        sound_bankswitch = str(config.get("sound", {}).get("bankswitch", False)).lower()
         games.append(
-            f"    {{ {json.dumps(identity)}, {json.dumps(pref_dir)}, {vid_settings}, {in_settings}, {{{{ "
+            f"    {{ {json.dumps(identity)}, {json.dumps(pref_dir)}, {vid_settings}, {in_settings}, {sound_bankswitch}, {{{{ "
             + ", ".join(regions)
             + " }} },\n"
         )

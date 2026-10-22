@@ -64,7 +64,8 @@ unsigned rgb_jump(uint32_t a, uint32_t b) {
 bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsigned pf,
                   unsigned stride, GameVideoOptions options, std::span<const uint64_t> masks) {
     if (masks.empty()) return false;
-    const int source_b = a.source + phase_delta(a.source, b.source, 1024 * 256);
+    const int pf_period = (f3rt::game_config::video.extend ? 1024 : 512) * 256;
+    const int source_b = a.source + phase_delta(a.source, b.source, pf_period);
     // Source and zoom have independent cubics: all endpoint combinations,
     // not only paired endpoints, bound their combined horizontal footprint.
     const int64_t maximum_zoom = std::max(a.zoom, b.zoom);
@@ -79,7 +80,8 @@ bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsign
     for (int cy = y0; cy <= y1; ++cy) {
         for (int64_t cx = floor_divide(x0 - 256, int64_t(16) * 256);
              cx <= floor_divide(x1 + 256, int64_t(16) * 256); ++cx) {
-            const unsigned cell = (unsigned(cy) & 31) * 64 + (unsigned(cx) & 63);
+            const unsigned cell = (unsigned(cy) & 31) * GameTiles::COLUMNS +
+                                  (unsigned(cx) & (GameTiles::COLUMNS - 1));
             // Raw 4-byte PF cell (attributes<<16 | code); see runtime/renderer/game/tiles.hpp.
             const uint32_t raw = frame.tiles.cells(pf)[cell];
             const unsigned attr = raw >> 16, code = raw & 65535;
@@ -169,7 +171,9 @@ InterpolationAnalysis analyze_gpu_interpolation(const CapturedFrame &frame,
                 if (!links[y]) continue;
                 const auto &a = rows[y];
                 const auto &b = rows[y + 1];
-                if (field == 0) delta[y] = phase_delta(a.source, b.source, 1024 * 256);
+                if (field == 0)
+                    delta[y] = phase_delta(a.source, b.source,
+                                           (f3rt::game_config::video.extend ? 1024 : 512) * 256);
                 if (field == 1) delta[y] = b.zoom - a.zoom;
                 if (field == 2) delta[y] = phase_delta(a.phase, b.phase, 512 * 256);
                 if (field == 3) delta[y] = b.palette - a.palette;
