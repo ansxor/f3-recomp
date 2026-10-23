@@ -290,11 +290,11 @@ OnsetStep LayerPatch::onset(Voice &v, NoiseState &noise) const {
     update_lfo(v, m_view, bank);
     update_random(v, noise);
     advance_glide(v);
-    v.parameters(false); // c181da calls c18372 before key-on.
+    v.apply_parameters(false); // c181da calls c18372 before key-on.
     return {false, envelopes.restarted, true};
 }
 
-void LayerPatch::parameters(Voice &v, bool initial) const {
+void LayerPatch::apply_parameters(Voice &v, bool initial) const {
     const SoundBank &bank = this->bank();
     const TrackParameters &c = v.track->config.parameters;
     v.owner.program =
@@ -441,7 +441,7 @@ OnsetStep DirectPatch::onset(Voice &, NoiseState &) const {
     return {};
 }
 
-void DirectPatch::parameters(Voice &v, bool initial) const {
+void DirectPatch::apply_parameters(Voice &v, bool initial) const {
     const SoundBank &bank = this->bank();
     const TrackParameters &c = v.track->config.parameters;
     v.owner.program = v.track->config.program;

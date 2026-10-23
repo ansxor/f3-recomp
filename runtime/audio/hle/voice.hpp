@@ -159,7 +159,7 @@ struct NoiseState {
 struct Voice {
     NoteOnEvent owner{};
     const Patch *patch = nullptr;
-    Track *track = nullptr;
+    const Track *track = nullptr;
     uint32_t filter_epoch = 0;
     Split split{};
     // envelope[] slots, in EnvelopeRole order.
@@ -197,7 +197,7 @@ struct Voice {
         patch->initialize(*this, start, noise);
         patch->address(*this, prior);
     }
-    void parameters(bool initial) { patch->parameters(*this, initial); }
+    void apply_parameters(bool initial) { patch->apply_parameters(*this, initial); }
     void retarget(int kernel, const Program &program) { patch->retarget(*this, kernel, program); }
     EnvelopeTick step(NoiseState &noise) { return patch->step(*this, noise); }
     OnsetStep onset(NoiseState &noise) { return patch->onset(*this, noise); }

@@ -35,7 +35,7 @@ public:
     void reset(uint64_t tick);
 
     // Starts every patch of the note at its driver start tick (or schedules its delay/release trigger).
-    void note_on(const NoteOnEvent &event, const PatchList &patches, Track &track);
+    void note_on(const NoteOnEvent &event, const PatchList &patches, const Track &track);
     void note_off(uint64_t instance, uint64_t tick);
 
     // Re-runs the voice parameters of one track's / one sequence's live voices after a track event.
@@ -74,7 +74,7 @@ private:
     struct Pending {
         NoteOnEvent note{};
         const Patch *patch = nullptr;
-        Track *track = nullptr;
+        const Track *track = nullptr;
         uint64_t tick = 0;
         bool active = false, release_trigger = false;
     };
@@ -94,16 +94,16 @@ private:
     };
 #endif
 
-    void begin(const NoteOnEvent &note, const Patch &patch, Track &track, uint64_t at);
-    void launch(const NoteOnEvent &note, const Patch &patch, Track &track, uint64_t start);
+    void begin(const NoteOnEvent &note, const Patch &patch, const Track &track, uint64_t at);
+    void launch(const NoteOnEvent &note, const Patch &patch, const Track &track, uint64_t start);
     void release(Voice &voice, uint64_t tick);
     void release_instance(uint64_t instance, uint64_t tick);
 #if F3RT_HLE_EVENTS
     void emit(const Voice &voice, VoiceEvent::Kind kind, uint64_t tick,
               const Onset *onset = nullptr);
 #endif
-    void parameters(Voice &voice, bool initial, [[maybe_unused]] uint64_t tick,
-                    [[maybe_unused]] bool notify = true);
+    void apply_parameters(Voice &voice, bool initial, [[maybe_unused]] uint64_t tick,
+                          [[maybe_unused]] bool notify = true);
     void move_before_cursor(unsigned index);
     unsigned allocate(const NoteOnEvent &note, const Patch &patch, unsigned priority,
                       AllocationMode mode);

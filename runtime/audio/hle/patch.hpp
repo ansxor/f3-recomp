@@ -383,7 +383,10 @@ public:
 
     virtual EnvelopeTick step(Voice &voice, NoiseState &noise) const = 0;
     virtual OnsetStep onset(Voice &voice, NoiseState &noise) const = 0;
-    virtual void parameters(Voice &voice, bool initial) const = 0;
+    // Computes and writes the voice's parameter latches (LVOL/RVOL, FC, K1/K2, pair) from the track record
+    // and the current envelope/LFO state. Called at key-on and whenever a track event or the ring re-syncs
+    // the voice; `initial` also snaps the volume/filter ramps instead of ramping to the new targets.
+    virtual void apply_parameters(Voice &voice, bool initial) const = 0;
     // True when the release ends the voice immediately.
     virtual bool release(Voice &voice) const = 0;
 
@@ -413,7 +416,7 @@ public:
 
     EnvelopeTick step(Voice &voice, NoiseState &noise) const override;
     OnsetStep onset(Voice &voice, NoiseState &noise) const override;
-    void parameters(Voice &voice, bool initial) const override;
+    void apply_parameters(Voice &voice, bool initial) const override;
     bool release(Voice &voice) const override;
 
 private:
@@ -443,7 +446,7 @@ public:
 
     EnvelopeTick step(Voice &voice, NoiseState &noise) const override;
     OnsetStep onset(Voice &voice, NoiseState &noise) const override;
-    void parameters(Voice &voice, bool initial) const override;
+    void apply_parameters(Voice &voice, bool initial) const override;
     bool release(Voice &voice) const override;
 
 private:

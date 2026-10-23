@@ -102,9 +102,9 @@ void VoiceService::finish_render() {
 }
 #endif
 
-void VoiceService::parameters(Voice &v, bool initial, [[maybe_unused]] uint64_t tick,
-                              [[maybe_unused]] bool notify) {
-    v.parameters(initial);
+void VoiceService::apply_parameters(Voice &v, bool initial, [[maybe_unused]] uint64_t tick,
+                                    [[maybe_unused]] bool notify) {
+    v.apply_parameters(initial);
 #if F3RT_HLE_EVENTS
     if (!initial && notify) emit(v, VoiceEvent::Kind::Parameters, tick);
 #endif
@@ -166,7 +166,7 @@ unsigned VoiceService::allocate(const NoteOnEvent &n, const Patch &patch, unsign
     return 32;
 }
 
-void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, Track &track, uint64_t at) {
+void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, const Track &track, uint64_t at) {
     const int kernel = track.config.parameters.transposed_key(n.kernel_key);
     const int weight = patch.weight(n, kernel);
     if (weight < 0) return;
@@ -195,7 +195,7 @@ void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, Track &track,
         v.owner.velocity = velocity;
         v.released = false;
         v.retarget(kernel, patch.program());
-        parameters(v, false, at);
+        apply_parameters(v, false, at);
         return;
     }
     stop(v, at);
@@ -217,7 +217,7 @@ void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, Track &track,
     v.active = v.hardware_valid = true;
     // Ring admission, then the opening step: a layered voice steps once here, a direct voice waits for the ring.
     move_before_cursor(v.slot);
-    parameters(v, true, at, false);
+    apply_parameters(v, true, at, false);
 #if F3RT_HLE_EVENTS
     const Onset onset{v};
 #endif
@@ -235,7 +235,7 @@ void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, Track &track,
 #endif
 }
 
-void VoiceService::launch(const NoteOnEvent &n, const Patch &patch, Track &track, uint64_t start) {
+void VoiceService::launch(const NoteOnEvent &n, const Patch &patch, const Track &track, uint64_t start) {
     if (start == n.tick && m_queue.empty()) {
         begin(n, patch, track, start);
         return;
@@ -276,7 +276,7 @@ void VoiceService::release_instance(uint64_t instance, uint64_t tick) {
         if (v.active && v.owner.instance == instance) release(v, tick);
 }
 
-void VoiceService::note_on(const NoteOnEvent &event, const PatchList &patches, Track &track) {
+void VoiceService::note_on(const NoteOnEvent &event, const PatchList &patches, const Track &track) {
     NoteOnEvent note = event;
     note.velocity &= 127; // c16faa clears the velocity flag bit.
     unsigned immediate = 0;
@@ -325,7 +325,7 @@ void VoiceService::service_queue(uint64_t tick) {
 void VoiceService::refresh_track(uint8_t sequence, uint8_t track, uint64_t tick) {
     for (Voice &v : m_voices)
         if (v.active && v.owner.sequence == sequence && v.owner.track == track)
-            parameters(v, false, tick);
+            apply_parameters(v, false, tick);
 }
 
 void VoiceService::refresh_sequence(uint8_t sequence, uint64_t tick) {
@@ -333,7 +333,7 @@ void VoiceService::refresh_sequence(uint8_t sequence, uint64_t tick) {
     for (uint8_t track = 0; track < TRACK_COUNT; ++track)
         for (Voice &v : m_voices)
             if (v.active && v.owner.sequence == sequence && v.owner.track == track)
-                parameters(v, false, tick);
+                apply_parameters(v, false, tick);
 }
 
 void VoiceService::service() {
@@ -363,7 +363,7 @@ void VoiceService::service() {
             continue;
         }
         advance_glide(v);
-        parameters(v, false, tick);
+        apply_parameters(v, false, tick);
     }
 }
 
