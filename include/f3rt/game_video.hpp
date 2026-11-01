@@ -27,9 +27,9 @@ struct GameVideoOptions {
 
     unsigned scale = 1;
     unsigned border = 0; // Additional native scene columns on EACH side.
-    unsigned width() const { return (geometry::NATIVE_WIDTH + border * 2) * scale; }
-    unsigned height() const { return geometry::HEIGHT * scale; }
-    bool expanded() const { return scale != 1 || border != 0; }
+    constexpr unsigned width() const { return (geometry::NATIVE_WIDTH + border * 2) * scale; }
+    constexpr unsigned height() const { return geometry::HEIGHT * scale; }
+    constexpr bool expanded() const { return scale != 1 || border != 0; }
 };
 
 class GameVideo {
@@ -45,7 +45,7 @@ public:
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;
     // Host-only presentation snapshot. Native observations remain CPU-produced.
-    void enable_gpu_presentation(bool enabled = true);
+    void enable_captured_presentation(bool enabled = true);
     // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
     void set_gpu_scale(unsigned scale);
     // The newest scanout snapshot. Overwritten in place at each VBSTART capture unless a capture target is set.

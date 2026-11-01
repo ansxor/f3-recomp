@@ -38,32 +38,44 @@ target_link_libraries(cpp_yyjson INTERFACE yyjson::yyjson)
 target_compile_features(cpp_yyjson INTERFACE cxx_std_20)
 add_library(cpp_yyjson::cpp_yyjson ALIAS cpp_yyjson)
 
-CPMFindPackage(NAME httplib GITHUB_REPOSITORY yhirose/cpp-httplib GIT_TAG v0.51.0 VERSION 0.14
-    OPTIONS "HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF" "HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF"
-        "HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF" "HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF"
-        "HTTPLIB_COMPILE OFF" "HTTPLIB_TEST OFF" "HTTPLIB_INSTALL OFF")
+if(F3RT_NETPLAY)
+    CPMFindPackage(NAME httplib GITHUB_REPOSITORY yhirose/cpp-httplib GIT_TAG v0.51.0 VERSION 0.14
+        OPTIONS "HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF" "HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF"
+            "HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF" "HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF"
+            "HTTPLIB_COMPILE OFF" "HTTPLIB_TEST OFF" "HTTPLIB_INSTALL OFF")
 
-# Yojimbo with its bundled libsodium and TLSF (unpackaged; pinned commit).
-CPMAddPackage(NAME Yojimbo GITHUB_REPOSITORY mas-bandwidth/yojimbo
-    GIT_TAG 272153a10f32135bb44bb60e7467072baf48f762
-    OPTIONS "YOJIMBO_SYSTEM_SODIUM OFF" "YOJIMBO_BUILD_TESTS OFF" "YOJIMBO_INSTALL OFF")
+    # Yojimbo with its bundled libsodium and TLSF (unpackaged; pinned commit).
+    CPMAddPackage(NAME Yojimbo GITHUB_REPOSITORY mas-bandwidth/yojimbo
+        GIT_TAG 272153a10f32135bb44bb60e7467072baf48f762
+        OPTIONS "YOJIMBO_SYSTEM_SODIUM OFF" "YOJIMBO_BUILD_TESTS OFF" "YOJIMBO_INSTALL OFF")
+endif()
 
 if(F3RT_SDL)
     CPMFindPackage(NAME SDL3 GITHUB_REPOSITORY libsdl-org/SDL GIT_TAG release-3.4.12 VERSION 3.4.0
         OPTIONS "SDL_SHARED OFF" "SDL_STATIC ON" "SDL_TEST_LIBRARY OFF" "SDL_EXAMPLES OFF"
             "SDL_TESTS OFF" "SDL_INSTALL OFF")
-    # Dear ImGui ships no CMake build and distro packages omit the SDL3 backends.
-    CPMAddPackage(NAME imgui GITHUB_REPOSITORY ocornut/imgui GIT_TAG v1.92.8 DOWNLOAD_ONLY YES)
+endif()
+
+# Dear ImGui ships no CMake build. The 3DS frontend draws through the vendored ftpd citro3d
+# backend and needs the core only; the SDL3 backends belong to the desktop frontend.
+if(F3RT_SDL OR NINTENDO_3DS)
+    CPMAddPackage(NAME imgui GITHUB_REPOSITORY ocornut/imgui GIT_TAG v1.93.0 DOWNLOAD_ONLY YES)
     add_library(imgui STATIC
         "${imgui_SOURCE_DIR}/imgui.cpp" "${imgui_SOURCE_DIR}/imgui_draw.cpp"
-        "${imgui_SOURCE_DIR}/imgui_tables.cpp" "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp")
-    target_include_directories(imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends")
-    target_link_libraries(imgui PUBLIC SDL3::SDL3)
+        "${imgui_SOURCE_DIR}/imgui_tables.cpp" "${imgui_SOURCE_DIR}/imgui_widgets.cpp")
+    target_include_directories(imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
     add_library(imgui::imgui ALIAS imgui)
+    if(F3RT_SDL)
+        target_sources(imgui PRIVATE
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
+            "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp")
+        target_include_directories(imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}/backends")
+        target_link_libraries(imgui PUBLIC SDL3::SDL3)
+    endif()
+endif()
 
+if(F3RT_SDL)
     if(F3RT_GPU)
         # Offline shader tools: installed binaries (Vulkan SDK, distro packages) first.
         find_program(F3_GLSLANG NAMES glslangValidator glslang)

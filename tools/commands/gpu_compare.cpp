@@ -1185,17 +1185,31 @@ void verify_sprite_boundaries(Harness &h) {
                   << st.edges[3] << " isolated_and_composite=exact (native producer batch)\n";
     }
 }
+// A peer Machine runs the same ROM set. Machine::roms releases the raw sprite, tile and sample
+// bytes once decoded, so a peer re-reads its chips from the ROM directory instead of copying
+// another machine's set.
+std::unique_ptr<f3rt::Machine> clone_machine(const Options &options) {
+    auto machine = std::make_unique<f3rt::Machine>(
+        f3rt::RomSet::load(options.rom_dir, std::string(f3rt::game_config::id)));
+    machine->allow_main_fallback = false;
+#ifdef F3RT_GENERATED
+    if (!f3_generated_register(&machine->cpu))
+        throw std::runtime_error("CPU peer registration failed");
+#endif
+#ifdef F3RT_SOUND_GENERATED
+    machine->use_native_sound(f3_sound_blocks, f3_sound_block_count,
+                              {f3_sound_excluded_ranges, f3_sound_excluded_count},
+                              f3_sound_rom_crc32);
+#endif
+    return machine;
+}
 // Saving after several trail frames must retain every intervening sprite list.
 void verify_trail_history(Harness &h) {
     auto &m = h.m;
     const auto baseline = snapshot(m);
     const auto baseline_crc = m.state_crc();
-    auto peer_owner = std::make_unique<f3rt::Machine>(m.roms);
+    auto peer_owner = clone_machine(h.o);
     auto &peer = *peer_owner;
-#ifdef F3RT_SOUND_GENERATED
-    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                          {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
-#endif
     peer.game_video =
         std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
     peer.load_state(baseline);
@@ -1231,20 +1245,15 @@ void verify_trail_history(Harness &h) {
 void verify_deferred_native(Harness &h) {
     const auto baseline = snapshot(h.m);
     const auto baseline_blocks = h.m.native_blocks, baseline_fallbacks = h.m.fallback_instructions;
-    auto eager_owner = std::make_unique<f3rt::Machine>(h.m.roms);
-    auto lazy_owner = std::make_unique<f3rt::Machine>(h.m.roms);
+    auto eager_owner = clone_machine(h.o);
+    auto lazy_owner = clone_machine(h.o);
     auto &eager = *eager_owner, &lazy = *lazy_owner;
     for (auto *m : {&eager, &lazy}) {
-#ifdef F3RT_SOUND_GENERATED
-        m->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                            {f3_sound_excluded_ranges, f3_sound_excluded_count},
-                            f3_sound_rom_crc32);
-#endif
         m->game_video =
             std::make_unique<f3rt::GameVideo>(*m, f3rt::GameVideoMode::Game, h.canonical_video);
     }
     // The independent control stays CPU-eager for the entire proof.
-    lazy.game_video->enable_gpu_presentation();
+    lazy.game_video->enable_captured_presentation();
     const auto tiles = h.m.video->sprite_tiles();
     unsigned tile = 0;
     for (unsigned candidate = 1; candidate < std::min<size_t>(32768, tiles.size() / 256);
@@ -1322,7 +1331,7 @@ void verify_deferred_native(Harness &h) {
         "disable_enable_pending", "enable_pending", "load_pending",       "reset_pending"};
     size_t visible_pixels = 0, composite_pixels = 0;
     for (unsigned kind = 0; kind < TAGS.size(); ++kind) {
-        lazy.game_video->enable_gpu_presentation();
+        lazy.game_video->enable_captured_presentation();
         lazy.game_video->set_gpu_scale(h.o.video.scale);
         for (auto *m : {&eager, &lazy}) m->load_state(baseline);
         for (unsigned frame = 0; frame < 4; ++frame) {
@@ -1354,11 +1363,11 @@ void verify_deferred_native(Harness &h) {
         } else if (kind == 3) {
             lazy.game_video->set_gpu_scale(h.o.video.scale == 1 ? 3 : 1);
         } else if (kind == 4) {
-            lazy.game_video->enable_gpu_presentation(false);
+            lazy.game_video->enable_captured_presentation(false);
             compare("disable_pending");
-            lazy.game_video->enable_gpu_presentation();
+            lazy.game_video->enable_captured_presentation();
         } else if (kind == 5) {
-            lazy.game_video->enable_gpu_presentation();
+            lazy.game_video->enable_captured_presentation();
         } else if (kind == 6) {
             for (auto *m : {&eager, &lazy}) m->load_state(baseline);
         } else if (kind == 7) {
@@ -1416,21 +1425,13 @@ void verify_deferred_native(Harness &h) {
         << " native_state_mismatches=0 gameplay_and_diagnostics=unchanged (independent branches)\n";
 }
 void verify_cpu_backend(Harness &h, std::span<const uint8_t> pre) {
-    auto peer_owner = std::make_unique<f3rt::Machine>(h.m.roms);
+    auto peer_owner = clone_machine(h.o);
     auto &peer = *peer_owner;
-    peer.allow_main_fallback = false;
-#ifdef F3RT_GENERATED
-    if (!f3_generated_register(&peer.cpu)) throw std::runtime_error("CPU peer registration failed");
-#endif
-#ifdef F3RT_SOUND_GENERATED
-    peer.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                          {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
-#endif
     peer.game_video =
         std::make_unique<f3rt::GameVideo>(peer, f3rt::GameVideoMode::Game, h.canonical_video);
     const bool selected_geometry = h.canonical_video.scale != h.o.video.scale;
     if (selected_geometry) {
-        peer.game_video->enable_gpu_presentation();
+        peer.game_video->enable_captured_presentation();
         peer.game_video->set_gpu_scale(h.o.video.scale);
     }
     peer.load_state(pre);

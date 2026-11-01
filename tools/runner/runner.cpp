@@ -53,7 +53,7 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
         GameVideoOptions vopts;
         vopts.scale = gpu_scale;
         machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Game, vopts);
-        machine->game_video->enable_gpu_presentation();
+        machine->game_video->enable_captured_presentation();
         machine->game_video->set_gpu_scale(gpu_scale);
     }
 #endif

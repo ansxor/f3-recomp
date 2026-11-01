@@ -235,7 +235,7 @@ int cmd_netplay(int argc, char **argv) try {
         }
     }
     // Compute ROM CRCs
-    auto rom_crcs = rom_region_crcs(machine->roms);
+    auto rom_crcs = machine->rom_region_crcs();
 
     // Setup netplay session configuration
     netplay::SessionConfig cfg;

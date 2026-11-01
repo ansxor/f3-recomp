@@ -34,6 +34,19 @@ const SpriteUnitTable &SpriteUnits::game_table() {
     return TABLE;
 }
 
+std::unique_ptr<SpriteUnits> make_game_sprite_units(Machine &machine, bool flicker_shadows) {
+    const auto &unit_table = SpriteUnits::game_table();
+    if (unit_table.units.empty()) return nullptr;
+    SpriteUnits::Options options;
+    const auto registered = registered_sprite_behaviours();
+    options.behaviours.assign(registered.begin(), registered.end());
+    const auto shadows = registered_flicker_shadows();
+    options.flicker_shadows.assign(shadows.begin(), shadows.end());
+    auto units = std::make_unique<SpriteUnits>(machine, unit_table, std::move(options));
+    units->set_flicker_shadows(flicker_shadows);
+    return units;
+}
+
 const char *SpriteUnits::abort_name(Abort reason) {
     switch (reason) {
     case Abort::Device:

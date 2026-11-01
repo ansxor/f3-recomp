@@ -27,7 +27,8 @@ public:
     static const char *backend_name(Backend backend);
     bool backend_available(Backend backend) const;
     struct EnhancedStats {
-        uint64_t commands = 0, rendered_frames = 0;
+        uint64_t commands = 0, rendered_frames = 0, voices_started = 0;
+        unsigned voices_active = 0;
     };
     // Select once, after ROM loading and before machine execution.
     void set_backend(Backend backend);

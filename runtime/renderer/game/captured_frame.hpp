@@ -39,4 +39,14 @@ struct CapturedFrame {
     }
 };
 
+// Indexed sprite plane for `options` (sprite_plane_size) from the captured list.
+void raster_captured_sprites(const CapturedFrame &frame, std::span<const uint8_t> sprite_tiles,
+                             std::span<uint16_t> plane, GameVideoOptions options);
+// Compose a captured frame: the letterboxed native picture of an oracle-fallback frame, else the
+// scene over `plane`. Canonical observations pass ComposeMode::Serial.
+void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
+                            std::span<const uint16_t> plane, std::span<uint32_t> output,
+                            GameVideoOptions options, ComposeMode mode,
+                            uint32_t layer_mask = ALL_LAYERS);
+
 } // namespace f3rt

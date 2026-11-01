@@ -32,8 +32,8 @@ struct SceneTarget {
     GameVideoOptions geometry{};
 };
 
-// Parallel dispatches expanded frames to the row workers; Serial runs the same
-// row kernel on the caller (measurement/reference use).
+// Parallel dispatches any geometry to the row workers; Serial runs the same
+// row kernels on the caller (measurement/reference use).
 enum class ComposeMode { Parallel, Serial };
 
 // Neither mode changes emulated state. Concurrent calls must provide disjoint

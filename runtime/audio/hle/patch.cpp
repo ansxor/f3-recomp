@@ -176,7 +176,7 @@ void LayerPatch::address(Voice &v, const PriorWindow &prior) const {
     if (!sample.table()) phase &= 0xffffff00;
     else {
         uint32_t d0 = m_view.start_offset();
-        uint32_t d1 = std::min(uint32_t(d0 + m_view.start_amount_byte()), 0xfau);
+        uint32_t d1 = std::min(uint32_t(d0 + m_view.start_amount_byte()), uint32_t(0xfa));
         d0 *= 14;
         d1 *= 14;
         const uint32_t split_table = sound_5a7e9117::SPECIAL_SPLIT_TABLE;

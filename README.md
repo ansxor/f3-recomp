@@ -46,6 +46,27 @@ make help
 
 Run with `--help` for all command-line options.
 
+## Nintendo 3DS
+
+The 3DS build (New 3DS only, `landmakrj` only) is a set of optional flake outputs; the desktop
+outputs are unchanged and never pull the devkitPro toolchain.
+
+```sh
+nix run .#3ds-3dsx              # build build/landmakrj-3ds/landmakrj.3dsx
+nix run .#3ds-cia               # build build/landmakrj-3ds/landmakrj.cia
+nix run .#3ds-azahar            # build the 3dsx and launch it in Azahar
+nix develop .#3ds               # devkitARM, makerom, bannertool, ctrtool, cmake, ninja
+```
+
+GAME and ROM_DIR default to `landmakrj` and `roms/landmakrj`; a ROM directory is required because
+the ROM set is embedded in the ROM file system image. The 3DS build runs only the core runtime: HLE
+(Enhanced) audio, CPU scene composition, fast boot, and the touch menu on the bottom screen.
+Reference audio, netplay, save states and the native sound program are not available there.
+
+**Real hardware:** audio needs `sdmc:/3ds/dspfirm.cdc`, a firmware dump taken from the console itself.
+Without it the app runs silently and the bottom screen shows `Audio off: sdmc:/3ds/dspfirm.cdc missing`.
+Azahar's HLE DSP ignores the file's contents, so a placeholder is enough there.
+
 ## Supported Games
 
 The following ROM sets have tested native builds:

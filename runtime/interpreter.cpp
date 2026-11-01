@@ -5,12 +5,14 @@
 #include "state_io.hpp"
 #include "audio/reference/state_oracle.h"
 #include "audio/sound_trace.hpp"
-#include <mutex>
 
 namespace {
 f3rt::Machine *active_machine = nullptr;
 bool sound_bus = false;
-std::once_flag init_flag;
+// Musashi's tables initialize once per process. devkitARM's libstdc++ routes std::call_once
+// through pthread_once, but its libpthread is a dummy, so the call throws on the 3DS; the
+// interpreter is constructed from one thread at startup, so a plain guard is equivalent.
+bool musashi_initialized = false;
 int acknowledge(int level) {
     return sound_bus ? active_machine->audio->irq_ack(level) : int(M68K_INT_ACK_AUTOVECTOR);
 }
@@ -80,7 +82,10 @@ void m68k_write_memory_32(unsigned int a, unsigned int v) {
 } // extern "C"
 namespace f3rt {
 Interpreter::Interpreter(Machine &m) : m_machine(m) {
-    std::call_once(init_flag, [] { m68k_init(); });
+    if (!musashi_initialized) {
+        m68k_init();
+        musashi_initialized = true;
+    }
     m_main_context.resize((m68k_context_size() + 7) / 8);
     m_sound_context.resize(m_main_context.size());
     // The main context keeps the 68EC020 type and interrupt callbacks. Main CPU

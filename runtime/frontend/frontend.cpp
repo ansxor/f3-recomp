@@ -10,6 +10,10 @@
 #include "netplay/recorder.hpp"
 #include "ui.hpp"
 #include "state.hpp"
+#include "audio_pacer.hpp"
+#include "fast_boot.hpp"
+#include "frame_slots.hpp"
+#include "platform/thread.hpp"
 #include "interpreter.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
@@ -18,7 +22,6 @@
 #include "debug/input_script.hpp"
 #include "sprites/units.hpp"
 #include "debug/discovery.hpp"
-#include "sprites/behaviour.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
 #include "f3rt/video.hpp"
@@ -34,9 +37,6 @@
 #include <optional>
 #include <thread>
 #include <unordered_set>
-#ifdef __APPLE__
-#include <pthread.h>
-#endif
 #include <atomic>
 #include <condition_variable>
 #include <exception>
@@ -194,21 +194,9 @@ enum Preference : uint32_t {
     MotionInterp = 1u << 18
 };
 // Hand-off between the emulation thread (writer of every Machine access) and the video thread (SDL window,
-// UI, GPU). Everything the video thread may read of the machine travels in a Snapshot; everything it may ask
-// of the machine travels as a Command. One mutex guards the slots and queues; slots are triple-buffered and
-// latest-wins, so a slow presenter drops stale frames and never delays emulation.
-struct Snapshot {
-    f3rt::CapturedFrame *gpu =
-        nullptr; // GPU path: capture buffer Link::captures[capture], immutable while published
-    size_t capture = 0;
-    std::vector<uint32_t> pixels; // CPU/FDP path: presentation pixels
-    uint64_t frame = 0,
-             epoch =
-                 0; // epoch changes on every emulation discontinuity (load, resume, clock resync)
-    unsigned scale = 1; // GameVideo GPU scale this frame was captured at
-    std::chrono::steady_clock::time_point
-        start; // scheduled emulation start of the frame (motion interpolation clock)
-};
+// UI, GPU). Everything the video thread may read of the machine travels in a FrameSnapshot (frame_slots.hpp);
+// everything it may ask of the machine travels as a Command. One mutex guards the frame slots and queues, so the
+// triple-buffered slots drop stale frames for a slow presenter and never delay emulation.
 struct NetSettings {
     std::string server, name;
     uint8_t delay = 0;
@@ -247,13 +235,9 @@ struct NetStatus {
     bool operator==(const NetStatus &) const = default;
 };
 struct Link {
-    static constexpr int SLOT_COUNT = 3;
     std::mutex mutex;
     std::condition_variable cv;
-    std::array<Snapshot, SLOT_COUNT> slots;
-    std::array<f3rt::CapturedFrame *, SLOT_COUNT> captures{};
-    int latest = -1, held = -1, writing = -1;
-    uint64_t published = 0, seen = 0;
+    f3rt::FrameSlots frames;
     std::atomic<uint64_t> frames_published{0};
     std::vector<Command> commands;
     std::vector<Reply> replies;
@@ -268,28 +252,14 @@ struct Link {
     // video thread sample input just before the frame latches it.
     std::atomic<int64_t> deadline{0};
     // Emulation thread: a slot (and capture buffer) the presenter cannot be reading.
-    Snapshot &begin_frame() {
+    f3rt::FrameSnapshot &begin_frame() {
         std::lock_guard lock(mutex);
-        int slot = 0;
-        while (slot == latest || slot == held) ++slot;
-        Snapshot &s = slots[slot];
-        s.gpu = nullptr;
-        if (captures[0]) {
-            size_t c = 0;
-            while ((latest >= 0 && c == slots[latest].capture) ||
-                   (held >= 0 && c == slots[held].capture))
-                ++c;
-            s.capture = c;
-            s.gpu = captures[c];
-        }
-        writing = slot;
-        return s;
+        return frames.begin();
     }
     void publish(bool frame_boundary = true) {
         {
             std::lock_guard lock(mutex);
-            latest = writing;
-            ++published;
+            frames.publish();
             if (frame_boundary) frames_published.fetch_add(1, std::memory_order_relaxed);
         }
         cv.notify_all();
@@ -298,29 +268,14 @@ struct Link {
     void restate(unsigned scale) {
         {
             std::lock_guard lock(mutex);
-            if (latest < 0) return;
-            int slot = 0;
-            while (slot == latest || slot == held) ++slot;
-            slots[slot].gpu = slots[latest].gpu;
-            slots[slot].capture = slots[latest].capture;
-            slots[slot].frame = slots[latest].frame;
-            slots[slot].epoch = slots[latest].epoch;
-            slots[slot].start = slots[latest].start;
-            slots[slot].scale = scale;
-            latest = slot;
-            ++published;
+            frames.restate(scale);
         }
         cv.notify_all();
     }
     // Video thread: newest published snapshot (fresh when not yet seen) or the one it already holds.
-    const Snapshot *take(bool &fresh) {
+    const f3rt::FrameSnapshot *take(bool &fresh) {
         std::lock_guard lock(mutex);
-        fresh = latest >= 0 && published != seen;
-        if (fresh) {
-            held = latest;
-            seen = published;
-        }
-        return held >= 0 ? &slots[held] : nullptr;
+        return frames.take(fresh);
     }
     void post(Command command) {
         {
@@ -397,13 +352,13 @@ struct Link {
         }
         std::unique_lock lock(mutex);
         cv.wait_until(lock, until,
-                      [&] { return done || published != seen || !replies.empty() || net_dirty; });
+                      [&] { return done || frames.unseen() || !replies.empty() || net_dirty; });
     }
 };
 // Joins the emulation thread on every exit path of the video loop.
 struct EmulationThread {
     Link &link;
-    std::thread thread;
+    f3rt::Thread thread;
     explicit EmulationThread(Link &l) : link(l) {}
     ~EmulationThread() {
         if (thread.joinable()) {
@@ -831,20 +786,10 @@ int main(int argc, char **argv) try {
             m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
             video_options);
 #endif
-    {
-        const auto &unit_table = f3rt::SpriteUnits::game_table();
-        if (translated && !unit_table.units.empty()) {
-            f3rt::SpriteUnits::Options options;
-            const auto registered = f3rt::registered_sprite_behaviours();
-            options.behaviours.assign(registered.begin(), registered.end());
-            const auto shadows = f3rt::registered_flicker_shadows();
-            options.flicker_shadows.assign(shadows.begin(), shadows.end());
-            m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, unit_table, std::move(options));
-            // Always on with the GPU presenter, which picks flicker shadow visibility per presented frame;
-            // CPU and FDP output keeps the game's own alternate-frame emission.
-            m.sprite_units->set_flicker_shadows(video_backend == "gpu" && m.game_video);
-        }
-    }
+    // Always on with the GPU presenter, which picks flicker shadow visibility per presented frame;
+    // CPU and FDP output keeps the game's own alternate-frame emission.
+    if (translated)
+        m.sprite_units = f3rt::make_game_sprite_units(m, video_backend == "gpu" && m.game_video);
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     }
@@ -893,7 +838,7 @@ int main(int argc, char **argv) try {
             sdl.window = SDL_CreateWindow(("f3rt — " + set).c_str(),
                                           int((320 + video_options.border * 2) * 3), 696, flags);
             check(sdl.window != nullptr);
-            m.game_video->enable_gpu_presentation();
+            m.game_video->enable_captured_presentation();
             if (automatic_scale) {
                 int pixel_width = 0, pixel_height = 0;
                 check(SDL_GetWindowSizeInPixels(sdl.window, &pixel_width, &pixel_height));
@@ -997,9 +942,12 @@ int main(int argc, char **argv) try {
     const auto frame_time = std::chrono::nanoseconds(
         uint64_t(1e9 * f3rt::Machine::FRAME_PIXELS / f3rt::Machine::PIXEL_CLOCK));
     constexpr int MAX_AUDIO_QUEUE_MS = 50, MAX_CATCHUP_MS = 50;
-    uint64_t audio_queue_drops = 0, clock_resyncs = 0, audio_queue_sum = 0, audio_queue_samples = 0,
-             audio_queue_max = 0;
-    double audio_queue_average = audio_target_bytes;
+    uint64_t clock_resyncs = 0;
+    // The device queue is measured in bytes; the shared policy works in frames (4 bytes each).
+    f3rt::AudioPacer audio_pacer({.rate = audio_rate,
+                                  .target_frames = size_t(audio_target_bytes) / 4,
+                                  .max_queue_ms = MAX_AUDIO_QUEUE_MS,
+                                  .throttle = throttle});
     std::vector<int16_t> audio_silence;
     const auto start = std::chrono::steady_clock::now();
     // Fast boot: run the power-on frames unthrottled with no presentation and discarded
@@ -1012,106 +960,41 @@ int main(int argc, char **argv) try {
         dumpdir.empty() && profile_path.empty() && fallback_report.empty() && inputs_path.empty();
     std::filesystem::path config_dir;
     if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
-    bool eeprom_enabled = false, eeprom_loaded = false, eeprom_generated = false;
-    std::filesystem::path eeprom_init_path;
-    if (fast_boot_active && eeprom.empty() && m.roms.factory_eeprom.empty() &&
-        !config_dir.empty()) {
-        eeprom_enabled = true;
-        eeprom_init_path = config_dir / "eeprom" / (set + "-init.bin");
-        if (std::filesystem::exists(eeprom_init_path)) {
-            try {
-                m.load_eeprom(eeprom_init_path);
-                eeprom_loaded = true;
-            } catch (const std::exception &error) {
-                std::cerr << "f3rt: ignoring initialised EEPROM " << eeprom_init_path << ": "
-                          << error.what() << '\n';
+    if (fast_boot_active) {
+        f3rt::FastBootRequest request;
+        // An explicit --eeprom, or a factory EEPROM in the ROM set, owns the game's settings.
+        if (eeprom.empty() && m.roms.factory_eeprom.empty() && !config_dir.empty())
+            request.eeprom_init = config_dir / "eeprom" / (set + "-init.bin");
+        if (settings.boot_cache && eeprom.empty() && !config_dir.empty())
+            request.boot_cache = config_dir / "boot" / (set + ".state");
+        request.snapshot = snapshot_video_options;
+        request.translated = translated;
+        request.frame_budget = frames;
+        request.audio = [&](std::span<const int16_t> chunk) {
+            audio_frames += chunk.size() / 2;
+            for (const int16_t sample : chunk) {
+                audio_peak = std::max(audio_peak, std::abs(int(sample)));
+                nonzero_samples += sample != 0;
             }
-        }
-    }
-    std::filesystem::path boot_state_path;
-    bool cache_loaded = false;
-    if (fast_boot_active && settings.boot_cache && eeprom.empty() && !config_dir.empty()) {
-        boot_state_path = config_dir / "boot" / (set + ".state");
-        if (std::filesystem::exists(boot_state_path)) {
-            try {
-                f3rt::frontend_state_slot(m, boot_state_path, snapshot_video_options.scale,
-                                          snapshot_video_options.border, false);
-                cache_loaded = true;
-            } catch (const std::exception &error) {
-                std::cerr << "f3rt: boot cache unusable, using turbo boot: " << error.what()
-                          << '\n';
-            }
-        }
-    }
-    if (cache_loaded) {
-        if (sdl.input) sdl.input->release();
-        if (sdl.audio) check(SDL_ClearAudioStream(sdl.audio));
-        executed_frames = m.frame;
-    }
-    const char *boot_source = cache_loaded ? "cache" : "turbo";
-    uint64_t turbo_frames = 0;
-    double turbo_ms = 0;
-    bool turbo_complete = false;
-    if (fast_boot_active && !cache_loaded) {
-        const auto turbo_start = std::chrono::steady_clock::now();
-        while (!quit && (frames == 0 || executed_frames < frames) &&
-               turbo_frames < boot->frame_limit) {
-            if (boot->complete(m)) {
-                turbo_complete = true;
-                break;
-            }
-            f3rt::apply_local_inputs(m, {});
-            if (!m.run_frame(translated))
-                throw std::runtime_error("CPU halted at " + std::to_string(m.cpu.pc));
-            ++executed_frames;
-            ++turbo_frames;
-            size_t count;
-            while ((count = m.audio->render(samples.data(), samples.size() / 2)) != 0) {
-                audio_frames += count;
-                for (size_t i = 0; i < count * 2; ++i) {
-                    audio_peak = std::max(audio_peak, std::abs(int(samples[i])));
-                    nonzero_samples += samples[i] != 0;
-                }
-            }
-            if (!headless && turbo_frames % 30 == 0) {
+        };
+        if (!headless)
+            request.cancelled = [&] {
                 SDL_PumpEvents();
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
                     if (event.type == SDL_EVENT_QUIT) quit = true;
-            }
+                return quit;
+            };
+        const auto boot_result = f3rt::run_fast_boot(m, *boot, request);
+        if (boot_result.cache_loaded) {
+            if (sdl.input) sdl.input->release();
+            if (sdl.audio) check(SDL_ClearAudioStream(sdl.audio));
+            audio_pacer.reset();
         }
-        turbo_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                             turbo_start)
-                       .count();
-        if (!turbo_complete && turbo_frames >= boot->frame_limit)
-            std::cerr << "f3rt: fast boot reached the " << boot->frame_limit
-                      << "-frame limit without a completion signal; continuing normally\n";
+        executed_frames = m.frame;
+        std::cout << "fast_boot frames=" << boot_result.frames << " ms=" << boot_result.ms
+                  << " source=" << boot_result.source << " eeprom=" << boot_result.eeprom << '\n';
     }
-    // Only a completed boot has written the game's defaults; a quit or frame limit mid-boot must not persist.
-    if (fast_boot_active && eeprom_enabled && !eeprom_loaded && turbo_complete) {
-        std::error_code ec;
-        std::filesystem::create_directories(eeprom_init_path.parent_path(), ec);
-        m.save_eeprom(eeprom_init_path);
-        eeprom_generated = true;
-    }
-    if (fast_boot_active && settings.boot_cache && eeprom.empty() && !config_dir.empty() &&
-        !cache_loaded && turbo_complete) {
-        try {
-            f3rt::frontend_state_slot(m, boot_state_path, snapshot_video_options.scale,
-                                      snapshot_video_options.border, true);
-        } catch (const std::exception &error) {
-            std::cerr << "f3rt: cannot write boot cache " << boot_state_path << ": " << error.what()
-                      << '\n';
-        }
-    }
-    if (fast_boot_active)
-        std::cout << "fast_boot frames=" << turbo_frames << " ms=" << turbo_ms
-                  << " source=" << boot_source << " eeprom="
-                  << (!eeprom_enabled    ? "none"
-                      : eeprom_generated ? "generated"
-                      : eeprom_loaded    ? "loaded"
-                                         : "none")
-                  << '\n';
     auto handle_audio_chunk = [&](size_t count) {
         audio_frames += count;
         for (size_t i = 0; i < count * 2; ++i) {
@@ -1120,39 +1003,20 @@ int main(int argc, char **argv) try {
         }
         if (wav) wav->append(std::span(samples.data(), count * 2));
         if (sdl.audio) {
-            int backlog = SDL_GetAudioStreamQueued(sdl.audio);
+            const int backlog = SDL_GetAudioStreamQueued(sdl.audio);
             check(backlog >= 0);
-            if (throttle) {
-                // A stalled window (tab-out, fullscreen switch) must not leave seconds of audio queued ahead of the
-                // picture. Past the latency cap, drop the stale backlog so new sound plays now.
-                if (backlog > audio_target_bytes + int(audio_rate * 4 * MAX_AUDIO_QUEUE_MS / 1000)) {
-                    check(SDL_ClearAudioStream(sdl.audio));
-                    ++audio_queue_drops;
-                    backlog = 0;
-                }
-                // An empty queue (start, after a drop or an underrun) is already silent; lead the chunk with
-                // silence up to the target instead of letting the device run dry on every period until it refills.
-                const int chunk_bytes = int(count * 4);
-                if (backlog == 0) audio_queue_average = audio_target_bytes;
-                if (backlog == 0 && chunk_bytes < audio_target_bytes) {
-                    audio_silence.assign(size_t(audio_target_bytes - chunk_bytes) / 2, 0);
-                    check(SDL_PutAudioStreamData(sdl.audio, audio_silence.data(),
-                                                 audio_target_bytes - chunk_bytes));
-                }
+            const auto action = audio_pacer.before_push(size_t(backlog) / 4, count);
+            if (action.drop_backlog) check(SDL_ClearAudioStream(sdl.audio));
+            if (action.lead_silence_frames) {
+                audio_silence.assign(action.lead_silence_frames * 2, 0);
+                check(SDL_PutAudioStreamData(sdl.audio, audio_silence.data(),
+                                             int(action.lead_silence_frames * 4)));
             }
             check(SDL_PutAudioStreamData(sdl.audio, samples.data(), int(count * 4)));
-            const uint64_t queued = uint64_t(SDL_GetAudioStreamQueued(sdl.audio));
-            if (throttle) {
-                // Frames are paced by the system clock and consumed by the device clock; hold the queue at the target
-                // by nudging the playback rate (at most 0.5%, inaudible) against a ~1 s average of its depth.
-                audio_queue_average += (double(queued) - audio_queue_average) / 64.0;
-                const double error = std::clamp(
-                    (audio_queue_average - audio_target_bytes) / audio_target_bytes, -1.0, 1.0);
-                check(SDL_SetAudioStreamFrequencyRatio(sdl.audio, float(1.0 + 0.005 * error)));
-            }
-            audio_queue_sum += queued;
-            ++audio_queue_samples;
-            audio_queue_max = std::max(audio_queue_max, queued);
+            const int queued = SDL_GetAudioStreamQueued(sdl.audio);
+            check(queued >= 0);
+            const double ratio = audio_pacer.after_push(size_t(queued) / 4);
+            if (throttle) check(SDL_SetAudioStreamFrequencyRatio(sdl.audio, float(ratio)));
         }
     };
     const bool slots_supported = translated && !allow_fallback;
@@ -1164,10 +1028,11 @@ int main(int argc, char **argv) try {
     // the video thread never touches `m`, `samples` or the audio statistics until that thread is joined.
     Link link;
 #ifdef F3RT_GPU
-    std::array<std::unique_ptr<f3rt::CapturedFrame>, Link::SLOT_COUNT> capture_buffers;
+    std::array<std::unique_ptr<f3rt::CapturedFrame>, f3rt::FrameSlots::SLOT_COUNT> capture_buffers;
     if (!headless && sdl.gpu)
         for (size_t i = 0; i < capture_buffers.size(); ++i)
-            link.captures[i] = (capture_buffers[i] = std::make_unique<f3rt::CapturedFrame>()).get();
+            link.frames.captures[i] =
+                (capture_buffers[i] = std::make_unique<f3rt::CapturedFrame>()).get();
 #endif
     unsigned emu_scale = video_options.scale;
     uint64_t epoch = 0;
@@ -1188,12 +1053,13 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::netplay::Session> netplay_session;
     std::string netplay_own_name, logged_room;
     uint32_t netplay_match_frame = 0, next_netplay_local_frame = 0;
-    auto fill_snapshot = [&](Snapshot &s, std::chrono::steady_clock::time_point scheduled) {
+    auto fill_snapshot = [&](f3rt::FrameSnapshot &s,
+                             std::chrono::steady_clock::time_point scheduled) {
         s.frame = m.frame;
         s.epoch = epoch;
         s.scale = emu_scale;
         s.start = scheduled;
-        if (!s.gpu) {
+        if (!s.captured) {
             const auto pixels = m.game_video ? m.game_video->presentation()
                                              : std::span<const uint32_t>(m.native_pixels());
             s.pixels.assign(pixels.begin(), pixels.end());
@@ -1202,14 +1068,14 @@ int main(int argc, char **argv) try {
     };
     // A slot (and GPU capture buffer) the presenter cannot be reading, installed as the capture target. Anything that
     // redraws the capture (frames, state loads) must start here, or it rewrites the buffer the presenter holds.
-    auto begin_unpublished = [&]() -> Snapshot * {
+    auto begin_unpublished = [&]() -> f3rt::FrameSnapshot * {
         if (headless) return nullptr;
-        Snapshot *slot = &link.begin_frame();
-        if (slot->gpu) m.game_video->set_capture_target(slot->gpu);
+        f3rt::FrameSnapshot *slot = &link.begin_frame();
+        if (slot->captured) m.game_video->set_capture_target(slot->captured);
         return slot;
     };
     // After a state load or sync: the picture and clock jump, so the video thread resets motion history.
-    auto publish_jump = [&](Snapshot *slot) {
+    auto publish_jump = [&](f3rt::FrameSnapshot *slot) {
         ++epoch;
         next_frame = std::chrono::steady_clock::now();
         if (slot) {
@@ -1224,7 +1090,7 @@ int main(int argc, char **argv) try {
         netplay_meta.lobby_hold_ms = std::chrono::duration<double, std::milli>(
                                          std::chrono::steady_clock::now() - netplay_trigger_time)
                                          .count();
-        Snapshot *slot = begin_unpublished();
+        f3rt::FrameSnapshot *slot = begin_unpublished();
         if (!netplay_trigger_snapshot.empty()) m.load_state(netplay_trigger_snapshot);
         while (netplay_hook->in_versus && !netplay_hook->in_versus(m)) {
             f3rt::apply_local_inputs(m, {});
@@ -1259,7 +1125,7 @@ int main(int argc, char **argv) try {
         cfg.server_host = server;
         cfg.server_port = port;
         cfg.game_id = std::string(f3rt::netplay::default_game_id);
-        cfg.rom_crcs = f3rt::rom_region_crcs(m.roms);
+        cfg.rom_crcs = m.rom_region_crcs();
         cfg.build_hash = f3rt::netplay::build_hash;
         cfg.player_name = net_settings.name;
         cfg.is_host = host;
@@ -1307,7 +1173,7 @@ int main(int argc, char **argv) try {
         netplay_state_sync_done = false;
         netplay_lobby_active = false;
         if (!netplay_trigger_snapshot.empty()) {
-            Snapshot *slot = begin_unpublished();
+            f3rt::FrameSnapshot *slot = begin_unpublished();
             m.load_state(netplay_trigger_snapshot);
             netplay_trigger_snapshot.clear();
             publish_jump(slot);
@@ -1339,11 +1205,12 @@ int main(int argc, char **argv) try {
                     throw std::runtime_error("Save/load states are disabled during active netplay");
                 const bool save = c.kind == Command::Save;
                 // The load rewrites the newest capture in place unless redirected to a buffer nobody else holds.
-                Snapshot *target = save ? nullptr : begin_unpublished();
+                f3rt::FrameSnapshot *target = save ? nullptr : begin_unpublished();
                 f3rt::frontend_state_slot(m, c.path, snapshot_video_options.scale,
                                           snapshot_video_options.border, save);
                 if (!save) {
                     if (sdl.audio) check(SDL_ClearAudioStream(sdl.audio));
+                    audio_pacer.reset();
                     publish_jump(target);
                 }
                 link.reply({std::string(save ? "Saved " : "Loaded ") + c.path.string(), !save});
@@ -1456,7 +1323,7 @@ int main(int argc, char **argv) try {
                     facts.desync_crc_p2 = di.crc_p2;
                     netplay_recorder->meta.stall_count = netplay_session->stats().stall_count;
                     netplay_recorder->meta.clock_resyncs = clock_resyncs;
-                    netplay_recorder->meta.audio_queue_drops = audio_queue_drops;
+                    netplay_recorder->meta.audio_queue_drops = audio_pacer.stats().drops;
                     try {
                         const auto base =
                             (config_dir.empty() ? std::filesystem::current_path() : config_dir) /
@@ -1499,7 +1366,8 @@ int main(int argc, char **argv) try {
                 net.chat.emplace_back(line.from_player, std::move(line.text));
     };
     // One emulated frame's bookkeeping after the machine ran it: publish, dump, drain audio, advance the pace clock.
-    auto finish_frame = [&](Snapshot *slot, std::chrono::steady_clock::time_point scheduled) {
+    auto finish_frame = [&](f3rt::FrameSnapshot *slot,
+                            std::chrono::steady_clock::time_point scheduled) {
         ++executed_frames;
         if (entry_watch) entry_watch->frame(m.frame);
         if (slot) {
@@ -1540,7 +1408,7 @@ int main(int argc, char **argv) try {
                 for (unsigned p = 0; p < local.size(); ++p) local[p] |= scripted[p];
             }
         }
-        Snapshot *slot = begin_unpublished();
+        f3rt::FrameSnapshot *slot = begin_unpublished();
         const auto scheduled = pace ? next_frame : std::chrono::steady_clock::now();
         f3rt::apply_local_inputs(m, local);
         if (!in_lobby && input_script) input_script->poke(m, m.frame + 1);
@@ -1570,7 +1438,7 @@ int main(int argc, char **argv) try {
         }
         if ((pace && now < next_frame) || !netplay_session->ready_to_step(netplay_match_frame))
             return false;
-        Snapshot *slot = begin_unpublished();
+        f3rt::FrameSnapshot *slot = begin_unpublished();
         const auto scheduled = pace ? next_frame : now;
         if (!step_lockstep_frame(m, *netplay_session, netplay_match_frame, netplay_hook, 60,
                                  netplay_recorder.get()))
@@ -1696,12 +1564,7 @@ int main(int argc, char **argv) try {
 #endif
             motion_capture_pending = true;
         };
-        emulation.thread = std::thread([&] {
-#ifdef __APPLE__
-            // Default-QoS threads sleeping ~14 ms between frames wake 1-4 ms late under timer coalescing, which skews both
-            // the frame start and the input sampling lead; user-interactive QoS wakes within a few hundred microseconds.
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-#endif
+        emulation.thread = f3rt::Thread(f3rt::ThreadRole::Emulation, 0, [&] {
             try {
                 emulate();
             } catch (...) {
@@ -1931,7 +1794,7 @@ int main(int argc, char **argv) try {
 #endif
             const bool finished = link.finished();
             bool fresh = false;
-            const Snapshot *shot = link.take(fresh);
+            const f3rt::FrameSnapshot *shot = link.take(fresh);
             if (finished && emulation_error) break;
             if (shot && fresh)
                 for (const uint64_t screenshot_frame : screenshot_frames)
@@ -1954,7 +1817,7 @@ int main(int argc, char **argv) try {
                 }
             }
             if (motion_presentation && sdl.gpu && shot && (fresh || motion_capture_pending)) {
-                sdl.gpu->capture_motion(*shot->gpu, shot->frame);
+                sdl.gpu->capture_motion(*shot->captured, shot->frame);
                 motion_capture_pending = false;
                 motion_pair_pending = true;
             }
@@ -2023,10 +1886,10 @@ int main(int argc, char **argv) try {
                         const char *capture_path =
                             screenshot_pending ? screenshot_str.c_str() : nullptr;
                         if (throttle && !draw_menu && !capture_final && !screenshot_pending)
-                            presented = sdl.gpu->present_motion(*shot->gpu, shot->start, frame_time,
+                            presented = sdl.gpu->present_motion(*shot->captured, shot->start, frame_time,
                                                                 false, nullptr);
                         else
-                            presented = sdl.gpu->present_motion(*shot->gpu, shot->start, frame_time,
+                            presented = sdl.gpu->present_motion(*shot->captured, shot->start, frame_time,
                                                                 true, capture_path);
                         if (presented) {
                             ++motion_presentations;
@@ -2043,9 +1906,9 @@ int main(int argc, char **argv) try {
                         }
                     } else {
                         if (screenshot_pending)
-                            sdl.gpu->present(*shot->gpu, screenshot.string().c_str());
-                        else if (capture_final || !throttle) sdl.gpu->draw(*shot->gpu);
-                        else sdl.gpu->present(*shot->gpu);
+                            sdl.gpu->present(*shot->captured, screenshot.string().c_str());
+                        else if (capture_final || !throttle) sdl.gpu->draw(*shot->captured);
+                        else sdl.gpu->present(*shot->captured);
                         if (capture_final) sdl.gpu->save_surface(surface.string().c_str());
                     }
                 } else
@@ -2154,14 +2017,16 @@ int main(int argc, char **argv) try {
     if (settings.audio_backend == f3rt::AudioBackend::Enhanced) {
         const auto stats = m.audio->enhanced_stats();
         std::cout << "hle_commands=" << stats.commands
-                  << " hle_rendered_frames=" << stats.rendered_frames << '\n';
+                  << " hle_rendered_frames=" << stats.rendered_frames
+                  << " hle_voices_started=" << stats.voices_started
+                  << " hle_voices_active=" << stats.voices_active << '\n';
     }
-    if (audio_queue_samples)
+    if (const auto &pacing = audio_pacer.stats(); pacing.queue_samples)
         std::cerr << "f3rt: pacing clock_resyncs=" << clock_resyncs
-                  << " audio_queue_drops=" << audio_queue_drops << " queued_ms mean="
-                  << 1000.0 * double(audio_queue_sum) / double(audio_queue_samples) /
-                         (4.0 * audio_rate)
-                  << " max=" << 1000.0 * double(audio_queue_max) / (4.0 * audio_rate) << '\n';
+                  << " audio_queue_drops=" << pacing.drops << " queued_ms mean="
+                  << 1000.0 * double(pacing.queue_sum) / double(pacing.queue_samples) /
+                         double(audio_rate)
+                  << " max=" << 1000.0 * double(pacing.queue_max) / double(audio_rate) << '\n';
     std::cout << "FINAL state_crc=0x" << std::hex << std::setw(8) << std::setfill('0')
               << m.state_crc() << std::dec << '\n';
     if (netplay_session && netplay_session->state() == f3rt::netplay::SessionState::Running) {

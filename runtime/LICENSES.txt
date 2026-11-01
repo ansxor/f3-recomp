@@ -84,3 +84,11 @@ name-to-zone registry) is project code, not derived from FAUST.
 
 third_party/sha1dc: SHA-1 with collision detection, https://github.com/cr-marcstevens/sha1collisiondetection
 revision a06f1adbe5522f3c939cd6a3f13d5ec7f4c1a988 (MIT, Marc Stevens and Dan Shumow; license in third_party/sha1dc/LICENSE.txt). Unmodified lib/ sources.
+
+third_party/ftpd: Dear ImGui 3DS platform and citro3d backends plus the system-font loader from
+ftpd (https://github.com/mtheall/ftpd), revision 8cd5e109fedcdc087744338ce73aea5266650a0b.
+imgui_citro3d.{cpp,h} and imgui_ctru.{cpp,h} are MIT (Michael Theall); imgui_font.{cpp,h},
+vshader.v.pica and the full GPL-3.0 text in third_party/ftpd/LICENSE are GPL-3.0. These sources are
+compiled only into the Nintendo 3DS executable of a generated game; desktop builds do not link
+them. libctru and citro3d (zlib licenses, devkitPro) are linked from the same 3DS toolchain for
+that target only.

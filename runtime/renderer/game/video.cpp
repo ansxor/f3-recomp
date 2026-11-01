@@ -89,11 +89,7 @@ struct GameVideo::Impl {
         std::vector<uint16_t> selected_sprite_plane;
         bool canonical_ready = false, selected_ready = false;
         explicit ReferencePlanes(GameVideoOptions options)
-            : canonical_sprite_plane(options.expanded() ? plane_size(options) : 0) {}
-        static size_t plane_size(GameVideoOptions options) {
-            return options.expanded() ? size_t(options.width()) * options.height()
-                                      : size_t(432) * 256;
-        }
+            : canonical_sprite_plane(options.expanded() ? sprite_plane_size(options) : 0) {}
         void invalidate() { canonical_ready = selected_ready = false; }
     };
     std::unique_ptr<ReferencePlanes> reference;
@@ -132,7 +128,7 @@ struct GameVideo::Impl {
             if (reference_selected && gpu_scale != options.scale) {
                 auto selected = options;
                 selected.scale = gpu_scale;
-                reference->selected_sprite_plane.resize(ReferencePlanes::plane_size(selected));
+                reference->selected_sprite_plane.resize(sprite_plane_size(selected));
             }
         }
         return *reference;
@@ -155,17 +151,11 @@ struct GameVideo::Impl {
         if (!canonical && !reference_selected) {
             reference_selected = true;
             if (reference && opts.scale != options.scale)
-                reference->selected_sprite_plane.resize(ReferencePlanes::plane_size(opts));
+                reference->selected_sprite_plane.resize(sprite_plane_size(opts));
         }
         if (captured->fallback) {
-            const unsigned left = opts.border * opts.scale;
-            for (unsigned y = 0; y < opts.height(); ++y)
-                for (unsigned x = 0; x < opts.width(); ++x)
-                    output[size_t(y) * opts.width() + x] =
-                        x < left || x >= left + geometry::NATIVE_WIDTH * opts.scale
-                            ? 0xff000000u
-                            : captured->native_pixels[(y / opts.scale) * geometry::NATIVE_WIDTH +
-                                                      (x - left) / opts.scale];
+            compose_captured_scene(*captured, {}, {}, output, opts,
+                                   serial ? ComposeMode::Serial : ComposeMode::Parallel, mask);
             return;
         }
         auto &ref = reference_planes();
@@ -173,13 +163,12 @@ struct GameVideo::Impl {
         auto &plane = fixed_plane ? ref.canonical_sprite_plane : ref.selected_sprite_plane;
         auto &ready = fixed_plane ? ref.canonical_ready : ref.selected_ready;
         if (!ready) {
-            if (plane.empty()) plane.resize(ReferencePlanes::plane_size(opts));
-            raster_sprites(captured->sprite_list(), captured->pen_mask,
-                           machine.video->sprite_tiles(), plane, {opts});
+            if (plane.empty()) plane.resize(sprite_plane_size(opts));
+            raster_captured_sprites(*captured, machine.video->sprite_tiles(), plane, opts);
             ready = true;
         }
-        compose_game_scene(captured_scene(mask), {plane, output, opts},
-                           serial ? ComposeMode::Serial : ComposeMode::Parallel);
+        compose_captured_scene(*captured, machine.video->playfield_tiles(), plane, output, opts,
+                               serial ? ComposeMode::Serial : ComposeMode::Parallel, mask);
     }
 
     void materialize_native() {
@@ -478,7 +467,7 @@ std::span<const uint32_t> GameVideo::presentation() const {
                                       : std::span<const uint32_t>(m_impl->machine.native_pixels());
 }
 
-void GameVideo::enable_gpu_presentation(bool enabled) {
+void GameVideo::enable_captured_presentation(bool enabled) {
     m_impl->materialize_native();
     m_impl->materialize_presentation();
     if (enabled) {
@@ -497,11 +486,11 @@ void GameVideo::enable_gpu_presentation(bool enabled) {
 }
 void GameVideo::set_capture_target(CapturedFrame *target) {
     if (target && !m_impl->captured)
-        throw std::runtime_error("GPU presentation snapshot is not enabled");
+        throw std::runtime_error("Captured presentation is not enabled");
     m_impl->capture_target = target;
 }
 void GameVideo::set_gpu_scale(unsigned scale) {
-    if (!m_impl->captured) throw std::runtime_error("GPU presentation snapshot is not enabled");
+    if (!m_impl->captured) throw std::runtime_error("Captured presentation is not enabled");
     if (!scale || scale > GameVideoOptions::MAX_GPU_SCALE)
         throw std::runtime_error("Game GPU reference scale must be 1..8");
     if (scale == m_impl->gpu_scale) return;
@@ -511,14 +500,15 @@ void GameVideo::set_gpu_scale(unsigned scale) {
     options.scale = scale;
     if (m_impl->reference && m_impl->reference_selected) {
         auto &ref = *m_impl->reference;
-        ref.selected_sprite_plane.resize(
-            scale == m_impl->options.scale ? 0 : Impl::ReferencePlanes::plane_size(options));
+        ref.selected_sprite_plane.resize(scale == m_impl->options.scale
+                                             ? 0
+                                             : sprite_plane_size(options));
         ref.selected_ready = false;
     }
     m_impl->gpu_scale = scale;
 }
 const CapturedFrame &GameVideo::captured_frame() const {
-    if (!m_impl->captured) throw std::runtime_error("GPU presentation snapshot is not enabled");
+    if (!m_impl->captured) throw std::runtime_error("Captured presentation is not enabled");
     return *m_impl->captured;
 }
 void GameVideo::render_reference(std::span<uint32_t> output, GameVideoOptions options,

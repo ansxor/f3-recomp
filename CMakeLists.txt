@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
+option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
+option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
+option(F3RT_SOUND_NATIVE "Recompile the sound CPU and link the native sound program" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
 option(F3RT_HLE_EVENTS "Compile the HLE voice-event observer used by --hle-events and the HLE audio tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
@@ -9,6 +12,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(F3RT_SDL AND NOT F3RT_NETPLAY)
+    message(FATAL_ERROR "F3RT_SDL requires F3RT_NETPLAY: the SDL frontend drives netplay sessions")
+endif()
+if(BUILD_TESTING AND NOT F3RT_HOST_TOOLS)
+    message(FATAL_ERROR "BUILD_TESTING requires F3RT_HOST_TOOLS: the tests link f3rt-runner")
+endif()
 include(cmake/dependencies.cmake)
 include(cmake/faust.cmake)
 f3rt_faust_dsp(NAME voice_filter CLASS VoiceFilterDsp)
@@ -35,6 +44,16 @@ set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
 set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
 set(F3_SOUND_GENERATED_DIR "" CACHE PATH "Pre-generated sound CPU C directory (optional)")
+if(NINTENDO_3DS)
+    if(F3RT_SDL OR F3RT_GPU OR F3RT_NETPLAY OR F3RT_HOST_TOOLS OR BUILD_TESTING OR F3RT_SOUND_NATIVE)
+        message(FATAL_ERROR "The 3DS build is core-only: configure with -DF3RT_SDL=OFF "
+            "-DF3RT_GPU=OFF -DF3RT_NETPLAY=OFF -DF3RT_HOST_TOOLS=OFF -DBUILD_TESTING=OFF "
+            "-DF3RT_SOUND_NATIVE=OFF")
+    endif()
+    if(NOT F3_ROM_DIR)
+        message(FATAL_ERROR "The 3DS build embeds the ROM set in RomFS: F3_ROM_DIR is required")
+    endif()
+endif()
 find_program(UV_EXECUTABLE uv REQUIRED)
 execute_process(COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
     python -c
@@ -108,6 +127,14 @@ set(F3_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_config")
 set(F3_COMPILE_ROMS_ARGS
     --configs ${F3_GAME_CONFIGS} --output "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
     --game "${F3_GAME}" --game-output "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
+set(F3_COMPILE_ROMS_OUTPUTS
+    "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
+    "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
+if(NINTENDO_3DS)
+    # The RomFS staging step copies exactly these chips, so the PAL files stay out of the image.
+    list(APPEND F3_COMPILE_ROMS_ARGS --files-output "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
+    list(APPEND F3_COMPILE_ROMS_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
+endif()
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
     INPUT_FILES
@@ -117,9 +144,7 @@ f3_run_generator(
         "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
         "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
     EXTRA_DATA "${F3_COMPILE_ROMS_ARGS}"
-    OUTPUT_FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
-        "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp"
+    OUTPUT_FILES ${F3_COMPILE_ROMS_OUTPUTS}
     COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
         python recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS})
 # Emit-unit headers come from the config alone (no ROM); recomp emit reads the same
@@ -226,42 +251,56 @@ if(F3_ROM_DIR)
         COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
             python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
 
-    if(NOT F3_SOUND_GENERATED_DIR)
-        set(F3_SOUND_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/sound-${F3_GAME}")
+    if(F3RT_SOUND_NATIVE)
+        if(NOT F3_SOUND_GENERATED_DIR)
+            set(F3_SOUND_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/sound-${F3_GAME}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py")
+        set(F3_COMPILE_SOUND_ARGS
+            --rom-dir "${F3_ROM_DIR}" --output "${F3_SOUND_GENERATED_DIR}"
+            --config "${F3_GAME_CONFIG}"
+            ${F3_PROFILE_GENERATOR_ARGS})
+        f3_run_generator(
+            STAMP_FILE "${F3_SOUND_GENERATED_DIR}/compile_sound.stamp"
+            INPUT_FILES
+                "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py"
+                ${RECOMP_SOURCES}
+                "${F3_GAME_CONFIG}"
+                ${F3_PROFILE_INPUTS}
+                "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
+                "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
+            EXTRA_DATA
+                "${_rom_identity}"
+                "${F3_COMPILE_SOUND_ARGS}"
+            OUTPUT_FILES
+                "${F3_SOUND_GENERATED_DIR}/sources.cmake"
+                "${F3_SOUND_GENERATED_DIR}/sound_program.c"
+                "${F3_SOUND_GENERATED_DIR}/sound_program.h"
+            COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
+                python recomp/compile/sound.py ${F3_COMPILE_SOUND_ARGS})
     endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py")
-    set(F3_COMPILE_SOUND_ARGS
-        --rom-dir "${F3_ROM_DIR}" --output "${F3_SOUND_GENERATED_DIR}"
-        --config "${F3_GAME_CONFIG}"
-        ${F3_PROFILE_GENERATOR_ARGS})
-    f3_run_generator(
-        STAMP_FILE "${F3_SOUND_GENERATED_DIR}/compile_sound.stamp"
-        INPUT_FILES
-            "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py"
-            ${RECOMP_SOURCES}
-            "${F3_GAME_CONFIG}"
-            ${F3_PROFILE_INPUTS}
-            "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-        EXTRA_DATA
-            "${_rom_identity}"
-            "${F3_COMPILE_SOUND_ARGS}"
-        OUTPUT_FILES
-            "${F3_SOUND_GENERATED_DIR}/sources.cmake"
-            "${F3_SOUND_GENERATED_DIR}/sound_program.c"
-            "${F3_SOUND_GENERATED_DIR}/sound_program.h"
-        COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-            python recomp/compile/sound.py ${F3_COMPILE_SOUND_ARGS})
 endif()
 
 set(MUSASHI ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/musashi)
-add_executable(f3rt_m68kmake ${MUSASHI}/m68kmake.c)
+set(F3_M68KMAKE_EXECUTABLE "" CACHE FILEPATH
+    "Host m68kmake for cross builds; built from source when empty")
+if(F3_M68KMAKE_EXECUTABLE)
+    get_filename_component(F3_M68KMAKE_EXECUTABLE "${F3_M68KMAKE_EXECUTABLE}" ABSOLUTE)
+    set(F3_M68KMAKE_COMMAND "${F3_M68KMAKE_EXECUTABLE}")
+    set(F3_M68KMAKE_DEPENDS "")
+elseif(CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "Cross-compiling requires -DF3_M68KMAKE_EXECUTABLE=<host m68kmake>")
+else()
+    add_executable(f3rt_m68kmake ${MUSASHI}/m68kmake.c)
+    set(F3_M68KMAKE_COMMAND f3rt_m68kmake)
+    set(F3_M68KMAKE_DEPENDS f3rt_m68kmake)
+endif()
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/musashi)
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.c ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.h
-    COMMAND f3rt_m68kmake ${CMAKE_CURRENT_BINARY_DIR}/musashi ${MUSASHI}/m68k_in.c
-    DEPENDS f3rt_m68kmake ${MUSASHI}/m68k_in.c
+    COMMAND ${F3_M68KMAKE_COMMAND} ${CMAKE_CURRENT_BINARY_DIR}/musashi ${MUSASHI}/m68k_in.c
+    DEPENDS ${F3_M68KMAKE_DEPENDS} ${MUSASHI}/m68k_in.c
     VERBATIM)
 add_library(f3rt_musashi STATIC ${MUSASHI}/m68kcpu.c ${MUSASHI}/softfloat/softfloat.c
     ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.c runtime/core_state.c)
@@ -296,12 +335,24 @@ if(GAME_NETPLAY_SOURCES)
 else()
     set(F3RT_GAME_NETPLAY_SOURCES runtime/stubs/netplay.cpp)
 endif()
+# The game hook above is always compiled; the client that drives it is optional.
+set(F3RT_NETPLAY_SOURCES "")
+if(F3RT_NETPLAY)
+    set(F3RT_NETPLAY_SOURCES
+        runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp)
+endif()
+if(NINTENDO_3DS)
+    set(F3RT_THREAD_SOURCES runtime/platform/thread_ctru.cpp)
+else()
+    set(F3RT_THREAD_SOURCES runtime/platform/thread_std.cpp)
+endif()
 set(F3RT_CORE_SOURCES
     runtime/third_party/sha1dc/sha1.c runtime/third_party/sha1dc/ubc_check.c
     runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp
+    runtime/renderer/game/captured_frame.cpp
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
     runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
@@ -311,7 +362,8 @@ set(F3RT_CORE_SOURCES
     runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
     runtime/audio/hle/synthesis.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
-    runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
+    ${F3RT_NETPLAY_SOURCES}
+    ${F3RT_THREAD_SOURCES}
     ${AUDIO_SOURCES}
 )
 
@@ -408,38 +460,43 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
-target_link_libraries(f3rt PUBLIC f3-netplay-shared)
 
-add_library(f3-netplay-shared STATIC
-    netplay/shared/contract.cpp
-)
-target_include_directories(f3-netplay-shared PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(f3-netplay-shared PUBLIC Yojimbo::yojimbo httplib::httplib)
-target_compile_options(f3-netplay-shared PRIVATE -Wall -Wextra -Wpedantic)
+if(F3RT_NETPLAY)
+    target_link_libraries(f3rt PUBLIC f3-netplay-shared)
 
-add_library(f3-netplay-relay STATIC
-    netplay/server/relay.cpp
-    netplay/server/state.cpp
-    netplay/server/log_writer.cpp
-    netplay/server/token_service.cpp
-    netplay/server/socket_transport.cpp
-)
-target_include_directories(f3-netplay-relay PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" netplay/server)
-target_link_libraries(f3-netplay-relay PUBLIC f3-netplay-shared cpp_yyjson::cpp_yyjson)
-target_compile_options(f3-netplay-relay PRIVATE -Wall -Wextra -Wpedantic)
+    add_library(f3-netplay-shared STATIC
+        netplay/shared/contract.cpp
+    )
+    target_include_directories(f3-netplay-shared PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(f3-netplay-shared PUBLIC Yojimbo::yojimbo httplib::httplib)
+    target_compile_options(f3-netplay-shared PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(f3-netplay-server
-    netplay/server/main.cpp
-)
-target_link_libraries(f3-netplay-server PRIVATE f3-netplay-relay)
+    add_library(f3-netplay-relay STATIC
+        netplay/server/relay.cpp
+        netplay/server/state.cpp
+        netplay/server/log_writer.cpp
+        netplay/server/token_service.cpp
+        netplay/server/socket_transport.cpp
+    )
+    target_include_directories(f3-netplay-relay PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" netplay/server)
+    target_link_libraries(f3-netplay-relay PUBLIC f3-netplay-shared cpp_yyjson::cpp_yyjson)
+    target_compile_options(f3-netplay-relay PRIVATE -Wall -Wextra -Wpedantic)
+
+    add_executable(f3-netplay-server
+        netplay/server/main.cpp
+    )
+    target_link_libraries(f3-netplay-server PRIVATE f3-netplay-relay)
+endif()
 
 if(BUILD_TESTING)
     include(GoogleTest)
-    add_executable(f3-netplay-relay-test
-        netplay/server/tests/relay_test.cpp
-    )
-    target_link_libraries(f3-netplay-relay-test PRIVATE f3-netplay-relay GTest::gtest_main)
-    gtest_discover_tests(f3-netplay-relay-test TEST_PREFIX "netplay-relay.")
+    if(F3RT_NETPLAY)
+        add_executable(f3-netplay-relay-test
+            netplay/server/tests/relay_test.cpp
+        )
+        target_link_libraries(f3-netplay-relay-test PRIVATE f3-netplay-relay GTest::gtest_main)
+        gtest_discover_tests(f3-netplay-relay-test TEST_PREFIX "netplay-relay.")
+    endif()
 endif()
 if(WIN32)
     target_link_libraries(f3rt PRIVATE ws2_32)
@@ -464,7 +521,13 @@ endif()
 if(F3_PROFILE_SLIM)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_SLIM_ENABLED=1)
 endif()
-if(F3_SOUND_GENERATED_DIR)
+if(F3_GENERATED_DIR)
+    add_subdirectory(recomp)
+endif()
+
+set(F3_SOUND_PROGRAM_AVAILABLE FALSE)
+if(F3RT_SOUND_NATIVE AND F3_SOUND_GENERATED_DIR)
+    set(F3_SOUND_PROGRAM_AVAILABLE TRUE)
     include("${F3_SOUND_GENERATED_DIR}/sources.cmake")
     add_library(f3_sound_recompiled STATIC ${F3_SOUND_GENERATED_SOURCES})
     target_include_directories(f3_sound_recompiled PUBLIC
@@ -477,40 +540,55 @@ if(F3_SOUND_GENERATED_DIR)
         endif()
     endif()
 endif()
-add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp tools/runner/sound/capture.cpp)
-target_include_directories(f3rt-runner PUBLIC tools/runner runtime include "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(f3rt-runner PUBLIC f3rt)
-if(F3_ROM_DIR)
-    target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
-endif()
-target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
-add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
-# A game opts into sound-extract/music-export by providing games/<game>/sound/profile.cpp, which
-# registers its sound request path under its set id. Every game's profile is linked into every
-# build, so any set can be extracted from any build.
-file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
-target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
-target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
-target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
-    F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-if(F3_ROM_DIR)
-    target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
+if(F3RT_HOST_TOOLS)
+    add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp tools/runner/sound/capture.cpp)
+    target_include_directories(f3rt-runner PUBLIC tools/runner runtime include "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(f3rt-runner PUBLIC f3rt)
+    if(F3_ROM_DIR)
+        target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
+    endif()
+    target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
+
+    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
+    # A game opts into sound-extract/music-export by providing games/<game>/sound/profile.cpp, which
+    # registers its sound request path under its set id. Every game's profile is linked into every
+    # build, so any set can be extracted from any build.
+    file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
+    target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
+    target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
+    target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
+        F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(F3_ROM_DIR)
+        target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
+    endif()
+    if(F3_GENERATED_DIR)
+        target_link_libraries(f3rt-runner PRIVATE f3_recompiled)
+        target_compile_definitions(f3rt-runner PRIVATE F3RT_GENERATED=1)
+        target_link_libraries(f3rt-tool PRIVATE f3_recompiled)
+        target_compile_definitions(f3rt-tool PRIVATE F3RT_GENERATED=1)
+    endif()
 endif()
-if(F3_GENERATED_DIR)
-    add_subdirectory(recomp)
-    target_link_libraries(f3rt-runner PRIVATE f3_recompiled)
-    target_compile_definitions(f3rt-runner PRIVATE F3RT_GENERATED=1)
-    target_link_libraries(f3rt-tool PRIVATE f3_recompiled)
-    target_compile_definitions(f3rt-tool PRIVATE F3RT_GENERATED=1)
-endif()
+# Shared frontend components: frame hand-off, audio pacing, the boot shortcut and config-file IO.
+# Used by the SDL frontend, the tools and the 3DS frontend; no SDL dependency of its own.
+add_library(f3rt-frontend STATIC
+    runtime/frontend/frame_slots.cpp
+    runtime/frontend/audio_pacer.cpp
+    runtime/frontend/fast_boot.cpp
+    runtime/frontend/config_file.cpp
+)
+target_include_directories(f3rt-frontend PUBLIC runtime runtime/frontend include
+    "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(f3rt-frontend PUBLIC f3rt)
+target_compile_options(f3rt-frontend PRIVATE -Wall -Wextra -Wpedantic)
+
 if(F3RT_SDL)
     add_library(f3rt-ui STATIC runtime/frontend/settings.cpp runtime/frontend/ui.cpp)
     target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(f3rt-ui PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
-    target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui)
-    if(F3_SOUND_GENERATED_DIR)
+    target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui f3rt-frontend)
+    if(F3_SOUND_PROGRAM_AVAILABLE)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_SOUND_GENERATED=1)
     endif()
     add_executable(f3rt-run runtime/frontend/frontend.cpp)
@@ -560,7 +638,7 @@ if(F3RT_SDL)
         endforeach()
     endif()
 endif()
-if(F3_SOUND_GENERATED_DIR)
+if(F3_SOUND_PROGRAM_AVAILABLE)
     foreach(frontend f3rt-tool f3rt-run ${F3_GAME_EXECUTABLE})
         if(TARGET ${frontend})
             target_link_libraries(${frontend} PRIVATE f3_sound_recompiled)
@@ -572,9 +650,11 @@ if(F3_SOUND_GENERATED_DIR)
         target_compile_definitions(f3rt-runner PRIVATE F3RT_SOUND_GENERATED=1)
     endif()
 endif()
-add_executable(f3rt-replay runtime/replay.cpp)
-target_link_libraries(f3rt-replay PRIVATE f3rt)
-target_compile_definitions(f3rt-replay PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_HOST_TOOLS)
+    add_executable(f3rt-replay runtime/replay.cpp)
+    target_link_libraries(f3rt-replay PRIVATE f3rt)
+    target_compile_definitions(f3rt-replay PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
+endif()
 include(CTest)
 if(BUILD_TESTING)
     add_test(NAME game-geometry-literals COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
@@ -600,6 +680,7 @@ if(BUILD_TESTING)
     endforeach()
     # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
     target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
+    target_link_libraries(f3rt-test-audio PRIVATE f3rt-frontend)
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)
@@ -619,4 +700,9 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-frontend PRIVATE f3rt-test-support f3rt-ui GTest::gtest_main)
         gtest_discover_tests(f3rt-test-frontend TEST_PREFIX "runtime-frontend.")
     endif()
+endif()
+
+# The devkitPro platform file sets NINTENDO_3DS; packaging lives in its own module.
+if(NINTENDO_3DS)
+    include(cmake/n3ds.cmake)
 endif()

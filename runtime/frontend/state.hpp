@@ -20,11 +20,8 @@ inline void frontend_state_slot(Machine &machine, const std::filesystem::path &p
     auto put = [&](size_t offset, uint32_t value) {
         for (unsigned i = 0; i < 4; ++i) header[offset + i] = uint8_t(value >> (24 - i * 8));
     };
-    const std::vector<uint8_t> *regions[] = {&machine.roms.main,       &machine.roms.sprites,
-                                             &machine.roms.sprites_hi, &machine.roms.tiles,
-                                             &machine.roms.tiles_hi,   &machine.roms.sound,
-                                             &machine.roms.samples};
-    for (size_t i = 0; i < 7; ++i) put(8 + i * 4, crc32(regions[i]->data(), regions[i]->size()));
+    const auto &rom_crcs = machine.rom_region_crcs();
+    for (size_t i = 0; i < rom_crcs.size(); ++i) put(8 + i * 4, rom_crcs[i]);
     if (machine.state_size() > UINT32_MAX)
         throw std::runtime_error("Save state exceeds file format limit");
     put(36, uint32_t(machine.state_size()));

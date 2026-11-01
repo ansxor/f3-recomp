@@ -15,6 +15,8 @@ nvram/
 cfg/
 *.wav
 *.flac
+# The 3DS banner audio is a committed build asset (generated, not ROM-derived).
+!games/*/n3ds/banner.wav
 netplay-logs/
 # Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
 *.profile

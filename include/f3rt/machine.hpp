@@ -42,6 +42,9 @@ private:
 public:
     // Observing native scanout materializes a retained GPU-presented frame.
     const std::vector<uint32_t> &native_pixels() const;
+    // Region CRCs of the ROM set as loaded; the sprite, tile and sample bytes themselves are
+    // released once decoded, so this survives the whole session (save states, netplay identity).
+    const std::array<uint32_t, 7> &rom_region_crcs() const { return m_rom_crcs; }
     RomSet roms;
     std::unique_ptr<Video> video;
     // Host-only `--discovery-log` observer of graphics/control stores; null = off. Never serialized.
@@ -111,6 +114,7 @@ public:
 
 private:
     uint64_t m_hardware_cycles = 0;
+    std::array<uint32_t, 7> m_rom_crcs{};
     uint64_t m_next_vblank = 0, m_irq3_at = UINT64_MAX;
     uint64_t m_watchdog_at = 0;
     uint64_t raster_cycle(uint64_t pixels) const;

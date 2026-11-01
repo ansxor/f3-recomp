@@ -14,6 +14,7 @@
 #include "third_party/audio/mc68681.hpp"
 #include "third_party/audio/es5510.hpp"
 #include "state_io.hpp"
+#include "frontend/audio_pacer.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
@@ -1812,4 +1813,42 @@ TEST(Audio, MutableBusSliceAccumulateAndOtisTargetBus) {
     buses.subspan(0, 16).reverb() += stereo.span();
     EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbL]), 1.0f);
     EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbR]), 2.0f);
+}
+
+// Queue policy: for any sequence of queue depths and chunk sizes, the drop decision, the silence
+// lead, the rate ratio and the recorded depths keep their documented relation.
+RC_GTEST_PROP(AudioPacer, PolicyInvariants, ()) {
+    const uint32_t rate = *rc::gen::element<uint32_t>(8000, 22050, 44100, 48000);
+    const size_t target = *rc::gen::inRange<size_t>(1, size_t(rate) / 4 + 1);
+    const unsigned max_queue_ms = *rc::gen::inRange<unsigned>(0, 200);
+    const bool throttle = *rc::gen::arbitrary<bool>();
+    f3rt::AudioPacer pacer({.rate = rate,
+                            .target_frames = target,
+                            .max_queue_ms = max_queue_ms,
+                            .throttle = throttle});
+    const size_t cap = target + size_t(rate) * max_queue_ms / 1000;
+    const size_t steps = *rc::gen::inRange<size_t>(1, 64);
+    uint64_t deepest = 0, sum = 0, drops = 0;
+    for (size_t step = 0; step < steps; ++step) {
+        const size_t queued = *rc::gen::inRange<size_t>(0, cap + target + 1);
+        const size_t chunk = *rc::gen::inRange<size_t>(0, target * 2 + 1);
+        const auto action = pacer.before_push(queued, chunk);
+        const bool dropped = throttle && queued > cap;
+        RC_ASSERT(action.drop_backlog == dropped);
+        drops += dropped;
+        const size_t effective = dropped ? 0 : queued;
+        RC_ASSERT(action.lead_silence_frames ==
+                  (throttle && effective == 0 && chunk < target ? target - chunk : 0));
+        const size_t depth = effective + action.lead_silence_frames + chunk;
+        const double ratio = pacer.after_push(depth);
+        if (throttle) RC_ASSERT(ratio >= 0.995 - 1e-9 && ratio <= 1.005 + 1e-9);
+        else RC_ASSERT(ratio == 1.0);
+        deepest = std::max(deepest, uint64_t(depth));
+        sum += depth;
+        RC_ASSERT(pacer.stats().queue_max >= depth);
+    }
+    RC_ASSERT(pacer.stats().queue_max == deepest);
+    RC_ASSERT(pacer.stats().queue_samples == steps);
+    RC_ASSERT(pacer.stats().queue_sum == sum);
+    RC_ASSERT(pacer.stats().drops == drops);
 }

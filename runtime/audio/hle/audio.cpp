@@ -1,6 +1,7 @@
 #include "audio/hle/audio.hpp"
 #include "f3rt/memory_map.hpp"
 #include "audio/hle/core.hpp"
+#include "platform/thread.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -8,7 +9,6 @@
 #include <exception>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 
 namespace f3rt::hle {
 static_assert(Audio::OUTPUT_BOOST == OUTPUT_BOOST,
@@ -42,13 +42,13 @@ struct AudioEngine::Impl : PcmSink {
     std::array<float, PCM_CAPACITY * 2> pcm{};
     uint64_t pcm_read = 0, pcm_write = 0;
     std::atomic<uint64_t> generated{0};
-    std::thread worker;
+    Thread worker;
 
     Impl(std::span<const uint8_t> rom, std::span<const uint16_t> samples, uint8_t *ram)
         : shared(ram), core(rom, samples) {
         if (!shared) throw std::invalid_argument("HLE requires shared RAM");
         core.set_pcm_sink(this);
-        worker = std::thread([this] { run(); });
+        worker = Thread(ThreadRole::AudioSynth, 0, [this] { run(); });
     }
     ~Impl() {
         {
@@ -249,7 +249,10 @@ size_t AudioEngine::render_ready(int16_t *out, size_t count) {
 uint64_t AudioEngine::generated() const {
     return m_impl->generated.load(std::memory_order_relaxed);
 }
-Audio::EnhancedStats AudioEngine::stats() const { return {m_impl->command_count, generated()}; }
+Audio::EnhancedStats AudioEngine::stats() const {
+    const auto render = m_impl->core.render_stats();
+    return {m_impl->command_count, generated(), render.voices_started, render.voices_active};
+}
 #if F3RT_HLE_EVENTS
 void AudioEngine::set_observer(std::function<void(const VoiceEvent &)> observer) {
     flush();

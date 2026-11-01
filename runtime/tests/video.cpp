@@ -1,14 +1,20 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/video.hpp"
+#include "f3rt/game_video.hpp"
+#include "f3rt/input.hpp"
 #include "renderer/game/tiles.hpp"
 #include "renderer/game/text.hpp"
 #include "renderer/game/sprites.hpp"
 #include "renderer/game/lines.hpp"
+#include "renderer/game/captured_frame.hpp"
+#include "runner.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -610,3 +616,44 @@ RC_GTEST_PROP(Video, Color15BitUnpackingInvariant, ()) {
 
     RC_ASSERT(pixels[0] == expected_pixel);
 }
+
+#if defined(F3RT_GAME_VIDEO)
+// Land Maker attract mode after boot, composed at both geometries by the row workers and by the
+// caller: chunking and per-job kernel selection must not change a single pixel. ROM-gated.
+TEST(GameCompositor, ParallelMatchesSerial) {
+    const char *rom_env = std::getenv("F3_ROM_DIR");
+#ifdef F3RT_DEFAULT_ROM_DIR
+    if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
+#endif
+    if (!rom_env || !*rom_env)
+        GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed compositor check";
+    std::unique_ptr<f3rt::Machine> machine;
+    try {
+        machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
+                                                      F3RT_DEFAULT_SET, true, 1);
+    } catch (const std::exception &error) {
+        GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
+    }
+    for (unsigned frame = 0; frame < 900; ++frame) {
+        f3rt::apply_local_inputs(*machine, {});
+        ASSERT_TRUE(machine->run_frame(true));
+    }
+    ASSERT_NE(machine->game_video, nullptr);
+    const auto &captured = machine->game_video->captured_frame();
+    ASSERT_FALSE(captured.fallback) << "Frame 900 must be a supported native scanout";
+    for (const unsigned border : {0u, 40u}) {
+        f3rt::GameVideoOptions options;
+        options.scale = 1;
+        options.border = border;
+        std::vector<uint16_t> plane(f3rt::sprite_plane_size(options));
+        f3rt::raster_captured_sprites(captured, machine->video->sprite_tiles(), plane, options);
+        std::vector<uint32_t> expected(size_t(options.width()) * options.height());
+        f3rt::compose_captured_scene(captured, machine->video->playfield_tiles(), plane, expected,
+                                     options, f3rt::ComposeMode::Serial);
+        std::vector<uint32_t> parallel(expected.size());
+        f3rt::compose_captured_scene(captured, machine->video->playfield_tiles(), plane, parallel,
+                                     options, f3rt::ComposeMode::Parallel);
+        EXPECT_EQ(parallel, expected) << "border=" << border;
+    }
+}
+#endif

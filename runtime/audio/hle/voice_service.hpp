@@ -53,6 +53,11 @@ public:
 
     std::array<Voice, 32> &pool() noexcept { return m_voices; }
 
+    // Debug/diagnostic: voices started since reset and voices currently sounding. A build whose music
+    // loses instruments shows a started count below the desktop's over the same frames.
+    uint64_t launched() const { return m_launched; }
+    unsigned active_voices() const;
+
     // Deactivates a voice and emits Stop. `end_sample` keeps a retriggered voice's slot for its envelope restart.
     void stop(Voice &voice, uint64_t tick);
     void end_sample(Voice &voice, uint64_t tick);
@@ -110,6 +115,7 @@ private:
 
     SoundBank &m_bank;
     std::array<Voice, 32> m_voices{};
+    uint64_t m_launched = 0;
     std::array<Pending, 96> m_pending{};
     DriverClock m_driver;
     NoteQueue<Pending, 96> m_queue;

@@ -39,6 +39,7 @@
 #include <array>
 #include <cstdint>
 #include <iosfwd>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -299,5 +300,9 @@ private:
     StrayWriter *m_last_stray = nullptr; // one-entry cache into m_stray (node-stable)
     DiscoveryLog *m_discovery = nullptr;
 };
+
+// Frontend helper: the game's emit units with every registered behaviour and flicker source.
+// Returns null when the game declares no units.
+std::unique_ptr<SpriteUnits> make_game_sprite_units(Machine &machine, bool flicker_shadows);
 
 } // namespace f3rt

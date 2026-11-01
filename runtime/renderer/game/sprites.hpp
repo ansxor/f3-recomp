@@ -16,6 +16,10 @@ struct SpriteRasterOptions {
     bool flipped = false;        // flipscreen row phase
     bool accumulate = false;     // sprite trails: keep the existing plane contents
 };
+// Indexed sprite plane for `geometry`: 432x256 for the fixed native frame, width*height expanded.
+constexpr size_t sprite_plane_size(GameVideoOptions geometry) {
+    return geometry.expanded() ? size_t(geometry.width()) * geometry.height() : size_t(432) * 256;
+}
 // Indexed sprite plane from a latched list. Sprite 0 is the front-most;
 // GameSprites::raster() delegates here, and CapturedFrame sprite lists use it
 // for reference-scale planes.

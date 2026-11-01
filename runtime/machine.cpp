@@ -52,11 +52,19 @@ Machine::Machine(RomSet set)
     if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
         roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
+    // Region identity is read for save states and netplay long after the raw bytes are released.
+    m_rom_crcs = f3rt::rom_region_crcs(roms);
     if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Invalid video ROM regions");
+    // The decoders copy what they retain, so the raw sprite/tile/sample bytes are dead weight now.
+    std::vector<uint8_t>().swap(roms.sprites);
+    std::vector<uint8_t>().swap(roms.sprites_hi);
+    std::vector<uint8_t>().swap(roms.tiles);
+    std::vector<uint8_t>().swap(roms.tiles_hi);
     audio->set_shared_ram(shared.data(), shared.size());
     audio->load_sound_rom(roms.sound);
     audio->load_sample_rom(roms.samples);
+    std::vector<uint8_t>().swap(roms.samples);
     interpreter = std::make_unique<Interpreter>(*this);
     audio->set_cpu_runner([this](int cycles) { return interpreter->run_audio(cycles); });
     audio->set_reset_callback([this](bool asserted) { interpreter->audio_reset(asserted); });

@@ -207,6 +207,9 @@ void Core::set_voice_observer(std::function<void(const VoiceEvent &)> observer) 
 
 uint64_t Core::tick() const { return m_impl->worker_tick; }
 uint64_t Core::frames() const { return m_impl->worker_frames; }
+Core::RenderStats Core::render_stats() const {
+    return {m_impl->voices.launched(), m_impl->voices.active_voices()};
+}
 uint64_t Core::frames_at(uint64_t tick) { return Impl::frames_at(tick); }
 
 void Core::advance(uint64_t tick) { m_impl->advance_worker(std::max(m_impl->worker_tick, tick)); }
@@ -258,6 +261,11 @@ void Core::enable_flush_denormals() {
     __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
     fpcr |= (1ULL << 24);
     __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
+#elif defined(__arm__)
+    uint32_t fpscr;
+    __asm__ __volatile__("vmrs %0, fpscr" : "=r"(fpscr));
+    fpscr |= (1u << 24); // FZ: flush-to-zero, the AArch32 counterpart of FPCR.FZ
+    __asm__ __volatile__("vmsr fpscr, %0" : : "r"(fpscr));
 #endif
 }
 

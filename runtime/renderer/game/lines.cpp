@@ -331,7 +331,7 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
                 // Every map row the scanline can sample: the highest sub-row phase stays below
                 // y_fraction + y_step (expanded sub-rows, GameLines/compositor vertical phase).
                 const int rows_spanned =
-                    std::clamp((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
+                    std::clamp<int>((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
                 const unsigned first = unsigned(pf.source_y) & 511;
                 const unsigned last = (first + unsigned(rows_spanned)) & 511;
                 pf.full_res_offset = int16_t(maps.offset(i, first >> 4, last >> 4));

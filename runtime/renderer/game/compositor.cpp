@@ -3,13 +3,15 @@
 #include "renderer/game/text.hpp"
 #include "renderer/game/tiles.hpp"
 #include "renderer/game/clip.hpp"
+#include "platform/thread.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <thread>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace f3rt {
 namespace {
@@ -255,16 +257,22 @@ void compose_expanded_rows(const SceneJob &job, unsigned begin, unsigned end) no
     KERNELS[job.target.geometry.scale - 1](job, begin, end);
 }
 
-// Three persistent workers plus the caller leave room for emulation/audio on
-// a ten-core host. Each participant owns a contiguous native-row interval.
+void compose_range(const SceneJob &job, unsigned begin, unsigned end) noexcept {
+    if (job.target.geometry.expanded()) compose_expanded_rows(job, begin, end);
+    else compose_rows<0>(job, begin, end);
+}
+
+// Persistent helpers plus the caller. Participants pull 8-row chunks from a shared cursor, so a
+// helper that only receives idle-time slices never stalls an otherwise finished frame, and the
+// caller's own share shrinks as helpers finish early.
 class RowWorkers {
 public:
     RowWorkers() {
-        const unsigned hardware = std::thread::hardware_concurrency();
-        m_count = hardware ? std::min(3u, hardware - 1) : 1;
+        const unsigned count = compose_helper_count();
+        m_threads.reserve(count);
         try {
-            for (unsigned i = 0; i < m_count; ++i)
-                m_threads[i] = std::thread([this, i] { work(i + 1); });
+            for (unsigned i = 0; i < count; ++i)
+                m_threads.emplace_back(ThreadRole::ComposeHelper, i, [this] { work(); });
         } catch (...) {
             stop();
             throw;
@@ -281,23 +289,31 @@ public:
         {
             std::lock_guard lock(m_mutex);
             m_job = &job;
-            m_remaining = m_count;
+            m_cursor.store(0, std::memory_order_relaxed);
+            m_remaining = unsigned(m_threads.size()) + 1;
             ++m_generation;
         }
         m_ready.notify_all();
-        compose_part(job, 0);
+        compose_chunks(job);
         std::unique_lock lock(m_mutex);
-        m_done.wait(lock, [this] { return m_remaining == 0; });
+        if (--m_remaining == 0) m_done.notify_one();
+        else m_done.wait(lock, [this] { return m_remaining == 0; });
         m_job = nullptr;
     }
 
 private:
-    void compose_part(const SceneJob &job, unsigned part) const noexcept {
-        const unsigned participants = m_count + 1;
-        compose_expanded_rows(job, geometry::FIRST_LINE + geometry::HEIGHT * part / participants,
-                              geometry::FIRST_LINE + geometry::HEIGHT * (part + 1) / participants);
+    static constexpr unsigned CHUNK_ROWS = 8;
+    static constexpr unsigned CHUNK_COUNT =
+        (geometry::END_LINE - geometry::FIRST_LINE + CHUNK_ROWS - 1) / CHUNK_ROWS;
+
+    void compose_chunks(const SceneJob &job) const noexcept {
+        for (unsigned chunk; (chunk = m_cursor.fetch_add(1, std::memory_order_relaxed)) <
+                             CHUNK_COUNT;) {
+            const unsigned begin = geometry::FIRST_LINE + chunk * CHUNK_ROWS;
+            compose_range(job, begin, std::min(begin + CHUNK_ROWS, geometry::END_LINE));
+        }
     }
-    void work(unsigned part) {
+    void work() {
         uint64_t observed = 0;
         std::unique_lock lock(m_mutex);
         for (;;) {
@@ -306,7 +322,7 @@ private:
             observed = m_generation;
             const SceneJob *job = m_job;
             lock.unlock();
-            compose_part(*job, part);
+            compose_chunks(*job);
             lock.lock();
             if (--m_remaining == 0) m_done.notify_one();
         }
@@ -317,16 +333,17 @@ private:
             m_stopping = true;
         }
         m_ready.notify_all();
-        for (auto &thread : m_threads)
-            if (thread.joinable()) thread.join();
+        for (auto &thread : m_threads) thread.join();
+        m_threads.clear();
     }
 
-    std::array<std::thread, 3> m_threads;
+    std::vector<Thread> m_threads;
     std::mutex m_submission_mutex, m_mutex;
     std::condition_variable m_ready, m_done;
+    mutable std::atomic<unsigned> m_cursor{0};
     const SceneJob *m_job = nullptr;
     uint64_t m_generation = 0;
-    unsigned m_count = 0, m_remaining = 0;
+    unsigned m_remaining = 0;
     bool m_stopping = false;
 };
 } // namespace
@@ -334,14 +351,14 @@ private:
 void compose_game_scene(const FrameScene &scene, const SceneTarget &target, ComposeMode mode) {
     const SceneJob job{scene, target};
     validate_scene(job);
-    const bool expanded = target.geometry.expanded();
     if (mode == ComposeMode::Serial) {
-        if (expanded) compose_expanded_rows(job, geometry::FIRST_LINE, geometry::END_LINE);
-        else compose_rows<0>(job, geometry::FIRST_LINE, geometry::END_LINE);
-    } else if (!expanded) {
-        // Constant native geometry also removes per-pixel variable division.
-        compose_rows<0>(job, geometry::FIRST_LINE, geometry::END_LINE);
+        if (target.geometry.expanded())
+            compose_expanded_rows(job, geometry::FIRST_LINE, geometry::END_LINE);
+        else
+            compose_rows<0>(job, geometry::FIRST_LINE, geometry::END_LINE);
     } else {
+        // The kernel is chosen per job, so native geometry avoids per-pixel variable division
+        // just as it does on the caller.
         static RowWorkers workers;
         workers.compose(job);
     }
