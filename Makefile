@@ -4,7 +4,7 @@
 GAME       ?= commandw
 ROM_DIR    ?= $(CURDIR)/roms/$(GAME)
 BUILD_TYPE ?= Release
-BUILD_DIR  ?= build-$(GAME)
+BUILD_DIR  ?= build/$(GAME)
 GENERATOR  ?= Ninja
 CMAKE_ARGS ?=
 FRAMES     ?= 600
@@ -38,7 +38,7 @@ help:
 	@echo "  test        build, then ctest --output-on-failure"
 	@echo "  run         build, then run the game executable windowed"
 	@echo "  smoke       build, then headless run for FRAMES frames"
-	@echo "  headless    configure, build, test with F3RT_SDL=OFF F3RT_GPU=OFF in build-GAME-headless"
+	@echo "  headless    configure, build, test with F3RT_SDL=OFF F3RT_GPU=OFF in build/GAME-headless"
 	@echo "  clean       cmake --build --target clean"
 	@echo "  distclean   rm -rf BUILD_DIR (only if it holds a CMakeCache.txt)"
 	@echo "  list-games  ROM sets under roms/ that have games/SET/config.toml"
@@ -50,7 +50,7 @@ help:
 	@echo "  GAME        ROM set / game id                     (commandw)"
 	@echo "  ROM_DIR     directory holding the set's ROM files (roms/GAME)"
 	@echo "  BUILD_TYPE  CMAKE_BUILD_TYPE                      (Release)"
-	@echo "  BUILD_DIR   build directory                       (build-GAME)"
+	@echo "  BUILD_DIR   build directory                       (build/GAME)"
 	@echo "  GENERATOR   CMake generator                       (Ninja)"
 	@echo "  CMAKE_ARGS  extra raw arguments for configure     (empty)"
 	@echo "  CC, CXX     compilers, forwarded to CMake when set"
@@ -95,7 +95,7 @@ smoke: build
 	@$(need_exe)
 	$(call shq,$(EXE)) --frames $(call shq,$(FRAMES)) --headless
 
-headless: BUILD_DIR = build-$(GAME)-headless
+headless: BUILD_DIR = build/$(GAME)-headless
 headless: CONFIG_EXTRA = -DF3RT_SDL=OFF -DF3RT_GPU=OFF
 headless: build test
 

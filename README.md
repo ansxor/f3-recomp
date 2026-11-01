@@ -41,7 +41,7 @@ make help
 ## Running
 
 ```sh
-./build-landmakrj/landmakr
+./build/landmakrj/landmakrj
 ```
 
 Run with `--help` for all command-line options.

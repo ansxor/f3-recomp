@@ -11,11 +11,9 @@ from pathlib import Path
 
 def find_default_binary() -> Path | None:
     candidates = [
-        Path("build/f3rt-tool"),
-        Path("build-landmakrj/f3rt-tool"),
-        Path("build-commandw/f3rt-tool"),
-        Path("build/f3rt-gameplay-regression"),
-        Path("build-landmakrj/f3rt-gameplay-regression"),
+        Path("build/landmakrj/f3rt-tool"),
+        Path("build/commandw/f3rt-tool"),
+        Path("build/landmakrj/f3rt-gameplay-regression"),
     ]
     for candidate in candidates:
         if candidate.is_file():

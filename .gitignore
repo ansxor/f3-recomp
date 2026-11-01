@@ -22,8 +22,7 @@ netplay-logs/
 !profiles/.gitkeep
 f3-cold-hits.log
 
-# CMake/Makefile build trees: BUILD_DIR=build-<game> (and build-<game>-headless)
-/build-*/
+# CMake/Makefile build trees: BUILD_DIR=build/<game> (and build/<game>-headless)
 # In-source CMake leftovers from a configure run in the source root
 CMakeFiles/
 CMakeCache.txt

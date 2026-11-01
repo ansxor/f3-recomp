@@ -1416,9 +1416,9 @@ def game_executable(g: Game, explicit: str | None, instrumented: bool = False) -
         rom = f"-DF3_ROM_DIR={g.rom_dir} " if g.rom_dir else ""
         raise SystemExit(
             f"f3a: --watch needs an instrumented {g.id} build; configure and build one once:\n"
-            f"  cmake -S . -B build-{g.id}-instrument -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_GAME={g.id} "
-            f"{rom}-DF3_PROFILE_INSTRUMENT=ON\n  cmake --build build-{g.id}-instrument --target "
-            f"{g.id.rstrip('j')}"
+            f"  cmake -S . -B build/{g.id}-instrument -G Ninja -DCMAKE_BUILD_TYPE=Release -DF3_GAME={g.id} "
+            f"{rom}-DF3_PROFILE_INSTRUMENT=ON\n  cmake --build build/{g.id}-instrument --target "
+            f"{g.id}"
         )
     raise SystemExit(f"f3a: no built executable for {g.id}; build it or pass --exe")
 
@@ -2638,8 +2638,8 @@ def cmd_graph(args) -> None:
 
 
 def build_instrumented(g: Game) -> Path:
-    build_dir = ROOT / f"build-{g.id}-instrument"
-    target = "landmakr" if g.id in ("landmakrj", "landmakr") else g.id  # CMakeLists.txt F3_GAME_EXECUTABLE
+    build_dir = ROOT / f"build/{g.id}-instrument"
+    target = g.id  # CMakeLists.txt F3_GAME_EXECUTABLE
     if not g.rom_dir or not Path(g.rom_dir).is_dir():
         raise SystemExit(f"f3a: ROM directory unknown or not found: {g.rom_dir}; pass --rom-dir or set F3_ROM_DIR")
     print(f"configuring {build_dir.name} ({g.id}, instrumented)...")
@@ -3074,7 +3074,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="input script(s) to run in addition to attract mode",
     )
     p.add_argument("--out", help="output profile path (default: profiles/<game>.profile)")
-    p.add_argument("--build", action="store_true", help="configure and build build-<id>-instrument if missing")
+    p.add_argument("--build", action="store_true", help="configure and build build/<id>-instrument if missing")
     p.add_argument(
         "--replace",
         action="store_true",
