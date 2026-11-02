@@ -1,9 +1,21 @@
 #include "composer.hpp"
+#include "cpu_counters.hpp"
+#include "log.hpp"
 #include "renderer/game/captured_frame.hpp"
-#include "renderer/game/sprites.hpp"
+#include "renderer/game/indexed_compositor.hpp"
+#include "renderer/game/row_workers.hpp"
+#include <3ds.h>
 #include <chrono>
 
 namespace f3rt::n3ds {
+namespace {
+// The tile-row opacity table costs 1 MiB; build it only when the application region keeps this much
+// free after load, so the table can never be the reason an allocation fails.
+constexpr uint64_t OPACITY_MIN_FREE = 4 * 1024 * 1024;
+// Staging rows the display transfer reads: the picture height, not the whole texture.
+constexpr unsigned STAGING_STRIDE = 512;
+} // namespace
+
 Composer::Composer(Shared &shared, Session &session, const Settings &settings, PerfStats &perf)
     : m_shared(shared), m_session(session), m_settings(settings), m_perf(perf) {}
 Composer::~Composer() { stop(); }
@@ -15,11 +27,30 @@ void Composer::stop() {
     m_shared.cv.notify_all();
     m_thread.join();
 }
+
+void Composer::build_opacity() {
+    const auto tile_pixels = m_session.playfield_tiles();
+    if (tile_pixels.empty()) return;
+    const uint64_t free_bytes = osGetMemRegionFree(MEMREGION_APPLICATION);
+    const size_t bytes = f3rt::TileRowOpacity::bytes(tile_pixels);
+    if (free_bytes < OPACITY_MIN_FREE + bytes) {
+        log_line("n3ds: tile opacity skipped tiles=%zu bytes=%zu free_kib=%u", tile_pixels.size() / 256,
+                 bytes, unsigned(free_bytes / 1024));
+        m_opacity_checked = true;
+        return;
+    }
+    m_opacity.build(tile_pixels);
+    m_opacity_checked = true;
+    log_line("n3ds: tile opacity tiles=%u bytes=%zu free_kib=%u", m_opacity.tile_count(), bytes,
+             unsigned(free_bytes / 1024));
+}
+
 void Composer::run() {
     // Presentation stays pixel-exact at scale 1; only the side border may widen the frame.
-    f3rt::GameVideoOptions options{1, m_settings.border};
-    const size_t pixel_count = size_t(options.width()) * options.height();
-    m_plane.resize(f3rt::sprite_plane_size(options));
+    const f3rt::GameVideoOptions options{1, m_settings.border};
+    const unsigned height = options.height();
+    f3rt::IndexedScratch scratch;
+    scratch.configure(options);
     while (true) {
         std::unique_lock lock(m_shared.mutex);
         m_shared.cv.wait(lock, [&] { return m_stop.load() || m_shared.emulation.unseen(); });
@@ -34,14 +65,25 @@ void Composer::run() {
         out.epoch = shot->epoch;
         out.scale = options.scale;
         out.start = shot->start;
-        out.pixels.resize(pixel_count);
+        uint32_t *staging = out.rgba;
+        const size_t stride = out.stride;
         lock.unlock();
+        if (!staging) continue;
+        if (!m_opacity_checked) build_opacity();
+        CpuCounters *counters = nullptr;
+        if (m_perf.cpu_counters.load(std::memory_order_relaxed)) {
+            if (!m_counters_open) m_counters_open = m_counters.open();
+            if (m_counters.available()) counters = &m_counters;
+        }
         const auto begin = std::chrono::steady_clock::now();
-        f3rt::raster_captured_sprites(*shot->captured, m_session.sprite_tiles(), m_plane, options);
-        const auto raster_end = std::chrono::steady_clock::now();
-        f3rt::compose_captured_scene(*shot->captured, m_session.playfield_tiles(), m_plane,
-                                     out.pixels, options, f3rt::ComposeMode::Parallel);
+        f3rt::compose_captured_indexed(*shot->captured, m_session.playfield_tiles(),
+                                       m_session.sprite_tiles(), scratch,
+                                       {staging, size_t(STAGING_STRIDE) * 256}, stride,
+                                       f3rt::PixelFormat::Rgba8888, options,
+                                       m_opacity.empty() ? nullptr : &m_opacity, counters);
         const auto end = std::chrono::steady_clock::now();
+        // The writer owns cache maintenance: the display transfer reads these rows by DMA.
+        GSPGPU_FlushDataCache(staging, u32(size_t(stride) * height * sizeof(uint32_t)));
         const auto to_us = [](auto span) {
             return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(span).count());
         };
@@ -52,9 +94,26 @@ void Composer::run() {
                          : int64_t(sample);
             slot.store(uint64_t(value), std::memory_order_relaxed);
         };
-        ema(m_perf.raster_us, to_us(raster_end - begin));
-        ema(m_perf.scene_us, to_us(end - raster_end));
-        ema(m_perf.compose_us, to_us(end - begin));
+        const auto maximum = [](std::atomic<uint64_t> &slot, uint64_t sample) {
+            uint64_t previous = slot.load(std::memory_order_relaxed);
+            while (sample > previous &&
+                   !slot.compare_exchange_weak(previous, sample, std::memory_order_relaxed)) {
+            }
+        };
+        const uint64_t compose_us = to_us(end - begin);
+        ema(m_perf.compose_us, compose_us);
+        maximum(m_perf.compose_max_us, compose_us);
+        m_perf.fallback_rows.store(scratch.stats.fallback_rows.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+        m_perf.special_px.store(scratch.stats.special_px.load(std::memory_order_relaxed),
+                                std::memory_order_relaxed);
+        m_perf.chunks.store(f3rt::compose_workers().participants(), std::memory_order_relaxed);
+        if (counters) {
+            const auto sample = counters->sample();
+            m_perf.cpu_insn.store(sample.instructions, std::memory_order_relaxed);
+            m_perf.cpu_cycles.store(sample.cycles, std::memory_order_relaxed);
+            m_perf.cpu_dmiss.store(sample.data_misses, std::memory_order_relaxed);
+        }
         m_perf.composed.fetch_add(1, std::memory_order_relaxed);
         {
             std::lock_guard publish_lock(m_shared.mutex);

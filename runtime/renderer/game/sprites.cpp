@@ -133,69 +133,180 @@ void GameSprites::raster(std::span<const uint8_t> assets, std::span<uint16_t> ou
     raster_sprites(sprites(), pen_mask(), assets, output, {options, flipped(), trails()});
 }
 
-void raster_sprites(std::span<const SceneSprite> sprites, uint8_t mask,
-                    std::span<const uint8_t> assets, std::span<uint16_t> output,
-                    SpriteRasterOptions raster) {
+namespace {
+// One raster geometry for both entry points; the row window is folded into top/bottom.
+struct RasterGeometry {
+    GameVideoOptions options;
+    uint32_t tile_count;
+    int scale, width, origin_x, origin_y, left, right, top, bottom, y_bias;
+    bool expanded;
+};
+
+RasterGeometry make_geometry(std::span<const uint8_t> assets, SpriteRasterOptions raster) {
     const GameVideoOptions options = raster.geometry;
-    if (!raster.accumulate) std::fill(output.begin(), output.end(), 0);
-    if (assets.empty()) return;
-    const uint32_t tile_count = uint32_t(assets.size() / 256);
-    const bool expanded = options.expanded();
-    const int scale = int(options.scale);
-    const int width = expanded ? int(options.width()) : 432;
-    const int origin_x = expanded ? 46 - int(options.border) : 0;
-    const int origin_y = expanded ? int(geometry::FIRST_LINE) : 0;
-    const int left = expanded ? 0 : 46, right = expanded ? width : 366;
-    const int top = expanded ? 0 : int(geometry::FIRST_LINE),
-              bottom = expanded ? int(options.height()) : int(geometry::END_LINE);
-    const int y_bias = raster.flipped ? 0 : 255;
-    for (size_t i = sprites.size(); i; --i) {
-        const auto &sprite = sprites[i - 1];
-        // Cull the nominal fixed-point rectangle BEFORE rounding texel rows.
-        // Otherwise a sprite ending exactly at the first visible line leaks its last row into
-        // the active picture through the +255 native raster phase.
-        if (sprite.x + sprite.scale_x * 16 <= (46 - int(options.border)) * 256 ||
-            sprite.x > (365 + int(options.border)) * 256 ||
-            sprite.y + sprite.scale_y * 16 <= int(geometry::FIRST_LINE) * 256 ||
-            sprite.y > 255 * 256)
-            continue;
-        const auto *pixels = assets.data() + size_t(wrap_tile_index(sprite.tile, tile_count)) * 256;
-        struct Column {
-            int left, right, source;
+    RasterGeometry g{options,
+                     uint32_t(assets.size() / 256),
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     options.expanded()};
+    g.scale = int(options.scale);
+    g.width = g.expanded ? int(options.width()) : 432;
+    g.origin_x = g.expanded ? 46 - int(options.border) : 0;
+    g.origin_y = g.expanded ? int(geometry::FIRST_LINE) : 0;
+    g.left = g.expanded ? 0 : 46;
+    g.right = g.expanded ? g.width : 366;
+    g.top = g.expanded ? 0 : int(geometry::FIRST_LINE);
+    g.bottom = g.expanded ? int(options.height()) : int(geometry::END_LINE);
+    g.y_bias = raster.flipped ? 0 : 255;
+    return g;
+}
+
+void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
+                 std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
+                 SpriteRowSpans *spans) {
+    // Cull the nominal fixed-point rectangle BEFORE rounding texel rows.
+    // Otherwise a sprite ending exactly at the first visible line leaks its last row into
+    // the active picture through the +255 native raster phase.
+    if (sprite.x + sprite.scale_x * 16 <= (46 - int(g.options.border)) * 256 ||
+        sprite.x > (365 + int(g.options.border)) * 256 ||
+        sprite.y + sprite.scale_y * 16 <= int(geometry::FIRST_LINE) * 256 ||
+        sprite.y > 255 * 256)
+        return;
+    const auto *pixels = assets.data() + size_t(wrap_tile_index(sprite.tile, g.tile_count)) * 256;
+    struct Column {
+        int left, right, source;
+    };
+    std::array<Column, 16> columns;
+    unsigned column_count = 0;
+    // Column geometry and horizontal flip do not depend on the texel row.
+    for (int x = 0; x < 16; ++x) {
+        const int position_x = (sprite.x + x * sprite.scale_x) * g.scale + 128;
+        const int start_x = (position_x >> 8) - g.origin_x * g.scale;
+        const int end_x = ((position_x + sprite.scale_x * g.scale) >> 8) - g.origin_x * g.scale;
+        if (start_x == end_x || end_x <= g.left || start_x >= g.right) continue;
+        columns[column_count++] = {std::max(g.left, start_x), std::min(g.right, end_x),
+                                   x ^ (sprite.flip_x ? 15 : 0)};
+    }
+    if (!column_count) return;
+    for (int y = 0; y < 16; ++y) {
+        const int position_y = (sprite.y + y * sprite.scale_y) * g.scale + g.y_bias;
+        const int start_y = (position_y >> 8) - g.origin_y * g.scale;
+        const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * g.scale) >> 8) -
+                                                    g.origin_y * g.scale);
+        if (end_y <= g.top || start_y >= g.bottom) continue;
+        const auto *row = pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16;
+        const int first_y = std::max(g.top, start_y), last_y = std::min(g.bottom, end_y);
+        // Per-layer column spans of this texel row. The layer comes from each written plane value:
+        // a pen can carry into bits 10-11, so one sprite may reach more than one layer.
+        struct Span {
+            int lo = 0, hi = 0;
         };
-        std::array<Column, 16> columns;
-        unsigned column_count = 0;
-        // Column geometry and horizontal flip do not depend on the texel row.
-        for (int x = 0; x < 16; ++x) {
-            const int position_x = (sprite.x + x * sprite.scale_x) * scale + 128;
-            const int start_x = (position_x >> 8) - origin_x * scale;
-            const int end_x = ((position_x + sprite.scale_x * scale) >> 8) - origin_x * scale;
-            if (start_x == end_x || end_x <= left || start_x >= right) continue;
-            columns[column_count++] = {std::max(left, start_x), std::min(right, end_x),
-                                       x ^ (sprite.flip_x ? 15 : 0)};
+        std::array<Span, 4> spans_by_layer{};
+        for (unsigned x = 0; x < column_count; ++x) {
+            const auto &column = columns[x];
+            const uint8_t pen = row[column.source] & mask;
+            if (!pen) continue;
+            const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
+            for (int dy = first_y; dy < last_y; ++dy)
+                for (int dx = column.left; dx < column.right; ++dx) {
+                    auto &destination = plane[dy * g.width + dx];
+                    if (!destination) destination = color;
+                }
+            if (spans) {
+                const unsigned layer =
+                    unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0);
+                auto &span = spans_by_layer[layer];
+                if (!span.hi) {
+                    span.lo = column.left;
+                    span.hi = column.right;
+                } else {
+                    span.lo = std::min(span.lo, column.left);
+                    span.hi = std::max(span.hi, column.right);
+                }
+            }
         }
-        if (!column_count) continue;
-        for (int y = 0; y < 16; ++y) {
-            const int position_y = (sprite.y + y * sprite.scale_y) * scale + y_bias;
-            const int start_y = (position_y >> 8) - origin_y * scale;
-            const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * scale) >> 8) -
-                                                        origin_y * scale);
-            if (end_y <= top || start_y >= bottom) continue;
-            const auto *row = pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16;
-            const int first_y = std::max(top, start_y), last_y = std::min(bottom, end_y);
-            for (unsigned x = 0; x < column_count; ++x) {
-                const auto &column = columns[x];
-                const uint8_t pen = row[column.source] & mask;
-                if (!pen) continue;
-                const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
-                for (int dy = first_y; dy < last_y; ++dy)
-                    for (int dx = column.left; dx < column.right; ++dx) {
-                        auto &destination = output[dy * width + dx];
-                        if (!destination) destination = color;
-                    }
+        if (!spans) continue;
+        for (unsigned layer = 0; layer < spans_by_layer.size(); ++layer) {
+            const auto &drawn = spans_by_layer[layer];
+            if (drawn.hi <= drawn.lo) continue;
+            for (int dy = first_y; dy < last_y; ++dy) {
+                auto &span = spans->rows[dy];
+                span.mask |= uint8_t(1u << layer);
+                span.lo[layer] = std::min<uint16_t>(span.lo[layer], uint16_t(drawn.lo));
+                span.hi[layer] = std::max<uint16_t>(span.hi[layer], uint16_t(drawn.hi));
             }
         }
     }
+}
+} // namespace
+
+void raster_sprites(std::span<const SceneSprite> sprites, uint8_t mask,
+                    std::span<const uint8_t> assets, std::span<uint16_t> output,
+                    SpriteRasterOptions raster) {
+    if (!raster.accumulate) std::fill(output.begin(), output.end(), 0);
+    if (assets.empty()) return;
+    const RasterGeometry g = make_geometry(assets, raster);
+    for (size_t i = sprites.size(); i; --i) draw_sprite(sprites[i - 1], assets, output, g, mask, nullptr);
+}
+
+void SpriteBins::bin(std::span<const SceneSprite> sprites, SpriteRasterOptions raster) {
+    const RasterGeometry g = make_geometry({}, raster);
+    const unsigned chunks =
+        (unsigned(g.bottom) - unsigned(g.top) + COMPOSE_CHUNK_ROWS - 1) / COMPOSE_CHUNK_ROWS;
+    if (m_chunks.size() != chunks) m_chunks.resize(chunks);
+    for (auto &bucket : m_chunks) bucket.clear();
+    if (raster.accumulate) return; // chunked raster clears its window; trails keep the whole plane
+    for (unsigned i = 0; i < sprites.size(); ++i) {
+        const auto &sprite = sprites[i];
+        // One row of margin each side: a bucket may hold a sprite that draws nothing in it, never
+        // the other way round.
+        const int start = ((sprite.y * g.scale + g.y_bias) >> 8) - g.origin_y * g.scale - 1;
+        const int end = (((sprite.y + 16 * sprite.scale_y) * g.scale + g.y_bias) >> 8) -
+                        g.origin_y * g.scale + 1;
+        const int first = std::max(g.top, start), last = std::min(g.bottom, end);
+        if (first >= last) continue;
+        const unsigned begin_chunk = unsigned(first - g.top) / COMPOSE_CHUNK_ROWS;
+        const unsigned end_chunk = unsigned(last - g.top) / COMPOSE_CHUNK_ROWS;
+        for (unsigned chunk = begin_chunk; chunk <= end_chunk && chunk < chunks; ++chunk)
+            m_chunks[chunk].push_back(uint16_t(i));
+    }
+}
+
+void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites,
+                         unsigned chunk, uint8_t mask, std::span<const uint8_t> assets,
+                         std::span<uint16_t> plane, SpriteRasterOptions raster,
+                         SpriteRowSpans *spans) {
+    if (assets.empty()) return;
+    const RasterGeometry g = make_geometry(assets, raster);
+    const unsigned first = unsigned(g.top) + chunk * COMPOSE_CHUNK_ROWS;
+    const unsigned last = std::min(unsigned(g.top) + (chunk + 1) * COMPOSE_CHUNK_ROWS,
+                                   unsigned(g.bottom));
+    if (first >= last) return;
+    std::fill_n(plane.begin() + size_t(first) * g.width, size_t(last - first) * g.width, 0);
+    if (spans)
+        for (unsigned row = first; row < last; ++row) spans->rows[row] = SpriteRowSpans::Row{};
+    const auto bucket = bins.chunk(chunk);
+    const RasterGeometry windowed{g.options,
+                                  g.tile_count,
+                                  g.scale,
+                                  g.width,
+                                  g.origin_x,
+                                  g.origin_y,
+                                  g.left,
+                                  g.right,
+                                  std::max(g.top, int(first)),
+                                  std::min(g.bottom, int(last)),
+                                  g.y_bias,
+                                  g.expanded};
+    for (size_t i = bucket.size(); i; --i)
+        draw_sprite(sprites[bucket[i - 1]], assets, plane, windowed, mask, spans);
 }
 
 size_t GameSprites::state_size() const {

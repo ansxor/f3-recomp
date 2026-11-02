@@ -29,11 +29,22 @@ bool Presenter::init() {
     m_top = render_target(SCREEN_HEIGHT, SCREEN_WIDTH);
     m_bottom = render_target(SCREEN_HEIGHT, 320);
     m_texture = std::malloc(sizeof(C3D_Tex));
-    m_staging = linearAlloc(size_t(TEXTURE_WIDTH) * TEXTURE_HEIGHT * 4);
-    if (!m_top || !m_bottom || !m_texture || !m_staging) {
+    // One staging buffer per frame slot: the composer writes the slot it is about to publish while
+    // the presenter transfers the slot it holds, and a slot is only reused after its transfer has
+    // completed (a new take releases the previous slot in a later frame).
+    std::array<uint32_t *, f3rt::FrameSlots::SLOT_COUNT> buffers{};
+    for (size_t i = 0; i < m_staging.size(); ++i) {
+        buffers[i] = static_cast<uint32_t *>(
+            linearAlloc(size_t(TEXTURE_WIDTH) * TEXTURE_HEIGHT * sizeof(uint32_t)));
+        m_staging[i] = buffers[i];
+    }
+    if (!m_top || !m_bottom || !m_texture || !buffers[0]) {
         log_line("n3ds: presenter allocation failed");
         return false;
     }
+    for (auto *buffer : m_staging)
+        if (!buffer) return false;
+    m_shared.present.attach_buffers(buffers, TEXTURE_WIDTH);
     C3D_Tex *texture = static_cast<C3D_Tex *>(m_texture);
     std::memset(texture, 0, sizeof(C3D_Tex));
     if (!C3D_TexInitVRAM(texture, TEXTURE_WIDTH, TEXTURE_HEIGHT, GPU_RGBA8)) {
@@ -41,7 +52,8 @@ bool Presenter::init() {
         return false;
     }
     m_texture_address = texture->data;
-    std::memset(m_staging, 0, size_t(TEXTURE_WIDTH) * TEXTURE_HEIGHT * 4);
+    for (auto *buffer : m_staging)
+        std::memset(buffer, 0, size_t(TEXTURE_WIDTH) * TEXTURE_HEIGHT * sizeof(uint32_t));
     // Without an output binding citro3d never transfers the targets to the LCD panels when the
     // frame ends, which leaves both screens black.
     constexpr GX_TRANSFER_FORMAT format = GX_TRANSFER_FMT_RGBA8;
@@ -65,8 +77,10 @@ bool Presenter::create_texture() {
     return true;
 }
 void Presenter::shutdown() {
-    if (m_staging) linearFree(m_staging);
-    m_staging = nullptr;
+    for (auto *&buffer : m_staging) {
+        if (buffer) linearFree(buffer);
+        buffer = nullptr;
+    }
     if (m_texture) {
         std::free(m_texture);
         m_texture = nullptr;
@@ -84,25 +98,23 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
             std::lock_guard lock(m_shared.mutex);
             slot = m_shared.present.take(fresh);
         }
-        if (slot && fresh) {
+        const unsigned width = 320 + m_settings.border * 2;
+        if (slot && slot->rgba && slot->stride >= width) {
             static unsigned traced = 0;
             if (traced < 4) {
                 ++traced;
                 unsigned nonzero = 0;
-                for (const auto pixel : slot->pixels) nonzero += (pixel & 0xffffff) != 0;
-                log_line("n3ds: present trace frame=%llu px=%zu nonzero=%u",
-                         static_cast<unsigned long long>(slot->frame), slot->pixels.size(), nonzero);
+                for (unsigned y = 0; y < 232; ++y)
+                    for (unsigned x = 0; x < width; ++x)
+                        nonzero += (slot->rgba[size_t(y) * slot->stride + x] & 0xffffff00u) != 0;
+                log_line("n3ds: present trace frame=%llu px=%u nonzero=%u",
+                         static_cast<unsigned long long>(slot->frame), width * 232, nonzero);
             }
-        }
-        if (slot && fresh && slot->pixels.size() >= size_t(320 + m_settings.border * 2) * 232) {
-            const unsigned width = 320 + m_settings.border * 2;
-            auto *out = static_cast<uint32_t *>(m_staging);
-            for (unsigned y = 0; y < 232; ++y)
-                for (unsigned x = 0; x < width; ++x)
-                    out[size_t(y) * TEXTURE_WIDTH + x] =
-                        (slot->pixels[size_t(y) * width + x] << 8) | 0xFF;
-            GSPGPU_FlushDataCache(m_staging, u32(size_t(TEXTURE_WIDTH) * TEXTURE_HEIGHT * 4));
-            m_transfer_pending = true;
+            // The composer flushed the rows it wrote; the display transfer only reads those.
+            if (fresh) {
+                m_transfer_buffer = slot->rgba;
+                m_transfer_pending = true;
+            }
         }
     }
     // The vendored ctru backend only refreshes input and timing; the frame itself starts here.
@@ -116,6 +128,7 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
     ImDrawList *background = ImGui::GetBackgroundDrawList();
     const ImGuiPlatformIO &platform = ImGui::GetPlatformIO();
     background->AddCallback(platform.DrawCallback_SetSamplerNearest, nullptr);
+    m_perf.cpu_counters.store(m_settings.perf_overlay, std::memory_order_relaxed);
     if (m_settings.border) {
         background->AddImage(reinterpret_cast<ImTextureID>(m_game_texture_id), ImVec2(0, 4),
                              ImVec2(400, 236), ImVec2(0, 0),
@@ -155,7 +168,7 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
     m_transfer_pending = false;
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     if (transfer)
-        C3D_SyncDisplayTransfer(static_cast<u32 *>(m_staging),
+        C3D_SyncDisplayTransfer(reinterpret_cast<u32 *>(m_transfer_buffer),
                                 GX_BUFFER_DIM(TEXTURE_WIDTH, TEXTURE_HEIGHT),
                                 static_cast<u32 *>(m_texture_address), GX_BUFFER_DIM(TEXTURE_WIDTH, TEXTURE_HEIGHT),
                                 GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_OUT_TILED(1) |
@@ -199,14 +212,28 @@ void Presenter::report_rates() {
     const auto now = std::chrono::steady_clock::now();
     if (last_log.time_since_epoch().count() && now - last_log < std::chrono::seconds(5)) return;
     last_log = now;
-    log_line("n3ds: perf emu_fps=%.1f emu_ms=%.2f comp_fps=%.1f comp_ms=%.2f raster_ms=%.2f "
-             "scene_ms=%.2f present_ms=%.2f present_fps=%.1f audio_ms=%.1f drops=%llu",
+    const double comp_ms = double(m_perf.compose_us.load(std::memory_order_relaxed)) / 1000.0;
+    const double comp_max_ms = double(m_perf.compose_max_us.load(std::memory_order_relaxed)) / 1000.0;
+    log_line("n3ds: perf emu_fps=%.1f emu_ms=%.2f comp_fps=%.1f comp_ms=%.2f comp_max_ms=%.2f "
+             "present_ms=%.2f present_fps=%.1f audio_ms=%.1f drops=%llu fallback_rows=%u "
+             "special_px=%u chunks=%u",
              m_emu_fps, double(m_perf.emu_us.load(std::memory_order_relaxed)) / 1000.0, m_comp_fps,
-             double(m_perf.compose_us.load(std::memory_order_relaxed)) / 1000.0,
-             double(m_perf.raster_us.load(std::memory_order_relaxed)) / 1000.0,
-             double(m_perf.scene_us.load(std::memory_order_relaxed)) / 1000.0,
-             double(m_perf.present_us.load(std::memory_order_relaxed)) / 1000.0, m_present_fps,
+             comp_ms, comp_max_ms, double(m_perf.present_us.load(std::memory_order_relaxed)) / 1000.0,
+             m_present_fps,
              double(m_perf.audio_queue_frames.load(std::memory_order_relaxed)) * 1000.0 / 29762.0,
-             static_cast<unsigned long long>(m_perf.drops.load(std::memory_order_relaxed)));
+             static_cast<unsigned long long>(m_perf.drops.load(std::memory_order_relaxed)),
+             m_perf.fallback_rows.load(std::memory_order_relaxed),
+             m_perf.special_px.load(std::memory_order_relaxed),
+             m_perf.chunks.load(std::memory_order_relaxed));
+    const uint64_t cycles = m_perf.cpu_cycles.load(std::memory_order_relaxed);
+    if (cycles) {
+        const uint64_t insn = m_perf.cpu_insn.load(std::memory_order_relaxed);
+        log_line("n3ds: cpu insn=%llu cycles=%llu cpi=%.2f dmiss=%llu",
+                 static_cast<unsigned long long>(insn),
+                 static_cast<unsigned long long>(cycles),
+                 insn ? double(cycles) / double(insn) : 0.0,
+                 static_cast<unsigned long long>(m_perf.cpu_dmiss.load(std::memory_order_relaxed)));
+    }
+    m_perf.compose_max_us.store(0, std::memory_order_relaxed);
 }
 } // namespace f3rt::n3ds

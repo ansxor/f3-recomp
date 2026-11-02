@@ -1,5 +1,6 @@
 #pragma once
 #include "renderer/game/scene.hpp"
+#include "renderer/game/row_workers.hpp"
 #include "f3rt/game_video.hpp"
 #include "sprites/presentation.hpp"
 #include <array>
@@ -26,6 +27,40 @@ constexpr size_t sprite_plane_size(GameVideoOptions geometry) {
 void raster_sprites(std::span<const SceneSprite> sprites, uint8_t pen_mask,
                     std::span<const uint8_t> assets, std::span<uint16_t> output,
                     SpriteRasterOptions options = {});
+
+// Per-plane-row sprite coverage written by raster_sprite_chunk: which sprite layers reached the
+// row and the half-open column range each wrote. Render-only hints for the indexed compositor; a
+// range is a superset of the layer's drawn columns, so a consumer must still test the plane value.
+struct SpriteRowSpans {
+    struct Row {
+        uint8_t mask = 0;                              // bit i: sprite layer i drew in this row
+        std::array<uint16_t, 4> lo{0xffff, 0xffff, 0xffff, 0xffff};
+        std::array<uint16_t, 4> hi{};
+    };
+    std::span<Row> rows; // one entry per plane row of the raster geometry
+};
+
+// Sprites bucketed once per frame by COMPOSE_CHUNK_ROWS-row plane chunks, so a worker rasterising
+// and composing one chunk only walks the sprites that reach it. Buckets keep list order.
+class SpriteBins {
+public:
+    // `sprites` indices are bucketed; the list itself is passed to raster_sprite_chunk.
+    void bin(std::span<const SceneSprite> sprites, SpriteRasterOptions options);
+    unsigned chunk_count() const { return unsigned(m_chunks.size()); }
+    std::span<const uint16_t> chunk(unsigned chunk) const { return m_chunks[chunk]; }
+
+private:
+    std::vector<std::vector<uint16_t>> m_chunks;
+};
+
+// Clear plane rows [chunk * COMPOSE_CHUNK_ROWS, ...) of the raster geometry, then draw the chunk's
+// bucketed sprites into them (same order and same "first write wins" rule as raster_sprites, so the
+// chunked plane equals the whole-plane one). `options.accumulate` is not supported: the window is
+// always cleared. Recording spans in a null pointer leaves coverage untracked.
+void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites, unsigned chunk,
+                         uint8_t pen_mask, std::span<const uint8_t> assets,
+                         std::span<uint16_t> plane, SpriteRasterOptions options,
+                         SpriteRowSpans *spans);
 
 class GameSprites {
 public:

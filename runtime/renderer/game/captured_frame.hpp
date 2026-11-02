@@ -1,6 +1,7 @@
 #pragma once
 #include "f3rt/game_video.hpp"
 #include "renderer/game/compositor.hpp"
+#include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/scene.hpp"
 #include "renderer/game/text.hpp"
 #include "renderer/game/tiles.hpp"
@@ -48,5 +49,16 @@ void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t>
                             std::span<const uint16_t> plane, std::span<uint32_t> output,
                             GameVideoOptions options, ComposeMode mode,
                             uint32_t layer_mask = ALL_LAYERS);
+
+// Compose a captured frame with the indexed kernel into `output` at `stride` pixels per row in
+// `format`. Pixel-identical to compose_captured_scene(..., Serial) for the same frame; the sprite
+// raster is fused per COMPOSE_CHUNK_ROWS-row chunk inside the participants. Only the expanded
+// scale-1 presentation (native picture plus an optional side border) is supported. `scratch` is the
+// caller's persistent working set; `opacity` is optional. `window` observes the caller's own share.
+void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
+                              std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
+                              std::span<uint32_t> output, size_t stride, PixelFormat format,
+                              GameVideoOptions options, const TileRowOpacity *opacity = nullptr,
+                              WorkWindow *window = nullptr);
 
 } // namespace f3rt

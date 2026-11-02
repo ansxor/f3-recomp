@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace f3rt {
@@ -13,7 +14,12 @@ struct CapturedFrame;
 struct FrameSnapshot {
     CapturedFrame *captured = nullptr;
     size_t capture = 0;
-    std::vector<uint32_t> pixels;
+    std::vector<uint32_t> pixels; // host ARGB path
+    // 3DS: composer-written pixels in `stride`-pixel rows, in the display transfer's byte order. The
+    // buffer belongs to the presenter's staging (attached once) and stays immutable while the
+    // snapshot is published; `pixels` stays empty on that path.
+    uint32_t *rgba = nullptr;
+    size_t stride = 0;
     uint64_t frame = 0,
              epoch = 0; // epoch changes on every emulation discontinuity (load, resume, clock resync)
     unsigned scale = 1; // GameVideo GPU scale this frame was captured at
@@ -38,6 +44,9 @@ public:
     void restate(unsigned scale);
     // Presenter: newest published snapshot (fresh when not yet seen) or the one it already holds.
     const FrameSnapshot *take(bool &fresh);
+    // Presenter: give every slot its own staging buffer (one per slot, so the writer and the reader
+    // never share one). Call before the first publish.
+    void attach_buffers(std::span<uint32_t *> buffers, size_t stride);
     bool unseen() const { return m_published != m_seen; }
 
 private:

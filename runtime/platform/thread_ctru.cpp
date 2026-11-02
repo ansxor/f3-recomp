@@ -41,8 +41,11 @@ RoleSpec role_spec(ThreadRole role, unsigned index) {
     case ThreadRole::Composer:
         return {1, 0x30, 256 * 1024};
     case ThreadRole::ComposeHelper:
-        // The second helper only uses the emulation core's idle time.
-        return index == 0 ? RoleSpec{0, 0x31, 256 * 1024} : RoleSpec{2, 0x3F, 256 * 1024};
+        // One helper shares core 0 with HLE synthesis, out of emulation's way. A second helper on
+        // core 2 competed with emulation for no measured need, so compose_helper_count() stays at
+        // one; re-adding it means returning {2, 0x3F, 256 * 1024} here for index 1 and raising the
+        // count below.
+        return {0, 0x31, 256 * 1024};
     }
     return {0, 0x30, 256 * 1024};
 }
@@ -85,7 +88,7 @@ void Thread::join() {
     delete std::exchange(m_state, nullptr);
 }
 
-unsigned compose_helper_count() { return 2; }
+unsigned compose_helper_count() { return 1; }
 } // namespace f3rt
 
 #endif // __3DS__

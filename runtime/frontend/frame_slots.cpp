@@ -34,6 +34,12 @@ void FrameSlots::restate(unsigned scale) {
     m_latest = slot;
     ++m_published;
 }
+void FrameSlots::attach_buffers(std::span<uint32_t *> buffers, size_t stride) {
+    for (size_t i = 0; i < buffers.size() && i < m_slots.size(); ++i) {
+        m_slots[i].rgba = buffers[i];
+        m_slots[i].stride = stride;
+    }
+}
 const FrameSnapshot *FrameSlots::take(bool &fresh) {
     fresh = m_latest >= 0 && m_published != m_seen;
     if (fresh) {

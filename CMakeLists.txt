@@ -352,6 +352,7 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp
+    runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/captured_frame.cpp
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp runtime/audio/reference/engine.cpp

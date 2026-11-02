@@ -2,6 +2,8 @@
 #include "perf.hpp"
 #include "session.hpp"
 #include "settings.hpp"
+#include "frontend/frame_slots.hpp"
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -38,7 +40,8 @@ private:
     void *m_bottom = nullptr;
     void *m_texture = nullptr;
     void *m_texture_address = nullptr;
-    void *m_staging = nullptr;
+    std::array<void *, f3rt::FrameSlots::SLOT_COUNT> m_staging{};
+    uint32_t *m_transfer_buffer = nullptr;
     std::unique_ptr<ImTextureData> m_game_texture;
     void *m_game_texture_id = nullptr;
     bool m_transfer_pending = false;
