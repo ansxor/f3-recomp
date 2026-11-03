@@ -49,6 +49,8 @@ public:
     // Advance / vblank hook:
     // If not called separately, render_frame automatically handles the sprite_lag=1
     // frame sequence (render using previous frame's sprites, then buffer current spriteram).
+    // vblank parses the list at once but rasters it only when render_frame, sprite_plane or
+    // save_state needs the plane, or a trail frame accumulates on it.
     void vblank(std::span<const uint8_t> graphics_ram);
 
     // Direct injection of active spriteram (for single-frame capture tests)

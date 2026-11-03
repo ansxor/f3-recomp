@@ -168,6 +168,46 @@ RasterGeometry make_geometry(std::span<const uint8_t> assets, SpriteRasterOption
     return g;
 }
 
+// A sprite at exactly 256/256 zoom on a scale-1 plane: every texel column is one plane column and
+// every texel row one plane row, so the per-column geometry and the dy/dx loops collapse. Writes the
+// same plane pixels and spans as the general path below.
+void draw_unscaled_sprite(const SceneSprite &sprite, const uint8_t *pixels,
+                          std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
+                          SpriteRowSpans *spans) {
+    // Column x lands at base_x + x; the +128 rounds the fixed-point position like the general path.
+    const int base_x = ((sprite.x + 128) >> 8) - g.origin_x;
+    const int first_x = std::max(0, g.left - base_x), last_x = std::min(16, g.right - base_x);
+    if (first_x >= last_x) return;
+    const int base_y = ((sprite.y + g.y_bias) >> 8) - g.origin_y;
+    const int first_y = std::max(0, g.top - base_y), last_y = std::min(16, g.bottom - base_y);
+    const unsigned flip_x = sprite.flip_x ? 15 : 0;
+    for (int y = first_y; y < last_y; ++y) {
+        const uint8_t *row = pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16;
+        uint16_t *line = plane.data() + size_t(base_y + y) * g.width + base_x;
+        // Per-layer column span of this texel row; a pen can carry into bits 10-11, so the layer
+        // comes from each written plane value.
+        std::array<uint16_t, 4> lo{}, hi{};
+        for (int x = first_x; x < last_x; ++x) {
+            const uint8_t pen = row[unsigned(x) ^ flip_x] & mask;
+            if (!pen) continue;
+            const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
+            if (!line[x]) line[x] = color;
+            if (!spans) continue;
+            const unsigned layer = unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0);
+            if (!hi[layer]) lo[layer] = uint16_t(base_x + x);
+            hi[layer] = uint16_t(base_x + x + 1);
+        }
+        if (!spans) continue;
+        auto &span = spans->rows[base_y + y];
+        for (unsigned layer = 0; layer < lo.size(); ++layer) {
+            if (!hi[layer]) continue;
+            span.mask |= uint8_t(1u << layer);
+            span.lo[layer] = std::min(span.lo[layer], lo[layer]);
+            span.hi[layer] = std::max(span.hi[layer], hi[layer]);
+        }
+    }
+}
+
 void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
                  std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
                  SpriteRowSpans *spans) {
@@ -180,6 +220,10 @@ void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
         sprite.y > 255 * 256)
         return;
     const auto *pixels = assets.data() + size_t(wrap_tile_index(sprite.tile, g.tile_count)) * 256;
+    if (g.scale == 1 && sprite.scale_x == 256 && sprite.scale_y == 256) {
+        draw_unscaled_sprite(sprite, pixels, plane, g, mask, spans);
+        return;
+    }
     struct Column {
         int left, right, source;
     };

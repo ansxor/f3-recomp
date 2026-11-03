@@ -238,6 +238,11 @@ void Session::run() {
     running.store(false);
     m_shared.cv.notify_all();
 }
+bool Session::profile_frame() {
+    if (!m_perf.cpu_counters.load(std::memory_order_relaxed)) return false;
+    if (!m_counters_open) m_counters_open = m_counters.open("emulation");
+    return m_counters.available();
+}
 void Session::emulate() {
     auto &machine = *m_machine;
     const auto frame_time = std::chrono::nanoseconds(
@@ -281,8 +286,16 @@ void Session::emulate() {
         const auto frame_start = std::chrono::steady_clock::now();
         f3rt::apply_local_inputs(
             machine, {f3rt::LocalInputWord(input.load()), 0, 0, 0});
+        const bool profile = profile_frame();
+        machine.game_video->set_probe(profile ? &m_stages : nullptr);
+        if (profile) m_stages.begin_frame();
         if (!machine.run_frame(true))
             throw std::runtime_error("CPU halted at " + std::to_string(machine.cpu.pc));
+        if (profile) {
+            m_stages.end_frame();
+            for (size_t stage = 0; stage < m_stages.stages().size(); ++stage)
+                m_perf.emulation_cpu[stage].store(m_stages.stages()[stage]);
+        }
         {
             std::lock_guard lock(m_shared.mutex);
             m_shared.emulation.publish();

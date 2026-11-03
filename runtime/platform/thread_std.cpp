@@ -48,6 +48,6 @@ void Thread::join() {
 
 unsigned compose_helper_count() {
     const unsigned hardware = std::thread::hardware_concurrency();
-    return hardware ? std::min(3u, hardware - 1) : 1;
+    return hardware ? std::min(MAX_COMPOSE_HELPERS, hardware - 1) : 1;
 }
 } // namespace f3rt

@@ -1,6 +1,7 @@
 #pragma once
 #include "f3rt/game_video.hpp"
 #include "platform/thread.hpp"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -27,10 +28,15 @@ public:
     virtual void end() = 0;
 };
 
-// Persistent helpers plus the caller. Participants pull chunks from a shared cursor, so a helper
-// that only receives idle-time slices never stalls an otherwise finished frame, and the caller's
-// own share shrinks as helpers finish early. `body` must stay alive and callable for the whole
-// call; the dispatch returns only after every participant has finished it.
+// Chunks pulled by each participant of one dispatch: slot 0 is the caller, slot 1 + i helper i. A
+// helper that did not join the dispatch reads zero.
+using ChunkCounts = std::array<unsigned, 1 + MAX_COMPOSE_HELPERS>;
+
+// Persistent helpers plus the caller. Participants pull chunks from a shared cursor, and the caller
+// waits only for the helpers that joined: a helper that has not been scheduled by the time the
+// chunks run out (or the dispatch ends) finds nothing to do and never delays the frame, and the
+// caller's own share shrinks as helpers join. `body` must stay alive and callable for the whole
+// call; the dispatch returns only after every joined participant has finished it.
 class RowWorkers {
 public:
     RowWorkers();
@@ -40,23 +46,24 @@ public:
 
     void run(unsigned count, const std::function<void(unsigned chunk)> &body,
              WorkWindow *window = nullptr);
-    // Participants (helpers plus the caller) that pulled at least one chunk of the last dispatch.
-    unsigned participants() const { return m_participants.load(std::memory_order_relaxed); }
+    // Per-participant chunk counts of the last dispatch; read them after run() returns, before the
+    // next one.
+    ChunkCounts chunk_counts() const;
 
 private:
-    bool compose_chunks(const std::function<void(unsigned)> &body) const noexcept;
-    void work();
+    unsigned compose_chunks(const std::function<void(unsigned)> &body) const noexcept;
+    void work(unsigned slot);
     void stop();
 
     std::vector<Thread> m_threads;
     std::mutex m_submission_mutex, m_mutex;
     std::condition_variable m_ready, m_done;
     mutable std::atomic<unsigned> m_cursor{0};
-    mutable std::atomic<unsigned> m_participants{0};
+    std::array<std::atomic<unsigned>, 1 + MAX_COMPOSE_HELPERS> m_pulled{};
     const std::function<void(unsigned)> *m_body = nullptr;
     unsigned m_count = 0;
     uint64_t m_generation = 0;
-    unsigned m_remaining = 0;
+    unsigned m_remaining = 0; // the caller plus the helpers that joined the current dispatch
     bool m_stopping = false;
 };
 

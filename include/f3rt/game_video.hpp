@@ -32,6 +32,18 @@ struct GameVideoOptions {
     constexpr bool expanded() const { return scale != 1 || border != 0; }
 };
 
+// The stages of one GameVideo::render_frame, in execution order. Idle names everything outside it.
+enum class VideoStage : uint8_t { Idle, Decode, Scene, Oracle, Capture, Latch };
+inline constexpr unsigned VIDEO_STAGE_COUNT = 6;
+
+// Observer of the stage boundaries, for profiling (the 3DS frontend attributes hardware counters
+// to each stage). render_frame calls enter() as each stage begins and enter(Idle) when it returns.
+class VideoProbe {
+public:
+    virtual ~VideoProbe() = default;
+    virtual void enter(VideoStage stage) = 0;
+};
+
 class GameVideo {
 public:
     explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Diagnostic,
@@ -41,6 +53,8 @@ public:
     GameVideo &operator=(const GameVideo &) = delete;
     void reset();
     void render_frame();
+    // Install (or clear with null) the stage observer render_frame reports to.
+    void set_probe(VideoProbe *probe);
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;
     std::span<const uint32_t> presentation() const;

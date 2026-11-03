@@ -1,5 +1,6 @@
 #pragma once
 #include "f3rt/game_video.hpp"
+#include "cpu_counters.hpp"
 #include "frame_slots.hpp"
 #include "perf.hpp"
 #include "platform/thread.hpp"
@@ -66,6 +67,9 @@ private:
     void startup();
     void stage(const char *step);
     void emulate();
+    // Whether this frame's hardware counters are on (the Performance overlay toggle); opens them on
+    // first use.
+    bool profile_frame();
     void apply(Command command, unsigned value);
     void fail(const std::string &message);
     void push_audio(const int16_t *stereo, size_t frames);
@@ -77,6 +81,10 @@ private:
     GameVideoOptions m_video;
     NdspAudioOutput *m_audio;
     PerfStats &m_perf;
+    // The emulation thread's own performance monitor and its per-stage split of each frame.
+    CpuCounters m_counters;
+    StageCounters m_stages{m_counters};
+    bool m_counters_open = false;
     f3rt::Thread m_thread;
     std::unique_ptr<f3rt::Machine> m_machine;
     std::unique_ptr<f3rt::AudioPacer> m_pacer;

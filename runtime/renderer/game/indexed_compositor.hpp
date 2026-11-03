@@ -57,7 +57,7 @@ struct IndexedScratch {
 struct IndexedComposeJob {
     const FrameScene &scene;
     std::span<uint16_t> plane; // sprite plane at `geometry`; each chunk writes only its own rows
-    SpriteRowSpans spans;            // per plane row coverage of this frame's raster
+    SpriteRowSpans spans; // per plane row coverage of this frame's raster; one entry per plane row
     const SpriteBins *bins = nullptr;
     std::span<const SceneSprite> sprites;
     uint8_t pen_mask = 15;

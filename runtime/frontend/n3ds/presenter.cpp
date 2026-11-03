@@ -8,11 +8,31 @@
 #include <citro3d.h>
 #include <imgui.h>
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace f3rt::n3ds {
 namespace {
+// Stage names in VideoStage order; Idle is the guest CPU and everything else outside render_frame.
+constexpr std::array<const char *, f3rt::VIDEO_STAGE_COUNT> STAGE_NAMES{
+    "guest", "decode", "scene", "oracle", "capture", "latch"};
+
+double cpi(const CpuSample &sample) {
+    return sample.instructions ? double(sample.cycles) / double(sample.instructions) : 0.0;
+}
+
+// Row chunks pulled by each compose participant of the last frame: "caller/helper0/helper1...".
+std::string chunk_split(const PerfStats &perf) {
+    std::string split;
+    for (unsigned i = 0; i <= f3rt::compose_helper_count(); ++i) {
+        if (i) split += '/';
+        split += std::to_string(perf.chunks[i].load(std::memory_order_relaxed));
+    }
+    return split;
+}
+
 constexpr unsigned TEXTURE_WIDTH = 512, TEXTURE_HEIGHT = 256;
 constexpr unsigned SCREEN_WIDTH = 400, SCREEN_HEIGHT = 240;
 void *render_target(unsigned width, unsigned height) {
@@ -216,23 +236,38 @@ void Presenter::report_rates() {
     const double comp_max_ms = double(m_perf.compose_max_us.load(std::memory_order_relaxed)) / 1000.0;
     log_line("n3ds: perf emu_fps=%.1f emu_ms=%.2f comp_fps=%.1f comp_ms=%.2f comp_max_ms=%.2f "
              "present_ms=%.2f present_fps=%.1f audio_ms=%.1f drops=%llu fallback_rows=%u "
-             "special_px=%u chunks=%u",
+             "special_px=%u chunks=%s",
              m_emu_fps, double(m_perf.emu_us.load(std::memory_order_relaxed)) / 1000.0, m_comp_fps,
-             comp_ms, comp_max_ms, double(m_perf.present_us.load(std::memory_order_relaxed)) / 1000.0,
-             m_present_fps,
+             comp_ms, comp_max_ms,
+             double(m_perf.present_us.load(std::memory_order_relaxed)) / 1000.0, m_present_fps,
              double(m_perf.audio_queue_frames.load(std::memory_order_relaxed)) * 1000.0 / 29762.0,
              static_cast<unsigned long long>(m_perf.drops.load(std::memory_order_relaxed)),
              m_perf.fallback_rows.load(std::memory_order_relaxed),
-             m_perf.special_px.load(std::memory_order_relaxed),
-             m_perf.chunks.load(std::memory_order_relaxed));
-    const uint64_t cycles = m_perf.cpu_cycles.load(std::memory_order_relaxed);
-    if (cycles) {
-        const uint64_t insn = m_perf.cpu_insn.load(std::memory_order_relaxed);
-        log_line("n3ds: cpu insn=%llu cycles=%llu cpi=%.2f dmiss=%llu",
-                 static_cast<unsigned long long>(insn),
-                 static_cast<unsigned long long>(cycles),
-                 insn ? double(cycles) / double(insn) : 0.0,
-                 static_cast<unsigned long long>(m_perf.cpu_dmiss.load(std::memory_order_relaxed)));
+             m_perf.special_px.load(std::memory_order_relaxed), chunk_split(m_perf).c_str());
+    const CpuSample composer = m_perf.composer_cpu.load();
+    if (composer.cycles)
+        log_line("n3ds: cpu composer insn=%llu cycles=%llu cpi=%.2f dmiss=%llu",
+                 static_cast<unsigned long long>(composer.instructions),
+                 static_cast<unsigned long long>(composer.cycles), cpi(composer),
+                 static_cast<unsigned long long>(composer.data_misses));
+    CpuSample frame;
+    std::array<CpuSample, f3rt::VIDEO_STAGE_COUNT> stages;
+    for (size_t i = 0; i < stages.size(); ++i) frame += stages[i] = m_perf.emulation_cpu[i].load();
+    if (frame.cycles) {
+        std::string split;
+        for (size_t i = 0; i < stages.size(); ++i) {
+            char part[96];
+            std::snprintf(part, sizeof(part), " %s=%llu/%llu/%llu", STAGE_NAMES[i],
+                          static_cast<unsigned long long>(stages[i].instructions),
+                          static_cast<unsigned long long>(stages[i].cycles),
+                          static_cast<unsigned long long>(stages[i].data_misses));
+            split += part;
+        }
+        log_line("n3ds: cpu emulation insn=%llu cycles=%llu cpi=%.2f dmiss=%llu stages(insn/cycles/"
+                 "dmiss):%s",
+                 static_cast<unsigned long long>(frame.instructions),
+                 static_cast<unsigned long long>(frame.cycles), cpi(frame),
+                 static_cast<unsigned long long>(frame.data_misses), split.c_str());
     }
     m_perf.compose_max_us.store(0, std::memory_order_relaxed);
 }

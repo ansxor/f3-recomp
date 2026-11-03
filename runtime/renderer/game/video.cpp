@@ -39,6 +39,10 @@ struct GameVideo::Impl {
     unsigned gpu_scale;
     std::vector<uint32_t> presentation_pixels;
     std::vector<uint16_t> presentation_sprites;
+    VideoProbe *probe = nullptr;
+    void enter(VideoStage stage) {
+        if (probe) probe->enter(stage);
+    }
     struct Fallback {
         const char *reason = nullptr;
         uint64_t frames = 0, first = 0, last = 0;
@@ -72,6 +76,15 @@ struct GameVideo::Impl {
     std::array<std::array<uint16_t, size_t(432) * 256>, 2> sprite_planes{};
     unsigned next_plane = 0, native_plane = 0;
     bool native_pending = false;
+    // With captured presentation nothing reads the native sprite plane per frame, so latch_sprites
+    // leaves it undrawn (stale) and every reader draws it first (ensure_plane). A stale next_plane
+    // is the raster of the latched list; a stale native plane whose list has since been replaced
+    // keeps that list in `retained`. Trail frames draw eagerly: a trail plane accumulates history.
+    std::array<bool, 2> plane_stale{};
+    struct RetainedList {
+        std::vector<SceneSprite> sprites;
+        uint8_t pen_mask = 15;
+    } retained;
     std::array<uint32_t, geometry::NATIVE_PIXELS> pixels{};
     bool rendered = false;
     // Present exactly when GPU presentation is enabled. Overwritten once per
@@ -171,8 +184,17 @@ struct GameVideo::Impl {
                                serial ? ComposeMode::Serial : ComposeMode::Parallel, mask);
     }
 
+    // Draw sprite plane `index` if latch_sprites left it stale.
+    void ensure_plane(unsigned index) {
+        if (!plane_stale[index]) return;
+        const auto assets = machine.video->sprite_tiles();
+        if (index == next_plane) sprites.raster(assets, sprite_planes[index]);
+        else raster_sprites(retained.sprites, retained.pen_mask, assets, sprite_planes[index]);
+        plane_stale[index] = false;
+    }
     void materialize_native() {
         if (!native_pending) return;
+        ensure_plane(native_plane);
         // Neither live maps/palette nor the now-latched sprite list describe
         // this frame. Use the immutable capture and retained native plane.
         compose_game_scene(captured_scene(), {sprite_planes[native_plane], pixels},
@@ -243,6 +265,7 @@ struct GameVideo::Impl {
         std::apply([&](auto &...c) { Impl::load_all(reader, c...); }, stateful());
         native_pending = false;
         next_plane = native_plane = 0;
+        plane_stale.fill(false);
         reader.read_span(std::span<uint16_t, size_t(432) * 256>(sprite_planes[next_plane]));
         reader.read_span(std::span<uint32_t, geometry::NATIVE_PIXELS>(pixels));
         reader.read_span(std::span<uint32_t>(presentation_pixels));
@@ -251,6 +274,7 @@ struct GameVideo::Impl {
     void reseed_presentation() {
         // Imported native retention is authoritative. Do not reconstruct a
         // previous frame from the now-latched NEXT-frame sprite list.
+        ensure_plane(next_plane);
         std::fill(presentation_sprites.begin(), presentation_sprites.end(), 0);
         std::fill(presentation_pixels.begin(), presentation_pixels.end(), 0xff000000);
         if (options.expanded()) {
@@ -319,6 +343,7 @@ void GameVideo::reset() {
     std::apply([](auto &...c) { Impl::reset_all(c...); }, m_impl->sources());
     for (auto &plane : m_impl->sprite_planes) plane.fill(0);
     m_impl->next_plane = m_impl->native_plane = 0;
+    m_impl->plane_stale.fill(false);
     m_impl->native_pending = false;
     std::fill(m_impl->presentation_sprites.begin(), m_impl->presentation_sprites.end(), 0);
     std::fill(m_impl->presentation_pixels.begin(), m_impl->presentation_pixels.end(), 0xff000000);
@@ -351,12 +376,25 @@ void GameVideo::latch_sprites() {
         // first trail list. Reconstructing only the final list loses history.
         state.sprites.raster(assets, state.presentation_sprites, state.options);
     }
+    const bool accumulate = state.sprites.m_reg_trails;
     // A trail latch updates the prior plane in place. Finish its pending
     // composite first rather than copying a full plane just to preserve it.
-    if (state.native_pending && state.sprites.m_reg_trails) state.materialize_native();
+    if (state.native_pending && accumulate) state.materialize_native();
+    if (accumulate) state.ensure_plane(state.next_plane);
+    // The pending composite keeps its plane through the latch; an undrawn one keeps its list.
+    if (state.native_pending && state.plane_stale[state.next_plane]) {
+        const auto list = state.sprites.sprites();
+        state.retained.sprites.assign(list.begin(), list.end());
+        state.retained.pen_mask = state.sprites.pen_mask();
+    }
     state.sprites.latch();
     if (state.native_pending) state.next_plane ^= 1;
-    state.sprites.raster(assets, state.sprite_planes[state.next_plane]);
+    if (state.captured && !accumulate) {
+        state.plane_stale[state.next_plane] = true;
+    } else {
+        state.sprites.raster(assets, state.sprite_planes[state.next_plane]);
+        state.plane_stale[state.next_plane] = false;
+    }
     if (state.options.expanded() && (!state.captured || state.sprites.trails()))
         state.sprites.raster(assets, state.presentation_sprites, state.options);
 }
@@ -364,6 +402,7 @@ void GameVideo::latch_sprites() {
 void GameVideo::render_frame() {
     auto &state = *m_impl;
     auto &m = state.machine;
+    state.enter(VideoStage::Decode);
     // VBSTART: video RAM is the source of truth. Decode this frame's playfield,
     // text, sprite (next submission) and scanline layers from it before rendering.
     // Render below still uses the previously latched sprite plane, preserving the
@@ -382,7 +421,9 @@ void GameVideo::render_frame() {
         ++state.presented_frames;
         state.presented_overflow_frames += state.sprites.presented_overflow();
     }
+    state.enter(VideoStage::Scene);
     render();
+    state.enter(VideoStage::Oracle);
     if (state.rendered && state.mode == GameVideoMode::Game) {
         if (!state.captured)
             std::copy(state.pixels.begin(), state.pixels.end(), m.m_pixels.begin());
@@ -407,6 +448,7 @@ void GameVideo::render_frame() {
                 state.presentation_pixels[y * width + state.options.border * scale + x] =
                     m.m_pixels[(y / scale) * geometry::NATIVE_WIDTH + x / scale];
     }
+    state.enter(VideoStage::Capture);
     if (state.captured) {
         // Only a supported successor may discard an unobserved composite.
         state.native_pending = false;
@@ -415,8 +457,12 @@ void GameVideo::render_frame() {
         state.native_plane = state.next_plane;
         state.presentation_pending = state.options.expanded();
     }
+    state.enter(VideoStage::Latch);
     latch_sprites();
+    state.enter(VideoStage::Idle);
 }
+
+void GameVideo::set_probe(VideoProbe *probe) { m_impl->probe = probe; }
 
 void GameVideo::render() {
     auto &state = *m_impl;
@@ -451,6 +497,7 @@ void GameVideo::render() {
             colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) |
                         palette[i * 4 + 3];
         const FrameScene scene = state.live_scene(colors);
+        state.ensure_plane(state.next_plane);
         compose_game_scene(scene, {state.sprite_planes[state.next_plane], state.pixels});
         if (state.options.expanded() && !state.captured)
             compose_game_scene(
@@ -521,6 +568,7 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
         throw std::runtime_error("Video layer mask must select PF0..3, SP0..3, text (bits 0..8)");
     auto &m = m_impl->machine;
     const auto assets = m.video->playfield_tiles();
+    m_impl->ensure_plane(m_impl->next_plane);
     if (layer_mask & layer_bit(LayerId::Text)) m.video->prepare_text_inspection(m.graphics);
     if (layer_mask == ALL_LAYERS) m_impl->lines.compare_rows(*m.video, frame);
     for (unsigned layer = 0; layer < LAYER_COUNT; ++layer) {
@@ -708,6 +756,7 @@ void GameVideo::save_state(std::span<uint8_t> dst) const {
     }
     m_impl->materialize_native();
     m_impl->materialize_presentation();
+    m_impl->ensure_plane(m_impl->next_plane);
     StateWriter writer(dst);
     m_impl->save_state(writer);
     if (writer.remaining() != 0) {

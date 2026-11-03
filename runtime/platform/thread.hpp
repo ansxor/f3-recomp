@@ -28,6 +28,8 @@ private:
     State *m_state = nullptr;
 };
 
-// Compose helpers available next to a caller that composes too. Never more than three.
+// Compose helpers available next to a caller that composes too. Never more than
+// MAX_COMPOSE_HELPERS.
+inline constexpr unsigned MAX_COMPOSE_HELPERS = 3;
 unsigned compose_helper_count();
 } // namespace f3rt

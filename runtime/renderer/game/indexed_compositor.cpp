@@ -97,6 +97,36 @@ template <class Body>
     }
 }
 
+// Bits [x, x + len) of a row bitmask as bit i = column x + i. len <= 16, so at most two words.
+[[gnu::always_inline]] inline uint32_t extract_columns(const std::array<uint32_t, MAX_WORDS> &words,
+                                                       int x, unsigned len) {
+    const unsigned word = unsigned(x) >> 5, shift = unsigned(x) & 31;
+    uint32_t bits = words[word] >> shift;
+    if (shift + len > 32) bits |= words[word + 1] << (32 - shift);
+    return bits & ((1u << len) - 1);
+}
+
+// Clear the columns of `bits` (bit i = column x + i, at most 16 wide) in a row bitmask.
+[[gnu::always_inline]] inline void clear_columns(std::array<uint32_t, MAX_WORDS> &words, int x,
+                                                 uint32_t bits) {
+    const unsigned word = unsigned(x) >> 5, shift = unsigned(x) & 31;
+    words[word] &= ~(bits << shift);
+    if (shift > 16) words[word + 1] &= ~(bits >> (32 - shift));
+}
+
+// Columns of [x, x + len) that still need a sample: unresolved, or pending a real blend.
+[[gnu::always_inline]] inline uint32_t open_columns(const RowWork &work, int x, unsigned len) {
+    const uint32_t open = extract_columns(work.unresolved, x, len);
+    return work.any_pending ? open | extract_columns(work.pending, x, len) : open;
+}
+
+constexpr uint32_t reverse16(uint32_t v) {
+    v = ((v & 0x5555u) << 1) | ((v >> 1) & 0x5555u);
+    v = ((v & 0x3333u) << 2) | ((v >> 2) & 0x3333u);
+    v = ((v & 0x0f0fu) << 4) | ((v >> 4) & 0x0f0fu);
+    return ((v & 0x00ffu) << 8) | ((v >> 8) & 0x00ffu);
+}
+
 int clip_left(const RowWork &work, const ClipRanges &ranges, unsigned r) {
     return std::max(work.left_edge, int(ranges.ranges[r].left)) - work.left_edge;
 }
@@ -168,9 +198,10 @@ void compose_generic_layer(RowWork &work, LayerId id, const SceneLayer &layer) {
     }
 }
 
-// The playfield run kernel: x_step == 256 advances one texel per output column, so a map column's
-// whole 16-texel span is emitted at once when the opacity table proves it opaque and none of its
-// pixels is resolved yet.
+// The playfield run kernel: x_step == 256 advances one texel per output column, so each map cell is
+// one run of at most 16 columns. A run walks bitmasks: the columns still open, intersected with the
+// opacity table's opaque texels when it proves them, and the unresolved ones that resolve on first
+// sight are written directly.
 void compose_playfield(RowWork &work, LayerId id, const SceneLayer &layer) {
     PlayfieldState state = playfield_state(work, id);
     if (state.pf.x_step != 256) {
@@ -193,69 +224,72 @@ void compose_playfield(RowWork &work, LayerId id, const SceneLayer &layer) {
     const auto &ranges = work.clips[unsigned(id)];
     for (unsigned r = 0; r < ranges.count; ++r) {
         const int left = clip_left(work, ranges, r), right = clip_right(work, ranges, r);
-        unsigned column = ~0u;
-        const uint8_t *pens = nullptr;
-        uint16_t opacity_mask = 0;
-        bool opacity_known = false;
-        uint16_t palette_base = 0;
-        uint8_t pen_mask = 0, flip_x = 0;
-        bool select = false;
         int x = left;
         while (x < right) {
             const unsigned wrapped =
                 (unsigned(base + x - work.border) & (MAP_WIDTH - 1)) ^ screen_flip;
             const unsigned cell = wrapped >> 4, texel = wrapped & 15;
-            if (cell != column) {
-                column = cell;
-                const uint32_t word = map_row[cell];
-                const uint16_t attributes = uint16_t(word >> 16);
-                const uint32_t tile = wrap_tile_index(uint16_t(word), tile_count);
-                const unsigned tile_y = texel_y ^ ((attributes & 0x8000) ? 15 : 0);
-                pens = tile_pixels.data() + size_t(tile) * 256 + size_t(tile_y) * 16;
-                palette_base = uint16_t((attributes & 0x1ff) * 16);
-                pen_mask = uint8_t((((attributes >> 10) & 3 & ~attributes) << 4) | 15);
-                flip_x = (attributes & 0x4000) ? 15 : 0;
-                select = (attributes & 0x200) != 0;
-                opacity_known = opacity_usable;
-                opacity_mask = opacity_known ? opacity->row(tile, tile_y) : 0;
-            }
             const unsigned run = std::min<unsigned>(
                 work.flipped ? texel + 1 : 16 - texel, unsigned(right - x));
-            if (run == 16 && opacity_known && opacity_mask == 0xffff &&
-                resolves_first(work, layer, select)) {
-                bool clear = true;
-                for (unsigned i = 0; i < 16 && clear; ++i) {
-                    const unsigned wx = (unsigned(x) + i) >> 5;
-                    const uint32_t bit = 1u << ((unsigned(x) + i) & 31);
-                    clear = (work.unresolved[wx] & bit) && !(work.pending[wx] & bit);
-                }
-                if (clear) {
-                    const uint16_t add = uint16_t(palette_base + state.pf.palette_add);
-                    for (unsigned i = 0; i < 16; ++i) {
-                        const unsigned t = work.flipped ? texel - i : texel + i;
-                        (*work.idx)[x + int(i)] =
-                            uint16_t(add + (pens[t ^ flip_x] & pen_mask));
-                        const unsigned wx = (unsigned(x) + i) >> 5;
-                        work.unresolved[wx] &= ~(1u << ((unsigned(x) + i) & 31));
-                    }
-                    x += 16;
-                    continue;
-                }
+            // Columns of the run that no earlier layer has settled; a settled run is skipped
+            // without touching its map cell.
+            const uint32_t unresolved = extract_columns(work.unresolved, x, run);
+            const uint32_t open =
+                work.any_pending ? unresolved | extract_columns(work.pending, x, run) : unresolved;
+            if (!open) {
+                x += int(run);
+                continue;
             }
-            for (unsigned i = 0; i < run; ++i) {
-                const unsigned t = work.flipped ? texel - i : texel + i;
-                const uint8_t pen = pens[t ^ flip_x] & pen_mask;
-                if (!pen) continue;
-                visit(work, x + int(i), uint16_t(palette_base + state.pf.palette_add + pen),
-                      select, layer);
+            const uint32_t word = map_row[cell];
+            const uint16_t attributes = uint16_t(word >> 16);
+            const uint32_t tile = wrap_tile_index(uint16_t(word), tile_count);
+            const unsigned tile_y = texel_y ^ ((attributes & 0x8000) ? 15 : 0);
+            const uint8_t *pens = tile_pixels.data() + size_t(tile) * 256 + size_t(tile_y) * 16;
+            const uint8_t pen_mask = uint8_t((((attributes >> 10) & 3 & ~attributes) << 4) | 15);
+            const unsigned flip_x = (attributes & 0x4000) ? 15 : 0;
+            const bool select = (attributes & 0x200) != 0;
+            const uint16_t palette = uint16_t((attributes & 0x1ff) * 16 + state.pf.palette_add);
+            // Column i of the run shows texel (texel -/+ i) ^ flip_x of the row.
+            const auto pen_at = [&](unsigned i) {
+                return uint8_t(pens[((work.flipped ? texel - i : texel + i)) ^ flip_x] & pen_mask);
+            };
+            uint32_t live = open;
+            if (opacity_usable && pen_mask == 15) {
+                // A set opacity bit is an opaque texel and, with the plain pen mask, a clear one is
+                // transparent: the table answers every texel of the run at once. Column i is
+                // texel bit (texel -/+ i) ^ flip_x, so the row is mirrored when exactly one of the
+                // screen flip and the cell flip applies.
+                const uint32_t row = opacity->row(tile, tile_y);
+                const uint32_t mirrored = work.flipped != (flip_x != 0) ? reverse16(row) : row;
+                live &= mirrored >> (work.flipped ? 15 - texel : texel);
+            }
+            if (live && resolves_first(work, layer, select)) {
+                // Unresolved opaque columns are final as they are: write them, settle them with
+                // one mask operation, and leave only the pending ones to the blend.
+                uint32_t settled = 0;
+                for (uint32_t fast = live & unresolved; fast; fast &= fast - 1) {
+                    const unsigned i = unsigned(__builtin_ctz(fast));
+                    const uint8_t pen = pen_at(i);
+                    if (!pen) continue;
+                    (*work.idx)[x + int(i)] = uint16_t(palette + pen);
+                    settled |= 1u << i;
+                }
+                clear_columns(work.unresolved, x, settled);
+                live &= ~unresolved;
+            }
+            for (; live; live &= live - 1) {
+                const unsigned i = unsigned(__builtin_ctz(live));
+                const uint8_t pen = pen_at(i);
+                if (pen) visit(work, x + int(i), uint16_t(palette + pen), select, layer);
             }
             x += int(run);
         }
     }
 }
 
-// Text: a glyph cell decodes its eight texels once. Consecutive output columns walk one text cell at
-// a time, mirrored when the frame is flipped exactly like GameText::pixel.
+// Text: walks one glyph cell at a time, mirrored when the frame is flipped exactly like
+// GameText::pixel. A cell none of whose columns is open, or whose glyph row is blank, costs no
+// pixel work.
 void compose_text(RowWork &work, LayerId id, const SceneLayer &layer) {
     const auto &text = work.job.scene.text;
     const auto &ranges = work.clips[unsigned(id)];
@@ -267,44 +301,42 @@ void compose_text(RowWork &work, LayerId id, const SceneLayer &layer) {
     const unsigned texel_y = unsigned(y & 7);
     for (unsigned r = 0; r < ranges.count; ++r) {
         const int left = clip_left(work, ranges, r), right = clip_right(work, ranges, r);
-        if (left >= right) continue;
-        unsigned cell = ~0u;
-        uint16_t palette_base = 0;
-        uint8_t pens[8]{};
-        for_each_visit(work, left, right, [&](int x) {
-            int xs = work.row.text_x + x - work.border;
-            xs &= 511;
-            if (work.flipped) xs = 511 - xs;
-            const unsigned cell_index = unsigned(xs >> 3);
-            if (cell_index != cell) {
-                cell = cell_index;
+        int x = left;
+        while (x < right) {
+            // Text column u of the 512-wide map; a cell spans eight consecutive u.
+            const unsigned u = unsigned(work.row.text_x + x - work.border) & 511;
+            const unsigned phase = u & 7;
+            const unsigned len = std::min(8 - phase, unsigned(right - x));
+            const uint32_t open = open_columns(work, x, len);
+            if (open) {
+                const unsigned cell = work.flipped ? 63 - (u >> 3) : u >> 3;
                 const uint16_t word = map[row_base + cell];
                 const unsigned flip_x = (word & 0x0100) ? 7u : 0u;
                 const unsigned flip_y = (word & 0x8000) ? 7u : 0u;
-                const size_t row = size_t((texel_y ^ flip_y) * 4);
-                palette_base = uint16_t(((word >> 9) & 0x3f) * 16);
-                const uint8_t *glyph = glyphs + size_t(word & 0xff) * 32 + row;
-                for (unsigned i = 0; i < 8; ++i) {
-                    const unsigned t = i ^ flip_x;
-                    pens[i] = uint8_t((glyph[3 - t / 2] >> ((t & 1) * 4)) & 0x0f);
-                }
+                const uint8_t *glyph =
+                    glyphs + size_t(word & 0xff) * 32 + size_t((texel_y ^ flip_y) * 4);
+                // The row's eight 4-bit texels as one word: texel t is nibble t.
+                const uint32_t texels = uint32_t(glyph[0]) << 24 | uint32_t(glyph[1]) << 16 |
+                                        uint32_t(glyph[2]) << 8 | glyph[3];
+                const uint16_t palette_base = uint16_t(((word >> 9) & 0x3f) * 16);
+                if (texels)
+                    for (uint32_t bits = open; bits; bits &= bits - 1) {
+                        const unsigned i = unsigned(__builtin_ctz(bits));
+                        const unsigned column = work.flipped ? 7 - (phase + i) : phase + i;
+                        const unsigned pen = (texels >> (((column ^ flip_x)) * 4)) & 0x0f;
+                        if (pen)
+                            visit(work, x + int(i), uint16_t(palette_base + pen),
+                                  layer.blend_select, layer);
+                    }
             }
-            const uint8_t pen = pens[unsigned(xs & 7)];
-            if (!pen) return;
-            visit(work, x, uint16_t(palette_base + pen), layer.blend_select, layer);
-        });
+            x += int(len);
+        }
     }
 }
 
 void compose_sprites(RowWork &work, LayerId id, const SceneLayer &layer) {
     const unsigned index = sub_index(id);
-    SpriteRowSpans::Row span{};
-    if (!work.job.spans.rows.empty()) span = work.job.spans.rows[work.plane_row];
-    else {
-        span.mask = 0x0f;
-        span.lo.fill(0);
-        span.hi.fill(uint16_t(work.plane_stride));
-    }
+    const SpriteRowSpans::Row &span = work.job.spans.rows[work.plane_row];
     if (!(span.mask & (1u << index))) return; // no plane value of this layer on the row
     const auto &ranges = work.clips[unsigned(id)];
     const uint16_t *plane = work.job.plane.data() + size_t(work.plane_row) * work.plane_stride;
@@ -363,8 +395,7 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
     // A sprite layer with no plane value on this row cannot change any pixel of it, so it is not
     // active here (the canonical kernel would sample and skip all of it). Leaving it out also keeps
     // its line-RAM priority out of the class-A test.
-    const SpriteRowSpans::Row sprite_span =
-        job.spans.rows.empty() ? SpriteRowSpans::Row{} : job.spans.rows[plane_row];
+    const SpriteRowSpans::Row &sprite_span = job.spans.rows[plane_row];
     std::array<bool, LAYER_COUNT> active{};
     for (unsigned i = 0; i < LAYER_COUNT; ++i) {
         const LayerId id{uint8_t(i)};

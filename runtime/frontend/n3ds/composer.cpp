@@ -72,7 +72,7 @@ void Composer::run() {
         if (!m_opacity_checked) build_opacity();
         CpuCounters *counters = nullptr;
         if (m_perf.cpu_counters.load(std::memory_order_relaxed)) {
-            if (!m_counters_open) m_counters_open = m_counters.open();
+            if (!m_counters_open) m_counters_open = m_counters.open("composer");
             if (m_counters.available()) counters = &m_counters;
         }
         const auto begin = std::chrono::steady_clock::now();
@@ -107,13 +107,10 @@ void Composer::run() {
                                    std::memory_order_relaxed);
         m_perf.special_px.store(scratch.stats.special_px.load(std::memory_order_relaxed),
                                 std::memory_order_relaxed);
-        m_perf.chunks.store(f3rt::compose_workers().participants(), std::memory_order_relaxed);
-        if (counters) {
-            const auto sample = counters->sample();
-            m_perf.cpu_insn.store(sample.instructions, std::memory_order_relaxed);
-            m_perf.cpu_cycles.store(sample.cycles, std::memory_order_relaxed);
-            m_perf.cpu_dmiss.store(sample.data_misses, std::memory_order_relaxed);
-        }
+        const f3rt::ChunkCounts chunks = f3rt::compose_workers().chunk_counts();
+        for (size_t i = 0; i < chunks.size(); ++i)
+            m_perf.chunks[i].store(chunks[i], std::memory_order_relaxed);
+        if (counters) m_perf.composer_cpu.store(counters->sample());
         m_perf.composed.fetch_add(1, std::memory_order_relaxed);
         {
             std::lock_guard publish_lock(m_shared.mutex);
