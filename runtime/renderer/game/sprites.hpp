@@ -3,6 +3,7 @@
 #include "renderer/game/row_workers.hpp"
 #include "f3rt/game_video.hpp"
 #include "sprites/presentation.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -28,16 +29,29 @@ void raster_sprites(std::span<const SceneSprite> sprites, uint8_t pen_mask,
                     std::span<const uint8_t> assets, std::span<uint16_t> output,
                     SpriteRasterOptions options = {});
 
-// Per-plane-row sprite coverage written by raster_sprite_chunk: which sprite layers reached the
-// row and the half-open column range each wrote. Render-only hints for the indexed compositor; a
-// range is a superset of the layer's drawn columns, so a consumer must still test the plane value.
-struct SpriteRowSpans {
-    struct Row {
-        uint8_t mask = 0;                              // bit i: sprite layer i drew in this row
-        std::array<uint16_t, 4> lo{0xffff, 0xffff, 0xffff, 0xffff};
-        std::array<uint16_t, 4> hi{};
-    };
-    std::span<Row> rows; // one entry per plane row of the raster geometry
+// Per-plane-row sprite coverage written by raster_sprite_chunk: for every sprite layer, the exact
+// set of picture columns whose plane value belongs to that layer. Render-only for the indexed
+// compositor, which walks these bits instead of testing every plane texel. Bit c of a layer row is
+// picture column c (plane column c + the plane's left margin: 46 for the native plane, 0 for an
+// expanded one); each layer row ends in one guard word that stays zero.
+struct SpriteCoverage {
+    static constexpr unsigned LAYERS = 4;
+    // Words per layer row for `geometry`: its picture columns plus the guard word.
+    static constexpr unsigned words_for(GameVideoOptions geometry) {
+        return (geometry.width() + 31) / 32 + 1;
+    }
+    unsigned words = 0;
+    std::span<uint8_t> layers; // per plane row: bit i set when sprite layer i covers a column
+    std::span<uint32_t> bits;  // per plane row, LAYERS layer rows of `words` words
+    std::span<uint32_t> row(unsigned plane_row, unsigned layer) const {
+        return bits.subspan((size_t(plane_row) * LAYERS + layer) * words, words);
+    }
+    // Zero one plane row's coverage.
+    void clear(unsigned plane_row) const {
+        layers[plane_row] = 0;
+        std::fill_n(bits.begin() + ptrdiff_t(size_t(plane_row) * LAYERS * words),
+                    size_t(LAYERS) * words, 0u);
+    }
 };
 
 // Sprites bucketed once per frame by COMPOSE_CHUNK_ROWS-row plane chunks, so a worker rasterising
@@ -53,14 +67,15 @@ private:
     std::vector<std::vector<uint16_t>> m_chunks;
 };
 
-// Clear plane rows [chunk * COMPOSE_CHUNK_ROWS, ...) of the raster geometry, then draw the chunk's
-// bucketed sprites into them (same order and same "first write wins" rule as raster_sprites, so the
-// chunked plane equals the whole-plane one). `options.accumulate` is not supported: the window is
-// always cleared. Recording spans in a null pointer leaves coverage untracked.
-void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites, unsigned chunk,
-                         uint8_t pen_mask, std::span<const uint8_t> assets,
+// Clear the coverage of plane rows [chunk * COMPOSE_CHUNK_ROWS, ...) of the raster geometry, then
+// draw the chunk's bucketed sprites into them (same order and same "first write wins" rule as
+// raster_sprites). The plane itself is not cleared: a texel of the window holds the whole-plane
+// raster's value where `coverage` has a bit and is stale everywhere else. `options.accumulate` is
+// not supported.
+void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites,
+                         unsigned chunk, uint8_t pen_mask, std::span<const uint8_t> assets,
                          std::span<uint16_t> plane, SpriteRasterOptions options,
-                         SpriteRowSpans *spans);
+                         SpriteCoverage &coverage);
 
 class GameSprites {
 public:

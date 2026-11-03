@@ -21,9 +21,12 @@ constexpr uint32_t to_pixel_format(uint32_t argb, PixelFormat format) {
 }
 
 // Per-frame palette lookup in output byte order: index -> pixel word, alpha forced opaque.
-// The 15-bit table exists only when a row of the frame selects 15-bit palette words.
+// The 15-bit table exists only when a row of the frame selects 15-bit palette words. Each table
+// repeats its first GUARD entries after the last, so a palette base plus a pen (or a sprite plane
+// value, which sits above 0x1000) can index it without wrapping first.
 struct IndexedPalette {
-    std::array<uint32_t, 8192> colors{}, colors15{};
+    static constexpr unsigned SIZE = 8192, GUARD = 64;
+    std::array<uint32_t, SIZE + GUARD> colors{}, colors15{};
     bool uses_15bit = false;
 
     void build(std::span<const uint32_t> palette, PixelFormat format, bool need_15bit);
@@ -40,16 +43,21 @@ struct IndexedFrameStats {
 };
 
 // Persistent working set of one indexed composer: the sprite plane (chunk-cleared by the raster),
-// its per-row coverage spans and the sprite bins. Geometry changes reuse the buffers.
+// its per-row layer coverage bits and the sprite bins. Geometry changes reuse the buffers.
 struct IndexedScratch {
     std::vector<uint16_t> plane;
-    std::vector<SpriteRowSpans::Row> span_rows;
+    std::vector<uint8_t> coverage_layers;
+    std::vector<uint32_t> coverage_bits;
     SpriteBins bins;
     IndexedPalette palette;
+    std::array<uint8_t, 256> glyph_rows{};
     IndexedFrameStats stats;
 
     void configure(GameVideoOptions geometry);
-    SpriteRowSpans spans() { return {span_rows}; }
+    // The coverage view of the buffers sized by configure(geometry).
+    SpriteCoverage coverage(GameVideoOptions geometry) {
+        return {SpriteCoverage::words_for(geometry), coverage_layers, coverage_bits};
+    }
 };
 
 // One frame, immutable while the chunks run. `output` holds picture rows: row r of the presented
@@ -57,28 +65,32 @@ struct IndexedScratch {
 struct IndexedComposeJob {
     const FrameScene &scene;
     std::span<uint16_t> plane; // sprite plane at `geometry`; each chunk writes only its own rows
-    SpriteRowSpans spans; // per plane row coverage of this frame's raster; one entry per plane row
+    SpriteCoverage coverage;   // per plane row layer coverage of this frame's raster
     const SpriteBins *bins = nullptr;
     std::span<const SceneSprite> sprites;
     uint8_t pen_mask = 15;
     std::span<const uint8_t> sprite_tiles;
-    std::span<const uint32_t> palette;   // IndexedPalette::colors
+    std::span<const uint8_t> glyph_rows; // indexed_glyph_rows() of the frame's text
+    std::span<const uint32_t> palette;   // IndexedPalette::colors, guard entries included
     std::span<const uint32_t> palette15; // IndexedPalette::colors15 (empty when unused)
     std::span<uint32_t> output;
     size_t stride = 0;
     PixelFormat format = PixelFormat::Argb8888;
     GameVideoOptions geometry{}; // expanded scale-1 presentation (320x232 plus the border)
-    const TileRowOpacity *opacity = nullptr;
     IndexedFrameStats *stats = nullptr;
 };
 
 // True when any presented row of `scene` selects 15-bit palette words.
 bool indexed_frame_uses_15bit(const FrameScene &scene) noexcept;
 
+// Which glyph rows of `scene`'s text are not blank: bit y of entry g is set when row y of glyph g
+// has a nonzero texel. The compositor skips a blank glyph row without reading it.
+void indexed_glyph_rows(const FrameScene &scene, std::array<uint8_t, 256> &rows) noexcept;
+
 // Compose one COMPOSE_CHUNK_ROWS-row picture chunk on the caller: rasterise the chunk's sprites into
 // its plane rows, record their coverage, then compose the rows. Pixel-identical to
 // compose_scene_rows over the same rows for class-A rows, and to the canonical row kernel for rows
 // where the first-visible-layer shortcut is not provably exact. The chunk writes only its own plane
-// rows and span rows of the job.
+// rows and coverage rows of the job.
 void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept;
 } // namespace f3rt

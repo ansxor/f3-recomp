@@ -721,6 +721,24 @@ TEST(GameCompositor, ParallelMatchesSerial) {
 // Indexed-kernel equivalence helpers. Both composers receive the same captured frame; the canonical
 // serial composition of the frame (with the whole-plane sprite raster) is the reference.
 namespace {
+// The chunk raster leaves plane texels no sprite wrote stale: this is the plane with those zeroed,
+// the form comparable to the whole-plane raster.
+std::vector<uint16_t> covered_plane(std::span<const uint16_t> plane, f3rt::GameVideoOptions options,
+                                    const f3rt::SpriteCoverage &coverage) {
+    const bool expanded = options.expanded();
+    const unsigned width = expanded ? options.width() : 432;
+    const unsigned left = expanded ? 0 : 46;
+    std::vector<uint16_t> result(plane.size(), 0);
+    for (unsigned row = 0; row < plane.size() / width; ++row)
+        for (unsigned layer = 0; layer < f3rt::SpriteCoverage::LAYERS; ++layer) {
+            const auto bits = coverage.row(row, layer);
+            for (unsigned x = left; x < left + options.width(); ++x)
+                if (bits[(x - left) / 32] >> ((x - left) % 32) & 1)
+                    result[size_t(row) * width + x] = plane[size_t(row) * width + x];
+        }
+    return result;
+}
+
 struct IndexedComparison {
     size_t pixels = 0, mismatches = 0, plane_mismatches = 0;
     size_t rows = 0, fallback_rows = 0; // composed rows, and those the canonical row kernel decided
@@ -730,8 +748,7 @@ struct IndexedComparison {
 IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
                                         std::span<const uint8_t> tile_pixels,
                                         std::span<const uint8_t> sprite_tiles,
-                                        unsigned border, f3rt::IndexedScratch &scratch,
-                                        const f3rt::TileRowOpacity *opacity) {
+                                        unsigned border, f3rt::IndexedScratch &scratch) {
     f3rt::GameVideoOptions options;
     options.scale = 1;
     options.border = border;
@@ -743,7 +760,7 @@ IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
                                  f3rt::ComposeMode::Serial);
     std::vector<uint32_t> indexed(pixel_count);
     f3rt::compose_captured_indexed(frame, tile_pixels, sprite_tiles, scratch, indexed,
-                                   options.width(), f3rt::PixelFormat::Argb8888, options, opacity);
+                                   options.width(), f3rt::PixelFormat::Argb8888, options);
     IndexedComparison result;
     result.pixels = pixel_count;
     result.rows = options.height();
@@ -753,15 +770,16 @@ IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
             ++result.mismatches;
         }
+    const auto written = covered_plane(scratch.plane, options, scratch.coverage(options));
     for (size_t i = 0; i < plane.size(); ++i)
-        if (scratch.plane[i] != plane[i]) {
+        if (written[i] != plane[i]) {
             if (result.first_plane == SIZE_MAX) result.first_plane = i;
             ++result.plane_mismatches;
         }
     // The 3DS staging order is the canonical word rotated for the display transfer.
     std::vector<uint32_t> staging(pixel_count);
     f3rt::compose_captured_indexed(frame, tile_pixels, sprite_tiles, scratch, staging,
-                                   options.width(), f3rt::PixelFormat::Rgba8888, options, opacity);
+                                   options.width(), f3rt::PixelFormat::Rgba8888, options);
     for (size_t i = 0; i < pixel_count; ++i)
         if (staging[i] != f3rt::to_pixel_format(expected[i], f3rt::PixelFormat::Rgba8888)) {
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
@@ -916,7 +934,7 @@ TEST(GameCompositor, IndexedMatchesReference) {
             for (const unsigned border : {0u, 40u}) {
                 const auto result = compare_indexed_frame(captured, machine->video->playfield_tiles(),
                                                           machine->video->sprite_tiles(), border,
-                                                          scratch, nullptr);
+                                                          scratch);
                 ++frames;
                 rows += result.rows;
                 fallback_rows += result.fallback_rows;
@@ -1011,14 +1029,17 @@ TEST(GameCompositor, ChunkedSpriteRasterMatchesWholePlane) {
         bins.bin(sprites, {options});
         f3rt::IndexedScratch scratch;
         scratch.configure(options);
+        // The chunk raster must not depend on what the plane held before.
+        std::fill(scratch.plane.begin(), scratch.plane.end(), uint16_t(0xabcd));
         EXPECT_EQ(bins.chunk_count(), (f3rt::compose_chunk_count()));
-        auto spans = scratch.spans();
+        auto coverage = scratch.coverage(options);
         for (unsigned chunk = 0; chunk < bins.chunk_count(); ++chunk)
             f3rt::raster_sprite_chunk(bins, sprites, chunk, 0x1f, sprite_tiles, scratch.plane,
-                                      {options}, &spans);
+                                      {options}, coverage);
+        const auto written = covered_plane(scratch.plane, options, coverage);
         size_t mismatches = 0, first = SIZE_MAX;
         for (size_t i = 0; i < expected.size(); ++i)
-            if (expected[i] != scratch.plane[i]) {
+            if (expected[i] != written[i]) {
                 if (first == SIZE_MAX) first = i;
                 ++mismatches;
             }
@@ -1028,14 +1049,9 @@ TEST(GameCompositor, ChunkedSpriteRasterMatchesWholePlane) {
 
 // The unscaled-sprite raster path must equal the general per-column raster. This reference is the
 // general algorithm written out plainly: nominal-rectangle cull, per-column and per-row fixed-point
-// positions, first write wins, and a per-row, per-layer column range for every nonzero pen.
+// positions, and first write wins.
 namespace {
-struct ReferenceRaster {
-    std::vector<uint16_t> plane;
-    std::vector<f3rt::SpriteRowSpans::Row> spans;
-};
-
-ReferenceRaster reference_sprite_raster(std::span<const f3rt::SceneSprite> sprites,
+std::vector<uint16_t> reference_sprite_raster(std::span<const f3rt::SceneSprite> sprites,
                                         uint8_t pen_mask, std::span<const uint8_t> tiles,
                                         f3rt::GameVideoOptions options) {
     const bool expanded = options.expanded();
@@ -1045,9 +1061,7 @@ ReferenceRaster reference_sprite_raster(std::span<const f3rt::SceneSprite> sprit
     const int left = expanded ? 0 : 46, right = expanded ? width : 366;
     const int top = expanded ? 0 : int(f3rt::geometry::FIRST_LINE);
     const int bottom = expanded ? int(options.height()) : int(f3rt::geometry::END_LINE);
-    ReferenceRaster result;
-    result.plane.assign(f3rt::sprite_plane_size(options), 0);
-    result.spans.assign(expanded ? options.height() : 256, f3rt::SpriteRowSpans::Row{});
+    std::vector<uint16_t> plane(f3rt::sprite_plane_size(options), 0);
     for (size_t i = sprites.size(); i; --i) {
         const auto &sprite = sprites[i - 1];
         if (sprite.x + sprite.scale_x * 16 <= (46 - int(options.border)) * 256 ||
@@ -1062,10 +1076,6 @@ ReferenceRaster reference_sprite_raster(std::span<const f3rt::SceneSprite> sprit
             const int end_y =
                 std::max(start_y + 1, ((position_y + sprite.scale_y) >> 8) - origin_y);
             if (end_y <= top || start_y >= bottom) continue;
-            struct Range {
-                int lo = 0, hi = 0;
-            };
-            std::array<Range, 4> by_layer{};
             for (int x = 0; x < 16; ++x) {
                 const int position_x = sprite.x + x * sprite.scale_x + 128;
                 const int start_x = (position_x >> 8) - origin_x;
@@ -1079,27 +1089,39 @@ ReferenceRaster reference_sprite_raster(std::span<const f3rt::SceneSprite> sprit
                 const int first_x = std::max(left, start_x), last_x = std::min(right, end_x);
                 for (int dy = std::max(top, start_y); dy < std::min(bottom, end_y); ++dy)
                     for (int dx = first_x; dx < last_x; ++dx)
-                        if (!result.plane[size_t(dy) * width + dx])
-                            result.plane[size_t(dy) * width + dx] = color;
-                auto &range =
-                    by_layer[unsigned(f3rt::sprite_layer(color)) - unsigned(f3rt::LayerId::Sp0)];
-                if (!range.hi) range = {first_x, last_x};
-                range = {std::min(range.lo, first_x), std::max(range.hi, last_x)};
-            }
-            for (unsigned layer = 0; layer < by_layer.size(); ++layer) {
-                if (by_layer[layer].hi <= by_layer[layer].lo) continue;
-                for (int dy = std::max(top, start_y); dy < std::min(bottom, end_y); ++dy) {
-                    auto &span = result.spans[dy];
-                    span.mask |= uint8_t(1u << layer);
-                    span.lo[layer] =
-                        std::min<uint16_t>(span.lo[layer], uint16_t(by_layer[layer].lo));
-                    span.hi[layer] =
-                        std::max<uint16_t>(span.hi[layer], uint16_t(by_layer[layer].hi));
-                }
+                        if (!plane[size_t(dy) * width + dx]) plane[size_t(dy) * width + dx] = color;
             }
         }
     }
-    return result;
+    return plane;
+}
+
+// The coverage a plane implies: per row and sprite layer, the picture columns whose plane value
+// belongs to the layer, and the mask of layers present.
+size_t coverage_mismatches(std::span<const uint16_t> plane, f3rt::GameVideoOptions options,
+                           const f3rt::SpriteCoverage &coverage) {
+    const bool expanded = options.expanded();
+    const unsigned width = expanded ? options.width() : 432;
+    const unsigned left = expanded ? 0 : 46;
+    const unsigned rows = expanded ? options.height() : 256;
+    size_t mismatches = 0;
+    for (unsigned row = 0; row < rows; ++row) {
+        uint8_t layers = 0;
+        for (unsigned layer = 0; layer < f3rt::SpriteCoverage::LAYERS; ++layer) {
+            std::vector<uint32_t> want(coverage.words, 0);
+            for (unsigned x = left; x < left + options.width(); ++x) {
+                const uint16_t value = plane[size_t(row) * width + x];
+                if (!value || unsigned(f3rt::sprite_layer(value)) - unsigned(f3rt::LayerId::Sp0) != layer)
+                    continue;
+                want[(x - left) / 32] |= 1u << ((x - left) % 32);
+                layers |= uint8_t(1u << layer);
+            }
+            const auto got = coverage.row(row, layer);
+            if (!std::equal(want.begin(), want.end(), got.begin())) ++mismatches;
+        }
+        if (layers != coverage.layers[row]) ++mismatches;
+    }
+    return mismatches;
 }
 } // namespace
 
@@ -1129,25 +1151,23 @@ TEST(GameCompositor, SpriteRasterMatchesGeneralReference) {
             sprite.flip_y = range(0, 1) != 0;
             sprites.push_back(sprite);
         }
-        const ReferenceRaster expected = reference_sprite_raster(sprites, 0x3f, tiles, geometry);
+        const std::vector<uint16_t> expected = reference_sprite_raster(sprites, 0x3f, tiles, geometry);
         std::vector<uint16_t> whole(f3rt::sprite_plane_size(geometry));
         f3rt::raster_sprites(sprites, 0x3f, tiles, whole, {geometry});
-        EXPECT_EQ(whole, expected.plane) << "border=" << border << " whole plane";
+        EXPECT_EQ(whole, expected) << "border=" << border << " whole plane";
         f3rt::SpriteBins bins;
         bins.bin(sprites, {geometry});
         f3rt::IndexedScratch scratch;
         scratch.configure(geometry);
-        auto spans = scratch.spans();
+        std::fill(scratch.plane.begin(), scratch.plane.end(), uint16_t(0xabcd));
+        auto coverage = scratch.coverage(geometry);
         for (unsigned chunk = 0; chunk < bins.chunk_count(); ++chunk)
             f3rt::raster_sprite_chunk(bins, sprites, chunk, 0x3f, tiles, scratch.plane, {geometry},
-                                      &spans);
-        EXPECT_EQ(scratch.plane, expected.plane) << "border=" << border << " chunked plane";
-        size_t span_mismatches = 0;
-        for (size_t row = 0; row < expected.spans.size(); ++row) {
-            const auto &want = expected.spans[row], &got = scratch.span_rows[row];
-            if (want.mask != got.mask || want.lo != got.lo || want.hi != got.hi) ++span_mismatches;
-        }
-        EXPECT_EQ(span_mismatches, 0u) << "border=" << border << " span rows";
+                                      coverage);
+        EXPECT_EQ(covered_plane(scratch.plane, geometry, coverage), expected)
+            << "border=" << border << " chunked plane";
+        EXPECT_EQ(coverage_mismatches(expected, geometry, coverage), 0u)
+            << "border=" << border << " coverage";
     }
 }
 
@@ -1206,13 +1226,13 @@ TEST(GameCompositor, IndexedPriorityTieRowsFallBackOnlyWhenBothLayersDraw) {
         f3rt::IndexedScratch scratch;
         const auto sp0_only = priority_tie_frame(false, sprite_tiles);
         const auto before =
-            compare_indexed_frame(sp0_only, tile_pixels, sprite_tiles, border, scratch, nullptr);
+            compare_indexed_frame(sp0_only, tile_pixels, sprite_tiles, border, scratch);
         EXPECT_EQ(before.fallback_rows, 0u) << "border=" << border;
         EXPECT_EQ(before.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(before.plane_mismatches, 0u) << "border=" << border;
         const auto with_sp1 = priority_tie_frame(true, sprite_tiles);
         const auto after =
-            compare_indexed_frame(with_sp1, tile_pixels, sprite_tiles, border, scratch, nullptr);
+            compare_indexed_frame(with_sp1, tile_pixels, sprite_tiles, border, scratch);
         EXPECT_EQ(after.fallback_rows, 1u) << "border=" << border;
         EXPECT_EQ(after.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(after.plane_mismatches, 0u) << "border=" << border;
@@ -1228,23 +1248,19 @@ RC_GTEST_PROP(GameCompositor, IndexedMatchesReferenceSynthetic, ()) {
     std::mt19937_64 rng(seed);
     const f3rt::CapturedFrame frame = synthetic_frame(rng);
     std::vector<uint8_t> tile_pixels(4 * 256), sprite_tiles(4 * 256);
-    // Transparent texels and whole transparent tile rows, as in real tile ROMs.
+    // Transparent texels, whole transparent tile rows and whole opaque ones, as in real tile ROMs.
     for (size_t row = 0; row < tile_pixels.size() / 16; ++row) {
-        const bool blank = rng() % 8 == 0;
+        const bool blank = rng() % 8 == 0, solid = !blank && rng() % 3 == 0;
         for (size_t i = 0; i < 16; ++i)
-            tile_pixels[row * 16 + i] = blank || rng() % 4 == 0 ? uint8_t(0) : uint8_t(rng());
+            tile_pixels[row * 16 + i] = blank                    ? uint8_t(0)
+                                        : solid                  ? uint8_t(1 + rng() % 15)
+                                        : rng() % 4 == 0 ? uint8_t(0)
+                                                         : uint8_t(rng());
     }
     for (auto &byte : sprite_tiles) byte = uint8_t(rng());
-    // A tile-row opacity table over the same ROM exercises the bulk playfield path.
-    f3rt::TileRowOpacity opacity;
-    opacity.build(tile_pixels);
     f3rt::IndexedScratch scratch;
-    const std::array<const f3rt::TileRowOpacity *, 2> tables{nullptr, &opacity};
-    for (const f3rt::TileRowOpacity *table : tables) {
-        const auto result =
-            compare_indexed_frame(frame, tile_pixels, sprite_tiles, border, scratch, table);
-        RC_ASSERT(result.mismatches == 0);
-        RC_ASSERT(result.plane_mismatches == 0);
-    }
+    const auto result = compare_indexed_frame(frame, tile_pixels, sprite_tiles, border, scratch);
+    RC_ASSERT(result.mismatches == 0);
+    RC_ASSERT(result.plane_mismatches == 0);
 }
 #endif
