@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
@@ -41,7 +42,14 @@ struct AudioEngine::Impl : PcmSink {
     std::mutex pcm_mutex;
     std::array<float, PCM_CAPACITY * 2> pcm{};
     uint64_t pcm_read = 0, pcm_write = 0;
+    // render_ready() hands out only frames below `releasable`: the frames up to the previous video frame's end.
+    // The worker has had a whole video frame to render those, so what a drain returns does not depend on whether
+    // it beat the caller to the frame that just finished. `frame_end` is the frame count at the latest
+    // finish_frame().
+    std::atomic<uint64_t> releasable{0};
+    uint64_t frame_end = 0;
     std::atomic<uint64_t> generated{0};
+    std::atomic<uint64_t> render_ns{0};
     Thread worker;
 
     Impl(std::span<const uint8_t> rom, std::span<const uint16_t> samples, uint8_t *ram)
@@ -76,10 +84,18 @@ struct AudioEngine::Impl : PcmSink {
         if (failure) std::rethrow_exception(failure);
         auto &queued = queue[pushed++ % QUEUE_SIZE];
         queued = m;
-        queued.tick = m.tick >= clock_epoch
-                          ? playback_epoch + (m.tick - clock_epoch)
-                          : playback_epoch - std::min(playback_epoch, clock_epoch - m.tick);
+        queued.tick = playback_tick(m.tick);
         wake.notify_one();
+    }
+    uint64_t playback_tick(uint64_t tick) const {
+        return tick >= clock_epoch ? playback_epoch + (tick - clock_epoch)
+                                   : playback_epoch - std::min(playback_epoch, clock_epoch - tick);
+    }
+    // The video frame is over: its audio becomes releasable one frame from now.
+    void finish_frame() {
+        submit(clock);
+        releasable.store(frame_end, std::memory_order_release);
+        frame_end = Core::frames_at(playback_tick(clock));
     }
     void submit(uint64_t tick) {
         if (tick <= submitted_tick) return;
@@ -110,6 +126,7 @@ struct AudioEngine::Impl : PcmSink {
                     ticket = popped;
                     completed.notify_all();
                 }
+                const auto started = std::chrono::steady_clock::now();
                 switch (m.kind) {
                 case Message::Command:
                     core.command(m.packet, m.instance, m.tick);
@@ -127,6 +144,10 @@ struct AudioEngine::Impl : PcmSink {
                     core.advance(m.tick);
                     break;
                 }
+                render_ns.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                 std::chrono::steady_clock::now() - started)
+                                                 .count()),
+                                    std::memory_order_relaxed);
                 generated.store(core.frames(), std::memory_order_relaxed);
                 {
                     std::lock_guard lock(mutex);
@@ -218,7 +239,7 @@ void AudioEngine::set_bank(uint8_t bank) {
     p.push(m);
 }
 void AudioEngine::shared_write(uint32_t offset) { m_impl->shared_write(offset); }
-void AudioEngine::finish_frame() { m_impl->submit(m_impl->clock); }
+void AudioEngine::finish_frame() { m_impl->finish_frame(); }
 void AudioEngine::flush() const { m_impl->flush(); }
 size_t AudioEngine::available() const {
     flush();
@@ -229,7 +250,12 @@ namespace {
 template <bool Wait = true, class Sample> size_t drain(auto &p, Sample *out, size_t count) {
     if constexpr (Wait) p.flush();
     std::lock_guard lock(p.pcm_mutex);
-    count = std::min<uint64_t>(count, p.pcm_write - p.pcm_read);
+    uint64_t available = p.pcm_write - p.pcm_read;
+    if constexpr (!Wait) {
+        const uint64_t releasable = p.releasable.load(std::memory_order_acquire);
+        available = std::min(available, releasable > p.pcm_read ? releasable - p.pcm_read : 0);
+    }
+    count = std::min<uint64_t>(count, available);
     for (size_t n = 0; n < count; ++n) {
         for (unsigned c = 0; c < 2; ++c) {
             const float value = p.pcm[(p.pcm_read % PCM_CAPACITY) * 2 + c];
@@ -251,7 +277,8 @@ uint64_t AudioEngine::generated() const {
 }
 Audio::EnhancedStats AudioEngine::stats() const {
     const auto render = m_impl->core.render_stats();
-    return {m_impl->command_count, generated(), render.voices_started, render.voices_active};
+    return {m_impl->command_count, generated(), render.voices_started, render.voices_active,
+            m_impl->render_ns.load(std::memory_order_relaxed)};
 }
 #if F3RT_HLE_EVENTS
 void AudioEngine::set_observer(std::function<void(const VoiceEvent &)> observer) {
@@ -285,6 +312,9 @@ void AudioEngine::load(std::span<const uint8_t> src) {
     {
         std::lock_guard lock(m_impl->pcm_mutex);
         m_impl->pcm_read = m_impl->pcm_write;
+        // Everything produced so far belongs to the old timeline; nothing of it is held back.
+        m_impl->frame_end = m_impl->pcm_write;
+        m_impl->releasable.store(m_impl->pcm_write, std::memory_order_release);
     }
     m_impl->clock = words[0];
     m_impl->command_count = words[1];

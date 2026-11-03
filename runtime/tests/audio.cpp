@@ -8,7 +8,7 @@
 #include "audio/hle/mailbox.hpp"
 #include "audio/hle/patch.hpp"
 #include "audio/hle/pulse_timer.hpp"
-#include "audio/hle/faust/generated/voice_filter.hpp"
+#include "audio/hle/voice_filter.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
 #include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
@@ -1584,7 +1584,22 @@ struct VoiceFilterRef {
     }
 };
 
-// Runs `chunks` blocks of 64 frames of random controls through the DSP and the reference, with
+// One filter step at a run-time mode.
+float voice_filter_step(f3rt::hle::VoiceFilterState &state, int mode, float x, float a1, float a2, float hp) {
+    using namespace f3rt::hle;
+    switch (filter_mode(uint8_t(mode))) {
+    case 0:
+        return filter_step<0>(state, x, a1, a2, hp);
+    case 1:
+        return filter_step<1>(state, x, a1, a2, hp);
+    case 2:
+        return filter_step<2>(state, x, a1, a2, hp);
+    default:
+        return filter_step<3>(state, x, a1, a2, hp);
+    }
+}
+
+// Runs `chunks` blocks of 64 frames of random controls through the filter and the reference, with
 // mode_of(chunk) selecting each block's mode. Returns the largest output error relative to the
 // largest output magnitude.
 template <class ModeOf>
@@ -1593,63 +1608,35 @@ float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
     std::mt19937 rng(seed);
     std::uniform_real_distribution<float> coef(0.01f, 0.99f), pole(0.f, 1.f), gain(0.f, 1.f),
         sample(-32768.f, 32767.f);
-    f3rt::hle::faust::VoiceFilterDsp dsp;
-    dsp.init(29762);
-    f3rt::hle::faust::Controls controls(dsp);
-    float *mode_zone = controls.zone("mode");
+    f3rt::hle::VoiceFilterState state;
     VoiceFilterRef ref;
-    float in[6][CH]{}, out[2][CH]{};
-    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
-    float *outs[2] = {out[0], out[1]};
     float peak = 0.f, err = 0.f;
     for (int k = 0; k < chunks; ++k) {
         const int mode = mode_of(k);
-        *mode_zone = float(mode);
         for (int r = 0; r < CH; ++r) {
-            in[0][r] = sample(rng);
-            in[1][r] = coef(rng);
-            in[2][r] = coef(rng);
-            in[3][r] = pole(rng);
-            in[4][r] = gain(rng);
-            in[5][r] = gain(rng);
-        }
-        dsp.compute(CH, ins, outs);
-        for (int r = 0; r < CH; ++r) {
+            const float x = sample(rng), a1 = coef(rng), a2 = coef(rng), hp = pole(rng);
+            const float gl = gain(rng), gr = gain(rng);
+            const float y = voice_filter_step(state, mode, x, a1, a2, hp);
             float L = 0.f, R = 0.f;
-            ref.frame(mode, in[0][r], in[1][r], in[2][r], in[3][r], in[4][r], in[5][r], L, R);
+            ref.frame(mode, x, a1, a2, hp, gl, gr, L, R);
             peak = std::max({peak, std::fabs(L), std::fabs(R)});
-            err = std::max({err, std::fabs(out[0][r] - L), std::fabs(out[1][r] - R)});
+            err = std::max({err, std::fabs(y * gl - L), std::fabs(y * gr - R)});
         }
     }
     return peak > 0.f ? err / peak : err;
 }
 
-// Settles a constant input (1000 through unity gains, a1 0.2, a2 0.7, high pole 0.5) and returns
-// the settled left output.
+// Settles a constant input (1000, a1 0.2, a2 0.7, high pole 0.5) and returns the settled output.
 float voice_filter_dc(int mode) {
-    constexpr int CH = 64;
-    f3rt::hle::faust::VoiceFilterDsp dsp;
-    dsp.init(29762);
-    f3rt::hle::faust::Controls controls(dsp);
-    *controls.zone("mode") = float(mode);
-    float in[6][CH], out[2][CH];
-    for (int r = 0; r < CH; ++r) {
-        in[0][r] = 1000.f;
-        in[1][r] = 0.2f;
-        in[2][r] = 0.7f;
-        in[3][r] = 0.5f;
-        in[4][r] = 1.f;
-        in[5][r] = 1.f;
-    }
-    float *ins[6] = {in[0], in[1], in[2], in[3], in[4], in[5]};
-    float *outs[2] = {out[0], out[1]};
-    for (int k = 0; k < 2000; ++k) dsp.compute(CH, ins, outs);
-    return out[0][CH - 1];
+    f3rt::hle::VoiceFilterState state;
+    float y = 0.f;
+    for (int k = 0; k < 2000 * 64; ++k) y = voice_filter_step(state, mode, 1000.f, 0.2f, 0.7f, 0.5f);
+    return y;
 }
 
 }  // namespace
 
-TEST(Audio, VoiceFilterDspMatchesScalarRecursion) {
+TEST(Audio, VoiceFilterMatchesScalarRecursion) {
     for (int mode = 0; mode < 4; ++mode) {
         EXPECT_LT(voice_filter_error(1234u + unsigned(mode), 256, [mode](int) { return mode; }),
                   1e-5f)

@@ -108,11 +108,15 @@ private:
     uint64_t m_audio_window_frames = 0, m_audio_window_samples = 0;
     size_t m_audio_min = SIZE_MAX, m_audio_max = 0;
     uint64_t m_audio_pushes = 0, m_audio_window_underruns = 0, m_audio_window_late = 0;
+    // Video frames of the window by how much audio the emulation thread found ready after them: none, about one
+    // frame's worth, or more (a late worker delivers two frames at once).
+    uint64_t m_audio_window_empty = 0, m_audio_window_single = 0, m_audio_window_burst = 0;
     uint64_t m_audio_window_pushed = 0;
     double m_source_rate = 0;
     uint32_t m_audio_window_peak = 0;
     uint64_t m_audio_window_energy = 0, m_audio_window_samples_pcm = 0;
     uint64_t m_hle_commands_base = 0;
+    uint64_t m_hle_render_ns_base = 0;
     double m_audio_ratio = 1.0;
     mutable std::mutex m_error_mutex;
     std::string m_error;

@@ -453,6 +453,28 @@ TEST(HleCore, EngineAndCoreReplayAreBitExact) {
     }
 }
 
+// render_ready() releases the audio one video frame late: after finish_frame() N it returns everything up to the end of
+// frame N - 1 (which the worker has had a whole frame to render), never a part of frame N, however fast the worker is.
+TEST(HleCore, RenderReadyHoldsBackTheFrameJustClosed) {
+    std::string why;
+    const auto *set = load_set("landmakrj", why);
+    if (!set) GTEST_SKIP() << why;
+    std::array<uint8_t, 0x800> shared{};
+    AudioEngine engine(set->rom.sound, set->words, shared.data());
+    std::vector<int16_t> block(4096 * 2);
+    uint64_t drained = 0, produced_before = 0;
+    for (unsigned frame = 0; frame < 20; ++frame) {
+        engine.advance(272000);
+        engine.finish_frame();
+        engine.flush(); // the worker is as quick as it can be: all of this frame is rendered
+        const uint64_t produced = engine.generated();
+        while (const size_t n = engine.render_ready(block.data(), 4096)) drained += n;
+        EXPECT_EQ(drained, produced_before) << "frame " << frame;
+        produced_before = produced;
+    }
+    EXPECT_GT(drained, 0u);
+}
+
 // ---- A3: how the caller slices time ------------------------------------------------------------------------------------
 //
 // advance() always splits at the clock ticks (every 16000 ticks from the reset), so a schedule whose targets

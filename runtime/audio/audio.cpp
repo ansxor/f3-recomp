@@ -563,7 +563,7 @@ void Audio::finish_frame() {
 Audio::EnhancedStats Audio::enhanced_stats() const {
     if (m_impl->m_hle) {
         const auto s = m_impl->m_hle->stats();
-        return EnhancedStats{s.commands, s.rendered_frames, s.voices_started, s.voices_active};
+        return EnhancedStats{s.commands, s.rendered_frames, s.voices_started, s.voices_active, s.render_ns};
     }
     return EnhancedStats{};
 }
