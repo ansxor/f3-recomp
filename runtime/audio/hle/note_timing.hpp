@@ -48,9 +48,13 @@ public:
     // Earliest tick at which service() has something to do.
     uint64_t next_event() const {
         uint64_t next = NONE;
+        size_t left = m_used; // stop at the last live entry: push() takes the first free slot, so they lead
         for (const Entry &e : m_entries) {
+            if (!left) break;
             if (e.state == State::Waiting) next = std::min(next, e.start);
             else if (e.state == State::Started) next = std::min(next, e.off);
+            else continue;
+            --left;
         }
         return next;
     }
@@ -68,11 +72,14 @@ public:
     // begin(payload, start) once per entry whose start <= limit; release(instance, tick) once per entry whose
     // note-off arrived, never before its begin. Order: ascending tick, begins before releases at equal ticks.
     template <class Begin, class Release> void service(uint64_t limit, Begin &&begin, Release &&release) {
-        for (;;) {
+        while (m_used) {
             Entry *pick = nullptr;
             bool pick_release = false;
+            size_t left = m_used;
             for (Entry &e : m_entries) {
+                if (!left) break;
                 if (e.state == State::Free) continue;
+                --left;
                 const bool rel = e.state == State::Started;
                 const uint64_t tick = rel ? e.off : e.start;
                 if (tick > limit) continue;

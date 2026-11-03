@@ -216,6 +216,10 @@ private:
     float m_current_bucket_peak = 0.f;
     uint64_t m_silent_frames = K_DELAY_BUFFER_SIZE;
     bool m_bypassed = true;
+    // mix() scratch, kept here so that a call does not zero 11 KB of stack: the render calls it once per clock tick.
+    PlanarAudioBlock<6, K_CHUNK> m_in;
+    PlanarAudioBlock<3, K_CHUNK> m_out;
+    PlanarAudioBlock<2, K_CHUNK> m_dc_out;
 
     float table(unsigned index) const {
         const size_t p = sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET + std::min(index, 127u) * 2;
@@ -532,9 +536,9 @@ public:
 
         m_dc->gain_l = output_gain[0];
         m_dc->gain_r = output_gain[1];
-        PlanarAudioBlock<6, K_CHUNK> in;
-        PlanarAudioBlock<3, K_CHUNK> out;
-        PlanarAudioBlock<2, K_CHUNK> dc_out;
+        auto &in = m_in;
+        auto &out = m_out;
+        auto &dc_out = m_dc_out;
         const auto interleave = [&](size_t offset, size_t n) {
             for (size_t f = 0; f < n; ++f) {
                 stereo_out[offset + f, StereoChannel::Left] = dc_out[0][f];

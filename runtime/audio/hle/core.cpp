@@ -41,6 +41,10 @@ struct Core::Impl : Clock::Listener {
     VoiceService voices{bank};
     Sequencer sequencer;
     VoiceRenderState render_state;
+    // The render scratch lives here, not on render_until's stack: the clock ticks about 17 times a frame, and a
+    // stack block would be zeroed on every call.
+    BusBlock buses;
+    StereoBlock stereo;
     uint64_t worker_tick = 0, worker_frames = 0;
     std::array<float, 2> gain{1.f, 1.f};
     PcmSink *sink = nullptr;
@@ -121,8 +125,6 @@ struct Core::Impl : Clock::Listener {
 
     void render_until(uint64_t tick) {
         const uint64_t end = frames_at(tick);
-        BusBlock buses;
-        StereoBlock stereo;
         std::array<float, 2> input, output;
         for (unsigned ch = 0; ch < 2; ++ch) {
             input[ch] = .18f;

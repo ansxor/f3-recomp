@@ -20,7 +20,6 @@ if(BUILD_TESTING AND NOT F3RT_HOST_TOOLS)
 endif()
 include(cmake/dependencies.cmake)
 include(cmake/faust.cmake)
-f3rt_faust_dsp(NAME voice_filter CLASS VoiceFilterDsp)
 # ES5510 effects programs: double precision (the LFO is a rotation of a GPR pair whose rate a float would drift).
 f3rt_faust_dsp(NAME reverb CLASS ReverbDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
 f3rt_faust_dsp(NAME chorus CLASS ChorusDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)

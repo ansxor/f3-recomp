@@ -130,9 +130,15 @@ void Session::log_audio_window(f3rt::Machine &machine) {
     const auto hle = machine.audio->enhanced_stats();
     const uint64_t commands = hle.commands - m_hle_commands_base;
     m_hle_commands_base = hle.commands;
+    // Core 0 cost of the synth worker per emulated frame (wall time of its message handling).
+    const double synth_ms = emulated > m_audio_window_emulated
+                                ? double(hle.render_ns - m_hle_render_ns_base) / 1e6 /
+                                      double(emulated - m_audio_window_emulated)
+                                : 0.0;
+    m_hle_render_ns_base = hle.render_ns;
     log_line("n3ds: audio emu_fps=%.1f emu_ms=%.2f push_fps=%.0f queue_ms=min/mean/max=%.2f/"
              "%.2f/%.2f audio_ms=%.2f drops=%llu underruns=%llu late=%llu ratio=%.4f "
-             "hle_cmd=%llu voices=%llu/%u peak=%u rms=%.0f",
+             "ready=%llu/%llu/%llu synth_ms=%.2f hle_cmd=%llu voices=%llu/%u peak=%u rms=%.0f",
              double(emulated - m_audio_window_emulated) / seconds,
              double(m_perf.emu_us.load(std::memory_order_relaxed)) / 1000.0,
              double(m_audio_window_pushed) / seconds,
@@ -141,6 +147,9 @@ void Session::log_audio_window(f3rt::Machine &machine) {
              to_ms(double(m_audio->queued_frames())), static_cast<unsigned long long>(drops),
              static_cast<unsigned long long>(m_audio_window_underruns),
              static_cast<unsigned long long>(m_audio_window_late), m_audio_ratio,
+             static_cast<unsigned long long>(m_audio_window_empty),
+             static_cast<unsigned long long>(m_audio_window_single),
+             static_cast<unsigned long long>(m_audio_window_burst), synth_ms,
              static_cast<unsigned long long>(commands),
              static_cast<unsigned long long>(hle.voices_started), hle.voices_active,
              m_audio_window_peak,
@@ -156,6 +165,7 @@ void Session::log_audio_window(f3rt::Machine &machine) {
     m_audio_max = 0;
     m_audio_window_underruns = 0;
     m_audio_window_late = 0;
+    m_audio_window_empty = m_audio_window_single = m_audio_window_burst = 0;
     m_audio_window_peak = 0;
     m_audio_window_energy = 0;
     m_audio_window_samples_pcm = 0;
@@ -328,9 +338,13 @@ void Session::emulate() {
             previous_us ? int64_t(previous_us) + (int64_t(elapsed_us) - int64_t(previous_us)) / 16
                         : int64_t(elapsed_us);
         m_perf.emu_us.store(uint64_t(ema_us), std::memory_order_relaxed);
-        size_t count;
-        while ((count = machine.audio->render_ready(samples.data(), samples.size() / 2)) != 0)
+        size_t count, ready = 0;
+        while ((count = machine.audio->render_ready(samples.data(), samples.size() / 2)) != 0) {
             push_audio(samples.data(), count);
+            ready += count;
+        }
+        // A video frame is about 505 audio frames.
+        ++(ready == 0 ? m_audio_window_empty : ready < 756 ? m_audio_window_single : m_audio_window_burst);
         if (m_audio && std::chrono::steady_clock::now() - m_audio_window_start >=
                            std::chrono::seconds(5))
             log_audio_window(machine);

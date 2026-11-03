@@ -29,6 +29,7 @@ public:
     struct EnhancedStats {
         uint64_t commands = 0, rendered_frames = 0, voices_started = 0;
         unsigned voices_active = 0;
+        uint64_t render_ns = 0; // wall time the synth worker has spent applying messages (rendering) since start
     };
     // Select once, after ROM loading and before machine execution.
     void set_backend(Backend backend);
@@ -106,8 +107,10 @@ public:
     size_t render(int16_t *interleaved_stereo, size_t max_frames);
     size_t render(float *interleaved_stereo, size_t max_frames);
     // Non-blocking drain: returns only PCM already produced by the Enhanced worker
-    // without waiting. Never blocks on the Enhanced worker. Callers needing a
-    // complete, deterministic stream must finish with the blocking render.
+    // without waiting. Never blocks on the Enhanced worker. It holds back the audio of
+    // the video frame that finish_frame() just closed, so each call returns the frame
+    // before it whether or not the worker is quick: the amount does not race with it.
+    // Callers needing a complete, deterministic stream must finish with the blocking render.
     size_t render_ready(int16_t *interleaved_stereo, size_t max_frames);
     // Default SingleStage matches hardware MB87078 post-DAC analog attenuation
     // (docs/notes/raw/docs/taito-f3/list.txt:265-280); MameRouting is retained

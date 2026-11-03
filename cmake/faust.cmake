@@ -12,7 +12,7 @@
 # one of those inputs, without being asked, and then recompiles what includes it. The output is
 # deterministic; it is rewritten with identical bytes but a new mtime. Observed: touching reverb.dsp
 # regenerates reverb.hpp; touching es5510.lib regenerates reverb, chorus, echo and hall; touching
-# architecture.hpp regenerates all of them, voice_filter included.
+# architecture.hpp regenerates all of them.
 #
 # The faust-regen target builds the same rules on request. It forces nothing: a header newer than
 # its inputs is left alone. To regenerate one anyway, touch its .dsp or delete the header, then:
