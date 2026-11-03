@@ -33,22 +33,6 @@ void GameTiles::decode(const VideoRam &vram) {
     }
 }
 
-void TileRowOpacity::reset() { m_rows.clear(); }
-
-void TileRowOpacity::build(std::span<const uint8_t> tile_pixels) {
-    const unsigned tiles = unsigned(tile_pixels.size() / TILE_TEXELS);
-    m_rows.assign(size_t(tiles) * ROWS, 0);
-    for (unsigned tile = 0; tile < tiles; ++tile) {
-        const uint8_t *data = tile_pixels.data() + size_t(tile) * TILE_TEXELS;
-        for (unsigned row = 0; row < ROWS; ++row) {
-            uint16_t mask = 0;
-            for (unsigned x = 0; x < 16; ++x)
-                mask |= uint16_t((data[row * 16 + x] & 0x0f ? 1u : 0u) << x);
-            m_rows[size_t(tile) * ROWS + row] = mask;
-        }
-    }
-}
-
 void FullResolutionAltMaps::reset() { *this = FullResolutionAltMaps{}; }
 
 void FullResolutionAltMaps::update(const GameTiles &tiles, std::span<const uint8_t> tile_pixels) {

@@ -9,9 +9,6 @@
 
 namespace f3rt::n3ds {
 namespace {
-// The tile-row opacity table costs 1 MiB; build it only when the application region keeps this much
-// free after load, so the table can never be the reason an allocation fails.
-constexpr uint64_t OPACITY_MIN_FREE = 4 * 1024 * 1024;
 // Staging rows the display transfer reads: the picture height, not the whole texture.
 constexpr unsigned STAGING_STRIDE = 512;
 } // namespace
@@ -26,23 +23,6 @@ void Composer::stop() {
     m_stop.store(true);
     m_shared.cv.notify_all();
     m_thread.join();
-}
-
-void Composer::build_opacity() {
-    const auto tile_pixels = m_session.playfield_tiles();
-    if (tile_pixels.empty()) return;
-    const uint64_t free_bytes = osGetMemRegionFree(MEMREGION_APPLICATION);
-    const size_t bytes = f3rt::TileRowOpacity::bytes(tile_pixels);
-    if (free_bytes < OPACITY_MIN_FREE + bytes) {
-        log_line("n3ds: tile opacity skipped tiles=%zu bytes=%zu free_kib=%u", tile_pixels.size() / 256,
-                 bytes, unsigned(free_bytes / 1024));
-        m_opacity_checked = true;
-        return;
-    }
-    m_opacity.build(tile_pixels);
-    m_opacity_checked = true;
-    log_line("n3ds: tile opacity tiles=%u bytes=%zu free_kib=%u", m_opacity.tile_count(), bytes,
-             unsigned(free_bytes / 1024));
 }
 
 void Composer::run() {
@@ -69,7 +49,6 @@ void Composer::run() {
         const size_t stride = out.stride;
         lock.unlock();
         if (!staging) continue;
-        if (!m_opacity_checked) build_opacity();
         CpuCounters *counters = nullptr;
         if (m_perf.cpu_counters.load(std::memory_order_relaxed)) {
             if (!m_counters_open) m_counters_open = m_counters.open("composer");
@@ -79,8 +58,7 @@ void Composer::run() {
         f3rt::compose_captured_indexed(*shot->captured, m_session.playfield_tiles(),
                                        m_session.sprite_tiles(), scratch,
                                        {staging, size_t(STAGING_STRIDE) * 256}, stride,
-                                       f3rt::PixelFormat::Rgba8888, options,
-                                       m_opacity.empty() ? nullptr : &m_opacity, counters);
+                                       f3rt::PixelFormat::Rgba8888, options, counters);
         const auto end = std::chrono::steady_clock::now();
         // The writer owns cache maintenance: the display transfer reads these rows by DMA.
         GSPGPU_FlushDataCache(staging, u32(size_t(stride) * height * sizeof(uint32_t)));

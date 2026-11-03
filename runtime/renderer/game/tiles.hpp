@@ -122,34 +122,6 @@ private:
 };
 static_assert(SceneSource<GameTiles>);
 
-// Render-only (never serialized): per tile-row opacity, so a playfield run can copy a fully opaque
-// 16-texel column with no per-texel transparency test and skip an empty one. One 16-bit mask per
-// tile row, bit x set when texel x's low nibble is nonzero: the pen mask always keeps the low
-// nibble, so a set bit is opaque for every cell attributes, while an all-zero row is transparent
-// for all of them. 32768 tiles cost 1 MiB; a game with no budget leaves it unbuilt and the kernel
-// tests every texel.
-class TileRowOpacity {
-public:
-    static constexpr unsigned TILE_TEXELS = 256, ROWS = 16;
-
-    // Build the table for a playfield tile ROM (1 byte per texel). Returns the bytes it needs, so a
-    // caller can decide before allocating; build() is a no-op when the table does not fit.
-    static size_t bytes(std::span<const uint8_t> tile_pixels) {
-        return (tile_pixels.size() / TILE_TEXELS) * ROWS * sizeof(uint16_t);
-    }
-    void build(std::span<const uint8_t> tile_pixels);
-    void reset();
-    bool empty() const { return m_rows.empty(); }
-    unsigned tile_count() const { return unsigned(m_rows.size() / ROWS); }
-    // Bit x: texel x of (tile, row) has a nonzero low nibble. `tile` must be < tile_count().
-    uint16_t row(unsigned tile, unsigned row) const {
-        return m_rows[size_t(tile) * ROWS + row];
-    }
-
-private:
-    std::vector<uint16_t> m_rows;
-};
-
 // Render-only (never serialized, never feeds emulation): which PF2/PF3 alternate-map tile rows are an
 // exact X2/Y1 alias of the same row of the full-resolution main map. A game that draws distant floors
 // from a horizontally half-scaled copy uploads both copies; the alias offset differs per upload

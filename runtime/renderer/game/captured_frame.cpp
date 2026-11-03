@@ -34,8 +34,7 @@ void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t>
 void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
                               std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
                               std::span<uint32_t> output, size_t stride, PixelFormat format,
-                              GameVideoOptions options, const TileRowOpacity *opacity,
-                              WorkWindow *window) {
+                              GameVideoOptions options, WorkWindow *window) {
     if (options.scale != 1 || options.border > GameVideoOptions::MAX_BORDER)
         throw std::runtime_error("Indexed composition needs the expanded scale-1 frame");
     if (stride < options.width() || output.size() < stride * options.height())
@@ -46,11 +45,11 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
         for (unsigned y = 0; y < options.height(); ++y) {
             uint32_t *row = output.data() + size_t(y) * stride;
             for (unsigned x = 0; x < options.width(); ++x)
-                row[x] = x < left || x >= left + geometry::NATIVE_WIDTH
-                             ? to_pixel_format(0xff000000u, format)
-                             : to_pixel_format(frame.native_pixels[y * geometry::NATIVE_WIDTH +
-                                                                   (x - left)],
-                                               format);
+                row[x] =
+                    x < left || x >= left + geometry::NATIVE_WIDTH
+                        ? to_pixel_format(0xff000000u, format)
+                        : to_pixel_format(
+                              frame.native_pixels[y * geometry::NATIVE_WIDTH + (x - left)], format);
         }
         return;
     }
@@ -58,26 +57,28 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
     const FrameScene scene = frame.scene(tile_pixels);
     const bool palette_15bit = indexed_frame_uses_15bit(scene);
     scratch.palette.build(scene.colors, format, palette_15bit);
+    indexed_glyph_rows(scene, scratch.glyph_rows);
     scratch.stats.reset();
     scratch.bins.bin(frame.sprite_list(), SpriteRasterOptions{options, false, false});
     const auto sprite_list = frame.sprite_list();
     IndexedComposeJob job{scene,
-                                scratch.plane,
-                                scratch.spans(),
-                                &scratch.bins,
-                                sprite_list,
-                                frame.pen_mask,
-                                sprite_tiles,
-                                scratch.palette.colors,
-                                palette_15bit ? std::span<const uint32_t>(scratch.palette.colors15)
-                                              : std::span<const uint32_t>{},
-                                output,
-                                stride,
-                                format,
-                                options,
-                                opacity,
-                                &scratch.stats};
-    compose_workers().run(compose_chunk_count(),
-                          [&job](unsigned chunk) { compose_indexed_chunk(job, chunk); }, window);
+                          scratch.plane,
+                          scratch.coverage(options),
+                          &scratch.bins,
+                          sprite_list,
+                          frame.pen_mask,
+                          sprite_tiles,
+                          scratch.glyph_rows,
+                          scratch.palette.colors,
+                          palette_15bit ? std::span<const uint32_t>(scratch.palette.colors15)
+                                        : std::span<const uint32_t>{},
+                          output,
+                          stride,
+                          format,
+                          options,
+                          &scratch.stats};
+    compose_workers().run(
+        compose_chunk_count(), [&job](unsigned chunk) { compose_indexed_chunk(job, chunk); },
+        window);
 }
 } // namespace f3rt

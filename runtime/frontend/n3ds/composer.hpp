@@ -2,7 +2,6 @@
 #include "cpu_counters.hpp"
 #include "perf.hpp"
 #include "renderer/game/indexed_compositor.hpp"
-#include "renderer/game/tiles.hpp"
 #include "session.hpp"
 #include "settings.hpp"
 #include <atomic>
@@ -27,8 +26,6 @@ public:
 
 private:
     void run();
-    // One-time tile-row opacity table; skipped when the application region is too tight.
-    void build_opacity();
 
     Shared &m_shared;
     Session &m_session;
@@ -36,8 +33,6 @@ private:
     PerfStats &m_perf;
     f3rt::Thread m_thread;
     std::atomic<bool> m_stop{false};
-    f3rt::TileRowOpacity m_opacity;
-    bool m_opacity_checked = false;
     CpuCounters m_counters;
     bool m_counters_open = false;
 };
