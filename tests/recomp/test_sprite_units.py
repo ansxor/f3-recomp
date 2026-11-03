@@ -197,7 +197,7 @@ class GeneratorHookTests(unittest.TestCase):
         self.assertLess(start.index("F3_UNIT_ENTER(cpu, 0);"), start.index("F3_PROFILE_HIT_MAIN"))
         self.assertEqual(lowering["emit_units"]["units"]["objects"], {"id": 0, "enter_hooks": 1, "exit_hooks": 1})
         self.assertEqual(lowering["emit_units"]["frame_writer_ranges"], 1)
-        self.assertEqual(lowering["runtime_abi_version"], 5)
+        self.assertEqual(lowering["runtime_abi_version"], 6)
 
     def test_no_units_emits_no_hooks(self):
         _, files, lowering = self.generate({})

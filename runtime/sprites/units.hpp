@@ -165,6 +165,8 @@ public:
     // `--discovery-log`: report writes outside units from PCs outside frame_writers (works without check mode).
     void set_discovery(DiscoveryLog *log) { m_discovery = log; }
     bool tracks_writers() const { return !m_writer_pc.empty(); }
+    // Last-writer pc per RAM halfword, for the generated code's inline RAM stores; null when untracked.
+    uint32_t *writer_table() { return m_writer_pc.empty() ? nullptr : m_writer_pc.data(); }
     void note_irq(unsigned level);
     void frame_end();
     // Drops all transient state (machine reset, state load); counters are kept.

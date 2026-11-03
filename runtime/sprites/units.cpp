@@ -118,10 +118,16 @@ SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options
         m_flicker_by_unit[target] = source;
         m_has_flicker = true;
     }
-    if (writer_owned) m_writer_pc.assign(0x10000, 0);
+    if (writer_owned) {
+        m_writer_pc.assign(0x10000, 0);
+        machine.cpu.ram_writer = m_writer_pc.data();
+    }
     m_stack.reserve(MAX_OPEN);
 }
-SpriteUnits::~SpriteUnits() = default;
+SpriteUnits::~SpriteUnits() {
+    if (!m_writer_pc.empty() && m_machine.cpu.ram_writer == m_writer_pc.data())
+        m_machine.cpu.ram_writer = nullptr;
+}
 
 uint32_t SpriteUnits::register_value(const f3_cpu &cpu, UnitRegister reg) const {
     const unsigned index = unsigned(reg);
@@ -641,7 +647,7 @@ void SpriteUnits::ram_put(uint32_t offset, uint8_t value) {
 void SpriteUnits::sandbox_abort(Abort reason) {
     if (m_sandbox_abort != Abort::Count) return;
     m_sandbox_abort = reason;
-    m_sandbox_cpu.halted = 1; // stops chained native blocks at the next guard
+    m_sandbox_cpu.dispatch_deadline = 0; // stops chained native blocks at the next guard
 }
 
 uint8_t SpriteUnits::sandbox_read8(uint32_t address) {
@@ -755,6 +761,11 @@ void SpriteUnits::run_replay(const EmitUnit &unit, const Invocation &invocation,
     f3_cc_flush(&m_machine.cpu);
     m_sandbox_cpu = m_machine.cpu;
     m_sandbox_cpu.runtime = &m_machine;
+    // The clone reaches memory only through the sandbox callbacks, never the real windows.
+    m_sandbox_cpu.ram = nullptr;
+    m_sandbox_cpu.ram_writer = nullptr;
+    m_sandbox_cpu.rom = nullptr;
+    m_sandbox_cpu.rom_size = 0;
     m_sandbox_cpu.pc = unit.starts[invocation.start_index];
     m_sandbox_cpu.stopped = m_sandbox_cpu.halted = 0;
     m_sandbox_unit = unit.id;

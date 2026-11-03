@@ -29,7 +29,7 @@ public:
     Machine(const Machine &) = delete;
     Machine &operator=(const Machine &) = delete;
     f3_cpu cpu{};
-    std::array<uint8_t, 0x20000> ram{};
+    alignas(8) std::array<uint8_t, 0x20000> ram{};
     std::array<uint8_t, 0x8000> palette{};
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
@@ -88,6 +88,8 @@ public:
     std::vector<uint32_t> fallback_hits;
 
     void reset();
+    // Points the cpu's direct memory windows (f3_cpu::ram, rom, ram_writer) at this machine's memory.
+    void bind_cpu_windows();
     void reset_devices();
     void reset_main_cpu();
     // Select before advancing the machine. The interpreted driver is the default.

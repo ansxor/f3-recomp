@@ -106,6 +106,12 @@ uint32_t Machine::sound_pc() const {
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
     return (pixels * MAIN_CLOCK + PIXEL_CLOCK - 1) / PIXEL_CLOCK;
 }
+void Machine::bind_cpu_windows() {
+    cpu.ram = ram.data();
+    cpu.rom = roms.main.data();
+    cpu.rom_size = uint32_t(roms.main.size());
+    cpu.ram_writer = sprite_units ? sprite_units->writer_table() : nullptr;
+}
 void Machine::reset_devices() {
     cpu.dispatch_deadline = 0;
     audio->set_reset(true);
@@ -119,6 +125,7 @@ void Machine::reset() {
     native_pixels();
     cpu = {};
     cpu.runtime = this;
+    bind_cpu_windows();
     eeprom->reset();
     frame = m_hardware_cycles = 0;
     // Reference beam time zero is VBSTART, not scanline zero.

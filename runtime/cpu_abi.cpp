@@ -70,6 +70,14 @@ void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) {
     }
     bus(cpu, a, 4).write32(a, v);
 }
+uint8_t *f3_ram(f3_cpu *cpu, uint32_t a, uint32_t size) {
+    if (sandbox(cpu)) return nullptr;
+    auto &m = machine(cpu);
+    a &= 0xffffff;
+    if (a - f3rt::RAM_BASE >= f3rt::RAM_END - f3rt::RAM_BASE) return nullptr;
+    const uint32_t offset = a & f3rt::RAM_MIRROR_MASK;
+    return size <= m.ram.size() && offset <= m.ram.size() - size ? m.ram.data() + offset : nullptr;
+}
 void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     sr &= 0xf71f; // 68EC020 writable status bits.
     if ((sr & 0x0700) < (cpu->sr & 0x0700)) cpu->dispatch_deadline = 0;
