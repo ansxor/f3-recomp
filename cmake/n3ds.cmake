@@ -64,6 +64,14 @@ file(GLOB F3_N3DS_FRONTEND_SOURCES CONFIGURE_DEPENDS
 if(NOT F3_N3DS_FRONTEND_SOURCES)
     message(FATAL_ERROR "runtime/frontend/n3ds/*.cpp is missing")
 endif()
+# Dev-only scripted run for the frame-budget bench (scripts/n3ds-bench.sh): reads
+# sdmc:/3ds/f3-recomp/<set>/bench.txt, logs scenario markers and ignores settings.cfg. Off in the
+# shipped build, where bench.cpp is not even compiled.
+option(F3_N3DS_BENCH "Build the 3DS frontend with the scripted bench input" OFF)
+if(NOT F3_N3DS_BENCH)
+    list(REMOVE_ITEM F3_N3DS_FRONTEND_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/frontend/n3ds/bench.cpp")
+endif()
 file(GLOB F3_N3DS_FTPD_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/ftpd/*.cpp")
 if(NOT F3_N3DS_FTPD_SOURCES)
@@ -90,6 +98,9 @@ target_include_directories(${F3_GAME_EXECUTABLE} PRIVATE
 target_link_libraries(${F3_GAME_EXECUTABLE} PRIVATE
     f3rt f3_recompiled f3rt-frontend imgui f3rt-n3ds-shader-blobs citro3d ctru m)
 target_compile_options(${F3_GAME_EXECUTABLE} PRIVATE -ffunction-sections -fdata-sections)
+if(F3_N3DS_BENCH)
+    target_compile_definitions(${F3_GAME_EXECUTABLE} PRIVATE F3_N3DS_BENCH)
+endif()
 target_link_options(${F3_GAME_EXECUTABLE} PRIVATE -Wl,--gc-sections)
 
 # ---- 3dsx: built by every default build; embeds the RomFS ----

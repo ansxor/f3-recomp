@@ -243,9 +243,11 @@
             text = ''
               usage() {
                 printf '%s\n' \
-                  'usage: f3-3ds {3dsx|cia} [GAME=landmakrj] [ROM_DIR=roms/GAME] [-- cmake configure args]' \
+                  'usage: f3-3ds {3dsx|cia|bench} [GAME=landmakrj] [ROM_DIR=roms/GAME] [-- cmake configure args]' \
                   '  Run from the repository root. GAME defaults to landmakrj, ROM_DIR to roms/GAME.' \
-                  '  Output: build/GAME-3ds/GAME.3dsx, or GAME.cia for the cia target.' >&2
+                  '  Output: build/GAME-3ds/GAME.3dsx, or GAME.cia for the cia target.' \
+                  '  bench: dev-only 3dsx with the scripted bench input (F3_N3DS_BENCH), in' \
+                  '  build/GAME-3ds-bench/GAME.3dsx so the shipped build directory stays untouched.' >&2
                 exit 2
               }
 
@@ -253,7 +255,7 @@
               target=$1
               shift
               case $target in
-                3dsx|cia) ;;
+                3dsx|cia|bench) ;;
                 *)
                   printf 'error: unknown target: %s\n' "$target" >&2
                   usage
@@ -287,6 +289,11 @@
               fi
 
               build_dir="build/$game-3ds"
+              bench_flags=()
+              if [ "$target" = bench ]; then
+                build_dir="build/$game-3ds-bench"
+                bench_flags=(-DF3_N3DS_BENCH=ON)
+              fi
 
               flags=(
               ${flagArray})
@@ -296,13 +303,14 @@
                 -DF3_GAME="$game" \
                 -DF3_ROM_DIR="$rom_dir" \
                 "''${flags[@]}" \
+                "''${bench_flags[@]}" \
                 "$@"
 
               case $target in
-                3dsx) cmake --build "$build_dir" ;;
+                3dsx|bench) cmake --build "$build_dir" ;;
                 cia) cmake --build "$build_dir" --target "$game-cia" ;;
               esac
-              printf 'build ok: %s/%s.%s\n' "$build_dir" "$game" "$target"
+              printf 'build ok: %s/%s.%s\n' "$build_dir" "$game" "''${target/bench/3dsx}"
             '';
           };
 
@@ -313,6 +321,14 @@
             runtimeInputs = [ f3-3ds ];
             text = ''
               exec f3-3ds 3dsx "$@"
+            '';
+          };
+
+          f3-3ds-bench = pkgs.writeShellApplication {
+            name = "f3-3ds-bench";
+            runtimeInputs = [ f3-3ds ];
+            text = ''
+              exec f3-3ds bench "$@"
             '';
           };
 
@@ -350,6 +366,7 @@
           apps = {
             "3ds-3dsx" = app f3-3dsx "f3-3dsx";
             "3ds-cia" = app f3-3ds-cia "f3-3ds-cia";
+            "3ds-bench" = app f3-3ds-bench "f3-3ds-bench";
             "3ds-azahar" = app f3-3ds-azahar "f3-3ds-azahar";
           };
 

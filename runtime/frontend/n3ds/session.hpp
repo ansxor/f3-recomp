@@ -23,6 +23,7 @@ class AudioPacer;
 } // namespace f3rt
 
 namespace f3rt::n3ds {
+class Bench;
 class NdspAudioOutput;
 
 enum class Command : uint8_t { Pause, Resume, SystemPause, SystemResume, SetVolume, Stop };
@@ -87,6 +88,9 @@ private:
     bool m_counters_open = false;
     f3rt::Thread m_thread;
     std::unique_ptr<f3rt::Machine> m_machine;
+#ifdef F3_N3DS_BENCH
+    std::unique_ptr<Bench> m_bench;
+#endif
     std::unique_ptr<f3rt::AudioPacer> m_pacer;
     std::span<const uint8_t> m_playfield, m_sprite;
     // Capture buffers handed to the presenter through FrameSlots; owned here for the session's life.

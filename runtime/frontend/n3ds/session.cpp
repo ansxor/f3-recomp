@@ -1,6 +1,9 @@
 #include "session.hpp"
 #include "audio_ndsp.hpp"
 #include "audio_pacer.hpp"
+#ifdef F3_N3DS_BENCH
+#include "bench.hpp"
+#endif
 #include "fast_boot.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/game_boot.hpp"
@@ -206,6 +209,14 @@ void Session::startup() {
         // The game's boot frames were discarded, so nothing is queued on the device yet.
         if (m_audio) m_audio->clear();
     }
+#ifdef F3_N3DS_BENCH
+    stage("bench script");
+    m_bench = Bench::load(m_data_dir + "/bench.txt");
+    if (!m_bench) throw std::runtime_error("bench.txt is missing or malformed in " + m_data_dir);
+    log_line("n3ds: bench starts at frame=%llu fast_boot=%s",
+             static_cast<unsigned long long>(machine.frame + 1),
+             m_settings.fast_boot ? "on" : "off");
+#endif
     stage("audio pacer");
     const double source_rate = machine.audio->sample_rate();
     m_source_rate = source_rate;
@@ -284,8 +295,14 @@ void Session::emulate() {
         slot->scale = m_video.scale;
         slot->start = next_frame;
         const auto frame_start = std::chrono::steady_clock::now();
-        f3rt::apply_local_inputs(
-            machine, {f3rt::LocalInputWord(input.load()), 0, 0, 0});
+        std::array<f3rt::LocalInputWord, f3rt::LOCAL_PLAYER_COUNT> local{
+            f3rt::LocalInputWord(input.load()), 0, 0, 0};
+#ifdef F3_N3DS_BENCH
+        const auto scripted = m_bench->begin_frame(machine);
+        for (size_t player = 0; player < local.size(); ++player)
+            local[player] = f3rt::LocalInputWord(local[player] | scripted[player]);
+#endif
+        f3rt::apply_local_inputs(machine, local);
         const bool profile = profile_frame();
         machine.game_video->set_probe(profile ? &m_stages : nullptr);
         if (profile) m_stages.begin_frame();

@@ -68,7 +68,12 @@ int main() {
     };
 
     Settings settings = default_settings();
+#ifdef F3_N3DS_BENCH
+    // A bench run is reproducible: the defaults, never the user's settings file.
+    log_line("n3ds: bench build, settings.cfg ignored");
+#else
     load_settings(data_dir + "/settings.cfg", settings);
+#endif
     log_line("n3ds: stage settings");
 
     std::unique_ptr<NdspAudioOutput> audio;

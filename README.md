@@ -63,6 +63,14 @@ the ROM set is embedded in the ROM file system image. The 3DS build runs only th
 (Enhanced) audio, CPU scene composition, fast boot, and the touch menu on the bottom screen.
 Reference audio, netplay, save states and the native sound program are not available there.
 
+**Frame-budget bench (dev only):** `nix run .#3ds-bench` builds `build/landmakrj-3ds-bench/landmakrj.3dsx`
+with `F3_N3DS_BENCH`, which plays the scripted timeline `games/landmakrj/n3ds/bench.txt` (attract, main
+menu, character select, gameplay) from `sdmc:/3ds/f3-recomp/landmakrj/bench.txt`, logs
+`n3ds: scenario <name> frame=<n>` markers and ignores `settings.cfg`. The shipped build never contains it.
+`tools/bench/n3ds-bench.sh 100 TAG` (or `300`) builds it, runs it in Azahar under Xvfb at that
+`cpu_clock_percentage`, and writes the log, a screenshot per scenario and the per-scenario gate table
+(`tools/bench/n3ds_report.py`) to `/tmp/bench/TAG/`.
+
 **Real hardware:** audio needs `sdmc:/3ds/dspfirm.cdc`, a firmware dump taken from the console itself.
 Without it the app runs silently and the bottom screen shows `Audio off: sdmc:/3ds/dspfirm.cdc missing`.
 Azahar's HLE DSP ignores the file's contents, so a placeholder is enough there.

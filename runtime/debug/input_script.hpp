@@ -20,6 +20,8 @@ namespace f3rt {
 //                                                              at the start of each of those frames (a range
 //                                                              rewrites it every frame; the game may still
 //                                                              overwrite it during the frame)
+//   FRAME scenario NAME                                      label a section of the timeline; the 3DS bench
+//                                                              logs it when the frame starts (scenario_at)
 // END may be `end`. Active rules are OR'd per player; numbers are decimal or 0x hex.
 class InputScript {
 public:
@@ -31,6 +33,8 @@ public:
     std::array<LocalInputWord, LOCAL_PLAYER_COUNT> words(uint64_t frame);
     // Applies the poke rules active at `frame` to main RAM (call right before run_frame).
     void poke(Machine &machine, uint64_t frame) const;
+    // Name of the `scenario` marker that starts exactly at `frame`, or nullptr.
+    const std::string *scenario_at(uint64_t frame) const;
     size_t rules() const { return m_rules.size(); }
     bool has_pokes() const;
 
@@ -40,6 +44,7 @@ private:
         unsigned player = 0;
         LocalInputWord hold = 0;
         bool mash = false;
+        std::string scenario;   // non-empty: a timeline label, no input
         unsigned poke_size = 0; // bytes; 0 = not a poke
         uint32_t poke_address = 0, poke_value = 0;
         uint64_t seed = 1, rng = 1, next = 0; // next: first frame whose mash step has not run
