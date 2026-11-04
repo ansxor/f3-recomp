@@ -9,20 +9,7 @@
 extern "C" {
 #endif
 
-/* Enter another generated block function without returning to the runtime
- * dispatcher. The guard emitted before this (recomp/generate.py) proves the
- * skipped dispatch would be a no-op: pc names a table entry,
- * cpu->cycles < dispatch_deadline (no vblank, IRQ3 or watchdog event is due, so
- * runtime boundary() would fire nothing and republish the same deadline), and
- * trace bits are clear. The guard does not test stopped or halted: only
- * instructions that return at once (STOP, exceptions, fallback) set them, and a
- * replay sandbox that must stop zeroes its deadline. The trace-bit term
- * is emitted only for transfers that leave the function or target a
- * non-sequential address; a same-function fall-through is a bare goto. Every
- * path that sets the deadline back to 0 (IRQ-mask lowering, reset) is in
- * runtime, so the guard needs no further state.
- *
- * The expansion must stay a tail call: the block functions are mutually
+/* The expansion must stay a tail call: the block functions are mutually
  * recursive, so a plain (non-tail) call would grow the host stack without
  * bound. __attribute__((musttail)) guarantees it where available; otherwise
  * the transfer degrades to a plain return, which re-enters the dispatcher and
@@ -127,7 +114,6 @@ static inline void f3_st32(f3_cpu *cpu, uint32_t a, uint32_t v) {
 #define F3_UNIT_ENTER(cpu, id) do { f3_cc_flush(cpu); f3_unit_enter((cpu), (id)); } while (0)
 #define F3_UNIT_EXIT(cpu, id) do { f3_cc_flush(cpu); if (f3_unit_exit((cpu), (id))) return; } while (0)
 
-/* Evaluate a 68000/68020 4-bit condition against a canonical CCR. */
 static inline int f3_cond_ccr(uint16_t sr, uint8_t cond) {
     int c = sr & F3_CCR_C;
     int v = (sr & F3_CCR_V) != 0;
@@ -154,7 +140,6 @@ static inline int f3_cond_ccr(uint16_t sr, uint8_t cond) {
     return 0;
 }
 
-/* Evaluate a condition against the CCR after flushing pending flags. */
 static inline int f3_eval_cond(f3_cpu *cpu, uint8_t cond) {
     f3_cc_flush(cpu);
     return f3_cond_ccr(cpu->sr, cond);
@@ -618,62 +603,47 @@ static inline uint32_t f3_bchg(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t 
     return val ^ (1u << (bit & mask));
 }
 
-/* Idle-loop fast-forward (planted at loop heads by recomp/idle.py).
- *
- * Executing a whole iteration of a loop natively makes every instruction guard
- * pass exactly while cpu->cycles < cpu->dispatch_deadline, so skipping n
- * iterations of C cycles each is invisible when cycles + n * C stays below the
- * deadline: no device event, IRQ boundary or watchdog falls inside, and the
- * loop still reaches its head under the chain guard (trace bits clear, not
- * stopped or halted). Native execution resumes at the head and spends the rest
- * of the budget itself, so the deadline lands on the same instruction as
- * before. A skip never changes the pc, any register or flag the loop's next
- * iteration reads, or memory read by the loop; fast-forwards that leave state
- * an iteration only overwrites also leave at least one whole iteration to
- * native execution, which rewrites that state exactly as the skipped ones did.
- * Instrumented profile builds plant no calls so hit counts stay exact.
- */
-/* Whole loop iterations of `cycles` each that native execution would complete
- * without any guard failing; 0 when the chain guard itself would fail. */
 static inline uint64_t f3_idle_iterations(const f3_cpu *cpu, uint32_t cycles) {
     if (cpu->stopped || cpu->halted || (cpu->sr & 0xc000u) || cpu->cycles >= cpu->dispatch_deadline) return 0;
     return (cpu->dispatch_deadline - 1u - cpu->cycles) / cycles;
 }
 
-/* Branch to self: an iteration changes nothing but time. */
 static inline void f3_idle_spin(f3_cpu *cpu, uint32_t cycles) {
     cpu->cycles += f3_idle_iterations(cpu, cycles) * cycles;
 }
 
-/* Poll of a memory operand `address` (TST.size ea) closed by Bcc (loop while
- * the condition holds, loop_when_true = 1) or DBcc Dn (loop while it fails and
- * the low word of Dn is nonzero, counter = n; -1 for none). Main RAM is
- * constant while the CPU spins, so the polled value, and with it the loop
- * condition, is the same for every skipped iteration. A DBcc counter takes one
- * decrement per skipped iteration, never reaching the -1 that ends the loop.
- * The iteration kept for native execution recomputes the flags and the
- * lazy-flag state the skipped iterations would have left. */
-static inline void f3_idle_poll(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
-                                int loop_when_true, int counter, uint32_t cycles) {
+static inline uint64_t f3_idle_skippable(const f3_cpu *cpu, uint32_t cycles) {
+    const uint64_t iterations = f3_idle_iterations(cpu, cycles);
+    return iterations < 2 ? 0 : iterations - 1;
+}
+
+static inline uint16_t f3_tst_ccr(const uint8_t *bytes, unsigned size) {
+    uint32_t value = 0;
+    for (unsigned i = 0; i < size; ++i) value = (value << 8) | bytes[i];
+    const uint32_t sign = 0x80u << (8 * (size - 1));
+    return (value ? 0u : F3_CCR_Z) | ((value & sign) ? F3_CCR_N : 0u);
+}
+
+static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond, uint32_t cycles) {
     const uint8_t *p = f3_ram(cpu, address, size);
     if (!p) return;
-    uint32_t value = 0;
-    for (unsigned i = 0; i < size; ++i) value = (value << 8) | p[i];
-    const uint32_t sign = 0x80u << (8 * (size - 1));
-    const uint16_t ccr = (value ? 0u : F3_CCR_Z) | ((value & sign) ? F3_CCR_N : 0u);
-    if ((f3_cond_ccr(ccr, (uint8_t)cond) != 0) != (loop_when_true != 0)) return;
-    uint64_t whole = f3_idle_iterations(cpu, cycles);
-    if (whole < 2) return;
-    whole -= 1;
-    if (counter >= 0) {
-        const uint32_t count = cpu->d[counter] & 0xffffu;
-        if (whole > count) whole = count;
-        cpu->d[counter] = (cpu->d[counter] & 0xffff0000u) | (count - (uint32_t)whole);
-    }
+    if (!f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) return;
+    cpu->cycles += f3_idle_skippable(cpu, cycles) * cycles;
+}
+
+static inline void f3_idle_poll_dbcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
+                                     unsigned counter, uint32_t cycles) {
+    const uint8_t *p = f3_ram(cpu, address, size);
+    if (!p) return;
+    if (f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) return;
+    uint64_t whole = f3_idle_skippable(cpu, cycles);
+    if (!whole) return;
+    const uint32_t count = cpu->d[counter] & 0xffffu;
+    if (whole > count) whole = count;
+    cpu->d[counter] = (cpu->d[counter] & 0xffff0000u) | (count - (uint32_t)whole);
     cpu->cycles += whole * cycles;
 }
 
-/* x -> multiplier * x + addend applied n times modulo 2^32, in O(log n). */
 static inline uint32_t f3_affine_power(uint32_t x, uint32_t multiplier, uint32_t addend, uint64_t n) {
     uint32_t result_multiplier = 1u, result_addend = 0u;
     for (; n; n >>= 1) {
@@ -687,23 +657,13 @@ static inline uint32_t f3_affine_power(uint32_t x, uint32_t multiplier, uint32_t
     return result_multiplier * x + result_addend;
 }
 
-/* Loop of subroutine calls that only advance one RAM longword by an affine
- * map (a linear-congruential generator): each iteration pushes `stack` bytes
- * of return addresses, loads the longword at `address`, stores
- * multiplier * x + addend back and pops the frames. Everything it leaves in
- * registers is rewritten from the longword alone by the next iteration, and
- * the pushed words are rewritten with identical values by every iteration, so
- * only the longword advances; the kept native iteration replays the stack
- * stores (writer attribution included). Requires the longword and the stack
- * frame to be plain RAM that does not overlap. */
 static inline void f3_idle_affine_call(f3_cpu *cpu, uint32_t address, uint32_t stack, uint32_t multiplier,
                                        uint32_t addend, uint32_t cycles) {
     uint8_t *word = f3_ram(cpu, address, 4);
     const uint8_t *frame = f3_ram(cpu, cpu->a[7] - stack, stack);
     if (!word || !frame || (word < frame + stack && frame < word + 4)) return;
-    uint64_t whole = f3_idle_iterations(cpu, cycles);
-    if (whole < 2) return;
-    whole -= 1;
+    uint64_t whole = f3_idle_skippable(cpu, cycles);
+    if (!whole) return;
     uint32_t x = (uint32_t)word[0] << 24 | (uint32_t)word[1] << 16 | (uint32_t)word[2] << 8 | word[3];
     x = f3_affine_power(x, multiplier, addend, whole);
     word[0] = (uint8_t)(x >> 24);
@@ -714,12 +674,15 @@ static inline void f3_idle_affine_call(f3_cpu *cpu, uint32_t address, uint32_t s
 }
 #if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
 #  define F3_IDLE_SPIN(cpu, cycles) ((void)0)
-#  define F3_IDLE_POLL(cpu, address, size, cond, loop_when_true, counter, cycles) ((void)0)
+#  define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) ((void)0)
+#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) ((void)0)
 #  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) ((void)0)
 #else
 #  define F3_IDLE_SPIN(cpu, cycles) f3_idle_spin((cpu), (cycles))
-#  define F3_IDLE_POLL(cpu, address, size, cond, loop_when_true, counter, cycles) \
-      f3_idle_poll((cpu), (address), (size), (cond), (loop_when_true), (counter), (cycles))
+#  define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) \
+      f3_idle_poll_bcc((cpu), (address), (size), (cond), (cycles))
+#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) \
+      f3_idle_poll_dbcc((cpu), (address), (size), (cond), (counter), (cycles))
 #  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) \
       f3_idle_affine_call((cpu), (address), (stack), (multiplier), (addend), (cycles))
 #endif

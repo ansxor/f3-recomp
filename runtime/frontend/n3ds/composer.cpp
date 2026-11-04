@@ -83,8 +83,6 @@ public:
 
 private:
     static void write(const FrameRecord &r) {
-        // Per participant: chunks pulled @ first claim - end of last chunk (ms from the dispatch
-        // start), and in parentheses the part of that spent waiting for a helper window.
         std::string split;
         for (size_t i = 0; i < r.trace.participants.size(); ++i) {
             const f3rt::ParticipantTrace &p = r.trace.participants[i];
@@ -118,7 +116,7 @@ void Composer::start() {
 }
 void Composer::stop() {
     m_stop.store(true);
-    m_shared.cv.notify_all();
+    m_shared.emulation.wake();
     m_thread.join();
 }
 
@@ -130,14 +128,8 @@ void Composer::run() {
     SlowFrameLog slow_frames;
     Clock::duration synth_estimate{};
     while (true) {
-        std::unique_lock lock(m_shared.mutex);
-        if (!m_shared.emulation.unseen()) {
-            lock.unlock();
-            slow_frames.flush();
-            lock.lock();
-        }
-        m_shared.cv.wait(lock, [&] { return m_stop.load() || m_shared.emulation.unseen(); });
-        if (m_stop.load()) return;
+        if (!m_shared.emulation.unseen()) slow_frames.flush();
+        if (!m_shared.emulation.wait_unseen(m_stop)) return;
         bool fresh = false;
         const f3rt::FrameSnapshot *shot = m_shared.emulation.take(fresh);
         if (!shot || !shot->captured) continue;
@@ -148,7 +140,6 @@ void Composer::run() {
         out.start = shot->start;
         uint32_t *staging = out.rgba;
         const size_t stride = out.stride;
-        lock.unlock();
         if (!staging) continue;
         CpuCounters *counters = nullptr;
         if (m_perf.cpu_counters.load(std::memory_order_relaxed)) {
@@ -193,11 +184,7 @@ void Composer::run() {
                           uint32_t(synth_us), f3rt::compose_workers().trace()});
         if (counters) m_perf.composer_cpu.store(counters->sample());
         m_perf.composed.fetch_add(1, std::memory_order_relaxed);
-        {
-            std::lock_guard publish_lock(m_shared.mutex);
-            m_shared.present.publish();
-        }
-        m_shared.cv.notify_all();
+        m_shared.present.publish();
     }
 }
 } // namespace f3rt::n3ds

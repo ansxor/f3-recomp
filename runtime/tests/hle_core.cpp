@@ -453,8 +453,6 @@ TEST(HleCore, EngineAndCoreReplayAreBitExact) {
     }
 }
 
-// render_ready() releases the audio one video frame late: after finish_frame() N it returns everything up to the end of
-// frame N - 1 (which the worker has had a whole frame to render), never a part of frame N, however fast the worker is.
 TEST(HleCore, RenderReadyHoldsBackTheFrameJustClosed) {
     std::string why;
     const auto *set = load_set("landmakrj", why);
@@ -466,7 +464,7 @@ TEST(HleCore, RenderReadyHoldsBackTheFrameJustClosed) {
     for (unsigned frame = 0; frame < 20; ++frame) {
         engine.advance(272000);
         engine.finish_frame();
-        engine.flush(); // the worker is as quick as it can be: all of this frame is rendered
+        engine.flush();
         const uint64_t produced = engine.generated();
         while (const size_t n = engine.render_ready(block.data(), 4096)) drained += n;
         EXPECT_EQ(drained, produced_before) << "frame " << frame;

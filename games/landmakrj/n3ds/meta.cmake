@@ -1,4 +1,3 @@
-# 3DS packaging metadata for Land Maker (Japan). Read by cmake/n3ds.cmake.
 set(F3_N3DS_TITLE "Land Maker")
 set(F3_N3DS_DESCRIPTION "Land Maker (Japan) - f3-recomp")
 set(F3_N3DS_AUTHOR "f3-recomp")

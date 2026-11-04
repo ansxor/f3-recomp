@@ -5,8 +5,6 @@
 #include <cstdint>
 
 namespace f3rt::n3ds {
-// ARM11 performance-monitor readings of one core: instructions retired, core cycles and L1
-// data-cache read misses.
 struct CpuSample {
     uint64_t instructions = 0, cycles = 0, data_misses = 0;
 
@@ -39,12 +37,9 @@ public:
     // the log.
     bool open(const char *owner);
     bool available() const { return m_available; }
-    // The free-running counters now (zero when unavailable).
     CpuSample read() const;
-    // WorkWindow: observe one span; `begin()` marks its start, `end()` latches its counts.
     void begin() override;
     void end() override;
-    // The most recent latched span (zero until the first end()).
     CpuSample sample() const { return m_sample; }
 
 private:
@@ -52,10 +47,6 @@ private:
     CpuSample m_origin{}, m_sample{};
 };
 
-// Attributes one thread's counters to the GameVideo stages of a frame. begin_frame() starts a frame
-// in VideoStage::Idle; each enter() charges everything since the previous call to the stage just
-// left; end_frame() charges the remainder. stages() then holds the frame's per-stage counts, with
-// the work outside render_frame (the guest CPU, audio hand-off) in Idle.
 class StageCounters final : public f3rt::VideoProbe {
 public:
     using Stages = std::array<CpuSample, f3rt::VIDEO_STAGE_COUNT>;
@@ -65,7 +56,6 @@ public:
     void end_frame();
     void enter(f3rt::VideoStage stage) override;
     const Stages &stages() const { return m_stages; }
-    // Every stage of the frame together.
     CpuSample total() const;
 
 private:

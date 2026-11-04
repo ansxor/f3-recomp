@@ -130,7 +130,6 @@ set(F3_COMPILE_ROMS_OUTPUTS
     "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
     "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
 if(NINTENDO_3DS)
-    # The RomFS staging step copies exactly these chips, so the PAL files stay out of the image.
     list(APPEND F3_COMPILE_ROMS_ARGS --files-output "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
     list(APPEND F3_COMPILE_ROMS_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
 endif()
@@ -334,7 +333,6 @@ if(GAME_NETPLAY_SOURCES)
 else()
     set(F3RT_GAME_NETPLAY_SOURCES runtime/stubs/netplay.cpp)
 endif()
-# The game hook above is always compiled; the client that drives it is optional.
 set(F3RT_NETPLAY_SOURCES "")
 if(F3RT_NETPLAY)
     set(F3RT_NETPLAY_SOURCES
@@ -551,9 +549,6 @@ if(F3RT_HOST_TOOLS)
     target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
     add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
-    # A game opts into sound-extract/music-export by providing games/<game>/sound/profile.cpp, which
-    # registers its sound request path under its set id. Every game's profile is linked into every
-    # build, so any set can be extracted from any build.
     file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
     target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
     target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
@@ -570,8 +565,6 @@ if(F3RT_HOST_TOOLS)
         target_compile_definitions(f3rt-tool PRIVATE F3RT_GENERATED=1)
     endif()
 endif()
-# Shared frontend components: frame hand-off, audio pacing, the boot shortcut and config-file IO.
-# Used by the SDL frontend, the tools and the 3DS frontend; no SDL dependency of its own.
 add_library(f3rt-frontend STATIC
     runtime/frontend/frame_slots.cpp
     runtime/frontend/audio_pacer.cpp
@@ -702,7 +695,6 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# The devkitPro platform file sets NINTENDO_3DS; packaging lives in its own module.
 if(NINTENDO_3DS)
     include(cmake/n3ds.cmake)
 endif()

@@ -10,10 +10,6 @@
 #include <vector>
 
 namespace f3rt::n3ds {
-// The composer side, on ThreadRole::Composer: takes the newest captured frame and composes the
-// Enhanced scene with the indexed kernel (row chunks run on the ComposeHelper roles) straight into
-// the presenter's staging buffer, then publishes it. Latest wins: a slow composer drops frames and
-// never delays emulation.
 class Composer {
 public:
     Composer(Shared &shared, Session &session, const Settings &settings, PerfStats &perf);

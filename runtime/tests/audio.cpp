@@ -1584,7 +1584,6 @@ struct VoiceFilterRef {
     }
 };
 
-// One filter step at a run-time mode.
 float voice_filter_step(f3rt::hle::VoiceFilterState &state, int mode, float x, float a1, float a2, float hp) {
     using namespace f3rt::hle;
     switch (filter_mode(uint8_t(mode))) {
@@ -1599,7 +1598,6 @@ float voice_filter_step(f3rt::hle::VoiceFilterState &state, int mode, float x, f
     }
 }
 
-// Runs `chunks` blocks of 64 frames of random controls through the filter and the reference, with
 // mode_of(chunk) selecting each block's mode. Returns the largest output error relative to the
 // largest output magnitude.
 template <class ModeOf>
@@ -1626,7 +1624,6 @@ float voice_filter_error(unsigned seed, int chunks, ModeOf mode_of) {
     return peak > 0.f ? err / peak : err;
 }
 
-// Settles a constant input (1000, a1 0.2, a2 0.7, high pole 0.5) and returns the settled output.
 float voice_filter_dc(int mode) {
     f3rt::hle::VoiceFilterState state;
     float y = 0.f;
@@ -1802,8 +1799,6 @@ TEST(Audio, MutableBusSliceAccumulateAndOtisTargetBus) {
     EXPECT_FLOAT_EQ((buses[0, OtisBus::ReverbR]), 2.0f);
 }
 
-// Queue policy: for any sequence of queue depths and chunk sizes, the drop decision, the silence
-// lead, the rate ratio and the recorded depths keep their documented relation.
 RC_GTEST_PROP(AudioPacer, PolicyInvariants, ()) {
     const uint32_t rate = *rc::gen::element<uint32_t>(8000, 22050, 44100, 48000);
     const size_t target = *rc::gen::inRange<size_t>(1, size_t(rate) / 4 + 1);

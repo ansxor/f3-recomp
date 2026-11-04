@@ -30,7 +30,6 @@ namespace {
 constexpr auto MAX_CATCHUP = std::chrono::milliseconds(50);
 
 constexpr auto SLEEP_SLICE = std::chrono::milliseconds(4);
-// One video frame of lead plus one of jitter against the DSP's short mixing frames.
 constexpr double audio_target_frames(double rate) {
     return 2.0 * (rate * double(f3rt::Machine::FRAME_PIXELS) / double(f3rt::Machine::PIXEL_CLOCK));
 }
@@ -46,15 +45,11 @@ void Session::start() {
 }
 void Session::stop() {
     m_stop.store(true);
-    m_shared.cv.notify_all();
     m_thread.join();
 }
 void Session::post(Command command, unsigned value) {
-    {
-        std::lock_guard lock(m_command_mutex);
-        m_commands.emplace_back(command, value);
-    }
-    m_shared.cv.notify_all();
+    std::lock_guard lock(m_command_mutex);
+    m_commands.emplace_back(command, value);
 }
 std::string Session::error() const {
     std::lock_guard lock(m_error_mutex);
@@ -89,7 +84,6 @@ void Session::apply(Command command, unsigned value) {
 void Session::push_audio(const int16_t *stereo, size_t frames) {
     if (!m_audio || !frames) return;
     const size_t queued = m_audio->queued_frames();
-    // The very first push starts from an empty device queue by construction.
     if (m_audio_pushes++ && queued == 0) ++m_audio_window_underruns;
     const auto action = m_pacer->before_push(queued, frames);
     if (action.drop_backlog) m_audio->clear();
@@ -130,7 +124,6 @@ void Session::log_audio_window(f3rt::Machine &machine) {
     const auto hle = machine.audio->enhanced_stats();
     const uint64_t commands = hle.commands - m_hle_commands_base;
     m_hle_commands_base = hle.commands;
-    // Core 0 cost of the synth worker per emulated frame (wall time of its message handling).
     const double synth_ms = emulated > m_audio_window_emulated
                                 ? double(hle.render_ns - m_hle_render_ns_base) / 1e6 /
                                       double(emulated - m_audio_window_emulated)
@@ -180,8 +173,6 @@ void Session::startup() {
         auto roms = f3rt::RomSet::load("romfs:/" + m_set, m_set);
         stage("machine");
         auto machine = std::make_unique<f3rt::Machine>(std::move(roms));
-        // The recompiled program must be registered before any frame runs: the game executes
-        // from its native blocks only (allow_main_fallback stays false).
         stage("block registration");
         if (!f3_generated_register(&machine->cpu))
             throw std::runtime_error("Generated block registration failed");
@@ -196,14 +187,15 @@ void Session::startup() {
         machine->game_video->enable_captured_presentation();
         stage("sprite units");
         machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
-        m_playfield = machine->video->playfield_tiles();
+        m_playfield = f3rt::TileRowTable(machine->video->playfield_tiles());
         m_sprite = machine->video->sprite_tiles();
         m_machine = std::move(machine);
     }
     stage("capture slots");
+    std::array<f3rt::CapturedFrame *, f3rt::FrameSlots::SLOT_COUNT> captures{};
     for (size_t slot = 0; slot < m_captures.size(); ++slot)
-        m_shared.emulation.captures[slot] =
-            (m_captures[slot] = std::make_unique<f3rt::CapturedFrame>()).get();
+        captures[slot] = (m_captures[slot] = std::make_unique<f3rt::CapturedFrame>()).get();
+    m_shared.emulation.attach_captures(captures);
     auto &machine = *m_machine;
     const f3rt::GameBoot *boot = f3rt::game_boot();
     if (boot && m_settings.fast_boot) {
@@ -256,7 +248,6 @@ void Session::run() {
         fail(std::string(m_stage) + ": " + error.what());
     }
     running.store(false);
-    m_shared.cv.notify_all();
 }
 bool Session::profile_frame() {
     if (!m_perf.cpu_counters.load(std::memory_order_relaxed)) return false;
@@ -316,11 +307,7 @@ void Session::emulate() {
             for (size_t stage = 0; stage < m_stages.stages().size(); ++stage)
                 m_perf.emulation_cpu[stage].store(m_stages.stages()[stage]);
         }
-        {
-            std::lock_guard lock(m_shared.mutex);
-            m_shared.emulation.publish();
-        }
-        m_shared.cv.notify_all();
+        m_shared.emulation.publish();
         const auto frame_end = std::chrono::steady_clock::now();
         const uint64_t elapsed_us = uint64_t(
             std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start).count());
@@ -339,7 +326,6 @@ void Session::emulate() {
             push_audio(samples.data(), count);
             ready += count;
         }
-        // A video frame is about 505 audio frames.
         ++(ready == 0 ? m_audio_window_empty : ready < 756 ? m_audio_window_single : m_audio_window_burst);
         if (m_audio && std::chrono::steady_clock::now() - m_audio_window_start >=
                            std::chrono::seconds(5))

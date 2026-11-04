@@ -32,8 +32,6 @@ struct SpriteRamState {
     uint8_t pen_mask = 0x0f;
 };
 
-// One decoded sprite-list entry. Left uninitialised so that the scratch arrays callers declare per
-// frame cost nothing; decode_sprite_list assigns every field of each entry it returns. `x`/`y` are 24.8 scanout coordinates, unmirrored
 // when apply_flip is false (the caller's sprite latch applies the flipscreen
 // mirror) or already mirrored when true. `color` is the raw colour byte: its low
 // 6 bits select the 16x16 tile palette and bits 6..7 its priority group.
@@ -44,9 +42,9 @@ struct DecodedSpriteEntry {
     uint8_t color;
     bool flip_x, flip_y;
     uint8_t pri;
-    uint64_t identity; // stable sprite identity from a SpritePresentation; 0 = unknown
-    uint64_t object; // owning invocation identity (shared by a multi-part object); 0 = unknown
-    uint8_t flags;   // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
+    uint64_t identity;
+    uint64_t object;
+    uint8_t flags;
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)

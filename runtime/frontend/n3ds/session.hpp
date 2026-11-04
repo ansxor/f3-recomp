@@ -4,10 +4,10 @@
 #include "frame_slots.hpp"
 #include "perf.hpp"
 #include "platform/thread.hpp"
+#include "renderer/game/indexed_compositor.hpp"
 #include "settings.hpp"
 #include <atomic>
 #include <array>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -28,19 +28,12 @@ class NdspAudioOutput;
 
 enum class Command : uint8_t { Pause, Resume, SystemPause, SystemResume, SetVolume, Stop };
 
-// Frame hand-offs between the three threads: emulation -> composer carries captured frames,
-// composer -> presenter carries composed pixels. Both pairs share one mutex and variable; slot
-// access itself is serialized by that mutex, and FrameSlots keeps the published frames immutable.
 struct Shared {
-    std::mutex mutex;
-    std::condition_variable cv;
     f3rt::FrameSlots emulation;
     f3rt::FrameSlots present;
     std::atomic<bool> quit{false};
 };
 
-// The emulation side, on ThreadRole::Emulation: game setup, fast boot, the paced frame loop and
-// ndsp output. Everything it owns stays on that thread until stop() joins it.
 class Session {
 public:
     Session(Shared &shared, const Settings &settings, const std::string &set,
@@ -53,14 +46,12 @@ public:
     void stop();
     void post(Command command, unsigned value = 0);
 
-    // Written by the main thread once per vblank; read by the emulation thread per frame.
     std::atomic<uint16_t> input{0};
     std::atomic<bool> running{false};
     std::string error() const;
 
-    // Capture geometry; fixed for the session (a border change restarts the game).
     GameVideoOptions geometry() const { return m_video; }
-    std::span<const uint8_t> playfield_tiles() const { return m_playfield; }
+    const f3rt::TileRowTable &playfield_tiles() const { return m_playfield; }
     std::span<const uint8_t> sprite_tiles() const { return m_sprite; }
 
 private:
@@ -68,8 +59,6 @@ private:
     void startup();
     void stage(const char *step);
     void emulate();
-    // Whether this frame's hardware counters are on (the Performance overlay toggle); opens them on
-    // first use.
     bool profile_frame();
     void apply(Command command, unsigned value);
     void fail(const std::string &message);
@@ -91,8 +80,8 @@ private:
     std::unique_ptr<Bench> m_bench;
 #endif
     std::unique_ptr<f3rt::AudioPacer> m_pacer;
-    std::span<const uint8_t> m_playfield, m_sprite;
-    // Capture buffers handed to the presenter through FrameSlots; owned here for the session's life.
+    f3rt::TileRowTable m_playfield;
+    std::span<const uint8_t> m_sprite;
     std::array<std::unique_ptr<f3rt::CapturedFrame>, f3rt::FrameSlots::SLOT_COUNT> m_captures;
     std::atomic<bool> m_stop{false}, m_paused{false};
     std::atomic<unsigned> m_volume;
@@ -105,8 +94,6 @@ private:
     uint64_t m_audio_window_frames = 0, m_audio_window_samples = 0;
     size_t m_audio_min = SIZE_MAX, m_audio_max = 0;
     uint64_t m_audio_pushes = 0, m_audio_window_underruns = 0, m_audio_window_late = 0;
-    // Video frames of the window by how much audio the emulation thread found ready after them: none, about one
-    // frame's worth, or more (a late worker delivers two frames at once).
     uint64_t m_audio_window_empty = 0, m_audio_window_single = 0, m_audio_window_burst = 0;
     uint64_t m_audio_window_pushed = 0;
     double m_source_rate = 0;
@@ -114,11 +101,10 @@ private:
     uint64_t m_audio_window_energy = 0, m_audio_window_samples_pcm = 0;
     uint64_t m_hle_commands_base = 0;
     uint64_t m_hle_render_ns_base = 0;
-    uint64_t m_synth_render_ns = 0; // synth render time at the end of the previous emulated frame
+    uint64_t m_synth_render_ns = 0;
     double m_audio_ratio = 1.0;
     mutable std::mutex m_error_mutex;
     std::string m_error;
-    // Setup step the emulation thread is in; a failure reports it alongside the exception.
     const char *m_stage = "construct";
 };
 } // namespace f3rt::n3ds

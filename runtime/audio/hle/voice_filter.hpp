@@ -14,25 +14,20 @@
 //   2      LP coef1   LP coef1   LP coef2   LP coef2
 //   3      LP coef1   LP coef1   LP coef1   LP coef2
 //
-// Any mode above 3 behaves as mode 3. The loop in synthesis.cpp keeps the four stage outputs in registers across a
-// whole run of samples; this header is the single definition of one step.
+// Any mode above 3 behaves as mode 3.
 #include <cstdint>
 
 namespace f3rt::hle {
 
-// The previous output of each stage.
 struct VoiceFilterState {
     float stage1 = 0.f, stage2 = 0.f, stage3 = 0.f, stage4 = 0.f;
     void clear() { *this = {}; }
 };
 
-// Compile-time filter mode (see the table above): the host's mode register clamped to 0..3.
 constexpr unsigned filter_mode(uint8_t register_mode) noexcept {
     return register_mode < 3 ? register_mode : 3;
 }
 
-// Advances the four stages by one input sample and returns the stage 4 output. The operation order is fixed: it
-// is the arithmetic the output has always been made of.
 template <unsigned Mode>
 inline float filter_step(VoiceFilterState &s, float x, float coef1, float coef2,
                          float highpass_pole) noexcept {

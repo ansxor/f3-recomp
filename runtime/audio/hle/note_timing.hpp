@@ -48,7 +48,7 @@ public:
     // Earliest tick at which service() has something to do.
     uint64_t next_event() const {
         uint64_t next = NONE;
-        size_t left = m_used; // stop at the last live entry: push() takes the first free slot, so they lead
+        size_t left = m_used;
         for (const Entry &e : m_entries) {
             if (!left) break;
             if (e.state == State::Waiting) next = std::min(next, e.start);

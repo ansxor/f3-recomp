@@ -728,8 +728,6 @@ int main(void) {
     f3_cc_flush(&fallback);
     assert(fallback.cc_op == 0 && (fallback.sr & 0xfu) == 4);   /* Z, no lazy flags */
 
-    /* Trace (T0) refuses the chained indirect transfer: entering at the JMP
-       directly leaves the switch guard as the only decision. */
     f3_cpu traced = fresh_cpu();
     traced.pc = 0x402; traced.d[0] = 0x16; traced.sr = 0x8000;
     traced.dispatch_deadline = UINT64_MAX;

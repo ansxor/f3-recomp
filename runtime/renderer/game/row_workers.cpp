@@ -3,9 +3,7 @@
 
 namespace f3rt {
 namespace {
-// Headroom a limited helper keeps on top of its chunk estimate: chunk times vary around their mean.
 constexpr std::chrono::microseconds CHUNK_MARGIN{300};
-// What a limited helper assumes a chunk costs until it has timed one.
 constexpr int64_t INITIAL_CHUNK_NS = 500'000;
 } // namespace
 
@@ -31,8 +29,6 @@ void RowWorkers::set_schedule(const ComposeSchedule &schedule) {
 
 void RowWorkers::run(unsigned count, const std::function<void(unsigned)> &body,
                      WorkWindow *window) {
-    // Serialize submissions, not sampling: caller-owned bodies remain alive
-    // until every participant has finished, including concurrent callers.
     std::unique_lock submission(m_submission_mutex);
     {
         std::lock_guard lock(m_mutex);
@@ -41,14 +37,13 @@ void RowWorkers::run(unsigned count, const std::function<void(unsigned)> &body,
         m_cursor.store(0, std::memory_order_relaxed);
         m_trace = {};
         m_schedule = std::exchange(m_armed, {});
-        m_remaining = 1; // helpers add themselves when they join
+        m_remaining = 1;
         m_start = ComposeClock::now();
         ++m_generation;
     }
     m_ready.notify_all();
     if (window) window->begin();
     m_trace.participants[0] = pull_chunks(0, body, HelperWindow{});
-    // The chunks are gone: helpers still waiting for a window have nothing left to wait for.
     { std::lock_guard lock(m_mutex); }
     m_wake.notify_all();
     if (window) window->end();
@@ -58,8 +53,6 @@ void RowWorkers::run(unsigned count, const std::function<void(unsigned)> &body,
     m_trace.total_us = uint32_t(
         std::chrono::duration_cast<std::chrono::microseconds>(ComposeClock::now() - m_start)
             .count());
-    // Withdrawing the body under the lock that saw m_remaining == 0 closes the dispatch: a helper
-    // that wakes from here on finds no body and never joins.
     m_body = nullptr;
     m_count = 0;
 }
@@ -89,11 +82,8 @@ ParticipantTrace RowWorkers::pull_chunks(unsigned participant,
         }
         now = ComposeClock::now();
     } else {
-        // One clock read per chunk serves as the end of one and the claim time of the next.
         int64_t &estimate = m_chunk_ns[participant - 1];
         for (;;) {
-            // Claim now when a chunk fits in the current window, else at the start of the next
-            // one (or of the first, before it opens).
             auto claim_at = now;
             if (now < window.origin) {
                 claim_at = window.origin;
@@ -147,7 +137,6 @@ void RowWorkers::work(unsigned slot) {
         m_ready.wait(lock, [this, observed] { return m_stopping || m_generation != observed; });
         if (m_stopping) return;
         observed = m_generation;
-        // Join only a dispatch that is still open and still has chunks to hand out.
         if (!m_body || m_cursor.load(std::memory_order_relaxed) >= m_count) continue;
         const std::function<void(unsigned)> *body = m_body;
         const HelperWindow window = window_for(slot);

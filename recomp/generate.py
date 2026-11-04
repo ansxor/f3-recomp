@@ -216,8 +216,6 @@ def generate(
             unflagged[pc] = statements
     pinned = fallback_entries | unit_enter.keys() | unit_exit.keys()
     liveness = analyse(discovery.instructions, pc_to_name, pinned=pinned)
-    # Idle loops skip whole iterations at their head; every instruction they
-    # execute must be plain native code, hook-free, or the loop runs as lowered.
     idle_loops = find_idle_loops(discovery.instructions, lambda pc: pc in pc_to_name and pc not in pinned)
     flag_emitted = Counter()
     source_names = []
@@ -263,8 +261,6 @@ def generate(
             else:
                 supported[insn.mnemonic] += 1
                 if insn.mnemonic.split(".")[0].lower() in ("rts", "rtd") and statements[-1].strip() == "return;":
-                    # The return address is in cpu->pc with flags flushed; enter its block
-                    # directly when the dispatcher would only republish the deadline.
                     statements = [*statements[:-1], "F3_DISPATCH_PC(cpu);", "return;"]
                 lazy, eager_x = _count_flag_stores(statements)
                 flag_emitted["lazy"] += lazy

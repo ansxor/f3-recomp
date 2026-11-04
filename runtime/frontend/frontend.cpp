@@ -194,9 +194,6 @@ enum Preference : uint32_t {
     MotionInterp = 1u << 18
 };
 // Hand-off between the emulation thread (writer of every Machine access) and the video thread (SDL window,
-// UI, GPU). Everything the video thread may read of the machine travels in a FrameSnapshot (frame_slots.hpp);
-// everything it may ask of the machine travels as a Command. One mutex guards the frame slots and queues, so the
-// triple-buffered slots drop stale frames for a slow presenter and never delay emulation.
 struct NetSettings {
     std::string server, name;
     uint8_t delay = 0;
@@ -251,11 +248,6 @@ struct Link {
     // Emulation thread: scheduled start of its next frame (steady_clock ns), 0 while paused or unthrottled. Lets the
     // video thread sample input just before the frame latches it.
     std::atomic<int64_t> deadline{0};
-    // Emulation thread: a slot (and capture buffer) the presenter cannot be reading.
-    f3rt::FrameSnapshot &begin_frame() {
-        std::lock_guard lock(mutex);
-        return frames.begin();
-    }
     void publish(bool frame_boundary = true) {
         {
             std::lock_guard lock(mutex);
@@ -271,11 +263,6 @@ struct Link {
             frames.restate(scale);
         }
         cv.notify_all();
-    }
-    // Video thread: newest published snapshot (fresh when not yet seen) or the one it already holds.
-    const f3rt::FrameSnapshot *take(bool &fresh) {
-        std::lock_guard lock(mutex);
-        return frames.take(fresh);
     }
     void post(Command command) {
         {
@@ -786,8 +773,6 @@ int main(int argc, char **argv) try {
             m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
             video_options);
 #endif
-    // Always on with the GPU presenter, which picks flicker shadow visibility per presented frame;
-    // CPU and FDP output keeps the game's own alternate-frame emission.
     if (translated)
         m.sprite_units = f3rt::make_game_sprite_units(m, video_backend == "gpu" && m.game_video);
     if (!dumpdir.empty()) {
@@ -943,7 +928,6 @@ int main(int argc, char **argv) try {
         uint64_t(1e9 * f3rt::Machine::FRAME_PIXELS / f3rt::Machine::PIXEL_CLOCK));
     constexpr int MAX_AUDIO_QUEUE_MS = 50, MAX_CATCHUP_MS = 50;
     uint64_t clock_resyncs = 0;
-    // The device queue is measured in bytes; the shared policy works in frames (4 bytes each).
     f3rt::AudioPacer audio_pacer({.rate = audio_rate,
                                   .target_frames = size_t(audio_target_bytes) / 4,
                                   .max_queue_ms = MAX_AUDIO_QUEUE_MS,
@@ -962,7 +946,6 @@ int main(int argc, char **argv) try {
     if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
     if (fast_boot_active) {
         f3rt::FastBootRequest request;
-        // An explicit --eeprom, or a factory EEPROM in the ROM set, owns the game's settings.
         if (eeprom.empty() && m.roms.factory_eeprom.empty() && !config_dir.empty())
             request.eeprom_init = config_dir / "eeprom" / (set + "-init.bin");
         if (settings.boot_cache && eeprom.empty() && !config_dir.empty())
@@ -1029,10 +1012,12 @@ int main(int argc, char **argv) try {
     Link link;
 #ifdef F3RT_GPU
     std::array<std::unique_ptr<f3rt::CapturedFrame>, f3rt::FrameSlots::SLOT_COUNT> capture_buffers;
-    if (!headless && sdl.gpu)
+    if (!headless && sdl.gpu) {
+        std::array<f3rt::CapturedFrame *, f3rt::FrameSlots::SLOT_COUNT> captures{};
         for (size_t i = 0; i < capture_buffers.size(); ++i)
-            link.frames.captures[i] =
-                (capture_buffers[i] = std::make_unique<f3rt::CapturedFrame>()).get();
+            captures[i] = (capture_buffers[i] = std::make_unique<f3rt::CapturedFrame>()).get();
+        link.frames.attach_captures(captures);
+    }
 #endif
     unsigned emu_scale = video_options.scale;
     uint64_t epoch = 0;
@@ -1070,7 +1055,7 @@ int main(int argc, char **argv) try {
     // redraws the capture (frames, state loads) must start here, or it rewrites the buffer the presenter holds.
     auto begin_unpublished = [&]() -> f3rt::FrameSnapshot * {
         if (headless) return nullptr;
-        f3rt::FrameSnapshot *slot = &link.begin_frame();
+        f3rt::FrameSnapshot *slot = &link.frames.begin();
         if (slot->captured) m.game_video->set_capture_target(slot->captured);
         return slot;
     };
@@ -1794,7 +1779,7 @@ int main(int argc, char **argv) try {
 #endif
             const bool finished = link.finished();
             bool fresh = false;
-            const f3rt::FrameSnapshot *shot = link.take(fresh);
+            const f3rt::FrameSnapshot *shot = link.frames.take(fresh);
             if (finished && emulation_error) break;
             if (shot && fresh)
                 for (const uint64_t screenshot_frame : screenshot_frames)

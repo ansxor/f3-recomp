@@ -46,7 +46,6 @@ config=$HOME/.config/azahar-emu/qt-config.ini
 shots=$HOME/.local/share/azahar-emu/screenshots
 out=/tmp/bench/$tag
 three_dsx=build/$game-3ds-bench/$game.3dsx
-# Longest a run may take, in seconds, and how long after a scenario marker its screenshot is taken.
 limit=1800
 shot_delay=35
 scenarios=(attract menu charselect gameplay)
@@ -87,7 +86,6 @@ sleep 2
 azahar_pid=$!
 printf 'bench %s at cpu_clock_percentage=%s, azahar pid %s, display %s\n' "$tag" "$clock" "$azahar_pid" "$display"
 
-# Capture Azahar's own screenshot (Ctrl+P, both screens) and keep the newest file as NAME.png.
 screenshot() {
     local before after window
     before=$(find "$shots" -name '*.png' | wc -l)

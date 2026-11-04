@@ -1,8 +1,3 @@
-# Nintendo 3DS packaging, included from the top level when the devkitPro toolchain sets
-# NINTENDO_3DS. Produces the 3dsx (part of ALL) and a <game>-cia target.
-#
-# The 3DS build is core-only: F3RT_SDL/GPU/NETPLAY/HOST_TOOLS/SOUND_NATIVE and BUILD_TESTING are
-# off, so this file owns the frontend executable, its RomFS and the CTR formats.
 
 set(F3_N3DS_META_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/n3ds")
 if(NOT EXISTS "${F3_N3DS_META_DIR}/meta.cmake")
@@ -29,7 +24,6 @@ foreach(_asset IN ITEMS "${F3_N3DS_ICON}" "${F3_N3DS_BANNER_IMAGE}" "${F3_N3DS_B
     endif()
 endforeach()
 
-# ---- RomFS: the chips rom_files.txt names, so the PAL files never enter the image ----
 set(F3_N3DS_ROM_FILES_LIST "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
 if(NOT EXISTS "${F3_N3DS_ROM_FILES_LIST}")
     message(FATAL_ERROR "rom_files.txt is missing; recomp/compile/roms.py --files-output did not run")
@@ -58,15 +52,11 @@ add_custom_command(
     VERBATIM)
 add_custom_target(f3rt-n3ds-romfs DEPENDS ${F3_N3DS_ROMFS_OUTPUTS})
 
-# ---- frontend, vendored ftpd ImGui backends and the picasso shader blob ----
 file(GLOB F3_N3DS_FRONTEND_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/frontend/n3ds/*.cpp")
 if(NOT F3_N3DS_FRONTEND_SOURCES)
     message(FATAL_ERROR "runtime/frontend/n3ds/*.cpp is missing")
 endif()
-# Dev-only scripted run for the frame-budget bench (scripts/n3ds-bench.sh): reads
-# sdmc:/3ds/f3-recomp/<set>/bench.txt, logs scenario markers and ignores settings.cfg. Off in the
-# shipped build, where bench.cpp is not even compiled.
 option(F3_N3DS_BENCH "Build the 3DS frontend with the scripted bench input" OFF)
 if(NOT F3_N3DS_BENCH)
     list(REMOVE_ITEM F3_N3DS_FRONTEND_SOURCES
@@ -103,7 +93,6 @@ if(F3_N3DS_BENCH)
 endif()
 target_link_options(${F3_GAME_EXECUTABLE} PRIVATE -Wl,--gc-sections)
 
-# ---- 3dsx: built by every default build; embeds the RomFS ----
 ctr_generate_smdh("${CMAKE_CURRENT_BINARY_DIR}/${F3_GAME}.smdh"
     NAME "${F3_N3DS_TITLE}"
     DESCRIPTION "${F3_N3DS_DESCRIPTION}"
@@ -116,7 +105,6 @@ ctr_create_3dsx(${F3_GAME_EXECUTABLE}
 # ctr_create_3dsx only orders the executable and the SMDH; the staged chips are ours to order.
 add_dependencies(${F3_GAME_EXECUTABLE}_3dsx f3rt-n3ds-romfs)
 
-# ---- CIA: an explicitly requested target, since it also needs makerom and bannertool ----
 set(F3_N3DS_RSF "${CMAKE_CURRENT_BINARY_DIR}/n3ds/app.rsf")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/n3ds/app.rsf.in" "${F3_N3DS_RSF}" @ONLY)
 

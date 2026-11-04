@@ -22,9 +22,7 @@ public:
     GameText() { reset(); }
     void reset();
     // Copy the raw text map and glyph RAM from VRAM at VBSTART. Shared; defined
-    // in runtime/renderer/game/text.cpp. A region unchanged since the last decode is kept.
     void decode(const VideoRam &vram);
-    // Tag of the current content (see fresh_content_version); a copy carries it along.
     uint64_t version() const { return m_version; }
 
     // Raw text-map word bit layout (shared with the GPU decode in
@@ -58,7 +56,6 @@ public:
 
     // Raw snapshot regions (see above), for snapshot consumers.
     std::span<const uint16_t, 4096> map() const { return m_map; }
-    // Mutable access is for tools that edit a snapshot: it drops the decode cache and the version tag.
     std::span<uint16_t, 4096> map() {
         touch();
         return m_map;

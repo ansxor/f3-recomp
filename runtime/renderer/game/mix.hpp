@@ -6,9 +6,6 @@
 #include <span>
 
 namespace f3rt {
-// One destination pixel's blend state (FDP line RAM semantics). Shared by the canonical row kernel
-// (compositor.cpp) and the indexed kernel (indexed_compositor.cpp) so both hold one definition of
-// the blend rules.
 struct PixelMix {
     uint16_t source, destination;
     uint8_t source_weight, destination_weight;
@@ -47,7 +44,6 @@ inline uint32_t color15(uint32_t color) {
            ((color & 4u) << 9) | (color & 0x00f0u) | ((color & 2u) << 2);
 }
 
-// Resolve a blended pixel to 0xAARRGGBB.
 template <bool Palette15> uint32_t rgb(const PixelMix &pixel, std::span<const uint32_t> palette) {
     auto fetch = [&](uint16_t index) {
         const uint32_t color = palette[index & 8191];
@@ -69,6 +65,5 @@ template <bool Palette15> uint32_t rgb(const PixelMix &pixel, std::span<const ui
     return color;
 }
 
-// The blend state a destination pixel starts from: the background at full weight.
 constexpr PixelMix background_mix(uint16_t background) { return {0, background, 0, 8, 0, 0, 255}; }
 } // namespace f3rt

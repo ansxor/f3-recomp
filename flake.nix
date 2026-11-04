@@ -4,8 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # 3DS-only toolchain. Flake inputs are fetched lazily, so evaluating or building the
-    # desktop outputs below never pulls the devkitARM image.
     devkitNix = {
       url = "github:bandithedoge/devkitNix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -19,9 +17,6 @@
       # devkitNix packages the devkitPro images for Linux hosts only.
       n3dsSystems = [ "x86_64-linux" ];
 
-      # Sources CPM.cmake would otherwise fetch at configure time (cmake/dependencies.cmake).
-      # Pins mirror the GIT_TAGs there; each is handed to CMake as -DCPM_<name>_SOURCE so the
-      # build needs no network.
       cpmSources = pkgs:
         let gh = owner: repo: rev: hash: extra:
           pkgs.fetchFromGitHub ({ inherit owner repo rev hash; } // extra);
@@ -99,13 +94,11 @@
           '';
         };
 
-      # Desktop outputs: every system, unchanged by the 3DS additions below.
       desktop = system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         {
           packages = { default = compile pkgs; f3-compile = compile pkgs; };
 
-          # nix run .#compile -- landmakrj roms/landmakrj
           apps = let app = { type = "app"; program = "${compile pkgs}/bin/f3-compile"; };
             in { default = app; compile = app; };
 
@@ -114,7 +107,6 @@
             {
               default = pkgs.mkShell {
                 packages = [ tc.uv tc.python ] ++ tc.tools ++ tc.libs;
-                # `make build GAME=<id>` works unchanged: CMake and CPM read these from the environment.
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}
                   ${pkgs.lib.concatStringsSep "\n" (pkgs.lib.mapAttrsToList (n: s: "export CPM_${n}_SOURCE=${s}") (cpmSources pkgs))}
@@ -123,7 +115,6 @@
             };
         };
 
-      # ---- 3DS (devkitPro) ----
 
       devkitEnv = devkit: {
         DEVKITPRO = "${devkit}/opt/devkitpro";
@@ -168,7 +159,6 @@
           fetchSubmodules = true;
         };
         postPatch = ''
-          # The makefile asks git for the version; a source tarball has no repository.
           sed -i -e 's/^VERSION_PARTS.*$/VERSION_PARTS := ${lib.concatStringsSep " " (lib.splitVersion finalAttrs.version)}/' Makefile
         '';
         enableParallelBuilding = true;
@@ -200,8 +190,6 @@
         $CC -O2 -o $out/bin/m68kmake ${./runtime/third_party/musashi/m68kmake.c}
       '';
 
-      # Configure flags the 3DS build always uses. F3_GAME and F3_ROM_DIR depend on the
-      # invocation and stay in the f3-3ds script.
       n3dsConfigureFlags = pkgs: makeromDrv: bannertoolDrv: m68kmakeDrv:
         let
           tc = toolchain pkgs;
@@ -392,7 +380,6 @@
 
       n3dsOutputs = lib.genAttrs n3dsSystems n3ds;
 
-      # Desktop outputs for every system, plus the 3DS outputs on the hosts that have them.
       merged = attr: lib.genAttrs systems (system:
         let base = (desktop system).${attr}; in
         base // lib.optionalAttrs (lib.hasAttr system n3dsOutputs) n3dsOutputs.${system}.${attr});

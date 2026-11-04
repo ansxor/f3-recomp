@@ -36,8 +36,6 @@ void validate_scene(const SceneJob &job) {
 }
 
 // Scale zero is the fixed native frame; 1..8 retain expanded border geometry.
-// Constant divisors avoid per-texel integer division at every supported scale. Row `y` is written
-// at output[(y - row_base) * SCALE + sub_y]; composing a whole frame uses row_base = FIRST_LINE.
 template <unsigned Scale>
 void compose_rows(const SceneJob &job, unsigned row_base, unsigned begin, unsigned end) noexcept {
     constexpr bool EXPANDED = Scale != 0;
@@ -219,8 +217,6 @@ void compose_game_scene(const FrameScene &scene, const SceneTarget &target, Comp
     if (mode == ComposeMode::Serial) {
         compose_range(job, geometry::FIRST_LINE, geometry::FIRST_LINE, geometry::END_LINE);
     } else {
-        // The kernel is chosen per job, so native geometry avoids per-pixel variable division
-        // just as it does on the caller.
         compose_workers().run(compose_chunk_count(), [&job](unsigned chunk) {
             const unsigned begin = geometry::FIRST_LINE + chunk * COMPOSE_CHUNK_ROWS;
             compose_range(job, geometry::FIRST_LINE, begin,

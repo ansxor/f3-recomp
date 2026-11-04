@@ -13,9 +13,6 @@ DRIVER = r"""
 #include <string.h>
 #include "recomp/cpu_ops.h"
 
-/* Reference bus model behind the callbacks: byte-wise big-endian RAM mirrored over the
-   0x400000..0x43ffff window, program ROM below rom_size (0xff beyond), everything else a
-   logged device. One instance per cpu so the inline and callback paths run side by side. */
 typedef struct {
     uint8_t ram[0x20000] __attribute__((aligned(8)));
     uint32_t writer[0x10000];
@@ -54,7 +51,6 @@ void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) { wr8(cpu, a, v); }
 void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) { wr8(cpu, a, (uint8_t)(v >> 8)); wr8(cpu, a + 1, (uint8_t)v); }
 void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) { f3_write16(cpu, a, (uint16_t)(v >> 16)); f3_write16(cpu, a + 2, (uint16_t)v); }
 
-/* Referenced by the idle fast-forward helpers in cpu_ops.h, unused here. */
 uint8_t *f3_ram(f3_cpu *cpu, uint32_t a, uint32_t size) { (void)cpu; (void)a; (void)size; return NULL; }
 
 static uint64_t state = 0x2545f4914f6cdd1dull;
@@ -77,7 +73,6 @@ int main(void) {
         for (size_t j = 0; j < sizeof buses[i].rom; ++j) buses[i].rom[j] = (uint8_t)(j * 13 + 5);
         buses[i].track_writers = 1;
     }
-    /* Cpu 0 uses the windows, cpu 1 the callbacks alone. */
     cpus[0].ram = buses[0].ram;
     cpus[0].ram_writer = buses[0].writer;
     cpus[0].rom = buses[0].rom;
@@ -102,7 +97,6 @@ int main(void) {
     assert(memcmp(buses[0].ram, buses[1].ram, sizeof buses[0].ram) == 0);
     assert(memcmp(buses[0].writer, buses[1].writer, sizeof buses[0].writer) == 0);
     assert(buses[0].device_hash == buses[1].device_hash);
-    /* Inline accesses through an unset window go to the callbacks. */
     f3_cpu bare = {0};
     cpus[0] = bare;
     assert(f3_ld32(&cpus[0], 0x400010u) == f3_read32(&cpus[1], 0x400010u));

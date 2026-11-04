@@ -1,5 +1,3 @@
-// The Nintendo 3DS thread backend. CMake selects this file instead of thread_std.cpp when
-// building for the 3DS; other platforms compile it to nothing.
 #if defined(__3DS__)
 #include "platform/thread.hpp"
 #include <3ds.h>
@@ -16,8 +14,6 @@ struct Entry {
     std::function<void()> body;
 };
 void trampoline(void *argument) {
-    // The thread seam's contract forbids throwing bodies; an escaping exception must not unwind
-    // through libctru's C entry frame.
     const std::unique_ptr<Entry> entry(static_cast<Entry *>(argument));
     try {
         entry->body();
@@ -35,10 +31,6 @@ void trampoline(void *argument) {
 //           can finish a frame.
 //   core 2  emulation (0x30) and compose helper 1 (0x2F). Emulation sleeps on the frame tick for
 //           whatever its frame leaves of the period, and that idle time is the helper's.
-// Both helpers outrank what they share a core with, so neither is ever stuck behind it: a chunk of
-// compose work caught by an idle-priority helper would stall the whole frame for as long as emulation
-// or synthesis runs. What they delay instead is bounded by the row workers, which stop a helper
-// from claiming a chunk that would end after its deadline (compose_helper_contention()).
 struct RoleSpec {
     int core;
     int priority;
@@ -75,7 +67,7 @@ Thread::Thread(ThreadRole role, unsigned index, std::function<void()> body) {
             threadCreate(trampoline, entry.get(), spec.stack, spec.priority, 0, false);
     }
     if (!state->native) throw std::runtime_error("threadCreate failed");
-    entry.release(); // the running thread owns the entry now
+    entry.release();
     m_state = state.release();
 }
 Thread::~Thread() { join(); }

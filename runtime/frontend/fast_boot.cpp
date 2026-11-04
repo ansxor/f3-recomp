@@ -63,8 +63,6 @@ FastBootResult run_fast_boot(Machine &machine, const GameBoot &boot,
             std::cerr << "f3rt: fast boot reached the " << boot.frame_limit
                       << "-frame limit without a completion signal; continuing normally\n";
     }
-    // Only a completed boot has written the game's defaults; a quit or frame limit mid-boot must
-    // not persist.
     if (eeprom_enabled && !eeprom_loaded && result.complete) {
         std::error_code ec;
         std::filesystem::create_directories(request.eeprom_init.parent_path(), ec);

@@ -29,7 +29,7 @@ static_assert(sizeof(RecursiveLock) == sizeof(_LOCK_RECURSIVE_T));
 LightLock g_table_lock = {0};
 LightLock g_once_lock = {0};
 
-constexpr uint32_t COND_MAGIC = 0x434F4E44u; // 'COND'
+constexpr uint32_t COND_MAGIC = 0x434F4E44u;
 constexpr int SEMAPHORE_MAX = 0x7FFFFFFF;
 
 struct CondState {
@@ -82,18 +82,15 @@ TlsEntry g_tls[MAX_KEYS * MAX_KEY_THREADS];
 
 extern "C" {
 
-// The frontend installs this to log a mutex that stays contended: a stalled lock is otherwise
-// indistinguishable from a slow emulated frame.
 void (*f3rt_pthread_stall)(const void *lock, unsigned long long waited_us) = nullptr;
 
 namespace {
 
-// Blocks on a light lock without spinning the core, and reports a stall that outlives a second.
 void lock_slow(LightLock *lock) {
     const u64 start = svcGetSystemTick();
     u64 last_report = start;
     for (;;) {
-        svcSleepThread(20000); // 20 us
+        svcSleepThread(20000);
         if (LightLock_TryLock(lock) == 0) return;
         if (!f3rt_pthread_stall) continue;
         const u64 now = svcGetSystemTick();
@@ -257,9 +254,6 @@ int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 int pthread_cond_signal(pthread_cond_t *cond) {
     CondState *state = cond ? ensure_state(cond) : nullptr;
     if (!state) return EINVAL;
-    // Predicates are changed under the mutex, so a waiter that has not counted itself yet cannot
-    // have missed this notification; a count left behind by a waiter that woke on a timeout is
-    // consumed as a harmless spurious wakeup.
     if (__atomic_load_n(&state->waiters, __ATOMIC_ACQUIRE) > 0) {
         // The syscall stub stores the released count through the first argument.
         s32 released = 0;

@@ -1185,9 +1185,6 @@ void verify_sprite_boundaries(Harness &h) {
                   << st.edges[3] << " isolated_and_composite=exact (native producer batch)\n";
     }
 }
-// A peer Machine runs the same ROM set. Machine::roms releases the raw sprite, tile and sample
-// bytes once decoded, so a peer re-reads its chips from the ROM directory instead of copying
-// another machine's set.
 std::unique_ptr<f3rt::Machine> clone_machine(const Options &options) {
     auto machine = std::make_unique<f3rt::Machine>(
         f3rt::RomSet::load(options.rom_dir, std::string(f3rt::game_config::id)));

@@ -243,9 +243,6 @@ struct Video::Impl {
     size_t sprite_count = 0;
     std::array<uint16_t, size_t(432) * 256> sprite_framebuffer{};
     std::array<uint8_t, 256> sprite_pri_row_usage{};
-    // Video::vblank parses every frame but draws only when something reads the framebuffer or
-    // usage rows: `spritelist` and the sprite registers describe a list that has not been drawn
-    // yet. draw_sprites() clears it; flush_sprites() draws on demand.
     bool sprite_draw_pending = false;
     std::array<uint8_t, SPRITE_RAM_SIZE> buffered_spriteram{};
     bool has_buffered_spriteram = false;
@@ -488,8 +485,6 @@ struct Video::Impl {
         std::array<DecodedSpriteEntry, 1024> decoded;
         const size_t count = decode_sprite_list(spriteram_base, int(config.visible_y),
                                                 int(config.visible_height), decoded, state, true);
-        // An undrawn previous list is overwritten here. The next draw clears the framebuffer, so
-        // it only matters when that draw accumulates trails on top of it.
         if (sprite_draw_pending && state.trails) draw_sprites();
         sprite_count = count;
         for (size_t i = 0; i < sprite_count; ++i) {
@@ -1195,7 +1190,6 @@ void Video::set_active_spriteram(std::span<const uint8_t> spriteram) {
 
 void Video::vblank(std::span<const uint8_t> graphics_ram) {
     if (graphics_ram.size() >= GRAPHICS_RAM_SIZE) {
-        // Parse now so the list and registers stay exact; the raster waits for a reader.
         m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
         m_impl->sprite_draw_pending = true;
         std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM],
@@ -1221,7 +1215,7 @@ void Video::render_frame(std::span<const uint8_t> palette_ram,
         m_impl->control_1[i] = read_be16(&control_regs[16 + i * 2]);
     }
 
-    m_impl->flush_sprites(); // the framebuffer must hold the list a preceding vblank parsed
+    m_impl->flush_sprites();
 
     // Lag 2: compose old framebuffer, draw old parsed list, parse new list.
     // Lag 1: compose old framebuffer, parse and draw current list.

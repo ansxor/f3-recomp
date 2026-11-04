@@ -42,10 +42,6 @@ struct AudioEngine::Impl : PcmSink {
     std::mutex pcm_mutex;
     std::array<float, PCM_CAPACITY * 2> pcm{};
     uint64_t pcm_read = 0, pcm_write = 0;
-    // render_ready() hands out only frames below `releasable`: the frames up to the previous video frame's end.
-    // The worker has had a whole video frame to render those, so what a drain returns does not depend on whether
-    // it beat the caller to the frame that just finished. `frame_end` is the frame count at the latest
-    // finish_frame().
     std::atomic<uint64_t> releasable{0};
     uint64_t frame_end = 0;
     std::atomic<uint64_t> generated{0};
@@ -91,7 +87,6 @@ struct AudioEngine::Impl : PcmSink {
         return tick >= clock_epoch ? playback_epoch + (tick - clock_epoch)
                                    : playback_epoch - std::min(playback_epoch, clock_epoch - tick);
     }
-    // The video frame is over: its audio becomes releasable one frame from now.
     void finish_frame() {
         submit(clock);
         releasable.store(frame_end, std::memory_order_release);
@@ -315,7 +310,6 @@ void AudioEngine::load(std::span<const uint8_t> src) {
     {
         std::lock_guard lock(m_impl->pcm_mutex);
         m_impl->pcm_read = m_impl->pcm_write;
-        // Everything produced so far belongs to the old timeline; nothing of it is held back.
         m_impl->frame_end = m_impl->pcm_write;
         m_impl->releasable.store(m_impl->pcm_write, std::memory_order_release);
     }

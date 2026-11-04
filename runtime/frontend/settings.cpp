@@ -106,7 +106,7 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
             else if (key == "postprocess") s.postprocess = value;
             else if (key == "user_shader") s.user_shader = value;
             else if (key == "sprite_behaviour" || key == "video" || key == "backend") {
-            } // retired options (video/backend: replaced by renderer): ignored, old files still carry the keys
+            }
             else if (key == "audio") {
                 if (value == "enhanced") s.audio_backend = AudioBackend::Enhanced;
                 else if (value == "reference") s.audio_backend = AudioBackend::Reference;

@@ -94,7 +94,6 @@ int main() {
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
     imgui::ctru::init();
-    // Touch only: the gamepad navigation path would move focus away from the tapped widget.
     ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
     ImGui::GetStyle().TouchExtraPadding = ImVec2(4, 4);
     log_line("n3ds: stage ctru");

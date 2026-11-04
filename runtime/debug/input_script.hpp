@@ -33,7 +33,6 @@ public:
     std::array<LocalInputWord, LOCAL_PLAYER_COUNT> words(uint64_t frame);
     // Applies the poke rules active at `frame` to main RAM (call right before run_frame).
     void poke(Machine &machine, uint64_t frame) const;
-    // Name of the `scenario` marker that starts exactly at `frame`, or nullptr.
     const std::string *scenario_at(uint64_t frame) const;
     size_t rules() const { return m_rules.size(); }
     bool has_pokes() const;

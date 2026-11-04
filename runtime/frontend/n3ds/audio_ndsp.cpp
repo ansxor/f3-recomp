@@ -104,8 +104,8 @@ void NdspAudioOutput::set_rate(double ratio) {
 void NdspAudioOutput::set_volume(float volume) {
     if (!m_valid) return;
     float mix[12] = {};
-    mix[0] = volume; // front left
-    mix[1] = volume; // front right
+    mix[0] = volume;
+    mix[1] = volume;
     ndspChnSetMix(CHANNEL, mix);
 }
 } // namespace f3rt::n3ds

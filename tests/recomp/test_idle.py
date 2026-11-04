@@ -12,13 +12,6 @@ from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
 from recomp.generate import generate
 from recomp.idle import find_idle_loops
 
-# Synthetic code (opcodes from the 68020 manual, no game data):
-#   0x400 spin   BRA.B *
-#   0x410 poll   TST.B $10(A5); DBNE D0,$410
-#   0x420 poll   TST.W $20(A5); BNE.B $420
-#   0x440 affine JSR $460.L; BRA.B $440
-#   0x460        JSR $470.W; RTS
-#   0x470        MOVE.L $30(A5),D0; MULS.L #7,D0; ADDQ.L #5,D0; MOVE.L D0,$30(A5); SWAP D0; RTS
 CHUNKS = (
     (0x400, "60fe"),
     (0x410, "4a2d001056c8fffa4e75"),
@@ -108,7 +101,6 @@ static uint32_t crc(const void *data, size_t size) {
 int main(void) {
     f3_cpu base = {0};
     assert(f3_generated_register(&base));
-    /* f3_affine_power against repetition. */
     for (uint32_t n = 0; n < 300; ++n) {
         uint32_t x = 0x12345678u + n, expected = x;
         for (uint32_t i = 0; i < n; ++i) expected = 7u * expected + 5u;
@@ -129,13 +121,10 @@ int main(void) {
         cpu.cc_src = random32(); cpu.cc_dst = random32(); cpu.cc_result = random32();
         cpu.cc_width = (uint8_t)(1u << (random32() % 3)); cpu.cc_mask = (uint8_t)random32();
         cpu.cycles = random32() & 0xffff;
-        /* The polled operands: zero (the loop keeps going) most of the time. */
         if (random32() & 3) { ram[0x110] = 0; ram[0x120] = ram[0x121] = 0; }
         if (random32() % 7 == 0) ram[0x110] = (uint8_t)random32();
         const uint64_t budget = random32() % (round % 3 == 0 ? 150 : 4000) + 1;
         cpu.dispatch_deadline = cpu.cycles + budget;
-        /* Dispatch as the runtime does: re-enter whenever a block returns early; a loop
-           that falls out into a RET (random return address) ends the case. */
         while (cpu.cycles < cpu.dispatch_deadline && dispatch(&cpu)) {}
         printf("%u pc=%" PRIx32 " cyc=%" PRIu64 " sr=%" PRIx16 " op=%u width=%u src=%" PRIx32 " dst=%" PRIx32
                " res=%" PRIx32 " mask=%u a7=%" PRIx32 " d=%" PRIx32 ",%" PRIx32 ",%" PRIx32 " ram=%" PRIx32 "\n",
@@ -155,11 +144,9 @@ class IdleLoopShapeTests(unittest.TestCase):
         self.assertEqual({pc: shape for pc, (shape, _) in loops.items()}, {0x400: "spin", 0x410: "poll", 0x420: "poll", 0x440: "affine"})
         self.assertEqual(loops[0x400][1], ["F3_IDLE_SPIN(cpu, 10u);"])
         self.assertEqual(
-            loops[0x410][1], ["F3_IDLE_POLL(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0, 0, 13u);"]
+            loops[0x410][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0, 13u);"]
         )
-        self.assertEqual(
-            loops[0x420][1], ["F3_IDLE_POLL(cpu, (uint32_t)(cpu->a[5] + (int32_t)(32)), 2, 6, 1, -1, 13u);"]
-        )
+        self.assertEqual(loops[0x420][1], ["F3_IDLE_POLL_BCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(32)), 2, 6, 13u);"])
         self.assertEqual(
             loops[0x440][1], ["F3_IDLE_AFFINE_CALL(cpu, (uint32_t)(cpu->a[5] + (int32_t)(48)), 8u, 7u, 5u, 103u);"]
         )
@@ -173,7 +160,9 @@ class IdleLoopShapeTests(unittest.TestCase):
     def test_poll_counter_is_the_dbcc_register(self):
         instructions = {insn.address: insn for insn in _decoder().disasm(bytes.fromhex("4a2d001056c9fffa"), 0x400)}
         loops = find_idle_loops(instructions, lambda pc: True)
-        self.assertEqual(loops[0x400][1], ["F3_IDLE_POLL(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0, 1, 13u);"])
+        self.assertEqual(
+            loops[0x400][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 1, 13u);"]
+        )
 
     def test_rejects_polls_whose_address_can_change_inside_the_loop(self):
         for code in (
@@ -225,7 +214,6 @@ class IdleLoopEquivalenceTests(unittest.TestCase):
             (fast, fast_reads), (plain, plain_reads) = results
             self.assertEqual(fast.count("\n"), 6000)
             self.assertEqual(fast, plain)
-            # The loops really were fast-forwarded: far fewer polled and stacked accesses.
             self.assertLess(fast_reads * 4, plain_reads)
 
 

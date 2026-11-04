@@ -216,7 +216,6 @@ private:
     float m_current_bucket_peak = 0.f;
     uint64_t m_silent_frames = K_DELAY_BUFFER_SIZE;
     bool m_bypassed = true;
-    // mix() scratch, kept here so that a call does not zero 11 KB of stack: the render calls it once per clock tick.
     PlanarAudioBlock<6, K_CHUNK> m_in;
     PlanarAudioBlock<3, K_CHUNK> m_out;
     PlanarAudioBlock<2, K_CHUNK> m_dc_out;

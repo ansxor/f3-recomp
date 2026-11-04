@@ -336,7 +336,7 @@ void GameLines::cull_empty_rows(const GameTiles &tiles) {
 GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolutionAltMaps &maps) {
     AltRowCounts counts;
     if constexpr (f3rt::game_config::video.full_resolution_alt_maps) {
-        m_rows_version = fresh_content_version(); // rewrites full_res_offset on every alt row
+        m_rows_version = fresh_content_version();
         for (unsigned y = 0; y < m_rows.size(); ++y)
             for (unsigned i = 2; i < 4; ++i) {
                 auto &pf = m_rows[y].playfields[i];

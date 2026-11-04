@@ -3,8 +3,6 @@
 #include <cstdint>
 
 namespace f3rt::n3ds {
-// ndsp output, used only from the emulation thread. The DSP mixes and resamples; the channel rate
-// carries the source rate times the pacer ratio, so the pacer can trim drift.
 class NdspAudioOutput {
 public:
     static constexpr unsigned BUFFER_COUNT = 8, BUFFER_FRAMES = 1024;
@@ -15,12 +13,9 @@ public:
     NdspAudioOutput &operator=(const NdspAudioOutput &) = delete;
 
     bool valid() const { return m_valid; }
-    // Frames queued ahead of the device (queued buffers plus the remainder of the playing one).
     size_t queued_frames() const;
-    // Queues the frames into free buffers; frames left over when every buffer is in flight are dropped.
     void push(const int16_t *stereo, size_t frames);
     void clear();
-    // The generated stream's own rate; ndsp resamples it to the DSP rate.
     void set_source_rate(double rate);
     void set_rate(double ratio);
     void set_volume(float volume);

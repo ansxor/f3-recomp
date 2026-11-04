@@ -15,7 +15,6 @@
 
 namespace f3rt::n3ds {
 namespace {
-// Stage names in VideoStage order; Idle is the guest CPU and everything else outside render_frame.
 constexpr std::array<const char *, f3rt::VIDEO_STAGE_COUNT> STAGE_NAMES{
     "guest", "decode", "scene", "oracle", "capture", "latch"};
 
@@ -23,7 +22,6 @@ double cpi(const CpuSample &sample) {
     return sample.instructions ? double(sample.cycles) / double(sample.instructions) : 0.0;
 }
 
-// Row chunks pulled by each compose participant of the last frame: "caller/helper0/helper1...".
 std::string chunk_split(const PerfStats &perf) {
     std::string split;
     for (unsigned i = 0; i <= f3rt::compose_helper_count(); ++i) {
@@ -110,11 +108,7 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
     const auto frame_begin = std::chrono::steady_clock::now();
     {
         bool fresh = false;
-        const f3rt::FrameSnapshot *slot = nullptr;
-        {
-            std::lock_guard lock(m_shared.mutex);
-            slot = m_shared.present.take(fresh);
-        }
+        const f3rt::FrameSnapshot *slot = m_shared.present.take(fresh);
         const unsigned width = 320 + m_settings.border * 2;
         if (slot && slot->rgba && slot->stride >= width) {
             static unsigned traced = 0;
@@ -127,7 +121,6 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
                 log_line("n3ds: present trace frame=%llu px=%u nonzero=%u",
                          static_cast<unsigned long long>(slot->frame), width * 232, nonzero);
             }
-            // The composer flushed the rows it wrote; the display transfer only reads those.
             if (fresh) {
                 m_transfer_buffer = slot->rgba;
                 m_transfer_pending = true;
@@ -136,8 +129,6 @@ void Presenter::frame(Menu &menu, const std::string &error, const std::string &a
     }
     // The vendored ctru backend only refreshes input and timing; the frame itself starts here.
     imgui::ctru::newFrame();
-    // One 400x480 virtual display: the top screen at y 0-240, the bottom centred at x 40-360,
-    // y 240-480. The backend lays out its two render targets from this.
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, 480);
     io.DisplayFramebufferScale = ImVec2(1, 1);

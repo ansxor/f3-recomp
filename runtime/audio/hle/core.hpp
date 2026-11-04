@@ -52,8 +52,8 @@ public:
     uint64_t tick() const;          // sequencer events up to and including this tick have fired
     uint64_t frames() const;        // frames handed to the sink so far
     struct RenderStats {
-        uint64_t voices_started = 0; // key-ons begun since construction
-        unsigned voices_active = 0;  // voices sounding right now
+        uint64_t voices_started = 0;
+        unsigned voices_active = 0;
     };
     RenderStats render_stats() const;
     // floor(tick * SAMPLE_RATE / MAIN_CLOCK), overflow-free.

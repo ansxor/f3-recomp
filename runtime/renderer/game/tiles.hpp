@@ -79,9 +79,7 @@ public:
 
     void reset();
     // Copy the raw PF layers from video RAM at VBSTART. Shared; defined in
-    // runtime/renderer/game/tiles.cpp. A layer whose RAM is unchanged since the last decode is kept.
     void decode(const VideoRam &vram);
-    // Tag of the current cell content (see fresh_content_version); a copy carries it along.
     uint64_t version() const { return m_version; }
     // Physical map count: 4, or 6 with alternate PF2/PF3 maps.
     // In standard mode (!extend), PF2/PF3 can select alternate maps (maps 4/5) via line RAM bit 0x200.
@@ -111,7 +109,6 @@ public:
     }
     // `map` is a physical map index (0..MAP_COUNT).
     std::span<const uint32_t, CELLS_PER_MAP> cells(unsigned map) const { return m_maps[map]; }
-    // Mutable access is for tools that edit a snapshot: it drops the decode cache and the version tag.
     std::span<uint32_t, CELLS_PER_MAP> cells(unsigned map) {
         touch();
         return m_maps[map];

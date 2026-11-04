@@ -55,6 +55,14 @@ struct SpriteUnitTable {
     std::span<const PcRange> frame_writers;
 };
 
+namespace sprite_list {
+inline constexpr uint32_t ENTRIES = 0x400;
+constexpr bool listed(uint32_t offset) { return ((offset & 0x7fff) >> 4) < ENTRIES; }
+constexpr uint16_t key(uint32_t offset) {
+    return uint16_t(((offset >> 15) & 1) * ENTRIES + ((offset & 0x7fff) >> 4));
+}
+} // namespace sprite_list
+
 class SpriteUnits {
 public:
     struct Options {
@@ -161,19 +169,15 @@ public:
     int unit_exit(f3_cpu *cpu, uint32_t unit); // nonzero only for the sandbox at its unit end
     // Interpreted execution: call before the instruction at `pc` runs (exit hooks, then enter).
     void interpreted_instruction(uint32_t pc);
-    // Real-CPU bus writes (Machine::write*): RAM word writer PCs and sprite-RAM entries. Everything else
-    // is ignored, and a store that repeats the entry last written in the same invocation state is
-    // decided inline.
     void note_write(uint32_t address, unsigned width) {
         const uint32_t a = address & 0xffffff;
-        const uint32_t offset = a - GRAPHICS_BASE; // wraps below the graphics RAM
+        const uint32_t offset = a - GRAPHICS_BASE;
         if (offset >= SPRITE_RAM_SIZE) {
             if (a - RAM_BASE < RAM_END - RAM_BASE) note_write_slow(address, width);
             return;
         }
         const uint32_t tail = offset + width - 1;
-        // Only the first 0x400 entries of each 0x800-entry bank are listed; the rest are never attributed.
-        if (offset & tail & 0x4000) return;
+        if (!sprite_list::listed(offset) && !sprite_list::listed(tail)) return;
         const uint32_t entry = offset >> 4;
         const unsigned bank = entry >> 11;
         if (entry == m_memo_entry[bank] && tail >> 4 == entry &&
@@ -187,7 +191,6 @@ public:
         clear_memo();
     }
     bool tracks_writers() const { return !m_writer_pc.empty(); }
-    // Last-writer pc per RAM halfword, for the generated code's inline RAM stores; null when untracked.
     uint32_t *writer_table() { return m_writer_pc.empty() ? nullptr : m_writer_pc.data(); }
     void note_irq(unsigned level);
     void frame_end();
@@ -307,12 +310,10 @@ private:
     mutable std::vector<SpriteSplice> m_view;
     uint32_t m_last_hook_pc = 0;
     uint64_t m_last_hook_cycles = UINT64_MAX;
-    static constexpr uint16_t NO_ENTRY = 0xffff; // never an entry (entries are < 0x1000)
-    // Last sprite-RAM entry (address >> 4 within the sprite RAM) written per bank, and the SR interrupt
-    // mask it ran under (see sprite_write).
+    static constexpr uint16_t NO_ENTRY = 0xffff;
     std::array<uint16_t, 2> m_memo_entry{NO_ENTRY, NO_ENTRY};
     std::array<uint8_t, 2> m_memo_mask{};
-    const uint16_t *m_sr = nullptr; // the machine's SR, which fixes the IRQ depth together with the IRQ levels
+    const uint16_t *m_sr = nullptr;
     void clear_memo() { m_memo_entry = {NO_ENTRY, NO_ENTRY}; }
     void remember(uint32_t offset, unsigned bank) {
         m_memo_entry[bank] = uint16_t(offset >> 4);
@@ -337,8 +338,6 @@ private:
     DiscoveryLog *m_discovery = nullptr;
 };
 
-// Frontend helper: the game's emit units with every registered behaviour and flicker source.
-// Returns null when the game declares no units.
 std::unique_ptr<SpriteUnits> make_game_sprite_units(Machine &machine, bool flicker_shadows);
 
 } // namespace f3rt

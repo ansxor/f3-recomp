@@ -13,8 +13,6 @@ struct ImTextureData;
 namespace f3rt::n3ds {
 class Menu;
 
-// The main-thread presenter: C3D render targets, the 512x256 game texture, the bottom-screen menu
-// and the per-vblank shell. The GPU does the display transfer, the textured quad and ImGui drawing.
 class Presenter {
 public:
     Presenter(Shared &shared, Settings &settings, PerfStats &perf);
@@ -27,7 +25,6 @@ public:
     // ImGui-owned game texture. Call after imgui::citro3d::init().
     bool create_texture();
     void shutdown();
-    // One vblank: take a new composed frame, draw the game and the menu, present both screens.
     void frame(Menu &menu, const std::string &error, const std::string &audio_note);
 
 private:

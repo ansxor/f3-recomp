@@ -42,8 +42,6 @@ private:
 public:
     // Observing native scanout materializes a retained GPU-presented frame.
     const std::vector<uint32_t> &native_pixels() const;
-    // Region CRCs of the ROM set as loaded; the sprite, tile and sample bytes themselves are
-    // released once decoded, so this survives the whole session (save states, netplay identity).
     const std::array<uint32_t, 7> &rom_region_crcs() const { return m_rom_crcs; }
     RomSet roms;
     std::unique_ptr<Video> video;
@@ -88,7 +86,6 @@ public:
     std::vector<uint32_t> fallback_hits;
 
     void reset();
-    // Points the cpu's direct memory windows (f3_cpu::ram, rom, ram_writer) at this machine's memory.
     void bind_cpu_windows();
     void reset_devices();
     void reset_main_cpu();

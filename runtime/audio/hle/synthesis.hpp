@@ -11,17 +11,12 @@
 
 namespace f3rt::hle {
 
-// Frames per render chunk. Fast runs and single-sample steps alternate inside a chunk; a chunk boundary is a
-// decision point (the fast-run conditions are re-evaluated there), so the size is part of the output.
 inline constexpr size_t VOICE_BLOCK_FRAMES = 64;
 
-// Render-side state: the per-slot filter memory and the frame -> tick map of the current block. It is not a
-// service: it holds no voice decisions, only DSP memory.
 struct VoiceRenderState {
     std::array<VoiceFilterState, 32> filters;
     std::array<uint32_t, 32> filter_epoch{};
     std::vector<uint64_t> frame_ticks;
-    // Bus stand-in of a voice whose pair reaches no OTIS bus: it is rendered for its state and heard nowhere.
     alignas(64) std::array<float, VOICE_BLOCK_FRAMES * 8> discard{};
     uint64_t tick = 0;
     uint32_t tick_remainder = 0;

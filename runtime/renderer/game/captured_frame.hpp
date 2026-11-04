@@ -26,8 +26,6 @@ struct CapturedFrame {
     unsigned sprite_count = 0;
     unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
-    // Content tags of the decoded `rows` and `colors` (0 = never captured). GameVideo::capture() skips
-    // re-copying what a slot already holds; nothing else writes these arrays through a capture.
     uint64_t rows_version = 0, colors_version = 0;
     uint8_t pen_mask = 15;
     bool flipped = false;
@@ -43,22 +41,14 @@ struct CapturedFrame {
     }
 };
 
-// Indexed sprite plane for `options` (sprite_plane_size) from the captured list.
 void raster_captured_sprites(const CapturedFrame &frame, std::span<const uint8_t> sprite_tiles,
                              std::span<uint16_t> plane, GameVideoOptions options);
-// Compose a captured frame: the letterboxed native picture of an oracle-fallback frame, else the
-// scene over `plane`. Canonical observations pass ComposeMode::Serial.
 void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
                             std::span<const uint16_t> plane, std::span<uint32_t> output,
                             GameVideoOptions options, ComposeMode mode,
                             uint32_t layer_mask = ALL_LAYERS);
 
-// Compose a captured frame with the indexed kernel into `output` at `stride` pixels per row in
-// `format`. Pixel-identical to compose_captured_scene(..., Serial) for the same frame; the sprite
-// raster is fused per COMPOSE_CHUNK_ROWS-row chunk inside the participants. Only the expanded
-// scale-1 presentation (native picture plus an optional side border) is supported. `scratch` is the
-// caller's persistent working set. `window` observes the caller's own share.
-void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
+void compose_captured_indexed(const CapturedFrame &frame, const TileRowTable &playfield_tiles,
                               std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
                               std::span<uint32_t> output, size_t stride, PixelFormat format,
                               GameVideoOptions options, WorkWindow *window = nullptr);

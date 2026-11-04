@@ -23,17 +23,13 @@ Option:
 AccessControlInfo:
   CoreVersion                   : 2
 
-  # Exheader Format Version
   DescVersion                   : 2
 
-  # Minimum Required Kernel Version (4.5.0)
   ReleaseKernelMajor            : "02"
   ReleaseKernelMinor            : "33"
 
-  # ExtData
   UseExtSaveData                : false
 
-  # FS:USER Archive Access Permissions
   FileSystemAccess:
    - CategorySystemApplication
    - CategoryHardwareCheck
@@ -67,7 +63,6 @@ AccessControlInfo:
    - CreateSeed
    - UseCardSpi
 
-  # Process Settings
   MemoryType                    : Application
   SystemMode                    : 64MB
   IdealProcessor                : 0
@@ -85,19 +80,16 @@ AccessControlInfo:
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
 
-  # New3DS Exclusive Process Settings
   SystemModeExt                 : 124MB
   CpuSpeed                      : 804MHz
   EnableL2Cache                 : true
   CanAccessCore2                : true
 
-  # Virtual Address Mappings
   IORegisterMapping:
    - 1ff00000-1ff7ffff   # DSP memory
   MemoryMapping:
    - 1f000000-1f5fffff:r # VRAM
 
-  # Accessible SVCs, <Name>:<ID>
   SystemCallAccess:
     ControlMemory: 1
     QueryMemory: 2
@@ -207,7 +199,6 @@ AccessControlInfo:
     KernelSetState: 124
     QueryProcessMemory: 125
 
-  # Service List
   # Maximum 34 services (32 if firmware is prior to 9.6.0)
   ServiceAccessControl:
    - APT:U

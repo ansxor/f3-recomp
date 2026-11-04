@@ -32,8 +32,6 @@ struct SceneTarget {
     GameVideoOptions geometry{};
 };
 
-// Parallel dispatches any geometry to the row workers; Serial runs the same
-// row kernels on the caller (measurement/reference use).
 enum class ComposeMode { Parallel, Serial };
 
 // Neither mode changes emulated state. Concurrent calls must provide disjoint
@@ -41,11 +39,6 @@ enum class ComposeMode { Parallel, Serial };
 void compose_game_scene(const FrameScene &scene, const SceneTarget &target,
                         ComposeMode mode = ComposeMode::Parallel);
 
-// The canonical row kernel for one row range, on the caller. Row `y` lands at
-// output[(y - row_base) * scale + sub_y] so a caller composing chunk-local output (the indexed
-// compositor's fallback rows) can address its own rows, while the sprite plane stays indexed by
-// the frame-wide row. compose_game_scene passes row_base = geometry::FIRST_LINE.
-// The target must satisfy the same buffer requirements; the scene is not validated here.
 void compose_scene_rows(const FrameScene &scene, const SceneTarget &target, unsigned row_base,
                         unsigned begin, unsigned end);
 } // namespace f3rt

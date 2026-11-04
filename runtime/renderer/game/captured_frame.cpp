@@ -17,7 +17,6 @@ void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t>
         output.size() < size_t(options.width()) * options.height())
         throw std::runtime_error("Incomplete captured frame render buffers");
     if (frame.fallback) {
-        // Oracle-fallback frames carry only the canonical native picture; present it letterboxed.
         const unsigned left = options.border * options.scale;
         for (unsigned y = 0; y < options.height(); ++y)
             for (unsigned x = 0; x < options.width(); ++x)
@@ -31,7 +30,7 @@ void compose_captured_scene(const CapturedFrame &frame, std::span<const uint8_t>
     compose_game_scene(frame.scene(tile_pixels, layer_mask), {plane, output, options}, mode);
 }
 
-void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_t> tile_pixels,
+void compose_captured_indexed(const CapturedFrame &frame, const TileRowTable &playfield_tiles,
                               std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
                               std::span<uint32_t> output, size_t stride, PixelFormat format,
                               GameVideoOptions options, WorkWindow *window) {
@@ -40,7 +39,6 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
     if (stride < options.width() || output.size() < stride * options.height())
         throw std::runtime_error("Incomplete indexed frame render buffers");
     if (frame.fallback) {
-        // Oracle-fallback frames carry only the canonical native picture; present it letterboxed.
         const unsigned left = options.border;
         for (unsigned y = 0; y < options.height(); ++y) {
             uint32_t *row = output.data() + size_t(y) * stride;
@@ -54,10 +52,10 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
         return;
     }
     scratch.configure(options);
-    const FrameScene scene = frame.scene(tile_pixels);
+    const FrameScene scene = frame.scene(playfield_tiles.pixels());
     const bool palette_15bit = scratch.prepare(scene, format);
     scratch.stats.reset();
-    scratch.bins.bin(frame.sprite_list(), SpriteRasterOptions{options, false, false});
+    scratch.bins.bin(frame.sprite_list(), SpriteRasterOptions{options});
     const auto sprite_list = frame.sprite_list();
     IndexedComposeJob job{scene,
                           scratch.plane,
@@ -66,7 +64,7 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
                           sprite_list,
                           frame.pen_mask,
                           sprite_tiles,
-                          scratch.tile_rows.tiles(),
+                          playfield_tiles.rows(),
                           scratch.glyph_rows,
                           scratch.palette.colors,
                           palette_15bit ? std::span<const uint32_t>(scratch.palette.colors15)

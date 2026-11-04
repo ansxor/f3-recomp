@@ -39,8 +39,6 @@ _MASK = 0xFFFFFFFF
 _MAX_PATH = 32
 _RETURN_ADDRESS_BYTES = 4
 
-# Memory operands whose address is a function of address registers only, so it
-# cannot change while the loop runs (a loop may modify just one data register).
 _INVARIANT_MODES = (
     m68k.M68K_AM_REGI_ADDR,
     m68k.M68K_AM_REGI_ADDR_DISP,
@@ -98,14 +96,13 @@ def _poll(instructions: Mapping[int, CsInsn], insn: CsInsn) -> list[str] | None:
         return None
     mnemonic = _get_base_mnemonic(closing)
     if mnemonic.startswith("db") and mnemonic[2:] in COND_MAP and _data_register(closing.operands[0]) is not None:
-        condition, loop_when_true = COND_MAP[mnemonic[2:]], 0
         counter = _data_register(closing.operands[0])
-    elif mnemonic.startswith("b") and mnemonic[1:] in COND_MAP and mnemonic not in ("bra", "bsr"):
-        condition, loop_when_true, counter = COND_MAP[mnemonic[1:]], 1, -1
-    else:
-        return None
-    cycles = _cycles(insn) + _cycles(closing)
-    return [f"F3_IDLE_POLL(cpu, {address}, {size}, {condition}, {loop_when_true}, {counter}, {cycles}u);"]
+        cycles = _cycles(insn) + _cycles(closing)
+        return [f"F3_IDLE_POLL_DBCC(cpu, {address}, {size}, {COND_MAP[mnemonic[2:]]}, {counter}, {cycles}u);"]
+    if mnemonic.startswith("b") and mnemonic[1:] in COND_MAP and mnemonic not in ("bra", "bsr"):
+        cycles = _cycles(insn) + _cycles(closing)
+        return [f"F3_IDLE_POLL_BCC(cpu, {address}, {size}, {COND_MAP[mnemonic[1:]]}, {cycles}u);"]
+    return None
 
 
 def _call_path(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn], int] | None:
@@ -149,7 +146,6 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
         return None
     path, depth = called
     body = [insn for insn in path if _get_base_mnemonic(insn) not in ("jsr", "rts", "bra")]
-    # move.l ea,Dn ; (mul/add/sub of an immediate on Dn)+ ; move.l Dn,ea ; (swap Dn)*
     load = body[0] if body else None
     if load is None or _get_base_mnemonic(load) != "move" or _get_size(load) != 4 or len(load.operands) != 2:
         return None
@@ -168,8 +164,6 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
         if mnemonic in _AFFINE_ADD:
             addend = (addend + _AFFINE_ADD[mnemonic] * immediate) & _MASK
         elif mnemonic in _AFFINE_MUL and not int.from_bytes(insn.bytes[2:4], "big") & 0x0400:
-            # 32-bit result form only: the low word of the product is the same
-            # for signed and unsigned operands.
             multiplier, addend = multiplier * immediate & _MASK, addend * immediate & _MASK
         else:
             break

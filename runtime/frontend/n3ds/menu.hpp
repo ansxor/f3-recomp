@@ -9,8 +9,6 @@ namespace f3rt::n3ds {
 class Session;
 struct Shared;
 
-// Bottom-screen menu, drawn on the main thread. A tap opens it (and pauses emulation, as F1 does on
-// desktop); a tap released over no item closes it and resumes. Touch drives every setting.
 class Menu {
 public:
     struct Status {
@@ -43,7 +41,6 @@ private:
 
     bool m_open = false, m_restart = false;
     bool m_touching = false, m_press_hovered = false;
-    // Press point and the last contact point; the release frame itself reports no position.
     float m_touch_x = 0, m_touch_y = 0, m_last_x = 0, m_last_y = 0;
     std::chrono::steady_clock::time_point m_touch_start;
     int m_tab = 0;

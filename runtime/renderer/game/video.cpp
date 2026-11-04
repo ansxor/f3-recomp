@@ -76,10 +76,6 @@ struct GameVideo::Impl {
     std::array<std::array<uint16_t, size_t(432) * 256>, 2> sprite_planes{};
     unsigned next_plane = 0, native_plane = 0;
     bool native_pending = false;
-    // With captured presentation nothing reads the native sprite plane per frame, so latch_sprites
-    // leaves it undrawn (stale) and every reader draws it first (ensure_plane). A stale next_plane
-    // is the raster of the latched list; a stale native plane whose list has since been replaced
-    // keeps that list in `retained`. Trail frames draw eagerly: a trail plane accumulates history.
     std::array<bool, 2> plane_stale{};
     struct RetainedList {
         std::vector<SceneSprite> sprites;
@@ -109,7 +105,6 @@ struct GameVideo::Impl {
     bool reference_selected = false;
     bool presentation_pending = false;
 
-    // Palette RAM as 0x00RRGGBB per entry, converted again only when the RAM changed.
     RamShadow<PALETTE_RAM_SIZE> palette_shadow;
     std::array<uint32_t, CapturedFrame::PALETTE_SIZE> colors{};
     uint64_t colors_version = fresh_content_version();
@@ -132,7 +127,6 @@ struct GameVideo::Impl {
                       frame.native_pixels.begin());
             return;
         }
-        // Playfield and text content rarely changes; a slot that already holds this version keeps it.
         if (frame.tiles.version() != tiles.version()) frame.tiles = tiles;
         if (frame.text.version() != text.version()) frame.text = text;
         if (frame.rows_version != lines.rows_version()) {
@@ -201,7 +195,6 @@ struct GameVideo::Impl {
                                serial ? ComposeMode::Serial : ComposeMode::Parallel, mask);
     }
 
-    // Draw sprite plane `index` if latch_sprites left it stale.
     void ensure_plane(unsigned index) {
         if (!plane_stale[index]) return;
         const auto assets = machine.video->sprite_tiles();
@@ -398,7 +391,6 @@ void GameVideo::latch_sprites() {
     // composite first rather than copying a full plane just to preserve it.
     if (state.native_pending && accumulate) state.materialize_native();
     if (accumulate) state.ensure_plane(state.next_plane);
-    // The pending composite keeps its plane through the latch; an undrawn one keeps its list.
     if (state.native_pending && state.plane_stale[state.next_plane]) {
         const auto list = state.sprites.sprites();
         state.retained.sprites.assign(list.begin(), list.end());
