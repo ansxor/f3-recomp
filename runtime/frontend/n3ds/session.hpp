@@ -82,7 +82,6 @@ private:
     GameVideoOptions m_video;
     NdspAudioOutput *m_audio;
     PerfStats &m_perf;
-    // The emulation thread's own performance monitor and its per-stage split of each frame.
     CpuCounters m_counters;
     StageCounters m_stages{m_counters};
     bool m_counters_open = false;
@@ -101,8 +100,6 @@ private:
     std::vector<int16_t> m_silence;
     std::mutex m_command_mutex;
     std::vector<std::pair<Command, unsigned>> m_commands;
-    // Device queue depth over the current reporting window, in frames; logged with the pacer's
-    // drops and the underruns so a stutter can be attributed without guessing.
     std::chrono::steady_clock::time_point m_audio_window_start;
     uint64_t m_audio_window_emulated = 0, m_audio_window_drops_base = 0;
     uint64_t m_audio_window_frames = 0, m_audio_window_samples = 0;

@@ -17,6 +17,7 @@ public:
     bool valid() const { return m_valid; }
     // Frames queued ahead of the device (queued buffers plus the remainder of the playing one).
     size_t queued_frames() const;
+    // Queues the frames into free buffers; frames left over when every buffer is in flight are dropped.
     void push(const int16_t *stereo, size_t frames);
     void clear();
     // The generated stream's own rate; ndsp resamples it to the DSP rate.

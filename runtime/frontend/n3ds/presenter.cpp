@@ -49,9 +49,6 @@ bool Presenter::init() {
     m_top = render_target(SCREEN_HEIGHT, SCREEN_WIDTH);
     m_bottom = render_target(SCREEN_HEIGHT, 320);
     m_texture = std::malloc(sizeof(C3D_Tex));
-    // One staging buffer per frame slot: the composer writes the slot it is about to publish while
-    // the presenter transfers the slot it holds, and a slot is only reused after its transfer has
-    // completed (a new take releases the previous slot in a later frame).
     std::array<uint32_t *, f3rt::FrameSlots::SLOT_COUNT> buffers{};
     for (size_t i = 0; i < m_staging.size(); ++i) {
         buffers[i] = static_cast<uint32_t *>(

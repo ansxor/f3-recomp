@@ -43,14 +43,6 @@ bool load_settings(const std::string &path, Settings &settings) {
                     reject = "Invalid fast_boot";
                     return false;
                 }
-            } else if (key == "boot_cache") {
-                // Obsolete: a cached snapshot loses the HLE's in-flight voices. The key is still
-                // accepted so an older settings file keeps loading.
-                bool ignored = true;
-                if (!boolean(value, ignored)) {
-                    reject = "Invalid boot_cache";
-                    return false;
-                }
             } else if (key == "perf_overlay") {
                 if (!boolean(value, loaded.perf_overlay)) {
                     reject = "Invalid perf_overlay";

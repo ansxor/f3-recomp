@@ -14,27 +14,32 @@
 
 namespace f3rt::n3ds {
 namespace {
-// Staging rows the display transfer reads: the picture height, not the whole texture.
 constexpr unsigned STAGING_STRIDE = 512;
 
 using Clock = std::chrono::steady_clock;
 constexpr auto FRAME_PERIOD = std::chrono::nanoseconds(
     uint64_t(1e9 * f3rt::Machine::FRAME_PIXELS / f3rt::Machine::PIXEL_CLOCK));
-// What the core-0 helper leaves to synthesis on top of its estimated block time: the synth must
-// finish a frame's block before the emulation thread polls it one frame later, and the presenter
-// shares the core.
 constexpr auto SYNTH_MARGIN = std::chrono::milliseconds(2);
-// Added to the emulation time estimate before the core-2 helper may start: emulation frames vary.
 constexpr auto EMULATION_MARGIN = std::chrono::microseconds(500);
-// Composes slower than this are written to the log with how the participants spent them.
 constexpr uint32_t SLOW_FRAME_US = 14000;
 
 uint64_t to_us(Clock::duration span) {
     return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(span).count());
 }
 
-// Forwards the caller's share of a dispatch to the performance counters (when observing) and
-// stamps its start: everything before it is serial preparation.
+f3rt::ComposeSchedule helper_windows(Clock::time_point frame_start, Clock::duration emulation_busy,
+                                     Clock::duration synth_busy) {
+    const auto emulation_end = emulation_busy + EMULATION_MARGIN;
+    const auto idle_from = frame_start + emulation_end;
+    const auto idle = [](Clock::duration busy) {
+        return std::max(FRAME_PERIOD - busy, Clock::duration::zero());
+    };
+    f3rt::ComposeSchedule schedule;
+    schedule.emulation_core = {idle_from, FRAME_PERIOD, idle(emulation_end)};
+    schedule.synth_core = {idle_from, FRAME_PERIOD, idle(synth_busy + SYNTH_MARGIN)};
+    return schedule;
+}
+
 class ShareTimer final : public f3rt::WorkWindow {
 public:
     explicit ShareTimer(f3rt::WorkWindow *inner) : m_inner(inner) {}
@@ -52,17 +57,13 @@ private:
     Clock::time_point m_begin{};
 };
 
-// How one composed frame went, kept for the log.
 struct FrameRecord {
     uint64_t frame = 0;
     uint32_t compose_us = 0, prep_us = 0;
-    uint32_t emu_us = 0, synth_us = 0; // the emulated and synthesized frames running alongside
+    uint32_t emu_us = 0, synth_us = 0;
     f3rt::DispatchTrace trace;
 };
 
-// Frames over SLOW_FRAME_US wait here until the composer has nothing to compose: writing the log
-// takes milliseconds that would otherwise delay the next frame. A full queue drops the newest
-// record and counts it.
 class SlowFrameLog {
 public:
     void note(const FrameRecord &record) {
@@ -122,17 +123,14 @@ void Composer::stop() {
 }
 
 void Composer::run() {
-    // Presentation stays pixel-exact at scale 1; only the side border may widen the frame.
     const f3rt::GameVideoOptions options{1, m_settings.border};
     const unsigned height = options.height();
     f3rt::IndexedScratch scratch;
     scratch.configure(options);
     SlowFrameLog slow_frames;
-    // Synthesis time of a frame, averaged: what the core-0 helper has to leave the synth.
     Clock::duration synth_estimate{};
     while (true) {
         std::unique_lock lock(m_shared.mutex);
-        // Slow-frame records are written only while no frame waits to be composed.
         if (!m_shared.emulation.unseen()) {
             lock.unlock();
             slow_frames.flush();
@@ -143,8 +141,6 @@ void Composer::run() {
         bool fresh = false;
         const f3rt::FrameSnapshot *shot = m_shared.emulation.take(fresh);
         if (!shot || !shot->captured) continue;
-        // The emulation slot stays held (immutable) until the next take, so composing outside the
-        // lock reads a frame nobody will rewrite.
         f3rt::FrameSnapshot &out = m_shared.present.begin();
         out.frame = shot->frame;
         out.epoch = shot->epoch;
@@ -160,25 +156,13 @@ void Composer::run() {
             if (m_counters.available()) counters = &m_counters;
         }
         const auto begin = Clock::now();
-        // The helpers outrank what they share a core with, so each is confined to the part of
-        // every frame period the other thread leaves free. Emulation runs from each frame tick
-        // (shot->start, then every period) for its frame time; HLE synthesis then runs the frame's
-        // block, and has to finish it within the period. The core-2 helper may therefore compose
-        // from the end of emulation to the next tick, the core-0 helper from the end of emulation
-        // for the period less the synth time.
         const auto synth_us = m_perf.synth_frame_us.load(std::memory_order_relaxed);
         synth_estimate += (std::chrono::microseconds(synth_us) - synth_estimate) / 8;
         const auto emulation_busy = std::chrono::microseconds(std::max(
-                                        m_perf.emu_us.load(std::memory_order_relaxed),
-                                        m_perf.emu_frame_us.load(std::memory_order_relaxed))) +
-                                    EMULATION_MARGIN;
-        const auto idle_from = shot->start + emulation_busy;
-        f3rt::ComposeSchedule schedule;
-        schedule.emulation_core = {idle_from, FRAME_PERIOD,
-                                   std::max(FRAME_PERIOD - emulation_busy, Clock::duration::zero())};
-        schedule.synth_core = {idle_from, FRAME_PERIOD,
-                               std::max(FRAME_PERIOD - synth_estimate - SYNTH_MARGIN,
-                                        Clock::duration::zero())};
+            m_perf.emu_us.load(std::memory_order_relaxed),
+            m_perf.emu_frame_us.load(std::memory_order_relaxed)));
+        const f3rt::ComposeSchedule schedule =
+            helper_windows(shot->start, emulation_busy, synth_estimate);
         f3rt::compose_workers().set_schedule(schedule);
         ShareTimer share(counters);
         f3rt::compose_captured_indexed(*shot->captured, m_session.playfield_tiles(),
@@ -188,13 +172,6 @@ void Composer::run() {
         const auto end = Clock::now();
         // The writer owns cache maintenance: the display transfer reads these rows by DMA.
         GSPGPU_FlushDataCache(staging, u32(size_t(stride) * height * sizeof(uint32_t)));
-        const auto ema = [](std::atomic<uint64_t> &slot, uint64_t sample) {
-            const uint64_t previous = slot.load(std::memory_order_relaxed);
-            const int64_t value =
-                previous ? int64_t(previous) + (int64_t(sample) - int64_t(previous)) / 16
-                         : int64_t(sample);
-            slot.store(uint64_t(value), std::memory_order_relaxed);
-        };
         const auto maximum = [](std::atomic<uint64_t> &slot, uint64_t sample) {
             uint64_t previous = slot.load(std::memory_order_relaxed);
             while (sample > previous &&
@@ -202,7 +179,7 @@ void Composer::run() {
             }
         };
         const uint64_t compose_us = to_us(end - begin);
-        ema(m_perf.compose_us, compose_us);
+        PerfStats::smooth(m_perf.compose_us, compose_us);
         maximum(m_perf.compose_max_us, compose_us);
         m_perf.fallback_rows.store(scratch.stats.fallback_rows.load(std::memory_order_relaxed),
                                    std::memory_order_relaxed);

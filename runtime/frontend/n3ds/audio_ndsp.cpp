@@ -8,7 +8,6 @@
 namespace f3rt::n3ds {
 namespace {
 constexpr unsigned CHANNEL = 0;
-// The Enhanced stream's rate is not fixed; Session supplies it from the machine before playback.
 constexpr double DEFAULT_SOURCE_RATE = 48000;
 struct State {
     std::array<ndspWaveBuf, NdspAudioOutput::BUFFER_COUNT> buffers{};
@@ -74,7 +73,7 @@ void NdspAudioOutput::push(const int16_t *stereo, size_t frames) {
                 break;
             }
         }
-        if (!buffer) return; // device is behind: drop rather than block the emulation thread
+        if (!buffer) return;
         const size_t take = std::min(frames, size_t(BUFFER_FRAMES));
         auto *destination = samples + size_t(&*buffer - &buffers->buffers[0]) * BUFFER_FRAMES * 2;
         std::memcpy(destination, stereo, take * 4);
@@ -99,7 +98,6 @@ void NdspAudioOutput::set_source_rate(double rate) {
 }
 void NdspAudioOutput::set_rate(double ratio) {
     if (!m_valid) return;
-    // The channel rate is the source rate times the drift trim, at most +-0.5%.
     m_ratio = ratio;
     ndspChnSetRate(CHANNEL, float(m_source_rate * ratio));
 }

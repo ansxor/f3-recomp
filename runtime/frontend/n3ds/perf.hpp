@@ -26,6 +26,12 @@ struct CpuStats {
 // window maxima the presenter clears after each rate report, and the indexed-compositor entries are
 // per-frame values from the last composed frame.
 struct PerfStats {
+    static void smooth(std::atomic<uint64_t> &slot, uint64_t sample) {
+        const uint64_t previous = slot.load(std::memory_order_relaxed);
+        const int64_t value = previous ? int64_t(previous) + (int64_t(sample) - int64_t(previous)) / 16
+                                       : int64_t(sample);
+        slot.store(uint64_t(value), std::memory_order_relaxed);
+    }
     std::atomic<uint64_t> emulated{0}, composed{0}, presented{0};
     std::atomic<uint64_t> emu_us{0}, compose_us{0}, compose_max_us{0}, present_us{0};
     // The last emulated frame, for the slow-frame records: its wall-clock span (steady_clock ns since the

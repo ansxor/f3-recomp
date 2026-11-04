@@ -216,7 +216,6 @@ void Session::startup() {
         const auto result = f3rt::run_fast_boot(machine, *boot, request);
         log_line("fast_boot frames=%llu source=%s eeprom=%s",
                  static_cast<unsigned long long>(result.frames), result.source, result.eeprom);
-        // The game's boot frames were discarded, so nothing is queued on the device yet.
         if (m_audio) m_audio->clear();
     }
 #ifdef F3_N3DS_BENCH
@@ -282,17 +281,11 @@ void Session::emulate() {
         const bool paused = m_paused.load();
         const auto now = std::chrono::steady_clock::now();
         if (was_paused && !paused) {
-            // Resume is a discontinuity for the presenter's motion/epoch bookkeeping.
             ++m_epoch;
             next_frame = now;
         }
         was_paused = paused;
         if (paused || now < next_frame) {
-            // Sleep on the system timer instead of a condition variable: semaphore timeouts wake
-            // late by a fraction of a millisecond, and slicing an idle wait into SLEEP_SLICE
-            // pieces adds a syscall (and its latency) per slice, which costs about 1% of the
-            // frame rate. The unpaused wait therefore runs to the frame deadline in one call;
-            // commands are still polled once per frame.
             const auto until = paused ? now + SLEEP_SLICE : next_frame;
             const auto delta = until - now;
             if (delta > std::chrono::nanoseconds::zero()) svcSleepThread(s64(delta.count()));
@@ -331,12 +324,7 @@ void Session::emulate() {
         const auto frame_end = std::chrono::steady_clock::now();
         const uint64_t elapsed_us = uint64_t(
             std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start).count());
-        // Signed: a faster frame must lower the average, not wrap it around zero.
-        const uint64_t previous_us = m_perf.emu_us.load(std::memory_order_relaxed);
-        const int64_t ema_us =
-            previous_us ? int64_t(previous_us) + (int64_t(elapsed_us) - int64_t(previous_us)) / 16
-                        : int64_t(elapsed_us);
-        m_perf.emu_us.store(uint64_t(ema_us), std::memory_order_relaxed);
+        PerfStats::smooth(m_perf.emu_us, elapsed_us);
         const uint64_t synth_ns = machine.audio->enhanced_render_ns();
         m_perf.emu_start_ns.store(uint64_t(frame_start.time_since_epoch().count()),
                                   std::memory_order_relaxed);
@@ -345,8 +333,7 @@ void Session::emulate() {
         m_perf.emu_frame_us.store(elapsed_us, std::memory_order_relaxed);
         m_perf.synth_frame_us.store((synth_ns - m_synth_render_ns) / 1000, std::memory_order_relaxed);
         m_synth_render_ns = synth_ns;
-        // Last, so a reader that sees the new count also sees this frame's fields.
-        m_perf.emulated.fetch_add(1, std::memory_order_release);
+        m_perf.emulated.fetch_add(1, std::memory_order_relaxed);
         size_t count, ready = 0;
         while ((count = machine.audio->render_ready(samples.data(), samples.size() / 2)) != 0) {
             push_audio(samples.data(), count);

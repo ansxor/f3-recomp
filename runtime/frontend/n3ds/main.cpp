@@ -69,7 +69,6 @@ int main() {
 
     Settings settings = default_settings();
 #ifdef F3_N3DS_BENCH
-    // A bench run is reproducible: the defaults, never the user's settings file.
     log_line("n3ds: bench build, settings.cfg ignored");
 #else
     load_settings(data_dir + "/settings.cfg", settings);
@@ -122,7 +121,6 @@ int main() {
                                           : map_input(hidKeysHeld(), settings.keys));
         presenter.frame(*menu, session->error(), audio_note);
         if (menu->take_restart()) {
-            // A border change reconfigures the capture geometry: rebuild the game threads.
             composer->stop();
             session->stop();
             g_session = nullptr;

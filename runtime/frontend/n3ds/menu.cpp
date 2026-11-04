@@ -59,7 +59,7 @@ void Menu::update_tap() {
     const double ms = std::chrono::duration<double, std::milli>(
                           std::chrono::steady_clock::now() - m_touch_start)
                           .count();
-    if (ms >= TAP_MS || moved >= TAP_DISTANCE) return; // a drag or a hold, not a tap
+    if (ms >= TAP_MS || moved >= TAP_DISTANCE) return;
     if (!m_open) {
         m_open = true;
         m_session.post(Command::Pause);
