@@ -8,6 +8,7 @@ namespace f3rt {
 void GameTiles::reset() {
     for (auto &map : m_maps) map.fill(0);
     m_row_used.fill(0);
+    touch();
 }
 
 namespace {
@@ -17,8 +18,11 @@ constexpr uint32_t PF_BEGIN = OFFS_PLAYFIELDS; // PF0 data
 } // namespace
 
 void GameTiles::decode(const VideoRam &vram) {
+    bool any = false;
     for (unsigned layer = 0; layer < m_maps.size(); ++layer) {
         const uint32_t base = PF_BEGIN + layer * MAP_STRIDE;
+        if (!m_shadow[layer].changed(&vram.graphics[base])) continue;
+        any = true;
         for (unsigned i = 0; i < m_maps[layer].size(); ++i) {
             const uint32_t at = base + i * 4;
             m_maps[layer][i] = uint32_t(vram.u16(at)) << 16 | vram.u16(at + 2);
@@ -31,6 +35,7 @@ void GameTiles::decode(const VideoRam &vram) {
                     break;
                 }
     }
+    if (any) m_version = fresh_content_version();
 }
 
 void FullResolutionAltMaps::reset() { *this = FullResolutionAltMaps{}; }

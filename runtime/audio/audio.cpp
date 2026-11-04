@@ -560,6 +560,7 @@ void Audio::shared_write(uint32_t offset) {
 void Audio::finish_frame() {
     if (m_impl->m_hle) m_impl->m_hle->finish_frame();
 }
+uint64_t Audio::enhanced_render_ns() const { return m_impl->m_hle ? m_impl->m_hle->render_ns() : 0; }
 Audio::EnhancedStats Audio::enhanced_stats() const {
     if (m_impl->m_hle) {
         const auto s = m_impl->m_hle->stats();

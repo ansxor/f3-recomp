@@ -25,6 +25,7 @@ public:
     size_t render_ready(int16_t *stereo, size_t frames);
     uint64_t generated() const;
     Audio::EnhancedStats stats() const;
+    uint64_t render_ns() const;
 #if F3RT_HLE_EVENTS
     void set_observer(std::function<void(const VoiceEvent &)> observer);
 #endif

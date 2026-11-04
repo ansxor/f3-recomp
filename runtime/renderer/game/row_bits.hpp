@@ -44,6 +44,27 @@ template <class Body> [[gnu::always_inline]] inline void for_each_run(uint32_t b
     }
 }
 
+// The eight 4-bit pens of one glyph row (four bytes, texel t is nibble t % 2 of byte 3 - t / 2) as
+// nibbles in screen order: nibble s is the pen shown at cell column s. A `mirrored` cell shows the
+// row backwards, which reverses the nibbles; in the byte-swapped read that is a swap of the two
+// nibbles of every byte.
+[[gnu::always_inline]] inline uint32_t glyph_row_pens(const uint8_t *row, bool mirrored) {
+    uint32_t word;
+    std::memcpy(&word, row, sizeof word);
+    if (!mirrored) return __builtin_bswap32(word);
+    return (word >> 4 & 0x0f0f0f0fu) | (word & 0x0f0f0f0fu) << 4;
+}
+
+// The nonzero nibbles of a word as an 8-bit mask: bit s is set when nibble s is nonzero.
+[[gnu::always_inline]] inline uint32_t nonzero_nibbles(uint32_t pens) {
+    uint32_t flags = pens | pens >> 1;
+    flags = (flags | flags >> 2) & 0x11111111u; // bit 4k: nibble k is nonzero
+    // Gather the eight flags: bit pairs, then nibbles, then bytes.
+    flags = (flags | flags >> 3) & 0x03030303u;
+    flags = (flags | flags >> 6) & 0x000f000fu;
+    return (flags | flags >> 12) & 0xffu;
+}
+
 // The 16 pens of a tile row with the pen mask (at most 0x3f) applied, held as four little-endian
 // words: pen i is byte i % 4 of word i / 4. A masked pen is at most 0x3f, so adding 0x7f to its
 // byte sets bit 7 exactly when the pen is nonzero and never carries into the next byte.

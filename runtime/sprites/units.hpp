@@ -34,6 +34,7 @@
 //    the bank, or they have not been refreshed for a few frames.
 #include "f3rt/cpu_abi.h"
 #include "f3rt/emit_unit.hpp"
+#include "f3rt/memory_map.hpp"
 #include "sprites/behaviour.hpp"
 #include "sprites/presentation.hpp"
 #include <array>
@@ -160,10 +161,31 @@ public:
     int unit_exit(f3_cpu *cpu, uint32_t unit); // nonzero only for the sandbox at its unit end
     // Interpreted execution: call before the instruction at `pc` runs (exit hooks, then enter).
     void interpreted_instruction(uint32_t pc);
-    // Real-CPU bus writes (Machine::write*): RAM word writer PCs and sprite-RAM entries.
-    void note_write(uint32_t address, unsigned width);
+    // Real-CPU bus writes (Machine::write*): RAM word writer PCs and sprite-RAM entries. Everything else
+    // is ignored, and a store that repeats the entry last written in the same invocation state is
+    // decided inline.
+    void note_write(uint32_t address, unsigned width) {
+        const uint32_t a = address & 0xffffff;
+        const uint32_t offset = a - GRAPHICS_BASE; // wraps below the graphics RAM
+        if (offset >= SPRITE_RAM_SIZE) {
+            if (a - RAM_BASE < RAM_END - RAM_BASE) note_write_slow(address, width);
+            return;
+        }
+        const uint32_t tail = offset + width - 1;
+        // Only the first 0x400 entries of each 0x800-entry bank are listed; the rest are never attributed.
+        if (offset & tail & 0x4000) return;
+        const uint32_t entry = offset >> 4;
+        const unsigned bank = entry >> 11;
+        if (entry == m_memo_entry[bank] && tail >> 4 == entry &&
+            ((*m_sr >> 8) & 7) == m_memo_mask[bank])
+            return;
+        note_write_slow(address, width);
+    }
     // `--discovery-log`: report writes outside units from PCs outside frame_writers (works without check mode).
-    void set_discovery(DiscoveryLog *log) { m_discovery = log; }
+    void set_discovery(DiscoveryLog *log) {
+        m_discovery = log;
+        clear_memo();
+    }
     bool tracks_writers() const { return !m_writer_pc.empty(); }
     // Last-writer pc per RAM halfword, for the generated code's inline RAM stores; null when untracked.
     uint32_t *writer_table() { return m_writer_pc.empty() ? nullptr : m_writer_pc.data(); }
@@ -243,6 +265,7 @@ private:
     void close_invocation(size_t index);
     void discard_from(size_t index);
     uint32_t irq_depth();
+    void note_write_slow(uint32_t address, unsigned width);
     void sprite_write(uint32_t address);
     void finish(Invocation &invocation);
     void compare(Invocation &invocation, const std::vector<uint16_t> &real_keys);
@@ -284,6 +307,17 @@ private:
     mutable std::vector<SpriteSplice> m_view;
     uint32_t m_last_hook_pc = 0;
     uint64_t m_last_hook_cycles = UINT64_MAX;
+    static constexpr uint16_t NO_ENTRY = 0xffff; // never an entry (entries are < 0x1000)
+    // Last sprite-RAM entry (address >> 4 within the sprite RAM) written per bank, and the SR interrupt
+    // mask it ran under (see sprite_write).
+    std::array<uint16_t, 2> m_memo_entry{NO_ENTRY, NO_ENTRY};
+    std::array<uint8_t, 2> m_memo_mask{};
+    const uint16_t *m_sr = nullptr; // the machine's SR, which fixes the IRQ depth together with the IRQ levels
+    void clear_memo() { m_memo_entry = {NO_ENTRY, NO_ENTRY}; }
+    void remember(uint32_t offset, unsigned bank) {
+        m_memo_entry[bank] = uint16_t(offset >> 4);
+        m_memo_mask[bank] = uint8_t((*m_sr >> 8) & 7);
+    }
 
     // Sandbox state.
     f3_cpu m_sandbox_cpu{};

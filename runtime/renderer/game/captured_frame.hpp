@@ -26,6 +26,9 @@ struct CapturedFrame {
     unsigned sprite_count = 0;
     unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
+    // Content tags of the decoded `rows` and `colors` (0 = never captured). GameVideo::capture() skips
+    // re-copying what a slot already holds; nothing else writes these arrays through a capture.
+    uint64_t rows_version = 0, colors_version = 0;
     uint8_t pen_mask = 15;
     bool flipped = false;
     // Oracle-fallback frame: only native_pixels (320 x geometry::HEIGHT ARGB) is meaningful.

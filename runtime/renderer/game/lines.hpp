@@ -1,5 +1,7 @@
 #pragma once
 #include "f3rt/game_video.hpp"
+#include "f3rt/memory_map.hpp"
+#include "renderer/game/ram_shadow.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
@@ -16,8 +18,10 @@ public:
 
     void reset();
     // Decode the per-scanline line RAM plus the control registers from VRAM.
-    // Shared Taito F3 decode defined in runtime/renderer/game/lines.cpp.
+    // Shared Taito F3 decode defined in runtime/renderer/game/lines.cpp. Nothing is decoded when the
+    // line RAM bytes it reads and the control registers are unchanged since the last decode.
     void decode(const VideoRam &vram);
+    // Expand the decoded lines into scanout rows; skipped when neither they nor `flipped` changed.
     void prepare(bool flipped);
     // After prepare(): flag playfield rows whose sampled map row holds no tile codes.
     void cull_empty_rows(const class GameTiles &tiles);
@@ -31,6 +35,8 @@ public:
     AltRowCounts resolve_full_resolution_alt(const class FullResolutionAltMaps &maps);
     const SceneRow &row(unsigned scanout_y) const { return m_rows[scanout_y & 255]; }
     std::span<const SceneRow, 256> rows() const { return m_rows; }
+    // Tag of the current rows (see fresh_content_version), advanced by every step that rewrites them.
+    uint64_t rows_version() const { return m_rows_version; }
     void compare_rows(const Video &oracle, uint64_t frame);
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
@@ -128,6 +134,22 @@ private:
 
     std::array<uint16_t, 8> m_control_0{};
     std::array<uint16_t, 8> m_control_1{};
+
+    // What decode() reads: the eight latch tables, the eight sections, the control registers.
+    static constexpr size_t LATCH_BYTES = 8 * LINERAM_LATCH_STRIDE, SECTION_BYTES = 8 * LINERAM_SECTION_STRIDE;
+    RamShadow<LATCH_BYTES> m_shadow_latches;
+    RamShadow<SECTION_BYTES> m_shadow_sections;
+    RamShadow<0x20> m_shadow_control;
+    // m_rows holds prepare(m_rows_flipped) of the current m_lines and control registers.
+    bool m_rows_current = false, m_rows_flipped = false;
+    uint64_t m_rows_version = fresh_content_version();
+    void forget_decode() {
+        m_shadow_latches.invalidate();
+        m_shadow_sections.invalidate();
+        m_shadow_control.invalidate();
+        m_rows_current = false;
+        m_rows_version = fresh_content_version();
+    }
 
     void get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const;
 };

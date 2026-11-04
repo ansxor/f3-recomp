@@ -50,4 +50,6 @@ unsigned compose_helper_count() {
     const unsigned hardware = std::thread::hardware_concurrency();
     return hardware ? std::min(MAX_COMPOSE_HELPERS, hardware - 1) : 1;
 }
+
+HelperContention compose_helper_contention(unsigned) { return HelperContention::None; }
 } // namespace f3rt

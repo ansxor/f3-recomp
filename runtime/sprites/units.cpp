@@ -74,6 +74,7 @@ const char *SpriteUnits::abort_name(Abort reason) {
 SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options options)
     : m_machine(machine), m_options(std::move(options)),
       m_units(table.units.begin(), table.units.end()), m_frame_writers(table.frame_writers) {
+    m_sr = &machine.cpu.sr;
     m_sandbox_cpu.runtime = &machine;
     m_page_slot.fill(-1);
     m_capture_slot.fill(-1);
@@ -145,9 +146,13 @@ uint32_t SpriteUnits::irq_depth() {
     while (!m_irq_levels.empty() && mask < m_irq_levels.back()) m_irq_levels.pop_back();
     return uint32_t(m_irq_levels.size());
 }
-void SpriteUnits::note_irq(unsigned level) { m_irq_levels.push_back(level); }
+void SpriteUnits::note_irq(unsigned level) {
+    clear_memo();
+    m_irq_levels.push_back(level);
+}
 
 void SpriteUnits::reset() {
+    clear_memo();
     while (!m_stack.empty()) {
         m_pool.push_back(std::move(m_stack.back()));
         m_stack.pop_back();
@@ -166,6 +171,7 @@ void SpriteUnits::reset() {
 }
 
 void SpriteUnits::discard_from(size_t index) {
+    clear_memo();
     while (m_stack.size() > index) {
         m_pool.push_back(std::move(m_stack.back()));
         m_stack.pop_back();
@@ -173,6 +179,7 @@ void SpriteUnits::discard_from(size_t index) {
     }
 }
 void SpriteUnits::close_invocation(size_t index) {
+    clear_memo();
     m_pool.push_back(std::move(m_stack[index]));
     m_stack.erase(m_stack.begin() + std::ptrdiff_t(index));
 }
@@ -230,6 +237,7 @@ void SpriteUnits::open_invocation(const EmitUnit &unit, size_t start) {
             discard_from(i); // previous invocation never exited
             break;
         }
+    clear_memo();
     if (m_stack.size() >= MAX_OPEN) {
         m_pool.push_back(std::move(m_stack.front()));
         m_stack.erase(m_stack.begin());
@@ -309,7 +317,7 @@ int SpriteUnits::exit_real(uint32_t id) {
 
 // ---- Real sprite writes ---------------------------------------------------------------
 
-void SpriteUnits::note_write(uint32_t address, unsigned width) {
+void SpriteUnits::note_write_slow(uint32_t address, unsigned width) {
     const uint32_t a = address & 0xffffff;
     if (a - RAM_BASE < RAM_SPAN) {
         if (m_writer_pc.empty()) return;
@@ -319,29 +327,53 @@ void SpriteUnits::note_write(uint32_t address, unsigned width) {
             m_writer_pc[word] = m_machine.cpu.pc;
         return;
     }
-    for (unsigned i = 0; i < width; ++i)
-        if (a + i - GRAPHICS_BASE < SPRITE_SPAN) sprite_write(a + i);
+    const uint32_t offset = a - GRAPHICS_BASE;
+    if (m_options.check || m_discovery) {
+        // Stray-writer accounting counts every byte store.
+        for (unsigned i = 0; i < width; ++i)
+            if (offset + i < SPRITE_SPAN) sprite_write(a + i);
+        return;
+    }
+    // Bytes of one store that share a 16-byte entry share a key, and repeating a key is idempotent
+    // (see sprite_write), so a store of at most four bytes touches at most two entries.
+    if (offset < SPRITE_SPAN) sprite_write(a);
+    const uint32_t tail = offset + width - 1;
+    if (tail < SPRITE_SPAN && ((tail ^ offset) >> 4)) sprite_write(a + width - 1);
 }
 
+// Repeating an entry in an unchanged invocation state has no further effect: the open invocation
+// already lists it (its keys are only sorted and de-duplicated at exit), or its slot is already
+// zeroed. The memo keeps the last entry per bank with the SR interrupt mask it ran under (the mask
+// and the IRQ levels fix the depth; note_irq and every change of the invocation stack clear it).
+// A bank each, because the game fills both banks entry by entry, alternating between them.
 void SpriteUnits::sprite_write(uint32_t address) {
     const uint32_t offset = address - GRAPHICS_BASE;
     if (!listed(offset)) return;
     const uint16_t key = sprite_key(offset);
+    const uint32_t bank = key >= ENTRIES;
     const uint32_t depth = irq_depth();
     while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
     if (!m_stack.empty() && m_stack.back().irq_depth == depth) {
         Invocation &top = m_stack.back();
         auto &keys = top.keys;
         if (keys.empty() || keys.back() != key) keys.push_back(key);
-        if (top.flicker && contains(top.flicker->emit, m_machine.cpu.pc) &&
-            (top.shadow_keys.empty() || top.shadow_keys.back() != key))
-            top.shadow_keys.push_back(key);
+        if (top.flicker) {
+            // Shadow attribution depends on the writing pc, so it is never memoised.
+            if (contains(top.flicker->emit, m_machine.cpu.pc) &&
+                (top.shadow_keys.empty() || top.shadow_keys.back() != key))
+                top.shadow_keys.push_back(key);
+            return;
+        }
+        remember(offset, bank);
         return;
     }
     m_identity[key] = 0;
     m_object[key] = 0;
     m_flag[key] = 0;
-    if (!m_options.check && !m_discovery) return;
+    if (!m_options.check && !m_discovery) {
+        remember(offset, bank);
+        return;
+    }
     const uint32_t pc = m_machine.cpu.pc;
     StrayWriter *found = m_last_stray;
     if (!found || found->pc != pc) {
@@ -575,6 +607,7 @@ void SpriteUnits::frame_end() {
     m_ordinals.clear();
     for (size_t i = 0; i < m_stack.size();) {
         if (m_stack[i].frame + 1 < m_machine.frame) {
+            clear_memo();
             // Keep stack order: drop this entry only.
             m_pool.push_back(std::move(m_stack[i]));
             m_stack.erase(m_stack.begin() + std::ptrdiff_t(i));

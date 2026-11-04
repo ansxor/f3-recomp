@@ -27,6 +27,18 @@ void trampoline(void *argument) {
 }
 // libctru priorities run 0x18 (most urgent) to 0x3F (idle). The std::thread default (core 0,
 // 0x3F, 32 KiB) would starve HLE synthesis and overflow GameSprites::decode's 240 KiB frame.
+//
+// Core map (New 3DS; core 2 exists only there, and a thread refused it falls back to core 0):
+//   core 0  the presenter (main thread, 0x30), HLE synthesis (0x2C) and compose helper 0 (0x2B).
+//   core 1  the composer (0x30). It is the system core: APT_SetAppCpuTimeLimit(80) caps the
+//           application's share of it at 80%, so the composer must not be the only participant that
+//           can finish a frame.
+//   core 2  emulation (0x30) and compose helper 1 (0x2F). Emulation sleeps on the frame tick for
+//           whatever its frame leaves of the period, and that idle time is the helper's.
+// Both helpers outrank what they share a core with, so neither is ever stuck behind it: a chunk of
+// compose work caught by an idle-priority helper would stall the whole frame for as long as emulation
+// or synthesis runs. What they delay instead is bounded by the row workers, which stop a helper
+// from claiming a chunk that would end after its deadline (compose_helper_contention()).
 struct RoleSpec {
     int core;
     int priority;
@@ -41,11 +53,7 @@ RoleSpec role_spec(ThreadRole role, unsigned index) {
     case ThreadRole::Composer:
         return {1, 0x30, 256 * 1024};
     case ThreadRole::ComposeHelper:
-        // One helper shares core 0 with HLE synthesis, out of emulation's way. A second helper on
-        // core 2 competed with emulation for no measured need, so compose_helper_count() stays at
-        // one; re-adding it means returning {2, 0x3F, 256 * 1024} here for index 1 and raising the
-        // count below.
-        return {0, 0x31, 256 * 1024};
+        return index == 0 ? RoleSpec{0, 0x2B, 256 * 1024} : RoleSpec{2, 0x2F, 256 * 1024};
     }
     return {0, 0x30, 256 * 1024};
 }
@@ -88,7 +96,11 @@ void Thread::join() {
     delete std::exchange(m_state, nullptr);
 }
 
-unsigned compose_helper_count() { return 1; }
+unsigned compose_helper_count() { return 2; }
+
+HelperContention compose_helper_contention(unsigned index) {
+    return index == 0 ? HelperContention::Synth : HelperContention::Emulation;
+}
 } // namespace f3rt
 
 #endif // __3DS__

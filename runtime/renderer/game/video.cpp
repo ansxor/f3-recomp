@@ -109,6 +109,19 @@ struct GameVideo::Impl {
     bool reference_selected = false;
     bool presentation_pending = false;
 
+    // Palette RAM as 0x00RRGGBB per entry, converted again only when the RAM changed.
+    RamShadow<PALETTE_RAM_SIZE> palette_shadow;
+    std::array<uint32_t, CapturedFrame::PALETTE_SIZE> colors{};
+    uint64_t colors_version = fresh_content_version();
+    void refresh_colors() {
+        const auto &palette = machine.palette;
+        if (!palette_shadow.changed(palette.data())) return;
+        for (unsigned i = 0; i < colors.size(); ++i)
+            colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) |
+                        palette[i * 4 + 3];
+        colors_version = fresh_content_version();
+    }
+
     void capture() {
         auto &frame = capture_dest();
         captured = &frame;
@@ -119,9 +132,13 @@ struct GameVideo::Impl {
                       frame.native_pixels.begin());
             return;
         }
-        frame.tiles = tiles;
-        frame.text = text;
-        std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
+        // Playfield and text content rarely changes; a slot that already holds this version keeps it.
+        if (frame.tiles.version() != tiles.version()) frame.tiles = tiles;
+        if (frame.text.version() != text.version()) frame.text = text;
+        if (frame.rows_version != lines.rows_version()) {
+            std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
+            frame.rows_version = lines.rows_version();
+        }
         const auto current = sprites.presented_sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
@@ -129,10 +146,10 @@ struct GameVideo::Impl {
                                                     [](const SceneSprite &s) { return s.shadow; }));
         frame.pen_mask = sprites.pen_mask();
         frame.flipped = sprites.flipped();
-        const auto &palette = machine.palette;
-        for (unsigned i = 0; i < frame.colors.size(); ++i)
-            frame.colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) |
-                              (uint32_t(palette[i * 4 + 2]) << 8) | palette[i * 4 + 3];
+        if (frame.colors_version != colors_version) {
+            frame.colors = colors;
+            frame.colors_version = colors_version;
+        }
     }
 
     ReferencePlanes &reference_planes() {
@@ -416,6 +433,7 @@ void GameVideo::render_frame() {
         state.sprites.set_presentation(&presentation);
     }
     std::apply([&](auto &...c) { Impl::decode_all(vram, c...); }, state.sources());
+    state.refresh_colors();
     state.sprites.set_presentation(nullptr);
     if (state.sprites.presented_valid()) {
         ++state.presented_frames;
@@ -491,12 +509,7 @@ void GameVideo::render() {
         state.alt_rows_fallback += counts.fallback;
     }
     if (state.mode != GameVideoMode::Game || !state.captured) {
-        std::array<uint32_t, 8192> colors;
-        const auto &palette = state.machine.palette;
-        for (unsigned i = 0; i < colors.size(); ++i)
-            colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) |
-                        palette[i * 4 + 3];
-        const FrameScene scene = state.live_scene(colors);
+        const FrameScene scene = state.live_scene(state.colors);
         state.ensure_plane(state.next_plane);
         compose_game_scene(scene, {state.sprite_planes[state.next_plane], state.pixels});
         if (state.options.expanded() && !state.captured)

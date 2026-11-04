@@ -38,6 +38,9 @@ public:
     void shared_write(uint32_t offset);
     void finish_frame();
     EnhancedStats enhanced_stats() const;
+    // Just the synth worker's cumulative render time (EnhancedStats::render_ns), one relaxed load: cheap
+    // enough to sample every frame while the worker runs. Zero without the HLE backend.
+    uint64_t enhanced_render_ns() const;
 #if F3RT_HLE_EVENTS
     // Diagnostic callback executes on the worker, never on the main CPU.
     void set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer);

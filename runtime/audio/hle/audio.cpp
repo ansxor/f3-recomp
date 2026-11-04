@@ -275,6 +275,9 @@ size_t AudioEngine::render_ready(int16_t *out, size_t count) {
 uint64_t AudioEngine::generated() const {
     return m_impl->generated.load(std::memory_order_relaxed);
 }
+uint64_t AudioEngine::render_ns() const {
+    return m_impl->render_ns.load(std::memory_order_relaxed);
+}
 Audio::EnhancedStats AudioEngine::stats() const {
     const auto render = m_impl->core.render_stats();
     return {m_impl->command_count, generated(), render.voices_started, render.voices_active,

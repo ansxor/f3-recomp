@@ -117,6 +117,7 @@ private:
     uint64_t m_audio_window_energy = 0, m_audio_window_samples_pcm = 0;
     uint64_t m_hle_commands_base = 0;
     uint64_t m_hle_render_ns_base = 0;
+    uint64_t m_synth_render_ns = 0; // synth render time at the end of the previous emulated frame
     double m_audio_ratio = 1.0;
     mutable std::mutex m_error_mutex;
     std::string m_error;

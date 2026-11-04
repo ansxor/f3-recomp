@@ -28,6 +28,10 @@ struct CpuStats {
 struct PerfStats {
     std::atomic<uint64_t> emulated{0}, composed{0}, presented{0};
     std::atomic<uint64_t> emu_us{0}, compose_us{0}, compose_max_us{0}, present_us{0};
+    // The last emulated frame, for the slow-frame records: its wall-clock span (steady_clock ns since the
+    // clock's epoch), its wall duration, and the wall time the synth worker spent rendering since the
+    // previous frame ended. `emulated` counts frames, so a reader pairs these with its own frame.
+    std::atomic<uint64_t> emu_start_ns{0}, emu_end_ns{0}, emu_frame_us{0}, synth_frame_us{0};
     // Indexed compositor: rows the canonical kernel decided, pixels that needed a real blend, and
     // the row chunks each participant of the last frame pulled (the composer, then each helper).
     std::atomic<uint32_t> fallback_rows{0}, special_px{0};

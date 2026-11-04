@@ -5,6 +5,8 @@
 #include "renderer/game/text.hpp"
 #include <algorithm>
 #include <array>
+#include <climits>
+#include <cstring>
 
 namespace f3rt {
 namespace {
@@ -20,7 +22,8 @@ int floor_divide(int value, int divisor) {
 
 // How a layer's first visible sample treats a pixel: with mode 0/3 and the two weights of the
 // selected slot summing to eight, (c*8)>>3 == c per channel, so the sample resolves the pixel by
-// itself. `resolves` is indexed by the sample's blend selector; `layer` is the layer's index.
+// itself, provided no later layer can still change it (RowSetup::settle). `resolves` is indexed by
+// the sample's blend selector; `layer` is the layer's index.
 struct LayerPlan {
     std::array<bool, 2> resolves;
     unsigned layer;
@@ -36,22 +39,51 @@ struct ColumnRanges {
 // sample it gets is recorded, and its colour comes from replaying the canonical mix() over those
 // samples once per distinct combination (BlendResult), not once per pixel. `seen` holds bit
 // `layer * 2 + select` for each sample and bit `18 + layer` for a layer that sampled it twice
-// (overlapping clip ranges), which mix() treats as a second visit.
+// (overlapping clip ranges), which mix() treats as a second visit. `index` is the palette index
+// each layer sampled; the two entries after the layers hold the literal index 0 and the row
+// background, so a blend picks its source and destination colours by slot alone.
+constexpr unsigned SLOT_ZERO = LAYER_COUNT, SLOT_BACKGROUND = LAYER_COUNT + 1;
 struct BlendSamples {
     uint32_t seen;
-    std::array<uint16_t, LAYER_COUNT> index; // the palette index each layer sampled
+    std::array<uint16_t, LAYER_COUNT + 2> index;
 };
 
-// A palette index source of a blended pixel: a layer's sample (by layer index), the row background,
-// or the literal index 0.
+// The stand-in a replayed mix() colour carries: the sampling layer's index + 1, so the outcome says
+// which sample ends up as source and destination, FROM_ZERO for the literal index 0 a priority tie
+// puts in the destination, and FROM_BACKGROUND for the row background.
 constexpr unsigned FROM_ZERO = 0, FROM_BACKGROUND = 0xffff;
 
-// The replayed mix() of one `seen` combination: where the source and destination colours come from
-// (layer index + 1, FROM_ZERO or FROM_BACKGROUND) and their weights.
+// The replayed mix() of one `seen` combination: the sample slots its source and destination colours
+// come from, and their weights.
 struct BlendResult {
     uint32_t seen; // 0 marks an unused memo entry
-    uint16_t source, destination;
+    uint8_t source, destination;
     uint8_t source_weight, destination_weight;
+};
+
+constexpr uint8_t sample_slot(uint16_t from) {
+    return from == FROM_ZERO ? SLOT_ZERO : from == FROM_BACKGROUND ? SLOT_BACKGROUND
+                                                                    : uint8_t(from - 1);
+}
+
+// What a row's layers need that depends on its line state alone, not on its scroll position or
+// pixels: the composition order, which layers may settle a pixel, and each layer's column ranges.
+// Neighbouring rows mostly share a line state, so a chunk keeps the last one and rebuilds it only
+// when the key changes.
+struct RowSetup {
+    // The key: every layer's state, the clip windows, and the layers active on the row.
+    std::array<SceneLayer, LAYER_COUNT> layers;
+    std::array<SceneClip, 4> clips;
+    unsigned active = 0; // bit per LayerId
+    bool valid = false;
+    // Derived from the key.
+    std::array<LayerId, LAYER_COUNT> order; // active layers in composition order
+    unsigned order_count = 0;
+    unsigned settle = 0; // bit per LayerId: the layer may settle a pixel by its first sample
+    // True when a layer's priority is outside what the hardware encodes (4 bits): the canonical row
+    // kernel decides such a row.
+    bool canonical = false;
+    std::array<ColumnRanges, LAYER_COUNT> ranges;
 };
 
 // One row's working state. A pixel is unresolved until a layer settles it: a layer that resolves on
@@ -71,12 +103,11 @@ struct RowWork {
     std::array<BlendSamples, MAX_WIDTH> *samples = nullptr;
     std::array<uint32_t, MAX_WORDS> unresolved, pending;
     bool any_pending = false;
-    // The active layers in composition order, for replaying mix().
-    std::array<LayerId, LAYER_COUNT> order;
-    unsigned order_count = 0;
+    const RowSetup &setup; // the active layers in composition order, for replaying mix()
     std::array<BlendResult, 64> memo; // open-addressed by `seen`; filled when a pixel first blends
 
-    RowWork(const IndexedComposeJob &job, const SceneRow &row) : job(job), row(row) {}
+    RowWork(const IndexedComposeJob &job, const SceneRow &row, const RowSetup &setup)
+        : job(job), row(row), setup(setup) {}
 
     void reset() {
         words = (width + 31) / 32;
@@ -88,28 +119,30 @@ struct RowWork {
     }
 
     LayerPlan plan(const SceneLayer &layer, LayerId id) const {
-        const bool mode = layer.blend_mode == 0 || layer.blend_mode == 3;
+        const bool mode = (layer.blend_mode == 0 || layer.blend_mode == 3) &&
+                          (setup.settle >> unsigned(id) & 1);
         return {
             {mode && row.blend[0] + row.blend[2] == 8, mode && row.blend[1] + row.blend[3] == 8},
             unsigned(id)};
     }
 
     // Replay mix() over the samples of `seen` in composition order. Colours are stood in for by
-    // their source: layer index + 1, so the outcome says which sample ends up as source and
+    // their source (see FROM_ZERO), so the outcome says which sample ends up as source and
     // destination.
     BlendResult replay(uint32_t seen) const {
         PixelMix pixel = background_mix(FROM_BACKGROUND);
-        for (unsigned n = 0; n < order_count; ++n) {
-            const unsigned layer = unsigned(order[n]);
+        for (unsigned n = 0; n < setup.order_count; ++n) {
+            const unsigned layer = unsigned(setup.order[n]);
             for (unsigned select = 0; select < 2; ++select) {
                 if (!(seen >> (layer * 2 + select) & 1)) continue;
                 const unsigned visits = 1 + (seen >> (18 + layer) & 1);
                 for (unsigned visit = 0; visit < visits; ++visit)
-                    mix(pixel, row.layer(order[n]), uint16_t(layer + 1), select != 0, row.blend);
+                    mix(pixel, row.layer(setup.order[n]), uint16_t(layer + 1), select != 0,
+                        row.blend);
             }
         }
-        return {seen, pixel.source, pixel.destination, pixel.source_weight,
-                pixel.destination_weight};
+        return {seen, sample_slot(pixel.source), sample_slot(pixel.destination),
+                pixel.source_weight, pixel.destination_weight};
     }
 
     // The replay of `seen`, memoised for the few combinations a row has; a combination that finds
@@ -125,7 +158,7 @@ struct RowWork {
 };
 
 // Feed one visible sample into the row. Callers only pass pixels that are unresolved or pending, so
-// a resolved pixel can never be revisited (the class-A row guarantees it is already final).
+// a resolved pixel is never revisited (RowSetup::settle guarantees it is already final).
 [[gnu::always_inline]] inline void visit(RowWork &work, int x, uint16_t palette, bool select,
                                          const LayerPlan &plan) {
     const unsigned word = unsigned(x) >> 5, bit = 1u << (unsigned(x) & 31);
@@ -143,6 +176,8 @@ struct RowWork {
         }
         work.pending[word] |= bit;
         sample.seen = seen;
+        sample.index[SLOT_ZERO] = 0;
+        sample.index[SLOT_BACKGROUND] = work.row.background;
     } else if (work.pending[word] & bit) {
         // A layer sampling a pixel it already sampled (the same select) is a second visit.
         sample.seen |= sample.seen & seen ? 1u << (18 + plan.layer) : seen;
@@ -150,6 +185,51 @@ struct RowWork {
         return;
     }
     sample.index[plan.layer] = palette;
+}
+
+// visit() for the open columns `bits` of bitmask word `w` (bit c = column w * 32 + c), none of them
+// settled by the layer itself: each becomes pending, or takes one more sample when it already was.
+// palette_at(x) is the palette index the layer sampled at column x.
+template <class PaletteAt>
+[[gnu::always_inline]] inline void visit_bits(RowWork &work, unsigned w, uint32_t bits,
+                                              bool select, const LayerPlan &plan,
+                                              PaletteAt &&palette_at) {
+    const uint32_t seen = 1u << (plan.layer * 2 + unsigned(select));
+    const uint32_t again = bits & work.pending[w], fresh = bits & ~again;
+    if (fresh) {
+        if (!work.any_pending) {
+            work.any_pending = true;
+            for (auto &entry : work.memo) entry.seen = 0;
+        }
+        work.unresolved[w] &= ~fresh;
+        work.pending[w] |= fresh;
+        for (uint32_t mask = fresh; mask; mask &= mask - 1) {
+            const unsigned x = w * 32 + unsigned(__builtin_ctz(mask));
+            BlendSamples &sample = (*work.samples)[x];
+            sample.seen = seen;
+            sample.index[SLOT_ZERO] = 0;
+            sample.index[SLOT_BACKGROUND] = work.row.background;
+            sample.index[plan.layer] = palette_at(x);
+        }
+    }
+    for (uint32_t mask = again; mask; mask &= mask - 1) {
+        const unsigned x = w * 32 + unsigned(__builtin_ctz(mask));
+        BlendSamples &sample = (*work.samples)[x];
+        // A layer sampling a pixel it already sampled (the same select) is a second visit.
+        sample.seen |= sample.seen & seen ? 1u << (18 + plan.layer) : seen;
+        sample.index[plan.layer] = palette_at(x);
+    }
+}
+
+// visit_bits() for the open columns `bits` of a run at column x (bit i = column x + i, at most 16
+// wide), which can straddle two bitmask words.
+template <class PaletteAt>
+[[gnu::always_inline]] inline void visit_run(RowWork &work, int x, uint32_t bits, bool select,
+                                             const LayerPlan &plan, PaletteAt &&palette_at) {
+    const unsigned word = unsigned(x) >> 5, shift = unsigned(x) & 31;
+    if (bits << shift) visit_bits(work, word, bits << shift, select, plan, palette_at);
+    if (shift > 16 && bits >> (32 - shift))
+        visit_bits(work, word + 1, bits >> (32 - shift), select, plan, palette_at);
 }
 
 // Calls body(word, window) for every 32-column word of [left, right); `window` selects the range's
@@ -195,19 +275,21 @@ template <class Body>
     return std::min(right, int(w * 32 + unsigned(__builtin_ctz(bits))));
 }
 
-ColumnRanges column_ranges(const RowWork &work, const SceneLayer &layer) {
+// `layer`'s visible column ranges of a row presented between the scanout columns [left_edge,
+// right_edge), in picture columns.
+ColumnRanges column_ranges(const SceneRow &row, const SceneLayer &layer, int left_edge,
+                           int right_edge) {
     ColumnRanges result;
     if (!layer.clip_enabled) {
         result.count = 1;
-        result.range[0] = {0, int(work.width)};
+        result.range[0] = {0, right_edge - left_edge};
         return result;
     }
-    const ClipRanges clips =
-        clip_ranges(work.row, layer, int16_t(work.left_edge), int16_t(work.right_edge));
+    const ClipRanges clips = clip_ranges(row, layer, int16_t(left_edge), int16_t(right_edge));
     result.count = clips.count;
     for (unsigned r = 0; r < clips.count; ++r)
-        result.range[r] = {std::max(work.left_edge, int(clips.ranges[r].left)) - work.left_edge,
-                           std::min(work.right_edge, int(clips.ranges[r].right)) - work.left_edge};
+        result.range[r] = {std::max(left_edge, int(clips.ranges[r].left)) - left_edge,
+                           std::min(right_edge, int(clips.ranges[r].right)) - left_edge};
     return result;
 }
 
@@ -276,6 +358,8 @@ struct PlayfieldCell {
     uint16_t palette;         // palette base of the cell: code * 16 plus the row's palette add
     uint8_t pen_mask, flip_x; // flip_x is 15 or 0
     bool select;
+    uint32_t tile;            // the tile and the pixel row of it the cell shows
+    uint8_t tile_y;
 };
 
 [[gnu::always_inline]] inline PlayfieldCell decode_cell(uint32_t word, unsigned texel_y,
@@ -287,7 +371,8 @@ struct PlayfieldCell {
     return {tile_pixels.data() + size_t(tile) * 256 + size_t(tile_y) * 16,
             uint16_t((attributes & 0x1ff) * 16 + palette_add),
             uint8_t((((attributes >> 10) & 3 & ~attributes) << 4) | 15),
-            uint8_t((attributes & 0x4000) ? 15 : 0), (attributes & 0x200) != 0};
+            uint8_t((attributes & 0x4000) ? 15 : 0), (attributes & 0x200) != 0, tile,
+            uint8_t(tile_y)};
 }
 
 // A zoomed playfield row (x_step != 256) samples one source texel per output column.
@@ -386,6 +471,7 @@ struct PlayfieldCell {
     const auto cells =
         work.job.scene.tiles.cells(GameTiles::physical_map(sub_index(id), pf.alt_map));
     const auto tile_pixels = work.job.scene.tile_pixels;
+    const TileRows *tile_rows = work.job.tile_rows.data();
     const uint32_t tile_count = uint32_t(tile_pixels.size() / 256);
     constexpr unsigned MAP_WIDTH = GameTiles::MAP_WIDTH_PX;
     const unsigned screen_flip = work.flipped ? MAP_WIDTH - 1 : 0;
@@ -416,6 +502,11 @@ struct PlayfieldCell {
             }
             const PlayfieldCell cell = decode_cell(map_row[wrapped >> 4], texel_y, tile_pixels,
                                                    tile_count, pf.palette_add);
+            if (!tile_rows[cell.tile].visible(cell.tile_y, cell.pen_mask)) {
+                // Under the cell's pen mask this tile row has no pen to draw.
+                x += int(run);
+                continue;
+            }
             const uint32_t *palette = work.lut + (cell.palette & 8191);
             // Column i of the run shows texel (texel -/+ i) ^ flip_x of the row, so the row is
             // mirrored when exactly one of the screen flip and the cell flip applies.
@@ -449,11 +540,11 @@ struct PlayfieldCell {
                     clear_columns(work.unresolved.data(), x, fast);
                     rest &= ~fast;
                 }
-                for (; rest; rest &= rest - 1) {
-                    const unsigned i = unsigned(__builtin_ctz(rest));
-                    const unsigned pen = source[int(i) * step] & cell.pen_mask;
-                    visit(work, x + int(i), uint16_t(cell.palette + pen), cell.select, plan);
-                }
+                if (rest)
+                    visit_run(work, x, rest, cell.select, plan, [&](unsigned column) {
+                        const unsigned pen = source[(int(column) - x) * step] & cell.pen_mask;
+                        return uint16_t(cell.palette + pen);
+                    });
             }
             x += int(run);
         }
@@ -488,32 +579,42 @@ struct PlayfieldCell {
             const uint16_t word = map[row_base + cell];
             const unsigned flip_y = (word & 0x8000) ? 7u : 0u;
             const unsigned glyph_y = texel_y ^ flip_y;
-            const uint32_t open =
-                (glyph_rows[word & 0xff] >> glyph_y & 1) ? open_columns(work, x, len) : 0;
+            // The columns of the run no layer has settled, and those open to this layer.
+            const bool visible = glyph_rows[word & 0xff] >> glyph_y & 1;
+            const uint32_t unresolved =
+                visible ? extract_columns(work.unresolved.data(), x, len) : 0;
+            const uint32_t open = work.any_pending && visible
+                                      ? unresolved | extract_columns(work.pending.data(), x, len)
+                                      : unresolved;
             if (open) {
-                const unsigned flip_x = (word & 0x0100) ? 7u : 0u;
-                const uint8_t *glyph = glyphs + size_t(word & 0xff) * 32 + size_t(glyph_y * 4);
-                // The row's eight 4-bit texels as one word: texel t is nibble t.
-                const uint32_t texels = uint32_t(glyph[0]) << 24 | uint32_t(glyph[1]) << 16 |
-                                        uint32_t(glyph[2]) << 8 | glyph[3];
-                const uint16_t palette_base = uint16_t(((word >> 9) & 0x3f) * 16);
-                const uint32_t direct =
-                    resolves ? open & extract_columns(work.unresolved.data(), x, len) : 0;
-                uint32_t settled = 0;
-                for (uint32_t bits = open; bits; bits &= bits - 1) {
-                    const unsigned i = unsigned(__builtin_ctz(bits));
-                    const unsigned column = work.flipped ? 7 - (phase + i) : phase + i;
-                    const unsigned pen = (texels >> (((column ^ flip_x)) * 4)) & 0x0f;
-                    if (!pen) continue;
-                    if (direct >> i & 1) {
-                        work.out[x + int(i)] = work.lut[palette_base + pen];
-                        settled |= 1u << i;
-                    } else {
-                        visit(work, x + int(i), uint16_t(palette_base + pen), layer.blend_select,
-                              plan);
+                // Cell column s (0 = left on screen) shows texel s ^ 7 when the cell is mirrored,
+                // by the frame flip or the cell's own flip but not both, else texel s.
+                const bool mirrored = work.flipped != ((word & 0x0100) != 0);
+                const uint32_t pens = glyph_row_pens(
+                    glyphs + size_t(word & 0xff) * 32 + size_t(glyph_y * 4), mirrored);
+                // The open columns of the run that have a pen to draw, as run bits.
+                const uint32_t live = open & (nonzero_nibbles(pens) >> phase);
+                const unsigned palette_base = ((word >> 9) & 0x3f) * 16;
+                const uint32_t *palette = work.lut + palette_base;
+                const uint32_t direct = resolves ? live & unresolved : 0;
+                const unsigned shift = phase * 4;
+                if (direct == 0xffu) {
+                    // A whole cell of unresolved opaque columns: eight stores, no per-column test.
+                    uint32_t *pixel = work.out + x;
+                    for (unsigned i = 0; i < 8; ++i) pixel[i] = palette[pens >> (i * 4) & 0x0f];
+                } else {
+                    for (uint32_t bits = direct; bits; bits &= bits - 1) {
+                        const unsigned i = unsigned(__builtin_ctz(bits));
+                        work.out[x + int(i)] = palette[pens >> (shift + i * 4) & 0x0f];
                     }
                 }
-                clear_columns(work.unresolved.data(), x, settled);
+                if (direct) clear_columns(work.unresolved.data(), x, direct);
+                if (live & ~direct)
+                    visit_run(work, x, live & ~direct, layer.blend_select, plan,
+                              [&](unsigned column) {
+                                  return uint16_t(palette_base +
+                                                  (pens >> (shift + (column - x) * 4) & 0x0f));
+                              });
             }
             x += int(len);
         }
@@ -548,39 +649,29 @@ struct PlayfieldCell {
                                 } else {
                                     pending |= direct;
                                 }
-                                for (; pending; pending &= pending - 1) {
-                                    const unsigned x = w * 32 + unsigned(__builtin_ctz(pending));
-                                    visit(work, int(x), plane[x], layer.blend_select, plan);
-                                }
+                                if (pending)
+                                    visit_bits(work, w, pending, layer.blend_select, plan,
+                                               [&](unsigned x) { return plane[x]; });
                             });
 }
 
-// Resolve a blended pixel to the canonical 0xAARRGGBB word: rgb() of mix.hpp over the colours its
-// replayed mix() picked, with the red and blue channels blended in one multiply. A channel is at
-// most 255 and the two weights add up to at most 16, so a sum of at most 4080 stays inside its
-// 16-bit lane.
-template <bool Palette15>
-[[gnu::always_inline]] inline uint32_t
-resolve_blend(const BlendResult &result, const BlendSamples &sample, uint16_t background,
-              std::span<const uint32_t> palette) {
-    const auto fetch = [&](uint16_t from) {
-        const uint16_t index = from == FROM_BACKGROUND ? background
-                               : from == FROM_ZERO     ? uint16_t(0)
-                                                       : sample.index[from - 1u];
-        const uint32_t color = palette[index & 8191];
-        return Palette15 ? color15(color) : color;
-    };
-    if (result.source_weight == 8 && result.destination_weight == 0)
-        return 0xff000000u | fetch(result.source);
-    if (result.source_weight == 0 && result.destination_weight == 8)
-        return 0xff000000u | fetch(result.destination);
-    const uint32_t source = fetch(result.source), destination = fetch(result.destination);
-    const uint32_t blue_red = ((source & 0x00ff00ffu) * result.source_weight +
-                               (destination & 0x00ff00ffu) * result.destination_weight) >>
+constexpr uint32_t from_pixel_format(uint32_t pixel, PixelFormat format) {
+    return format == PixelFormat::Rgba8888 ? (pixel >> 8) | 0xff000000u : pixel;
+}
+
+// The weighted blend of two palette entries, as rgb() of mix.hpp computes it, with the red and blue
+// channels blended in one multiply. A channel is at most 255 and the two weights add up to at most
+// 16, so a sum of at most 4080 stays inside its 16-bit lane. Both colours and the result are in
+// ARGB order, alpha opaque.
+[[gnu::always_inline]] inline uint32_t blend_argb(uint32_t source, uint32_t destination,
+                                                  unsigned source_weight,
+                                                  unsigned destination_weight) {
+    const uint32_t blue_red = ((source & 0x00ff00ffu) * source_weight +
+                               (destination & 0x00ff00ffu) * destination_weight) >>
                                   3 &
                               0x01ff01ffu;
-    const uint32_t green = (((source >> 8) & 0xffu) * result.source_weight +
-                            ((destination >> 8) & 0xffu) * result.destination_weight) >>
+    const uint32_t green = (((source >> 8) & 0xffu) * source_weight +
+                            ((destination >> 8) & 0xffu) * destination_weight) >>
                            3;
     // Clamp each lane to 255: a lane at 256 or more sets bit 8.
     const uint32_t over = (blue_red >> 8) & 0x00010001u;
@@ -588,8 +679,50 @@ resolve_blend(const BlendResult &result, const BlendSamples &sample, uint16_t ba
            std::min<uint32_t>(green, 255u) << 8;
 }
 
-constexpr uint32_t from_pixel_format(uint32_t pixel, PixelFormat format) {
-    return format == PixelFormat::Rgba8888 ? (pixel >> 8) | 0xff000000u : pixel;
+// Resolve the pending (blended) pixels of a row: rgb() of mix.hpp over the colours the replayed
+// mix() of each pixel's samples picked, read from the row's palette table so a 15-bit row needs no
+// conversion. A run of pixels with the same samples shares one result. Returns the pixel count.
+unsigned resolve_pending(RowWork &work, uint32_t *out) {
+    // The table words are in output byte order; the blend works on ARGB words, which for the
+    // Rgba8888 order are one right rotation away (the opaque low byte drops out).
+    const bool rgba = work.job.format == PixelFormat::Rgba8888;
+    const unsigned rotate = rgba ? 8 : 0;
+    const uint32_t low = rgba ? 0xffu : 0;
+    BlendResult result{};
+    uint32_t seen = 0; // no pixel has seen no sample
+    unsigned source = UINT_MAX, destination = UINT_MAX; // the palette entries of `color`
+    uint32_t color = 0;
+    unsigned count = 0;
+    for (unsigned w = 0; w < work.words; ++w)
+        for (uint32_t mask = work.pending[w]; mask; mask &= mask - 1, ++count) {
+            const int x = int(w * 32 + unsigned(__builtin_ctz(mask)));
+            const BlendSamples &sample = (*work.samples)[x];
+            if (sample.seen != seen) {
+                seen = sample.seen;
+                result = work.blend_result(seen);
+                source = destination = UINT_MAX;
+            }
+            const unsigned source_index = sample.index[result.source] & 8191u;
+            const unsigned destination_index = sample.index[result.destination] & 8191u;
+            if (result.source_weight == 8 && result.destination_weight == 0) {
+                out[x] = work.lut[source_index];
+                continue;
+            }
+            if (result.source_weight == 0 && result.destination_weight == 8) {
+                out[x] = work.lut[destination_index];
+                continue;
+            }
+            if (source_index != source || destination_index != destination) {
+                source = source_index;
+                destination = destination_index;
+                color = (blend_argb(work.lut[source] >> rotate, work.lut[destination] >> rotate,
+                                    result.source_weight, result.destination_weight)
+                         << rotate) |
+                        low;
+            }
+            out[x] = color;
+        }
+    return count;
 }
 
 // Zero the texels of plane row `plane_row` (`stride` texels, picture column 0 at texel `left`) that
@@ -609,23 +742,52 @@ void clear_uncovered_plane_row(const IndexedComposeJob &job, unsigned plane_row,
     }
 }
 
-bool row_is_class_a(const SceneRow &row, const std::array<bool, LAYER_COUNT> &active) {
-    // The first visible sample of a mode 0/3 layer is final when every active layer outranks the
-    // cleared destination and equal priorities cannot reintroduce a different blend.
-    std::array<uint8_t, 16> mode{};
-    mode.fill(0xff);
-    for (unsigned i = 0; i < LAYER_COUNT; ++i) {
-        if (!active[i]) continue;
-        const auto &layer = row.layer(LayerId{uint8_t(i)});
-        if (!layer.priority || layer.priority >= mode.size()) return false;
-        uint8_t &slot = mode[layer.priority];
-        if (slot == 0xff) slot = layer.blend_mode;
-        else if (slot != layer.blend_mode) return false;
-    }
+// Whether `setup` was built from this line state.
+bool setup_matches(const RowSetup &setup, const SceneRow &row, unsigned active) {
+    if (!setup.valid || setup.active != active || setup.clips != row.clips) return false;
+    for (unsigned i = 0; i < LAYER_COUNT; ++i)
+        if (setup.layers[i] != row.layer(LayerId{uint8_t(i)})) return false;
     return true;
 }
 
-void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratch) {
+// Build `setup` for a row presented between the scanout columns [left_edge, right_edge).
+//
+// A layer's first visible sample settles a pixel when the layer blends in mode 0 or 3 with weights
+// that sum to eight (LayerPlan), and nothing later in the composition order can change the pixel
+// afterwards. mix() lets a later layer change a pixel that a mode 0/3 layer sourced only when the
+// layer has the same priority and a different blend mode: a lower priority neither outranks the
+// source nor reaches the destination priority, and the order never puts a higher one later. A layer
+// of priority 0 never becomes the source of anything. Every other pixel stays pending and is
+// resolved by replaying mix(), which holds for any priorities and modes.
+void build_setup(RowSetup &setup, const SceneRow &row, unsigned active, int left_edge,
+                 int right_edge) {
+    for (unsigned i = 0; i < LAYER_COUNT; ++i) setup.layers[i] = row.layer(LayerId{uint8_t(i)});
+    setup.clips = row.clips;
+    setup.active = active;
+    setup.order_count = 0;
+    setup.settle = 0;
+    setup.canonical = false;
+    for (LayerId id : scene_order(row)) {
+        if (!(active >> unsigned(id) & 1)) continue;
+        setup.order[setup.order_count++] = id;
+        setup.canonical |= row.layer(id).priority >= 16;
+        setup.ranges[unsigned(id)] = column_ranges(row, row.layer(id), left_edge, right_edge);
+    }
+    for (unsigned n = 0; n < setup.order_count; ++n) {
+        const SceneLayer &layer = row.layer(setup.order[n]);
+        bool tie = false;
+        for (unsigned m = n + 1; m < setup.order_count; ++m) {
+            const SceneLayer &later = row.layer(setup.order[m]);
+            if (later.priority != layer.priority) break;
+            tie |= later.blend_mode != layer.blend_mode;
+        }
+        if (layer.priority && !tie) setup.settle |= 1u << unsigned(setup.order[n]);
+    }
+    setup.valid = true;
+}
+
+void compose_row(const IndexedComposeJob &job, unsigned y, RowSetup &setup,
+                 uint32_t *argb_scratch) {
     const auto &scene = job.scene;
     const auto &row = scene.rows[y & 255];
     const unsigned width = job.geometry.width();
@@ -636,9 +798,9 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
     const unsigned plane_row = expanded ? picture_row : y;
     // A sprite layer with no plane value on this row cannot change any pixel of it, so it is not
     // active here (the canonical kernel would sample and skip all of it). Leaving it out also keeps
-    // its line-RAM priority out of the class-A test.
+    // its line-RAM priority out of the ties that stop a layer from settling pixels.
     const unsigned sprite_layers = job.coverage.layers[plane_row];
-    std::array<bool, LAYER_COUNT> active{};
+    unsigned active = 0;
     for (unsigned i = 0; i < LAYER_COUNT; ++i) {
         const LayerId id{uint8_t(i)};
         const int text_y = flipped ? (511 - row.text_y) : row.text_y;
@@ -646,10 +808,14 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
             (kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row) ||
             (id == LayerId::Text && !scene.text.row_used(unsigned(text_y))) ||
             (kind(id) == LayerKind::Sprite && !(sprite_layers & (1u << sub_index(id))));
-        active[i] = row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 && !empty;
+        if (row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 && !empty)
+            active |= 1u << i;
     }
-    if (!row_is_class_a(row, active)) {
-        // Not provably first-visible-layer-wins: the canonical row kernel decides every pixel. It
+    const int left_edge = 46 - int(job.geometry.border);
+    const int right_edge = 366 + int(job.geometry.border);
+    if (!setup_matches(setup, row, active)) build_setup(setup, row, active, left_edge, right_edge);
+    if (setup.canonical) {
+        // A priority the hardware cannot encode: the canonical row kernel decides every pixel. It
         // reads the plane as a whole, so first zero the texels the raster did not write.
         clear_uncovered_plane_row(job, plane_row, expanded ? width : 432, expanded ? 0 : 46);
         SceneTarget target{job.plane, {argb_scratch, width}, job.geometry};
@@ -664,13 +830,13 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
     }
 
     std::array<BlendSamples, MAX_WIDTH> samples;
-    RowWork work{job, row};
+    RowWork work{job, row, setup};
     work.width = width;
     work.expanded = expanded;
     work.plane_stride = expanded ? width : 432;
     work.plane_row = plane_row;
-    work.left_edge = 46 - int(job.geometry.border);
-    work.right_edge = 366 + int(job.geometry.border);
+    work.left_edge = left_edge;
+    work.right_edge = right_edge;
     work.border = int(job.geometry.border);
     work.flipped = flipped;
     work.out = out;
@@ -678,12 +844,10 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
     work.samples = &samples;
     work.reset();
 
-    for (LayerId id : scene_order(row))
-        if (active[unsigned(id)]) work.order[work.order_count++] = id;
-    for (unsigned n = 0; n < work.order_count; ++n) {
-        const LayerId id = work.order[n];
+    for (unsigned n = 0; n < setup.order_count; ++n) {
+        const LayerId id = setup.order[n];
         const auto &layer = row.layer(id);
-        const ColumnRanges ranges = column_ranges(work, layer);
+        const ColumnRanges &ranges = setup.ranges[unsigned(id)];
         if (layer.mosaic && row.mosaic_period > 1) {
             compose_mosaic_layer(work, id, layer, ranges);
             continue;
@@ -712,18 +876,7 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
         for (; mask; mask &= mask - 1) out[w * 32 + unsigned(__builtin_ctz(mask))] = background;
     }
     if (work.any_pending) {
-        uint32_t special = 0;
-        for (unsigned w = 0; w < work.words; ++w)
-            for (uint32_t mask = work.pending[w]; mask; mask &= mask - 1, ++special) {
-                const int x = int(w * 32 + unsigned(__builtin_ctz(mask)));
-                const BlendSamples &sample = samples[x];
-                const BlendResult result = work.blend_result(sample.seen);
-                out[x] = to_pixel_format(
-                    row.palette_15bit
-                        ? resolve_blend<true>(result, sample, row.background, scene.colors)
-                        : resolve_blend<false>(result, sample, row.background, scene.colors),
-                    job.format);
-            }
+        const unsigned special = resolve_pending(work, out);
         if (job.stats && special)
             job.stats->special_px.fetch_add(special, std::memory_order_relaxed);
     }
@@ -745,14 +898,37 @@ void compose_row(const IndexedComposeJob &job, unsigned y, uint32_t *argb_scratc
 } // namespace
 
 void IndexedPalette::build(std::span<const uint32_t> palette, PixelFormat format, bool need_15bit) {
-    for (unsigned i = 0; i < SIZE; ++i) {
-        colors[i] = to_pixel_format(0xff000000u | (palette[i] & 0xffffffu), format);
-        if (need_15bit) colors15[i] = to_pixel_format(0xff000000u | color15(palette[i]), format);
+    // A block whose source colours differ from m_source is converted again, and so is every block
+    // when the format changes. The 15-bit table is only kept current while a frame wants it; when
+    // it was not, all of its blocks are converted.
+    const bool rebuild = !m_built || format != m_format;
+    if (rebuild) m_built_15bit = false;
+    const bool refresh_15bit = need_15bit && !m_built_15bit;
+    bool any_changed = false, first_changed = false;
+    for (unsigned first = 0; first < SIZE; first += BLOCK) {
+        const bool changed = rebuild || std::memcmp(m_source.data() + first, palette.data() + first,
+                                                    BLOCK * sizeof(uint32_t)) != 0;
+        if (!changed && !refresh_15bit) continue;
+        if (changed)
+            for (unsigned i = first; i < first + BLOCK; ++i)
+                colors[i] = to_pixel_format(0xff000000u | (palette[i] & 0xffffffu), format);
+        if (need_15bit)
+            for (unsigned i = first; i < first + BLOCK; ++i)
+                colors15[i] = to_pixel_format(0xff000000u | color15(palette[i]), format);
+        if (changed) {
+            std::copy_n(palette.begin() + first, BLOCK, m_source.begin() + first);
+            any_changed = true;
+            first_changed |= first == 0;
+        }
     }
     // The guard entries repeat the table's first ones: an index may run past the end by up to a
     // pen (or a sprite's palette offset) before it wraps.
-    std::copy_n(colors.begin(), GUARD, colors.begin() + SIZE);
-    if (need_15bit) std::copy_n(colors15.begin(), GUARD, colors15.begin() + SIZE);
+    if (first_changed) std::copy_n(colors.begin(), GUARD, colors.begin() + SIZE);
+    if (need_15bit && (first_changed || refresh_15bit))
+        std::copy_n(colors15.begin(), GUARD, colors15.begin() + SIZE);
+    m_format = format;
+    m_built = true;
+    m_built_15bit = need_15bit || (m_built_15bit && !any_changed);
     uses_15bit = need_15bit;
 }
 
@@ -765,25 +941,60 @@ void IndexedScratch::configure(GameVideoOptions geometry) {
     if (coverage_bits.size() != bits) coverage_bits.assign(bits, 0);
 }
 
-bool indexed_frame_uses_15bit(const FrameScene &scene) noexcept {
+void TileRowTable::ensure(std::span<const uint8_t> tile_pixels) {
+    if (tile_pixels.data() == m_source && tile_pixels.size() == m_size) return;
+    const size_t tile_count = tile_pixels.size() / 256;
+    m_tiles.assign(tile_count, TileRows{});
+    for (size_t tile = 0; tile < tile_count; ++tile) {
+        uint32_t low = 0, plane4 = 0, plane5 = 0;
+        for (unsigned y = 0; y < 16; ++y) {
+            // A tile row is 16 pen bytes, read as words: the OR of its words holds every pen bit.
+            const uint8_t *row = tile_pixels.data() + tile * 256 + y * 16;
+            uint32_t words[4];
+            std::memcpy(words, row, sizeof words);
+            const uint32_t any = words[0] | words[1] | words[2] | words[3];
+            low |= uint32_t((any & 0x0f0f0f0fu) != 0) << y;
+            plane4 |= uint32_t((any & 0x10101010u) != 0) << y;
+            plane5 |= uint32_t((any & 0x20202020u) != 0) << y;
+        }
+        m_tiles[tile] = {uint16_t(low), uint16_t(plane4), uint16_t(plane5)};
+    }
+    m_source = tile_pixels.data();
+    m_size = tile_pixels.size();
+}
+
+namespace {
+// True when any presented row of `scene` selects 15-bit palette words.
+bool uses_15bit_palette(const FrameScene &scene) noexcept {
     for (unsigned y = geometry::FIRST_LINE; y < geometry::END_LINE; ++y)
         if (scene.rows[y & 255].palette_15bit) return true;
     return false;
 }
 
-void indexed_glyph_rows(const FrameScene &scene, std::array<uint8_t, 256> &rows) noexcept {
+// Which glyph rows of `scene`'s text are not blank: bit y of entry g is set when row y of glyph g
+// has a nonzero texel.
+void glyph_row_masks(const FrameScene &scene, std::array<uint8_t, 256> &rows) noexcept {
     const auto glyphs = scene.text.glyphs();
     for (unsigned glyph = 0; glyph < rows.size(); ++glyph) {
         const uint8_t *data = glyphs.data() + size_t(glyph) * 32;
         uint8_t used = 0;
         for (unsigned y = 0; y < 8; ++y) {
             // A glyph row is four bytes: one nonzero byte makes it used.
-            used |=
-                uint8_t((data[y * 4] | data[y * 4 + 1] | data[y * 4 + 2] | data[y * 4 + 3]) != 0)
-                << y;
+            uint32_t word;
+            std::memcpy(&word, data + y * 4, sizeof word);
+            used |= uint8_t(word != 0) << y;
         }
         rows[glyph] = used;
     }
+}
+} // namespace
+
+bool IndexedScratch::prepare(const FrameScene &scene, PixelFormat format) {
+    const bool need_15bit = uses_15bit_palette(scene);
+    palette.build(scene.colors, format, need_15bit);
+    glyph_row_masks(scene, glyph_rows);
+    tile_rows.ensure(scene.tile_pixels);
+    return need_15bit;
 }
 
 void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept {
@@ -796,7 +1007,10 @@ void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept {
     raster_sprite_chunk(*job.bins, job.sprites, chunk, job.pen_mask, job.sprite_tiles, job.plane,
                         SpriteRasterOptions{job.geometry, false, false}, job.coverage);
     std::array<uint32_t, MAX_WIDTH> argb_scratch;
+    // The rows of a chunk share what they can of their line state.
+    RowSetup setup;
+    setup.valid = false;
     for (unsigned row = first; row < last; ++row)
-        compose_row(job, geometry::FIRST_LINE + row, argb_scratch.data());
+        compose_row(job, geometry::FIRST_LINE + row, setup, argb_scratch.data());
 }
 } // namespace f3rt

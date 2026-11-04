@@ -32,4 +32,13 @@ private:
 // MAX_COMPOSE_HELPERS.
 inline constexpr unsigned MAX_COMPOSE_HELPERS = 3;
 unsigned compose_helper_count();
+
+// The work a compose helper outranks on its core, and so delays for as long as one of its chunks
+// runs. The row workers keep such a helper off its core when the delayed thread is due.
+enum class HelperContention : uint8_t {
+    None,      // nothing time-critical shares the core
+    Synth,     // HLE synthesis, which must finish its block before the next frame's audio poll
+    Emulation, // the emulation thread, which must start its next frame on the frame tick
+};
+HelperContention compose_helper_contention(unsigned index);
 } // namespace f3rt

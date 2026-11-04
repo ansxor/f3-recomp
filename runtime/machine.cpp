@@ -24,22 +24,28 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
     if constexpr (!Write) {
         if (a <= m.roms.main.size() - Width) return m.roms.main.data() + a;
     }
+    // Generated code stores to work RAM inline, so a store that reaches the bus is mostly video memory.
+    const auto video = [&]() -> uint8_t * {
+        if (a - GRAPHICS_BASE > m.graphics.size() - Width) return nullptr;
+        // The dump-mode writer table records one pc per byte store, so sprite-RAM stores take the byte path
+        // then; SpriteUnits sees direct stores through note_write.
+        if constexpr (Write)
+            if (m.sprite_writers && a - GRAPHICS_BASE < SPRITE_RAM_SIZE) return nullptr;
+        // Discovery logging must see every graphics store byte by byte (PC attribution).
+        if constexpr (Write)
+            if (m.discovery) return nullptr;
+        return m.graphics.data() + (a - GRAPHICS_BASE);
+    };
+    if constexpr (Write) {
+        if (a - GRAPHICS_BASE < GRAPHICS_END - GRAPHICS_BASE) return video();
+    }
     if (a - RAM_BASE < RAM_END - RAM_BASE) {
         const uint32_t offset = a & RAM_MIRROR_MASK;
         if (offset <= m.ram.size() - Width) return m.ram.data() + offset;
     }
     if (a - PALETTE_BASE <= m.palette.size() - Width) return m.palette.data() + (a - PALETTE_BASE);
-    if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
-        // Sprite-RAM stores must reach SpriteUnits/sprite_writers (entry attribution), so they take the byte path.
-        if constexpr (Write)
-            if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE)
-                return nullptr;
-        // Discovery logging must see every graphics store byte by byte (PC attribution).
-        if constexpr (Write)
-            if (m.discovery) return nullptr;
-        return m.graphics.data() + (a - GRAPHICS_BASE);
-    }
     if constexpr (!Write) {
+        if (uint8_t *p = video()) return p;
         if (a - SHARED_BASE <= m.shared.size() - Width) return m.shared.data() + (a - SHARED_BASE);
     }
     return nullptr;
@@ -260,6 +266,12 @@ void Machine::write8(uint32_t a, uint8_t v) {
     // MAME records this timer control but does not assert timer IRQ5.
 }
 void Machine::write16(uint32_t a, uint16_t v) {
+    if (auto *p = direct_bytes<2, true>(*this, a)) {
+        p[0] = uint8_t(v >> 8);
+        p[1] = uint8_t(v);
+        if (sprite_units) sprite_units->note_write(a, 2);
+        return;
+    }
     if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
         uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
         bool low16 = (a & 2) != 0;
@@ -269,29 +281,23 @@ void Machine::write16(uint32_t a, uint16_t v) {
         audio->set_sound_bank(idx);
         return;
     }
-    if (auto *p = direct_bytes<2, true>(*this, a)) {
-        p[0] = uint8_t(v >> 8);
-        p[1] = uint8_t(v);
-        if (sprite_units) sprite_units->note_write(a, 2);
-        return;
-    }
     write8(a, uint8_t(v >> 8));
     write8(a + 1, uint8_t(v));
 }
 void Machine::write32(uint32_t a, uint32_t v) {
-    if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
-        uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
-        uint32_t idx = ((offset << 1) & 0x1e) + 1;
-        if (idx >= 8) idx -= 8;
-        audio->set_sound_bank(idx);
-        return;
-    }
     if (auto *p = direct_bytes<4, true>(*this, a)) {
         p[0] = uint8_t(v >> 24);
         p[1] = uint8_t(v >> 16);
         p[2] = uint8_t(v >> 8);
         p[3] = uint8_t(v);
         if (sprite_units) sprite_units->note_write(a, 4);
+        return;
+    }
+    if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
+        uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
+        uint32_t idx = ((offset << 1) & 0x1e) + 1;
+        if (idx >= 8) idx -= 8;
+        audio->set_sound_bank(idx);
         return;
     }
     write16(a, uint16_t(v >> 16));

@@ -1,6 +1,7 @@
 #pragma once
 #include "f3rt/game_video.hpp"
 #include "f3rt/memory_map.hpp"
+#include "renderer/game/ram_shadow.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
@@ -78,8 +79,10 @@ public:
 
     void reset();
     // Copy the raw PF layers from video RAM at VBSTART. Shared; defined in
-    // runtime/renderer/game/tiles.cpp.
+    // runtime/renderer/game/tiles.cpp. A layer whose RAM is unchanged since the last decode is kept.
     void decode(const VideoRam &vram);
+    // Tag of the current cell content (see fresh_content_version); a copy carries it along.
+    uint64_t version() const { return m_version; }
     // Physical map count: 4, or 6 with alternate PF2/PF3 maps.
     // In standard mode (!extend), PF2/PF3 can select alternate maps (maps 4/5) via line RAM bit 0x200.
     static constexpr unsigned MAP_COUNT =
@@ -108,7 +111,11 @@ public:
     }
     // `map` is a physical map index (0..MAP_COUNT).
     std::span<const uint32_t, CELLS_PER_MAP> cells(unsigned map) const { return m_maps[map]; }
-    std::span<uint32_t, CELLS_PER_MAP> cells(unsigned map) { return m_maps[map]; }
+    // Mutable access is for tools that edit a snapshot: it drops the decode cache and the version tag.
+    std::span<uint32_t, CELLS_PER_MAP> cells(unsigned map) {
+        touch();
+        return m_maps[map];
+    }
     ScenePixel playfield_pixel(unsigned layer, int x, int y, bool flipped,
                                std::span<const uint8_t> tiles, bool alt = false) const {
         return row_sampler(layer, y, flipped, tiles, alt).pixel(x);
@@ -119,6 +126,12 @@ private:
     // Raw 4-byte cell per 16x16 tile: attributes in the high word, code low.
     std::array<std::array<uint32_t, CELLS_PER_MAP>, MAP_COUNT> m_maps{};
     std::array<uint32_t, MAP_COUNT> m_row_used{}; // bit r: map row r has a nonzero tile code
+    std::array<RamShadow<CELLS_PER_MAP * 4>, MAP_COUNT> m_shadow; // raw RAM behind each decoded map
+    uint64_t m_version = fresh_content_version();
+    void touch() {
+        for (auto &shadow : m_shadow) shadow.invalidate();
+        m_version = fresh_content_version();
+    }
 };
 static_assert(SceneSource<GameTiles>);
 

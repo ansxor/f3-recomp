@@ -11,6 +11,7 @@
 #include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "sprites/units.hpp"
+#include "state_io.hpp"
 #include "runner.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
@@ -18,9 +19,11 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <memory>
 #include <random>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -584,6 +587,79 @@ TEST(Video, GameTextVramDecode) {
     EXPECT_TRUE(flipped.palette == 2 * 16 + 9 && flipped.flags == 0x10)
         << "Text flip bits and glyph nibble order decode from raw words";
 }
+
+// Components decoded at every VBSTART skip the decode of a region the game left untouched. Persistent
+// components must match freshly decoded ones after any mix of edits and no-op rewrites, and their
+// content tags must advance exactly when the decoded content changes.
+TEST(GameVideo, UnchangedRegionDecodeMatchesFreshDecode) {
+    std::vector<uint8_t> graphics(0x40000, 0);
+    std::array<uint8_t, 0x20> control{};
+    const f3rt::VideoRam vram{graphics, control, 0};
+    std::mt19937 rng(11);
+    const auto in = [&](uint32_t first, uint32_t count) { return first + rng() % count; };
+    auto tiles = std::make_unique<f3rt::GameTiles>();
+    auto text = std::make_unique<f3rt::GameText>();
+    auto lines = std::make_unique<f3rt::GameLines>();
+    const auto lines_state = [](const f3rt::GameLines &decoded) {
+        std::vector<uint8_t> bytes(decoded.state_size());
+        f3rt::StateWriter writer(bytes);
+        decoded.save_state(writer);
+        return bytes;
+    };
+    for (unsigned round = 0; round < 400; ++round) {
+        const unsigned kind = rng() % 8;
+        const uint32_t pf_bytes = f3rt::GameTiles::MAP_COUNT * f3rt::GameTiles::MAP_STRIDE;
+        bool tiles_edit = false, text_edit = false;
+        const auto store = [&](uint32_t at) {
+            const uint8_t before = graphics[at];
+            graphics[at] = uint8_t(rng());
+            return graphics[at] != before;
+        };
+        // Line RAM edits stay on the first scanlines, so latches and the words they select meet often.
+        if (kind == 0)
+            graphics[f3rt::OFFS_LINERAM + in(0, 8) * f3rt::LINERAM_LATCH_STRIDE + in(0, 8) * 2 + 1] =
+                uint8_t(rng());
+        else if (kind == 1)
+            graphics[f3rt::OFFS_LINERAM + f3rt::LINERAM_SECTIONS_OFFSET +
+                     in(0, 8) * f3rt::LINERAM_SECTION_STRIDE +
+                     in(0, 4) * f3rt::LINERAM_SUBSECTION_STRIDE +
+                     (rng() & 1) * f3rt::LINERAM_BANK_OFFSET + in(0, 8) * 2 + in(0, 2)] =
+                uint8_t(rng());
+        else if (kind == 2) tiles_edit = store(in(f3rt::OFFS_PLAYFIELDS, pf_bytes));
+        else if (kind == 3) text_edit = store(in(f3rt::OFFS_TEXTRAM_MAP, 0x2000));
+        else if (kind == 4) text_edit = store(in(f3rt::OFFS_TEXTRAM_GLYPHS, f3rt::TEXTRAM_GLYPH_SIZE));
+        else if (kind == 5) control[rng() % control.size()] = uint8_t(rng());
+        else if (kind == 6) graphics[in(0x21000, 0x3000)] = uint8_t(rng()); // read by no component
+        const bool flipped = rng() & 1;
+        const uint64_t tiles_before = tiles->version(), text_before = text->version();
+        tiles->decode(vram);
+        text->decode(vram);
+        lines->decode(vram);
+        lines->prepare(flipped);
+        EXPECT_EQ(tiles->version() != tiles_before, tiles_edit || round == 0) << "round " << round;
+        EXPECT_EQ(text->version() != text_before, text_edit || round == 0) << "round " << round;
+
+        auto fresh_tiles = std::make_unique<f3rt::GameTiles>();
+        auto fresh_text = std::make_unique<f3rt::GameText>();
+        auto fresh_lines = std::make_unique<f3rt::GameLines>();
+        fresh_tiles->decode(vram);
+        fresh_text->decode(vram);
+        fresh_lines->decode(vram);
+        fresh_lines->prepare(flipped);
+        for (unsigned map = 0; map < f3rt::GameTiles::MAP_COUNT; ++map) {
+            const auto got = std::as_const(*tiles).cells(map), want = std::as_const(*fresh_tiles).cells(map);
+            ASSERT_TRUE(std::equal(got.begin(), got.end(), want.begin())) << "round " << round;
+            for (unsigned row = 0; row < 32; ++row)
+                ASSERT_EQ(tiles->row_used(map, row * 16), fresh_tiles->row_used(map, row * 16));
+        }
+        const auto map = std::as_const(*text).map(), fresh_map = std::as_const(*fresh_text).map();
+        ASSERT_TRUE(std::equal(map.begin(), map.end(), fresh_map.begin())) << "round " << round;
+        const auto glyphs = std::as_const(*text).glyphs(), fresh_glyphs = std::as_const(*fresh_text).glyphs();
+        ASSERT_TRUE(std::equal(glyphs.begin(), glyphs.end(), fresh_glyphs.begin())) << "round " << round;
+        for (unsigned y = 0; y < 512; y += 8) ASSERT_EQ(text->row_used(y), fresh_text->row_used(y));
+        ASSERT_EQ(lines_state(*lines), lines_state(*fresh_lines)) << "round " << round;
+    }
+}
 #endif
 
 #ifdef F3RT_GAME_VIDEO
@@ -742,6 +818,7 @@ std::vector<uint16_t> covered_plane(std::span<const uint16_t> plane, f3rt::GameV
 struct IndexedComparison {
     size_t pixels = 0, mismatches = 0, plane_mismatches = 0;
     size_t rows = 0, fallback_rows = 0; // composed rows, and those the canonical row kernel decided
+    size_t special_px = 0;              // pixels resolved by a real blend
     size_t first_pixel = SIZE_MAX, first_plane = SIZE_MAX;
 };
 
@@ -765,6 +842,7 @@ IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
     result.pixels = pixel_count;
     result.rows = options.height();
     result.fallback_rows = scratch.stats.fallback_rows.load();
+    result.special_px = scratch.stats.special_px.load();
     for (size_t i = 0; i < pixel_count; ++i)
         if (indexed[i] != expected[i]) {
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
@@ -846,10 +924,12 @@ f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
             row.blend[2] = uint8_t(8 - row.blend[0]);
             row.blend[3] = uint8_t(8 - row.blend[1]);
         }
-        // Half the rows give every layer its own priority, so no tie sends the row to the
-        // canonical kernel and the first-visible-layer kernels are what the property checks.
+        // Half the rows give every layer its own priority, so no tie stops a layer from settling
+        // its pixels on first sight and the first-visible-layer kernels are what the property checks.
         std::array<uint8_t, f3rt::LAYER_COUNT> distinct{1, 2, 3, 4, 5, 6, 7, 8, 9};
         const bool distinct_priorities = range(0, 1) != 0;
+        // Priorities the hardware cannot encode (above 15) send a row to the canonical kernel.
+        const unsigned max_priority = range(0, 15) == 0 ? 17 : 15;
         std::shuffle(distinct.begin(), distinct.end(), rng);
         for (unsigned i = 0; i < 4; ++i) {
             row.clips[i].left = int16_t(int(range(0, 400)) - 40);
@@ -858,7 +938,7 @@ f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
         for (unsigned i = 0; i < f3rt::LAYER_COUNT; ++i) {
             auto &layer = row.layer(f3rt::LayerId{uint8_t(i)});
             layer.enabled = range(0, 3) != 0;
-            layer.priority = distinct_priorities ? distinct[i] : uint8_t(range(0, 15));
+            layer.priority = distinct_priorities ? distinct[i] : uint8_t(range(0, max_priority));
             layer.blend_mode = uint8_t(range(0, 3));
             layer.blend_select = range(0, 1) != 0;
             layer.mosaic = range(0, 3) == 0;
@@ -948,16 +1028,135 @@ TEST(GameCompositor, IndexedMatchesReference) {
                     << result.first_plane;
             }
         }
-        // The first-visible-layer shortcut has to cover the real game: rows it cannot prove exact
-        // go to the slow canonical row kernel and may not become the common case.
+        // Land Maker never has a priority the hardware cannot encode, so no row of the real game
+        // takes the canonical row kernel.
         std::printf("indexed compositor %s: rows=%zu fallback_rows=%zu\n",
                     play ? "play" : "attract", rows, fallback_rows);
-        EXPECT_LT(fallback_rows * 100, rows) << (play ? "play" : "attract");
+        EXPECT_EQ(fallback_rows, 0u) << (play ? "play" : "attract");
     }
     std::printf("indexed compositor: frames=%zu mismatches=%zu plane_mismatches=%zu\n", frames,
                 mismatches, plane_mismatches);
     EXPECT_EQ(mismatches, 0u);
     EXPECT_EQ(plane_mismatches, 0u);
+}
+
+namespace {
+// The Land Maker EEPROM the 3DS bench starts from (the init image of a first boot): with it the
+// game boots in 478 frames, which is what the frame numbers of games/landmakrj/n3ds/bench.txt count.
+constexpr std::array<uint8_t, 128> LANDMAKR_INIT_EEPROM{
+    0x54, 0x41, 0x49, 0x54, 0x4f, 0x01, 0x00, 0x07, 0xa2, 0x06, 0xe0, 0x01, 0x11, 0x11, 0x30, 0x20,
+    0x00, 0x00, 0x02, 0x01, 0x88, 0x88, 0x88, 0x88, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x25, 0x1a,
+    0x00, 0x00, 0xc3, 0x50, 0x05, 0x00, 0x54, 0x53, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x9c, 0x40,
+    0x04, 0x00, 0x54, 0x45, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x75, 0x30, 0x03, 0x00, 0x54, 0x4d,
+    0x52, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e, 0x20, 0x02, 0x00, 0x48, 0x41, 0x53, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x27, 0x10, 0x01, 0x00, 0x4e, 0x4f, 0x42, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x85, 0xac};
+
+// Frames of the bench timeline (Machine::frame + 1 before the frame runs) that were the composer's
+// most expensive classes, sampled every `stride` frames from `first` to `last`.
+struct BenchWindow {
+    const char *name;
+    unsigned first, last, stride;
+};
+constexpr std::array<BenchWindow, 6> BENCH_WINDOWS{{
+    {"portrait cross-fade", 1444, 1522, 1},
+    {"attract to tutorial", 4844, 5045, 1},
+    {"map and VS screens", 14001, 14036, 1},
+    {"gameplay priority ties", 15399, 15403, 1},
+    {"gameplay sprite layers", 16993, 17000, 1},
+    {"dense gameplay", 17144, 17150, 1},
+}};
+constexpr unsigned BENCH_FRAMES = 18580, BENCH_BACKGROUND_STRIDE = 37;
+} // namespace
+
+// ROM-gated: the indexed kernel must reproduce the canonical composition on the frames of the 3DS
+// bench timeline (attract, tutorial, menu, character select, a full 1P game), whose worst frames
+// are the cross-fades, the scaled-sprite transitions and the rows where sprite layers share a
+// priority. Every sampled frame is checked at both 3DS geometries, and none may take the canonical
+// row kernel.
+TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
+    const char *rom_env = std::getenv("F3_ROM_DIR");
+#ifdef F3RT_DEFAULT_ROM_DIR
+    if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
+#endif
+    if (!rom_env || !*rom_env)
+        GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed bench timeline check";
+    if (std::string_view(F3RT_DEFAULT_SET) != "landmakrj")
+        GTEST_SKIP() << "The bench timeline is Land Maker's";
+    const auto script_path = std::filesystem::path(__FILE__).parent_path().parent_path()
+                                 .parent_path() / "games" / "landmakrj" / "n3ds" / "bench.txt";
+    std::unique_ptr<f3rt::Machine> machine;
+    try {
+        machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
+                                                      F3RT_DEFAULT_SET, true, 1);
+    } catch (const std::exception &error) {
+        GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
+    }
+    if (!machine->audio->backend_available(f3rt::Audio::Backend::Enhanced))
+        GTEST_SKIP() << "Enhanced audio unavailable";
+    machine->audio->set_backend(f3rt::Audio::Backend::Enhanced);
+    machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+    const auto eeprom_path = std::filesystem::temp_directory_path() / "f3rt-bench-timeline.eeprom";
+    {
+        std::ofstream file(eeprom_path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char *>(LANDMAKR_INIT_EEPROM.data()),
+                   std::streamsize(LANDMAKR_INIT_EEPROM.size()));
+    }
+    machine->load_eeprom(eeprom_path);
+    std::filesystem::remove(eeprom_path);
+    auto input = f3rt::runner::ScriptInputSource::from_file(script_path.string());
+
+    struct Totals {
+        size_t frames = 0, fallback_rows = 0, special_px = 0, mismatches = 0;
+    };
+    std::array<Totals, BENCH_WINDOWS.size() + 1> totals{};
+    f3rt::IndexedScratch scratch;
+    for (unsigned index = 0; index < BENCH_FRAMES; ++index) {
+        input->apply(*machine, index);
+        ASSERT_TRUE(machine->run_frame(true));
+        const unsigned frame = index + 1;
+        size_t slot = BENCH_WINDOWS.size();
+        bool sampled = frame % BENCH_BACKGROUND_STRIDE == 0 && frame >= 479;
+        for (size_t w = 0; w < BENCH_WINDOWS.size(); ++w) {
+            const auto &window = BENCH_WINDOWS[w];
+            if (frame >= window.first && frame <= window.last &&
+                (frame - window.first) % window.stride == 0) {
+                slot = w;
+                sampled = true;
+            }
+        }
+        if (!sampled) continue;
+        const auto &captured = machine->game_video->captured_frame();
+        ASSERT_FALSE(captured.fallback) << "frame " << frame << " must be a native scanout";
+        for (const unsigned border : {0u, 40u}) {
+            const auto result =
+                compare_indexed_frame(captured, machine->video->playfield_tiles(),
+                                      machine->video->sprite_tiles(), border, scratch);
+            Totals &total = totals[slot];
+            ++total.frames;
+            total.fallback_rows += result.fallback_rows;
+            total.special_px += result.special_px;
+            total.mismatches += result.mismatches + result.plane_mismatches;
+            EXPECT_EQ(result.mismatches, 0u)
+                << "frame " << frame << " border " << border << " first pixel "
+                << result.first_pixel;
+            EXPECT_EQ(result.plane_mismatches, 0u)
+                << "frame " << frame << " border " << border << " first plane texel "
+                << result.first_plane;
+        }
+    }
+    for (size_t w = 0; w <= BENCH_WINDOWS.size(); ++w) {
+        const char *name = w < BENCH_WINDOWS.size() ? BENCH_WINDOWS[w].name : "background";
+        std::printf("bench timeline %-24s frames=%zu fallback_rows=%zu special_px=%zu "
+                    "mismatches=%zu\n",
+                    name, totals[w].frames, totals[w].fallback_rows, totals[w].special_px,
+                    totals[w].mismatches);
+        EXPECT_GT(totals[w].frames, 0u) << name;
+        EXPECT_EQ(totals[w].fallback_rows, 0u) << name;
+    }
+    // The cross-fade window is the one that blends: it proves the timeline reached the portraits.
+    EXPECT_GT(totals[0].special_px, 100000u);
 }
 
 // ROM-gated: the native sprite plane is drawn on demand when captured presentation is on. Observed at
@@ -1142,9 +1341,12 @@ TEST(GameCompositor, SpriteRasterMatchesGeneralReference) {
             f3rt::SceneSprite sprite;
             sprite.x = int32_t(int(rng() % (560 * 256)) - 100 * 256) + int32_t(range(0, 255));
             sprite.y = int32_t(int(rng() % (300 * 256)) - 50 * 256) + int32_t(range(0, 255));
-            const bool unscaled = range(0, 9) < 7;
-            sprite.scale_x = unscaled ? 256 : uint16_t(range(200, 330));
-            sprite.scale_y = unscaled ? 256 : uint16_t(range(200, 330));
+            // Mostly unscaled, then horizontally unscaled with any vertical zoom (including the
+            // 16-texel-rows-on-one-output-row squash), then every zoom from a sliver to 12x.
+            const unsigned kind = range(0, 9);
+            sprite.scale_x = kind < 7 ? 256 : uint16_t(range(8, 3000));
+            sprite.scale_y = kind < 5 ? 256 : kind < 7 ? uint16_t(range(1, 700))
+                                                       : uint16_t(range(8, 3000));
             sprite.tile = uint32_t(range(0, 11));
             sprite.palette = uint8_t(rng());
             sprite.flip_x = range(0, 1) != 0;
@@ -1171,11 +1373,11 @@ TEST(GameCompositor, SpriteRasterMatchesGeneralReference) {
     }
 }
 
-// Priority ties across blend modes are what stop the first-visible-layer shortcut, but a sprite layer
-// that drew nothing on a row takes no part in it. A frame whose sprites all sit on sp0 therefore
-// stays on the indexed kernel even though sp0 and sp1 tie in priority with different modes; one
-// sp1 pixel makes exactly its row fall back to the canonical row kernel. Both must match the
-// canonical composition.
+// Priority ties across blend modes stop a layer from settling its pixels on first sight, but a sprite
+// layer that drew nothing on a row takes no part in them. A frame whose sprites all sit on sp0
+// therefore resolves every pixel directly even though sp0 and sp1 tie in priority with different
+// modes; one sp1 pixel makes exactly its row blend the sp0 pixels it covers, on the indexed kernel
+// like every other row. Both must match the canonical composition.
 namespace {
 f3rt::CapturedFrame priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t> &sprite_tiles) {
     f3rt::CapturedFrame frame;
@@ -1220,7 +1422,7 @@ f3rt::CapturedFrame priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t>
 }
 } // namespace
 
-TEST(GameCompositor, IndexedPriorityTieRowsFallBackOnlyWhenBothLayersDraw) {
+TEST(GameCompositor, IndexedPriorityTieRowsBlendOnlyWhenBothLayersDraw) {
     std::vector<uint8_t> tile_pixels(256, 0), sprite_tiles;
     for (const unsigned border : {0u, 40u}) {
         f3rt::IndexedScratch scratch;
@@ -1228,14 +1430,44 @@ TEST(GameCompositor, IndexedPriorityTieRowsFallBackOnlyWhenBothLayersDraw) {
         const auto before =
             compare_indexed_frame(sp0_only, tile_pixels, sprite_tiles, border, scratch);
         EXPECT_EQ(before.fallback_rows, 0u) << "border=" << border;
+        EXPECT_EQ(before.special_px, 0u) << "border=" << border;
         EXPECT_EQ(before.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(before.plane_mismatches, 0u) << "border=" << border;
         const auto with_sp1 = priority_tie_frame(true, sprite_tiles);
         const auto after =
             compare_indexed_frame(with_sp1, tile_pixels, sprite_tiles, border, scratch);
-        EXPECT_EQ(after.fallback_rows, 1u) << "border=" << border;
+        EXPECT_EQ(after.fallback_rows, 0u) << "border=" << border;
+        // The tie row blends the 16 sp0 pixels and the single sp1 pixel; no other row blends.
+        EXPECT_EQ(after.special_px, 17u) << "border=" << border;
         EXPECT_EQ(after.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(after.plane_mismatches, 0u) << "border=" << border;
+    }
+}
+
+// The palette tables follow the previous frame's colours block by block: whatever sequence of colour
+// edits (the guard entries included), output formats and 15-bit demands a run goes through, they
+// must equal a fresh conversion of the current colours.
+TEST(GameCompositor, IndexedPaletteIncrementalBuildMatchesFullBuild) {
+    std::mt19937_64 rng(4242);
+    std::vector<uint32_t> source(f3rt::IndexedPalette::SIZE);
+    for (auto &color : source) color = uint32_t(rng());
+    f3rt::IndexedPalette incremental;
+    auto format = f3rt::PixelFormat::Argb8888;
+    for (unsigned step = 0; step < 600; ++step) {
+        const unsigned edits = rng() % 4 == 0 ? 0 : unsigned(rng() % 6);
+        for (unsigned i = 0; i < edits; ++i)
+            source[rng() % 8 == 0 ? rng() % f3rt::IndexedPalette::GUARD
+                                  : rng() % f3rt::IndexedPalette::SIZE] = uint32_t(rng());
+        if (rng() % 16 == 0)
+            format = format == f3rt::PixelFormat::Argb8888 ? f3rt::PixelFormat::Rgba8888
+                                                           : f3rt::PixelFormat::Argb8888;
+        const bool need_15bit = rng() % 3 == 0;
+        incremental.build(source, format, need_15bit);
+        f3rt::IndexedPalette fresh;
+        fresh.build(source, format, need_15bit);
+        EXPECT_EQ(incremental.colors, fresh.colors) << "step " << step;
+        if (need_15bit) EXPECT_EQ(incremental.colors15, fresh.colors15) << "step " << step;
+        EXPECT_EQ(incremental.uses_15bit, need_15bit) << "step " << step;
     }
 }
 

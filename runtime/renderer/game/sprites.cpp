@@ -4,6 +4,7 @@
 #include "state_io.hpp"
 #include <algorithm>
 #include <array>
+#include <optional>
 
 namespace f3rt {
 
@@ -176,20 +177,34 @@ covered_columns(const SpriteCoverage &coverage, unsigned plane_row, unsigned col
     return held;
 }
 
-// A sprite at exactly 256/256 zoom on a scale-1 plane: every texel column is one plane column and
-// every texel row one plane row, so the per-column geometry and the dy/dx loops collapse. Writes the
-// same plane pixels as the general path below: the opaque texels of a texel row come from one mask,
-// and the columns an earlier sprite already holds (first write wins) from the coverage bits, or
-// from the plane when coverage is not tracked.
-void draw_unscaled_sprite(const SceneSprite &sprite, const uint8_t *pixels,
-                          std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
-                          SpriteCoverage *coverage) {
+// Output rows [first, last) of texel row `y` of `sprite`, clipped to the raster window. Shrunk
+// sprites put several texel rows on one output row, magnified ones spread a texel row over several.
+struct RowRange {
+    int first, last;
+    bool empty() const { return first >= last; }
+};
+[[gnu::always_inline]] inline RowRange texel_rows(const SceneSprite &sprite, const RasterGeometry &g,
+                                                   int y) {
+    const int position_y = (sprite.y + y * sprite.scale_y) * g.scale + g.y_bias;
+    const int start_y = (position_y >> 8) - g.origin_y * g.scale;
+    const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * g.scale) >> 8) -
+                                                g.origin_y * g.scale);
+    return {std::max(g.top, start_y), std::min(g.bottom, end_y)};
+}
+
+// A sprite whose texel columns are exactly one plane column each (256/256 horizontal zoom on a
+// scale-1 plane), at any vertical zoom: the texel columns of a row come from one opaque mask and
+// the columns an earlier sprite already holds (first write wins) from the coverage bits, or from
+// the plane when coverage is not tracked. Writes the same plane pixels as the general path below.
+// `UnitRows`: the vertical zoom is 256/256 too, so texel row y is output row base_y + y and only the
+// rows inside the raster window are visited.
+template <bool UnitRows>
+void draw_aligned_sprite(const SceneSprite &sprite, const uint8_t *pixels, std::span<uint16_t> plane,
+                         const RasterGeometry &g, uint8_t mask, SpriteCoverage *coverage) {
     // Column x lands at base_x + x; the +128 rounds the fixed-point position like the general path.
     const int base_x = ((sprite.x + 128) >> 8) - g.origin_x;
     const int first_x = std::max(0, g.left - base_x), last_x = std::min(16, g.right - base_x);
     if (first_x >= last_x) return;
-    const int base_y = ((sprite.y + g.y_bias) >> 8) - g.origin_y;
-    const int first_y = std::max(0, g.top - base_y), last_y = std::min(16, g.bottom - base_y);
     const uint16_t color_base = uint16_t(0x1000 + (unsigned(sprite.palette) << 4));
     // A pen can carry into the layer bits 10-11, so the layer is constant only when the largest
     // pen leaves them alone; otherwise the layer comes from each written plane value.
@@ -199,58 +214,157 @@ void draw_unscaled_sprite(const SceneSprite &sprite, const uint8_t *pixels,
     const uint32_t window = (1u << window_width) - 1;
     // Picture column of the window's first column.
     const unsigned column = unsigned(base_x + first_x - g.left);
+    const int base_y = UnitRows ? ((sprite.y + g.y_bias) >> 8) - g.origin_y : 0;
+    const int first_y = UnitRows ? std::max(0, g.top - base_y) : 0;
+    const int last_y = UnitRows ? std::min(16, g.bottom - base_y) : 16;
     for (int y = first_y; y < last_y; ++y) {
-        const unsigned plane_row = unsigned(base_y + y);
-        uint16_t *line = plane.data() + size_t(plane_row) * g.width + base_x + first_x;
-        uint32_t claimed = 0;
-        if (coverage) {
-            claimed = covered_columns(*coverage, plane_row, column, window_width);
-        } else {
-            for (unsigned i = 0; i < window_width; ++i) claimed |= uint32_t(line[i] != 0) << i;
+        RowRange rows{base_y + y, base_y + y + 1};
+        if constexpr (!UnitRows) {
+            rows = texel_rows(sprite, g, y);
+            if (rows.empty()) continue;
         }
-        if (claimed == window) continue; // every column already holds an earlier sprite
-        const PenRow pens(pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16, mask);
-        if (pens.blank()) continue;
-        const uint32_t opaque = (pens.opaque(sprite.flip_x) >> first_x) & window;
-        const uint32_t fresh = opaque & ~claimed;
-        if (!fresh) continue;
-        if (!coverage || one_layer) {
+        const uint8_t *texels = pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16;
+        // The pens are read once the first output row turns out to have an open column.
+        std::optional<PenRow> pens;
+        uint32_t opaque = 0;
+        for (int row = rows.first; row < rows.last; ++row) {
+            const unsigned plane_row = unsigned(row);
+            uint16_t *line = plane.data() + size_t(plane_row) * g.width + base_x + first_x;
+            uint32_t claimed = 0;
             if (coverage) {
-                coverage->layers[plane_row] |= uint8_t(1u << layer);
-                set_columns(coverage->row(plane_row, layer).data(), int(column), fresh);
+                claimed = covered_columns(*coverage, plane_row, column, window_width);
+            } else {
+                for (unsigned i = 0; i < window_width; ++i) claimed |= uint32_t(line[i] != 0) << i;
             }
-            // Write four columns at a time from the pens of their group; `columns` is the fresh
-            // set in sprite-column space.
-            const uint32_t columns = fresh << first_x;
-            for (unsigned group = 0; group < 4; ++group) {
-                const uint32_t nibble = columns >> (4 * group) & 0xf;
-                if (!nibble) continue;
-                const uint32_t four = pens.group(group, sprite.flip_x);
-                // Offset of the group's first column from the window's first column (negative when
-                // the window starts inside the group; those columns are not fresh).
-                const int offset = int(4 * group) - first_x;
-                if (nibble == 0xf) {
-                    line[offset] = uint16_t(color_base + (four & 0xff));
-                    line[offset + 1] = uint16_t(color_base + ((four >> 8) & 0xff));
-                    line[offset + 2] = uint16_t(color_base + ((four >> 16) & 0xff));
-                    line[offset + 3] = uint16_t(color_base + (four >> 24));
-                } else {
-                    for (uint32_t rest = nibble; rest; rest &= rest - 1) {
-                        const unsigned i = unsigned(__builtin_ctz(rest));
-                        line[offset + int(i)] = uint16_t(color_base + ((four >> (8 * i)) & 0xff));
+            if (claimed == window) continue; // every column already holds an earlier sprite
+            if (!pens) {
+                pens.emplace(texels, mask);
+                opaque = pens->blank() ? 0 : (pens->opaque(sprite.flip_x) >> first_x) & window;
+            }
+            if (!opaque) break; // nothing to draw on any output row of this texel row
+            const uint32_t fresh = opaque & ~claimed;
+            if (!fresh) continue;
+            if (!coverage || one_layer) {
+                if (coverage) {
+                    coverage->layers[plane_row] |= uint8_t(1u << layer);
+                    set_columns(coverage->row(plane_row, layer).data(), int(column), fresh);
+                }
+                // Write four columns at a time from the pens of their group; `columns` is the
+                // fresh set in sprite-column space.
+                const uint32_t columns = fresh << first_x;
+                for (unsigned group = 0; group < 4; ++group) {
+                    const uint32_t nibble = columns >> (4 * group) & 0xf;
+                    if (!nibble) continue;
+                    const uint32_t four = pens->group(group, sprite.flip_x);
+                    // Offset of the group's first column from the window's first column (negative
+                    // when the window starts inside the group; those columns are not fresh).
+                    const int offset = int(4 * group) - first_x;
+                    if (nibble == 0xf) {
+                        line[offset] = uint16_t(color_base + (four & 0xff));
+                        line[offset + 1] = uint16_t(color_base + ((four >> 8) & 0xff));
+                        line[offset + 2] = uint16_t(color_base + ((four >> 16) & 0xff));
+                        line[offset + 3] = uint16_t(color_base + (four >> 24));
+                    } else {
+                        for (uint32_t rest = nibble; rest; rest &= rest - 1) {
+                            const unsigned i = unsigned(__builtin_ctz(rest));
+                            line[offset + int(i)] =
+                                uint16_t(color_base + ((four >> (8 * i)) & 0xff));
+                        }
                     }
                 }
+            } else {
+                for (uint32_t rest = fresh; rest; rest &= rest - 1) {
+                    const unsigned i = unsigned(__builtin_ctz(rest));
+                    const uint16_t color =
+                        uint16_t(color_base + ((pens->group((first_x + i) / 4, sprite.flip_x) >>
+                                                (8 * ((first_x + i) % 4))) &
+                                               0xff));
+                    line[i] = color;
+                    mark_coverage(*coverage, plane_row,
+                                  unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0),
+                                  column + i);
+                }
             }
-        } else {
-            for (uint32_t rest = fresh; rest; rest &= rest - 1) {
-                const unsigned i = unsigned(__builtin_ctz(rest));
-                const uint16_t color =
-                    uint16_t(color_base + ((pens.group((first_x + i) / 4, sprite.flip_x) >>
-                                            (8 * ((first_x + i) % 4))) &
-                                           0xff));
-                line[i] = color;
-                mark_coverage(*coverage, plane_row,
-                              unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0), column + i);
+        }
+    }
+}
+
+// Bits [lo, hi) of a 32-bit word, 0 <= lo < hi <= 32.
+constexpr uint32_t bit_range(unsigned lo, unsigned hi) {
+    return (hi == 32 ? ~0u : (1u << hi) - 1) & ~((1u << lo) - 1);
+}
+
+// Most coverage words a row can span: the widest expanded picture's columns plus the guard word.
+constexpr unsigned MAX_COVERAGE_WORDS =
+    SpriteCoverage::words_for(GameVideoOptions{1, GameVideoOptions::MAX_BORDER});
+
+// One texel column of a general-path sprite as a run of plane columns: [left, right) in picture
+// columns (plane column - g.left), drawn from screen column `x` of the tile row.
+struct SpriteColumn {
+    int left, right;
+    unsigned x;
+};
+
+// The general path with coverage: for each (texel row, output row) pair, `held` gathers the columns
+// earlier sprites already hold, an output row with no open column is skipped outright, and each
+// opaque texel column writes the open part of its run with mask operations instead of testing
+// every pixel. Texel rows are visited in order, so the first write to a pixel still wins.
+void draw_scaled_sprite_covered(const SceneSprite &sprite, const uint8_t *pixels,
+                                std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
+                                SpriteCoverage &coverage,
+                                std::span<const SpriteColumn> columns) {
+    const uint16_t color_base = uint16_t(0x1000 + (unsigned(sprite.palette) << 4));
+    // The columns partition the span [span_left, span_right) of picture columns: each starts where
+    // the previous one ended, and empty ones were dropped.
+    const unsigned span_left = unsigned(columns.front().left);
+    const unsigned span_right = unsigned(columns.back().right);
+    const unsigned first_word = span_left / 32, last_word = (span_right - 1) / 32;
+    std::array<uint32_t, MAX_COVERAGE_WORDS> held;
+    for (int y = 0; y < 16; ++y) {
+        const RowRange rows = texel_rows(sprite, g, y);
+        if (rows.empty()) continue;
+        const PenRow pens(pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16, mask);
+        if (pens.blank()) continue;
+        const uint32_t opaque = pens.opaque(sprite.flip_x);
+        for (int row = rows.first; row < rows.last; ++row) {
+            const unsigned plane_row = unsigned(row);
+            uint32_t open = 0;
+            for (unsigned w = first_word; w <= last_word; ++w) {
+                uint32_t any = 0;
+                for (unsigned layers = coverage.layers[plane_row]; layers; layers &= layers - 1)
+                    any |= coverage.row(plane_row, unsigned(__builtin_ctz(layers)))[w];
+                held[w - first_word] = any;
+                open |= bit_range(w == first_word ? span_left % 32 : 0,
+                                  w == last_word ? (span_right - 1) % 32 + 1 : 32) &
+                        ~any;
+            }
+            if (!open) continue; // the sprite adds nothing to this output row
+            uint16_t *line = plane.data() + size_t(plane_row) * g.width + g.left;
+            for (const SpriteColumn &column : columns) {
+                if (!(opaque >> column.x & 1)) continue;
+                const uint16_t color = uint16_t(
+                    color_base + ((pens.group(column.x / 4, sprite.flip_x) >> (8 * (column.x % 4))) &
+                                  0xff));
+                const unsigned layer = unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0);
+                // The run's words: a texel column spans at most two (zoom up to 32/256 of
+                // the plane) and often one.
+                const unsigned first = unsigned(column.left), last = unsigned(column.right);
+                uint32_t *layer_row =
+                    coverage.row(plane_row, layer).data(); // guard word keeps w + 1 in range
+                bool drawn = false;
+                for (unsigned w = first / 32; w <= (last - 1) / 32; ++w) {
+                    const uint32_t fresh =
+                        bit_range(w == first / 32 ? first % 32 : 0,
+                                  w == (last - 1) / 32 ? (last - 1) % 32 + 1 : 32) &
+                        ~held[w - first_word];
+                    if (!fresh) continue;
+                    layer_row[w] |= fresh;
+                    drawn = true;
+                    for_each_run(fresh, [&](unsigned begin, unsigned length) {
+                        std::fill_n(line + w * 32 + begin, length, color);
+                    });
+                }
+                if (drawn) coverage.layers[plane_row] |= uint8_t(1u << layer);
             }
         }
     }
@@ -267,14 +381,12 @@ void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
         sprite.y + sprite.scale_y * 16 <= int(geometry::FIRST_LINE) * 256 || sprite.y > 255 * 256)
         return;
     const auto *pixels = assets.data() + size_t(wrap_tile_index(sprite.tile, g.tile_count)) * 256;
-    if (g.scale == 1 && sprite.scale_x == 256 && sprite.scale_y == 256) {
-        draw_unscaled_sprite(sprite, pixels, plane, g, mask, coverage);
+    if (g.scale == 1 && sprite.scale_x == 256) {
+        if (sprite.scale_y == 256) draw_aligned_sprite<true>(sprite, pixels, plane, g, mask, coverage);
+        else draw_aligned_sprite<false>(sprite, pixels, plane, g, mask, coverage);
         return;
     }
-    struct Column {
-        int left, right, source;
-    };
-    std::array<Column, 16> columns;
+    std::array<SpriteColumn, 16> columns;
     unsigned column_count = 0;
     // Column geometry and horizontal flip do not depend on the texel row.
     for (int x = 0; x < 16; ++x) {
@@ -282,37 +394,29 @@ void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
         const int start_x = (position_x >> 8) - g.origin_x * g.scale;
         const int end_x = ((position_x + sprite.scale_x * g.scale) >> 8) - g.origin_x * g.scale;
         if (start_x == end_x || end_x <= g.left || start_x >= g.right) continue;
-        columns[column_count++] = {std::max(g.left, start_x), std::min(g.right, end_x),
-                                   x ^ (sprite.flip_x ? 15 : 0)};
+        columns[column_count++] = {std::max(g.left, start_x) - g.left,
+                                   std::min(g.right, end_x) - g.left, unsigned(x)};
     }
     if (!column_count) return;
+    if (coverage) {
+        draw_scaled_sprite_covered(sprite, pixels, plane, g, mask, *coverage,
+                                   std::span(columns).first(column_count));
+        return;
+    }
+    // Without coverage the plane itself tells which pixels an earlier sprite wrote.
     for (int y = 0; y < 16; ++y) {
-        const int position_y = (sprite.y + y * sprite.scale_y) * g.scale + g.y_bias;
-        const int start_y = (position_y >> 8) - g.origin_y * g.scale;
-        const int end_y = std::max(start_y + 1, ((position_y + sprite.scale_y * g.scale) >> 8) -
-                                                    g.origin_y * g.scale);
-        if (end_y <= g.top || start_y >= g.bottom) continue;
+        const RowRange rows = texel_rows(sprite, g, y);
+        if (rows.empty()) continue;
         const auto *row = pixels + size_t(y ^ (sprite.flip_y ? 15 : 0)) * 16;
-        const int first_y = std::max(g.top, start_y), last_y = std::min(g.bottom, end_y);
-        for (unsigned x = 0; x < column_count; ++x) {
-            const auto &column = columns[x];
-            const uint8_t pen = row[column.source] & mask;
+        for (unsigned i = 0; i < column_count; ++i) {
+            const SpriteColumn &column = columns[i];
+            const uint8_t pen = row[column.x ^ (sprite.flip_x ? 15 : 0)] & mask;
             if (!pen) continue;
             const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
-            // The layer comes from each written plane value: a pen can carry into bits 10-11, so
-            // one sprite may reach more than one layer.
-            const unsigned layer = unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0);
-            for (int dy = first_y; dy < last_y; ++dy)
-                for (int dx = column.left; dx < column.right; ++dx) {
+            for (int dy = rows.first; dy < rows.last; ++dy)
+                for (int dx = column.left + g.left; dx < column.right + g.left; ++dx) {
                     auto &destination = plane[size_t(dy) * g.width + size_t(dx)];
-                    if (coverage) {
-                        if (covered_columns(*coverage, unsigned(dy), unsigned(dx - g.left), 1))
-                            continue;
-                        mark_coverage(*coverage, unsigned(dy), layer, unsigned(dx - g.left));
-                    } else if (destination) {
-                        continue;
-                    }
-                    destination = color;
+                    if (!destination) destination = color;
                 }
         }
     }

@@ -102,7 +102,7 @@ int main() {
     imgui::citro3d::init();
     log_line("n3ds: stage texture");
     present_ok = presenter.create_texture() && present_ok;
-    log_line("n3ds: threads emulation=2 audio=0 composer=1 helper_cores=0 count=%u",
+    log_line("n3ds: threads emulation=2 audio=0 composer=1 helper_cores=0,2 count=%u",
              f3rt::compose_helper_count());
     log_line("n3ds: memory app_free_kib=%u",
              unsigned(osGetMemRegionFree(MEMREGION_APPLICATION) / 1024));

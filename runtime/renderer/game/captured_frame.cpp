@@ -55,9 +55,7 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
     }
     scratch.configure(options);
     const FrameScene scene = frame.scene(tile_pixels);
-    const bool palette_15bit = indexed_frame_uses_15bit(scene);
-    scratch.palette.build(scene.colors, format, palette_15bit);
-    indexed_glyph_rows(scene, scratch.glyph_rows);
+    const bool palette_15bit = scratch.prepare(scene, format);
     scratch.stats.reset();
     scratch.bins.bin(frame.sprite_list(), SpriteRasterOptions{options, false, false});
     const auto sprite_list = frame.sprite_list();
@@ -68,6 +66,7 @@ void compose_captured_indexed(const CapturedFrame &frame, std::span<const uint8_
                           sprite_list,
                           frame.pen_mask,
                           sprite_tiles,
+                          scratch.tile_rows.tiles(),
                           scratch.glyph_rows,
                           scratch.palette.colors,
                           palette_15bit ? std::span<const uint32_t>(scratch.palette.colors15)

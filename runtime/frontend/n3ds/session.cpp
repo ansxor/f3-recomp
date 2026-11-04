@@ -328,16 +328,25 @@ void Session::emulate() {
             m_shared.emulation.publish();
         }
         m_shared.cv.notify_all();
-        m_perf.emulated.fetch_add(1, std::memory_order_relaxed);
-        const uint64_t elapsed_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
-                                                 std::chrono::steady_clock::now() - frame_start)
-                                                 .count());
+        const auto frame_end = std::chrono::steady_clock::now();
+        const uint64_t elapsed_us = uint64_t(
+            std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start).count());
         // Signed: a faster frame must lower the average, not wrap it around zero.
         const uint64_t previous_us = m_perf.emu_us.load(std::memory_order_relaxed);
         const int64_t ema_us =
             previous_us ? int64_t(previous_us) + (int64_t(elapsed_us) - int64_t(previous_us)) / 16
                         : int64_t(elapsed_us);
         m_perf.emu_us.store(uint64_t(ema_us), std::memory_order_relaxed);
+        const uint64_t synth_ns = machine.audio->enhanced_render_ns();
+        m_perf.emu_start_ns.store(uint64_t(frame_start.time_since_epoch().count()),
+                                  std::memory_order_relaxed);
+        m_perf.emu_end_ns.store(uint64_t(frame_end.time_since_epoch().count()),
+                                std::memory_order_relaxed);
+        m_perf.emu_frame_us.store(elapsed_us, std::memory_order_relaxed);
+        m_perf.synth_frame_us.store((synth_ns - m_synth_render_ns) / 1000, std::memory_order_relaxed);
+        m_synth_render_ns = synth_ns;
+        // Last, so a reader that sees the new count also sees this frame's fields.
+        m_perf.emulated.fetch_add(1, std::memory_order_release);
         size_t count, ready = 0;
         while ((count = machine.audio->render_ready(samples.data(), samples.size() / 2)) != 0) {
             push_audio(samples.data(), count);
