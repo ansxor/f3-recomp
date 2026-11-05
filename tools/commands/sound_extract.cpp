@@ -65,19 +65,11 @@ void print_help(const char *prog) {
         << "                         be repeated)\n"
         << "  --boot-frames N        Interpreted main CPU boot frames before freezing (default:\n"
         << "                         900, ~15.3s)\n"
-        << "  --sound-trace FILE     Record lossless bus sound trace from cold boot (F3SND2\n"
-        << "                         format; reference backend, packet mode)\n"
         << "  --wav FILE             Save generated stereo 16-bit PCM audio as WAV\n"
         << "  --wav-window full|event\n"
         << "                         full: record cold boot through extraction (default)\n"
         << "                         event: record only from event time origin onward\n"
         << "                         (packet mode; sound-code mode always records the event only)\n"
-        << "  --audio-backend enhanced|reference\n"
-        << "                         enhanced: HLE synth, no sound CPU (default)\n"
-        << "                         reference: emulated 68000 sound CPU + ES5505\n"
-        << "  --sound-driver oracle|native\n"
-        << "                         reference backend only. oracle: interpreted 68000 sound CPU\n"
-        << "                         (default), native: statically compiled 68000 driver\n"
 #if F3RT_HLE_EVENTS
         << "  --hle-events FILE      Save HLE voice start/release/stop/parameter CSV\n"
 #endif
@@ -128,12 +120,10 @@ int cmd_sound_extract(int argc, char **argv) try {
 #ifdef F3RT_DEFAULT_ROM_DIR
     cfg.rom_dir = F3RT_DEFAULT_ROM_DIR;
 #endif
-    cfg.audio_backend = Audio::Backend::Enhanced;
 
     std::vector<runner::ScheduledPacket> scheduled;
     double duration_seconds = 0.0;
     uint64_t boot_frames = 900;
-    bool sound_explicit = false;
     bool json_output = false;
     std::vector<uint32_t> codes;
     std::filesystem::path out_dir;
@@ -200,26 +190,12 @@ int cmd_sound_extract(int argc, char **argv) try {
             if (end != text.size() || text[0] == '-' || boot_frames == 0) {
                 throw std::runtime_error("--boot-frames must be positive");
             }
-        } else if (arg == "--sound-trace") {
-            cfg.sound_trace_path = value();
         } else if (arg == "--wav") {
             cfg.wav_path = value();
         } else if (arg == "--wav-window") {
             cfg.wav_window = value();
             if (cfg.wav_window != "full" && cfg.wav_window != "event") {
                 throw std::runtime_error("--wav-window must be 'full' or 'event'");
-            }
-        } else if (arg == "--sound-driver") {
-            sound_explicit = true;
-            cfg.sound_driver = value();
-            if (cfg.sound_driver != "oracle" && cfg.sound_driver != "native") {
-                throw std::runtime_error("Invalid --sound-driver '" + cfg.sound_driver +
-                                         "': must be 'oracle' or 'native'");
-            }
-        } else if (arg == "--audio-backend") {
-            const std::string name = value();
-            if (!Audio::parse_backend(name, cfg.audio_backend)) {
-                throw std::runtime_error("--audio-backend must be enhanced or reference");
             }
         } else if (arg == "--hle-events") {
 #if F3RT_HLE_EVENTS
@@ -239,14 +215,6 @@ int cmd_sound_extract(int argc, char **argv) try {
 
     if (cfg.rom_dir.empty()) {
         throw std::runtime_error("ROM directory must be specified via --rom-dir");
-    }
-    const bool enhanced = (cfg.audio_backend == Audio::Backend::Enhanced);
-    if (enhanced && (sound_explicit || !cfg.sound_trace_path.empty())) {
-        throw std::runtime_error(
-            "Enhanced audio does not execute a sound driver or emit CPU bus traces");
-    }
-    if (!enhanced && !cfg.hle_events_path.empty()) {
-        throw std::runtime_error("--hle-events requires --audio-backend enhanced");
     }
 
     const bool code_mode = !codes.empty();
@@ -315,13 +283,13 @@ int cmd_sound_extract(int argc, char **argv) try {
     if (code_mode) {
         const uint32_t rate = m->audio->sample_rate();
         const runner::PostBootSnapshot snapshot = runner::take_post_boot_snapshot(*m);
-        if (!json_output && enhanced)
+        if (!json_output)
             std::cout << "HLE commands before freeze: " << snapshot.boot_commands << '\n';
         // A reset pulse rewinds the HLE read pointer to ring byte 0, so the packets the game sent
         // during boot (effect preset/parameters, stop-all) are re-parsed together with the new
         // request and the HLE ends in exactly the post-boot state. That needs the ring to still
         // hold the whole boot stream; the check throws when it does not.
-        if (enhanced) runner::boot_packet_stream(*m, snapshot.boot_commands);
+        runner::boot_packet_stream(*m, snapshot.boot_commands);
         std::filesystem::path effective_out_dir = out_dir;
         if (bank_override && !out_dir.empty()) {
             char bdir[32];
@@ -458,8 +426,7 @@ int cmd_sound_extract(int argc, char **argv) try {
         }
         const double elapsed =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
-        std::cout << (json_output ? "" : "SUMMARY ") << "backend="
-                  << Audio::backend_name(cfg.audio_backend) << " codes=" << results.size()
+        std::cout << (json_output ? "" : "SUMMARY ") << "codes=" << results.size()
                   << " ok=" << ok << " silent=" << silent << " no_packets=" << none
                   << " error=" << failed << " wall_time=" << std::fixed << std::setprecision(2)
                   << elapsed << "s\n";
@@ -522,26 +489,21 @@ int cmd_sound_extract(int argc, char **argv) try {
     const double elapsed_seconds = std::chrono::duration<double>(elapsed).count();
 
     if (json_output) {
-        std::cout << "{\"status\":\"SUCCESS\",\"backend\":\""
-                  << Audio::backend_name(cfg.audio_backend) << "\",\"driver\":\""
-                  << (enhanced ? "none" : cfg.sound_driver) << "\",\"set\":\"" << cfg.set
+        std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << cfg.set
                   << "\",\"packets\":" << packets_published << ",\"duration\":" << duration_seconds
                   << ",\"audio_frames\":" << runner->audio_frames()
                   << ",\"audio_peak\":" << runner->audio_peak()
-                  << ",\"nonzero_samples\":" << runner->nonzero_samples() << ",\"sound_pc\":\"0x"
-                  << std::hex << m->sound_pc() << std::dec << "\""
+                  << ",\"nonzero_samples\":" << runner->nonzero_samples()
                   << ",\"wall_time\":" << elapsed_seconds
                   << ",\"event_origin_seconds\":" << event_origin_seconds
                   << ",\"event_origin_cycles\":" << event_origin_cycles << "}\n";
     } else {
-        std::cout << "SUCCESS backend=" << Audio::backend_name(cfg.audio_backend)
-                  << " driver=" << (enhanced ? "none" : cfg.sound_driver) << " set=" << cfg.set
+        std::cout << "SUCCESS set=" << cfg.set
                   << " packets=" << packets_published << " duration=" << std::fixed
                   << std::setprecision(3) << duration_seconds << "s"
                   << " audio_frames=" << runner->audio_frames()
                   << " audio_peak=" << runner->audio_peak()
-                  << " nonzero_samples=" << runner->nonzero_samples() << " sound_pc=0x" << std::hex
-                  << m->sound_pc() << std::dec << " wall_time=" << std::fixed << std::setprecision(2)
+                  << " nonzero_samples=" << runner->nonzero_samples() << " wall_time=" << std::fixed << std::setprecision(2)
                   << elapsed_seconds << "s\n";
     }
 

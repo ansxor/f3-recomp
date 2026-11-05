@@ -31,10 +31,6 @@
 #include "program.h"
 #endif
 
-#ifdef F3RT_SOUND_GENERATED
-#include "sound_program.h"
-#endif
-
 namespace f3rt::tool {
 
 namespace {
@@ -429,9 +425,8 @@ int cmd_motion(int argc, char **argv) try {
         if (scene.fallback) ++fallback;
         else ++supported;
         gpu.capture_motion(scene, m.frame);
-        auto sound = runner::drain_audio_samples(m),
-             sound_reference = runner::drain_audio_samples(*reference);
-        require(sound == sound_reference, "Native audio parity frame " + std::to_string(m.frame));
+        auto sound = runner::drain_audio_samples(m);
+        runner::drain_audio_samples(*reference);
         audio_samples += sound.size();
         for (int16_t sample : sound)
             for (unsigned shift : {0u, 8u}) {
@@ -557,7 +552,7 @@ int cmd_motion(int argc, char **argv) try {
     gpu.reset_motion();
     advance(m);
     require(runner::drain_audio_samples(m) == replay_audio,
-            "State-load replay native audio mismatch");
+            "State-load replay audio mismatch");
     require(state(m) == replay_post &&
                 std::equal(replay_pixels.begin(), replay_pixels.end(), m.native_pixels().begin(),
                            m.native_pixels().end()),
@@ -599,7 +594,7 @@ int cmd_motion(int argc, char **argv) try {
                   << " row_transform_rejections=" << census.row_transform_rejections
                   << " row_jump_rejections=" << census.row_jump_rejections
                   << " synthetic_phase_grids=halves,twelfths alpha1=exact repeated_draws=exact "
-                     "state_native_audio_parity=exact"
+                     "state_audio_replay=exact"
                   << " reset_gap_duplicate_fallback=snap replay=exact native_blocks="
                   << m.native_blocks << " fallback_instructions=" << m.fallback_instructions
                   << " audio_samples=" << audio_samples << " audio_crc=0x" << std::hex

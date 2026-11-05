@@ -121,7 +121,7 @@ void Session::log_audio_window(f3rt::Machine &machine) {
                             ? double(m_audio_window_frames) / double(m_audio_window_samples)
                             : 0.0;
     const uint64_t drops = m_pacer ? m_pacer->stats().drops - m_audio_window_drops_base : 0;
-    const auto hle = machine.audio->enhanced_stats();
+    const auto hle = machine.audio->performance_stats();
     const uint64_t commands = hle.commands - m_hle_commands_base;
     m_hle_commands_base = hle.commands;
     const double synth_ms = emulated > m_audio_window_emulated
@@ -177,10 +177,6 @@ void Session::startup() {
         if (!f3_generated_register(&machine->cpu))
             throw std::runtime_error("Generated block registration failed");
         machine->allow_main_fallback = false;
-        stage("audio backend");
-        if (!machine->audio->backend_available(f3rt::Audio::Backend::Enhanced))
-            throw std::runtime_error("Enhanced audio is unavailable for this ROM set");
-        machine->audio->set_backend(f3rt::Audio::Backend::Enhanced);
         stage("game video");
         machine->game_video =
             std::make_unique<f3rt::GameVideo>(*machine, f3rt::GameVideoMode::Game, m_video);
@@ -312,7 +308,7 @@ void Session::emulate() {
         const uint64_t elapsed_us = uint64_t(
             std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start).count());
         PerfStats::smooth(m_perf.emu_us, elapsed_us);
-        const uint64_t synth_ns = machine.audio->enhanced_render_ns();
+        const uint64_t synth_ns = machine.audio->performance_stats().render_ns;
         m_perf.emu_start_ns.store(uint64_t(frame_start.time_since_epoch().count()),
                                   std::memory_order_relaxed);
         m_perf.emu_end_ns.store(uint64_t(frame_end.time_since_epoch().count()),

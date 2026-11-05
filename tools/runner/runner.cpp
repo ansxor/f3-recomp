@@ -9,10 +9,6 @@
 #include "program.h"
 #endif
 
-#if defined(F3RT_SOUND_GENERATED)
-#include "sound_program.h"
-#endif
-
 #include "audio/hle/events.hpp"
 
 #include <algorithm>
@@ -42,11 +38,6 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
 #else
     throw std::runtime_error(
         "Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
-#endif
-#if defined(F3RT_SOUND_GENERATED)
-    machine->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                              {f3_sound_excluded_ranges, f3_sound_excluded_count},
-                              f3_sound_rom_crc32);
 #endif
 #if defined(F3RT_GAME_VIDEO)
     if (enable_gpu) {
@@ -167,40 +158,25 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
         profile_ = std::make_unique<BlockProfileSession>(machine_->roms, config_.profile_path);
     }
 
-    if (!config_.sound_trace_path.empty()) {
-        machine_->sound_trace = std::make_unique<SoundTrace>(config_.sound_trace_path);
-    }
-
-    if (config_.audio_backend == Audio::Backend::Enhanced) {
-        machine_->audio->set_backend(Audio::Backend::Enhanced);
 #if F3RT_HLE_EVENTS
-        if (!config_.hle_events_path.empty()) {
-            auto events = std::make_shared<std::ofstream>(config_.hle_events_path);
-            if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
-            *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,"
-                       "right,k1,k2,loop,reverse\n";
-            machine_->audio->set_hle_observer([events](const hle::VoiceEvent &e) {
-                *events << unsigned(e.kind) << ',' << e.instance << ',' << e.tick << ','
-                        << unsigned(e.sequence) << ',' << unsigned(e.track) << ','
-                        << unsigned(e.key) << ',' << unsigned(e.layer) << ','
-                        << unsigned(e.output_pair) << ',' << e.sample_start << ',' << e.sample_end
-                        << ',' << e.frequency << ',' << e.left_volume << ',' << e.right_volume
-                        << ',' << e.k1 << ',' << e.k2 << ',' << e.loop << ',' << e.reverse << '\n';
-            });
-        }
-#else
-        if (!config_.hle_events_path.empty())
-            throw std::runtime_error("--hle-events requires a build with F3RT_HLE_EVENTS=ON");
-#endif
-    } else if (config_.sound_driver == "native") {
-#if defined(F3RT_SOUND_GENERATED)
-        machine_->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                                   {f3_sound_excluded_ranges, f3_sound_excluded_count},
-                                   f3_sound_rom_crc32);
-#else
-        throw std::runtime_error("Native sound requires a generated sound program (F3_ROM_DIR)");
-#endif
+    if (!config_.hle_events_path.empty()) {
+        auto events = std::make_shared<std::ofstream>(config_.hle_events_path);
+        if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
+        *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,"
+                   "right,k1,k2,loop,reverse\n";
+        machine_->audio->set_voice_observer([events](const hle::VoiceEvent &e) {
+            *events << unsigned(e.kind) << ',' << e.instance << ',' << e.tick << ','
+                    << unsigned(e.sequence) << ',' << unsigned(e.track) << ',' << unsigned(e.key)
+                    << ',' << unsigned(e.layer) << ',' << unsigned(e.output_pair) << ','
+                    << e.sample_start << ',' << e.sample_end << ',' << e.frequency << ','
+                    << e.left_volume << ',' << e.right_volume << ',' << e.k1 << ',' << e.k2 << ','
+                    << e.loop << ',' << e.reverse << '\n';
+        });
     }
+#else
+    if (!config_.hle_events_path.empty())
+        throw std::runtime_error("--hle-events requires a build with F3RT_HLE_EVENTS=ON");
+#endif
 
     if (!config_.wav_path.empty()) {
         wav_ = std::make_unique<WavWriter>(config_.wav_path, machine_->audio->sample_rate());
@@ -279,9 +255,6 @@ void MachineRunner::save_bmp(const std::filesystem::path &path) {
 }
 
 void MachineRunner::finish() {
-    if (machine_->sound_trace) {
-        machine_->sound_trace->finish(*machine_);
-    }
     if (profile_) {
         profile_->flush();
     }

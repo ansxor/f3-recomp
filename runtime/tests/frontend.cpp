@@ -73,7 +73,7 @@ bool settings_equal(const f3rt::FrontendSettings &a, const f3rt::FrontendSetting
     if (a.renderer != b.renderer || a.video_scale != b.video_scale || a.border != b.border ||
         a.filter != b.filter || a.interpolation != b.interpolation ||
         a.interpolation_fields != b.interpolation_fields || a.postprocess != b.postprocess ||
-        a.user_shader != b.user_shader || a.audio_backend != b.audio_backend ||
+        a.user_shader != b.user_shader ||
         std::abs(a.volume - b.volume) >= 0.001f || a.fast_boot != b.fast_boot ||
         a.boot_cache != b.boot_cache || a.motion_interp != b.motion_interp) {
         return false;
@@ -313,7 +313,7 @@ TEST_F(Frontend, LegacySettingsCompatibility) {
                                                    SDL_SCANCODE_E, SDL_SCANCODE_R, SDL_SCANCODE_T,
                                                    SDL_SCANCODE_Y, SDL_SCANCODE_U};
     std::ostringstream old;
-    old << "device0=2\ndevice1=3\n";
+    old << "audio=reference\ndevice0=2\ndevice1=3\n";
     for (unsigned c = 0; c < old_keys.size(); ++c) {
         old << "binding0." << c << '=' << int(old_keys[c]) << " -1 -1 1\n";
     }
@@ -460,8 +460,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
         *rc::gen::element<std::string>("none", "geometry", "palette", "geometry,palette");
     s.postprocess = *rc::gen::element<std::string>("off", "crt", "user");
     s.user_shader = gen_clean_string(64);
-    s.audio_backend =
-        *rc::gen::element(f3rt::AudioBackend::Enhanced, f3rt::AudioBackend::Reference);
     s.volume = float(*rc::gen::inRange(0, 101)) / 100.0f;
     s.fast_boot = *rc::gen::arbitrary<bool>();
     s.boot_cache = *rc::gen::arbitrary<bool>();
@@ -492,7 +490,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     RC_ASSERT(loaded.interpolation_fields == s.interpolation_fields);
     RC_ASSERT(loaded.postprocess == s.postprocess);
     RC_ASSERT(loaded.user_shader == s.user_shader);
-    RC_ASSERT(loaded.audio_backend == s.audio_backend);
     RC_ASSERT(std::abs(loaded.volume - s.volume) < 0.001f);
     RC_ASSERT(loaded.fast_boot == s.fast_boot);
     RC_ASSERT(loaded.boot_cache == s.boot_cache);

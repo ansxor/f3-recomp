@@ -6,7 +6,6 @@
 #include "f3rt/audio.hpp"
 #include "capture_io.hpp"
 #include "debug/profile.hpp"
-#include "audio/sound_trace.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -64,7 +63,6 @@ inline std::vector<int16_t> drain_audio_samples(Machine &m) {
     return result;
 }
 
-// Creates and initializes a strict-native Machine with recompiled code, native sound, and optional GPU presentation.
 std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_dir,
                                                const std::string &set = F3RT_DEFAULT_SET,
                                                bool enable_gpu = false, unsigned gpu_scale = 1);
@@ -72,9 +70,6 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
 struct RunnerConfig {
     std::filesystem::path rom_dir;
     std::string set = F3RT_DEFAULT_SET;
-    std::string sound_driver = "oracle"; // "oracle" or "native"
-    Audio::Backend audio_backend = Audio::Backend::Reference;
-    std::filesystem::path sound_trace_path;
     std::filesystem::path wav_path;
     std::string wav_window = "full"; // "full" or "event"
     std::filesystem::path profile_path;
@@ -109,7 +104,6 @@ public:
     // Save final screen frame as BMP
     void save_bmp(const std::filesystem::path &path);
 
-    // Finish audio/trace/profile sessions
     void finish();
 
     // Stats

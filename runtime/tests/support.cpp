@@ -5,6 +5,8 @@ constexpr size_t RESET_SP_VECTOR = 0;        // initial SSP longword (big-endian
 constexpr size_t RESET_PC_VECTOR = 4;        // initial PC longword (big-endian)
 constexpr size_t TEST_PROGRAM_PC = 0x100;    // moveq #42,d0; bra self
 constexpr size_t OTIS_SAMPLE_WORD = 0x2468a; // OTIS word 0x12345
+constexpr size_t SOUND_STREAM_DIRECTORY = 0x20000 + 2;
+constexpr size_t SOUND_HEADER_BLOCK = 0x21000 + 2;
 } // namespace
 
 namespace f3test {
@@ -25,6 +27,8 @@ f3rt::RomSet fixture() {
     r.main[TEST_PROGRAM_PC + 1] = 0x2a; // moveq #42,d0
     r.main[TEST_PROGRAM_PC + 2] = 0x60;
     r.main[TEST_PROGRAM_PC + 3] = 0xfe; // bra self
+    r.sound[SOUND_STREAM_DIRECTORY] = 0x10;
+    r.sound[SOUND_HEADER_BLOCK] = 0x04;
     r.samples[OTIS_SAMPLE_WORD] = 0x45;
     r.samples[OTIS_SAMPLE_WORD + 1] = 0x67; // OTIS word 0x12345, above old truncated mask
     return r;

@@ -48,7 +48,6 @@ void print_help(const char *) {
         << "  --disable-apply-sync   Joiner negative control: do not apply sync blob\n"
         << "  --gpu 0|1              Build the machine with GPU game video, like the frontend "
            "(default 0)\n"
-        << "  --audio NAME           Audio backend: enhanced | reference (default reference)\n"
         << "  --desync-dir DIR       On DESYNC write a local diagnostic bundle into "
            "DIR/<time>-<session>-p<idx>/\n"
         << "                         (info.json, hashed.bin, inputs.txt, trigger.f3s). Nothing is "
@@ -70,7 +69,6 @@ int cmd_netplay(int argc, char **argv) try {
     bool until_trigger = false;
     bool disable_apply_sync = false;
     bool use_gpu = false;
-    std::string audio_backend;
     uint32_t target_frames = 3000;
     uint32_t crc_every = 60;
     std::filesystem::path desync_dir;
@@ -116,8 +114,6 @@ int cmd_netplay(int argc, char **argv) try {
             desync_dir = value();
         } else if (arg == "--gpu") {
             use_gpu = value() == std::string("1");
-        } else if (arg == "--audio") {
-            audio_backend = value();
         } else if (arg == "--frames") {
             target_frames = static_cast<uint32_t>(std::stoul(value()));
         } else if (arg == "--crc-every") {
@@ -186,12 +182,6 @@ int cmd_netplay(int argc, char **argv) try {
     auto machine = runner::create_strict_machine(rom_dir, set, use_gpu, 1);
     if (use_gpu && !machine->game_video) {
         throw std::runtime_error("--gpu 1 needs an f3rt-tool built with F3RT_GAME_VIDEO");
-    }
-    if (!audio_backend.empty()) {
-        Audio::Backend backend;
-        if (!Audio::parse_backend(audio_backend, backend))
-            throw std::runtime_error("--audio must be enhanced or reference");
-        machine->audio->set_backend(backend);
     }
     const auto *netplay_hook = f3rt::game_netplay();
 

@@ -7,9 +7,6 @@
 #include <vector>
 
 namespace f3rt {
-enum class AudioBackend { Enhanced, Reference };
-bool audio_backend_available(AudioBackend backend);
-const char *audio_backend_name(AudioBackend backend);
 struct InputBinding {
     SDL_Scancode key = SDL_SCANCODE_UNKNOWN;
     int button = -1;
@@ -25,7 +22,6 @@ struct FrontendSettings {
     unsigned border = 0;
     std::string filter = "nearest", interpolation = "off", interpolation_fields = "geometry";
     std::string postprocess = "off", user_shader;
-    AudioBackend audio_backend = AudioBackend::Enhanced;
     float volume = 1.0f;
     bool fast_boot = true, boot_cache = false;
     bool motion_interp = false;

@@ -15,8 +15,6 @@ class GameVideo;
 class Audio;
 class Interpreter;
 class Eeprom;
-class SoundTrace;
-class SoundNative;
 class SpriteUnits;
 class DiscoveryLog;
 class Machine {
@@ -55,8 +53,6 @@ public:
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;
     std::unique_ptr<Interpreter> interpreter;
-    std::unique_ptr<SoundTrace> sound_trace;
-    std::unique_ptr<SoundNative> sound_native;
     bool sound_bankswitch = false;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff,
                                    0xffffffff, 0xffffffff, 0xffffffff};
@@ -89,10 +85,6 @@ public:
     void bind_cpu_windows();
     void reset_devices();
     void reset_main_cpu();
-    // Select before advancing the machine. The interpreted driver is the default.
-    void use_native_sound(const f3_block *program, size_t count,
-                          std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
-    uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);
     int boundary();

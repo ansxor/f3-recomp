@@ -10,18 +10,6 @@
 #include <vector>
 
 namespace f3rt {
-bool audio_backend_available(AudioBackend backend) {
-    return backend == AudioBackend::Enhanced || backend == AudioBackend::Reference;
-}
-const char *audio_backend_name(AudioBackend backend) {
-    switch (backend) {
-    case AudioBackend::Enhanced:
-        return "enhanced";
-    case AudioBackend::Reference:
-        return "reference";
-    }
-    return "unknown";
-}
 FrontendSettings::FrontendSettings() {
     const std::array<SDL_Scancode, LOCAL_CONTROL_COUNT> p1 = {
         SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_Z,
@@ -62,7 +50,6 @@ bool choice(const std::string &s, std::initializer_list<const char *> values) {
     return false;
 }
 bool valid(const FrontendSettings &s) {
-    if (!audio_backend_available(s.audio_backend)) return false;
     if (!choice(s.renderer, {"accurate", "enhanced"}) ||
         !choice(s.video_scale, {"1", "2", "3", "4", "auto", "auto-integer"}) || s.border > 160 ||
         !choice(s.filter, {"nearest", "linear"}) ||
@@ -105,16 +92,10 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
             else if (key == "fields") s.interpolation_fields = value;
             else if (key == "postprocess") s.postprocess = value;
             else if (key == "user_shader") s.user_shader = value;
-            else if (key == "sprite_behaviour" || key == "video" || key == "backend") {
+            else if (key == "sprite_behaviour" || key == "video" || key == "backend" ||
+                       key == "audio") {
             }
-            else if (key == "audio") {
-                if (value == "enhanced") s.audio_backend = AudioBackend::Enhanced;
-                else if (value == "reference") s.audio_backend = AudioBackend::Reference;
-                else {
-                    reject = "Unknown audio backend";
-                    return false;
-                }
-            } else if (key == "volume") {
+            else if (key == "volume") {
                 std::istringstream in{std::string(value)};
                 in >> s.volume;
                 if (!in || in.peek() != EOF) {
@@ -196,7 +177,7 @@ bool save_frontend_settings(const std::string &path, const FrontendSettings &s,
     text << "# f3rt settings, Dear ImGui frontend\nrenderer=" << s.renderer
          << "\nscale=" << s.video_scale << "\nborder=" << s.border << "\nfilter=" << s.filter
          << "\ninterpolation=" << s.interpolation << "\nfields=" << s.interpolation_fields
-         << "\naudio=" << audio_backend_name(s.audio_backend) << "\nvolume=" << s.volume << '\n';
+         << "\nvolume=" << s.volume << '\n';
     text << "postprocess=" << s.postprocess << "\nuser_shader=" << s.user_shader << '\n';
     text << "motion_interp=" << (s.motion_interp ? "on" : "off") << '\n';
     text << "fast_boot=" << (s.fast_boot ? "on" : "off")

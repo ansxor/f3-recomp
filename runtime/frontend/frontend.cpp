@@ -44,9 +44,6 @@
 #ifdef F3RT_GENERATED
 #include "program.h"
 #endif
-#ifdef F3RT_SOUND_GENERATED
-#include "sound_program.h"
-#endif
 namespace {
 struct Sdl {
     SDL_Window *window = nullptr;
@@ -188,7 +185,6 @@ enum Preference : uint32_t {
     Volume = 1u << 8,
     PostprocessMode = 1u << 13,
     UserShader = 1u << 14,
-    SoundBackend = 1u << 15,
     FastBoot = 1u << 16,
     BootCache = 1u << 17,
     MotionInterp = 1u << 18
@@ -362,7 +358,6 @@ int main(int argc, char **argv) try {
     std::vector<uint32_t> watch_entries;
     std::string set = F3RT_DEFAULT_SET;
     std::string renderer;
-    std::string audio_backend = "enhanced";
     f3rt::GameVideoOptions video_options;
     f3rt::VideoScaleMode video_scale_mode = f3rt::VideoScaleMode::Fixed;
     std::string video_filter = "nearest";
@@ -433,9 +428,6 @@ int main(int argc, char **argv) try {
                     uint32_t(std::stoul(list.substr(start, comma - start), nullptr, 16)));
                 start = comma + 1;
             }
-        } else if (arg == "--audio-backend") {
-            audio_backend = value();
-            cli_preferences |= SoundBackend;
         } else if (arg == "--config") config_path = value();
         else if (arg == "--volume") {
             const std::string text = value();
@@ -525,9 +517,6 @@ int main(int argc, char **argv) try {
                    "--profile-out: per-frame execution counts of those main-CPU instructions)\n"
                 << "  [--indirect-log FILE] (instrumented build with --profile-out: log observed "
                    "targets of computed jmp/jsr sites)\n"
-                << "  [--sound-trace FILE] (reference audio only)\n"
-                << "  [--audio-backend enhanced|reference] (default enhanced; reference runs "
-                   "cycle-accurate chips)\n"
                 << "  [--renderer accurate|enhanced] (accurate: MAME-derived reference renderer; "
                    "enhanced: game-data GPU renderer, needs strict native execution and "
                    "games/<game>/video/)\n"
@@ -665,14 +654,6 @@ int main(int argc, char **argv) try {
         if (!(cli_preferences & Interpolation)) video_interp = "off";
         if (!(cli_preferences & MotionInterp)) motion_interp = false;
     }
-    if (cli_preferences & SoundBackend) {
-        f3rt::Audio::Backend parsed;
-        if (!f3rt::Audio::parse_backend(audio_backend, parsed))
-            throw std::runtime_error("--audio-backend must be enhanced or reference");
-        settings.audio_backend = parsed == f3rt::Audio::Backend::Enhanced
-                                     ? f3rt::AudioBackend::Enhanced
-                                     : f3rt::AudioBackend::Reference;
-    }
     parse_scale(video_scale, video_scale_mode, video_options);
 #ifdef F3RT_GAME
     if (set != F3RT_DEFAULT_SET)
@@ -737,34 +718,13 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if (!indirect_path.empty())
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
-#ifdef F3RT_SOUND_GENERATED
-    if (set == F3RT_DEFAULT_SET) {
-        m.use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                           {f3_sound_excluded_ranges, f3_sound_excluded_count}, f3_sound_rom_crc32);
-    }
-#endif
-    if (settings.audio_backend == f3rt::AudioBackend::Enhanced) {
-        if (!m.audio->backend_available(f3rt::Audio::Backend::Enhanced)) {
-            if (cli_preferences & SoundBackend)
-                throw std::runtime_error("Enhanced audio is not supported for this game");
-            settings.audio_backend = f3rt::AudioBackend::Reference;
-        }
-    }
-    if (settings.audio_backend == f3rt::AudioBackend::Enhanced)
-        m.audio->set_backend(f3rt::Audio::Backend::Enhanced);
-    else m.audio->set_backend(f3rt::Audio::Backend::Reference);
-    audio_backend = f3rt::audio_backend_name(settings.audio_backend);
 #ifdef F3_PROFILE_SLIM_ENABLED
-    if (allow_fallback || !translated ||
-        (settings.audio_backend == f3rt::AudioBackend::Reference && !m.sound_native))
-        throw std::runtime_error(
-            "Profile-slim requires strict native main and sound CPUs; no interpreter fallback");
+    if (allow_fallback || !translated)
+        throw std::runtime_error("Profile-slim requires strict native main CPU; no interpreter fallback");
 #endif
 #ifdef F3_PROFILE_INSTRUMENT
-    if (!profile_path.empty() &&
-        (!translated || allow_fallback || settings.audio_backend != f3rt::AudioBackend::Reference ||
-         !m.sound_native))
-        throw std::runtime_error("Profiling requires strict native main and sound CPUs");
+    if (!profile_path.empty() && (!translated || allow_fallback))
+        throw std::runtime_error("Profiling requires strict native main CPU");
 #endif
     m.allow_main_fallback = allow_fallback;
 #ifdef F3RT_GAME_VIDEO
@@ -916,7 +876,6 @@ int main(int argc, char **argv) try {
 #endif
     ui_state.active_renderer = renderer;
     ui_state.set = set;
-    ui_state.enhanced_audio_available = m.audio->backend_available(f3rt::Audio::Backend::Enhanced);
     ui_state.message = settings_error;
     const auto *netplay_hook = f3rt::game_netplay();
     ui_state.netplay_supported = (netplay_hook != nullptr && netplay_hook->in_versus != nullptr);
@@ -1963,12 +1922,6 @@ int main(int argc, char **argv) try {
     if (m.discovery) m.discovery->finish(m);
     profile.flush();
     std::cout << "set=" << set << " frames=" << m.frame << " pc=0x" << std::hex << m.cpu.pc
-              << " sound_pc=0x" << m.sound_pc()
-              << " audio_backend=" << f3rt::audio_backend_name(settings.audio_backend)
-              << " sound_driver="
-              << (settings.audio_backend == f3rt::AudioBackend::Enhanced
-                      ? "none"
-                      : (m.sound_native ? "native" : "oracle"))
               << " frame_crc=0x"
               << f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),
                              m.native_pixels().size() * 4)
@@ -1999,8 +1952,8 @@ int main(int argc, char **argv) try {
                   << " elapsed_seconds="
                   << std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()
                   << '\n';
-    if (settings.audio_backend == f3rt::AudioBackend::Enhanced) {
-        const auto stats = m.audio->enhanced_stats();
+    {
+        const auto stats = m.audio->performance_stats();
         std::cout << "hle_commands=" << stats.commands
                   << " hle_rendered_frames=" << stats.rendered_frames
                   << " hle_voices_started=" << stats.voices_started

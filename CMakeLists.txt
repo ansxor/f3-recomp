@@ -3,7 +3,6 @@ option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
 option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
-option(F3RT_SOUND_NATIVE "Recompile the sound CPU and link the native sound program" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
 option(F3RT_HLE_EVENTS "Compile the HLE voice-event observer used by --hle-events and the HLE audio tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
@@ -42,12 +41,10 @@ endif()
 set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
 set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
-set(F3_SOUND_GENERATED_DIR "" CACHE PATH "Pre-generated sound CPU C directory (optional)")
 if(NINTENDO_3DS)
-    if(F3RT_SDL OR F3RT_GPU OR F3RT_NETPLAY OR F3RT_HOST_TOOLS OR BUILD_TESTING OR F3RT_SOUND_NATIVE)
+    if(F3RT_SDL OR F3RT_GPU OR F3RT_NETPLAY OR F3RT_HOST_TOOLS OR BUILD_TESTING)
         message(FATAL_ERROR "The 3DS build is core-only: configure with -DF3RT_SDL=OFF "
-            "-DF3RT_GPU=OFF -DF3RT_NETPLAY=OFF -DF3RT_HOST_TOOLS=OFF -DBUILD_TESTING=OFF "
-            "-DF3RT_SOUND_NATIVE=OFF")
+            "-DF3RT_GPU=OFF -DF3RT_NETPLAY=OFF -DF3RT_HOST_TOOLS=OFF -DBUILD_TESTING=OFF")
     endif()
     if(NOT F3_ROM_DIR)
         message(FATAL_ERROR "The 3DS build embeds the ROM set in RomFS: F3_ROM_DIR is required")
@@ -248,36 +245,6 @@ if(F3_ROM_DIR)
             "${F3_GENERATED_DIR}/program.bin"
         COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
             python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
-
-    if(F3RT_SOUND_NATIVE)
-        if(NOT F3_SOUND_GENERATED_DIR)
-            set(F3_SOUND_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/sound-${F3_GAME}")
-        endif()
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py")
-        set(F3_COMPILE_SOUND_ARGS
-            --rom-dir "${F3_ROM_DIR}" --output "${F3_SOUND_GENERATED_DIR}"
-            --config "${F3_GAME_CONFIG}"
-            ${F3_PROFILE_GENERATOR_ARGS})
-        f3_run_generator(
-            STAMP_FILE "${F3_SOUND_GENERATED_DIR}/compile_sound.stamp"
-            INPUT_FILES
-                "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sound.py"
-                ${RECOMP_SOURCES}
-                "${F3_GAME_CONFIG}"
-                ${F3_PROFILE_INPUTS}
-                "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-                "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-            EXTRA_DATA
-                "${_rom_identity}"
-                "${F3_COMPILE_SOUND_ARGS}"
-            OUTPUT_FILES
-                "${F3_SOUND_GENERATED_DIR}/sources.cmake"
-                "${F3_SOUND_GENERATED_DIR}/sound_program.c"
-                "${F3_SOUND_GENERATED_DIR}/sound_program.h"
-            COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-                python recomp/compile/sound.py ${F3_COMPILE_SOUND_ARGS})
-    endif()
 endif()
 
 set(MUSASHI ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/musashi)
@@ -352,9 +319,9 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/captured_frame.cpp
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
-    runtime/audio/audio.cpp runtime/audio/reference/engine.cpp
-    runtime/audio/sound_trace.cpp runtime/audio/reference/native/sound_native.cpp runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/audio/hle/audio.cpp runtime/audio/hle/core.cpp runtime/debug/replay.cpp
+    runtime/audio/audio.cpp
+    runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
+    runtime/audio/hle/core.cpp runtime/debug/replay.cpp
     runtime/audio/hle/command.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/patch.cpp
     runtime/audio/hle/program_service.cpp
     runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
@@ -394,14 +361,6 @@ if(F3_GENERATED_DIR)
         "${F3_GENERATED_DIR}/program.bin"
     )
 endif()
-if(F3_SOUND_GENERATED_DIR)
-    list(APPEND F3_SIMULATION_SOURCES
-        "${F3_SOUND_GENERATED_DIR}/sound_program.c"
-    )
-    list(APPEND F3_BUILD_IDENTITY_DEPS
-        "${F3_SOUND_GENERATED_DIR}/sound_program.c"
-    )
-endif()
 
 string(REPLACE ";" "\n" _inputs_txt "${F3_SIMULATION_SOURCES}")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt" CONTENT "${_inputs_txt}\n" @ONLY)
@@ -439,6 +398,10 @@ execute_process(
 
 add_library(f3rt STATIC ${F3RT_CORE_SOURCES})
 add_dependencies(f3rt f3rt_build_identity)
+
+add_library(f3rt-audio-reference STATIC runtime/audio/reference/engine.cpp runtime/audio/reference/board.cpp)
+target_include_directories(f3rt-audio-reference PUBLIC include runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(f3rt-audio-reference PUBLIC f3rt)
 
 
 
@@ -504,7 +467,6 @@ target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
 if(F3RT_HLE_EVENTS)
-    # PUBLIC: the headers hide set_hle_observer/VoiceEvent plumbing when this is 0.
     target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=1)
 else()
     target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=0)
@@ -521,22 +483,6 @@ if(F3_PROFILE_SLIM)
 endif()
 if(F3_GENERATED_DIR)
     add_subdirectory(recomp)
-endif()
-
-set(F3_SOUND_PROGRAM_AVAILABLE FALSE)
-if(F3RT_SOUND_NATIVE AND F3_SOUND_GENERATED_DIR)
-    set(F3_SOUND_PROGRAM_AVAILABLE TRUE)
-    include("${F3_SOUND_GENERATED_DIR}/sources.cmake")
-    add_library(f3_sound_recompiled STATIC ${F3_SOUND_GENERATED_SOURCES})
-    target_include_directories(f3_sound_recompiled PUBLIC
-        include "${CMAKE_CURRENT_SOURCE_DIR}" "${F3_SOUND_GENERATED_DIR}")
-    target_link_libraries(f3_sound_recompiled PUBLIC f3rt)
-    if(F3_PROFILE_TIERS)
-        set_source_files_properties(${F3_SOUND_GENERATED_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS -O2)
-        if(F3_SOUND_GENERATED_COLD_SOURCES)
-            set_source_files_properties(${F3_SOUND_GENERATED_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${F3_PROFILE_COLD_OPT}")
-        endif()
-    endif()
 endif()
 
 if(F3RT_HOST_TOOLS)
@@ -581,9 +527,6 @@ if(F3RT_SDL)
     target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(f3rt-ui PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
     target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui f3rt-frontend)
-    if(F3_SOUND_PROGRAM_AVAILABLE)
-        target_compile_definitions(f3rt-ui PRIVATE F3RT_SOUND_GENERATED=1)
-    endif()
     add_executable(f3rt-run runtime/frontend/frontend.cpp)
     target_include_directories(f3rt-run PRIVATE runtime)
     target_link_libraries(f3rt-run PRIVATE f3rt f3rt-ui SDL3::SDL3)
@@ -631,21 +574,9 @@ if(F3RT_SDL)
         endforeach()
     endif()
 endif()
-if(F3_SOUND_PROGRAM_AVAILABLE)
-    foreach(frontend f3rt-tool f3rt-run ${F3_GAME_EXECUTABLE})
-        if(TARGET ${frontend})
-            target_link_libraries(${frontend} PRIVATE f3_sound_recompiled)
-            target_compile_definitions(${frontend} PRIVATE F3RT_SOUND_GENERATED=1)
-        endif()
-    endforeach()
-    if(TARGET f3rt-runner)
-        target_link_libraries(f3rt-runner PRIVATE f3_sound_recompiled)
-        target_compile_definitions(f3rt-runner PRIVATE F3RT_SOUND_GENERATED=1)
-    endif()
-endif()
 if(F3RT_HOST_TOOLS)
     add_executable(f3rt-replay runtime/replay.cpp)
-    target_link_libraries(f3rt-replay PRIVATE f3rt)
+    target_link_libraries(f3rt-replay PRIVATE f3rt f3rt-audio-reference)
     target_compile_definitions(f3rt-replay PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 endif()
 include(CTest)
@@ -673,7 +604,7 @@ if(BUILD_TESTING)
     endforeach()
     # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
     target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
-    target_link_libraries(f3rt-test-audio PRIVATE f3rt-frontend)
+    target_link_libraries(f3rt-test-audio PRIVATE f3rt-frontend f3rt-audio-reference)
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)

@@ -28,9 +28,6 @@
 #ifdef F3RT_GENERATED
 #include "program.h"
 #endif
-#ifdef F3RT_SOUND_GENERATED
-#include "sound_program.h"
-#endif
 
 namespace f3rt::tool {
 namespace {
@@ -120,10 +117,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--inject-trails") o.injections[1] = true;
         else if (arg == "--inject-globalflip") o.injections[2] = true;
         else if (arg == "--inject-sprite-boundaries") o.injections[3] = true;
-        else if (arg == "--sound-driver") {
-            if (value() != "native")
-                throw std::runtime_error("GPU regression requires --sound-driver native");
-        } else if (arg == "--help" || arg == "-h") {
+        else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Strict-native GPU parity for the configured game; optional presentation-only "
                    "interpolation.\n"
@@ -132,7 +126,7 @@ Options parse(int argc, char **argv) {
                    "--every N (1) --layers (all nine isolated contributions plus composite)\n"
                    "--bench (600-frame varied-scene warmup; 100 repeats on final supported "
                    "snapshot)\n"
-                   "--dump-dir DIR (external PNG captures) --sound-driver native\n"
+                   "--dump-dir DIR (external PNG captures)\n"
                    "--interp off|linear|fit (off) --capture-frame N (repeatable; requires "
                    "--dump-dir)\n"
                    "--interp-fields none|geometry|palette|geometry,palette (geometry; native alpha "
@@ -1193,11 +1187,6 @@ std::unique_ptr<f3rt::Machine> clone_machine(const Options &options) {
     if (!f3_generated_register(&machine->cpu))
         throw std::runtime_error("CPU peer registration failed");
 #endif
-#ifdef F3RT_SOUND_GENERATED
-    machine->use_native_sound(f3_sound_blocks, f3_sound_block_count,
-                              {f3_sound_excluded_ranges, f3_sound_excluded_count},
-                              f3_sound_rom_crc32);
-#endif
     return machine;
 }
 // Saving after several trail frames must retain every intervening sprite list.
@@ -1650,7 +1639,7 @@ int cmd_gpu_compare(int argc, char **argv) try {
               << " actual_oracle_transitions=" << transitions
               << " native_blocks=" << m.native_blocks
               << " fallback_instructions=" << m.fallback_instructions << " cycles=" << m.cpu.cycles
-              << " sound_driver=native audio_frames=" << audio_frames << " audio_peak=" << peak
+              << " audio_frames=" << audio_frames << " audio_peak=" << peak
               << " nonzero_audio_samples=" << nonzero << " audio_crc=0x" << std::hex
               << (audio_crc ^ 0xffffffffu) << " frame_crc=0x" << frame_crc << " state_crc=0x"
               << m.state_crc() << std::dec << " elapsed_seconds=" << seconds

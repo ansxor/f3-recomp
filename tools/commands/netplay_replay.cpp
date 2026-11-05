@@ -49,7 +49,6 @@ void print_help() {
               << "  --max-diff N     Differing bytes to list (default 64)\n"
               << "  --gpu 0|1        Override the recorded machine: GPU game video (bundles from "
                  "before info.json recorded it)\n"
-              << "  --audio NAME     Override the recorded audio backend: enhanced | reference\n"
               << "  --dump-state FRAME OUT  Replay one bundle to match frame FRAME and write the "
                  "machine state to OUT\n"
               << "  --help, -h       Show this help message\n";
@@ -68,7 +67,6 @@ struct Bundle {
     std::vector<uint8_t> trigger, hashed;
     uint64_t seed = 0, frame = 0, interval = 60, hashed_len = 0, recorded_crc = 0, player = 0;
     int gpu = -1;             // machine_gpu from info.json, -1 = not recorded
-    std::string audio;        // audio_backend from info.json, empty = not recorded
     bool legacy_hash = false; // no hash_layout in info.json
     std::unique_ptr<Machine> machine;
     uint64_t replayed = 0; // match frames run so far
@@ -99,84 +97,57 @@ Bundle load_bundle(const fs::path &dir) {
     b.recorded_crc = info.recorded_crc.value_or(0);
     b.player = info.player_index.value_or(0);
     if (info.machine_gpu) b.gpu = int(*info.machine_gpu);
-    if (info.audio_backend) b.audio = *info.audio_backend;
     b.legacy_hash = !info.hash_layout.has_value();
     if (b.interval == 0) b.interval = 60;
     return b;
 }
 
-// Builds the machine the bundle was recorded on: GPU game video on/off and the audio backend change the state layout.
-// Source order: command-line override, info.json, then (old bundles without config) whichever of the four combinations
-// has the same state size as trigger.f3s.
-std::unique_ptr<Machine> make_machine(const fs::path &rom_dir, const std::string &set, bool gpu,
-                                      Audio::Backend backend) {
+std::unique_ptr<Machine> make_machine(const fs::path &rom_dir, const std::string &set, bool gpu) {
     auto m = runner::create_strict_machine(rom_dir, set, gpu, 1);
     if (gpu && !m->game_video) {
         throw std::runtime_error("this f3rt-tool build has no GPU game video (F3RT_GAME_VIDEO); "
                                  "cannot replay a GPU-machine bundle");
     }
-    try {
-        m->audio->set_backend(backend);
-    } catch (const std::exception &e) {
-        throw std::runtime_error(std::string("audio backend '") + Audio::backend_name(backend) +
-                                 "' is unavailable in this build: " + e.what());
-    }
     return m;
 }
 
-Audio::Backend parse_audio(const std::string &name) {
-    Audio::Backend b;
-    if (!Audio::parse_backend(name, b))
-        throw std::runtime_error("audio backend must be enhanced or reference, got '" + name + "'");
-    return b;
-}
-
 std::unique_ptr<Machine> build_machine(const Bundle &b, const fs::path &rom_dir,
-                                       const std::string &set, int gpu_override,
-                                       const std::string &audio_override) {
+                                       const std::string &set, int gpu_override) {
     const int gpu = gpu_override >= 0 ? gpu_override : b.gpu;
-    const std::string audio = !audio_override.empty() ? audio_override : b.audio;
     std::unique_ptr<Machine> m;
-    if (gpu >= 0 && !audio.empty()) {
-        m = make_machine(rom_dir, set, gpu == 1, parse_audio(audio));
-        std::cout << "MACHINE gpu=" << gpu << " audio=" << audio << " source="
-                  << ((gpu_override >= 0 || !audio_override.empty()) ? "command line" : "info.json")
-                  << "\n";
+    if (gpu >= 0) {
+        m = make_machine(rom_dir, set, gpu == 1);
+        std::cout << "MACHINE gpu=" << gpu
+                  << " source=" << (gpu_override >= 0 ? "command line" : "info.json") << "\n";
     } else {
-        // No (complete) recorded config: pick the combination whose state size equals trigger.f3s.
         for (int g = 1; g >= 0 && !m; --g) {
-            for (auto be : {Audio::Backend::Enhanced, Audio::Backend::Reference}) {
-                if (gpu >= 0 && g != gpu) continue;
-                if (!audio.empty() && be != parse_audio(audio)) continue;
-                std::unique_ptr<Machine> cand;
-                try {
-                    cand = make_machine(rom_dir, set, g == 1, be);
-                } catch (const std::exception &) {
-                    continue; // combination unavailable in this build
-                }
-                if (cand->state_size() == b.trigger.size()) {
-                    m = std::move(cand);
-                    std::cout << "MACHINE gpu=" << g << " audio=" << Audio::backend_name(be)
-                              << " source=state-size-match\n";
-                    break;
-                }
+            std::unique_ptr<Machine> cand;
+            try {
+                cand = make_machine(rom_dir, set, g == 1);
+            } catch (const std::exception &) {
+                continue;
+            }
+            if (cand->state_size() == b.trigger.size()) {
+                m = std::move(cand);
+                std::cout << "MACHINE gpu=" << g << " source=state-size-match\n";
             }
         }
         if (!m) {
             throw std::runtime_error(
                 b.dir.string() + ": trigger.f3s is " + std::to_string(b.trigger.size()) +
                 " bytes and no machine configuration available in this build has that state size; "
-                "give --gpu 0|1 and --audio enhanced|reference");
+                "give --gpu 0|1");
         }
     }
     if (b.trigger.size() != m->state_size()) {
         throw std::runtime_error(
             b.dir.string() + ": trigger.f3s is " + std::to_string(b.trigger.size()) +
             " bytes, the requested machine's state is " + std::to_string(m->state_size()) +
-            " (wrong --gpu/--audio, different build or ROM set?)");
+            " (wrong --gpu, different build or ROM set?)");
     }
     return m;
 }
+
 size_t region_of(Machine &m, const GameNetplay *hook, std::array<uint8_t, 2048> &buf,
                  uint8_t &phase) {
     return hook->sync_hash_region(m, buf, phase);
@@ -247,7 +218,6 @@ int cmd_netplay_replay(int argc, char **argv) try {
     int64_t dump_frame = -1;
     fs::path dump_path;
     int gpu_override = -1;
-    std::string audio_override;
 #ifdef F3RT_DEFAULT_ROM_DIR
     rom_dir = F3RT_DEFAULT_ROM_DIR;
 #endif
@@ -266,8 +236,6 @@ int cmd_netplay_replay(int argc, char **argv) try {
             const std::string v = value();
             if (v != "0" && v != "1") throw std::runtime_error("--gpu must be 0 or 1");
             gpu_override = v == "1" ? 1 : 0;
-        } else if (arg == "--audio") {
-            audio_override = value();
         } else if (arg == "--dump-state") {
             dump_frame = std::stoll(value());
             dump_path = value();
@@ -292,7 +260,7 @@ int cmd_netplay_replay(int argc, char **argv) try {
     std::transform(bundle_dirs.begin(), bundle_dirs.end(), std::back_inserter(bundles),
                    load_bundle);
     for (auto &b : bundles) {
-        b.machine = build_machine(b, rom_dir, set, gpu_override, audio_override);
+        b.machine = build_machine(b, rom_dir, set, gpu_override);
         b.machine->load_state(b.trigger);
         std::cout << "BUNDLE " << b.dir.string() << " player=" << b.player << " frame=" << b.frame
                   << " seed=" << b.seed << " inputs=" << b.inputs.frames.size() << " "

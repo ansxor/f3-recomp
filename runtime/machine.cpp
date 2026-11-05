@@ -3,8 +3,6 @@
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
-#include "audio/sound_trace.hpp"
-#include "audio/reference/native/sound_native.hpp"
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "debug/discovery.hpp"
@@ -50,8 +48,8 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
 } // namespace
 Machine::Machine(RomSet set)
     : m_pixels(size_t(320) * set.video.visible_height), roms(std::move(set)),
-      video(std::make_unique<Video>()), audio(std::make_unique<Audio>()),
-      eeprom(std::make_unique<Eeprom>()), sound_bankswitch(roms.sound_bankswitch) {
+      video(std::make_unique<Video>()), eeprom(std::make_unique<Eeprom>()),
+      sound_bankswitch(roms.sound_bankswitch) {
     if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
         roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
@@ -62,14 +60,12 @@ Machine::Machine(RomSet set)
     std::vector<uint8_t>().swap(roms.sprites_hi);
     std::vector<uint8_t>().swap(roms.tiles);
     std::vector<uint8_t>().swap(roms.tiles_hi);
-    audio->set_shared_ram(shared.data(), shared.size());
-    audio->load_sound_rom(roms.sound);
-    audio->load_sample_rom(roms.samples);
+    auto sample_words = decode_sample_words(roms.samples);
+    if (!Audio::supported(roms.sound, sample_words))
+        throw std::runtime_error("Audio is not supported for this game");
+    audio = std::make_unique<Audio>(roms.sound, std::move(sample_words), shared.data());
     std::vector<uint8_t>().swap(roms.samples);
     interpreter = std::make_unique<Interpreter>(*this);
-    audio->set_cpu_runner([this](int cycles) { return interpreter->run_audio(cycles); });
-    audio->set_reset_callback([this](bool asserted) { interpreter->audio_reset(asserted); });
-    audio->set_irq_callback([this](bool asserted) { interpreter->audio_irq(asserted); });
     if (!roms.factory_eeprom.empty()) {
         if (roms.factory_eeprom.size() != eeprom->words.size() * 2)
             throw std::runtime_error("Factory EEPROM ROM must be exactly 128 bytes");
@@ -86,23 +82,6 @@ Machine::~Machine() = default;
 const std::vector<uint32_t> &Machine::native_pixels() const {
     if (game_video) game_video->materialize_native();
     return m_pixels;
-}
-void Machine::use_native_sound(const f3_block *program, size_t count,
-                               std::span<const f3_excluded_range> excluded, uint32_t expected_crc) {
-    if (audio->is_enhanced_active())
-        throw std::runtime_error("HLE audio does not execute a native sound driver");
-    if (!audio->is_reset() || audio->clock_ticks())
-        throw std::runtime_error("Select the native sound driver before machine execution");
-    sound_native = std::make_unique<SoundNative>(*this, program, count, excluded, expected_crc);
-    audio->set_cpu_runner([this](int cycles) { return sound_native->run(cycles); });
-    audio->set_reset_callback([this](bool asserted) { sound_native->reset(asserted); });
-    // Native SR/IRQ recognition reads the DUART's current line directly.
-    audio->set_irq_callback({});
-    sound_native->reset(true);
-}
-uint32_t Machine::sound_pc() const {
-    if (audio->is_enhanced_active()) return 0;
-    return sound_native ? sound_native->pc() : interpreter->sound_pc();
 }
 uint64_t Machine::raster_cycle(uint64_t pixels) const {
     return (pixels * MAIN_CLOCK + PIXEL_CLOCK - 1) / PIXEL_CLOCK;
@@ -133,7 +112,6 @@ void Machine::reset() {
     m_next_vblank = raster_cycle(FRAME_PIXELS);
     reset_devices();
     audio->reset_board();
-    if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
     video->reset();
     if (game_video) game_video->reset();
     reset_main_cpu();
@@ -218,14 +196,12 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a >= SHARED_BASE && a < SHARED_END) {
-        if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
         shared[a - SHARED_BASE] = v;
         audio->shared_write(a - SHARED_BASE);
         return;
     }
     if ((a >= SOUND_RESET_RELEASE && a < SOUND_RESET_RELEASE + 4) ||
         (a >= SOUND_RESET_ASSERT && a < SOUND_RESET_ASSERT + 4)) {
-        if (sound_trace) sound_trace->record(*this, SoundTrace::MainWrite, cpu.pc, a, v, 1);
         audio->set_reset(a >= SOUND_RESET_ASSERT);
         return;
     }
@@ -348,7 +324,6 @@ int Machine::boundary() {
     if (cpu.cycles >= m_watchdog_at) {
         reset_devices();
         audio->reset_board();
-        if (sound_trace) sound_trace->record(*this, SoundTrace::Reset, cpu.pc, 0, 2, 0);
         reset_main_cpu();
         return 1;
     }
@@ -415,10 +390,6 @@ size_t Machine::state_size() const {
                 palette.size() + graphics.size() + control.size() + shared.size() +
                 sizeof(uint32_t) * m_pixels.size() + eeprom->state_size() + audio->state_size() +
                 video->state_size();
-    if (!audio->is_enhanced_active()) {
-        if (sound_native) sz += sound_native->state_size();
-        else sz += interpreter->sound_state_size();
-    }
     if (game_video) sz += game_video->state_size();
     return sz;
 }
@@ -495,20 +466,12 @@ void Machine::save_state(std::span<uint8_t> dst) const {
         writer.advance(audio->state_size());
     }
 
-    // 6. Sound CPU
-    if (!audio->is_enhanced_active()) {
-        if (sound_native) sound_native->save_state(writer);
-        else interpreter->save_sound_state(writer);
-    }
-
-    // 7. Video (always FDP)
     {
         std::span<uint8_t> v_slice(writer.current(), video->state_size());
         video->save_state(v_slice);
         writer.advance(video->state_size());
     }
 
-    // 8. GameVideo (when present)
     if (game_video) {
         const size_t size = game_video->state_size();
         std::span<uint8_t> gv_slice(writer.current(), size);
@@ -597,25 +560,17 @@ void Machine::load_state(std::span<const uint8_t> src) {
         reader.skip(audio->state_size());
     }
 
-    // 6. Sound CPU
-    if (!audio->is_enhanced_active()) {
-        if (sound_native) sound_native->load_state(reader);
-        else interpreter->load_sound_state(reader);
-    }
-
     // Also sync main interpreter context so Musashi is ready for any fallback
     if (interpreter) {
         interpreter->sync_main_from_cpu();
     }
 
-    // 7. Video (always FDP)
     {
         std::span<const uint8_t> v_slice(reader.current(), video->state_size());
         video->load_state(v_slice);
         reader.skip(video->state_size());
     }
 
-    // 8. GameVideo (when present)
     if (game_video) {
         const size_t size = game_video->state_size();
         std::span<const uint8_t> gv_slice(reader.current(), size);

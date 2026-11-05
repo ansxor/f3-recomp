@@ -1,6 +1,6 @@
-#include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
-#include "f3rt/rom.hpp"
+#include "f3rt/memory_map.hpp"
+#include "f3rt/bytes.hpp"
+#include "audio/reference/board.hpp"
 #include "audio/hle/effects.hpp"
 #include "audio/hle/clock.hpp"
 #include "audio/hle/events.hpp"
@@ -9,8 +9,11 @@
 #include "audio/hle/patch.hpp"
 #include "audio/hle/pulse_timer.hpp"
 #include "audio/hle/voice_filter.hpp"
+#include "audio/pcm_ring.hpp"
+#include "audio/shared_mailbox.hpp"
+#include "audio/snapshot.hpp"
+#include "audio/worker_queue.hpp"
 #include "audio/hle/sound_rom_5a7e9117.hpp"
-#include "interpreter.hpp"
 #include "third_party/audio/mc68681.hpp"
 #include "third_party/audio/es5510.hpp"
 #include "state_io.hpp"
@@ -20,259 +23,28 @@
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <initializer_list>
+#include <latch>
 #include <memory>
 #include <random>
+#include <span>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
-using f3test::fixture;
-
 namespace {
-// Sound-side scratch and vector addresses (sound bus) used by the test programs.
-constexpr uint32_t SND_PROGRAM = 0x100;       // mailbox-copy program image
-constexpr uint32_t SND_IRQ_VECTOR_64 = 0x100; // vector slot for DUART vector 64
-constexpr uint32_t SND_CODE_BASE = 0x1000;    // foreground / executed-instruction code
-constexpr uint32_t SND_HANDLER_BASE = 0x2000; // DUART IRQ handler
-constexpr uint32_t SND_EXEC_SOURCE = 0x4000;  // operand scratch
-constexpr uint32_t SND_RESULT_D0 = 0x1500;
-constexpr uint32_t SND_RESULT_A1 = 0x1504;
-constexpr uint32_t SND_RESULT_SR = 0x1508;
-constexpr uint32_t SND_WORK_BYTE = 0x600;   // mailbox copy destination
-constexpr uint32_t SND_IRQ_RECORDS = 0x600; // ten 4-byte IRQ records
-constexpr uint16_t hi16(uint32_t a) { return uint16_t(a >> 16); }
-constexpr uint16_t lo16(uint32_t a) { return uint16_t(a); }
+constexpr uint32_t SND_WORK_BYTE = 0x600;
 // DUART register n on the sound bus (odd byte lane).
 constexpr uint32_t duart_reg(uint32_t reg) { return f3rt::SOUND_DUART_BASE + 2 * reg + 1; }
-constexpr uint32_t SND_STACK_SR = 0xfefa; // stacked SR of a vectored IRQ entry
-constexpr uint32_t SND_STACK_PC = 0xfefc; // stacked return PC of a vectored IRQ entry
 // ES5505 (OTIS) register n on the sound bus (16-bit, even byte lane).
 constexpr uint32_t otis_reg(uint32_t reg) { return f3rt::SOUND_ES5505_BASE + 2 * reg; }
-std::unique_ptr<f3rt::Machine> make_sound_machine() {
-    auto roms = fixture();
-    roms.sound[2] = 0x80;
-    roms.sound[6] = 1; // SSP 8000, PC 100.
-    auto m = std::make_unique<f3rt::Machine>(std::move(roms));
-    // Real sound CPU: snapshot mailbox byte zero, post a reply, then loop.
-    const uint16_t code[] = {0x13f9,
-                             hi16(f3rt::SOUND_SHARED_BASE),
-                             lo16(f3rt::SOUND_SHARED_BASE),
-                             0x0000,
-                             lo16(SND_WORK_BYTE),
-                             0x13fc,
-                             0x005a,
-                             hi16(f3rt::SOUND_SHARED_BASE + 2),
-                             lo16(f3rt::SOUND_SHARED_BASE + 2),
-                             0x60fe};
-    for (unsigned i = 0; i < std::size(code); ++i) m->audio->write16(SND_PROGRAM + 2 * i, code[i]);
-    m->write8(f3rt::SHARED_BASE, 0x11);
-    return m;
+f3rt::reference::Board make_board(std::span<const uint8_t> sample_rom = {}, uint8_t *shared = nullptr) {
+    return f3rt::reference::Board({}, sample_rom, shared);
 }
-
-struct SoundExecResult {
-    int cycles;
-    uint32_t d0, a1;
-    uint16_t sr;
-};
-SoundExecResult execute_sound_instruction(f3rt::Machine &m,
-                                          std::initializer_list<uint16_t> instruction,
-                                          uint32_t source = 0, uint32_t d0 = 0) {
-    m.audio->set_reset(true);
-    m.audio->write32(0, 0xff00);
-    m.audio->write32(4, SND_CODE_BASE);
-    m.audio->write32(SND_EXEC_SOURCE, source << 16);
-    uint32_t pc = SND_CODE_BASE;
-    const auto emit = [&](uint16_t word) {
-        m.audio->write16(pc, word);
-        pc += 2;
-    };
-    for (uint16_t word : {uint16_t(0x203c), uint16_t(d0 >> 16), uint16_t(d0), uint16_t(0x223c),
-                          uint16_t(source >> 16), uint16_t(source), uint16_t(0x227c), uint16_t(0),
-                          lo16(SND_EXEC_SOURCE), uint16_t(0x46fc), uint16_t(0x271b)})
-        emit(word);
-    for (auto word : instruction) emit(word);
-    for (uint16_t word : {uint16_t(0x40f8), lo16(SND_RESULT_SR), uint16_t(0x21c0),
-                          lo16(SND_RESULT_D0), uint16_t(0x21c9), lo16(SND_RESULT_A1)})
-        emit(word);
-    m.audio->set_reset(false);
-    for (int i = 0; i < 5; ++i) m.interpreter->run_audio(1);
-    const int cycles = m.interpreter->run_audio(1);
-    for (int i = 0; i < 3; ++i) m.interpreter->run_audio(1);
-    const SoundExecResult result{cycles, m.audio->read32(SND_RESULT_D0),
-                                 m.audio->read32(SND_RESULT_A1), m.audio->read16(SND_RESULT_SR)};
-    m.audio->set_reset(true);
-    return result;
-}
-
-class AudioMachineTest : public ::testing::Test {
-protected:
-    std::unique_ptr<f3rt::Machine> m_m;
-
-    void SetUp() override { m_m = std::make_unique<f3rt::Machine>(fixture()); }
-};
-} // namespace
-
-TEST(Audio, SoundResetReleaseOrdering) {
-    auto m = make_sound_machine();
-    m->cpu.cycles = 2048;
-    f3_write16(&m->cpu, f3rt::SOUND_RESET_RELEASE, 0);
-    m->boundary();
-    EXPECT_TRUE(m->audio->read8(SND_WORK_BYTE) == 0 && m->shared[1] == 0)
-        << "Sound reset release cannot execute the CPU during preceding main-block time";
-    m->cpu.cycles += 1024;
-    m->boundary();
-    EXPECT_TRUE(m->audio->read8(SND_WORK_BYTE) == 0x11 && m->shared[1] == 0x5a)
-        << "Sound CPU executes the mailbox program after reset release";
-}
-
-TEST(Audio, SoundBankswitchIndexMapping) {
-    auto m = make_sound_machine();
-    EXPECT_EQ(m->audio->sound_bank(), 1u);
-
-    // When sound_bankswitch is disabled (default for unbanked games), writes are ignored
-    m->sound_bankswitch = false;
-    m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 2 * 4, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 1u);
-
-    // Enable bankswitch (kirameki)
-    m->sound_bankswitch = true;
-
-    // 16-bit word writes (move.w): addr = 0x300000 + bank * 2
-    // Banks 1..7 map to pages 1..7
-    for (uint32_t bank = 1; bank <= 7; ++bank) {
-        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
-        EXPECT_EQ(m->audio->sound_bank(), bank) << "16-bit write for bank " << bank;
-    }
-
-    // Banks 8..15 wrap with idx -= 8 -> pages 0..7
-    for (uint32_t bank = 8; bank <= 15; ++bank) {
-        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
-        EXPECT_EQ(m->audio->sound_bank(), bank - 8) << "16-bit write for bank " << bank;
-    }
-
-    // Banks 16..31 map to pages 8..23
-    for (uint32_t bank = 16; bank <= 31; ++bank) {
-        m->write16(f3rt::MAIN_SOUND_BANKSWITCH_BASE + bank * 2, 0);
-        EXPECT_EQ(m->audio->sound_bank(), bank - 8) << "16-bit write for bank " << bank;
-    }
-
-    // 8-bit byte writes (move.b)
-    // High byte of word 0 (0x300000) -> bank 0 -> page 0
-    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 0u);
-    // Low byte of word 0 (0x300001) -> bank 0 -> page 0
-    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 1, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 0u);
-    // High byte of word 1 (0x300002) -> bank 1 -> page 1
-    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 2, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 1u);
-    // Low byte of word 1 (0x300003) -> bank 1 -> page 1
-    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 3, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 1u);
-    // Bank 16 (0x300000 + 32 = 0x300020): word 16 -> idx 16 -> page 8
-    m->write8(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 32, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 8u);
-
-    // 32-bit dword writes (move.l)
-    // Dword 0 touches low 16 bits (bank 1) -> page 1
-    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 1u);
-    // Dword 1 touches bank 3 -> page 3
-    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 4, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 3u);
-    // Dword 8 (offset 0x20 = 32) touches bank 17 -> idx 17 -> page 9
-    m->write32(f3rt::MAIN_SOUND_BANKSWITCH_BASE + 32, 0);
-    EXPECT_EQ(m->audio->sound_bank(), 9u);
-}
-
-TEST(Audio, MailboxWidthWrites) {
-    for (unsigned width : {1, 2, 4}) {
-        auto m = make_sound_machine();
-        m->audio->set_reset(false);
-        m->cpu.cycles = 1024;
-        if (width == 1) f3_write8(&m->cpu, f3rt::SHARED_BASE, 0x22);
-        else if (width == 2) f3_write16(&m->cpu, f3rt::SHARED_BASE, 0x2233);
-        else
-            f3_write32(&m->cpu, f3rt::SHARED_BASE - 1,
-                       0x99223344); // Unaligned access enters shared RAM.
-        m->boundary();
-        EXPECT_TRUE(m->audio->read8(SND_WORK_BYTE) == 0x11 && m->shared[0] == 0x22)
-            << "Mailbox writes become visible only after preceding sound execution";
-    }
-}
-
-TEST(Audio, MailboxWidthReads) {
-    for (unsigned width : {1, 2, 4}) {
-        auto m = make_sound_machine();
-        m->audio->set_reset(false);
-        m->cpu.cycles = 1024;
-        const uint32_t value = width == 1   ? f3_read8(&m->cpu, f3rt::SHARED_BASE + 1)
-                               : width == 2 ? f3_read16(&m->cpu, f3rt::SHARED_BASE)
-                                            : f3_read32(&m->cpu, f3rt::SHARED_BASE - 1);
-        EXPECT_EQ(value, (width == 1   ? 0x5au
-                          : width == 2 ? 0x115au
-                                       : 0xff115a00u))
-            << "Mailbox reads observe sound replies produced before the current main instruction";
-    }
-}
-
-TEST(Audio, ResetInstructionPreservesPrecedingSoundExecution) {
-    for (bool reset_instruction : {false, true}) {
-        auto m = make_sound_machine();
-        m->audio->set_reset(false);
-        m->cpu.cycles = 1024;
-        if (reset_instruction) f3_reset_devices(&m->cpu);
-        else f3_write8(&m->cpu, f3rt::SOUND_RESET_ASSERT, 0);
-        m->boundary();
-        EXPECT_TRUE(m->audio->is_reset() && m->audio->read8(SND_WORK_BYTE) == 0x11 &&
-                    m->shared[1] == 0x5a)
-            << "Reset assertion preserves sound execution preceding the reset instruction";
-    }
-}
-
-TEST(Audio, SoundIrqPartitioningIndependence) {
-    const auto run = [](unsigned quantum) {
-        auto m = std::make_unique<f3rt::Machine>(fixture());
-        m->audio->write32(0, 0xff00);
-        m->audio->write32(4, SND_CODE_BASE);
-        m->audio->write32(SND_IRQ_VECTOR_64, SND_HANDLER_BASE);
-        // Foreground counts iterations; each timer IRQ records the interrupted count.
-        const uint16_t foreground[] = {0x7000, 0x227c, 0,      lo16(SND_IRQ_RECORDS),
-                                       0x46fc, 0x2000, 0x5280, 0x60fc};
-        const uint16_t handler[] = {0x22c0, 0x1239, hi16(duart_reg(15)), lo16(duart_reg(15)),
-                                    0x4e73};
-        for (unsigned i = 0; i < std::size(foreground); ++i)
-            m->audio->write16(SND_CODE_BASE + 2 * i, foreground[i]);
-        for (unsigned i = 0; i < std::size(handler); ++i)
-            m->audio->write16(SND_HANDLER_BASE + 2 * i, handler[i]);
-        m->audio->write8(duart_reg(12), 64);
-        m->audio->write8(duart_reg(5), 8);
-        m->audio->write8(duart_reg(6), 0);
-        m->audio->write8(duart_reg(7), 125);
-        m->audio->write8(duart_reg(4), 0x60);
-        m->audio->set_reset(false);
-        for (unsigned elapsed = 0; elapsed < 10050;) {
-            const unsigned step = quantum < 10050 - elapsed ? quantum : 10050 - elapsed;
-            m->audio->advance(step);
-            elapsed += step;
-        }
-        std::array<uint32_t, 11> state{};
-        for (unsigned i = 0; i < 10; ++i) {
-            state[i] = m->audio->read32(SND_IRQ_RECORDS + 4 * i);
-            EXPECT_GT(state[i], (i ? state[i - 1] : 0))
-                << "Each periodic IRQ observes further real foreground execution";
-        }
-        EXPECT_EQ(m->audio->read32(SND_IRQ_RECORDS + 4 * 10), 0)
-            << "Ten elapsed timer deadlines produce exactly ten interrupt records";
-        state[10] = m->interpreter->sound_pc();
-        return state;
-    };
-    const auto single_clock = run(1);
-    for (unsigned quantum : {7, 64, 511, 4096})
-        EXPECT_EQ(run(quantum), single_clock) << "Sound IRQ recognition and CPU state are "
-                                                 "independent of main-block time partitioning";
 }
 
 TEST(Audio, DuartCounterRestartAndExpiry) {
@@ -466,175 +238,6 @@ TEST(Audio, DuartCounterDerivedTxClock) {
     EXPECT_EQ(counter_clock.read(9) & 0x0c, 0x0c)
         << "Counter-derived 8N2 frame completes at its eleventh serial edge";
 }
-
-TEST_F(AudioMachineTest, SoundInstructionCycleCharges) {
-    const auto execute = [&](std::initializer_list<uint16_t> instruction, uint32_t source = 0,
-                             uint32_t d0 = 0) {
-        return execute_sound_instruction(*m_m, instruction, source, d0);
-    };
-
-    const auto quick = execute({0x5049});
-    EXPECT_TRUE(quick.cycles == 8 && quick.a1 == 0x4008 && quick.sr == 0x271b)
-        << "68000 ADDQ.W to an address register takes eight cycles and preserves flags";
-    EXPECT_EQ(execute({0x544f}).cycles, 8)
-        << "68000 ADDQ.W stack adjustment has the same full cost";
-    EXPECT_TRUE(execute({0xd2fc, 10}).cycles == 12 && execute({0x92fc, 10}).cycles == 12)
-        << "68000 immediate word address arithmetic has no long-operand surcharge";
-    EXPECT_TRUE(execute({0xd3fc, 0, 10}).cycles == 16 && execute({0x93fc, 0, 10}).cycles == 16)
-        << "68000 immediate long address arithmetic retains its surcharge";
-    for (uint16_t family : {0xd000, 0x9000, 0xc000, 0x8000}) {
-        EXPECT_TRUE(execute({uint16_t(family | 0x3c), 1}).cycles == 8 &&
-                    execute({uint16_t(family | 0x7c), 1}).cycles == 8 &&
-                    execute({uint16_t(family | 0xbc), 0, 1}).cycles == 16)
-            << "68000 immediate EA arithmetic charges byte, word and long operands distinctly";
-        EXPECT_EQ(execute({uint16_t(family | 0x81)}).cycles, 8)
-            << "68000 long register arithmetic takes eight cycles";
-        if (family == 0xd000 || family == 0x9000)
-            EXPECT_EQ(execute({uint16_t(family | 0x89)}).cycles, 8)
-                << "68000 long arithmetic accepts address-register sources";
-    }
-    for (uint16_t opcode : {0xd3c0, 0xd3c8, 0x93c0, 0x93c8})
-        EXPECT_EQ(execute({opcode}).cycles, 8)
-            << "68000 long address arithmetic has an eight-cycle register cost";
-    const auto tas = execute({0x4ad1});
-    EXPECT_TRUE(tas.cycles == 14 && tas.sr == 0x2714 && m_m->audio->read8(SND_EXEC_SOURCE) == 0x80)
-        << "68000 memory TAS charges its read-modify-write once and reports the original byte";
-    EXPECT_TRUE(execute({0x4ac0}).cycles == 4 && execute({0x4ad9}).cycles == 14 &&
-                execute({0x4ae1}).cycles == 16 && execute({0x4ae9, 16}).cycles == 18 &&
-                execute({0x4af8, SND_EXEC_SOURCE}).cycles == 18 &&
-                execute({0x4af9, 0, SND_EXEC_SOURCE}).cycles == 22)
-        << "68000 TAS retains register and effective-address timing distinctions";
-
-    for (unsigned kind = 1; kind <= 3; ++kind)
-        for (unsigned bit : {0, 2, 15, 16, 31, 32, 47, 48, 63}) {
-            const int cycles = (kind == 2 ? 8 : 6) + ((bit & 31) >= 16 ? 2 : 0);
-            const uint32_t result = kind == 2 ? 0 : 1u << (bit & 31);
-            const auto reg = execute({uint16_t(0x0300 | (kind << 6))}, bit);
-            const auto immediate = execute({uint16_t(0x0800 | (kind << 6)), uint16_t(bit)});
-            EXPECT_TRUE(reg.cycles == cycles && immediate.cycles == cycles + 4)
-                << "68000 register bit mutations distinguish low/high halves after modulo-32 "
-                   "selection";
-            EXPECT_TRUE(reg.d0 == result && immediate.d0 == result && reg.sr == 0x271f &&
-                        immediate.sr == 0x271f)
-                << "Bit timing preserves result, old-bit Z and untouched X/N/V/C flags";
-        }
-    const struct {
-        uint32_t dividend;
-        uint16_t divisor;
-        int cycles;
-    } divisions[] = {{0, 1, 136},
-                     {0xffff, 1, 106},
-                     {0x10000, 1, 10},
-                     {0x10000, 2, 134},
-                     {0xff1234, 0x100, 116},
-                     {0x80000000, 0xffff, 132},
-                     {0xfffeffff, 0xffff, 76}};
-    for (const auto &test : divisions) {
-        const auto reg = execute({0x80c1}, test.divisor, test.dividend);
-        const auto immediate = execute({0x80fc, test.divisor}, test.divisor, test.dividend);
-        const auto memory = execute({0x80d1}, test.divisor, test.dividend);
-        EXPECT_TRUE(reg.cycles == test.cycles && immediate.cycles == test.cycles + 4 &&
-                    memory.cycles == test.cycles + 4)
-            << "68000 DIVU.W timing follows the operand-dependent subtract stages and EA cost";
-        const auto quotient = test.dividend / test.divisor;
-        const bool overflow = quotient > 0xffff;
-        const auto result =
-            overflow ? test.dividend : ((test.dividend % test.divisor) << 16) | quotient;
-        const uint16_t flags =
-            0x10 | (overflow ? 2 : ((quotient == 0 ? 4 : 0) | (quotient & 0x8000 ? 8 : 0)));
-        const uint16_t mask = overflow ? 0x13 : 0x1f; // N/Z are undefined on overflow.
-        EXPECT_TRUE(reg.d0 == result && immediate.d0 == result && memory.d0 == result &&
-                    (reg.sr & mask) == flags && (immediate.sr & mask) == flags &&
-                    (memory.sr & mask) == flags)
-            << "DIVU timing preserves packed remainder/quotient, overflow destination and defined "
-               "flags";
-    }
-    const struct {
-        uint16_t source;
-        int cycles;
-    } multiplications[] = {{0, 38},      {1, 42},      {0x12, 46},   {0x5555, 70},
-                           {0x7fff, 42}, {0x8000, 40}, {0xffff, 40}, {0xaaaa, 68}};
-    for (const auto &test : multiplications) {
-        const auto reg = execute({0xc1c1}, test.source, 0xfffffffd);
-        const auto immediate = execute({0xc1fc, test.source}, test.source, 0xfffffffd);
-        const auto memory = execute({0xc1d1}, test.source, 0xfffffffd);
-        EXPECT_TRUE(reg.cycles == test.cycles && immediate.cycles == test.cycles + 4 &&
-                    memory.cycles == test.cycles + 4)
-            << "68000 MULS.W charges every Booth transition including the positive source's final "
-               "transition";
-        const int32_t product = int32_t(int16_t(test.source)) * -3;
-        const uint16_t sr = 0x2710 | (product == 0 ? 4 : product < 0 ? 8 : 0);
-        EXPECT_TRUE(reg.d0 == uint32_t(product) && immediate.d0 == uint32_t(product) &&
-                    memory.d0 == uint32_t(product) && reg.sr == sr && immediate.sr == sr &&
-                    memory.sr == sr)
-            << "Signed multiply preserves the full product and X while replacing N/Z/V/C";
-    }
-}
-
-TEST_F(AudioMachineTest, SoundVectoredIrqWake) {
-    m_m->audio->set_cpu_runner({});
-    for (unsigned vector : {15, 30, 64, 255}) {
-        m_m->audio->reset_board();
-        m_m->audio->write32(0, 0xff00);
-        m_m->audio->write32(4, SND_CODE_BASE);
-        m_m->audio->write32(vector * 4, SND_HANDLER_BASE);
-        m_m->audio->write16(SND_CODE_BASE, 0x4e72);
-        m_m->audio->write16(SND_CODE_BASE + 2, 0x2000);
-        m_m->audio->write16(SND_HANDLER_BASE, 0x4e71);
-        m_m->audio->set_reset(false);
-        m_m->interpreter->run_audio(1);
-        m_m->interpreter->run_audio(1);
-        m_m->audio->write8(duart_reg(12), vector);
-        m_m->audio->write8(duart_reg(6), 0);
-        m_m->audio->write8(duart_reg(7), 1);
-        m_m->audio->write8(duart_reg(5), 8);
-        m_m->audio->write8(duart_reg(4), 0x60);
-        m_m->audio->advance(8);
-        EXPECT_EQ(m_m->audio->irq_level(), 6) << "DUART timer wakes the stopped sound CPU on IRQ6";
-        EXPECT_TRUE(m_m->interpreter->run_audio(1) == 48 &&
-                    m_m->interpreter->sound_pc() == SND_HANDLER_BASE + 2)
-            << "68000 IRQ entry costs 44 cycles independently of vector number, plus the handler "
-               "NOP";
-        EXPECT_TRUE(m_m->audio->read16(SND_STACK_SR) == 0x2000 &&
-                    m_m->audio->read32(SND_STACK_PC) == SND_CODE_BASE + 4)
-            << "Vectored IRQ entry preserves the stopped CPU's SR and return PC";
-    }
-    m_m->audio->reset_board();
-    m_m->audio->set_cpu_runner([this](int cycles) { return m_m->interpreter->run_audio(cycles); });
-}
-
-TEST_F(AudioMachineTest, SoundStopUnmaskBudget) {
-    m_m->audio->set_cpu_runner({});
-    for (int budget : {1, 2, 3, 4, 8, 16, 32, 47, 48, 52}) {
-        m_m->audio->reset_board();
-        m_m->audio->write32(0, 0xff00);
-        m_m->audio->write32(4, SND_CODE_BASE);
-        m_m->audio->write32(SND_IRQ_VECTOR_64, SND_HANDLER_BASE);
-        m_m->audio->write16(SND_CODE_BASE, 0x4e72);
-        m_m->audio->write16(SND_CODE_BASE + 2, 0x2000);
-        m_m->audio->write16(SND_HANDLER_BASE, 0x4e71);
-        m_m->audio->set_reset(false);
-        m_m->interpreter->run_audio(1);
-        m_m->audio->write8(duart_reg(12), 64);
-        m_m->audio->write8(duart_reg(5), 1);
-        m_m->audio->write8(duart_reg(2), 4);
-        EXPECT_EQ(m_m->audio->irq_level(), 6)
-            << "TX-ready IRQ is pending while reset SR masks interrupts";
-        EXPECT_TRUE(m_m->interpreter->run_audio(budget) == 52 &&
-                    m_m->interpreter->sound_pc() == SND_HANDLER_BASE)
-            << "STOP unmasking an IRQ retains four instruction clocks, a four-clock poll and 44 "
-               "entry clocks";
-        EXPECT_TRUE(m_m->audio->read16(SND_STACK_SR) == 0x2000 &&
-                    m_m->audio->read32(SND_STACK_PC) == SND_CODE_BASE + 4 &&
-                    m_m->interpreter->run_audio(1) == 4 &&
-                    m_m->interpreter->sound_pc() == SND_HANDLER_BASE + 2)
-            << "Immediate STOP wake stacks the next PC and resumes the handler without remaining "
-               "stopped";
-    }
-    m_m->audio->reset_board();
-    m_m->audio->set_cpu_runner([this](int cycles) { return m_m->interpreter->run_audio(cycles); });
-}
-
 TEST(Audio, DspEndAndSafetyBudgetOrdering) {
     f3rt::ES5510 dsp;
     std::vector<uint8_t> saved(dsp.state_size());
@@ -716,9 +319,8 @@ TEST(Audio, DspDelayAddressing) {
 }
 
 TEST(Audio, AudioMixerBoardGainAndMute) {
-    f3rt::Audio audio;
     const std::array<uint8_t, 4> rom{0x40, 0, 0x40, 0};
-    audio.load_sample_rom(rom);
+    auto audio = make_board(rom);
     audio.write16(f3rt::OTIS_PAGE, 0x20);
     for (unsigned reg = 1; reg <= 6; ++reg) audio.write16(otis_reg(reg), 0x0800);
     audio.write16(f3rt::OTIS_PAGE, 0);
@@ -742,29 +344,19 @@ TEST(Audio, AudioMixerBoardGainAndMute) {
         audio.advance(538);
         EXPECT_EQ(audio.render(pcm.data(), 1), 1) << "One complete audio sample is available";
     };
-    // Default gain model is SingleStage (hardware MB87078 post-DAC analog attenuation).
     sample();
     EXPECT_TRUE(pcm[0] == 2136 && pcm[1] == 2136)
-        << "Default SingleStage gain model matches post-DAC analog attenuation";
-
-    // Test MameRouting model
-    audio.set_gain_model(f3rt::Audio::GainModel::MameRouting);
-    sample();
-    EXPECT_TRUE(pcm[0] == 20925 && pcm[1] == 20925) << "Board gain and signed PCM normalization";
+        << "Default gain matches post-DAC analog attenuation";
     audio.write8(f3rt::SOUND_VOLUME_BASE, 2);
     audio.write8(f3rt::SOUND_VOLUME_BASE + 2, 0);
     sample();
-    EXPECT_TRUE(pcm[0] == 20925 && pcm[1] == 0)
+    EXPECT_TRUE(pcm[0] == 2136 && pcm[1] == 0)
         << "Channel-0 volume mute follows its data through the DAC swap and preserves channel 1";
     audio.write8(f3rt::SOUND_VOLUME_BASE, 7);
     audio.write8(f3rt::SOUND_VOLUME_BASE + 2, 0x33);
     sample();
-    EXPECT_TRUE(pcm[0] == 5231 && pcm[1] == 0)
-        << "Minus-six-dB control applies both baseline gain stages";
-    audio.set_gain_model(f3rt::Audio::GainModel::SingleStage);
-    sample();
     EXPECT_TRUE(pcm[0] == 1070 && pcm[1] == 0)
-        << "Single-stage gain is distinct and preserves channel mute";
+        << "Minus-six-dB control attenuates once and preserves channel mute";
     audio.set_reset(false);
     audio.set_reset(true);
     sample();
@@ -777,7 +369,7 @@ TEST(Audio, AudioMixerBoardGainAndMute) {
 }
 
 TEST(Audio, AudioSampleRateNoClockDrift) {
-    f3rt::Audio clock_audio;
+    auto clock_audio = make_board();
     std::array<int16_t, 128> clock_samples{};
     uint64_t sample_count = 0;
     for (unsigned i = 0; i < 10000; ++i) {
@@ -793,38 +385,40 @@ TEST(Audio, AudioSampleRateNoClockDrift) {
         << "Board reset preserves queued audio and fractional sample-clock phase";
 }
 
-TEST_F(AudioMachineTest, DpramOtisAndSoundReset) {
-    m_m->write8(f3rt::SHARED_BASE + 0x10, 0x75);
-    EXPECT_EQ(m_m->audio->read16(f3rt::SOUND_SHARED_BASE + 0x20), 0x75ff)
-        << "DPRAM sound high-byte lane";
-    m_m->audio->write16(f3rt::SOUND_SHARED_BASE + 0x20, 0xaabb);
-    EXPECT_EQ(m_m->read8(f3rt::SHARED_BASE + 0x10), 0xaa) << "DPRAM reverse lane";
-    m_m->audio->write16(f3rt::OTIS_PAGE, 0); // Voice 0, register page
-    m_m->audio->write16(otis_reg(10), 0x0246);
-    m_m->audio->write16(otis_reg(11), 0x8a00);
-    m_m->audio->write16(f3rt::OTIS_PAGE, 0x20); // Stopped voice sample-ROM readback
-    EXPECT_EQ(m_m->audio->read16(otis_reg(6)), 0x4567)
-        << "OTIS stopped voice reads full 20-bit sample address";
-    m_m->audio->write16(SND_WORK_BYTE, 0xa55a);
-    m_m->audio->set_reset(false);
-    m_m->audio->set_reset(true);
-    m_m->audio->set_reset(false);
-    EXPECT_EQ(m_m->audio->read16(SND_WORK_BYTE), 0xa55a)
-        << "Sound CPU RESET preserves board work RAM";
+TEST(Audio, DpramOtisAndSoundReset) {
+    std::array<uint8_t, 0x800> shared{};
+    std::vector<uint8_t> samples(0x2468c);
+    samples[0x2468a] = 0x45;
+    samples[0x2468b] = 0x67;
+    auto audio = make_board(samples, shared.data());
+    shared[0x10] = 0x75;
+    EXPECT_EQ(audio.read16(f3rt::SOUND_SHARED_BASE + 0x20), 0x75ff) << "DPRAM sound high-byte lane";
+    audio.write16(f3rt::SOUND_SHARED_BASE + 0x20, 0xaabb);
+    EXPECT_EQ(shared[0x10], 0xaa) << "DPRAM reverse lane";
+    audio.write16(f3rt::OTIS_PAGE, 0);
+    audio.write16(otis_reg(10), 0x0246);
+    audio.write16(otis_reg(11), 0x8a00);
+    audio.write16(f3rt::OTIS_PAGE, 0x20);
+    EXPECT_EQ(audio.read16(otis_reg(6)), 0x4567) << "OTIS stopped voice reads full 20-bit sample address";
+    audio.write16(SND_WORK_BYTE, 0xa55a);
+    audio.set_reset(false);
+    audio.set_reset(true);
+    audio.set_reset(false);
+    EXPECT_EQ(audio.read16(SND_WORK_BYTE), 0xa55a) << "Sound CPU RESET preserves board work RAM";
 }
 
-TEST_F(AudioMachineTest, CpuLineResetPreservesDspAndDuart) {
-    m_m->audio->set_reset(true);
-    m_m->audio->write8(duart_reg(12), 0x66);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 1, 0x12);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 3, 0x34);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 5, 0x56);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 0x141, 0);
-    m_m->audio->set_reset(false);
-    m_m->audio->set_reset(true);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 0x101, 0);
-    EXPECT_TRUE(m_m->audio->read8(f3rt::SOUND_ES5510_BASE + 1) == 0x12 &&
-                m_m->audio->read8(duart_reg(12)) == 0x66)
+TEST(Audio, CpuLineResetPreservesDspAndDuart) {
+    auto audio = make_board();
+    audio.set_reset(true);
+    audio.write8(duart_reg(12), 0x66);
+    audio.write8(f3rt::SOUND_ES5510_BASE + 1, 0x12);
+    audio.write8(f3rt::SOUND_ES5510_BASE + 3, 0x34);
+    audio.write8(f3rt::SOUND_ES5510_BASE + 5, 0x56);
+    audio.write8(f3rt::SOUND_ES5510_BASE + 0x141, 0);
+    audio.set_reset(false);
+    audio.set_reset(true);
+    audio.write8(f3rt::SOUND_ES5510_BASE + 0x101, 0);
+    EXPECT_TRUE(audio.read8(f3rt::SOUND_ES5510_BASE + 1) == 0x12 && audio.read8(duart_reg(12)) == 0x66)
         << "CPU-line reset preserves DSP registers and DUART configuration";
 }
 
@@ -857,26 +451,6 @@ RC_GTEST_PROP(Audio, DspDelayAddressingModuloInvariant, ()) {
     f3rt::StateReader r2(saved);
     r2.read(s2);
     RC_ASSERT(int(s2.ram_p.address) == expected);
-}
-
-// RapidCheck property: Sound 68000 executes real MULS.W on the interpreter/Musashi sound core
-// with arbitrary 16-bit operands, verifying the 32-bit product and condition flags (N, Z, V=0, C=0, X preserved).
-RC_GTEST_PROP(Audio, SoundMulsSignedProductInvariant, ()) {
-    const auto op1 = *rc::gen::arbitrary<int16_t>();
-    const auto op2 = *rc::gen::arbitrary<int16_t>();
-    static auto mach = std::make_unique<f3rt::Machine>(fixture());
-
-    // MULS.W D1, D0 (opcode 0xc1c1): D0 = D0 * D1 (signed 16-bit to 32-bit)
-    const auto result =
-        execute_sound_instruction(*mach, {0xc1c1}, uint16_t(op2), uint32_t(int32_t(op1)));
-
-    const int32_t expected_product = int32_t(op1) * int32_t(op2);
-    RC_ASSERT(result.d0 == uint32_t(expected_product));
-
-    // 68000 condition codes: X preserved (bit 4, setup sets 0x271b so X=1), N if negative, Z if zero, V=0, C=0.
-    const uint16_t expected_flags =
-        0x10 | (expected_product == 0 ? 4 : (expected_product < 0 ? 8 : 0));
-    RC_ASSERT((result.sr & 0x1f) == expected_flags);
 }
 
 // ES5510 volume/pan table stand-in: table(i) = i / 127, so gains are exactly checkable. `program` is the ROM
@@ -1833,4 +1407,319 @@ RC_GTEST_PROP(AudioPacer, PolicyInvariants, ()) {
     RC_ASSERT(pacer.stats().queue_samples == steps);
     RC_ASSERT(pacer.stats().queue_sum == sum);
     RC_ASSERT(pacer.stats().drops == drops);
+}
+
+namespace {
+struct Ring {
+    std::array<uint8_t, f3rt::SHARED_RAM_SIZE> shared{};
+    size_t written = 0;
+
+    void put(std::initializer_list<uint8_t> bytes) {
+        for (uint8_t byte : bytes) shared[written++ & f3rt::MAILBOX_RING_MASK] = byte;
+    }
+    void publish() {
+        f3rt::write_be<uint16_t>(shared.data() + f3rt::MAILBOX_PRODUCER_H,
+                                 uint16_t((written * 2) & f3rt::SharedMailbox::INDEX_MASK));
+    }
+    uint16_t consumer() const { return f3rt::read_be16(shared.data() + f3rt::MAILBOX_CONSUMER_H); }
+};
+
+std::vector<f3rt::hle::CommandPacket> drain_packets(f3rt::SharedMailbox &mailbox) {
+    std::vector<f3rt::hle::CommandPacket> packets;
+    mailbox.drain([&](const f3rt::hle::CommandPacket &packet) { packets.push_back(packet); });
+    return packets;
+}
+
+struct Recorder {
+    static constexpr int GATED = 1, FAIL = -1;
+    std::vector<int> applied;
+    std::thread::id thread_id;
+    std::latch *gate = nullptr;
+
+    void apply(const int &value) {
+        thread_id = std::this_thread::get_id();
+        if (gate && value == GATED) gate->wait();
+        if (value == FAIL) throw std::runtime_error("apply failed");
+        applied.push_back(value);
+    }
+};
+}
+
+TEST(AudioMailbox, DeliversPacketsInRingOrderAndWritesTheConsumerBack) {
+    Ring ram;
+    ram.put({3, 0x82, 0, 4, 0x21, 0, 0x28});
+    ram.publish();
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    const auto packets = drain_packets(mailbox);
+    ASSERT_EQ(packets.size(), 2u);
+    EXPECT_EQ(packets[0].opcode(), 0x82);
+    EXPECT_EQ(packets[1].opcode(), 0x21);
+    EXPECT_EQ(mailbox.consumer(), 14);
+    EXPECT_EQ(ram.consumer(), 14);
+}
+
+TEST(AudioMailbox, PacketsWrapAroundTheRingEnd) {
+    Ring ram;
+    ram.written = 0x3fe;
+    ram.put({4, 0x21, 1, 2});
+    ram.publish();
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    mailbox.restore(0x7fc);
+    const auto packets = drain_packets(mailbox);
+    ASSERT_EQ(packets.size(), 1u);
+    const auto &param = std::get<f3rt::hle::EffectParameter>(packets[0].command());
+    EXPECT_EQ(param.index, 1);
+    EXPECT_EQ(param.value, 2);
+    EXPECT_EQ(ram.consumer(), 4);
+}
+
+TEST(AudioMailbox, StopsAtAnIncompleteOrMalformedPacket) {
+    Ring ram;
+    ram.put({5, 0x8f, 0, 0});
+    ram.publish();
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    EXPECT_TRUE(drain_packets(mailbox).empty());
+    EXPECT_EQ(ram.consumer(), 0);
+    ram.put({0x3c});
+    ram.publish();
+    const auto packets = drain_packets(mailbox);
+    ASSERT_EQ(packets.size(), 1u);
+    EXPECT_EQ(packets[0].opcode(), 0x8f);
+    EXPECT_EQ(ram.consumer(), 10);
+    for (uint8_t length : {uint8_t(1), uint8_t(0)}) {
+        Ring bad;
+        bad.put({length, 0x82, 0});
+        bad.publish();
+        f3rt::SharedMailbox stopped(bad.shared.data());
+        EXPECT_TRUE(drain_packets(stopped).empty());
+        EXPECT_EQ(bad.consumer(), 0);
+    }
+}
+
+TEST(AudioMailbox, ConsumesOversizePacketsUnseen) {
+    Ring ram;
+    ram.put({9, 0x21, 0, 0, 0, 0, 0, 0, 0});
+    ram.put({3, 0x82, 0});
+    ram.publish();
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    const auto packets = drain_packets(mailbox);
+    ASSERT_EQ(packets.size(), 1u);
+    EXPECT_EQ(packets[0].opcode(), 0x82);
+    EXPECT_EQ(ram.consumer(), 24);
+}
+
+TEST(AudioMailbox, IgnoresTheProducerLowBit) {
+    Ring ram;
+    ram.put({3, 0x82, 0});
+    ram.publish();
+    f3rt::write_be<uint16_t>(ram.shared.data() + f3rt::MAILBOX_PRODUCER_H, 7);
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    EXPECT_EQ(drain_packets(mailbox).size(), 1u);
+    EXPECT_EQ(ram.consumer(), 6);
+}
+
+TEST(AudioMailbox, FullRingDrainsInOneCall) {
+    Ring ram;
+    for (int i = 0; i < 341; ++i) ram.put({3, 0x82, 0});
+    ram.publish();
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    EXPECT_EQ(drain_packets(mailbox).size(), 341u);
+    EXPECT_EQ(mailbox.consumer(), 0x7fe);
+    EXPECT_EQ(ram.consumer(), 0x7fe);
+}
+
+TEST(AudioMailbox, GainResetAndRestore) {
+    Ring ram;
+    ram.shared[f3rt::MAILBOX_GAIN_CH0] = 0x11;
+    ram.shared[f3rt::MAILBOX_GAIN_CH1] = 0x22;
+    f3rt::SharedMailbox mailbox(ram.shared.data());
+    EXPECT_EQ(mailbox.gain(0), 0x11);
+    EXPECT_EQ(mailbox.gain(1), 0x22);
+    EXPECT_EQ(mailbox.gain(2), 0x11);
+    ram.put({3, 0x82, 0});
+    ram.publish();
+    EXPECT_EQ(drain_packets(mailbox).size(), 1u);
+    EXPECT_EQ(mailbox.consumer(), 6);
+    mailbox.reset();
+    EXPECT_EQ(mailbox.consumer(), 0);
+    EXPECT_EQ(ram.consumer(), 6);
+    mailbox.restore(0x7fc);
+    EXPECT_EQ(mailbox.consumer(), 0x7fc);
+}
+
+TEST(AudioMailbox, RequiresSharedRam) {
+    EXPECT_THROW(f3rt::SharedMailbox{nullptr}, std::invalid_argument);
+}
+
+TEST(AudioPcmRing, DrainExchangesTheDacChannels) {
+    auto ring = std::make_unique<f3rt::PcmRing>();
+    const std::array<float, 4> frames{0.5f, -1.f, 2.f, -2.f};
+    ring->write(frames.data(), 2);
+    std::array<float, 4> floats{};
+    EXPECT_EQ(ring->drain(floats.data(), 2), 2u);
+    EXPECT_EQ(floats, (std::array<float, 4>{-1.f, 0.5f, -2.f, 2.f}));
+    ring->write(frames.data(), 2);
+    std::array<int16_t, 4> samples{};
+    EXPECT_EQ(ring->drain(samples.data(), 2), 2u);
+    EXPECT_EQ(samples, (std::array<int16_t, 4>{-32768, 16384, -32768, 32767}));
+}
+
+TEST(AudioPcmRing, KeepsTheNewestCapacityFrames) {
+    auto ring = std::make_unique<f3rt::PcmRing>();
+    const size_t frames = f3rt::PcmRing::CAPACITY + 3;
+    std::vector<float> stereo(frames * 2);
+    for (size_t i = 0; i < frames; ++i) stereo[i * 2] = stereo[i * 2 + 1] = float(i);
+    ring->write(stereo.data(), frames);
+    EXPECT_EQ(ring->available(), f3rt::PcmRing::CAPACITY);
+    std::vector<float> out(f3rt::PcmRing::CAPACITY * 2);
+    EXPECT_EQ(ring->drain(out.data(), frames), f3rt::PcmRing::CAPACITY);
+    EXPECT_EQ(out.front(), 3.f);
+    EXPECT_EQ(out.back(), float(frames - 1));
+}
+
+TEST(AudioPcmRing, DrainRespectsMaxFrames) {
+    auto ring = std::make_unique<f3rt::PcmRing>();
+    const std::vector<float> stereo(10 * 2, 0.25f);
+    ring->write(stereo.data(), 10);
+    std::array<float, 200> out{};
+    EXPECT_EQ(ring->drain(out.data(), 4), 4u);
+    EXPECT_EQ(ring->available(), 6u);
+    EXPECT_EQ(ring->drain(out.data(), 100), 6u);
+    EXPECT_EQ(ring->available(), 0u);
+}
+
+TEST(AudioPcmRing, DrainReleasedHoldsBackTheFrameJustClosed) {
+    auto ring = std::make_unique<f3rt::PcmRing>();
+    const std::vector<float> first(100 * 2, 0.25f), second(50 * 2, 0.25f);
+    std::array<int16_t, 200> out{};
+    ring->write(first.data(), 100);
+    ring->close_frame(100);
+    EXPECT_EQ(ring->drain_released(out.data(), 100), 0u);
+    ring->write(second.data(), 50);
+    ring->close_frame(150);
+    EXPECT_EQ(ring->drain_released(out.data(), 100), 100u);
+    EXPECT_EQ(ring->drain_released(out.data(), 100), 0u);
+    EXPECT_EQ(ring->drain(out.data(), 100), 50u);
+}
+
+TEST(AudioPcmRing, DiscardDropsBufferedFramesAndReleasesThem) {
+    auto ring = std::make_unique<f3rt::PcmRing>();
+    const std::vector<float> stale(10 * 2, 0.25f), fresh(5 * 2, 0.5f);
+    std::array<int16_t, 20> out{};
+    ring->write(stale.data(), 10);
+    ring->close_frame(10);
+    ring->close_frame(10);
+    ring->discard();
+    EXPECT_EQ(ring->available(), 0u);
+    ring->write(fresh.data(), 5);
+    EXPECT_EQ(ring->drain_released(out.data(), 10), 0u);
+    ring->close_frame(15);
+    EXPECT_EQ(ring->drain_released(out.data(), 10), 0u);
+    ring->close_frame(15);
+    EXPECT_EQ(ring->drain_released(out.data(), 10), 5u);
+    EXPECT_EQ(out[0], 16384);
+}
+
+TEST(AudioWorkerQueue, AppliesInPostOrderOnItsOwnThread) {
+    Recorder recorder;
+    f3rt::WorkerQueue<int, Recorder, 8> queue(recorder);
+    std::vector<int> expected;
+    for (int i = 1; i <= 100; ++i) {
+        queue.post(i);
+        expected.push_back(i);
+    }
+    queue.flush();
+    EXPECT_EQ(recorder.applied, expected);
+    EXPECT_NE(recorder.thread_id, std::this_thread::get_id());
+}
+
+TEST(AudioWorkerQueue, FullQueueWaitsInsteadOfDropping) {
+    std::latch gate(1);
+    Recorder recorder;
+    recorder.gate = &gate;
+    f3rt::WorkerQueue<int, Recorder, 2> queue(recorder);
+    std::promise<void> returned;
+    auto posted = returned.get_future();
+    queue.post(Recorder::GATED);
+    queue.post(2);
+    queue.post(3);
+    std::thread producer([&] {
+        queue.post(4);
+        returned.set_value();
+    });
+    EXPECT_EQ(posted.wait_for(std::chrono::milliseconds{50}), std::future_status::timeout);
+    gate.count_down();
+    ASSERT_EQ(posted.wait_for(std::chrono::seconds{10}), std::future_status::ready);
+    producer.join();
+    queue.flush();
+    EXPECT_EQ(recorder.applied, (std::vector<int>{1, 2, 3, 4}));
+}
+
+TEST(AudioWorkerQueue, FailureStopsTheWorkerAndIsRethrown) {
+    Recorder recorder;
+    f3rt::WorkerQueue<int, Recorder, 8> queue(recorder);
+    queue.post(1);
+    queue.post(Recorder::FAIL);
+    EXPECT_THROW(queue.flush(), std::runtime_error);
+    EXPECT_THROW(queue.post(2), std::runtime_error);
+    EXPECT_EQ(recorder.applied, (std::vector<int>{1}));
+}
+
+TEST(AudioWorkerQueue, DestructionAppliesEveryPostedMessage) {
+    Recorder recorder;
+    {
+        f3rt::WorkerQueue<int, Recorder, 8> queue(recorder);
+        for (int i = 0; i < 50; ++i) queue.post(i);
+    }
+    EXPECT_EQ(recorder.applied.size(), 50u);
+}
+
+TEST(AudioSnapshot, WritesTheBigEndianLayout) {
+    const f3rt::AudioSnapshot state{0x0102030405060708, 0x1112131415161718, 0x07fe, true};
+    std::array<uint8_t, f3rt::AudioSnapshot::BYTES> bytes{};
+    state.write(bytes);
+    const std::array<uint8_t, f3rt::AudioSnapshot::BYTES> expected{
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x11, 0x12,
+        0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x07, 0xfe, 0x01};
+    EXPECT_EQ(bytes, expected);
+}
+
+TEST(AudioSnapshot, ParseRoundTripsWrite) {
+    const f3rt::AudioSnapshot state{0x0102030405060708, 0x1112131415161718, 0x07fe, true};
+    std::array<uint8_t, f3rt::AudioSnapshot::BYTES> bytes{};
+    state.write(bytes);
+    const auto parsed = f3rt::AudioSnapshot::parse(bytes);
+    EXPECT_EQ(parsed.clock, state.clock);
+    EXPECT_EQ(parsed.commands, state.commands);
+    EXPECT_EQ(parsed.consumer, state.consumer);
+    EXPECT_EQ(parsed.held, state.held);
+}
+
+TEST(AudioSnapshot, RejectsAWrongSize) {
+    const std::array<uint8_t, 31> short_bytes{};
+    const std::array<uint8_t, 33> long_bytes{};
+    EXPECT_THROW((void)f3rt::AudioSnapshot::parse(short_bytes), std::invalid_argument);
+    EXPECT_THROW((void)f3rt::AudioSnapshot::parse(long_bytes), std::invalid_argument);
+    const f3rt::AudioSnapshot state{};
+    std::array<uint8_t, 33> out{};
+    EXPECT_THROW(state.write(std::span(out).first(31)), std::invalid_argument);
+    EXPECT_THROW(state.write(out), std::invalid_argument);
+}
+
+TEST(AudioSnapshot, RejectsAMailboxStateTheHleCannotResume) {
+    const std::array<uint8_t, f3rt::AudioSnapshot::BYTES> valid{};
+    EXPECT_NO_THROW((void)f3rt::AudioSnapshot::parse(valid));
+    for (uint16_t consumer : {uint16_t(0x0001), uint16_t(0x0800), uint16_t(0xfffe)}) {
+        auto bad = valid;
+        f3rt::write_be<uint16_t>(bad.data() + 16, consumer);
+        EXPECT_THROW((void)f3rt::AudioSnapshot::parse(bad), std::invalid_argument);
+    }
+    auto held = valid;
+    held[18] = 2;
+    EXPECT_THROW((void)f3rt::AudioSnapshot::parse(held), std::invalid_argument);
+    for (size_t reserved : {size_t(19), size_t(31)}) {
+        auto bad = valid;
+        bad[reserved] = 1;
+        EXPECT_THROW((void)f3rt::AudioSnapshot::parse(bad), std::invalid_argument);
+    }
 }

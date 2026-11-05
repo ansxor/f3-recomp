@@ -202,7 +202,6 @@
           "-DF3RT_NETPLAY=OFF"
           "-DF3RT_HOST_TOOLS=OFF"
           "-DBUILD_TESTING=OFF"
-          "-DF3RT_SOUND_NATIVE=OFF"
           "-DF3RT_HLE_EVENTS=OFF"
           "-DUV_EXECUTABLE=${tc.uv}/bin/uv"
           "-DF3_M68KMAKE_EXECUTABLE=${m68kmakeDrv}/bin/m68kmake"

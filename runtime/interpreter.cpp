@@ -1,84 +1,28 @@
 #include "interpreter.hpp"
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
 #include "m68k.h"
 #include "state_io.hpp"
-#include "audio/reference/state_oracle.h"
-#include "audio/sound_trace.hpp"
 
 namespace {
 f3rt::Machine *active_machine = nullptr;
-bool sound_bus = false;
 // Musashi's tables initialize once per process. devkitARM's libstdc++ routes std::call_once
 // through pthread_once, but its libpthread is a dummy, so the call throws on the 3DS; the
 // interpreter is constructed from one thread at startup, so a plain guard is equivalent.
 bool musashi_initialized = false;
-int acknowledge(int level) {
-    return sound_bus ? active_machine->audio->irq_ack(level) : int(M68K_INT_ACK_AUTOVECTOR);
-}
-void reset_devices() {
-    if (!sound_bus) active_machine->reset_devices();
-}
-void bind(f3rt::Machine &machine, bool sound) {
-    active_machine = &machine;
-    sound_bus = sound;
-}
+int acknowledge(int) { return int(M68K_INT_ACK_AUTOVECTOR); }
+void reset_devices() { active_machine->reset_devices(); }
 void callbacks() {
     m68k_set_int_ack_callback(acknowledge);
     m68k_set_reset_instr_callback(reset_devices);
 }
-void trace_sound(uint32_t address, uint32_t value, uint8_t width, bool write) {
-    if (!active_machine->sound_trace) return;
-    if (address < f3rt::SOUND_TRACE_BUS_BEGIN || address >= f3rt::SOUND_TRACE_BUS_END) return;
-    const uint32_t pc = m68k_get_reg(nullptr, M68K_REG_PPC);
-    active_machine->sound_trace->record(
-        *active_machine, write ? f3rt::SoundTrace::SoundWrite : f3rt::SoundTrace::SoundRead, pc,
-        address, value, width);
-}
 } // namespace
 extern "C" {
-unsigned int m68k_read_memory_8(unsigned int a) {
-    if (!sound_bus) return active_machine->read8(a);
-    const auto value = active_machine->audio->read8(a);
-    trace_sound(a, value, 1, false);
-    return value;
-}
-unsigned int m68k_read_memory_16(unsigned int a) {
-    if (!sound_bus) return active_machine->read16(a);
-    const auto value = active_machine->audio->read16(a);
-    trace_sound(a, value, 2, false);
-    return value;
-}
-unsigned int m68k_read_memory_32(unsigned int a) {
-    if (!sound_bus) return active_machine->read32(a);
-    const auto value = active_machine->audio->read32(a);
-    trace_sound(a, value, 4, false);
-    return value;
-}
-void m68k_write_memory_8(unsigned int a, unsigned int v) {
-    if (!sound_bus) {
-        active_machine->write8(a, uint8_t(v));
-        return;
-    }
-    trace_sound(a, uint8_t(v), 1, true);
-    active_machine->audio->write8(a, uint8_t(v));
-}
-void m68k_write_memory_16(unsigned int a, unsigned int v) {
-    if (!sound_bus) {
-        active_machine->write16(a, uint16_t(v));
-        return;
-    }
-    trace_sound(a, uint16_t(v), 2, true);
-    active_machine->audio->write16(a, uint16_t(v));
-}
-void m68k_write_memory_32(unsigned int a, unsigned int v) {
-    if (!sound_bus) {
-        active_machine->write32(a, v);
-        return;
-    }
-    trace_sound(a, v, 4, true);
-    active_machine->audio->write32(a, v);
-}
+unsigned int m68k_read_memory_8(unsigned int a) { return active_machine->read8(a); }
+unsigned int m68k_read_memory_16(unsigned int a) { return active_machine->read16(a); }
+unsigned int m68k_read_memory_32(unsigned int a) { return active_machine->read32(a); }
+void m68k_write_memory_8(unsigned int a, unsigned int v) { active_machine->write8(a, uint8_t(v)); }
+void m68k_write_memory_16(unsigned int a, unsigned int v) { active_machine->write16(a, uint16_t(v)); }
+void m68k_write_memory_32(unsigned int a, unsigned int v) { active_machine->write32(a, v); }
 } // extern "C"
 namespace f3rt {
 Interpreter::Interpreter(Machine &m) : m_machine(m) {
@@ -87,7 +31,6 @@ Interpreter::Interpreter(Machine &m) : m_machine(m) {
         musashi_initialized = true;
     }
     m_main_context.resize((m68k_context_size() + 7) / 8);
-    m_sound_context.resize(m_main_context.size());
     // The main context keeps the 68EC020 type and interrupt callbacks. Main CPU
     // reset is native (Machine::reset_main_cpu); run_main imports canonical state.
     m68k_set_context(m_main_context.data());
@@ -95,16 +38,8 @@ Interpreter::Interpreter(Machine &m) : m_machine(m) {
     callbacks();
     m68k_get_context(m_main_context.data());
 }
-void Interpreter::audio_reset(bool asserted) {
-    if (!asserted) m_sound_needs_reset = true;
-}
-void Interpreter::audio_irq(bool asserted) {
-    // DUART acknowledge/IMR writes can lower IRQ during m68k_execute. Waiting
-    // until the next slice causes a second, spurious interrupt after RTE.
-    if (active_machine == &m_machine && sound_bus) m68k_set_irq(asserted ? 6 : 0);
-}
 int Interpreter::run_main(int cycles) {
-    bind(m_machine, false);
+    active_machine = &m_machine;
     f3_cc_flush(&m_machine.cpu);
     m68k_set_context(m_main_context.data());
     f3rt_core_import(&m_machine.cpu);
@@ -115,49 +50,8 @@ int Interpreter::run_main(int cycles) {
     m_machine.cpu.cycles += unsigned(used);
     return used;
 }
-int Interpreter::run_audio(int cycles) {
-    bind(m_machine, true);
-    m68k_set_context(m_sound_context.data());
-    if (m_sound_needs_reset) {
-        m68k_set_cpu_type(M68K_CPU_TYPE_68000);
-        callbacks();
-        m68k_pulse_reset();
-        m_sound_needs_reset = false;
-    }
-    m68k_set_irq(unsigned(m_machine.audio->irq_level()));
-    const int used = m68k_execute(cycles);
-    m68k_get_context(m_sound_context.data());
-    bind(m_machine, false);
-    return used;
-}
-uint32_t Interpreter::sound_pc() const {
-    return m68k_get_reg(const_cast<uint64_t *>(m_sound_context.data()), M68K_REG_PC);
-}
-size_t Interpreter::sound_state_size() const { return sizeof(f3rt_sound_oracle_state); }
-
-void Interpreter::save_sound_state(StateWriter &writer) const {
-    f3rt_sound_oracle_state st{};
-    f3rt_sound_core_export(m_sound_context.data(), &st);
-    st.sound_needs_reset = m_sound_needs_reset ? 1 : 0;
-    writer.write(st);
-}
-
-void Interpreter::load_sound_state(StateReader &reader) {
-    f3rt_sound_oracle_state st;
-    reader.read(st);
-    f3rt_sound_core_import(m_sound_context.data(), &st);
-    m_sound_needs_reset = st.sound_needs_reset != 0;
-    if (!m_sound_needs_reset) {
-        bind(m_machine, true);
-        m68k_set_context(m_sound_context.data());
-        callbacks();
-        m68k_get_context(m_sound_context.data());
-        bind(m_machine, false);
-    }
-}
-
 void Interpreter::sync_main_from_cpu() {
-    bind(m_machine, false);
+    active_machine = &m_machine;
     m68k_set_context(m_main_context.data());
     f3rt_core_import(&m_machine.cpu);
     callbacks();

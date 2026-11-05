@@ -1051,9 +1051,6 @@ TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
     } catch (const std::exception &error) {
         GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
     }
-    if (!machine->audio->backend_available(f3rt::Audio::Backend::Enhanced))
-        GTEST_SKIP() << "Enhanced audio unavailable";
-    machine->audio->set_backend(f3rt::Audio::Backend::Enhanced);
     machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
     const auto eeprom_path = std::filesystem::temp_directory_path() / "f3rt-bench-timeline.eeprom";
     {

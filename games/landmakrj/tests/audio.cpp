@@ -28,11 +28,8 @@ TEST(HleAudio, StateAndSequencing) {
     } catch (const std::exception &e) {
         GTEST_SKIP() << "ROM set unavailable: " << e.what();
     }
-    f3rt::Audio probe_audio;
-    probe_audio.load_sound_rom(rom.sound);
-    probe_audio.load_sample_rom(rom.samples);
-    ASSERT_TRUE(probe_audio.backend_available(f3rt::Audio::Backend::Enhanced))
-        << "Enhanced audio backend must be available for Land Maker sound ROM";
+    ASSERT_TRUE(f3rt::Audio::supported(rom.sound, f3rt::decode_sample_words(rom.samples)))
+        << "Audio must be supported for Land Maker sound ROM";
     using Kind = f3rt::hle::VoiceEvent::Kind;
 
     struct Fixture {
@@ -41,14 +38,9 @@ TEST(HleAudio, StateAndSequencing) {
         std::thread::id main_thread = std::this_thread::get_id();
         bool worker_only = true;
         f3rt::Audio audio;
-        explicit Fixture(const f3rt::RomSet &r) {
-            audio.load_sound_rom(r.sound);
-            audio.load_sample_rom(r.samples);
-            audio.set_shared_ram(shared.data());
-            audio.set_backend(f3rt::Audio::Backend::Enhanced);
-            audio.set_cpu_runner(
-                [](int) -> int { throw std::runtime_error("HLE executed sound CPU"); });
-            audio.set_hle_observer([this](const auto &event) {
+        explicit Fixture(const f3rt::RomSet &r)
+            : audio(r.sound, f3rt::decode_sample_words(r.samples), shared.data()) {
+            audio.set_voice_observer([this](const auto &event) {
                 worker_only &= std::this_thread::get_id() != main_thread;
                 events.push_back(event);
             });
