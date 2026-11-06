@@ -9,6 +9,7 @@
 #include "audio/hle/patch.hpp"
 #include "audio/hle/pulse_timer.hpp"
 #include "audio/hle/voice_filter.hpp"
+#include "audio/hle/voice_render.hpp"
 #include "audio/pcm_ring.hpp"
 #include "audio/shared_mailbox.hpp"
 #include "audio/snapshot.hpp"
@@ -23,6 +24,7 @@
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -1160,16 +1162,9 @@ struct VoiceFilterRef {
 
 float voice_filter_step(f3rt::hle::VoiceFilterState &state, int mode, float x, float a1, float a2, float hp) {
     using namespace f3rt::hle;
-    switch (filter_mode(uint8_t(mode))) {
-    case 0:
-        return filter_step<0>(state, x, a1, a2, hp);
-    case 1:
-        return filter_step<1>(state, x, a1, a2, hp);
-    case 2:
-        return filter_step<2>(state, x, a1, a2, hp);
-    default:
-        return filter_step<3>(state, x, a1, a2, hp);
-    }
+    return with_filter_mode(uint8_t(mode), [&](auto m) {
+        return filter_step<decltype(m)::value>(state, x, a1, a2, hp);
+    });
 }
 
 // mode_of(chunk) selecting each block's mode. Returns the largest output error relative to the
@@ -1228,6 +1223,373 @@ TEST(Audio, DirectVoiceFilterIndexMatchesDriverMath) {
     EXPECT_EQ(f3rt::hle::direct_filter_index(101, 115), 692);
     EXPECT_EQ(f3rt::hle::direct_filter_index(248, 127), 1501);
     EXPECT_EQ(f3rt::hle::direct_filter_index(0, 100), 0);
+}
+
+namespace {
+
+uint32_t float_bits(float v) { return std::bit_cast<uint32_t>(v); }
+uint64_t double_bits(double v) { return std::bit_cast<uint64_t>(v); }
+
+constexpr size_t ROM_WORDS = 256;
+
+std::vector<uint16_t> test_words() {
+    std::vector<uint16_t> words(ROM_WORDS);
+    for (size_t i = 0; i < words.size(); ++i) words[i] = uint16_t(i * 37 + 5);
+    return words;
+}
+
+f3rt::hle::Voice forward_voice() {
+    f3rt::hle::Voice voice;
+    voice.position = 10;
+    voice.start = 0;
+    voice.end = 100;
+    voice.increment = 1;
+    return voice;
+}
+
+f3rt::hle::Voice ramping_voice() {
+    f3rt::hle::Voice voice = forward_voice();
+    voice.left = 0x4010;
+    voice.right = 0x5080;
+    voice.step_left = 1.0;
+    voice.step_right = -1.5;
+    voice.target_left = voice.left + 100 * voice.step_left;
+    voice.target_right = voice.right + 100 * voice.step_right;
+    voice.gain_frames = 100;
+    voice.gain_dirty = false;
+    f3rt::hle::step_gain(voice);
+    return voice;
+}
+
+template <unsigned Mode> void expect_filter_matches_filter_step() {
+    using namespace f3rt::hle;
+    Filter filter;
+    filter.a1 = 0.123456789012345;
+    filter.a2 = 0.765432109876543;
+    filter.high_pole = 0.456789012345678;
+    const VoiceFilterState memory{100.25f, -200.5f, 300.75f, -400.125f};
+    VoiceFilter<Mode> vf(memory, filter);
+    VoiceFilterState reference = memory;
+    for (float x : {1234.5f, -4321.25f, 0.f}) {
+        const float y = vf.step(x);
+        const float expected = filter_step<Mode>(reference, x, float(filter.a1), float(filter.a2),
+                                                 float(filter.high_pole));
+        EXPECT_EQ(float_bits(y), float_bits(expected)) << "mode " << Mode;
+        EXPECT_EQ(float_bits(vf.state.stage1), float_bits(reference.stage1)) << "mode " << Mode;
+        EXPECT_EQ(float_bits(vf.state.stage2), float_bits(reference.stage2)) << "mode " << Mode;
+        EXPECT_EQ(float_bits(vf.state.stage3), float_bits(reference.stage3)) << "mode " << Mode;
+        EXPECT_EQ(float_bits(vf.state.stage4), float_bits(reference.stage4)) << "mode " << Mode;
+    }
+}
+
+}
+
+TEST(HleVoiceRender, WithFilterModeClampsAboveThree) {
+    using namespace f3rt::hle;
+    for (unsigned mode = 0; mode < 4; ++mode) {
+        const unsigned seen =
+            with_filter_mode(uint8_t(mode), [](auto m) -> unsigned { return decltype(m)::value; });
+        EXPECT_EQ(seen, mode);
+    }
+    for (unsigned mode : {4u, 200u, 255u}) {
+        const unsigned seen =
+            with_filter_mode(uint8_t(mode), [](auto m) -> unsigned { return decltype(m)::value; });
+        EXPECT_EQ(seen, 3u) << "mode " << mode;
+    }
+}
+
+TEST(HleVoiceRender, SampleWordsReadSignedWordsAndMask) {
+    using namespace f3rt::hle;
+    std::vector<uint16_t> words = test_words();
+    words[2] = 100;
+    words[3] = 300;
+    words[4] = 0x8000;
+    words[5] = 0;
+    words[ROM_WORDS - 1] = 1000;
+    words[0] = 2000;
+    words[9] = 777;
+    words[19] = 555;
+    words[20] = 333;
+    const SampleWords samples(words);
+
+    EXPECT_EQ(samples.interpolate(2.25), interpolate_sample(100, 300, 0.25));
+    EXPECT_EQ(samples.interpolate(4.0), interpolate_sample(-32768.0, 0.0, 0.0));
+    EXPECT_EQ(samples.interpolate(4.5), interpolate_sample(-32768.0, 0.0, 0.5));
+    EXPECT_LT(samples.interpolate(4.0), 0.f);
+
+    Voice wrap = forward_voice();
+    wrap.loop = true;
+    wrap.end = double(ROM_WORDS);
+    wrap.position = double(ROM_WORDS - 1) + 0.5;
+    EXPECT_EQ(samples.interpolate(wrap), interpolate_sample(1000, 2000, 0.5));
+
+    Voice forward = forward_voice();
+    forward.end = 10;
+    forward.position = 9.5;
+    EXPECT_EQ(samples.interpolate(forward), interpolate_sample(777, 0.0, 0.5));
+
+    Voice reverse = forward_voice();
+    reverse.reverse = true;
+    reverse.start = 20;
+    reverse.position = 19.5;
+    EXPECT_EQ(samples.interpolate(reverse), interpolate_sample(0.0, 333, 0.5));
+
+    EXPECT_TRUE(samples.outside(-0.5));
+    EXPECT_TRUE(samples.outside(double(ROM_WORDS)));
+    EXPECT_FALSE(samples.outside(0.0));
+    EXPECT_FALSE(samples.outside(double(ROM_WORDS) - 0.5));
+    EXPECT_FALSE(samples.outside(std::nan("")));
+}
+
+TEST(HleVoiceRender, SampleWordsRoomStopsBeforeTheWindowEdge) {
+    using namespace f3rt::hle;
+    const std::vector<uint16_t> words = test_words();
+    const SampleWords samples(words);
+
+    Voice forward = forward_voice();
+    EXPECT_EQ(samples.room(forward, 1000), 89u);
+    EXPECT_EQ(samples.room(forward, 20), 20u);
+    forward.increment = 0.5;
+    EXPECT_EQ(samples.room(forward, 1000), 179u);
+    forward.position = 98;
+    forward.increment = 1;
+    EXPECT_EQ(samples.room(forward, 1000), 1u);
+    forward.position = 99.5;
+    EXPECT_EQ(samples.room(forward, 1000), 0u);
+    forward.position = 10;
+    forward.increment = 0;
+    EXPECT_EQ(samples.room(forward, 1000), 0u);
+    forward.increment = 1;
+    forward.position = double(ROM_WORDS - 1);
+    EXPECT_EQ(samples.room(forward, 1000), 0u);
+    forward.position = 10;
+    forward.end = double(ROM_WORDS - 1);
+    EXPECT_EQ(samples.room(forward, 1000), 0u);
+
+    Voice reverse = forward_voice();
+    reverse.reverse = true;
+    reverse.start = 10;
+    reverse.position = 100;
+    reverse.increment = 1.5;
+    EXPECT_EQ(samples.room(reverse, 1000), 59u);
+    EXPECT_EQ(samples.room(reverse, 7), 7u);
+    reverse.position = 11;
+    EXPECT_EQ(samples.room(reverse, 1000), 0u);
+    reverse.position = 100;
+    reverse.increment = 0;
+    EXPECT_EQ(samples.room(reverse, 1000), 0u);
+    reverse.increment = 1.5;
+    reverse.position = double(ROM_WORDS - 1);
+    EXPECT_EQ(samples.room(reverse, 1000), 0u);
+}
+
+TEST(HleVoiceRender, PlanRunPicksSingleConstantOrRamping) {
+    using namespace f3rt::hle;
+    using Kind = VoiceRun::Kind;
+    const std::vector<uint16_t> words = test_words();
+    const SampleWords samples(words);
+
+    auto expect_single = [&](const Voice &voice, const char *why) {
+        const VoiceRun run = plan_run(voice, 64, samples);
+        EXPECT_EQ(run.kind, Kind::Single) << why;
+        EXPECT_EQ(run.frames, 1u) << why;
+    };
+
+    Voice finished = forward_voice();
+    finished.sample_finished = true;
+    expect_single(finished, "sample finished");
+
+    Voice filter_ramp = forward_voice();
+    filter_ramp.filter.ramp = 5;
+    expect_single(filter_ramp, "filter ramp");
+
+    Voice empty_segment = forward_voice();
+    empty_segment.gain_frames = 50;
+    empty_segment.left_segment.frames = 30;
+    empty_segment.right_segment.frames = 0;
+    expect_single(empty_segment, "empty right segment");
+    empty_segment.left_segment.frames = 0;
+    empty_segment.right_segment.frames = 30;
+    expect_single(empty_segment, "empty left segment");
+
+    Voice last_step = forward_voice();
+    last_step.gain_frames = 1;
+    last_step.left_segment.frames = 30;
+    last_step.right_segment.frames = 30;
+    expect_single(last_step, "last ramp step");
+
+    Voice no_room = forward_voice();
+    no_room.increment = 0;
+    expect_single(no_room, "no room");
+
+    Voice constant = forward_voice();
+    const VoiceRun all = plan_run(constant, 1000, samples);
+    EXPECT_EQ(all.kind, Kind::Constant);
+    EXPECT_EQ(all.frames, samples.room(constant, 1000));
+    const VoiceRun capped = plan_run(constant, 20, samples);
+    EXPECT_EQ(capped.kind, Kind::Constant);
+    EXPECT_EQ(capped.frames, 20u);
+
+    Voice ramping = forward_voice();
+    ramping.gain_frames = 50;
+    ramping.left_segment.frames = 30;
+    ramping.right_segment.frames = 20;
+    VoiceRun run = plan_run(ramping, 40, samples);
+    EXPECT_EQ(run.kind, Kind::Ramping);
+    EXPECT_EQ(run.frames, 20u);
+    ramping.right_segment.frames = 45;
+    run = plan_run(ramping, 40, samples);
+    EXPECT_EQ(run.kind, Kind::Ramping);
+    EXPECT_EQ(run.frames, 30u);
+    ramping.left_segment.frames = 60;
+    run = plan_run(ramping, 70, samples);
+    EXPECT_EQ(run.kind, Kind::Ramping);
+    EXPECT_EQ(run.frames, 45u);
+    ramping.right_segment.frames = 60;
+    run = plan_run(ramping, 70, samples);
+    EXPECT_EQ(run.kind, Kind::Ramping);
+    EXPECT_EQ(run.frames, 49u);
+    run = plan_run(ramping, 10, samples);
+    EXPECT_EQ(run.kind, Kind::Ramping);
+    EXPECT_EQ(run.frames, 10u);
+}
+
+TEST(HleVoiceRender, CurrentGainRefreshesOnlyWhenDirty) {
+    using namespace f3rt::hle;
+    Voice voice;
+    voice.left = 0x4010;
+    voice.right = 0x5080;
+    voice.left_gain = 1234.f;
+    voice.right_gain = 5678.f;
+    voice.gain_dirty = false;
+
+    StereoGain clean = current_gain(voice);
+    EXPECT_EQ(float_bits(voice.left_gain), float_bits(1234.f));
+    EXPECT_EQ(float_bits(voice.right_gain), float_bits(5678.f));
+    EXPECT_FALSE(voice.gain_dirty);
+    EXPECT_EQ(float_bits(clean.left), float_bits(1234.f * GAIN_SCALE));
+    EXPECT_EQ(float_bits(clean.right), float_bits(5678.f * GAIN_SCALE));
+
+    voice.gain_dirty = true;
+    StereoGain dirty = current_gain(voice);
+    EXPECT_FALSE(voice.gain_dirty);
+    EXPECT_EQ(float_bits(voice.left_gain), float_bits(interpolated_gain(0x4010)));
+    EXPECT_EQ(float_bits(voice.right_gain), float_bits(interpolated_gain(0x5080)));
+    EXPECT_EQ(float_bits(dirty.left), float_bits(voice.left_gain * GAIN_SCALE));
+    EXPECT_EQ(float_bits(dirty.right), float_bits(voice.right_gain * GAIN_SCALE));
+}
+
+TEST(HleVoiceRender, StepGainLandsOnTheTargets) {
+    using namespace f3rt::hle;
+    Voice idle;
+    idle.left = 100;
+    idle.right = 200;
+    idle.step_left = 10;
+    idle.step_right = -5;
+    idle.gain_dirty = false;
+    step_gain(idle);
+    EXPECT_EQ(idle.left, 100.0);
+    EXPECT_EQ(idle.right, 200.0);
+    EXPECT_EQ(idle.gain_frames, 0u);
+    EXPECT_FALSE(idle.gain_dirty);
+
+    Voice voice;
+    voice.left = 0x4010;
+    voice.right = 0x5080;
+    voice.step_left = 1.0;
+    voice.step_right = -1.5;
+    voice.target_left = voice.left + 3.25;
+    voice.target_right = voice.right - 4.75;
+    voice.gain_frames = 3;
+    voice.gain_dirty = false;
+
+    step_gain(voice);
+    EXPECT_EQ(voice.left, 0x4011);
+    EXPECT_EQ(voice.right, 0x5080 - 1.5);
+    EXPECT_EQ(voice.gain_frames, 2u);
+    EXPECT_FALSE(voice.gain_dirty);
+    EXPECT_EQ(float_bits(voice.left_gain), float_bits(interpolated_gain(0x4011)));
+
+    step_gain(voice);
+    EXPECT_EQ(voice.gain_frames, 1u);
+    EXPECT_FALSE(voice.gain_dirty);
+
+    step_gain(voice);
+    EXPECT_EQ(voice.gain_frames, 0u);
+    EXPECT_EQ(voice.left, voice.target_left);
+    EXPECT_EQ(voice.right, voice.target_right);
+    EXPECT_TRUE(voice.gain_dirty);
+}
+
+TEST(HleVoiceRender, RampingGainMatchesFrameByFrameSteps) {
+    using namespace f3rt::hle;
+    constexpr size_t N = 16;
+    Voice a = ramping_voice();
+    Voice b = a;
+    ASSERT_GE(a.left_segment.frames, N);
+    ASSERT_GE(a.right_segment.frames, N);
+    ASSERT_GT(a.gain_frames, N);
+    ASSERT_GE(N, 8u);
+
+    RampingGain ramp(a);
+    for (size_t k = 0; k < N; ++k) {
+        const StereoGain from_ramp = ramp.next();
+        step_gain(b);
+        const StereoGain from_steps = current_gain(b);
+        EXPECT_EQ(float_bits(from_ramp.left), float_bits(from_steps.left)) << "frame " << k;
+        EXPECT_EQ(float_bits(from_ramp.right), float_bits(from_steps.right)) << "frame " << k;
+    }
+    ramp.store(a, N);
+
+    EXPECT_EQ(double_bits(a.left), double_bits(b.left));
+    EXPECT_EQ(double_bits(a.right), double_bits(b.right));
+    EXPECT_EQ(double_bits(a.left_segment.value), double_bits(b.left_segment.value));
+    EXPECT_EQ(double_bits(a.right_segment.value), double_bits(b.right_segment.value));
+    EXPECT_EQ(double_bits(a.left_segment.slope), double_bits(b.left_segment.slope));
+    EXPECT_EQ(double_bits(a.right_segment.slope), double_bits(b.right_segment.slope));
+    EXPECT_EQ(a.left_segment.frames, b.left_segment.frames);
+    EXPECT_EQ(a.right_segment.frames, b.right_segment.frames);
+    EXPECT_EQ(a.gain_frames, b.gain_frames);
+    EXPECT_EQ(float_bits(a.left_gain), float_bits(b.left_gain));
+    EXPECT_EQ(float_bits(a.right_gain), float_bits(b.right_gain));
+    EXPECT_EQ(a.gain_dirty, b.gain_dirty);
+}
+
+TEST(HleVoiceRender, VoiceFilterRoundsCoefficientsOnce) {
+    expect_filter_matches_filter_step<0>();
+    expect_filter_matches_filter_step<1>();
+    expect_filter_matches_filter_step<2>();
+    expect_filter_matches_filter_step<3>();
+}
+
+TEST(HleVoiceRender, VoiceBusRoutesThePairOrDiscards) {
+    using namespace f3rt::hle;
+    std::vector<float> buses(VOICE_BLOCK_FRAMES * 3 * 8, 9.f);
+    MutableAudioBlockSpan<8> span(buses);
+    std::array<float, VOICE_BLOCK_FRAMES * 8> discard;
+    discard.fill(7.f);
+    constexpr size_t FIRST = VOICE_BLOCK_FRAMES, FRAMES = 5;
+
+    const VoiceBus dry(span, 1, discard);
+    const Chunk routed = dry.chunk(FIRST, FRAMES);
+    EXPECT_EQ(routed.rows, span.data() + FIRST * 8 + size_t(OtisBus::DryL));
+    EXPECT_EQ(routed.first_frame, FIRST);
+    EXPECT_EQ(routed.frames, FRAMES);
+    EXPECT_EQ(routed.row(2), routed.rows + 16);
+    EXPECT_EQ(routed.frame(2), FIRST + 2);
+    for (float v : discard) EXPECT_EQ(v, 7.f);
+
+    const VoiceBus delay(span, 2, discard);
+    EXPECT_EQ(delay.chunk(0, 1).rows, span.data() + size_t(OtisBus::DelayL));
+
+    const VoiceBus unrouted(span, 0, discard);
+    const Chunk dropped = unrouted.chunk(FIRST, FRAMES);
+    EXPECT_EQ(dropped.rows, discard.data());
+    EXPECT_EQ(dropped.first_frame, FIRST);
+    EXPECT_EQ(dropped.frames, FRAMES);
+    for (size_t i = 0; i < discard.size(); ++i)
+        EXPECT_EQ(discard[i], i < FRAMES * 8 ? 0.f : 7.f) << "float " << i;
+    for (float v : buses) EXPECT_EQ(v, 9.f);
 }
 
 TEST(Audio, AudioBlockAlignmentAndMultiSubscript) {

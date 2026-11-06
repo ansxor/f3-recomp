@@ -16,6 +16,7 @@
 //
 // Any mode above 3 behaves as mode 3.
 #include <cstdint>
+#include <type_traits>
 
 namespace f3rt::hle {
 
@@ -40,6 +41,15 @@ inline float filter_step(VoiceFilterState &s, float x, float coef1, float coef2,
                                   : previous4 + coef2 * (stage3 - previous4);
     s = {stage1, stage2, stage3, stage4};
     return stage4;
+}
+
+template <class Body> constexpr decltype(auto) with_filter_mode(uint8_t register_mode, Body &&body) {
+    switch (filter_mode(register_mode)) {
+    case 0: return body(std::integral_constant<unsigned, 0>{});
+    case 1: return body(std::integral_constant<unsigned, 1>{});
+    case 2: return body(std::integral_constant<unsigned, 2>{});
+    default: return body(std::integral_constant<unsigned, 3>{});
+    }
 }
 
 } // namespace f3rt::hle
