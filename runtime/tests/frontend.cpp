@@ -73,9 +73,9 @@ bool settings_equal(const f3rt::FrontendSettings &a, const f3rt::FrontendSetting
     if (a.renderer != b.renderer || a.video_scale != b.video_scale || a.border != b.border ||
         a.filter != b.filter || a.interpolation != b.interpolation ||
         a.interpolation_fields != b.interpolation_fields || a.postprocess != b.postprocess ||
-        a.user_shader != b.user_shader ||
-        std::abs(a.volume - b.volume) >= 0.001f || a.fast_boot != b.fast_boot ||
-        a.boot_cache != b.boot_cache || a.motion_interp != b.motion_interp) {
+        a.user_shader != b.user_shader || std::abs(a.volume - b.volume) >= 0.001f ||
+        a.fast_boot != b.fast_boot || a.boot_cache != b.boot_cache ||
+        a.motion_interp != b.motion_interp) {
         return false;
     }
     for (unsigned p = 0; p < f3rt::LOCAL_PLAYER_COUNT; ++p) {
@@ -732,7 +732,8 @@ RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
             RC_ASSERT(pointer != held);
             size_t index = 0;
             while (index < size_t(f3rt::FrameSlots::SLOT_COUNT) &&
-                   ((latest && index == latest->snapshot_index) || (held && index == held->snapshot_index)))
+                   ((latest && index == latest->snapshot_index) ||
+                    (held && index == held->snapshot_index)))
                 ++index;
             RC_ASSERT(index < size_t(f3rt::FrameSlots::SLOT_COUNT));
             RC_ASSERT(snapshot.snapshot_index == index);

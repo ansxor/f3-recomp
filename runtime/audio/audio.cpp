@@ -201,4 +201,4 @@ void Audio::set_voice_observer(std::function<void(const hle::VoiceEvent &)> obse
 size_t Audio::state_size() const { return AudioSnapshot::BYTES; }
 void Audio::save_state(std::span<uint8_t> dst) const { m_impl->snapshot().write(dst); }
 void Audio::load_state(std::span<const uint8_t> src) { m_impl->restore(AudioSnapshot::parse(src)); }
-}
+} // namespace f3rt

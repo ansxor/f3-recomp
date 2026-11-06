@@ -13,8 +13,7 @@
 
 namespace f3rt::hle {
 
-inline constexpr float GAIN_SCALE =
-    1.f / 524288.f;
+inline constexpr float GAIN_SCALE = 1.f / 524288.f;
 
 class SampleWords {
 public:
@@ -293,4 +292,4 @@ private:
     VoiceFilterState m_filter;
 };
 
-}
+} // namespace f3rt::hle

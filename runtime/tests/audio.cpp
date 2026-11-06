@@ -44,7 +44,8 @@ constexpr uint32_t SND_WORK_BYTE = 0x600;
 constexpr uint32_t duart_reg(uint32_t reg) { return f3rt::SOUND_DUART_BASE + 2 * reg + 1; }
 // ES5505 (OTIS) register n on the sound bus (16-bit, even byte lane).
 constexpr uint32_t otis_reg(uint32_t reg) { return f3rt::SOUND_ES5505_BASE + 2 * reg; }
-f3rt::reference::Board make_board(std::span<const uint8_t> sample_rom = {}, uint8_t *shared = nullptr) {
+f3rt::reference::Board make_board(std::span<const uint8_t> sample_rom = {},
+                                  uint8_t *shared = nullptr) {
     return f3rt::reference::Board({}, sample_rom, shared);
 }
 }
@@ -401,7 +402,8 @@ TEST(Audio, DpramOtisAndSoundReset) {
     audio.write16(otis_reg(10), 0x0246);
     audio.write16(otis_reg(11), 0x8a00);
     audio.write16(f3rt::OTIS_PAGE, 0x20);
-    EXPECT_EQ(audio.read16(otis_reg(6)), 0x4567) << "OTIS stopped voice reads full 20-bit sample address";
+    EXPECT_EQ(audio.read16(otis_reg(6)), 0x4567)
+        << "OTIS stopped voice reads full 20-bit sample address";
     audio.write16(SND_WORK_BYTE, 0xa55a);
     audio.set_reset(false);
     audio.set_reset(true);
@@ -420,7 +422,8 @@ TEST(Audio, CpuLineResetPreservesDspAndDuart) {
     audio.set_reset(false);
     audio.set_reset(true);
     audio.write8(f3rt::SOUND_ES5510_BASE + 0x101, 0);
-    EXPECT_TRUE(audio.read8(f3rt::SOUND_ES5510_BASE + 1) == 0x12 && audio.read8(duart_reg(12)) == 0x66)
+    EXPECT_TRUE(audio.read8(f3rt::SOUND_ES5510_BASE + 1) == 0x12 &&
+                audio.read8(duart_reg(12)) == 0x66)
         << "CPU-line reset preserves DSP registers and DUART configuration";
 }
 
@@ -1282,7 +1285,7 @@ template <unsigned Mode> void expect_filter_matches_filter_step() {
     }
 }
 
-}
+} // namespace
 
 TEST(HleVoiceRender, WithFilterModeClampsAboveThree) {
     using namespace f3rt::hle;
@@ -1805,7 +1808,7 @@ struct Recorder {
         applied.push_back(value);
     }
 };
-}
+} // namespace
 
 TEST(AudioMailbox, DeliversPacketsInRingOrderAndWritesTheConsumerBack) {
     Ring ram;

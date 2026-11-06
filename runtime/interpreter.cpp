@@ -21,7 +21,9 @@ unsigned int m68k_read_memory_8(unsigned int a) { return active_machine->read8(a
 unsigned int m68k_read_memory_16(unsigned int a) { return active_machine->read16(a); }
 unsigned int m68k_read_memory_32(unsigned int a) { return active_machine->read32(a); }
 void m68k_write_memory_8(unsigned int a, unsigned int v) { active_machine->write8(a, uint8_t(v)); }
-void m68k_write_memory_16(unsigned int a, unsigned int v) { active_machine->write16(a, uint16_t(v)); }
+void m68k_write_memory_16(unsigned int a, unsigned int v) {
+    active_machine->write16(a, uint16_t(v));
+}
 void m68k_write_memory_32(unsigned int a, unsigned int v) { active_machine->write32(a, v); }
 } // extern "C"
 namespace f3rt {

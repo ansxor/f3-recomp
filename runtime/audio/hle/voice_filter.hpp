@@ -43,12 +43,17 @@ inline float filter_step(VoiceFilterState &s, float x, float coef1, float coef2,
     return stage4;
 }
 
-template <class Body> constexpr decltype(auto) with_filter_mode(uint8_t register_mode, Body &&body) {
+template <class Body>
+constexpr decltype(auto) with_filter_mode(uint8_t register_mode, Body &&body) {
     switch (filter_mode(register_mode)) {
-    case 0: return body(std::integral_constant<unsigned, 0>{});
-    case 1: return body(std::integral_constant<unsigned, 1>{});
-    case 2: return body(std::integral_constant<unsigned, 2>{});
-    default: return body(std::integral_constant<unsigned, 3>{});
+    case 0:
+        return body(std::integral_constant<unsigned, 0>{});
+    case 1:
+        return body(std::integral_constant<unsigned, 1>{});
+    case 2:
+        return body(std::integral_constant<unsigned, 2>{});
+    default:
+        return body(std::integral_constant<unsigned, 3>{});
     }
 }
 

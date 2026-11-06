@@ -93,9 +93,8 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
             else if (key == "postprocess") s.postprocess = value;
             else if (key == "user_shader") s.user_shader = value;
             else if (key == "sprite_behaviour" || key == "video" || key == "backend" ||
-                       key == "audio") {
-            }
-            else if (key == "volume") {
+                     key == "audio") {
+            } else if (key == "volume") {
                 std::istringstream in{std::string(value)};
                 in >> s.volume;
                 if (!in || in.peek() != EOF) {

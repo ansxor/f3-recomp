@@ -174,8 +174,9 @@ struct RowRange {
 }
 
 template <bool UnitRows>
-void draw_aligned_sprite(const SceneSprite &sprite, const uint8_t *pixels, std::span<uint16_t> plane,
-                         const RasterGeometry &g, uint8_t mask, SpriteCoverage *coverage) {
+void draw_aligned_sprite(const SceneSprite &sprite, const uint8_t *pixels,
+                         std::span<uint16_t> plane, const RasterGeometry &g, uint8_t mask,
+                         SpriteCoverage *coverage) {
     const int base_x = ((sprite.x + 128) >> 8) - g.origin_x;
     const int first_x = std::max(0, g.left - base_x), last_x = std::min(16, g.right - base_x);
     if (first_x >= last_x) return;

@@ -51,4 +51,4 @@ private:
     uint16_t m_consumer = 0;
 };
 
-}
+} // namespace f3rt

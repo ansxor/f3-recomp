@@ -783,14 +783,12 @@ TEST(GameCompositor, IndexedParallelMatchesSerial) {
         f3rt::IndexedScratch scratch;
         std::vector<uint32_t> serial(size_t(options.width()) * options.height()),
             parallel(serial.size());
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(),
-                                       scratch, serial, options.width(),
-                                       f3rt::PixelFormat::Argb8888, options,
-                                       f3rt::ComposeMode::Serial);
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(),
-                                       scratch, parallel, options.width(),
-                                       f3rt::PixelFormat::Argb8888, options,
-                                       f3rt::ComposeMode::Parallel);
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(), scratch,
+                                       serial, options.width(), f3rt::PixelFormat::Argb8888,
+                                       options, f3rt::ComposeMode::Serial);
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(), scratch,
+                                       parallel, options.width(), f3rt::PixelFormat::Argb8888,
+                                       options, f3rt::ComposeMode::Parallel);
         EXPECT_EQ(parallel, serial) << "border=" << border;
     }
 }
@@ -841,8 +839,8 @@ private:
             if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
             f3rt::GameVideoOptions options;
             options.border = border;
-            return (m_gpu[border] = std::make_unique<f3rt::GpuVideo>(
-                        nullptr, options, m_playfield, m_sprites, false, false))
+            return (m_gpu[border] = std::make_unique<f3rt::GpuVideo>(nullptr, options, m_playfield,
+                                                                     m_sprites, false, false))
                 .get();
         } catch (const std::exception &) {
             m_failed = true;
@@ -866,9 +864,8 @@ struct IndexedComparison {
 
 IndexedComparison compare_indexed_frame(const f3rt::SceneSnapshot &frame,
                                         const f3rt::TileRowTable &playfield_tiles,
-                                        std::span<const uint8_t> sprite_tiles,
-                                        unsigned border, f3rt::IndexedScratch &scratch,
-                                        GpuReference &gpu) {
+                                        std::span<const uint8_t> sprite_tiles, unsigned border,
+                                        f3rt::IndexedScratch &scratch, GpuReference &gpu) {
     f3rt::GameVideoOptions options;
     options.scale = 1;
     options.border = border;
@@ -926,8 +923,7 @@ f3rt::SceneSnapshot synthetic_frame(std::mt19937_64 &rng) {
             word(f3rt::OFFS_PLAYFIELDS + map * f3rt::GameTiles::MAP_STRIDE + i * 4 + 0, flags);
             word(f3rt::OFFS_PLAYFIELDS + map * f3rt::GameTiles::MAP_STRIDE + i * 4 + 2, code);
         }
-    for (unsigned i = 0; i < 4096; ++i)
-        word(f3rt::OFFS_TEXTRAM_MAP + i * 2, uint16_t(rng()));
+    for (unsigned i = 0; i < 4096; ++i) word(f3rt::OFFS_TEXTRAM_MAP + i * 2, uint16_t(rng()));
     for (unsigned i = 0; i < 0x2000; ++i)
         graphics[f3rt::OFFS_TEXTRAM_GLYPHS + i] = range(0, 3) ? uint8_t(rng()) : uint8_t(0);
     for (unsigned row = 0; row < 0x2000 / 4; ++row)
@@ -1157,8 +1153,8 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
     }
     for (size_t w = 0; w <= BENCH_WINDOWS.size(); ++w) {
         const char *name = w < BENCH_WINDOWS.size() ? BENCH_WINDOWS[w].name : "background";
-        std::printf("bench timeline %-24s frames=%zu special_px=%zu mismatches=%zu\n",
-                    name, totals[w].frames, totals[w].special_px, totals[w].mismatches);
+        std::printf("bench timeline %-24s frames=%zu special_px=%zu mismatches=%zu\n", name,
+                    totals[w].frames, totals[w].special_px, totals[w].mismatches);
         EXPECT_GT(totals[w].frames, 0u) << name;
     }
     EXPECT_GT(totals[0].special_px, 100000u);
@@ -1202,8 +1198,7 @@ TEST(GameVideo, SaveLoadPreservesNativeFrameAndFutureFrames) {
     auto original = strict_machine_or_skip(true);
     auto restored = strict_machine_or_skip(true);
     if (!original || !restored) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
-    f3rt::runner::SeededScheduleInputSource input(1,
-                                                  f3rt::runner::ScheduleConfig{.versus = false});
+    f3rt::runner::SeededScheduleInputSource input(1, f3rt::runner::ScheduleConfig{.versus = false});
     for (unsigned index = 0; index < 900; ++index) {
         input.apply(*original, index);
         ASSERT_TRUE(original->run_frame(true));
@@ -1488,8 +1483,8 @@ struct SyntheticAssets {
         for (size_t row = 0; row < tile_pixels.size() / 16; ++row) {
             const bool blank = rng() % 8 == 0, solid = !blank && rng() % 3 == 0;
             for (size_t i = 0; i < 16; ++i)
-                tile_pixels[row * 16 + i] = blank          ? uint8_t(0)
-                                            : solid        ? uint8_t(1 + rng() % 15)
+                tile_pixels[row * 16 + i] = blank            ? uint8_t(0)
+                                            : solid          ? uint8_t(1 + rng() % 15)
                                             : rng() % 4 == 0 ? uint8_t(0)
                                                              : uint8_t(rng());
         }

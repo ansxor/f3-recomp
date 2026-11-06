@@ -149,19 +149,17 @@ void Composer::run() {
         const auto begin = Clock::now();
         const auto synth_us = m_perf.synth_frame_us.load(std::memory_order_relaxed);
         synth_estimate += (std::chrono::microseconds(synth_us) - synth_estimate) / 8;
-        const auto emulation_busy = std::chrono::microseconds(std::max(
-            m_perf.emu_us.load(std::memory_order_relaxed),
-            m_perf.emu_frame_us.load(std::memory_order_relaxed)));
+        const auto emulation_busy = std::chrono::microseconds(
+            std::max(m_perf.emu_us.load(std::memory_order_relaxed),
+                     m_perf.emu_frame_us.load(std::memory_order_relaxed)));
         const f3rt::ComposeSchedule schedule =
             helper_windows(shot->start, emulation_busy, synth_estimate);
         f3rt::compose_workers().set_schedule(schedule);
         ShareTimer share(counters);
-        f3rt::compose_snapshot_indexed(*shot->scene_snapshot, m_session.playfield_tiles(),
-                                       m_session.sprite_tiles(), scratch,
-                                       {staging, size_t(STAGING_STRIDE) * 256}, stride,
-                                       f3rt::PixelFormat::Rgba8888, options,
-                                       f3rt::ComposeMode::Parallel, f3rt::SpriteList::Presented,
-                                       &share);
+        f3rt::compose_snapshot_indexed(
+            *shot->scene_snapshot, m_session.playfield_tiles(), m_session.sprite_tiles(), scratch,
+            {staging, size_t(STAGING_STRIDE) * 256}, stride, f3rt::PixelFormat::Rgba8888, options,
+            f3rt::ComposeMode::Parallel, f3rt::SpriteList::Presented, &share);
         const auto end = Clock::now();
         // The writer owns cache maintenance: the display transfer reads these rows by DMA.
         GSPGPU_FlushDataCache(staging, u32(size_t(stride) * height * sizeof(uint32_t)));

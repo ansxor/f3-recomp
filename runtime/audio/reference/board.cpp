@@ -29,7 +29,8 @@ inline int16_t clamp16(int32_t val) {
 
 // This is the only place the exchange is applied.
 template <typename T> size_t swap_dac_channels(T *interleaved_stereo, size_t frames) {
-    for (size_t i = 0; i < frames; ++i) std::swap(interleaved_stereo[i * 2], interleaved_stereo[i * 2 + 1]);
+    for (size_t i = 0; i < frames; ++i)
+        std::swap(interleaved_stereo[i * 2], interleaved_stereo[i * 2 + 1]);
     return frames;
 }
 
@@ -626,4 +627,4 @@ void Board::load_state(std::span<const uint8_t> src) {
 }
 
 static_assert(SnapshotRoot<Board>);
-}
+} // namespace f3rt::reference

@@ -38,4 +38,4 @@ struct AudioSnapshot {
     }
 };
 
-}
+} // namespace f3rt

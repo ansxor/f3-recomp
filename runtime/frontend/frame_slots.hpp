@@ -20,8 +20,7 @@ struct FrameSnapshot {
     size_t stride = 0;
     uint64_t frame = 0, epoch = 0;
     unsigned scale = 1;
-    std::chrono::steady_clock::time_point
-        start;
+    std::chrono::steady_clock::time_point start;
 };
 
 class FrameSlots {

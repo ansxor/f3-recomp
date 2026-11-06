@@ -624,7 +624,8 @@ static inline uint16_t f3_tst_ccr(const uint8_t *bytes, unsigned size) {
     return (value ? 0u : F3_CCR_Z) | ((value & sign) ? F3_CCR_N : 0u);
 }
 
-static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond, uint32_t cycles) {
+static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
+                                    uint32_t cycles) {
     const uint8_t *p = f3_ram(cpu, address, size);
     if (!p) return;
     if (!f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) return;
@@ -674,15 +675,15 @@ static inline void f3_idle_affine_call(f3_cpu *cpu, uint32_t address, uint32_t s
 }
 #if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
 #  define F3_IDLE_SPIN(cpu, cycles) ((void)0)
-#  define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) ((void)0)
-#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) ((void)0)
+#define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) ((void)0)
+#define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) ((void)0)
 #  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) ((void)0)
 #else
 #  define F3_IDLE_SPIN(cpu, cycles) f3_idle_spin((cpu), (cycles))
-#  define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) \
-      f3_idle_poll_bcc((cpu), (address), (size), (cond), (cycles))
-#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) \
-      f3_idle_poll_dbcc((cpu), (address), (size), (cond), (counter), (cycles))
+#define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles)                                         \
+    f3_idle_poll_bcc((cpu), (address), (size), (cond), (cycles))
+#define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles)                               \
+    f3_idle_poll_dbcc((cpu), (address), (size), (cond), (counter), (cycles))
 #  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) \
       f3_idle_affine_call((cpu), (address), (stack), (multiplier), (addend), (cycles))
 #endif

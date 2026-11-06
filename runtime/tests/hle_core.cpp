@@ -699,15 +699,16 @@ TEST(HleCore, ArbitraryStepsAgreeWithinFloatNoise) {
     });
 }
 
-
 bool bits_equal(const std::vector<float> &a, const std::vector<float> &b) {
     return a.size() == b.size() && !std::memcmp(a.data(), b.data(), a.size() * sizeof(float));
 }
 
-bool bits_equal(const VoiceFilterState &a, const VoiceFilterState &b) { return !std::memcmp(&a, &b, sizeof a); }
+bool bits_equal(const VoiceFilterState &a, const VoiceFilterState &b) {
+    return !std::memcmp(&a, &b, sizeof a);
+}
 
-bool all_zero(const std::vector<float> &values, size_t first_row = 0, size_t last_row = SIZE_MAX, size_t column = 0,
-              size_t columns = 8) {
+bool all_zero(const std::vector<float> &values, size_t first_row = 0, size_t last_row = SIZE_MAX,
+              size_t column = 0, size_t columns = 8) {
     for (size_t row = first_row; row < std::min(last_row, values.size() / 8); ++row)
         for (size_t c = column; c < column + columns; ++c)
             if (values[row * 8 + c] != 0.f) return false;
@@ -730,7 +731,8 @@ struct HleVoiceRenderSpans : ::testing::Test {
     std::vector<uint64_t> ticks = std::vector<uint64_t>(FRAMES, 0);
 
     HleVoiceRenderSpans() {
-        for (size_t i = 0; i < 0x4000; ++i) rom.samples[i] = uint16_t(i * 0x9e37u + (i >> 3) * 0x79b9u);
+        for (size_t i = 0; i < 0x4000; ++i)
+            rom.samples[i] = uint16_t(i * 0x9e37u + (i >> 3) * 0x79b9u);
     }
 
     static Voice base_voice() {
@@ -754,8 +756,8 @@ struct HleVoiceRenderSpans : ::testing::Test {
 
     void render(RenderedVoice &run, const Spans &spans) {
         for (const auto &[first, last] : spans)
-            render_voice(voices, run.voice, bank, run.state, MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), first,
-                         last, ticks);
+            render_voice(voices, run.voice, bank, run.state,
+                         MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), first, last, ticks);
     }
 
     RenderedVoice rendered(const Voice &voice, const Spans &spans) {
@@ -835,7 +837,8 @@ TEST_F(HleVoiceRenderSpans, OneShotEndStopsAndSilencesTheChunk) {
 }
 
 TEST_F(HleVoiceRenderSpans, PositionOutsideTheRomDeactivates) {
-    for (const double position : {-1.0, double(rom.samples.size()), double(rom.samples.size()) + 5}) {
+    for (const double position :
+         {-1.0, double(rom.samples.size()), double(rom.samples.size()) + 5}) {
         SCOPED_TRACE(position);
         Voice voice = base_voice();
         voice.position = position;
@@ -867,9 +870,11 @@ TEST_F(HleVoiceRenderSpans, NewFilterEpochStartsFromSilence) {
 TEST_F(HleVoiceRenderSpans, VoiceSpanReturnsTheSlotMemory) {
     const RenderedVoice reference = rendered(base_voice(), {{0, 150}});
     RenderedVoice run = make_run(base_voice());
-    const VoiceBus bus(MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), run.voice.pair, run.state.discard);
+    const VoiceBus bus(MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), run.voice.pair,
+                       run.state.discard);
     const VoiceFilterState memory =
-        VoiceSpan<3>(run.voice, SampleWords(bank.samples), VoiceFilterState{}).render(bus, voices, ticks, 0, 150);
+        VoiceSpan<3>(run.voice, SampleWords(bank.samples), VoiceFilterState{})
+            .render(bus, voices, ticks, 0, 150);
     EXPECT_TRUE(bits_equal(memory, reference.state.filters[SLOT]));
     EXPECT_TRUE(bits_equal(run.buses, reference.buses));
     EXPECT_EQ(run.voice.position, reference.voice.position);

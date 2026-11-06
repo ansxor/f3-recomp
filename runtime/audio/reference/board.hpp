@@ -10,8 +10,8 @@ namespace f3rt::reference {
 
 class Board {
 public:
-    Board(std::span<const uint8_t> sound_rom, std::span<const uint8_t> sample_rom, uint8_t *shared_ram,
-          size_t shared_ram_size = 0x800);
+    Board(std::span<const uint8_t> sound_rom, std::span<const uint8_t> sample_rom,
+          uint8_t *shared_ram, size_t shared_ram_size = 0x800);
     ~Board();
 
     Board(const Board &) = delete;
@@ -59,4 +59,4 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
-}
+} // namespace f3rt::reference

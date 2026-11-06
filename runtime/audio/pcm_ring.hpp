@@ -78,4 +78,4 @@ private:
     uint64_t m_pending = 0;
 };
 
-}
+} // namespace f3rt

@@ -61,9 +61,7 @@ private:
 
 struct IndexedFrameStats {
     std::atomic<uint32_t> special_px{0};
-    void reset() {
-        special_px.store(0, std::memory_order_relaxed);
-    }
+    void reset() { special_px.store(0, std::memory_order_relaxed); }
 };
 
 struct IndexedScratch {

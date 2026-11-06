@@ -581,9 +581,7 @@ int main(int argc, char **argv) try {
         } else if (renderer == "compare-gpu") {
             video_mode = "compare";
             video_backend = "gpu";
-        } else
-            throw std::runtime_error(
-                "--renderer must be accurate, enhanced or compare-gpu");
+        } else throw std::runtime_error("--renderer must be accurate, enhanced or compare-gpu");
     };
     select_renderer();
 #ifdef F3RT_GPU
@@ -677,9 +675,8 @@ int main(int argc, char **argv) try {
         throw std::runtime_error("--video-interp requires --renderer enhanced or compare-gpu");
     if (motion_interp && video_backend != "gpu")
         throw std::runtime_error("--motion-interp requires --renderer enhanced or compare-gpu");
-    if (video_mode == "compare" &&
-        (headless || video_options.expanded() || automatic_scale || video_interp != "off" ||
-         motion_interp))
+    if (video_mode == "compare" && (headless || video_options.expanded() || automatic_scale ||
+                                    video_interp != "off" || motion_interp))
         throw std::runtime_error(
             "--renderer compare-gpu reads back the GPU frame and compares it to the FDP frame "
             "pixel for pixel: it needs a window, --video-scale 1, --video-border 0, "
@@ -723,7 +720,8 @@ int main(int argc, char **argv) try {
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
 #ifdef F3_PROFILE_SLIM_ENABLED
     if (allow_fallback || !translated)
-        throw std::runtime_error("Profile-slim requires strict native main CPU; no interpreter fallback");
+        throw std::runtime_error(
+            "Profile-slim requires strict native main CPU; no interpreter fallback");
 #endif
 #ifdef F3_PROFILE_INSTRUMENT
     if (!profile_path.empty() && (!translated || allow_fallback))
@@ -1830,11 +1828,11 @@ int main(int argc, char **argv) try {
                         const char *capture_path =
                             screenshot_pending ? screenshot_str.c_str() : nullptr;
                         if (throttle && !draw_menu && !capture_final && !screenshot_pending)
-                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start, frame_time,
-                                                                false, nullptr);
+                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start,
+                                                                frame_time, false, nullptr);
                         else
-                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start, frame_time,
-                                                                true, capture_path);
+                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start,
+                                                                frame_time, true, capture_path);
                         if (presented) {
                             ++motion_presentations;
                             const auto &stats = sdl.gpu->last_motion();
@@ -1867,9 +1865,11 @@ int main(int argc, char **argv) try {
                             if (mismatches) {
                                 std::ostringstream error;
                                 error << "GPU vs FDP frame " << shot->frame << ": " << mismatches
-                                      << " pixel mismatches; first (" << first % f3rt::geometry::NATIVE_WIDTH
-                                      << ',' << first / f3rt::geometry::NATIVE_WIDTH << ") gpu=0x"
-                                      << std::hex << gpu_fdp_readback[first] << " fdp=0x" << fdp[first];
+                                      << " pixel mismatches; first ("
+                                      << first % f3rt::geometry::NATIVE_WIDTH << ','
+                                      << first / f3rt::geometry::NATIVE_WIDTH << ") gpu=0x"
+                                      << std::hex << gpu_fdp_readback[first] << " fdp=0x"
+                                      << fdp[first];
                                 throw std::runtime_error(error.str());
                             }
                         } else if (capture_final || !throttle) sdl.gpu->draw(*shot->scene_snapshot);

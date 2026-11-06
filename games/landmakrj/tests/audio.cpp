@@ -226,7 +226,8 @@ TEST(HleAudio, StateAndSequencing) {
         for (unsigned frame = 0; frame < to_s * 60; ++frame) {
             const auto samples = f.step();
             if (frame < from_s * 60) continue;
-            audible |= std::any_of(samples.begin(), samples.end(), [](int16_t v) { return v != 0; });
+            audible |=
+                std::any_of(samples.begin(), samples.end(), [](int16_t v) { return v != 0; });
         }
         return audible;
     };

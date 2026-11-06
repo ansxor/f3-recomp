@@ -88,4 +88,4 @@ private:
     Thread m_thread;
 };
 
-}
+} // namespace f3rt
