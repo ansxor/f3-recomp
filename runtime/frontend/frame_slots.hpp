@@ -10,11 +10,11 @@
 #include <vector>
 
 namespace f3rt {
-struct CapturedFrame;
+struct SceneSnapshot;
 
 struct FrameSnapshot {
-    CapturedFrame *captured = nullptr;
-    size_t capture = 0;
+    SceneSnapshot *scene_snapshot = nullptr;
+    size_t snapshot_index = 0;
     std::vector<uint32_t> pixels;
     uint32_t *rgba = nullptr;
     size_t stride = 0;
@@ -27,7 +27,7 @@ struct FrameSnapshot {
 class FrameSlots {
 public:
     static constexpr int SLOT_COUNT = 3;
-    void attach_captures(const std::array<CapturedFrame *, SLOT_COUNT> &captures);
+    void attach_snapshots(const std::array<SceneSnapshot *, SLOT_COUNT> &snapshots);
     void attach_buffers(std::span<uint32_t *> buffers, size_t stride);
     FrameSnapshot &begin();
     void publish();
@@ -42,7 +42,7 @@ private:
 
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
-    std::array<CapturedFrame *, SLOT_COUNT> m_captures{};
+    std::array<SceneSnapshot *, SLOT_COUNT> m_snapshots{};
     std::array<FrameSnapshot, SLOT_COUNT> m_slots;
     int m_latest = -1, m_held = -1, m_writing = -1;
     uint64_t m_published = 0, m_seen = 0;

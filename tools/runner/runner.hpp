@@ -65,7 +65,7 @@ inline std::vector<int16_t> drain_audio_samples(Machine &m) {
 
 std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_dir,
                                                const std::string &set = F3RT_DEFAULT_SET,
-                                               bool enable_gpu = false, unsigned gpu_scale = 1);
+                                               bool enable_game_video = false);
 
 struct RunnerConfig {
     std::filesystem::path rom_dir;

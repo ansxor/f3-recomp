@@ -57,7 +57,6 @@ struct RowSetup {
     std::array<LayerId, LAYER_COUNT> order;
     unsigned order_count = 0;
     unsigned settle = 0;
-    bool canonical = false;
     std::array<ColumnRanges, LAYER_COUNT> ranges;
 };
 
@@ -625,19 +624,6 @@ unsigned resolve_pending(RowWork &work, uint32_t *out) {
     return count;
 }
 
-void clear_uncovered_plane_row(const IndexedComposeJob &job, unsigned plane_row, unsigned stride,
-                               unsigned left) {
-    uint16_t *plane = job.plane.data() + size_t(plane_row) * stride;
-    const unsigned width = job.geometry.width();
-    const SpriteCoverage::Row coverage = job.coverage.row(plane_row);
-    std::array<uint32_t, MAX_WORDS> covered{};
-    for (unsigned w = 0; w < coverage.word_count(); ++w) covered[w] = coverage.covered_word(w);
-    for (unsigned x = 0; x < stride; ++x) {
-        const unsigned column = x - left;
-        if (column >= width || !(covered[column >> 5] >> (column & 31) & 1)) plane[x] = 0;
-    }
-}
-
 bool setup_matches(const RowSetup &setup, const SceneRow &row, unsigned active) {
     if (!setup.valid || setup.active != active || setup.clips != row.clips) return false;
     for (unsigned i = 0; i < LAYER_COUNT; ++i)
@@ -652,11 +638,9 @@ void build_setup(RowSetup &setup, const SceneRow &row, unsigned active, int left
     setup.active = active;
     setup.order_count = 0;
     setup.settle = 0;
-    setup.canonical = false;
     for (LayerId id : scene_order(row)) {
         if (!(active >> unsigned(id) & 1)) continue;
         setup.order[setup.order_count++] = id;
-        setup.canonical |= row.layer(id).priority >= 16;
         setup.ranges[unsigned(id)] = column_ranges(row, row.layer(id), left_edge, right_edge);
     }
     for (unsigned n = 0; n < setup.order_count; ++n) {
@@ -697,18 +681,6 @@ void compose_row(const IndexedComposeJob &job, unsigned y, RowSetup &setup,
     const int left_edge = 46 - int(job.geometry.border);
     const int right_edge = 366 + int(job.geometry.border);
     if (!setup_matches(setup, row, active)) build_setup(setup, row, active, left_edge, right_edge);
-    if (setup.canonical) {
-        clear_uncovered_plane_row(job, plane_row, expanded ? width : 432, expanded ? 0 : 46);
-        SceneTarget target{job.plane, {argb_scratch, width}, job.geometry};
-        compose_scene_rows(scene, target, y, y, y + 1);
-        for (unsigned sub = 0; sub < job.geometry.scale; ++sub) {
-            const uint32_t *source = argb_scratch + size_t(sub) * width;
-            uint32_t *row = out + size_t(sub) * job.stride;
-            for (unsigned x = 0; x < width; ++x) row[x] = to_pixel_format(source[x], job.format);
-        }
-        if (job.stats) job.stats->fallback_rows.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
 
     std::array<BlendSamples, MAX_WIDTH> samples;
     RowWork work{job, row, setup};

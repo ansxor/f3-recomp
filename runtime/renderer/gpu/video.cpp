@@ -572,7 +572,7 @@ struct GpuVideo::Impl {
         have_interpolation_log = true;
     }
     enum class Presentation { Wait, SkipBusy, Offscreen };
-    void draw(const CapturedFrame &scene, std::span<uint32_t> output, unsigned layer_mask,
+    void draw(const SceneSnapshot &scene, std::span<uint32_t> output, unsigned layer_mask,
               bool process_diagnostic, bool temporal = false, float alpha = 1.0f,
               const std::chrono::steady_clock::time_point *frame_start = nullptr,
               std::chrono::nanoseconds period = {}, Presentation presentation = Presentation::Wait,
@@ -887,11 +887,11 @@ void GpuVideo::set_overlay(Overlay callback, void *userdata) {
     m_impl->overlay = callback;
     m_impl->overlay_userdata = userdata;
 }
-void GpuVideo::draw(const CapturedFrame &scene, std::span<uint32_t> output, unsigned layer_mask,
+void GpuVideo::draw(const SceneSnapshot &scene, std::span<uint32_t> output, unsigned layer_mask,
                     bool process_diagnostic) {
     m_impl->draw(scene, output, layer_mask, process_diagnostic);
 }
-bool GpuVideo::present(const CapturedFrame &scene, const char *capture_path) {
+bool GpuVideo::present(const SceneSnapshot &scene, const char *capture_path) {
     m_impl->draw(scene, {}, ALL_LAYERS, false, false, 1.0f, nullptr, {},
                  capture_path ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy, false,
                  capture_path);
@@ -908,7 +908,7 @@ void GpuVideo::enable_display_pacing() {
 #endif
     m_impl->display_pacing = true;
 }
-void GpuVideo::capture_motion(const CapturedFrame &scene, uint64_t frame) {
+void GpuVideo::capture_motion(const SceneSnapshot &scene, uint64_t frame) {
     if (!m_impl->motion) {
         enable_display_pacing();
         m_impl->motion = std::make_unique<GpuMotionHistory>(m_impl->options);
@@ -930,12 +930,12 @@ bool GpuVideo::pace_motion() {
 #endif
     return m_impl->motion_pace_prepared;
 }
-void GpuVideo::draw_motion(const CapturedFrame &scene, float alpha, std::span<uint32_t> output,
+void GpuVideo::draw_motion(const SceneSnapshot &scene, float alpha, std::span<uint32_t> output,
                            unsigned layer_mask, bool process_diagnostic) {
     m_impl->motion_stats = {};
     m_impl->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
 }
-bool GpuVideo::present_motion(const CapturedFrame &scene,
+bool GpuVideo::present_motion(const SceneSnapshot &scene,
                               std::chrono::steady_clock::time_point frame_start,
                               std::chrono::nanoseconds period, bool wait,
                               const char *capture_path) {
@@ -945,7 +945,7 @@ bool GpuVideo::present_motion(const CapturedFrame &scene,
                  capture_path);
     return m_impl->last_presented;
 }
-void GpuVideo::draw_motion_comparison_timed(const CapturedFrame &scene,
+void GpuVideo::draw_motion_comparison_timed(const SceneSnapshot &scene,
                                             std::chrono::steady_clock::time_point frame_start,
                                             std::chrono::nanoseconds period,
                                             const char *capture_path) {

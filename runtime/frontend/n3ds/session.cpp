@@ -13,7 +13,7 @@
 #include "f3rt/video.hpp"
 #include "log.hpp"
 #include "program.h"
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "sprites/units.hpp"
 #include <algorithm>
 #include <array>
@@ -179,8 +179,7 @@ void Session::startup() {
         machine->allow_main_fallback = false;
         stage("game video");
         machine->game_video =
-            std::make_unique<f3rt::GameVideo>(*machine, f3rt::GameVideoMode::Game, m_video);
-        machine->game_video->enable_captured_presentation();
+            std::make_unique<f3rt::GameVideo>(*machine, f3rt::GameVideoMode::Game);
         stage("sprite units");
         machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
         m_playfield = f3rt::TileRowTable(machine->video->playfield_tiles());
@@ -188,10 +187,10 @@ void Session::startup() {
         m_machine = std::move(machine);
     }
     stage("capture slots");
-    std::array<f3rt::CapturedFrame *, f3rt::FrameSlots::SLOT_COUNT> captures{};
-    for (size_t slot = 0; slot < m_captures.size(); ++slot)
-        captures[slot] = (m_captures[slot] = std::make_unique<f3rt::CapturedFrame>()).get();
-    m_shared.emulation.attach_captures(captures);
+    std::array<f3rt::SceneSnapshot *, f3rt::FrameSlots::SLOT_COUNT> snapshots{};
+    for (size_t slot = 0; slot < m_snapshots.size(); ++slot)
+        snapshots[slot] = (m_snapshots[slot] = std::make_unique<f3rt::SceneSnapshot>()).get();
+    m_shared.emulation.attach_snapshots(snapshots);
     auto &machine = *m_machine;
     const f3rt::GameBoot *boot = f3rt::game_boot();
     if (boot && m_settings.fast_boot) {
@@ -279,7 +278,7 @@ void Session::emulate() {
             continue;
         }
         f3rt::FrameSnapshot *slot = &m_shared.emulation.begin();
-        if (slot->captured) machine.game_video->set_capture_target(slot->captured);
+        if (slot->scene_snapshot) machine.game_video->set_snapshot_target(slot->scene_snapshot);
         slot->frame = machine.frame;
         slot->epoch = m_epoch;
         slot->scale = m_video.scale;

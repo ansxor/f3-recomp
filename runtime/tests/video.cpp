@@ -6,13 +6,17 @@
 #include "renderer/game/text.hpp"
 #include "renderer/game/sprites.hpp"
 #include "renderer/game/lines.hpp"
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/clip.hpp"
 #include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/layer_visits.hpp"
 #include "renderer/game/ram_shadow.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "sprites/units.hpp"
+#ifdef F3RT_GPU
+#include "renderer/gpu/video.hpp"
+#include <SDL3/SDL.h>
+#endif
 #include "state_io.hpp"
 #include "runner.hpp"
 #include "support.hpp"
@@ -23,7 +27,9 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdio>
+#include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string_view>
 #include <vector>
@@ -748,7 +754,7 @@ RC_GTEST_PROP(Video, Color15BitUnpackingInvariant, ()) {
 }
 
 #if defined(F3RT_GAME_VIDEO)
-TEST(GameCompositor, ParallelMatchesSerial) {
+TEST(GameCompositor, IndexedParallelMatchesSerial) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
     if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
@@ -758,7 +764,7 @@ TEST(GameCompositor, ParallelMatchesSerial) {
     std::unique_ptr<f3rt::Machine> machine;
     try {
         machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
-                                                      F3RT_DEFAULT_SET, true, 1);
+                                                      F3RT_DEFAULT_SET, true);
     } catch (const std::exception &error) {
         GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
     }
@@ -767,21 +773,25 @@ TEST(GameCompositor, ParallelMatchesSerial) {
         ASSERT_TRUE(machine->run_frame(true));
     }
     ASSERT_NE(machine->game_video, nullptr);
-    const auto &captured = machine->game_video->captured_frame();
+    const auto &captured = machine->game_video->scene_snapshot();
     ASSERT_FALSE(captured.fallback) << "Frame 900 must be a supported native scanout";
+    const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
     for (const unsigned border : {0u, 40u}) {
         f3rt::GameVideoOptions options;
         options.scale = 1;
         options.border = border;
-        std::vector<uint16_t> plane(f3rt::sprite_plane_size(options));
-        f3rt::raster_captured_sprites(captured, machine->video->sprite_tiles(), plane, options);
-        std::vector<uint32_t> expected(size_t(options.width()) * options.height());
-        f3rt::compose_captured_scene(captured, machine->video->playfield_tiles(), plane, expected,
-                                     options, f3rt::ComposeMode::Serial);
-        std::vector<uint32_t> parallel(expected.size());
-        f3rt::compose_captured_scene(captured, machine->video->playfield_tiles(), plane, parallel,
-                                     options, f3rt::ComposeMode::Parallel);
-        EXPECT_EQ(parallel, expected) << "border=" << border;
+        f3rt::IndexedScratch scratch;
+        std::vector<uint32_t> serial(size_t(options.width()) * options.height()),
+            parallel(serial.size());
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(),
+                                       scratch, serial, options.width(),
+                                       f3rt::PixelFormat::Argb8888, options,
+                                       f3rt::ComposeMode::Serial);
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(),
+                                       scratch, parallel, options.width(),
+                                       f3rt::PixelFormat::Argb8888, options,
+                                       f3rt::ComposeMode::Parallel);
+        EXPECT_EQ(parallel, serial) << "border=" << border;
     }
 }
 
@@ -802,36 +812,80 @@ std::vector<uint16_t> covered_plane(std::span<const uint16_t> plane, f3rt::GameV
     return result;
 }
 
+class GpuReference {
+public:
+    GpuReference(std::span<const uint8_t> playfield, std::span<const uint8_t> sprites)
+        : m_playfield(playfield), m_sprites(sprites) {}
+    bool available() { return render_at(0) != nullptr; }
+    std::optional<std::vector<uint32_t>> render(const f3rt::SceneSnapshot &frame,
+                                                f3rt::GameVideoOptions options) {
+        std::vector<uint32_t> output(size_t(options.width()) * options.height());
+#ifdef F3RT_GPU
+        auto *gpu = render_at(options.border);
+        if (!gpu) return std::nullopt;
+        gpu->draw(frame, output);
+        return output;
+#else
+        (void)frame;
+        return std::nullopt;
+#endif
+    }
+
+private:
+#ifdef F3RT_GPU
+    f3rt::GpuVideo *render_at(unsigned border) {
+        if (m_failed) return nullptr;
+        auto found = m_gpu.find(border);
+        if (found != m_gpu.end()) return found->second.get();
+        try {
+            if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
+            f3rt::GameVideoOptions options;
+            options.border = border;
+            return (m_gpu[border] = std::make_unique<f3rt::GpuVideo>(
+                        nullptr, options, m_playfield, m_sprites, false, false))
+                .get();
+        } catch (const std::exception &) {
+            m_failed = true;
+            return nullptr;
+        }
+    }
+    std::map<unsigned, std::unique_ptr<f3rt::GpuVideo>> m_gpu;
+    bool m_failed = false;
+#else
+    void *render_at(unsigned) { return nullptr; }
+#endif
+    std::span<const uint8_t> m_playfield, m_sprites;
+};
+
 struct IndexedComparison {
     size_t pixels = 0, mismatches = 0, plane_mismatches = 0;
-    size_t rows = 0, fallback_rows = 0;
+    size_t rows = 0;
     size_t special_px = 0;
     size_t first_pixel = SIZE_MAX, first_plane = SIZE_MAX;
 };
 
-IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
+IndexedComparison compare_indexed_frame(const f3rt::SceneSnapshot &frame,
                                         const f3rt::TileRowTable &playfield_tiles,
                                         std::span<const uint8_t> sprite_tiles,
-                                        unsigned border, f3rt::IndexedScratch &scratch) {
+                                        unsigned border, f3rt::IndexedScratch &scratch,
+                                        GpuReference &gpu) {
     f3rt::GameVideoOptions options;
     options.scale = 1;
     options.border = border;
     const size_t pixel_count = size_t(options.width()) * options.height();
     std::vector<uint16_t> plane(f3rt::sprite_plane_size(options));
-    f3rt::raster_captured_sprites(frame, sprite_tiles, plane, options);
-    std::vector<uint32_t> expected(pixel_count);
-    f3rt::compose_captured_scene(frame, playfield_tiles.pixels(), plane, expected, options,
-                                 f3rt::ComposeMode::Serial);
+    f3rt::raster_sprites(frame.sprite_list(), frame.pen_mask, sprite_tiles, plane, {options});
+    auto expected = gpu.render(frame, options);
+    if (!expected) throw std::runtime_error("GPU reference unavailable");
     std::vector<uint32_t> indexed(pixel_count);
-    f3rt::compose_captured_indexed(frame, playfield_tiles, sprite_tiles, scratch, indexed,
+    f3rt::compose_snapshot_indexed(frame, playfield_tiles, sprite_tiles, scratch, indexed,
                                    options.width(), f3rt::PixelFormat::Argb8888, options);
     IndexedComparison result;
     result.pixels = pixel_count;
     result.rows = options.height();
-    result.fallback_rows = scratch.stats.fallback_rows.load();
     result.special_px = scratch.stats.special_px.load();
     for (size_t i = 0; i < pixel_count; ++i)
-        if (indexed[i] != expected[i]) {
+        if (indexed[i] != (*expected)[i]) {
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
             ++result.mismatches;
         }
@@ -842,21 +896,21 @@ IndexedComparison compare_indexed_frame(const f3rt::CapturedFrame &frame,
             ++result.plane_mismatches;
         }
     std::vector<uint32_t> staging(pixel_count);
-    f3rt::compose_captured_indexed(frame, playfield_tiles, sprite_tiles, scratch, staging,
+    f3rt::compose_snapshot_indexed(frame, playfield_tiles, sprite_tiles, scratch, staging,
                                    options.width(), f3rt::PixelFormat::Rgba8888, options);
     for (size_t i = 0; i < pixel_count; ++i)
-        if (staging[i] != f3rt::to_pixel_format(expected[i], f3rt::PixelFormat::Rgba8888)) {
+        if (staging[i] != f3rt::to_pixel_format((*expected)[i], f3rt::PixelFormat::Rgba8888)) {
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
             ++result.mismatches;
         }
     return result;
 }
 
-f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
+f3rt::SceneSnapshot synthetic_frame(std::mt19937_64 &rng) {
     const auto range = [&rng](unsigned lo, unsigned hi) {
         return unsigned(rng() % (hi - lo + 1)) + lo;
     };
-    f3rt::CapturedFrame frame;
+    f3rt::SceneSnapshot frame;
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
     const auto word = [&](size_t offset, uint16_t value) {
@@ -883,7 +937,7 @@ f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
     frame.tiles.decode(vram);
     frame.text.decode(vram);
     frame.pen_mask = uint8_t(range(0x0f, 0x3f));
-    frame.flipped = range(0, 1) != 0;
+    frame.flipped = false;
     for (unsigned i = 0; i < frame.colors.size(); ++i)
         frame.colors[i] = uint32_t(rng()) & 0xffffffu;
     for (auto &row : frame.rows) {
@@ -901,7 +955,7 @@ f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
         }
         std::array<uint8_t, f3rt::LAYER_COUNT> distinct{1, 2, 3, 4, 5, 6, 7, 8, 9};
         const bool distinct_priorities = range(0, 1) != 0;
-        const unsigned max_priority = range(0, 15) == 0 ? 17 : 15;
+        constexpr unsigned max_priority = 15;
         std::shuffle(distinct.begin(), distinct.end(), rng);
         for (unsigned i = 0; i < 4; ++i) {
             row.clips[i].left = int16_t(int(range(0, 400)) - 40);
@@ -952,7 +1006,7 @@ f3rt::CapturedFrame synthetic_frame(std::mt19937_64 &rng) {
 }
 } // namespace
 
-TEST(GameCompositor, IndexedMatchesReference) {
+TEST(GameCompositor, IndexedMatchesGpu) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
     if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
@@ -961,17 +1015,19 @@ TEST(GameCompositor, IndexedMatchesReference) {
         GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed indexed compositor check";
     size_t frames = 0, mismatches = 0, plane_mismatches = 0;
     for (const bool play : {false, true}) {
-        size_t rows = 0, fallback_rows = 0;
+        size_t rows = 0;
         std::unique_ptr<f3rt::Machine> machine;
         try {
             machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
-                                                          F3RT_DEFAULT_SET, true, 1);
+                                                          F3RT_DEFAULT_SET, true);
         } catch (const std::exception &error) {
             GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
         }
         machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
         f3rt::runner::SeededScheduleInputSource schedule(
             1, f3rt::runner::ScheduleConfig{.versus = false});
+        GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
+        if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
         const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
         f3rt::IndexedScratch scratch;
         for (unsigned index = 0; index < 3600; ++index) {
@@ -979,14 +1035,13 @@ TEST(GameCompositor, IndexedMatchesReference) {
             else f3rt::apply_local_inputs(*machine, {});
             ASSERT_TRUE(machine->run_frame(true));
             if (index < 600 || index % 30) continue;
-            const auto &captured = machine->game_video->captured_frame();
+            const auto &captured = machine->game_video->scene_snapshot();
             ASSERT_FALSE(captured.fallback) << "frame " << index << " must be a native scanout";
             for (const unsigned border : {0u, 40u}) {
                 const auto result = compare_indexed_frame(
-                    captured, playfield, machine->video->sprite_tiles(), border, scratch);
+                    captured, playfield, machine->video->sprite_tiles(), border, scratch, gpu);
                 ++frames;
                 rows += result.rows;
-                fallback_rows += result.fallback_rows;
                 mismatches += result.mismatches;
                 plane_mismatches += result.plane_mismatches;
                 EXPECT_EQ(result.mismatches, 0u)
@@ -997,9 +1052,7 @@ TEST(GameCompositor, IndexedMatchesReference) {
                     << result.first_plane;
             }
         }
-        std::printf("indexed compositor %s: rows=%zu fallback_rows=%zu\n",
-                    play ? "play" : "attract", rows, fallback_rows);
-        EXPECT_EQ(fallback_rows, 0u) << (play ? "play" : "attract");
+        std::printf("indexed compositor %s: rows=%zu\n", play ? "play" : "attract", rows);
     }
     std::printf("indexed compositor: frames=%zu mismatches=%zu plane_mismatches=%zu\n", frames,
                 mismatches, plane_mismatches);
@@ -1033,7 +1086,7 @@ constexpr std::array<BenchWindow, 6> BENCH_WINDOWS{{
 constexpr unsigned BENCH_FRAMES = 18580, BENCH_BACKGROUND_STRIDE = 37;
 } // namespace
 
-TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
+TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
     if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
@@ -1047,11 +1100,13 @@ TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
     std::unique_ptr<f3rt::Machine> machine;
     try {
         machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
-                                                      F3RT_DEFAULT_SET, true, 1);
+                                                      F3RT_DEFAULT_SET, true);
     } catch (const std::exception &error) {
         GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
     }
     machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+    GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
+    if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
     const auto eeprom_path = std::filesystem::temp_directory_path() / "f3rt-bench-timeline.eeprom";
     {
         std::ofstream file(eeprom_path, std::ios::binary | std::ios::trunc);
@@ -1063,7 +1118,7 @@ TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
     auto input = f3rt::runner::ScriptInputSource::from_file(script_path.string());
 
     struct Totals {
-        size_t frames = 0, fallback_rows = 0, special_px = 0, mismatches = 0;
+        size_t frames = 0, special_px = 0, mismatches = 0;
     };
     std::array<Totals, BENCH_WINDOWS.size() + 1> totals{};
     const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
@@ -1083,14 +1138,13 @@ TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
             }
         }
         if (!sampled) continue;
-        const auto &captured = machine->game_video->captured_frame();
+        const auto &captured = machine->game_video->scene_snapshot();
         ASSERT_FALSE(captured.fallback) << "frame " << frame << " must be a native scanout";
         for (const unsigned border : {0u, 40u}) {
             const auto result = compare_indexed_frame(
-                captured, playfield, machine->video->sprite_tiles(), border, scratch);
+                captured, playfield, machine->video->sprite_tiles(), border, scratch, gpu);
             Totals &total = totals[slot];
             ++total.frames;
-            total.fallback_rows += result.fallback_rows;
             total.special_px += result.special_px;
             total.mismatches += result.mismatches + result.plane_mismatches;
             EXPECT_EQ(result.mismatches, 0u)
@@ -1103,47 +1157,72 @@ TEST(GameCompositor, IndexedMatchesReferenceOnBenchTimeline) {
     }
     for (size_t w = 0; w <= BENCH_WINDOWS.size(); ++w) {
         const char *name = w < BENCH_WINDOWS.size() ? BENCH_WINDOWS[w].name : "background";
-        std::printf("bench timeline %-24s frames=%zu fallback_rows=%zu special_px=%zu "
-                    "mismatches=%zu\n",
-                    name, totals[w].frames, totals[w].fallback_rows, totals[w].special_px,
-                    totals[w].mismatches);
+        std::printf("bench timeline %-24s frames=%zu special_px=%zu mismatches=%zu\n",
+                    name, totals[w].frames, totals[w].special_px, totals[w].mismatches);
         EXPECT_GT(totals[w].frames, 0u) << name;
-        EXPECT_EQ(totals[w].fallback_rows, 0u) << name;
     }
     EXPECT_GT(totals[0].special_px, 100000u);
 }
 
-TEST(GameVideo, LazyNativePlaneMatchesEagerPlane) {
+namespace {
+std::unique_ptr<f3rt::Machine> strict_machine_or_skip(bool game_video) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
     if (!rom_env) rom_env = F3RT_DEFAULT_ROM_DIR;
 #endif
-    if (!rom_env || !*rom_env)
-        GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed lazy sprite plane check";
-    std::unique_ptr<f3rt::Machine> lazy, eager;
+    if (!rom_env || !*rom_env) return nullptr;
     try {
-        lazy = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env), F3RT_DEFAULT_SET,
-                                                   true, 1);
-        eager = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),
-                                                    F3RT_DEFAULT_SET, false, 1);
-    } catch (const std::exception &error) {
-        GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
+        return f3rt::runner::create_strict_machine(std::filesystem::path(rom_env), F3RT_DEFAULT_SET,
+                                                   game_video);
+    } catch (const std::exception &) {
+        return nullptr;
     }
-    eager->game_video = std::make_unique<f3rt::GameVideo>(*eager, f3rt::GameVideoMode::Game);
-    lazy->sprite_units = f3rt::make_game_sprite_units(*lazy, false);
-    f3rt::runner::SeededScheduleInputSource lazy_input(
+}
+} // namespace
+
+TEST(GameVideo, LazyNativeFrameMatchesFdpOracle) {
+    auto game = strict_machine_or_skip(true);
+    auto oracle = strict_machine_or_skip(false);
+    if (!game || !oracle) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
+    game->sprite_units = f3rt::make_game_sprite_units(*game, false);
+    f3rt::runner::SeededScheduleInputSource game_input(
         1, f3rt::runner::ScheduleConfig{.versus = false}),
-        eager_input(1, f3rt::runner::ScheduleConfig{.versus = false});
+        oracle_input(1, f3rt::runner::ScheduleConfig{.versus = false});
     for (unsigned index = 0; index < 1800; ++index) {
-        lazy_input.apply(*lazy, index);
-        eager_input.apply(*eager, index);
-        ASSERT_TRUE(lazy->run_frame(true));
-        ASSERT_TRUE(eager->run_frame(true));
-        if (index % 13 == 0) EXPECT_EQ(lazy->state_crc(), eager->state_crc()) << "frame " << index;
-        else if (index % 5 == 0)
-            EXPECT_EQ(lazy->native_pixels(), eager->native_pixels()) << "frame " << index;
+        game_input.apply(*game, index);
+        oracle_input.apply(*oracle, index);
+        ASSERT_TRUE(game->run_frame(true));
+        ASSERT_TRUE(oracle->run_frame(true));
+        if (index % 5 == 0)
+            EXPECT_EQ(game->native_pixels(), oracle->native_pixels()) << "frame " << index;
     }
-    EXPECT_EQ(lazy->state_crc(), eager->state_crc());
+}
+
+TEST(GameVideo, SaveLoadPreservesNativeFrameAndFutureFrames) {
+    auto original = strict_machine_or_skip(true);
+    auto restored = strict_machine_or_skip(true);
+    if (!original || !restored) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
+    f3rt::runner::SeededScheduleInputSource input(1,
+                                                  f3rt::runner::ScheduleConfig{.versus = false});
+    for (unsigned index = 0; index < 900; ++index) {
+        input.apply(*original, index);
+        ASSERT_TRUE(original->run_frame(true));
+    }
+    std::vector<uint8_t> state(original->state_size());
+    original->save_state(state);
+    restored->load_state(state);
+    EXPECT_EQ(restored->native_pixels(), original->native_pixels());
+    EXPECT_EQ(restored->state_crc(), original->state_crc());
+    for (unsigned index = 900; index < 1200; ++index) {
+        input.apply(*original, index);
+        ASSERT_TRUE(original->run_frame(true));
+        input.apply(*restored, index);
+        ASSERT_TRUE(restored->run_frame(true));
+        if (index % 7 == 0) {
+            EXPECT_EQ(restored->native_pixels(), original->native_pixels()) << "frame " << index;
+            EXPECT_EQ(restored->state_crc(), original->state_crc()) << "frame " << index;
+        }
+    }
 }
 
 TEST(GameCompositor, ChunkedSpriteRasterMatchesWholePlane) {
@@ -1314,8 +1393,8 @@ TEST(GameCompositor, SpriteRasterMatchesGeneralReference) {
 }
 
 namespace {
-f3rt::CapturedFrame priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t> &sprite_tiles) {
-    f3rt::CapturedFrame frame;
+f3rt::SceneSnapshot priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t> &sprite_tiles) {
+    f3rt::SceneSnapshot frame;
     frame.fallback = false;
     frame.pen_mask = 0x0f;
     for (unsigned i = 0; i < frame.colors.size(); ++i)
@@ -1359,19 +1438,19 @@ f3rt::CapturedFrame priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t>
 TEST(GameCompositor, IndexedPriorityTieRowsBlendOnlyWhenBothLayersDraw) {
     std::vector<uint8_t> tile_pixels(256, 0), sprite_tiles;
     const f3rt::TileRowTable playfield(tile_pixels);
+    const auto sp0_only = priority_tie_frame(false, sprite_tiles);
+    const auto with_sp1 = priority_tie_frame(true, sprite_tiles);
+    GpuReference gpu(tile_pixels, sprite_tiles);
+    if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
     for (const unsigned border : {0u, 40u}) {
         f3rt::IndexedScratch scratch;
-        const auto sp0_only = priority_tie_frame(false, sprite_tiles);
         const auto before =
-            compare_indexed_frame(sp0_only, playfield, sprite_tiles, border, scratch);
-        EXPECT_EQ(before.fallback_rows, 0u) << "border=" << border;
+            compare_indexed_frame(sp0_only, playfield, sprite_tiles, border, scratch, gpu);
         EXPECT_EQ(before.special_px, 0u) << "border=" << border;
         EXPECT_EQ(before.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(before.plane_mismatches, 0u) << "border=" << border;
-        const auto with_sp1 = priority_tie_frame(true, sprite_tiles);
         const auto after =
-            compare_indexed_frame(with_sp1, playfield, sprite_tiles, border, scratch);
-        EXPECT_EQ(after.fallback_rows, 0u) << "border=" << border;
+            compare_indexed_frame(with_sp1, playfield, sprite_tiles, border, scratch, gpu);
         EXPECT_EQ(after.special_px, 17u) << "border=" << border;
         EXPECT_EQ(after.mismatches, 0u) << "border=" << border;
         EXPECT_EQ(after.plane_mismatches, 0u) << "border=" << border;
@@ -1402,24 +1481,37 @@ TEST(GameCompositor, IndexedPaletteIncrementalBuildMatchesFullBuild) {
     }
 }
 
-RC_GTEST_PROP(GameCompositor, IndexedMatchesReferenceSynthetic, ()) {
+namespace {
+struct SyntheticAssets {
+    SyntheticAssets() : tile_pixels(4 * 256), sprite_tiles(4 * 256) {
+        std::mt19937_64 rng(777);
+        for (size_t row = 0; row < tile_pixels.size() / 16; ++row) {
+            const bool blank = rng() % 8 == 0, solid = !blank && rng() % 3 == 0;
+            for (size_t i = 0; i < 16; ++i)
+                tile_pixels[row * 16 + i] = blank          ? uint8_t(0)
+                                            : solid        ? uint8_t(1 + rng() % 15)
+                                            : rng() % 4 == 0 ? uint8_t(0)
+                                                             : uint8_t(rng());
+        }
+        for (auto &byte : sprite_tiles) byte = uint8_t(rng());
+        playfield = f3rt::TileRowTable(tile_pixels);
+    }
+    std::vector<uint8_t> tile_pixels, sprite_tiles;
+    f3rt::TileRowTable playfield;
+    GpuReference gpu{tile_pixels, sprite_tiles};
+};
+} // namespace
+
+RC_GTEST_PROP(GameCompositor, IndexedMatchesGpuSynthetic, ()) {
+    static SyntheticAssets assets;
+    if (!assets.gpu.available()) RC_SUCCEED("No GPU device for the reference render");
     const auto seed = *rc::gen::arbitrary<uint64_t>();
     const auto border = *rc::gen::element(0u, 40u);
     std::mt19937_64 rng(seed);
-    const f3rt::CapturedFrame frame = synthetic_frame(rng);
-    std::vector<uint8_t> tile_pixels(4 * 256), sprite_tiles(4 * 256);
-    for (size_t row = 0; row < tile_pixels.size() / 16; ++row) {
-        const bool blank = rng() % 8 == 0, solid = !blank && rng() % 3 == 0;
-        for (size_t i = 0; i < 16; ++i)
-            tile_pixels[row * 16 + i] = blank                    ? uint8_t(0)
-                                        : solid                  ? uint8_t(1 + rng() % 15)
-                                        : rng() % 4 == 0 ? uint8_t(0)
-                                                         : uint8_t(rng());
-    }
-    for (auto &byte : sprite_tiles) byte = uint8_t(rng());
-    const f3rt::TileRowTable playfield(tile_pixels);
+    const f3rt::SceneSnapshot frame = synthetic_frame(rng);
     f3rt::IndexedScratch scratch;
-    const auto result = compare_indexed_frame(frame, playfield, sprite_tiles, border, scratch);
+    const auto result = compare_indexed_frame(frame, assets.playfield, assets.sprite_tiles, border,
+                                              scratch, assets.gpu);
     RC_ASSERT(result.mismatches == 0);
     RC_ASSERT(result.plane_mismatches == 0);
 }

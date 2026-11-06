@@ -30,8 +30,8 @@ static_assert(F3_LAYER_CLIPS + 2 * 16 == F3_LAYER_STRIDE);
 static_assert(F3_ROW_LAYERS + LAYER_COUNT * F3_LAYER_STRIDE == F3_ROW_PF);
 static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE <= F3_SCENE_ROW_STRIDE);
 static_assert(GameTiles::MAP_COUNT == 4 || GameTiles::MAP_COUNT == 6);
-static_assert(CapturedFrame::MAX_SPRITES == F3_SCENE_SPRITE_COUNT &&
-              CapturedFrame::PALETTE_SIZE == F3_SCENE_PALETTE_WORDS);
+static_assert(SceneSnapshot::MAX_SPRITES == F3_SCENE_SPRITE_COUNT &&
+              SceneSnapshot::PALETTE_SIZE == F3_SCENE_PALETTE_WORDS);
 
 uint32_t layer_flags(const SceneLayer &l) {
     return uint32_t(l.priority) | (uint32_t(l.blend_mode) << F3_LAYER_MODE_SHIFT) |
@@ -92,7 +92,7 @@ void encode_row(const SceneRow &r, const GameText &text, bool flipped,
         pa[F3_PF_Y_STEP] = uint32_t(p.y_step);
         pa[F3_PF_Y_FRACTION] = p.y_fraction;
         pa[F3_PF_PALETTE_ADD] = p.palette_add;
-        // The captured phase is kept bit-exact where motion did not move it.
+        // The snapshot phase is kept bit-exact where motion did not move it.
         if (moved_y[i]) {
             pa[F3_PF_SOURCE_Y] = uint32_t(motion->phase[i]) >> 8;
             pa[F3_PF_Y_FRACTION] = uint32_t(motion->phase[i]) & 255u;
@@ -120,7 +120,7 @@ void encode_coefficients(const InterpolationCoefficients &coefficients, uint32_t
 }
 } // namespace
 
-void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionState *motion,
+void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
             const InterpolationCoefficients *coefficients, std::span<uint32_t> out) {
     if (frame.fallback) {
         if (out.size() < ENCODED_NATIVE_WORDS)

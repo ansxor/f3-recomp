@@ -6,9 +6,9 @@ int FrameSlots::free_slot() const {
     while (slot == m_latest || slot == m_held) ++slot;
     return slot;
 }
-void FrameSlots::attach_captures(const std::array<CapturedFrame *, SLOT_COUNT> &captures) {
+void FrameSlots::attach_snapshots(const std::array<SceneSnapshot *, SLOT_COUNT> &snapshots) {
     std::lock_guard lock(m_mutex);
-    m_captures = captures;
+    m_snapshots = snapshots;
 }
 void FrameSlots::attach_buffers(std::span<uint32_t *> buffers, size_t stride) {
     std::lock_guard lock(m_mutex);
@@ -21,14 +21,14 @@ FrameSnapshot &FrameSlots::begin() {
     std::lock_guard lock(m_mutex);
     const int slot = free_slot();
     FrameSnapshot &s = m_slots[slot];
-    s.captured = nullptr;
-    if (m_captures[0]) {
-        size_t capture = 0;
-        while ((m_latest >= 0 && capture == m_slots[m_latest].capture) ||
-               (m_held >= 0 && capture == m_slots[m_held].capture))
-            ++capture;
-        s.capture = capture;
-        s.captured = m_captures[capture];
+    s.scene_snapshot = nullptr;
+    if (m_snapshots[0]) {
+        size_t index = 0;
+        while ((m_latest >= 0 && index == m_slots[m_latest].snapshot_index) ||
+               (m_held >= 0 && index == m_slots[m_held].snapshot_index))
+            ++index;
+        s.snapshot_index = index;
+        s.scene_snapshot = m_snapshots[index];
     }
     m_writing = slot;
     return s;
@@ -48,8 +48,8 @@ void FrameSlots::restate(unsigned scale) {
         const FrameSnapshot &latest = m_slots[m_latest];
         const int slot = free_slot();
         FrameSnapshot &s = m_slots[slot];
-        s.captured = latest.captured;
-        s.capture = latest.capture;
+        s.scene_snapshot = latest.scene_snapshot;
+        s.snapshot_index = latest.snapshot_index;
         s.frame = latest.frame;
         s.epoch = latest.epoch;
         s.start = latest.start;

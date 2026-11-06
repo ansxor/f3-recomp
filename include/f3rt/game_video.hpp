@@ -19,7 +19,7 @@ inline constexpr unsigned NATIVE_PIXELS = NATIVE_WIDTH * HEIGHT;
 
 } // namespace geometry
 class Machine;
-struct CapturedFrame;
+struct SceneSnapshot;
 enum class GameVideoMode { Diagnostic, Game, Compare };
 
 struct GameVideoOptions {
@@ -43,8 +43,7 @@ public:
 
 class GameVideo {
 public:
-    explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Diagnostic,
-                       GameVideoOptions options = {});
+    explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Diagnostic);
     ~GameVideo();
     GameVideo(const GameVideo &) = delete;
     GameVideo &operator=(const GameVideo &) = delete;
@@ -53,19 +52,12 @@ public:
     void set_probe(VideoProbe *probe);
     void compare_layers(uint64_t frame, unsigned layer_mask);
     void report(std::ostream &output) const;
-    std::span<const uint32_t> presentation() const;
-    // Host-only presentation snapshot. Native observations remain CPU-produced.
-    void enable_captured_presentation(bool enabled = true);
-    // Host-only GPU/reference geometry; constructor presentation/state stay fixed.
-    void set_gpu_scale(unsigned scale);
     // The newest scanout snapshot. Overwritten in place at each VBSTART capture unless a capture target is set.
-    const CapturedFrame &captured_frame() const;
+    const SceneSnapshot &scene_snapshot() const;
     // Redirect subsequent captures (and state loads) into caller-owned storage; null restores the internal frame.
-    // captured_frame() keeps naming the newest frame, which is never rewritten while a target is installed
+    // scene_snapshot() keeps naming the newest frame, which is never rewritten while a target is installed
     // (the caller picks a target that is neither the newest frame nor in use elsewhere).
-    void set_capture_target(CapturedFrame *target);
-    void render_reference(std::span<uint32_t> output, GameVideoOptions options,
-                          unsigned layer_mask = 511, bool serial = false) const;
+    void set_snapshot_target(SceneSnapshot *target);
     size_t state_size() const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
@@ -73,7 +65,6 @@ public:
 private:
     friend class Machine;
     void materialize_native() const;
-    void latch_sprites();
     void render();
     void compare_composite(uint64_t frame);
     struct Impl;

@@ -24,8 +24,8 @@
 namespace f3rt::runner {
 
 std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_dir,
-                                               const std::string &set, bool enable_gpu,
-                                               unsigned gpu_scale) {
+                                               const std::string &set,
+                                               bool enable_game_video) {
     if (rom_dir.empty()) {
         throw std::runtime_error("ROM directory must be specified");
     }
@@ -40,12 +40,8 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
         "Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
 #endif
 #if defined(F3RT_GAME_VIDEO)
-    if (enable_gpu) {
-        GameVideoOptions vopts;
-        vopts.scale = gpu_scale;
-        machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Game, vopts);
-        machine->game_video->enable_captured_presentation();
-        machine->game_video->set_gpu_scale(gpu_scale);
+    if (enable_game_video) {
+        machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Game);
     }
 #endif
     return machine;

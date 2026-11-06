@@ -1,5 +1,5 @@
 #pragma once
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "renderer/scale.hpp"
@@ -48,15 +48,15 @@ public:
     Postprocess postprocess() const;
     // Output/layer-mask diagnostics remain baseline unless process_diagnostic is
     // explicitly true. Optional output receives width*height ARGB8888 pixels.
-    void draw(const CapturedFrame &scene, std::span<uint32_t> output = {},
+    void draw(const SceneSnapshot &scene, std::span<uint32_t> output = {},
               unsigned layer_mask = 511, bool process_diagnostic = false);
     // Skip busy in-flight frames before uploading/rendering. No fence wait or
     // readback; draw() still waits for explicit captures and diagnostics.
-    bool present(const CapturedFrame &scene, const char *capture_path = nullptr);
+    bool present(const SceneSnapshot &scene, const char *capture_path = nullptr);
     // Explicit opt-in; completed emulated frames are captured, never draws.
-    void capture_motion(const CapturedFrame &scene, uint64_t frame);
+    void capture_motion(const SceneSnapshot &scene, uint64_t frame);
     void reset_motion();
-    void draw_motion(const CapturedFrame &scene, float alpha, std::span<uint32_t> output = {},
+    void draw_motion(const SceneSnapshot &scene, float alpha, std::span<uint32_t> output = {},
                      unsigned layer_mask = 511, bool process_diagnostic = false);
     const MotionInterpolationStats &last_motion() const;
     // Pace before testing the native-frame deadline so the selected pair is
@@ -65,7 +65,7 @@ public:
     bool pace_motion();
     // Sample live alpha after acquisition. Caller owns display pacing; busy
     // GPU frames are skipped unless an explicit capture requests a wait.
-    bool present_motion(const CapturedFrame &scene,
+    bool present_motion(const SceneSnapshot &scene,
                         std::chrono::steady_clock::time_point frame_start,
                         std::chrono::nanoseconds period, bool wait = false,
                         const char *capture_path = nullptr);
@@ -74,7 +74,7 @@ public:
     // capture_motion, reset_motion, scale or postprocess changes.
     // Optional one-shot PNG of the full-window composition submitted to the
     // drawable, including overlay. Null adds no readback/allocation/fence wait.
-    void draw_motion_comparison_timed(const CapturedFrame &scene,
+    void draw_motion_comparison_timed(const SceneSnapshot &scene,
                                       std::chrono::steady_clock::time_point frame_start,
                                       std::chrono::nanoseconds period,
                                       const char *capture_path = nullptr);

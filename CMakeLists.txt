@@ -315,9 +315,9 @@ set(F3RT_CORE_SOURCES
     runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
     runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
-    runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp runtime/renderer/game/compositor.cpp
+    runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp
     runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
-    runtime/renderer/game/captured_frame.cpp
+    runtime/renderer/game/scene_snapshot.cpp
     ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/audio/audio.cpp
     runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
@@ -494,7 +494,7 @@ if(F3RT_HOST_TOOLS)
     endif()
     target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
-    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/gpu_compare.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
+    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
     file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
     target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
     target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
@@ -602,6 +602,10 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
     endforeach()
+    if(TARGET f3rt-gpu)
+        target_link_libraries(f3rt-test-video PRIVATE f3rt-gpu SDL3::SDL3)
+        target_compile_definitions(f3rt-test-video PRIVATE F3RT_GPU=1)
+    endif()
     # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
     target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
     target_link_libraries(f3rt-test-audio PRIVATE f3rt-frontend f3rt-audio-reference)

@@ -71,7 +71,7 @@ struct InterpolationAnalysis {
     InterpolationCoefficients coefficients;
 };
 // Motion-effective geometry comes from `motion` (null: the canonical frame).
-InterpolationAnalysis analyze_gpu_interpolation(const CapturedFrame &frame,
+InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                                                 GameVideoOptions options, VideoInterpolation mode,
                                                 InterpolationFields fields,
                                                 const MotionState *motion,

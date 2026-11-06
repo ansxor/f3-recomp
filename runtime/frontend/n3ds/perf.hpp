@@ -30,7 +30,7 @@ struct PerfStats {
     std::atomic<uint64_t> emulated{0}, composed{0}, presented{0};
     std::atomic<uint64_t> emu_us{0}, compose_us{0}, compose_max_us{0}, present_us{0};
     std::atomic<uint64_t> emu_start_ns{0}, emu_end_ns{0}, emu_frame_us{0}, synth_frame_us{0};
-    std::atomic<uint32_t> fallback_rows{0}, special_px{0};
+    std::atomic<uint32_t> special_px{0};
     std::array<std::atomic<uint32_t>, std::tuple_size_v<f3rt::ChunkCounts>> chunks{};
     CpuStats composer_cpu;
     std::array<CpuStats, f3rt::VIDEO_STAGE_COUNT> emulation_cpu;

@@ -141,11 +141,11 @@ void png(const std::filesystem::path &path, std::span<const uint32_t> pixels,
     require(ok, "PNG write failed: " + path.string());
 }
 
-void text_sampling(f3rt::GpuVideo &gpu, const f3rt::CapturedFrame &source,
+void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
                    f3rt::GameVideoOptions o) {
     if (o.scale % 2)
         return; // Half-native-pixel translation is an integer output shift at even scales.
-    auto a = std::make_unique<f3rt::CapturedFrame>(source);
+    auto a = std::make_unique<f3rt::SceneSnapshot>(source);
     uint16_t cell = 0;
     bool found = false;
     for (unsigned i = 0; i < 4096 && !found; ++i) {
@@ -175,7 +175,7 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::CapturedFrame &source,
         layer.clip_inverse = true;
         row.clips[0] = {46, 366};
     }
-    auto b = std::make_unique<f3rt::CapturedFrame>();
+    auto b = std::make_unique<f3rt::SceneSnapshot>();
     std::vector<uint32_t> before(size_t(o.width()) * o.height()), after(before.size()),
         middle(before.size());
     gpu.draw(*a, before, 256);
@@ -217,14 +217,14 @@ struct ScopedWindow {
 };
 
 int comparison(const Options &o) {
-    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
+    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true);
     auto &m = *owner;
     runner::SeededScheduleInputSource schedule(o.seed, runner::ScheduleConfig{.versus = false});
     while (m.frame < o.frames) {
         runner::apply_gameplay_word(m, schedule.step(m.frame)[0]);
         advance(m);
     }
-    const auto &base = m.game_video->captured_frame();
+    const auto &base = m.game_video->scene_snapshot();
     require(!base.fallback, "Cannot demonstrate motion on a fallback frame");
     const auto before = state(m);
     const auto pixels = m.native_pixels();
@@ -233,7 +233,7 @@ int comparison(const Options &o) {
     f3rt::GpuVideo gpu(window.value, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
                        false, true, o.interp);
     gpu.set_scale_mode(f3rt::VideoScaleMode::Auto);
-    auto scene = std::make_unique<f3rt::CapturedFrame>(base);
+    auto scene = std::make_unique<f3rt::SceneSnapshot>(base);
     auto pan = [&](uint64_t step) {
         const int phase = int(step % 128);
         const int x = phase <= 64 ? -64 + phase * 2 : 192 - phase * 2;
@@ -387,8 +387,8 @@ int cmd_motion(int argc, char **argv) try {
     auto o = parse(argc, argv);
     SdlLifetime sdl;
     if (o.demo) return comparison(o);
-    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
-    auto reference = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
+    auto owner = runner::create_strict_machine(o.rom_dir, o.set, true);
+    auto reference = runner::create_strict_machine(o.rom_dir, o.set, true);
     auto &m = *owner;
     if (o.sprite_units)
         m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, f3rt::SpriteUnits::game_table(),
@@ -421,7 +421,7 @@ int cmd_motion(int argc, char **argv) try {
         if (m.frame + 1 == o.frames) replay_pre = state(m);
         advance(m);
         advance(*reference);
-        const auto &scene = m.game_video->captured_frame();
+        const auto &scene = m.game_video->scene_snapshot();
         if (scene.fallback) ++fallback;
         else ++supported;
         gpu.capture_motion(scene, m.frame);
@@ -515,7 +515,7 @@ int cmd_motion(int argc, char **argv) try {
         }
     }
     if (!o.dump_dir.empty()) {
-        const auto &final_scene = m.game_video->captured_frame();
+        const auto &final_scene = m.game_video->scene_snapshot();
         for (unsigned phase = 0; phase < 3; ++phase) {
             gpu.draw_motion(final_scene, float(phase) / 2, out);
             png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_phase_" +
@@ -527,7 +527,7 @@ int cmd_motion(int argc, char **argv) try {
     }
     require(paired && visible && half_visible && eligible,
             "No visible paired ROM midpoint motion; use a longer seeded gameplay run");
-    const auto &scene = m.game_video->captured_frame();
+    const auto &scene = m.game_video->scene_snapshot();
     text_sampling(gpu, scene, o.video);
     auto snap = [&](const std::string &label) {
         gpu.draw(scene, canonical);
@@ -543,7 +543,7 @@ int cmd_motion(int argc, char **argv) try {
     snap("duplicate frame");
     gpu.capture_motion(scene, m.frame - 1);
     snap("identity");
-    auto fallback_scene = std::make_unique<f3rt::CapturedFrame>(scene);
+    auto fallback_scene = std::make_unique<f3rt::SceneSnapshot>(scene);
     fallback_scene->fallback = true;
     gpu.capture_motion(*fallback_scene, m.frame);
     gpu.capture_motion(scene, m.frame + 1);
@@ -557,7 +557,7 @@ int cmd_motion(int argc, char **argv) try {
                 std::equal(replay_pixels.begin(), replay_pixels.end(), m.native_pixels().begin(),
                            m.native_pixels().end()),
             "State-load replay canonical state/native pixels mismatch");
-    gpu.capture_motion(m.game_video->captured_frame(), m.frame);
+    gpu.capture_motion(m.game_video->scene_snapshot(), m.frame);
     snap("state-load replay");
 
     if (o.json_output) {

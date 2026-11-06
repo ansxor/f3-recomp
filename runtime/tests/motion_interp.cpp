@@ -11,17 +11,17 @@
 
 namespace {
 
-using f3rt::CapturedFrame;
+using f3rt::SceneSnapshot;
 
-void sprite(CapturedFrame &s, unsigned slot, int x, unsigned tile = 10) {
+void sprite(SceneSnapshot &s, unsigned slot, int x, unsigned tile = 10) {
     s.sprites[slot] = {x * 256, 20 * 256, 256, 256, tile, 0, false, false};
     s.sprite_count = std::max(s.sprite_count, slot + 1);
 }
 
-f3rt::SceneRow &row24(CapturedFrame &s) { return s.rows[f3rt::geometry::FIRST_LINE]; }
-f3rt::ScenePlayfield &pf0(CapturedFrame &s) { return row24(s).playfields[0]; }
+f3rt::SceneRow &row24(SceneSnapshot &s) { return s.rows[f3rt::geometry::FIRST_LINE]; }
+f3rt::ScenePlayfield &pf0(SceneSnapshot &s) { return row24(s).playfields[0]; }
 
-void layer(CapturedFrame &s) {
+void layer(SceneSnapshot &s) {
     auto &p = pf0(s);
     p.layer.enabled = true;
     p.source_x = 100 * 256;
@@ -30,7 +30,7 @@ void layer(CapturedFrame &s) {
     p.y_step = 256;
 }
 
-f3rt::MotionResult pair(const CapturedFrame &a, const CapturedFrame &b, float alpha = 0.5f) {
+f3rt::MotionResult pair(const SceneSnapshot &a, const SceneSnapshot &b, float alpha = 0.5f) {
     f3rt::GpuMotionHistory history;
     history.capture(a, 10);
     history.capture(b, 11);
@@ -75,12 +75,12 @@ bool same_geometry(const f3rt::DecodedSpriteEntry &a, const f3rt::DecodedSpriteE
            a.pri == b.pri;
 }
 
-void sprite_id(CapturedFrame &s, unsigned slot, int x, unsigned tile, uint64_t identity) {
+void sprite_id(SceneSnapshot &s, unsigned slot, int x, unsigned tile, uint64_t identity) {
     s.sprites[slot] = {x * 256, 20 * 256, 256, 256, tile, 0, false, false, identity};
     s.sprite_count = std::max(s.sprite_count, slot + 1);
 }
 
-void sprite_obj(CapturedFrame &s, unsigned slot, int x, unsigned tile, uint64_t identity,
+void sprite_obj(SceneSnapshot &s, unsigned slot, int x, unsigned tile, uint64_t identity,
                 uint64_t object) {
     sprite_id(s, slot, x, tile, identity);
     s.sprites[slot].object = object;
@@ -212,11 +212,11 @@ TEST(MotionDecode, SplicedReplacementAndChaining) {
 }
 
 TEST(MotionInterp, SpriteCountShiftAndRemoval) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
     sprite(*a, 1, 80, 11);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
 
     // An unrelated insertion shifts both compact slots, but neither object identity.
     sprite(*b, 0, 150, 12);
@@ -233,11 +233,11 @@ TEST(MotionInterp, SpriteCountShiftAndRemoval) {
 }
 
 TEST(MotionInterp, AmbiguousDuplicatesSnap) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
     sprite(*a, 1, 24);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     sprite(*b, 0, 22);
     sprite(*b, 1, 26);
     auto stats = pair(*a, *b).stats;
@@ -246,11 +246,11 @@ TEST(MotionInterp, AmbiguousDuplicatesSnap) {
 }
 
 TEST(MotionInterp, DenseUnambiguousDuplicateMovement) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
     sprite(*a, 1, 36);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     sprite(*b, 0, 24);
     sprite(*b, 1, 40);
     auto result = pair(*a, *b);
@@ -260,10 +260,10 @@ TEST(MotionInterp, DenseUnambiguousDuplicateMovement) {
 }
 
 TEST(MotionInterp, TransformAndJumpRejections) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     sprite(*b, 0, 24);
 
     for (unsigned field : {2u, 6u}) {
@@ -288,7 +288,7 @@ TEST(MotionInterp, TransformAndJumpRejections) {
 }
 
 TEST(MotionInterp, StaticPairNoMovementOrRejections) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
     auto stats = pair(*a, *a).stats;
@@ -298,9 +298,9 @@ TEST(MotionInterp, StaticPairNoMovementOrRejections) {
 }
 
 TEST(MotionInterp, RigidAgreementAndPoseSwap) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    auto b = std::make_unique<CapturedFrame>();
+    auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
 
     // Objectless tile change snaps.
@@ -313,12 +313,12 @@ TEST(MotionInterp, RigidAgreementAndPoseSwap) {
         << "objectless tile change should reject transform";
 
     // Tile change agreeing with object rigid delta interpolates.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
     sprite_obj(*a, 1, 60, 11, 2, 5);
     sprite_obj(*a, 2, 100, 12, 3, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 10, 1, 5);
     sprite_obj(*b, 1, 64, 11, 2, 5);
@@ -345,10 +345,10 @@ TEST(MotionInterp, RigidAgreementAndPoseSwap) {
     EXPECT_EQ(pair(*a, *b).stats.sprites, 2u) << "tile change beyond 1 px tolerance interpolated";
 
     // Single-entry object with tile change interpolates.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 99, 1, 5);
     result = pair(*a, *b);
@@ -358,9 +358,9 @@ TEST(MotionInterp, RigidAgreementAndPoseSwap) {
 }
 
 TEST(MotionInterp, ReindexedGridAndAppearanceTwin) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    auto b = std::make_unique<CapturedFrame>();
+    auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
 
     // Re-indexed zoomed grid stays static.
@@ -380,11 +380,11 @@ TEST(MotionInterp, ReindexedGridAndAppearanceTwin) {
     EXPECT_EQ(result.state.sprite_x[1], 0) << "re-indexed grid position 1 wrong";
 
     // Demoted pair with static twin pairs with twin.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
     sprite_obj(*a, 1, 40, 11, 2, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 40, 11, 1, 5);
     sprite_obj(*b, 1, 44, 12, 2, 5);
@@ -393,10 +393,10 @@ TEST(MotionInterp, ReindexedGridAndAppearanceTwin) {
     EXPECT_EQ(result.state.sprite_x[0], 40 * 256) << "demoted pair position wrong";
 
     // Majority-less tile change: all snap.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 99, 1, 5);
     sprite_obj(*a, 1, 60, 11, 2, 5);
@@ -415,9 +415,9 @@ TEST(MotionInterp, ReindexedGridAndAppearanceTwin) {
 }
 
 TEST(MotionInterp, IdentityMatchedMotionAndZoomRejection) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    auto b = std::make_unique<CapturedFrame>();
+    auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
 
     sprite_id(*a, 0, 20, 10, 7);
@@ -436,9 +436,9 @@ TEST(MotionInterp, IdentityMatchedMotionAndZoomRejection) {
 }
 
 TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    auto b = std::make_unique<CapturedFrame>();
+    auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
 
     // Vanished identity and born identity with same appearance within window.
@@ -462,11 +462,11 @@ TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
     EXPECT_EQ(stats.sprite_jump_rejections, 1u) << "beyond window should reject jump";
 
     // Equidistant vanished candidates snap.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 7, 5);
     sprite_obj(*a, 1, 28, 10, 9, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 10, 8, 5);
     stats = pair(*a, *b).stats;
@@ -474,10 +474,10 @@ TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
     EXPECT_EQ(stats.sprite_identity_rejections, 1u) << "equidistant candidates should reject";
 
     // Fallback match with object 0 has no reference and snaps.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_id(*a, 0, 20, 10, 7);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_id(*b, 0, 24, 10, 8);
     stats = pair(*a, *b).stats;
@@ -485,12 +485,12 @@ TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
     EXPECT_EQ(stats.sprite_transform_rejections, 1u) << "object-0 should reject transform";
 
     // Fallback matches with disagreeing deltas: minority snaps, majority interpolates.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
     sprite_obj(*a, 1, 60, 11, 2, 5);
     sprite_obj(*a, 2, 100, 12, 3, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 10, 11, 5);
     sprite_obj(*b, 1, 64, 11, 12, 5);
@@ -504,11 +504,11 @@ TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
     EXPECT_EQ(result.state.sprite_x[2], 110 * 256) << "minority snapped position wrong";
 
     // 50/50 split has no reference: all snap.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_obj(*a, 0, 20, 10, 1, 5);
     sprite_obj(*a, 1, 60, 11, 2, 5);
-    *b = CapturedFrame{};
+    *b = SceneSnapshot{};
     b->fallback = false;
     sprite_obj(*b, 0, 24, 10, 11, 5);
     sprite_obj(*b, 1, 70, 11, 12, 5);
@@ -518,9 +518,9 @@ TEST(MotionInterp, RekeyedIdentityAndAppearanceFallback) {
 }
 
 TEST(MotionInterp, MixedIdentityVsNoIdentity) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    auto b = std::make_unique<CapturedFrame>();
+    auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
 
     sprite_id(*a, 0, 20, 10, 7);
@@ -541,7 +541,7 @@ TEST(MotionInterp, MixedIdentityVsNoIdentity) {
     EXPECT_EQ(stats.rejected_sprites, 0u) << "identity-only change counted as rejected";
 
     // Duplicate identities are ambiguous and snap.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite_id(*a, 0, 20, 10, 7);
     sprite_id(*a, 1, 60, 10, 7);
@@ -552,7 +552,7 @@ TEST(MotionInterp, MixedIdentityVsNoIdentity) {
     EXPECT_EQ(stats.sprites, 0u) << "duplicate identities interpolated";
 
     // Sprites without identity keep (tile, palette) + nearest matching.
-    *a = CapturedFrame{};
+    *a = SceneSnapshot{};
     a->fallback = false;
     sprite(*a, 0, 20);
     *b = *a;
@@ -565,10 +565,10 @@ TEST(MotionInterp, MixedIdentityVsNoIdentity) {
 }
 
 TEST(MotionInterp, PlayfieldScrollAndIndependentGuards) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     layer(*a);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     pf0(*b).source_x += 4 * 256;
     row24(*b).blend = {8, 8, 8, 8};
     row24(*b).playfields[1].layer.enabled = true;
@@ -664,13 +664,13 @@ TEST(MotionInterp, PlayfieldScrollAndIndependentGuards) {
 }
 
 TEST(MotionInterp, TextScrollAndIndependentWrap) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     auto &text = row24(*a).text;
     text.enabled = true;
     row24(*a).text_x = 100;
     row24(*a).text_y = 100;
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     row24(*b).text_x = 101;
     row24(*b).text_y = 101;
 
@@ -700,10 +700,10 @@ TEST(MotionInterp, TextScrollAndIndependentWrap) {
 }
 
 TEST(MotionInterp, HistoryLifecycleAndDiscontinuity) {
-    auto a = std::make_unique<CapturedFrame>();
+    auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     sprite(*a, 0, 20);
-    auto b = std::make_unique<CapturedFrame>(*a);
+    auto b = std::make_unique<SceneSnapshot>(*a);
     sprite(*b, 0, 24);
 
     f3rt::GpuMotionHistory history;
@@ -740,10 +740,10 @@ RC_GTEST_PROP(MotionInterp, EndpointIdentity, ()) {
     const int dx = *rc::gen::inRange(-32, 33);
     RC_PRE(dx != 0);
 
-    CapturedFrame a;
+    SceneSnapshot a;
     a.fallback = false;
     sprite(a, 0, x0);
-    CapturedFrame b = a;
+    SceneSnapshot b = a;
     sprite(b, 0, x0 + dx);
 
     f3rt::GpuMotionHistory history;
@@ -768,10 +768,10 @@ RC_GTEST_PROP(MotionInterp, MonotonicInterpolationBounds, ()) {
     const int alpha_step = *rc::gen::inRange(0, 101);
     const float alpha = float(alpha_step) / 100.0f;
 
-    CapturedFrame a;
+    SceneSnapshot a;
     a.fallback = false;
     sprite(a, 0, x0);
-    CapturedFrame b = a;
+    SceneSnapshot b = a;
     sprite(b, 0, x0 + dx);
 
     f3rt::GpuMotionHistory history;
@@ -797,10 +797,10 @@ RC_GTEST_PROP(MotionInterp, JumpThresholdRejection, ()) {
     const int jump_px = *rc::gen::inRange(33, 100);
     const int dx = sign * jump_px;
 
-    CapturedFrame a;
+    SceneSnapshot a;
     a.fallback = false;
     sprite(a, 0, x0);
-    CapturedFrame b = a;
+    SceneSnapshot b = a;
     sprite(b, 0, x0 + dx);
 
     const auto res = pair(a, b);

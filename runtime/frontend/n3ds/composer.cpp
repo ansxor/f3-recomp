@@ -2,7 +2,7 @@
 #include "cpu_counters.hpp"
 #include "f3rt/machine.hpp"
 #include "log.hpp"
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/row_workers.hpp"
 #include <3ds.h>
@@ -132,7 +132,7 @@ void Composer::run() {
         if (!m_shared.emulation.wait_unseen(m_stop)) return;
         bool fresh = false;
         const f3rt::FrameSnapshot *shot = m_shared.emulation.take(fresh);
-        if (!shot || !shot->captured) continue;
+        if (!shot || !shot->scene_snapshot) continue;
         f3rt::FrameSnapshot &out = m_shared.present.begin();
         out.frame = shot->frame;
         out.epoch = shot->epoch;
@@ -156,10 +156,12 @@ void Composer::run() {
             helper_windows(shot->start, emulation_busy, synth_estimate);
         f3rt::compose_workers().set_schedule(schedule);
         ShareTimer share(counters);
-        f3rt::compose_captured_indexed(*shot->captured, m_session.playfield_tiles(),
+        f3rt::compose_snapshot_indexed(*shot->scene_snapshot, m_session.playfield_tiles(),
                                        m_session.sprite_tiles(), scratch,
                                        {staging, size_t(STAGING_STRIDE) * 256}, stride,
-                                       f3rt::PixelFormat::Rgba8888, options, &share);
+                                       f3rt::PixelFormat::Rgba8888, options,
+                                       f3rt::ComposeMode::Parallel, f3rt::SpriteList::Presented,
+                                       &share);
         const auto end = Clock::now();
         // The writer owns cache maintenance: the display transfer reads these rows by DMA.
         GSPGPU_FlushDataCache(staging, u32(size_t(stride) * height * sizeof(uint32_t)));
@@ -172,8 +174,6 @@ void Composer::run() {
         const uint64_t compose_us = to_us(end - begin);
         PerfStats::smooth(m_perf.compose_us, compose_us);
         maximum(m_perf.compose_max_us, compose_us);
-        m_perf.fallback_rows.store(scratch.stats.fallback_rows.load(std::memory_order_relaxed),
-                                   std::memory_order_relaxed);
         m_perf.special_px.store(scratch.stats.special_px.load(std::memory_order_relaxed),
                                 std::memory_order_relaxed);
         const f3rt::ChunkCounts chunks = f3rt::compose_workers().chunk_counts();

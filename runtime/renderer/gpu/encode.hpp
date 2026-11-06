@@ -1,5 +1,5 @@
 #pragma once
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "renderer/gpu/scene_layout.h"
@@ -20,16 +20,16 @@ struct GpuUniforms {
              sp_tile_count = 0;
 };
 
-// The only code that writes GPU scene words: a one-way encoding of a captured
+// The only code that writes GPU scene words: a one-way encoding of a snapshot
 // frame into `out`, typically the mapped upload buffer, with no intermediate copy.
 //   * fallback frame: copies native_pixels (320 x geometry::HEIGHT ARGB) to out[0..encoded_native_words).
 //   * otherwise writes the canonical scene (encoded_scene_words), with `motion`'s
-//     sprite/playfield/text geometry replacing the captured values when non-null. Expanded
+//     sprite/playfield/text geometry replacing the snapshot values when non-null. Expanded
 //     output (`options.expanded()`) writes playfield rows through presented_playfield()
-//     (game_config::video.full_resolution_alt_maps); the captured rows themselves stay canonical.
+//     (game_config::video.full_resolution_alt_maps); the snapshot rows themselves stay canonical.
 //   * non-null `coefficients` additionally writes the interpolation region
 //     (encoded_interpolation_words in total).
 // `options.border` bounds layer clip ranges. Throws std::invalid_argument if `out` is too small.
-void encode(const CapturedFrame &frame, GameVideoOptions options, const MotionState *motion,
+void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
             const InterpolationCoefficients *coefficients, std::span<uint32_t> out);
 } // namespace f3rt

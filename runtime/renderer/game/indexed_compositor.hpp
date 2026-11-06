@@ -1,6 +1,6 @@
 #pragma once
 #include "f3rt/game_video.hpp"
-#include "renderer/game/compositor.hpp"
+#include "renderer/game/frame_scene.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "renderer/game/sprites.hpp"
 #include "renderer/game/tiles.hpp"
@@ -11,6 +11,9 @@
 #include <vector>
 
 namespace f3rt {
+enum class ComposeMode { Parallel, Serial };
+enum class SpriteList { Presented, Canonical };
+
 // Byte order of one composed pixel. Argb8888 is the canonical 0xAARRGGBB word the CPU composers
 // produce; Rgba8888 is the word the 3DS presenter's display transfer consumes (the ARGB word
 // rotated left by eight bits with an opaque low byte), so no separate conversion pass exists.
@@ -57,10 +60,8 @@ private:
 };
 
 struct IndexedFrameStats {
-    std::atomic<uint32_t> fallback_rows{0};
     std::atomic<uint32_t> special_px{0};
     void reset() {
-        fallback_rows.store(0, std::memory_order_relaxed);
         special_px.store(0, std::memory_order_relaxed);
     }
 };

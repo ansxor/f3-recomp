@@ -103,7 +103,7 @@ Bundle load_bundle(const fs::path &dir) {
 }
 
 std::unique_ptr<Machine> make_machine(const fs::path &rom_dir, const std::string &set, bool gpu) {
-    auto m = runner::create_strict_machine(rom_dir, set, gpu, 1);
+    auto m = runner::create_strict_machine(rom_dir, set, gpu);
     if (gpu && !m->game_video) {
         throw std::runtime_error("this f3rt-tool build has no GPU game video (F3RT_GAME_VIDEO); "
                                  "cannot replay a GPU-machine bundle");

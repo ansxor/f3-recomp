@@ -11,7 +11,6 @@ void print_general_help(const char *prog) {
         << "Taito F3 recompiled runtime tool and regression harness.\n\n"
         << "Subcommands:\n"
         << "  gameplay       Deterministic strict-native seeded gameplay regression harness\n"
-        << "  gpu-compare    Strict-native GPU parity verification against FDP oracle\n"
         << "  motion         Strict-native seeded temporal GPU motion proof\n"
         << "  sound-extract  Standalone sound extraction and stimulus injection tool\n"
         << "  sprite-check   Sprite emit-unit and behaviour verification against native code\n\n"
@@ -39,9 +38,6 @@ int main(int argc, char **argv) {
 
     if (subcmd == "gameplay") {
         return f3rt::tool::cmd_gameplay(sub_argc, sub_argv);
-    }
-    if (subcmd == "gpu-compare") {
-        return f3rt::tool::cmd_gpu_compare(sub_argc, sub_argv);
     }
     if (subcmd == "motion") {
         return f3rt::tool::cmd_motion(sub_argc, sub_argv);

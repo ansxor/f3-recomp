@@ -1,6 +1,6 @@
 #include "frontend/frame_slots.hpp"
 #include "frontend/settings.hpp"
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <SDL3/SDL.h>
@@ -714,11 +714,11 @@ RC_GTEST_PROP(FrontendInputMapper, ReleaseBlocksHeldKeysUntilPhysicalRelease, ()
 
 RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
     f3rt::FrameSlots frames;
-    std::array<std::unique_ptr<f3rt::CapturedFrame>, f3rt::FrameSlots::SLOT_COUNT> captures;
-    std::array<f3rt::CapturedFrame *, f3rt::FrameSlots::SLOT_COUNT> attached{};
-    for (size_t i = 0; i < captures.size(); ++i)
-        attached[i] = (captures[i] = std::make_unique<f3rt::CapturedFrame>()).get();
-    frames.attach_captures(attached);
+    std::array<std::unique_ptr<f3rt::SceneSnapshot>, f3rt::FrameSlots::SLOT_COUNT> snapshots;
+    std::array<f3rt::SceneSnapshot *, f3rt::FrameSlots::SLOT_COUNT> attached{};
+    for (size_t i = 0; i < snapshots.size(); ++i)
+        attached[i] = (snapshots[i] = std::make_unique<f3rt::SceneSnapshot>()).get();
+    frames.attach_snapshots(attached);
 
     const f3rt::FrameSnapshot *latest = nullptr, *held = nullptr, *writing = nullptr;
     uint64_t published = 0, seen = 0, tag = 0;
@@ -730,13 +730,13 @@ RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
             const f3rt::FrameSnapshot *pointer = &snapshot;
             RC_ASSERT(pointer != latest);
             RC_ASSERT(pointer != held);
-            size_t capture = 0;
-            while (capture < size_t(f3rt::FrameSlots::SLOT_COUNT) &&
-                   ((latest && capture == latest->capture) || (held && capture == held->capture)))
-                ++capture;
-            RC_ASSERT(capture < size_t(f3rt::FrameSlots::SLOT_COUNT));
-            RC_ASSERT(snapshot.capture == capture);
-            RC_ASSERT(snapshot.captured == attached[capture]);
+            size_t index = 0;
+            while (index < size_t(f3rt::FrameSlots::SLOT_COUNT) &&
+                   ((latest && index == latest->snapshot_index) || (held && index == held->snapshot_index)))
+                ++index;
+            RC_ASSERT(index < size_t(f3rt::FrameSlots::SLOT_COUNT));
+            RC_ASSERT(snapshot.snapshot_index == index);
+            RC_ASSERT(snapshot.scene_snapshot == attached[index]);
             snapshot.frame = ++tag;
             writing = pointer;
             break;
@@ -758,7 +758,7 @@ RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
                 break;
             }
             const uint64_t frame = latest->frame;
-            const f3rt::CapturedFrame *capture = latest->captured;
+            const f3rt::SceneSnapshot *scene = latest->scene_snapshot;
             frames.restate(scale);
             RC_ASSERT(frames.unseen());
             bool fresh = false;
@@ -769,7 +769,7 @@ RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
             RC_ASSERT(restated != held);
             RC_ASSERT(restated->scale == scale);
             RC_ASSERT(restated->frame == frame);
-            RC_ASSERT(restated->captured == capture);
+            RC_ASSERT(restated->scene_snapshot == scene);
             latest = restated;
             held = restated;
             ++published;

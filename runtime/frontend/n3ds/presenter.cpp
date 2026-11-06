@@ -223,14 +223,13 @@ void Presenter::report_rates() {
     const double comp_ms = double(m_perf.compose_us.load(std::memory_order_relaxed)) / 1000.0;
     const double comp_max_ms = double(m_perf.compose_max_us.load(std::memory_order_relaxed)) / 1000.0;
     log_line("n3ds: perf emu_fps=%.1f emu_ms=%.2f comp_fps=%.1f comp_ms=%.2f comp_max_ms=%.2f "
-             "present_ms=%.2f present_fps=%.1f audio_ms=%.1f drops=%llu fallback_rows=%u "
+             "present_ms=%.2f present_fps=%.1f audio_ms=%.1f drops=%llu "
              "special_px=%u chunks=%s",
              m_emu_fps, double(m_perf.emu_us.load(std::memory_order_relaxed)) / 1000.0, m_comp_fps,
              comp_ms, comp_max_ms,
              double(m_perf.present_us.load(std::memory_order_relaxed)) / 1000.0, m_present_fps,
              double(m_perf.audio_queue_frames.load(std::memory_order_relaxed)) * 1000.0 / 29762.0,
              static_cast<unsigned long long>(m_perf.drops.load(std::memory_order_relaxed)),
-             m_perf.fallback_rows.load(std::memory_order_relaxed),
              m_perf.special_px.load(std::memory_order_relaxed), chunk_split(m_perf).c_str());
     const CpuSample composer = m_perf.composer_cpu.load();
     if (composer.cycles)

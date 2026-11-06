@@ -82,7 +82,7 @@ private:
     std::unique_ptr<f3rt::AudioPacer> m_pacer;
     f3rt::TileRowTable m_playfield;
     std::span<const uint8_t> m_sprite;
-    std::array<std::unique_ptr<f3rt::CapturedFrame>, f3rt::FrameSlots::SLOT_COUNT> m_captures;
+    std::array<std::unique_ptr<f3rt::SceneSnapshot>, f3rt::FrameSlots::SLOT_COUNT> m_snapshots;
     std::atomic<bool> m_stop{false}, m_paused{false};
     std::atomic<unsigned> m_volume;
     uint64_t m_epoch = 0;

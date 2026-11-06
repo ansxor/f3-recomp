@@ -491,7 +491,6 @@ void Machine::load_state(std::span<const uint8_t> src) {
                                     std::to_string(expected) + ", got " +
                                     std::to_string(src.size()));
     }
-    native_pixels();
     if (sprite_units) sprite_units->reset();
     StateReader reader(src);
     // 1. Native CPU
