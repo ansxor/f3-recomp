@@ -15,6 +15,7 @@ nvram/
 cfg/
 *.wav
 *.flac
+!games/*/n3ds/banner.wav
 netplay-logs/
 # Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
 *.profile
@@ -22,8 +23,6 @@ netplay-logs/
 !profiles/.gitkeep
 f3-cold-hits.log
 
-# CMake/Makefile build trees: BUILD_DIR=build-<game> (and build-<game>-headless)
-/build-*/
 # In-source CMake leftovers from a configure run in the source root
 CMakeFiles/
 CMakeCache.txt

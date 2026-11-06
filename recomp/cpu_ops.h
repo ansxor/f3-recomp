@@ -2,24 +2,14 @@
 #define RECOMP_CPU_OPS_H
 
 #include <stdint.h>
+#include <string.h>
 #include <f3rt/cpu_abi.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Enter another generated block function without returning to the runtime
- * dispatcher. The guard emitted before this (recomp/generate.py) proves the
- * skipped dispatch would be a no-op: pc names a table entry, the CPU is
- * neither stopped nor halted, cpu->cycles < dispatch_deadline (no vblank,
- * IRQ3 or watchdog event is due, so runtime boundary() would fire nothing and
- * republish the same deadline), and trace bits are clear. The trace-bit term
- * is emitted only for transfers that leave the function or target a
- * non-sequential address; a same-function fall-through is a bare goto. Every
- * path that sets the deadline back to 0 (IRQ-mask lowering, reset) is in
- * runtime, so the guard needs no further state.
- *
- * The expansion must stay a tail call: the block functions are mutually
+/* The expansion must stay a tail call: the block functions are mutually
  * recursive, so a plain (non-tail) call would grow the host stack without
  * bound. __attribute__((musttail)) guarantees it where available; otherwise
  * the transfer degrades to a plain return, which re-enters the dispatcher and
@@ -34,16 +24,97 @@ extern "C" {
 #  define F3_CHAIN(target, cpu) return
 #endif
 
+/* One entry per 2-byte ROM address: the block function registered for that pc,
+ * NULL where there is none. Defined and filled by the generated program
+ * (f3_generated_register), so main-CPU code only. */
+#define F3_ENTRY_WORDS 0x100000u
+extern f3_block_fn f3_entry_by_word[F3_ENTRY_WORDS];
+
+/* Transfer to cpu->pc (set by an rts or computed jump) without returning to the
+ * dispatcher under the chain guard: no trace bits and
+ * cpu->cycles < dispatch_deadline, so boundary() would only republish the same
+ * deadline. Anything else, including a pc with no block, falls through to the
+ * caller's return. Expands to a tail call exactly like F3_CHAIN. */
+#define F3_DISPATCH_PC(cpu)                                                                        \
+    do {                                                                                           \
+        if ((cpu)->pc < 2u * F3_ENTRY_WORDS && !((cpu)->pc & 1u) && !((cpu)->sr & 0xc000u) &&     \
+            (cpu)->cycles < (cpu)->dispatch_deadline) {                                            \
+            f3_block_fn f3_next = f3_entry_by_word[(cpu)->pc >> 1];                                \
+            if (f3_next) { F3_CHAIN(f3_next, cpu); }                                               \
+        }                                                                                          \
+    } while (0)
+
+/* Guest memory access of generated main-CPU code. Naturally aligned accesses to
+ * main work RAM (any of the four 128 KiB mirrors in 0x400000..0x43ffff) and
+ * aligned program-ROM reads go straight to the host window the runtime publishes
+ * in the cpu; everything else, including all of it while a window is unset
+ * (replay sandbox), takes the f3_read and f3_write callbacks. A RAM store also
+ * records the writing pc in the halfword attribution table when sprite units
+ * track it, exactly as Machine::write* does. The 24-bit bus ignores the top byte. */
+#define F3_RAM_WINDOW 0x00fc0000u
+#define F3_RAM_BASE 0x00400000u
+#define F3_RAM_MASK 0x0001ffffu
+
+static inline int f3_in_ram(const f3_cpu *cpu, uint32_t a, uint32_t align_mask) {
+    return cpu->ram && (a & (F3_RAM_WINDOW | align_mask)) == F3_RAM_BASE;
+}
+static inline int f3_in_rom(const f3_cpu *cpu, uint32_t a, uint32_t width) {
+    return (a & 0xffffffu) + width <= cpu->rom_size && !(a & (width - 1u));
+}
+
+static inline uint8_t f3_ld8(f3_cpu *cpu, uint32_t a) {
+    if (f3_in_ram(cpu, a, 0u)) return cpu->ram[a & F3_RAM_MASK];
+    if (f3_in_rom(cpu, a, 1u)) return cpu->rom[a & 0xffffffu];
+    return f3_read8(cpu, a);
+}
+static inline uint16_t f3_ld16(f3_cpu *cpu, uint32_t a) {
+    const uint8_t *p;
+    if (f3_in_ram(cpu, a, 1u)) p = cpu->ram + (a & F3_RAM_MASK);
+    else if (f3_in_rom(cpu, a, 2u)) p = cpu->rom + (a & 0xffffffu);
+    else return f3_read16(cpu, a);
+    uint16_t v;
+    memcpy(&v, __builtin_assume_aligned(p, 2), 2);
+    return __builtin_bswap16(v);
+}
+static inline uint32_t f3_ld32(f3_cpu *cpu, uint32_t a) {
+    const uint8_t *p;
+    if (f3_in_ram(cpu, a, 3u)) p = cpu->ram + (a & F3_RAM_MASK);
+    else if (f3_in_rom(cpu, a, 4u)) p = cpu->rom + (a & 0xffffffu);
+    else return f3_read32(cpu, a);
+    uint32_t v;
+    memcpy(&v, __builtin_assume_aligned(p, 4), 4);
+    return __builtin_bswap32(v);
+}
+static inline void f3_st8(f3_cpu *cpu, uint32_t a, uint8_t v) {
+    if (!f3_in_ram(cpu, a, 0u)) return f3_write8(cpu, a, v);
+    cpu->ram[a & F3_RAM_MASK] = v;
+    if (cpu->ram_writer) cpu->ram_writer[(a & F3_RAM_MASK) >> 1] = cpu->pc;
+}
+static inline void f3_st16(f3_cpu *cpu, uint32_t a, uint16_t v) {
+    if (!f3_in_ram(cpu, a, 1u)) return f3_write16(cpu, a, v);
+    const uint32_t offset = a & F3_RAM_MASK;
+    const uint16_t big = __builtin_bswap16(v);
+    memcpy(__builtin_assume_aligned(cpu->ram + offset, 2), &big, 2);
+    if (cpu->ram_writer) cpu->ram_writer[offset >> 1] = cpu->pc;
+}
+static inline void f3_st32(f3_cpu *cpu, uint32_t a, uint32_t v) {
+    if (!f3_in_ram(cpu, a, 3u)) return f3_write32(cpu, a, v);
+    const uint32_t offset = a & F3_RAM_MASK;
+    const uint32_t big = __builtin_bswap32(v);
+    memcpy(__builtin_assume_aligned(cpu->ram + offset, 4), &big, 4);
+    if (cpu->ram_writer) {
+        cpu->ram_writer[offset >> 1] = cpu->pc;
+        cpu->ram_writer[(offset >> 1) + 1u] = cpu->pc;
+    }
+}
+
 /* Emit-unit hooks planted at declared start/end PCs (ABI 4). Flags are flushed so
  * a sandbox replay observes canonical sr; EXIT returns before the instruction at
  * cpu->pc runs when a replay CPU reached its unit end. */
 #define F3_UNIT_ENTER(cpu, id) do { f3_cc_flush(cpu); f3_unit_enter((cpu), (id)); } while (0)
 #define F3_UNIT_EXIT(cpu, id) do { f3_cc_flush(cpu); if (f3_unit_exit((cpu), (id))) return; } while (0)
 
-/* Evaluate a 68000/68020 4-bit condition against canonicalized CCR. */
-static inline int f3_eval_cond(f3_cpu *cpu, uint8_t cond) {
-    f3_cc_flush(cpu);
-    uint16_t sr = cpu->sr;
+static inline int f3_cond_ccr(uint16_t sr, uint8_t cond) {
     int c = sr & F3_CCR_C;
     int v = (sr & F3_CCR_V) != 0;
     int z = (sr & F3_CCR_Z) != 0;
@@ -67,6 +138,11 @@ static inline int f3_eval_cond(f3_cpu *cpu, uint8_t cond) {
         case 15: return (n ^ v) || z;       /* LE */
     }
     return 0;
+}
+
+static inline int f3_eval_cond(f3_cpu *cpu, uint8_t cond) {
+    f3_cc_flush(cpu);
+    return f3_cond_ccr(cpu->sr, cond);
 }
 
 /* Logical Shift Left */
@@ -526,6 +602,91 @@ static inline uint32_t f3_bchg(f3_cpu *cpu, uint32_t val, uint32_t bit, uint8_t 
     uint32_t mask = (width == 1) ? 7u : 31u;
     return val ^ (1u << (bit & mask));
 }
+
+static inline uint64_t f3_idle_iterations(const f3_cpu *cpu, uint32_t cycles) {
+    if (cpu->stopped || cpu->halted || (cpu->sr & 0xc000u) || cpu->cycles >= cpu->dispatch_deadline) return 0;
+    return (cpu->dispatch_deadline - 1u - cpu->cycles) / cycles;
+}
+
+static inline void f3_idle_spin(f3_cpu *cpu, uint32_t cycles) {
+    cpu->cycles += f3_idle_iterations(cpu, cycles) * cycles;
+}
+
+static inline uint64_t f3_idle_skippable(const f3_cpu *cpu, uint32_t cycles) {
+    const uint64_t iterations = f3_idle_iterations(cpu, cycles);
+    return iterations < 2 ? 0 : iterations - 1;
+}
+
+static inline uint16_t f3_tst_ccr(const uint8_t *bytes, unsigned size) {
+    uint32_t value = 0;
+    for (unsigned i = 0; i < size; ++i) value = (value << 8) | bytes[i];
+    const uint32_t sign = 0x80u << (8 * (size - 1));
+    return (value ? 0u : F3_CCR_Z) | ((value & sign) ? F3_CCR_N : 0u);
+}
+
+static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
+                                    uint32_t cycles) {
+    const uint8_t *p = f3_ram(cpu, address, size);
+    if (!p) return;
+    if (!f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) return;
+    cpu->cycles += f3_idle_skippable(cpu, cycles) * cycles;
+}
+
+static inline void f3_idle_poll_dbcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
+                                     unsigned counter, uint32_t cycles) {
+    const uint8_t *p = f3_ram(cpu, address, size);
+    if (!p) return;
+    if (f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) return;
+    uint64_t whole = f3_idle_skippable(cpu, cycles);
+    if (!whole) return;
+    const uint32_t count = cpu->d[counter] & 0xffffu;
+    if (whole > count) whole = count;
+    cpu->d[counter] = (cpu->d[counter] & 0xffff0000u) | (count - (uint32_t)whole);
+    cpu->cycles += whole * cycles;
+}
+
+static inline uint32_t f3_affine_power(uint32_t x, uint32_t multiplier, uint32_t addend, uint64_t n) {
+    uint32_t result_multiplier = 1u, result_addend = 0u;
+    for (; n; n >>= 1) {
+        if (n & 1u) {
+            result_addend = multiplier * result_addend + addend;
+            result_multiplier *= multiplier;
+        }
+        addend = multiplier * addend + addend;
+        multiplier *= multiplier;
+    }
+    return result_multiplier * x + result_addend;
+}
+
+static inline void f3_idle_affine_call(f3_cpu *cpu, uint32_t address, uint32_t stack, uint32_t multiplier,
+                                       uint32_t addend, uint32_t cycles) {
+    uint8_t *word = f3_ram(cpu, address, 4);
+    const uint8_t *frame = f3_ram(cpu, cpu->a[7] - stack, stack);
+    if (!word || !frame || (word < frame + stack && frame < word + 4)) return;
+    uint64_t whole = f3_idle_skippable(cpu, cycles);
+    if (!whole) return;
+    uint32_t x = (uint32_t)word[0] << 24 | (uint32_t)word[1] << 16 | (uint32_t)word[2] << 8 | word[3];
+    x = f3_affine_power(x, multiplier, addend, whole);
+    word[0] = (uint8_t)(x >> 24);
+    word[1] = (uint8_t)(x >> 16);
+    word[2] = (uint8_t)(x >> 8);
+    word[3] = (uint8_t)x;
+    cpu->cycles += whole * cycles;
+}
+#if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
+#  define F3_IDLE_SPIN(cpu, cycles) ((void)0)
+#define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles) ((void)0)
+#define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles) ((void)0)
+#  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) ((void)0)
+#else
+#  define F3_IDLE_SPIN(cpu, cycles) f3_idle_spin((cpu), (cycles))
+#define F3_IDLE_POLL_BCC(cpu, address, size, cond, cycles)                                         \
+    f3_idle_poll_bcc((cpu), (address), (size), (cond), (cycles))
+#define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter, cycles)                               \
+    f3_idle_poll_dbcc((cpu), (address), (size), (cond), (counter), (cycles))
+#  define F3_IDLE_AFFINE_CALL(cpu, address, stack, multiplier, addend, cycles) \
+      f3_idle_affine_call((cpu), (address), (stack), (multiplier), (addend), (cycles))
+#endif
 
 #include "bitfield.h"
 

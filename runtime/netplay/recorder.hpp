@@ -45,7 +45,6 @@ struct MatchMeta {
     uint64_t stall_count = 0;
     // Machine configuration the state files belong to (filled by begin_match); netplay-replay must build the same one.
     bool machine_gpu = false;
-    std::string audio_backend; // Audio::backend_name
     uint64_t machine_state_bytes = 0;
     std::vector<std::pair<std::string, std::string>>
         extra; // free-form key/value, written to info.json
@@ -86,7 +85,6 @@ std::string header_value(const InputsFile &file, const std::string &key,
 struct BundleInfo {
     std::optional<uint64_t> seed, frame, crc_interval, hashed_len, recorded_crc, player_index,
         machine_gpu, hash_layout;
-    std::optional<std::string> audio_backend;
 };
 // Throws std::runtime_error if `json` is not valid JSON or its top level is not an object.
 BundleInfo parse_info_json(const std::string &json);

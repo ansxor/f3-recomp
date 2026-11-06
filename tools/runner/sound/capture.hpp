@@ -53,13 +53,12 @@ CodeCall request_code(Machine &m, uint32_t routine, uint32_t code);
 // Interpreted boot of `cfg` for `boot_frames` frames, then the sound side is run until it has
 // consumed every pending packet: the machine is frozen at a frame boundary in the post-boot state.
 // `record_boot_wav` feeds the boot audio to the runner's WAV/statistics. Throws when the main
-// CPU halts, the sound CPU stays in reset, the consumer cannot catch up, or the enhanced backend
-// is selected but unsupported for the game.
+// CPU halts, the sound board stays in reset, or the consumer cannot catch up.
 std::unique_ptr<MachineRunner> boot_to_freeze(const RunnerConfig &cfg, uint64_t boot_frames,
                                               bool record_boot_wav);
 
-// Machine state at the freeze point. `boot_commands` is the number of packets the enhanced engine
-// parsed during boot (0 for the reference backend).
+// Machine state at the freeze point. `boot_commands` is the number of packets the audio engine parsed
+// during boot.
 struct PostBootSnapshot {
     std::vector<uint8_t> state;
     uint64_t boot_commands = 0;
@@ -73,11 +72,11 @@ PostBootSnapshot take_post_boot_snapshot(Machine &m);
 // the machine's shared RAM: copy it before running anything on the machine.
 std::span<const uint8_t> boot_packet_stream(const Machine &m, uint64_t boot_commands);
 
-// Puts `runner` into the snapshot state. The enhanced engine runs on a worker outside the machine
+// Puts `runner` into the snapshot state. The audio engine runs on a worker outside the machine
 // snapshot, and a reused worker renders the same request differently (absolute clock and DSP
-// history carry over), so the enhanced backend gets a new runner (hence a new worker) built from
-// `cfg`, restored from the snapshot, then a reset pulse re-parses the boot stream. The reference
-// backend restores in place. Leaves the main CPU cycle count at the audio clock.
+// history carry over), so `runner` is replaced by a new one (hence a new worker) built from `cfg`,
+// restored from the snapshot, then a reset pulse re-parses the boot stream. Leaves the main CPU
+// cycle count at the audio clock.
 void restore_post_boot(std::unique_ptr<MachineRunner> &runner, const RunnerConfig &cfg,
                        const PostBootSnapshot &snapshot);
 

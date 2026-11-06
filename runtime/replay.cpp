@@ -1,6 +1,6 @@
 #include "f3rt/rom.hpp"
 #include "f3rt/video.hpp"
-#include "f3rt/audio.hpp"
+#include "audio/reference/board.hpp"
 #include "capture_io.hpp"
 #include <algorithm>
 #include <array>
@@ -20,8 +20,7 @@ int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
     input.read(magic.data(), magic.size());
     if (magic != std::array<char, 8>{'F', '3', 'A', 'U', 'D', '2', 0, 0})
         throw std::runtime_error("Invalid F3 audio trace header");
-    f3rt::Audio audio;
-    audio.load_sample_rom(roms.samples);
+    f3rt::reference::Board audio({}, roms.samples, nullptr);
     f3rt::WavWriter wav(output, audio.sample_rate());
     std::array<int16_t, 1024> samples{};
     std::array<uint8_t, 16> record{};

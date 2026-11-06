@@ -9,9 +9,12 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+// Only the builds that can open a session touch POSIX file locking; the 3DS toolchain has none.
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
+#endif
 
 extern "C" {
 uint64_t *f3_profile_main_counts = nullptr;
@@ -33,6 +36,7 @@ uint64_t number(const std::string &text, int radix) {
         throw std::runtime_error("Invalid block profile number: " + text);
     return value;
 }
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
 void sync_file(const std::filesystem::path &path) {
     const int fd = open(path.c_str(), O_RDONLY);
     if (fd < 0) throw std::runtime_error("Cannot open profile for sync: " + path.string());
@@ -40,6 +44,7 @@ void sync_file(const std::filesystem::path &path) {
     close(fd);
     if (result) throw std::runtime_error("Cannot sync profile: " + path.string());
 }
+#endif
 } // namespace
 namespace f3rt {
 BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesystem::path &path)
@@ -53,14 +58,18 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
         throw std::runtime_error("Only one block profile session may be active per process");
     if (!m_output.parent_path().empty())
         std::filesystem::create_directories(m_output.parent_path());
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
     const auto lock_path = m_output.string() + ".lock";
     m_lock_fd = open(lock_path.c_str(), O_CREAT | O_RDWR, 0600);
     if (m_lock_fd < 0) throw std::runtime_error("Cannot lock profile: " + lock_path);
+#endif
     try {
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
         if (flock(m_lock_fd, LOCK_EX | LOCK_NB))
             throw std::runtime_error(
                 "Profile is in use; choose a separate --profile-out and merge: " +
                 m_output.string());
+#endif
         const std::vector<uint8_t> *programs[] = {&roms.main, &roms.sound};
         for (unsigned region = 0; region < 2; ++region) {
             const auto &bytes = *programs[region];
@@ -97,8 +106,10 @@ BlockProfileSession::BlockProfileSession(const RomSet &roms, const std::filesyst
         active = this;
         m_next_flush = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     } catch (...) {
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
         close(m_lock_fd);
         m_lock_fd = -1;
+#endif
         throw;
     }
 }
@@ -113,7 +124,9 @@ BlockProfileSession::~BlockProfileSession() {
     } catch (const std::exception &error) {
         std::fprintf(stderr, "PROFILE FLUSH FAILED: %s\n", error.what());
     }
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
     if (m_lock_fd >= 0) close(m_lock_fd);
+#endif
 }
 void BlockProfileSession::load() {
     std::ifstream input(m_output);
@@ -198,7 +211,9 @@ void BlockProfileSession::flush() {
             throw std::runtime_error("Block profile write failed: " + temporary.string() + ": " +
                                      std::strerror(errno));
     }
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
     sync_file(temporary);
+#endif
     std::filesystem::rename(temporary, m_output);
     if (m_indirect_watch) {
         try {
@@ -342,7 +357,9 @@ void IndirectWatch::flush() {
             throw std::runtime_error("Indirect log write failed: " + temporary.string() + ": " +
                                      std::strerror(errno));
     }
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
     sync_file(temporary);
+#endif
     std::filesystem::rename(temporary, m_path);
 }
 } // namespace f3rt
@@ -360,8 +377,10 @@ extern "C" [[noreturn]] void f3_profile_cold_abort(unsigned region, uint32_t crc
     std::fprintf(stderr, "%s\n", message);
     FILE *log = std::fopen(log_path.c_str(), "a");
     if (log) {
-        const bool failed =
-            std::fprintf(log, "%s\n", message) < 0 || std::fflush(log) || fsync(fileno(log));
+        bool failed = std::fprintf(log, "%s\n", message) < 0 || std::fflush(log) != 0;
+#if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
+        failed = failed || fsync(fileno(log)) != 0;
+#endif
         std::fclose(log);
         if (failed) std::fprintf(stderr, "COLD-HIT RECORD FAILED: %s\n", log_path.c_str());
         else std::fprintf(stderr, "Cold hit recorded: %s\n", log_path.c_str());

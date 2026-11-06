@@ -343,23 +343,6 @@ void FrontendUi::draw(const FrontendUiState &state) {
                 }
                 if (ImGui::BeginTabItem("Audio")) {
                     changed |= ImGui::SliderFloat("Host output volume", &s.volume, 0, 1, "%.2f");
-                    if (ImGui::BeginCombo("Sound backend (restart)",
-                                          audio_backend_name(s.audio_backend))) {
-                        for (auto backend : {AudioBackend::Enhanced, AudioBackend::Reference}) {
-                            ImGui::BeginDisabled(backend == AudioBackend::Enhanced &&
-                                                 !state.enhanced_audio_available);
-                            if (ImGui::Selectable(audio_backend_name(backend),
-                                                  s.audio_backend == backend)) {
-                                s.audio_backend = backend;
-                                changed = true;
-                            }
-                            ImGui::EndDisabled();
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TextWrapped(
-                        "Reference audio uses cycle-accurate sound hardware emulation. Enhanced "
-                        "(HLE) is approximate high-level synthesis.");
                     ImGui::TextWrapped("Volume changes host SDL output gain only. Emulated PCM and "
                                        "WAV captures remain unchanged.");
                     ImGui::EndTabItem();

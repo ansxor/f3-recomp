@@ -84,7 +84,6 @@ BundleInfo parse_info_json(const std::string &json) {
     info.player_index = info_u64(*obj, "player_index");
     info.machine_gpu = info_u64(*obj, "machine_gpu");
     info.hash_layout = info_u64(*obj, "hash_layout");
-    info.audio_backend = info_string(*obj, "audio_backend");
     return info;
 }
 
@@ -169,7 +168,6 @@ void MatchRecorder::begin_match(Machine &m, uint64_t seed) {
     m_seed = seed;
     meta.start_machine_frame = m.frame;
     meta.machine_gpu = m.game_video != nullptr;
-    meta.audio_backend = m.audio ? Audio::backend_name(m.audio->backend()) : "";
     meta.machine_state_bytes = m.state_size();
     m_trigger_state.resize(m.state_size());
     m.save_state(m_trigger_state);
@@ -263,7 +261,6 @@ std::filesystem::path MatchRecorder::write_bundle(const std::filesystem::path &b
     j.emplace("bundle_version", 2);
     j.emplace("hash_layout", 2);
     j.emplace("machine_gpu", meta.machine_gpu ? 1 : 0);
-    j.emplace("audio_backend", meta.audio_backend, yyjson::copy_string);
     j.emplace("machine_state_bytes", meta.machine_state_bytes);
     j.emplace("frame", facts.desync_frame);
     j.emplace("local_crc", local_crc);

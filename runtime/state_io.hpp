@@ -11,7 +11,6 @@
 #include <string>
 #include <type_traits>
 
-#include "audio/reference/state_oracle.h"
 namespace f3rt {
 // Validate canonical fields before device loaders can use imported indices.
 template <typename T> void validate_state_value(const T &) {}
@@ -372,14 +371,6 @@ struct CanonicalAudioCore {
     uint32_t rb_count;
 };
 
-struct CanonicalSoundNative {
-    CanonicalF3Cpu cpu;
-    uint8_t needs_reset;
-    int32_t reset_cycles;
-};
-
-using CanonicalSoundOracle = f3rt_sound_oracle_state;
-
 struct CanonicalTempsprite {
     int32_t code;
     uint8_t color;
@@ -542,7 +533,6 @@ static_assert(sizeof(CanonicalES5510Ram) == 6, "CanonicalES5510Ram snapshot layo
 static_assert(sizeof(CanonicalES5510Registers) == 171,
               "CanonicalES5510Registers snapshot layout changed");
 static_assert(sizeof(CanonicalAudioCore) == 136, "CanonicalAudioCore snapshot layout changed");
-static_assert(sizeof(CanonicalSoundNative) == 140, "CanonicalSoundNative snapshot layout changed");
 static_assert(sizeof(CanonicalTempsprite) == 24, "CanonicalTempsprite snapshot layout changed");
 static_assert(sizeof(CanonicalVideo) == 24938, "CanonicalVideo snapshot layout changed");
 static_assert(sizeof(CanonicalSceneSprite) == 19, "CanonicalSceneSprite snapshot layout changed");
@@ -563,8 +553,6 @@ static_assert(offsetof(CanonicalF3Cpu, sr) == 100, "CanonicalF3Cpu layout change
 static_assert(offsetof(CanonicalF3Cpu, cc_op) == 116, "CanonicalF3Cpu layout changed");
 static_assert(offsetof(CanonicalF3Cpu, cycles) == 119, "CanonicalF3Cpu layout changed");
 static_assert(offsetof(CanonicalF3Cpu, dispatch_deadline) == 127, "CanonicalF3Cpu layout changed");
-static_assert(sizeof(CanonicalSoundOracle) == sizeof(f3rt_sound_oracle_state),
-              "oracle snapshot alias changed");
 
 inline void require_state(bool valid,
                           std::source_location where = std::source_location::current()) {
@@ -576,34 +564,6 @@ inline void require_state(bool valid,
 template <> inline void validate_state_value(const CanonicalF3Cpu &s) {
     require_state(s.stopped <= 1 && s.halted <= 1 && s.cc_op <= 4 &&
                   (!s.cc_op || s.cc_width == 1 || s.cc_width == 2 || s.cc_width == 4));
-}
-template <> inline void validate_state_value(const CanonicalSoundOracle &s) {
-    // An unstarted oracle context is zero-filled. Once initialized it is the
-    // board's 68000, never a foreign Musashi CPU model or timing table.
-    if (s.cpu_type == 0) {
-        CanonicalSoundOracle cold{};
-        cold.sound_needs_reset = 1;
-        require_state(std::memcmp(&s, &cold, sizeof(s)) == 0);
-        return;
-    }
-    require_state(s.cpu_type == 1 && s.address_mask == 0x00ffffff && s.sr_mask == 0xa71f &&
-                  s.sound_needs_reset <= 1 && !(s.s_flag & ~4u) && !(s.m_flag & ~2u) &&
-                  !(s.t1_flag & ~0x8000u) && !(s.t0_flag & ~0x4000u) && !(s.int_mask & ~0x700u) &&
-                  !(s.int_level & ~0x700u) && !(s.stopped & ~3u) && s.ir <= 0xffff &&
-                  s.virq_state <= 0xff && s.nmi_pending <= 1 &&
-                  (s.instr_mode == 0 || s.instr_mode == 8) && s.run_mode <= 2 && !s.has_pmmu &&
-                  !s.pmmu_enabled && (s.fpu_just_reset == 0 || s.fpu_just_reset == 1) &&
-                  s.reset_cycles <= 132);
-    // m68k_set_cpu_type(M68K_CPU_TYPE_68000), including unsigned -2 encodings.
-    require_state(s.cyc_bcc_notake_b == uint32_t(-2) && s.cyc_bcc_notake_w == 2 &&
-                  s.cyc_dbcc_f_noexp == uint32_t(-2) && s.cyc_dbcc_f_exp == 2 &&
-                  s.cyc_scc_r_true == 2 && s.cyc_movem_w == 2 && s.cyc_movem_l == 3 &&
-                  s.cyc_movem_store_w == 4 && s.cyc_movem_store_l == 8 && s.cyc_shift == 2 &&
-                  s.cyc_reset == 132);
-}
-template <> inline void validate_state_value(const CanonicalSoundNative &s) {
-    validate_state_value(s.cpu);
-    require_state(s.needs_reset <= 1);
 }
 template <> inline void validate_state_value(const CanonicalEeprom &s) {
     require_state(s.mode <= 4 && s.selected <= 1 && s.old_clock <= 1 && s.data_out <= 1 &&

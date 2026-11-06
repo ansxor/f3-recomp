@@ -15,23 +15,31 @@ constexpr uint32_t RAM_SPAN = RAM_END - RAM_BASE, RAM_MASK = RAM_MIRROR_MASK;
 constexpr uint32_t PALETTE_SPAN = PALETTE_RAM_SIZE;
 constexpr uint32_t GRAPHICS_SPAN = GRAPHICS_RAM_SIZE;
 constexpr uint32_t SPRITE_SPAN = SPRITE_RAM_SIZE;
-constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE, ENTRIES = 0x400;
+constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE;
 constexpr uint64_t REPLAY_BUDGET_CYCLES = 1000000;
 constexpr uint32_t REPLAY_BUDGET_BLOCKS = 500000;
 constexpr size_t MAX_OPEN = 8;
 constexpr uint64_t SPLICE_FRAMES = 4; // frames a splice survives without refresh
 constexpr size_t MAX_MISMATCHES = 8;
-
-constexpr uint16_t sprite_key(uint32_t offset) { // offset within 0x600000..0x610000
-    return uint16_t(((offset >> 15) & 1) * ENTRIES + ((offset & 0x7fff) >> 4));
-}
-constexpr bool listed(uint32_t offset) { return ((offset & 0x7fff) >> 4) < ENTRIES; }
 } // namespace
 
 const SpriteUnitTable &SpriteUnits::game_table() {
     static const SpriteUnitTable TABLE{std::span<const EmitUnit *const>(sprite_units::all),
                                        std::span<const PcRange>(sprite_units::frame_writers)};
     return TABLE;
+}
+
+std::unique_ptr<SpriteUnits> make_game_sprite_units(Machine &machine, bool flicker_shadows) {
+    const auto &unit_table = SpriteUnits::game_table();
+    if (unit_table.units.empty()) return nullptr;
+    SpriteUnits::Options options;
+    const auto registered = registered_sprite_behaviours();
+    options.behaviours.assign(registered.begin(), registered.end());
+    const auto shadows = registered_flicker_shadows();
+    options.flicker_shadows.assign(shadows.begin(), shadows.end());
+    auto units = std::make_unique<SpriteUnits>(machine, unit_table, std::move(options));
+    units->set_flicker_shadows(flicker_shadows);
+    return units;
 }
 
 const char *SpriteUnits::abort_name(Abort reason) {
@@ -61,6 +69,7 @@ const char *SpriteUnits::abort_name(Abort reason) {
 SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options options)
     : m_machine(machine), m_options(std::move(options)),
       m_units(table.units.begin(), table.units.end()), m_frame_writers(table.frame_writers) {
+    m_sr = &machine.cpu.sr;
     m_sandbox_cpu.runtime = &machine;
     m_page_slot.fill(-1);
     m_capture_slot.fill(-1);
@@ -105,10 +114,16 @@ SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options
         m_flicker_by_unit[target] = source;
         m_has_flicker = true;
     }
-    if (writer_owned) m_writer_pc.assign(0x10000, 0);
+    if (writer_owned) {
+        m_writer_pc.assign(0x10000, 0);
+        machine.cpu.ram_writer = m_writer_pc.data();
+    }
     m_stack.reserve(MAX_OPEN);
 }
-SpriteUnits::~SpriteUnits() = default;
+SpriteUnits::~SpriteUnits() {
+    if (!m_writer_pc.empty() && m_machine.cpu.ram_writer == m_writer_pc.data())
+        m_machine.cpu.ram_writer = nullptr;
+}
 
 uint32_t SpriteUnits::register_value(const f3_cpu &cpu, UnitRegister reg) const {
     const unsigned index = unsigned(reg);
@@ -126,9 +141,13 @@ uint32_t SpriteUnits::irq_depth() {
     while (!m_irq_levels.empty() && mask < m_irq_levels.back()) m_irq_levels.pop_back();
     return uint32_t(m_irq_levels.size());
 }
-void SpriteUnits::note_irq(unsigned level) { m_irq_levels.push_back(level); }
+void SpriteUnits::note_irq(unsigned level) {
+    clear_memo();
+    m_irq_levels.push_back(level);
+}
 
 void SpriteUnits::reset() {
+    clear_memo();
     while (!m_stack.empty()) {
         m_pool.push_back(std::move(m_stack.back()));
         m_stack.pop_back();
@@ -147,6 +166,7 @@ void SpriteUnits::reset() {
 }
 
 void SpriteUnits::discard_from(size_t index) {
+    clear_memo();
     while (m_stack.size() > index) {
         m_pool.push_back(std::move(m_stack.back()));
         m_stack.pop_back();
@@ -154,6 +174,7 @@ void SpriteUnits::discard_from(size_t index) {
     }
 }
 void SpriteUnits::close_invocation(size_t index) {
+    clear_memo();
     m_pool.push_back(std::move(m_stack[index]));
     m_stack.erase(m_stack.begin() + std::ptrdiff_t(index));
 }
@@ -211,6 +232,7 @@ void SpriteUnits::open_invocation(const EmitUnit &unit, size_t start) {
             discard_from(i); // previous invocation never exited
             break;
         }
+    clear_memo();
     if (m_stack.size() >= MAX_OPEN) {
         m_pool.push_back(std::move(m_stack.front()));
         m_stack.erase(m_stack.begin());
@@ -290,7 +312,7 @@ int SpriteUnits::exit_real(uint32_t id) {
 
 // ---- Real sprite writes ---------------------------------------------------------------
 
-void SpriteUnits::note_write(uint32_t address, unsigned width) {
+void SpriteUnits::note_write_slow(uint32_t address, unsigned width) {
     const uint32_t a = address & 0xffffff;
     if (a - RAM_BASE < RAM_SPAN) {
         if (m_writer_pc.empty()) return;
@@ -300,29 +322,44 @@ void SpriteUnits::note_write(uint32_t address, unsigned width) {
             m_writer_pc[word] = m_machine.cpu.pc;
         return;
     }
-    for (unsigned i = 0; i < width; ++i)
-        if (a + i - GRAPHICS_BASE < SPRITE_SPAN) sprite_write(a + i);
+    const uint32_t offset = a - GRAPHICS_BASE;
+    if (m_options.check || m_discovery) {
+        for (unsigned i = 0; i < width; ++i)
+            if (offset + i < SPRITE_SPAN) sprite_write(a + i);
+        return;
+    }
+    if (offset < SPRITE_SPAN) sprite_write(a);
+    const uint32_t tail = offset + width - 1;
+    if (tail < SPRITE_SPAN && ((tail ^ offset) >> 4)) sprite_write(a + width - 1);
 }
 
 void SpriteUnits::sprite_write(uint32_t address) {
     const uint32_t offset = address - GRAPHICS_BASE;
-    if (!listed(offset)) return;
-    const uint16_t key = sprite_key(offset);
+    if (!sprite_list::listed(offset)) return;
+    const uint16_t key = sprite_list::key(offset);
+    const uint32_t bank = key >= sprite_list::ENTRIES;
     const uint32_t depth = irq_depth();
     while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
     if (!m_stack.empty() && m_stack.back().irq_depth == depth) {
         Invocation &top = m_stack.back();
         auto &keys = top.keys;
         if (keys.empty() || keys.back() != key) keys.push_back(key);
-        if (top.flicker && contains(top.flicker->emit, m_machine.cpu.pc) &&
-            (top.shadow_keys.empty() || top.shadow_keys.back() != key))
-            top.shadow_keys.push_back(key);
+        if (top.flicker) {
+            if (contains(top.flicker->emit, m_machine.cpu.pc) &&
+                (top.shadow_keys.empty() || top.shadow_keys.back() != key))
+                top.shadow_keys.push_back(key);
+            return;
+        }
+        remember(offset, bank);
         return;
     }
     m_identity[key] = 0;
     m_object[key] = 0;
     m_flag[key] = 0;
-    if (!m_options.check && !m_discovery) return;
+    if (!m_options.check && !m_discovery) {
+        remember(offset, bank);
+        return;
+    }
     const uint32_t pc = m_machine.cpu.pc;
     StrayWriter *found = m_last_stray;
     if (!found || found->pc != pc) {
@@ -348,22 +385,22 @@ void SpriteUnits::finish(Invocation &invocation) {
         if (invocation.check.ok) compare(invocation, invocation.keys);
         return;
     }
-    const bool first_bank = invocation.keys.front() >= ENTRIES;
+    const bool first_bank = invocation.keys.front() >= sprite_list::ENTRIES;
     std::vector<uint16_t> keys = invocation.keys;
     std::sort(keys.begin(), keys.end());
     keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
     stats.real_entries += keys.size();
     uint16_t lo[2] = {0xffff, 0xffff}, hi[2] = {0, 0};
     for (uint16_t key : keys) {
-        const unsigned bank = key >= ENTRIES;
-        const uint16_t entry = key & (ENTRIES - 1);
+        const unsigned bank = key >= sprite_list::ENTRIES;
+        const uint16_t entry = key & (sprite_list::ENTRIES - 1);
         lo[bank] = std::min(lo[bank], entry);
         hi[bank] = std::max(hi[bank], entry);
     }
     for (uint16_t key : keys) {
-        const unsigned bank = key >= ENTRIES;
+        const unsigned bank = key >= sprite_list::ENTRIES;
         m_identity[key] =
-            sprite_identity_mix(invocation.identity, (key & (ENTRIES - 1)) - lo[bank]);
+            sprite_identity_mix(invocation.identity, (key & (sprite_list::ENTRIES - 1)) - lo[bank]);
         m_object[key] = invocation.identity;
         m_flag[key] = 0;
     }
@@ -494,8 +531,8 @@ void SpriteUnits::compare(Invocation &invocation, const std::vector<uint16_t> &r
     char detail[200] = "";
     size_t i = 0, j = 0;
     const auto bytes_at = [&](uint16_t key) {
-        return m_machine.graphics.data() + (key >= ENTRIES ? BANK_BYTES : 0) +
-               size_t(key & (ENTRIES - 1)) * 16;
+        return m_machine.graphics.data() + (key >= sprite_list::ENTRIES ? BANK_BYTES : 0) +
+               size_t(key & (sprite_list::ENTRIES - 1)) * 16;
     };
     const auto hex = [](const uint8_t *p) {
         char text[40];
@@ -510,8 +547,8 @@ void SpriteUnits::compare(Invocation &invocation, const std::vector<uint16_t> &r
         if (rk == pk) {
             if (std::memcmp(bytes_at(uint16_t(rk)), replay[j].bytes.data(), 16) != 0) {
                 std::snprintf(detail, sizeof detail, "bank%u entry 0x%03x real=%s replay=%s",
-                              unsigned(key >= ENTRIES), key & (ENTRIES - 1),
-                              hex(bytes_at(uint16_t(rk))).c_str(),
+                              unsigned(key >= sprite_list::ENTRIES),
+                              key & (sprite_list::ENTRIES - 1), hex(bytes_at(uint16_t(rk))).c_str(),
                               hex(replay[j].bytes.data()).c_str());
                 equal = false;
             }
@@ -520,13 +557,14 @@ void SpriteUnits::compare(Invocation &invocation, const std::vector<uint16_t> &r
         } else if (rk < pk) {
             std::snprintf(detail, sizeof detail,
                           "bank%u entry 0x%03x written by real span, missing in replay real=%s",
-                          unsigned(key >= ENTRIES), key & (ENTRIES - 1),
+                          unsigned(key >= sprite_list::ENTRIES), key & (sprite_list::ENTRIES - 1),
                           hex(bytes_at(uint16_t(rk))).c_str());
             equal = false;
         } else {
-            std::snprintf(
-                detail, sizeof detail, "bank%u entry 0x%03x written by replay only replay=%s",
-                unsigned(key >= ENTRIES), key & (ENTRIES - 1), hex(replay[j].bytes.data()).c_str());
+            std::snprintf(detail, sizeof detail,
+                          "bank%u entry 0x%03x written by replay only replay=%s",
+                          unsigned(key >= sprite_list::ENTRIES), key & (sprite_list::ENTRIES - 1),
+                          hex(replay[j].bytes.data()).c_str());
             equal = false;
         }
     }
@@ -556,6 +594,7 @@ void SpriteUnits::frame_end() {
     m_ordinals.clear();
     for (size_t i = 0; i < m_stack.size();) {
         if (m_stack[i].frame + 1 < m_machine.frame) {
+            clear_memo();
             // Keep stack order: drop this entry only.
             m_pool.push_back(std::move(m_stack[i]));
             m_stack.erase(m_stack.begin() + std::ptrdiff_t(i));
@@ -628,7 +667,7 @@ void SpriteUnits::ram_put(uint32_t offset, uint8_t value) {
 void SpriteUnits::sandbox_abort(Abort reason) {
     if (m_sandbox_abort != Abort::Count) return;
     m_sandbox_abort = reason;
-    m_sandbox_cpu.halted = 1; // stops chained native blocks at the next guard
+    m_sandbox_cpu.dispatch_deadline = 0; // stops chained native blocks at the next guard
 }
 
 uint8_t SpriteUnits::sandbox_read8(uint32_t address) {
@@ -638,8 +677,8 @@ uint8_t SpriteUnits::sandbox_read8(uint32_t address) {
     if (a - PALETTE_BASE < PALETTE_SPAN) return m_machine.palette[a - PALETTE_BASE];
     if (a - GRAPHICS_BASE < GRAPHICS_SPAN) {
         const uint32_t offset = a - GRAPHICS_BASE;
-        if (offset < SPRITE_SPAN && listed(offset)) {
-            const int16_t slot = m_capture_slot[sprite_key(offset)];
+        if (offset < SPRITE_SPAN && sprite_list::listed(offset)) {
+            const int16_t slot = m_capture_slot[sprite_list::key(offset)];
             if (slot >= 0) return m_capture[size_t(slot)].bytes[offset & 15];
         }
         return m_machine.graphics[offset];
@@ -656,8 +695,8 @@ void SpriteUnits::sandbox_write8(uint32_t address, uint8_t value) {
     }
     if (a - GRAPHICS_BASE < SPRITE_SPAN) {
         const uint32_t offset = a - GRAPHICS_BASE;
-        if (!listed(offset)) return; // never displayed, never compared
-        const uint16_t key = sprite_key(offset);
+        if (!sprite_list::listed(offset)) return; // never displayed, never compared
+        const uint16_t key = sprite_list::key(offset);
         int16_t &slot = m_capture_slot[key];
         if (slot < 0) {
             // Copy-on-first-touch of the whole entry so untouched words match hardware.
@@ -699,19 +738,19 @@ void SpriteUnits::collect(ReplayResult &out, bool dense) {
     std::sort(out.written.begin(), out.written.end(),
               [](const Entry &a, const Entry &b) { return a.key < b.key; });
     if (!dense || m_capture.empty()) return;
-    out.bank = m_capture.front().key >= ENTRIES; // bank of the first write
+    out.bank = m_capture.front().key >= sprite_list::ENTRIES; // bank of the first write
     uint16_t lo = 0xffff, hi = 0;
     for (const Entry &entry : m_capture) {
-        if ((entry.key >= ENTRIES) != out.bank) continue;
-        lo = std::min<uint16_t>(lo, entry.key & (ENTRIES - 1));
-        hi = std::max<uint16_t>(hi, entry.key & (ENTRIES - 1));
+        if ((entry.key >= sprite_list::ENTRIES) != out.bank) continue;
+        lo = std::min<uint16_t>(lo, entry.key & (sprite_list::ENTRIES - 1));
+        hi = std::max<uint16_t>(hi, entry.key & (sprite_list::ENTRIES - 1));
     }
     out.first = lo;
     out.last = hi;
     out.dense.resize((size_t(hi) - lo + 1) * 16);
     if (out.shadow_forced) out.dense_flags.assign(size_t(hi) - lo + 1, 0);
     for (uint16_t entry = lo; entry <= hi; ++entry) {
-        const uint16_t key = uint16_t((out.bank ? ENTRIES : 0) + entry);
+        const uint16_t key = uint16_t((out.bank ? sprite_list::ENTRIES : 0) + entry);
         const int16_t slot = m_capture_slot[key];
         if (slot >= 0 && out.shadow_forced &&
             (m_capture[size_t(slot)].flags & SPRITE_FLAG_SHADOW)) {
@@ -742,6 +781,10 @@ void SpriteUnits::run_replay(const EmitUnit &unit, const Invocation &invocation,
     f3_cc_flush(&m_machine.cpu);
     m_sandbox_cpu = m_machine.cpu;
     m_sandbox_cpu.runtime = &m_machine;
+    m_sandbox_cpu.ram = nullptr;
+    m_sandbox_cpu.ram_writer = nullptr;
+    m_sandbox_cpu.rom = nullptr;
+    m_sandbox_cpu.rom_size = 0;
     m_sandbox_cpu.pc = unit.starts[invocation.start_index];
     m_sandbox_cpu.stopped = m_sandbox_cpu.halted = 0;
     m_sandbox_unit = unit.id;

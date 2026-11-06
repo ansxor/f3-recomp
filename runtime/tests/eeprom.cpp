@@ -141,9 +141,10 @@ TEST(Eeprom, UserImageOverrideAndPersistence) {
     EXPECT_EQ(read_word(*m), 0xd42e)
         << "Loaded user EEPROM remains writable and persists through reset";
 
-    roms = std::move(m->roms);
+    auto reused = fixture();
+    reused.factory_eeprom = std::move(m->roms.factory_eeprom);
     m.reset();
-    auto factory_machine = std::make_unique<f3rt::Machine>(std::move(roms));
+    auto factory_machine = std::make_unique<f3rt::Machine>(std::move(reused));
     command(*factory_machine, 0x1bf);
     const uint16_t fw0 = read_word(*factory_machine);
     const uint16_t fw1 = read_word(*factory_machine);

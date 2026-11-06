@@ -1,11 +1,12 @@
 // hle::Core and the F3RP replay script:
 //  * ReplayCodec.*  encoder layout and malformed-script rejection; need no ROM (synthetic sound ROM with no songs).
-//  * HleCore.*      A2 (AudioEngine vs Core + replay, bit-exact), the encode->replay round trip and A3 (chunk invariance
+//  * HleCore.*      A2 (Audio vs Core + replay, bit-exact), the encode->replay round trip and A3 (chunk invariance
 //                   property). They load sets from the directories next to F3_ROM_DIR (kirameki, landmakrj) and skip
 //                   when a set is unavailable. Land Maker needs its real boot packet stream, so one 900-frame
 //                   interpreted boot runs (about 5 s) the first time it is needed.
-#include "audio/hle/audio.hpp"
+#include "f3rt/audio.hpp"
 #include "audio/hle/core.hpp"
+#include "audio/hle/voice_render.hpp"
 #include "debug/replay.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
@@ -13,6 +14,7 @@
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -49,7 +51,6 @@ Packets split_packets(const std::vector<uint8_t> &bytes) {
     return packets;
 }
 
-// Runs `fn` on a fresh thread with flush-to-zero set, like the AudioEngine worker; the test thread's FP mode is not touched.
 template <class F> void on_worker_thread(F &&fn) {
     std::exception_ptr failure;
     std::thread thread([&] {
@@ -113,6 +114,24 @@ ReplayScript sample_script() {
     return script;
 }
 
+struct SyntheticAudio : ::testing::Test {
+    SyntheticRom rom;
+    std::array<uint8_t, 0x800> shared{};
+    Audio audio{rom.sound, rom.samples, shared.data()};
+    size_t producer = 0;
+
+    void publish(std::initializer_list<uint8_t> bytes) {
+        for (const uint8_t byte : bytes) shared[producer++ & MAILBOX_RING_MASK] = byte;
+        const unsigned doubled = unsigned(producer & MAILBOX_RING_MASK) * 2;
+        shared[MAILBOX_PRODUCER_H] = uint8_t(doubled >> 8);
+        shared[MAILBOX_PRODUCER_L] = uint8_t(doubled);
+        audio.shared_write(MAILBOX_PRODUCER_L);
+    }
+    unsigned consumer() const {
+        return unsigned(shared[MAILBOX_CONSUMER_H]) << 8 | shared[MAILBOX_CONSUMER_L];
+    }
+};
+
 // ---- ROM-backed fixtures ---------------------------------------------------------------------------------------------
 
 struct SetRom {
@@ -162,7 +181,6 @@ const Boot &boot_of(const std::string &set) {
     const auto root = roms_root();
     Machine m(RomSet::load(root / set, set));
     m.allow_main_fallback = true;
-    m.audio->set_backend(Audio::Backend::Enhanced);
     std::vector<int16_t> drain(8192);
     for (unsigned f = 0; f < 900; ++f) {
         if (!m.run_frame(false) || m.cpu.halted) throw std::runtime_error("main CPU halted during boot");
@@ -185,7 +203,7 @@ const Boot &boot_of(const std::string &set) {
         ++parsed;
         if (packet.size() <= CommandPacket::MAX_BYTES) boot.packets.push_back(std::move(packet));
     }
-    boot.commands = m.audio->enhanced_stats().commands;
+    boot.commands = m.audio->performance_stats().commands;
     if (parsed != boot.commands) throw std::runtime_error("boot ring does not hold the whole boot packet stream");
     boot.gain = {m.shared[MAILBOX_GAIN_CH0], m.shared[MAILBOX_GAIN_CH1]};
     return cache[set] = std::move(boot);
@@ -237,8 +255,6 @@ Inputs inputs_for(const Song &song) {
     return in;
 }
 
-// The game-facing path of the sound-extract run: a fresh AudioEngine restored from a post-boot snapshot, reset
-// pulse, gain bytes, optional bank write, request bytes through the mailbox ring, then 10 ms advance + render slices.
 std::vector<float> render_engine(const SetRom &set, const Inputs &in, unsigned slices) {
     std::array<uint8_t, 0x800> shared{};
     size_t producer = 0;
@@ -254,8 +270,8 @@ std::vector<float> render_engine(const SetRom &set, const Inputs &in, unsigned s
     shared[MAILBOX_GAIN_CH0] = in.script.gain_raw[0];
     shared[MAILBOX_GAIN_CH1] = in.script.gain_raw[1];
     publish();
-    AudioEngine engine(set.rom.sound, set.words, shared.data());
-    std::array<uint8_t, AudioEngine::STATE_BYTES> state{};
+    Audio engine(set.rom.sound, set.words, shared.data());
+    std::array<uint8_t, 32> state{};
     const uint64_t clock = 244300337, commands = in.boot ? in.boot->commands : 0;
     for (unsigned b = 0; b < 8; ++b) {
         state[b] = uint8_t(clock >> (56 - b * 8));
@@ -266,10 +282,10 @@ std::vector<float> render_engine(const SetRom &set, const Inputs &in, unsigned s
     state[17] = uint8_t(consumer);
     shared[MAILBOX_CONSUMER_H] = state[16];
     shared[MAILBOX_CONSUMER_L] = state[17];
-    engine.load(state);
+    engine.load_state(state);
     engine.set_reset(true);
     engine.set_reset(false);
-    if (in.script.page) engine.set_bank(*in.script.page);
+    if (in.script.page) engine.set_sound_bank(*in.script.page);
     for (const auto &bytes : in.ring_calls) {
         for (const uint8_t byte : bytes) shared[producer++ & MAILBOX_RING_MASK] = byte;
         publish();
@@ -402,6 +418,100 @@ TEST(ReplayCodec, ReplayRejectsMalformedScripts) {
     }
 }
 
+using AudioDevice = SyntheticAudio;
+
+TEST_F(AudioDevice, HeldBoardIgnoresTheMailboxUntilReleased) {
+    EXPECT_TRUE(audio.is_reset());
+    publish({3, 0x82, 0});
+    EXPECT_EQ(consumer(), 0u);
+    EXPECT_EQ(audio.performance_stats().commands, 0u);
+
+    audio.set_reset(false);
+    audio.shared_write(MAILBOX_PRODUCER_L);
+    EXPECT_EQ(consumer(), 6u);
+    EXPECT_EQ(audio.performance_stats().commands, 1u);
+    EXPECT_NO_THROW(audio.available_frames());
+}
+
+TEST_F(AudioDevice, MailboxSkipsOversizePacketsAndBoardResetRewinds) {
+    audio.set_reset(false);
+    publish({9, 0x80, 0, 0, 0, 0, 0, 0, 0});
+    publish({3, 0x82, 0});
+    EXPECT_EQ(consumer(), 24u);
+    EXPECT_EQ(audio.performance_stats().commands, 1u);
+
+    audio.reset_board();
+    audio.set_reset(false);
+    audio.shared_write(MAILBOX_PRODUCER_L);
+    EXPECT_EQ(audio.performance_stats().commands, 2u);
+    EXPECT_EQ(consumer(), 24u);
+}
+
+TEST_F(AudioDevice, WorkerFailureReachesTheMainThread) {
+    audio.set_reset(false);
+    publish({3, 0x20, 0});
+    int16_t pcm[2] = {};
+    EXPECT_THROW(audio.available_frames(), std::runtime_error);
+    EXPECT_THROW(audio.render(pcm, 1), std::runtime_error);
+    EXPECT_THROW(audio.set_sound_bank(2), std::runtime_error);
+}
+
+TEST_F(AudioDevice, SnapshotLayoutAndRejectedLoadsLeaveStateUntouched) {
+    audio.set_reset(false);
+    publish({3, 0x82, 0});
+    audio.advance(1000);
+    ASSERT_EQ(audio.state_size(), 32u);
+
+    const uint64_t clock = 1000;
+    std::array<uint8_t, 32> expected{};
+    for (unsigned b = 0; b < 8; ++b) expected[b] = uint8_t(clock >> (56 - b * 8));
+    expected[15] = 1;
+    expected[17] = 6;
+    std::array<uint8_t, 32> saved{};
+    audio.save_state(saved);
+    EXPECT_EQ(saved, expected);
+
+    const std::pair<size_t, uint8_t> corruptions[] = {
+        {16, 0x08}, {17, 0x07}, {18, 2}, {19, 1}, {31, 1}};
+    for (const auto &[at, value] : corruptions) {
+        auto bad = saved;
+        bad[at] = value;
+        EXPECT_THROW(audio.load_state(bad), std::invalid_argument) << "byte " << at;
+    }
+    std::array<uint8_t, 32> resaved{};
+    audio.save_state(resaved);
+    EXPECT_EQ(resaved, saved);
+
+    std::array<uint8_t, 31> narrow{};
+    EXPECT_THROW(audio.load_state(narrow), std::invalid_argument);
+    EXPECT_THROW(audio.save_state(narrow), std::invalid_argument);
+}
+
+TEST_F(AudioDevice, LoadedClockKeepsPlaybackMonotonic) {
+    audio.set_reset(false);
+    audio.advance(272000);
+    audio.finish_frame();
+    std::vector<float> pcm(2 * (Core::frames_at(272000) + 1));
+    EXPECT_EQ(audio.render(pcm.data(), pcm.size() / 2), Core::frames_at(272000));
+
+    uint64_t playback = 272000;
+    for (const uint64_t clock : {uint64_t(5000000000), uint64_t(1000)}) {
+        std::array<uint8_t, 32> state{};
+        audio.save_state(state);
+        for (unsigned b = 0; b < 8; ++b) state[b] = uint8_t(clock >> (56 - b * 8));
+        audio.load_state(state);
+        EXPECT_EQ(audio.clock_ticks(), clock);
+        EXPECT_EQ(audio.available_frames(), 0u);
+
+        audio.advance(272000);
+        audio.finish_frame();
+        EXPECT_EQ(audio.render(pcm.data(), pcm.size() / 2),
+                  Core::frames_at(playback + 272000) - Core::frames_at(playback));
+        EXPECT_EQ(audio.generated_frames(), Core::frames_at(playback + 272000));
+        playback += 272000;
+    }
+}
+
 // ---- A2 and the round trip --------------------------------------------------------------------------------------------
 
 TEST(HleCore, EncodeReplayRoundTripMatchesManualCalls) {
@@ -431,8 +541,6 @@ TEST(HleCore, EncodeReplayRoundTripMatchesManualCalls) {
     EXPECT_GT(*std::max_element(manual.begin(), manual.end()), 0.01f) << "the song must be audible in the first 2 s";
 }
 
-// A2: the AudioEngine path (mailbox, snapshot restore, 10 ms slices) and Core + replay render the same float stream.
-// One song per set: Kirameki 0x187 with BANK, Land Maker 0x50 with its real boot packet stream.
 TEST(HleCore, EngineAndCoreReplayAreBitExact) {
     for (const size_t index : {size_t(0), size_t(4)}) {
         const Song &song = songs()[index];
@@ -446,11 +554,32 @@ TEST(HleCore, EngineAndCoreReplayAreBitExact) {
         const auto in = inputs_for(song);
         const unsigned slices = 600; // 6 s
         const auto engine = render_engine(*set, in, slices);
-        const auto core = render_core_replay(*set, encode_replay(in.script), slices);
+        auto core = render_core_replay(*set, encode_replay(in.script), slices);
+        for (size_t i = 0; i + 1 < core.size(); i += 2) std::swap(core[i], core[i + 1]);
         ASSERT_FALSE(engine.empty());
         EXPECT_TRUE(same_bits(engine, core));
         EXPECT_GT(*std::max_element(core.begin(), core.end()), 0.01f) << "the song must be audible within 6 s";
     }
+}
+
+TEST(HleCore, RenderReadyHoldsBackTheFrameJustClosed) {
+    std::string why;
+    const auto *set = load_set("landmakrj", why);
+    if (!set) GTEST_SKIP() << why;
+    std::array<uint8_t, 0x800> shared{};
+    Audio engine(set->rom.sound, set->words, shared.data());
+    std::vector<int16_t> block(4096 * 2);
+    uint64_t drained = 0, produced_before = 0;
+    for (unsigned frame = 0; frame < 20; ++frame) {
+        engine.advance(272000);
+        engine.finish_frame();
+        engine.available_frames();
+        const uint64_t produced = engine.generated_frames();
+        while (const size_t n = engine.render_ready(block.data(), 4096)) drained += n;
+        EXPECT_EQ(drained, produced_before) << "frame " << frame;
+        produced_before = produced;
+    }
+    EXPECT_GT(drained, 0u);
 }
 
 // ---- A3: how the caller slices time ------------------------------------------------------------------------------------
@@ -568,4 +697,185 @@ TEST(HleCore, ArbitraryStepsAgreeWithinFloatNoise) {
         RC_LOG() << item.name << ": worst |difference| " << worst;
         RC_ASSERT(worst <= 1e-6f);
     });
+}
+
+bool bits_equal(const std::vector<float> &a, const std::vector<float> &b) {
+    return a.size() == b.size() && !std::memcmp(a.data(), b.data(), a.size() * sizeof(float));
+}
+
+bool bits_equal(const VoiceFilterState &a, const VoiceFilterState &b) {
+    return !std::memcmp(&a, &b, sizeof a);
+}
+
+bool all_zero(const std::vector<float> &values, size_t first_row = 0, size_t last_row = SIZE_MAX,
+              size_t column = 0, size_t columns = 8) {
+    for (size_t row = first_row; row < std::min(last_row, values.size() / 8); ++row)
+        for (size_t c = column; c < column + columns; ++c)
+            if (values[row * 8 + c] != 0.f) return false;
+    return true;
+}
+
+struct RenderedVoice {
+    Voice voice;
+    VoiceRenderState state;
+    std::vector<float> buses;
+};
+
+struct HleVoiceRenderSpans : ::testing::Test {
+    static constexpr size_t FRAMES = 256, SLOT = 5;
+    using Spans = std::vector<std::pair<size_t, size_t>>;
+
+    SyntheticRom rom;
+    SoundBank bank{RomView(rom.sound), rom.samples};
+    VoiceService voices{bank};
+    std::vector<uint64_t> ticks = std::vector<uint64_t>(FRAMES, 0);
+
+    HleVoiceRenderSpans() {
+        for (size_t i = 0; i < 0x4000; ++i)
+            rom.samples[i] = uint16_t(i * 0x9e37u + (i >> 3) * 0x79b9u);
+    }
+
+    static Voice base_voice() {
+        Voice voice;
+        voice.slot = SLOT;
+        voice.pair = 1;
+        voice.active = true;
+        voice.loop = true;
+        voice.position = voice.start = 0x1000;
+        voice.end = 0x1800;
+        voice.increment = 0.75;
+        voice.left = voice.right = 0xc000;
+        voice.filter.a1 = voice.filter.a2 = voice.filter.high_pole = 0.5;
+        voice.filter.target1 = voice.filter.target2 = voice.filter.target_high_pole = 0.5;
+        return voice;
+    }
+
+    static RenderedVoice make_run(const Voice &voice) {
+        return {voice, {}, std::vector<float>(FRAMES * 8, 0.f)};
+    }
+
+    void render(RenderedVoice &run, const Spans &spans) {
+        for (const auto &[first, last] : spans)
+            render_voice(voices, run.voice, bank, run.state,
+                         MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), first, last, ticks);
+    }
+
+    RenderedVoice rendered(const Voice &voice, const Spans &spans) {
+        RenderedVoice run = make_run(voice);
+        render(run, spans);
+        return run;
+    }
+};
+
+TEST_F(HleVoiceRenderSpans, FusedRunsMatchSingleFrames) {
+    for (const double start : {double(0x1000), 0x17f0 + 0.5}) {
+        SCOPED_TRACE(start);
+        Voice fused = base_voice();
+        fused.position = start;
+        Voice single = fused;
+        single.filter.ramp = 1000;
+        const SampleWords words(bank.samples);
+        ASSERT_EQ(plan_run(fused, VOICE_BLOCK_FRAMES, words).kind, VoiceRun::Kind::Constant);
+        ASSERT_EQ(plan_run(single, VOICE_BLOCK_FRAMES, words).kind, VoiceRun::Kind::Single);
+        const RenderedVoice a = rendered(fused, {{0, 200}});
+        const RenderedVoice b = rendered(single, {{0, 200}});
+        EXPECT_FALSE(all_zero(a.buses));
+        EXPECT_TRUE(bits_equal(a.buses, b.buses));
+        EXPECT_EQ(a.voice.position, b.voice.position);
+        EXPECT_TRUE(bits_equal(a.state.filters[SLOT], b.state.filters[SLOT]));
+    }
+}
+
+TEST_F(HleVoiceRenderSpans, SplittingTheSpanDoesNotChangeTheOutput) {
+    const RenderedVoice whole = rendered(base_voice(), {{0, 200}});
+    const RenderedVoice split = rendered(base_voice(), {{0, 37}, {37, 120}, {120, 200}});
+    EXPECT_FALSE(all_zero(whole.buses));
+    EXPECT_TRUE(bits_equal(whole.buses, split.buses));
+    EXPECT_EQ(whole.voice.position, split.voice.position);
+    EXPECT_TRUE(bits_equal(whole.state.filters[SLOT], split.state.filters[SLOT]));
+}
+
+TEST_F(HleVoiceRenderSpans, UnroutedPairOnlyAdvancesTheVoice) {
+    Voice unrouted = base_voice();
+    unrouted.pair = 0;
+    const RenderedVoice routed = rendered(base_voice(), {{0, 100}});
+    const RenderedVoice silent = rendered(unrouted, {{0, 100}});
+    EXPECT_FALSE(all_zero(routed.buses));
+    EXPECT_TRUE(all_zero(silent.buses));
+    EXPECT_EQ(silent.voice.position, routed.voice.position);
+    EXPECT_TRUE(bits_equal(silent.state.filters[SLOT], routed.state.filters[SLOT]));
+}
+
+TEST_F(HleVoiceRenderSpans, RoutedPairWritesOnlyItsColumns) {
+    Voice delay = base_voice();
+    delay.pair = 2;
+    const RenderedVoice dry = rendered(base_voice(), {{0, 100}});
+    const RenderedVoice run = rendered(delay, {{0, 100}});
+    EXPECT_FALSE(all_zero(run.buses, 0, SIZE_MAX, 4, 2));
+    EXPECT_TRUE(all_zero(run.buses, 0, SIZE_MAX, 0, 4));
+    EXPECT_TRUE(all_zero(run.buses, 0, SIZE_MAX, 6, 2));
+    for (size_t row = 0; row < FRAMES; ++row)
+        for (size_t channel = 0; channel < 2; ++channel)
+            EXPECT_EQ(std::bit_cast<uint32_t>(run.buses[row * 8 + 4 + channel]),
+                      std::bit_cast<uint32_t>(dry.buses[row * 8 + 2 + channel]));
+}
+
+TEST_F(HleVoiceRenderSpans, OneShotEndStopsAndSilencesTheChunk) {
+    constexpr size_t LAST = 21;
+    Voice one_shot = base_voice();
+    one_shot.loop = false;
+    one_shot.end = 0x1010;
+    for (const uint8_t allocation : {0, 1}) {
+        SCOPED_TRACE(int(allocation));
+        one_shot.allocation = allocation;
+        const RenderedVoice run = rendered(one_shot, {{0, 40}});
+        EXPECT_EQ(run.voice.active, allocation != 0);
+        EXPECT_EQ(run.voice.sample_finished, allocation != 0);
+        EXPECT_FALSE(all_zero(run.buses, 0, LAST + 1));
+        EXPECT_TRUE(all_zero(run.buses, LAST + 1));
+    }
+}
+
+TEST_F(HleVoiceRenderSpans, PositionOutsideTheRomDeactivates) {
+    for (const double position :
+         {-1.0, double(rom.samples.size()), double(rom.samples.size()) + 5}) {
+        SCOPED_TRACE(position);
+        Voice voice = base_voice();
+        voice.position = position;
+        const RenderedVoice run = rendered(voice, {{0, 70}});
+        EXPECT_FALSE(run.voice.active);
+        EXPECT_TRUE(all_zero(run.buses));
+    }
+}
+
+TEST_F(HleVoiceRenderSpans, NewFilterEpochStartsFromSilence) {
+    const VoiceFilterState worn{0.5f, -0.25f, 0.125f, -0.0625f};
+    const RenderedVoice fresh = rendered(base_voice(), {{0, 100}});
+
+    RenderedVoice same = make_run(base_voice());
+    same.state.filters[SLOT] = worn;
+    render(same, {{0, 100}});
+    EXPECT_FALSE(bits_equal(same.buses, fresh.buses));
+
+    Voice next = base_voice();
+    next.filter_epoch = 7;
+    RenderedVoice reset = make_run(next);
+    reset.state.filters[SLOT] = worn;
+    render(reset, {{0, 100}});
+    EXPECT_EQ(reset.state.filter_epoch[SLOT], 7u);
+    EXPECT_TRUE(bits_equal(reset.buses, fresh.buses));
+    EXPECT_TRUE(bits_equal(reset.state.filters[SLOT], fresh.state.filters[SLOT]));
+}
+
+TEST_F(HleVoiceRenderSpans, VoiceSpanReturnsTheSlotMemory) {
+    const RenderedVoice reference = rendered(base_voice(), {{0, 150}});
+    RenderedVoice run = make_run(base_voice());
+    const VoiceBus bus(MutableAudioBlockSpan<8>(run.buses.data(), FRAMES), run.voice.pair,
+                       run.state.discard);
+    const VoiceFilterState memory =
+        VoiceSpan<3>(run.voice, SampleWords(bank.samples), VoiceFilterState{})
+            .render(bus, voices, ticks, 0, 150);
+    EXPECT_TRUE(bits_equal(memory, reference.state.filters[SLOT]));
+    EXPECT_TRUE(bits_equal(run.buses, reference.buses));
+    EXPECT_EQ(run.voice.position, reference.voice.position);
 }

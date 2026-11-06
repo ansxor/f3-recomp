@@ -30,7 +30,6 @@ void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame,
               << "  seed: " << seed << "\n"
               << "  frame: " << frame << "\n"
               << "  pc: 0x" << std::hex << m.cpu.pc << std::dec << "\n"
-              << "  sound_pc: 0x" << std::hex << m.sound_pc() << std::dec << "\n"
               << "  sr: 0x" << std::hex << m.cpu.sr << std::dec << " halted: " << int(m.cpu.halted)
               << " stopped: " << int(m.cpu.stopped) << "\n"
               << "  cycles: " << m.cpu.cycles << " native_blocks: " << m.native_blocks
@@ -64,11 +63,8 @@ void print_help(const char *prog) {
         << "  --dump-dir DIR         Dump final state or the first video mismatch\n"
         << "  --capture-surface BMP  Save final frame BMP capture using f3rt::write_bmp\n"
         << "  --surface BMP          Alias for --capture-surface\n"
-        << "  --sound-trace FILE     Record sound CPU and main mailbox bus events\n"
-        << "  --sound-driver MODE    oracle (default) or native (generated driver)\n"
-        << "  --audio-backend MODE   reference (default) or enhanced (threaded ROM sequencer)\n"
         << "  --wav FILE             Save audio\n"
-        << "  --profile-out FILE     Merge main/sound entry counts (instrumented build)\n"
+        << "  --profile-out FILE     Merge main entry counts (instrumented build)\n"
         << "  --video-diff           Compare game-owned layers and final RGB against FDP from "
            "frame 600\n"
         << "  --video-layer-mask N   Bits 0..3 PF, 4..7 sprites, 8 text (default: 511, all + RGB)\n"
@@ -113,20 +109,8 @@ int cmd_gameplay(int argc, char **argv) try {
             cfg.dump_dir = value();
         } else if (arg == "--capture-surface" || arg == "--surface") {
             capture_surface = value();
-        } else if (arg == "--sound-trace") {
-            cfg.sound_trace_path = value();
         } else if (arg == "--profile-out") {
             cfg.profile_path = value();
-        } else if (arg == "--sound-driver") {
-            cfg.sound_driver = value();
-            if (cfg.sound_driver != "oracle" && cfg.sound_driver != "native") {
-                throw std::runtime_error("--sound-driver must be oracle or native");
-            }
-        } else if (arg == "--audio-backend") {
-            const std::string name = value();
-            if (!Audio::parse_backend(name, cfg.audio_backend)) {
-                throw std::runtime_error("--audio-backend must be reference or enhanced");
-            }
         } else if (arg == "--wav") {
             cfg.wav_path = value();
         } else if (arg == "--video-diff") {
@@ -148,10 +132,6 @@ int cmd_gameplay(int argc, char **argv) try {
     if (cfg.rom_dir.empty()) {
         throw std::runtime_error(
             "ROM directory must be specified via --rom-dir or compiled F3RT_DEFAULT_ROM_DIR");
-    }
-    const bool enhanced = (cfg.audio_backend == Audio::Backend::Enhanced);
-    if (enhanced && !cfg.sound_trace_path.empty()) {
-        throw std::runtime_error("Enhanced audio does not emit sound CPU bus traces");
     }
 
     cfg.allow_fallback = false;
@@ -217,7 +197,7 @@ int cmd_gameplay(int argc, char **argv) try {
     if (json_output) {
         std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << cfg.set << "\",\"seed\":" << seed
                   << ",\"frames\":" << m.frame << ",\"pc\":\"0x" << std::hex << m.cpu.pc
-                  << "\",\"sound_pc\":\"0x" << m.sound_pc() << "\",\"frame_crc\":\"0x" << frame_crc
+                  << "\",\"frame_crc\":\"0x" << frame_crc
                   << "\",\"cycles\":" << std::dec << m.cpu.cycles
                   << ",\"native_blocks\":" << m.native_blocks
                   << ",\"fallback_instructions\":" << m.fallback_instructions
@@ -227,9 +207,7 @@ int cmd_gameplay(int argc, char **argv) try {
                   << "}\n";
     } else {
         std::cout << "SUCCESS set=" << cfg.set << " seed=" << seed << " frames=" << m.frame
-                  << " pc=0x" << std::hex << m.cpu.pc << " sound_pc=0x" << m.sound_pc()
-                  << " audio_backend=" << Audio::backend_name(cfg.audio_backend)
-                  << " sound_driver=" << (enhanced ? "none" : cfg.sound_driver) << " frame_crc=0x"
+                  << " pc=0x" << std::hex << m.cpu.pc << " frame_crc=0x"
                   << frame_crc << std::dec << " cycles=" << m.cpu.cycles
                   << " native_blocks=" << m.native_blocks
                   << " fallback_instructions=" << m.fallback_instructions

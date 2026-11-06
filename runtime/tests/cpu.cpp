@@ -73,8 +73,6 @@ constexpr uint32_t WORK_IRQ_HANDLER = f3rt::RAM_BASE + 0x300;  // IRQ vector tar
 constexpr uint32_t WORK_RTE_HANDLER = f3rt::RAM_BASE + 0x310;  // RTE handler
 constexpr uint32_t WORK_LOW_SR_CODE = f3rt::RAM_BASE + 0x320;  // MOVE #imm,SR test code
 constexpr uint32_t ROM_WRITE_PROBE = 0x100;                    // ROM byte probed for read-only
-constexpr uint32_t SND_WORK_RAM = 0x600;                       // sound work RAM probe
-constexpr uint32_t DUART_IVR = f3rt::SOUND_DUART_BASE + 0x19;  // DUART interrupt vector register
 constexpr uint32_t EXCLUDED_START = 0x200;                     // synthetic excluded range
 constexpr uint32_t EXCLUDED_END = 0x204;
 constexpr uint32_t EXCLUDED_ALIAS_BASE = 0xff000200; // physical alias of EXCLUDED_START
@@ -538,17 +536,7 @@ TEST_F(CpuTest, WatchdogWholeBoardReset) {
     m_m->write8(f3rt::WATCHDOG, 0);
     const auto watchdog_deadline = cpu.cycles + 3ull * f3rt::Machine::MAIN_CLOCK;
 
-    m_m->audio->write16(SND_WORK_RAM, 0xa55a);
-    m_m->audio->set_reset(true);
-    m_m->audio->write8(DUART_IVR, 0x66);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 1, 0x12);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 3, 0x34);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 5, 0x56);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 0x141, 0);
     m_m->audio->set_reset(false);
-    m_m->audio->set_reset(true);
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 0x101, 0);
-    m_m->audio->write32(0, 0xabcdef12);
     cpu.sr = 0x2700;
     cpu.cycles = watchdog_deadline - 1;
     EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline == watchdog_deadline)
@@ -558,17 +546,8 @@ TEST_F(CpuTest, WatchdogWholeBoardReset) {
                 cpu.dispatch_deadline == 0)
         << "STOP advances to watchdog expiry without skipping it";
     EXPECT_TRUE(m_m->boundary() != 0 && m_m->audio->is_reset())
-        << "Watchdog holds the sound CPU in reset";
+        << "Watchdog holds the sound board in reset";
     EXPECT_EQ(cpu.dispatch_deadline, 0) << "Watchdog reset invalidates the native deadline";
-    EXPECT_EQ(m_m->audio->read8(DUART_IVR), 0x0f) << "Watchdog restores the DUART interrupt vector";
-    EXPECT_EQ(m_m->audio->read16(SND_WORK_RAM), 0xa55a)
-        << "Whole-board reset preserves sound work RAM";
-    EXPECT_EQ(m_m->audio->read32(0), 0) << "Whole-board reset reloads boot vectors from sound ROM";
-    m_m->audio->write8(f3rt::SOUND_ES5510_BASE + 0x101, 0);
-    EXPECT_TRUE(m_m->audio->read8(f3rt::SOUND_ES5510_BASE + 1) == 0 &&
-                m_m->audio->read8(f3rt::SOUND_ES5510_BASE + 3) == 0 &&
-                m_m->audio->read8(f3rt::SOUND_ES5510_BASE + 5) == 0)
-        << "Watchdog clears DSP general-purpose registers";
 }
 
 // RapidCheck property: Work RAM 32-bit writes are identically readable from the mirror offset.

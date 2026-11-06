@@ -528,7 +528,7 @@ int main(void) {
             )
 
     @requires_musttail
-    def test_cross_function_transfer_chains_but_trace_or_stop_refuses(self):
+    def test_cross_function_transfer_chains_but_trace_refuses(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         # BSR 0x400 -> 0x500 and BRA 0x600 -> 0x500 reach a different block
@@ -558,11 +558,6 @@ int main(void) {
     traced.pc = 0x400; traced.sr = 0x8000; traced.dispatch_deadline = UINT64_MAX;
     assert(dispatch(&traced));
     assert(traced.pc == 0x500 && traced.d[1] == 0);
-
-    f3_cpu stopped = fresh_cpu();
-    stopped.pc = 0x400; stopped.stopped = 1; stopped.dispatch_deadline = UINT64_MAX;
-    assert(dispatch(&stopped));
-    assert(stopped.pc == 0x500 && stopped.d[1] == 0);
 
     f3_cpu jumped = fresh_cpu();
     jumped.pc = 0x600; jumped.dispatch_deadline = UINT64_MAX;
@@ -704,7 +699,7 @@ int main(void) {
 """,
             )
 
-    def test_unknown_index_and_trace_or_stop_refuse_the_chain(self):
+    def test_unknown_index_and_trace_refuse_the_chain(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         rom, discovery = _indirect_fixture(decoder)
@@ -733,21 +728,12 @@ int main(void) {
     f3_cc_flush(&fallback);
     assert(fallback.cc_op == 0 && (fallback.sr & 0xfu) == 4);   /* Z, no lazy flags */
 
-    /* Trace (T0) and STOP each refuse the chained indirect transfer: entering
-       at the JMP directly leaves the switch guard as the only decision. */
     f3_cpu traced = fresh_cpu();
     traced.pc = 0x402; traced.d[0] = 0x16; traced.sr = 0x8000;
     traced.dispatch_deadline = UINT64_MAX;
     assert(dispatch(&traced));
     f3_cc_flush(&traced);
     assert(traced.pc == 0x406 && traced.cc_op == 0);
-
-    f3_cpu stopped = fresh_cpu();
-    stopped.pc = 0x402; stopped.d[0] = 0x16; stopped.stopped = 1;
-    stopped.dispatch_deadline = UINT64_MAX;
-    assert(dispatch(&stopped));
-    f3_cc_flush(&stopped);
-    assert(stopped.pc == 0x406 && stopped.cc_op == 0);
     return 0;
 }
 """,

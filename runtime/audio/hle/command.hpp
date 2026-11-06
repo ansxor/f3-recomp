@@ -221,7 +221,7 @@ struct Nop {
 };
 
 // A packet the driver consumes without acting on: an unknown opcode, or a known opcode whose length does
-// not match. The default alternative is inert, so a default-constructed packet is a no-op.
+// not match.
 struct Ignored {
     uint8_t opcode = 0;
 };
@@ -237,9 +237,6 @@ class CommandPacket {
 public:
     // Largest packet the mailbox carries (the engine drops longer ones without recording them).
     static constexpr size_t MAX_BYTES = 8;
-
-    // An inert packet (Ignored): the default-initialized state of the AudioEngine queue slot.
-    CommandPacket() noexcept = default;
 
     // Throws std::runtime_error unless 2 <= bytes.size() <= MAX_BYTES and bytes[0] == bytes.size().
     // An opcode or payload length the driver rejects becomes Ignored.

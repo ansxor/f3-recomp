@@ -32,20 +32,19 @@ struct SpriteRamState {
     uint8_t pen_mask = 0x0f;
 };
 
-// One decoded sprite-list entry. `x`/`y` are 24.8 scanout coordinates, unmirrored
 // when apply_flip is false (the caller's sprite latch applies the flipscreen
 // mirror) or already mirrored when true. `color` is the raw colour byte: its low
 // 6 bits select the 16x16 tile palette and bits 6..7 its priority group.
 struct DecodedSpriteEntry {
-    int32_t x = 0, y = 0;
-    int32_t scale_x = 256, scale_y = 256;
-    uint32_t tile = 0;
-    uint8_t color = 0;
-    bool flip_x = false, flip_y = false;
-    uint8_t pri = 0;
-    uint64_t identity = 0; // stable sprite identity from a SpritePresentation; 0 = unknown
-    uint64_t object = 0; // owning invocation identity (shared by a multi-part object); 0 = unknown
-    uint8_t flags = 0;   // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
+    int32_t x, y;
+    int32_t scale_x, scale_y;
+    uint32_t tile;
+    uint8_t color;
+    bool flip_x, flip_y;
+    uint8_t pri;
+    uint64_t identity;
+    uint64_t object;
+    uint8_t flags;
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)

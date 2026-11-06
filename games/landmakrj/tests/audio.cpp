@@ -28,11 +28,8 @@ TEST(HleAudio, StateAndSequencing) {
     } catch (const std::exception &e) {
         GTEST_SKIP() << "ROM set unavailable: " << e.what();
     }
-    f3rt::Audio probe_audio;
-    probe_audio.load_sound_rom(rom.sound);
-    probe_audio.load_sample_rom(rom.samples);
-    ASSERT_TRUE(probe_audio.backend_available(f3rt::Audio::Backend::Enhanced))
-        << "Enhanced audio backend must be available for Land Maker sound ROM";
+    ASSERT_TRUE(f3rt::Audio::supported(rom.sound, f3rt::decode_sample_words(rom.samples)))
+        << "Audio must be supported for Land Maker sound ROM";
     using Kind = f3rt::hle::VoiceEvent::Kind;
 
     struct Fixture {
@@ -41,14 +38,9 @@ TEST(HleAudio, StateAndSequencing) {
         std::thread::id main_thread = std::this_thread::get_id();
         bool worker_only = true;
         f3rt::Audio audio;
-        explicit Fixture(const f3rt::RomSet &r) {
-            audio.load_sound_rom(r.sound);
-            audio.load_sample_rom(r.samples);
-            audio.set_shared_ram(shared.data());
-            audio.set_backend(f3rt::Audio::Backend::Enhanced);
-            audio.set_cpu_runner(
-                [](int) -> int { throw std::runtime_error("HLE executed sound CPU"); });
-            audio.set_hle_observer([this](const auto &event) {
+        explicit Fixture(const f3rt::RomSet &r)
+            : audio(r.sound, f3rt::decode_sample_words(r.samples), shared.data()) {
+            audio.set_voice_observer([this](const auto &event) {
                 worker_only &= std::this_thread::get_id() != main_thread;
                 events.push_back(event);
             });
@@ -224,4 +216,21 @@ TEST(HleAudio, StateAndSequencing) {
         }
         EXPECT_EQ(big_spikes, 0) << "non-looping sample end produced transient click spikes";
     }
+
+    // 7. Header flag bit 1 makes a standalone song restart at its last bar; without it the song ends.
+    // Song $0f (sound-test 0x56) is 32 bars at rate 119, about 66 s; song $0a (0x53) is 22 bars, about 36 s.
+    auto audible_between = [&](unsigned song, unsigned from_s, unsigned to_s) {
+        Fixture f(rom);
+        f.packet({3, 0x81, uint8_t(song)});
+        bool audible = false;
+        for (unsigned frame = 0; frame < to_s * 60; ++frame) {
+            const auto samples = f.step();
+            if (frame < from_s * 60) continue;
+            audible |=
+                std::any_of(samples.begin(), samples.end(), [](int16_t v) { return v != 0; });
+        }
+        return audible;
+    };
+    EXPECT_TRUE(audible_between(0x0f, 70, 90)) << "looping song ended instead of restarting";
+    EXPECT_FALSE(audible_between(0x0a, 50, 60)) << "non-looping song kept playing";
 }

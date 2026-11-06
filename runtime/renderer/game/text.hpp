@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/game/ram_shadow.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
@@ -21,8 +22,8 @@ public:
     GameText() { reset(); }
     void reset();
     // Copy the raw text map and glyph RAM from VRAM at VBSTART. Shared; defined
-    // in runtime/renderer/game/text.cpp.
     void decode(const VideoRam &vram);
+    uint64_t version() const { return m_version; }
 
     // Raw text-map word bit layout (shared with the GPU decode in
     // runtime/renderer/shaders/scene_body.glsl):
@@ -55,15 +56,29 @@ public:
 
     // Raw snapshot regions (see above), for snapshot consumers.
     std::span<const uint16_t, 4096> map() const { return m_map; }
-    std::span<uint16_t, 4096> map() { return m_map; }
+    std::span<uint16_t, 4096> map() {
+        touch();
+        return m_map;
+    }
     std::span<const uint8_t, 0x2000> glyphs() const { return m_glyph_ram; }
-    std::span<uint8_t, 0x2000> glyphs() { return m_glyph_ram; }
+    std::span<uint8_t, 0x2000> glyphs() {
+        touch();
+        return m_glyph_ram;
+    }
 
 private:
     friend class GameVideo;
     std::array<uint16_t, 4096> m_map{};
     std::array<uint8_t, 0x2000> m_glyph_ram{};
     uint64_t m_row_used = 0; // bit r: text row r has a nonzero tile code
+    RamShadow<sizeof(uint16_t) * 4096> m_shadow_map;
+    RamShadow<0x2000> m_shadow_glyphs;
+    uint64_t m_version = fresh_content_version();
+    void touch() {
+        m_shadow_map.invalidate();
+        m_shadow_glyphs.invalidate();
+        m_version = fresh_content_version();
+    }
 };
 static_assert(SceneSource<GameText>);
 

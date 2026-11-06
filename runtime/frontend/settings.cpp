@@ -1,27 +1,15 @@
 #include "settings.hpp"
+#include "config_file.hpp"
 #include "f3rt/audio.hpp"
 #include "rom_manifest.hpp"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 namespace f3rt {
-bool audio_backend_available(AudioBackend backend) {
-    return backend == AudioBackend::Enhanced || backend == AudioBackend::Reference;
-}
-const char *audio_backend_name(AudioBackend backend) {
-    switch (backend) {
-    case AudioBackend::Enhanced:
-        return "enhanced";
-    case AudioBackend::Reference:
-        return "reference";
-    }
-    return "unknown";
-}
 FrontendSettings::FrontendSettings() {
     const std::array<SDL_Scancode, LOCAL_CONTROL_COUNT> p1 = {
         SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_Z,
@@ -62,7 +50,6 @@ bool choice(const std::string &s, std::initializer_list<const char *> values) {
     return false;
 }
 bool valid(const FrontendSettings &s) {
-    if (!audio_backend_available(s.audio_backend)) return false;
     if (!choice(s.renderer, {"accurate", "enhanced"}) ||
         !choice(s.video_scale, {"1", "2", "3", "4", "auto", "auto-integer"}) || s.border > 160 ||
         !choice(s.filter, {"nearest", "linear"}) ||
@@ -86,122 +73,92 @@ bool valid(const FrontendSettings &s) {
     }
     return true;
 }
-bool integer(const std::string &s, int &v) {
+bool integer(std::string_view s, int &v) {
     auto r = std::from_chars(s.data(), s.data() + s.size(), v);
     return r.ec == std::errc{} && r.ptr == s.data() + s.size();
 }
 } // namespace
 bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
                             std::string &error) {
-    error.clear();
-    std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
-        if (ec) error = ec.message();
-        return !ec;
-    }
-    if (std::filesystem::file_size(path, ec) > 32768 || ec) {
-        error = "Config exceeds 32 KiB or is unreadable";
-        return false;
-    }
-    std::ifstream file(path);
-    if (!file) {
-        error = "Cannot read config";
-        return false;
-    }
     auto s = settings;
-    std::string line;
-    unsigned count = 0;
-    while (std::getline(file, line)) {
-        if (++count > 512 || line.size() > 1024) {
-            error = "Config limits exceeded";
-            return false;
-        }
-        if (line.empty() || line[0] == '#') continue;
-        auto split = line.find('=');
-        if (split == std::string::npos) {
-            error = "Invalid config line";
-            return false;
-        }
-        const auto k = line.substr(0, split), v = line.substr(split + 1);
-        int n = 0;
-        if (k == "renderer") s.renderer = v;
-        else if (k == "scale") s.video_scale = v;
-        else if (k == "filter") s.filter = v;
-        else if (k == "interpolation") s.interpolation = v;
-        else if (k == "fields") s.interpolation_fields = v;
-        else if (k == "postprocess") s.postprocess = v;
-        else if (k == "user_shader") s.user_shader = v;
-        else if (k == "sprite_behaviour" || k == "video" || k == "backend") {
-        } // retired options (video/backend: replaced by renderer): ignored, old files still carry the keys
-        else if (k == "audio") {
-            if (v == "enhanced") s.audio_backend = AudioBackend::Enhanced;
-            else if (v == "reference") s.audio_backend = AudioBackend::Reference;
-            else {
-                error = "Unknown audio backend";
+    const bool read = read_config(
+        path,
+        [&](std::string_view key, std::string_view value, std::string &reject) {
+            int n = 0;
+            if (key == "renderer") s.renderer = value;
+            else if (key == "scale") s.video_scale = value;
+            else if (key == "filter") s.filter = value;
+            else if (key == "interpolation") s.interpolation = value;
+            else if (key == "fields") s.interpolation_fields = value;
+            else if (key == "postprocess") s.postprocess = value;
+            else if (key == "user_shader") s.user_shader = value;
+            else if (key == "sprite_behaviour" || key == "video" || key == "backend" ||
+                     key == "audio") {
+            } else if (key == "volume") {
+                std::istringstream in{std::string(value)};
+                in >> s.volume;
+                if (!in || in.peek() != EOF) {
+                    reject = "Invalid volume";
+                    return false;
+                }
+            } else if (key == "motion_interp") {
+                if (value != "on" && value != "off") {
+                    reject = "Invalid motion interpolation setting";
+                    return false;
+                }
+                s.motion_interp = value == "on";
+            } else if (key == "fast_boot" || key == "boot_cache") {
+                if (value != "on" && value != "off") {
+                    reject = "Invalid fast boot setting";
+                    return false;
+                }
+                (key == "fast_boot" ? s.fast_boot : s.boot_cache) = value == "on";
+            } else if (key == "netplay_server") s.netplay_server = value;
+            else if (key == "netplay_name") s.netplay_name = value;
+            else if (key == "netplay_delay") {
+                if (!integer(value, n) || n < 1 || n > 8) {
+                    reject = "Invalid netplay delay";
+                    return false;
+                }
+                s.netplay_delay = uint8_t(n);
+            } else if (key == "border") {
+                if (!integer(value, n) || n < 0) {
+                    reject = "Invalid numeric setting";
+                    return false;
+                }
+                s.border = n;
+            } else if (key.size() == 7 && key.substr(0, 6) == "device" && key[6] >= '0' &&
+                       unsigned(key[6] - '0') < s.profiles.size()) {
+                if (!integer(value, n)) {
+                    reject = "Invalid device slot";
+                    return false;
+                }
+                s.profiles[key[6] - '0'].device_slot = n;
+            } else if (key.starts_with("binding")) {
+                unsigned p = 0, c = 0;
+                char dot = 0;
+                std::istringstream name{std::string(key.substr(7))};
+                name >> p >> dot >> c;
+                InputBinding b;
+                int key_code;
+                std::istringstream in{std::string(value)};
+                in >> key_code >> b.button >> b.axis >> b.direction;
+                if (!name || dot != '.' || name.peek() != EOF || p >= s.profiles.size() ||
+                    c >= LOCAL_CONTROL_COUNT || !in || in.peek() != EOF) {
+                    reject = "Invalid binding";
+                    return false;
+                }
+                b.key = SDL_Scancode(key_code);
+                s.profiles[p].controls[c] = b;
+            } else {
+                reject = "Unknown config setting: " + std::string(key);
                 return false;
             }
-        } else if (k == "volume") {
-            std::istringstream in(v);
-            in >> s.volume;
-            if (!in || in.peek() != EOF) {
-                error = "Invalid volume";
-                return false;
-            }
-        } else if (k == "motion_interp") {
-            if (v != "on" && v != "off") {
-                error = "Invalid motion interpolation setting";
-                return false;
-            }
-            s.motion_interp = v == "on";
-        } else if (k == "fast_boot" || k == "boot_cache") {
-            if (v != "on" && v != "off") {
-                error = "Invalid fast boot setting";
-                return false;
-            }
-            (k == "fast_boot" ? s.fast_boot : s.boot_cache) = v == "on";
-        } else if (k == "netplay_server") s.netplay_server = v;
-        else if (k == "netplay_name") s.netplay_name = v;
-        else if (k == "netplay_delay") {
-            if (!integer(v, n) || n < 1 || n > 8) {
-                error = "Invalid netplay delay";
-                return false;
-            }
-            s.netplay_delay = uint8_t(n);
-        } else if (k == "border") {
-            if (!integer(v, n) || n < 0) {
-                error = "Invalid numeric setting";
-                return false;
-            }
-            s.border = n;
-        } else if (k.size() == 7 && k.substr(0, 6) == "device" && k[6] >= '0' &&
-                   unsigned(k[6] - '0') < s.profiles.size()) {
-            if (!integer(v, n)) {
-                error = "Invalid device slot";
-                return false;
-            }
-            s.profiles[k[6] - '0'].device_slot = n;
-        } else if (k.starts_with("binding")) {
-            unsigned p = 0, c = 0;
-            char dot = 0;
-            std::istringstream name(k.substr(7));
-            name >> p >> dot >> c;
-            InputBinding b;
-            int key;
-            std::istringstream in(v);
-            in >> key >> b.button >> b.axis >> b.direction;
-            if (!name || dot != '.' || name.peek() != EOF || p >= s.profiles.size() ||
-                c >= LOCAL_CONTROL_COUNT || !in || in.peek() != EOF) {
-                error = "Invalid binding";
-                return false;
-            }
-            b.key = SDL_Scancode(key);
-            s.profiles[p].controls[c] = b;
-        } else {
-            error = "Unknown config setting: " + k;
-            return false;
-        }
-    }
-    if (file.bad() || !valid(s)) {
+            return true;
+        },
+        error);
+    if (!read) return false;
+    if (!valid(s)) {
         error = "Invalid config values";
         return false;
     }
@@ -215,52 +172,26 @@ bool save_frontend_settings(const std::string &path, const FrontendSettings &s,
         error = "Invalid config path or values";
         return false;
     }
-    std::error_code ec;
-    auto target = std::filesystem::path(path);
-    if (!target.parent_path().empty())
-        std::filesystem::create_directories(target.parent_path(), ec);
-    if (ec) {
-        error = ec.message();
-        return false;
-    }
-    // Same-directory temporary file keeps replacement atomic.
-    std::string tmp = path + ".tmp." + std::to_string(SDL_GetTicksNS());
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        error = "Cannot create config temporary file";
-        return false;
-    }
-    out << "# f3rt settings, Dear ImGui frontend\nrenderer=" << s.renderer
-        << "\nscale=" << s.video_scale << "\nborder=" << s.border << "\nfilter=" << s.filter
-        << "\ninterpolation=" << s.interpolation << "\nfields=" << s.interpolation_fields
-        << "\naudio=" << audio_backend_name(s.audio_backend) << "\nvolume=" << s.volume << '\n';
-    out << "postprocess=" << s.postprocess << "\nuser_shader=" << s.user_shader << '\n';
-    out << "motion_interp=" << (s.motion_interp ? "on" : "off") << '\n';
-    out << "fast_boot=" << (s.fast_boot ? "on" : "off")
-        << "\nboot_cache=" << (s.boot_cache ? "on" : "off") << '\n';
-    out << "netplay_server=" << s.netplay_server << "\nnetplay_name=" << s.netplay_name
-        << "\nnetplay_delay=" << int(s.netplay_delay) << '\n';
+    std::ostringstream text;
+    text << "# f3rt settings, Dear ImGui frontend\nrenderer=" << s.renderer
+         << "\nscale=" << s.video_scale << "\nborder=" << s.border << "\nfilter=" << s.filter
+         << "\ninterpolation=" << s.interpolation << "\nfields=" << s.interpolation_fields
+         << "\nvolume=" << s.volume << '\n';
+    text << "postprocess=" << s.postprocess << "\nuser_shader=" << s.user_shader << '\n';
+    text << "motion_interp=" << (s.motion_interp ? "on" : "off") << '\n';
+    text << "fast_boot=" << (s.fast_boot ? "on" : "off")
+         << "\nboot_cache=" << (s.boot_cache ? "on" : "off") << '\n';
+    text << "netplay_server=" << s.netplay_server << "\nnetplay_name=" << s.netplay_name
+         << "\nnetplay_delay=" << int(s.netplay_delay) << '\n';
     for (unsigned p = 0; p < s.profiles.size(); ++p) {
-        out << "device" << p << '=' << s.profiles[p].device_slot << '\n';
+        text << "device" << p << '=' << s.profiles[p].device_slot << '\n';
         for (unsigned c = 0; c < LOCAL_CONTROL_COUNT; ++c) {
             const auto &b = s.profiles[p].controls[c];
-            out << "binding" << p << '.' << c << '=' << int(b.key) << ' ' << b.button << ' '
-                << b.axis << ' ' << b.direction << '\n';
+            text << "binding" << p << '.' << c << '=' << int(b.key) << ' ' << b.button << ' '
+                 << b.axis << ' ' << b.direction << '\n';
         }
     }
-    out.close();
-    if (!out) {
-        error = "Cannot write config";
-        std::filesystem::remove(tmp, ec);
-        return false;
-    }
-    std::filesystem::rename(tmp, target, ec);
-    if (ec) {
-        error = ec.message();
-        std::filesystem::remove(tmp, ec);
-        return false;
-    }
-    return true;
+    return write_config_atomic(path, text.str(), error);
 }
 InputMapper::InputMapper(const FrontendSettings &s) : m_profiles(s.profiles) {
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);

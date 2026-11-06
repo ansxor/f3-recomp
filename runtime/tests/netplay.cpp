@@ -303,7 +303,7 @@ TEST(NetplayRecorder, InfoJsonReadsBundleFields) {
   "bundle_version": 2,
   "hash_layout": 2,
   "machine_gpu": 1,
-  "audio_backend": "Enhanced \"x\"",
+  "unknown_key": "x \"y\"",
   "seed": 12345678901234,
   "frame": 1740,
   "crc_interval": 60,
@@ -326,10 +326,6 @@ TEST(NetplayRecorder, InfoJsonReadsBundleFields) {
     EXPECT_EQ(info.player_index.value_or(0), 1u);
     EXPECT_EQ(info.machine_gpu.value_or(0), 1u);
     EXPECT_EQ(info.hash_layout.value_or(0), 2u);
-    if (!info.audio_backend.has_value()) {
-        FAIL() << "audio_backend missing from parsed info.json";
-    }
-    EXPECT_EQ(*info.audio_backend, "Enhanced \"x\"");
 
     EXPECT_FALSE(
         parse_info_json("{\"seed\": \"12\"}").seed.has_value()); // wrong JSON type stays absent

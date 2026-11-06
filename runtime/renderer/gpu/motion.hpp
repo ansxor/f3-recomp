@@ -1,6 +1,6 @@
 #pragma once
 #include "f3rt/game_video.hpp"
-#include "renderer/game/captured_frame.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/clip.hpp"
 #include <array>
 #include <span>
@@ -25,7 +25,7 @@ struct MotionInterpolationStats {
 };
 // Temporal geometry for one present: the scene's motion-affected fields at
 // the sampled alpha, in 24.8 fixed point. Initialized to the canonical frame
-// values, so any field motion did not accept equals the captured one. Text
+// values, so any field motion did not accept equals the snapshot one. Text
 // scroll is carried here because SceneRow only holds integer scroll.
 struct MotionState {
     struct Row {
@@ -33,7 +33,7 @@ struct MotionState {
         std::array<int32_t, 4> phase{};    // playfield source_y * 256 + y_fraction
         int32_t text_x = 0, text_y = 0;
     };
-    std::array<int32_t, CapturedFrame::MAX_SPRITES> sprite_x{}, sprite_y{};
+    std::array<int32_t, SceneSnapshot::MAX_SPRITES> sprite_x{}, sprite_y{};
     std::array<Row, 256> rows{};
 };
 struct MotionResult {
@@ -48,9 +48,9 @@ public:
     // GPU encoder does, so history compares the same visible ranges.
     explicit GpuMotionHistory(GameVideoOptions options = {}) noexcept
         : m_border(int(options.border)) {}
-    void capture(const CapturedFrame &frame, uint64_t frame_id) noexcept;
+    void capture(const SceneSnapshot &frame, uint64_t frame_id) noexcept;
     void reset() noexcept;
-    MotionResult apply(const CapturedFrame &frame, float alpha) const noexcept;
+    MotionResult apply(const SceneSnapshot &frame, float alpha) const noexcept;
 
 private:
     struct Sprite {
@@ -67,7 +67,7 @@ private:
     };
     ClipRanges ranges(const SceneRow &row, LayerId id) const noexcept;
     bool same_controls(const SceneRow &a, const SceneRow &b, LayerId id) const noexcept;
-    std::array<Sprite, CapturedFrame::MAX_SPRITES> m_sprites{};
+    std::array<Sprite, SceneSnapshot::MAX_SPRITES> m_sprites{};
     std::array<Row, geometry::HEIGHT> m_rows{};
     uint64_t m_frame = 0;
     unsigned m_sprite_count = 0;

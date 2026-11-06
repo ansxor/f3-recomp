@@ -40,6 +40,9 @@ constexpr uint8_t EV_END = 0xe9;
 // Arrangement marker
 constexpr uint16_t ARRANGEMENT_LOOP_MARKER = 100;
 
+// Header flags (+1) bit 1: a standalone song restarts at its last bar.
+constexpr uint8_t SEQ_FLAG_LOOP = 0x02;
+
 [[noreturn]] inline void invalid(const char *message) { throw std::runtime_error(message); }
 
 // The sequence-addressed commands share the alias walk and the active-sequence gate; these express that
@@ -454,7 +457,8 @@ struct Sequencer::Impl {
     }
 
     void dispatch_command(const EffectParameter &command, uint64_t, uint64_t tick) {
-        mailbox.push(EffectEvent{EffectEvent::Kind::Parameter, tick, 0, command.index, command.value});
+        mailbox.push(
+            EffectEvent{EffectEvent::Kind::Parameter, tick, 0, command.index, command.value});
     }
 
     template <AddressedCommand C>
@@ -541,7 +545,8 @@ struct Sequencer::Impl {
             }
             finish_sequence(id, tick);
         } else if constexpr (std::is_same_v<C, SequenceVolume>) {
-            mailbox.push(TrackEvent{TrackEventKind::SequenceVolume, tick, id, 0, 0, command.volume});
+            mailbox.push(
+                TrackEvent{TrackEventKind::SequenceVolume, tick, id, 0, 0, command.volume});
         } else if constexpr (std::is_same_v<C, SequencePan>) {
             mailbox.push(TrackEvent{TrackEventKind::SequencePan, tick, id, 0, 0, command.value});
         } else if constexpr (std::is_same_v<C, SequenceRate>) {
@@ -644,7 +649,8 @@ struct Sequencer::Impl {
             track.status = can_stream ? TrackStatus::Streaming : TrackStatus::Inactive;
             // c13ef6 re-sends the track record: voices of this track still sounding pick it up before the
             // pulse's own events are applied.
-            if (track.is_live()) mailbox.push(TrackEvent{TrackEventKind::Refresh, tick, owner, uint8_t(t)});
+            if (track.is_live())
+                mailbox.push(TrackEvent{TrackEventKind::Refresh, tick, owner, uint8_t(t)});
         }
 
         if (!s.rate_override) {
@@ -797,6 +803,8 @@ struct Sequencer::Impl {
                     return;
                 }
             }
+            initialize_tracks(id, id, tick);
+        } else if (song.flags & SEQ_FLAG_LOOP) {
             initialize_tracks(id, id, tick);
         } else {
             finish_sequence(id, tick);

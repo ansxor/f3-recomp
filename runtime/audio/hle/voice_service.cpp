@@ -167,6 +167,7 @@ unsigned VoiceService::allocate(const NoteOnEvent &n, const Patch &patch, unsign
 }
 
 void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, const Track &track, uint64_t at) {
+    ++m_launched;
     const int kernel = track.config.parameters.transposed_key(n.kernel_key);
     const int weight = patch.weight(n, kernel);
     if (weight < 0) return;
@@ -233,6 +234,13 @@ void VoiceService::begin(const NoteOnEvent &n, const Patch &patch, const Track &
     emit(v, VoiceEvent::Kind::Start, at, &onset);
     if (step.parameters) emit(v, VoiceEvent::Kind::Parameters, at);
 #endif
+}
+
+unsigned VoiceService::active_voices() const {
+    unsigned count = 0;
+    for (const auto &voice : m_voices)
+        if (voice.active) ++count;
+    return count;
 }
 
 void VoiceService::launch(const NoteOnEvent &n, const Patch &patch, const Track &track, uint64_t start) {

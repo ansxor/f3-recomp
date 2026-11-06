@@ -1,7 +1,10 @@
 #pragma once
 #include "renderer/game/scene.hpp"
+#include "renderer/game/row_bits.hpp"
+#include "renderer/game/row_workers.hpp"
 #include "f3rt/game_video.hpp"
 #include "sprites/presentation.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -12,16 +15,99 @@ class StateWriter;
 class StateReader;
 
 struct SpriteRasterOptions {
-    GameVideoOptions geometry{}; // {} = native 432x256 plane
-    bool flipped = false;        // flipscreen row phase
-    bool accumulate = false;     // sprite trails: keep the existing plane contents
+    GameVideoOptions geometry{};
+    bool flipped = false;
 };
-// Indexed sprite plane from a latched list. Sprite 0 is the front-most;
-// GameSprites::raster() delegates here, and CapturedFrame sprite lists use it
-// for reference-scale planes.
+constexpr size_t sprite_plane_size(GameVideoOptions geometry) {
+    return geometry.expanded() ? size_t(geometry.width()) * geometry.height() : size_t(432) * 256;
+}
+enum class SpriteTrails : bool { Off, On };
+
 void raster_sprites(std::span<const SceneSprite> sprites, uint8_t pen_mask,
                     std::span<const uint8_t> assets, std::span<uint16_t> output,
-                    SpriteRasterOptions options = {});
+                    SpriteRasterOptions options = {}, SpriteTrails trails = SpriteTrails::Off);
+
+class SpriteCoverage {
+public:
+    static constexpr unsigned LAYERS = 4;
+    static constexpr unsigned words_for(GameVideoOptions geometry) {
+        return (geometry.width() + 31) / 32 + 1;
+    }
+
+    class Row {
+    public:
+        uint8_t layers() const { return *m_layers; }
+        bool covers(unsigned layer) const { return (*m_layers >> layer) & 1u; }
+        unsigned word_count() const { return m_words; }
+        std::span<const uint32_t> columns(unsigned layer) const {
+            return {m_bits + size_t(layer) * m_words, m_words};
+        }
+
+        uint32_t covered_word(unsigned word) const {
+            uint32_t held = 0;
+            for (unsigned mask = *m_layers; mask; mask &= mask - 1)
+                held |= m_bits[size_t(__builtin_ctz(mask)) * m_words + word];
+            return held;
+        }
+        [[gnu::always_inline]] uint32_t covered(unsigned column, unsigned len) const {
+            uint32_t held = 0;
+            for (unsigned mask = *m_layers; mask; mask &= mask - 1)
+                held |= extract_columns(m_bits + size_t(__builtin_ctz(mask)) * m_words, int(column),
+                                        len);
+            return held;
+        }
+
+        void mark(unsigned layer, unsigned column, uint32_t bits) const {
+            *m_layers |= uint8_t(1u << layer);
+            set_columns(m_bits + size_t(layer) * m_words, int(column), bits);
+        }
+        void mark_word(unsigned layer, unsigned word, uint32_t bits) const {
+            *m_layers |= uint8_t(1u << layer);
+            m_bits[size_t(layer) * m_words + word] |= bits;
+        }
+        void clear() const {
+            *m_layers = 0;
+            std::fill_n(m_bits, size_t(LAYERS) * m_words, 0u);
+        }
+
+    private:
+        friend class SpriteCoverage;
+        Row(uint8_t *layer_flags, uint32_t *bits, unsigned words)
+            : m_layers(layer_flags), m_bits(bits), m_words(words) {}
+
+        uint8_t *m_layers;
+        uint32_t *m_bits;
+        unsigned m_words;
+    };
+
+    SpriteCoverage(GameVideoOptions geometry, std::span<uint8_t> layers, std::span<uint32_t> bits)
+        : m_words(words_for(geometry)), m_layers(layers), m_bits(bits) {}
+
+    Row row(unsigned plane_row) const {
+        return Row(m_layers.data() + plane_row,
+                   m_bits.data() + size_t(plane_row) * LAYERS * m_words, m_words);
+    }
+
+private:
+    unsigned m_words;
+    std::span<uint8_t> m_layers;
+    std::span<uint32_t> m_bits;
+};
+
+class SpriteBins {
+public:
+    void bin(std::span<const SceneSprite> sprites, SpriteRasterOptions options);
+    unsigned chunk_count() const { return unsigned(m_chunks.size()); }
+    std::span<const uint16_t> chunk(unsigned chunk) const { return m_chunks[chunk]; }
+
+private:
+    std::vector<std::vector<uint16_t>> m_chunks;
+};
+
+void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites,
+                         unsigned chunk, uint8_t pen_mask, std::span<const uint8_t> assets,
+                         std::span<uint16_t> plane, SpriteRasterOptions options,
+                         SpriteCoverage &coverage);
 
 class GameSprites {
 public:

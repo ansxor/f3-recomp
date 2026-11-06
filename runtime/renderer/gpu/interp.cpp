@@ -61,7 +61,7 @@ unsigned rgb_jump(uint32_t a, uint32_t b) {
 }
 // Conservative endpoint-bounded tile footprint, including border and fractional taps.
 // Every bank traversed by the polynomial is checked against actual tile pen sets.
-bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsigned pf,
+bool safe_palette(const SceneSnapshot &frame, const Row &a, const Row &b, unsigned pf,
                   unsigned stride, GameVideoOptions options, std::span<const uint64_t> masks) {
     if (masks.empty()) return false;
     const int pf_period = (f3rt::game_config::video.extend ? 1024 : 512) * 256;
@@ -105,7 +105,7 @@ bool safe_palette(const CapturedFrame &frame, const Row &a, const Row &b, unsign
 }
 } // namespace
 
-InterpolationAnalysis analyze_gpu_interpolation(const CapturedFrame &frame,
+InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                                                 GameVideoOptions options, VideoInterpolation mode,
                                                 InterpolationFields fields,
                                                 const MotionState *motion,

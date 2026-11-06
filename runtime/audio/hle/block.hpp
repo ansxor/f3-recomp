@@ -509,8 +509,6 @@ struct alignas(64) PlanarAudioBlock {
 
     T **data() noexcept { return ptrs; }
     const T *const *data() const noexcept { return ptrs; }
-    operator T **() noexcept { return ptrs; }
-    operator const T *const *() const noexcept { return ptrs; }
 
     T *operator[](size_t channel) noexcept { return ptrs[channel]; }
     const T *operator[](size_t channel) const noexcept { return ptrs[channel]; }

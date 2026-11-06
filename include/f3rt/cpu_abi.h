@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define F3RT_ABI_VERSION 5u
+#define F3RT_ABI_VERSION 6u
 
 /* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
  * stacks. All addresses/registers are host integers; bus accesses are big-endian.
@@ -30,6 +30,17 @@ typedef struct
      * Native blocks yield between instructions when due. */
     uint64_t dispatch_deadline;
     void *runtime;
+    /* Direct memory windows for generated main-CPU code (recomp/cpu_ops.h f3_ld*,
+     * f3_st*). A NULL pointer or zero size sends every access through the f3_read*
+     * and f3_write* callbacks, as for replay sandboxes and synthetic test CPUs.
+     * ram: 128 KiB main work RAM, 4-byte aligned, mirrored across 0x400000..0x43ffff.
+     * ram_writer: last-writer pc per RAM halfword (offset >> 1), or NULL when no
+     * sprite unit reads writer attribution. rom: program ROM, readable below
+     * rom_size. All three must mirror what f3_read and f3_write would access. */
+    uint8_t *ram;
+    uint32_t *ram_writer;
+    const uint8_t *rom;
+    uint32_t rom_size;
 } f3_cpu;
 
 /* Condition Code Operations for Lazy Evaluation */
@@ -131,6 +142,14 @@ uint32_t f3_read32(f3_cpu *cpu, uint32_t address);
 void f3_write8(f3_cpu *cpu, uint32_t address, uint8_t value);
 void f3_write16(f3_cpu *cpu, uint32_t address, uint16_t value);
 void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value);
+
+/* Direct access to main work RAM for idle-loop fast-forward (recomp/idle.py):
+ * a pointer to `size` contiguous bytes at `address`, or NULL when the range is
+ * not plain RAM (device, mirror wrap, ROM) or cpu is a replay sandbox. Loads
+ * and stores through it have no bus side effects, but a store bypasses
+ * sprite-unit writer attribution: callers must repeat the store through
+ * f3_write* (or replay the same instruction natively) before it can matter. */
+uint8_t *f3_ram(f3_cpu *cpu, uint32_t address, uint32_t size);
 
 /* Only the memory callbacks above accept pending lazy flags; every callback
  * below requires canonical SR (generated code flushes first). */

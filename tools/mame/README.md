@@ -138,10 +138,6 @@ the advertised OTIS integer stream rate (29761 Hz with 32 voices). Compare
 after accounting for output resampling and latency, not by WAV byte identity.
 Native-game audio must be checked separately against the baseline.
 
-The default gain model reproduces observed MAME routing. Embedders may select
-`Audio::GainModel::SingleStage` explicitly to investigate analog attenuation;
-that alternative is not claimed to match the physical board.
-
 ### Reproducible waveform metrics
 
 `f3 compare audio` requires NumPy and SciPy in the analysis Python

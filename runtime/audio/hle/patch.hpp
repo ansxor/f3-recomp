@@ -33,7 +33,6 @@ enum class ModSource : uint8_t {
 
 enum class AllocationMode : uint8_t { Poly = 0, Retrigger = 1, Legato = 2, LegatoHold = 3 };
 
-// Filter stage order, matching voice_filter: bits 6..7 of the layer flags.
 // Bit 7 also selects the k2 coefficient half (set = offset 0, clear = 1024),
 // so modes 2 and 3 use the low half and modes 0 and 1 the high half.
 enum class FilterMode : uint8_t { LpLpHpHp = 0, LpLpLpHp = 1, LpLpLp2Lp2 = 2, LpLpLpLp2 = 3 };

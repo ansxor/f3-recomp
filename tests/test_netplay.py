@@ -93,8 +93,7 @@ def find_rom_dir() -> Path | None:
 
 def find_tool_binary() -> Path | None:
     candidates = [
-        ROOT / "build-landmakrj/f3rt-tool",
-        ROOT / "build/f3rt-tool",
+        ROOT / "build/landmakrj/f3rt-tool",
     ]
     for c in candidates:
         if c.is_file() and os.access(c, os.X_OK):

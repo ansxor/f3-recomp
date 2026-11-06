@@ -22,7 +22,6 @@ struct UiAction {
 };
 struct FrontendUiState {
     bool gpu_available = false;
-    bool enhanced_audio_available = true;
     std::string status = "Solo", message;
     std::string active_postprocess = "off";
     std::string

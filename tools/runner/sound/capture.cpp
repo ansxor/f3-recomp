@@ -119,10 +119,6 @@ std::unique_ptr<MachineRunner> boot_to_freeze(const RunnerConfig &cfg, uint64_t 
                                               bool record_boot_wav) {
     auto runner = std::make_unique<MachineRunner>(cfg);
     auto &m = runner->machine();
-    if (cfg.audio_backend == Audio::Backend::Enhanced &&
-        !m.audio->backend_available(Audio::Backend::Enhanced)) {
-        throw std::runtime_error("Enhanced audio is not supported for this game");
-    }
     for (uint64_t f = 0; f < boot_frames; ++f) {
         if (!m.run_frame(/*translated=*/false) || m.cpu.halted) {
             std::ostringstream error;
@@ -158,8 +154,7 @@ PostBootSnapshot take_post_boot_snapshot(Machine &m) {
     PostBootSnapshot snapshot;
     snapshot.state.resize(m.state_size());
     m.save_state(snapshot.state);
-    snapshot.boot_commands =
-        m.audio->backend() == Audio::Backend::Enhanced ? m.audio->enhanced_stats().commands : 0;
+    snapshot.boot_commands = m.audio->performance_stats().commands;
     return snapshot;
 }
 
@@ -185,16 +180,11 @@ std::span<const uint8_t> boot_packet_stream(const Machine &m, uint64_t boot_comm
 
 void restore_post_boot(std::unique_ptr<MachineRunner> &runner, const RunnerConfig &cfg,
                        const PostBootSnapshot &snapshot) {
-    if (cfg.audio_backend == Audio::Backend::Enhanced) {
-        runner = std::make_unique<MachineRunner>(cfg);
-        auto &m = runner->machine();
-        m.load_state(snapshot.state);
-        m.audio->set_reset(true);
-        m.audio->set_reset(false);
-    } else {
-        runner->machine().load_state(snapshot.state);
-    }
+    runner = std::make_unique<MachineRunner>(cfg);
     auto &m = runner->machine();
+    m.load_state(snapshot.state);
+    m.audio->set_reset(true);
+    m.audio->set_reset(false);
     m.cpu.cycles = m.audio->clock_ticks();
 }
 

@@ -69,7 +69,7 @@ void GpuMotionHistory::reset() noexcept {
     m_captured = m_paired = false;
     m_frame = 0;
 }
-void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexcept {
+void GpuMotionHistory::capture(const SceneSnapshot &scene, uint64_t frame) noexcept {
     if (scene.fallback || scene.sprite_count > m_sprites.size()) {
         reset();
         return;
@@ -95,18 +95,18 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
     // (tile, palette) groups with mutually unique nearest positions within 32 px; tile
     // animation deliberately snaps there. Those fallback matches are not identity matches
     // (by_identity), so they also go through the per-object rigid check below.
-    std::array<unsigned, CapturedFrame::MAX_SPRITES> matches;
-    std::array<bool, CapturedFrame::MAX_SPRITES> by_identity{};
+    std::array<unsigned, SceneSnapshot::MAX_SPRITES> matches;
+    std::array<bool, SceneSnapshot::MAX_SPRITES> by_identity{};
     const auto &current = scene.sprites;
     bool sprites_changed = m_sprite_count != scene.sprite_count;
     for (unsigned i = 0; m_paired && !sprites_changed && i < scene.sprite_count; ++i)
         sprites_changed = current[i] != m_sprites[i].value;
     if (m_paired && sprites_changed) {
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> old_order, new_order, old_ids, new_ids;
+        std::array<unsigned, SceneSnapshot::MAX_SPRITES> old_order, new_order, old_ids, new_ids;
         unsigned old_n = 0, new_n = 0, old_id_n = 0, new_id_n = 0;
-        matches.fill(CapturedFrame::MAX_SPRITES);
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> demoted;
-        demoted.fill(CapturedFrame::MAX_SPRITES);
+        matches.fill(SceneSnapshot::MAX_SPRITES);
+        std::array<unsigned, SceneSnapshot::MAX_SPRITES> demoted;
+        demoted.fill(SceneSnapshot::MAX_SPRITES);
         for (unsigned i = 0; i < m_sprite_count; ++i) {
             if (m_sprites[i].value.identity) old_ids[old_id_n++] = i;
             else old_order[old_n++] = i;
@@ -167,7 +167,7 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
                   [&](unsigned a, unsigned b) { return key(current[a]) < key(current[b]); });
         old = 0;
         now = 0;
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> old_nearest, new_nearest, old_distance,
+        std::array<unsigned, SceneSnapshot::MAX_SPRITES> old_nearest, new_nearest, old_distance,
             new_distance;
         while (old < old_n && now < new_n) {
             const uint64_t a = key(m_sprites[old_order[old]].value),
@@ -187,11 +187,11 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
                 matches[new_order[now]] = old_order[old];
             } else {
                 for (unsigned p = old; p < old_end; ++p) {
-                    old_nearest[p] = CapturedFrame::MAX_SPRITES;
+                    old_nearest[p] = SceneSnapshot::MAX_SPRITES;
                     old_distance[p] = std::numeric_limits<unsigned>::max();
                 }
                 for (unsigned n = now; n < now_end; ++n) {
-                    new_nearest[n] = CapturedFrame::MAX_SPRITES;
+                    new_nearest[n] = SceneSnapshot::MAX_SPRITES;
                     new_distance[n] = std::numeric_limits<unsigned>::max();
                     const auto &v = current[new_order[n]];
                     for (unsigned p = old; p < old_end; ++p) {
@@ -205,16 +205,16 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
                             old_distance[p] = distance;
                             old_nearest[p] = n;
                         } else if (distance == old_distance[p])
-                            old_nearest[p] = CapturedFrame::MAX_SPRITES;
+                            old_nearest[p] = SceneSnapshot::MAX_SPRITES;
                         if (distance < new_distance[n]) {
                             new_distance[n] = distance;
                             new_nearest[n] = p;
                         } else if (distance == new_distance[n])
-                            new_nearest[n] = CapturedFrame::MAX_SPRITES;
+                            new_nearest[n] = SceneSnapshot::MAX_SPRITES;
                     }
                 }
                 for (unsigned n = now; n < now_end; ++n)
-                    if (new_nearest[n] != CapturedFrame::MAX_SPRITES &&
+                    if (new_nearest[n] != SceneSnapshot::MAX_SPRITES &&
                         old_nearest[new_nearest[n]] == n)
                         matches[new_order[n]] = old_order[new_nearest[n]];
             }
@@ -222,12 +222,12 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
             now = now_end;
         }
         // Restore demoted identity pairs whose both sides stayed unmatched.
-        std::array<bool, CapturedFrame::MAX_SPRITES> old_used{};
+        std::array<bool, SceneSnapshot::MAX_SPRITES> old_used{};
         for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (matches[i] != CapturedFrame::MAX_SPRITES) old_used[matches[i]] = true;
+            if (matches[i] != SceneSnapshot::MAX_SPRITES) old_used[matches[i]] = true;
         for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (demoted[i] != CapturedFrame::MAX_SPRITES &&
-                matches[i] == CapturedFrame::MAX_SPRITES && !old_used[demoted[i]]) {
+            if (demoted[i] != SceneSnapshot::MAX_SPRITES &&
+                matches[i] == SceneSnapshot::MAX_SPRITES && !old_used[demoted[i]]) {
                 matches[i] = demoted[i];
                 by_identity[i] = true;
                 old_used[demoted[i]] = true;
@@ -242,12 +242,12 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
     // A checked entry is rigid when its delta is within +-1 native px (256) of that reference per
     // axis. No reference or object 0: not rigid (snaps). A single-entry object passes trivially.
     // Sort-based, O(n log n) over fixed arrays.
-    std::array<bool, CapturedFrame::MAX_SPRITES> rigid{};
+    std::array<bool, SceneSnapshot::MAX_SPRITES> rigid{};
     if (m_paired && sprites_changed) {
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> order;
+        std::array<unsigned, SceneSnapshot::MAX_SPRITES> order;
         unsigned n = 0;
         for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (matches[i] != CapturedFrame::MAX_SPRITES && current[i].identity &&
+            if (matches[i] != SceneSnapshot::MAX_SPRITES && current[i].identity &&
                 current[i].object)
                 order[n++] = i;
         // Reference-forming entries: same-tile identity matches.
@@ -293,12 +293,12 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
         }
     }
     // Compute all deltas before overwriting old compact slots.
-    std::array<int32_t, CapturedFrame::MAX_SPRITES> dx{}, dy{};
-    std::array<bool, CapturedFrame::MAX_SPRITES> eligible{};
+    std::array<int32_t, SceneSnapshot::MAX_SPRITES> dx{}, dy{};
+    std::array<bool, SceneSnapshot::MAX_SPRITES> eligible{};
     for (unsigned i = 0; m_paired && sprites_changed && i < scene.sprite_count; ++i) {
         const auto &v = current[i];
         const unsigned match = matches[i];
-        if (match == CapturedFrame::MAX_SPRITES) {
+        if (match == SceneSnapshot::MAX_SPRITES) {
             // Identical stationary duplicates are not evidence of moving rejects.
             if (i < m_sprite_count && v == m_sprites[i].value) continue;
             ++m_pair_stats.rejected_sprites;
@@ -402,7 +402,7 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
     m_pen_mask = scene.pen_mask;
     m_captured = true;
 }
-MotionResult GpuMotionHistory::apply(const CapturedFrame &scene, float alpha) const noexcept {
+MotionResult GpuMotionHistory::apply(const SceneSnapshot &scene, float alpha) const noexcept {
     if (!std::isfinite(alpha) || alpha < 0 || alpha > 1 || !m_paired || scene.fallback ||
         scene.sprite_count != m_sprite_count || scene.pen_mask != m_pen_mask)
         return {};

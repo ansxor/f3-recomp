@@ -1,5 +1,4 @@
 #include "state_io.hpp"
-#include "third_party/musashi/m68k.h"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <cstring>
@@ -15,60 +14,7 @@ template <typename T> void expect_rejected(const T &value, const char *name) {
         << "ACCEPTED unsafe snapshot: " << name;
 }
 
-template <typename T> void expect_round_trip(const T &value) {
-    std::vector<uint8_t> buffer(sizeof(T));
-    f3rt::StateWriter writer(buffer);
-    writer.write(value);
-    f3rt::StateReader reader(buffer);
-    T restored{};
-    reader.read(restored);
-    EXPECT_EQ(std::memcmp(&value, &restored, sizeof(T)), 0);
-}
-
-class StateValidationTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        m68k_init();
-        m68k_set_cpu_type(M68K_CPU_TYPE_68000);
-    }
-};
-
-TEST_F(StateValidationTest, MusashiSoundContextUnsafeFieldsRejected) {
-    std::vector<uint8_t> context(m68k_context_size());
-    m68k_get_context(context.data());
-    f3rt_sound_oracle_state sound{};
-    f3rt_sound_core_export(context.data(), &sound);
-
-    // Baseline clean export round-trips successfully.
-    expect_round_trip(sound);
-
-    auto bad = sound;
-    bad.s_flag = 0x40000000;
-    bad.nmi_pending = 1;
-    expect_rejected(bad, "sound supervisor stack index");
-
-    bad = sound;
-    bad.m_flag = 0x40000000;
-    expect_rejected(bad, "sound master stack index");
-
-    bad = sound;
-    bad.ir = 0x10000;
-    expect_rejected(bad, "sound opcode table index");
-
-    bad = sound;
-    bad.int_level = 0xffffffff;
-    expect_rejected(bad, "sound interrupt level");
-
-    bad = sound;
-    bad.cpu_type = 0x80000000;
-    expect_rejected(bad, "sound CPU model");
-
-    bad = sound;
-    bad.cyc_movem_w = 0xffffffff;
-    expect_rejected(bad, "sound instruction timing");
-}
-
-TEST_F(StateValidationTest, AudioSchedulerSnapshotsRejected) {
+TEST(StateValidationTest, AudioSchedulerSnapshotsRejected) {
     f3rt::CanonicalAudioCore audio{};
     audio.sample_accum = 16000000;
     expect_rejected(audio, "sample deadline outside fractional range");
@@ -84,7 +30,7 @@ TEST_F(StateValidationTest, AudioSchedulerSnapshotsRejected) {
     expect_rejected(audio, "sound deadline arithmetic overflow");
 }
 
-TEST_F(StateValidationTest, ES5505ClocksRejected) {
+TEST(StateValidationTest, ES5505ClocksRejected) {
     f3rt::CanonicalES5505 otis{};
     otis.master_clock = 15238090;
     otis.active_voices = 31;

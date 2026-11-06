@@ -1,7 +1,7 @@
 ---
 title: Land Maker sound driver sequence streams, events, programs and sample splits (c14730)
 created: 2026-10-11
-updated: 2026-10-12
+updated: 2026-11-05
 type: routine
 tags: [audio, sound-driver, undocumented]
 sources:
@@ -9,6 +9,7 @@ sources:
   - raw/docs/runtime-hle-audio-rom-protocol.md
   - raw/tests/landmakrj-sound-rom-structure-check.md
   - raw/disasm/landmakrj-sound-driver-excerpts.md
+  - raw/tests/2026-11-05-landmakrj-song-loop-flag.md
 games: [landmakrj]
 addresses: [0x00C14730, 0x00C1475A, 0x00C148B2, 0x00C20000, 0x00C3879E, 0x00C00134, 0x00C1AE76, 0x00C17CFA, 0x00C12A46, 0x00C12DCA, 0x00C158AE, 0x00C158CC, 0x00C11C1A, 0x00C159A0, 0x00C17A00, 0x00C17B94, 0x00C17CE6, 0x00C089DC, 0x00C08BEC, 0x00C0A734]
 status: hypothesis
@@ -16,6 +17,7 @@ evidence:
   - {kind: test, ref: raw/tests/landmakrj-sound-rom-structure-check.md, note: "stream directory at 0xc20008 and header directory at 0xc3879e+8 each hold 27 entries; header stride 0xa8; read from the ROM image"}
   - {kind: doc, ref: raw/docs/runtime-hle-audio-rom-protocol.md, note: "stream/header/instrument formats from the deleted tools/hle_sequence.py and tools/hle_instruments.py; those tools are no longer in the repository, so the event and instrument counts below were not reproduced"}
   - {kind: doc, ref: raw/disasm/landmakrj-sound-driver-excerpts.md, note: "disassembly of table access routines ($c12a46, $c12dca, $c158ae, $c158cc, $c11c1a, $c159a0, $c17a00, $c17b94, $c17ce6), note ownership, and fixed ROM tables ($c089dc, $c08bec, $c0a734)"}
+  - {kind: test, ref: raw/tests/2026-11-05-landmakrj-song-loop-flag.md, note: "reference-backend runs of sound-test 0x56, 0x4e, 0x58, 0x59, 0x5a, 0x5d keep playing past the last bar; 0x53 ends; the songs that loop have header flags 0x12"}
 contradictions: []
 supersedes: []
 ---
@@ -59,6 +61,20 @@ Hardware the voices end up on: [[hardware/es5505-otis]]. ROM bank placement: [[g
   table, so an event is not always a note onset. ^[raw/docs/runtime-audio-sequences.md]
 - Repeat marker `100` is the loop-selection point; the callback skips it and returns to the following
   phase at `E9`. Notes belong to the child sequence. ^[raw/docs/runtime-hle-audio-rom-protocol.md]
+
+## Song end and looping
+
+- A song that is not part of an arrangement restarts at its last bar boundary when bit 1 of its header flags
+  (`+1`) is set. Land Maker songs with flags `0x12` repeat (sound-test 0x56 = song `$0f`, 32 bars, repeats every
+  about 65.7 s; also 0x4e, 0x58, 0x59, 0x5a, 0x5d); songs with `0x10` (intro sections) or `0x08` (0x53, 0x54)
+  end, or hand over to an arrangement parent when started with the selection bit. Measured on the reference
+  driver, not read from the code: the instruction that consumes the bit was not found.
+  ^[raw/tests/2026-11-05-landmakrj-song-loop-flag.md]
+- The tick routine's bar-boundary tail (`$c14d0a..$c14da4`) resets the bar counter, handles the arrangement
+  child through slot byte `+$24`, then branches on header bit 0 (`$c158f0`); with bit 0 clear and no queued
+  selection (`$d0f0 = $ffff`) it does nothing further. ^[raw/tests/2026-11-05-landmakrj-song-loop-flag.md]
+- Opcode `0x81` is not what makes a song loop: `0x80` and `0x81` differ only in whether `$d524` is cleared
+  (`$c12ce0` / `$c12ce6`, `$c12d86`). ^[raw/tests/2026-11-05-landmakrj-song-loop-flag.md]
 
 ## Programs, layers and sample splits
 

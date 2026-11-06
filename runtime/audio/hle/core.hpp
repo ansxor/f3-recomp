@@ -1,9 +1,6 @@
 #pragma once
-// Single-threaded HLE audio core: the synthesis services, Effects and Sequencer, the tick -> frame render loop, the
-// gain math and the command / reset / bank / gain handling of the former AudioEngine worker. No thread, mutex, SDL,
-// Machine or mailbox dependency: AudioEngine wraps it with a thread and the mailbox, so there is one implementation of
-// the mixing path.
 #include "audio/hle/block.hpp"
+#include "audio/output_gain.hpp"
 #include "audio/hle/command.hpp"
 #include "audio/hle/events.hpp"
 #include <cstddef>
@@ -15,9 +12,6 @@
 #include <span>
 
 namespace f3rt::hle {
-
-// Output stage gain, shared by the reference and enhanced backends (== Audio::OUTPUT_BOOST; hle/audio.cpp asserts it).
-inline constexpr float OUTPUT_BOOST = 12.0f;
 
 // Receives rendered stereo frames in render order, in blocks of 1..Core::BLOCK_FRAMES frames.
 class PcmSink {
@@ -40,7 +34,6 @@ public:
     Core(const Core &) = delete;
     Core &operator=(const Core &) = delete;
 
-    // ---- configuration. Call only while no other Core call is running (AudioEngine: after flush()).
     // nullptr drops the rendered frames (fast-forward); the engine state evolves identically.
     void set_pcm_sink(PcmSink *sink);
 #if F3RT_HLE_EVENTS
@@ -51,6 +44,11 @@ public:
     // clamped to tick().
     uint64_t tick() const;          // sequencer events up to and including this tick have fired
     uint64_t frames() const;        // frames handed to the sink so far
+    struct RenderStats {
+        uint64_t voices_started = 0;
+        unsigned voices_active = 0;
+    };
+    RenderStats render_stats() const;
     // floor(tick * SAMPLE_RATE / MAIN_CLOCK), overflow-free.
     static uint64_t frames_at(uint64_t tick);
 

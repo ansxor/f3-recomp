@@ -162,6 +162,19 @@ TEST(SpriteUnits, BehaviourNameHyphenation) {
         << "Behaviour names replace underscores with hyphens";
 }
 
+TEST(SpriteUnits, ListedEntriesAreTheFirstHalfOfEachBank) {
+    using f3rt::sprite_list::key;
+    using f3rt::sprite_list::listed;
+    EXPECT_TRUE(listed(0x0000));
+    EXPECT_TRUE(listed(0x3ff0)) << "last listed entry of bank 0";
+    EXPECT_FALSE(listed(0x4000)) << "first unlisted entry of bank 0";
+    EXPECT_FALSE(listed(0x7fff));
+    EXPECT_TRUE(listed(0x8000)) << "bank 1 starts its own listed half";
+    EXPECT_FALSE(listed(0xc000)) << "first unlisted entry of bank 1";
+    EXPECT_TRUE(listed(0x10001)) << "address bits above 15 do not affect the listing";
+    EXPECT_EQ(key(0x8010), 0x401) << "bank 1 keys continue after bank 0";
+}
+
 TEST(SpriteUnits, CompletedReplayLeavesMachineUntouched) {
     auto m = synth_machine(true, true, false);
     m->cpu.pc = UNIT0_BLOCK0;

@@ -7,18 +7,28 @@ transfer can enter the middle of a discovered block without interpreting it.
 from __future__ import annotations
 
 import json
+import re
 import zlib
 from collections import Counter
 from pathlib import Path
 
 from .discovery import exclusion_at, parse_exclusions
 from .emitter import lower, static_flow
+from .idle import find_idle_loops
 from .liveness import analyse
 from .sprite_units import digest as sprite_units_digest
 from .sprite_units import guard_lines, parse_sprite_units
 from .timing import BASE_CYCLES
 
-_RUNTIME_ABI_VERSION = 5
+_RUNTIME_ABI_VERSION = 6
+
+
+_MEMORY_ACCESS = re.compile(r"\bf3_(read|write)(8|16|32)\(")
+
+
+def _inline_memory(statement: str) -> str:
+    """Route a lowered guest access through the inline RAM/ROM fast path (cpu_ops.h)."""
+    return _MEMORY_ACCESS.sub(lambda match: f"f3_{'ld' if match[1] == 'read' else 'st'}{match[2]}(", statement)
 
 
 def _count_flag_stores(statements: list[str]) -> tuple[int, int]:
@@ -204,9 +214,9 @@ def generate(
         flag_producers["eager_x"] += eager_x
         if not lazy and not eager_x:
             unflagged[pc] = statements
-    liveness = analyse(
-        discovery.instructions, pc_to_name, pinned=fallback_entries | unit_enter.keys() | unit_exit.keys()
-    )
+    pinned = fallback_entries | unit_enter.keys() | unit_exit.keys()
+    liveness = analyse(discovery.instructions, pc_to_name, pinned=pinned)
+    idle_loops = find_idle_loops(discovery.instructions, lambda pc: pc in pc_to_name and pc not in pinned)
     flag_emitted = Counter()
     source_names = []
     tier_sources = {"hot": [], "cold": []}
@@ -241,6 +251,8 @@ def generate(
                 unit_hooks[(unit_id, "enter")] += 1
                 shard_hooked[tier] = True
             lines.append(f"    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);")
+            if pc in idle_loops:
+                lines.extend(f"    {statement}" for statement in idle_loops[pc][1])
             statements = None if pc in fallback_entries else unflagged.get(pc) or lower(insn, liveness.live_out[pc])
             if statements is None:
                 unsupported[insn.mnemonic] += 1
@@ -248,10 +260,12 @@ def generate(
                 lines.extend(["    if (!f3_fallback(cpu)) cpu->halted = 1;", "    return;"])
             else:
                 supported[insn.mnemonic] += 1
+                if insn.mnemonic.split(".")[0].lower() in ("rts", "rtd") and statements[-1].strip() == "return;":
+                    statements = [*statements[:-1], "F3_DISPATCH_PC(cpu);", "return;"]
                 lazy, eager_x = _count_flag_stores(statements)
                 flag_emitted["lazy"] += lazy
                 flag_emitted["eager_x"] += eager_x
-                lines.extend("    " + statement for statement in statements)
+                lines.extend("    " + _inline_memory(statement) for statement in statements)
                 # Chain into a statically known successor instead of returning
                 # to the dispatcher. One guard per successor proves the pending
                 # boundary() would only republish the same deadline; anything
@@ -272,7 +286,7 @@ def generate(
                         owner = pc_to_name.get(target)
                         if owner is None or target >= 0x200000:
                             continue
-                        guard = f"cpu->pc == 0x{target:08x}u && !cpu->stopped && !cpu->halted && "
+                        guard = f"cpu->pc == 0x{target:08x}u && "
                         if dispatched:
                             # f3_dispatch refuses native blocks while trace bits
                             # are set; a chained transfer must refuse them too.
@@ -304,9 +318,7 @@ def generate(
                             indirect_sites[tier] += 1
                             indirect_cases[tier] += len(cases)
                             lines.append(
-                                "    if (!cpu->stopped && !cpu->halted && "
-                                "!(cpu->sr & 0xc000u) && "
-                                "cpu->cycles < cpu->dispatch_deadline) {"
+                                "    if (!(cpu->sr & 0xc000u) && cpu->cycles < cpu->dispatch_deadline) {"
                             )
                             lines.append("        switch (cpu->pc) {")
                             for target, owner in cases:
@@ -318,6 +330,8 @@ def generate(
                             lines.append("        default: break;")
                             lines.append("        }")
                             lines.append("    }")
+                    if base_mnem in ("jmp", "jsr") and not flow.targets:
+                        lines.append("    F3_DISPATCH_PC(cpu);")
                     lines.append("    return;")
             lines.append("}")
         lines.append("}\n")
@@ -406,10 +420,13 @@ def generate(
         )
         program += "};\n"
     program += (
+        "f3_block_fn f3_entry_by_word[F3_ENTRY_WORDS];\n"
         "int f3_generated_register(f3_cpu *cpu) {\n"
         f"    if (!f3_validate_main_rom(cpu, {len(rom)}u, 0x{zlib.crc32(rom):08x}u)) return 0;\n"
         "    if (!f3_register_blocks(cpu, translated_blocks,\n"
         "        sizeof(translated_blocks) / sizeof(translated_blocks[0]))) return 0;\n"
+        "    for (size_t i = 0; i < sizeof(translated_blocks) / sizeof(translated_blocks[0]); ++i)\n"
+        "        f3_entry_by_word[translated_blocks[i].address >> 1] = translated_blocks[i].execute;\n"
     )
     if exclusions:
         program += (
@@ -469,6 +486,7 @@ def generate(
         "source_files": source_names,
         "runtime_abi_version": _RUNTIME_ABI_VERSION,
         "emit_units": unit_report,
+        "idle_loops": {f"0x{pc:06x}": shape for pc, (shape, _) in sorted(idle_loops.items())},
         "flag_liveness": {
             "lazy_producers": flag_producers["lazy"],
             "lazy_producers_emitted": flag_emitted["lazy"],

@@ -1,784 +1,204 @@
-// Standalone Taito F3 audio implementation for f3rt
-// Incorporates ES5505 OTIS, ES5510 DSP, MC68681 DUART, MB87078 Volume, and ESQPUMP
-
 #include "f3rt/audio.hpp"
+#include "audio/hle/core.hpp"
+#include "audio/pcm_ring.hpp"
+#include "audio/shared_mailbox.hpp"
+#include "audio/snapshot.hpp"
+#include "audio/worker_queue.hpp"
 #include "f3rt/memory_map.hpp"
-
-#include "audio/reference/engine.hpp"
-#include "third_party/audio/mb87078.hpp"
-#include "third_party/audio/mc68681.hpp"
-#include "state_io.hpp"
-#include "audio/hle/audio.hpp"
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstring>
-#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace f3rt {
-
 namespace {
-
-inline int16_t clamp16(int32_t val) {
-    if (val > 32767) return 32767;
-    if (val < -32768) return -32768;
-    return int16_t(val);
-}
-
-
-// Both backends produce OTIS/ESP channel order; the final output exchanges left and right once.
-// This is the only place the exchange is applied.
-template <typename T> size_t swap_dac_channels(T *interleaved_stereo, size_t frames) {
-    for (size_t i = 0; i < frames; ++i) std::swap(interleaved_stereo[i * 2], interleaved_stereo[i * 2 + 1]);
-    return frames;
-}
-
-} // namespace
-
-struct Audio::Impl {
-    static constexpr size_t WORK_RAM_SIZE = 0x10000;      // 64KB
-    static constexpr size_t RING_BUFFER_CAPACITY = 32768; // Stereo frames
-
-    std::vector<uint8_t> m_work_ram;
-    std::vector<uint8_t> m_sound_rom;
-    std::vector<uint16_t> m_sample_words;
-    std::unique_ptr<hle::AudioEngine> m_hle;
-    reference::Engine m_reference;
-    Audio::Backend m_backend = Audio::Backend::Enhanced;
-    bool m_enhanced_available = false;
-    void update_enhanced_available() {
-        if (!m_sound_rom.empty() && !m_sample_words.empty()) {
-            m_enhanced_available = hle::validate(m_sound_rom, m_sample_words);
-        } else {
-            m_enhanced_available = false;
-        }
-    }
-
-    uint8_t *m_shared_ram;
-    size_t m_shared_ram_size;
-
-    MC68681 m_duart;
-    MB87078 m_volume;
-
-    Audio::GainModel m_gain_model = Audio::GainModel::SingleStage;
-    std::array<float, 2> m_volume_gain{1.0f, 1.0f};
-    std::array<float, 2> m_otis_gain{}, m_output_gain{};
-
-    bool m_reset_asserted;
-    uint32_t m_cpubank2 = 1;
-
-    std::function<int(int cycles)> m_cpu_runner;
-    std::function<void(bool asserted)> m_reset_cb;
-
-    // Fractional cycle accumulators
-    int64_t m_cpu_accum;
-    uint32_t m_duart_accum;
-    uint64_t m_sample_accum;
-    uint64_t m_clock_ticks = 0;
-    uint64_t m_generated_frames = 0;
-
-    // Thread-safe audio sample ring buffer (interleaved stereo)
-    mutable std::mutex m_audio_mutex;
-    std::vector<float> m_sample_buffer;
-    size_t m_rb_read_pos;
-    size_t m_rb_write_pos;
-    size_t m_rb_count;
-
-    Impl()
-        : m_work_ram(WORK_RAM_SIZE, 0), m_shared_ram(nullptr), m_shared_ram_size(SHARED_RAM_SIZE),
-          m_reset_asserted(true), m_cpu_accum(0), m_duart_accum(0), m_sample_accum(0),
-          m_sample_buffer(RING_BUFFER_CAPACITY * 2, 0.0f), m_rb_read_pos(0), m_rb_write_pos(0),
-          m_rb_count(0) {
-        // Connect DUART OP6 output to ES5510 HALT pin via Reference Engine
-        m_duart.set_outport_callback([this](uint8_t output_pins) {
-            // Pin OP6: 1 = ESPHALT asserted (halted), 0 = ESP running
-            m_reference.set_esp_halted((output_pins & 0x40) != 0);
-        });
-
-        // The baseline board mixer applies quantized MB87078 percent/32 gain
-        // both before ESP input and after the pump. Keep that observable model
-        // separate from a single analog attenuation stage.
-        update_gains();
-        m_volume.set_gain_callback([this](int channel, float gain) {
-            if (channel >= 2) {
-                m_volume_gain[channel & 1] = gain;
-                update_gains();
-            }
-        });
-    }
-
-    void update_gains() {
-        for (unsigned channel = 0; channel < 2; ++channel) {
-            const float physical = m_volume_gain[channel];
-            const float route = float(std::lround(physical * 100.0f)) / 32.0f;
-            m_otis_gain[channel] =
-                0.18f * (m_gain_model == Audio::GainModel::MameRouting ? route : 1.0f);
-            m_output_gain[channel] =
-                Audio::OUTPUT_BOOST *
-                (m_gain_model == Audio::GainModel::MameRouting ? route : physical);
-        }
-    }
-
-    void set_reset(bool asserted) {
-        if (m_reset_asserted != asserted) {
-            m_reset_asserted = asserted;
-            if (m_reset_cb) {
-                m_reset_cb(asserted);
-            }
-        }
-    }
-
-    void reset_board() {
-        set_reset(true);
-        m_cpu_accum = 0;
-        m_cpubank2 = 1;
-        m_duart.reset();
-        m_reference.reset();
-        m_volume.reset();
-        if (m_sound_rom.size() >= 8) std::memcpy(m_work_ram.data(), m_sound_rom.data(), 8);
-    }
-
-    void push_frame(float left, float right) {
-        std::lock_guard<std::mutex> lock(m_audio_mutex);
-        if (m_rb_count >= RING_BUFFER_CAPACITY) {
-            // Overwrite oldest frame to preserve real-time latency
-            m_rb_read_pos = (m_rb_read_pos + 1) % RING_BUFFER_CAPACITY;
-            --m_rb_count;
-        }
-        m_sample_buffer[m_rb_write_pos * 2 + 0] = left;
-        m_sample_buffer[m_rb_write_pos * 2 + 1] = right;
-        m_rb_write_pos = (m_rb_write_pos + 1) % RING_BUFFER_CAPACITY;
-        ++m_rb_count;
-    }
-
-    void generate_one_frame() {
-        ++m_generated_frames;
-        m_reference.generate_one_frame(m_otis_gain, m_output_gain,
-                                       [this](float l, float r) { push_frame(l, r); });
-    }
-
-    void advance_slice(uint32_t main_cycles) {
-        m_clock_ticks += main_cycles;
-        // Advance DUART 68681 (clock 4.0 MHz = 16MHz / 4).
-        m_duart_accum += main_cycles;
-        uint32_t duart_cycles = m_duart_accum / 4;
-        m_duart_accum %= 4;
-
-        if (duart_cycles > 0) {
-            m_duart.advance(duart_cycles);
-        }
-
-        // Use the same integer stream rate advertised to SDL/WAV consumers.
-        // A rational crystal divider here drifts against both that metadata
-        // and the baseline's integer-rate OTIS stream (~30 ppm at 32 voices).
-        m_sample_accum += uint64_t(main_cycles) * m_reference.sample_rate();
-        while (m_sample_accum >= 16000000ULL) {
-            m_sample_accum -= 16000000ULL;
-            generate_one_frame();
-        }
-
-        // Device edges precede the CPU dispatch due at this clock. Dispatch one
-        // instruction at a time so IRQ recognition cannot depend on main blocks.
-        if (!m_reset_asserted && m_cpu_runner) {
-            m_cpu_accum += int64_t(main_cycles) * 15238090LL;
-            if (m_cpu_accum >= 16000000LL) m_cpu_accum -= int64_t(m_cpu_runner(1)) * 16000000LL;
-        } else {
-            m_cpu_accum = 0;
-        }
-    }
-
-    void advance(uint32_t main_cycles) {
-        while (main_cycles > 0) {
-            // Stop at each sample or CPU deadline, retaining fractional clocks
-            // and complete-instruction overrun across arbitrary caller chunks.
-            uint32_t step = main_cycles;
-            if (!m_reset_asserted && m_cpu_runner) {
-                const uint32_t until_cpu =
-                    uint32_t((16000000LL - m_cpu_accum + 15238089LL) / 15238090LL);
-                step = std::min(step, until_cpu);
-            }
-            const uint32_t rate = m_reference.sample_rate();
-            // CPU deadlines are normally much nearer. Bound the candidate first
-            // so the variable-rate division is needed only at a sample edge.
-            if (m_sample_accum + uint64_t(step) * rate >= 16000000ULL)
-                step = uint32_t((16000000ULL - m_sample_accum + rate - 1) / rate);
-            main_cycles -= step;
-            advance_slice(step);
-        }
-    }
-
-    // Bus handlers
-    uint8_t read8(uint32_t address) {
-        address &= 0x00ffffff;
-
-        // Work RAM (0x000000 - 0x03ffff, mirrored 4 times)
-        if (address < SOUND_RAM_END) {
-            return m_work_ram[address & SOUND_RAM_MASK];
-        }
-
-        // Shared DPRAM (0x140000 - 0x140fff, 8-bit even byte lane)
-        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
-            if ((address & 1) == 0) {
-                uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
-                return (m_shared_ram && idx < m_shared_ram_size) ? m_shared_ram[idx] : 0xff;
-            }
-            return 0xff;
-        }
-
-        // Reference Engine: OTIS (0x200000), ESP (0x260000), Bank Table (0x300000)
-        if (m_reference.is_mapped(address)) {
-            return m_reference.read8(address);
-        }
-
-        // MC68681 DUART (0x280000 - 0x28001f, 8-bit odd byte lane)
-        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
-            if (address & 1) {
-                return m_duart.read((address >> 1) & 0x0f);
-            }
-            return 0xff;
-        }
-
-        // MB87078 Electronic Volume (0x340000 - 0x340003, 8-bit even byte lane)
-        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
-            if ((address & 1) == 0) {
-                uint32_t offset = (address >> 1) & 1;
-                return m_volume.read(offset ^ 1);
-            }
-            return 0xff;
-        }
-
-        // Sound Program ROM (0xc00000 - 0xc7ffff, banked via cpubank2)
-        if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
-            uint32_t off = address - SOUND_ROM_BASE;
-            if (m_sound_rom.size() > 0x80000) {
-                if (address >= 0xc20000 && address < 0xc40000) {
-                    off = m_cpubank2 * 0x20000 + (address - 0xc20000);
-                } else if (address >= 0xc40000) {
-                    off = 0x40000 + (address - 0xc40000);
-                }
-            }
-            return (off < m_sound_rom.size()) ? m_sound_rom[off] : 0xff;
-        }
-
-        // Work RAM mirror (0xff0000 - 0xffffff)
-        if (address >= SOUND_RAM_HIGH_BASE) {
-            return m_work_ram[address & SOUND_RAM_MASK];
-        }
-
-        return 0xff;
-    }
-
-    uint16_t read16(uint32_t address) {
-        address &= 0x00fffffe;
-
-        // Work RAM
-        if (address < SOUND_RAM_END) {
-            uint32_t off = address & 0xfffe;
-            return (uint16_t(m_work_ram[off]) << 8) | m_work_ram[off + 1];
-        }
-
-        // Shared DPRAM (even byte has data, odd byte unmapped)
-        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
-            uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
-            uint8_t data = (m_shared_ram && idx < m_shared_ram_size) ? m_shared_ram[idx] : 0xff;
-            return (uint16_t(data) << 8) | 0xff;
-        }
-
-        // Reference Engine: OTIS (0x200000), ESP (0x260000), Bank Table (0x300000)
-        if (m_reference.is_mapped(address)) {
-            return m_reference.read16(address);
-        }
-
-        // MC68681 DUART (odd byte has data)
-        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
-            return m_duart.read((address >> 1) & 0x0f);
-        }
-
-        // MB87078 Electronic Volume
-        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
-            uint32_t offset = (address >> 1) & 1;
-            return uint16_t(m_volume.read(offset ^ 1)) << 8;
-        }
-
-        // Sound Program ROM
-        if (address >= SOUND_ROM_BASE && address < SOUND_ROM_END) {
-            return (uint16_t(read8(address)) << 8) | read8(address + 1);
-        }
-
-        // Work RAM mirror
-        if (address >= SOUND_RAM_HIGH_BASE) {
-            uint32_t off = address & 0xfffe;
-            return (uint16_t(m_work_ram[off]) << 8) | m_work_ram[off + 1];
-        }
-
-        return 0xffff;
-    }
-
-    uint32_t read32(uint32_t address) {
-        return (uint32_t(read16(address)) << 16) | read16(address + 2);
-    }
-
-    void write8(uint32_t address, uint8_t value) {
-        address &= 0x00ffffff;
-
-        // Work RAM
-        if (address < SOUND_RAM_END) {
-            m_work_ram[address & SOUND_RAM_MASK] = value;
-            return;
-        }
-
-        // Shared DPRAM (even byte only)
-        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
-            if ((address & 1) == 0) {
-                uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
-                if (m_shared_ram && idx < m_shared_ram_size) {
-                    m_shared_ram[idx] = value;
-                }
-            }
-            return;
-        }
-
-        // Reference Engine: OTIS (0x200000), ESP (0x260000), Bank Table (0x300000)
-        if (m_reference.is_mapped(address)) {
-            m_reference.write8(address, value);
-            return;
-        }
-
-        // MC68681 DUART (odd byte only)
-        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
-            if (address & 1) {
-                m_duart.write((address >> 1) & 0x0f, value);
-            }
-            return;
-        }
-
-        // MB87078 Volume (even byte only)
-        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
-            if ((address & 1) == 0) {
-                uint32_t offset = (address >> 1) & 1;
-                m_volume.write(offset ^ 1, value);
-            }
-            return;
-        }
-
-        // Work RAM mirror
-        if (address >= SOUND_RAM_HIGH_BASE) {
-            m_work_ram[address & SOUND_RAM_MASK] = value;
-            return;
-        }
-    }
-
-    void write16(uint32_t address, uint16_t value) {
-        address &= 0x00fffffe;
-
-        // Work RAM
-        if (address < SOUND_RAM_END) {
-            uint32_t off = address & 0xfffe;
-            m_work_ram[off] = (value >> 8) & 0xff;
-            m_work_ram[off + 1] = value & 0xff;
-            return;
-        }
-
-        // Shared DPRAM
-        if (address >= SOUND_SHARED_BASE && address < SOUND_SHARED_END) {
-            uint32_t idx = (address - SOUND_SHARED_BASE) >> 1;
-            if (m_shared_ram && idx < m_shared_ram_size) {
-                m_shared_ram[idx] = (value >> 8) & 0xff;
-            }
-            return;
-        }
-
-        // Reference Engine: OTIS (0x200000), ESP (0x260000), Bank Table (0x300000)
-        if (m_reference.is_mapped(address)) {
-            m_reference.write16(address, value);
-            return;
-        }
-
-        // MC68681 DUART
-        if (address >= SOUND_DUART_BASE && address < SOUND_DUART_END) {
-            m_duart.write((address >> 1) & 0x0f, value & 0xff);
-            return;
-        }
-
-        // MB87078 Volume
-        if (address >= SOUND_VOLUME_BASE && address < SOUND_VOLUME_END) {
-            uint32_t offset = (address >> 1) & 1;
-            m_volume.write(offset ^ 1, (value >> 8) & 0xff);
-            return;
-        }
-
-        // Work RAM mirror
-        if (address >= SOUND_RAM_HIGH_BASE) {
-            uint32_t off = address & 0xfffe;
-            m_work_ram[off] = (value >> 8) & 0xff;
-            m_work_ram[off + 1] = value & 0xff;
-            return;
-        }
-    }
-
-    void write32(uint32_t address, uint32_t value) {
-        write16(address, uint16_t(value >> 16));
-        write16(address + 2, uint16_t(value & 0xffff));
-    }
-
-    size_t state_size() const {
-        return sizeof(CanonicalAudioCore) + WORK_RAM_SIZE +
-               sizeof(float) * RING_BUFFER_CAPACITY * 2 + m_reference.es5505().state_size() +
-               m_reference.es5510().state_size() + m_duart.state_size() + m_volume.state_size();
-    }
-
-    void save_state(StateWriter &writer) const {
-        std::lock_guard<std::mutex> lock(m_audio_mutex);
-        CanonicalAudioCore core{};
-        core.bank_mask = m_reference.bank_mask();
-        for (int i = 0; i < ES5505::MAX_VOICES; ++i) core.bank_table[i] = m_reference.bank_table(i);
-        core.reset_asserted = m_reset_asserted ? 1 : 0;
-        core.esp_halted = m_reference.esp_halted() ? 1 : 0;
-        core.gain_model = uint8_t(m_gain_model);
-        core.cpubank2 = uint8_t(m_cpubank2);
-        core.volume_gain[0] = m_volume_gain[0];
-        core.volume_gain[1] = m_volume_gain[1];
-        core.otis_gain[0] = m_otis_gain[0];
-        core.otis_gain[1] = m_otis_gain[1];
-        core.output_gain[0] = m_output_gain[0];
-        core.output_gain[1] = m_output_gain[1];
-        core.cpu_accum = m_cpu_accum;
-        core.duart_accum = m_duart_accum;
-        core.sample_accum = m_sample_accum;
-        core.clock_ticks = m_clock_ticks;
-        core.generated_frames = m_generated_frames;
-        core.rb_count = uint32_t(m_rb_count);
-        writer.write(core);
-
-        writer.write_bytes(m_work_ram.data(), WORK_RAM_SIZE);
-
-        // Block copy of the ring buffer: m_rb_count frames in play order, remainder 0.0f
-        if (m_rb_count > 0) {
-            size_t first_part = std::min(m_rb_count, RING_BUFFER_CAPACITY - m_rb_read_pos);
-            writer.write_bytes(&m_sample_buffer[m_rb_read_pos * 2], first_part * 2 * sizeof(float));
-            if (m_rb_count > first_part) {
-                size_t second_part = m_rb_count - first_part;
-                writer.write_bytes(&m_sample_buffer[0], second_part * 2 * sizeof(float));
-            }
-        }
-        size_t zero_frames = RING_BUFFER_CAPACITY - m_rb_count;
-        if (zero_frames > 0) {
-            size_t bytes = zero_frames * 2 * sizeof(float);
-            if (writer.remaining() < bytes) throw std::runtime_error("StateWriter buffer overflow");
-            std::memset(writer.current(), 0, bytes);
-            writer.advance(bytes);
-        }
-
-        m_reference.save_state(writer);
-        m_duart.save_state(writer);
-        m_volume.save_state(writer);
-    }
-
-    void load_state(StateReader &reader) {
-        std::lock_guard<std::mutex> lock(m_audio_mutex);
-        CanonicalAudioCore core;
-        reader.read(core);
-        m_reference.set_bank_mask(core.bank_mask);
-        for (int i = 0; i < ES5505::MAX_VOICES; ++i)
-            m_reference.set_bank_table(i, core.bank_table[i]);
-        m_reset_asserted = core.reset_asserted != 0;
-        m_reference.set_esp_halted(core.esp_halted != 0);
-        m_gain_model = Audio::GainModel(core.gain_model);
-        m_cpubank2 = core.cpubank2;
-        m_volume_gain[0] = core.volume_gain[0];
-        m_volume_gain[1] = core.volume_gain[1];
-        m_otis_gain[0] = core.otis_gain[0];
-        m_otis_gain[1] = core.otis_gain[1];
-        m_output_gain[0] = core.output_gain[0];
-        m_output_gain[1] = core.output_gain[1];
-        m_cpu_accum = core.cpu_accum;
-        m_duart_accum = core.duart_accum;
-        m_sample_accum = core.sample_accum;
-        m_clock_ticks = core.clock_ticks;
-        m_generated_frames = core.generated_frames;
-
-        reader.read_bytes(m_work_ram.data(), WORK_RAM_SIZE);
-
-        m_rb_count = std::min(size_t(core.rb_count), RING_BUFFER_CAPACITY);
-        m_rb_read_pos = 0;
-        m_rb_write_pos = m_rb_count % RING_BUFFER_CAPACITY;
-        if (m_rb_count > 0) {
-            reader.read_bytes(m_sample_buffer.data(), m_rb_count * 2 * sizeof(float));
-        }
-        std::memset(&m_sample_buffer[m_rb_count * 2], 0,
-                    (RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
-        reader.skip((RING_BUFFER_CAPACITY - m_rb_count) * 2 * sizeof(float));
-
-        m_reference.load_state(reader);
-        m_duart.load_state(reader);
-        m_volume.load_state(reader);
-        update_gains();
+constexpr size_t QUEUE_SIZE = 4096;
+
+struct CoreInput {
+    struct Advance {
+        void apply(hle::Core &core, uint64_t tick) const { core.advance(tick); }
+    };
+    struct Command {
+        hle::CommandPacket packet;
+        uint64_t instance = 0;
+        void apply(hle::Core &core, uint64_t tick) const { core.command(packet, instance, tick); }
+    };
+    struct Reset {
+        void apply(hle::Core &core, uint64_t tick) const { core.reset(tick); }
+    };
+    struct Gain {
+        uint8_t channel = 0, raw = 0;
+        void apply(hle::Core &core, uint64_t tick) const { core.set_gain(channel, raw, tick); }
+    };
+    struct Bank {
+        uint8_t page = 0;
+        void apply(hle::Core &core, uint64_t tick) const { core.set_bank(page, tick); }
+    };
+    using Kind = std::variant<Advance, Command, Reset, Gain, Bank>;
+
+    Kind kind;
+    uint64_t tick = 0;
+
+    void apply(hle::Core &core) const {
+        std::visit([&](const auto &input) { input.apply(core, tick); }, kind);
     }
 };
 
-Audio::Audio() : m_impl(std::make_unique<Impl>()) {}
+struct Synth {
+    std::vector<uint8_t> rom;
+    std::vector<uint16_t> samples;
+    hle::Core core;
+    std::atomic<uint64_t> generated{0}, render_ns{0};
+
+    Synth(std::vector<uint8_t> sound_rom, std::vector<uint16_t> sample_words, hle::PcmSink &sink)
+        : rom(std::move(sound_rom)), samples(std::move(sample_words)), core(rom, samples) {
+        core.set_pcm_sink(&sink);
+    }
+    void apply(const CoreInput &input) {
+        const auto started = std::chrono::steady_clock::now();
+        input.apply(core);
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        render_ns.fetch_add(
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+            std::memory_order_relaxed);
+        generated.store(core.frames(), std::memory_order_relaxed);
+    }
+};
+} // namespace
+
+struct Audio::Impl {
+    PcmRing pcm;
+    Synth synth;
+    SharedMailbox mailbox;
+    uint64_t clock = 0, command_count = 0, serial = 0, submitted_tick = 0;
+    uint64_t clock_epoch = 0, playback_epoch = 0;
+    uint32_t bank = 1;
+    bool held = true;
+    WorkerQueue<CoreInput, Synth, QUEUE_SIZE> worker;
+
+    Impl(std::vector<uint8_t> sound_rom, std::vector<uint16_t> sample_words, uint8_t *shared)
+        : synth(std::move(sound_rom), std::move(sample_words), pcm), mailbox(shared),
+          worker(synth) {}
+
+    uint64_t playback_now() const { return playback_epoch + (clock - clock_epoch); }
+    void post(CoreInput::Kind kind) { worker.post({kind, playback_now()}); }
+    void post_gain(unsigned channel) {
+        post(CoreInput::Gain{uint8_t(channel), mailbox.gain(channel)});
+    }
+    void record(hle::CommandPacket packet) {
+        ++command_count;
+        const uint64_t instance = ++serial;
+        if (serial >> 63) throw std::overflow_error("HLE instance IDs exhausted");
+        post(CoreInput::Command{packet, instance});
+    }
+    void submit_clock() {
+        if (clock <= submitted_tick) return;
+        post(CoreInput::Advance{});
+        submitted_tick = clock;
+    }
+    void flush() {
+        submit_clock();
+        worker.flush();
+    }
+    [[nodiscard]] AudioSnapshot snapshot() const {
+        return {clock, command_count, mailbox.consumer(), held};
+    }
+    void restore(const AudioSnapshot &state) {
+        flush();
+        clock = clock_epoch = submitted_tick = state.clock;
+        playback_epoch = synth.core.tick();
+        pcm.discard();
+        command_count = state.commands;
+        mailbox.restore(state.consumer);
+        held = state.held;
+    }
+};
+
+std::vector<uint16_t> decode_sample_words(std::span<const uint8_t> sample_rom) {
+    std::vector<uint16_t> words(sample_rom.size() / 2);
+    for (size_t i = 0; i < words.size(); ++i)
+        words[i] = uint16_t(uint16_t(sample_rom[i * 2]) << 8 | sample_rom[i * 2 + 1]);
+    return words;
+}
+bool Audio::supported(std::span<const uint8_t> sound_rom,
+                      std::span<const uint16_t> sample_words) noexcept {
+    return hle::Core::validate(sound_rom, sample_words);
+}
+Audio::Audio(std::vector<uint8_t> sound_rom, std::vector<uint16_t> sample_words,
+             uint8_t *shared_ram)
+    : m_impl(std::make_unique<Impl>(std::move(sound_rom), std::move(sample_words), shared_ram)) {}
 Audio::~Audio() = default;
+void Audio::advance(uint32_t cycles) { m_impl->clock += cycles; }
+uint64_t Audio::clock_ticks() const { return m_impl->clock; }
+bool Audio::is_reset() const { return m_impl->held; }
 
-Audio::Audio(Audio &&) noexcept = default;
-Audio &Audio::operator=(Audio &&) noexcept = default;
-
-void Audio::set_backend(Backend backend) {
-    if (clock_ticks() || !is_reset())
-        throw std::runtime_error("Select audio backend before machine execution");
-    if (backend == Backend::Enhanced && !m_impl->m_enhanced_available)
-        throw std::runtime_error("Enhanced audio is not supported for this game");
-    m_impl->m_backend = backend;
-    if (backend == Backend::Enhanced) {
-        m_impl->m_hle = std::make_unique<hle::AudioEngine>(
-            m_impl->m_sound_rom, m_impl->m_sample_words, m_impl->m_shared_ram);
-    } else {
-        m_impl->m_hle.reset();
-    }
-}
-bool Audio::parse_backend(std::string_view name, Backend &backend) {
-    if (name == "enhanced") backend = Backend::Enhanced;
-    else if (name == "reference") backend = Backend::Reference;
-    else return false;
-    return true;
-}
-const char *Audio::backend_name(Backend backend) {
-    return backend == Backend::Enhanced ? "enhanced" : "reference";
-}
-bool Audio::backend_available(Backend backend) const {
-    if (backend == Backend::Reference) return true;
-    if (backend == Backend::Enhanced) return m_impl->m_enhanced_available;
-    return false;
-}
-Audio::Backend Audio::backend() const { return m_impl->m_backend; }
-bool Audio::is_enhanced_active() const { return m_impl->m_hle != nullptr; }
 void Audio::shared_write(uint32_t offset) {
-    if (m_impl->m_hle) m_impl->m_hle->shared_write(offset);
+    auto &p = *m_impl;
+    if (p.held) return;
+    if (offset == MAILBOX_PRODUCER_L)
+        p.mailbox.drain([&p](hle::CommandPacket packet) { p.record(packet); });
+    else if (offset == MAILBOX_GAIN_CH0 || offset == MAILBOX_GAIN_CH1) p.post_gain(offset & 1);
 }
-void Audio::finish_frame() {
-    if (m_impl->m_hle) m_impl->m_hle->finish_frame();
-}
-Audio::EnhancedStats Audio::enhanced_stats() const {
-    if (m_impl->m_hle) {
-        const auto s = m_impl->m_hle->stats();
-        return EnhancedStats{s.commands, s.rendered_frames};
+void Audio::set_reset(bool asserted) {
+    auto &p = *m_impl;
+    if (p.held == asserted) return;
+    p.held = asserted;
+    if (asserted) {
+        p.mailbox.reset();
+        p.post(CoreInput::Reset{});
+    } else {
+        p.post_gain(0);
+        p.post_gain(1);
     }
-    return EnhancedStats{};
+}
+void Audio::reset_board() { set_reset(true); }
+void Audio::set_sound_bank(uint32_t page) {
+    m_impl->bank = page;
+    m_impl->post(CoreInput::Bank{uint8_t(page)});
+}
+uint32_t Audio::sound_bank() const { return m_impl->bank; }
+uint32_t Audio::sample_rate() const { return hle::SAMPLE_RATE; }
+
+void Audio::finish_frame() {
+    auto &p = *m_impl;
+    p.submit_clock();
+    p.pcm.close_frame(hle::Core::frames_at(p.playback_now()));
+}
+size_t Audio::available_frames() const {
+    m_impl->flush();
+    return m_impl->pcm.available();
+}
+size_t Audio::render(float *out, size_t max_frames) {
+    m_impl->flush();
+    return m_impl->pcm.drain(out, max_frames);
+}
+size_t Audio::render(int16_t *out, size_t max_frames) {
+    m_impl->flush();
+    return m_impl->pcm.drain(out, max_frames);
+}
+size_t Audio::render_ready(int16_t *out, size_t max_frames) {
+    return m_impl->pcm.drain_released(out, max_frames);
+}
+
+uint64_t Audio::generated_frames() const {
+    return m_impl->synth.generated.load(std::memory_order_relaxed);
+}
+AudioPerformanceStats Audio::performance_stats() const {
+    const auto render = m_impl->synth.core.render_stats();
+    return {m_impl->command_count, generated_frames(), render.voices_started, render.voices_active,
+            m_impl->synth.render_ns.load(std::memory_order_relaxed)};
 }
 #if F3RT_HLE_EVENTS
-void Audio::set_hle_observer(std::function<void(const hle::VoiceEvent &)> observer) {
-    if (!m_impl->m_hle) throw std::logic_error("HLE observer requires HLE backend");
-    m_impl->m_hle->set_observer(std::move(observer));
+void Audio::set_voice_observer(std::function<void(const hle::VoiceEvent &)> observer) {
+    m_impl->flush();
+    m_impl->synth.core.set_voice_observer(std::move(observer));
 }
 #endif
 
-void Audio::load_sound_rom(std::span<const uint8_t> sound_rom) {
-    if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");
-    m_impl->m_sound_rom.assign(sound_rom.begin(), sound_rom.end());
-    if (m_impl->m_sound_rom.size() >= 8) {
-        std::memcpy(m_impl->m_work_ram.data(), m_impl->m_sound_rom.data(), 8);
-    }
-    m_impl->update_enhanced_available();
-}
-
-void Audio::load_sample_rom(std::span<const uint8_t> sample_rom) {
-    if (m_impl->m_hle) throw std::logic_error("Load ROMs before selecting HLE audio");
-    size_t word_count = sample_rom.size() / 2;
-    m_impl->m_sample_words.resize(word_count);
-    for (size_t i = 0; i < word_count; i++) {
-        m_impl->m_sample_words[i] = (uint16_t(sample_rom[i * 2]) << 8) | sample_rom[i * 2 + 1];
-    }
-    m_impl->m_reference.set_sample_rom(m_impl->m_sample_words.data(), word_count);
-    m_impl->m_reference.set_bank_mask(
-        (sample_rom.size() >= 0x200000) ? ((sample_rom.size() / 0x200000) - 1) : 0);
-    m_impl->update_enhanced_available();
-}
-
-void Audio::set_shared_ram(uint8_t *shared_ram, size_t size) {
-    if (m_impl->m_hle) throw std::logic_error("Configure shared RAM before selecting HLE audio");
-    m_impl->m_shared_ram = shared_ram;
-    m_impl->m_shared_ram_size = size;
-}
-
-void Audio::set_cpu_runner(std::function<int(int cycles)> runner) {
-    m_impl->m_cpu_runner = std::move(runner);
-}
-
-void Audio::set_reset(bool asserted) {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->set_reset(asserted);
-        return;
-    }
-    m_impl->set_reset(asserted);
-}
-
-void Audio::reset_board() {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->set_reset(true);
-        return;
-    }
-    m_impl->reset_board();
-}
-
-uint64_t Audio::clock_ticks() const {
-    return m_impl->m_hle ? m_impl->m_hle->clock() : m_impl->m_clock_ticks;
-}
-uint64_t Audio::generated_frames() const {
-    return m_impl->m_hle ? m_impl->m_hle->generated() : m_impl->m_generated_frames;
-}
-
-bool Audio::is_reset() const {
-    if (m_impl->m_hle) return m_impl->m_hle->is_reset();
-    return m_impl->m_reset_asserted;
-}
-
-void Audio::set_reset_callback(std::function<void(bool asserted)> cb) {
-    m_impl->m_reset_cb = std::move(cb);
-}
-
-void Audio::set_irq_callback(std::function<void(bool asserted)> cb) {
-    m_impl->m_duart.set_irq_callback(std::move(cb));
-}
-
-uint8_t Audio::read8(uint32_t address) { return m_impl->read8(address); }
-
-uint16_t Audio::read16(uint32_t address) { return m_impl->read16(address); }
-
-uint32_t Audio::read32(uint32_t address) { return m_impl->read32(address); }
-
-void Audio::write8(uint32_t address, uint8_t value) { m_impl->write8(address, value); }
-
-void Audio::write16(uint32_t address, uint16_t value) { m_impl->write16(address, value); }
-
-void Audio::write32(uint32_t address, uint32_t value) { m_impl->write32(address, value); }
-
-int Audio::irq_level() const {
-    // DUART timer/counter triggers IRQ level 6
-    if (m_impl->m_duart.irq_pending()) {
-        return 6;
-    }
-    return 0;
-}
-
-uint8_t Audio::irq_ack(int level) {
-    if (level == 6) {
-        return m_impl->m_duart.get_irq_vector();
-    }
-    return uint8_t(0x18 + level); // Standard 68000 autovector fallback
-}
-
-void Audio::advance(uint32_t main_cycles) {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->advance(main_cycles);
-        return;
-    }
-    m_impl->advance(main_cycles);
-}
-
-uint32_t Audio::sample_rate() const {
-    if (m_impl->m_hle) return hle::SAMPLE_RATE;
-    return m_impl->m_reference.sample_rate();
-}
-
-void Audio::set_gain_model(GainModel model) {
-    m_impl->m_gain_model = model;
-    m_impl->update_gains();
-}
-
-size_t Audio::available_frames() const {
-    if (m_impl->m_hle) return m_impl->m_hle->available();
-    std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
-    return m_impl->m_rb_count;
-}
-
-size_t Audio::render(int16_t *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle)
-        return swap_dac_channels(interleaved_stereo,
-                                 m_impl->m_hle->render(interleaved_stereo, max_frames));
-    std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
-    size_t frames = std::min(max_frames, m_impl->m_rb_count);
-    for (size_t i = 0; i < frames; i++) {
-        float l = m_impl->m_sample_buffer[m_impl->m_rb_read_pos * 2 + 0];
-        float r = m_impl->m_sample_buffer[m_impl->m_rb_read_pos * 2 + 1];
-        m_impl->m_rb_read_pos = (m_impl->m_rb_read_pos + 1) % Impl::RING_BUFFER_CAPACITY;
-
-        interleaved_stereo[i * 2 + 0] = clamp16(int32_t(std::clamp(l, -1.0f, 1.0f) * 32768.0f));
-        interleaved_stereo[i * 2 + 1] = clamp16(int32_t(std::clamp(r, -1.0f, 1.0f) * 32768.0f));
-    }
-    m_impl->m_rb_count -= frames;
-    return swap_dac_channels(interleaved_stereo, frames);
-}
-
-size_t Audio::render(float *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle)
-        return swap_dac_channels(interleaved_stereo,
-                                 m_impl->m_hle->render(interleaved_stereo, max_frames));
-    std::lock_guard<std::mutex> lock(m_impl->m_audio_mutex);
-    size_t frames = std::min(max_frames, m_impl->m_rb_count);
-    for (size_t i = 0; i < frames; i++) {
-        interleaved_stereo[i * 2 + 0] = m_impl->m_sample_buffer[m_impl->m_rb_read_pos * 2 + 0];
-        interleaved_stereo[i * 2 + 1] = m_impl->m_sample_buffer[m_impl->m_rb_read_pos * 2 + 1];
-        m_impl->m_rb_read_pos = (m_impl->m_rb_read_pos + 1) % Impl::RING_BUFFER_CAPACITY;
-    }
-    m_impl->m_rb_count -= frames;
-    return swap_dac_channels(interleaved_stereo, frames);
-}
-
-size_t Audio::render_ready(int16_t *interleaved_stereo, size_t max_frames) {
-    if (m_impl->m_hle)
-        return swap_dac_channels(interleaved_stereo,
-                                 m_impl->m_hle->render_ready(interleaved_stereo, max_frames));
-    return render(interleaved_stereo, max_frames);
-}
-
-size_t Audio::state_size() const {
-    if (m_impl->m_hle) return hle::AudioEngine::STATE_BYTES;
-    return m_impl->state_size();
-}
-
-void Audio::set_sound_bank(uint32_t page) {
-    m_impl->m_cpubank2 = page;
-    if (m_impl->m_hle) {
-        m_impl->m_hle->set_bank(uint8_t(page));
-    }
-}
-
-uint32_t Audio::sound_bank() const {
-    return m_impl->m_cpubank2;
-}
-
-void Audio::save_state(std::span<uint8_t> dst) const {
-    static_assert(Snapshotable<Impl>);
-    if (m_impl->m_hle) {
-        m_impl->m_hle->save(dst);
-        return;
-    }
-    if (dst.size() != state_size()) {
-        throw std::invalid_argument("Audio::save_state size mismatch");
-    }
-    StateWriter writer(dst);
-    m_impl->save_state(writer);
-    if (writer.remaining() != 0) {
-        throw std::logic_error("Audio::save_state remaining unwritten bytes");
-    }
-}
-
-void Audio::load_state(std::span<const uint8_t> src) {
-    if (m_impl->m_hle) {
-        m_impl->m_hle->load(src);
-        return;
-    }
-    if (src.size() != state_size()) {
-        throw std::invalid_argument("Audio::load_state size mismatch");
-    }
-    StateReader reader(src);
-    m_impl->load_state(reader);
-    if (reader.remaining() != 0) {
-        throw std::logic_error("Audio::load_state remaining unread bytes");
-    }
-}
-
-static_assert(SnapshotRoot<Audio>);
+size_t Audio::state_size() const { return AudioSnapshot::BYTES; }
+void Audio::save_state(std::span<uint8_t> dst) const { m_impl->snapshot().write(dst); }
+void Audio::load_state(std::span<const uint8_t> src) { m_impl->restore(AudioSnapshot::parse(src)); }
 } // namespace f3rt

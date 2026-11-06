@@ -152,7 +152,7 @@ run.log                                # frames in which each watched PC execute
 ```
 
 - `until` without `watch` only sees routines that write video/control RAM.
-- `watch` needs `build-<id>-instrument/`; the error prints the cmake commands if missing.
+- `watch` needs `build/<id>-instrument/`; the error prints the cmake commands if missing.
 - Task routines (cooperative yield traps) run their entry once and resume inside: watch a resume point
   (`dis` annotates yields, `flow(tree=...)` lists resume points).
 - `rendered.png` dumps show which screen you are on.

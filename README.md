@@ -7,6 +7,7 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 **Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, `uv` (managing Python 3.11+ and Capstone 5.0.9).
 
 **macOS:**
+
 ```sh
 brew install cmake ninja uv
 # Optional: prebuilt libraries/tools, used instead of source builds when present.
@@ -41,10 +42,27 @@ make help
 ## Running
 
 ```sh
-./build-landmakrj/landmakr
+./build/landmakrj/landmakrj
 ```
 
 Run with `--help` for all command-line options.
+
+## Nintendo 3DS
+
+```sh
+nix run .#3ds-3dsx              # build build/landmakrj-3ds/landmakrj.3dsx
+nix run .#3ds-cia               # build build/landmakrj-3ds/landmakrj.cia
+nix run .#3ds-azahar            # build the 3dsx and launch it in Azahar
+nix develop .#3ds               # devkitARM, makerom, bannertool, ctrtool, cmake, ninja
+```
+
+**Frame-budget bench (dev only):** `nix run .#3ds-bench` builds a separate 3dsx that replays a scripted
+playthrough (attract, menu, character select, gameplay) to check frame timing. `tools/bench/n3ds-bench.sh`
+runs it in Azahar and reports per-scenario results. It is never part of the shipped build.
+
+**Real hardware:** audio needs `sdmc:/3ds/dspfirm.cdc`, a firmware dump taken from the console itself.
+Without it the app runs silently and the bottom screen shows `Audio off: sdmc:/3ds/dspfirm.cdc missing`.
+Azahar's HLE DSP ignores the file's contents, so a placeholder is enough there.
 
 ## Supported Games
 

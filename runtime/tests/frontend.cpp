@@ -1,4 +1,6 @@
+#include "frontend/frame_slots.hpp"
 #include "frontend/settings.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <SDL3/SDL.h>
@@ -8,8 +10,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -69,9 +73,9 @@ bool settings_equal(const f3rt::FrontendSettings &a, const f3rt::FrontendSetting
     if (a.renderer != b.renderer || a.video_scale != b.video_scale || a.border != b.border ||
         a.filter != b.filter || a.interpolation != b.interpolation ||
         a.interpolation_fields != b.interpolation_fields || a.postprocess != b.postprocess ||
-        a.user_shader != b.user_shader || a.audio_backend != b.audio_backend ||
-        std::abs(a.volume - b.volume) >= 0.001f || a.fast_boot != b.fast_boot ||
-        a.boot_cache != b.boot_cache || a.motion_interp != b.motion_interp) {
+        a.user_shader != b.user_shader || std::abs(a.volume - b.volume) >= 0.001f ||
+        a.fast_boot != b.fast_boot || a.boot_cache != b.boot_cache ||
+        a.motion_interp != b.motion_interp) {
         return false;
     }
     for (unsigned p = 0; p < f3rt::LOCAL_PLAYER_COUNT; ++p) {
@@ -309,7 +313,7 @@ TEST_F(Frontend, LegacySettingsCompatibility) {
                                                    SDL_SCANCODE_E, SDL_SCANCODE_R, SDL_SCANCODE_T,
                                                    SDL_SCANCODE_Y, SDL_SCANCODE_U};
     std::ostringstream old;
-    old << "device0=2\ndevice1=3\n";
+    old << "audio=reference\ndevice0=2\ndevice1=3\n";
     for (unsigned c = 0; c < old_keys.size(); ++c) {
         old << "binding0." << c << '=' << int(old_keys[c]) << " -1 -1 1\n";
     }
@@ -456,8 +460,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
         *rc::gen::element<std::string>("none", "geometry", "palette", "geometry,palette");
     s.postprocess = *rc::gen::element<std::string>("off", "crt", "user");
     s.user_shader = gen_clean_string(64);
-    s.audio_backend =
-        *rc::gen::element(f3rt::AudioBackend::Enhanced, f3rt::AudioBackend::Reference);
     s.volume = float(*rc::gen::inRange(0, 101)) / 100.0f;
     s.fast_boot = *rc::gen::arbitrary<bool>();
     s.boot_cache = *rc::gen::arbitrary<bool>();
@@ -488,7 +490,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     RC_ASSERT(loaded.interpolation_fields == s.interpolation_fields);
     RC_ASSERT(loaded.postprocess == s.postprocess);
     RC_ASSERT(loaded.user_shader == s.user_shader);
-    RC_ASSERT(loaded.audio_backend == s.audio_backend);
     RC_ASSERT(std::abs(loaded.volume - s.volume) < 0.001f);
     RC_ASSERT(loaded.fast_boot == s.fast_boot);
     RC_ASSERT(loaded.boot_cache == s.boot_cache);
@@ -709,5 +710,110 @@ RC_GTEST_PROP(FrontendInputMapper, ReleaseBlocksHeldKeysUntilPhysicalRelease, ()
         send_key(mapper, keys[i], false);
     }
     RC_ASSERT(is_neutral(mapper));
+}
+
+RC_GTEST_PROP(FrameSlots, BeginAvoidsPublishedAndHeld, ()) {
+    f3rt::FrameSlots frames;
+    std::array<std::unique_ptr<f3rt::SceneSnapshot>, f3rt::FrameSlots::SLOT_COUNT> snapshots;
+    std::array<f3rt::SceneSnapshot *, f3rt::FrameSlots::SLOT_COUNT> attached{};
+    for (size_t i = 0; i < snapshots.size(); ++i)
+        attached[i] = (snapshots[i] = std::make_unique<f3rt::SceneSnapshot>()).get();
+    frames.attach_snapshots(attached);
+
+    const f3rt::FrameSnapshot *latest = nullptr, *held = nullptr, *writing = nullptr;
+    uint64_t published = 0, seen = 0, tag = 0;
+    const int steps = *rc::gen::inRange(1, 80);
+    for (int step = 0; step < steps; ++step) {
+        switch (*rc::gen::inRange(0, 4)) {
+        case 0: {
+            f3rt::FrameSnapshot &snapshot = frames.begin();
+            const f3rt::FrameSnapshot *pointer = &snapshot;
+            RC_ASSERT(pointer != latest);
+            RC_ASSERT(pointer != held);
+            size_t index = 0;
+            while (index < size_t(f3rt::FrameSlots::SLOT_COUNT) &&
+                   ((latest && index == latest->snapshot_index) ||
+                    (held && index == held->snapshot_index)))
+                ++index;
+            RC_ASSERT(index < size_t(f3rt::FrameSlots::SLOT_COUNT));
+            RC_ASSERT(snapshot.snapshot_index == index);
+            RC_ASSERT(snapshot.scene_snapshot == attached[index]);
+            snapshot.frame = ++tag;
+            writing = pointer;
+            break;
+        }
+        case 1: {
+            if (!writing) break;
+            frames.publish();
+            latest = writing;
+            writing = nullptr;
+            ++published;
+            RC_ASSERT(frames.unseen());
+            break;
+        }
+        case 2: {
+            const unsigned scale = *rc::gen::inRange(1u, 5u);
+            if (!latest) {
+                frames.restate(scale);
+                RC_ASSERT(!frames.unseen());
+                break;
+            }
+            const uint64_t frame = latest->frame;
+            const f3rt::SceneSnapshot *scene = latest->scene_snapshot;
+            frames.restate(scale);
+            RC_ASSERT(frames.unseen());
+            bool fresh = false;
+            const f3rt::FrameSnapshot *restated = frames.take(fresh);
+            RC_ASSERT(fresh);
+            RC_ASSERT(restated != nullptr);
+            RC_ASSERT(restated != latest);
+            RC_ASSERT(restated != held);
+            RC_ASSERT(restated->scale == scale);
+            RC_ASSERT(restated->frame == frame);
+            RC_ASSERT(restated->scene_snapshot == scene);
+            latest = restated;
+            held = restated;
+            ++published;
+            seen = published;
+            break;
+        }
+        case 3: {
+            bool fresh = false;
+            const f3rt::FrameSnapshot *taken = frames.take(fresh);
+            const bool expected = latest && published != seen;
+            RC_ASSERT(fresh == expected);
+            if (expected) {
+                RC_ASSERT(taken == latest);
+                held = latest;
+                seen = published;
+            } else {
+                RC_ASSERT(taken == held);
+            }
+            break;
+        }
+        }
+    }
+}
+
+TEST(FrameSlots, WaitUnseenWakesOnPublishAndStop) {
+    f3rt::FrameSlots frames;
+    std::atomic<bool> stop{false};
+    std::atomic<int> stage{0};
+    std::thread producer([&] {
+        while (stage.load() == 0) std::this_thread::yield();
+        frames.begin();
+        frames.publish();
+        while (stage.load() != 2) std::this_thread::yield();
+        stop.store(true);
+        frames.wake();
+    });
+    stage.store(1);
+    EXPECT_TRUE(frames.wait_unseen(stop));
+    bool fresh = false;
+    const f3rt::FrameSnapshot *shot = frames.take(fresh);
+    EXPECT_TRUE(fresh && shot);
+    stage.store(2);
+    EXPECT_FALSE(frames.wait_unseen(stop));
+    producer.join();
 }
 // NOLINTEND(misc-use-internal-linkage,bugprone-throwing-static-initialization)

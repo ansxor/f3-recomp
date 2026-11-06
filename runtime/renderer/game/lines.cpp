@@ -27,18 +27,23 @@ void GameLines::reset() {
     m_control_1.fill(0);
     for (auto &line : m_lines) line = {};
     for (auto &row : m_rows) row = {};
+    forget_decode();
 }
 
 // Decode line RAM and FDP controls, mirroring Video::read_line_ram. Fields carry
 // forward when a subsection latch is absent, so all 256 scanlines are walked
 // in order with a persistent scratch line.
 void GameLines::decode(const VideoRam &vram) {
+    const uint8_t *lineram = &vram.graphics[OFFS_LINERAM];
+    const bool latches_changed = m_shadow_latches.changed(lineram);
+    const bool sections_changed = m_shadow_sections.changed(lineram + LINERAM_SECTIONS_OFFSET);
+    const bool control_changed = m_shadow_control.changed(vram.control.data());
+    if (!latches_changed && !sections_changed && !control_changed) return;
+    m_rows_current = false;
     for (int i = 0; i < 8; ++i) {
         m_control_0[i] = vram.control_u16(unsigned(i));
         m_control_1[i] = vram.control_u16(unsigned(8 + i));
     }
-
-    const uint8_t *lineram = &vram.graphics[OFFS_LINERAM];
 
     auto set_clip_upper = [](LineClip &c, int8_t left, int8_t right) {
         c.left = int16_t((c.left & 0xff) | (int16_t(left) << 8));
@@ -210,6 +215,10 @@ void GameLines::get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool
 }
 
 void GameLines::prepare(bool flipped) {
+    if (m_rows_current && m_rows_flipped == flipped) return;
+    m_rows_current = true;
+    m_rows_flipped = flipped;
+    m_rows_version = fresh_content_version();
     std::array<int32_t, 4> reg_sx{};
     std::array<int32_t, 4> reg_sy{};
     std::array<int32_t, 4> reg_fx_y{};
@@ -312,17 +321,22 @@ void GameLines::prepare(bool flipped) {
 }
 
 void GameLines::cull_empty_rows(const GameTiles &tiles) {
+    bool changed = false;
     for (auto &row : m_rows)
         for (unsigned i = 0; i < 4; ++i) {
             auto &pf = row.playfields[i];
-            pf.empty_row = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map),
-                                           unsigned(pf.source_y) & 511);
+            const bool empty = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map),
+                                               unsigned(pf.source_y) & 511);
+            changed |= pf.empty_row != empty;
+            pf.empty_row = empty;
         }
+    if (changed) m_rows_version = fresh_content_version();
 }
 
 GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolutionAltMaps &maps) {
     AltRowCounts counts;
     if constexpr (f3rt::game_config::video.full_resolution_alt_maps) {
+        m_rows_version = fresh_content_version();
         for (unsigned y = 0; y < m_rows.size(); ++y)
             for (unsigned i = 2; i < 4; ++i) {
                 auto &pf = m_rows[y].playfields[i];
@@ -331,7 +345,7 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
                 // Every map row the scanline can sample: the highest sub-row phase stays below
                 // y_fraction + y_step (expanded sub-rows, GameLines/compositor vertical phase).
                 const int rows_spanned =
-                    std::clamp((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
+                    std::clamp<int>((int(pf.y_fraction) + pf.y_step - 1) >> 8, 0, 31);
                 const unsigned first = unsigned(pf.source_y) & 511;
                 const unsigned last = (first + unsigned(rows_spanned)) & 511;
                 pf.full_res_offset = int16_t(maps.offset(i, first >> 4, last >> 4));
@@ -567,6 +581,7 @@ void GameLines::save_state(StateWriter &writer) const {
 }
 
 void GameLines::load_state(StateReader &reader) {
+    forget_decode();
     for (size_t i = 0; i < 256; ++i) {
         CanonicalLineParams s;
         reader.read(s);

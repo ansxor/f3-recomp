@@ -15,8 +15,6 @@ class GameVideo;
 class Audio;
 class Interpreter;
 class Eeprom;
-class SoundTrace;
-class SoundNative;
 class SpriteUnits;
 class DiscoveryLog;
 class Machine {
@@ -29,7 +27,7 @@ public:
     Machine(const Machine &) = delete;
     Machine &operator=(const Machine &) = delete;
     f3_cpu cpu{};
-    std::array<uint8_t, 0x20000> ram{};
+    alignas(8) std::array<uint8_t, 0x20000> ram{};
     std::array<uint8_t, 0x8000> palette{};
     std::array<uint8_t, 0x40000> graphics{};
     std::array<uint8_t, 0x20> control{};
@@ -42,6 +40,7 @@ private:
 public:
     // Observing native scanout materializes a retained GPU-presented frame.
     const std::vector<uint32_t> &native_pixels() const;
+    const std::array<uint32_t, 7> &rom_region_crcs() const { return m_rom_crcs; }
     RomSet roms;
     std::unique_ptr<Video> video;
     // Host-only `--discovery-log` observer of graphics/control stores; null = off. Never serialized.
@@ -54,8 +53,6 @@ public:
     std::unique_ptr<Audio> audio;
     std::unique_ptr<Eeprom> eeprom;
     std::unique_ptr<Interpreter> interpreter;
-    std::unique_ptr<SoundTrace> sound_trace;
-    std::unique_ptr<SoundNative> sound_native;
     bool sound_bankswitch = false;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff,
                                    0xffffffff, 0xffffffff, 0xffffffff};
@@ -85,12 +82,9 @@ public:
     std::vector<uint32_t> fallback_hits;
 
     void reset();
+    void bind_cpu_windows();
     void reset_devices();
     void reset_main_cpu();
-    // Select before advancing the machine. The interpreted driver is the default.
-    void use_native_sound(const f3_block *program, size_t count,
-                          std::span<const f3_excluded_range> excluded, uint32_t expected_crc);
-    uint32_t sound_pc() const;
     bool run_frame(bool translated = false);
     void advance_to(uint64_t cycles);
     int boundary();
@@ -111,6 +105,7 @@ public:
 
 private:
     uint64_t m_hardware_cycles = 0;
+    std::array<uint32_t, 7> m_rom_crcs{};
     uint64_t m_next_vblank = 0, m_irq3_at = UINT64_MAX;
     uint64_t m_watchdog_at = 0;
     uint64_t raster_cycle(uint64_t pixels) const;

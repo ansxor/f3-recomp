@@ -18,8 +18,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Subcommands
     subparsers.add_parser("analyze", help="Static and headless dynamic game analysis (f3a)", add_help=False)
-    subparsers.add_parser("compare", help="Compare frames, audio, or sound traces", add_help=False)
-    subparsers.add_parser("decode", help="Decode binary traces", add_help=False)
+    subparsers.add_parser("compare", help="Compare frames or audio", add_help=False)
     subparsers.add_parser(
         "differential", help="Instruction-level differential test harness against Musashi", add_help=False
     )
@@ -46,12 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "compare":
         compare_parser = argparse.ArgumentParser(
             prog="f3 compare",
-            description="Compare frames, audio WAVs, or sound traces",
+            description="Compare frames or audio WAVs",
         )
         compare_sub = compare_parser.add_subparsers(dest="compare_type", metavar="<type>")
         compare_sub.add_parser("frames", help="Compare pixel frames (BMP / raw buffers)", add_help=False)
         compare_sub.add_parser("audio", help="Compare PCM16 audio WAV files", add_help=False)
-        compare_sub.add_parser("trace", help="Compare F3SND2 sound bus traces", add_help=False)
 
         if not rest or rest[0] in ("-h", "--help"):
             compare_parser.print_help()
@@ -67,33 +65,8 @@ def main(argv: list[str] | None = None) -> int:
             from tools.compare.audio import main as audio_main
 
             return audio_main(compare_args)
-        elif target == "trace":
-            from tools.compare.trace import main as trace_main
-
-            return trace_main(compare_args)
         else:
             compare_parser.error(f"unknown comparison target: {target}")
-
-    elif cmd == "decode":
-        decode_parser = argparse.ArgumentParser(
-            prog="f3 decode",
-            description="Decode binary traces",
-        )
-        decode_sub = decode_parser.add_subparsers(dest="decode_type", metavar="<type>")
-        decode_sub.add_parser("trace", help="Decode F3SND2 sound bus traces to JSONL", add_help=False)
-
-        if not rest or rest[0] in ("-h", "--help"):
-            decode_parser.print_help()
-            return 0
-
-        target = rest[0]
-        decode_args = rest[1:]
-        if target == "trace":
-            from tools.decode.trace import main as trace_decode_main
-
-            return trace_decode_main(decode_args)
-        else:
-            decode_parser.error(f"unknown decode target: {target}")
 
     elif cmd == "differential":
         from tools.differential.runner import run_differential
