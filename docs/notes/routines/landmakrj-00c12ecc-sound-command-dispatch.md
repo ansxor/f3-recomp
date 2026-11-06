@@ -1,7 +1,7 @@
 ---
 title: Land Maker sound driver command dispatch (c12ecc) and command set
 created: 2026-10-11
-updated: 2026-10-12
+updated: 2026-11-05
 type: routine
 tags: [audio, dispatch, sound-driver, mailbox]
 sources:
@@ -12,6 +12,7 @@ sources:
   - raw/tests/landmakrj-seed5-sound-trace.md
   - raw/tests/landmakrj-sound-image-crc.md
   - raw/disasm/landmakrj-sound-driver-excerpts.md
+  - raw/tests/2026-11-05-landmakrj-song-loop-flag.md
 games: [landmakrj]
 addresses: [0x00C12ECC, 0x00C0B414, 0x00C1323E, 0x00C13260, 0x00C13072, 0x00C141CE, 0x00C12F1A, 0x00C12C30, 0x00C12CB8, 0x00C12CEA, 0x00C12DE6, 0x00C130D2, 0x00C14330, 0x00C130DA, 0x00C11DCE, 0x00C130EA, 0x00C140D6]
 status: hypothesis
@@ -58,8 +59,8 @@ ROM and agree with the documented handlers and lengths; the table entries are 16
 |---|---:|---|---|
 | `0x20` | 3 | effect | select effects configuration (< 13), queue effects worker (`$c0b454`) |
 | `0x21` | 4 | parameter, value | store byte at `$c84a + 2*parameter` (`$c0b47e`) |
-| `0x80` | 3 | sequence | stop and restart, non-looping (`$c12f20`, start `$c12ce0`) |
-| `0x81` | 3 | sequence | stop and restart, looping (`$c12f26`, start `$c12ce6`) |
+| `0x80` | 3 | sequence | stop and restart; clears `$6e1a`, so `$d524` is cleared at `$c12d8c` (`$c12f20`, start `$c12ce0`) |
+| `0x81` | 3 | sequence | stop and restart; sets `$6e1a`, `$d524` survives (`$c12f26`, start `$c12ce6`); it does not by itself loop the song ^[raw/tests/2026-11-05-landmakrj-song-loop-flag.md] |
 | `0x82` | 3 | sequence | stop and remove active sequence (`$c12f1a` branches to `$c12c30`) |
 | `0x83` | 3 | sequence | rate to zero, release track notes (`$c12f2c`) |
 | `0x84` | 3 | sequence | restore saved rate (`$c12f42`) |

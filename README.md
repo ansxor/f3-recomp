@@ -7,6 +7,7 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 **Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, `uv` (managing Python 3.11+ and Capstone 5.0.9).
 
 **macOS:**
+
 ```sh
 brew install cmake ninja uv
 # Optional: prebuilt libraries/tools, used instead of source builds when present.
@@ -48,9 +49,6 @@ Run with `--help` for all command-line options.
 
 ## Nintendo 3DS
 
-The 3DS build (New 3DS only, `landmakrj` only) is a set of optional flake outputs; the desktop
-outputs are unchanged and never pull the devkitPro toolchain.
-
 ```sh
 nix run .#3ds-3dsx              # build build/landmakrj-3ds/landmakrj.3dsx
 nix run .#3ds-cia               # build build/landmakrj-3ds/landmakrj.cia
@@ -58,18 +56,9 @@ nix run .#3ds-azahar            # build the 3dsx and launch it in Azahar
 nix develop .#3ds               # devkitARM, makerom, bannertool, ctrtool, cmake, ninja
 ```
 
-GAME and ROM_DIR default to `landmakrj` and `roms/landmakrj`; a ROM directory is required because
-the ROM set is embedded in the ROM file system image. The 3DS build runs only the core runtime: HLE
-(Enhanced) audio, CPU scene composition, fast boot, and the touch menu on the bottom screen.
-Reference audio, netplay, save states and the native sound program are not available there.
-
-**Frame-budget bench (dev only):** `nix run .#3ds-bench` builds `build/landmakrj-3ds-bench/landmakrj.3dsx`
-with `F3_N3DS_BENCH`, which plays the scripted timeline `games/landmakrj/n3ds/bench.txt` (attract, main
-menu, character select, gameplay) from `sdmc:/3ds/f3-recomp/landmakrj/bench.txt`, logs
-`n3ds: scenario <name> frame=<n>` markers and ignores `settings.cfg`. The shipped build never contains it.
-`tools/bench/n3ds-bench.sh 100 TAG` (or `300`) builds it, runs it in Azahar under Xvfb at that
-`cpu_clock_percentage`, and writes the log, a screenshot per scenario and the per-scenario gate table
-(`tools/bench/n3ds_report.py`) to `/tmp/bench/TAG/`.
+**Frame-budget bench (dev only):** `nix run .#3ds-bench` builds a separate 3dsx that replays a scripted
+playthrough (attract, menu, character select, gameplay) to check frame timing. `tools/bench/n3ds-bench.sh`
+runs it in Azahar and reports per-scenario results. It is never part of the shipped build.
 
 **Real hardware:** audio needs `sdmc:/3ds/dspfirm.cdc`, a firmware dump taken from the console itself.
 Without it the app runs silently and the bottom screen shows `Audio off: sdmc:/3ds/dspfirm.cdc missing`.
