@@ -50,11 +50,28 @@ if(NINTENDO_3DS)
         message(FATAL_ERROR "The 3DS build embeds the ROM set in RomFS: F3_ROM_DIR is required")
     endif()
 endif()
-find_program(UV_EXECUTABLE uv REQUIRED)
-execute_process(COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-    python -c
-    "import pathlib, sys, tomllib; p = pathlib.Path(sys.argv[1]); identity = tomllib.loads(p.read_text())['game']['id']; sys.exit(0 if identity == sys.argv[2] else 'Configured game id does not match directory: ' + str(p))"
-    "${F3_GAME_CONFIG}" "${F3_GAME}"
+set(F3_RECOMP_EXECUTABLE "" CACHE FILEPATH "Prebuilt f3-recomp binary; built with Go at configure time when empty")
+if(F3_RECOMP_EXECUTABLE)
+    get_filename_component(F3_RECOMP_EXECUTABLE "${F3_RECOMP_EXECUTABLE}" ABSOLUTE)
+else()
+    find_program(F3_GO_EXECUTABLE go REQUIRED)
+    file(GLOB F3_RECOMP_GO_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.go" "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        ${F3_RECOMP_GO_SOURCES}
+        "${CMAKE_CURRENT_SOURCE_DIR}/go.mod" "${CMAKE_CURRENT_SOURCE_DIR}/go.sum")
+    set(_f3_recomp_built "${CMAKE_CURRENT_BINARY_DIR}/f3-recomp${CMAKE_EXECUTABLE_SUFFIX}")
+    execute_process(
+        COMMAND ${F3_GO_EXECUTABLE} build -o "${_f3_recomp_built}" ./recomp
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE _f3_go_build_result)
+    if(NOT _f3_go_build_result EQUAL 0)
+        message(FATAL_ERROR "Building f3-recomp failed. It needs Go (see go.mod) and the Capstone C library "
+            "(libcapstone development files plus pkg-config); or pass -DF3_RECOMP_EXECUTABLE=<prebuilt f3-recomp>.")
+    endif()
+    set(F3_RECOMP_EXECUTABLE "${_f3_recomp_built}")
+endif()
+execute_process(COMMAND "${F3_RECOMP_EXECUTABLE}" game-id --config "${F3_GAME_CONFIG}" --expect "${F3_GAME}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMAND_ERROR_IS_FATAL ANY)
 function(f3_compute_generator_stamp out_stamp)
@@ -115,10 +132,7 @@ function(f3_run_generator)
 endfunction()
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${F3_GAME_CONFIGS} "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock")
+    ${F3_GAME_CONFIGS})
 set(F3_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_config")
 set(F3_COMPILE_ROMS_ARGS
     --configs ${F3_GAME_CONFIGS} --output "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
@@ -133,36 +147,25 @@ endif()
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
     INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
+        "${F3_RECOMP_EXECUTABLE}"
         ${F3_GAME_CONFIGS}
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
     EXTRA_DATA "${F3_COMPILE_ROMS_ARGS}"
     OUTPUT_FILES ${F3_COMPILE_ROMS_OUTPUTS}
-    COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-        python recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS})
-# Emit-unit headers come from the config alone (no ROM); recomp emit reads the same
+    COMMAND "${F3_RECOMP_EXECUTABLE}" compile-roms ${F3_COMPILE_ROMS_ARGS})
+# Emit-unit headers come from the config alone (no ROM); f3-recomp emit reads the same
 # config and checks the digest guard it plants against these headers.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py")
 set(F3_COMPILE_SPRITE_UNITS_ARGS
     --config "${F3_GAME_CONFIG}" --output-dir "${F3_GENERATED_CONFIG_DIR}")
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_sprite_units.stamp"
     INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
+        "${F3_RECOMP_EXECUTABLE}"
         "${F3_GAME_CONFIG}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
     EXTRA_DATA "${F3_COMPILE_SPRITE_UNITS_ARGS}"
     OUTPUT_FILES
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.h"
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.hpp"
-    COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-        python recomp/compile/sprite_units.py ${F3_COMPILE_SPRITE_UNITS_ARGS})
+    COMMAND "${F3_RECOMP_EXECUTABLE}" compile-sprite-units ${F3_COMPILE_SPRITE_UNITS_ARGS})
 option(F3_PROFILE_INSTRUMENT "Record every generated main/sound entry with --profile-out" OFF)
 if(F3_PROFILE_INSTRUMENT AND NOT F3_ROM_DIR)
     message(FATAL_ERROR "F3_PROFILE_INSTRUMENT requires F3_ROM_DIR to regenerate instrumentable main/sound entries")
@@ -202,10 +205,7 @@ if(F3_ROM_DIR)
     if(NOT F3_GENERATED_DIR)
         set(F3_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/${F3_GAME}")
     endif()
-    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py" "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        ${RECOMP_SOURCES} "${F3_GAME_CONFIG}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_GAME_CONFIG}")
 
     file(GLOB _rom_files LIST_DIRECTORIES false "${F3_ROM_DIR}/*")
     list(SORT _rom_files)
@@ -230,11 +230,9 @@ if(F3_ROM_DIR)
     f3_run_generator(
         STAMP_FILE "${F3_GENERATED_DIR}/recomp_emit.stamp"
         INPUT_FILES
-            ${RECOMP_SOURCES}
+            "${F3_RECOMP_EXECUTABLE}"
             "${F3_GAME_CONFIG}"
             ${F3_PROFILE_INPUTS}
-            "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
         EXTRA_DATA
             "${_rom_identity}"
             "${F3_RECOMP_EMIT_ARGS}"
@@ -243,8 +241,7 @@ if(F3_ROM_DIR)
             "${F3_GENERATED_DIR}/program.c"
             "${F3_GENERATED_DIR}/program.h"
             "${F3_GENERATED_DIR}/program.bin"
-        COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-            python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
+        COMMAND "${F3_RECOMP_EXECUTABLE}" emit ${F3_RECOMP_EMIT_ARGS})
 endif()
 
 set(MUSASHI ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/musashi)
@@ -542,6 +539,7 @@ if(F3RT_SDL)
     endif()
     if(F3RT_GPU)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
+        find_program(UV_EXECUTABLE uv REQUIRED)
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
         add_custom_command(OUTPUT "${VIDEO_SHADER_HEADER}"
             COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups

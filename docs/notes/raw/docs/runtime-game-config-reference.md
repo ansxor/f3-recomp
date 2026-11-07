@@ -25,7 +25,7 @@ Their exact revisions and finite evidence are in [porting](/developer/porting).
 You can also pass `--config` directly to the compiler; a config alone is not proof
 of a complete port.
 
-The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]`. The emit step (`generate()` in `recomp/generate.py`) reads `[discovery] coverage` again.
+The Go recompiler (`recomp/`) loads this file. `f3-recomp discover` reads `[discovery]`; `f3-recomp emit` reads `[discovery] coverage` again.
 
 ::: info
 The loader does not check unknown keys. A misspelled key is silently ignored. Check the spelling of every key.
@@ -142,8 +142,8 @@ In the two Land Maker configs, `size` is `2097152` (2 MiB) and each lane file ha
 
 ## Additional regions and video metadata
 
-`tools/compile_roms.py` generates runtime metadata from these configs using
-`recomp/roms.py`; the sound compiler consumes the same manifest. Optional region
+`f3-recomp compile-roms` generates runtime metadata from these configs using
+the Go recompiler; the sound compiler consumes the same manifest. Optional region
 tables are `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples`.
 Each has explicit `size`, `fill` (0 or 255) and lanes with `file`, `size`, `crc`
 (CRC32), `sha1`, `offset`, `stride`, `group`. Every source group of consecutive
@@ -203,12 +203,12 @@ owner = "unit"         # "unit" (default) | "writer" (writer PC of the record's 
 ranges = [[0x9a74, 0x9af6]]   # inclusive PC ranges writing sprite RAM outside any unit
 ```
 
-Unit ids are declaration order. `tools/compile_sprite_units.py --config <toml>
+Unit ids are declaration order. `f3-recomp compile-sprite-units --config <toml>
 --output-dir <dir>` writes, at CMake configure time and without a ROM,
 `sprite_units.h` (`F3_SPRITE_UNITS_DIGEST`, `F3_SPRITE_UNIT_COUNT`) and
 `sprite_units.hpp` (`f3rt::sprite_units::<name>` `EmitUnit`s, `all`,
 `frame_writers`, `digest`, static_asserts). Games without units get empty arrays.
-`recomp emit` plants `F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every
+`f3-recomp emit` plants `F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every
 declared end/start PC, includes `sprite_units.h` with a digest `#error` guard in
 each file that has a hook, rejects PCs that are not retained decoded
 instructions or frame-writer ranges outside the ROM, and records per-unit hook
@@ -231,7 +231,7 @@ sources; see [flicker shadows](../../developer/SPRITE-UNITS.md#flicker-shadows).
 
 ## Compile-time video geometry
 
-`tools/compile_roms.py --game <id> --game-output <path>` also writes
+`f3-recomp compile-roms --game <id> --game-output <path>` also writes
 `game_video_config.hpp` into the same `generated_config` directory, from the same
 validated `[video]` values as the runtime manifest: `f3rt::game_config::id`,
 `video` (a `VideoConfig`), `visible_end`, and `matches(const VideoConfig &)`, which

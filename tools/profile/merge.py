@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from recomp.block_profile import BlockProfile, read_profile
+from tools.recomp_py.block_profile import BlockProfile, read_profile
 
 
 def merge_profiles(inputs: list[Path], output: Path) -> dict:

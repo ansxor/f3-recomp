@@ -72,11 +72,11 @@ def run_differential(
     # 2. Initialize Capstone
     md = _get_capstone_disassembler()
 
-    # 3. Import recomp.emitter.lower
+    # 3. Import tools.recomp_py.emitter.lower
     try:
-        from recomp.emitter import lower
+        from tools.recomp_py.emitter import lower
     except ImportError as exc:
-        print(f"ERROR: Cannot import recomp.emitter.lower: {exc}", file=sys.stderr)
+        print(f"ERROR: Cannot import tools.recomp_py.emitter.lower: {exc}", file=sys.stderr)
         return 2
 
     # 4. Generate test cases

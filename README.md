@@ -4,12 +4,14 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 
 ## Building
 
-**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, `uv` (managing Python 3.11+ and Capstone 5.0.9).
+**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, Go (version in `go.mod`), and the Capstone C library (libcapstone 5.x) with pkg-config.
+CMake builds the recompiler (`recomp/`) with `go build` at configure time; pass `-DF3_RECOMP_EXECUTABLE=<path>` to use a prebuilt one.
+`F3RT_GPU=ON` builds also need `uv` (shader compilation runs `runtime/renderer/shaders/compile.py`). The Python tools under `tools/` (analysis, differential, profile, ROM exclusions) use `uv` separately; the build does not.
 
 **macOS:**
 
 ```sh
-brew install cmake ninja uv
+brew install cmake ninja go capstone pkg-config
 # Optional: prebuilt libraries/tools, used instead of source builds when present.
 brew install sdl3 yyjson cpp-httplib googletest glslang spirv-cross
 ```
@@ -25,6 +27,8 @@ checked in, and without a FAUST compiler (the default) no build runs it. If one 
 run it for any header older than its `.dsp`, `architecture.hpp` or `.lib` inputs, then recompile the
 code that includes it. `cmake --build <build-dir> --target faust-regen` does the same on request and
 leaves up-to-date headers alone; touch the `.dsp` (or delete the header) to force one.
+
+**Linux (apt):** `sudo apt install cmake ninja-build golang libcapstone-dev pkg-config`
 
 **Build steps** (using your own legally obtained ROMs):
 

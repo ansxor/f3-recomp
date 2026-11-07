@@ -143,7 +143,7 @@ void f3_write8(f3_cpu *cpu, uint32_t address, uint8_t value);
 void f3_write16(f3_cpu *cpu, uint32_t address, uint16_t value);
 void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value);
 
-/* Direct access to main work RAM for idle-loop fast-forward (recomp/idle.py):
+/* Direct access to main work RAM for idle-loop fast-forward (internal/idle):
  * a pointer to `size` contiguous bytes at `address`, or NULL when the range is
  * not plain RAM (device, mirror wrap, ROM) or cpu is a replay sandbox. Loads
  * and stores through it have no bus side effects, but a store bypasses
