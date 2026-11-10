@@ -26,7 +26,7 @@ endforeach()
 
 set(F3_N3DS_ROM_FILES_LIST "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
 if(NOT EXISTS "${F3_N3DS_ROM_FILES_LIST}")
-    message(FATAL_ERROR "rom_files.txt is missing; f3-recomp compile-roms --files-output did not run")
+    message(FATAL_ERROR "rom_files.txt is missing; recomp/compile/roms.py --files-output did not run")
 endif()
 file(STRINGS "${F3_N3DS_ROM_FILES_LIST}" F3_N3DS_ROM_NAMES)
 set(F3_N3DS_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")

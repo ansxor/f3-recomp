@@ -1,6 +1,6 @@
 """Game model shared by every f3a command.
 
-Code evidence comes from the recompiler's own discovery (tools/recomp_py/discovery.py), so
+Code evidence comes from the recompiler's own discovery (recomp/discovery.py), so
 the analysis sees the same instructions, jump-table edges and devirtualized
 computed transfers the generated C was built from:
 
@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
 
 from capstone import m68k as M  # noqa: E402
 
-from tools.recomp_py.discovery import (  # noqa: E402  (path set up above)
+from recomp.discovery import (  # noqa: E402  (path set up above)
     CALL_MNEMONICS,
     COND_BRANCH_MNEMONICS,
     CS_ARCH_M68K,
@@ -48,7 +48,7 @@ from tools.recomp_py.discovery import (  # noqa: E402  (path set up above)
     discover,
     load_rom,
 )
-from tools.recomp_py.emitter import _ea_extension_bytes, _pc_base  # noqa: E402
+from recomp.emitter import _ea_extension_bytes, _pc_base  # noqa: E402
 
 DISPATCH = -1  # pseudo routine: f3_dispatch / anything the static pass cannot attribute
 

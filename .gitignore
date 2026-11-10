@@ -1,7 +1,6 @@
 build/
-/result
 *.zip
-/roms/
+roms/
 games/*/generated/
 games/*/rom/
 *.bin

@@ -31,35 +31,12 @@
             "sha256-C7KepsbRlBMIIV2w7O3wZpzjgtdzgIo/c+dYGpucOi0=" { fetchSubmodules = true; };
         };
 
-      # The recompiler runs on the build host (it also drives the cross-compiled 3DS build).
-      recompiler = pkgs: pkgs.buildGoModule {
-        pname = "f3-recomp";
-        version = "0.1.0";
-        src = lib.fileset.toSource {
-          root = ./.;
-          fileset = lib.fileset.unions [
-            ./go.mod
-            ./go.sum
-            ./recomp
-          ];
-        };
-        subPackages = [ "recomp" ];
-        vendorHash = "sha256-tX7TJVzUUoykscJCK91GnicevjcKi37IopH592OHOw8=";
-        nativeBuildInputs = [ pkgs.pkg-config ];
-        buildInputs = [ pkgs.capstone ];
-        env.CGO_ENABLED = "1";
-        doCheck = false;
-        postInstall = "mv $out/bin/recomp $out/bin/f3-recomp";
-        meta = {
-          description = "Taito F3 static recompiler";
-          mainProgram = "f3-recomp";
-        };
-      };
-
       toolchain = pkgs: {
-        # Only the F3RT_GPU shader step (runtime/renderer/shaders/compile.py, stdlib-only) still
-        # runs `uv run --project . --locked --no-default-groups python ...`. This stand-in drops
-        # uv's options and runs the command with the Nix Python.
+        python = pkgs.python3.withPackages (ps: [ ps.capstone ]); # pyproject pins capstone==5.0.9
+
+        # CMake runs `uv run --project . --locked --no-default-groups python ...`. uv would
+        # fetch capstone from PyPI; the sandbox-free Nix environment already has it, so this
+        # stand-in drops uv's options and runs the command with the Nix Python.
         uv = pkgs.writeShellScriptBin "uv" ''
           [ "$1" = run ] || { echo "uv shim: only 'uv run' is supported" >&2; exit 1; }
           shift
@@ -70,7 +47,7 @@
               *) break ;;
             esac
           done
-          PATH=${pkgs.python3}/bin:$PATH exec "$@"
+          exec "$@"
         '';
 
         libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest ];
@@ -81,15 +58,13 @@
         let tc = toolchain pkgs; in
         [
           "-DCMAKE_PREFIX_PATH=${pkgs.lib.concatMapStringsSep ";" (p: "${pkgs.lib.getDev p}") tc.libs}"
-          "-DF3_RECOMP_EXECUTABLE=${recompiler pkgs}/bin/f3-recomp"
-          "-DUV_EXECUTABLE=${tc.uv}/bin/uv"
         ] ++ pkgs.lib.mapAttrsToList (name: src: "-DCPM_${name}_SOURCE=${src}") (cpmSources pkgs);
 
       compile = pkgs:
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
           name = "f3-compile";
-          runtimeInputs = [ tc.uv (recompiler pkgs) pkgs.stdenv.cc ] ++ tc.tools;
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
           text = ''
             usage() {
               echo "usage: f3-compile GAME [ROM_DIR] [-- extra cmake configure args]" >&2
@@ -122,7 +97,7 @@
       desktop = system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         {
-          packages = { default = compile pkgs; f3-compile = compile pkgs; f3-recomp = recompiler pkgs; };
+          packages = { default = compile pkgs; f3-compile = compile pkgs; };
 
           apps = let app = { type = "app"; program = "${compile pkgs}/bin/f3-compile"; };
             in { default = app; compile = app; };
@@ -131,10 +106,7 @@
             let tc = toolchain pkgs; in
             {
               default = pkgs.mkShell {
-                # F3_RECOMP_EXECUTABLE stays unset: CMake builds f3-recomp with this shell's go,
-                # so edits to the Go sources take effect on the next configure.
-                packages = [ tc.uv pkgs.go ] ++ tc.tools ++ tc.libs;
-                buildInputs = [ pkgs.capstone ];
+                packages = [ tc.uv tc.python ] ++ tc.tools ++ tc.libs;
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}
                   ${pkgs.lib.concatStringsSep "\n" (pkgs.lib.mapAttrsToList (n: s: "export CPM_${n}_SOURCE=${s}") (cpmSources pkgs))}
@@ -220,6 +192,7 @@
 
       n3dsConfigureFlags = pkgs: makeromDrv: bannertoolDrv: m68kmakeDrv:
         let
+          tc = toolchain pkgs;
           sources = lib.getAttrs [ "imgui" "yyjson" "cpp_yyjson" ] (cpmSources pkgs);
         in
         [
@@ -230,7 +203,7 @@
           "-DF3RT_HOST_TOOLS=OFF"
           "-DBUILD_TESTING=OFF"
           "-DF3RT_HLE_EVENTS=OFF"
-          "-DF3_RECOMP_EXECUTABLE=${recompiler pkgs}/bin/f3-recomp"
+          "-DUV_EXECUTABLE=${tc.uv}/bin/uv"
           "-DF3_M68KMAKE_EXECUTABLE=${m68kmakeDrv}/bin/m68kmake"
           "-DF3_MAKEROM_EXECUTABLE=${makeromDrv}/bin/makerom"
           "-DF3_BANNERTOOL_EXECUTABLE=${bannertoolDrv}/bin/bannertool"
@@ -239,6 +212,7 @@
       n3ds = system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          tc = toolchain pkgs;
           devkit = devkitNix.packages.${system}.devkitARM;
           env = devkitEnv devkit;
           makeromDrv = makerom pkgs;
@@ -250,7 +224,7 @@
           f3-3ds = pkgs.writeShellApplication {
             name = "f3-3ds";
             runtimeInputs = [
-              (recompiler pkgs) pkgs.cmake pkgs.ninja
+              tc.uv tc.python pkgs.cmake pkgs.ninja
               devkit makeromDrv bannertoolDrv m68kmakeDrv
             ];
             text = ''
@@ -371,7 +345,6 @@
           packages = {
             devkitARM = devkit;
             f3-3ds = f3-3ds;
-            f3-recomp = recompiler pkgs;
             makerom = makeromDrv;
             bannertool = bannertoolDrv;
             f3-m68kmake = m68kmakeDrv;
@@ -390,10 +363,9 @@
                 devkit makeromDrv bannertoolDrv m68kmakeDrv
                 pkgs.azahar pkgs.ctrtool
                 pkgs.linuxPackages.perf # host-side profile of the emulator process
-                pkgs.go pkgs.pkg-config
+                tc.uv tc.python
                 pkgs.cmake pkgs.ninja pkgs.git
               ];
-              buildInputs = [ pkgs.capstone ];
               shellHook = ''
                 export DEVKITPRO=${env.DEVKITPRO}
                 export DEVKITARM=${env.DEVKITARM}
