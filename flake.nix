@@ -61,6 +61,28 @@
           "-DCMAKE_PREFIX_PATH=${pkgs.lib.concatMapStringsSep ";" (p: "${pkgs.lib.getDev p}") tc.libs}"
         ] ++ pkgs.lib.mapAttrsToList (name: src: "-DCPM_${name}_SOURCE=${src}") (cpmSources pkgs);
 
+      # Shell fragment: parses `[ROM_DIR] [-- args]` after $game is set and shifted, validates,
+      # sets rom_dir and build_dir, and defines configure() running the desktop cmake configure.
+      desktopConfigure = pkgs: ''
+        rom_dir=roms/$game
+        if [ $# -gt 0 ] && [ "$1" != -- ]; then rom_dir=$1; shift; fi
+        [ "''${1:-}" = -- ] && shift
+
+        [ -f CMakeLists.txt ] && [ -d games/"$game" ] || { echo "error: run from the repo root with a valid GAME ($game)" >&2; exit 1; }
+        [ -d "$rom_dir" ] || { echo "error: ROM directory $rom_dir does not exist" >&2; exit 1; }
+        rom_dir=$(realpath "$rom_dir")
+        build_dir=''${BUILD_DIR:-build/$game}
+
+        configure() {
+          cmake -S . -B "$build_dir" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DF3_GAME="$game" \
+            -DF3_ROM_DIR="$rom_dir" \
+            ${pkgs.lib.escapeShellArgs (cmakeFlags pkgs)} \
+            "$@"
+        }
+      '';
+
       compile = pkgs:
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
@@ -75,33 +97,44 @@
             }
             [ $# -ge 1 ] || usage
             game=$1; shift
-            rom_dir=roms/$game
-            if [ $# -gt 0 ] && [ "$1" != -- ]; then rom_dir=$1; shift; fi
-            [ "''${1:-}" = -- ] && shift
-
-            [ -f CMakeLists.txt ] && [ -d games/"$game" ] || { echo "error: run from the repo root with a valid GAME ($game)" >&2; exit 1; }
-            [ -d "$rom_dir" ] || { echo "error: ROM directory $rom_dir does not exist" >&2; exit 1; }
-            rom_dir=$(realpath "$rom_dir")
-            build_dir=''${BUILD_DIR:-build/$game}
-
-            cmake -S . -B "$build_dir" -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DF3_GAME="$game" \
-              -DF3_ROM_DIR="$rom_dir" \
-              ${pkgs.lib.escapeShellArgs (cmakeFlags pkgs)} \
-              "$@"
+            ${desktopConfigure pkgs}
+            configure "$@"
             cmake --build "$build_dir"
             echo "build ok: $build_dir"
+          '';
+        };
+
+      compdb = pkgs:
+        let tc = toolchain pkgs; in
+        pkgs.writeShellApplication {
+          name = "f3-compdb";
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
+          text = ''
+            # usage: f3-compdb [GAME=landmakrj] [ROM_DIR=roms/GAME] [-- extra cmake configure args]
+            # Configures $BUILD_DIR (default build/GAME) when it has no compile_commands.json or
+            # when configure args are given, then links it to ./compile_commands.json for clangd.
+            game=landmakrj
+            if [ $# -gt 0 ] && [ "$1" != -- ]; then game=$1; shift; fi
+            ${desktopConfigure pkgs}
+            if [ $# -gt 0 ] || [ ! -f "$build_dir/compile_commands.json" ]; then
+              configure "$@"
+            fi
+            ln -sfn "$build_dir/compile_commands.json" compile_commands.json
+            echo "compile_commands.json -> $build_dir/compile_commands.json"
           '';
         };
 
       desktop = system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         {
-          packages = { default = compile pkgs; f3-compile = compile pkgs; };
+          packages = { default = compile pkgs; f3-compile = compile pkgs; f3-compdb = compdb pkgs; };
 
           apps = let app = { type = "app"; program = "${compile pkgs}/bin/f3-compile"; };
-            in { default = app; compile = app; };
+            in {
+              default = app;
+              compile = app;
+              compdb = { type = "app"; program = "${compdb pkgs}/bin/f3-compdb"; };
+            };
 
           devShells =
             let tc = toolchain pkgs; in

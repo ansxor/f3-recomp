@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use crate::hle::command::CommandPacket;
 use crate::hle::core::{self, Core, PcmSink, RenderStats};
-use crate::hle::events::SAMPLE_RATE;
 use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L};
 use crate::pcm_ring::PcmRing;
 use crate::shared_mailbox::SharedMailbox;
@@ -76,14 +75,16 @@ impl CoreInput {
                 core.command(&command.packet, command.instance, self.tick)
             }
             CoreInputKind::Reset(_) => core.reset(self.tick),
-            CoreInputKind::Gain(gain) => core.set_gain(u32::from(gain.channel), gain.raw, self.tick),
+            CoreInputKind::Gain(gain) => {
+                core.set_gain(u32::from(gain.channel), gain.raw, self.tick)
+            }
             CoreInputKind::Bank(bank) => core.set_bank(bank.page, self.tick),
         }
     }
 }
 
 pub struct Synth {
-    pub rom: Vec<u8>,
+    pub rom: &'static [u8],
     pub samples: Vec<u16>,
     pub core: Core,
     pub generated: AtomicU64,
@@ -91,11 +92,10 @@ pub struct Synth {
 }
 
 impl Synth {
-    fn new(sound_rom: Vec<u8>, sample_words: Vec<u16>, sink: *mut dyn PcmSink) -> Synth {
+    fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, sink: *mut dyn PcmSink) -> Synth {
         // SAFETY: the decoder owns both buffers for as long as this Synth lives, and a Vec's buffer does
         // not move when the Synth does, so the slices stay valid for the core's lifetime.
-        let rom: &'static [u8] =
-            unsafe { std::slice::from_raw_parts(sound_rom.as_ptr(), sound_rom.len()) };
+        let rom = sound_rom;
         let samples: &'static [u16] =
             unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
         let mut core = Core::new(rom, samples);
@@ -115,16 +115,22 @@ impl Applies<CoreInput> for Synth {
         let started = Instant::now();
         input.apply(&mut self.core);
         let elapsed = started.elapsed();
-        self.render_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        self.render_ns
+            .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
         self.generated.store(self.core.frames(), Ordering::Relaxed);
     }
 }
 
-pub struct Audio {
-    impl_: Box<Impl>,
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct AudioPerformanceStats {
+    pub commands: u64,
+    pub rendered_frames: u64,
+    pub voices_started: u64,
+    pub voices_active: u32,
+    pub render_ns: u64,
 }
 
-pub struct Impl {
+pub struct Audio {
     /// Declared first so it is dropped (and its thread joined) before the services it points at.
     pub worker: WorkerQueue<CoreInput, Synth, QUEUE_SIZE>,
     pub pcm: Box<PcmRing>,
@@ -140,14 +146,14 @@ pub struct Impl {
     pub held: bool,
 }
 
-impl Impl {
-    fn new(sound_rom: Vec<u8>, sample_words: Vec<u16>, shared: *mut u8) -> Impl {
+impl Audio {
+    pub fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, shared: *mut u8) -> Audio {
         let mut pcm = Box::new(PcmRing::new());
         let sink_ptr: *mut PcmRing = &mut *pcm;
         let sink: *mut dyn PcmSink = sink_ptr;
         let mut synth = Box::new(Synth::new(sound_rom, sample_words, sink));
         let worker = WorkerQueue::new(&mut *synth as *mut Synth);
-        Impl {
+        Audio {
             worker,
             pcm,
             synth,
@@ -222,18 +228,7 @@ impl Impl {
         self.mailbox.restore(state.consumer);
         self.held = state.held;
     }
-}
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct AudioPerformanceStats {
-    pub commands: u64,
-    pub rendered_frames: u64,
-    pub voices_started: u64,
-    pub voices_active: u32,
-    pub render_ns: u64,
-}
-
-impl Audio {
     /// Whether the sound program and samples can be driven; the constructor panics when this is false.
     pub fn supported(sound_rom: &[u8], sample_words: &[u16]) -> bool {
         // SAFETY: validate() only uses the buffers while it runs; the 'static lifetime only states that
@@ -245,60 +240,55 @@ impl Audio {
         Core::validate(rom, samples)
     }
 
-    /// `sound_rom`: 0x80000+ bytes 68000 program code (interleaved high/low byte pairs), owned.
-    /// `sample_words`: decoded sample ROM, owned. `shared_ram`: 0x800-byte dual-port RAM owned by the
-    /// main CPU bus; must outlive the Audio.
-    pub fn new(sound_rom: Vec<u8>, sample_words: Vec<u16>, shared_ram: *mut u8) -> Audio {
-        Audio { impl_: Box::new(Impl::new(sound_rom, sample_words, shared_ram)) }
-    }
-
     pub fn shared_write(&mut self, offset: u32) {
-        if self.impl_.held {
+        if self.held {
             return;
         }
         if offset == MAILBOX_PRODUCER_L {
-            let p: *mut Impl = &mut *self.impl_;
+            // TODO: Need to fix whatever the fuck is going on here?
+            let p: *mut Audio = &mut *self;
             // SAFETY: record() does not touch the mailbox the drain is iterating.
             unsafe { (*p).mailbox.drain(|packet| (*p).record(packet)) };
         } else if offset == MAILBOX_GAIN_CH0 || offset == MAILBOX_GAIN_CH1 {
-            self.impl_.post_gain(offset & 1);
+            self.post_gain(offset & 1);
         }
     }
 
     pub fn finish_frame(&mut self) {
-        let p = &mut *self.impl_;
+        // TODO: Need to fix whatever the fuck is going on here?
+        let p = &mut *self;
         p.submit_clock();
         let frames = core::frames_at(p.playback_now());
         p.pcm.close_frame(frames);
     }
 
     pub fn advance(&mut self, main_cycles: u32) {
-        self.impl_.clock += u64::from(main_cycles);
+        self.clock += u64::from(main_cycles);
     }
 
     /// Continuous effective device time, not the caller's main-block endpoint.
     pub fn clock_ticks(&self) -> u64 {
-        self.impl_.clock
+        self.clock
     }
 
     pub fn generated_frames(&self) -> u64 {
-        self.impl_.synth.generated.load(Ordering::Relaxed)
+        self.synth.generated.load(Ordering::Relaxed)
     }
 
     pub fn performance_stats(&self) -> AudioPerformanceStats {
-        let render: RenderStats = self.impl_.synth.core.render_stats();
+        let render: RenderStats = self.synth.core.render_stats();
         AudioPerformanceStats {
-            commands: self.impl_.command_count,
+            commands: self.command_count,
             rendered_frames: self.generated_frames(),
             voices_started: render.voices_started,
             voices_active: render.voices_active,
-            render_ns: self.impl_.synth.render_ns.load(Ordering::Relaxed),
+            render_ns: self.synth.render_ns.load(Ordering::Relaxed),
         }
     }
 
     /// Reset control (active-high asserted = CPU held in reset).
     pub fn set_reset(&mut self, asserted: bool) {
-        let p = &mut *self.impl_;
+        let p = &mut *self;
         if p.held == asserted {
             return;
         }
@@ -313,7 +303,7 @@ impl Audio {
     }
 
     pub fn is_reset(&self) -> bool {
-        self.impl_.held
+        self.held
     }
 
     /// Whole-machine/watchdog reset: hold the board and keep the continuous audio clock.
@@ -323,32 +313,24 @@ impl Audio {
 
     /// Sound CPU program ROM banking (0xc20000 - 0xc3ffff window, default page 1).
     pub fn set_sound_bank(&mut self, page: u32) {
-        self.impl_.bank = page;
-        self.impl_.post(CoreInputKind::Bank(Bank { page: page as u8 }));
-    }
-
-    pub fn sound_bank(&self) -> u32 {
-        self.impl_.bank
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        SAMPLE_RATE
+        self.bank = page;
+        self.post(CoreInputKind::Bank(Bank { page: page as u8 }));
     }
 
     pub fn available_frames(&mut self) -> usize {
-        self.impl_.flush();
-        self.impl_.pcm.available()
+        self.flush();
+        self.pcm.available()
     }
 
     pub fn render(&mut self, interleaved_stereo: &mut [i16], max_frames: usize) -> usize {
-        self.impl_.flush();
-        self.impl_.pcm.drain_i16(interleaved_stereo, max_frames)
+        self.flush();
+        self.pcm.drain_i16(interleaved_stereo, max_frames)
     }
 
     /// The float overload: the same ring, converted to the -1..1 scale the C++ passes on.
     pub fn render_f32(&mut self, interleaved_stereo: &mut [f32], max_frames: usize) -> usize {
-        self.impl_.flush();
-        self.impl_.pcm.drain(interleaved_stereo, max_frames)
+        self.flush();
+        self.pcm.drain(interleaved_stereo, max_frames)
     }
 
     /// Non-blocking drain: returns only PCM already produced without waiting. It holds back the audio of
@@ -356,20 +338,16 @@ impl Audio {
     /// whether or not the worker is quick: the amount does not race with it. Callers needing a complete,
     /// deterministic stream must finish with the blocking render.
     pub fn render_ready(&mut self, interleaved_stereo: &mut [i16], max_frames: usize) -> usize {
-        self.impl_.pcm.drain_released(interleaved_stereo, max_frames)
-    }
-
-    pub fn state_size(&self) -> usize {
-        crate::snapshot::BYTES
+        self.pcm.drain_released(interleaved_stereo, max_frames)
     }
 
     pub fn save_state(&self, dst: &mut [u8]) {
-        self.impl_.snapshot().write(dst);
+        self.snapshot().write(dst);
     }
 
     pub fn load_state(&mut self, src: &[u8]) -> Result<(), &'static str> {
         let state = AudioSnapshot::parse(src)?;
-        self.impl_.restore(&state);
+        self.restore(&state);
         Ok(())
     }
 }

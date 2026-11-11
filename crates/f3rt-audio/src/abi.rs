@@ -8,13 +8,17 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::audio::{self, Audio};
+use crate::{
+    audio::{self, Audio},
+    hle::events::SAMPLE_RATE,
+};
 
 pub type f3rt_audio_status = i32;
 pub const F3RT_AUDIO_OK: f3rt_audio_status = 0;
 pub const F3RT_AUDIO_UNSUPPORTED_ROM: f3rt_audio_status = 1;
 pub const F3RT_AUDIO_ALREADY_INITIALIZED: f3rt_audio_status = 2;
 pub const F3RT_AUDIO_INVALID_STATE: f3rt_audio_status = 3;
+pub const F3RT_AUDIO_INVALID_ARGUMENT: f3rt_audio_status = 4;
 
 /// Size of the save-state blob written by `f3rt_audio_save_state`.
 pub const F3RT_AUDIO_STATE_SIZE: u32 = 32;
@@ -66,19 +70,33 @@ fn guarded<R, F: FnOnce(&mut Audio) -> R>(function: &str, body: F) -> R {
 
 /// `std::span(ptr, size)` over caller memory; a null pointer with a zero length is an empty slice.
 unsafe fn bytes<'a>(data: *const u8, size: usize) -> &'a [u8] {
-    if size == 0 { &[] } else { unsafe { std::slice::from_raw_parts(data, size) } }
+    if size == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, size) }
+    }
 }
 
 unsafe fn bytes_mut<'a>(data: *mut u8, size: usize) -> &'a mut [u8] {
-    if size == 0 { &mut [] } else { unsafe { std::slice::from_raw_parts_mut(data, size) } }
+    if size == 0 {
+        &mut []
+    } else {
+        unsafe { std::slice::from_raw_parts_mut(data, size) }
+    }
 }
 
 /// Calls that must not unwind into C++ run inside `catch_unwind`, which needs the closure to be
 /// unwind safe: the state is process-wide and single-threaded, so this only asserts what the header
 /// already requires.
 /// # Safety
-/// `sound_rom` and `sample_rom` must point to their stated lengths for the duration of the call;
-/// `shared_ram` must point to the 0x800-byte dual-port RAM, which must outlive the instance.
+/// `sound_rom` and `sample_rom` are expected to NEVER be deallocated since these are
+/// associated at compile-time and stored by the global state. they MUST equal their respective
+/// *_size parameters.
+///
+/// As an assumption, since ROM is implied to NEVER be modified, it assumes thread safety
+/// and doesn't try to apply any thread-safe smart pointer logic to satisfy this.
+///
+/// The audio subsystem assumes this and makes an unsafe reference to this ROM data.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn f3rt_audio_init(
     sound_rom: *const u8,
@@ -87,19 +105,24 @@ pub unsafe extern "C" fn f3rt_audio_init(
     sample_rom_size: usize,
     shared_ram: *mut u8,
 ) -> f3rt_audio_status {
+    if sound_rom.is_null() {
+        return F3RT_AUDIO_INVALID_ARGUMENT;
+    }
     if instance().is_some() {
         return F3RT_AUDIO_ALREADY_INITIALIZED;
     }
-    // SAFETY: the caller hands over both ROM buffers for the duration of the call.
     let (sound, samples) = unsafe {
-        (bytes(sound_rom, sound_rom_size), bytes(sample_rom, sample_rom_size))
+        (
+            std::slice::from_raw_parts(sound_rom, sound_rom_size),
+            std::slice::from_raw_parts(sample_rom, sample_rom_size),
+        )
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let words = audio::decode_sample_words(samples);
         if !Audio::supported(sound, &words) {
             return Some(F3RT_AUDIO_UNSUPPORTED_ROM);
         }
-        *instance() = Some(Audio::new(sound.to_vec(), words, shared_ram));
+        *instance() = Some(Audio::new(sound, words, shared_ram));
         None
     }));
     match result {
@@ -141,7 +164,7 @@ pub extern "C" fn f3rt_audio_finish_frame() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn f3rt_audio_sample_rate() -> u32 {
-    guarded("f3rt_audio_sample_rate", |a| a.sample_rate())
+    SAMPLE_RATE
 }
 
 /// # Safety
