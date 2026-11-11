@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/f3rt-abi",
+    "crates/f3rt-audio",
+    "crates/f3rt-eeprom",
+]
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+codegen-units = 1
+lto = "fat"

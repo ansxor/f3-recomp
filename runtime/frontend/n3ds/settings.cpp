@@ -39,10 +39,7 @@ bool load_settings(const std::string &path, Settings &settings) {
                     return false;
                 }
             } else if (key == "fast_boot") {
-                if (!boolean(value, loaded.fast_boot)) {
-                    reject = "Invalid fast_boot";
-                    return false;
-                }
+                // Retired setting from older config files.
             } else if (key == "perf_overlay") {
                 if (!boolean(value, loaded.perf_overlay)) {
                     reject = "Invalid perf_overlay";
@@ -77,7 +74,6 @@ bool load_settings(const std::string &path, Settings &settings) {
 bool save_settings(const std::string &path, const Settings &settings) {
     std::ostringstream text;
     text << "# f3rt New 3DS settings\nvolume=" << settings.volume
-         << "\nfast_boot=" << (settings.fast_boot ? "on" : "off")
          << "\nperf_overlay=" << (settings.perf_overlay ? "on" : "off")
          << "\nborder=" << settings.border << '\n';
     for (unsigned control = 0; control < settings.keys.size(); ++control) {

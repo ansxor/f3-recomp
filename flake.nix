@@ -24,6 +24,7 @@
           yyjson = gh "ibireme" "yyjson" "0.12.0" "sha256-1CYnEgUMUc7eqdkv6M/KyL/MdVQBMov9HgLCycF6++w=" { };
           cpp_yyjson = gh "yosh-matsuda" "cpp-yyjson" "v1.1.0" "sha256-5mssdkHHYsSd4Wz6bjKDGLhEUD2bRYf5bw/jHK+yXuA=" { };
           httplib = gh "yhirose" "cpp-httplib" "v0.51.0" "sha256-7vifeaLAlNioumol+fUkIUO93MFxVNOY6AGZkUJVYy8=" { };
+          Corrosion = gh "corrosion-rs" "corrosion" "v0.6.1" "sha256-ppuDNObfKhneD9AlnPAvyCRHKW3BidXKglD1j/LE9CM=" { };
           imgui = gh "ocornut" "imgui" "v1.93.0" "sha256-SSrZe05l78C2nea80JmK6Xc8VPYdnRkrOVXG1sYo2VE=" { };
           rapidcheck = gh "emil-e" "rapidcheck" "ff6af6fc683159deb51c543b065eba14dfcf329b"
             "sha256-Ixz5RpY0n8Un/Pv4XoTfbs40+70iyMbkQUjDqoLaWOg=" { };
@@ -51,7 +52,7 @@
         '';
 
         libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest ];
-        tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git ];
+        tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git pkgs.cargo pkgs.rustc ];
       };
 
       cmakeFlags = pkgs:
@@ -202,7 +203,6 @@
           "-DF3RT_NETPLAY=OFF"
           "-DF3RT_HOST_TOOLS=OFF"
           "-DBUILD_TESTING=OFF"
-          "-DF3RT_HLE_EVENTS=OFF"
           "-DUV_EXECUTABLE=${tc.uv}/bin/uv"
           "-DF3_M68KMAKE_EXECUTABLE=${m68kmakeDrv}/bin/m68kmake"
           "-DF3_MAKEROM_EXECUTABLE=${makeromDrv}/bin/makerom"

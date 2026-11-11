@@ -82,10 +82,6 @@ SpriteUnits::SpriteUnits(Machine &machine, const SpriteUnitTable &table, Options
             throw std::invalid_argument("Malformed emit-unit table");
         m_report.units[i].name = unit.name;
         writer_owned |= unit.owner == UnitOwner::Writer;
-        for (size_t s = 0; s < unit.starts.size(); ++s) {
-            m_hooks[unit.starts[s]].enters.push_back(unit.id);
-            m_hooks[unit.ends[s]].exits.push_back(unit.id);
-        }
     }
     for (const SpriteBehaviour *behaviour : m_options.behaviours) {
         size_t target = m_units.size();
@@ -160,7 +156,6 @@ void SpriteUnits::reset() {
     m_generations.clear();
     m_ordinals.clear();
     std::fill(m_writer_pc.begin(), m_writer_pc.end(), 0u);
-    m_last_hook_cycles = UINT64_MAX;
     m_frame_shadow_entries = m_frame_shadow_objects = m_frame_shadow_gate_set = 0;
     m_last_frame_shadow = {};
 }
@@ -197,22 +192,9 @@ int SpriteUnits::unit_exit(f3_cpu *cpu, uint32_t unit) {
     if (cpu != &m_machine.cpu || unit >= m_units.size()) return 0;
     return exit_real(unit);
 }
-void SpriteUnits::interpreted_instruction(uint32_t pc) {
-    const auto it = m_hooks.find(pc);
-    if (it == m_hooks.end()) return;
-    // A translated block already fired the hooks for this label before falling back.
-    if (pc == m_last_hook_pc && m_machine.cpu.cycles == m_last_hook_cycles) return;
-    m_last_hook_pc = pc;
-    m_last_hook_cycles = m_machine.cpu.cycles;
-    for (uint32_t unit : it->second.exits) exit_real(unit);
-    for (uint32_t unit : it->second.enters) enter_real(unit);
-}
-
 void SpriteUnits::enter_real(uint32_t id) {
     const EmitUnit &unit = *m_units[id];
     const uint32_t pc = m_machine.cpu.pc;
-    m_last_hook_pc = pc;
-    m_last_hook_cycles = m_machine.cpu.cycles;
     size_t start = unit.starts.size();
     for (size_t i = 0; i < unit.starts.size(); ++i)
         if (unit.starts[i] == pc) {
@@ -292,8 +274,6 @@ void SpriteUnits::open_invocation(const EmitUnit &unit, size_t start) {
 int SpriteUnits::exit_real(uint32_t id) {
     const EmitUnit &unit = *m_units[id];
     const uint32_t pc = m_machine.cpu.pc;
-    m_last_hook_pc = pc;
-    m_last_hook_cycles = m_machine.cpu.cycles;
     const uint32_t depth = irq_depth();
     while (!m_stack.empty() && m_stack.back().irq_depth > depth) discard_from(m_stack.size() - 1);
     for (size_t i = m_stack.size(); i-- > 0;) {

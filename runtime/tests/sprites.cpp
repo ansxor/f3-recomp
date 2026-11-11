@@ -1,7 +1,5 @@
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
 #include "f3rt/rom.hpp"
-#include "interpreter.hpp"
 #include "state_io.hpp"
 #include "sprites/units.hpp"
 #include "sprites/behaviour.hpp"
@@ -108,7 +106,6 @@ const f3_block SYNTH_BLOCKS[] = {{UNIT0_BLOCK0, synth_start},  {UNIT0_BLOCK1, sy
 
 std::unique_ptr<f3rt::Machine> synth_machine(bool units, bool check, bool behaviour) {
     auto m = std::make_unique<f3rt::Machine>(fixture());
-    m->allow_main_fallback = false;
     EXPECT_TRUE(f3_register_blocks(&m->cpu, SYNTH_BLOCKS, std::size(SYNTH_BLOCKS)))
         << "Synthetic unit blocks register";
     if (units) {
@@ -199,12 +196,17 @@ TEST(SpriteUnits, DeviceAccessAbortsReplay) {
         << "I/O read aborts the replay";
 }
 
+// The audio board and EEPROM are process-wide: the machines of a comparison exist one after the other, so
+// each side is reduced to a SynthSnapshot before the next is built.
 TEST(SpriteUnits, UnpatchedReplayMatchesRealSpan) {
+    const auto off_snapshot = [] {
+        auto off = synth_machine(false, false, false);
+        synth_span(*off);
+        return std::make_unique<SynthSnapshot>(*off);
+    }();
     auto on = synth_machine(true, true, false);
-    auto off = synth_machine(false, false, false);
     synth_span(*on);
-    synth_span(*off);
-    EXPECT_TRUE(SynthSnapshot(*on) == SynthSnapshot(*off))
+    EXPECT_TRUE(SynthSnapshot(*on) == *off_snapshot)
         << "Replay on/off yields identical state, cycles and native_blocks";
     EXPECT_TRUE(on->ram[SYNTH_DATA_OFFSET + 2] == 0x12 && on->ram[SYNTH_DATA_OFFSET + 3] == 0x35)
         << "Real span still executes against unpatched RAM";
@@ -230,13 +232,16 @@ TEST(SpriteUnits, UnpatchedReplayMatchesRealSpan) {
 // Sprite emit units are always on (no flag): installing them, with or without a splicing behaviour, must
 // never change emulated state. Behaviour replays run in a sandbox and only feed the presentation.
 TEST(SpriteUnits, BehaviourSplicingNeverChangesEmulatedState) {
+    const auto without_snapshot = [] {
+        auto without_units = synth_machine(false, false, false);
+        synth_span(*without_units);
+        return std::make_unique<SynthSnapshot>(*without_units);
+    }();
     auto with_units = synth_machine(true, false, true);
-    auto without_units = synth_machine(false, false, false);
     synth_span(*with_units);
-    synth_span(*without_units);
     ASSERT_EQ(with_units->sprite_units->presentation().splices.size(), 1)
         << "Splice must actually happen";
-    EXPECT_TRUE(SynthSnapshot(*with_units) == SynthSnapshot(*without_units))
+    EXPECT_TRUE(SynthSnapshot(*with_units) == *without_snapshot)
         << "ram, graphics, cpu, cycles, native_blocks and state_crc match without units";
 }
 
@@ -245,23 +250,31 @@ TEST(SpriteUnits, BehaviourSplicingNeverChangesEmulatedState) {
 TEST(DiscoveryLog, IsObserveOnly) {
     const auto path = std::filesystem::temp_directory_path() / "f3rt-test-discovery.log";
     for (const bool log_all : {false, true}) {
-        auto plain = synth_machine(true, false, false);
+        const auto stores = [](f3rt::Machine &m) {
+            synth_span(m);
+            m.write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001); // sprite RAM outside any unit
+            m.write8(PLAYFIELD_RAM_PROBE, 0x5a);                     // playfield RAM
+            m.write16(f3rt::CONTROL_BASE, 0x1234);                   // control register
+            m.write32(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_HIGH, 0xdeadbeef);
+        };
+        std::unique_ptr<SynthSnapshot> plain_snapshot;
+        std::array<uint8_t, 0x20> plain_control;
+        {
+            auto plain = synth_machine(true, false, false);
+            stores(*plain);
+            plain_snapshot = std::make_unique<SynthSnapshot>(*plain);
+            plain_control = plain->control;
+        }
         auto logged = synth_machine(true, false, false);
         logged->discovery = std::make_unique<f3rt::DiscoveryLog>(path.string(), *logged, "test");
         logged->discovery->set_sprites_accounted_by_units(true);
         logged->discovery->set_log_all(log_all);
         logged->sprite_units->set_discovery(logged->discovery.get());
-        for (auto *m : {plain.get(), logged.get()}) {
-            synth_span(*m);
-            m->write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001); // sprite RAM outside any unit
-            m->write8(PLAYFIELD_RAM_PROBE, 0x5a);                     // playfield RAM
-            m->write16(f3rt::CONTROL_BASE, 0x1234);                   // control register
-            m->write32(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_HIGH, 0xdeadbeef);
-        }
-        EXPECT_TRUE(SynthSnapshot(*plain) == SynthSnapshot(*logged))
+        stores(*logged);
+        EXPECT_TRUE(SynthSnapshot(*logged) == *plain_snapshot)
             << "ram, graphics, palette, cpu, cycles, native_blocks and state_crc, log_all="
             << log_all;
-        EXPECT_EQ(plain->control, logged->control);
+        EXPECT_EQ(plain_control, logged->control);
         logged->discovery->finish(*logged);
         EXPECT_GT(std::filesystem::file_size(path), 0u) << "The log must have observed something";
     }
@@ -295,7 +308,6 @@ TEST(SpriteUnits, BehaviourSplicesReplacementEntries) {
 RC_GTEST_PROP(SpriteUnits, ReplayPipelineSplicesPatchedCounter, ()) {
     const auto counter_val = *rc::gen::arbitrary<uint16_t>();
     auto m = std::make_unique<f3rt::Machine>(fixture());
-    m->allow_main_fallback = false;
     f3_register_blocks(&m->cpu, SYNTH_BLOCKS, std::size(SYNTH_BLOCKS));
     f3rt::SpriteUnits::Options options;
     options.check = false;

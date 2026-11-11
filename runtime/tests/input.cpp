@@ -10,6 +10,11 @@ using f3test::fixture;
 
 namespace {
 using Words = std::array<f3rt::LocalInputWord, f3rt::LOCAL_PLAYER_COUNT>;
+// The fixture ROM has no recompiled code: one native block at its reset PC stands in for the game and spins
+// until the frame ends.
+constexpr uint32_t FIXTURE_RESET_PC = 0x100;
+void spin(f3_cpu *cpu) { cpu->cycles += 64; }
+const f3_block SPIN_BLOCK[] = {{FIXTURE_RESET_PC, spin}};
 // Input MMIO lines, as offsets from f3rt::IO_BASE.
 constexpr uint32_t IO_SYSTEM = f3rt::IO_BASE;
 constexpr uint32_t IO_SYSTEM_LANE1 = f3rt::IO_BASE + 0x01;
@@ -92,6 +97,7 @@ TEST(Input, DialNibblePackingAndDirectionCancellation) {
         auto roms = fixture();
         roms.input.dial = true;
         auto m = std::make_unique<f3rt::Machine>(std::move(roms));
+        ASSERT_TRUE(f3_register_blocks(&m->cpu, SPIN_BLOCK, std::size(SPIN_BLOCK)));
         const auto expect = [&](uint32_t first, uint32_t second) {
             EXPECT_TRUE(m->read32(DIAL_COUNTER_A) == first && m->read32(DIAL_COUNTER_B) == second)
                 << "Both twelve-bit dial counters expose the native big-endian nibble-packed MMIO "

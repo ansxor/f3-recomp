@@ -9,8 +9,6 @@
 #include "program.h"
 #endif
 
-#include "audio/hle/events.hpp"
-
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -30,7 +28,6 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
         throw std::runtime_error("ROM directory must be specified");
     }
     auto machine = std::make_unique<Machine>(RomSet::load(rom_dir, set));
-    machine->allow_main_fallback = false;
 #if defined(F3RT_GENERATED)
     if (!f3_generated_register(&machine->cpu)) {
         throw std::runtime_error("f3_generated_register failed to register recompiled blocks");
@@ -144,7 +141,6 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
     }
 
     machine_ = std::make_unique<Machine>(RomSet::load(config_.rom_dir, config_.set));
-    machine_->allow_main_fallback = config_.allow_fallback;
 
     if (config_.record_sprite_writers || !config_.dump_dir.empty()) {
         machine_->sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
@@ -154,28 +150,8 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
         profile_ = std::make_unique<BlockProfileSession>(machine_->roms, config_.profile_path);
     }
 
-#if F3RT_HLE_EVENTS
-    if (!config_.hle_events_path.empty()) {
-        auto events = std::make_shared<std::ofstream>(config_.hle_events_path);
-        if (!*events) throw std::runtime_error("Cannot create HLE event CSV");
-        *events << "kind,instance,tick,sequence,track,key,layer,pair,start,end,frequency,left,"
-                   "right,k1,k2,loop,reverse\n";
-        machine_->audio->set_voice_observer([events](const hle::VoiceEvent &e) {
-            *events << unsigned(e.kind) << ',' << e.instance << ',' << e.tick << ','
-                    << unsigned(e.sequence) << ',' << unsigned(e.track) << ',' << unsigned(e.key)
-                    << ',' << unsigned(e.layer) << ',' << unsigned(e.output_pair) << ','
-                    << e.sample_start << ',' << e.sample_end << ',' << e.frequency << ','
-                    << e.left_volume << ',' << e.right_volume << ',' << e.k1 << ',' << e.k2 << ','
-                    << e.loop << ',' << e.reverse << '\n';
-        });
-    }
-#else
-    if (!config_.hle_events_path.empty())
-        throw std::runtime_error("--hle-events requires a build with F3RT_HLE_EVENTS=ON");
-#endif
-
     if (!config_.wav_path.empty()) {
-        wav_ = std::make_unique<WavWriter>(config_.wav_path, machine_->audio->sample_rate());
+        wav_ = std::make_unique<WavWriter>(config_.wav_path, f3rt_audio_sample_rate());
     }
 
     if (config_.video_diff) {
@@ -190,23 +166,21 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
 #endif
     }
 
-    if (config_.translated) {
 #if defined(F3RT_GENERATED)
-        if (!f3_generated_register(&machine_->cpu)) {
-            throw std::runtime_error("f3_generated_register failed to register recompiled blocks");
-        }
-#else
-        throw std::runtime_error(
-            "Strict native mode requires compiled generated blocks (F3RT_GENERATED)");
-#endif
+    if (!f3_generated_register(&machine_->cpu)) {
+        throw std::runtime_error("f3_generated_register failed to register recompiled blocks");
     }
+#else
+    throw std::runtime_error(
+        "Strict native mode requires compiled generated blocks (F3RT_GENERATED)");
+#endif
 }
 
 MachineRunner::~MachineRunner() = default;
 
 void MachineRunner::drain_audio(bool record_to_wav) {
     size_t count = 0;
-    while ((count = machine_->audio->render(audio_buffer_.data(), audio_buffer_.size() / 2)) != 0) {
+    while ((count = f3rt_audio_render(audio_buffer_.data(), audio_buffer_.size() / 2)) != 0) {
         total_audio_frames_ += count;
         if (wav_ && record_to_wav) {
             wav_->append(std::span(audio_buffer_.data(), count * 2));
@@ -229,7 +203,7 @@ bool MachineRunner::run_frames(uint64_t target_frames,
             config_.input_source->apply(*machine_, machine_->frame);
         }
 
-        bool ok = machine_->run_frame(config_.translated);
+        bool ok = machine_->run_frame();
         if (!ok || machine_->cpu.halted) {
             return false;
         }

@@ -1,7 +1,6 @@
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "f3rt/game_video.hpp"
-#include "f3rt/game_boot.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/game_netplay.hpp"
 #include "f3rt/netplay.hpp"
@@ -11,10 +10,8 @@
 #include "ui.hpp"
 #include "state.hpp"
 #include "audio_pacer.hpp"
-#include "fast_boot.hpp"
 #include "frame_slots.hpp"
 #include "platform/thread.hpp"
-#include "interpreter.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
 #include "renderer/gpu/interp.hpp"
@@ -185,8 +182,6 @@ enum Preference : uint32_t {
     Volume = 1u << 8,
     PostprocessMode = 1u << 13,
     UserShader = 1u << 14,
-    FastBoot = 1u << 16,
-    BootCache = 1u << 17,
     MotionInterp = 1u << 18
 };
 // Hand-off between the emulation thread (writer of every Machine access) and the video thread (SDL window,
@@ -352,7 +347,7 @@ struct EmulationThread {
 };
 } // namespace
 int main(int argc, char **argv) try {
-    std::filesystem::path romdir, dumpdir, eeprom, wav_path, fallback_report, surface;
+    std::filesystem::path romdir, dumpdir, eeprom, wav_path, surface;
     std::filesystem::path profile_path, config_path, discovery_path, inputs_path, watch_path,
         indirect_path;
     std::vector<uint32_t> watch_entries;
@@ -368,15 +363,10 @@ int main(int argc, char **argv) try {
     float volume = 1;
     uint32_t cli_preferences = 0;
     uint64_t frames = 0, dump_start = 1, dump_every = 1;
-    bool headless = false, sound = true, translated = false, throttle = true;
+    bool headless = false, sound = true, throttle = true;
     bool motion_interp = false;
-    bool fast_boot = true, boot_cache = false;
 #ifdef F3RT_GAME
     romdir = F3RT_DEFAULT_ROM_DIR;
-    translated = true;
-    bool allow_fallback = false;
-#else
-    bool allow_fallback = true;
 #endif
     bool discovery_all = false;
     std::string netplay_auto;
@@ -401,19 +391,7 @@ int main(int argc, char **argv) try {
         else if (arg == "--dump-start") dump_start = std::stoull(value());
         else if (arg == "--dump-every") dump_every = std::stoull(value());
         else if (arg == "--eeprom") eeprom = value();
-        else if (arg == "--fast-boot") {
-            const std::string v = value();
-            if (v == "on") fast_boot = true;
-            else if (v == "off") fast_boot = false;
-            else throw std::runtime_error("--fast-boot must be on or off");
-            cli_preferences |= FastBoot;
-        } else if (arg == "--boot-cache") {
-            const std::string v = value();
-            if (v == "on") boot_cache = true;
-            else if (v == "off") boot_cache = false;
-            else throw std::runtime_error("--boot-cache must be on or off");
-            cli_preferences |= BootCache;
-        } else if (arg == "--wav") wav_path = value();
+        else if (arg == "--wav") wav_path = value();
         else if (arg == "--profile-out") profile_path = value();
         else if (arg == "--discovery-log") discovery_path = value();
         else if (arg == "--discovery-all") discovery_all = true;
@@ -436,8 +414,7 @@ int main(int argc, char **argv) try {
             if (consumed != text.size() || !std::isfinite(volume) || volume < 0 || volume > 1)
                 throw std::runtime_error("--volume must be 0..100");
             cli_preferences |= Volume;
-        } else if (arg == "--fallback-report") fallback_report = value();
-        else if (arg == "--surface") surface = value();
+        } else if (arg == "--surface") surface = value();
         else if (arg == "--renderer") {
             renderer = value();
             cli_preferences |= Renderer;
@@ -470,8 +447,6 @@ int main(int argc, char **argv) try {
             cli_preferences |= UserShader;
         } else if (arg == "--headless") headless = true;
         else if (arg == "--no-audio") sound = false;
-        else if (arg == "--translated") translated = true;
-        else if (arg == "--allow-fallback") allow_fallback = true;
         else if (arg == "--unthrottled") throttle = false;
         else if (arg == "--netplay-auto") netplay_auto = value();
         else if (arg == "--netplay-server") netplay_server_cli = value();
@@ -498,11 +473,8 @@ int main(int argc, char **argv) try {
             std::cout
                 << argv[0]
                 << " [--rom-dir DIR] [--set SET] [--frames N] [--headless] [--no-audio]\n"
-                << "  [--translated] [--allow-fallback (diagnostic only)] [--unthrottled] "
-                   "[--eeprom FILE] [--wav FILE] [--surface BMP]\n"
-                << "  [--fast-boot on|off] [--boot-cache on|off] (host-only boot shortcut; default "
-                   "fast boot on, cache off)\n"
-                << "  [--dump-dir DIR --dump-start N --dump-every N] [--fallback-report TSV]\n"
+                << "  [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
+                << "  [--dump-dir DIR --dump-start N --dump-every N]\n"
                 << "  [--config FILE] [--volume 0..100] (user preferences load first; CLI "
                    "overrides)\n"
                 << "  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush "
@@ -555,7 +527,7 @@ int main(int argc, char **argv) try {
     f3rt::FrontendSettings settings;
 #if defined(F3RT_GAME_VIDEO) && defined(F3RT_GPU)
     // Enhanced needs game-data video (strict native execution) and a GPU-enabled build; otherwise accurate.
-    if (translated && !allow_fallback) settings.renderer = "enhanced";
+    settings.renderer = "enhanced";
 #endif
     if (config_path.empty()) config_path = f3rt::default_config_path(set);
     std::string settings_error;
@@ -626,8 +598,6 @@ int main(int argc, char **argv) try {
     preference(postprocess, settings.postprocess, PostprocessMode);
     preference(user_shader, settings.user_shader, UserShader);
     preference(volume, settings.volume, Volume);
-    preference(fast_boot, settings.fast_boot, FastBoot);
-    preference(boot_cache, settings.boot_cache, BootCache);
     preference(motion_interp, settings.motion_interp, MotionInterp);
     if (!netplay_server_cli.empty()) settings.netplay_server = netplay_server_cli;
     if (!netplay_name_cli.empty()) settings.netplay_name = netplay_name_cli;
@@ -655,9 +625,6 @@ int main(int argc, char **argv) try {
 #ifndef F3RT_GAME_VIDEO
     if (video_mode != "fdp")
         throw std::runtime_error("Game-data video is unavailable for this game");
-#else
-    if (video_mode != "fdp" && (!translated || allow_fallback))
-        throw std::runtime_error("Game-data video requires strict native execution");
 #endif
     if (video_filter != "nearest" && video_filter != "linear")
         throw std::runtime_error("--video-filter must be nearest or linear");
@@ -681,10 +648,6 @@ int main(int argc, char **argv) try {
             "--renderer compare-gpu reads back the GPU frame and compares it to the FDP frame "
             "pixel for pixel: it needs a window, --video-scale 1, --video-border 0, "
             "--video-interp off and no --motion-interp");
-    if (motion_interp && allow_fallback)
-        throw std::runtime_error(
-            "--motion-interp requires a strict-native title build with no interpreter fallback "
-            "(--allow-fallback, and the f3rt-run default, are refused)");
     if (postprocess != "off" && postprocess != "crt" && postprocess != "user")
         throw std::runtime_error("--postprocess must be off, crt or user");
     if (postprocess != "off" && video_backend != "gpu")
@@ -718,23 +681,12 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if (!indirect_path.empty())
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
-#ifdef F3_PROFILE_SLIM_ENABLED
-    if (allow_fallback || !translated)
-        throw std::runtime_error(
-            "Profile-slim requires strict native main CPU; no interpreter fallback");
-#endif
-#ifdef F3_PROFILE_INSTRUMENT
-    if (!profile_path.empty() && (!translated || allow_fallback))
-        throw std::runtime_error("Profiling requires strict native main CPU");
-#endif
-    m.allow_main_fallback = allow_fallback;
 #ifdef F3RT_GAME_VIDEO
     if (video_mode != "fdp")
         m.game_video = std::make_unique<f3rt::GameVideo>(
             m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare);
 #endif
-    if (translated)
-        m.sprite_units = f3rt::make_game_sprite_units(m, video_backend == "gpu" && m.game_video);
+    m.sprite_units = f3rt::make_game_sprite_units(m, video_backend == "gpu" && m.game_video);
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     }
@@ -742,7 +694,7 @@ int main(int argc, char **argv) try {
         m.discovery = std::make_unique<f3rt::DiscoveryLog>(
             discovery_path.string(), m,
             "set=" + set + " renderer=" + (renderer.empty() ? "default" : renderer) +
-                " exec=" + (translated ? "native" : "interpreted") + " emit_units=" +
+                " exec=native emit_units=" +
                 (m.sprite_units ? "yes" : "no") + " game_video=" + (m.game_video ? "yes" : "no"));
         m.discovery->set_sprites_accounted_by_units(m.sprite_units != nullptr);
         m.discovery->set_log_all(discovery_all);
@@ -761,18 +713,15 @@ int main(int argc, char **argv) try {
                                  (float(display_height) - float(frame_height)) / 2,
                                  float(frame_width), float(frame_height)};
     if (!eeprom.empty()) m.load_eeprom(eeprom);
-    if (!fallback_report.empty()) m.fallback_hits.resize(0x800000);
-    if (translated) {
 #ifdef F3RT_GENERATED
-        if (!f3_generated_register(&m.cpu))
-            throw std::runtime_error("Generated block registration failed");
+    if (!f3_generated_register(&m.cpu))
+        throw std::runtime_error("Generated block registration failed");
 #else
-        throw std::runtime_error("This binary was built without F3_GENERATED_DIR");
+    throw std::runtime_error("This binary was built without F3_GENERATED_DIR");
 #endif
-    }
     Sdl sdl;
     int pixel_width = 0, pixel_height = 0;
-    uint32_t audio_rate = m.audio->sample_rate();
+    uint32_t audio_rate = f3rt_audio_sample_rate();
     int audio_target_bytes = 0; // steady-state SDL queue depth; set when the device opens
     if (!headless) {
         check(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | (sound ? SDL_INIT_AUDIO : 0)));
@@ -891,50 +840,6 @@ int main(int argc, char **argv) try {
                                   .throttle = throttle});
     std::vector<int16_t> audio_silence;
     const auto start = std::chrono::steady_clock::now();
-    // Fast boot: run the power-on frames unthrottled with no presentation and discarded
-    // audio, from a locally generated initialised EEPROM and optionally a cached
-    // post-boot state. Host-side only; the emulated machine executes the same frames.
-    const f3rt::GameBoot *boot = f3rt::game_boot();
-    const bool explicit_fast_boot = (cli_preferences & FastBoot) != 0 && fast_boot;
-    const bool fast_boot_active =
-        boot && ((!headless && settings.fast_boot) || explicit_fast_boot) && wav_path.empty() &&
-        dumpdir.empty() && profile_path.empty() && fallback_report.empty() && inputs_path.empty();
-    std::filesystem::path config_dir;
-    if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
-    if (fast_boot_active) {
-        f3rt::FastBootRequest request;
-        if (eeprom.empty() && m.roms.factory_eeprom.empty() && !config_dir.empty())
-            request.eeprom_init = config_dir / "eeprom" / (set + "-init.bin");
-        if (settings.boot_cache && eeprom.empty() && !config_dir.empty())
-            request.boot_cache = config_dir / "boot" / (set + ".state");
-        request.snapshot = snapshot_video_options;
-        request.translated = translated;
-        request.frame_budget = frames;
-        request.audio = [&](std::span<const int16_t> chunk) {
-            audio_frames += chunk.size() / 2;
-            for (const int16_t sample : chunk) {
-                audio_peak = std::max(audio_peak, std::abs(int(sample)));
-                nonzero_samples += sample != 0;
-            }
-        };
-        if (!headless)
-            request.cancelled = [&] {
-                SDL_PumpEvents();
-                SDL_Event event;
-                while (SDL_PollEvent(&event))
-                    if (event.type == SDL_EVENT_QUIT) quit = true;
-                return quit;
-            };
-        const auto boot_result = f3rt::run_fast_boot(m, *boot, request);
-        if (boot_result.cache_loaded) {
-            if (sdl.input) sdl.input->release();
-            if (sdl.audio) check(SDL_ClearAudioStream(sdl.audio));
-            audio_pacer.reset();
-        }
-        executed_frames = m.frame;
-        std::cout << "fast_boot frames=" << boot_result.frames << " ms=" << boot_result.ms
-                  << " source=" << boot_result.source << " eeprom=" << boot_result.eeprom << '\n';
-    }
     auto handle_audio_chunk = [&](size_t count) {
         audio_frames += count;
         for (size_t i = 0; i < count * 2; ++i) {
@@ -959,7 +864,8 @@ int main(int argc, char **argv) try {
             if (throttle) check(SDL_SetAudioStreamFrequencyRatio(sdl.audio, float(ratio)));
         }
     };
-    const bool slots_supported = translated && !allow_fallback;
+    std::filesystem::path config_dir;
+    if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
     bool motion_presentation = motion_interp && !headless;
     uint64_t motion_presentations = 0, motion_intermediates = 0, motion_history_resets = 0,
              scale_changes = 0;
@@ -1037,7 +943,7 @@ int main(int argc, char **argv) try {
         if (!netplay_trigger_snapshot.empty()) m.load_state(netplay_trigger_snapshot);
         while (netplay_hook->in_versus && !netplay_hook->in_versus(m)) {
             f3rt::apply_local_inputs(m, {});
-            m.run_frame(translated);
+            m.run_frame();
         }
         netplay_meta.edge_machine_frame = netplay_meta.sync_machine_frame = m.frame;
         // From here until GO the machine must not run a single frame (see `halted` in the loop).
@@ -1323,7 +1229,7 @@ int main(int argc, char **argv) try {
         if (!dumpdir.empty() && m.frame >= dump_start && (m.frame - dump_start) % dump_every == 0)
             f3rt::dump_machine(m, dumpdir);
         size_t count;
-        while ((count = m.audio->render_ready(samples.data(), samples.size() / 2)) != 0)
+        while ((count = f3rt_audio_render_ready(samples.data(), samples.size() / 2)) != 0)
             handle_audio_chunk(count);
         if (pace) {
             // Pace against a rolling deadline. After a stall longer than one catch-up window, resync to now instead of
@@ -1355,7 +1261,7 @@ int main(int argc, char **argv) try {
         f3rt::apply_local_inputs(m, local);
         if (!in_lobby && input_script) input_script->poke(m, m.frame + 1);
         if (in_lobby && has_hold) netplay_hook->lobby_hold_frame(m);
-        if (!m.run_frame(translated))
+        if (!m.run_frame())
             throw std::runtime_error("CPU halted at " + std::to_string(m.cpu.pc));
         if (in_lobby && has_hold) netplay_hook->lobby_hold_frame(m);
         finish_frame(slot, scheduled);
@@ -1607,9 +1513,6 @@ int main(int argc, char **argv) try {
                         break;
                     case Action::SaveState:
                     case Action::LoadState: {
-                        if (!slots_supported)
-                            throw std::runtime_error(
-                                "Slots require offline strict-native execution");
                         if (config_path.empty())
                             throw std::runtime_error("No user config path; supply --config FILE");
                         // The emulation thread performs the transfer between frames and answers with the status message.
@@ -1925,19 +1828,10 @@ int main(int argc, char **argv) try {
     }
     {
         size_t count;
-        while ((count = m.audio->render(samples.data(), samples.size() / 2)) != 0)
+        while ((count = f3rt_audio_render(samples.data(), samples.size() / 2)) != 0)
             handle_audio_chunk(count);
     }
     if (!eeprom.empty()) m.save_eeprom(eeprom);
-    if (!fallback_report.empty()) {
-        std::ofstream report(fallback_report);
-        report << "pc\tcount\n";
-        for (size_t i = 0; i < m.fallback_hits.size(); ++i)
-            if (m.fallback_hits[i])
-                report << "0x" << std::hex << i * 2 << std::dec << '\t' << m.fallback_hits[i]
-                       << '\n';
-        if (!report) throw std::runtime_error("Fallback report write failed");
-    }
     if (m.game_video) m.game_video->report(std::cout);
     if (m.sprite_units) m.sprite_units->write_summary(std::cout);
     if (m.discovery) m.discovery->finish(m);
@@ -1947,7 +1841,6 @@ int main(int argc, char **argv) try {
               << f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),
                              m.native_pixels().size() * 4)
               << std::dec << " cycles=" << m.cpu.cycles << " native_blocks=" << m.native_blocks
-              << " fallback_instructions=" << m.fallback_instructions
               << " audio_frames=" << audio_frames << " audio_peak=" << audio_peak
               << " nonzero_samples=" << nonzero_samples << '\n';
     if (video_mode == "compare")
@@ -1976,7 +1869,7 @@ int main(int argc, char **argv) try {
                   << std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()
                   << '\n';
     {
-        const auto stats = m.audio->performance_stats();
+        const f3rt_audio_stats stats = f3rt_audio_performance_stats();
         std::cout << "hle_commands=" << stats.commands
                   << " hle_rendered_frames=" << stats.rendered_frames
                   << " hle_voices_started=" << stats.voices_started

@@ -1,5 +1,4 @@
 #include "recorder.hpp"
-#include "f3rt/audio.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
 #include "cpp_yyjson.hpp"

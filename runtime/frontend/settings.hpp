@@ -23,7 +23,6 @@ struct FrontendSettings {
     std::string filter = "nearest", interpolation = "off", interpolation_fields = "geometry";
     std::string postprocess = "off", user_shader;
     float volume = 1.0f;
-    bool fast_boot = true, boot_cache = false;
     bool motion_interp = false;
     std::array<InputProfile, LOCAL_PLAYER_COUNT> profiles;
     std::string netplay_server = "127.0.0.1:7845";

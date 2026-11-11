@@ -1,14 +1,12 @@
 # Land Maker 3DS bench timeline (F3_N3DS_BENCH). Install as sdmc:/3ds/f3-recomp/landmakrj/bench.txt.
 # Format: runtime/debug/input_script.hpp (`FRAME scenario NAME` labels a section). Frames are
-# Machine::frame + 1; the 3DS starts at frame 479 (fast boot ends after 478 frames).
+# Machine::frame + 1; the 3DS boots from frame 1; the timeline below starts at frame 479, where the boot sequence ends.
 #
 # The same script plays on the desktop, which is how the timeline was explored:
-#   cp <sdmc>/3ds/f3-recomp/landmakrj/eeprom/landmakrj-init.bin /tmp/e.bin
-#   build/landmakrj/landmakrj --rom-dir roms/landmakrj --headless --no-audio --fast-boot off \
-#     --eeprom /tmp/e.bin --renderer accurate --frames 18600 --dump-dir /tmp/d \
+#   build/landmakrj/landmakrj --rom-dir roms/landmakrj --headless --no-audio \
+#     --renderer accurate --frames 18600 --dump-dir /tmp/d \
 #     --dump-start 479 --dump-every 100 --inputs games/landmakrj/n3ds/bench.txt
-# (--dump-dir writes rendered.bmp per dumped frame; --fast-boot off with the init EEPROM runs the
-# exact frames of the 3DS fast boot. A landmakrj desktop build refuses `poke` rules because its
+# (--dump-dir writes rendered.bmp per dumped frame. A landmakrj desktop build refuses `poke` rules because its
 # game netplay hook is active: lift that check locally to explore.)
 #
 # Timeline (frames; 5 s perf windows, a scenario needs >= 12 whole windows = 3540 frames; each

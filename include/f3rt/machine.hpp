@@ -12,9 +12,6 @@
 namespace f3rt {
 class Video;
 class GameVideo;
-class Audio;
-class Interpreter;
-class Eeprom;
 class SpriteUnits;
 class DiscoveryLog;
 class Machine {
@@ -50,9 +47,6 @@ public:
     // Host-only per-slot writer attribution (one PC per 16-byte sprite RAM entry); null = off. Never serialized.
     std::unique_ptr<std::array<uint32_t, 0x1000>> sprite_writers;
     std::unique_ptr<GameVideo> game_video;
-    std::unique_ptr<Audio> audio;
-    std::unique_ptr<Eeprom> eeprom;
-    std::unique_ptr<Interpreter> interpreter;
     bool sound_bankswitch = false;
     std::array<uint32_t, 6> inputs{0xffffffff, 0xffffffff, 0xffffffff,
                                    0xffffffff, 0xffffffff, 0xffffffff};
@@ -76,16 +70,13 @@ public:
     };
     std::array<NativePage, 0x200000 / 0x1000> native_pages{};
     std::span<const f3_excluded_range> excluded_code;
-    uint64_t native_blocks = 0, fallback_instructions = 0;
-    bool allow_main_fallback = true; // Native game target disables this; diagnostics opt in.
-    // Optional PC coverage counter, allocated only when requested by tooling.
-    std::vector<uint32_t> fallback_hits;
+    uint64_t native_blocks = 0;
 
     void reset();
     void bind_cpu_windows();
     void reset_devices();
     void reset_main_cpu();
-    bool run_frame(bool translated = false);
+    bool run_frame();
     void advance_to(uint64_t cycles);
     int boundary();
     int fallback();
@@ -104,6 +95,25 @@ public:
     uint32_t state_crc() const;
 
 private:
+    // The audio board and the EEPROM are process-wide instances behind include/f3rt/abi/{audio,eeprom}.h.
+    // A lease releases its instance when the Machine dies, also when the constructor throws part way.
+    // Declared after `shared`, so they are destroyed first: the audio worker borrows it until shutdown.
+    struct AudioLease {
+        bool held = false;
+        AudioLease() = default;
+        AudioLease(const AudioLease &) = delete;
+        AudioLease &operator=(const AudioLease &) = delete;
+        ~AudioLease();
+    };
+    struct EepromLease {
+        bool held = false;
+        EepromLease() = default;
+        EepromLease(const EepromLease &) = delete;
+        EepromLease &operator=(const EepromLease &) = delete;
+        ~EepromLease();
+    };
+    AudioLease m_audio_lease;
+    EepromLease m_eeprom_lease;
     uint64_t m_hardware_cycles = 0;
     std::array<uint32_t, 7> m_rom_crcs{};
     uint64_t m_next_vblank = 0, m_irq3_at = UINT64_MAX;

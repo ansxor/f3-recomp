@@ -360,14 +360,6 @@ void FrontendUi::draw(const FrontendUiState &state) {
                             ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                             "Save/load states disabled during active netplay match.");
                     if (ImGui::Button("Screenshot (F12)")) p.action(UiActionKind::Screenshot);
-                    ImGui::SeparatorText("Startup");
-                    changed |= ImGui::Checkbox("Fast boot (next launch)", &s.fast_boot);
-                    changed |= ImGui::Checkbox("Boot state cache (next launch)", &s.boot_cache);
-                    ImGui::TextWrapped(
-                        "Fast boot runs the power-on frames without presentation and uses a "
-                        "locally generated initialised EEPROM. The boot cache stores that "
-                        "post-boot state so later launches skip it. Both are host-side only and "
-                        "never change emulation. Saved with Save preferences.");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Input")) {

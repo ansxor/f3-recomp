@@ -3,7 +3,7 @@
 #include "inputs.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/memory_map.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "capture_io.hpp"
 #include "debug/profile.hpp"
 
@@ -57,7 +57,7 @@ inline void crc_byte(uint32_t &crc, uint8_t byte) {
 inline std::vector<int16_t> drain_audio_samples(Machine &m) {
     std::array<int16_t, 8192> block{};
     std::vector<int16_t> result;
-    while (auto count = m.audio->render(block.data(), block.size() / 2)) {
+    while (auto count = f3rt_audio_render(block.data(), block.size() / 2)) {
         result.insert(result.end(), block.begin(), block.begin() + count * 2);
     }
     return result;
@@ -73,10 +73,7 @@ struct RunnerConfig {
     std::filesystem::path wav_path;
     std::string wav_window = "full"; // "full" or "event"
     std::filesystem::path profile_path;
-    std::filesystem::path hle_events_path;
     std::filesystem::path dump_dir;
-    bool translated = true;
-    bool allow_fallback = false;
     bool record_sprite_writers = false;
     bool video_diff = false;
     unsigned video_layer_mask = 511;

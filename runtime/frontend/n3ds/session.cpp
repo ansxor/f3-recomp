@@ -4,9 +4,7 @@
 #ifdef F3_N3DS_BENCH
 #include "bench.hpp"
 #endif
-#include "fast_boot.hpp"
-#include "f3rt/audio.hpp"
-#include "f3rt/game_boot.hpp"
+#include "f3rt/abi/audio.h"
 #include "f3rt/input.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
@@ -121,7 +119,7 @@ void Session::log_audio_window(f3rt::Machine &machine) {
                             ? double(m_audio_window_frames) / double(m_audio_window_samples)
                             : 0.0;
     const uint64_t drops = m_pacer ? m_pacer->stats().drops - m_audio_window_drops_base : 0;
-    const auto hle = machine.audio->performance_stats();
+    const f3rt_audio_stats hle = f3rt_audio_performance_stats();
     const uint64_t commands = hle.commands - m_hle_commands_base;
     m_hle_commands_base = hle.commands;
     const double synth_ms = emulated > m_audio_window_emulated
@@ -176,7 +174,6 @@ void Session::startup() {
         stage("block registration");
         if (!f3_generated_register(&machine->cpu))
             throw std::runtime_error("Generated block registration failed");
-        machine->allow_main_fallback = false;
         stage("game video");
         machine->game_video =
             std::make_unique<f3rt::GameVideo>(*machine, f3rt::GameVideoMode::Game);
@@ -192,29 +189,15 @@ void Session::startup() {
         snapshots[slot] = (m_snapshots[slot] = std::make_unique<f3rt::SceneSnapshot>()).get();
     m_shared.emulation.attach_snapshots(snapshots);
     auto &machine = *m_machine;
-    const f3rt::GameBoot *boot = f3rt::game_boot();
-    if (boot && m_settings.fast_boot) {
-        stage("fast boot");
-        f3rt::FastBootRequest request;
-        request.eeprom_init = m_data_dir + "/eeprom/" + m_set + "-init.bin";
-        request.snapshot = m_video;
-        request.translated = true;
-        request.cancelled = [this] { return m_stop.load(); };
-        const auto result = f3rt::run_fast_boot(machine, *boot, request);
-        log_line("fast_boot frames=%llu source=%s eeprom=%s",
-                 static_cast<unsigned long long>(result.frames), result.source, result.eeprom);
-        if (m_audio) m_audio->clear();
-    }
 #ifdef F3_N3DS_BENCH
     stage("bench script");
     m_bench = Bench::load(m_data_dir + "/bench.txt");
     if (!m_bench) throw std::runtime_error("bench.txt is missing or malformed in " + m_data_dir);
-    log_line("n3ds: bench starts at frame=%llu fast_boot=%s",
-             static_cast<unsigned long long>(machine.frame + 1),
-             m_settings.fast_boot ? "on" : "off");
+    log_line("n3ds: bench starts at frame=%llu",
+             static_cast<unsigned long long>(machine.frame + 1));
 #endif
     stage("audio pacer");
-    const double source_rate = machine.audio->sample_rate();
+    const double source_rate = f3rt_audio_sample_rate();
     m_source_rate = source_rate;
     if (m_audio) m_audio->set_source_rate(source_rate);
     m_pacer = std::make_unique<f3rt::AudioPacer>(f3rt::AudioPacer::Config{
@@ -295,7 +278,7 @@ void Session::emulate() {
         const bool profile = profile_frame();
         machine.game_video->set_probe(profile ? &m_stages : nullptr);
         if (profile) m_stages.begin_frame();
-        if (!machine.run_frame(true))
+        if (!machine.run_frame())
             throw std::runtime_error("CPU halted at " + std::to_string(machine.cpu.pc));
         if (profile) {
             m_stages.end_frame();
@@ -307,7 +290,7 @@ void Session::emulate() {
         const uint64_t elapsed_us = uint64_t(
             std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start).count());
         PerfStats::smooth(m_perf.emu_us, elapsed_us);
-        const uint64_t synth_ns = machine.audio->performance_stats().render_ns;
+        const uint64_t synth_ns = f3rt_audio_performance_stats().render_ns;
         m_perf.emu_start_ns.store(uint64_t(frame_start.time_since_epoch().count()),
                                   std::memory_order_relaxed);
         m_perf.emu_end_ns.store(uint64_t(frame_end.time_since_epoch().count()),
@@ -317,7 +300,7 @@ void Session::emulate() {
         m_synth_render_ns = synth_ns;
         m_perf.emulated.fetch_add(1, std::memory_order_relaxed);
         size_t count, ready = 0;
-        while ((count = machine.audio->render_ready(samples.data(), samples.size() / 2)) != 0) {
+        while ((count = f3rt_audio_render_ready(samples.data(), samples.size() / 2)) != 0) {
             push_audio(samples.data(), count);
             ready += count;
         }

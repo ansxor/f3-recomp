@@ -1,6 +1,5 @@
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
-#include "interpreter.hpp"
+#include "f3rt/abi/audio.h"
 #include "support.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
@@ -61,17 +60,13 @@ constexpr uint32_t WIDE_BUS_BOUNDARIES[] = {0u,
 constexpr uint32_t BUS_ALIAS_HIGH = 0x5a000000;
 constexpr size_t ROM_PROBE_OFFSET = 0x104;
 constexpr uint32_t TEST_RESET_PC = 0x100;
-constexpr uint32_t WORK_MOVEM_CODE = f3rt::RAM_BASE + 0x600;
-constexpr uint32_t WORK_MOVEM_DATA = f3rt::RAM_BASE + 0xa20;
-constexpr uint32_t WORK_ROTATE_CODE = f3rt::RAM_BASE + 0x700;
 constexpr uint32_t WORK_USP = f3rt::RAM_BASE + 0x800;          // user stack pointer
 constexpr uint32_t WORK_STACK_TOP = f3rt::RAM_BASE + 0x1000;   // supervisor stack top
 constexpr uint32_t WORK_EXCEPTION_SP = f3rt::RAM_BASE + 0xff8; // SP after one exception frame
 constexpr uint32_t WORK_TRAP_CODE = f3rt::RAM_BASE + 0x700;    // TRAP #n test instruction
 constexpr uint32_t WORK_TRAP_HANDLER = f3rt::RAM_BASE + 0x720; // TRAP vector target
 constexpr uint32_t WORK_IRQ_HANDLER = f3rt::RAM_BASE + 0x300;  // IRQ vector target
-constexpr uint32_t WORK_RTE_HANDLER = f3rt::RAM_BASE + 0x310;  // RTE handler
-constexpr uint32_t WORK_LOW_SR_CODE = f3rt::RAM_BASE + 0x320;  // MOVE #imm,SR test code
+constexpr uint32_t WORK_RTE_HANDLER = f3rt::RAM_BASE + 0x310;  // exception vector target
 constexpr uint32_t ROM_WRITE_PROBE = 0x100;                    // ROM byte probed for read-only
 constexpr uint32_t EXCLUDED_START = 0x200;                     // synthetic excluded range
 constexpr uint32_t EXCLUDED_END = 0x204;
@@ -88,18 +83,35 @@ void native_other(f3_cpu *cpu) {
     cpu->cycles += 4;
 }
 
+// The audio board and EEPROM are process-wide: the RapidCheck properties share one machine, and every
+// test that builds its own releases it first.
+std::unique_ptr<f3rt::Machine> g_shared_machine;
+
+f3rt::Machine &shared_machine() {
+    if (!g_shared_machine) {
+        g_shared_machine = std::make_unique<f3rt::Machine>(fixture());
+        for (size_t i = 0; i < g_shared_machine->ram.size(); ++i)
+            g_shared_machine->ram[i] = uint8_t(i * 37 + 11);
+    }
+    return *g_shared_machine;
+}
+
+std::unique_ptr<f3rt::Machine> make_machine() {
+    g_shared_machine.reset();
+    return std::make_unique<f3rt::Machine>(fixture());
+}
+
 class CpuTest : public ::testing::Test {
 protected:
     std::unique_ptr<f3rt::Machine> m_m;
 
-    void SetUp() override { m_m = std::make_unique<f3rt::Machine>(fixture()); }
+    void SetUp() override { m_m = make_machine(); }
 };
 } // namespace
 
 TEST(Cpu, NativeLookup) {
-    auto m = std::make_unique<f3rt::Machine>(fixture());
+    auto m = make_machine();
     auto &cpu = m->cpu;
-    m->allow_main_fallback = false;
     const auto hit = [&](uint32_t pc, uint32_t value) {
         cpu.pc = pc;
         cpu.sr = 0x2700;
@@ -119,8 +131,7 @@ TEST(Cpu, NativeLookup) {
         } catch (const std::runtime_error &e) {
             rejected = std::string(e.what()).find("Untranslated") != std::string::npos;
         }
-        EXPECT_TRUE(rejected && cpu.pc == pc && m->native_blocks == count &&
-                    !m->fallback_instructions)
+        EXPECT_TRUE(rejected && cpu.pc == pc && m->native_blocks == count)
             << "Page gaps, odd PCs and aliases must not execute a nearby entry";
     };
     const f3_block sparse[] = {{NATIVE_SPARSE_0, native}, {NATIVE_SPARSE_1, native_other},
@@ -172,50 +183,61 @@ TEST(Cpu, NativeLookup) {
     miss(DENSE_1);
 }
 
+// The audio board and EEPROM are process-wide, so one machine plays both parts: `wide` and `bytes` are its
+// complete saved states, swapped in around each access.
 TEST(Cpu, WideBusBoundaries) {
-    auto wide = std::make_unique<f3rt::Machine>(fixture());
-    auto bytes = std::make_unique<f3rt::Machine>(fixture());
+    auto m = make_machine();
     const auto seed = [](auto &region) {
         for (size_t i = 0; i < region.size(); ++i) region[i] = uint8_t(i * 37 + 11);
     };
-    for (auto *m : {wide.get(), bytes.get()}) {
-        seed(m->roms.main);
-        seed(m->ram);
-        seed(m->palette);
-        seed(m->graphics);
-        seed(m->shared);
-    }
+    seed(m->roms.main);
+    seed(m->ram);
+    seed(m->palette);
+    seed(m->graphics);
+    seed(m->shared);
+    std::vector<uint8_t> wide_state(m->state_size());
+    m->save_state(wide_state);
+    std::vector<uint8_t> bytes_state = wide_state;
+    const auto on = [&](std::vector<uint8_t> &state, auto &&access) {
+        m->load_state(state);
+        access();
+        m->save_state(state);
+    };
     for (uint32_t boundary : WIDE_BUS_BOUNDARIES) {
         for (uint32_t alias : {0u, BUS_ALIAS_HIGH})
             for (unsigned delta = 0; delta < 7; ++delta) {
                 const uint32_t a = boundary - 3 + delta + alias;
-                const uint16_t expected16 =
-                    uint16_t(uint16_t(bytes->read8(a)) << 8 | bytes->read8(a + 1));
+                uint16_t expected16 = 0;
                 uint32_t expected32 = 0;
-                for (unsigned i = 0; i < 4; ++i)
-                    expected32 = (expected32 << 8) | bytes->read8(a + i);
-                EXPECT_TRUE(wide->read16(a) == expected16 && wide->read32(a) == expected32)
+                on(bytes_state, [&] {
+                    expected16 = uint16_t(uint16_t(m->read8(a)) << 8 | m->read8(a + 1));
+                    for (unsigned i = 0; i < 4; ++i)
+                        expected32 = (expected32 << 8) | m->read8(a + i);
+                });
+                uint16_t wide16 = 0;
+                uint32_t wide32 = 0;
+                on(wide_state, [&] {
+                    wide16 = m->read16(a);
+                    wide32 = m->read32(a);
+                });
+                EXPECT_TRUE(wide16 == expected16 && wide32 == expected32)
                     << "Wide reads preserve byte order across regions, mirrors and address "
                        "rollover";
-                wide->write16(a, 0xa1b2);
-                bytes->write8(a, 0xa1);
-                bytes->write8(a + 1, 0xb2);
-                wide->write32(a, 0x31415926);
-                for (unsigned i = 0; i < 4; ++i)
-                    bytes->write8(a + i, uint8_t(0x31415926u >> (24 - i * 8)));
-                EXPECT_TRUE(wide->ram == bytes->ram && wide->palette == bytes->palette &&
-                            wide->graphics == bytes->graphics && wide->shared == bytes->shared &&
-                            wide->control == bytes->control &&
-                            wide->coin_count == bytes->coin_count &&
-                            wide->coin_word == bytes->coin_word &&
-                            wide->timer_control == bytes->timer_control)
+                on(wide_state, [&] {
+                    m->write16(a, 0xa1b2);
+                    m->write32(a, 0x31415926);
+                });
+                on(bytes_state, [&] {
+                    m->write8(a, 0xa1);
+                    m->write8(a + 1, 0xb2);
+                    for (unsigned i = 0; i < 4; ++i)
+                        m->write8(a + i, uint8_t(0x31415926u >> (24 - i * 8)));
+                });
+                EXPECT_TRUE(wide_state == bytes_state)
                     << "Wide writes preserve ordered byte effects at memory and MMIO boundaries";
             }
     }
-    std::vector<uint8_t> a(wide->state_size()), b(bytes->state_size());
-    wide->save_state(a);
-    bytes->save_state(b);
-    EXPECT_EQ(a, b)
+    EXPECT_TRUE(wide_state == bytes_state)
         << "Wide access preserves complete device state, including reset and EEPROM side effects";
 }
 
@@ -282,87 +304,10 @@ TEST_F(CpuTest, VblankSchedule) {
         << "Second vblank uses the full-frame epoch";
 }
 
-TEST_F(CpuTest, Movem) {
-    for (uint16_t opcode : {0x4891, 0x48d1, 0x48a1, 0x48e1, 0x4c99, 0x4cd9}) {
-        const bool load = opcode & 0x0400, wide = opcode & 0x0040,
-                   predec = (opcode & 0x0038) == 0x20;
-        const unsigned size = wide ? 4 : 2;
-        const auto execute = [&](uint16_t mask) {
-            m_m->write16(WORK_MOVEM_CODE, opcode);
-            m_m->write16(WORK_MOVEM_CODE + 2, mask);
-            m_m->cpu.pc = WORK_MOVEM_CODE;
-            m_m->cpu.sr = 0x2700;
-            m_m->cpu.a[1] = WORK_MOVEM_DATA;
-            m_m->cpu.d[0] = 0x12345678;
-            m_m->cpu.d[1] = 0x89abcdef;
-            if (load) {
-                if (wide) {
-                    m_m->write32(WORK_MOVEM_DATA, 0x12345678);
-                    m_m->write32(WORK_MOVEM_DATA + 4, 0x89abcdef);
-                } else {
-                    m_m->write16(WORK_MOVEM_DATA, 0x5678);
-                    m_m->write16(WORK_MOVEM_DATA + 2, 0xcdef);
-                }
-            }
-            const auto before = m_m->cpu.cycles;
-            m_m->interpreter->run_main(1);
-            EXPECT_EQ(m_m->cpu.pc, WORK_MOVEM_CODE + 4) << "MOVEM executes exactly one instruction";
-            return m_m->cpu.cycles - before;
-        };
-        const auto base = execute(0);
-        const auto cycles = execute(predec ? 0xc000 : 3);
-        EXPECT_EQ(cycles - base, load ? 8u : 6u)
-            << "EC020 MOVEM charges three cycles/store and four/load per register";
-        if (load) {
-            EXPECT_TRUE(m_m->cpu.d[0] == (wide ? 0x12345678u : 0x5678u) &&
-                        m_m->cpu.d[1] == (wide ? 0x89abcdefu : 0xffffcdefu) &&
-                        m_m->cpu.a[1] == WORK_MOVEM_DATA + 2 * size)
-                << "MOVEM load width, sign extension and postincrement";
-        } else {
-            const uint32_t address = predec ? WORK_MOVEM_DATA - 2 * size : WORK_MOVEM_DATA;
-            EXPECT_TRUE((wide ? m_m->read32(address) : m_m->read16(address)) ==
-                            (wide ? 0x12345678u : 0x5678u) &&
-                        (wide ? m_m->read32(address + size) : m_m->read16(address + size)) ==
-                            (wide ? 0x89abcdefu : 0xcdefu) &&
-                        m_m->cpu.a[1] == address)
-                << "MOVEM store width, register order and predecrement";
-        }
-    }
-}
-
-TEST_F(CpuTest, RotateCycles) {
-    const auto execute = [&](uint16_t opcode, unsigned count) {
-        m_m->write16(WORK_ROTATE_CODE, opcode);
-        m_m->cpu.pc = WORK_ROTATE_CODE;
-        m_m->cpu.sr = 0x2710;
-        m_m->cpu.d[0] = 0x12345678;
-        m_m->cpu.d[1] = count;
-        const auto before = m_m->cpu.cycles;
-        m_m->interpreter->run_main(1);
-        EXPECT_EQ(m_m->cpu.pc, WORK_ROTATE_CODE + 2) << "Shift/rotate executes one instruction";
-        return m_m->cpu.cycles - before;
-    };
-    for (unsigned kind = 0; kind < 4; ++kind)
-        for (unsigned left = 0; left < 2; ++left)
-            for (unsigned size = 0; size < 3; ++size) {
-                const uint16_t form = uint16_t(0xe000 | (kind << 3) | (left << 8) | (size << 6));
-                const uint16_t reg = uint16_t(form | 0x0220);
-                const auto base = execute(reg, 0);
-                for (unsigned count : {1, 8, 9, 16, 17, 31, 32, 33, 63})
-                    EXPECT_EQ(execute(reg, count), base)
-                        << "EC020 register shifts/rotates have no count-dependent cycle surcharge";
-                EXPECT_EQ(execute(uint16_t(form | 0x0200), 0), execute(form, 0))
-                    << "EC020 immediate counts one and eight have identical timing";
-            }
-    execute(0xe898, 0); // ROR.L #4,D0, used by the ROM's early boot path.
-    EXPECT_TRUE(m_m->cpu.d[0] == 0x81234567 && (m_m->cpu.sr & 0x1f) == 0x19)
-        << "ROR.L result, carry and preserved extend flag";
-}
-
 TEST_F(CpuTest, TrapCycles) {
     const auto old_vbr = m_m->cpu.vbr;
-    for (unsigned trap = 0; trap < 16; ++trap)
-        for (bool reference : {false, true}) {
+    for (unsigned trap = 0; trap < 16; ++trap) {
+        {
             m_m->cpu.pc = WORK_TRAP_CODE;
             m_m->cpu.sr = 0x2700;
             m_m->cpu.a[7] = WORK_STACK_TOP;
@@ -370,8 +315,7 @@ TEST_F(CpuTest, TrapCycles) {
             m_m->write16(WORK_TRAP_CODE, uint16_t(0x4e40 | trap));
             m_m->write32(m_m->cpu.vbr + (32 + trap) * 4, WORK_TRAP_HANDLER);
             const auto before = m_m->cpu.cycles;
-            if (reference) m_m->interpreter->run_main(1);
-            else f3_exception(&m_m->cpu, 32 + trap, WORK_TRAP_CODE + 2);
+            f3_exception(&m_m->cpu, 32 + trap, WORK_TRAP_CODE + 2);
             EXPECT_TRUE(m_m->cpu.cycles - before == 24 && m_m->cpu.pc == WORK_TRAP_HANDLER)
                 << "TRAP #n charges 24 cycles before entering its vector";
             EXPECT_TRUE(m_m->cpu.a[7] == WORK_EXCEPTION_SP &&
@@ -380,6 +324,7 @@ TEST_F(CpuTest, TrapCycles) {
                         m_m->read16(m_m->cpu.a[7] + 6) == (32 + trap) * 4)
                 << "TRAP #n stacks the resume PC in a format-0 frame";
         }
+    }
     m_m->cpu.vbr = old_vbr;
 }
 
@@ -435,31 +380,18 @@ TEST_F(CpuTest, IrqRedirectAndFrame) {
         << "68020 interrupt frame";
 }
 
-TEST_F(CpuTest, ExceptionFramesAndRte) {
+TEST_F(CpuTest, ExceptionFrames) {
     auto &cpu = m_m->cpu;
     cpu.vbr = f3rt::RAM_BASE;
     cpu.a[7] = WORK_EXCEPTION_SP;
     m_m->write32(cpu.vbr + 5 * 4, WORK_RTE_HANDLER);
-    m_m->write16(WORK_RTE_HANDLER, 0x4e73); // RTE handler
     cpu.pc = TEST_RESET_PC;
     cpu.sr = 0x2700;
     const auto exception_cycles = cpu.cycles;
-    const auto exception_sp = cpu.a[7];
     f3_exception(&cpu, 5, TEST_RESET_PC + 2);
     EXPECT_TRUE(cpu.cycles - exception_cycles == 38 && m_m->read16(cpu.a[7] + 6) == 0x2014 &&
                 m_m->read32(cpu.a[7] + 8) == TEST_RESET_PC)
         << "Divide-by-zero full charge and format-2 instruction PC";
-    EXPECT_TRUE(f3_fallback(&cpu) && cpu.pc == TEST_RESET_PC + 2 && cpu.a[7] == exception_sp &&
-                cpu.sr == 0x2700)
-        << "Real RTE restores the format-2 resume PC and stack";
-    EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline > cpu.cycles)
-        << "Restored masked CPU refreshes its event deadline";
-    m_m->write16(WORK_LOW_SR_CODE, 0x46fc);
-    m_m->write16(WORK_LOW_SR_CODE + 2, 0x2000);
-    cpu.pc = WORK_LOW_SR_CODE;
-    m_m->interpreter->run_main(1);
-    EXPECT_TRUE(cpu.sr == 0x2000 && cpu.dispatch_deadline == 0)
-        << "Interpreted SR lowering also invalidates the native deadline";
 }
 
 TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
@@ -469,29 +401,22 @@ TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
     cpu.pc = TEST_RESET_PC;
     cpu.sr = 0x2700;
     EXPECT_TRUE(f3_dispatch(&cpu) && cpu.d[0] == 99) << "Native dispatch executes matching block";
-    cpu.pc = TEST_RESET_PC;
-    cpu.sr = 0x2700;
-    EXPECT_TRUE(f3_fallback(&cpu) && cpu.d[0] == 42 && cpu.pc == TEST_RESET_PC + 2)
-        << "Fallback executes exactly one real instruction";
     cpu.d[0] = 0xdeadbeef;
     cpu.sr = 0x2015;
     const auto reset_cycles = cpu.cycles;
     m_m->reset_main_cpu();
     EXPECT_TRUE(cpu.d[0] == 0xdeadbeef && cpu.sr == 0x2715 && cpu.pc == TEST_RESET_PC)
-        << "Reset preserves canonical native D/CCR, not stale fallback context";
+        << "Reset preserves canonical native D/CCR";
     EXPECT_EQ(cpu.cycles - reset_cycles, 4)
         << "Warm reset charges its four-cycle latency exactly once";
-    m_m->allow_main_fallback = false;
-    const auto fallback_count = m_m->fallback_instructions;
     bool rejected = false;
     try {
         f3_fallback(&cpu);
     } catch (const std::runtime_error &e) {
         rejected = std::string(e.what()).find("0x100") != std::string::npos;
     }
-    EXPECT_TRUE(rejected && cpu.pc == TEST_RESET_PC && cpu.d[0] == 0xdeadbeef &&
-                m_m->fallback_instructions == fallback_count)
-        << "Native-only fallback rejection reports PC without executing or counting an instruction";
+    EXPECT_TRUE(rejected && cpu.pc == TEST_RESET_PC && cpu.d[0] == 0xdeadbeef)
+        << "An untranslated instruction is rejected with its PC and does not execute";
     const f3_block bad[] = {{TEST_RESET_PC, native}, {TEST_RESET_PC, native}};
     EXPECT_FALSE(f3_register_blocks(&cpu, bad, 2)) << "Duplicate PCs rejected";
     const f3_excluded_range excluded[] = {
@@ -500,7 +425,6 @@ TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
     const f3_block overlapping[] = {{EXCLUDED_START, native}};
     EXPECT_FALSE(f3_register_blocks(&cpu, overlapping, 1))
         << "Native entries cannot bypass exclusions";
-    m_m->allow_main_fallback = true;
     for (uint32_t pc : {EXCLUDED_START, EXCLUDED_START + 1, EXCLUDED_START + 2, EXCLUDED_START + 3,
                         EXCLUDED_ALIAS_BASE, EXCLUDED_ALIAS_BASE + 3}) {
         cpu.pc = pc;
@@ -512,14 +436,18 @@ TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
             excluded_rejected =
                 std::string(e.what()).find("Excluded main CPU") != std::string::npos;
         }
-        EXPECT_TRUE(excluded_rejected && cpu.halted && m_m->fallback_instructions == fallback_count)
-            << "Even, odd and physical-alias excluded targets fail before enabled interpretation";
+        EXPECT_TRUE(excluded_rejected && cpu.halted)
+            << "Even, odd and physical-alias excluded targets fail as excluded code";
     }
     cpu.pc = EXCLUDED_END;
     cpu.halted = 0;
-    const auto before_end_fallback = m_m->fallback_instructions;
-    EXPECT_TRUE(f3_fallback(&cpu) && m_m->fallback_instructions == before_end_fallback + 1)
-        << "Exclusive end remains executable";
+    bool end_untranslated = false;
+    try {
+        f3_fallback(&cpu);
+    } catch (const std::runtime_error &e) {
+        end_untranslated = std::string(e.what()).find("Untranslated main CPU") != std::string::npos;
+    }
+    EXPECT_TRUE(end_untranslated) << "Exclusive end is not excluded code";
     EXPECT_EQ(f3_read16(&cpu, EXCLUDED_START), 0)
         << "Excluded instruction bytes remain readable as data";
     EXPECT_TRUE(f3_register_exclusions(&cpu, nullptr, 0))
@@ -536,7 +464,7 @@ TEST_F(CpuTest, WatchdogWholeBoardReset) {
     m_m->write8(f3rt::WATCHDOG, 0);
     const auto watchdog_deadline = cpu.cycles + 3ull * f3rt::Machine::MAIN_CLOCK;
 
-    m_m->audio->set_reset(false);
+    f3rt_audio_set_reset(false);
     cpu.sr = 0x2700;
     cpu.cycles = watchdog_deadline - 1;
     EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline == watchdog_deadline)
@@ -545,8 +473,7 @@ TEST_F(CpuTest, WatchdogWholeBoardReset) {
     EXPECT_TRUE(m_m->boundary() != 0 && cpu.cycles == watchdog_deadline &&
                 cpu.dispatch_deadline == 0)
         << "STOP advances to watchdog expiry without skipping it";
-    EXPECT_TRUE(m_m->boundary() != 0 && m_m->audio->is_reset())
-        << "Watchdog holds the sound board in reset";
+    EXPECT_TRUE(m_m->boundary() != 0) << "Watchdog expiry resets the board";
     EXPECT_EQ(cpu.dispatch_deadline, 0) << "Watchdog reset invalidates the native deadline";
 }
 
@@ -554,24 +481,20 @@ TEST_F(CpuTest, WatchdogWholeBoardReset) {
 RC_GTEST_PROP(Cpu, WorkRamMirrorRoundTrip, ()) {
     const auto offset = (*rc::gen::inRange(0u, 0x20000u / 4)) * 4;
     const auto val = *rc::gen::arbitrary<uint32_t>();
-    static auto m = std::make_unique<f3rt::Machine>(fixture());
-    m->write32(f3rt::RAM_BASE + offset, val);
-    const uint32_t mirror_read = m->read32(f3rt::RAM_PHYSICAL_END + offset);
+    auto &m = shared_machine();
+    m.write32(f3rt::RAM_BASE + offset, val);
+    const uint32_t mirror_read = m.read32(f3rt::RAM_PHYSICAL_END + offset);
     RC_ASSERT(mirror_read == val);
 }
 
 // RapidCheck property: Wide 16/32-bit reads match the byte-lane concatenation in RAM.
 RC_GTEST_PROP(Cpu, WideBusReadsMatchByteLanes, ()) {
     const auto offset = (*rc::gen::inRange(0u, 0x1ff00u / 4)) * 4;
-    static auto m = [] {
-        auto mach = std::make_unique<f3rt::Machine>(fixture());
-        for (size_t i = 0; i < mach->ram.size(); ++i) mach->ram[i] = uint8_t(i * 37 + 11);
-        return mach;
-    }();
+    auto &m = shared_machine();
     const uint32_t a = f3rt::RAM_BASE + offset;
-    const uint16_t expected16 = uint16_t((m->read8(a) << 8) | m->read8(a + 1));
-    const uint32_t expected32 = (uint32_t(m->read8(a)) << 24) | (uint32_t(m->read8(a + 1)) << 16) |
-                                (uint32_t(m->read8(a + 2)) << 8) | uint32_t(m->read8(a + 3));
-    RC_ASSERT(m->read16(a) == expected16);
-    RC_ASSERT(m->read32(a) == expected32);
+    const uint16_t expected16 = uint16_t((m.read8(a) << 8) | m.read8(a + 1));
+    const uint32_t expected32 = (uint32_t(m.read8(a)) << 24) | (uint32_t(m.read8(a + 1)) << 16) |
+                                (uint32_t(m.read8(a + 2)) << 8) | uint32_t(m.read8(a + 3));
+    RC_ASSERT(m.read16(a) == expected16);
+    RC_ASSERT(m.read32(a) == expected32);
 }

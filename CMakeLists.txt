@@ -4,7 +4,6 @@ option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built 
 option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
 option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
-option(F3RT_HLE_EVENTS "Compile the HLE voice-event observer used by --hle-events and the HLE audio tests" ON)
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
 # compile_commands.json for clangd and other LSP servers; `make compdb` links it to the root.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -18,13 +17,7 @@ if(BUILD_TESTING AND NOT F3RT_HOST_TOOLS)
     message(FATAL_ERROR "BUILD_TESTING requires F3RT_HOST_TOOLS: the tests link f3rt-runner")
 endif()
 include(cmake/dependencies.cmake)
-include(cmake/faust.cmake)
-# ES5510 effects programs: double precision (the LFO is a rotation of a GPR pair whose rate a float would drift).
-f3rt_faust_dsp(NAME reverb CLASS ReverbDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
-f3rt_faust_dsp(NAME chorus CLASS ChorusDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
-f3rt_faust_dsp(NAME echo CLASS EchoDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
-f3rt_faust_dsp(NAME hall CLASS HallDsp OPTIONS -double DEPENDS runtime/audio/hle/faust/es5510.lib)
-f3rt_faust_dsp(NAME dc_blocker CLASS DcBlockerDsp OPTIONS -double)
+include(cmake/corrosion.cmake)
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -247,36 +240,7 @@ if(F3_ROM_DIR)
             python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
 endif()
 
-set(MUSASHI ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/musashi)
-set(F3_M68KMAKE_EXECUTABLE "" CACHE FILEPATH
-    "Host m68kmake for cross builds; built from source when empty")
-if(F3_M68KMAKE_EXECUTABLE)
-    get_filename_component(F3_M68KMAKE_EXECUTABLE "${F3_M68KMAKE_EXECUTABLE}" ABSOLUTE)
-    set(F3_M68KMAKE_COMMAND "${F3_M68KMAKE_EXECUTABLE}")
-    set(F3_M68KMAKE_DEPENDS "")
-elseif(CMAKE_CROSSCOMPILING)
-    message(FATAL_ERROR "Cross-compiling requires -DF3_M68KMAKE_EXECUTABLE=<host m68kmake>")
-else()
-    add_executable(f3rt_m68kmake ${MUSASHI}/m68kmake.c)
-    set(F3_M68KMAKE_COMMAND f3rt_m68kmake)
-    set(F3_M68KMAKE_DEPENDS f3rt_m68kmake)
-endif()
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/musashi)
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.c ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.h
-    COMMAND ${F3_M68KMAKE_COMMAND} ${CMAKE_CURRENT_BINARY_DIR}/musashi ${MUSASHI}/m68k_in.c
-    DEPENDS ${F3_M68KMAKE_DEPENDS} ${MUSASHI}/m68k_in.c
-    VERBATIM)
-add_library(f3rt_musashi STATIC ${MUSASHI}/m68kcpu.c ${MUSASHI}/softfloat/softfloat.c
-    ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.c runtime/core_state.c)
-target_include_directories(f3rt_musashi PUBLIC ${MUSASHI} PRIVATE include ${CMAKE_CURRENT_BINARY_DIR}/musashi runtime)
-target_compile_definitions(f3rt_musashi PRIVATE M68K_EMULATE_030=0 M68K_EMULATE_040=0
-    M68K_EMULATE_INT_ACK=1 M68K_EMULATE_TRACE=1 M68K_EMULATE_RESET=1 M68K_EMULATE_ADDRESS_ERROR=1)
-# m68kcpu.c includes the generated header, not only the generated C file.
-add_custom_target(f3rt_musashi_generated DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/musashi/m68kops.h)
-add_dependencies(f3rt_musashi f3rt_musashi_generated)
-
-file(GLOB AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
+file(GLOB REFERENCE_AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 # A game opts into the de-HLE'd GameVideo scene by providing games/<game>/video/.
 file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
 if(GAME_VIDEO_SOURCES)
@@ -285,14 +249,6 @@ if(GAME_VIDEO_SOURCES)
 else()
     # Games without a scene still link GameVideo (never instantiated for them).
     set(F3RT_GAME_VIDEO_SOURCES runtime/renderer/game/video_generic.cpp)
-endif()
-# A game opts into fast boot by providing games/<game>/boot/.
-file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
-if(GAME_BOOT_SOURCES)
-    set(F3RT_GAME_BOOT_SOURCES ${GAME_BOOT_SOURCES})
-else()
-    # Games with no boot predicate never turbo-boot; the entry point still resolves.
-    set(F3RT_GAME_BOOT_SOURCES runtime/stubs/boot.cpp)
 endif()
 file(GLOB GAME_NETPLAY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/netplay/*.cpp")
 if(GAME_NETPLAY_SOURCES)
@@ -312,36 +268,34 @@ else()
 endif()
 set(F3RT_CORE_SOURCES
     runtime/third_party/sha1dc/sha1.c runtime/third_party/sha1dc/ubc_check.c
-    runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp runtime/interpreter.cpp
+    runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp
     runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
     runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp
     runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
-    ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
-    runtime/audio/audio.cpp
+    ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/audio/hle/core.cpp runtime/debug/replay.cpp
-    runtime/audio/hle/command.cpp runtime/audio/hle/sequencer.cpp runtime/audio/hle/patch.cpp
-    runtime/audio/hle/program_service.cpp
-    runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
-    runtime/audio/hle/synthesis.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
     ${F3RT_THREAD_SOURCES}
-    ${AUDIO_SOURCES}
 )
 
+# The audio and eeprom simulation is the Rust crates behind include/f3rt/abi/*.h.
+file(GLOB_RECURSE F3_RUST_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/crates/f3rt-*/src/*.rs")
+file(GLOB F3_ABI_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/abi/*.h")
 set(F3_SIMULATION_SOURCES
     "${F3_GAME_CONFIG}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.lock"
+    ${F3_RUST_SOURCES}
+    ${F3_ABI_HEADERS}
     "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/machine.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/rom.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/input.hpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/audio.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/video.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/game_video.hpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/core_state.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/eeprom.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/state_io.hpp"
 )
 foreach(_src IN LISTS F3RT_CORE_SOURCES)
@@ -399,7 +353,7 @@ execute_process(
 add_library(f3rt STATIC ${F3RT_CORE_SOURCES})
 add_dependencies(f3rt f3rt_build_identity)
 
-add_library(f3rt-audio-reference STATIC runtime/audio/reference/engine.cpp runtime/audio/reference/board.cpp)
+add_library(f3rt-audio-reference STATIC runtime/audio/reference/engine.cpp runtime/audio/reference/board.cpp ${REFERENCE_AUDIO_SOURCES})
 target_include_directories(f3rt-audio-reference PUBLIC include runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(f3rt-audio-reference PUBLIC f3rt)
 
@@ -408,9 +362,7 @@ target_link_libraries(f3rt-audio-reference PUBLIC f3rt)
 # Generated headers are reached as "generated_config/<name>"; runtime sprite headers
 # use "sprites/<name>" to avoid basename ambiguity.
 target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
-    PRIVATE runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
-# Unmodified FAUST architecture headers. System includes keep their warnings out of our builds.
-target_include_directories(f3rt SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/faust")
+    PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}")
 # A game opts into sprite behaviours by providing games/<game>/sprites/behaviours.hpp.
 # Header-only registry: sprites/behaviours.cpp includes it, so no static registrar
 # can be dead-stripped from the archive. Not under video/, which would enable GameVideo.
@@ -420,7 +372,8 @@ if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE f3rt_musashi Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
+target_link_libraries(f3rt PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
+target_link_libraries(f3rt PUBLIC f3rt_abi)
 
 if(F3RT_NETPLAY)
     target_link_libraries(f3rt PUBLIC f3-netplay-shared)
@@ -462,15 +415,8 @@ endif()
 if(WIN32)
     target_link_libraries(f3rt PRIVATE ws2_32)
 endif()
-# Musashi calls the runtime bus; static consumers need both archives rescanned.
-target_link_libraries(f3rt_musashi PRIVATE f3rt)
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
-if(F3RT_HLE_EVENTS)
-    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=1)
-else()
-    target_compile_definitions(f3rt PUBLIC F3RT_HLE_EVENTS=0)
-endif()
 if(F3RT_GAME_VIDEO)
     # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
     target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
@@ -486,7 +432,7 @@ if(F3_GENERATED_DIR)
 endif()
 
 if(F3RT_HOST_TOOLS)
-    add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp tools/runner/sound/capture.cpp)
+    add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp)
     target_include_directories(f3rt-runner PUBLIC tools/runner runtime include "${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(f3rt-runner PUBLIC f3rt)
     if(F3_ROM_DIR)
@@ -494,9 +440,7 @@ if(F3RT_HOST_TOOLS)
     endif()
     target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
-    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/sound_extract.cpp tools/commands/motion.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
-    file(GLOB GAME_SOUND_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/sound/profile.cpp")
-    target_sources(f3rt-tool PRIVATE ${GAME_SOUND_PROFILE_SOURCES})
+    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/motion.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
     target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
@@ -514,7 +458,6 @@ endif()
 add_library(f3rt-frontend STATIC
     runtime/frontend/frame_slots.cpp
     runtime/frontend/audio_pacer.cpp
-    runtime/frontend/fast_boot.cpp
     runtime/frontend/config_file.cpp
 )
 target_include_directories(f3rt-frontend PUBLIC runtime runtime/frontend include
@@ -527,13 +470,7 @@ if(F3RT_SDL)
     target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(f3rt-ui PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
     target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui f3rt-frontend)
-    add_executable(f3rt-run runtime/frontend/frontend.cpp)
-    target_include_directories(f3rt-run PRIVATE runtime)
-    target_link_libraries(f3rt-run PRIVATE f3rt f3rt-ui SDL3::SDL3)
-    target_compile_definitions(f3rt-run PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
     if(F3_GENERATED_DIR)
-        target_link_libraries(f3rt-run PRIVATE f3_recompiled)
-        target_compile_definitions(f3rt-run PRIVATE F3RT_GENERATED=1)
         add_executable(${F3_GAME_EXECUTABLE} runtime/frontend/frontend.cpp)
         target_include_directories(${F3_GAME_EXECUTABLE} PRIVATE runtime)
         target_link_libraries(${F3_GAME_EXECUTABLE} PRIVATE f3rt f3_recompiled f3rt-ui SDL3::SDL3)
@@ -566,7 +503,7 @@ if(F3RT_SDL)
         target_include_directories(f3rt-gpu PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}" PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
         target_link_libraries(f3rt-gpu PUBLIC SDL3::SDL3)
         target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)
-        foreach(frontend f3rt-tool f3rt-run ${F3_GAME_EXECUTABLE})
+        foreach(frontend f3rt-tool ${F3_GAME_EXECUTABLE})
             if(TARGET ${frontend})
                 target_link_libraries(${frontend} PRIVATE f3rt-gpu SDL3::SDL3)
                 target_compile_definitions(${frontend} PRIVATE F3RT_GPU=1)
@@ -586,18 +523,14 @@ if(BUILD_TESTING)
     include(GoogleTest)
 
     add_library(f3rt-test-support STATIC runtime/tests/support.cpp runtime/renderer/gpu/motion.cpp)
-    target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt_musashi f3rt-runner GTest::gtest rapidcheck_gtest)
+    target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt-runner GTest::gtest rapidcheck_gtest)
     target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    foreach(area video input input_script eeprom cpu sprites audio motion_interp state netplay bytes)
+    foreach(area video input input_script cpu sprites motion_interp state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
-        if(NOT F3RT_HLE_EVENTS)
-            # The game audio tests read VoiceEvents; the observer is compiled out in this configuration.
-            list(FILTER GAME_AREA_TEST_SOURCES EXCLUDE REGEX "/tests/audio[^/]*\\.cpp$")
-        endif()
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
@@ -606,9 +539,6 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-video PRIVATE f3rt-gpu SDL3::SDL3)
         target_compile_definitions(f3rt-test-video PRIVATE F3RT_GPU=1)
     endif()
-    # Core/replay tests: both sets are loaded from sibling directories of F3_ROM_DIR, whatever F3_GAME is.
-    target_sources(f3rt-test-audio PRIVATE runtime/tests/hle_core.cpp)
-    target_link_libraries(f3rt-test-audio PRIVATE f3rt-frontend f3rt-audio-reference)
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)
@@ -618,10 +548,6 @@ if(BUILD_TESTING)
     string(FIND "${F3_GAME_CONFIG_TEXT}" "[[video.emit_units]]" F3_EMIT_UNITS_POS)
     if(F3_ROM_DIR AND NOT F3_EMIT_UNITS_POS EQUAL -1)
         add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
-    endif()
-    file(GLOB GAME_HLE_AUDIO_TEST CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/audio*.cpp")
-    if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST AND F3RT_HLE_EVENTS)
-        add_test(NAME hle-audio COMMAND f3rt-test-audio --gtest_filter=HleAudio.*)
     endif()
     if(TARGET f3rt-ui)
         add_executable(f3rt-test-frontend runtime/tests/frontend.cpp)

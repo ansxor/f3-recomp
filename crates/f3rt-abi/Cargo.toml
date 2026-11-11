@@ -1,0 +1,13 @@
+[package]
+name = "f3rt-abi"
+version = "0.1.0"
+edition = "2024"
+description = "Links the Rust runtime crates (audio, eeprom) into one staticlib for the C++ runtime"
+
+[lib]
+name = "f3rt_abi"
+crate-type = ["staticlib"]
+
+[dependencies]
+f3rt-audio = { path = "../f3rt-audio" }
+f3rt-eeprom = { path = "../f3rt-eeprom" }

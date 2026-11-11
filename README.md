@@ -4,12 +4,12 @@ Static recompilation of Taito F3 arcade games into native C, with a runtime buil
 
 ## Building
 
-**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, `uv` (managing Python 3.11+ and Capstone 5.0.9).
+**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Rust (cargo, rustc; edition 2024), Git, `uv` (managing Python 3.11+ and Capstone 5.0.9).
 
 **macOS:**
 
 ```sh
-brew install cmake ninja uv
+brew install cmake ninja uv rust
 # Optional: prebuilt libraries/tools, used instead of source builds when present.
 brew install sdl3 yyjson cpp-httplib googletest glslang spirv-cross
 ```
@@ -19,12 +19,15 @@ Installed packages (Homebrew, distro, Vulkan SDK) are linked as-is; anything mis
 pinned tag and built from source, with sources cached in `~/.cache/CPM` across build directories.
 Pass `-DCPM_DOWNLOAD_ALL=ON` to ignore installed packages.
 
-FAUST 2.x is not needed to build: the DSP headers under `runtime/audio/hle/faust/generated/` are
-checked in, and without a FAUST compiler (the default) no build runs it. If one is configured
-(`-DFAUST_EXECUTABLE=<path to faust>`, or `faust` on `PATH` when configuring), ordinary builds also
-run it for any header older than its `.dsp`, `architecture.hpp` or `.lib` inputs, then recompile the
-code that includes it. `cmake --build <build-dir> --target faust-regen` does the same on request and
-leaves up-to-date headers alone; touch the `.dsp` (or delete the header) to force one.
+The audio board and the EEPROM are Rust: `crates/f3rt-{audio,eeprom}` implement the C ABI declared in
+`include/f3rt/abi/{audio,eeprom}.h`. They reach the C++ runtime through
+[Corrosion](https://github.com/corrosion-rs/corrosion) (`cmake/corrosion.cmake`): `crates/f3rt-abi` is the
+single staticlib linked into `f3rt`, and the other crates are its rlib dependencies. There are no external
+crates (`Cargo.lock` lists only the workspace; the workspace builds with `cargo build -p f3rt-abi --release`;
+`[profile.release]` in `Cargo.toml` is `opt-level = 3`, fat LTO, one codegen unit, `panic = "abort"`).
+
+FAUST 2.x is only needed to regenerate the audio DSPs: the generated Rust under
+`crates/f3rt-audio/src/hle/faust/generated/` is checked in, and `crates/f3rt-audio/faust/regen.sh` rebuilds it.
 
 **Build steps** (using your own legally obtained ROMs):
 
@@ -80,6 +83,6 @@ The following ROM sets have tested native builds:
 
 ## Credits
 
-Architecture inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp). Video and sound algorithms adapted from BSD-3-Clause-licensed [MAME](https://github.com/mamedev/mame) sources. CPU interpreter based on Musashi. Built with SDL3.
+Architecture inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp). Video and sound algorithms adapted from BSD-3-Clause-licensed [MAME](https://github.com/mamedev/mame) sources. The main CPU runs only recompiled (static binary translation) code; there is no interpreter. Built with SDL3.
 
 See [runtime/LICENSES.txt](runtime/LICENSES.txt) for full attribution.

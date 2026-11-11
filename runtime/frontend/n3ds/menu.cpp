@@ -127,8 +127,6 @@ void Menu::input_tab() {
 }
 
 void Menu::system_tab() {
-    if (ImGui::Checkbox("Fast boot", &m_settings.fast_boot))
-        commit(std::string("fast_boot=") + (m_settings.fast_boot ? "on" : "off"));
     if (ImGui::Checkbox("Performance overlay", &m_settings.perf_overlay))
         commit(std::string("perf_overlay=") + (m_settings.perf_overlay ? "on" : "off"));
     ImGui::Dummy(ImVec2(0, 8));

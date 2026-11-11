@@ -3,8 +3,7 @@
 //
 // Games declare "emit units": code spans that draw one object/queue record into sprite
 // RAM (config.toml [[video.emit_units]], compiled into the generated sprite_units.hpp).
-// Generated code (and the interpreter, at the same instruction boundaries) calls
-// f3_unit_enter/f3_unit_exit at the declared PCs. SpriteUnits then
+// Generated code calls f3_unit_enter/f3_unit_exit at the declared PCs. SpriteUnits then
 //   1. attributes every sprite-RAM entry the real CPU writes inside a unit span to that
 //      invocation's identity (stable across tile/animation changes);
 //   2. at unit start, optionally replays the game's own native code for the span on a
@@ -76,12 +75,12 @@ public:
     enum class Abort : uint8_t {
         Device,         // I/O, control, shared RAM, sound, EEPROM, unmapped bus access
         ForbiddenWrite, // ROM, palette or non-sprite graphics write
-        Untranslated,   // PC without a native block (fallback / excluded code)
+        Untranslated,   // PC without a native block (excluded code or a miss in the block table)
         Exception,      // f3_exception raised
         ResetDevices,   // f3_reset_devices
         Budget,         // cycle or block budget exceeded
         Stopped,        // STOP, halt, trace bits or boundary request
-        NoNative,       // no native blocks registered (interpreted execution)
+        NoNative,       // no native blocks registered
         Count
     };
     static const char *abort_name(Abort reason);
@@ -167,8 +166,6 @@ public:
     bool is_sandbox(const f3_cpu *cpu) const { return cpu == &m_sandbox_cpu; }
     void unit_enter(f3_cpu *cpu, uint32_t unit);
     int unit_exit(f3_cpu *cpu, uint32_t unit); // nonzero only for the sandbox at its unit end
-    // Interpreted execution: call before the instruction at `pc` runs (exit hooks, then enter).
-    void interpreted_instruction(uint32_t pc);
     void note_write(uint32_t address, unsigned width) {
         const uint32_t a = address & 0xffffff;
         const uint32_t offset = a - GRAPHICS_BASE;
@@ -254,9 +251,6 @@ private:
         uint64_t identity = 0, frame = 0;
         std::vector<uint8_t> real, replacement, flags;
     };
-    struct Hooks {
-        std::vector<uint32_t> exits, enters;
-    };
     struct Generation {
         uint64_t last_frame = 0;
         uint32_t generation = 0;
@@ -296,7 +290,6 @@ private:
     const FlickerShadow *m_replay_flicker = nullptr; // source tagging sandbox writes
     uint32_t m_frame_shadow_entries = 0, m_frame_shadow_objects = 0, m_frame_shadow_gate_set = 0;
     FrameShadow m_last_frame_shadow;
-    std::unordered_map<uint32_t, Hooks> m_hooks; // by PC (interpreted execution)
     std::array<uint64_t, 0x800> m_identity{};
     std::array<uint64_t, 0x800> m_object{}; // owning invocation identity per slot
     std::array<uint8_t, 0x800> m_flag{};    // sprite_flag_* per slot (real shadow entries)
@@ -308,8 +301,6 @@ private:
     std::vector<unsigned> m_irq_levels;
     std::vector<Splice> m_splices;
     mutable std::vector<SpriteSplice> m_view;
-    uint32_t m_last_hook_pc = 0;
-    uint64_t m_last_hook_cycles = UINT64_MAX;
     static constexpr uint16_t NO_ENTRY = 0xffff;
     std::array<uint16_t, 2> m_memo_entry{NO_ENTRY, NO_ENTRY};
     std::array<uint8_t, 2> m_memo_mask{};

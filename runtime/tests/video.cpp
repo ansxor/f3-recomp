@@ -770,7 +770,7 @@ TEST(GameCompositor, IndexedParallelMatchesSerial) {
     }
     for (unsigned frame = 0; frame < 900; ++frame) {
         f3rt::apply_local_inputs(*machine, {});
-        ASSERT_TRUE(machine->run_frame(true));
+        ASSERT_TRUE(machine->run_frame());
     }
     ASSERT_NE(machine->game_video, nullptr);
     const auto &captured = machine->game_video->scene_snapshot();
@@ -1029,7 +1029,7 @@ TEST(GameCompositor, IndexedMatchesGpu) {
         for (unsigned index = 0; index < 3600; ++index) {
             if (play) schedule.apply(*machine, index);
             else f3rt::apply_local_inputs(*machine, {});
-            ASSERT_TRUE(machine->run_frame(true));
+            ASSERT_TRUE(machine->run_frame());
             if (index < 600 || index % 30) continue;
             const auto &captured = machine->game_video->scene_snapshot();
             ASSERT_FALSE(captured.fallback) << "frame " << index << " must be a native scanout";
@@ -1121,7 +1121,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
     f3rt::IndexedScratch scratch;
     for (unsigned index = 0; index < BENCH_FRAMES; ++index) {
         input->apply(*machine, index);
-        ASSERT_TRUE(machine->run_frame(true));
+        ASSERT_TRUE(machine->run_frame());
         const unsigned frame = index + 1;
         size_t slot = BENCH_WINDOWS.size();
         bool sampled = frame % BENCH_BACKGROUND_STRIDE == 0 && frame >= 479;
@@ -1176,46 +1176,71 @@ std::unique_ptr<f3rt::Machine> strict_machine_or_skip(bool game_video) {
 }
 } // namespace
 
+// The audio board and EEPROM are process-wide, so the two machines of a comparison run one after the other.
 TEST(GameVideo, LazyNativeFrameMatchesFdpOracle) {
-    auto game = strict_machine_or_skip(true);
-    auto oracle = strict_machine_or_skip(false);
-    if (!game || !oracle) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
-    game->sprite_units = f3rt::make_game_sprite_units(*game, false);
-    f3rt::runner::SeededScheduleInputSource game_input(
-        1, f3rt::runner::ScheduleConfig{.versus = false}),
-        oracle_input(1, f3rt::runner::ScheduleConfig{.versus = false});
-    for (unsigned index = 0; index < 1800; ++index) {
-        game_input.apply(*game, index);
-        oracle_input.apply(*oracle, index);
-        ASSERT_TRUE(game->run_frame(true));
-        ASSERT_TRUE(oracle->run_frame(true));
-        if (index % 5 == 0)
-            EXPECT_EQ(game->native_pixels(), oracle->native_pixels()) << "frame " << index;
+    std::vector<std::vector<uint32_t>> game_frames, oracle_frames;
+    for (const bool game_video : {true, false}) {
+        auto machine = strict_machine_or_skip(game_video);
+        if (!machine) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
+        if (game_video) machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+        f3rt::runner::SeededScheduleInputSource input(
+            1, f3rt::runner::ScheduleConfig{.versus = false});
+        auto &frames = game_video ? game_frames : oracle_frames;
+        for (unsigned index = 0; index < 1800; ++index) {
+            input.apply(*machine, index);
+            ASSERT_TRUE(machine->run_frame());
+            if (index % 5 == 0) frames.push_back(machine->native_pixels());
+        }
     }
+    ASSERT_EQ(game_frames.size(), oracle_frames.size());
+    for (size_t i = 0; i < game_frames.size(); ++i)
+        EXPECT_EQ(game_frames[i], oracle_frames[i]) << "frame " << i * 5;
 }
 
 TEST(GameVideo, SaveLoadPreservesNativeFrameAndFutureFrames) {
-    auto original = strict_machine_or_skip(true);
-    auto restored = strict_machine_or_skip(true);
-    if (!original || !restored) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
-    f3rt::runner::SeededScheduleInputSource input(1, f3rt::runner::ScheduleConfig{.versus = false});
-    for (unsigned index = 0; index < 900; ++index) {
-        input.apply(*original, index);
-        ASSERT_TRUE(original->run_frame(true));
+    struct Observation {
+        std::vector<uint32_t> pixels;
+        uint32_t crc;
+    };
+    const auto observe = [](f3rt::Machine &m) { return Observation{m.native_pixels(), m.state_crc()}; };
+    std::vector<uint8_t> state;
+    Observation at_save;
+    std::vector<Observation> future;
+    {
+        auto original = strict_machine_or_skip(true);
+        if (!original) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
+        f3rt::runner::SeededScheduleInputSource input(
+            1, f3rt::runner::ScheduleConfig{.versus = false});
+        for (unsigned index = 0; index < 900; ++index) {
+            input.apply(*original, index);
+            ASSERT_TRUE(original->run_frame());
+        }
+        state.resize(original->state_size());
+        original->save_state(state);
+        at_save = observe(*original);
+        for (unsigned index = 900; index < 1200; ++index) {
+            input.apply(*original, index);
+            ASSERT_TRUE(original->run_frame());
+            if (index % 7 == 0) future.push_back(observe(*original));
+        }
     }
-    std::vector<uint8_t> state(original->state_size());
-    original->save_state(state);
+    // The audio board and EEPROM are process-wide: the restored machine replaces the original.
+    auto restored = strict_machine_or_skip(true);
+    ASSERT_TRUE(restored) << "ROM-backed strict-native machine unavailable";
     restored->load_state(state);
-    EXPECT_EQ(restored->native_pixels(), original->native_pixels());
-    EXPECT_EQ(restored->state_crc(), original->state_crc());
+    EXPECT_EQ(restored->native_pixels(), at_save.pixels);
+    EXPECT_EQ(restored->state_crc(), at_save.crc);
+    f3rt::runner::SeededScheduleInputSource input(1, f3rt::runner::ScheduleConfig{.versus = false});
+    for (unsigned index = 0; index < 900; ++index) input.step(index); // replay the schedule up to the save point
+    size_t next = 0;
     for (unsigned index = 900; index < 1200; ++index) {
-        input.apply(*original, index);
-        ASSERT_TRUE(original->run_frame(true));
         input.apply(*restored, index);
-        ASSERT_TRUE(restored->run_frame(true));
+        ASSERT_TRUE(restored->run_frame());
         if (index % 7 == 0) {
-            EXPECT_EQ(restored->native_pixels(), original->native_pixels()) << "frame " << index;
-            EXPECT_EQ(restored->state_crc(), original->state_crc()) << "frame " << index;
+            const Observation now = observe(*restored);
+            EXPECT_EQ(now.pixels, future[next].pixels) << "frame " << index;
+            EXPECT_EQ(now.crc, future[next].crc) << "frame " << index;
+            ++next;
         }
     }
 }
