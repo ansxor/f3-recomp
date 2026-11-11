@@ -24,6 +24,7 @@ netplay-logs/
 f3-cold-hits.log
 .cache/
 result/
+.direnv/
 
 # In-source CMake leftovers from a configure run in the source root
 CMakeFiles/
