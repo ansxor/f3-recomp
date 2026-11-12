@@ -16,13 +16,13 @@ use crate::hle::block::{self, BusBlock, StereoBlock};
 use crate::hle::command::CommandPacket;
 use crate::hle::effects::Effects;
 use crate::hle::events::{
-    EffectEventKind, Event, TrackEventKind, MAIN_CLOCK, SAMPLE_RATE, SONG_SLOTS, TIMER_TICKS,
+    EffectEventKind, Event, MAIN_CLOCK, SAMPLE_RATE, SONG_SLOTS, TIMER_TICKS, TrackEventKind,
 };
 use crate::hle::mailbox::Mailbox;
 use crate::hle::program_service::{PatchList, ProgramQuery, ProgramService};
 use crate::hle::sequencer::Sequencer;
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::synthesis::{render_voices, reset_render_state, VoiceRenderState};
+use crate::hle::synthesis::{VoiceRenderState, render_voices, reset_render_state};
 use crate::hle::track_service::TrackService;
 use crate::hle::voice_service::VoiceService;
 use crate::output_gain::OUTPUT_BOOST;
@@ -38,7 +38,7 @@ pub trait PcmSink: Send {
 pub type SharedPcmSink = Arc<Mutex<dyn PcmSink>>;
 
 pub struct Core {
-    pub bank: Box<SoundBank>,
+    pub bank: Arc<SoundBank>,
     pub effects: Box<Effects>,
     /// The next 1 kHz grid boundary to deliver.
     pub next_tick: u64,
@@ -69,12 +69,11 @@ pub fn frames_at(tick: u64) -> u64 {
 
 impl Core {
     pub fn new(sound_rom: &'static [u8], sample_words: &'static [u16]) -> Core {
-        let mut bank = Box::new(SoundBank::new(sound_rom, sample_words));
-        let bank_ptr: *mut SoundBank = &mut *bank;
+        let bank = Arc::new(SoundBank::new(sound_rom, sample_words));
         let effects = Box::new(Effects::new(sound_rom));
         // SAFETY: the bank is boxed just above and outlives the service.
-        let programs = Box::new(unsafe { ProgramService::new(bank_ptr) });
-        let voices = Box::new(VoiceService::new(bank_ptr));
+        let programs = Box::new(ProgramService::new(Arc::clone(&bank)));
+        let voices = Box::new(VoiceService::new(Arc::clone(&bank)));
 
         let mut core = Core {
             bank,
@@ -236,7 +235,7 @@ impl Core {
                 self.voices.begin_render();
                 render_voices(
                     &mut self.voices,
-                    &mut self.bank,
+                    Arc::clone(&self.bank),
                     &mut self.render_state,
                     self.buses.span_mut(),
                     frame_start,

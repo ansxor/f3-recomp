@@ -1,5 +1,7 @@
 //! `audio/hle/rom_view.hpp`: the banked sound-program ROM window.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
 pub const BANKED_WINDOW_BASE: u32 = 0xc20000;
@@ -12,7 +14,7 @@ pub const SOUND_ROM_IMAGE_SIZE: u32 = 0x80000;
 /// The image is borrowed, not owned: it must outlive the view (the Audio implementation owns it).
 pub struct RomView {
     rom: &'static [u8],
-    bank: u8,
+    bank: AtomicU8,
 }
 
 impl Default for RomView {
@@ -23,15 +25,21 @@ impl Default for RomView {
 
 impl RomView {
     pub fn new() -> RomView {
-        RomView { rom: &[], bank: 1 }
+        RomView {
+            rom: &[],
+            bank: AtomicU8::new(1),
+        }
     }
 
     pub fn with_image(image: &'static [u8], bank: u8) -> RomView {
-        RomView { rom: image, bank }
+        RomView {
+            rom: image,
+            bank: AtomicU8::new(bank),
+        }
     }
 
-    pub fn set_bank(&mut self, bank: u8) {
-        self.bank = bank;
+    pub fn set_bank(&self, bank: u8) {
+        self.bank.store(bank, Ordering::Relaxed);
     }
 
     pub fn data(&self) -> *const u8 {
@@ -49,7 +57,8 @@ impl RomView {
         let mut off = address - SOUND_ROM_BASE;
         if self.rom.len() > SOUND_ROM_SIZE {
             if (BANKED_WINDOW_BASE..BANKED_WINDOW_END).contains(&address) {
-                off = self.bank as u32 * BANK_PAGE_SIZE + (address - BANKED_WINDOW_BASE);
+                off = u32::from(self.bank.load(Ordering::Relaxed)) * BANK_PAGE_SIZE
+                    + (address - BANKED_WINDOW_BASE);
             } else if address >= BANKED_OVERFLOW_BASE {
                 off = BANK_OVERFLOW_OFFSET + (address - BANKED_OVERFLOW_BASE);
             }
@@ -77,7 +86,12 @@ impl RomView {
         if off + 3 >= self.rom.len() {
             panic!("HLE ROM read outside image");
         }
-        u32::from_be_bytes([self.rom[off], self.rom[off + 1], self.rom[off + 2], self.rom[off + 3]])
+        u32::from_be_bytes([
+            self.rom[off],
+            self.rom[off + 1],
+            self.rom[off + 2],
+            self.rom[off + 3],
+        ])
     }
 
     pub fn pointer(&self, address: u32) -> *const u8 {
@@ -94,6 +108,10 @@ impl RomView {
 
     /// `operator[](size_t offset)`: a direct image read that yields 0xff outside the image.
     pub fn get(&self, offset: usize) -> u8 {
-        if offset < self.rom.len() { self.rom[offset] } else { 0xff }
+        if offset < self.rom.len() {
+            self.rom[offset]
+        } else {
+            0xff
+        }
     }
 }

@@ -1,5 +1,7 @@
 //! `audio/hle/program_service.hpp` + `program_service.cpp`: the program table.
 
+use std::sync::Arc;
+
 use crate::bytes::s8;
 use crate::hle::patch::{DirectPatch, DirectRegion, Layer, LayerPatch, Patch, Program};
 use crate::hle::sound_bank::SoundBank;
@@ -18,7 +20,12 @@ pub struct ProgramQuery {
 
 impl Default for ProgramQuery {
     fn default() -> ProgramQuery {
-        ProgramQuery { program: 0xffff, key: 0, layer_mask: 0, notes_suppressed: false }
+        ProgramQuery {
+            program: 0xffff,
+            key: 0,
+            layer_mask: 0,
+            notes_suppressed: false,
+        }
     }
 }
 
@@ -32,7 +39,10 @@ pub struct PatchList {
 
 impl Default for PatchList {
     fn default() -> PatchList {
-        PatchList { patches: [core::ptr::null(); Program::layer_count as usize], count: 0 }
+        PatchList {
+            patches: [core::ptr::null(); Program::layer_count as usize],
+            count: 0,
+        }
     }
 }
 
@@ -50,7 +60,7 @@ impl PatchList {
 /// in descending layer order, a direct program yields the one key region containing the key.
 pub struct ProgramService {
     /// The bank that owns the program bytes; it outlives this service (the C++ reference).
-    pub bank: *const SoundBank,
+    pub bank: Arc<SoundBank>,
     // PatchList hands out pointers into these tables: reserve the exact size once and never grow them.
     // The C++ vectors hold the concrete subclasses and the list stores `const Patch *` base
     // pointers; the Rust Patch enum owns its subclass, so each entry is the variant of its kind.
@@ -59,21 +69,18 @@ pub struct ProgramService {
 }
 
 impl ProgramService {
-    /// # Safety
-    /// `bank` must point to a `SoundBank` that outlives the service (the C++ reference rule).
-    pub unsafe fn new(bank: *const SoundBank) -> ProgramService {
-        let mut service = ProgramService { bank, layers: Vec::new(), regions: Vec::new() };
-        service.layers.reserve(1024 * Program::layer_count as usize);
-        service.regions.reserve(1024 * Program::region_count as usize);
+    pub fn new(bank: Arc<SoundBank>) -> ProgramService {
+        let mut layers = Vec::with_capacity(1024 * Program::layer_count as usize);
+        let mut regions = Vec::with_capacity(1024 * Program::region_count as usize);
         for slot in 0..1024u32 {
-            let base = unsafe { (*bank).program_data(slot).base };
+            let base = bank.program_data(slot).base;
             let program = Program::new(base);
             if !base.is_null() && program.enabled() != 0 {
                 for layer in 0..Program::layer_count {
                     let view = program.layer(layer);
-                    service.layers.push(Patch::Layer(LayerPatch::new(
+                    layers.push(Patch::Layer(LayerPatch::new(
                         view,
-                        bank,
+                        Arc::clone(&bank),
                         base,
                         layer as u8,
                         view.delay_ticks(),
@@ -81,18 +88,18 @@ impl ProgramService {
                     )));
                 }
                 for region in 0..Program::region_count {
-                    service.regions.push(Patch::Direct(DirectPatch::new(
+                    regions.push(Patch::Direct(DirectPatch::new(
                         DirectRegion::default(),
-                        bank,
+                        Arc::clone(&bank),
                         base,
                         region as u8,
                     )));
                 }
             } else {
                 for layer in 0..Program::layer_count {
-                    service.layers.push(Patch::Layer(LayerPatch::new(
+                    layers.push(Patch::Layer(LayerPatch::new(
                         Layer::default(),
-                        bank,
+                        Arc::clone(&bank),
                         base,
                         layer as u8,
                         0,
@@ -105,13 +112,20 @@ impl ProgramService {
                     } else {
                         DirectRegion::default()
                     };
-                    service
-                        .regions
-                        .push(Patch::Direct(DirectPatch::new(view, bank, base, region as u8)));
+                    regions.push(Patch::Direct(DirectPatch::new(
+                        view,
+                        Arc::clone(&bank),
+                        base,
+                        region as u8,
+                    )));
                 }
             }
         }
-        service
+        ProgramService {
+            bank: Arc::clone(&bank),
+            layers: layers,
+            regions: regions,
+        }
     }
 
     pub fn resolve(&self, query: &ProgramQuery) -> PatchList {
@@ -120,7 +134,7 @@ impl ProgramService {
             return list;
         }
         let slot = program_slot(query.program);
-        let base = unsafe { (*self.bank).program_data(slot).base };
+        let base = self.bank.program_data(slot).base;
         if base.is_null() {
             return list;
         }

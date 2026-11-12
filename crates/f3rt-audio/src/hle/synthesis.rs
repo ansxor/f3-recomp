@@ -4,6 +4,8 @@
 //! `with_filter_mode` has no Rust equivalent: the per-mode body is the `render_span` helper, and the
 //! register mode picks its monomorphisation.
 
+use std::sync::Arc;
+
 use super::block::MutableAudioBlockSpan;
 use super::sound_bank::SoundBank;
 use super::voice::Voice;
@@ -60,14 +62,20 @@ fn render_span<const MODE: u32>(
     frame_start: usize,
     frame_end: usize,
 ) -> VoiceFilterState {
-    VoiceSpan::<MODE>::new(voice, samples, memory).render(bus, voices, frame_ticks, frame_start, frame_end)
+    VoiceSpan::<MODE>::new(voice, samples, memory).render(
+        bus,
+        voices,
+        frame_ticks,
+        frame_start,
+        frame_end,
+    )
 }
 
 /// Renders one voice into its OTIS bus pair over [frame_start, frame_end) of `buses`.
 pub fn render_voice(
     voices: &mut VoiceService,
     voice: &mut Voice,
-    bank: &mut SoundBank,
+    bank: Arc<SoundBank>,
     state: &mut VoiceRenderState,
     buses: MutableAudioBlockSpan<8>,
     frame_start: usize,
@@ -91,10 +99,46 @@ pub fn render_voice(
     // SAFETY: the ticks live in `state.frame_ticks`, which this call does not touch.
     let frame_ticks: &[u64] = unsafe { std::slice::from_raw_parts(tick_ptr, tick_count) };
     let next = match voice_filter::filter_mode(voice.filter.mode) {
-        0 => render_span::<0>(voice, samples, memory, &bus, voices, frame_ticks, frame_start, frame_end),
-        1 => render_span::<1>(voice, samples, memory, &bus, voices, frame_ticks, frame_start, frame_end),
-        2 => render_span::<2>(voice, samples, memory, &bus, voices, frame_ticks, frame_start, frame_end),
-        _ => render_span::<3>(voice, samples, memory, &bus, voices, frame_ticks, frame_start, frame_end),
+        0 => render_span::<0>(
+            voice,
+            samples,
+            memory,
+            &bus,
+            voices,
+            frame_ticks,
+            frame_start,
+            frame_end,
+        ),
+        1 => render_span::<1>(
+            voice,
+            samples,
+            memory,
+            &bus,
+            voices,
+            frame_ticks,
+            frame_start,
+            frame_end,
+        ),
+        2 => render_span::<2>(
+            voice,
+            samples,
+            memory,
+            &bus,
+            voices,
+            frame_ticks,
+            frame_start,
+            frame_end,
+        ),
+        _ => render_span::<3>(
+            voice,
+            samples,
+            memory,
+            &bus,
+            voices,
+            frame_ticks,
+            frame_start,
+            frame_end,
+        ),
     };
     *memory = next;
 }
@@ -102,7 +146,7 @@ pub fn render_voice(
 /// Renders every active voice of the pool, in slot order.
 pub fn render_voices(
     voices: &mut VoiceService,
-    bank: &mut SoundBank,
+    bank: Arc<SoundBank>,
     state: &mut VoiceRenderState,
     buses: MutableAudioBlockSpan<8>,
     frame_start: usize,
@@ -116,6 +160,14 @@ pub fn render_voices(
         if !voice.active {
             continue;
         }
-        render_voice(voices, voice, bank, state, buses, frame_start, frame_end);
+        render_voice(
+            voices,
+            voice,
+            Arc::clone(&bank),
+            state,
+            buses,
+            frame_start,
+            frame_end,
+        );
     }
 }

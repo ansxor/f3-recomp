@@ -141,6 +141,7 @@
             {
               default = pkgs.mkShell {
                 packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt ] ++ tc.tools ++ tc.libs;
+                env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}
                   ${pkgs.lib.concatStringsSep "\n" (pkgs.lib.mapAttrsToList (n: s: "export CPM_${n}_SOURCE=${s}") (cpmSources pkgs))}

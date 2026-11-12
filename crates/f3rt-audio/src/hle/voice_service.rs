@@ -13,6 +13,8 @@
 //! its own members (`m_voices[i]`, `m_pending[i]`) to its own methods, so the pool and the pending
 //! table are reached through a raw pointer to the array where a method needs both.
 
+use std::sync::Arc;
+
 use super::events::{NoteOnEvent, TIMER_TICKS, TRACK_COUNT};
 use super::note_pool::NoteSink;
 use super::note_timing::{DriverClock, NoteQueue};
@@ -21,7 +23,7 @@ use super::program_service::PatchList;
 use super::sound_bank::SoundBank;
 use super::sound_rom_5a7e9117;
 use super::track_service::Track;
-use super::voice::{advance_glide, NoiseState, Voice};
+use super::voice::{NoiseState, Voice, advance_glide};
 
 pub struct VoiceService {
     impl_: Box<Impl>,
@@ -52,7 +54,7 @@ impl Default for Pending {
 }
 
 struct Impl {
-    bank: *mut SoundBank,
+    bank: Arc<SoundBank>,
     voices: [Voice; 32],
     launched: u64,
     pending: [Pending; 96],
@@ -69,7 +71,7 @@ struct Impl {
 }
 
 impl Impl {
-    fn new(bank: *mut SoundBank) -> Box<Impl> {
+    fn new(bank: Arc<SoundBank>) -> Box<Impl> {
         let mut imp = Box::new(Impl {
             bank,
             voices: std::array::from_fn(|_| Voice::default()),
@@ -112,9 +114,11 @@ impl Impl {
         self.budget_slot = 0;
         self.tick = (tick / u64::from(TIMER_TICKS) + 1) * u64::from(TIMER_TICKS);
         // SAFETY: the bank outlives the service; it owns the ROM the noise seeds live in.
-        self.noise.value = unsafe { (*self.bank).rom.read_u16(sound_rom_5a7e9117::NOISE_SEED_PTR) };
-        self.noise.history =
-            unsafe { (*self.bank).rom.read_u16(sound_rom_5a7e9117::NOISE_HISTORY_PTR) };
+        self.noise.value = self.bank.rom.read_u16(sound_rom_5a7e9117::NOISE_SEED_PTR);
+        self.noise.history = self
+            .bank
+            .rom
+            .read_u16(sound_rom_5a7e9117::NOISE_HISTORY_PTR);
         self.serial = 0;
     }
 
@@ -138,7 +142,13 @@ impl Impl {
         self.prev[self.cursor as usize] = i as u8;
     }
 
-    fn allocate(&mut self, n: &NoteOnEvent, patch: &Patch, priority: u32, mode: AllocationMode) -> u32 {
+    fn allocate(
+        &mut self,
+        n: &NoteOnEvent,
+        patch: &Patch,
+        priority: u32,
+        mode: AllocationMode,
+    ) -> u32 {
         if mode == AllocationMode::Legato || mode == AllocationMode::LegatoHold {
             let mut found: Option<usize> = None;
             for i in 0..32 {
@@ -259,10 +269,14 @@ impl Impl {
         }
         // SAFETY: `index` names a slot of the fixed pool; the service's other members are separate.
         let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(index as usize) };
-        let legato = v.active
-            && (mode == AllocationMode::Legato || mode == AllocationMode::LegatoHold);
+        let legato =
+            v.active && (mode == AllocationMode::Legato || mode == AllocationMode::LegatoHold);
         let old_board = f64::from((u32::from(v.selector) >> 1) << 20);
-        let prior = PriorWindow { start: v.start - old_board, end: v.end - old_board, valid: v.hardware_valid };
+        let prior = PriorWindow {
+            start: v.start - old_board,
+            end: v.end - old_board,
+            valid: v.hardware_valid,
+        };
         if legato {
             let velocity = v.owner.velocity;
             v.owner = *n;
@@ -382,7 +396,11 @@ impl Impl {
                 immediate += 1;
             }
         }
-        let start = if immediate != 0 { self.driver.start(note.tick, immediate) } else { note.tick };
+        let start = if immediate != 0 {
+            self.driver.start(note.tick, immediate)
+        } else {
+            note.tick
+        };
         for &patch in list {
             // SAFETY: the patch list points into the program service's tables, which outlive the note.
             let p = unsafe { &*patch };
@@ -491,7 +509,7 @@ impl Impl {
             unsafe { self.launch(&n, &*patch, &*track, start) };
         }
         // SAFETY: the bank outlives the service and owns the budget table.
-        let mut count = u32::from(unsafe { (*self.bank).budgets[self.budget_slot as usize] });
+        let mut count = u32::from(self.bank.budgets[self.budget_slot as usize]);
         self.budget_slot = ((u32::from(self.budget_slot) + 1) % 12) as u8;
         while count != 0 {
             count -= 1;
@@ -514,8 +532,10 @@ impl Impl {
 }
 
 impl VoiceService {
-    pub fn new(bank: *mut SoundBank) -> VoiceService {
-        VoiceService { impl_: Impl::new(bank) }
+    pub fn new(bank: Arc<SoundBank>) -> VoiceService {
+        VoiceService {
+            impl_: Impl::new(bank),
+        }
     }
 
     pub fn reset(&mut self, tick: u64) {

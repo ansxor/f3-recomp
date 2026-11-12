@@ -5,13 +5,13 @@ use crate::bytes::{read_be16, s16};
 use crate::hle::patch::{DirectRegion, Layer, Program};
 use crate::hle::rom_view::RomView;
 use crate::hle::sound_rom_5a7e9117::{
-    program_slot, Bank, ProgramData, Split, ATTENUATION_TABLE, BEND_RANGE_PTR, BUDGET_TABLE,
-    FILTER_TABLE, HEAP_BASE_PTR, HEAP_LIMIT_PTR_A, HEAP_LIMIT_PTR_B, HEAP_METADATA_OFFSET,
-    HEAP_NEXT_PTR, HEAP_RESERVE_PTR, PAN_TABLE, PHASE_RATE_TABLE, PITCH_TABLE, PROGRAM_BANK_MASK_OFFSET,
-    PROGRAM_COLUMN_STRIDE, PROGRAM_DATA_BASE, PROGRAM_DEFAULT_BANK_OFFSET, PROGRAM_MAGIC_OFFSET_0,
-    PROGRAM_MAGIC_OFFSET_1, PROGRAM_RECORD_STRIDE, RATE_TABLE, RESET_END_PTR, RESET_START_PTR,
+    ATTENUATION_TABLE, BEND_RANGE_PTR, BUDGET_TABLE, Bank, FILTER_TABLE, HEAP_BASE_PTR,
+    HEAP_LIMIT_PTR_A, HEAP_LIMIT_PTR_B, HEAP_METADATA_OFFSET, HEAP_NEXT_PTR, HEAP_RESERVE_PTR,
+    PAN_TABLE, PHASE_RATE_TABLE, PITCH_TABLE, PROGRAM_BANK_MASK_OFFSET, PROGRAM_COLUMN_STRIDE,
+    PROGRAM_DATA_BASE, PROGRAM_DEFAULT_BANK_OFFSET, PROGRAM_MAGIC_OFFSET_0, PROGRAM_MAGIC_OFFSET_1,
+    PROGRAM_RECORD_STRIDE, ProgramData, RATE_TABLE, RESET_END_PTR, RESET_START_PTR,
     SAMPLE_BANK_SIZE, SAMPLE_HALF_BANK_SIZE, SAMPLE_TAG_PROBE_OFFSET, SPLIT_DIRECTORY,
-    SPLIT_TABLE_BASE, VELOCITY_CURVE_TABLE,
+    SPLIT_TABLE_BASE, Split, VELOCITY_CURVE_TABLE, program_slot,
 };
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
@@ -72,8 +72,10 @@ impl SoundBank {
         bank.decode_banks();
 
         let heap_base = u32::from(bank.rom.read_u16(HEAP_BASE_PTR));
-        let heap_limit =
-            bank.rom.read_u32(HEAP_LIMIT_PTR_A).wrapping_add(bank.rom.read_u32(HEAP_LIMIT_PTR_B));
+        let heap_limit = bank
+            .rom
+            .read_u32(HEAP_LIMIT_PTR_A)
+            .wrapping_add(bank.rom.read_u32(HEAP_LIMIT_PTR_B));
         let heap_size = heap_limit
             .wrapping_sub(heap_base)
             .wrapping_sub(bank.rom.read_u32(HEAP_RESERVE_PTR));
@@ -121,7 +123,7 @@ impl SoundBank {
         bank
     }
 
-    pub fn set_bank(&mut self, bank: u8) {
+    pub fn set_bank(&self, bank: u8) {
         self.rom.set_bank(bank);
     }
 
@@ -169,7 +171,11 @@ impl SoundBank {
             if key >= hi {
                 return 127 + amount;
             }
-            return if hi <= lo { 127 } else { 127 + amount + (-amount) * (hi - key) / (hi - lo) };
+            return if hi <= lo {
+                127
+            } else {
+                127 + amount + (-amount) * (hi - key) / (hi - lo)
+            };
         }
         if key >= hi {
             return 127;
@@ -177,7 +183,11 @@ impl SoundBank {
         if key <= lo {
             return 127 - amount;
         }
-        if hi <= lo { 127 } else { 127 - amount + amount * (key - lo) / (hi - lo) }
+        if hi <= lo {
+            127
+        } else {
+            127 - amount + amount * (key - lo) / (hi - lo)
+        }
     }
 
     pub fn frequency(&self, pitch: i32) -> u16 {
@@ -217,8 +227,9 @@ impl SoundBank {
         selector: &mut u8,
         program_id: u16,
     ) -> Split {
-        let bank_idx =
-            i32::from(self.programs[program_slot(program_id) as usize].sample_banks[layer as usize]);
+        let bank_idx = i32::from(
+            self.programs[program_slot(program_id) as usize].sample_banks[layer as usize],
+        );
         if bank_idx == -2 {
             panic!("HLE instrument names missing sample bank");
         }
@@ -231,7 +242,11 @@ impl SoundBank {
                 panic!("HLE sample ID exceeds external directory");
             }
             let relative = unsafe {
-                read_be16(self.metadata.as_ptr().add(b.offset as usize + 2 + id as usize * 14))
+                read_be16(
+                    self.metadata
+                        .as_ptr()
+                        .add(b.offset as usize + 2 + id as usize * 14),
+                )
             };
             let offset = b.offset as usize + (relative as i16) as isize as usize;
             if offset + 14 > self.metadata.len() {
@@ -271,7 +286,12 @@ impl SoundBank {
     // index loop as in the C++.
     #[allow(clippy::needless_range_loop)]
     fn decode_banks(&mut self) {
-        let SoundBank { banks, metadata, samples, .. } = self;
+        let SoundBank {
+            banks,
+            metadata,
+            samples,
+            ..
+        } = self;
         let samples: &[u16] = samples;
         let num_banks = if 16 < samples.len() / SAMPLE_HALF_BANK_SIZE {
             16
@@ -309,13 +329,20 @@ impl SoundBank {
                 if offset == 0 {
                     break;
                 }
-                let limit =
-                    if packed { u32::from(offset) * 2 + 4 } else { u32::from(offset) + 8 };
+                let limit = if packed {
+                    u32::from(offset) * 2 + 4
+                } else {
+                    u32::from(offset) + 8
+                };
                 if limit <= at as u32 * 2 || limit % 14 != 0 {
                     valid = false;
                     break;
                 }
-                last = if packed { u32::from(offset) * 2 } else { u32::from(offset) };
+                last = if packed {
+                    u32::from(offset) * 2
+                } else {
+                    u32::from(offset)
+                };
                 if packed {
                     let size = metadata.len();
                     metadata[size - 2] = ((u32::from(offset) + 1) >> 8) as u8;
@@ -425,9 +452,8 @@ impl SoundBank {
                     {
                         for i in 0..17u32 {
                             if (mask & (1u32 << i)) != 0 {
-                                data.sample_banks[i as usize] = find_bank(unsafe {
-                                    *p.add(PROGRAM_DEFAULT_BANK_OFFSET)
-                                });
+                                data.sample_banks[i as usize] =
+                                    find_bank(unsafe { *p.add(PROGRAM_DEFAULT_BANK_OFFSET) });
                             }
                         }
                     }
