@@ -71,7 +71,6 @@ impl Core {
     pub fn new(sound_rom: &'static [u8], sample_words: &'static [u16]) -> Core {
         let bank = Arc::new(SoundBank::new(sound_rom, sample_words));
         let effects = Box::new(Effects::new(sound_rom));
-        // SAFETY: the bank is boxed just above and outlives the service.
         let programs = Box::new(ProgramService::new(Arc::clone(&bank)));
         let voices = Box::new(VoiceService::new(Arc::clone(&bank)));
 
