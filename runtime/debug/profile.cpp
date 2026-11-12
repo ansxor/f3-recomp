@@ -9,7 +9,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
-// Only the builds that can open a session touch POSIX file locking; the 3DS toolchain has none.
+// Only the builds that can open a session touch POSIX file locking.
 #if defined(F3_PROFILE_INSTRUMENT) || defined(F3_PROFILE_SLIM_ENABLED)
 #include <fcntl.h>
 #include <sys/file.h>

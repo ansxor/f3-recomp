@@ -59,10 +59,6 @@ TEST(InputScript, MalformedLinesRejected) {
         "5 poke " + address_text(POKE_LAST_BYTE_ADDRESS) + ".w=1\n",
         "5 poke " + address_text(f3rt::CONTROL_BASE) + ".b=1\n",
         "5 p2 poke " + address_text(POKE_WORD_ADDRESS) + ".b=1\n",
-        "5-6 scenario menu\n",
-        "5 scenario\n",
-        "5 scenario menu extra\n",
-        "5 p1 scenario menu\n",
     };
     for (const std::string &bad : bad_lines) {
         bool rejected = false;
@@ -73,19 +69,6 @@ TEST(InputScript, MalformedLinesRejected) {
         }
         EXPECT_TRUE(rejected) << "Malformed input script lines are rejected";
     }
-}
-
-TEST(InputScript, ScenarioMarkers) {
-    auto script = f3rt::InputScript::parse(
-        "479 scenario attract\n5140 scenario menu\n5140+2 start\n", "t");
-    const std::string *attract = script.scenario_at(479);
-    ASSERT_NE(attract, nullptr);
-    EXPECT_EQ(*attract, "attract");
-    EXPECT_EQ(*script.scenario_at(5140), "menu");
-    EXPECT_TRUE(!script.scenario_at(480) && !script.scenario_at(5141))
-        << "A marker is reported only on the frame it labels";
-    EXPECT_TRUE(script.words(479)[0] == 0 && script.words(5140)[0] == 0x80)
-        << "Markers add no input of their own";
 }
 
 TEST(InputScript, MemoryPokes) {

@@ -33,7 +33,7 @@ private:
     using Key = std::tuple<unsigned, uint32_t, uint32_t>;
     void load();
     std::filesystem::path m_output;
-    // Held only by the builds that can open a session; the 3DS toolchain has no file locking.
+    // Held only by the builds that can open a session.
     [[maybe_unused]] int m_lock_fd = -1;
     std::array<uint32_t, 2> m_crcs{}, m_sizes{};
     std::array<std::vector<uint64_t>, 2> m_counts;

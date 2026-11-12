@@ -10,7 +10,7 @@ use crate::hle::patch::{
     velocity_curve_index, velocity_level_scale,
 };
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::sound_rom_5a7e9117::{Split, RATE_TABLE};
+use crate::hle::sound_rom_5a7e9117::{RATE_TABLE, Split};
 use crate::hle::track_service::Track;
 
 pub const NATIVE_RATE: u32 = (15238090 + 8 * 32) / (16 * 32);
@@ -35,8 +35,7 @@ pub const fn make_gain_table() -> [f32; 256] {
     let mut table = [0.0f32; 256];
     let mut i: u32 = 0;
     while i < 256 {
-        table[i as usize] =
-            ((((i & 15) | 16) << 11) >> (16 - (i >> 4))) as f32 / 2048.0;
+        table[i as usize] = ((((i & 15) | 16) << 11) >> (16 - (i >> 4))) as f32 / 2048.0;
         i += 1;
     }
     table
@@ -49,8 +48,8 @@ pub fn interpolated_gain(encoded: f64) -> f32 {
     let index = scaled.clamp(0.0, 255.0);
     let i = index as u32 as usize;
     let next = if i + 1 < 255 { i + 1 } else { 255 };
-    (f64::from(GAIN_TABLE[i])
-        + f64::from(GAIN_TABLE[next] - GAIN_TABLE[i]) * (index - i as f64)) as f32
+    (f64::from(GAIN_TABLE[i]) + f64::from(GAIN_TABLE[next] - GAIN_TABLE[i]) * (index - i as f64))
+        as f32
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -84,7 +83,11 @@ pub fn ramp_gain(encoded: f64, step: f64, s: &mut GainSegment) -> f32 {
         } else {
             1e9
         };
-        s.frames = if room > 2.0 { (if room < 1e6 { room } else { 1e6 }) as u32 - 1 } else { 0 };
+        s.frames = if room > 2.0 {
+            (if room < 1e6 { room } else { 1e6 }) as u32 - 1
+        } else {
+            0
+        };
     }
     exact
 }
@@ -259,7 +262,7 @@ pub struct Voice {
     pub left_volume: u16,
     pub right_volume: u16,
 
-    pub filter_cutoff_low: u16, // k1 register
+    pub filter_cutoff_low: u16,  // k1 register
     pub filter_cutoff_high: u16, // k2 register
     pub lfo: i16,
     pub lfo_depth: i16,
@@ -395,6 +398,18 @@ impl Voice {
     pub fn release(&mut self) -> bool {
         unsafe { (*self.patch).release(self) }
     }
+
+    pub fn end_sample(&mut self) {
+        if self.allocation != 0 {
+            self.sample_finished = true;
+        } else {
+            self.stop();
+        }
+    }
+
+    pub fn stop(&mut self) {
+        self.active = false;
+    }
 }
 
 const _: () = assert!(Voice::pitch_envelope == 0);
@@ -404,8 +419,7 @@ const _: () = assert!(Voice::amplitude_envelope == 2);
 pub fn segment(e: &mut Envelope, target: u32, r: i32, bank: &SoundBank) {
     let difference = i32::from(s16(target.wrapping_sub(e.level() as u16 as u32)));
     if difference != 0 {
-        e.slope =
-            wrap_product(i64::from(difference) * i64::from(s16(u32::from(bank.rate(r)))) * 2);
+        e.slope = wrap_product(i64::from(difference) * i64::from(s16(u32::from(bank.rate(r)))) * 2);
         e.position &= 0xffff0000;
     } else {
         e.slope = -i32::from(s16(u32::from(bank.rate(r))));
@@ -424,15 +438,17 @@ pub fn initialize_envelope<const ROLE: u8>(
     e.flags = patch.flags();
     let index = velocity_curve_index(patch.velocity_curve(), v.owner.velocity);
     let gain_scale = velocity_level_scale(patch.velocity_level());
-    let scale = i32::from(s16(
-        (0x4000 - (128 - i32::from(bank.velocity_curves[index as usize])) * gain_scale) as u32,
-    )) >> 6;
+    let scale = i32::from(s16((0x4000
+        - (128 - i32::from(bank.velocity_curves[index as usize])) * gain_scale)
+        as u32))
+        >> 6;
     for i in 0..4u32 {
         e.levels[i as usize] = (i32::from(patch.level(i)) * scale) as u16;
     }
-    let key_scale = -(i32::from(s16(
-        ((i32::from(v.effective_key) - 64) * i32::from(patch.key_rate()) * 18) as u32,
-    )) >> 6);
+    let key_scale = -(i32::from(s16(((i32::from(v.effective_key) - 64)
+        * i32::from(patch.key_rate())
+        * 18) as u32))
+        >> 6);
     let vel_rate = (i32::from(patch.velocity_attack()) * 9 * i32::from(v.owner.velocity)) >> 7;
     e.rates[0] = (if i32::from(patch.rate(0)) - vel_rate < 0 {
         0
@@ -498,12 +514,12 @@ pub fn set_glide(v: &mut Voice, destination: i16, rate_index: u32, bank: &SoundB
         return;
     }
     let difference = i32::from(destination.wrapping_sub(v.glide_target));
-    v.glide = s16(
-        ((i64::from(difference)
-            * i64::from(s16(u32::from(bank.rom.read_u16(RATE_TABLE + 2 * rate_index))))
-            * 2)
-            >> 16) as u32,
-    );
+    v.glide = s16(((i64::from(difference)
+        * i64::from(s16(u32::from(
+            bank.rom.read_u16(RATE_TABLE + 2 * rate_index),
+        )))
+        * 2)
+        >> 16) as u32);
     if v.glide == 0 {
         v.glide_target = destination;
     }

@@ -13,7 +13,6 @@
 #include "audio_pacer.hpp"
 #include "fast_boot.hpp"
 #include "frame_slots.hpp"
-#include "platform/thread.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
 #include "renderer/gpu/interp.hpp"
@@ -35,6 +34,9 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
 #include <unordered_set>
 #include <atomic>
 #include <condition_variable>
@@ -340,7 +342,7 @@ struct Link {
 // Joins the emulation thread on every exit path of the video loop.
 struct EmulationThread {
     Link &link;
-    f3rt::Thread thread;
+    std::thread thread;
     explicit EmulationThread(Link &l) : link(l) {}
     ~EmulationThread() {
         if (thread.joinable()) {
@@ -1474,7 +1476,13 @@ int main(int argc, char **argv) try {
 #endif
             motion_capture_pending = true;
         };
-        emulation.thread = f3rt::Thread(f3rt::ThreadRole::Emulation, 0, [&] {
+        emulation.thread = std::thread([&] {
+#ifdef __APPLE__
+            // Default-QoS threads sleeping ~14 ms between frames wake 1-4 ms late under timer
+            // coalescing, which skews both the frame start and the input sampling lead;
+            // user-interactive QoS wakes within a few hundred microseconds.
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
             try {
                 emulate();
             } catch (...) {

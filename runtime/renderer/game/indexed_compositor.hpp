@@ -15,8 +15,7 @@ enum class ComposeMode { Parallel, Serial };
 enum class SpriteList { Presented, Canonical };
 
 // Byte order of one composed pixel. Argb8888 is the canonical 0xAARRGGBB word the CPU composers
-// produce; Rgba8888 is the word the 3DS presenter's display transfer consumes (the ARGB word
-// rotated left by eight bits with an opaque low byte), so no separate conversion pass exists.
+// produce; Rgba8888 is the ARGB word rotated left by eight bits with an opaque low byte.
 enum class PixelFormat { Argb8888, Rgba8888 };
 
 constexpr uint32_t to_pixel_format(uint32_t argb, PixelFormat format) {

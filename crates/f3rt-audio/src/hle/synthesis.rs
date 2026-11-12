@@ -57,40 +57,10 @@ fn render_span<const MODE: u32>(
     samples: SampleWords,
     memory: &VoiceFilterState,
     bus: &VoiceBus,
-    voices: &mut VoiceService,
     frame_start: usize,
     frame_end: usize,
 ) -> VoiceFilterState {
-    VoiceSpan::<MODE>::new(voice, samples, memory).render(bus, voices, frame_start, frame_end)
-}
-
-/// Renders one voice into its OTIS bus pair over [frame_start, frame_end) of `buses`.
-pub fn render_voice(
-    voices: &mut VoiceService,
-    voice: &mut Voice,
-    bank: Arc<SoundBank>,
-    state: &mut VoiceRenderState,
-    buses: MutableAudioBlockSpan<8>,
-    frame_start: usize,
-    frame_end: usize,
-) {
-    // filter_memory(): the slot's filter memory is dropped when the voice's filter epoch moved.
-    let slot = voice.slot as usize;
-    if state.filter_epoch[slot] != voice.filter_epoch {
-        state.filters[slot].clear();
-        state.filter_epoch[slot] = voice.filter_epoch;
-    }
-    let discard: *mut f32 = state.discard.as_mut_ptr();
-    let memory: &mut VoiceFilterState = &mut state.filters[slot];
-    let bus = VoiceBus::new(buses, voice.pair, discard);
-    let samples = SampleWords::new(bank.samples);
-    let next = match voice_filter::filter_mode(voice.filter.mode) {
-        0 => render_span::<0>(voice, samples, memory, &bus, voices, frame_start, frame_end),
-        1 => render_span::<1>(voice, samples, memory, &bus, voices, frame_start, frame_end),
-        2 => render_span::<2>(voice, samples, memory, &bus, voices, frame_start, frame_end),
-        _ => render_span::<3>(voice, samples, memory, &bus, voices, frame_start, frame_end),
-    };
-    *memory = next;
+    VoiceSpan::<MODE>::new(voice, samples, memory).render(bus, frame_start, frame_end)
 }
 
 /// Renders every active voice of the pool, in slot order.
@@ -102,22 +72,26 @@ pub fn render_voices(
     frame_start: usize,
     frame_end: usize,
 ) {
-    // SAFETY: the pool is a fixed array owned by the service; the C++ iterates the same slots while
-    // handing the service itself, and the voice it holds, to each render.
-    let pool: *mut Voice = &mut voices.pool()[0];
-    for slot in 0..32 {
-        let voice: &mut Voice = unsafe { &mut *pool.add(slot) };
+    for voice in voices.pool() {
         if !voice.active {
             continue;
         }
-        render_voice(
-            voices,
-            voice,
-            Arc::clone(&bank),
-            state,
-            buses,
-            frame_start,
-            frame_end,
-        );
+        // filter_memory(): the slot's filter memory is dropped when the voice's filter epoch moved.
+        let slot = voice.slot as usize;
+        if state.filter_epoch[slot] != voice.filter_epoch {
+            state.filters[slot].clear();
+            state.filter_epoch[slot] = voice.filter_epoch;
+        }
+        let discard: *mut f32 = state.discard.as_mut_ptr();
+        let memory: &mut VoiceFilterState = &mut state.filters[slot];
+        let bus = VoiceBus::new(buses, voice.pair, discard);
+        let samples = SampleWords::new(bank.samples);
+        let next = match voice_filter::filter_mode(voice.filter.mode) {
+            0 => render_span::<0>(voice, samples, memory, &bus, frame_start, frame_end),
+            1 => render_span::<1>(voice, samples, memory, &bus, frame_start, frame_end),
+            2 => render_span::<2>(voice, samples, memory, &bus, frame_start, frame_end),
+            _ => render_span::<3>(voice, samples, memory, &bus, frame_start, frame_end),
+        };
+        *memory = next;
     }
 }

@@ -34,15 +34,6 @@ endif()
 set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
 set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
-if(NINTENDO_3DS)
-    if(F3RT_SDL OR F3RT_GPU OR F3RT_NETPLAY OR F3RT_HOST_TOOLS OR BUILD_TESTING)
-        message(FATAL_ERROR "The 3DS build is core-only: configure with -DF3RT_SDL=OFF "
-            "-DF3RT_GPU=OFF -DF3RT_NETPLAY=OFF -DF3RT_HOST_TOOLS=OFF -DBUILD_TESTING=OFF")
-    endif()
-    if(NOT F3_ROM_DIR)
-        message(FATAL_ERROR "The 3DS build embeds the ROM set in RomFS: F3_ROM_DIR is required")
-    endif()
-endif()
 find_program(UV_EXECUTABLE uv REQUIRED)
 execute_process(COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
     python -c
@@ -119,10 +110,6 @@ set(F3_COMPILE_ROMS_ARGS
 set(F3_COMPILE_ROMS_OUTPUTS
     "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
     "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
-if(NINTENDO_3DS)
-    list(APPEND F3_COMPILE_ROMS_ARGS --files-output "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
-    list(APPEND F3_COMPILE_ROMS_OUTPUTS "${CMAKE_CURRENT_BINARY_DIR}/rom_files.txt")
-endif()
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
     INPUT_FILES
@@ -268,11 +255,6 @@ if(F3RT_NETPLAY)
     set(F3RT_NETPLAY_SOURCES
         runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp)
 endif()
-if(NINTENDO_3DS)
-    set(F3RT_THREAD_SOURCES runtime/platform/thread_ctru.cpp)
-else()
-    set(F3RT_THREAD_SOURCES runtime/platform/thread_std.cpp)
-endif()
 set(F3RT_CORE_SOURCES
     runtime/third_party/sha1dc/sha1.c runtime/third_party/sha1dc/ubc_check.c
     runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp
@@ -285,7 +267,6 @@ set(F3RT_CORE_SOURCES
     runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
-    ${F3RT_THREAD_SOURCES}
 )
 
 # The audio and eeprom simulation is the Rust crates behind include/f3rt/abi/*.h.
@@ -556,8 +537,4 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-frontend PRIVATE f3rt-test-support f3rt-ui GTest::gtest_main)
         gtest_discover_tests(f3rt-test-frontend TEST_PREFIX "runtime-frontend.")
     endif()
-endif()
-
-if(NINTENDO_3DS)
-    include(cmake/n3ds.cmake)
 endif()

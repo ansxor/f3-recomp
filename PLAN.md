@@ -41,8 +41,7 @@ A step is either "interface → seam" or "implementation → Rust behind a seam"
 - Release profile (`Cargo.toml`): `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`,
   `panic = "abort"`. `SampleWords::interpolate*` use `to_int_unchecked` (the C++ `size_t(position)`);
   the saturating `as usize` cost the audio worker 20%.
-- Allowed to break while converting: the Nintendo 3DS build (`runtime/frontend/n3ds/**`,
-  `cmake/n3ds.cmake`; no Rust cross-compile and it still names the removed audio C++ API), host tools
+- Allowed to break while converting: host tools
   (`tools/**`, `f3rt-tool`, `f3rt-runner`, `f3rt-replay`) where they used the removed audio engine
   (clock/observer APIs), and netplay over a live relay. They must break only where the audio/eeprom
   cutover or the interpreter/fast-boot removal forces it.
@@ -107,4 +106,4 @@ descend from it. It contains:
 - Verified against the all-C++ binary: gate crc/WAV, 1800/5400 frames, `--eeprom`, `--dump-dir`,
   `--discovery-log[/-all]`, `--inputs`, `--renderer enhanced|accurate`, `--surface` byte-identical;
   unthrottled 5400 frames 0.479 s (C++) vs 0.483 s (Rust).
-- C++ unit tests, tools and the 3DS build were left broken there by design.
+- C++ unit tests and tools were left broken there by design.

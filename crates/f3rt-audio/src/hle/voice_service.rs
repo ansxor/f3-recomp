@@ -215,7 +215,7 @@ impl VoiceService {
                     }
                 }
                 if let Some(o) = old {
-                    self.stop(o);
+                    self.voices[o].stop();
                     return o as u32;
                 }
             }
@@ -270,7 +270,7 @@ impl VoiceService {
             self.apply_parameters(index, false);
             return;
         }
-        self.stop(index);
+        v.stop();
 
         let v = &mut self.voices[index];
         *v = Voice::default();
@@ -348,20 +348,7 @@ impl VoiceService {
         self.serial = self.serial.wrapping_add(1);
         voice.release_serial = self.serial;
         if voice.release() {
-            self.stop(v);
-        }
-    }
-
-    fn stop(&mut self, v: usize) {
-        self.voices[v].active = false;
-    }
-
-    pub fn end_sample(&mut self, v: usize) {
-        let voice = &mut self.voices[v];
-        if voice.allocation != 0 {
-            voice.sample_finished = true;
-        } else {
-            self.stop(v);
+            voice.stop();
         }
     }
 
@@ -511,7 +498,7 @@ impl VoiceService {
             }
             let step = v.step(&mut self.noise);
             if step.ended {
-                self.stop(index);
+                v.stop();
                 continue;
             }
             advance_glide(v);

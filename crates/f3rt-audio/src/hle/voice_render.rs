@@ -8,7 +8,6 @@ use super::voice::{
     ramp_gain,
 };
 use super::voice_filter::{VoiceFilterState, filter_step};
-use super::voice_service::VoiceService;
 
 pub const GAIN_SCALE: f32 = 1.0 / 524288.0;
 
@@ -405,7 +404,6 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
     pub fn render(
         mut self,
         bus: &VoiceBus,
-        voices: &mut VoiceService,
         frame_start: usize,
         frame_end: usize,
     ) -> VoiceFilterState {
@@ -422,7 +420,7 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
                 let run = plan_run(&*self.voice, chunk.frames - row, &self.samples);
                 match run.kind {
                     VoiceRunKind::Single => {
-                        row += self.render_frame(&chunk, row, voices);
+                        row += self.render_frame(&chunk, row);
                     }
                     VoiceRunKind::Constant => {
                         let gain = ConstantGain::new(&mut *self.voice);
@@ -476,7 +474,7 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
     }
 
     #[inline(always)]
-    fn render_frame(&mut self, chunk: &Chunk, row: usize, voices: &mut VoiceService) -> usize {
+    fn render_frame(&mut self, chunk: &Chunk, row: usize) -> usize {
         step_gain(&mut *self.voice);
         if self.voice.sample_finished {
             self.emit(chunk.row(row), 0.0, StereoGain::default());
@@ -509,7 +507,7 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         }
         // TODO: should end_sample really be moved into voice itself instead?
         // this is a weird indirection
-        voices.end_sample(self.voice.slot as usize);
+        self.voice.end_sample();
         self.silence(chunk, row + 1);
         chunk.frames - row
     }

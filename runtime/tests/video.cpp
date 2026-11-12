@@ -1091,8 +1091,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
         GTEST_SKIP() << "F3_ROM_DIR not set; skipping ROM-backed bench timeline check";
     if (std::string_view(F3RT_DEFAULT_SET) != "landmakrj")
         GTEST_SKIP() << "The bench timeline is Land Maker's";
-    const auto script_path = std::filesystem::path(__FILE__).parent_path().parent_path()
-                                 .parent_path() / "games" / "landmakrj" / "n3ds" / "bench.txt";
+    const auto script_path = std::filesystem::path(__FILE__).parent_path() / "data" / "landmakrj-timeline.txt";
     std::unique_ptr<f3rt::Machine> machine;
     try {
         machine = f3rt::runner::create_strict_machine(std::filesystem::path(rom_env),

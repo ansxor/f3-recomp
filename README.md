@@ -42,15 +42,6 @@ make build GAME=landmakrj ROM_DIR=roms/landmakrj
 
 Run with `--help` for all command-line options.
 
-## Nintendo 3DS
-
-```sh
-nix run .#3ds-3dsx              # build build/landmakrj-3ds/landmakrj.3dsx
-nix run .#3ds-cia               # build build/landmakrj-3ds/landmakrj.cia
-nix run .#3ds-azahar            # build the 3dsx and launch it in Azahar
-nix develop .#3ds               # devkitARM, makerom, bannertool, ctrtool, cmake, ninja
-```
-
 ## Supported Games
 
 The following ROM sets have tested native builds:
