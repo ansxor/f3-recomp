@@ -44,8 +44,7 @@
 //!   DAC L/R = dry + table(127-p8) * serio1 path + table(127-p9) * serio2 + reverb taps.
 //!
 //! LFOs: the ES5510 LFOs are GPR pairs the microcode rotates every frame, and the DSP executes its
-//! whole program every frame whatever the input is (ES5510::run_once() once per frame,
-//! runtime/audio/reference/engine.cpp:131), so an LFO phase keeps advancing through silence. Here
+//! whole program every frame whatever the input is (ES5510::run_once() once per frame), so an LFO phase keeps advancing through silence. Here
 //! too: every LFO advances by its rate on every frame, including the frames the auto-bypass does not
 //! compute; the phase restarts at (1, 0) only when a program is loaded (select() of a different
 //! program) and on reset().

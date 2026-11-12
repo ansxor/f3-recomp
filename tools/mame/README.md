@@ -104,41 +104,7 @@ uv run f3 compare frames captures/landmakrj_attract/ f3rt_output_dir/
 - **Diff Image**: BMP highlighting differences with adjustable amplification (`--diff-amp <int>`)
 - **JSON Output**: For automated CI testing via `--json`
 
-## 6. Audio device replay
-
-Capture sound-ROM writes independently of main-CPU scheduling. Use fresh
-NVRAM/config directories so the reference starts from the same cold boot:
-
-```sh
-F3_AUDIO_TRACE=build/mame-audio.trace \
-  /Users/darien/Workspace/f3-stuff/tools/mame-baseline/f3 landmakrj \
-  -rompath tools/mame/staged_roms \
-  -autoboot_script tools/mame/audio_trace.lua -autoboot_delay 0 \
-  -wavwrite build/mame-audio.wav -video none -nothrottle \
-  -noautoframeskip -frameskip 0 -skip_gameinfo \
-  -nvram_directory build/mame-nvram-audio-trace \
-  -cfg_directory build/mame-cfg-audio-trace -seconds_to_run 62
-
-build/runtime/f3rt-replay --rom-dir /path/to/roms/landmakr \
-  --audio-trace build/mame-audio.trace --output build/replay-audio.wav
-```
-
-The binary trace begins with eight bytes `F3AUD2\0\0`. Each 16-byte,
-little-endian record contains a 64-bit timestamp in 16 MHz ticks, a 32-bit
-sound-bus address, 16-bit data, and a 16-bit byte-lane mask. An address of
-`0xfffffffe` resets the sound-board devices; `0xffffffff` terminates the stream
-at the recorded emulated time. Reset notifications record the event and reinstall
-the retained write tap. Version 1 traces omitted board resets and must be
-recaptured. Traces contain game-derived data and must remain under ignored `build/`.
-
-Replay drives the real standalone OTIS/ESP/volume devices without executing
-the main or sound CPU. It isolates audio-device behavior; it does **not**
-establish native game acceptance. Baseline WAV output is 48 kHz; replay is at
-the advertised OTIS integer stream rate (29761 Hz with 32 voices). Compare
-after accounting for output resampling and latency, not by WAV byte identity.
-Native-game audio must be checked separately against the baseline.
-
-### Reproducible waveform metrics
+## 6. Comparing audio
 
 `f3 compare audio` requires NumPy and SciPy in the analysis Python
 environment. It uses one fixed latency for the entire comparison interval,

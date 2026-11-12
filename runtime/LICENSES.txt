@@ -1,10 +1,6 @@
 Standalone hardware implementations derived from MAME BSD-3-Clause files:
   video.cpp / video.hpp: Bryan McPhail, ywy, 12Me21
   audio.cpp: Bryan McPhail, Aaron Giles, R. Belmont, Philip Bennett
-  third_party/audio/es5505.*: Aaron Giles
-  third_party/audio/es5510.*: Christian Brunschen
-  third_party/audio/mc68681.*: Mariusz Wojcieszek, R. Belmont
-  third_party/audio/mb87078.*: Fabio Priuli, Philip Bennett, hap
 Reference source: https://github.com/mamedev/mame, revision
 cfc4760a3be9c5a79846b19b6a573cb38459fa7e, local source headers retain authors.
 FDA 15-bit palette interpretation, per-line selection and forward blur also

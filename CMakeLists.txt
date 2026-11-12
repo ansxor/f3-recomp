@@ -240,7 +240,6 @@ if(F3_ROM_DIR)
             python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
 endif()
 
-file(GLOB REFERENCE_AUDIO_SOURCES CONFIGURE_DEPENDS runtime/third_party/audio/*.cpp)
 # A game opts into the de-HLE'd GameVideo scene by providing games/<game>/video/.
 file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
 if(GAME_VIDEO_SOURCES)
@@ -352,12 +351,6 @@ execute_process(
 
 add_library(f3rt STATIC ${F3RT_CORE_SOURCES})
 add_dependencies(f3rt f3rt_build_identity)
-
-add_library(f3rt-audio-reference STATIC runtime/audio/reference/engine.cpp runtime/audio/reference/board.cpp ${REFERENCE_AUDIO_SOURCES})
-target_include_directories(f3rt-audio-reference PUBLIC include runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(f3rt-audio-reference PUBLIC f3rt)
-
-
 
 # Generated headers are reached as "generated_config/<name>"; runtime sprite headers
 # use "sprites/<name>" to avoid basename ambiguity.
@@ -513,7 +506,7 @@ if(F3RT_SDL)
 endif()
 if(F3RT_HOST_TOOLS)
     add_executable(f3rt-replay runtime/replay.cpp)
-    target_link_libraries(f3rt-replay PRIVATE f3rt f3rt-audio-reference)
+    target_link_libraries(f3rt-replay PRIVATE f3rt)
     target_compile_definitions(f3rt-replay PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 endif()
 include(CTest)
