@@ -26,7 +26,20 @@ use super::track_service::Track;
 use super::voice::{NoiseState, Voice, advance_glide};
 
 pub struct VoiceService {
-    impl_: Box<Impl>,
+    bank: Arc<SoundBank>,
+    voices: [Voice; 32],
+    launched: u64,
+    pending: [Pending; 96],
+    driver: DriverClock,
+    queue: NoteQueue<Pending, 96>,
+    next: [u8; 32],
+    prev: [u8; 32],
+    cursor: u8,
+    budget_slot: u8,
+    noise: NoiseState,
+    serial: u64,
+    tick: u64,
+    filter_epoch: u32,
 }
 
 /// A note the driver clock or a delayed-patch delay starts later than it was requested.
@@ -53,26 +66,9 @@ impl Default for Pending {
     }
 }
 
-struct Impl {
-    bank: Arc<SoundBank>,
-    voices: [Voice; 32],
-    launched: u64,
-    pending: [Pending; 96],
-    driver: DriverClock,
-    queue: NoteQueue<Pending, 96>,
-    next: [u8; 32],
-    prev: [u8; 32],
-    cursor: u8,
-    budget_slot: u8,
-    noise: NoiseState,
-    serial: u64,
-    tick: u64,
-    filter_epoch: u32,
-}
-
-impl Impl {
-    fn new(bank: Arc<SoundBank>) -> Box<Impl> {
-        let mut imp = Box::new(Impl {
+impl VoiceService {
+    pub fn new(bank: Arc<SoundBank>) -> VoiceService {
+        let mut imp = VoiceService {
             bank,
             voices: std::array::from_fn(|_| Voice::default()),
             launched: 0,
@@ -87,12 +83,12 @@ impl Impl {
             serial: 0,
             tick: u64::from(TIMER_TICKS),
             filter_epoch: 0,
-        });
+        };
         imp.reset(0);
         imp
     }
 
-    fn reset(&mut self, tick: u64) {
+    pub fn reset(&mut self, tick: u64) {
         let pool: *mut Voice = self.voices.as_mut_ptr();
         for i in 0..32u8 {
             // SAFETY: `i` names a slot of the fixed pool; `stop` only writes that slot.
@@ -323,7 +319,7 @@ impl Impl {
         }
     }
 
-    fn active_voices(&self) -> u32 {
+    pub fn active_voices(&self) -> u32 {
         let mut count = 0;
         for voice in self.voices.iter() {
             if voice.active {
@@ -367,7 +363,7 @@ impl Impl {
         voice.active = false;
     }
 
-    fn end_sample(&mut self, voice: &mut Voice, tick: u64) {
+    pub fn end_sample(&mut self, voice: &mut Voice, tick: u64) {
         if voice.allocation != 0 {
             voice.sample_finished = true;
         } else {
@@ -385,7 +381,7 @@ impl Impl {
         }
     }
 
-    fn note_on(&mut self, event: &NoteOnEvent, patches: &PatchList, track: &Track) {
+    pub fn note_on(&mut self, event: &NoteOnEvent, patches: &PatchList, track: &Track) {
         let mut note = *event;
         note.velocity &= 127; // c16faa clears the velocity flag bit.
         let list = &patches.patches[..patches.count as usize];
@@ -429,7 +425,7 @@ impl Impl {
         }
     }
 
-    fn note_off(&mut self, instance: u64, tick: u64) {
+    pub fn note_off(&mut self, instance: u64, tick: u64) {
         self.queue.note_off(instance, tick);
         for i in 0..self.pending.len() {
             if !(self.pending[i].active && self.pending[i].note.instance == instance) {
@@ -448,8 +444,9 @@ impl Impl {
         self.release_instance(instance, tick);
     }
 
-    fn service_queue(&mut self, tick: u64) {
-        let this: *mut Impl = self;
+    pub fn service_queue(&mut self, tick: u64) {
+        // FIXME: lol. no. no no.
+        let this: *mut VoiceService = self;
         self.queue.service(
             tick,
             |p: Pending, start: u64| {
@@ -463,7 +460,7 @@ impl Impl {
         );
     }
 
-    fn refresh_track(&mut self, sequence: u8, track: u8, tick: u64) {
+    pub fn refresh_track(&mut self, sequence: u8, track: u8, tick: u64) {
         for i in 0..32 {
             // SAFETY: `i` names a slot of the fixed pool; the re-applied parameters write only that voice.
             let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(i) };
@@ -473,7 +470,7 @@ impl Impl {
         }
     }
 
-    fn refresh_sequence(&mut self, sequence: u8, tick: u64) {
+    pub fn refresh_sequence(&mut self, sequence: u8, tick: u64) {
         // Track-major, as the old per-track channel sync was: all voices of track 0, then track 1, ...
         for track in 0..TRACK_COUNT {
             let track = track as u8;
@@ -488,7 +485,7 @@ impl Impl {
         }
     }
 
-    fn service(&mut self) {
+    pub fn service(&mut self) {
         let tick = self.tick;
         self.tick = self.tick.wrapping_add(u64::from(TIMER_TICKS));
         // Delayed layered patches whose delay elapsed; the start still pays the driver's key-on cost.
@@ -529,75 +526,23 @@ impl Impl {
             self.apply_parameters(v, false, tick, true);
         }
     }
-}
-
-impl VoiceService {
-    pub fn new(bank: Arc<SoundBank>) -> VoiceService {
-        VoiceService {
-            impl_: Impl::new(bank),
-        }
-    }
-
-    pub fn reset(&mut self, tick: u64) {
-        self.impl_.reset(tick);
-    }
-
-    /// Starts every patch of the note at its driver start tick (or schedules its delay/release trigger).
-    pub fn note_on(&mut self, event: &NoteOnEvent, patches: &PatchList, track: &Track) {
-        self.impl_.note_on(event, patches, track);
-    }
-
-    pub fn note_off(&mut self, instance: u64, tick: u64) {
-        self.impl_.note_off(instance, tick);
-    }
-
-    /// Re-runs the voice parameters of one track's / one sequence's live voices after a track event.
-    pub fn refresh_track(&mut self, sequence: u8, track: u8, tick: u64) {
-        self.impl_.refresh_track(sequence, track, tick);
-    }
-
-    pub fn refresh_sequence(&mut self, sequence: u8, tick: u64) {
-        self.impl_.refresh_sequence(sequence, tick);
-    }
 
     /// The ring's own 1 kHz service tick (grid-aligned from reset) and the service itself: due delayed
     /// patches, then the budget ring. The render calls it when it reaches the tick.
     pub fn next_tick(&self) -> u64 {
-        self.impl_.tick
-    }
-
-    pub fn service(&mut self) {
-        self.impl_.service();
-    }
-
-    /// Driver starts that fall between two service ticks, at the exact tick the render reaches them.
-    pub fn service_queue(&mut self, tick: u64) {
-        self.impl_.service_queue(tick);
+        self.tick
     }
 
     pub fn next_queue_tick(&self) -> u64 {
-        self.impl_.queue.next_event()
+        self.queue.next_event()
     }
 
     pub fn pool(&mut self) -> &mut [Voice; 32] {
-        &mut self.impl_.voices
+        &mut self.voices
     }
 
     pub fn launched(&self) -> u64 {
-        self.impl_.launched
-    }
-
-    pub fn active_voices(&self) -> u32 {
-        self.impl_.active_voices()
-    }
-
-    /// Deactivates a voice. `end_sample` keeps a retriggered voice's slot for its envelope restart.
-    pub fn stop(&mut self, voice: &mut Voice, tick: u64) {
-        self.impl_.stop(voice, tick);
-    }
-
-    pub fn end_sample(&mut self, voice: &mut Voice, tick: u64) {
-        self.impl_.end_sample(voice, tick);
+        self.launched
     }
 
     // The voice-event observer is compiled out (`F3RT_HLE_EVENTS`): the render hooks do nothing.
@@ -612,6 +557,6 @@ impl VoiceService {
 
 impl NoteSink for VoiceService {
     fn note_off(&mut self, instance: u64, tick: u64) {
-        Impl::note_off(&mut self.impl_, instance, tick);
+        self.note_off(instance, tick);
     }
 }
