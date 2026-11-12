@@ -73,6 +73,15 @@ A step is either "interface → seam" or "implementation → Rust behind a seam"
       (`runtime/audio/reference/` + `third_party/audio`) stays as `f3rt-audio-reference` for `f3rt-replay`.
 - [x] Eeprom: `include/f3rt/abi/eeprom.h`, `crates/f3rt-eeprom` (13 unit tests), `Machine::EepromLease`.
       `runtime/eeprom.hpp` and its C++ test are deleted.
+- [x] Reference audio backend: `crates/f3rt-audio-reference` (rlib, test-only, not linked into CMake) is a
+      mechanical translation of `runtime/audio/reference/{board,engine}` and the MAME cores in
+      `runtime/third_party/audio/{es5505,es5510,mc68681,mb87078}`. The C++ stays for `f3rt-replay`.
+      The 12 reference-driven tests of the old `runtime/tests/audio.cpp` (DUART x5, DSP end/delay/modulo
+      property, mixer gain+mute, sample-rate drift, DPRAM/OTIS reset, CPU-line reset) are ported to
+      `src/tests.rs`. Verified against the C++ with a throwaway differential harness (seeded register-write /
+      advance / render scripts on the Board with the landmakrj sample ROM: PCM int16+float, state blobs,
+      clock, irq levels bit-exact). Not ported: the HLE-side C++ tests (note timing, voice render,
+      mailbox, pcm ring, worker queue, snapshot, replay codec, HleCore, game tests).
 - [x] Link: `crates/f3rt-abi`, `cmake/corrosion.cmake`, workspace `Cargo.toml`/`Cargo.lock`, flake.
 - [x] fast boot and `Interpreter` removed (above).
 

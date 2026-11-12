@@ -1,0 +1,8 @@
+[package]
+name = "f3rt-audio-reference"
+version = "0.1.0"
+edition = "2024"
+description = "Rust translation of the hardware-accurate reference audio backend, used as the test oracle"
+
+[dependencies]
+f3rt-audio = { path = "../f3rt-audio" }

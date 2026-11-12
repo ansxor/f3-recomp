@@ -15,5 +15,12 @@ name = "f3rt-audio"
 version = "0.1.0"
 
 [[package]]
+name = "f3rt-audio-reference"
+version = "0.1.0"
+dependencies = [
+ "f3rt-audio",
+]
+
+[[package]]
 name = "f3rt-eeprom"
 version = "0.1.0"
