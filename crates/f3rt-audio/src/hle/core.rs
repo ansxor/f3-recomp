@@ -9,6 +9,8 @@
 //! they hold pointers to each other, exactly as the C++ members' addresses are stable inside the
 //! heap-allocated `Impl`.
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use crate::hle::block::{self, BusBlock, StereoBlock};
 use crate::hle::clock;
 use crate::hle::command::CommandPacket;
@@ -27,11 +29,14 @@ use crate::hle::voice_service::VoiceService;
 use crate::output_gain::OUTPUT_BOOST;
 
 /// Receives rendered stereo frames in render order, in blocks of 1..Core::BLOCK_FRAMES frames.
-pub trait PcmSink {
+pub trait PcmSink: Send {
     /// Interleaved L,R in OTIS/ESP channel order (the left/right exchange of the DAC is applied by the
     /// final consumer).
-    fn write(&self, stereo: &[f32], frames: usize);
+    fn write(&mut self, stereo: &[f32], frames: usize);
 }
+
+/// A sink shared between the rendering thread and whoever drains it.
+pub type SharedPcmSink = Arc<Mutex<dyn PcmSink>>;
 
 pub struct Core {
     impl_: Box<Impl>,
@@ -53,7 +58,7 @@ pub struct Impl {
     pub worker_tick: u64,
     pub worker_frames: u64,
     pub gain: [f32; 2],
-    pub sink: Option<*mut dyn PcmSink>,
+    pub sink: Option<SharedPcmSink>,
 }
 
 impl Impl {
@@ -253,10 +258,9 @@ impl Impl {
             self.render_state.tick_remainder = remainder;
             self.stereo.resize(n);
             self.effects.mix_block(&self.buses, &mut self.stereo, input, output);
-            if let Some(sink) = self.sink {
+            if let Some(sink) = &self.sink {
                 let stereo: &[f32] = &self.stereo.samples[..n * 2];
-                // SAFETY: the sink outlives the core's rendering and is only written from this thread.
-                unsafe { (*sink).write(stereo, n) };
+                sink.lock().unwrap_or_else(PoisonError::into_inner).write(stereo, n);
             }
             self.worker_frames += n as u64;
         }
@@ -297,7 +301,7 @@ impl Core {
     }
 
     /// None drops the rendered frames (fast-forward); the engine state evolves identically.
-    pub fn set_pcm_sink(&mut self, sink: Option<*mut dyn PcmSink>) {
+    pub fn set_pcm_sink(&mut self, sink: Option<SharedPcmSink>) {
         self.impl_.sink = sink;
     }
 

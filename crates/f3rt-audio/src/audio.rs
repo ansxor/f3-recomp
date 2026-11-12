@@ -2,10 +2,11 @@
 //! on a synth worker thread. Output is interleaved stereo (Left, Right) at `sample_rate()`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use crate::hle::command::CommandPacket;
-use crate::hle::core::{self, Core, PcmSink, RenderStats};
+use crate::hle::core::{self, Core, RenderStats, SharedPcmSink};
 use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L};
 use crate::pcm_ring::PcmRing;
 use crate::shared_mailbox::SharedMailbox;
@@ -92,7 +93,7 @@ pub struct Synth {
 }
 
 impl Synth {
-    fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, sink: *mut dyn PcmSink) -> Synth {
+    fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, sink: SharedPcmSink) -> Synth {
         // SAFETY: the decoder owns both buffers for as long as this Synth lives, and a Vec's buffer does
         // not move when the Synth does, so the slices stay valid for the core's lifetime.
         let rom = sound_rom;
@@ -133,7 +134,7 @@ pub struct AudioPerformanceStats {
 pub struct Audio {
     /// Declared first so it is dropped (and its thread joined) before the services it points at.
     pub worker: WorkerQueue<CoreInput, Synth, QUEUE_SIZE>,
-    pub pcm: Box<PcmRing>,
+    pub pcm: Arc<Mutex<PcmRing>>,
     pub synth: Box<Synth>,
     pub mailbox: SharedMailbox,
     pub clock: u64,
@@ -148,10 +149,8 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, shared: *mut u8) -> Audio {
-        let mut pcm = Box::new(PcmRing::new());
-        let sink_ptr: *mut PcmRing = &mut *pcm;
-        let sink: *mut dyn PcmSink = sink_ptr;
-        let mut synth = Box::new(Synth::new(sound_rom, sample_words, sink));
+        let pcm = Arc::new(Mutex::new(PcmRing::new()));
+        let mut synth = Box::new(Synth::new(sound_rom, sample_words, pcm.clone()));
         let worker = WorkerQueue::new(&mut *synth as *mut Synth);
         Audio {
             worker,
@@ -167,6 +166,10 @@ impl Audio {
             bank: 1,
             held: true,
         }
+    }
+
+    fn pcm(&self) -> MutexGuard<'_, PcmRing> {
+        self.pcm.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn playback_now(&self) -> u64 {
@@ -223,7 +226,7 @@ impl Audio {
         self.clock_epoch = state.clock;
         self.submitted_tick = state.clock;
         self.playback_epoch = self.synth.core.tick();
-        self.pcm.discard();
+        self.pcm().discard();
         self.command_count = state.commands;
         self.mailbox.restore(state.consumer);
         self.held = state.held;
@@ -259,7 +262,7 @@ impl Audio {
         let p = &mut *self;
         p.submit_clock();
         let frames = core::frames_at(p.playback_now());
-        p.pcm.close_frame(frames);
+        p.pcm().close_frame(frames);
     }
 
     pub fn advance(&mut self, main_cycles: u32) {
@@ -319,18 +322,18 @@ impl Audio {
 
     pub fn available_frames(&mut self) -> usize {
         self.flush();
-        self.pcm.available()
+        self.pcm().available()
     }
 
     pub fn render(&mut self, interleaved_stereo: &mut [i16], max_frames: usize) -> usize {
         self.flush();
-        self.pcm.drain_i16(interleaved_stereo, max_frames)
+        self.pcm().drain_i16(interleaved_stereo, max_frames)
     }
 
     /// The float overload: the same ring, converted to the -1..1 scale the C++ passes on.
     pub fn render_f32(&mut self, interleaved_stereo: &mut [f32], max_frames: usize) -> usize {
         self.flush();
-        self.pcm.drain(interleaved_stereo, max_frames)
+        self.pcm().drain(interleaved_stereo, max_frames)
     }
 
     /// Non-blocking drain: returns only PCM already produced without waiting. It holds back the audio of
@@ -338,7 +341,7 @@ impl Audio {
     /// whether or not the worker is quick: the amount does not race with it. Callers needing a complete,
     /// deterministic stream must finish with the blocking render.
     pub fn render_ready(&mut self, interleaved_stereo: &mut [i16], max_frames: usize) -> usize {
-        self.pcm.drain_released(interleaved_stereo, max_frames)
+        self.pcm().drain_released(interleaved_stereo, max_frames)
     }
 
     pub fn save_state(&self, dst: &mut [u8]) {
