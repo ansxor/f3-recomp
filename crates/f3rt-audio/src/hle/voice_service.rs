@@ -91,7 +91,7 @@ impl VoiceService {
     pub fn reset(&mut self, tick: u64) {
         for (i, voice) in self.voices.iter_mut().enumerate() {
             *voice = Voice::default();
-            (*voice).slot = i as u8;
+            voice.slot = i as u8;
         }
         for p in self.pending.iter_mut() {
             p.active = false;
@@ -267,10 +267,10 @@ impl VoiceService {
             v.owner.velocity = velocity;
             v.released = false;
             v.retarget(kernel, &patch.program());
-            self.apply_parameters(index as usize, false);
+            self.apply_parameters(index, false);
             return;
         }
-        self.stop(index as usize);
+        self.stop(index);
 
         let v = &mut self.voices[index];
         *v = Voice::default();

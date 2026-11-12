@@ -393,8 +393,8 @@ impl SoundBank {
         // As in the C++, `b` indexes `banks` and is also the bank number stored in the result.
         let find_bank = |tag: u8| -> i8 {
             let mut result: i8 = -2;
-            for b in 0..banks.len() {
-                if banks[b].count != 0 && banks[b].tag == tag {
+            for (b, bank) in banks.iter().enumerate() {
+                if bank.count != 0 && bank.tag == tag {
                     result = b as i8;
                 }
             }
@@ -442,11 +442,13 @@ impl SoundBank {
                     for i in 0..4 {
                         mask = (mask << 8) | u32::from(record[PROGRAM_BANK_MASK_OFFSET + 2 * i]);
                     }
-                    if record[PROGRAM_MAGIC_OFFSET_0] == b'X' && record[PROGRAM_MAGIC_OFFSET_1] == b'E'
+                    if record[PROGRAM_MAGIC_OFFSET_0] == b'X'
+                        && record[PROGRAM_MAGIC_OFFSET_1] == b'E'
                     {
                         for i in 0..17 {
                             if (mask & (1u32 << i)) != 0 {
-                                data.sample_banks[i] = find_bank(record[PROGRAM_DEFAULT_BANK_OFFSET]);
+                                data.sample_banks[i] =
+                                    find_bank(record[PROGRAM_DEFAULT_BANK_OFFSET]);
                             }
                         }
                     }
