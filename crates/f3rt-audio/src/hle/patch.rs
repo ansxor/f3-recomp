@@ -125,20 +125,20 @@ impl EnvelopePatchAt {
 // Twenty bytes. Four breakpoints, then flags and the velocity scale.
 // level(0) is where the generator starts. Rates 0..2 ramp toward level(1)..level(3).
 // Rate 3 releases to zero. On the pitch envelope, level(3) is also the pitch zero.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EnvelopePatch<const ROLE: u8> {
-    pub bytes: *const u8,
+    pub bytes: &'static [u8],
 }
 
 impl<const ROLE: u8> EnvelopePatch<ROLE> {
     pub const size: usize = EnvelopePatchAt::size;
 
-    pub fn new(bytes: *const u8) -> EnvelopePatch<ROLE> {
+    pub fn new(bytes: &'static [u8]) -> EnvelopePatch<ROLE> {
         EnvelopePatch { bytes }
     }
 
     fn get(&self, offset: usize) -> u8 {
-        unsafe { *self.bytes.add(offset) }
+        self.bytes[offset]
     }
 
     pub fn level(&self, i: u32) -> u8 {
@@ -223,33 +223,33 @@ impl LayerAt {
     pub const delay: usize = 0x74;
 }
 
-/// A layer record view. The bytes belong to the sound ROM; the view is an unchecked borrow.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+/// A layer record view: the record's bytes in the sound ROM.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Layer {
-    pub bytes: *const u8,
+    pub bytes: &'static [u8],
 }
 
 impl Layer {
     pub const size: usize = LayerAt::size;
 
-    pub fn new(bytes: *const u8) -> Layer {
+    pub fn new(bytes: &'static [u8]) -> Layer {
         Layer { bytes }
     }
 
     fn get(&self, offset: usize) -> u8 {
-        unsafe { *self.bytes.add(offset) }
+        self.bytes[offset]
     }
 
     pub fn pitch(&self) -> EnvelopePatch<{ EnvelopeRole::Pitch as u8 }> {
-        EnvelopePatch::new(unsafe { self.bytes.add(LayerAt::pitch_envelope) })
+        EnvelopePatch::new(&self.bytes[LayerAt::pitch_envelope..][..EnvelopePatchAt::size])
     }
 
     pub fn filter(&self) -> EnvelopePatch<{ EnvelopeRole::Filter as u8 }> {
-        EnvelopePatch::new(unsafe { self.bytes.add(LayerAt::filter_envelope) })
+        EnvelopePatch::new(&self.bytes[LayerAt::filter_envelope..][..EnvelopePatchAt::size])
     }
 
     pub fn amplitude(&self) -> EnvelopePatch<{ EnvelopeRole::Amplitude as u8 }> {
-        EnvelopePatch::new(unsafe { self.bytes.add(LayerAt::amplitude_envelope) })
+        EnvelopePatch::new(&self.bytes[LayerAt::amplitude_envelope..][..EnvelopePatchAt::size])
     }
 
     // Key * 256, plus coarse semitones and fine in steps of 2/256 semitone.
@@ -580,21 +580,21 @@ impl DirectRegionAt {
     pub const pan: usize = 0x12;
 }
 
-/// A direct region view. The bytes belong to the sound ROM; the view is an unchecked borrow.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+/// A direct region view: the region's bytes in the sound ROM.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DirectRegion {
-    pub bytes: *const u8,
+    pub bytes: &'static [u8],
 }
 
 impl DirectRegion {
     pub const size: usize = DirectRegionAt::size;
 
-    pub fn new(bytes: *const u8) -> DirectRegion {
+    pub fn new(bytes: &'static [u8]) -> DirectRegion {
         DirectRegion { bytes }
     }
 
     fn get(&self, offset: usize) -> u8 {
-        unsafe { *self.bytes.add(offset) }
+        self.bytes[offset]
     }
 
     pub fn decay_rate(&self) -> u8 {
@@ -707,10 +707,10 @@ impl ProgramAt {
     pub const region_count: u32 = 17;
 }
 
-/// An instrument record view. The bytes belong to the sound ROM; the view is an unchecked borrow.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+/// An instrument record view: the record's bytes in the sound ROM.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Program {
-    pub bytes: *const u8,
+    pub bytes: &'static [u8],
 }
 
 impl Program {
@@ -718,17 +718,12 @@ impl Program {
     pub const layer_count: u32 = ProgramAt::layer_count;
     pub const region_count: u32 = ProgramAt::region_count;
 
-    pub fn new(bytes: *const u8) -> Program {
+    pub fn new(bytes: &'static [u8]) -> Program {
         Program { bytes }
     }
 
     fn get(&self, offset: usize) -> u8 {
-        unsafe { *self.bytes.add(offset) }
-    }
-
-    /// `operator bool`.
-    pub fn is_some(&self) -> bool {
-        !self.bytes.is_null()
+        self.bytes[offset]
     }
 
     // Top three bits of byte 0x196. Zero selects the seventeen key regions.
@@ -741,11 +736,11 @@ impl Program {
     }
 
     pub fn layer(&self, index: u32) -> Layer {
-        Layer::new(unsafe { self.bytes.add(index as usize * Layer::size) })
+        Layer::new(&self.bytes[index as usize * Layer::size..][..Layer::size])
     }
 
     pub fn region(&self, index: u32) -> DirectRegion {
-        DirectRegion::new(unsafe { self.bytes.add(index as usize * DirectRegion::size) })
+        DirectRegion::new(&self.bytes[index as usize * DirectRegion::size..][..DirectRegion::size])
     }
 }
 
@@ -899,7 +894,7 @@ fn finish_parameters(v: &mut Voice, initial: bool, pair: u32) {
 /// The fields the C++ `Patch` base class holds, shared by both patch kinds.
 pub struct PatchBase {
     pub bank: Arc<SoundBank>,
-    pub program: *const u8,
+    pub program: Program,
     pub index: u8,
     pub delay_ticks: u8,
     pub starts_on_release: bool,
@@ -908,7 +903,7 @@ pub struct PatchBase {
 impl PatchBase {
     pub fn new(
         bank: Arc<SoundBank>,
-        program: *const u8,
+        program: Program,
         index: u8,
         delay_ticks: u8,
         starts_on_release: bool,
@@ -927,7 +922,7 @@ impl PatchBase {
     }
 
     pub fn program(&self) -> Program {
-        Program::new(self.program)
+        self.program
     }
 
     // Layer 0..2, or region 0..16.
@@ -953,7 +948,7 @@ impl LayerPatch {
     pub fn new(
         view: Layer,
         bank: Arc<SoundBank>,
-        program: *const u8,
+        program: Program,
         index: u8,
         delay_ticks: u8,
         starts_on_release: bool,
@@ -1454,7 +1449,7 @@ impl DirectPatch {
     pub fn new(
         view: DirectRegion,
         bank: Arc<SoundBank>,
-        program: *const u8,
+        program: Program,
         index: u8,
     ) -> DirectPatch {
         DirectPatch {
@@ -1646,7 +1641,7 @@ impl Patch {
     }
 
     pub fn bank(&self) -> &SoundBank {
-        &self.base().bank()
+        self.base().bank()
     }
 
     pub fn program(&self) -> Program {

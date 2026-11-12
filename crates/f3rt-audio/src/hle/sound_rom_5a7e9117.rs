@@ -161,17 +161,11 @@ pub struct Bank {
     pub probe: u32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct ProgramData {
-    pub base: *const u8,
+    pub base: Option<&'static [u8]>,
     pub sample_banks: [i8; 17],
     pub enabled: u8,
-}
-
-impl Default for ProgramData {
-    fn default() -> ProgramData {
-        ProgramData { base: core::ptr::null(), sample_banks: [0; 17], enabled: 0 }
-    }
 }
 
 pub fn program_slot(id: u16) -> u32 {

@@ -42,6 +42,10 @@ impl RomView {
         self.bank.store(bank, Ordering::Relaxed);
     }
 
+    pub fn image(&self) -> &'static [u8] {
+        self.rom
+    }
+
     pub fn data(&self) -> *const u8 {
         self.rom.as_ptr()
     }

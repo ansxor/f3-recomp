@@ -387,10 +387,10 @@ impl SoundBank {
 
     fn cache_programs(&mut self) {
         const BASES: [u32; 4] = [PROGRAM_DATA_BASE, PROGRAM_DATA_BASE, 0xc7b050, 0xc760a0];
-        let rom_size = self.rom.size();
+        let image = self.rom.image();
+        let rom_size = image.len();
         let banks = &self.banks;
         // As in the C++, `b` indexes `banks` and is also the bank number stored in the result.
-        #[allow(clippy::needless_range_loop)]
         let find_bank = |tag: u8| -> i8 {
             let mut result: i8 = -2;
             for b in 0..banks.len() {
@@ -410,9 +410,9 @@ impl SoundBank {
                 let slot = bank_idx * 256 + id;
                 let data = &mut self.programs[slot as usize];
                 data.sample_banks.fill(-1);
+                data.base = None;
+                data.enabled = 0;
                 if !populated {
-                    data.base = core::ptr::null();
-                    data.enabled = 0;
                     continue;
                 }
                 let mut index = id;
@@ -431,47 +431,40 @@ impl SoundBank {
                     column += 1;
                 }
                 let addr = base + index * PROGRAM_RECORD_STRIDE as u32 + column;
-                if addr - SOUND_ROM_BASE + PROGRAM_RECORD_STRIDE as u32 > rom_size as u32 {
-                    data.base = core::ptr::null();
-                    data.enabled = 0;
+                let offset = (addr - SOUND_ROM_BASE) as usize;
+                let Some(record) = image.get(offset..offset + PROGRAM_RECORD_STRIDE) else {
                     continue;
-                }
-                data.base = unsafe { self.rom.data().add((addr - SOUND_ROM_BASE) as usize) };
-                data.enabled = Program::new(data.base).enabled();
+                };
+                data.base = Some(record);
+                data.enabled = Program::new(record).enabled();
                 if data.enabled == 0 {
-                    let p = data.base;
                     let mut mask: u32 = 0;
-                    for i in 0..4u32 {
-                        mask = (mask << 8)
-                            | u32::from(unsafe {
-                                *p.add(PROGRAM_BANK_MASK_OFFSET + 2 * i as usize)
-                            });
+                    for i in 0..4 {
+                        mask = (mask << 8) | u32::from(record[PROGRAM_BANK_MASK_OFFSET + 2 * i]);
                     }
-                    if unsafe { *p.add(PROGRAM_MAGIC_OFFSET_0) } == b'X'
-                        && unsafe { *p.add(PROGRAM_MAGIC_OFFSET_1) } == b'E'
+                    if record[PROGRAM_MAGIC_OFFSET_0] == b'X' && record[PROGRAM_MAGIC_OFFSET_1] == b'E'
                     {
-                        for i in 0..17u32 {
+                        for i in 0..17 {
                             if (mask & (1u32 << i)) != 0 {
-                                data.sample_banks[i as usize] =
-                                    find_bank(unsafe { *p.add(PROGRAM_DEFAULT_BANK_OFFSET) });
+                                data.sample_banks[i] = find_bank(record[PROGRAM_DEFAULT_BANK_OFFSET]);
                             }
                         }
                     }
                 } else {
-                    for layer in 0..3u32 {
-                        let p = unsafe { data.base.add(layer as usize * 0x76) };
+                    for layer in 0..3 {
+                        let p = &record[layer * Layer::size..][..Layer::size];
                         let mut marker: u32 = 0;
                         let mut tag: u32 = 0;
-                        for i in (0..16u32).step_by(2) {
-                            if (unsafe { *p.add(i as usize) } & 128) != 0 {
+                        for i in (0..16).step_by(2) {
+                            if (p[i] & 128) != 0 {
                                 marker |= 1u32 << i;
                             }
-                            if (unsafe { *p.add(20 + i as usize) } & 128) != 0 {
+                            if (p[20 + i] & 128) != 0 {
                                 tag |= 1u32 << (i / 2);
                             }
                         }
                         if marker == 0x5515 {
-                            data.sample_banks[layer as usize] = find_bank(tag as u8);
+                            data.sample_banks[layer] = find_bank(tag as u8);
                         }
                     }
                 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::bytes::s8;
-use crate::hle::patch::{DirectPatch, DirectRegion, Layer, LayerPatch, Patch, Program};
+use crate::hle::patch::{DirectPatch, LayerPatch, Patch, Program};
 use crate::hle::sound_bank::SoundBank;
 use crate::hle::sound_rom_5a7e9117::program_slot;
 
@@ -56,76 +56,60 @@ impl PatchList {
     }
 }
 
+/// What one program slot holds. Only real records get patches, so every view is backed by ROM bytes.
+pub enum SlotPatches {
+    Empty,
+    Layered {
+        program: Program,
+        layers: [Patch; Program::layer_count as usize],
+    },
+    Direct(Box<[Patch; Program::region_count as usize]>),
+}
+
 /// The only place that knows a program's layout: a layered program yields up to three layer patches
 /// in descending layer order, a direct program yields the one key region containing the key.
 pub struct ProgramService {
-    /// The bank that owns the program bytes; it outlives this service (the C++ reference).
-    pub bank: Arc<SoundBank>,
-    // PatchList hands out pointers into these tables: reserve the exact size once and never grow them.
-    // The C++ vectors hold the concrete subclasses and the list stores `const Patch *` base
-    // pointers; the Rust Patch enum owns its subclass, so each entry is the variant of its kind.
-    pub layers: Vec<Patch>,
-    pub regions: Vec<Patch>,
+    // PatchList hands out pointers into this table: it is built once at its final size and never
+    // grows.
+    pub slots: Vec<SlotPatches>,
 }
 
 impl ProgramService {
     pub fn new(bank: Arc<SoundBank>) -> ProgramService {
-        let mut layers = Vec::with_capacity(1024 * Program::layer_count as usize);
-        let mut regions = Vec::with_capacity(1024 * Program::region_count as usize);
+        let mut slots = Vec::with_capacity(1024);
         for slot in 0..1024u32 {
-            let base = bank.program_data(slot).base;
-            let program = Program::new(base);
-            if !base.is_null() && program.enabled() != 0 {
-                for layer in 0..Program::layer_count {
-                    let view = program.layer(layer);
-                    layers.push(Patch::Layer(LayerPatch::new(
-                        view,
-                        Arc::clone(&bank),
-                        base,
-                        layer as u8,
-                        view.delay_ticks(),
-                        view.starts_on_release(),
-                    )));
-                }
-                for region in 0..Program::region_count {
-                    regions.push(Patch::Direct(DirectPatch::new(
-                        DirectRegion::default(),
-                        Arc::clone(&bank),
-                        base,
-                        region as u8,
-                    )));
+            let Some(record) = bank.program_data(slot).base else {
+                slots.push(SlotPatches::Empty);
+                continue;
+            };
+            let program = Program::new(record);
+            slots.push(if program.enabled() != 0 {
+                SlotPatches::Layered {
+                    program,
+                    layers: std::array::from_fn(|layer| {
+                        let view = program.layer(layer as u32);
+                        Patch::Layer(LayerPatch::new(
+                            view,
+                            Arc::clone(&bank),
+                            program,
+                            layer as u8,
+                            view.delay_ticks(),
+                            view.starts_on_release(),
+                        ))
+                    }),
                 }
             } else {
-                for layer in 0..Program::layer_count {
-                    layers.push(Patch::Layer(LayerPatch::new(
-                        Layer::default(),
+                SlotPatches::Direct(Box::new(std::array::from_fn(|region| {
+                    Patch::Direct(DirectPatch::new(
+                        program.region(region as u32),
                         Arc::clone(&bank),
-                        base,
-                        layer as u8,
-                        0,
-                        false,
-                    )));
-                }
-                for region in 0..Program::region_count {
-                    let view = if !base.is_null() {
-                        program.region(region)
-                    } else {
-                        DirectRegion::default()
-                    };
-                    regions.push(Patch::Direct(DirectPatch::new(
-                        view,
-                        Arc::clone(&bank),
-                        base,
+                        program,
                         region as u8,
-                    )));
-                }
-            }
+                    ))
+                })))
+            });
         }
-        ProgramService {
-            bank: Arc::clone(&bank),
-            layers: layers,
-            regions: regions,
-        }
+        ProgramService { slots }
     }
 
     pub fn resolve(&self, query: &ProgramQuery) -> PatchList {
@@ -133,48 +117,37 @@ impl ProgramService {
         if query.program == 0xffff {
             return list;
         }
-        let slot = program_slot(query.program);
-        let base = self.bank.program_data(slot).base;
-        if base.is_null() {
-            return list;
-        }
-        let program = Program::new(base);
-        if program.enabled() == 0 {
-            let key = i32::from(s8(u32::from(query.key)));
-            for region in 0..Program::region_count {
-                let patch = &self.regions[(slot * Program::region_count + region) as usize];
-                let direct = match patch {
-                    Patch::Direct(direct) => direct,
-                    // The region table only holds direct patches.
-                    Patch::Layer(_) => continue,
-                };
-                if !direct.contains_key(key) {
-                    continue;
+        match &self.slots[program_slot(query.program) as usize] {
+            SlotPatches::Empty => {}
+            SlotPatches::Direct(regions) => {
+                let key = i32::from(s8(u32::from(query.key)));
+                let found = regions
+                    .iter()
+                    .find(|patch| matches!(patch, Patch::Direct(direct) if direct.contains_key(key)));
+                if let Some(patch) = found {
+                    list.patches[0] = patch as *const Patch;
+                    list.count = 1;
                 }
-                list.patches[0] = patch as *const Patch;
-                list.count = 1;
-                return list;
             }
-            return list;
-        }
-        if query.notes_suppressed {
-            return list;
-        }
-        let enabled: u32 = if query.layer_mask != 0 {
-            u32::from(query.layer_mask)
-        } else {
-            u32::from(program.enabled())
-        };
-        // Descending layer order keeps the voice allocation and the driver start order of the layered onset.
-        let mut layer = Program::layer_count;
-        while layer > 0 {
-            layer -= 1;
-            if enabled & (1u32 << layer) == 0 {
-                continue;
+            SlotPatches::Layered { program, layers } => {
+                if query.notes_suppressed {
+                    return list;
+                }
+                let enabled: u32 = if query.layer_mask != 0 {
+                    u32::from(query.layer_mask)
+                } else {
+                    u32::from(program.enabled())
+                };
+                // Descending layer order keeps the voice allocation and the driver start order of the
+                // layered onset.
+                for (layer, patch) in layers.iter().enumerate().rev() {
+                    if enabled & (1u32 << layer) == 0 {
+                        continue;
+                    }
+                    list.patches[usize::from(list.count)] = patch as *const Patch;
+                    list.count += 1;
+                }
             }
-            list.patches[usize::from(list.count)] =
-                &self.layers[(slot * Program::layer_count + layer) as usize] as *const Patch;
-            list.count += 1;
         }
         list
     }
