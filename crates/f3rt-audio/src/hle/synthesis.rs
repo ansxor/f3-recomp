@@ -58,17 +58,10 @@ fn render_span<const MODE: u32>(
     memory: &VoiceFilterState,
     bus: &VoiceBus,
     voices: &mut VoiceService,
-    frame_ticks: &[u64],
     frame_start: usize,
     frame_end: usize,
 ) -> VoiceFilterState {
-    VoiceSpan::<MODE>::new(voice, samples, memory).render(
-        bus,
-        voices,
-        frame_ticks,
-        frame_start,
-        frame_end,
-    )
+    VoiceSpan::<MODE>::new(voice, samples, memory).render(bus, voices, frame_start, frame_end)
 }
 
 /// Renders one voice into its OTIS bus pair over [frame_start, frame_end) of `buses`.
@@ -81,64 +74,21 @@ pub fn render_voice(
     frame_start: usize,
     frame_end: usize,
 ) {
-    // The frame -> tick map is a second view of `state`, as the C++ caller's `state.frame_ticks` is; it
-    // is only read while a span renders and the vector never moves during a render.
-    let tick_ptr: *const u64 = state.frame_ticks.as_ptr();
-    let tick_count = state.frame_ticks.len();
     // filter_memory(): the slot's filter memory is dropped when the voice's filter epoch moved.
     let slot = voice.slot as usize;
     if state.filter_epoch[slot] != voice.filter_epoch {
         state.filters[slot].clear();
         state.filter_epoch[slot] = voice.filter_epoch;
     }
-    voices.set_render_voice(u32::from(voice.slot));
     let discard: *mut f32 = state.discard.as_mut_ptr();
     let memory: &mut VoiceFilterState = &mut state.filters[slot];
     let bus = VoiceBus::new(buses, voice.pair, discard);
     let samples = SampleWords::new(bank.samples);
-    // SAFETY: the ticks live in `state.frame_ticks`, which this call does not touch.
-    let frame_ticks: &[u64] = unsafe { std::slice::from_raw_parts(tick_ptr, tick_count) };
     let next = match voice_filter::filter_mode(voice.filter.mode) {
-        0 => render_span::<0>(
-            voice,
-            samples,
-            memory,
-            &bus,
-            voices,
-            frame_ticks,
-            frame_start,
-            frame_end,
-        ),
-        1 => render_span::<1>(
-            voice,
-            samples,
-            memory,
-            &bus,
-            voices,
-            frame_ticks,
-            frame_start,
-            frame_end,
-        ),
-        2 => render_span::<2>(
-            voice,
-            samples,
-            memory,
-            &bus,
-            voices,
-            frame_ticks,
-            frame_start,
-            frame_end,
-        ),
-        _ => render_span::<3>(
-            voice,
-            samples,
-            memory,
-            &bus,
-            voices,
-            frame_ticks,
-            frame_start,
-            frame_end,
-        ),
+        0 => render_span::<0>(voice, samples, memory, &bus, voices, frame_start, frame_end),
+        1 => render_span::<1>(voice, samples, memory, &bus, voices, frame_start, frame_end),
+        2 => render_span::<2>(voice, samples, memory, &bus, voices, frame_start, frame_end),
+        _ => render_span::<3>(voice, samples, memory, &bus, voices, frame_start, frame_end),
     };
     *memory = next;
 }

@@ -68,7 +68,7 @@ impl Default for Pending {
 
 impl VoiceService {
     pub fn new(bank: Arc<SoundBank>) -> VoiceService {
-        let mut imp = VoiceService {
+        let mut service = VoiceService {
             bank,
             voices: std::array::from_fn(|_| Voice::default()),
             launched: 0,
@@ -84,18 +84,14 @@ impl VoiceService {
             tick: u64::from(TIMER_TICKS),
             filter_epoch: 0,
         };
-        imp.reset(0);
-        imp
+        service.reset(0);
+        service
     }
 
     pub fn reset(&mut self, tick: u64) {
-        let pool: *mut Voice = self.voices.as_mut_ptr();
-        for i in 0..32u8 {
-            // SAFETY: `i` names a slot of the fixed pool; `stop` only writes that slot.
-            let voice: &mut Voice = unsafe { &mut *pool.add(i as usize) };
-            self.stop(voice, tick);
+        for (i, voice) in self.voices.iter_mut().enumerate() {
             *voice = Voice::default();
-            voice.slot = i;
+            (*voice).slot = i as u8;
         }
         for p in self.pending.iter_mut() {
             p.active = false;
@@ -118,8 +114,8 @@ impl VoiceService {
         self.serial = 0;
     }
 
-    fn apply_parameters(&mut self, voice: &mut Voice, initial: bool, _tick: u64, _notify: bool) {
-        voice.apply_parameters(initial);
+    fn apply_parameters(&mut self, v: usize, initial: bool) {
+        self.voices[v].apply_parameters(initial);
     }
 
     fn move_before_cursor(&mut self, i: u32) {
@@ -170,9 +166,8 @@ impl VoiceService {
             }
         }
         if mode == AllocationMode::Retrigger {
-            for i in 0..32 {
+            for (i, v) in self.voices.iter().enumerate() {
                 let reuses = {
-                    let v = &self.voices[i];
                     v.active
                         && !v.released
                         && v.owner.sequence == n.sequence
@@ -180,10 +175,7 @@ impl VoiceService {
                         && patch.reuses(v)
                 };
                 if reuses {
-                    // SAFETY: `i` names a slot of the fixed pool; `release` writes only that voice and
-                    // the service's own event state.
-                    let voice: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(i) };
-                    self.release(voice, n.tick);
+                    self.release(i);
                     break;
                 }
             }
@@ -204,8 +196,7 @@ impl VoiceService {
             }
             for released in [true, false] {
                 let mut old: Option<usize> = None;
-                for i in 0..32 {
-                    let v = &self.voices[i];
+                for (i, v) in self.voices.iter().enumerate() {
                     if v.released == released && (klass == 128 || u32::from(v.priority) == klass) {
                         match old {
                             None => old = Some(i),
@@ -224,9 +215,7 @@ impl VoiceService {
                     }
                 }
                 if let Some(o) = old {
-                    // SAFETY: `o` names a slot of the fixed pool; `stop` only writes that slot.
-                    let voice: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(o) };
-                    self.stop(voice, n.tick);
+                    self.stop(o);
                     return o as u32;
                 }
             }
@@ -234,7 +223,7 @@ impl VoiceService {
         32
     }
 
-    fn begin(&mut self, n: &NoteOnEvent, patch: &Patch, track: &Track, at: u64) {
+    fn begin(&mut self, n: &NoteOnEvent, patch: &Patch, track: &Track) {
         self.launched = self.launched.wrapping_add(1);
         let kernel = i32::from(track.config.parameters.transposed_key(n.kernel_key));
         let weight = patch.weight(n, kernel);
@@ -259,12 +248,11 @@ impl VoiceService {
                 }
             }
         }
-        let index = self.allocate(n, patch, priority, mode);
+        let index = self.allocate(n, patch, priority, mode) as usize;
         if index == 32 {
             return;
         }
-        // SAFETY: `index` names a slot of the fixed pool; the service's other members are separate.
-        let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(index as usize) };
+        let v = &mut self.voices[index];
         let legato =
             v.active && (mode == AllocationMode::Legato || mode == AllocationMode::LegatoHold);
         let old_board = f64::from((u32::from(v.selector) >> 1) << 20);
@@ -279,10 +267,12 @@ impl VoiceService {
             v.owner.velocity = velocity;
             v.released = false;
             v.retarget(kernel, &patch.program());
-            self.apply_parameters(v, false, at, true);
+            self.apply_parameters(index as usize, false);
             return;
         }
-        self.stop(v, at);
+        self.stop(index as usize);
+
+        let v = &mut self.voices[index];
         *v = Voice::default();
         v.slot = index as u8;
         self.filter_epoch = self.filter_epoch.wrapping_add(1);
@@ -311,8 +301,10 @@ impl VoiceService {
         v.hardware_valid = true;
         // Ring admission, then the opening step: a layered voice steps once here, a direct voice waits
         // for the ring.
-        self.move_before_cursor(index);
-        self.apply_parameters(v, true, at, false);
+        self.move_before_cursor(index as u32);
+        self.apply_parameters(index, true);
+
+        let v = &mut self.voices[index];
         let step = v.onset(&mut self.noise);
         if step.ended {
             v.active = false;
@@ -331,7 +323,7 @@ impl VoiceService {
 
     fn launch(&mut self, n: &NoteOnEvent, patch: &Patch, track: &Track, start: u64) {
         if start == n.tick && self.queue.empty() {
-            self.begin(n, patch, track, start);
+            self.begin(n, patch, track);
             return;
         }
         let q = Pending {
@@ -347,36 +339,37 @@ impl VoiceService {
         }
     }
 
-    fn release(&mut self, v: &mut Voice, tick: u64) {
-        if v.released {
+    fn release(&mut self, v: usize) {
+        let voice = &mut self.voices[v];
+        if voice.released {
             return;
         }
-        v.released = true;
+        voice.released = true;
         self.serial = self.serial.wrapping_add(1);
-        v.release_serial = self.serial;
-        if v.release() {
-            self.stop(v, tick);
+        voice.release_serial = self.serial;
+        if voice.release() {
+            self.stop(v);
         }
     }
 
-    fn stop(&mut self, voice: &mut Voice, _tick: u64) {
-        voice.active = false;
+    fn stop(&mut self, v: usize) {
+        self.voices[v].active = false;
     }
 
-    pub fn end_sample(&mut self, voice: &mut Voice, tick: u64) {
+    pub fn end_sample(&mut self, v: usize) {
+        let voice = &mut self.voices[v];
         if voice.allocation != 0 {
             voice.sample_finished = true;
         } else {
-            self.stop(voice, tick);
+            self.stop(v);
         }
     }
 
-    fn release_instance(&mut self, instance: u64, tick: u64) {
+    fn release_instance(&mut self, instance: u64) {
         for i in 0..32 {
-            // SAFETY: `i` names a slot of the fixed pool; `release` writes only that voice.
-            let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(i) };
-            if v.active && v.owner.instance == instance {
-                self.release(v, tick);
+            let voice = &self.voices[i];
+            if voice.active && voice.owner.instance == instance {
+                self.release(i);
             }
         }
     }
@@ -437,11 +430,11 @@ impl VoiceService {
                 let patch = self.pending[i].patch;
                 let track = self.pending[i].track;
                 // SAFETY: a pending entry always names the patch and track of a live note.
-                self.begin(&n, unsafe { &*patch }, unsafe { &*track }, tick);
+                self.begin(&n, unsafe { &*patch }, unsafe { &*track });
             }
             self.pending[i].active = false;
         }
-        self.release_instance(instance, tick);
+        self.release_instance(instance);
     }
 
     pub fn service_queue(&mut self, tick: u64) {
@@ -454,32 +447,32 @@ impl VoiceService {
                 note.tick = start;
                 // SAFETY: the queue is a separate field of this service and the sinks only touch the
                 // pool, the driver and the pending table, as the C++ lambdas do.
-                unsafe { (*this).begin(&note, &*p.patch, &*p.track, start) };
+                unsafe { (*this).begin(&note, &*p.patch, &*p.track) };
             },
-            |instance: u64, at: u64| unsafe { (*this).release_instance(instance, at) },
+            |instance: u64, _at: u64| unsafe { (*this).release_instance(instance) },
         );
     }
 
-    pub fn refresh_track(&mut self, sequence: u8, track: u8, tick: u64) {
-        for i in 0..32 {
-            // SAFETY: `i` names a slot of the fixed pool; the re-applied parameters write only that voice.
-            let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(i) };
-            if v.active && v.owner.sequence == sequence && v.owner.track == track {
-                self.apply_parameters(v, false, tick, true);
+    pub fn refresh_track(&mut self, sequence: u8, track: u8) {
+        // we iterate over the array like this because attempting to use iter().enumerate()
+        // complains that we are making an immutable reference for `iter()` when
+        // apply_parameters() later borrows it as mutable.
+        for i in 0..self.voices.len() {
+            let voice = &self.voices[i];
+            if voice.active && voice.owner.sequence == sequence && voice.owner.track == track {
+                self.apply_parameters(i, false);
             }
         }
     }
 
-    pub fn refresh_sequence(&mut self, sequence: u8, tick: u64) {
+    pub fn refresh_sequence(&mut self, sequence: u8) {
         // Track-major, as the old per-track channel sync was: all voices of track 0, then track 1, ...
         for track in 0..TRACK_COUNT {
             let track = track as u8;
-            for i in 0..32 {
-                // SAFETY: `i` names a slot of the fixed pool; the re-applied parameters write only that
-                // voice.
-                let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(i) };
+            for i in 0..self.voices.len() {
+                let v = &self.voices[i];
                 if v.active && v.owner.sequence == sequence && v.owner.track == track {
-                    self.apply_parameters(v, false, tick, true);
+                    self.apply_parameters(i, false);
                 }
             }
         }
@@ -510,20 +503,19 @@ impl VoiceService {
         self.budget_slot = ((u32::from(self.budget_slot) + 1) % 12) as u8;
         while count != 0 {
             count -= 1;
-            let index = u32::from(self.cursor);
+            let index = usize::from(self.cursor);
             self.cursor = self.next[self.cursor as usize];
-            // SAFETY: `index` names a slot of the fixed pool; the ring steps one voice at a time.
-            let v: &mut Voice = unsafe { &mut *self.voices.as_mut_ptr().add(index as usize) };
+            let v = &mut self.voices[index];
             if !v.active {
                 continue;
             }
             let step = v.step(&mut self.noise);
             if step.ended {
-                self.stop(v, tick);
+                self.stop(index);
                 continue;
             }
             advance_glide(v);
-            self.apply_parameters(v, false, tick, true);
+            self.apply_parameters(index, false);
         }
     }
 
@@ -544,15 +536,6 @@ impl VoiceService {
     pub fn launched(&self) -> u64 {
         self.launched
     }
-
-    // The voice-event observer is compiled out (`F3RT_HLE_EVENTS`): the render hooks do nothing.
-    pub fn begin_render(&mut self) {}
-
-    pub fn finish_render(&mut self) {}
-
-    pub fn set_render_voice(&mut self, _voice: u32) {}
-
-    pub fn set_render_frame(&mut self, _frame: usize) {}
 }
 
 impl NoteSink for VoiceService {

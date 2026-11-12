@@ -145,13 +145,11 @@ impl Core {
                     | TrackEventKind::ProgramSelector
                     | TrackEventKind::Volume
                     | TrackEventKind::Pan
-                    | TrackEventKind::Refresh => voices.refresh_track(e.sequence, e.track, e.tick),
+                    | TrackEventKind::Refresh => voices.refresh_track(e.sequence, e.track),
                     TrackEventKind::SequenceVolume
                     | TrackEventKind::SequencePan
                     | TrackEventKind::SequenceFade
-                    | TrackEventKind::SequenceFadeStep => {
-                        voices.refresh_sequence(e.sequence, e.tick)
-                    }
+                    | TrackEventKind::SequenceFadeStep => voices.refresh_sequence(e.sequence),
                     TrackEventKind::PreviousKey => {}
                 }
             }
@@ -231,7 +229,6 @@ impl Core {
                     frame_end += 1;
                 }
                 self.buses.samples[frame_start * 8..frame_end * 8].fill(0.0);
-                self.voices.begin_render();
                 render_voices(
                     &mut self.voices,
                     Arc::clone(&self.bank),
@@ -240,7 +237,6 @@ impl Core {
                     frame_start,
                     frame_end,
                 );
-                self.voices.finish_render();
                 let clamped_high = 1.0f32 - 1.0f32 / 524288.0f32;
                 for sample in &mut self.buses.samples[frame_start * 8..frame_end * 8] {
                     *sample = if *sample < -1.0f32 {

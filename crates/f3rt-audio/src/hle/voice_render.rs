@@ -1,13 +1,13 @@
 //! `audio/hle/voice_render.hpp`: one voice's sample read, gain ramp and four-pole filter over a span of
 //! bus frames.
 
-use super::block::{otis_target_bus, MutableAudioBlockSpan};
+use super::block::{MutableAudioBlockSpan, otis_target_bus};
 use super::synthesis::VOICE_BLOCK_FRAMES;
 use super::voice::{
-    advance_voice_position, interpolate_sample, interpolated_gain, ramp_gain, Filter, SampleAdvance,
-    Voice,
+    Filter, SampleAdvance, Voice, advance_voice_position, interpolate_sample, interpolated_gain,
+    ramp_gain,
 };
-use super::voice_filter::{filter_step, VoiceFilterState};
+use super::voice_filter::{VoiceFilterState, filter_step};
 use super::voice_service::VoiceService;
 
 pub const GAIN_SCALE: f32 = 1.0 / 524288.0;
@@ -88,7 +88,11 @@ impl SampleWords {
         if left < 2.0 {
             return 0;
         }
-        if left < cap as f64 + 1.0 { left as usize - 1 } else { cap }
+        if left < cap as f64 + 1.0 {
+            left as usize - 1
+        } else {
+            cap
+        }
     }
 
     fn word(&self, at: usize) -> f64 {
@@ -143,10 +147,17 @@ pub fn plan_run(voice: &Voice, rows: usize, samples: &SampleWords) -> VoiceRun {
         frames = samples.room(voice, cap);
     }
     if frames < 1 {
-        return VoiceRun { kind: VoiceRunKind::Single, frames: 1 };
+        return VoiceRun {
+            kind: VoiceRunKind::Single,
+            frames: 1,
+        };
     }
     VoiceRun {
-        kind: if ramping { VoiceRunKind::Ramping } else { VoiceRunKind::Constant },
+        kind: if ramping {
+            VoiceRunKind::Ramping
+        } else {
+            VoiceRunKind::Constant
+        },
         frames,
     }
 }
@@ -178,7 +189,10 @@ pub fn current_gain(voice: &mut Voice) -> StereoGain {
         voice.right_gain = interpolated_gain(voice.right);
         voice.gain_dirty = false;
     }
-    StereoGain { left: voice.left_gain * GAIN_SCALE, right: voice.right_gain * GAIN_SCALE }
+    StereoGain {
+        left: voice.left_gain * GAIN_SCALE,
+        right: voice.right_gain * GAIN_SCALE,
+    }
 }
 
 #[inline(always)]
@@ -213,7 +227,9 @@ pub struct ConstantGain {
 impl ConstantGain {
     #[inline(always)]
     pub fn new(voice: &mut Voice) -> ConstantGain {
-        ConstantGain { gain: current_gain(voice) }
+        ConstantGain {
+            gain: current_gain(voice),
+        }
     }
 }
 
@@ -358,7 +374,11 @@ impl VoiceBus {
             // SAFETY: `discard` holds VOICE_BLOCK_FRAMES * 8 floats and frames <= VOICE_BLOCK_FRAMES.
             unsafe { *self.discard.add(i) = 0.0 };
         }
-        Chunk { rows: self.discard, first_frame, frames }
+        Chunk {
+            rows: self.discard,
+            first_frame,
+            frames,
+        }
     }
 }
 
@@ -374,7 +394,11 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         samples: SampleWords,
         memory: &VoiceFilterState,
     ) -> VoiceSpan<'a, MODE> {
-        VoiceSpan { voice, samples, filter: *memory }
+        VoiceSpan {
+            voice,
+            samples,
+            filter: *memory,
+        }
     }
 
     #[inline(never)]
@@ -382,7 +406,6 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         mut self,
         bus: &VoiceBus,
         voices: &mut VoiceService,
-        frame_ticks: &[u64],
         frame_start: usize,
         frame_end: usize,
     ) -> VoiceFilterState {
@@ -399,15 +422,15 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
                 let run = plan_run(&*self.voice, chunk.frames - row, &self.samples);
                 match run.kind {
                     VoiceRunKind::Single => {
-                        row += self.render_frame(&chunk, row, voices, frame_ticks);
+                        row += self.render_frame(&chunk, row, voices);
                     }
                     VoiceRunKind::Constant => {
                         let gain = ConstantGain::new(&mut *self.voice);
-                        row += self.render_run(&chunk, row, run.frames, gain, voices);
+                        row += self.render_run(&chunk, row, run.frames, gain);
                     }
                     VoiceRunKind::Ramping => {
                         let gain = RampingGain::new(&*self.voice);
-                        row += self.render_run(&chunk, row, run.frames, gain, voices);
+                        row += self.render_run(&chunk, row, run.frames, gain);
                     }
                 }
             }
@@ -423,9 +446,12 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         row: usize,
         frames: usize,
         mut gain: G,
-        voices: &mut VoiceService,
     ) -> usize {
-        let step = if self.voice.reverse { -self.voice.increment } else { self.voice.increment };
+        let step = if self.voice.reverse {
+            -self.voice.increment
+        } else {
+            self.voice.increment
+        };
         let samples = self.samples;
         let mut filter = VoiceFilter::<MODE>::new(&self.filter, &self.voice.filter);
         let mut out = chunk.row(row);
@@ -446,20 +472,11 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         self.filter = filter.state;
         self.voice.position = position;
         gain.store(&mut *self.voice, frames);
-        voices.set_render_frame(chunk.frame(row + frames - 1));
         frames
     }
 
     #[inline(always)]
-    fn render_frame(
-        &mut self,
-        chunk: &Chunk,
-        row: usize,
-        voices: &mut VoiceService,
-        frame_ticks: &[u64],
-    ) -> usize {
-        let frame = chunk.frame(row);
-        voices.set_render_frame(frame);
+    fn render_frame(&mut self, chunk: &Chunk, row: usize, voices: &mut VoiceService) -> usize {
         step_gain(&mut *self.voice);
         if self.voice.sample_finished {
             self.emit(chunk.row(row), 0.0, StereoGain::default());
@@ -490,7 +507,9 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
         if !ended {
             return 1;
         }
-        voices.end_sample(&mut *self.voice, frame_ticks[frame]);
+        // TODO: should end_sample really be moved into voice itself instead?
+        // this is a weird indirection
+        voices.end_sample(self.voice.slot as usize);
         self.silence(chunk, row + 1);
         chunk.frames - row
     }
