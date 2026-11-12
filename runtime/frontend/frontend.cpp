@@ -1,6 +1,7 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/abi/audio.h"
 #include "f3rt/game_video.hpp"
+#include "f3rt/game_boot.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/game_netplay.hpp"
 #include "f3rt/netplay.hpp"
@@ -10,6 +11,7 @@
 #include "ui.hpp"
 #include "state.hpp"
 #include "audio_pacer.hpp"
+#include "fast_boot.hpp"
 #include "frame_slots.hpp"
 #include "platform/thread.hpp"
 #include "capture_io.hpp"
@@ -182,6 +184,8 @@ enum Preference : uint32_t {
     Volume = 1u << 8,
     PostprocessMode = 1u << 13,
     UserShader = 1u << 14,
+    FastBoot = 1u << 16,
+    BootCache = 1u << 17,
     MotionInterp = 1u << 18
 };
 // Hand-off between the emulation thread (writer of every Machine access) and the video thread (SDL window,
@@ -365,6 +369,7 @@ int main(int argc, char **argv) try {
     uint64_t frames = 0, dump_start = 1, dump_every = 1;
     bool headless = false, sound = true, throttle = true;
     bool motion_interp = false;
+    bool fast_boot = true, boot_cache = false;
 #ifdef F3RT_GAME
     romdir = F3RT_DEFAULT_ROM_DIR;
 #endif
@@ -391,7 +396,19 @@ int main(int argc, char **argv) try {
         else if (arg == "--dump-start") dump_start = std::stoull(value());
         else if (arg == "--dump-every") dump_every = std::stoull(value());
         else if (arg == "--eeprom") eeprom = value();
-        else if (arg == "--wav") wav_path = value();
+        else if (arg == "--fast-boot") {
+            const std::string v = value();
+            if (v == "on") fast_boot = true;
+            else if (v == "off") fast_boot = false;
+            else throw std::runtime_error("--fast-boot must be on or off");
+            cli_preferences |= FastBoot;
+        } else if (arg == "--boot-cache") {
+            const std::string v = value();
+            if (v == "on") boot_cache = true;
+            else if (v == "off") boot_cache = false;
+            else throw std::runtime_error("--boot-cache must be on or off");
+            cli_preferences |= BootCache;
+        } else if (arg == "--wav") wav_path = value();
         else if (arg == "--profile-out") profile_path = value();
         else if (arg == "--discovery-log") discovery_path = value();
         else if (arg == "--discovery-all") discovery_all = true;
@@ -474,6 +491,8 @@ int main(int argc, char **argv) try {
                 << argv[0]
                 << " [--rom-dir DIR] [--set SET] [--frames N] [--headless] [--no-audio]\n"
                 << "  [--unthrottled] [--eeprom FILE] [--wav FILE] [--surface BMP]\n"
+                << "  [--fast-boot on|off] [--boot-cache on|off] (host-only boot shortcut; default "
+                   "fast boot on, cache off)\n"
                 << "  [--dump-dir DIR --dump-start N --dump-every N]\n"
                 << "  [--config FILE] [--volume 0..100] (user preferences load first; CLI "
                    "overrides)\n"
@@ -598,6 +617,8 @@ int main(int argc, char **argv) try {
     preference(postprocess, settings.postprocess, PostprocessMode);
     preference(user_shader, settings.user_shader, UserShader);
     preference(volume, settings.volume, Volume);
+    preference(fast_boot, settings.fast_boot, FastBoot);
+    preference(boot_cache, settings.boot_cache, BootCache);
     preference(motion_interp, settings.motion_interp, MotionInterp);
     if (!netplay_server_cli.empty()) settings.netplay_server = netplay_server_cli;
     if (!netplay_name_cli.empty()) settings.netplay_name = netplay_name_cli;
@@ -840,6 +861,49 @@ int main(int argc, char **argv) try {
                                   .throttle = throttle});
     std::vector<int16_t> audio_silence;
     const auto start = std::chrono::steady_clock::now();
+    // Fast boot: run the power-on frames unthrottled with no presentation and discarded
+    // audio, from a locally generated initialised EEPROM and optionally a cached
+    // post-boot state. Host-side only; the emulated machine executes the same frames.
+    const f3rt::GameBoot *boot = f3rt::game_boot();
+    const bool explicit_fast_boot = (cli_preferences & FastBoot) != 0 && fast_boot;
+    const bool fast_boot_active =
+        boot && ((!headless && settings.fast_boot) || explicit_fast_boot) && wav_path.empty() &&
+        dumpdir.empty() && profile_path.empty() && inputs_path.empty();
+    std::filesystem::path config_dir;
+    if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
+    if (fast_boot_active) {
+        f3rt::FastBootRequest request;
+        if (eeprom.empty() && m.roms.factory_eeprom.empty() && !config_dir.empty())
+            request.eeprom_init = config_dir / "eeprom" / (set + "-init.bin");
+        if (settings.boot_cache && eeprom.empty() && !config_dir.empty())
+            request.boot_cache = config_dir / "boot" / (set + ".state");
+        request.snapshot = snapshot_video_options;
+        request.frame_budget = frames;
+        request.audio = [&](std::span<const int16_t> chunk) {
+            audio_frames += chunk.size() / 2;
+            for (const int16_t sample : chunk) {
+                audio_peak = std::max(audio_peak, std::abs(int(sample)));
+                nonzero_samples += sample != 0;
+            }
+        };
+        if (!headless)
+            request.cancelled = [&] {
+                SDL_PumpEvents();
+                SDL_Event event;
+                while (SDL_PollEvent(&event))
+                    if (event.type == SDL_EVENT_QUIT) quit = true;
+                return quit;
+            };
+        const auto boot_result = f3rt::run_fast_boot(m, *boot, request);
+        if (boot_result.cache_loaded) {
+            if (sdl.input) sdl.input->release();
+            if (sdl.audio) check(SDL_ClearAudioStream(sdl.audio));
+            audio_pacer.reset();
+        }
+        executed_frames = m.frame;
+        std::cout << "fast_boot frames=" << boot_result.frames << " ms=" << boot_result.ms
+                  << " source=" << boot_result.source << " eeprom=" << boot_result.eeprom << '\n';
+    }
     auto handle_audio_chunk = [&](size_t count) {
         audio_frames += count;
         for (size_t i = 0; i < count * 2; ++i) {
@@ -864,8 +928,6 @@ int main(int argc, char **argv) try {
             if (throttle) check(SDL_SetAudioStreamFrequencyRatio(sdl.audio, float(ratio)));
         }
     };
-    std::filesystem::path config_dir;
-    if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
     bool motion_presentation = motion_interp && !headless;
     uint64_t motion_presentations = 0, motion_intermediates = 0, motion_history_resets = 0,
              scale_changes = 0;

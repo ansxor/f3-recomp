@@ -74,6 +74,7 @@ bool settings_equal(const f3rt::FrontendSettings &a, const f3rt::FrontendSetting
         a.filter != b.filter || a.interpolation != b.interpolation ||
         a.interpolation_fields != b.interpolation_fields || a.postprocess != b.postprocess ||
         a.user_shader != b.user_shader || std::abs(a.volume - b.volume) >= 0.001f ||
+        a.fast_boot != b.fast_boot || a.boot_cache != b.boot_cache ||
         a.motion_interp != b.motion_interp) {
         return false;
     }
@@ -460,6 +461,8 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     s.postprocess = *rc::gen::element<std::string>("off", "crt", "user");
     s.user_shader = gen_clean_string(64);
     s.volume = float(*rc::gen::inRange(0, 101)) / 100.0f;
+    s.fast_boot = *rc::gen::arbitrary<bool>();
+    s.boot_cache = *rc::gen::arbitrary<bool>();
     s.motion_interp = *rc::gen::arbitrary<bool>();
 
     for (unsigned p = 0; p < f3rt::LOCAL_PLAYER_COUNT; ++p) {
@@ -488,6 +491,8 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     RC_ASSERT(loaded.postprocess == s.postprocess);
     RC_ASSERT(loaded.user_shader == s.user_shader);
     RC_ASSERT(std::abs(loaded.volume - s.volume) < 0.001f);
+    RC_ASSERT(loaded.fast_boot == s.fast_boot);
+    RC_ASSERT(loaded.boot_cache == s.boot_cache);
     RC_ASSERT(loaded.motion_interp == s.motion_interp);
 
     for (unsigned p = 0; p < f3rt::LOCAL_PLAYER_COUNT; ++p) {
@@ -524,7 +529,7 @@ RC_GTEST_PROP(FrontendSettings, LoaderRobustnessOnArbitraryConfigText, ()) {
         for (size_t l = 0; l < lines; ++l) {
             const auto k = *rc::gen::element<std::string>(
                 "renderer", "scale", "device0", "device4", "binding0.0", "binding3.99", "volume",
-                "corrupt_key", "audio", "interpolation", "motion_interp");
+                "corrupt_key", "fast_boot", "audio", "interpolation", "motion_interp");
             const auto v = *rc::gen::element<std::string>("bad_val", "99999", "-5", "???", "",
                                                           "off\ninjection", "1 2 3", "accurate");
             const bool has_equals = *rc::gen::arbitrary<bool>();

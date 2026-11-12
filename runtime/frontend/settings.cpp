@@ -92,7 +92,7 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
             else if (key == "postprocess") s.postprocess = value;
             else if (key == "user_shader") s.user_shader = value;
             else if (key == "sprite_behaviour" || key == "video" || key == "backend" ||
-                     key == "audio" || key == "fast_boot" || key == "boot_cache") {
+                     key == "audio") {
             } else if (key == "volume") {
                 std::istringstream in{std::string(value)};
                 in >> s.volume;
@@ -106,6 +106,12 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
                     return false;
                 }
                 s.motion_interp = value == "on";
+            } else if (key == "fast_boot" || key == "boot_cache") {
+                if (value != "on" && value != "off") {
+                    reject = "Invalid fast boot setting";
+                    return false;
+                }
+                (key == "fast_boot" ? s.fast_boot : s.boot_cache) = value == "on";
             } else if (key == "netplay_server") s.netplay_server = value;
             else if (key == "netplay_name") s.netplay_name = value;
             else if (key == "netplay_delay") {
@@ -172,6 +178,8 @@ bool save_frontend_settings(const std::string &path, const FrontendSettings &s,
          << "\nvolume=" << s.volume << '\n';
     text << "postprocess=" << s.postprocess << "\nuser_shader=" << s.user_shader << '\n';
     text << "motion_interp=" << (s.motion_interp ? "on" : "off") << '\n';
+    text << "fast_boot=" << (s.fast_boot ? "on" : "off")
+         << "\nboot_cache=" << (s.boot_cache ? "on" : "off") << '\n';
     text << "netplay_server=" << s.netplay_server << "\nnetplay_name=" << s.netplay_name
          << "\nnetplay_delay=" << int(s.netplay_delay) << '\n';
     for (unsigned p = 0; p < s.profiles.size(); ++p) {

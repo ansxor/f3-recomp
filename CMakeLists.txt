@@ -249,6 +249,14 @@ else()
     # Games without a scene still link GameVideo (never instantiated for them).
     set(F3RT_GAME_VIDEO_SOURCES runtime/renderer/game/video_generic.cpp)
 endif()
+# A game opts into fast boot by providing games/<game>/boot/.
+file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
+if(GAME_BOOT_SOURCES)
+    set(F3RT_GAME_BOOT_SOURCES ${GAME_BOOT_SOURCES})
+else()
+    # Games with no boot predicate never turbo-boot; the entry point still resolves.
+    set(F3RT_GAME_BOOT_SOURCES runtime/stubs/boot.cpp)
+endif()
 file(GLOB GAME_NETPLAY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/netplay/*.cpp")
 if(GAME_NETPLAY_SOURCES)
     set(F3RT_GAME_NETPLAY_SOURCES ${GAME_NETPLAY_SOURCES})
@@ -273,7 +281,7 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp
     runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
-    ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
+    ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
     runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
@@ -451,6 +459,7 @@ endif()
 add_library(f3rt-frontend STATIC
     runtime/frontend/frame_slots.cpp
     runtime/frontend/audio_pacer.cpp
+    runtime/frontend/fast_boot.cpp
     runtime/frontend/config_file.cpp
 )
 target_include_directories(f3rt-frontend PUBLIC runtime runtime/frontend include
