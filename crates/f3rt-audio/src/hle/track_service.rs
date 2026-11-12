@@ -10,7 +10,7 @@ use crate::hle::events::{
 };
 use crate::hle::mailbox::Mailbox;
 use crate::hle::note_pool::{self, NotePool, NoteSink};
-use crate::hle::pulse_timer::{self, PulseTimer};
+use crate::hle::pulse_timer::PulseTimer;
 use crate::hle::track_parameters::TrackParameters;
 
 /// The sound CPU's channel table (c128a8): 56 physical channels, allocated 56..1. A track holds one
@@ -79,18 +79,15 @@ impl Track {
 }
 
 /// Pushes the note-off into the mailbox; the dispatcher releases the voice.
-pub struct MailboxNoteSink {
-    pub mailbox: *mut Mailbox,
+pub struct MailboxNoteSink<'a> {
+    pub mailbox: &'a mut Mailbox,
 }
 
-impl NoteSink for MailboxNoteSink {
+impl NoteSink for MailboxNoteSink<'_> {
     fn note_off(&mut self, instance: u64, tick: u64) {
-        // SAFETY: the mailbox is a sibling field of the owner that built this service and outlives it.
-        unsafe { (*self.mailbox).push(Event::NoteOff(NoteOffEvent { instance, tick })) };
+        self.mailbox.push(Event::NoteOff(NoteOffEvent { instance, tick }));
     }
 }
-
-const FADE_TAG: u8 = 0xff;
 
 // Program-selector value ranges; the extended-selector bit lives on TrackParameters.
 const SELECTOR_INTERNAL_MIN: u8 = 0x64;
@@ -112,8 +109,6 @@ impl Default for Mix {
 }
 
 pub struct TrackService {
-    mailbox: *mut Mailbox,
-    sink: MailboxNoteSink,
     tracks: [[Track; TRACK_COUNT]; SONG_SLOTS],
     active: [bool; SONG_SLOTS],
     mix: [Mix; SONG_SLOTS],
@@ -121,16 +116,17 @@ pub struct TrackService {
     channel_used: [bool; MAX_TRACK_CHANNEL as usize + 1],
     channel_previous_key: [u8; MAX_TRACK_CHANNEL as usize + 1],
     fade: PulseTimer,
-    fade_registered: bool,
+}
+
+impl Default for TrackService {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TrackService {
-    pub fn new(mailbox: *mut Mailbox) -> TrackService {
-        // The C++ constructor runs `m_fade.add(*this, FADE_TAG)`, which needs the object's final
-        // address; the owner registers the listener when it wires the timer (`fade_timer`).
+    pub fn new() -> TrackService {
         TrackService {
-            mailbox,
-            sink: MailboxNoteSink { mailbox },
             tracks: [[Track::default(); TRACK_COUNT]; SONG_SLOTS],
             active: [false; SONG_SLOTS],
             mix: [Mix::default(); SONG_SLOTS],
@@ -138,7 +134,6 @@ impl TrackService {
             channel_used: [false; MAX_TRACK_CHANNEL as usize + 1],
             channel_previous_key: [0; MAX_TRACK_CHANNEL as usize + 1],
             fade: PulseTimer::new(12, 1),
-            fade_registered: false,
         }
     }
 
@@ -152,10 +147,6 @@ impl TrackService {
         self.fade.reset();
     }
 
-    pub fn track(&mut self, sequence: u8, track: u8) -> *mut Track {
-        &mut self.tracks[sequence as usize][track as usize]
-    }
-
     pub fn tracks(&mut self, sequence: u8) -> &mut [Track; TRACK_COUNT] {
         &mut self.tracks[sequence as usize]
     }
@@ -166,10 +157,12 @@ impl TrackService {
         sequence: u8,
         initial: &[TrackConfig; TRACK_COUNT],
         tick: u64,
+        mailbox: &mut Mailbox,
     ) {
         let index = sequence as usize;
+        let mut sink = MailboxNoteSink { mailbox };
         for t in self.tracks[index].iter_mut() {
-            self.notes.release_all(&mut t.head, &mut self.sink, tick);
+            self.notes.release_all(&mut t.head, &mut sink, tick);
         }
         for i in 0..TRACK_COUNT {
             let physical = self.tracks[index][i].physical;
@@ -196,10 +189,11 @@ impl TrackService {
         self.active[sequence as usize] = true;
     }
 
-    pub fn stop_sequence(&mut self, sequence: u8, tick: u64) {
+    pub fn stop_sequence(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
         let index = sequence as usize;
+        let mut sink = MailboxNoteSink { mailbox };
         for i in 0..TRACK_COUNT {
-            self.notes.release_all(&mut self.tracks[index][i].head, &mut self.sink, tick);
+            self.notes.release_all(&mut self.tracks[index][i].head, &mut sink, tick);
             let physical = self.tracks[index][i].physical;
             if physical != 0 {
                 self.release_channel(physical);
@@ -209,15 +203,16 @@ impl TrackService {
         self.active[index] = false;
     }
 
-    pub fn park_sequence(&mut self, sequence: u8, tick: u64) {
-        self.release_notes(sequence, tick);
+    pub fn park_sequence(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
+        self.release_notes(sequence, tick, mailbox);
     }
 
     /// Note-offs only: the physical channels and the track records stay.
-    pub fn release_notes(&mut self, sequence: u8, tick: u64) {
+    pub fn release_notes(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
         let index = sequence as usize;
+        let mut sink = MailboxNoteSink { mailbox };
         for i in 0..TRACK_COUNT {
-            self.notes.release_all(&mut self.tracks[index][i].head, &mut self.sink, tick);
+            self.notes.release_all(&mut self.tracks[index][i].head, &mut sink, tick);
         }
     }
 
@@ -342,15 +337,8 @@ impl TrackService {
         )
     }
 
-    /// tag < SONG_SLOTS is that sequence's BPM note pulse, FADE_TAG the sequence fade pulse.
+    /// The sequence fade pulse; the owner calls `fade_pulse` when it fires.
     pub fn fade_timer(&mut self) -> &mut PulseTimer {
-        // `m_fade.add(*this, FADE_TAG)`: registered once the owner holds the service at its final
-        // address (see `new`).
-        if !self.fade_registered {
-            self.fade_registered = true;
-            let listener: *mut dyn pulse_timer::Listener = self;
-            self.fade.add(listener, FADE_TAG);
-        }
         &mut self.fade
     }
 
@@ -358,28 +346,27 @@ impl TrackService {
         self.mix[sequence as usize] = Mix::default();
     }
 
-    fn note_pulse(&mut self, sequence: u8, tick: u64) {
+    /// The sequence's BPM note pulse: steps every note duration of its tracks.
+    pub fn note_pulse(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
         let index = sequence as usize;
+        let mut sink = MailboxNoteSink { mailbox };
         for i in 0..TRACK_COUNT {
-            self.notes.step_durations(&mut self.tracks[index][i].head, &mut self.sink, tick);
+            self.notes.step_durations(&mut self.tracks[index][i].head, &mut sink, tick);
         }
     }
 
-    fn fade_pulse(&mut self, tick: u64) {
+    /// The sequence fade pulse: queues one fade step per fading sequence.
+    pub fn fade_pulse(&mut self, tick: u64, mailbox: &mut Mailbox) {
         for sequence in 0..SONG_SLOTS {
             if !self.active[sequence] || self.mix[sequence].fade_step == 0 {
                 continue;
             }
-            // SAFETY: the mailbox is a sibling field of the owner that built this service and
-            // outlives it.
-            unsafe {
-                (*self.mailbox).push(Event::Track(TrackEvent {
-                    kind: TrackEventKind::SequenceFadeStep,
-                    tick,
-                    sequence: sequence as u8,
-                    ..TrackEvent::default()
-                }))
-            };
+            mailbox.push(Event::Track(TrackEvent {
+                kind: TrackEventKind::SequenceFadeStep,
+                tick,
+                sequence: sequence as u8,
+                ..TrackEvent::default()
+            }));
         }
     }
 
@@ -407,18 +394,6 @@ impl TrackService {
     fn release_channel(&mut self, channel: u8) {
         if channel > 0 && channel <= MAX_TRACK_CHANNEL {
             self.channel_used[channel as usize] = false;
-        }
-    }
-}
-
-impl pulse_timer::Listener for TrackService {
-    fn pulse(&mut self, tick: u64, tag: u8) {
-        if (tag as usize) < SONG_SLOTS {
-            self.note_pulse(tag, tick);
-            return;
-        }
-        if tag == FADE_TAG {
-            self.fade_pulse(tick);
         }
     }
 }
