@@ -11,11 +11,11 @@ use crate::hle::events::{
     NO_PROGRAM, SONG_SLOTS, TRACK_COUNT,
 };
 use crate::hle::mailbox::Mailbox;
-use crate::hle::pulse_timer::{self, PulseTimer};
+use crate::hle::pulse_timer::PulseTimer;
 use crate::hle::rom_view::{RomView, SOUND_ROM_IMAGE_SIZE};
 use crate::hle::sound_rom_5a7e9117;
 use crate::hle::track_parameters::at;
-use crate::hle::track_service::{Track, TrackConfig, TrackService, TrackStatus};
+use crate::hle::track_service::{TrackConfig, TrackService, TrackStatus};
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
 const ROM_BASE: u32 = SOUND_ROM_BASE;
@@ -547,8 +547,6 @@ impl SongState {
 
 struct Impl {
     rom: &'static [u8],
-    mailbox: *mut Mailbox,
-    tracks: *mut TrackService,
     data: [SongData; SONG_SLOTS],
     state: [SongState; SONG_SLOTS],
     beats: [PulseTimer; SONG_SLOTS],
@@ -556,19 +554,30 @@ struct Impl {
     current_bank: u8,
 }
 
+/// One sequencer call: the sequencer's own state split into disjoint borrows, plus the services it
+/// writes to, borrowed for that call only.
+struct Pass<'a> {
+    rom: &'static [u8],
+    current_bank: u8,
+    data: &'a [SongData; SONG_SLOTS],
+    state: &'a mut [SongState; SONG_SLOTS],
+    beats: &'a mut [PulseTimer; SONG_SLOTS],
+    serial: &'a mut u64,
+    mailbox: &'a mut Mailbox,
+    tracks: &'a mut TrackService,
+}
+
 impl Impl {
     // -------------------------------------------------------------------------
     // 1. Lifecycle & Public Entry Points
     // -------------------------------------------------------------------------
 
-    fn new(image: &'static [u8], mailbox: *mut Mailbox, tracks: *mut TrackService) -> Impl {
+    fn new(image: &'static [u8]) -> Impl {
         if image.len() < SOUND_ROM_SIZE {
             panic!("HLE requires at least a 512 KiB padded sound ROM");
         }
         let mut impl_ = Impl {
             rom: image,
-            mailbox,
-            tracks,
             data: core::array::from_fn(|_| SongData::default()),
             state: [SongState::default(); SONG_SLOTS],
             beats: core::array::from_fn(|_| PulseTimer::new(625, 0)),
@@ -585,6 +594,21 @@ impl Impl {
         self.data = parse_sound_bank(&rom);
     }
 
+    fn pass<'a>(&'a mut self, mailbox: &'a mut Mailbox, tracks: &'a mut TrackService) -> Pass<'a> {
+        Pass {
+            rom: self.rom,
+            current_bank: self.current_bank,
+            data: &self.data,
+            state: &mut self.state,
+            beats: &mut self.beats,
+            serial: &mut self.serial,
+            mailbox,
+            tracks,
+        }
+    }
+}
+
+impl Pass<'_> {
     fn dispatch_command(&mut self, packet: &CommandPacket, instance: u64, tick: u64) {
         // The packet's opcode selects the payload; `Ignored` is the rejected default branch.
         let command = *packet.command();
@@ -615,30 +639,24 @@ impl Impl {
 
     fn dispatch_effect_preset(&mut self, command: &EffectPreset, tick: u64) {
         if command.preset < 13 {
-            // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-            unsafe {
-                (*self.mailbox).push(Event::Effect(EffectEvent {
-                    kind: EffectEventKind::Preset,
-                    tick,
-                    preset: command.preset,
-                    index: 0,
-                    value: 0,
-                }))
-            };
+            self.mailbox.push(Event::Effect(EffectEvent {
+                kind: EffectEventKind::Preset,
+                tick,
+                preset: command.preset,
+                index: 0,
+                value: 0,
+                }));
         }
     }
 
     fn dispatch_effect_parameter(&mut self, command: &EffectParameter, tick: u64) {
-        // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-        unsafe {
-            (*self.mailbox).push(Event::Effect(EffectEvent {
-                kind: EffectEventKind::Parameter,
-                tick,
-                preset: 0,
-                index: command.index,
-                value: command.value,
-            }))
-        };
+        self.mailbox.push(Event::Effect(EffectEvent {
+            kind: EffectEventKind::Parameter,
+            tick,
+            preset: 0,
+            index: command.index,
+            value: command.value,
+            }));
     }
 
     fn dispatch_addressed_command(&mut self, command: Command, instance: u64, tick: u64) {
@@ -710,8 +728,7 @@ impl Impl {
             Command::SequencePause(_) => {
                 self.state[usize::from(id)].pause_playback();
                 self.beats[usize::from(id)].set_step(0);
-                // SAFETY: the tracks are a sibling of the owner that built this sequencer.
-                unsafe { (*self.tracks).release_notes(id, tick) };
+                self.tracks.release_notes(id, tick, self.mailbox);
             }
             Command::SequenceResume(_) => {
                 self.state[usize::from(id)].resume_playback();
@@ -731,38 +748,32 @@ impl Impl {
                 self.finish_sequence(id, tick);
             }
             Command::SequenceVolume(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::SequenceVolume,
-                        tick,
-                        sequence: id,
-                        track: 0,
-                        index: 0,
-                        value: c.volume,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::SequenceVolume,
+                    tick,
+                    sequence: id,
+                    track: 0,
+                    index: 0,
+                    value: c.volume,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::SequencePan(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::SequencePan,
-                        tick,
-                        sequence: id,
-                        track: 0,
-                        index: 0,
-                        value: c.value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::SequencePan,
+                    tick,
+                    sequence: id,
+                    track: 0,
+                    index: 0,
+                    value: c.value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::SequenceRate(c) => {
                 self.state[usize::from(id)].override_rate(c.rate);
@@ -774,21 +785,18 @@ impl Impl {
                 let multiplier = rom_view.read_u16(
                     sound_rom_5a7e9117::RATE_TABLE + u32::from(c.rate_index) * 2,
                 ) as i16;
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::SequenceFade,
-                        tick,
-                        sequence: id,
-                        track: 0,
-                        index: 0,
-                        value: 0,
-                        program: 0,
-                        start: c.start,
-                        target: c.target,
-                        rate: multiplier,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::SequenceFade,
+                    tick,
+                    sequence: id,
+                    track: 0,
+                    index: 0,
+                    value: 0,
+                    program: 0,
+                    start: c.start,
+                    target: c.target,
+                    rate: multiplier,
+                    }));
             }
             // The track-addressed commands; starts and stops returned above.
             Command::TrackVolume(_)
@@ -808,80 +816,66 @@ impl Impl {
             return;
         }
         let t = logical - 1;
-        // SAFETY: the track table belongs to the TrackService that outlives the sequencer.
-        let track: *const Track = unsafe { (*self.tracks).track(id, t) };
-        if !unsafe { (*track).is_live() } {
+        if !self.tracks.tracks(id)[usize::from(t)].is_live() {
             return;
         }
 
         match command {
             Command::TrackVolume(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Volume,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: 0,
-                        value: c.value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Volume,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: 0,
+                    value: c.value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::TrackPan(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Pan,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: 0,
-                        value: c.value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Pan,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: 0,
+                    value: c.value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::TrackController(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Controller,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: c.index,
-                        value: c.value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Controller,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: c.index,
+                    value: c.value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::TrackProgram(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Program,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: 0,
-                        value: 0,
-                        program: c.program,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Program,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: 0,
+                    value: 0,
+                    program: c.program,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
             Command::DirectNoteOn(c) => {
                 if instance & (1u64 << 63) != 0 {
@@ -899,15 +893,12 @@ impl Impl {
                 );
             }
             Command::DirectNoteOff(c) => {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::ReleaseKey(ReleaseKeyEvent {
-                        tick,
-                        sequence: id,
-                        track: t,
-                        kernel_key: c.key.wrapping_add(21),
-                    }))
-                };
+                self.mailbox.push(Event::ReleaseKey(ReleaseKeyEvent {
+                    tick,
+                    sequence: id,
+                    track: t,
+                    kernel_key: c.key.wrapping_add(21),
+                    }));
             }
             Command::Nop(_) => {
                 // c1310e retains return-PC c13148 in A3; c13148 writes 6(A3)
@@ -936,8 +927,7 @@ impl Impl {
         s.saved_rate = rate;
         s.phase = phase;
         // An ordinary start never interprets the selection list in track 10.
-        // SAFETY: the tracks are a sibling of the owner that built this sequencer.
-        unsafe { (*self.tracks).start_sequence(id, &self.data[usize::from(id)].initial, tick) };
+        self.tracks.start_sequence(id, &self.data[usize::from(id)].initial, tick, self.mailbox);
         self.beats[usize::from(id)].reset();
         self.beats[usize::from(id)].set_step(u32::from(rate));
         self.initialize_tracks(id, id, tick);
@@ -957,47 +947,37 @@ impl Impl {
             self.data[usize::from(selected)].tracks[CONDUCTOR_STREAM_INDEX].events.is_empty();
 
         // Note-offs only: the physical tracks survive a repeat.
-        // SAFETY: the tracks are a sibling of the owner that built this sequencer.
-        unsafe { (*self.tracks).release_notes(owner, tick) };
+        self.tracks.release_notes(owner, tick, self.mailbox);
         for t in 0..TRACK_COUNT {
-            // SAFETY: the track table belongs to the TrackService that outlives the sequencer.
-            let track: *mut Track = unsafe { (*self.tracks).track(owner, t as u8) };
-            // SAFETY: as above; the mailbox is a sibling of the owner that built this sequencer.
-            unsafe {
-                (*track).config = self.data[usize::from(selected)].initial[t];
-                (*track)
-                    .config
-                    .parameters
-                    .set_previous_key((*self.tracks).previous_key((*track).physical));
-                (*track).cursor = 0;
-                (*track).countdown = 1;
+            let physical = self.tracks.tracks(owner)[t].physical;
+            let previous_key = self.tracks.previous_key(physical);
+            let track = &mut self.tracks.tracks(owner)[t];
+            track.config = self.data[usize::from(selected)].initial[t];
+            track.config.parameters.set_previous_key(previous_key);
+            track.cursor = 0;
+            track.countdown = 1;
 
-                let can_stream = (*track).physical != 0
-                    && !self.data[usize::from(selected)].tracks[FIRST_MUSIC_STREAM_INDEX + t]
-                        .events
-                        .is_empty()
-                    && (*track).config.program != NO_PROGRAM;
-                (*track).status = if can_stream {
-                    TrackStatus::Streaming
-                } else {
-                    TrackStatus::Inactive
-                };
-                // c13ef6 re-sends the track record: voices of this track still sounding pick it up before the
-                // pulse's own events are applied.
-                if (*track).is_live() {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Refresh,
-                        tick,
-                        sequence: owner,
-                        track: t as u8,
-                        index: 0,
-                        value: 0,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }));
-                }
+            let can_stream = track.physical != 0
+                && !self.data[usize::from(selected)].tracks[FIRST_MUSIC_STREAM_INDEX + t]
+                    .events
+                    .is_empty()
+                && track.config.program != NO_PROGRAM;
+            track.status = if can_stream { TrackStatus::Streaming } else { TrackStatus::Inactive };
+            // c13ef6 re-sends the track record: voices of this track still sounding pick it up before the
+            // pulse's own events are applied.
+            if track.is_live() {
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Refresh,
+                    tick,
+                    sequence: owner,
+                    track: t as u8,
+                    index: 0,
+                    value: 0,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                }));
             }
         }
 
@@ -1011,8 +991,7 @@ impl Impl {
     }
 
     fn stop_sequence(&mut self, id: u8, tick: u64) {
-        // SAFETY: the tracks are a sibling of the owner that built this sequencer.
-        unsafe { (*self.tracks).stop_sequence(id, tick) };
+        self.tracks.stop_sequence(id, tick, self.mailbox);
         self.beats[usize::from(id)].set_step(0);
         self.state[usize::from(id)].status = SequenceStatus::Stopped;
     }
@@ -1020,8 +999,7 @@ impl Impl {
     fn finish_sequence(&mut self, id: u8, tick: u64) {
         // Natural end parks the sequencer but retains allocated track records. c13072 still accepts direct 8d/8e
         // commands on those tracks. Explicit 82 instead removes the active sequence through c12c30.
-        // SAFETY: the tracks are a sibling of the owner that built this sequencer.
-        unsafe { (*self.tracks).park_sequence(id, tick) };
+        self.tracks.park_sequence(id, tick, self.mailbox);
         self.state[usize::from(id)].park_playback();
         self.beats[usize::from(id)].set_step(0);
     }
@@ -1115,7 +1093,7 @@ impl Impl {
 
             if !previous.is_null() {
                 // SAFETY: `previous` is the finishing sequence's state, which outlives this call.
-                unsafe { (*self.tracks).copy_mix((*previous).selected, child) };
+                self.tracks.copy_mix(unsafe { (*previous).selected }, child);
                 // SAFETY: as above.
                 if unsafe { (*previous).rate_override } {
                     // SAFETY: as above.
@@ -1157,8 +1135,7 @@ impl Impl {
             self.state[usize::from(id)].conductor_ended
         };
         if boundary == 0 {
-            // SAFETY: the track table belongs to the TrackService that outlives the sequencer.
-            for track in unsafe { (*self.tracks).tracks(id) }.iter() {
+            for track in self.tracks.tracks(id).iter() {
                 if track.is_streaming() {
                     finished = false;
                 }
@@ -1231,58 +1208,56 @@ impl Impl {
             }
         }
 
+        // The stream is borrowed from the sequence data, not from `self`, so the note and control
+        // calls below can take `&mut self`; the track record is re-indexed around them.
+        let data = self.data;
         for t in 0..TRACK_COUNT {
-            // SAFETY: the track table belongs to the TrackService that outlives the sequencer.
-            let track: *mut Track = unsafe { (*self.tracks).track(id, t as u8) };
-            // SAFETY: as above; the mailbox is a sibling of the owner that built this sequencer.
-            unsafe {
-                if !(*track).is_streaming() {
+            let track = &mut self.tracks.tracks(id)[t];
+            if !track.is_streaming() {
+                continue;
+            }
+            if !initial {
+                if track.countdown == 0 {
                     continue;
                 }
-                if !initial {
-                    if (*track).countdown == 0 {
-                        continue;
-                    }
-                    (*track).countdown = (*track).countdown.wrapping_sub(1);
-                    if (*track).countdown != 0 {
-                        continue;
-                    }
+                track.countdown = track.countdown.wrapping_sub(1);
+                if track.countdown != 0 {
+                    continue;
                 }
+            }
 
-                let stream_len = self.data[usize::from(selected)].tracks
-                    [FIRST_MUSIC_STREAM_INDEX + t]
-                    .events
-                    .len();
-                while (*track).cursor < stream_len {
-                    let event = self.data[usize::from(selected)].tracks
-                        [FIRST_MUSIC_STREAM_INDEX + t]
-                        .events[(*track).cursor];
-                    (*track).cursor += 1;
-                    if event.opcode == EV_END {
-                        (*track).status = TrackStatus::Ended;
-                        break;
+            let events = &data[usize::from(selected)].tracks[FIRST_MUSIC_STREAM_INDEX + t].events;
+            loop {
+                let cursor = self.tracks.tracks(id)[t].cursor;
+                if cursor >= events.len() {
+                    break;
+                }
+                let event = events[cursor];
+                self.tracks.tracks(id)[t].cursor = cursor + 1;
+                if event.opcode == EV_END {
+                    self.tracks.tracks(id)[t].status = TrackStatus::Ended;
+                    break;
+                }
+                if event.opcode < EV_NOTE_LONG_MAX {
+                    if !silent {
+                        *self.serial = self.serial.wrapping_add(1);
+                        self.trigger_note(
+                            id,
+                            t,
+                            event.key,
+                            event.velocity,
+                            event.duration,
+                            (1u64 << 63) | *self.serial,
+                            tick,
+                            true,
+                        );
                     }
-                    if event.opcode < EV_NOTE_LONG_MAX {
-                        if !silent {
-                            self.serial = self.serial.wrapping_add(1);
-                            self.trigger_note(
-                                id,
-                                t,
-                                event.key,
-                                event.velocity,
-                                event.duration,
-                                (1u64 << 63) | self.serial,
-                                tick,
-                                true,
-                            );
-                        }
-                    } else {
-                        self.apply_track_control(id, t, &event, tick, silent);
-                    }
-                    (*track).countdown = event.delay;
-                    if event.delay != 0 {
-                        break;
-                    }
+                } else {
+                    self.apply_track_control(id, t, &event, tick, silent);
+                }
+                self.tracks.tracks(id)[t].countdown = event.delay;
+                if event.delay != 0 {
+                    break;
                 }
             }
         }
@@ -1302,39 +1277,33 @@ impl Impl {
 
         if (EV_CONTROLLER_MIN..EV_CONTROLLER_MAX).contains(&op) {
             if !silent {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::Controller,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: op - EV_CONTROLLER_MIN,
-                        value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::Controller,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: op - EV_CONTROLLER_MIN,
+                    value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
         } else if op == EV_PROGRAM_SELECTOR {
             if !silent {
-                // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-                unsafe {
-                    (*self.mailbox).push(Event::Track(TrackEvent {
-                        kind: TrackEventKind::ProgramSelector,
-                        tick,
-                        sequence: id,
-                        track: t,
-                        index: 0,
-                        value,
-                        program: 0,
-                        start: 0,
-                        target: 0,
-                        rate: 0,
-                    }))
-                };
+                self.mailbox.push(Event::Track(TrackEvent {
+                    kind: TrackEventKind::ProgramSelector,
+                    tick,
+                    sequence: id,
+                    track: t,
+                    index: 0,
+                    value,
+                    program: 0,
+                    start: 0,
+                    target: 0,
+                    rate: 0,
+                    }));
             }
         } else if op == EV_SPECIAL_TRACK_DA || op == EV_SPECIAL_TRACK_DB {
             panic!("HLE special-track control absent from supplied data");
@@ -1363,10 +1332,7 @@ impl Impl {
         transpose: bool,
     ) {
         let t = track_id as u8;
-        // SAFETY: the track table belongs to the TrackService that outlives the sequencer.
-        let track: *const Track = unsafe { (*self.tracks).track(id, t) };
-        // SAFETY: as above; nothing below writes the track record.
-        let track = unsafe { &*track };
+        let track = &self.tracks.tracks(id)[track_id];
         if !track.is_live() || track.config.program == NO_PROGRAM {
             return;
         }
@@ -1392,26 +1358,22 @@ impl Impl {
             velocity,
             previous_key: track.config.parameters.previous_key(),
         };
-        // SAFETY: the mailbox is a sibling of the owner that built this sequencer.
-        unsafe { (*self.mailbox).push(Event::NoteOn(note)) };
+        self.mailbox.push(Event::NoteOn(note));
 
         // c172c2 consumes the previous key; c1723e stores the new factory key
         // only after all instrument layers have received their onset context.
-        // SAFETY: as above.
-        unsafe {
-            (*self.mailbox).push(Event::Track(TrackEvent {
-                kind: TrackEventKind::PreviousKey,
-                tick,
-                sequence: id,
-                track: t,
-                index: 0,
-                value: kernel_key,
-                program: 0,
-                start: 0,
-                target: 0,
-                rate: 0,
-            }))
-        };
+        self.mailbox.push(Event::Track(TrackEvent {
+            kind: TrackEventKind::PreviousKey,
+            tick,
+            sequence: id,
+            track: t,
+            index: 0,
+            value: kernel_key,
+            program: 0,
+            start: 0,
+            target: 0,
+            rate: 0,
+        }));
     }
 }
 
@@ -1425,17 +1387,36 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    pub fn new(rom: &'static [u8], mailbox: *mut Mailbox, tracks: *mut TrackService) -> Sequencer {
-        Sequencer { impl_: Box::new(Impl::new(rom, mailbox, tracks)) }
+    pub fn new(rom: &'static [u8]) -> Sequencer {
+        Sequencer { impl_: Box::new(Impl::new(rom)) }
     }
 
-    pub fn command(&mut self, packet: &CommandPacket, instance: u64, tick: u64) {
-        self.impl_.dispatch_command(packet, instance, tick);
+    pub fn command(
+        &mut self,
+        packet: &CommandPacket,
+        instance: u64,
+        tick: u64,
+        mailbox: &mut Mailbox,
+        tracks: &mut TrackService,
+    ) {
+        self.impl_.pass(mailbox, tracks).dispatch_command(packet, instance, tick);
     }
 
-    pub fn reset(&mut self, tick: u64) {
+    /// One tempo pulse of `sequence`, after its beat timer fired.
+    pub fn pulse(
+        &mut self,
+        sequence: u8,
+        tick: u64,
+        mailbox: &mut Mailbox,
+        tracks: &mut TrackService,
+    ) {
+        self.impl_.pass(mailbox, tracks).tick_sequence(sequence, tick, false);
+    }
+
+    pub fn reset(&mut self, tick: u64, mailbox: &mut Mailbox, tracks: &mut TrackService) {
+        let mut pass = self.impl_.pass(mailbox, tracks);
         for id in 0..SONG_SLOTS {
-            self.impl_.stop_sequence(id as u8, tick);
+            pass.stop_sequence(id as u8, tick);
         }
         self.impl_.state = [SongState::default(); SONG_SLOTS];
         for beat in self.impl_.beats.iter_mut() {
@@ -1466,21 +1447,10 @@ impl Sequencer {
         // The C++ catches every exception the default bank's parser throws.
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut mailbox = Mailbox::new();
-            let mailbox_ptr: *mut Mailbox = &mut mailbox;
-            let mut tracks = TrackService::new(mailbox_ptr);
-            let tracks_ptr: *mut TrackService = &mut tracks;
-            let _sequencer = Sequencer::new(sound_rom, mailbox_ptr, tracks_ptr);
-        }));
+        let result = std::panic::catch_unwind(|| {
+            Sequencer::new(sound_rom);
+        });
         std::panic::set_hook(hook);
         result.is_ok()
-    }
-}
-
-impl pulse_timer::Listener for Sequencer {
-    /// `PulseTimer::Listener`: `tag` is the sequence id.
-    fn pulse(&mut self, tick: u64, tag: u8) {
-        self.impl_.tick_sequence(tag, tick, false);
     }
 }
