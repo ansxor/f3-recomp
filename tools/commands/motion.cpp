@@ -8,7 +8,7 @@
 #include "f3rt/rom.hpp"
 #include "renderer/gpu/video.hpp"
 #include "renderer/gpu/motion.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -44,7 +44,7 @@ using Clock = std::chrono::steady_clock;
 struct Options {
     std::filesystem::path rom_dir, dump_dir;
     uint64_t frames = 4000, seed = 12345, every = 1;
-    bool demo = false, sprite_units = true;
+    bool demo = false, sprites = true;
     unsigned demo_seconds = 30;
     f3rt::GameVideoOptions video;
     f3rt::VideoInterpolation interp = f3rt::VideoInterpolation::Off;
@@ -96,16 +96,16 @@ Options parse(int argc, char **argv) {
             else if (v == "linear") o.interp = f3rt::VideoInterpolation::Linear;
             else if (v == "fit") o.interp = f3rt::VideoInterpolation::Fit;
             else throw std::runtime_error("Interpolation must be off, linear or fit");
-        } else if (arg == "--sprite-units") {
+        } else if (arg == "--sprite-groups") {
             auto v = value();
-            require(v == "on" || v == "off", "Sprite units must be on or off");
-            o.sprite_units = v == "on";
+            require(v == "on" || v == "off", "Sprite groups must be on or off");
+            o.sprites = v == "on";
         } else if (arg == "--json") {
             o.json_output = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Strict-native seeded temporal GPU motion proof\n"
                          "--rom-dir DIR --frames N (4000) --seed N (12345) --scale N (1..8)\n"
-                         "--every N (1) --dump-dir DIR --interp off|linear|fit --sprite-units "
+                         "--every N (1) --dump-dir DIR --interp off|linear|fit --sprite-groups "
                          "on|off (on)\n"
                          "--demo --demo-seconds N (30): one-window LEFT native / RIGHT motion "
                          "comparison;\n"
@@ -394,9 +394,10 @@ int cmd_motion(int argc, char **argv) try {
     auto owner = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
     auto reference = runner::create_strict_machine(o.rom_dir, o.set, true, o.video.scale);
     auto &m = *owner;
-    if (o.sprite_units)
-        m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, f3rt::SpriteUnits::game_table(),
-                                                             f3rt::SpriteUnits::Options{});
+    if (o.sprites)
+        m.sprites = std::make_unique<f3rt::SpriteSystem>(
+            m, f3rt::SpriteSystem::game_table(), f3rt::SpriteSystem::game_units(),
+            f3rt::SpriteSystem::Options{});
     f3rt::GpuVideo gpu(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(), false,
                        false, o.interp);
     if (!o.dump_dir.empty()) std::filesystem::create_directories(o.dump_dir);
@@ -476,7 +477,7 @@ int cmd_motion(int argc, char **argv) try {
                 census.moving_sprites += stats.moving_sprites;
                 census.moving_playfield_rows += stats.moving_playfield_rows;
                 census.moving_text_rows += stats.moving_text_rows;
-                census.sprite_identity_rejections += stats.sprite_identity_rejections;
+                census.sprite_group_rejections += stats.sprite_group_rejections;
                 census.sprite_count_rejections += stats.sprite_count_rejections;
                 census.sprite_transform_rejections += stats.sprite_transform_rejections;
                 census.sprite_jump_rejections += stats.sprite_jump_rejections;
@@ -586,12 +587,12 @@ int cmd_motion(int argc, char **argv) try {
                   << " moving_samples=" << moving_samples
                   << " accepted_moving_samples=" << accepted_moving_samples
                   << " visible_moving_samples=" << visible_moving_samples
-                  << " sprite_units=" << (o.sprite_units ? "on" : "off")
+                  << " sprite_groups=" << (o.sprites ? "on" : "off")
                   << " sampled_accepted_sprites=" << census.sprites
                   << " sampled_moving_sprites=" << census.moving_sprites
                   << " sampled_moving_pf_rows=" << census.moving_playfield_rows
                   << " sampled_moving_text_rows=" << census.moving_text_rows
-                  << " sprite_identity_rejections=" << census.sprite_identity_rejections
+                  << " sprite_group_rejections=" << census.sprite_group_rejections
                   << " sprite_count_subset=" << census.sprite_count_rejections
                   << " sprite_transform_rejections=" << census.sprite_transform_rejections
                   << " sprite_jump_rejections=" << census.sprite_jump_rejections

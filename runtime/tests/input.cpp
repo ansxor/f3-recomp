@@ -2,6 +2,7 @@
 #include "f3rt/input.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <array>
 #include <vector>

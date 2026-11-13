@@ -36,8 +36,8 @@ calls `DiscoveryLog::video_write(pc, address)` for:
 `VideoLayer` (`control`, `sprites`, `pf0`..`pf3`, `pf2-alt`, `pf3-alt`, `text`, `lines`;
 the Taito F3 layout is the same for every game) and, the first time it sees a `(layer, pc)`, asks the
 per-game `video_writer_known(layer, pc)` (**list of known store PCs**). Known PCs are
-suppressed; unknown ones get a `NEW video-write` line. Sprite RAM is left to the
-emit-unit accounting (`sprite-stray`) when the game declares emit units. See
+suppressed; unknown ones get a `NEW video-write` line. Sprite RAM writes are classified the
+same way (sprite-group derivation is render-only and needs no write accounting). See
 [the format](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/WORKFLOWS.md#discovery-log).
 
 The log is host-only and never part of machine or snapshot state. A store
@@ -177,11 +177,13 @@ Measured zero-gain and zoomed-sprite baseline:
 | `$fe620/$fefe6/$ff0fa` | Ending bitmap/slides | Audited producers explicitly unsupported by semantic lines; exact oracle fallback, no interpolation. Not exercised as a played ending. |
 
 <!-- excerpt: docs/developer/SPRITE-UNITS.md lines 18-53 -->
-## Workflow: add or change a unit
+## Workflow: add or change an emit unit (behaviour anchor)
+
+Sprite grouping and origins are derived automatically by `recomp emit`; a unit is only a
+behaviour anchor (sandbox replay + render-only splice).
 
 1. Find the loop that draws one object/record and note the span PCs and the register
-   holding the unit address (see Command War and Land Maker configs for annotated
-   examples).
+   holding the unit address (see the Command War config for an annotated example).
 2. Configure (`cmake -S . -B <dir>`; regenerates the hooks) and run the checker:
 
    ```sh
@@ -194,22 +196,19 @@ Measured zero-gain and zoomed-sprite baseline:
    `--seed N` / `--no-inputs` control the coin/start/button-mashing schedule shared
    with `f3rt-tool gameplay`; `--behaviour NAME` is repeatable.
 3. Read the report. It must end in `PASS` (exit code 0):
-   - every invocation `matched` (unpatched replay equals the real writes bit for
-     bit), no aborts;
-   - `sprite writes outside units ... (unaccounted 0)`: every outside writer PC lies in
-     `frame_writers`. Unaccounted PCs are printed with first frame and address;
-     disassemble them, decide whether they are frame setup/clears (add a range with
-     an evidence comment) or a missed draw span (extend/add a unit);
-   - a second machine without sprite units has identical cycles, `native_blocks` and
-     (every `--compare-every` frames and at the end) `state_crc()`.
-4. A mismatch means the span is wrong (too short: state set up before the start PC;
-   too long: reads outside the declared start state) or the replay hit something it
-   cannot reproduce (device access, interrupts); the report names the first differing
-   entry and abort reasons.
+   - group coverage: `grouped_entries` non-zero and `max_groups_frame` plausible for the
+     frame; `unresolved_entries` are writes the generated table could not resolve (they
+     snap, never guess);
+   - a second machine without sprite groups has identical cycles, `native_blocks` and
+     (every `--compare-every` frames and at the end) `state_crc()`; a requested behaviour
+     must have produced at least one splice.
+4. An abort in the replay means the span is wrong (too short: state set up before the start
+   PC; too long: reads outside the declared start state) or it hit something the sandbox
+   cannot reproduce (device access, interrupts); the report names the abort reasons.
 
-Humans can get the unaccounted-writer list from ordinary play with
-`--discovery-log FILE` (category `sprite-stray`; see [WORKFLOWS.md](WORKFLOWS.md#discovery-log)).
+Humans can get the sprite-RAM writer list from ordinary play with `--discovery-log FILE`
+(category `video-write`, layer `sprites`; see [WORKFLOWS.md](WORKFLOWS.md#discovery-log)).
 
 The checker runs the native strict path only, so it needs the game's generated
-code (`F3_ROM_DIR`). CTest registers `sprite-units` (6000 frames) only when ROMs were
-configured and the game declares units.
+code (`F3_ROM_DIR`). CTest registers `sprite-groups` (6000 frames) when ROMs were
+configured.

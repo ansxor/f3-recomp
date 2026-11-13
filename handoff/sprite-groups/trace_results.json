@@ -1,0 +1,1981 @@
+{
+  "generated_by": "recomp/sprite_trace.py (static value trace; HANDOFF.md section 7 steps 1-2)",
+  "landmakrj": {
+    "game": "landmakrj",
+    "summary": {
+      "instructions": 271762,
+      "analysed_instructions": 36782,
+      "dispatch_targets": 368,
+      "x_y_writers": 50,
+      "resolved_writers": 22,
+      "unresolved_writers": 28,
+      "undeclared_x_y_writers": 28,
+      "root_fields": 2,
+      "group_classes": 1,
+      "field_writers": 31,
+      "resets": 19
+    },
+    "writes": [
+      {
+        "pc": "0x0a8f5e",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a8f62",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a8f98",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a8f9e",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a8fb2",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a8fb4",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a8fc4",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a8fc6",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9052",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a9056",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9100",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a9102",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9112",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a9114",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9124",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a9126",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9132",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 1,
+        "lane_names": [
+          "X"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 65535,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0c"
+        ]
+      },
+      {
+        "pc": "0x0a9134",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 2,
+        "lane_names": [
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 65535,
+        "y_offset": 14,
+        "rigid": true,
+        "root_fields": [
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a91ea",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 14,
+        "rigid": false,
+        "root_fields": [
+          "a3+0x0c",
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a926a",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 14,
+        "rigid": false,
+        "root_fields": [
+          "a3+0x0c",
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a92e4",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 14,
+        "rigid": false,
+        "root_fields": [
+          "a3+0x0c",
+          "a3+0x0e"
+        ]
+      },
+      {
+        "pc": "0x0a9368",
+        "cursor_register": "a1",
+        "base": 11,
+        "base_register": "a3",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 12,
+        "y_offset": 14,
+        "rigid": false,
+        "root_fields": [
+          "a3+0x0c",
+          "a3+0x0e"
+        ]
+      }
+    ],
+    "unresolved": [
+      {
+        "pc": "0x0041f4",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x00421e",
+        "cursor_register": "a1",
+        "base_register": "a1",
+        "lane": 1,
+        "destination": "$4(a1)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x00422e",
+        "cursor_register": "a1",
+        "base_register": "a1",
+        "lane": 2,
+        "destination": "$6(a1)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x004240",
+        "cursor_register": "a1",
+        "base_register": "a1",
+        "lane": 1,
+        "destination": "$4(a1)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x004250",
+        "cursor_register": "a1",
+        "base_register": "a1",
+        "lane": 2,
+        "destination": "$6(a1)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x00428c",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "$4(a0)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x0042b0",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "$4(a0)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x0042c0",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x004340",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "$4(a0)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x00434c",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x00469a",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x0046a2",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x0046fe",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004702",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004750",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004754",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004798",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x00479c",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x0047e8",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x0047ec",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004882",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004886",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004902",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004906",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x00497a",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x00497e",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x0049fc",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 1,
+        "destination": "(a6)+",
+        "reason": "X: value read from a stream cursor (no record field)"
+      },
+      {
+        "pc": "0x004a00",
+        "cursor_register": "a6",
+        "base_register": "a6",
+        "lane": 2,
+        "destination": "(a6)+",
+        "reason": "Y: value read from a stream cursor (no record field)"
+      }
+    ],
+    "resets": [
+      {
+        "pc": "0x09550e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.l $c(a3)",
+        "evidence": "clr.l $c(a3) (also writes +0x0e)"
+      },
+      {
+        "pc": "0x095866",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.w #$10, $c(a3)",
+        "evidence": "move.w #$10, $c(a3) <- none"
+      },
+      {
+        "pc": "0x095dac",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.w #$60, $c(a3)",
+        "evidence": "move.w #$60, $c(a3) <- none"
+      },
+      {
+        "pc": "0x095e22",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x096a92",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x096ab0",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.w d0, $c(a3)",
+        "evidence": "move.w d0, $c(a3) <- none"
+      },
+      {
+        "pc": "0x0978b2",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x09792c",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x09798c",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x0a028a",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a02d0",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "instruction": "move.w #$3, $e(a3)",
+        "evidence": "move.w #$3, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0a02d8",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "instruction": "move.w #$2, $e(a3)",
+        "evidence": "move.w #$2, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0a034e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a0352",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "instruction": "clr.w $e(a3)",
+        "evidence": "clr.w $e(a3)"
+      },
+      {
+        "pc": "0x0a037e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a0382",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "instruction": "clr.w $e(a3)",
+        "evidence": "clr.w $e(a3)"
+      },
+      {
+        "pc": "0x0a04fa",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.w $a(a3), $c(a3)",
+        "evidence": "move.w $a(a3), $c(a3) <- a3+0x0a"
+      },
+      {
+        "pc": "0x0e5824",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "instruction": "move.l $0.w, $e(a3)",
+        "evidence": "move.l $0.w, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0f1602",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "instruction": "move.l -(a4), $a(a3)",
+        "evidence": "move.l -(a4), $a(a3) <- none"
+      }
+    ],
+    "classifications": [
+      {
+        "pc": "0x09550e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.l $c(a3)",
+        "evidence": "clr.l $c(a3) (also writes +0x0e)"
+      },
+      {
+        "pc": "0x095866",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.w #$10, $c(a3)",
+        "evidence": "move.w #$10, $c(a3) <- none"
+      },
+      {
+        "pc": "0x095dac",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.w #$60, $c(a3)",
+        "evidence": "move.w #$60, $c(a3) <- none"
+      },
+      {
+        "pc": "0x095e22",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x096a88",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "continuation",
+        "instruction": "subq.w #$6, $c(a3)",
+        "evidence": "subq.w #$6, $c(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x096a92",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x096ab0",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.w d0, $c(a3)",
+        "evidence": "move.w d0, $c(a3) <- none"
+      },
+      {
+        "pc": "0x0978b2",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x09792c",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x09798c",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.l d4, $c(a3)",
+        "evidence": "move.l d4, $c(a3) <- none (also writes +0x0e)"
+      },
+      {
+        "pc": "0x09fade",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fb32",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fb86",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fbda",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fc46",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fc8e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fcda",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x09fd2a",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $e(a3)",
+        "evidence": "addq.w #$1, $e(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0a0200",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $c(a3)",
+        "evidence": "addq.w #$1, $c(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0a0244",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $c(a3)",
+        "evidence": "addq.w #$1, $c(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0a028a",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a02d0",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "reset",
+        "instruction": "move.w #$3, $e(a3)",
+        "evidence": "move.w #$3, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0a02d8",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "reset",
+        "instruction": "move.w #$2, $e(a3)",
+        "evidence": "move.w #$2, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0a034e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a0352",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "reset",
+        "instruction": "clr.w $e(a3)",
+        "evidence": "clr.w $e(a3)"
+      },
+      {
+        "pc": "0x0a037e",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "clr.w $c(a3)",
+        "evidence": "clr.w $c(a3)"
+      },
+      {
+        "pc": "0x0a0382",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "reset",
+        "instruction": "clr.w $e(a3)",
+        "evidence": "clr.w $e(a3)"
+      },
+      {
+        "pc": "0x0a04fa",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.w $a(a3), $c(a3)",
+        "evidence": "move.w $a(a3), $c(a3) <- a3+0x0a"
+      },
+      {
+        "pc": "0x0e5824",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 14,
+        "kind": "reset",
+        "instruction": "move.l $0.w, $e(a3)",
+        "evidence": "move.l $0.w, $e(a3) <- none"
+      },
+      {
+        "pc": "0x0ed4de",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "continuation",
+        "instruction": "ori.l #$4e75000b, $a(a3)",
+        "evidence": "ori.l #$4e75000b, $a(a3) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0f1602",
+        "base": 11,
+        "base_register": "a3",
+        "offset": 12,
+        "kind": "reset",
+        "instruction": "move.l -(a4), $a(a3)",
+        "evidence": "move.l -(a4), $a(a3) <- none"
+      }
+    ]
+  },
+  "commandw": {
+    "game": "commandw",
+    "summary": {
+      "instructions": 362312,
+      "analysed_instructions": 20701,
+      "dispatch_targets": 13,
+      "x_y_writers": 20,
+      "resolved_writers": 3,
+      "unresolved_writers": 17,
+      "undeclared_x_y_writers": 17,
+      "root_fields": 4,
+      "group_classes": 2,
+      "field_writers": 59,
+      "resets": 17
+    },
+    "writes": [
+      {
+        "pc": "0x009c90",
+        "cursor_register": "a4",
+        "base": 14,
+        "base_register": "a6",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 2,
+        "shift": 8,
+        "x_offset": 68,
+        "y_offset": 70,
+        "rigid": true,
+        "root_fields": [
+          "a6+0x44",
+          "a6+0x46"
+        ]
+      },
+      {
+        "pc": "0x009e9a",
+        "cursor_register": "a4",
+        "base": 14,
+        "base_register": "a6",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 6,
+        "y_offset": 8,
+        "rigid": true,
+        "root_fields": [
+          "a6+0x06",
+          "a6+0x08"
+        ]
+      },
+      {
+        "pc": "0x00a0be",
+        "cursor_register": "a4",
+        "base": 14,
+        "base_register": "a6",
+        "lane": 3,
+        "lane_names": [
+          "X",
+          "Y"
+        ],
+        "group_class": 1,
+        "shift": 8,
+        "x_offset": 6,
+        "y_offset": 8,
+        "rigid": true,
+        "root_fields": [
+          "a6+0x06",
+          "a6+0x08"
+        ]
+      }
+    ],
+    "unresolved": [
+      {
+        "pc": "0x000a4e",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000a5a",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "$14(a0)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x000a60",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$16(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000a6c",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000a7e",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000a90",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000aa4",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000ab0",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "$14(a0)",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x000ab6",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$16(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000ac2",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000ad4",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x000ae6",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "$6(a0)",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x005170",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "(a0)+",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x005172",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "(a0)+",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x00518e",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 1,
+        "destination": "(a0)+",
+        "reason": "X: constant value"
+      },
+      {
+        "pc": "0x005190",
+        "cursor_register": "a0",
+        "base_register": "a0",
+        "lane": 2,
+        "destination": "(a0)+",
+        "reason": "Y: constant value"
+      },
+      {
+        "pc": "0x009aaa",
+        "cursor_register": "a4",
+        "base_register": "a4",
+        "lane": 3,
+        "destination": "(a4)+",
+        "reason": "X: constant value; Y: constant value"
+      }
+    ],
+    "resets": [
+      {
+        "pc": "0x00a2fe",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 68,
+        "instruction": "clr.l $44(a6)",
+        "evidence": "clr.l $44(a6) (also writes +0x46)"
+      },
+      {
+        "pc": "0x00c80a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "instruction": "move.w #$ffc0, $8(a6)",
+        "evidence": "move.w #$ffc0, $8(a6) <- none"
+      },
+      {
+        "pc": "0x00c824",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "instruction": "move.w #$140, $8(a6)",
+        "evidence": "move.w #$140, $8(a6) <- none"
+      },
+      {
+        "pc": "0x00c83c",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.w #$200, $6(a6)",
+        "evidence": "move.w #$200, $6(a6) <- none"
+      },
+      {
+        "pc": "0x00c856",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.w #$0, $6(a6)",
+        "evidence": "move.w #$0, $6(a6) <- none"
+      },
+      {
+        "pc": "0x02b6f0",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l (a4), $6(a6)",
+        "evidence": "move.l (a4), $6(a6) <- a4+0x00 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b716",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l (a4), $6(a6)",
+        "evidence": "move.l (a4), $6(a6) <- a4+0x00 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b760",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l $4(a4), $6(a6)",
+        "evidence": "move.l $4(a4), $6(a6) <- a4+0x04 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b784",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l $4(a4), $6(a6)",
+        "evidence": "move.l $4(a4), $6(a6) <- a4+0x04 (also writes +0x08)"
+      },
+      {
+        "pc": "0x05a71e",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "movep.w d7, $6(a6)",
+        "evidence": "movep.w d7, $6(a6) <- none"
+      },
+      {
+        "pc": "0x05e1a6",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l #$b2cf2, $6(a6)",
+        "evidence": "move.l #$b2cf2, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2ae",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l (a4)+, $6(a6)",
+        "evidence": "move.l (a4)+, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2b2",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l -(a6), $6(a6)",
+        "evidence": "move.l -(a6), $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2be",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l (a4)+, $6(a6)",
+        "evidence": "move.l (a4)+, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2c2",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l -(a6), $6(a6)",
+        "evidence": "move.l -(a6), $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05ea66",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "move.l a0, $6(a6)",
+        "evidence": "move.l a0, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05eff6",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "instruction": "movep.w d4, $6(a6)",
+        "evidence": "movep.w d4, $6(a6) <- none"
+      }
+    ],
+    "classifications": [
+      {
+        "pc": "0x00a25a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "move.l d3, $6(a6)",
+        "evidence": "move.l d3, $6(a6) <- same-record projection from a6+0x20, a6+0x22, a6+0x24 (also writes +0x08)"
+      },
+      {
+        "pc": "0x00a2e8",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 68,
+        "kind": "continuation",
+        "instruction": "move.l d3, $44(a6)",
+        "evidence": "move.l d3, $44(a6) <- same-record projection from a6+0x20, a6+0x24, a6+0x48 (also writes +0x46)"
+      },
+      {
+        "pc": "0x00a2fe",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 68,
+        "kind": "reset",
+        "instruction": "clr.l $44(a6)",
+        "evidence": "clr.l $44(a6) (also writes +0x46)"
+      },
+      {
+        "pc": "0x00c7fe",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "sub.w d0, $8(a6)",
+        "evidence": "sub.w d0, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x00c80a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "reset",
+        "instruction": "move.w #$ffc0, $8(a6)",
+        "evidence": "move.w #$ffc0, $8(a6) <- none"
+      },
+      {
+        "pc": "0x00c818",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "add.w d0, $8(a6)",
+        "evidence": "add.w d0, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x00c824",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "reset",
+        "instruction": "move.w #$140, $8(a6)",
+        "evidence": "move.w #$140, $8(a6) <- none"
+      },
+      {
+        "pc": "0x00c830",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "add.w d0, $6(a6)",
+        "evidence": "add.w d0, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x00c83c",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.w #$200, $6(a6)",
+        "evidence": "move.w #$200, $6(a6) <- none"
+      },
+      {
+        "pc": "0x00c84a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "sub.w d0, $6(a6)",
+        "evidence": "sub.w d0, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x00c856",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.w #$0, $6(a6)",
+        "evidence": "move.w #$0, $6(a6) <- none"
+      },
+      {
+        "pc": "0x02ab30",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "subi.w #$df69, $6(a6)",
+        "evidence": "subi.w #$df69, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b664",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "addq.w #$4, $8(a6)",
+        "evidence": "addq.w #$4, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b6f0",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l (a4), $6(a6)",
+        "evidence": "move.l (a4), $6(a6) <- a4+0x00 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b6f4",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "subq.w #$2, $8(a6)",
+        "evidence": "subq.w #$2, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b6f8",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "subq.w #$1, $6(a6)",
+        "evidence": "subq.w #$1, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b716",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l (a4), $6(a6)",
+        "evidence": "move.l (a4), $6(a6) <- a4+0x00 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b71a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "subq.w #$1, $6(a6)",
+        "evidence": "subq.w #$1, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b71e",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $8(a6)",
+        "evidence": "addq.w #$1, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b760",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l $4(a4), $6(a6)",
+        "evidence": "move.l $4(a4), $6(a6) <- a4+0x04 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b766",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "addq.w #$1, $6(a6)",
+        "evidence": "addq.w #$1, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b784",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l $4(a4), $6(a6)",
+        "evidence": "move.l $4(a4), $6(a6) <- a4+0x04 (also writes +0x08)"
+      },
+      {
+        "pc": "0x02b78a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "addi.w #$3d, $6(a6)",
+        "evidence": "addi.w #$3d, $6(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b7a4",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "addq.w #$8, $8(a6)",
+        "evidence": "addq.w #$8, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x02b7c4",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "subq.w #$8, $8(a6)",
+        "evidence": "subq.w #$8, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x05a71e",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "movep.w d7, $6(a6)",
+        "evidence": "movep.w d7, $6(a6) <- none"
+      },
+      {
+        "pc": "0x05e1a6",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l #$b2cf2, $6(a6)",
+        "evidence": "move.l #$b2cf2, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2ae",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l (a4)+, $6(a6)",
+        "evidence": "move.l (a4)+, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2b2",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l -(a6), $6(a6)",
+        "evidence": "move.l -(a6), $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2be",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l (a4)+, $6(a6)",
+        "evidence": "move.l (a4)+, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05e2c2",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l -(a6), $6(a6)",
+        "evidence": "move.l -(a6), $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05ea66",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "move.l a0, $6(a6)",
+        "evidence": "move.l a0, $6(a6) <- none (also writes +0x08)"
+      },
+      {
+        "pc": "0x05efb2",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "addi.l #$606d4, $6(a6)",
+        "evidence": "addi.l #$606d4, $6(a6) (read-modify-write of the field) (also writes +0x08)"
+      },
+      {
+        "pc": "0x05eff6",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "reset",
+        "instruction": "movep.w d4, $6(a6)",
+        "evidence": "movep.w d4, $6(a6) <- none"
+      },
+      {
+        "pc": "0x0c2ee6",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 6,
+        "kind": "continuation",
+        "instruction": "add.l d4, $6(a6)",
+        "evidence": "add.l d4, $6(a6) (read-modify-write of the field) (also writes +0x08)"
+      },
+      {
+        "pc": "0x0e5e8a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbf, $8(a6)",
+        "evidence": "ori.w #$ffbf, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5eaa",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbf, $8(a6)",
+        "evidence": "ori.w #$ffbf, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5eca",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5eea",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5f0a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5f2a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5f4a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5f6a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5f8a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e5faa",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e600a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbf, $8(a6)",
+        "evidence": "ori.w #$ffbf, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e602a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbf, $8(a6)",
+        "evidence": "ori.w #$ffbf, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e604a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e606a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e608a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e60aa",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e60ca",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e60ea",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e610a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e612a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e650a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e652a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e654a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      },
+      {
+        "pc": "0x0e656a",
+        "base": 14,
+        "base_register": "a6",
+        "offset": 8,
+        "kind": "continuation",
+        "instruction": "ori.w #$ffbe, $8(a6)",
+        "evidence": "ori.w #$ffbe, $8(a6) (read-modify-write of the field)"
+      }
+    ]
+  },
+  "notes": [
+    "Writers are sprite X/Y store instructions whose destination register is proven to hold a sprite-RAM cursor; group_class is the distinct (x,y) root-field pair.",
+    "x_offset/y_offset are 0xffff when the lane has no such word; single-lane writers inherit their class from the +2 adjacent pair.",
+    "Continuation = RMW of the field, a value traced from the field, or an exact same-record projection that combines >=2 record fields (or one field plus arithmetic/scale). A plain single-field copy, constant, table, stream, foreign record or unproven value is a reset/birth.",
+    "Classifications cover every decoded store to a table root field; reset rows are emitted in the generated SpriteGroupReset table.",
+    "unresolved lists sprite X/Y candidate stores whose root field did not resolve, with the reason; they are never guessed.",
+    "commandw ROMs were read from ~/Downloads/commandw (not part of the worktree)."
+  ]
+}

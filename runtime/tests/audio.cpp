@@ -16,6 +16,7 @@
 #include "state_io.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>

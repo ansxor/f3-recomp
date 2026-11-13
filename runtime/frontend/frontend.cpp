@@ -16,7 +16,7 @@
 #include "renderer/gpu/interp.hpp"
 #include "debug/profile.hpp"
 #include "debug/input_script.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include "debug/discovery.hpp"
 #include "sprites/behaviour.hpp"
 #ifdef F3RT_GPU
@@ -102,7 +102,7 @@ struct MotionReadout {
         census.rejected_sprites += s.rejected_sprites;
         census.rejected_rows += s.rejected_rows;
         census.sprite_count_rejections += s.sprite_count_rejections;
-        census.sprite_identity_rejections += s.sprite_identity_rejections;
+        census.sprite_group_rejections += s.sprite_group_rejections;
         census.sprite_transform_rejections += s.sprite_transform_rejections;
         census.sprite_jump_rejections += s.sprite_jump_rejections;
         census.row_control_rejections += s.row_control_rejections;
@@ -135,7 +135,7 @@ struct MotionReadout {
                   << " accepted_pf_rows=" << census.playfield_rows
                   << " accepted_text_rows=" << census.text_rows
                   << " rejected_sprites=" << census.rejected_sprites
-                  << " sprite_identity=" << census.sprite_identity_rejections
+                  << " sprite_group=" << census.sprite_group_rejections
                   << " sprite_count_subset=" << census.sprite_count_rejections
                   << " sprite_transform=" << census.sprite_transform_rejections
                   << " sprite_jump=" << census.sprite_jump_rejections
@@ -832,17 +832,14 @@ int main(int argc, char **argv) try {
             video_options);
 #endif
     {
-        const auto &unit_table = f3rt::SpriteUnits::game_table();
-        if (translated && !unit_table.units.empty()) {
-            f3rt::SpriteUnits::Options options;
+        const auto &group_table = f3rt::SpriteSystem::game_table();
+        const auto &unit_table = f3rt::SpriteSystem::game_units();
+        if (translated && (!group_table.writes.empty() || !unit_table.units.empty())) {
+            f3rt::SpriteSystem::Options options;
             const auto registered = f3rt::registered_sprite_behaviours();
             options.behaviours.assign(registered.begin(), registered.end());
-            const auto shadows = f3rt::registered_flicker_shadows();
-            options.flicker_shadows.assign(shadows.begin(), shadows.end());
-            m.sprite_units = std::make_unique<f3rt::SpriteUnits>(m, unit_table, std::move(options));
-            // Always on with the GPU presenter, which picks flicker shadow visibility per presented frame;
-            // CPU and FDP output keeps the game's own alternate-frame emission.
-            m.sprite_units->set_flicker_shadows(video_backend == "gpu" && m.game_video);
+            m.sprites = std::make_unique<f3rt::SpriteSystem>(m, group_table, unit_table,
+                                                            std::move(options));
         }
     }
     if (!dumpdir.empty()) {
@@ -852,13 +849,10 @@ int main(int argc, char **argv) try {
         m.discovery = std::make_unique<f3rt::DiscoveryLog>(
             discovery_path.string(), m,
             "set=" + set + " renderer=" + (renderer.empty() ? "default" : renderer) +
-                " exec=" + (translated ? "native" : "interpreted") + " emit_units=" +
-                (m.sprite_units ? "yes" : "no") + " game_video=" + (m.game_video ? "yes" : "no"));
-        m.discovery->set_sprites_accounted_by_units(m.sprite_units != nullptr);
+                " exec=" + (translated ? "native" : "interpreted") + " sprite_groups=" +
+                (m.sprites ? "yes" : "no") + " game_video=" + (m.game_video ? "yes" : "no"));
         m.discovery->set_log_all(discovery_all);
-        if (m.sprite_units) m.sprite_units->set_discovery(m.discovery.get());
     }
-    const bool shadows_active = m.sprite_units && m.sprite_units->flicker_shadows_enabled();
     const auto snapshot_video_options = video_options;
     const unsigned frame_width = video_options.width();
     const unsigned frame_height =
@@ -2111,7 +2105,7 @@ int main(int argc, char **argv) try {
         if (!report) throw std::runtime_error("Fallback report write failed");
     }
     if (m.game_video) m.game_video->report(std::cout);
-    if (m.sprite_units) m.sprite_units->write_summary(std::cout);
+    if (m.sprites) m.sprites->write_summary(std::cout);
     if (m.discovery) m.discovery->finish(m);
     profile.flush();
     std::cout << "set=" << set << " frames=" << m.frame << " pc=0x" << std::hex << m.cpu.pc
@@ -2128,17 +2122,6 @@ int main(int argc, char **argv) try {
               << " fallback_instructions=" << m.fallback_instructions
               << " audio_frames=" << audio_frames << " audio_peak=" << audio_peak
               << " nonzero_samples=" << nonzero_samples << '\n';
-#ifdef F3RT_GPU
-    if (sdl.gpu && m.sprite_units && m.sprite_units->flicker_shadows_available()) {
-        const auto report = m.sprite_units->report();
-        std::cout << "FLICKER-SHADOWS active=" << shadows_active
-                  << " native_frames=" << executed_frames
-                  << " presented_frames=" << sdl.gpu->presented_frames()
-                  << " shadowed_objects=" << report.flicker.invocations
-                  << " tagged_entries=" << report.flicker.replay_entries
-                  << " frames_with_shadow=" << report.flicker.frames << '\n';
-    }
-#endif
     if (motion_interp && motion_presentation)
         std::cout << "MOTION-TOTAL native_frames=" << executed_frames
                   << " drawable_submissions=" << motion_presentations

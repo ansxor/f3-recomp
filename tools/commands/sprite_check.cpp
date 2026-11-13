@@ -28,17 +28,16 @@ int cmd_sprite_check(int argc, char **argv) try {
         else if (arg == "--seed") args.seed = std::stoull(value());
         else if (arg == "--no-inputs") args.inputs = false;
         else if (arg == "--behaviour") args.behaviours.push_back(value());
-        else if (arg == "--no-flicker-shadows") args.flicker = false;
-        else if (arg == "--shadow-trace") args.shadow_trace = std::stoull(value());
         else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: f3rt-tool sprite-check [--rom-dir DIR] [--set SET] [--frames N] "
                    "[--compare-every N]\n"
-                   "       [--seed N] [--no-inputs] [--behaviour NAME]... [--no-flicker-shadows]\n"
-                   "       [--shadow-trace N]\n"
-                   "Exits nonzero unless every unit replay is bit-exact, every sprite write is "
-                   "accounted\n"
-                   "for, and emulated state is identical with sprite units on and off.\n";
+                   "       [--seed N] [--no-inputs] [--behaviour NAME]...\n"
+                   "Reports sprite-group coverage (groups per frame, grouped and unresolved "
+                   "entries)\n"
+                   "and exits nonzero unless emulated state is identical with sprite "
+                   "groups on\n"
+                   "and off and at least one group resolved.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: " + arg);
     }

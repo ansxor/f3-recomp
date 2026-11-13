@@ -10,12 +10,12 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <exception>
 #include <filesystem>
 #include <map>
 #include <memory>

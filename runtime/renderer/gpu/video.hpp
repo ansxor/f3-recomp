@@ -28,8 +28,7 @@ public:
     // Host-only geometry. Assets, pipelines and canonical game state survive.
     void set_scale(unsigned scale);
     void set_scale_mode(VideoScaleMode mode);
-    // Accepted swapchain submissions. Flicker shadows (SceneSprite::shadow) are not tied to it: window presents
-    // draw them as the steady linear-light average of the scene with and without the tagged sprites.
+    // Accepted swapchain submissions.
     uint64_t presented_frames() const;
     // Host overlay is invoked on the actual swapchain after the game blit.
     using Overlay = void (*)(void *, SDL_GPUCommandBuffer *, SDL_GPUTexture *, Uint32, Uint32);

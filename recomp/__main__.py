@@ -24,6 +24,11 @@ def main() -> int:
     profiles.add_argument(
         "--profile-slim", type=Path, help="retain only executed entries from this profile (strict sparse build)"
     )
+    parser.add_argument(
+        "--sprite-writers",
+        type=Path,
+        help='extra sprite X/Y writer PCs (a JSON array or {"writers":[{"pc":...,"lane":"XY"}]})',
+    )
     args = parser.parse_args()
     try:
         from .discovery import discover, load_rom
@@ -40,7 +45,9 @@ def main() -> int:
         )
         if args.command == "emit":
             from .generate import generate
+            from .sprite_trace import load_writer_seeds
 
+            writers, lanes = load_writer_seeds(args.sprite_writers) if args.sprite_writers else ((), {})
             report = generate(
                 rom,
                 result,
@@ -49,6 +56,8 @@ def main() -> int:
                 max_block_instructions=args.max_block_instructions,
                 profile_tiers=args.profile_tiers,
                 profile_slim=args.profile_slim,
+                sprite_writers=writers,
+                sprite_lanes=lanes,
             )
             print(
                 json.dumps(

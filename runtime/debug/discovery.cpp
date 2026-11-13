@@ -1,7 +1,7 @@
 #include "discovery.hpp"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include <algorithm>
 #include <functional>
 #include <stdexcept>
@@ -16,7 +16,7 @@ constexpr uint32_t PF_BEGIN = OFFS_PLAYFIELDS, TEXT_BEGIN = OFFS_TEXTRAM_MAP,
                    LINES_BEGIN = OFFS_LINERAM;
 
 const char *category_name(int category) {
-    static constexpr const char *NAMES[] = {"sprite-stray", "video-write", "video-fallback"};
+    static constexpr const char *NAMES[] = {"video-write", "video-fallback"};
     return NAMES[category];
 }
 
@@ -74,8 +74,6 @@ std::string DiscoveryLog::key_of(const Entry &entry) const {
     if (entry.category == Category::VideoFallback)
         std::snprintf(buffer, sizeof buffer, "component=%s reason=\"%s\"", entry.component,
                       entry.reason);
-    else if (entry.category == Category::SpriteStray)
-        std::snprintf(buffer, sizeof buffer, "pc=0x%06x", entry.pc);
     else
         std::snprintf(buffer, sizeof buffer, "layer=%s pc=0x%06x", video_layer_name(entry.layer),
                       entry.pc);
@@ -90,13 +88,9 @@ std::string DiscoveryLog::describe(const Entry &entry) const {
                       entry.seconds);
         return buffer;
     }
-    if (entry.category == Category::SpriteStray)
-        std::snprintf(buffer, sizeof buffer, "pc=0x%06x frame=%llu t=%.2f addr=0x%06x", entry.pc,
-                      static_cast<unsigned long long>(entry.frame), entry.seconds, entry.address);
-    else
-        std::snprintf(buffer, sizeof buffer, "layer=%s pc=0x%06x frame=%llu t=%.2f addr=0x%06x",
-                      video_layer_name(entry.layer), entry.pc,
-                      static_cast<unsigned long long>(entry.frame), entry.seconds, entry.address);
+    std::snprintf(buffer, sizeof buffer, "layer=%s pc=0x%06x frame=%llu t=%.2f addr=0x%06x",
+                  video_layer_name(entry.layer), entry.pc,
+                  static_cast<unsigned long long>(entry.frame), entry.seconds, entry.address);
     return buffer;
 }
 
@@ -131,16 +125,9 @@ void DiscoveryLog::count_hit(Entry &entry) {
 void DiscoveryLog::video_write(uint32_t pc, uint32_t address) {
     const VideoLayer layer = classify(address);
     if (layer == VideoLayer::Count) return;
-    if (layer == VideoLayer::Sprites && m_sprites_by_units && !m_log_all) return;
     Entry *&last = m_last_video[size_t(layer)];
     if (!last || last->pc != pc) last = &pc_entry(Category::VideoWrite, layer, pc, address);
     count_hit(*last);
-}
-
-void DiscoveryLog::sprite_stray(uint32_t pc, uint32_t address) {
-    if (!m_last_stray || m_last_stray->pc != pc)
-        m_last_stray = &pc_entry(Category::SpriteStray, VideoLayer::Sprites, pc, address);
-    count_hit(*m_last_stray);
 }
 
 void DiscoveryLog::video_fallback(const char *component, const char *reason, uint64_t frame) {
@@ -179,34 +166,36 @@ void DiscoveryLog::finish(const Machine &machine) {
     std::sort(listed.begin(), listed.end(),
               [&sort_key](const Entry &a, const Entry &b) { return sort_key(a) < sort_key(b); });
     line("# SUMMARY");
-    uint64_t totals[3] = {};
+    uint64_t totals[2] = {};
     for (const Entry &entry : listed) {
         if (entry.known) ++known_listed;
         else ++totals[size_t(entry.category)];
         line(std::string("SUM ") + category_name(int(entry.category)) + ' ' + describe(entry) +
              (entry.known ? " known=1" : "") + " count=" + std::to_string(entry.count));
     }
-    if (machine.sprite_units) {
-        const auto report = machine.sprite_units->report();
+    if (machine.sprites) {
+        const auto report = machine.sprites->report();
         for (const auto &unit : report.units)
             for (size_t reason = 0; reason < unit.aborts.size(); ++reason)
                 if (unit.aborts[reason])
                     line("SUM unit-replay-abort unit=" + unit.name +
-                         " reason=" + SpriteUnits::abort_name(SpriteUnits::Abort(reason)) +
+                         " reason=" + Sandbox::abort_name(Sandbox::Abort(reason)) +
                          " count=" + std::to_string(unit.aborts[reason]));
-        line("SUM unit-stats invocations=" + std::to_string(report.invocations) + " replays=" +
-             std::to_string(report.replays) + " aborted=" + std::to_string(report.aborted) +
+        line("SUM group-stats frames=" + std::to_string(report.frames) +
+             " classes=" + std::to_string(report.classes) +
+             " replays=" + std::to_string(report.replays) +
+             " aborted=" + std::to_string(report.aborted) +
              " unmatched_exits=" + std::to_string(report.unmatched_exits));
     }
-    line("# TOTAL frames=" + std::to_string(machine.frame) + " sprite-stray=" +
-         std::to_string(totals[0]) + " video-write=" + std::to_string(totals[1]) +
-         " video-fallback=" + std::to_string(totals[2]) + " known_writer_pcs_suppressed=" +
-         std::to_string(suppressed) + " known_listed=" + std::to_string(known_listed));
+    line("# TOTAL frames=" + std::to_string(machine.frame) + " video-write=" +
+         std::to_string(totals[0]) + " video-fallback=" + std::to_string(totals[1]) +
+         " known_writer_pcs_suppressed=" + std::to_string(suppressed) +
+         " known_listed=" + std::to_string(known_listed));
     std::printf(
-        "DISCOVERY sprite_stray=%llu video_write=%llu video_fallback=%llu known_suppressed=%llu "
+        "DISCOVERY video_write=%llu video_fallback=%llu known_suppressed=%llu "
         "known_listed=%llu\n",
         static_cast<unsigned long long>(totals[0]), static_cast<unsigned long long>(totals[1]),
-        static_cast<unsigned long long>(totals[2]), static_cast<unsigned long long>(suppressed),
+        static_cast<unsigned long long>(suppressed),
         static_cast<unsigned long long>(known_listed));
     std::fclose(m_file);
     m_file = nullptr;

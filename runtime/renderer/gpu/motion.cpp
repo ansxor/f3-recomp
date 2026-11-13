@@ -40,18 +40,73 @@ bool valid_sprite(const SceneSprite &v) {
            std::abs(int64_t(v.x)) <= int64_t(1024) * 256 &&
            std::abs(int64_t(v.y)) <= int64_t(1024) * 256;
 }
-// Scale and flip changes reject even identity matches.
+// Scale and flip changes snap: the group's member offsets are only rigid while the
+// whole-object transform is unchanged.
 bool same_transform(const SceneSprite &a, const SceneSprite &b) {
     return a.scale_x == b.scale_x && a.scale_y == b.scale_y && a.flip_x == b.flip_x &&
            a.flip_y == b.flip_y;
 }
-bool same_appearance(const SceneSprite &a, const SceneSprite &b) {
-    return a.tile == b.tile && a.palette == b.palette;
+// Rigid sprite groups (HANDOFF.md §3, TLC results §4.2): a sprite carrying a group key pairs by
+// that key alone, and the group's origin delta is the delta of every current member. Members may
+// appear, vanish or change tile between frames (LoD, flicker, skipped tiles), so no per-sprite
+// correspondence is needed or assumed. A key that is absent from either frame, or that occurs with
+// more than one origin in a frame, never pairs and snaps.
+inline constexpr unsigned NO_SPRITE = ~0u;
+// One frame's group keys: sprite indices sorted by key, plus per-run flags. A run is the maximal
+// contiguous range of equal keys; its flags are stored at the run's first position and describe
+// every member of the run. Fixed arrays: capture() never allocates.
+struct GroupTable {
+    std::array<unsigned, CapturedFrame::MAX_SPRITES> order{};
+    std::array<bool, CapturedFrame::MAX_SPRITES> origin_unique{};
+    std::array<bool, CapturedFrame::MAX_SPRITES> transform_unique{};
+    unsigned count = 0;
+};
+uint64_t transform_signature(const SceneSprite &s) {
+    return (uint64_t(s.scale_x) << 32) | (uint64_t(s.scale_y) << 16) | (uint64_t(s.flip_x) << 1) |
+           uint64_t(s.flip_y);
 }
-// Appearance identity: sprites are matched by tile and palette. Bit 63 separates identity-bearing
-// sprites (births/vanished fallbacks) from identity-less ones; tile is 17 bits, so it is free.
-uint64_t key(const SceneSprite &s) {
-    return (uint64_t(s.identity != 0) << 63) | (uint64_t(s.tile) << 32) | s.palette;
+// `at(i)` yields the SceneSprite of sprite slot i of the table's frame.
+template <class At> void build_group_table(unsigned count, const At &at, GroupTable &table) {
+    table.count = 0;
+    for (unsigned i = 0; i < count; ++i)
+        if (at(i).group) table.order[table.count++] = i;
+    std::sort(table.order.begin(), table.order.begin() + table.count,
+              [&at](unsigned a, unsigned b) { return at(a).group < at(b).group; });
+    for (unsigned p = 0; p < table.count;) {
+        const SceneSprite &first = at(table.order[p]);
+        bool same_origin = true, same_signature = true;
+        unsigned e = p + 1;
+        for (; e < table.count && at(table.order[e]).group == first.group; ++e) {
+            const SceneSprite &s = at(table.order[e]);
+            same_origin = same_origin && s.group_x == first.group_x && s.group_y == first.group_y;
+            same_signature =
+                same_signature && transform_signature(s) == transform_signature(first);
+        }
+        table.origin_unique[p] = same_origin;
+        table.transform_unique[p] = same_signature;
+        p = e;
+    }
+}
+// Position of the key's run start, or NO_SPRITE when the key does not occur.
+template <class At> unsigned find_group(const GroupTable &table, const At &at, uint64_t key) {
+    unsigned lo = 0, hi = table.count;
+    while (lo < hi) {
+        const unsigned mid = lo + (hi - lo) / 2;
+        if (at(table.order[mid]).group < key) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo < table.count && at(table.order[lo]).group == key) return lo;
+    return NO_SPRITE;
+}
+// The previous frame's group origin is the previous-equivalent geometry of every current member;
+// it must be a sane 24.8 scanout position for the interpolation to mean anything.
+bool valid_origin(const SceneSprite &s) {
+    return std::abs(int64_t(s.group_x)) <= int64_t(1024) * 256 &&
+           std::abs(int64_t(s.group_y)) <= int64_t(1024) * 256;
+}
+// Keyless sprites fall back to appearance: same tile and palette.
+uint64_t appearance_key(const SceneSprite &s) {
+    return (uint64_t(s.tile) << 32) | s.palette;
 }
 } // namespace
 ClipRanges GpuMotionHistory::ranges(const SceneRow &row, LayerId id) const noexcept {
@@ -69,6 +124,158 @@ void GpuMotionHistory::reset() noexcept {
     m_captured = m_paired = false;
     m_frame = 0;
 }
+// Pair the current frame's sprites against the previous frame.
+// Group sprites: pair by key; delta = group origin delta; eligible while the key is unambiguous on
+// both sides, the previous members share one transform signature that the current sprite still
+// has, and the origin moved at most 32 px per axis. No group pair -> snap.
+// Keyless sprites: appearance fallback only, (tile, palette) groups with mutually unique nearest
+// positions within 32 px; their delta is their own position delta.
+// Rejection counters separate "no pairing" (sprite_group_rejections) from paired-but-ineligible
+// sprites (transform / jump).
+void GpuMotionHistory::pair_sprites(const CapturedFrame &scene, int32_t *dx, int32_t *dy,
+                                    bool *eligible) noexcept {
+    const auto &current = scene.sprites;
+    const auto previous = [this](unsigned i) -> const SceneSprite & { return m_sprites[i].value; };
+    const auto now = [&current](unsigned i) -> const SceneSprite & { return current[i]; };
+
+    GroupTable old_groups, new_groups;
+    build_group_table(m_sprite_count, previous, old_groups);
+    build_group_table(scene.sprite_count, now, new_groups);
+
+    // Group pass. Every grouped sprite is evaluated, including members whose slot changed.
+    for (unsigned i = 0; i < scene.sprite_count; ++i) {
+        const SceneSprite &v = current[i];
+        if (!v.group) continue;
+        const unsigned old_run = find_group(old_groups, previous, v.group);
+        const unsigned new_run = find_group(new_groups, now, v.group);
+        const bool paired = old_run != NO_SPRITE && new_run != NO_SPRITE &&
+                            old_groups.origin_unique[old_run] && new_groups.origin_unique[new_run];
+        if (!paired) {
+            // A sprite that is unchanged in its old slot is not evidence of a moving reject.
+            if (i < m_sprite_count && v == m_sprites[i].value) continue;
+            ++m_pair_stats.rejected_sprites;
+            ++m_pair_stats.sprite_group_rejections;
+            if (scene.sprite_count != m_sprite_count) ++m_pair_stats.sprite_count_rejections;
+            continue;
+        }
+        const SceneSprite &origin = previous(old_groups.order[old_run]);
+        const int32_t gx = v.group_x - origin.group_x;
+        const int32_t gy = v.group_y - origin.group_y;
+        if (gx || gy) ++m_pair_stats.moving_sprites;
+        const bool geometry = m_pen_mask == scene.pen_mask && valid_sprite(v) &&
+                              valid_origin(origin) && old_groups.transform_unique[old_run] &&
+                              same_transform(v, origin);
+        const bool jump = motion_delta(origin.group_x, v.group_x) &&
+                          motion_delta(origin.group_y, v.group_y);
+        eligible[i] = geometry && jump;
+        if (eligible[i]) {
+            dx[i] = gx;
+            dy[i] = gy;
+        } else if (gx || gy) {
+            ++m_pair_stats.rejected_sprites;
+            if (!geometry) ++m_pair_stats.sprite_transform_rejections;
+            else ++m_pair_stats.sprite_jump_rejections;
+        }
+    }
+
+    // Appearance pass for keyless sprites: (tile, palette) groups with mutually unique nearest
+    // positions within 32 px. Tile animation, births and vanishing keyless sprites snap.
+    std::array<unsigned, CapturedFrame::MAX_SPRITES> old_order, new_order, matches;
+    unsigned old_n = 0, new_n = 0;
+    matches.fill(NO_SPRITE);
+    for (unsigned i = 0; i < m_sprite_count; ++i)
+        if (!previous(i).group) old_order[old_n++] = i;
+    for (unsigned i = 0; i < scene.sprite_count; ++i)
+        if (!current[i].group) new_order[new_n++] = i;
+    std::sort(old_order.begin(), old_order.begin() + old_n, [&](unsigned a, unsigned b) {
+        return appearance_key(previous(a)) < appearance_key(previous(b));
+    });
+    std::sort(new_order.begin(), new_order.begin() + new_n, [&](unsigned a, unsigned b) {
+        return appearance_key(current[a]) < appearance_key(current[b]);
+    });
+    std::array<unsigned, CapturedFrame::MAX_SPRITES> old_nearest, new_nearest, old_distance,
+        new_distance;
+    unsigned old = 0, fresh = 0;
+    while (old < old_n && fresh < new_n) {
+        const uint64_t a = appearance_key(previous(old_order[old]));
+        const uint64_t b = appearance_key(current[new_order[fresh]]);
+        if (a < b) {
+            ++old;
+            continue;
+        }
+        if (b < a) {
+            ++fresh;
+            continue;
+        }
+        unsigned old_end = old + 1, new_end = fresh + 1;
+        while (old_end < old_n && appearance_key(previous(old_order[old_end])) == a) ++old_end;
+        while (new_end < new_n && appearance_key(current[new_order[new_end]]) == b) ++new_end;
+        if (old_end - old == 1 && new_end - fresh == 1) {
+            matches[new_order[fresh]] = old_order[old];
+        } else {
+            for (unsigned p = old; p < old_end; ++p) {
+                old_nearest[p] = NO_SPRITE;
+                old_distance[p] = std::numeric_limits<unsigned>::max();
+            }
+            for (unsigned n = fresh; n < new_end; ++n) {
+                new_nearest[n] = NO_SPRITE;
+                new_distance[n] = std::numeric_limits<unsigned>::max();
+                const auto &v = current[new_order[n]];
+                for (unsigned p = old; p < old_end; ++p) {
+                    const auto &partner = previous(old_order[p]);
+                    const int64_t ddx = int64_t(v.x) - partner.x;
+                    const int64_t ddy = int64_t(v.y) - partner.y;
+                    if (std::abs(ddx) > int64_t(32) * 256 || std::abs(ddy) > int64_t(32) * 256)
+                        continue;
+                    const unsigned distance = unsigned(ddx * ddx + ddy * ddy);
+                    if (distance < old_distance[p]) {
+                        old_distance[p] = distance;
+                        old_nearest[p] = n;
+                    } else if (distance == old_distance[p]) old_nearest[p] = NO_SPRITE;
+                    if (distance < new_distance[n]) {
+                        new_distance[n] = distance;
+                        new_nearest[n] = p;
+                    } else if (distance == new_distance[n]) new_nearest[n] = NO_SPRITE;
+                }
+            }
+            for (unsigned n = fresh; n < new_end; ++n)
+                if (new_nearest[n] != NO_SPRITE && old_nearest[new_nearest[n]] == n)
+                    matches[new_order[n]] = old_order[new_nearest[n]];
+        }
+        old = old_end;
+        fresh = new_end;
+    }
+
+    // Keyless sprites: matched pairs interpolate by their own position delta; unmatched ones snap.
+    for (unsigned i = 0; i < scene.sprite_count; ++i) {
+        const SceneSprite &v = current[i];
+        if (v.group) continue;
+        const unsigned match = matches[i];
+        if (match == NO_SPRITE) {
+            if (i < m_sprite_count && v == m_sprites[i].value) continue;
+            ++m_pair_stats.rejected_sprites;
+            ++m_pair_stats.sprite_group_rejections;
+            if (scene.sprite_count != m_sprite_count) ++m_pair_stats.sprite_count_rejections;
+            continue;
+        }
+        const SceneSprite &partner = previous(match);
+        const bool moving = v.x != partner.x || v.y != partner.y;
+        if (moving) ++m_pair_stats.moving_sprites;
+        const bool geometry =
+            m_pen_mask == scene.pen_mask && valid_sprite(v) && valid_sprite(partner) &&
+            same_transform(v, partner);
+        const bool jump = motion_delta(partner.x, v.x) && motion_delta(partner.y, v.y);
+        eligible[i] = geometry && jump;
+        if (eligible[i]) {
+            dx[i] = v.x - partner.x;
+            dy[i] = v.y - partner.y;
+        } else if (moving) {
+            ++m_pair_stats.rejected_sprites;
+            if (!geometry) ++m_pair_stats.sprite_transform_rejections;
+            else ++m_pair_stats.sprite_jump_rejections;
+        }
+    }
+}
 void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexcept {
     if (scene.fallback || scene.sprite_count > m_sprites.size()) {
         reset();
@@ -77,253 +284,16 @@ void GpuMotionHistory::capture(const CapturedFrame &scene, uint64_t frame) noexc
     m_paired =
         m_captured && m_frame != std::numeric_limits<uint64_t>::max() && frame == m_frame + 1;
     m_pair_stats = {};
-    // Compact render slots are not identities: tile-zero births/deaths shift them.
-    // Sprites carrying a nonzero identity (stable per-entry id within an object/invocation) match
-    // exactly by it. A same-tile identity match is final. An identity match whose tile/palette
-    // changed is demoted below appearance matching: both sprites join the appearance pass (with
-    // births and vanished sprites), because entry k may now be a neighbouring cell of a zoomed
-    // grid while the sprite's static twin (same tile at the same spot) is still present. After the
-    // appearance pass, a demoted current sprite still unmatched whose previous partner is also
-    // still unmatched gets its identity pairing restored (by_identity); it interpolates only when
-    // its delta agrees with its object's reference delta (see the rigid check below). An identity
-    // value occurring on both sides but duplicated is ambiguous: unmatched, no fallback. An
-    // identity value absent from the other frame entirely (a birth in the current frame, a
-    // vanished sprite in the previous) may be the same sprite re-keyed (some games change the
-    // identity every other frame while the sprite stays on screen), so births and vanished
-    // sprites enter the appearance pass, in groups separate from identity-less sprites (key()
-    // bit 63): births pair only with vanished identity sprites. The appearance pass matches
-    // (tile, palette) groups with mutually unique nearest positions within 32 px; tile
-    // animation deliberately snaps there. Those fallback matches are not identity matches
-    // (by_identity), so they also go through the per-object rigid check below.
-    std::array<unsigned, CapturedFrame::MAX_SPRITES> matches;
-    std::array<bool, CapturedFrame::MAX_SPRITES> by_identity{};
     const auto &current = scene.sprites;
+    // Compact render slots are not identities, so the slot-by-slot comparison only detects
+    // whether the sprite list changed at all; pairing never uses slots.
     bool sprites_changed = m_sprite_count != scene.sprite_count;
     for (unsigned i = 0; m_paired && !sprites_changed && i < scene.sprite_count; ++i)
         sprites_changed = current[i] != m_sprites[i].value;
-    if (m_paired && sprites_changed) {
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> old_order, new_order, old_ids, new_ids;
-        unsigned old_n = 0, new_n = 0, old_id_n = 0, new_id_n = 0;
-        matches.fill(CapturedFrame::MAX_SPRITES);
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> demoted;
-        demoted.fill(CapturedFrame::MAX_SPRITES);
-        for (unsigned i = 0; i < m_sprite_count; ++i) {
-            if (m_sprites[i].value.identity) old_ids[old_id_n++] = i;
-            else old_order[old_n++] = i;
-        }
-        for (unsigned i = 0; i < scene.sprite_count; ++i) {
-            if (current[i].identity) new_ids[new_id_n++] = i;
-            else new_order[new_n++] = i;
-        }
-        // Identity pass: exact, one-to-one; duplicated identities on either side are ambiguous and unmatched.
-        std::sort(old_ids.begin(), old_ids.begin() + old_id_n, [&](unsigned a, unsigned b) {
-            return m_sprites[a].value.identity < m_sprites[b].value.identity;
-        });
-        std::sort(new_ids.begin(), new_ids.begin() + new_id_n, [&](unsigned a, unsigned b) {
-            return current[a].identity < current[b].identity;
-        });
-        // Births (identity absent from the previous frame) and vanished sprites (absent from the
-        // current frame) join the appearance pass; ambiguous duplicates do not.
-        // (by_identity marks matches made by the identity pass.)
-        auto vanished = [&](unsigned k) { old_order[old_n++] = old_ids[k]; };
-        auto born = [&](unsigned k) { new_order[new_n++] = new_ids[k]; };
-        unsigned old = 0, now = 0;
-        while (old < old_id_n && now < new_id_n) {
-            const uint64_t a = m_sprites[old_ids[old]].value.identity,
-                           b = current[new_ids[now]].identity;
-            if (a < b) {
-                vanished(old++);
-                continue;
-            }
-            if (b < a) {
-                born(now++);
-                continue;
-            }
-            unsigned old_end = old + 1, now_end = now + 1;
-            while (old_end < old_id_n && m_sprites[old_ids[old_end]].value.identity == a) ++old_end;
-            while (now_end < new_id_n && current[new_ids[now_end]].identity == b) ++now_end;
-            if (old_end - old == 1 && now_end - now == 1) {
-                const unsigned i = new_ids[now], p = old_ids[old];
-                if (same_appearance(current[i], m_sprites[p].value)) {
-                    matches[i] = p;
-                    by_identity[i] = true;
-                } else {
-                    // Tile/palette changed: demote to the appearance pass; restored below if unmatched.
-                    demoted[i] = p;
-                    old_order[old_n++] = p;
-                    new_order[new_n++] = i;
-                }
-            }
-            old = old_end;
-            now = now_end;
-        }
-        while (old < old_id_n) vanished(old++);
-        while (now < new_id_n) born(now++);
-        // Appearance pass over the identity-less remainder plus identity births/vanished.
-        std::sort(old_order.begin(), old_order.begin() + old_n, [&](unsigned a, unsigned b) {
-            return key(m_sprites[a].value) < key(m_sprites[b].value);
-        });
-        std::sort(new_order.begin(), new_order.begin() + new_n,
-                  [&](unsigned a, unsigned b) { return key(current[a]) < key(current[b]); });
-        old = 0;
-        now = 0;
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> old_nearest, new_nearest, old_distance,
-            new_distance;
-        while (old < old_n && now < new_n) {
-            const uint64_t a = key(m_sprites[old_order[old]].value),
-                           b = key(current[new_order[now]]);
-            if (a < b) {
-                ++old;
-                continue;
-            }
-            if (b < a) {
-                ++now;
-                continue;
-            }
-            unsigned old_end = old + 1, now_end = now + 1;
-            while (old_end < old_n && key(m_sprites[old_order[old_end]].value) == a) ++old_end;
-            while (now_end < new_n && key(current[new_order[now_end]]) == b) ++now_end;
-            if (old_end - old == 1 && now_end - now == 1) {
-                matches[new_order[now]] = old_order[old];
-            } else {
-                for (unsigned p = old; p < old_end; ++p) {
-                    old_nearest[p] = CapturedFrame::MAX_SPRITES;
-                    old_distance[p] = std::numeric_limits<unsigned>::max();
-                }
-                for (unsigned n = now; n < now_end; ++n) {
-                    new_nearest[n] = CapturedFrame::MAX_SPRITES;
-                    new_distance[n] = std::numeric_limits<unsigned>::max();
-                    const auto &v = current[new_order[n]];
-                    for (unsigned p = old; p < old_end; ++p) {
-                        const auto &previous = m_sprites[old_order[p]].value;
-                        const int64_t dx = int64_t(v.x) - previous.x;
-                        const int64_t dy = int64_t(v.y) - previous.y;
-                        if (std::abs(dx) > int64_t(32) * 256 || std::abs(dy) > int64_t(32) * 256)
-                            continue;
-                        const unsigned distance = unsigned(dx * dx + dy * dy);
-                        if (distance < old_distance[p]) {
-                            old_distance[p] = distance;
-                            old_nearest[p] = n;
-                        } else if (distance == old_distance[p])
-                            old_nearest[p] = CapturedFrame::MAX_SPRITES;
-                        if (distance < new_distance[n]) {
-                            new_distance[n] = distance;
-                            new_nearest[n] = p;
-                        } else if (distance == new_distance[n])
-                            new_nearest[n] = CapturedFrame::MAX_SPRITES;
-                    }
-                }
-                for (unsigned n = now; n < now_end; ++n)
-                    if (new_nearest[n] != CapturedFrame::MAX_SPRITES &&
-                        old_nearest[new_nearest[n]] == n)
-                        matches[new_order[n]] = old_order[new_nearest[n]];
-            }
-            old = old_end;
-            now = now_end;
-        }
-        // Restore demoted identity pairs whose both sides stayed unmatched.
-        std::array<bool, CapturedFrame::MAX_SPRITES> old_used{};
-        for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (matches[i] != CapturedFrame::MAX_SPRITES) old_used[matches[i]] = true;
-        for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (demoted[i] != CapturedFrame::MAX_SPRITES &&
-                matches[i] == CapturedFrame::MAX_SPRITES && !old_used[demoted[i]]) {
-                matches[i] = demoted[i];
-                by_identity[i] = true;
-                old_used[demoted[i]] = true;
-            }
-    }
-    // Per-object rigid check. Entries that must agree with their object's reference delta: identity
-    // matches whose tile/palette changed and appearance-fallback matches (identity sprites only;
-    // identity-less sprites are never checked). Same-tile identity matches are unchecked.
-    // The reference delta of an object (the SceneSprite::object shared by its entries) is the mode
-    // of (dx, dy) over its same-tile identity matches (must be a unique mode); if it has none, the
-    // mode over all its matched entries (identity and fallback) provided a strict majority holds it.
-    // A checked entry is rigid when its delta is within +-1 native px (256) of that reference per
-    // axis. No reference or object 0: not rigid (snaps). A single-entry object passes trivially.
-    // Sort-based, O(n log n) over fixed arrays.
-    std::array<bool, CapturedFrame::MAX_SPRITES> rigid{};
-    if (m_paired && sprites_changed) {
-        std::array<unsigned, CapturedFrame::MAX_SPRITES> order;
-        unsigned n = 0;
-        for (unsigned i = 0; i < scene.sprite_count; ++i)
-            if (matches[i] != CapturedFrame::MAX_SPRITES && current[i].identity &&
-                current[i].object)
-                order[n++] = i;
-        // Reference-forming entries: same-tile identity matches.
-        auto changed = [&](unsigned i) {
-            return !(by_identity[i] && same_appearance(current[i], m_sprites[matches[i]].value));
-        };
-        auto delta = [&](unsigned i) {
-            const auto &p = m_sprites[matches[i]].value;
-            return std::pair<int64_t, int64_t>{int64_t(current[i].x) - p.x,
-                                               int64_t(current[i].y) - p.y};
-        };
-        std::sort(order.begin(), order.begin() + n, [&](unsigned a, unsigned b) {
-            if (current[a].object != current[b].object)
-                return current[a].object < current[b].object;
-            if (changed(a) != changed(b)) return !changed(a);
-            return delta(a) < delta(b);
-        });
-        for (unsigned g = 0, e; g < n; g = e) {
-            e = g + 1;
-            while (e < n && current[order[e]].object == current[order[g]].object) ++e;
-            unsigned c = g;
-            while (c < e && !changed(order[c])) ++c;
-            const unsigned lo = g, hi = c > g ? c : e;
-            unsigned best = 0, best_at = lo;
-            bool tie = false;
-            for (unsigned r = lo, re; r < hi; r = re) {
-                re = r + 1;
-                while (re < hi && delta(order[re]) == delta(order[r])) ++re;
-                if (re - r > best) {
-                    best = re - r;
-                    best_at = r;
-                    tie = false;
-                } else if (re - r == best) tie = true;
-            }
-            const bool has = !tie && (c > g || best * 2 > hi - lo);
-            if (!has) continue;
-            const auto ref = delta(order[best_at]);
-            for (unsigned k = c; k < e; ++k) {
-                const auto d = delta(order[k]);
-                rigid[order[k]] =
-                    std::abs(d.first - ref.first) <= 256 && std::abs(d.second - ref.second) <= 256;
-            }
-        }
-    }
-    // Compute all deltas before overwriting old compact slots.
+    // Compute all deltas before overwriting the previous slots.
     std::array<int32_t, CapturedFrame::MAX_SPRITES> dx{}, dy{};
     std::array<bool, CapturedFrame::MAX_SPRITES> eligible{};
-    for (unsigned i = 0; m_paired && sprites_changed && i < scene.sprite_count; ++i) {
-        const auto &v = current[i];
-        const unsigned match = matches[i];
-        if (match == CapturedFrame::MAX_SPRITES) {
-            // Identical stationary duplicates are not evidence of moving rejects.
-            if (i < m_sprite_count && v == m_sprites[i].value) continue;
-            ++m_pair_stats.rejected_sprites;
-            ++m_pair_stats.sprite_identity_rejections;
-            if (scene.sprite_count != m_sprite_count) ++m_pair_stats.sprite_count_rejections;
-            continue;
-        }
-        const auto &previous = m_sprites[match].value;
-        const bool moving = v.x != previous.x || v.y != previous.y;
-        if (moving) ++m_pair_stats.moving_sprites;
-        const bool checked = v.identity && !(by_identity[i] && same_appearance(v, previous));
-        const bool transform = m_pen_mask == scene.pen_mask && valid_sprite(v) &&
-                               valid_sprite(previous) && same_transform(v, previous) &&
-                               (!checked || rigid[i]);
-        const bool jump = motion_delta(previous.x, v.x) && motion_delta(previous.y, v.y);
-        eligible[i] = transform && jump;
-        if (eligible[i]) {
-            dx[i] = v.x - previous.x;
-            dy[i] = v.y - previous.y;
-        } else if (moving) {
-            ++m_pair_stats.rejected_sprites;
-            if (!transform) ++m_pair_stats.sprite_transform_rejections;
-            else ++m_pair_stats.sprite_jump_rejections;
-        }
-    }
+    if (m_paired && sprites_changed) pair_sprites(scene, dx.data(), dy.data(), eligible.data());
     for (unsigned i = 0; i < scene.sprite_count; ++i) {
         auto &s = m_sprites[i];
         s.value = current[i];
@@ -428,6 +398,8 @@ MotionResult GpuMotionHistory::apply(const CapturedFrame &scene, float alpha) co
         out.text_x = int32_t(row.text_x) * 256;
         out.text_y = int32_t(row.text_y) * 256;
     }
+    // dx/dy are the group origin delta, so a member's interpolated position is its current
+    // position minus the shared delta. Only current members are drawn.
     for (unsigned i = 0; i < m_sprite_count; ++i) {
         const auto &s = m_sprites[i];
         if (!s.eligible || (!s.dx && !s.dy) || s.value != scene.sprites[i]) continue;

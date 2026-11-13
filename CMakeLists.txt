@@ -315,7 +315,9 @@ set(F3RT_CORE_SOURCES
     runtime/audio/hle/program_service.cpp
     runtime/audio/hle/track_service.cpp runtime/audio/hle/voice_service.cpp
     runtime/audio/hle/synthesis.cpp
-    runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
+    runtime/sprites/groups.cpp runtime/sprites/replay.cpp runtime/sprites/sandbox.cpp
+    runtime/sprites/sprite_system.cpp
+    runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
     runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp
     ${AUDIO_SOURCES}
 )
@@ -401,6 +403,10 @@ add_dependencies(f3rt f3rt_build_identity)
 # use "sprites/<name>" to avoid basename ambiguity.
 target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
     PRIVATE runtime runtime/audio "${CMAKE_CURRENT_SOURCE_DIR}")
+if(F3_GENERATED_DIR)
+    # The generated program directory holds sprite_groups.hpp (the per-game group table).
+    target_include_directories(f3rt PRIVATE "${F3_GENERATED_DIR}")
+endif()
 # Unmodified FAUST architecture headers. System includes keep their warnings out of our builds.
 target_include_directories(f3rt SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/faust")
 # A game opts into sprite behaviours by providing games/<game>/sprites/behaviours.hpp.
@@ -609,11 +615,9 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
         target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)
     endif()
-    # Emit-unit replay check (needs the game ROMs and a game that declares emit units).
-    file(READ "${F3_GAME_CONFIG}" F3_GAME_CONFIG_TEXT)
-    string(FIND "${F3_GAME_CONFIG_TEXT}" "[[video.emit_units]]" F3_EMIT_UNITS_POS)
-    if(F3_ROM_DIR AND NOT F3_EMIT_UNITS_POS EQUAL -1)
-        add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
+    # Sprite-group coverage check (needs the game ROMs and a generated group table).
+    if(F3_ROM_DIR)
+        add_test(NAME sprite-groups COMMAND f3rt-test-sprites --gtest_filter=SpriteSystem.RomGroupCoverage)
     endif()
     file(GLOB GAME_HLE_AUDIO_TEST CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/audio*.cpp")
     if(F3_ROM_DIR AND GAME_HLE_AUDIO_TEST AND F3RT_HLE_EVENTS)

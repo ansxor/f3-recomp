@@ -2,6 +2,7 @@
 #include "eeprom.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <chrono>
 #include <filesystem>

@@ -1,4 +1,5 @@
 #include "f3rt/machine.hpp"
+#include "sprites/sprite_system.hpp"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/audio.hpp"
 #include "f3rt/video.hpp"
@@ -8,7 +9,6 @@
 #include "eeprom.hpp"
 #include "interpreter.hpp"
 #include "debug/discovery.hpp"
-#include "sprites/units.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -30,9 +30,9 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
     }
     if (a - PALETTE_BASE <= m.palette.size() - Width) return m.palette.data() + (a - PALETTE_BASE);
     if (a - GRAPHICS_BASE <= m.graphics.size() - Width) {
-        // Sprite-RAM stores must reach SpriteUnits/sprite_writers (entry attribution), so they take the byte path.
+        // Sprite-RAM stores must reach the sprite system/sprite_writers (entry attribution), so they take the byte path.
         if constexpr (Write)
-            if ((m.sprite_units || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE)
+            if ((m.sprites || m.sprite_writers) && a - GRAPHICS_BASE < SPRITE_RAM_SIZE)
                 return nullptr;
         // Discovery logging must see every graphics store byte by byte (PC attribution).
         if constexpr (Write)
@@ -107,7 +107,7 @@ void Machine::reset_devices() {
     m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
 }
 void Machine::reset() {
-    if (sprite_units) sprite_units->reset();
+    if (sprites) sprites->reset();
     native_pixels();
     cpu = {};
     cpu.runtime = this;
@@ -181,7 +181,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     a &= 0xffffff;
     if (a >= RAM_BASE && a < RAM_END) {
         ram[a & RAM_MIRROR_MASK] = v;
-        if (sprite_units) sprite_units->note_write(a, 1);
+        if (sprites) sprites->note_write(a, 1);
         return;
     }
     if (a >= PALETTE_BASE && a < PALETTE_END) {
@@ -193,7 +193,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         const uint32_t offset = a - GRAPHICS_BASE;
         if (sprite_writers && offset < SPRITE_RAM_SIZE) (*sprite_writers)[offset >> 4] = cpu.pc;
         graphics[offset] = v;
-        if (sprite_units) sprite_units->note_write(a, 1);
+        if (sprites) sprites->note_write(a, 1);
         return;
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
@@ -257,7 +257,7 @@ void Machine::write16(uint32_t a, uint16_t v) {
     if (auto *p = direct_bytes<2, true>(*this, a)) {
         p[0] = uint8_t(v >> 8);
         p[1] = uint8_t(v);
-        if (sprite_units) sprite_units->note_write(a, 2);
+        if (sprites) sprites->note_write(a, 2);
         return;
     }
     write8(a, uint8_t(v >> 8));
@@ -276,7 +276,7 @@ void Machine::write32(uint32_t a, uint32_t v) {
         p[1] = uint8_t(v >> 16);
         p[2] = uint8_t(v >> 8);
         p[3] = uint8_t(v);
-        if (sprite_units) sprite_units->note_write(a, 4);
+        if (sprites) sprites->note_write(a, 4);
         return;
     }
     write16(a, uint16_t(v >> 16));
@@ -296,7 +296,7 @@ void Machine::advance_to(uint64_t cycles) {
             m_irq3_at = m_next_vblank + 10000;
             ++frame;
             m_next_vblank = raster_cycle((frame + 1) * FRAME_PIXELS);
-            if (sprite_units) sprite_units->frame_end();
+            if (sprites) sprites->frame_end();
         }
         if (m_hardware_cycles == m_irq3_at) {
             pending_irqs |= 1u << 3;
@@ -324,7 +324,6 @@ int Machine::boundary() {
                 write16(cpu.a[7] + 6, uint16_t(0x1000 | ((24 + level) * 4)));
             }
             f3_set_sr(&cpu, uint16_t((cpu.sr & ~0x0700) | (level << 8)));
-            if (sprite_units) sprite_units->note_irq(unsigned(level));
             if (!cpu.pc) cpu.pc = read32(cpu.vbr + 15 * 4);
             return 1;
         }
@@ -366,7 +365,7 @@ int Machine::fallback() {
     }
     ++fallback_instructions;
     if (!fallback_hits.empty()) ++fallback_hits[physical_pc >> 1];
-    if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
+    if (sprites) sprites->interpreted_instruction(cpu.pc);
     return interpreter->run_main(1) > 0 && !cpu.halted;
 }
 bool Machine::run_frame(bool translated) {
@@ -380,7 +379,7 @@ bool Machine::run_frame(bool translated) {
         } else if (!boundary()) {
             // Reference execution must hand MMIO/IRQ changes back at every
             // instruction boundary. Coarse slices alter the ROM boot checks.
-            if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
+            if (sprites) sprites->interpreted_instruction(cpu.pc);
             interpreter->run_main(1);
         }
     }
@@ -513,7 +512,7 @@ void Machine::load_state(std::span<const uint8_t> src) {
                                     std::to_string(src.size()));
     }
     native_pixels();
-    if (sprite_units) sprite_units->reset();
+    if (sprites) sprites->reset();
     StateReader reader(src);
     // 1. Native CPU
     CanonicalF3Cpu cpu_st;

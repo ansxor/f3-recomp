@@ -11,7 +11,7 @@
 #include "debug/discovery.hpp"
 #include "renderer/game/captured_frame.hpp"
 #include "state_io.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -116,8 +116,6 @@ struct GameVideo::Impl {
         const auto current = sprites.presented_sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
-        frame.shadow_count = unsigned(std::count_if(current.begin(), current.end(),
-                                                    [](const SceneSprite &s) { return s.shadow; }));
         frame.pen_mask = sprites.pen_mask();
         frame.flipped = sprites.flipped();
         const auto &palette = machine.palette;
@@ -380,11 +378,11 @@ void GameVideo::render_frame() {
     // Render below still uses the previously latched sprite plane, preserving the
     // one-frame FDP sprite lag.
     const VideoRam vram{m.graphics, m.control, m.frame + 1};
-    // Render-only unit presentation (identities/splices) valid for this decode only.
+    // Render-only sprite presentation (groups/splices) valid for this decode only.
     SpritePresentation presentation;
-    const bool have_presentation = m.sprite_units && m.sprite_units->active();
+    const bool have_presentation = m.sprites && m.sprites->active();
     if (have_presentation) {
-        presentation = m.sprite_units->presentation();
+        presentation = m.sprites->presentation();
         state.sprites.set_presentation(&presentation);
     }
     std::apply([&](auto &...c) { Impl::decode_all(vram, c...); }, state.sources());

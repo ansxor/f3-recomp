@@ -1,52 +1,71 @@
 #pragma once
-// Render-only view of sprite RAM produced by SpriteUnits and consumed by both
-// sprite decoders (FDP and GameSprites). Nothing here is serialized; enabling it
-// must never change Machine::state_crc().
+// Render-only view of sprite RAM produced by the sprite system and consumed by both sprite
+// decoders (FDP and GameSprites). Nothing here is serialized; enabling it must never change
+// Machine::state_crc().
 #include <cstdint>
+#include <cstddef>
 #include <span>
 
 namespace f3rt {
 
-// Per-entry render flags of a splice replacement (SpriteSplice::flags, DecodedSpriteEntry::flags).
-inline constexpr uint8_t SPRITE_FLAG_SHADOW =
-    1; // flicker shadow: the game's own shadow emit path wrote it
+// Sprite-RAM geometry. Offsets are relative to GRAPHICS_BASE: two 0x400-entry banks, the low
+// half at 0x0000..0x7fff and the high half at 0x8000..0xffff (entry 0x10 bytes). Slots are
+// indexed bank * SPRITE_ENTRIES + entry.
+inline constexpr uint16_t SPRITE_ENTRIES = 0x400;
+inline constexpr size_t SPRITE_SLOTS = 0x800;
 
-// Replace bank entries [first, last] with `replacement` while decoding, if and only
-// if the bank still holds exactly `real` there (content validation makes stale
+constexpr uint16_t sprite_slot_for(uint32_t offset) {
+    return uint16_t(((offset >> 15) & 1) * SPRITE_ENTRIES + ((offset & 0x7fff) >> 4));
+}
+// False for the bytes of the second half of each 0x8000 bank: hardware never displays them.
+constexpr bool sprite_slot_listed(uint32_t offset) {
+    return ((offset & 0x7fff) >> 4) < SPRITE_ENTRIES;
+}
+
+// Sprite group of one slot: the stable key (0 = unresolved) and the group origin at the time
+// the slot was written (24.8 scanout units). Params of a rigid group: member position =
+// origin + lane offset.
+struct SpriteGroupSlot {
+    uint64_t key = 0;
+    int32_t x = 0, y = 0;
+    uint32_t pc = 0; // sprite-RAM writer PC that set the slot's group (render-only)
+    bool operator==(const SpriteGroupSlot &) const = default;
+};
+
+// Replace bank entries [first, last] with `replacement` while decoding. A splice applies only
+// while the bank still holds exactly the `real` bytes (content validation makes stale behaviour
 // splices harmless across bank flips, lag and state loads).
 struct SpriteSplice {
     bool bank = false;                    // false: 0x600000 half, true: 0x608000 half
     uint16_t first = 0, last = 0;         // inclusive entry indices within the bank (0..0x3ff)
-    std::span<const uint8_t> real;        // (last - first + 1) * 16 bytes captured at unit exit
+    std::span<const uint8_t> real;        // validated range
     std::span<const uint8_t> replacement; // n * 16 raw entries; jump words inside are ignored
-    uint64_t identity = 0; // invocation identity; entry k gets sprite_identity_mix(identity, k)
-    // Parallel to `replacement` (one byte per 16-byte entry, sprite_flag_*); empty = no flags.
-    std::span<const uint8_t> flags;
+    // Group of the replacement entries (0 = unknown) and its origin at splice time.
+    uint64_t group = 0;
+    int32_t group_x = 0, group_y = 0;
+    uint32_t group_pc = 0;
+};
+
+// One sprite-RAM store, reported to the write listeners instead of them reaching into the
+// tracker's write state.
+struct SpriteRamWrite {
+    uint32_t start = 0; // byte offset within sprite RAM (relative to GRAPHICS_BASE)
+    unsigned width = 0;
+};
+
+// Render-only listener for every sprite-RAM write.
+class SpriteRamWriteListener {
+public:
+    virtual ~SpriteRamWriteListener() = default;
+    virtual void sprite_group_write(const SpriteRamWrite &write) = 0;
 };
 
 struct SpritePresentation {
-    // 0x800 entries indexed bank * 0x400 + entry; 0 = unknown. Empty span = no identities.
-    std::span<const uint64_t> identity;
-    // Sorted by (bank, first); non-overlapping.
+    // 0x800 entries indexed bank * 0x400 + entry. Empty span = no groups.
+    std::span<const SpriteGroupSlot> groups;
+    // Sorted by (bank, first); non-overlapping. `real`-validated behaviour splices.
     std::span<const SpriteSplice> splices;
-    // Parallel to `identity`: the owning invocation's identity per entry (0 = unknown); empty = none.
-    // Splice replacement entries take SpriteSplice::identity.
-    std::span<const uint64_t> object;
-    // Parallel to `identity`: sprite_flag_* of the real entry (shadow entries written by a
-    // flicker shadow's emit path); empty = no tagged real entries. Splice entries use SpriteSplice::flags.
-    std::span<const uint8_t> flags;
-    bool empty() const {
-        return identity.empty() && splices.empty() && object.empty() && flags.empty();
-    }
+    bool empty() const { return groups.empty() && splices.empty(); }
 };
-
-// Stable per-entry identity derived from an invocation identity; never returns 0.
-constexpr uint64_t sprite_identity_mix(uint64_t identity, uint32_t index) {
-    uint64_t x = identity ^ (uint64_t(index) + 0x9e3779b97f4a7c15ull);
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
-    x ^= x >> 31;
-    return x ? x : 1;
-}
 
 } // namespace f3rt

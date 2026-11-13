@@ -3,6 +3,7 @@
 #include "interpreter.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <initializer_list>
 #include <memory>

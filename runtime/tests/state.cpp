@@ -1,6 +1,7 @@
 #include "state_io.hpp"
 #include "third_party/musashi/m68k.h"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <cstring>
 #include <limits>

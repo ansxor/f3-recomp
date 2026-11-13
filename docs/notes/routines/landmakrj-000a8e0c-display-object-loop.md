@@ -26,8 +26,9 @@ reading plus the store-PC lists the video code treats as documented producers, n
 ^[raw/emu-source/landmakrj-video.cpp.txt]
 
 - Display-object loop at `0xa8e0c`: `a3` = display object; `jmp ([$8,a3])` enters the object's draw handler,
-  which returns through `a4 = 0xa8e40`. The object size is not yet known. The emit unit
-  `display_objects` is `[0xa8e22, 0xa8e40)` with the unit address in `a3`, owned by the unit.
+  which returns through `a4 = 0xa8e40`. The object size is not yet known. The span was declared as
+  the emit unit `display_objects` (`[0xa8e22, 0xa8e40)`, unit address in `a3`); emit units are now
+  behaviour anchors only, and sprite grouping comes from the generated sprite-group table.
   ^[raw/docs/landmakrj-config-excerpts.toml.txt]
 - Sprite-RAM store PCs of the object helpers (all inside `sprites_covered_write`):
   `0xa8f38..0xa8f82` `obj_grid`, `0xa8f84..0xa8fce` `obj_3tile`, `0xa9036..0xa9076` `obj_grid` with X flip,

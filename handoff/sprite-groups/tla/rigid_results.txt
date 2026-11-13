@@ -1,0 +1,289 @@
+class	forced	RigidKey	PASS	213,504	52s
+class	forced	GroupSound	PASS	213,504	51s
+class	forced	GroupComplete	PASS	213,504	40s
+class	forced	Interpolates	PASS	213,504	53s
+class	forced	ShadowSmooth	PASS	213,504	35s
+class	flicker	RigidKey	PASS	162,816	37s
+class	flicker	GroupSound	PASS	162,816	33s
+class	flicker	GroupComplete	PASS	162,816	28s
+class	flicker	Interpolates	PASS	162,816	36s
+class	flicker	ShadowSmooth	FAIL	4362	1s
+object	forced	RigidKey	FAIL	-	1s
+object	forced	GroupSound	ERR	-	0s
+object	forced	GroupComplete	ERR	-	0s
+object	forced	Interpolates	ERR	-	0s
+object	forced	ShadowSmooth	ERR	-	0s
+object	flicker	RigidKey	ERR	-	0s
+object	flicker	GroupSound	FAIL	4362	1s
+object	flicker	GroupComplete	PASS	162,816	28s
+object	flicker	Interpolates	FAIL	5509	1s
+object	flicker	ShadowSmooth	PASS	162,816	25s
+# Rerun of rows that first returned ERR (empty TLC output; launch collision), each with its own -metadir:
+object	forced	GroupSound	FAIL	4,490
+object	forced	GroupComplete	PASS	213,504
+object	forced	Interpolates	FAIL	4,742
+object	forced	ShadowSmooth	PASS	213,504	(vacuous: shadow paired with the body's key)
+object	flicker	RigidKey	FAIL	-	(violated by the initial state)
+# Matrix run 2026-10-22 17:09 (module copy: /tmp/sgmodel/RigidGroups.tla)
+grouping	unresolved	shadow	invariant	status	states	time	exit
+# 2.19 of 08 August 2024 (rev: 5a47802)
+class	pair	forced	RigidKey	PASS	213,504	56s	0
+class	pair	forced	GroupSound	PASS	213,504	58s	0
+class	pair	forced	GroupComplete	PASS	211,728	46s	0
+class	pair	forced	Interpolates	PASS	213,504	63s	0
+class	pair	forced	PairSound	PASS	213,504	59s	0
+class	pair	forced	ShadowSmooth	PASS	197,236	38s	0
+class	pair	flicker	RigidKey	PASS	162,816	41s	0
+class	pair	flicker	GroupSound	PASS	162,816	39s	0
+class	pair	flicker	GroupComplete	PASS	162,816	33s	0
+class	pair	flicker	Interpolates	PASS	162,816	39s	0
+class	pair	flicker	PairSound	PASS	162,816	38s	0
+class	pair	flicker	ShadowSmooth	FAIL	4232	1s	12
+class	pair	fill	RigidKey	PASS	145,920	71s	0
+class	pair	fill	GroupSound	PASS	182,784	47s	0
+class	pair	fill	GroupComplete	PASS	182,784	39s	0
+class	pair	fill	Interpolates	PASS	182,784	51s	0
+class	pair	fill	PairSound	PASS	182,784	52s	0
+class	pair	fill	ShadowSmooth	FAIL	4232	1s	12
+class	snap	forced	RigidKey	PASS	211,450	59s	0
+class	snap	forced	GroupSound	PASS	213,504	55s	0
+class	snap	forced	GroupComplete	PASS	213,504	45s	0
+class	snap	forced	Interpolates	PASS	213,504	111s	0
+class	snap	forced	PairSound	PASS	176,640	108s	0
+class	snap	forced	ShadowSmooth	PASS	213,504	46s	0
+class	snap	flicker	RigidKey	PASS	162,816	40s	0
+class	snap	flicker	GroupSound	PASS	162,816	40s	0
+class	snap	flicker	GroupComplete	PASS	162,816	31s	0
+class	snap	flicker	Interpolates	PASS	162,816	66s	0
+class	snap	flicker	PairSound	PASS	162,816	65s	0
+class	snap	flicker	ShadowSmooth	FAIL	4362	1s	12
+class	snap	fill	RigidKey	PASS	182,784	50s	0
+class	snap	fill	GroupSound	PASS	182,784	47s	0
+class	snap	fill	GroupComplete	PASS	182,784	39s	0
+class	snap	fill	Interpolates	PASS	182,784	91s	0
+class	snap	fill	PairSound	PASS	182,784	87s	0
+class	snap	fill	ShadowSmooth	FAIL	4362	1s	12
+object	pair	forced	RigidKey	FAIL	-	1s	12
+object	pair	forced	GroupSound	FAIL	4490	1s	12
+object	pair	forced	GroupComplete	PASS	213,504	65s	0
+object	pair	forced	Interpolates	FAIL	5128	1s	12
+object	pair	forced	PairSound	FAIL	4489	1s	12
+object	pair	forced	ShadowSmooth	PASS	195,072	42s	0
+object	pair	flicker	RigidKey	FAIL	-	1s	12
+object	pair	flicker	GroupSound	FAIL	4362	1s	12
+object	pair	flicker	GroupComplete	PASS	162,816	36s	0
+object	pair	flicker	Interpolates	FAIL	5896	1s	12
+object	pair	flicker	PairSound	FAIL	4362	1s	12
+object	pair	flicker	ShadowSmooth	PASS	162,816	30s	0
+object	pair	fill	RigidKey	FAIL	-	1s	12
+object	pair	fill	GroupSound	FAIL	4362	1s	12
+object	pair	fill	GroupComplete	PASS	182,784	41s	0
+object	pair	fill	Interpolates	FAIL	5896	1s	12
+object	pair	fill	PairSound	FAIL	4362	1s	12
+object	pair	fill	ShadowSmooth	PASS	182,784	36s	0
+object	snap	forced	RigidKey	FAIL	-	1s	12
+object	snap	forced	GroupSound	FAIL	4490	1s	12
+object	snap	forced	GroupComplete	PASS	213,504	52s	0
+object	snap	forced	Interpolates	PASS	213,504	122s	0
+object	snap	forced	PairSound	PASS	200,897	119s	0
+object	snap	forced	ShadowSmooth	FAIL	4490	1s	12
+object	snap	flicker	RigidKey	FAIL	-	1s	12
+object	snap	flicker	GroupSound	FAIL	4362	1s	12
+object	snap	flicker	GroupComplete	PASS	162,816	32s	0
+object	snap	flicker	Interpolates	PASS	162,816	69s	0
+object	snap	flicker	PairSound	PASS	162,816	76s	0
+object	snap	flicker	ShadowSmooth	FAIL	4362	1s	12
+object	snap	fill	RigidKey	FAIL	-	1s	12
+object	snap	fill	GroupSound	FAIL	4361	1s	12
+object	snap	fill	GroupComplete	PASS	182,784	40s	0
+object	snap	fill	Interpolates	PASS	182,784	92s	0
+object	snap	fill	PairSound	PASS	182,784	98s	0
+object	snap	fill	ShadowSmooth	FAIL	4362	1s	12
+# Matrix run 2026-10-22 17:58 (module copy: /tmp/sgmodel/RigidGroups.tla)
+grouping	unresolved	shadow	invariant	status	states	time	exit
+# 2.19 of 08 August 2024 (rev: 5a47802)
+class	pair	forced	RigidKey	PASS	213,504	62s	0
+class	pair	forced	GroupSound	PASS	213,504	57s	0
+class	pair	forced	GroupComplete	PASS	213,504	45s	0
+class	pair	forced	Interpolates	PASS	213,504	58s	0
+class	pair	forced	PairSound	PASS	213,504	59s	0
+class	pair	forced	ShadowSmooth	PASS	213,504	41s	0
+class	pair	flicker	RigidKey	PASS	162,816	40s	0
+class	pair	flicker	GroupSound	PASS	162,816	35s	0
+class	pair	flicker	GroupComplete	PASS	162,816	30s	0
+class	pair	flicker	Interpolates	PASS	162,816	39s	0
+class	pair	flicker	PairSound	PASS	162,816	42s	0
+class	pair	flicker	ShadowSmooth	FAIL	4,361	1s	12
+class	pair	fill	RigidKey	PASS	182,784	52s	0
+class	pair	fill	GroupSound	PASS	182,784	49s	0
+class	pair	fill	GroupComplete	PASS	182,784	40s	0
+class	pair	fill	Interpolates	PASS	182,784	51s	0
+class	pair	fill	PairSound	PASS	182,784	48s	0
+class	pair	fill	ShadowSmooth	FAIL	4,362	1s	12
+class	snap	forced	RigidKey	PASS	213,504	55s	0
+class	snap	forced	GroupSound	PASS	213,504	54s	0
+class	snap	forced	GroupComplete	PASS	213,504	44s	0
+class	snap	forced	Interpolates	PASS	213,504	110s	0
+class	snap	forced	PairSound	PASS	213,504	103s	0
+class	snap	forced	ShadowSmooth	PASS	213,504	44s	0
+class	snap	flicker	RigidKey	PASS	162,816	40s	0
+class	snap	flicker	GroupSound	PASS	162,816	41s	0
+class	snap	flicker	GroupComplete	PASS	162,816	34s	0
+class	snap	flicker	Interpolates	PASS	162,816	65s	0
+class	snap	flicker	PairSound	PASS	162,816	62s	0
+class	snap	flicker	ShadowSmooth	FAIL	4,362	1s	12
+class	snap	fill	RigidKey	PASS	182,784	54s	0
+class	snap	fill	GroupSound	PASS	182,784	52s	0
+class	snap	fill	GroupComplete	PASS	182,784	45s	0
+class	snap	fill	Interpolates	PASS	182,784	99s	0
+class	snap	fill	PairSound	PASS	182,784	95s	0
+class	snap	fill	ShadowSmooth	FAIL	4,361	1s	12
+object	pair	forced	RigidKey	FAIL	-	1s	12
+object	pair	forced	GroupSound	FAIL	4,489	1s	12
+object	pair	forced	GroupComplete	PASS	213,504	51s	0
+object	pair	forced	Interpolates	FAIL	4,741	1s	12
+object	pair	forced	PairSound	FAIL	4,360	1s	12
+object	pair	forced	ShadowSmooth	PASS	213,504	39s	0
+object	pair	flicker	RigidKey	FAIL	-	1s	12
+object	pair	flicker	GroupSound	FAIL	4,362	1s	12
+object	pair	flicker	GroupComplete	PASS	162,816	33s	0
+object	pair	flicker	Interpolates	FAIL	5,510	1s	12
+object	pair	flicker	PairSound	FAIL	4,362	1s	12
+object	pair	flicker	ShadowSmooth	PASS	162,816	30s	0
+object	pair	fill	RigidKey	FAIL	-	1s	12
+object	pair	fill	GroupSound	FAIL	4,362	1s	12
+object	pair	fill	GroupComplete	PASS	182,784	44s	0
+object	pair	fill	Interpolates	FAIL	5,510	1s	12
+object	pair	fill	PairSound	FAIL	4,362	1s	12
+object	pair	fill	ShadowSmooth	PASS	182,784	39s	0
+object	snap	forced	RigidKey	FAIL	-	1s	12
+object	snap	forced	GroupSound	FAIL	4,490	1s	12
+object	snap	forced	GroupComplete	PASS	213,504	45s	0
+object	snap	forced	Interpolates	PASS	213,504	123s	0
+object	snap	forced	PairSound	PASS	213,504	106s	0
+object	snap	forced	ShadowSmooth	FAIL	4,490	1s	12
+object	snap	flicker	RigidKey	FAIL	-	1s	12
+object	snap	flicker	GroupSound	FAIL	4,361	1s	12
+object	snap	flicker	GroupComplete	PASS	162,816	29s	0
+object	snap	flicker	Interpolates	PASS	162,816	70s	0
+object	snap	flicker	PairSound	PASS	162,816	69s	0
+object	snap	flicker	ShadowSmooth	FAIL	4,362	1s	12
+object	snap	fill	RigidKey	FAIL	-	1s	12
+object	snap	fill	GroupSound	FAIL	4,362	1s	12
+object	snap	fill	GroupComplete	PASS	182,784	40s	0
+object	snap	fill	Interpolates	PASS	182,784	93s	0
+object	snap	fill	PairSound	PASS	182,784	94s	0
+object	snap	fill	ShadowSmooth	FAIL	4,362	1s	12
+# Summary (run 2 authoritative). TLC 2.19 of 08 August 2024 (rev: 5a47802), -workers auto -deadlock. Run 1 (bg_12): EXIT=0, 2724 s. Run 2 (bg_34): EXIT=0, 2671 s. Both 72 rows.
+# Run 1 bug: the parser took the first "distinct states found" match, a Progress line, for 7 PASS rows. Run 2 uses the final summary line only. Corrected full-space counts: class/pair/fill RigidKey 182,784 (run 1: 145,920); class/pair/forced GroupComplete 213,504 (211,728); class/pair/forced ShadowSmooth 213,504 (197,236); class/snap/forced RigidKey 213,504 (211,450); class/snap/forced PairSound 213,504 (176,640); object/pair/forced ShadowSmooth 213,504 (195,072); object/snap/forced PairSound 213,504 (200,897).
+# PASS counts (run 2): forced 213,504; flicker 162,816; fill 182,784. Unresolved=pair PASS rows equal the baseline.
+# FAIL counts are violation-time snapshots under -workers auto and vary by run. Versus baseline (run 2): class/pair/flicker ShadowSmooth 4,361 vs 4,362; object/pair/forced GroupSound 4,489 vs 4,490; object/pair/forced Interpolates 4,741 vs 4,742; object/pair/flicker Interpolates 5,510 vs 5,509. Run 1 vs run 2: class/pair/flicker ShadowSmooth 4,232 vs 4,361; object/pair/forced Interpolates 5,128 vs 4,741. Verdicts agree across run 1, run 2, and baseline.
+# Acceptance (§7 row 7): NOT MET. No configuration meets both halves.
+#   No wrong pairing (PairSound): holds in class/pair, class/snap, object/snap. Fails in object/pair (body and shadow share a key).
+#   ShadowSmooth under fill: fails in class/pair, class/snap, object/snap. Holds only in object/pair, where the shadow pairs with the body (PairSound fails).
+# Cause (TLC counterexample and probe). In fill mode a shadow is drawn only on parity-on frames or when the same uid had a shadow in the previous frame (ShadowDrawn, RigidGroups.tla lines 40-42). An incarnation born on a parity-off frame gets no shadow that frame, so its first shadow appears on the next frame with no previous shadow to pair with. Objects alive at Init count as born on the Init frame.
+#   Original trace (class/pair/fill, Init parity FALSE): depth 2; object 1 has no shadow in state 1 and a shadow in state 2.
+#   Probe (scratch copy /tmp/sgprobe, not in repo; Init parity = TRUE; class/pair/fill; INVARIANT ShadowSmooth): violated at depth 3 by a birth on a parity-off frame (uid 1 -> 4 at state 2). Fixing parity at Init does not remove the violation. Command: cd /tmp/sgprobe && /opt/homebrew/opt/openjdk@21/bin/java -XX:+UseParallelGC -cp ~/Downloads/tla2tools.jar tlc2.TLC -workers auto -deadlock -metadir /tmp/sgprobe/meta -config probe.cfg RigidGroups.tla ; EXIT=12.
+# [INFERENCE from the definitions, consistent with the probe] Fill differs from forced only by delaying the first shadow of an incarnation born on a parity-off frame. Once drawn, a shadow stays drawn while its uid lives. The ShadowSmooth violation is exactly that delay.
+# Options for Main: (a) approve weakening ShadowSmooth to exempt an incarnation's first drawn frame; fill stays as defined (not run). (b) Draw newborn shadows in their birth frame; fill then draws the same shadows as forced. (c) Keep row 7 unmet and report it.
+# Matrix run 2026-10-22 19:13 (module copy: /tmp/sgmodel/RigidGroups.tla)
+# ShadowSmooth: once a shadow is drawn for an incarnation, every later frame pairs it (drawnBefore history; frames before the first draw are exempt).
+grouping	unresolved	shadow	invariant	status	states	time	exit
+# 2.19 of 08 August 2024 (rev: 5a47802)
+class	pair	forced	RigidKey	PASS	213,504	71s	0
+class	pair	forced	GroupSound	PASS	213,504	66s	0
+class	pair	forced	GroupComplete	PASS	213,504	56s	0
+class	pair	forced	Interpolates	PASS	213,504	74s	0
+class	pair	forced	PairSound	PASS	213,504	70s	0
+class	pair	forced	ShadowSmooth	PASS	213,504	49s	0
+class	pair	flicker	RigidKey	PASS	162,816	48s	0
+class	pair	flicker	GroupSound	PASS	162,816	45s	0
+class	pair	flicker	GroupComplete	PASS	162,816	40s	0
+class	pair	flicker	Interpolates	PASS	162,816	48s	0
+class	pair	flicker	PairSound	PASS	162,816	43s	0
+class	pair	flicker	ShadowSmooth	FAIL	124,545	2s	12
+class	pair	fill	RigidKey	PASS	182,784	54s	0
+class	pair	fill	GroupSound	PASS	182,784	54s	0
+class	pair	fill	GroupComplete	PASS	182,784	49s	0
+class	pair	fill	Interpolates	PASS	182,784	62s	0
+class	pair	fill	PairSound	PASS	182,784	59s	0
+class	pair	fill	ShadowSmooth	PASS	182,784	44s	0
+class	snap	forced	RigidKey	PASS	213,504	67s	0
+class	snap	forced	GroupSound	PASS	213,504	65s	0
+class	snap	forced	GroupComplete	PASS	213,504	56s	0
+class	snap	forced	Interpolates	PASS	213,504	117s	0
+class	snap	forced	PairSound	PASS	213,504	104s	0
+class	snap	forced	ShadowSmooth	PASS	213,504	52s	0
+class	snap	flicker	RigidKey	PASS	162,816	46s	0
+class	snap	flicker	GroupSound	PASS	162,816	42s	0
+class	snap	flicker	GroupComplete	PASS	162,816	39s	0
+class	snap	flicker	Interpolates	PASS	162,816	73s	0
+class	snap	flicker	PairSound	PASS	162,816	70s	0
+class	snap	flicker	ShadowSmooth	FAIL	124,554	2s	12
+class	snap	fill	RigidKey	PASS	182,784	54s	0
+class	snap	fill	GroupSound	PASS	182,784	54s	0
+class	snap	fill	GroupComplete	PASS	182,784	46s	0
+class	snap	fill	Interpolates	PASS	182,784	93s	0
+class	snap	fill	PairSound	PASS	182,784	97s	0
+class	snap	fill	ShadowSmooth	PASS	182,784	50s	0
+object	pair	forced	RigidKey	FAIL	-	1s	12
+object	pair	forced	GroupSound	FAIL	4,490	1s	12
+object	pair	forced	GroupComplete	PASS	213,504	57s	0
+object	pair	forced	Interpolates	FAIL	4,742	1s	12
+object	pair	forced	PairSound	FAIL	4,490	1s	12
+object	pair	forced	ShadowSmooth	PASS	213,504	49s	0
+object	pair	flicker	RigidKey	FAIL	-	1s	12
+object	pair	flicker	GroupSound	FAIL	4,231	1s	12
+object	pair	flicker	GroupComplete	PASS	162,816	39s	0
+object	pair	flicker	Interpolates	FAIL	5,509	1s	12
+object	pair	flicker	PairSound	FAIL	4,361	1s	12
+object	pair	flicker	ShadowSmooth	PASS	162,816	35s	0
+object	pair	fill	RigidKey	FAIL	-	1s	12
+object	pair	fill	GroupSound	FAIL	4,361	1s	12
+object	pair	fill	GroupComplete	PASS	182,784	48s	0
+object	pair	fill	Interpolates	FAIL	5,510	1s	12
+object	pair	fill	PairSound	FAIL	4,362	1s	12
+object	pair	fill	ShadowSmooth	PASS	182,784	40s	0
+object	snap	forced	RigidKey	FAIL	-	1s	12
+object	snap	forced	GroupSound	FAIL	4,490	1s	12
+object	snap	forced	GroupComplete	PASS	213,504	49s	0
+object	snap	forced	Interpolates	PASS	213,504	117s	0
+object	snap	forced	PairSound	PASS	213,504	125s	0
+object	snap	forced	ShadowSmooth	FAIL	4,490	1s	12
+object	snap	flicker	RigidKey	FAIL	-	1s	12
+object	snap	flicker	GroupSound	FAIL	4,362	1s	12
+object	snap	flicker	GroupComplete	PASS	162,816	42s	0
+object	snap	flicker	Interpolates	PASS	162,816	90s	0
+object	snap	flicker	PairSound	PASS	162,816	88s	0
+object	snap	flicker	ShadowSmooth	FAIL	124,549	2s	12
+object	snap	fill	RigidKey	FAIL	-	1s	12
+object	snap	fill	GroupSound	FAIL	4,362	1s	12
+object	snap	fill	GroupComplete	PASS	182,784	56s	0
+object	snap	fill	Interpolates	PASS	182,784	127s	0
+object	snap	fill	PairSound	PASS	182,784	117s	0
+object	snap	fill	ShadowSmooth	FAIL	5,257	1s	12
+# Run 3 summary (2026-10-22; wall time 3162 s). Authoritative for ShadowSmooth.
+# The run-2 summary above (lines 181-188) is superseded for ShadowSmooth only.
+# ShadowSmooth is now the drawnBefore form: (t.cls = "shadow" /\ drawnBefore[t.addr]) =>
+# \E s \in prev : Pairs(s, t), where drawnBefore[a] records that the current
+# incarnation at a had a shadow drawn in an earlier frame (reset on fate /= "same").
+# The suggested prev-shadow condition (\E s \in prev : s.uid = t.uid /\ s.cls = "shadow")
+# was rejected: probed on class/pair/flicker it PASSES (EXIT=0, 162,816 states),
+# vacuously true because under flicker prev never holds a shadow when Cur does.
+# Refined ShadowSmooth verdicts: class/pair and class/snap: forced PASS 213,504;
+# flicker FAIL (3-state counterexample: drawn, gap, reappearance with no prev shadow);
+# fill PASS 182,784 (was FAIL). object/pair: PASS in all three modes (via the body's
+# key; PairSound FAIL). object/snap: FAIL in all three modes. Every PASS row matches
+# run 2's count exactly [INFERENCE: drawnBefore is a function of the other state
+# variables], confirming added history added no states. Every non-ShadowSmooth row
+# matches run 2 verdict and count. §7 row 7: MET under class keys (PairSound PASS
+# and refined ShadowSmooth fill PASS, pair and snap); NOT MET under object keys.
+# PASS = no violation within 3 frames ("depth of the complete state graph search is 3",
+# Bound nextUid <= MaxUid with MaxUid=9, 512 initial states). FAIL counts are
+# violation-time snapshots and vary by exploration order (class flicker ShadowSmooth:
+# 4,232 run 1 / 4,361 run 2 / 4,362 baseline / 4,225 -workers 1 / ~124,5xx run 3;
+# object_pair_forced Interpolates 5,128 / 4,741 / 4,742 / 4,609 / 4,742;
+# object_pair_flicker Interpolates 5,896 / 5,510 / 5,509 / 5,377 / 5,509; object_snap_fill
+# ShadowSmooth 4,362 run 2 / 5,257 run 3). class/snap/fill confirms the target config:
+# RigidKey, GroupSound, GroupComplete, Interpolates, PairSound, ShadowSmooth all PASS
+# at 182,784. No ERR rows. Raw outputs in /tmp/sgmodel (run 2 in /tmp/sgmodel_run2).

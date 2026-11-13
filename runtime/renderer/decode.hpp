@@ -43,9 +43,12 @@ struct DecodedSpriteEntry {
     uint8_t color = 0;
     bool flip_x = false, flip_y = false;
     uint8_t pri = 0;
-    uint64_t identity = 0; // stable sprite identity from a SpritePresentation; 0 = unknown
-    uint64_t object = 0; // owning invocation identity (shared by a multi-part object); 0 = unknown
-    uint8_t flags = 0;   // sprite_flag_* from a SpriteSplice replacement entry; 0 for real entries
+    // Stable sprite group from a SpritePresentation (block members inherit the head's); 0 =
+    // unresolved, the renderer snaps instead of pairing. `group_x`/`group_y` are the group
+    // origin at draw time (24.8 scanout units).
+    uint64_t group = 0;
+    int32_t group_x = 0, group_y = 0;
+    uint32_t group_pc = 0; // writer PC that resolved the group (render-only)
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)

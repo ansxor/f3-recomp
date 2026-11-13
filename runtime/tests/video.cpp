@@ -6,6 +6,7 @@
 #include "renderer/game/lines.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <array>

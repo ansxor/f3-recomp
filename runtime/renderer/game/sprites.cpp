@@ -30,16 +30,13 @@ void GameSprites::decode(const VideoRam &vram) {
     state.extra_planes = uint8_t(m_reg_pen_mask >> 4);
     const SpriteRamState initial = state;
 
-    // Canonical list (serialized state): identities only, never splices.
-    SpritePresentation identities;
-    if (m_presentation) {
-        identities.identity = m_presentation->identity;
-        identities.object = m_presentation->object;
-    }
+    // Canonical list (serialized state): groups only, never splices.
+    SpritePresentation groups;
+    if (m_presentation) groups.groups = m_presentation->groups;
     std::array<DecodedSpriteEntry, MAX_SPRITES> decoded;
     const size_t count = decode_sprite_list(vram.graphics.data(), int(geometry::FIRST_LINE),
                                             int(geometry::HEIGHT), decoded, state, false,
-                                            identities.identity.empty() ? nullptr : &identities);
+                                            groups.empty() ? nullptr : &groups);
 
     auto convert = [](const DecodedSpriteEntry &d, SceneSprite &dst) {
         dst.x = d.x;
@@ -50,9 +47,10 @@ void GameSprites::decode(const VideoRam &vram) {
         dst.palette = d.color;
         dst.flip_x = d.flip_x;
         dst.flip_y = d.flip_y;
-        dst.identity = d.identity;
-        dst.object = d.object;
-        dst.shadow = (d.flags & SPRITE_FLAG_SHADOW) != 0;
+        dst.group = d.group;
+        dst.group_x = d.group_x;
+        dst.group_y = d.group_y;
+        dst.group_pc = d.group_pc;
     };
     for (size_t i = 0; i < count; ++i) convert(decoded[i], m_staging_sprites[i]);
     // The decoded list is this frame's submission; GameVideo::latch_sprites()
@@ -62,8 +60,7 @@ void GameSprites::decode(const VideoRam &vram) {
     m_staging_count = 0;
 
     // Render-only presented list with splices; capacity-truncated like the canonical one.
-    m_presented_submitted_valid =
-        m_presentation && (!m_presentation->splices.empty() || !m_presentation->flags.empty());
+    m_presented_submitted_valid = m_presentation && !m_presentation->splices.empty();
     if (m_presented_submitted_valid) {
         SpriteRamState presented_state = initial;
         std::array<DecodedSpriteEntry, MAX_PRESENTED_SPRITES> presented;
@@ -269,8 +266,9 @@ void GameSprites::load_state(StateReader &reader) {
         s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0;
         s.flip_y = ss.flip_y != 0;
-        s.identity = 0;
-        s.object = 0;
+        s.group = 0;
+        s.group_x = 0;
+        s.group_y = 0;
     }
     reader.read(c);
     if (c > MAX_SPRITES)
@@ -288,8 +286,9 @@ void GameSprites::load_state(StateReader &reader) {
         s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0;
         s.flip_y = ss.flip_y != 0;
-        s.identity = 0;
-        s.object = 0;
+        s.group = 0;
+        s.group_x = 0;
+        s.group_y = 0;
     }
     reader.read(c);
     if (c > MAX_SPRITES) throw std::invalid_argument("Snapshot current sprite count out of range");
@@ -306,8 +305,9 @@ void GameSprites::load_state(StateReader &reader) {
         s.palette = ss.palette;
         s.flip_x = ss.flip_x != 0;
         s.flip_y = ss.flip_y != 0;
-        s.identity = 0;
-        s.object = 0;
+        s.group = 0;
+        s.group_x = 0;
+        s.group_y = 0;
     }
     uint8_t u8;
     reader.read(u8);

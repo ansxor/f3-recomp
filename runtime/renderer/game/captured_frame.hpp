@@ -23,7 +23,6 @@ struct CapturedFrame {
     std::array<SceneRow, 256> rows{};
     std::array<SceneSprite, MAX_SPRITES> sprites{};
     unsigned sprite_count = 0;
-    unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
     uint8_t pen_mask = 15;
     bool flipped = false;

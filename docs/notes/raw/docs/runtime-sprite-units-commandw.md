@@ -12,38 +12,26 @@ captured_with: "repository documentation text (runtime-derived, not hardware); s
 `F3RT_SPRITE_BEHAVIOUR(name, unit, description, lambda)` reads the unit's bytes as they
 are at unit start and patches fields in the replay's RAM overlay; returning true runs
 the game's own code on the patched state and splices the result over the real entries.
+For `full-detail` (Command War, `games/commandw/sprites/behaviours.hpp`) the splice is
+decoded against its real entries and must keep the same footprint; emulated state must be
+identical to the groups-off machine and at least one splice must be produced.
 
-Per-behaviour invariants live in `tools/sprite_check.cpp`. For `full-detail` (Command
-War, `games/commandw/sprites/behaviours.hpp`) each splice is decoded against its real
-entries (matched by sprite identity) and must satisfy:
+## Multi-emission ambiguity
 
-- Scale: replacement tiles are never larger than the coarse tiles they replace.
-- Anchor: replacement and real bounding boxes overlap (measured worst gap over 6000
-  attract frames: 0). Equal footprints are not expected: the coarse mip level is
-  padded to whole coarse tiles, L0 culls blank tiles, and a stale class (the selector
-  at `0x2fed6` runs before projection) lets the real draw clamp at 1:1 while L0 keeps
-  growing.
-- Shadow: `0x9b32` emits shadow entries first from `$40`, `$42`-`$44`, byte1 bit 7,
-  which the behaviour does not touch; the real and replacement entries therefore share
-  a bit-identical leading run, and a splice identical to the real entries (no effect)
-  fails.
-- No aborts, at least one splice, emulated state identical to the units-off machine.
-  The `Shadow` invariant above holds with flicker shadows on too: a splice whose
-  replacement equals the real entries and carries tagged shadow entries is a flicker splice,
-  not a no-effect patch, and footprints compare the object body only (tagged entries
-  excluded).
+The `objects` record is not unique per drawn sprite in a frame: the multi-part emit site
+`0xa0be` produces two origins for the same (record, class, generation) (49,902 ambiguous
+sprites over 1500 frames, 46,732 from `0xa0be` class 1; writer PCs explain only 345, and the
+record address/generation are stable). Sprite groups therefore leave such keys ambiguous and
+the renderer snaps them; the draw-list slot or emission pass (`0x40885a` list /
+`0x413c00 + k*0x80` fallback) is the candidate discriminator and is still an open static-trace
+question. See `runtime/sprites/groups.hpp` next to `pack_key`.
 
-## Flicker shadows
+## Shadows (game-side)
 
-Some games fake translucent shadows by emitting the shadow sprites on alternate frames only.
-On a display that does not run at the game's ~58.9 Hz that shows the shadow for one or two
-presented frames unevenly. A `FlickerShadow` source (`F3RT_FLICKER_SHADOW` in
-`runtime/sprites/behaviour.hpp`, declared in `games/<id>/sprites/behaviours.hpp`
-next to `behaviours`) names the game's shadow emit path inside an emit unit; like units and
-behaviours it is always on (no flag) but **only for the GPU backend with game video**
-(`--renderer enhanced`, or developer `compare-gpu`; CPU and FDP output are untouched and keep the game's own
-alternate-frame flicker), render-only, and never changes
-cycles, native blocks or `state_crc()`.
+The former `F3RT_FLICKER_SHADOW` / `FlickerShadow` mechanism has been removed. The game still
+emits an alternating flicker shadow (below); the runtime does not synthesize the skipped
+frames, so the shadow snaps in motion mode. The game-side evidence is kept because it explains
+why the shadow group exists.
 
 **Command War** (`object_shadow`, unit `objects`), found by disassembly:
 

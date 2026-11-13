@@ -184,50 +184,77 @@ tile attributes/sprite commands, not per-game constants. Pinned
 and [FDA research](https://github.com/y-ack/mame/blob/28e411d4f760df3d55fae070a2f6424f89966a2f/src/mame/taito/tc0630fdp.cpp)
 are described in [porting](/developer/porting).
 
-## [[video.emit_units]] and [video.frame_writers]
+## [[video.emit_units]] (behaviour anchors)
 
-Optional. An emit unit is a span of game code that draws one object or queue
-record into sprite RAM. Declaring one gives the runtime stable sprite identity,
-sandbox replay of the game's own native code and render-only splicing; emulated
-state, CRCs, cycles and native block counts are unchanged.
+Optional. An emit unit is a span of game code that draws one object or queue record into
+sprite RAM. It is only a **behaviour anchor** now: the recompiler's static sprite-group table
+(below) supplies grouping and origins, and a declared unit lets a behaviour replay the game's
+own native code in a sandbox and splice the result over the real entries, render-only.
 
 ```toml
 [[video.emit_units]]
-name  = "objects"      # C identifier, unique (not all/frame_writers/digest/detail)
+name  = "objects"      # C identifier, unique (not all/digest)
 start = 0x9a3c         # even PC, or a list of them; each must decode as an instruction
 end   = 0x9a6c         # same arity as start; end[i] terminates start[i]; start < end
 unit  = "a6"           # d0-d7 / a0-a6: value at start = unit address in work RAM
 size  = 0x80           # optional, default 0: bytes behaviours may access at that address
-owner = "unit"         # "unit" (default) | "writer" (writer PC of the record's first word)
-[video.frame_writers]
-ranges = [[0x9a74, 0x9af6]]   # inclusive PC ranges writing sprite RAM outside any unit
+owner = "unit"         # accepted for compatibility; grouping no longer uses it
 ```
 
 Unit ids are declaration order. `tools/compile_sprite_units.py --config <toml>
 --output-dir <dir>` writes, at CMake configure time and without a ROM,
 `sprite_units.h` (`F3_SPRITE_UNITS_DIGEST`, `F3_SPRITE_UNIT_COUNT`) and
-`sprite_units.hpp` (`f3rt::sprite_units::<name>` `EmitUnit`s, `all`,
-`frame_writers`, `digest`, static_asserts). Games without units get empty arrays.
-`recomp emit` plants `F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every
-declared end/start PC, includes `sprite_units.h` with a digest `#error` guard in
-each file that has a hook, rejects PCs that are not retained decoded
-instructions or frame-writer ranges outside the ROM, and records per-unit hook
-counts under `emit_units` in `lowering.json`.
+`sprite_units.hpp` (`f3rt::sprite_units::<name>` `EmitUnit`s, `all`, `digest`,
+static_asserts). Games without units get empty arrays. `recomp emit` plants
+`F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every declared end/start PC, includes
+`sprite_units.h` with a digest `#error` guard in each file that has a hook, rejects PCs that
+are not retained decoded instructions, and records per-unit hook counts under `emit_units` in
+`lowering.json`. `[video.frame_writers]` is retired: writes are no longer attributed to units
+or audited against a declared writer list.
 
-Choosing spans and writer ranges is verified, not guessed: `f3rt-tool sprite-check`
-(see [developer notes](../../developer/SPRITE-UNITS.md)) replays every
-invocation unpatched in a sandbox and demands the bytes match what the real span wrote,
-and fails on any sprite-RAM write outside every unit whose PC is not in
-`frame_writers`. Annotate each declared span and range with the PCs that justify it:
-the checker prints every outside writer PC with its first frame and address.
+`size` must cover every field a behaviour reads or patches (offsets are compile-time checked
+against it). Behaviours live in `games/<id>/sprites/behaviours.hpp`
+(`F3RT_SPRITE_BEHAVIOUR`, registered through `F3RT_SPRITE_BEHAVIOURS_HEADER`); the frontend
+enables every registered behaviour automatically whenever the game runs natively
+(`--translated`).
 
-`size` must cover every field a behaviour reads or patches (offsets are
-compile-time checked against it). Behaviours live in
-`games/<id>/sprites/behaviours.hpp` (`F3RT_SPRITE_BEHAVIOUR`, registered
-through `F3RT_SPRITE_BEHAVIOURS_HEADER`); the frontend enables every registered
-behaviour automatically whenever the game runs natively (`--translated`). The same header
-must also define `flicker_shadows` (an array, empty if none) of `F3RT_FLICKER_SHADOW`
-sources; see [flicker shadows](../../developer/SPRITE-UNITS.md#flicker-shadows).
+Select the spans from evidence, not by guesswork: disassemble the draw loop and confirm the
+register that holds the record at the start PC. `f3rt-tool sprite-check` reports the
+render-only group coverage (`groups`, `group_entries`, `unresolved_entries`) and
+verifies that emulated state is identical with sprite groups on and off.
+
+## Sprite groups (generated)
+
+`recomp emit` writes `sprite_groups.hpp` into the generated program directory
+(`F3_GENERATED_DIR`): `f3rt::sprite_groups::table`, a `SpriteGroupTable`
+(`include/f3rt/sprite_group.hpp`) with one `SpriteGroupWrite` per sprite-RAM store PC
+(`{pc, base register, lane X/Y/XY, group class, shift, root X/Y field offsets}`) and one
+`SpriteGroupReset` per root-field write that starts a new value (spawn/teleport). No
+configuration is needed.
+
+At runtime each sprite-RAM write looks its PC up, reads the root fields from work RAM and
+derives a render-only group key `(record address, class, per-root generation)` and origin
+(`root << shift`, 24.8). Hardware block members (spritecont bit 3) inherit the head entry's
+group in the decoder, the same decoder used for rendering. A generation bump (reset write)
+changes the key, so a replaced object never reuses the old one. A birth is an event, not a
+routine: a reset that also ran for the same root in the immediately preceding frame is a
+per-frame recomputation/clamp and does not bump (at most one bump per root per frame), while a
+reset after a frame without one still starts a new generation. Anything unresolved leaves
+group 0 and the renderer snaps.
+
+### Known ambiguity (commandw multi-part objects)
+
+A key is (record address, class, per-root generation). commandw's multi-part emit site
+`0xa0be` emits **two origins for one key in the same frame** (measured over 1500 frames:
+49,902 ambiguous sprites, 46,732 of them from `0xa0be` class 1; the record address changes
+only 65 times and generations 0 times, and different writer PCs make only 345 unique). The
+key deliberately contains no emission ordinal and no writer PC: neither is unique (the same
+PC emits both origins, and a multi-part plus single-part pair exists). The renderer therefore
+refuses to pair an ambiguous key and snaps those sprites, while the remaining groups pair
+with `cross_paired = 0`. The missing discriminator is the draw-list slot or emission pass
+(the `0x40885a` list, or the `0x413c00 + k*0x80` fallback), which is an open static-trace
+question. The sprite system reports `ambiguity: key_frames / keys / slots / max_*_frame`
+every run.
 
 ## Compile-time video geometry
 

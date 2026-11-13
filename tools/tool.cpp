@@ -14,7 +14,7 @@ void print_general_help(const char *prog) {
         << "  gpu-compare    Strict-native GPU parity verification against FDP oracle\n"
         << "  motion         Strict-native seeded temporal GPU motion proof\n"
         << "  sound-extract  Standalone sound extraction and stimulus injection tool\n"
-        << "  sprite-check   Sprite emit-unit and behaviour verification against native code\n\n"
+        << "  sprite-check   Sprite-group coverage and behaviour verification\n\n"
         << "  netplay        Deterministic 2-player lockstep netplay client\n"
         << "  netplay-replay Replay / diff netplay desync bundles offline\n"
         << "Run '" << prog << " <subcommand> --help' for details on each subcommand.\n";

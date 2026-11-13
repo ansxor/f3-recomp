@@ -1,5 +1,6 @@
 #include "frontend/settings.hpp"
 #include <gtest/gtest.h>
+#include <exception>
 #include <rapidcheck/gtest.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
