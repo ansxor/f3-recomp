@@ -201,7 +201,6 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
         }
         if (!run_one(*on, frame, "groups on", error)) break;
         if (groups_available) {
-            // Render-only view of this frame; GameVideo would consume it the same way.
             const SpritePresentation presentation = on->sprites->presentation();
             SpriteRamState presented_state = latch;
             const FrameCoverage coverage = cover(*on, presentation, presented_state);

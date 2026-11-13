@@ -1,5 +1,3 @@
-"""Static sprite X/Y writer trace, continuity classification, and group table output."""
-
 import json
 import os
 import re
@@ -33,8 +31,6 @@ LANDMAKRJ_CONFIG = ROOT / "games" / "landmakrj" / "config.toml"
 LANDMAKRJ_ROMS = ROOT / "roms" / "landmakrj"
 COMMANDW_CONFIG = ROOT / "games" / "commandw" / "config.toml"
 
-# The 22 X/Y write instructions from handoff/sprite-groups/reports/05-trace-landmakrj.md.
-# (pc, lane, x_offset, y_offset)
 LANDMAKRJ_WRITERS = {
     0xA8F5E: (LANE_X, 0x0C, 0xFFFF),
     0xA8F62: (LANE_Y, 0xFFFF, 0x0E),
@@ -61,7 +57,6 @@ LANDMAKRJ_WRITERS = {
 }
 LANDMAKRJ_SCALED = (0xA91EA, 0xA926A, 0xA92E4, 0xA9368)
 
-# The three origin X/Y stores from handoff/sprite-groups/reports/06-trace-commandw.md.
 COMMANDW_WRITERS = {
     0x9C90: (LANE_XY, 0x44, 0x46),
     0x9E9A: (LANE_XY, 0x06, 0x08),
@@ -92,7 +87,6 @@ def commandw_trace() -> TraceResult | None:
 
 
 def fixture_discovery(code: bytes, entry: int = 0x400):
-    """Decode a synthetic straight-line/branching buffer into a Discovery shape."""
     decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
     decoder.detail = True
     instructions = {insn.address: insn for insn in decoder.disasm(code, entry)}
@@ -112,8 +106,6 @@ def fixture_discovery(code: bytes, entry: int = 0x400):
     )
 
 
-# lea.l $600340.l,a4; clr.w (a4)+; clr.w (a4)+; move.w $c(a3),d1; moveq #4,d2;
-# btst.b #0,d3; beq -> sub; add.w d2,d1; bra -> store; sub.w d2,d1; move.w d1,(a4)+; rts
 FIXTURE_CODE = bytes.fromhex("49f900600340425c425c322b000c7404080300006704d2426002924238c14e75")
 
 
@@ -139,26 +131,22 @@ class LandmakrjTraceTests(unittest.TestCase):
 
     def test_coverage(self):
         result = landmakrj_trace()
-        # 22 of the sprite X/Y writers resolve; the queue stream writers do not.
         self.assertEqual(result.stats["resolved_writers"], 22)
         self.assertGreater(result.stats["x_y_writers"], result.stats["resolved_writers"])
         self.assertEqual(result.stats["unresolved_writers"], len(result.unresolved))
         unresolved = {writer.pc: writer for writer in result.unresolved}
-        self.assertIn(0x469A, unresolved)  # queue single handler, X from (a4)+
-        self.assertIn(0x46A2, unresolved)  # queue single handler, Y from (a4)+
+        self.assertIn(0x469A, unresolved)
+        self.assertIn(0x46A2, unresolved)
         self.assertIn("stream cursor", unresolved[0x469A].reason)
         self.assertIn("(a6)+", unresolved[0x469A].destination)
 
     def test_continuity_classification(self):
         result = landmakrj_trace()
         kinds = {(item.pc, item.offset): item.kind for item in result.classifications}
-        # Spawn path: the handler slot is installed, then the position is a constant.
         self.assertEqual(kinds[(0x95866, 0x0C)], "reset")
         self.assertEqual(kinds[(0x95DAC, 0x0C)], "reset")
         self.assertEqual(kinds[(0x9550E, 0x0C)], "reset")
-        # A plain single-field copy stays a birth/teleport (spawn shape).
         self.assertEqual(kinds[(0xA04FA, 0x0C)], "reset")
-        # Update paths: read-modify-write of the same field.
         self.assertEqual(kinds[(0x96A88, 0x0C)], "continuation")
         self.assertEqual(kinds[(0x9FADE, 0x0E)], "continuation")
         self.assertEqual(kinds[(0xA0200, 0x0C)], "continuation")
@@ -192,13 +180,9 @@ class CommandwTraceTests(unittest.TestCase):
     def test_continuity_classification(self):
         result = commandw_trace()
         kinds = {(item.pc, item.offset): item.kind for item in result.classifications}
-        # 0xa1c8 projects body/shadow origins from the object's own fields every
-        # frame, so the position is computed from the previous origin: continuation.
         self.assertEqual(kinds[(0xA25A, 0x06)], "continuation")
         self.assertEqual(kinds[(0xA2E8, 0x44)], "continuation")
-        # The no-shadow path clears the field with a constant: a birth/reset.
         self.assertEqual(kinds[(0xA2FE, 0x44)], "reset")
-        # Camera clamp/integration: read-modify-write.
         self.assertEqual(kinds[(0xC7FE, 0x08)], "continuation")
         self.assertEqual(kinds[(0xC818, 0x08)], "continuation")
         self.assertEqual(kinds[(0xC830, 0x06)], "continuation")
@@ -207,7 +191,6 @@ class CommandwTraceTests(unittest.TestCase):
         result = commandw_trace()
         unresolved = {writer.pc: writer for writer in result.unresolved}
         self.assertEqual(len(unresolved), result.stats["unresolved_writers"])
-        # Object-loop tail clear: constant writes through the sprite cursor.
         self.assertIn(0x9AAA, unresolved)
         self.assertIn("constant", unresolved[0x9AAA].reason)
         self.assertEqual(unresolved[0x9AAA].lane, LANE_XY)
@@ -292,8 +275,6 @@ class FixtureTests(unittest.TestCase):
         self.assertTrue(writer.rigid)
 
     def test_explicit_writer_seed_forces_lane(self):
-        # A store through an unproven cursor register: without a hint the
-        # destination is not known to be sprite RAM, with one it resolves.
         code = bytes.fromhex("322b000c32c14e75")
         discovery = fixture_discovery(code)
         rom = bytes(0x400) + code

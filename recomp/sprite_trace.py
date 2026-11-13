@@ -1,61 +1,3 @@
-"""Static trace from sprite X/Y writers to object-record root fields.
-
-The tracer answers two questions for a game image, without per-game
-configuration:
-
-* which instruction stores a sprite X and/or Y word, which register holds the
-  sprite-RAM cursor at that store, and which object-record field the position
-  came from (``base register + field offset``);
-* whether every writer of such a field *continues* the field (``pos += vel``)
-  or *resets* it (constant, table, another field), so the runtime knows when a
-  group is born.
-
-Method
-------
-
-Instructions come from :class:`recomp.discovery.Discovery` (the same table the
-recompiler emits).  A forward abstract interpretation computes, per instruction:
-
-* a symbolic value per 16-bit register lane 32-bit value, where the interesting
-  atom is a *root leaf* ``RootField(base, offset)`` produced by reading a fixed
-  displacement from a register that holds an object/queue record;
-* two flavours of root leaf: ``direct`` (an additive anchor that survived only
-  moves, adds/subs and constant masks) and ``roots`` (all leaves, including the
-  ones folded into offsets through multiply/shift/index arithmetic);
-* whether a register holds a sprite-RAM cursor and, if so, its offset modulo 16
-  inside the 16-byte sprite entry.
-
-A lane's root field is the unique ``direct`` leaf at the store: the seed of the
-position accumulator.  Leaves that were transformed (zoom, size, descriptor) are
-tracked as offsets, which is exactly the rigidity definition in the handoff.
-Several distinct direct leaves, or a mixture of root and non-root paths, is
-ambiguous and stays unresolved: nothing is guessed.
-
-Writer discovery is automatic.  Cursor provenance comes from a whole-image
-constant-store summary: a register loaded from a RAM address (absolute or
-``d(a5)``) whose constant stores land in sprite RAM is a sprite cursor, and a
-register set by ``lea``/``move.l #`` with a sprite-RAM constant is one too.
-Indirect dispatch (``jmp ([$8,a3])``) resolves through the code pointers stored
-at that record displacement, and ``jmp (a4)`` through the constant return
-address.  ``[[video.emit_units]]`` is never consulted.
-
-Continuity classifies every decoded store to a table root field, including
-writers in code that static reachability cannot enter (object code reached by
-a pointer slot), because a missed spawn reset would break identity.  A PC that
-never executes costs one unused table entry; a reset that executes is a birth.
-The rule for a continuation is: a read-modify-write of the field, a value that
-traces back to the field itself, or a pure function of *other fields of the same
-record* (a per-frame projection such as `pos = anchor - zoom_offset` computed
-on the object it belongs to).  A constant, an unproven source, a ROM table or a
-value from a different record replaces the position, so it is a reset/birth.
-
-``--sprite-writers`` is an optional extra seed: an explicit PC may carry a lane
-hint for runtime discovery logs whose store is mid-entry, where the cursor
-offset is not statically known.
-
-Everything is deterministic: worklists and output are PC sorted.
-"""
-
 from __future__ import annotations
 
 import json
@@ -83,30 +25,24 @@ from capstone.m68k import (
 
 from .discovery import CALL_MNEMONICS, COND_BRANCH_MNEMONICS, TERMINAL_MNEMONICS, UNCOND_BRANCH_MNEMONICS
 
-# Register encoding matches f3rt::UnitRegister: 0..7 = d0..d7, 8..14 = a0..a6.
 REG_COUNT = 16
 SP = 15
 A5 = 13
 
-# F3 sprite RAM: command list plus two 8 KiB banks.
 SPRITE_RAM_START = 0x600000
 SPRITE_RAM_END = 0x610000
 RAM_START = 0x400000
 RAM_END = 0x600000
-# a5 is the game work-RAM page pointer; its value is recovered from reset.
 WORK_BASE_MIN = 0x400000
 WORK_BASE_MAX = 0x420000
 
-# Root delta to 24.8 scanout units: these roots hold pixel coordinates.
 DEFAULT_SHIFT = 8
 
-# 16-byte sprite entry lanes: +0 tile, +2 zoom, +4 X, +6 Y, +8 attr.
 LANE_X = 1
 LANE_Y = 2
 LANE_XY = 3
 ENTRY_WORDS = {0: "tile", 2: "zoom", 4: "X", 6: "Y", 8: "attr"}
 
-# Mnemonics whose last operand may be written in memory.
 _STORE_BASE = frozenset(
     {
         "move",
@@ -150,7 +86,6 @@ _STORE_BASE = frozenset(
         "movep",
     }
 )
-# Read-modify-write forms: the stored value is derived from the old memory value.
 _RMW_BASE = frozenset(
     {
         "add",
@@ -195,7 +130,6 @@ _CONTROL = TERMINAL_MNEMONICS | COND_BRANCH_MNEMONICS | CALL_MNEMONICS | UNCOND_
 
 
 def _reg(cs_reg: int) -> int | None:
-    """Map a Capstone register id to the f3rt::UnitRegister encoding."""
     index = cs_reg - 1
     return index if 0 <= index < REG_COUNT else None
 
@@ -222,8 +156,6 @@ def _addr_tag(address: int, rom_size: int) -> str:
 
 @dataclass(frozen=True, order=True)
 class RootField:
-    """A record field: offset read from the register holding the record."""
-
     base: int
     offset: int
 
@@ -242,39 +174,20 @@ def register_name(index: int) -> str:
 
 @dataclass(frozen=True)
 class Word:
-    """A 16-bit register lane.
-
-    ``direct`` are the additive anchor leaves, ``roots`` every leaf that
-    contributed (direct or folded into an offset), ``exact`` says whether
-    ``direct`` fully describes the provenance on every path.
-    """
-
     direct: frozenset[RootField] = frozenset()
     exact: bool = True
     roots: frozenset[RootField] = frozenset()
     const: int | None = None
     tags: frozenset[str] = frozenset()
-    # Set by arithmetic/logic/scale, cleared by plain copies.  Distinguishes a
-    # same-record projection (`anchor - zoom_offset`) from a plain field copy
-    # (`pos = other_field`), which is a spawn/teleport shape.
     transformed: bool = False
 
 
 @dataclass(frozen=True)
 class Value:
-    """A 32-bit register value, split into word lanes.
-
-    ``cursor``/``offsets`` describe a register proven to hold a sprite-RAM
-    write cursor; ``offsets`` holds the possible offsets modulo 16.
-    """
-
     hi: Word = Word()
     lo: Word = Word()
     cursor: bool = False
     offsets: frozenset[int] = frozenset()
-    # Provenance class of the 32-bit value: "param"/"mem"/"stream"/"rom"/
-    # "ram"/"const"/"value"/"other".  Root bases are pointer classes other
-    # than a constant, a cursor, the stack or a ROM pointer.
     kind: str = "unknown"
 
     @staticmethod
@@ -374,7 +287,6 @@ def _logic_const(base: str, value: int, immediate: int) -> int:
 
 
 def _derive_word(a: Word, b: Word | None = None) -> Word:
-    """A data-dependent transform keeps provenance but drops the anchor."""
     other = b or Word()
     return Word(
         direct=frozenset(),
@@ -401,8 +313,6 @@ class Writer:
 
 @dataclass(frozen=True)
 class UnresolvedWriter:
-    """A sprite X/Y store that was found but whose root field is not proven."""
-
     pc: int
     cursor_reg: int
     base_reg: int
@@ -520,10 +430,6 @@ def lane_names(lane: int) -> list[str]:
     return [name for bit, name in ((LANE_X, "X"), (LANE_Y, "Y")) if lane & bit]
 
 
-# ---------------------------------------------------------------------------
-# Static reachability and dispatch targets
-
-
 @dataclass(frozen=True)
 class _Info:
     insn: object
@@ -534,13 +440,6 @@ class _Info:
 
 
 def _handler_table(instructions: Mapping[int, object]) -> dict[int, set[int]]:
-    """Code pointers stored at small record displacements.
-
-    ``jmp ([$8,a3])`` selects the handler from the object's own +8 slot; the
-    slot is filled at runtime, but every value written into it is a constant
-    in the image.  Mapping displacement -> stored code pointers resolves the
-    dispatch without guessing which object is live.
-    """
     table: dict[int, set[int]] = {}
     for pc in sorted(instructions):
         info = _info(instructions[pc])
@@ -564,8 +463,6 @@ def _info(insn) -> _Info:
 
 
 class SpriteTrace:
-    """Whole-image sprite X/Y writer trace for one decoded program image."""
-
     def __init__(
         self,
         rom: bytes,
@@ -582,9 +479,6 @@ class SpriteTrace:
         self.indirect_targets: Mapping[int, list[int]] = getattr(discovery, "indirect_targets", {}) or {}
         self.game_id = str((config or {}).get("game", {}).get("id", "unknown"))
         self.extra_writers = sorted({int(pc) & 0xFFFFFF for pc in writer_seeds})
-        # Explicit --sprite-writers hints are an additional writer seed: the
-        # lane is trusted when the cursor proof cannot see the store's entry
-        # offset (runtime discovery logs mid-entry, for example).
         self.writer_lanes = {
             int(pc) & 0xFFFFFF: lane for pc, lane in (writer_lanes or {}).items() if lane in (LANE_X, LANE_Y, LANE_XY)
         }
@@ -602,8 +496,6 @@ class SpriteTrace:
             self._infos[pc] = info
         return info
 
-    # -- constant-store summary -------------------------------------------------
-
     def _find_work_bases(self) -> None:
         candidates: set[int] = set()
         for pc in sorted(self.instructions):
@@ -620,7 +512,6 @@ class SpriteTrace:
         self.work_bases = tuple(sorted(candidates))
 
     def _find_ram_constants(self) -> None:
-        """Constants stored to absolute or a5-relative RAM addresses."""
         summary: dict[int, set[int]] = {}
         bases = self.work_bases
         for pc in sorted(self.instructions):
@@ -659,8 +550,6 @@ class SpriteTrace:
                     continue
                 summary.setdefault(address, set()).add(value)
         self.ram_constants = {address: frozenset(values) for address, values in summary.items()}
-
-    # -- values -----------------------------------------------------------------
 
     def _entry_default(self) -> State:
         regs = [Value.unknown("param") for _ in range(REG_COUNT)]
@@ -712,7 +601,6 @@ class SpriteTrace:
         return True, frozenset({address & 15})
 
     def _static_ea(self, insn, op) -> int | None:
-        """Absolute or PC-relative address with no register state."""
         if op.type != M68K_OP_MEM or op.mem.index_reg:
             return None
         if op.address_mode in (M68K_AM_ABSOLUTE_DATA_LONG, M68K_AM_ABSOLUTE_DATA_SHORT):
@@ -731,7 +619,6 @@ class SpriteTrace:
             M68K_AM_REGI_ADDR_POST_INC,
             M68K_AM_REGI_ADDR_PRE_DEC,
         ):
-            # These modes carry the base in the operand register.
             return _reg(op.reg) if op.reg else None
         return _reg(op.mem.base_reg) if op.mem.base_reg else None
 
@@ -741,9 +628,6 @@ class SpriteTrace:
         disp = mem.disp
         base = self._mem_base(op)
         if mode in (M68K_AM_REGI_ADDR_POST_INC, M68K_AM_REGI_ADDR_PRE_DEC):
-            # A stream cursor: pointer provenance, never a record field.
-            # A stream read is a loop-carried cursor: it never contributes a
-            # record field, even when the pointer itself came from one.
             tags = frozenset({"stream"})
             if base is not None:
                 base_value = state[base]
@@ -781,7 +665,6 @@ class SpriteTrace:
                 return Value(lo=Word(direct=frozenset({root}), roots=frozenset({root})), kind="mem")
             roots = base_value.all_roots() | base_value.hi.direct | base_value.lo.direct
             tags = (base_value.hi.tags | base_value.lo.tags) | {"derived"}
-            # A pointer read through a ROM/RAM table base stays in that class.
             kind = base_value.kind if base_value.kind in ("rom", "ram") else "derived"
             word = Word(exact=True, roots=roots, tags=tags)
             return Value(hi=word, lo=word, kind=kind)
@@ -816,8 +699,6 @@ class SpriteTrace:
         if value & 0x8000:
             value -= 0x10000
         return Word(const=value & 0xFFFF, tags=word.tags, transformed=True)
-
-    # -- transfer ---------------------------------------------------------------
 
     def transfer(self, pc: int, state: State) -> State:
         insn = self.instructions[pc]
@@ -855,7 +736,7 @@ class SpriteTrace:
         elif base == "movem":
             destination = operands[-1] if operands else None
             if destination is not None and destination.type == M68K_OP_MEM:
-                pass  # registers are stored
+                pass
             else:
                 for op in operands[:-1]:
                     if op.type in (M68K_OP_REG, M68K_OP_REG_PAIR):
@@ -929,29 +810,16 @@ class SpriteTrace:
                     value = regs[register]
                     regs[register] = Value(hi=_derive_word(value.hi), lo=_derive_word(value.lo), kind="value")
         elif base == "movep":
-            # Destination is always memory in the forms seen; nothing to model.
             pass
         elif base in _NO_WRITE:
             pass
         else:
-            # Unknown instruction: clobber every register it writes so stale
-            # values never masquerade as provenance.
             for op in operands:
                 if op.type == M68K_OP_REG:
                     register = _reg(op.reg)
                     if register is not None and op is operands[-1]:
                         regs[register] = UNKNOWN
-            try:
-                _, written = insn.regs_access()
-            except Exception:  # pragma: no cover - capstone always supports this
-                written = []
-            for cs_reg in written:
-                register = _reg(cs_reg)
-                if register is not None:
-                    regs[register] = UNKNOWN
 
-        # `move.w` into a register: the cursor property never survives a
-        # partial write, only the full 32-bit forms.
         if destination_register is not None and base in ("move", "movea", "moveq", "lea") and size != 4:
             regs[destination_register] = replace(regs[destination_register], cursor=False, offsets=frozenset())
 
@@ -1050,8 +918,6 @@ class SpriteTrace:
         source = self._operand_value(insn, src, size, state)
         current = regs[register]
         if base in ("adda", "suba") or register >= 8:
-            # Address arithmetic: the low word is the address delta; the value
-            # is no longer a record pointer's field.
             if src.type == M68K_OP_IMM:
                 delta = src.imm & 0xFFFF
                 if delta & 0x8000:
@@ -1063,7 +929,6 @@ class SpriteTrace:
                     new_offsets = frozenset((offset + delta) & 15 for offset in current.offsets)
                 regs[register] = replace(current, offsets=new_offsets)
             else:
-                # Adding a data value to a pointer keeps the pointer's class.
                 kind = current.kind if current.kind in _POINTER_KINDS else join_kind(current.kind, source.kind)
                 regs[register] = Value.unknown(kind)
             return
@@ -1142,8 +1007,6 @@ class SpriteTrace:
             else:
                 regs[register] = Value.constant(constant, self.rom_size)
             return
-        # Shift/rotate forms: one operand shifts the register by the immediate,
-        # two operands shift the last operand by the first (register or count).
         if len(operands) == 1:
             dst = operands[0]
             count_op = None
@@ -1178,8 +1041,6 @@ class SpriteTrace:
             regs[register] = Value.constant(constant, self.rom_size)
         else:
             regs[register] = Value(hi=_derive_word(current.hi), lo=_derive_word(current.lo))
-
-    # -- CFG --------------------------------------------------------------------
 
     def successors(self, pc: int, state: State | None = None) -> tuple[int, ...]:
         static = self._succ.get(pc)
@@ -1237,8 +1098,6 @@ class SpriteTrace:
             return [address] if address in self.instructions else []
         return []
 
-    # -- fixpoint ---------------------------------------------------------------
-
     def run(self) -> TraceResult:
         if not self.instructions:
             return TraceResult(self.game_id, (), (), (), {"instructions": 0, "writers": 0, "resolved": 0})
@@ -1250,8 +1109,6 @@ class SpriteTrace:
         if not seeds:
             seeds = [min(self.instructions)]
 
-        # Static reachability decides which seeds carry an entry state: a seed
-        # with a real predecessor inherits its registers from that edge.
         reachable: set[int] = set()
         stack = list(reversed(seeds))
         while stack:
@@ -1281,16 +1138,13 @@ class SpriteTrace:
                 continue
             out_state = self.transfer(pc, state)
             transfers += 1
-            if transfers > limit:  # pragma: no cover - pathological image guard
+            if transfers > limit:
                 raise RuntimeError("sprite trace did not converge")
             for target in self.successors(pc, state):
                 if target not in self.instructions:
                     continue
                 new_state = out_state
                 if target in self.functions and self.work_bases:
-                    # a5 is the game work-RAM page pointer, fixed at reset; pin
-                    # it at call boundaries so a caller's dead a5 never hides
-                    # the RAM addresses the callee reads or writes.
                     pinned = self._const_union(self.work_bases)
                     new_state = (*new_state[:A5], pinned, *new_state[A5 + 1 :])
                 previous = self.entry_state.get(target)
@@ -1307,8 +1161,6 @@ class SpriteTrace:
                             queue.append(target)
                             queued.add(target)
 
-        # A writer seed that no static path reaches (e.g. copied from a runtime
-        # log) still gets a default parameter state so its own operands resolve.
         for pc in self.extra_writers:
             if pc in self.instructions and pc not in self.entry_state:
                 self.entry_state[pc] = self._entry_default()
@@ -1341,8 +1193,6 @@ class SpriteTrace:
     @staticmethod
     def _merge_entry(pc: int, state: State) -> State:
         return state
-
-    # -- writers ----------------------------------------------------------------
 
     def _collect_writers(self, analysed: set[int]) -> tuple[list[Writer], list[UnresolvedWriter]]:
         found: dict[int, Writer] = {}
@@ -1455,9 +1305,6 @@ class SpriteTrace:
         return next(iter(word.direct))
 
     def _assign_classes(self, writers: list[Writer]) -> None:
-        # A group is a pair of position fields.  XY writers state the pair
-        # directly; single-lane writers are paired with the field two bytes
-        # away, the layout every record in both games uses (x at +n, y at +n+2).
         pairs: dict[tuple[int, int], set[tuple[int, int]]] = {}
         for writer in writers:
             if writer.lane == LANE_XY:
@@ -1481,8 +1328,6 @@ class SpriteTrace:
             else:
                 key = (writer.base, writer.y_offset - 2, writer.y_offset)
             writers[index] = replace(writer, group_class=classes.get(key, 0))
-
-    # -- continuity -------------------------------------------------------------
 
     def _classify_fields(self, analysed: set[int], writers: list[Writer]) -> list[Classification]:
         fields = sorted(
@@ -1529,18 +1374,8 @@ class SpriteTrace:
                 lane_word = value.lo if field_offset != start else (value.hi if info.size == 4 else value.lo)
                 roots = sorted(lane_word.roots | lane_word.direct)
                 has_field = any(root.base == field_base and root.offset == field_offset for root in roots)
-                # A derived per-frame projection of the SAME object continues the
-                # group: its value is a function of other record fields, so it was
-                # computed from the previous origin (body/shadow anchors in
-                # commandw's 0xa1c8 are written exactly this way every frame).
-                # A constant, table, foreign record or unproven value replaces the
-                # position and therefore starts a new generation.
                 same_record = bool(roots) and all(root.base == field_base for root in roots)
                 projection = {root for root in roots if root.offset != field_offset}
-                # A plain single-field copy is the spawn/teleport shape and must
-                # stay a birth.  A projection combines two or more record fields,
-                # or one field plus arithmetic/scale, so it was computed from the
-                # object's previous origin.
                 projected = len(projection) >= 2 or (len(projection) == 1 and lane_word.transformed)
                 if has_field:
                     kind = "continuation"
@@ -1567,10 +1402,6 @@ def trace(
 ) -> TraceResult:
     """Trace sprite X/Y writers and root-field writers for one image."""
     return SpriteTrace(rom, discovery, config, writer_seeds, writer_lanes).run()
-
-
-# ---------------------------------------------------------------------------
-# Output
 
 
 def render_header(result: TraceResult) -> str:

@@ -55,7 +55,6 @@ class ParseTests(unittest.TestCase):
         self.rejects(cfg([unit(start=0x40A, end=0x400)]), "must be below")
         self.rejects(cfg([unit(size=-1)]), "size")
         self.rejects(cfg([unit(extra=1)]), "unknown keys")
-        # Owner was retired with the identity scheme: it is now an unknown key.
         self.rejects(cfg([unit(owner="unit")]), r"unknown keys \['owner'\]")
         self.rejects(cfg([{"name": "x", "start": 2, "end": 4}]), "missing 'unit'")
         self.rejects(cfg([unit(start=[2, 2], end=[4, 6])]), "duplicate")
@@ -81,8 +80,6 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(digest(parse_sprite_units(a)), digest(parse_sprite_units(b)))
 
     def test_digest_ignores_retired_frame_writer_table(self):
-        # A leftover [video.frame_writers] is not part of the unit schema and must
-        # not invalidate generated trees.
         a = cfg([unit()])
         b = dict(a, video={**a["video"], "frame_writers": {"ranges": [[0x10, 0x20]]}})
         self.assertEqual(digest(parse_sprite_units(a)), digest(parse_sprite_units(b)))
@@ -130,8 +127,6 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("PcRange", text)
 
     def test_leftover_frame_writer_table_is_ignored(self):
-        # Retired [video.frame_writers] entries are not validated or rendered any
-        # more; a stale config must still parse for the units it declares.
         config = {"video": {"emit_units": [unit()], "frame_writers": "retired"}}
         self.assertEqual([u.name for u in parse_sprite_units(config).units], ["objects"])
 
@@ -148,8 +143,6 @@ class RenderTests(unittest.TestCase):
         for path in sorted((ROOT / "games").glob("*/config.toml")):
             spec = parse_sprite_units(tomllib.loads(path.read_text("utf-8")))
             counts[path.parent.name] = [u.name for u in spec.units]
-        # Emit units are behaviour anchors only now: commandw keeps its FULL_DETAIL anchor,
-        # landmakrj/landmakr declare none (grouping is generated automatically).
         self.assertEqual(counts["commandw"], ["objects"])
         self.assertEqual(counts["landmakrj"], [])
         self.assertEqual(counts["landmakr"], [])
@@ -159,11 +152,9 @@ class GeneratorHookTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         try:
-            import tomllib  # noqa: F401  (recomp.generate needs Python 3.11)
-
             from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
         except ImportError:
-            raise unittest.SkipTest("tomllib/capstone unavailable") from None
+            raise unittest.SkipTest("capstone unavailable") from None
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         # 0x400: MOVEQ #-1,D0; ADDQ.W #1,D0; MOVEQ #1,D1; MOVEQ #2,D2; MOVEQ #3,D3

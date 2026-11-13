@@ -23,4 +23,4 @@ struct SpriteGroupTable {
     std::span<const SpriteGroupWrite> writes;
     std::span<const SpriteGroupReset> resets;
 };
-} // namespace f3rt
+}

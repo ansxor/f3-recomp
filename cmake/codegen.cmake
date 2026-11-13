@@ -1,6 +1,3 @@
-# Game discovery, Python codegen (rom_manifest, game_video_config, sprite_units),
-# and optional ROM-driven C recompilation.
-
 file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
 set(F3_GAME_CHOICES)
 foreach(config IN LISTS F3_GAME_CONFIGS)
@@ -120,8 +117,6 @@ f3_run_generator(
     COMMAND ${F3_UV_PYTHON} recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS}
 )
 
-# Emit-unit headers come from the config alone (no ROM); recomp emit reads the same
-# config and checks the digest guard it plants against these headers.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"

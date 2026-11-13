@@ -1,22 +1,4 @@
 #pragma once
-// Runtime discovery log (`--discovery-log PATH`): host-only, observe-only record of game routines
-// that the video HLE does not know about yet. Never part of machine or snapshot state.
-//
-// Categories (one deduplicated entry per (category, key), written and flushed on first sight):
-//   video-write     graphics/control RAM write from a PC the game's video code does not list as a
-//                   known producer, per layer (sprite RAM included: an observed writer map).
-//   video-fallback  game renderer fell back to the FDP/oracle frame, with the component and reason.
-// With `--discovery-all` (set_log_all) known producers are logged too (tagged `known=1`).
-// Format: text, one event per line, flushed on each write; `#` lines are comments.
-//   NEW <category> <fields>        first sighting of a (category, key); known=1 when logged under --discovery-all
-//   REPEAT <category> <key> count=N  hit count reached 10, 100, 1000, ...
-//   SUM <category> <fields> count=N  summary written by finish(), then `# TOTAL`
-// Fields are key=value; PCs/addresses are 24-bit hex; frame is 1-based (Machine::frame + 1);
-// t is wall seconds since start; counts are byte writes; no screenshot is taken (the frame
-// buffer completes only at VBSTART and capture differs per renderer).
-// Triage: video-write -> add the PC to the game's video_writer_known once understood;
-// video-fallback -> only with --renderer enhanced or a developer renderer. unit-replay-abort and
-// unit-stats appear only in the summary.
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -57,7 +39,6 @@ public:
     DiscoveryLog(const DiscoveryLog &) = delete;
     DiscoveryLog &operator=(const DiscoveryLog &) = delete;
 
-    // Also log known producers (tagged known=1).
     void set_log_all(bool on) {
         m_log_all = on;
         if (on)

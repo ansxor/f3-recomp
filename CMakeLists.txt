@@ -380,7 +380,6 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
     endif()
 
-    # Sprite-group coverage check (needs the game ROMs).
     if(F3_ROM_DIR)
         add_test(NAME sprite-groups COMMAND f3rt-test-sprites --gtest_filter=SpriteSystem.RomGroupCoverage)
     endif()

@@ -1,13 +1,3 @@
-"""Emit-unit declarations ([[video.emit_units]]).
-
-A unit is a span of game code that draws one object/record into sprite RAM.
-Behaviour anchors are the only surviving use: sprite grouping and origins come
-from the generated sprite_groups table. This module is the single parser for
-the schema: recomp/compile/sprite_units.py renders the C/C++ headers from it and
-recomp/generate.py plants the hooks and the digest guard from it, so both sides
-always agree on ids and PCs.
-"""
-
 from __future__ import annotations
 
 import re

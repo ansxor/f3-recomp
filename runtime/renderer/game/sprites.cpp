@@ -32,7 +32,6 @@ void GameSprites::decode(const VideoRam &vram) {
     state.extra_planes = uint8_t(m_reg_pen_mask >> 4);
     const SpriteRamState initial = state;
 
-    // Canonical list (serialized state): groups only, never splices.
     SpritePresentation groups;
     if (m_presentation) groups.groups = m_presentation->groups;
     std::array<DecodedSpriteEntry, MAX_SPRITES> decoded;

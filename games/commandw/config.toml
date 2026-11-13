@@ -244,14 +244,6 @@ full_resolution_alt_maps = true
 visible_y = 32
 visible_height = 224
 
-# Emit unit = behaviour anchor only. Sprite grouping, origins and flicker fills come from the
-# generated sprite-group table (sprite_groups.hpp, written by `recomp emit`); this span only
-# lets the FULL_DETAIL behaviour in games/commandw/sprites/behaviours.hpp replay the game's own
-# object compiler in a sandbox and splice the result over the real entries. Emulated state,
-# CRCs, cycles and native block counts are unchanged.
-# The object loop at 0x9a0e sets a6 = object (0x410000 + k*0x80). Per object, 0xa1c8 projects,
-# 0xa334 rescales zoom and 0x9b32 compiles sprite entries through a4; 0x9a6c is the loop's
-# `lea $80(a6),a6`, so [0x9a3c,0x9a6c) draws exactly one object.
 [[video.emit_units]]
 name = "objects"
 start = 0x9a3c

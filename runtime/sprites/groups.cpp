@@ -12,7 +12,7 @@ SpriteGroupTracker::SpriteGroupTracker(Machine &machine, const SpriteGroupTable 
 void SpriteGroupTracker::compile_table(const SpriteGroupTable &table) {
     m_writes.reserve(table.writes.size());
     for (const SpriteGroupWrite &write : table.writes) {
-        if (write.group_class == 0) continue; // class 0 is the unresolved key
+        if (write.group_class == 0) continue;
         WriteRule rule;
         rule.pc = write.pc;
         rule.base = write.base;
@@ -43,8 +43,6 @@ void SpriteGroupTracker::compile_table(const SpriteGroupTable &table) {
     m_report.classes = m_class_count;
     m_group_writes = !m_writes.empty();
 }
-
-// ---- Group derivation ------------------------------------------------------------------
 
 uint32_t SpriteGroupTracker::register_value(unsigned reg) const {
     return unit_register_value(m_machine.cpu, reg);
@@ -119,7 +117,7 @@ void SpriteGroupTracker::note_ram_write(uint32_t address, unsigned width) {
             if (target - address >= width) continue;
             const auto found = m_last_reset.try_emplace(target, ResetState{UINT64_MAX, 0});
             ResetState &last = found.first->second;
-            if (!found.second && last.frame == frame) continue; // once per root per frame
+            if (!found.second && last.frame == frame) continue;
             const bool periodic =
                 !found.second && last.frame != UINT64_MAX && last.frame + 1 == frame;
             if (!periodic) {
@@ -157,21 +155,16 @@ void SpriteGroupTracker::sprite_write(uint32_t address, unsigned width) {
         if (offset >= SPRITE_RAM_SIZE) break;
         if (!sprite_slot_listed(offset)) continue;
         const uint16_t slot = sprite_slot_for(offset);
-        // Only the X/Y words (bytes 4..7 of an entry) set or invalidate the position group; a
-        // tile/zoom/attribute store leaves the entry's group and origin alone.
         const uint32_t word_offset = offset & 15;
         if (key) {
             m_slot[slot] = slot_value;
         } else if (word_offset >= 4 && word_offset < 8) {
-            // A position write the table cannot attribute: snap, never guess.
             m_slot[slot] = {};
         }
     }
     const SpriteRamWrite write{start, width};
     for (SpriteRamWriteListener *listener : m_listeners) listener->sprite_group_write(write);
 }
-
-// ---- Per-presentation and per-frame bookkeeping ----------------------------------------
 
 void SpriteGroupTracker::count_ambiguity() {
     if (!m_group_writes) return;
@@ -198,7 +191,6 @@ void SpriteGroupTracker::count_ambiguity() {
 void SpriteGroupTracker::reset() {
     m_generation.clear();
     m_last_reset.clear();
-    // m_bump_pc is a counter: keep it across a machine reset.
     m_slot.fill({});
 }
 
@@ -212,4 +204,4 @@ SpriteGroupTracker::Report SpriteGroupTracker::report() const {
     return result;
 }
 
-} // namespace f3rt
+}

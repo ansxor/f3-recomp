@@ -35,11 +35,9 @@ BehaviourReplay::BehaviourReplay(Machine &machine, Sandbox &sandbox, const Sprit
     m_stack.reserve(MAX_OPEN);
 }
 
-// ---- Real-CPU hooks --------------------------------------------------------------------
-
 void BehaviourReplay::unit_enter(f3_cpu *cpu, uint32_t unit) {
     if (cpu != &m_machine.cpu || unit >= m_units.size())
-        return; // the sandbox never opens invocations
+        return;
     enter_real(unit);
 }
 
@@ -60,7 +58,6 @@ void BehaviourReplay::enter_real(uint32_t id) {
 }
 
 void BehaviourReplay::open_invocation(const EmitUnit &unit, size_t start) {
-    // A previous invocation of the same start that never exited is stale.
     for (size_t i = m_stack.size(); i-- > 0;)
         if (m_stack[i].unit == unit.id && m_stack[i].start_index == start) {
             while (m_stack.size() > i) {
@@ -114,7 +111,6 @@ int BehaviourReplay::exit_real(uint32_t id) {
 
 void BehaviourReplay::sprite_group_write(const SpriteRamWrite &write) {
     if (m_stack.empty()) return;
-    // Extent of the invocation's real writes (splice range); block members included.
     std::vector<uint16_t> &keys = m_stack.back().keys;
     for (unsigned i = 0; i < write.width; ++i) {
         const uint32_t offset = write.start + i;
@@ -127,7 +123,7 @@ void BehaviourReplay::sprite_group_write(const SpriteRamWrite &write) {
 
 void BehaviourReplay::finish(Invocation &invocation) {
     UnitStats &stats = m_stats.units[invocation.unit];
-    if (invocation.keys.empty()) return; // nothing drawn this time
+    if (invocation.keys.empty()) return;
     std::sort(invocation.keys.begin(), invocation.keys.end());
     invocation.keys.erase(std::unique(invocation.keys.begin(), invocation.keys.end()),
                           invocation.keys.end());
@@ -139,7 +135,6 @@ void BehaviourReplay::finish(Invocation &invocation) {
         lo[bank] = std::min(lo[bank], entry);
         hi[bank] = std::max(hi[bank], entry);
     }
-    // Replace splices overlapping what the real span just drew.
     for (unsigned bank = 0; bank < 2; ++bank) {
         if (lo[bank] == 0xffff) continue;
         std::erase_if(m_splices, [&](const Splice &s) {
@@ -153,7 +148,6 @@ void BehaviourReplay::finish(Invocation &invocation) {
     splice.first = lo[bank];
     splice.last = hi[bank];
     splice.frame = m_machine.frame;
-    // Group of the unit's own record: a group write whose base is the unit address.
     for (uint16_t entry = splice.first; entry <= splice.last; ++entry) {
         const SpriteGroupSlot &slot = m_tracker.slot(size_t(bank) * SPRITE_ENTRIES + entry);
         if (!slot.key || SpriteGroupTracker::key_base(slot.key) != invocation.address) continue;
@@ -214,8 +208,6 @@ void BehaviourReplay::presentation() {
     }
 }
 
-// ---- Sandbox replay --------------------------------------------------------------------
-
 void BehaviourReplay::run_replay(const EmitUnit &unit, const Invocation &invocation,
                                  Sandbox::Result &out) {
     out.clear();
@@ -244,7 +236,7 @@ void BehaviourReplay::run_replay(const EmitUnit &unit, const Invocation &invocat
         bool any = false;
         for (const SpriteBehaviour *behaviour : m_behaviours[unit.id])
             any |= behaviour->apply(view, patch);
-        if (!any) return; // nothing to show differently: keep real entries
+        if (!any) return;
     }
     ++m_stats.replays;
     ++m_stats.units[unit.id].replays;
@@ -267,4 +259,4 @@ void BehaviourReplay::record_abort(uint32_t unit, Sandbox::Abort reason) {
     ++m_stats.aborted;
 }
 
-} // namespace f3rt
+}

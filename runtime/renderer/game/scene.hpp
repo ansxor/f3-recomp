@@ -55,9 +55,6 @@ struct SceneSprite {
     uint32_t tile = 0;
     uint8_t palette = 0;
     bool flip_x = false, flip_y = false;
-    // Render-only stable sprite group (0 = unresolved); never serialized and not part of
-    // geometry equality, so group-only changes are not motion. `group_x`/`group_y` are the
-    // group origin at draw time (24.8 scanout units); `group_pc` is the sprite-RAM writer PC.
     uint64_t group = 0;
     int32_t group_x = 0, group_y = 0;
     uint32_t group_pc = 0;

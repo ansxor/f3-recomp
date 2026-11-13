@@ -16,8 +16,6 @@ namespace {
 
 using f3rt::SceneSnapshot;
 
-// Fresh render slot: default transform, y = 20 px, canonical palette. Written field by field so
-// render-only fields added to SceneSprite never disturb these helpers.
 f3rt::SceneSprite &fresh(SceneSnapshot &s, unsigned slot) {
     auto &sp = s.sprites[slot];
     sp = f3rt::SceneSprite{};
@@ -132,8 +130,6 @@ TEST(MotionDecode, BaselineAndEmptyPresentation) {
 
 TEST(MotionDecode, GroupPropagation) {
     std::vector<uint8_t> ram(0x10000, 0);
-    // Entry 0 opens a hardware block, entry 1 is its member (inherits the group), entry 2 carries
-    // its own group.
     put_entry(ram, 0, 0, {.tile = 1, .x = 100, .y = 50, .cont = 0x08});
     put_entry(ram, 0, 1, {.tile = 2, .x = 120, .y = 50, .cont = 0x08});
     put_entry(ram, 0, 2, {.tile = 3, .x = 200, .y = 60});
@@ -235,7 +231,6 @@ TEST(MotionDecode, SplicedReplacementAndChaining) {
     EXPECT_EQ(removed_out[0].tile, 3u) << "empty replacement retained wrong entry";
 }
 
-// Every member of one rigid group moves by the group-origin delta, whatever its own offset.
 TEST(MotionInterp, GroupMembersInterpolateTogether) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -260,13 +255,11 @@ TEST(MotionInterp, GroupMembersInterpolateTogether) {
     EXPECT_EQ(result.state.sprite_x[0], 30 * 256) << "member 0 alpha 1 wrong";
 }
 
-// Body and shadow are separate groups with independent origins. They deliberately share tile and
-// palette: only the group key may pair them.
 TEST(MotionInterp, BodyAndShadowGroupsInterpolateIndependently) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
-    grouped(*a, 0, 20, 10, 1, 20, 20); // body
-    grouped(*a, 1, 18, 10, 2, 18, 20); // shadow
+    grouped(*a, 0, 20, 10, 1, 20, 20);
+    grouped(*a, 1, 18, 10, 2, 18, 20);
     auto b = std::make_unique<SceneSnapshot>(*a);
     grouped(*b, 0, 30, 10, 1, 30, 20);
     grouped(*b, 1, 14, 10, 2, 14, 20);
@@ -276,7 +269,6 @@ TEST(MotionInterp, BodyAndShadowGroupsInterpolateIndependently) {
     EXPECT_EQ(result.state.sprite_x[0], 25 * 256) << "body delta wrong";
     EXPECT_EQ(result.state.sprite_x[1], 16 * 256) << "shadow delta wrong (cross-paired?)";
 
-    // Swapped slot order must not change the result: pairing is by key, not by slot.
     auto swapped = std::make_unique<SceneSnapshot>(*b);
     std::swap(swapped->sprites[0], swapped->sprites[1]);
     result = pair(*a, *swapped);
@@ -284,7 +276,6 @@ TEST(MotionInterp, BodyAndShadowGroupsInterpolateIndependently) {
     EXPECT_EQ(result.state.sprite_x[1], 25 * 256) << "body lost its own delta after swap";
 }
 
-// A birth or reset changes the group key: that group cannot pair and snaps.
 TEST(MotionInterp, GroupKeyChangeSnaps) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -299,12 +290,11 @@ TEST(MotionInterp, GroupKeyChangeSnaps) {
     EXPECT_EQ(result.state.sprite_x[0], 24 * 256) << "changed group key did not snap";
 }
 
-// One key with two origins in a frame is ambiguous and never pairs.
 TEST(MotionInterp, AmbiguousGroupOriginSnaps) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     grouped(*a, 0, 20, 10, 7, 20, 20);
-    grouped(*a, 1, 60, 11, 7, 60, 20); // same key, different origin
+    grouped(*a, 1, 60, 11, 7, 60, 20);
     auto b = std::make_unique<SceneSnapshot>();
     b->fallback = false;
     grouped(*b, 0, 24, 10, 7, 24, 20);
@@ -314,7 +304,6 @@ TEST(MotionInterp, AmbiguousGroupOriginSnaps) {
     EXPECT_EQ(result.stats.sprite_group_rejections, 1u) << "ambiguous previous group not rejected";
     EXPECT_EQ(result.state.sprite_x[0], 24 * 256) << "ambiguous previous group did not snap";
 
-    // Ambiguity on the current side is just as unusable.
     auto c = std::make_unique<SceneSnapshot>();
     c->fallback = false;
     grouped(*c, 0, 24, 10, 7, 24, 20);
@@ -330,15 +319,13 @@ TEST(MotionInterp, AmbiguousGroupOriginSnaps) {
     EXPECT_EQ(result.state.sprite_x[1], 64 * 256) << "ambiguous current member 1 did not snap";
 }
 
-// LoD/flicker/skipped tiles change the member set without changing the group: the current members
-// still interpolate with the group delta.
 TEST(MotionInterp, MemberSetChangeInterpolates) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     grouped(*a, 0, 20, 10, 3, 20, 20);
     grouped(*a, 1, 36, 11, 3, 20, 20);
     auto b = std::make_unique<SceneSnapshot>(*a);
-    b->sprite_count = 1; // one tile dropped
+    b->sprite_count = 1;
     grouped(*b, 0, 40, 11, 3, 24, 20);
 
     auto result = pair(*a, *b);
@@ -346,7 +333,6 @@ TEST(MotionInterp, MemberSetChangeInterpolates) {
     EXPECT_EQ(result.stats.rejected_sprites, 0u) << "shrunken member set rejected";
     EXPECT_EQ(result.state.sprite_x[0], 38 * 256) << "shrunken member set midpoint wrong";
 
-    // Growing 1 -> 2 members: the new member has no previous counterpart and still interpolates.
     auto c = std::make_unique<SceneSnapshot>();
     c->fallback = false;
     grouped(*c, 0, 36, 11, 3, 20, 20);
@@ -360,7 +346,6 @@ TEST(MotionInterp, MemberSetChangeInterpolates) {
     EXPECT_EQ(result.state.sprite_x[1], 38 * 256) << "surviving member midpoint wrong";
 }
 
-// Zoom/flip is a whole-object change: the member offsets are no longer rigid, so the group snaps.
 TEST(MotionInterp, GroupTransformChangeSnaps) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -380,7 +365,6 @@ TEST(MotionInterp, GroupTransformChangeSnaps) {
     EXPECT_EQ(result.stats.sprites, 0u) << "flip change interpolated";
     EXPECT_EQ(result.stats.sprite_transform_rejections, 1u) << "flip change not rejected";
 
-    // Previous members disagreeing on the transform signature make the group unusable.
     auto c = std::make_unique<SceneSnapshot>();
     c->fallback = false;
     grouped(*c, 0, 20, 10, 9, 20, 20);
@@ -396,8 +380,6 @@ TEST(MotionInterp, GroupTransformChangeSnaps) {
         << "mixed previous transforms not rejected";
 }
 
-// Keyless sprites keep the appearance fallback: (tile, palette) with mutually unique nearest
-// positions within 32 px.
 TEST(MotionInterp, KeylessAppearanceFallback) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -409,13 +391,11 @@ TEST(MotionInterp, KeylessAppearanceFallback) {
     EXPECT_EQ(result.stats.sprites, 1u) << "keyless motion lost";
     EXPECT_EQ(result.state.sprite_x[0], 22 * 256) << "keyless midpoint wrong";
 
-    // Tile animation snaps; there is no identity to pair.
     sprite(*b, 0, 24, 99);
     auto stats = pair(*a, *b).stats;
     EXPECT_EQ(stats.sprites, 0u) << "keyless tile change interpolated";
     EXPECT_EQ(stats.sprite_group_rejections, 1u) << "keyless tile change not rejected";
 
-    // Equidistant duplicates are ambiguous and snap.
     *a = SceneSnapshot{};
     a->fallback = false;
     sprite(*a, 0, 20);
@@ -427,7 +407,6 @@ TEST(MotionInterp, KeylessAppearanceFallback) {
     EXPECT_EQ(stats.sprites, 0u) << "ambiguous keyless duplicates interpolated";
     EXPECT_EQ(stats.sprite_group_rejections, 2u) << "ambiguous keyless duplicates not rejected";
 
-    // Dense but unambiguous duplicates still pair with their uniquely nearest partner.
     *a = SceneSnapshot{};
     a->fallback = false;
     sprite(*a, 0, 20);
@@ -441,13 +420,12 @@ TEST(MotionInterp, KeylessAppearanceFallback) {
     EXPECT_EQ(result.state.sprite_x[1], 38 * 256) << "dense keyless slot 1 midpoint wrong";
 }
 
-// Without a group pair the sprite is drawn canonically at every alpha.
 TEST(MotionInterp, NoGroupPairIsCanonicalAtEveryAlpha) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
     grouped(*a, 0, 20, 10, 1, 20, 20);
     auto b = std::make_unique<SceneSnapshot>(*a);
-    grouped(*b, 0, 24, 10, 2, 24, 20); // new key = birth
+    grouped(*b, 0, 24, 10, 2, 24, 20);
 
     for (float alpha : {0.0f, 0.25f, 0.5f, 1.0f}) {
         auto result = pair(*a, *b, alpha);
@@ -457,7 +435,6 @@ TEST(MotionInterp, NoGroupPairIsCanonicalAtEveryAlpha) {
     }
 }
 
-// The group-origin delta obeys the same 32 px per-axis limit as every other motion channel.
 TEST(MotionInterp, GroupJumpLimit) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -470,13 +447,12 @@ TEST(MotionInterp, GroupJumpLimit) {
     EXPECT_EQ(result.state.sprite_x[0], 36 * 256) << "exact 32 px group midpoint wrong";
 
     grouped(*b, 0, 52, 10, 5, 52, 20);
-    ++b->sprites[0].group_x; // one subunit beyond the limit
+    ++b->sprites[0].group_x;
     auto stats = pair(*a, *b).stats;
     EXPECT_EQ(stats.sprites, 0u) << "group delta beyond 32 px accepted";
     EXPECT_EQ(stats.sprite_jump_rejections, 1u) << "group jump rejection not recorded";
 }
 
-// A static grouped frame is neither motion nor a reject.
 TEST(MotionInterp, StaticGroupedFrameHasNoMotionOrRejections) {
     auto a = std::make_unique<SceneSnapshot>();
     a->fallback = false;
@@ -687,8 +663,6 @@ RC_GTEST_PROP(MotionInterp, EndpointIdentity, ()) {
     RC_ASSERT(res1.state.sprite_x[0] == (x0 + dx) * 256);
 }
 
-// RapidCheck property: For any alpha in [0.0, 1.0], the interpolated position stays within the
-// endpoint bounds.
 RC_GTEST_PROP(MotionInterp, MonotonicInterpolationBounds, ()) {
     const int x0 = *rc::gen::inRange(-300, 300);
     const int dx = *rc::gen::inRange(-32, 33);

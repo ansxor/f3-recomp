@@ -3,17 +3,14 @@
 #include <ostream>
 #include <utility>
 
-// The recompiler emits the group table next to the generated program (F3_GENERATED_DIR is on
-// f3rt's include path when set). Older/pre-generated programs have no table: groups then stay
-// unresolved and the renderer snaps, while emit-unit behaviour replay keeps working.
 #if __has_include("sprite_groups.hpp")
 #include "sprite_groups.hpp"
 #else
 namespace f3rt::sprite_groups {
 inline constexpr SpriteGroupTable table{};
-} // namespace f3rt::sprite_groups
+}
 #endif
-#include "generated_config/sprite_units.hpp" // configured emit units (behaviour anchors)
+#include "generated_config/sprite_units.hpp"
 
 namespace f3rt {
 
@@ -41,8 +38,6 @@ SpriteSystem::SpriteSystem(Machine &machine, const SpriteGroupTable &table,
     m_tracker.add_listener(&m_replay);
 }
 
-// ---- Presentation ---------------------------------------------------------------------
-
 SpritePresentation SpriteSystem::presentation() {
     m_tracker.count_ambiguity();
     m_replay.presentation();
@@ -63,8 +58,6 @@ void SpriteSystem::reset() {
     m_tracker.reset();
 }
 
-// ---- Reporting -------------------------------------------------------------------------
-
 SpriteSystem::Report SpriteSystem::report() const {
     const SpriteGroupTracker::Report writes = m_tracker.report();
     const BehaviourReplay::Stats &replay = m_replay.stats();
@@ -82,9 +75,7 @@ SpriteSystem::Report SpriteSystem::report() const {
     r.ambiguous_slots = writes.ambiguous_slots;
     r.max_ambiguous_keys_frame = writes.max_ambiguous_keys_frame;
     r.max_ambiguous_slots_frame = writes.max_ambiguous_slots_frame;
-    r.top_bump_pcs.reserve(writes.top_bump_pcs.size());
-    for (const SpriteGroupTracker::Report::PcCount &pc : writes.top_bump_pcs)
-        r.top_bump_pcs.push_back({pc.pc, pc.count});
+    r.top_bump_pcs = writes.top_bump_pcs;
     r.classes = writes.classes;
     r.class_writes = writes.class_writes;
     r.invocations = replay.invocations;
@@ -120,10 +111,11 @@ void SpriteSystem::write_report(std::ostream &out) const {
         << " keys=" << writes.ambiguous_keys << " slots=" << writes.ambiguous_slots
         << " max_keys_frame=" << writes.max_ambiguous_keys_frame
         << " max_slots_frame=" << writes.max_ambiguous_slots_frame << '\n';
-    // The text report has never listed the top bump PCs (report() exposes them); keep the line
-    // byte-for-byte.
     out << "  generations: bumps=" << writes.generation_bumps
-        << " periodic_suppressed=" << writes.periodic_resets << " top_pcs:\n";
+        << " periodic_suppressed=" << writes.periodic_resets << " top_pcs:";
+    for (const auto &pc : writes.top_bump_pcs)
+        out << " 0x" << std::hex << pc.pc << std::dec << "=" << pc.count;
+    out << '\n';
     out << "  class writes:";
     for (size_t cls = 1; cls < writes.class_writes.size(); ++cls)
         if (writes.class_writes[cls])
@@ -145,4 +137,4 @@ void SpriteSystem::write_report(std::ostream &out) const {
     }
 }
 
-} // namespace f3rt
+}

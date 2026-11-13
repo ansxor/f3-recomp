@@ -1,11 +1,4 @@
 #pragma once
-// Emit units: game code spans that draw one unit (object, queue record) into
-// sprite RAM. Declared per game in config.toml [[video.emit_units]] and compiled
-// into the generated sprite_units.hpp (tools/compile_sprite_units.py).
-//
-// They are behaviour anchors only: sprite grouping and origins come from the generated
-// sprite_groups.hpp table (include/f3rt/sprite_group.hpp), so only `name`, `starts`,
-// `ends`, `reg` and `size` are used at runtime.
 #include <cstdint>
 #include <span>
 
@@ -23,8 +16,6 @@ struct EmitUnit {
     uint32_t size; // bytes behaviours may read/patch at the unit address
 };
 
-// Inclusive PC range. Game video tables (games/*/video/video.cpp) use it; the
-// generated sprite_units.hpp no longer declares frame-writer ranges.
 struct PcRange {
     uint32_t first, last;
 };

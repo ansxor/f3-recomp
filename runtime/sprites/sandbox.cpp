@@ -9,7 +9,7 @@ namespace {
 constexpr uint64_t REPLAY_BUDGET_CYCLES = 1000000;
 constexpr uint32_t REPLAY_BUDGET_BLOCKS = 500000;
 constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE;
-} // namespace
+}
 
 const char *Sandbox::abort_name(Abort reason) {
     switch (reason) {
@@ -86,7 +86,7 @@ void Sandbox::ram_put(uint32_t offset, uint8_t value) {
 void Sandbox::abort(Abort reason) {
     if (m_abort != Abort::Count) return;
     m_abort = reason;
-    m_cpu.halted = 1; // stops chained native blocks at the next guard
+    m_cpu.halted = 1;
 }
 
 uint8_t Sandbox::read8(uint32_t address) {
@@ -102,7 +102,7 @@ uint8_t Sandbox::read8(uint32_t address) {
         }
         return m_machine.graphics[offset];
     }
-    abort(Abort::Device); // I/O, control, shared RAM, sound, EEPROM, unmapped
+    abort(Abort::Device);
     return 0;
 }
 
@@ -114,11 +114,10 @@ void Sandbox::write8(uint32_t address, uint8_t value) {
     }
     if (a - GRAPHICS_BASE < SPRITE_RAM_SIZE) {
         const uint32_t offset = a - GRAPHICS_BASE;
-        if (!sprite_slot_listed(offset)) return; // never displayed
+        if (!sprite_slot_listed(offset)) return;
         const uint16_t key = sprite_slot_for(offset);
         int16_t &slot = m_capture_slot[key];
         if (slot < 0) {
-            // Copy-on-first-touch of the whole entry so untouched words match hardware.
             Entry entry{key, {}};
             std::memcpy(entry.bytes.data(), m_machine.graphics.data() + (offset & ~15u), 16);
             slot = int16_t(m_capture.size());
@@ -153,8 +152,6 @@ int Sandbox::unit_exit(uint32_t unit) {
 }
 
 void Sandbox::begin(uint32_t unit, uint32_t start_pc, uint32_t end_pc) {
-    // Reset scratch state, then clone the (flushed) real CPU. The clone is the only CPU that
-    // ever executes; Machine state, counters and the real f3_cpu are never touched.
     for (uint16_t page : m_touched_pages) m_page_slot[page] = -1;
     m_touched_pages.clear();
     for (const Entry &entry : m_capture) m_capture_slot[entry.key] = -1;
@@ -190,7 +187,7 @@ Sandbox::Abort Sandbox::run() {
             abort(Abort::Untranslated);
             break;
         }
-        m_cpu.dispatch_deadline = limit; // chained blocks yield here, never at device events
+        m_cpu.dispatch_deadline = limit;
         block->execute(&m_cpu);
     }
     return m_abort;
@@ -201,7 +198,7 @@ void Sandbox::collect(Result &out) const {
     std::sort(out.written.begin(), out.written.end(),
               [](const Entry &a, const Entry &b) { return a.key < b.key; });
     if (m_capture.empty()) return;
-    out.bank = m_capture.front().key >= SPRITE_ENTRIES; // bank of the first write
+    out.bank = m_capture.front().key >= SPRITE_ENTRIES;
     uint16_t lo = 0xffff, hi = 0;
     for (const Entry &entry : m_capture) {
         if ((entry.key >= SPRITE_ENTRIES) != out.bank) continue;
@@ -222,4 +219,4 @@ void Sandbox::collect(Result &out) const {
     }
 }
 
-} // namespace f3rt
+}

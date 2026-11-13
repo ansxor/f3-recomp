@@ -40,21 +40,11 @@ bool valid_sprite(const SceneSprite &v) {
            std::abs(int64_t(v.x)) <= int64_t(1024) * 256 &&
            std::abs(int64_t(v.y)) <= int64_t(1024) * 256;
 }
-// Scale and flip changes snap: the group's member offsets are only rigid while the
-// whole-object transform is unchanged.
 bool same_transform(const SceneSprite &a, const SceneSprite &b) {
     return a.scale_x == b.scale_x && a.scale_y == b.scale_y && a.flip_x == b.flip_x &&
            a.flip_y == b.flip_y;
 }
-// Rigid sprite groups: a sprite carrying a group key pairs by that key alone, and the group's
-// origin delta is the delta of every current member. Members may appear, vanish or change tile
-// between frames (LoD, flicker, skipped tiles), so no per-sprite correspondence is needed or
-// assumed. A key that is absent from either frame, or that occurs with more than one origin in a
-// frame, never pairs and snaps.
 inline constexpr unsigned NO_SPRITE = ~0u;
-// One frame's group keys: sprite indices sorted by key, plus per-run flags. A run is the maximal
-// contiguous range of equal keys; its flags are stored at the run's first position and describe
-// every member of the run. Fixed arrays: capture() never allocates.
 struct GroupTable {
     std::array<unsigned, SceneSnapshot::MAX_SPRITES> order{};
     std::array<bool, SceneSnapshot::MAX_SPRITES> origin_unique{};
@@ -65,7 +55,6 @@ uint64_t transform_signature(const SceneSprite &s) {
     return (uint64_t(s.scale_x) << 32) | (uint64_t(s.scale_y) << 16) | (uint64_t(s.flip_x) << 1) |
            uint64_t(s.flip_y);
 }
-// `at(i)` yields the SceneSprite of sprite slot i of the table's frame.
 template <class At> void build_group_table(unsigned count, const At &at, GroupTable &table) {
     table.count = 0;
     for (unsigned i = 0; i < count; ++i)
@@ -87,7 +76,6 @@ template <class At> void build_group_table(unsigned count, const At &at, GroupTa
         p = e;
     }
 }
-// Position of the key's run start, or NO_SPRITE when the key does not occur.
 template <class At> unsigned find_group(const GroupTable &table, const At &at, uint64_t key) {
     unsigned lo = 0, hi = table.count;
     while (lo < hi) {
@@ -98,13 +86,10 @@ template <class At> unsigned find_group(const GroupTable &table, const At &at, u
     if (lo < table.count && at(table.order[lo]).group == key) return lo;
     return NO_SPRITE;
 }
-// The previous frame's group origin is the previous-equivalent geometry of every current member;
-// it must be a sane 24.8 scanout position for the interpolation to mean anything.
 bool valid_origin(const SceneSprite &s) {
     return std::abs(int64_t(s.group_x)) <= int64_t(1024) * 256 &&
            std::abs(int64_t(s.group_y)) <= int64_t(1024) * 256;
 }
-// Keyless sprites fall back to appearance: same tile and palette.
 uint64_t appearance_key(const SceneSprite &s) {
     return (uint64_t(s.tile) << 32) | s.palette;
 }
@@ -124,14 +109,6 @@ void GpuMotionHistory::reset() noexcept {
     m_captured = m_paired = false;
     m_frame = 0;
 }
-// Pair the current frame's sprites against the previous frame.
-// Group sprites: pair by key; delta = group origin delta; eligible while the key is unambiguous on
-// both sides, the previous members share one transform signature that the current sprite still
-// has, and the origin moved at most 32 px per axis. No group pair -> snap.
-// Keyless sprites: appearance fallback only, (tile, palette) groups with mutually unique nearest
-// positions within 32 px; their delta is their own position delta.
-// Rejection counters separate "no pairing" (sprite_group_rejections) from paired-but-ineligible
-// sprites (transform / jump).
 void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int32_t *dy,
                                     bool *eligible) noexcept {
     const auto &current = scene.sprites;
@@ -142,7 +119,6 @@ void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int
     build_group_table(m_sprite_count, previous, old_groups);
     build_group_table(scene.sprite_count, now, new_groups);
 
-    // Group pass. Every grouped sprite is evaluated, including members whose slot changed.
     for (unsigned i = 0; i < scene.sprite_count; ++i) {
         const SceneSprite &v = current[i];
         if (!v.group) continue;
@@ -151,7 +127,6 @@ void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int
         const bool paired = old_run != NO_SPRITE && new_run != NO_SPRITE &&
                             old_groups.origin_unique[old_run] && new_groups.origin_unique[new_run];
         if (!paired) {
-            // A sprite that is unchanged in its old slot is not evidence of a moving reject.
             if (i < m_sprite_count && v == m_sprites[i].value) continue;
             ++m_pair_stats.rejected_sprites;
             ++m_pair_stats.sprite_group_rejections;
@@ -178,8 +153,6 @@ void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int
         }
     }
 
-    // Appearance pass for keyless sprites: (tile, palette) groups with mutually unique nearest
-    // positions within 32 px. Tile animation, births and vanishing keyless sprites snap.
     std::array<unsigned, SceneSnapshot::MAX_SPRITES> old_order, new_order, matches;
     unsigned old_n = 0, new_n = 0;
     matches.fill(NO_SPRITE);
@@ -246,7 +219,6 @@ void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int
         fresh = new_end;
     }
 
-    // Keyless sprites: matched pairs interpolate by their own position delta; unmatched ones snap.
     for (unsigned i = 0; i < scene.sprite_count; ++i) {
         const SceneSprite &v = current[i];
         if (v.group) continue;
@@ -285,12 +257,9 @@ void GpuMotionHistory::capture(const SceneSnapshot &scene, uint64_t frame) noexc
         m_captured && m_frame != std::numeric_limits<uint64_t>::max() && frame == m_frame + 1;
     m_pair_stats = {};
     const auto &current = scene.sprites;
-    // Compact render slots are not identities, so the slot-by-slot comparison only detects
-    // whether the sprite list changed at all; pairing never uses slots.
     bool sprites_changed = m_sprite_count != scene.sprite_count;
     for (unsigned i = 0; m_paired && !sprites_changed && i < scene.sprite_count; ++i)
         sprites_changed = current[i] != m_sprites[i].value;
-    // Compute all deltas before overwriting the previous slots.
     std::array<int32_t, SceneSnapshot::MAX_SPRITES> dx{}, dy{};
     std::array<bool, SceneSnapshot::MAX_SPRITES> eligible{};
     if (m_paired && sprites_changed) pair_sprites(scene, dx.data(), dy.data(), eligible.data());
@@ -398,8 +367,6 @@ MotionResult GpuMotionHistory::apply(const SceneSnapshot &scene, float alpha) co
         out.text_x = int32_t(row.text_x) * 256;
         out.text_y = int32_t(row.text_y) * 256;
     }
-    // dx/dy are the group origin delta, so a member's interpolated position is its current
-    // position minus the shared delta. Only current members are drawn.
     for (unsigned i = 0; i < m_sprite_count; ++i) {
         const auto &s = m_sprites[i];
         if (!s.eligible || (!s.dx && !s.dy) || s.value != scene.sprites[i]) continue;

@@ -225,9 +225,6 @@ def generate(
         flag_producers["eager_x"] += eager_x
         if not lazy and not eager_x:
             unflagged[pc] = statements
-    # Sprite group table: sprite RAM X/Y writer PC -> record root fields, plus
-    # the root-field writers classified as continuations or resets. Traced
-    # before pinning so reset PCs pin liveness and idle analysis below.
     sprite_groups = trace_sprite_groups(rom, discovery, config, sprite_writers, sprite_lanes)
     reset_pcs = {reset.pc for reset in sprite_groups.resets}
     pinned = fallback_entries | unit_enter.keys() | unit_exit.keys() | reset_pcs

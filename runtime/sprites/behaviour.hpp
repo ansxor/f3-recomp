@@ -1,22 +1,4 @@
 #pragma once
-// Sprite behaviours: per-game patches applied to an emit-unit replay (see
-// runtime/sprites/replay.hpp). A behaviour reads the unit's bytes as they are at unit
-// start and writes field patches into the replay's copy-on-write RAM overlay; the
-// game's own native code then re-draws the unit from the patched state. Behaviours
-// never touch emulated state, and emit units exist only as behaviour anchors: grouping and
-// identity come from the generated sprite-group table.
-//
-//   // games/<id>/sprites/behaviours.hpp
-//   #include "generated_config/sprite_units.hpp"
-//   #include "sprites/behaviour.hpp"
-//   namespace f3rt::game_sprites {
-//   F3RT_SPRITE_BEHAVIOUR(DOUBLE_ZOOM, sprite_units::objects, "Doubles object zoom",
-//       [](const Unit<sprite_units::objects> &o, Patch<sprite_units::objects> &p) {
-//           p.u16<0x10>(uint16_t(o.u16<0x10>() * 2));
-//           return true;   // false: leave this unit unpatched (no splice)
-//       });
-//   inline constexpr std::array<const SpriteBehaviour *, 1> BEHAVIOURS{&DOUBLE_ZOOM};
-//   }
 #include "f3rt/emit_unit.hpp"
 #include <cstddef>
 #include <cstdint>

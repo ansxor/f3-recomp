@@ -137,15 +137,21 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
         // Raw 4-byte video-RAM cell (attributes<<16 | code); the shader decodes it
         // exactly like GameTiles::RowSampler. Word 1 of each slot is unused.
         const auto cells = frame.tiles.cells(l);
-        // Only PF2/PF3 have alternates (maps 4/5); word 1 carries them.
-        const bool alternate = ALTERNATE_MAPS && l >= 2;
-        // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores): only read when the game has alternate maps (ALTERNATE_MAPS is a per-game constant)
-        const auto alt_cells = frame.tiles.cells(alternate ? l + 2 : l);
         uint32_t *dst =
             w + F3_SCENE_PF_CELLS + size_t(l) * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE;
-        for (unsigned i = 0; i < cells.size(); ++i) {
-            dst[size_t(i) * 2] = cells[i];
-            dst[i * 2 + 1] = alternate ? alt_cells[i] : 0;
+        if constexpr (ALTERNATE_MAPS) {
+            // Only PF2/PF3 have alternates (maps 4/5); word 1 carries them.
+            const bool alternate = l >= 2;
+            const auto alt_cells = frame.tiles.cells(alternate ? l + 2 : l);
+            for (unsigned i = 0; i < cells.size(); ++i) {
+                dst[size_t(i) * 2] = cells[i];
+                dst[i * 2 + 1] = alternate ? alt_cells[i] : 0;
+            }
+        } else {
+            for (unsigned i = 0; i < cells.size(); ++i) {
+                dst[size_t(i) * 2] = cells[i];
+                dst[i * 2 + 1] = 0;
+            }
         }
     }
     // Raw big-endian text-map words; the shader decodes them like GameText::pixel.

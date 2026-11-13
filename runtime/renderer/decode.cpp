@@ -53,7 +53,6 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
     uint8_t color = 0;
     bool multi = false;
     size_t count = 0;
-    // Most recent entry carrying its own group: hardware block members inherit it.
     uint64_t block_group = 0;
     uint32_t block_pc = 0;
     int32_t block_x = 0, block_y = 0;
@@ -90,12 +89,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
         const bool lock = (spritecont & 0x04) != 0;
         if (!lock) color = uint8_t(w4 & 0xff);
 
-        // Hardware blocks: only the head entry carries the position (its X/Y store gave it the
-        // group); members have no group of their own and inherit the head's.
         const bool own_group = group != 0;
         if (!(spritecont & 0x08)) {
-            // Block head: it always starts a new context, even when it is unresolved (group 0),
-            // so members of an unresolved block can never inherit the previous block's key.
             block_group = group;
             block_pc = group_pc;
             block_x = group_x;
@@ -170,7 +165,7 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t n = size_t(sp.last) - sp.first + 1;
             if (sp.last < sp.first || sp.last >= 0x400 || sp.real.size() != n * 16 ||
                 std::memcmp(spr, sp.real.data(), n * 16) != 0)
-                break; // stale: the game rewrote this range
+                break;
             hit = &sp;
             break;
         }

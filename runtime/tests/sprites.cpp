@@ -68,7 +68,6 @@ F3RT_SPRITE_BEHAVIOUR(SYNTH_BUMP_BEHAVIOUR, SYNTH_UNIT0, "Adds 5 to the unit's f
                           p.u16<0>(uint16_t(u.u16<0>() + 5));
                           return true;
                       });
-// The I/O unit declares size 0, so this only requests a replay (which then aborts on the read).
 F3RT_SPRITE_BEHAVIOUR(SYNTH_IO_BEHAVIOUR, SYNTH_UNIT1, "Requests a replay of the I/O unit",
                       [](const f3rt::Unit<SYNTH_UNIT1> &, f3rt::Patch<SYNTH_UNIT1> &) {
                           return true;
@@ -169,20 +168,17 @@ struct SynthSnapshot {
     }
 };
 
-// ---- Synthetic sprite-group tables ------------------------------------------------------
-// Object records live in work RAM; the group roots are the record's X and Y fields.
-constexpr uint32_t OBJ_A = f3rt::RAM_BASE + 0x200; // a3
-constexpr uint32_t OBJ_B = f3rt::RAM_BASE + 0x280; // a4
-constexpr uint32_t GRP_PC_XY = 0x300;     // a3, class 1 (roots +0/+2), long X:Y store
-constexpr uint32_t GRP_PC_Y = 0x304;      // a3, class 1, Y-only store
-constexpr uint32_t GRP_PC_CLASS2 = 0x308; // a3, class 2 (roots +0x10/+0x12)
-constexpr uint32_t GRP_PC_A4 = 0x30c;     // a4, class 1
-constexpr uint32_t GRP_PC_RESET = 0x400;  // reset write to class 1 X root
-constexpr uint32_t GRP_PC_RESET2 = 0x404; // second reset writer, same root
-constexpr uint32_t GRP_PC_TILE = 0x500;   // plain sprite-RAM store outside the table
+constexpr uint32_t OBJ_A = f3rt::RAM_BASE + 0x200;
+constexpr uint32_t OBJ_B = f3rt::RAM_BASE + 0x280;
+constexpr uint32_t GRP_PC_XY = 0x300;
+constexpr uint32_t GRP_PC_Y = 0x304;
+constexpr uint32_t GRP_PC_CLASS2 = 0x308;
+constexpr uint32_t GRP_PC_A4 = 0x30c;
+constexpr uint32_t GRP_PC_RESET = 0x400;
+constexpr uint32_t GRP_PC_RESET2 = 0x404;
+constexpr uint32_t GRP_PC_TILE = 0x500;
 constexpr uint32_t SLOT = 4;
 
-// Base register encoding matches UnitRegister: 0..7 = d0..d7, 8..14 = a0..a6.
 constexpr uint8_t BASE_A3 = 8 + 3, BASE_A4 = 8 + 4;
 constexpr f3rt::SpriteGroupWrite SYNTH_WRITES[] = {
     {GRP_PC_XY, BASE_A3, uint8_t(f3rt::SpriteLane::XY), 1, 8, 0, 2},
@@ -190,7 +186,6 @@ constexpr f3rt::SpriteGroupWrite SYNTH_WRITES[] = {
     {GRP_PC_CLASS2, BASE_A3, uint8_t(f3rt::SpriteLane::XY), 2, 8, 0x10, 0x12},
     {GRP_PC_A4, BASE_A4, uint8_t(f3rt::SpriteLane::XY), 1, 8, 0, 2},
 };
-// Fields: {pc, base, pad, offset}.
 constexpr f3rt::SpriteGroupReset SYNTH_RESETS[] = {{GRP_PC_RESET, BASE_A3, 0, 0},
                                                    {GRP_PC_RESET, BASE_A3, 0, 0x10},
                                                    {GRP_PC_RESET2, BASE_A3, 0, 0}};
@@ -223,13 +218,12 @@ void raw16(uint8_t *p, uint16_t value) {
     p[1] = uint8_t(value);
 }
 
-// Raw sprite-RAM entry (16 bytes) at `slot` of bank 0.
 void raw_entry(uint8_t *ram, uint16_t slot, uint16_t tile, uint16_t x, uint16_t y,
                uint16_t cont = 0) {
     uint8_t *p = ram + size_t(slot) * 16;
     std::memset(p, 0, 16);
     raw16(p + 0, tile);
-    raw16(p + 2, 0); // zoom
+    raw16(p + 2, 0);
     raw16(p + 4, x);
     raw16(p + 6, y);
     raw16(p + 8, cont);
@@ -239,17 +233,14 @@ uint32_t sprite_address(uint16_t slot, uint32_t offset) {
     return f3rt::GRAPHICS_BASE + uint32_t(slot) * 16 + offset;
 }
 
-// A drawable head entry: tile, zoom, X/Y (written by the group rule) and no block bit.
 void write_head(f3rt::Machine &m, uint16_t slot, uint16_t x, uint16_t y) {
-    poke16(m, sprite_address(slot, 0), 1, GRP_PC_TILE); // tile
+    poke16(m, sprite_address(slot, 0), 1, GRP_PC_TILE);
     poke32(m, sprite_address(slot, 4), uint32_t(x) << 16 | y, GRP_PC_XY);
 }
 
-// A hardware block member: tile and a spritecont with multi + both control bits set, so the
-// decoder keeps the head's block position. Written outside the table -> no group of its own.
 void write_member(f3rt::Machine &m, uint16_t slot) {
     poke16(m, sprite_address(slot, 0), 2, GRP_PC_TILE);
-    poke16(m, sprite_address(slot, 8), 0x5800, GRP_PC_TILE); // spritecont 0x58, color 0
+    poke16(m, sprite_address(slot, 8), 0x5800, GRP_PC_TILE);
 }
 
 std::vector<f3rt::DecodedSpriteEntry> decode(const f3rt::Machine &m,
@@ -262,8 +253,6 @@ std::vector<f3rt::DecodedSpriteEntry> decode(const f3rt::Machine &m,
     return {out.begin(), out.begin() + std::ptrdiff_t(n)};
 }
 } // namespace
-
-// ---- Behaviour replay (emit units are anchors only) ------------------------------------
 
 TEST(SpriteSystem, BehaviourNameHyphenation) {
     EXPECT_EQ(std::string(SYNTH_BUMP_BEHAVIOUR.name), "synth-bump-behaviour")
@@ -307,8 +296,6 @@ TEST(SpriteSystem, DeviceAccessAbortsReplay) {
         << "I/O read aborts the replay";
 }
 
-// Sprite groups are render-only: installing them, with or without a splicing behaviour, must
-// never change emulated state.
 TEST(SpriteSystem, BehaviourSplicingNeverChangesEmulatedState) {
     const auto without_snapshot = [] {
         auto without_groups = synth_machine(false);
@@ -323,14 +310,12 @@ TEST(SpriteSystem, BehaviourSplicingNeverChangesEmulatedState) {
         << "ram, graphics, cpu, cycles, native_blocks and state_crc match without groups";
 }
 
-// `--discovery-log` is observe-only: the same stores with and without a DiscoveryLog leave
-// cycles, native_blocks, state_crc and all device memory identical.
 TEST(DiscoveryLog, IsObserveOnly) {
     const auto path = std::filesystem::temp_directory_path() / "f3rt-test-discovery.log";
     for (const bool log_all : {false, true}) {
         const auto stores = [](f3rt::Machine &m) {
             synth_span(m);
-            m.write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001); // sprite RAM
+            m.write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001);
             m.write8(PLAYFIELD_RAM_PROBE, 0x5a);                     // playfield RAM
             m.write16(f3rt::CONTROL_BASE, 0x1234);                   // control register
             m.write32(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_HIGH, 0xdeadbeef);
@@ -379,8 +364,6 @@ TEST(SpriteSystem, BehaviourSplicesReplacementEntries) {
     EXPECT_EQ(m->sprites->report().spliced, 1) << "Splice is counted";
 }
 
-// RapidCheck property: The real emit-unit replay and splice pipeline transforms arbitrary RAM
-// counter values into spliced replacement entries (value + 5) while leaving real RAM unmodified.
 RC_GTEST_PROP(SpriteSystem, ReplayPipelineSplicesPatchedCounter, ()) {
     const auto counter_val = *rc::gen::arbitrary<uint16_t>();
     auto m = std::make_unique<f3rt::Machine>(fixture());
@@ -409,12 +392,10 @@ RC_GTEST_PROP(SpriteSystem, ReplayPipelineSplicesPatchedCounter, ()) {
     RC_ASSERT(spliced_val == uint16_t(counter_val + 5));
 }
 
-// ---- Group keys and origins ------------------------------------------------------------
-
 TEST(SpriteSystem, TableLookupResolvesKeyAndOrigin) {
     auto m = group_machine();
-    poke16(*m, OBJ_A, 0x0100, GRP_PC_TILE);     // root X
-    poke16(*m, OBJ_A + 2, 0x00f0, GRP_PC_TILE); // root Y
+    poke16(*m, OBJ_A, 0x0100, GRP_PC_TILE);
+    poke16(*m, OBJ_A + 2, 0x00f0, GRP_PC_TILE);
     write_head(*m, SLOT, 0x0020, 0x0030);
 
     const auto presentation = m->sprites->presentation();
@@ -434,13 +415,11 @@ TEST(SpriteSystem, ResetBumpsGenerationAndChangesKey) {
     const uint64_t first = m->sprites->presentation().groups[SLOT].key;
     ASSERT_NE(first, 0u);
 
-    // A continuation write (same object) keeps the key.
     poke16(*m, OBJ_A, 0x0101, GRP_PC_TILE);
     write_head(*m, SLOT, 0x0020, 0x0030);
     EXPECT_EQ(m->sprites->presentation().groups[SLOT].key, first)
         << "Rewriting the same record keeps the group key";
 
-    // A reset write (spawn/teleport: not derived from the previous value) starts a new group.
     poke16(*m, OBJ_A, 0x0800, GRP_PC_RESET);
     write_head(*m, SLOT, 0x0020, 0x0030);
     const auto &slot = m->sprites->presentation().groups[SLOT];
@@ -482,7 +461,6 @@ TEST(SpriteSystem, UnresolvedWriteLeavesGroupZero) {
     poke16(*m, OBJ_A, 0x0100, GRP_PC_TILE);
     write_head(*m, SLOT, 0x0020, 0x0030);
     ASSERT_NE(m->sprites->presentation().groups[SLOT].key, 0u);
-    // A write from a PC the table does not know snaps the slot.
     poke16(*m, sprite_address(SLOT, 4), 0x0040, GRP_PC_TILE);
     EXPECT_EQ(m->sprites->presentation().groups[SLOT].key, 0u)
         << "A writer outside the table is unresolved";
@@ -506,8 +484,6 @@ TEST(SpriteSystem, BlockMembersInheritTheHeadGroup) {
     EXPECT_EQ(decoded[1].group_y, decoded[0].group_y);
 }
 
-// ---- Reset continuity -------------------------------------------------------------------
-
 TEST(SpriteSystem, PeriodicResetsDoNotRebirthTheGroup) {
     auto m = group_machine();
     poke16(*m, OBJ_A + 2, 0x00f0, GRP_PC_TILE);
@@ -518,7 +494,6 @@ TEST(SpriteSystem, PeriodicResetsDoNotRebirthTheGroup) {
     ASSERT_NE(key, 0u);
     ASSERT_EQ(m->sprites->report().generation_bumps, 1u);
 
-    // The same reset runs again next frame: a recomputation, not a birth.
     m->frame = 2;
     poke16(*m, OBJ_A, 0x0101, GRP_PC_RESET);
     write_head(*m, SLOT, 0x0020, 0x0030);
@@ -527,13 +502,11 @@ TEST(SpriteSystem, PeriodicResetsDoNotRebirthTheGroup) {
     EXPECT_EQ(m->sprites->report().generation_bumps, 1u);
     EXPECT_EQ(m->sprites->report().periodic_resets, 1u);
 
-    // A root write without a reset does not count as a reset event.
     m->frame = 3;
     poke16(*m, OBJ_A, 0x0102, GRP_PC_TILE);
     write_head(*m, SLOT, 0x0020, 0x0030);
     EXPECT_EQ(m->sprites->presentation().groups[SLOT].key, key);
 
-    // Reset after a frame without one: a birth.
     m->frame = 4;
     poke16(*m, OBJ_A, 0x0103, GRP_PC_RESET);
     write_head(*m, SLOT, 0x0020, 0x0030);
@@ -541,7 +514,6 @@ TEST(SpriteSystem, PeriodicResetsDoNotRebirthTheGroup) {
         << "A reset after a gap starts a new generation";
     EXPECT_EQ(m->sprites->report().generation_bumps, 2u);
 
-    // Skip a frame, then two reset writers for the same root in one frame bump at most once.
     m->frame = 5;
     poke16(*m, OBJ_A, 0x0104, GRP_PC_TILE);
     m->frame = 6;
@@ -551,14 +523,12 @@ TEST(SpriteSystem, PeriodicResetsDoNotRebirthTheGroup) {
         << "Two reset writers in one frame bump once";
 }
 
-// ---- Decoder: block inheritance --------------------------------------------------------
-
 TEST(SpriteSystem, DecoderDoesNotLeakBlockGroupAcrossAnUnresolvedHead) {
     std::array<uint8_t, 0x10000> ram{};
-    raw_entry(ram.data(), 0, 5, 100, 50);        // resolved head
-    raw_entry(ram.data(), 1, 6, 0, 0, 0x5800);   // its member
-    raw_entry(ram.data(), 2, 7, 200, 60);        // unresolved head (group 0)
-    raw_entry(ram.data(), 3, 8, 0, 0, 0x5800);   // member of the unresolved block
+    raw_entry(ram.data(), 0, 5, 100, 50);
+    raw_entry(ram.data(), 1, 6, 0, 0, 0x5800);
+    raw_entry(ram.data(), 2, 7, 200, 60);
+    raw_entry(ram.data(), 3, 8, 0, 0, 0x5800);
 
     std::array<f3rt::SpriteGroupSlot, 0x800> slots{};
     slots[0] = {0x7777, 100 << 8, 50 << 8};
@@ -599,12 +569,11 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
     uint64_t paired_frames = 0, grouped = 0, paired_group_sprites = 0, moving_grouped = 0,
              verified = 0, cross_paired = 0, max_error = 0, key_changed = 0, key_change_moved = 0,
              rejected_group = 0, runs = 0;
-    // Why a grouped sprite's key is absent from the previous frame (no key design change yet).
     uint64_t prev_group_zero = 0, base_changed = 0, class_changed = 0, gen_changed = 0,
              absent = 0, ambiguous = 0, multi_origin_keys = 0, ambiguous_examples = 0;
     uint64_t different_pc_pairs = 0, pc_split_unique = 0, still_pc_ambiguous = 0,
              multi_part_split = 0;
-    std::unordered_map<uint64_t, uint64_t> ambiguous_pc_class; // (pc<<8|class) -> sprites
+    std::unordered_map<uint64_t, uint64_t> ambiguous_pc_class;
     std::vector<f3rt::SceneSprite> prev_sprites;
     std::unordered_set<uint64_t> prev_keys, prev_base_class;
     std::unordered_set<uint32_t> prev_bases;
@@ -770,8 +739,6 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
     EXPECT_EQ(cross_paired, 0u) << "A paired sprite moved by a delta other than its group delta";
     EXPECT_EQ(key_change_moved, 0u) << "A new/ambiguous group key was interpolated instead of snapping";
 }
-
-// ---- ROM-backed coverage ----------------------------------------------------------------
 
 #if defined(F3RT_GENERATED)
 

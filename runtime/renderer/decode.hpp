@@ -42,9 +42,6 @@ struct DecodedSpriteEntry {
     uint8_t color;
     bool flip_x, flip_y;
     uint8_t pri;
-    // Stable sprite group from a SpritePresentation (block members inherit the head's); 0 =
-    // unresolved, the renderer snaps instead of pairing. `group_x`/`group_y` are the group
-    // origin at draw time (24.8 scanout units).
     uint64_t group;
     int32_t group_x, group_y;
     uint32_t group_pc;
