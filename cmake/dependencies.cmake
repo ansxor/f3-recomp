@@ -53,10 +53,8 @@ if(F3RT_SDL)
     CPMFindPackage(NAME SDL3 GITHUB_REPOSITORY libsdl-org/SDL GIT_TAG release-3.4.12 VERSION 3.4.0
         OPTIONS "SDL_SHARED OFF" "SDL_STATIC ON" "SDL_TEST_LIBRARY OFF" "SDL_EXAMPLES OFF"
             "SDL_TESTS OFF" "SDL_INSTALL OFF")
-endif()
 
-# Dear ImGui ships no CMake build.
-if(F3RT_SDL)
+    # Dear ImGui ships no CMake build.
     CPMAddPackage(NAME imgui GITHUB_REPOSITORY ocornut/imgui GIT_TAG v1.93.0 DOWNLOAD_ONLY YES)
     add_library(imgui STATIC
         "${imgui_SOURCE_DIR}/imgui.cpp" "${imgui_SOURCE_DIR}/imgui_draw.cpp"
@@ -69,9 +67,7 @@ if(F3RT_SDL)
         "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp")
     target_include_directories(imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}/backends")
     target_link_libraries(imgui PUBLIC SDL3::SDL3)
-endif()
 
-if(F3RT_SDL)
     if(F3RT_GPU)
         # Offline shader tools: installed binaries (Vulkan SDK, distro packages) first.
         find_program(F3_GLSLANG NAMES glslangValidator glslang)

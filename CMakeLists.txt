@@ -1,277 +1,95 @@
 cmake_minimum_required(VERSION 3.24)
+
 option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
 option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
 option(BUILD_TESTING "Build the unit tests" ON)
+
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
+
 # compile_commands.json for clangd and other LSP servers; `make compdb` links it to the root.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(F3RT_SDL AND NOT F3RT_NETPLAY)
     message(FATAL_ERROR "F3RT_SDL requires F3RT_NETPLAY: the SDL frontend drives netplay sessions")
 endif()
 if(BUILD_TESTING AND NOT F3RT_HOST_TOOLS)
     message(FATAL_ERROR "BUILD_TESTING requires F3RT_HOST_TOOLS: the tests link f3rt-runner")
 endif()
+
 include(cmake/dependencies.cmake)
 include(cmake/corrosion.cmake)
-file(GLOB F3_GAME_CONFIGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/*/config.toml")
-set(F3_GAME_CHOICES)
-foreach(config IN LISTS F3_GAME_CONFIGS)
-    get_filename_component(game_directory "${config}" DIRECTORY)
-    get_filename_component(game_id "${game_directory}" NAME)
-    list(APPEND F3_GAME_CHOICES "${game_id}")
-endforeach()
-set(F3_GAME "landmakrj" CACHE STRING "ROM set (discovered from games/*/config.toml)")
-set_property(CACHE F3_GAME PROPERTY STRINGS ${F3_GAME_CHOICES})
-set(F3_GAME_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/config.toml")
-if(NOT F3_GAME IN_LIST F3_GAME_CHOICES OR NOT EXISTS "${F3_GAME_CONFIG}")
-    message(FATAL_ERROR "Unsupported F3_GAME: ${F3_GAME}")
-endif()
-set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
-set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
-set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
-find_program(UV_EXECUTABLE uv REQUIRED)
-execute_process(COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-    python -c
-    "import pathlib, sys, tomllib; p = pathlib.Path(sys.argv[1]); identity = tomllib.loads(p.read_text())['game']['id']; sys.exit(0 if identity == sys.argv[2] else 'Configured game id does not match directory: ' + str(p))"
-    "${F3_GAME_CONFIG}" "${F3_GAME}"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    COMMAND_ERROR_IS_FATAL ANY)
-function(f3_compute_generator_stamp out_stamp)
-    cmake_parse_arguments(ARG "" "" "INPUT_FILES;EXTRA_DATA" ${ARGN})
-    set(_hash_data "")
-    set(_inputs_sorted ${ARG_INPUT_FILES})
-    list(SORT _inputs_sorted)
-    foreach(_in ${_inputs_sorted})
-        if(EXISTS "${_in}")
-            file(SHA256 "${_in}" _fhash)
-            string(APPEND _hash_data "${_in}:${_fhash};")
-        else()
-            string(APPEND _hash_data "${_in}:MISSING;")
-        endif()
-    endforeach()
-    foreach(_extra ${ARG_EXTRA_DATA})
-        string(APPEND _hash_data "EXTRA:${_extra};")
-    endforeach()
-    string(SHA256 _computed "${_hash_data}")
-    set(${out_stamp} "${_computed}" PARENT_SCOPE)
-endfunction()
+include(cmake/codegen.cmake)
 
-function(f3_run_generator)
-    cmake_parse_arguments(ARG "" "STAMP_FILE" "INPUT_FILES;EXTRA_DATA;OUTPUT_FILES;COMMAND" ${ARGN})
-    set(_outputs_exist TRUE)
-    foreach(_out ${ARG_OUTPUT_FILES})
-        if(NOT EXISTS "${_out}")
-            set(_outputs_exist FALSE)
-            break()
-        endif()
-    endforeach()
+# --- Core runtime (f3rt) ----------------------------------------------------
 
-    f3_compute_generator_stamp(_computed_stamp
-        INPUT_FILES ${ARG_INPUT_FILES}
-        EXTRA_DATA ${ARG_EXTRA_DATA})
-
-    set(_stamp_matches FALSE)
-    if(EXISTS "${ARG_STAMP_FILE}")
-        file(READ "${ARG_STAMP_FILE}" _existing_stamp)
-        string(STRIP "${_existing_stamp}" _existing_stamp)
-        if("${_existing_stamp}" STREQUAL "${_computed_stamp}")
-            set(_stamp_matches TRUE)
-        endif()
-    endif()
-
-    if(_outputs_exist AND _stamp_matches)
-        return()
-    endif()
-
-    execute_process(
-        COMMAND ${ARG_COMMAND}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMAND_ERROR_IS_FATAL ANY)
-
-    get_filename_component(_sdir "${ARG_STAMP_FILE}" DIRECTORY)
-    file(MAKE_DIRECTORY "${_sdir}")
-    file(WRITE "${ARG_STAMP_FILE}" "${_computed_stamp}\n")
-endfunction()
-
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${F3_GAME_CONFIGS} "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock")
-set(F3_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_config")
-set(F3_COMPILE_ROMS_ARGS
-    --configs ${F3_GAME_CONFIGS} --output "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
-    --game "${F3_GAME}" --game-output "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
-set(F3_COMPILE_ROMS_OUTPUTS
-    "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
-    "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp")
-f3_run_generator(
-    STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
-    INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
-        ${F3_GAME_CONFIGS}
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-    EXTRA_DATA "${F3_COMPILE_ROMS_ARGS}"
-    OUTPUT_FILES ${F3_COMPILE_ROMS_OUTPUTS}
-    COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-        python recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS})
-# Emit-unit headers come from the config alone (no ROM); recomp emit reads the same
-# config and checks the digest guard it plants against these headers.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py")
-set(F3_COMPILE_SPRITE_UNITS_ARGS
-    --config "${F3_GAME_CONFIG}" --output-dir "${F3_GENERATED_CONFIG_DIR}")
-f3_run_generator(
-    STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_sprite_units.stamp"
-    INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
-        "${F3_GAME_CONFIG}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-    EXTRA_DATA "${F3_COMPILE_SPRITE_UNITS_ARGS}"
-    OUTPUT_FILES
-        "${F3_GENERATED_CONFIG_DIR}/sprite_units.h"
-        "${F3_GENERATED_CONFIG_DIR}/sprite_units.hpp"
-    COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-        python recomp/compile/sprite_units.py ${F3_COMPILE_SPRITE_UNITS_ARGS})
-option(F3_PROFILE_INSTRUMENT "Record every generated main/sound entry with --profile-out" OFF)
-if(F3_PROFILE_INSTRUMENT AND NOT F3_ROM_DIR)
-    message(FATAL_ERROR "F3_PROFILE_INSTRUMENT requires F3_ROM_DIR to regenerate instrumentable main/sound entries")
-endif()
-set(F3_PROFILE_TIERS "" CACHE FILEPATH "Execution profile for full-coverage hot -O2 / cold size-optimized code")
-set(F3_PROFILE_SLIM "" CACHE FILEPATH "Explicit opt-in profile removing cold main/sound code; cold hits abort")
-option(F3_PROFILE_DEFAULT_TIERS "Use the frozen full-coverage profile tiers when generating from ROMs" ON)
-if(F3_ROM_DIR AND F3_PROFILE_DEFAULT_TIERS AND NOT F3_PROFILE_TIERS AND NOT F3_PROFILE_SLIM)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/profiles/${F3_GAME}.profile")
-        set(F3_PROFILE_TIERS "${CMAKE_CURRENT_SOURCE_DIR}/profiles/${F3_GAME}.profile")
-    else()
-        message(STATUS "profiles/${F3_GAME}.profile not found; building without profile tiers")
-    endif()
-endif()
-if(F3_PROFILE_TIERS AND F3_PROFILE_SLIM)
-    message(FATAL_ERROR "F3_PROFILE_TIERS and F3_PROFILE_SLIM are mutually exclusive")
-endif()
-set(F3_PROFILE_GENERATOR_ARGS)
-foreach(mode TIERS SLIM)
-    if(F3_PROFILE_${mode})
-        get_filename_component(F3_PROFILE_${mode} "${F3_PROFILE_${mode}}" ABSOLUTE)
-        if(NOT F3_ROM_DIR OR NOT EXISTS "${F3_PROFILE_${mode}}")
-            message(FATAL_ERROR "F3_PROFILE_${mode} requires F3_ROM_DIR and an existing profile")
-        endif()
-        string(TOLOWER "${mode}" flag)
-        list(APPEND F3_PROFILE_GENERATOR_ARGS "--profile-${flag}" "${F3_PROFILE_${mode}}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_PROFILE_${mode}}")
-    endif()
-endforeach()
-if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    set(F3_PROFILE_COLD_OPT -Oz)
-else()
-    set(F3_PROFILE_COLD_OPT -Os)
-endif()
-if(F3_ROM_DIR)
-    get_filename_component(F3_ROM_DIR "${F3_ROM_DIR}" ABSOLUTE)
-    if(NOT F3_GENERATED_DIR)
-        set(F3_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/${F3_GAME}")
-    endif()
-    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py" "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        ${RECOMP_SOURCES} "${F3_GAME_CONFIG}")
-
-    file(GLOB _rom_files LIST_DIRECTORIES false "${F3_ROM_DIR}/*")
-    list(SORT _rom_files)
-    set(_rom_identity "")
-    foreach(_rf ${_rom_files})
-        get_filename_component(_rname "${_rf}" NAME)
-        file(SIZE "${_rf}" _rsize)
-        file(TIMESTAMP "${_rf}" _rtime "%Y-%m-%dT%H:%M:%S" UTC)
-        string(APPEND _rom_identity "${_rname}:${_rsize}:${_rtime};")
-    endforeach()
-
-    set(F3_PROFILE_INPUTS "")
-    foreach(mode TIERS SLIM)
-        if(F3_PROFILE_${mode})
-            list(APPEND F3_PROFILE_INPUTS "${F3_PROFILE_${mode}}")
-        endif()
-    endforeach()
-
-    set(F3_RECOMP_EMIT_ARGS
-        --config "${F3_GAME_CONFIG}" --rom-dir "${F3_ROM_DIR}" --output "${F3_GENERATED_DIR}"
-        ${F3_PROFILE_GENERATOR_ARGS})
-    f3_run_generator(
-        STAMP_FILE "${F3_GENERATED_DIR}/recomp_emit.stamp"
-        INPUT_FILES
-            ${RECOMP_SOURCES}
-            "${F3_GAME_CONFIG}"
-            ${F3_PROFILE_INPUTS}
-            "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-        EXTRA_DATA
-            "${_rom_identity}"
-            "${F3_RECOMP_EMIT_ARGS}"
-        OUTPUT_FILES
-            "${F3_GENERATED_DIR}/sources.cmake"
-            "${F3_GENERATED_DIR}/program.c"
-            "${F3_GENERATED_DIR}/program.h"
-            "${F3_GENERATED_DIR}/program.bin"
-        COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-            python -m recomp emit ${F3_RECOMP_EMIT_ARGS})
-endif()
-
-# A game opts into the de-HLE'd GameVideo scene by providing games/<game>/video/.
+# Games opt into custom scene/boot/netplay implementations via games/<game>/{video,boot,netplay}/.
 file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
 if(GAME_VIDEO_SOURCES)
     set(F3RT_GAME_VIDEO ON)
     set(F3RT_GAME_VIDEO_SOURCES ${GAME_VIDEO_SOURCES})
 else()
-    # Games without a scene still link GameVideo (never instantiated for them).
     set(F3RT_GAME_VIDEO_SOURCES runtime/renderer/game/video_generic.cpp)
 endif()
-# A game opts into fast boot by providing games/<game>/boot/.
+
 file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
 if(GAME_BOOT_SOURCES)
     set(F3RT_GAME_BOOT_SOURCES ${GAME_BOOT_SOURCES})
 else()
-    # Games with no boot predicate never turbo-boot; the entry point still resolves.
     set(F3RT_GAME_BOOT_SOURCES runtime/stubs/boot.cpp)
 endif()
+
 file(GLOB GAME_NETPLAY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/netplay/*.cpp")
 if(GAME_NETPLAY_SOURCES)
     set(F3RT_GAME_NETPLAY_SOURCES ${GAME_NETPLAY_SOURCES})
 else()
     set(F3RT_GAME_NETPLAY_SOURCES runtime/stubs/netplay.cpp)
 endif()
+
 set(F3RT_NETPLAY_SOURCES "")
 if(F3RT_NETPLAY)
     set(F3RT_NETPLAY_SOURCES
-        runtime/netplay/client.cpp runtime/netplay/session.cpp runtime/netplay/recorder.cpp)
+        runtime/netplay/client.cpp
+        runtime/netplay/session.cpp
+        runtime/netplay/recorder.cpp
+    )
 endif()
+
 set(F3RT_CORE_SOURCES
-    runtime/third_party/sha1dc/sha1.c runtime/third_party/sha1dc/ubc_check.c
-    runtime/rom.cpp runtime/cpu_abi.cpp runtime/machine.cpp
-    runtime/renderer/fdp/video.cpp runtime/renderer/game/video.cpp runtime/renderer/game/video_log.cpp runtime/renderer/decode.cpp
-    runtime/renderer/game/tiles.cpp runtime/renderer/game/text.cpp
-    runtime/renderer/game/sprites.cpp runtime/renderer/game/lines.cpp
-    runtime/renderer/game/row_workers.cpp runtime/renderer/game/indexed_compositor.cpp
+    runtime/third_party/sha1dc/sha1.c
+    runtime/third_party/sha1dc/ubc_check.c
+    runtime/rom.cpp
+    runtime/cpu_abi.cpp
+    runtime/machine.cpp
+    runtime/renderer/fdp/video.cpp
+    runtime/renderer/game/video.cpp
+    runtime/renderer/game/video_log.cpp
+    runtime/renderer/decode.cpp
+    runtime/renderer/game/tiles.cpp
+    runtime/renderer/game/text.cpp
+    runtime/renderer/game/sprites.cpp
+    runtime/renderer/game/lines.cpp
+    runtime/renderer/game/row_workers.cpp
+    runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
-    ${F3RT_GAME_VIDEO_SOURCES} ${F3RT_GAME_BOOT_SOURCES} ${F3RT_GAME_NETPLAY_SOURCES}
-    runtime/debug/profile.cpp runtime/input.cpp runtime/debug/input_script.cpp
-    runtime/sprites/units.cpp runtime/sprites/behaviours.cpp runtime/debug/discovery.cpp
+    ${F3RT_GAME_VIDEO_SOURCES}
+    ${F3RT_GAME_BOOT_SOURCES}
+    ${F3RT_GAME_NETPLAY_SOURCES}
+    runtime/debug/profile.cpp
+    runtime/input.cpp
+    runtime/debug/input_script.cpp
+    runtime/sprites/units.cpp
+    runtime/sprites/behaviours.cpp
+    runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
 )
 
-# The audio and eeprom simulation is the Rust crates behind include/f3rt/abi/*.h.
-file(GLOB_RECURSE F3_RUST_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/crates/f3rt-*/src/*.rs")
+# Build identity hashes all simulation sources (Rust crates, ABI headers, C++ core, generated program).
+file(GLOB_RECURSE F3_RUST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/crates/f3rt-*/src/*.rs")
 file(GLOB F3_ABI_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/f3rt/abi/*.h")
 set(F3_SIMULATION_SOURCES
     "${F3_GAME_CONFIG}"
@@ -290,15 +108,8 @@ foreach(_src IN LISTS F3RT_CORE_SOURCES)
     get_filename_component(_abs "${_src}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     list(APPEND F3_SIMULATION_SOURCES "${_abs}")
 endforeach()
-
-set(F3_BUILD_IDENTITY_DEPS ${F3_SIMULATION_SOURCES})
-
 if(F3_GENERATED_DIR)
     list(APPEND F3_SIMULATION_SOURCES
-        "${F3_GENERATED_DIR}/program.c"
-        "${F3_GENERATED_DIR}/program.bin"
-    )
-    list(APPEND F3_BUILD_IDENTITY_DEPS
         "${F3_GENERATED_DIR}/program.c"
         "${F3_GENERATED_DIR}/program.bin"
     )
@@ -307,18 +118,20 @@ endif()
 string(REPLACE ";" "\n" _inputs_txt "${F3_SIMULATION_SOURCES}")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt" CONTENT "${_inputs_txt}\n" @ONLY)
 
+set(F3_BUILD_IDENTITY_ARGS
+    -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+    -DGAME_ID=${F3_GAME}
+    -DINPUT_FILES_LIST=${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt
+    -DTEMPLATE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_identity.hpp.in
+    -DOUTPUT_FILE=${F3_GENERATED_CONFIG_DIR}/build_identity.hpp
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_identity.cmake
+)
 add_custom_command(
     OUTPUT "${F3_GENERATED_CONFIG_DIR}/build_identity.hpp"
-    COMMAND ${CMAKE_COMMAND}
-        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-        -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
-        -DGAME_ID=${F3_GAME}
-        -DINPUT_FILES_LIST=${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt
-        -DTEMPLATE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_identity.hpp.in
-        -DOUTPUT_FILE=${F3_GENERATED_CONFIG_DIR}/build_identity.hpp
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_identity.cmake
+    COMMAND ${CMAKE_COMMAND} ${F3_BUILD_IDENTITY_ARGS}
     DEPENDS
-        ${F3_BUILD_IDENTITY_DEPS}
+        ${F3_SIMULATION_SOURCES}
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_identity.cmake
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_identity.hpp.in
         ${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt
@@ -326,43 +139,51 @@ add_custom_command(
     VERBATIM
 )
 add_custom_target(f3rt_build_identity DEPENDS "${F3_GENERATED_CONFIG_DIR}/build_identity.hpp")
-
-execute_process(
-    COMMAND ${CMAKE_COMMAND}
-        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-        -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
-        -DGAME_ID=${F3_GAME}
-        -DINPUT_FILES_LIST=${CMAKE_CURRENT_BINARY_DIR}/build_identity_inputs.txt
-        -DTEMPLATE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_identity.hpp.in
-        -DOUTPUT_FILE=${F3_GENERATED_CONFIG_DIR}/build_identity.hpp
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_build_identity.cmake
-)
+execute_process(COMMAND ${CMAKE_COMMAND} ${F3_BUILD_IDENTITY_ARGS})
 
 add_library(f3rt STATIC ${F3RT_CORE_SOURCES})
 add_dependencies(f3rt f3rt_build_identity)
 
 # Generated headers are reached as "generated_config/<name>"; runtime sprite headers
 # use "sprites/<name>" to avoid basename ambiguity.
-target_include_directories(f3rt PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
-    PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}")
-# A game opts into sprite behaviours by providing games/<game>/sprites/behaviours.hpp.
-# Header-only registry: sprites/behaviours.cpp includes it, so no static registrar
-# can be dead-stripped from the archive. Not under video/, which would enable GameVideo.
+target_include_directories(f3rt
+    PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
+    PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+# Header-only sprite behaviour registry: sprites/behaviours.cpp includes it directly
+# so static registrars cannot be dead-stripped from the archive.
 set(F3_SPRITE_BEHAVIOURS_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/sprites/behaviours.hpp")
 if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
     target_compile_definitions(f3rt PRIVATE F3RT_SPRITE_BEHAVIOURS_HEADER="${F3_SPRITE_BEHAVIOURS_HEADER}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
 endif()
+
 find_package(Threads REQUIRED)
-target_link_libraries(f3rt PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson)
-target_link_libraries(f3rt PUBLIC f3rt_abi)
+target_link_libraries(f3rt
+    PUBLIC f3rt_abi
+    PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson
+)
+if(WIN32)
+    target_link_libraries(f3rt PRIVATE ws2_32)
+endif()
+
+target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_GAME_VIDEO)
+    target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
+endif()
+if(F3_PROFILE_INSTRUMENT)
+    target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
+endif()
+if(F3_PROFILE_SLIM)
+    target_compile_definitions(f3rt PUBLIC F3_PROFILE_SLIM_ENABLED=1)
+endif()
+
+# --- Netplay ----------------------------------------------------------------
 
 if(F3RT_NETPLAY)
-    target_link_libraries(f3rt PUBLIC f3-netplay-shared)
-
-    add_library(f3-netplay-shared STATIC
-        netplay/shared/contract.cpp
-    )
+    add_library(f3-netplay-shared STATIC netplay/shared/contract.cpp)
     target_include_directories(f3-netplay-shared PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(f3-netplay-shared PUBLIC Yojimbo::yojimbo httplib::httplib)
     target_compile_options(f3-netplay-shared PRIVATE -Wall -Wextra -Wpedantic)
@@ -378,160 +199,188 @@ if(F3RT_NETPLAY)
     target_link_libraries(f3-netplay-relay PUBLIC f3-netplay-shared cpp_yyjson::cpp_yyjson)
     target_compile_options(f3-netplay-relay PRIVATE -Wall -Wextra -Wpedantic)
 
-    add_executable(f3-netplay-server
-        netplay/server/main.cpp
-    )
+    add_executable(f3-netplay-server netplay/server/main.cpp)
     target_link_libraries(f3-netplay-server PRIVATE f3-netplay-relay)
+
+    target_link_libraries(f3rt PUBLIC f3-netplay-shared)
 endif()
 
-if(BUILD_TESTING)
-    include(GoogleTest)
-    if(F3RT_NETPLAY)
-        add_executable(f3-netplay-relay-test
-            netplay/server/tests/relay_test.cpp
-        )
-        target_link_libraries(f3-netplay-relay-test PRIVATE f3-netplay-relay GTest::gtest_main)
-        gtest_discover_tests(f3-netplay-relay-test TEST_PREFIX "netplay-relay.")
-    endif()
-endif()
-if(WIN32)
-    target_link_libraries(f3rt PRIVATE ws2_32)
-endif()
-target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
-if(F3RT_GAME_VIDEO)
-    # GameVideo (non-FDP scene) is only built for games with games/<game>/video/.
-    target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
-endif()
-if(F3_PROFILE_INSTRUMENT)
-    target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
-endif()
-if(F3_PROFILE_SLIM)
-    target_compile_definitions(f3rt PUBLIC F3_PROFILE_SLIM_ENABLED=1)
-endif()
+# --- Recompiled game --------------------------------------------------------
+
 if(F3_GENERATED_DIR)
     add_subdirectory(recomp)
 endif()
 
+# --- Host tools -------------------------------------------------------------
+
 if(F3RT_HOST_TOOLS)
-    add_library(f3rt-runner STATIC tools/runner/runner.cpp tools/runner/inputs.cpp tools/runner/sprite_check.cpp)
-    target_include_directories(f3rt-runner PUBLIC tools/runner runtime include "${CMAKE_CURRENT_BINARY_DIR}")
+    add_library(f3rt-runner STATIC
+        tools/runner/runner.cpp
+        tools/runner/inputs.cpp
+        tools/runner/sprite_check.cpp
+    )
+    target_include_directories(f3rt-runner PUBLIC tools/runner runtime)
     target_link_libraries(f3rt-runner PUBLIC f3rt)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
 
-    add_executable(f3rt-tool tools/tool.cpp tools/commands/gameplay.cpp tools/commands/motion.cpp tools/commands/sprite_check.cpp tools/commands/netplay.cpp tools/commands/netplay_replay.cpp)
-    target_include_directories(f3rt-tool PRIVATE tools tools/runner tools/commands runtime include "${CMAKE_CURRENT_BINARY_DIR}")
+    add_executable(f3rt-tool
+        tools/tool.cpp
+        tools/commands/gameplay.cpp
+        tools/commands/motion.cpp
+        tools/commands/sprite_check.cpp
+        tools/commands/netplay.cpp
+        tools/commands/netplay_replay.cpp
+    )
+    target_include_directories(f3rt-tool PRIVATE tools tools/commands)
     target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
-    target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_SET="${F3_GAME}"
-        F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(f3rt-tool PRIVATE F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
-    if(F3_GENERATED_DIR)
+
+    if(TARGET f3_recompiled)
         target_link_libraries(f3rt-runner PRIVATE f3_recompiled)
-        target_compile_definitions(f3rt-runner PRIVATE F3RT_GENERATED=1)
         target_link_libraries(f3rt-tool PRIVATE f3_recompiled)
-        target_compile_definitions(f3rt-tool PRIVATE F3RT_GENERATED=1)
     endif()
+
+    add_executable(f3rt-replay runtime/replay.cpp)
+    target_link_libraries(f3rt-replay PRIVATE f3rt)
 endif()
+
+# --- Frontend & GPU ---------------------------------------------------------
+
 add_library(f3rt-frontend STATIC
     runtime/frontend/frame_slots.cpp
     runtime/frontend/audio_pacer.cpp
     runtime/frontend/fast_boot.cpp
     runtime/frontend/config_file.cpp
 )
-target_include_directories(f3rt-frontend PUBLIC runtime runtime/frontend include
-    "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(f3rt-frontend PUBLIC runtime runtime/frontend)
 target_link_libraries(f3rt-frontend PUBLIC f3rt)
 target_compile_options(f3rt-frontend PRIVATE -Wall -Wextra -Wpedantic)
 
 if(F3RT_SDL)
-    add_library(f3rt-ui STATIC runtime/frontend/settings.cpp runtime/frontend/ui.cpp)
-    target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend include PRIVATE runtime "${CMAKE_CURRENT_BINARY_DIR}")
-    target_compile_definitions(f3rt-ui PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
+    add_library(f3rt-ui STATIC
+        runtime/frontend/settings.cpp
+        runtime/frontend/ui.cpp
+    )
+    target_include_directories(f3rt-ui PUBLIC runtime runtime/frontend)
     target_link_libraries(f3rt-ui PUBLIC SDL3::SDL3 imgui::imgui f3rt-frontend)
+
     if(F3_GENERATED_DIR)
         add_executable(${F3_GAME_EXECUTABLE} runtime/frontend/frontend.cpp)
-        target_include_directories(${F3_GAME_EXECUTABLE} PRIVATE runtime)
-        target_link_libraries(${F3_GAME_EXECUTABLE} PRIVATE f3rt f3_recompiled f3rt-ui SDL3::SDL3)
+        target_link_libraries(${F3_GAME_EXECUTABLE} PRIVATE f3rt f3_recompiled f3rt-ui)
         target_compile_definitions(${F3_GAME_EXECUTABLE} PRIVATE
-            F3RT_GENERATED=1 F3RT_GAME=1 F3RT_DEFAULT_SET="${F3_GAME}" F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
+            F3RT_GAME=1
+            F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}"
+        )
     endif()
+
     if(F3RT_GPU)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
+
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
-        add_custom_command(OUTPUT "${VIDEO_SHADER_HEADER}"
-            COMMAND ${UV_EXECUTABLE} run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups
-                python "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
+        add_custom_command(
+            OUTPUT "${VIDEO_SHADER_HEADER}"
+            COMMAND ${F3_UV_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
                 --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
-                --output "${VIDEO_SHADER_HEADER}" --glslang "${F3_GLSLANG}" --spirv-cross "${F3_SPIRV_CROSS}"
-            DEPENDS runtime/renderer/shaders/compile.py runtime/renderer/shaders/scene.glsl
-                runtime/renderer/shaders/fullscreen.vert runtime/renderer/shaders/sprite.vert
-                runtime/renderer/shaders/sprite.frag runtime/renderer/shaders/scene.frag
-                runtime/renderer/shaders/scene_interp.frag runtime/renderer/shaders/scene_body.glsl
-                runtime/renderer/shaders/postprocess.frag runtime/renderer/gpu/scene_layout.h
+                --output "${VIDEO_SHADER_HEADER}"
+                --glslang "${F3_GLSLANG}"
+                --spirv-cross "${F3_SPIRV_CROSS}"
+            DEPENDS
+                runtime/renderer/shaders/compile.py
+                runtime/renderer/shaders/scene.glsl
+                runtime/renderer/shaders/fullscreen.vert
+                runtime/renderer/shaders/sprite.vert
+                runtime/renderer/shaders/sprite.frag
+                runtime/renderer/shaders/scene.frag
+                runtime/renderer/shaders/scene_interp.frag
+                runtime/renderer/shaders/scene_body.glsl
+                runtime/renderer/shaders/postprocess.frag
+                runtime/renderer/gpu/scene_layout.h
                 ${F3_SHADER_TOOL_TARGETS}
-            VERBATIM)
-        add_library(f3rt-gpu STATIC runtime/renderer/gpu/video.cpp runtime/renderer/gpu/encode.cpp runtime/renderer/gpu/interp.cpp runtime/renderer/gpu/motion.cpp "${VIDEO_SHADER_HEADER}")
+            VERBATIM
+        )
+
+        add_library(f3rt-gpu STATIC
+            runtime/renderer/gpu/video.cpp
+            runtime/renderer/gpu/encode.cpp
+            runtime/renderer/gpu/interp.cpp
+            runtime/renderer/gpu/motion.cpp
+            "${VIDEO_SHADER_HEADER}"
+        )
         if(APPLE)
             enable_language(OBJCXX)
             target_sources(f3rt-gpu PRIVATE runtime/renderer/gpu/pacing_macos.mm)
             set_source_files_properties(runtime/renderer/gpu/pacing_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
             target_link_libraries(f3rt-gpu PRIVATE "-framework AppKit" "-framework QuartzCore")
         endif()
-        # The build dir carries generated_config/ (compile-time game video geometry).
-        target_include_directories(f3rt-gpu PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}" PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+        target_include_directories(f3rt-gpu
+            PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}"
+            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        )
         target_link_libraries(f3rt-gpu PUBLIC SDL3::SDL3)
+        target_compile_definitions(f3rt-gpu INTERFACE F3RT_GPU=1)
         target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)
+
         foreach(frontend f3rt-tool ${F3_GAME_EXECUTABLE})
             if(TARGET ${frontend})
-                target_link_libraries(${frontend} PRIVATE f3rt-gpu SDL3::SDL3)
-                target_compile_definitions(${frontend} PRIVATE F3RT_GPU=1)
+                target_link_libraries(${frontend} PRIVATE f3rt-gpu)
             endif()
         endforeach()
     endif()
 endif()
-if(F3RT_HOST_TOOLS)
-    add_executable(f3rt-replay runtime/replay.cpp)
-    target_link_libraries(f3rt-replay PRIVATE f3rt)
-    target_compile_definitions(f3rt-replay PRIVATE F3RT_DEFAULT_SET="${F3_GAME}")
-endif()
+
+# --- Tests ------------------------------------------------------------------
+
 include(CTest)
 if(BUILD_TESTING)
-    add_test(NAME game-geometry-literals COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake)
+    add_test(NAME game-geometry-literals
+        COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake
+    )
+
     include(GoogleTest)
 
-    add_library(f3rt-test-support STATIC runtime/tests/support.cpp runtime/renderer/gpu/motion.cpp)
+    if(F3RT_NETPLAY)
+        add_executable(f3-netplay-relay-test netplay/server/tests/relay_test.cpp)
+        target_link_libraries(f3-netplay-relay-test PRIVATE f3-netplay-relay GTest::gtest_main)
+        gtest_discover_tests(f3-netplay-relay-test TEST_PREFIX "netplay-relay.")
+    endif()
+
+    add_library(f3rt-test-support STATIC
+        runtime/tests/support.cpp
+        runtime/renderer/gpu/motion.cpp
+    )
+    target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests)
     target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt-runner GTest::gtest rapidcheck_gtest)
-    target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests "${CMAKE_CURRENT_BINARY_DIR}")
-    target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
+
     foreach(area video input input_script cpu sprites motion_interp state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)
         gtest_discover_tests(f3rt-test-${area} TEST_PREFIX "runtime-${area}.")
     endforeach()
+
     if(TARGET f3rt-gpu)
-        target_link_libraries(f3rt-test-video PRIVATE f3rt-gpu SDL3::SDL3)
-        target_compile_definitions(f3rt-test-video PRIVATE F3RT_GPU=1)
+        target_link_libraries(f3rt-test-video PRIVATE f3rt-gpu)
     endif()
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
-        target_compile_definitions(f3rt-test-sprites PRIVATE F3RT_GENERATED=1)
     endif()
+
     # Emit-unit replay check (needs the game ROMs and a game that declares emit units).
     file(READ "${F3_GAME_CONFIG}" F3_GAME_CONFIG_TEXT)
     string(FIND "${F3_GAME_CONFIG_TEXT}" "[[video.emit_units]]" F3_EMIT_UNITS_POS)
     if(F3_ROM_DIR AND NOT F3_EMIT_UNITS_POS EQUAL -1)
         add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
     endif()
+
     if(TARGET f3rt-ui)
         add_executable(f3rt-test-frontend runtime/tests/frontend.cpp)
         target_link_libraries(f3rt-test-frontend PRIVATE f3rt-test-support f3rt-ui GTest::gtest_main)
