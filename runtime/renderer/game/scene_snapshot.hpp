@@ -25,7 +25,6 @@ struct SceneSnapshot {
     unsigned sprite_count = 0;
     std::array<SceneSprite, MAX_HARDWARE_SPRITES> canonical_sprites{};
     unsigned canonical_sprite_count = 0;
-    unsigned shadow_count = 0; // sprites tagged SceneSprite::shadow (flicker shadows)
     std::array<uint32_t, PALETTE_SIZE> colors{}; // 0x00RRGGBB, indexed by palette entry
     uint64_t rows_version = 0, colors_version = 0;
     uint8_t pen_mask = 15;

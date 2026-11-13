@@ -10,12 +10,15 @@ import json
 import re
 import zlib
 from collections import Counter
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from .discovery import exclusion_at, parse_exclusions
 from .emitter import lower, static_flow
 from .idle import find_idle_loops
 from .liveness import analyse
+from .sprite_trace import trace as trace_sprite_groups
+from .sprite_trace import write_outputs as write_sprite_groups
 from .sprite_units import digest as sprite_units_digest
 from .sprite_units import guard_lines, parse_sprite_units
 from .timing import BASE_CYCLES
@@ -26,9 +29,18 @@ _RUNTIME_ABI_VERSION = 6
 _MEMORY_ACCESS = re.compile(r"\bf3_(read|write)(8|16|32)\(")
 
 
-def _inline_memory(statement: str) -> str:
-    """Route a lowered guest access through the inline RAM/ROM fast path (cpu_ops.h)."""
-    return _MEMORY_ACCESS.sub(lambda match: f"f3_{'ld' if match[1] == 'read' else 'st'}{match[2]}(", statement)
+def _inline_memory(statement: str, inline_writes: bool = True) -> str:
+    """Route a lowered guest access through the inline RAM/ROM fast path (cpu_ops.h).
+
+    When inline_writes is False (a sprite-group reset PC), only reads are
+    inlined: the write must go through f3_write* -> the bus callback so the
+    runtime's SpriteGroupTracker observes the root-field reset.
+    """
+    if inline_writes:
+        return _MEMORY_ACCESS.sub(
+            lambda match: f"f3_{'ld' if match[1] == 'read' else 'st'}{match[2]}(", statement
+        )
+    return re.sub(r"\bf3_read(8|16|32)\(", lambda match: f"f3_ld{match[1]}(", statement)
 
 
 def _count_flag_stores(statements: list[str]) -> tuple[int, int]:
@@ -63,6 +75,8 @@ def generate(
     blocks_per_file: int = 128,
     profile_tiers: Path | None = None,
     profile_slim: Path | None = None,
+    sprite_writers: Iterable[int] = (),
+    sprite_lanes: Mapping[int, int] | None = None,
 ) -> dict:
     if profile_tiers is not None and profile_slim is not None:
         raise ValueError("profile tiers and profile slim are mutually exclusive")
@@ -159,9 +173,6 @@ def generate(
                         f"Emit unit {unit.name!r} {kind} {pc:#x} is not retained by the "
                         "slim profile; add it to the profile or use tiers"
                     )
-    for first, last in units.frame_writers:
-        if last >= len(rom):
-            raise ValueError(f"Frame writer range [{first:#x}, {last:#x}] lies outside the ROM")
     unit_guard = guard_lines(units)
     unit_hooks = Counter()
     emission_blocks = []
@@ -214,7 +225,12 @@ def generate(
         flag_producers["eager_x"] += eager_x
         if not lazy and not eager_x:
             unflagged[pc] = statements
-    pinned = fallback_entries | unit_enter.keys() | unit_exit.keys()
+    # Sprite group table: sprite RAM X/Y writer PC -> record root fields, plus
+    # the root-field writers classified as continuations or resets. Traced
+    # before pinning so reset PCs pin liveness and idle analysis below.
+    sprite_groups = trace_sprite_groups(rom, discovery, config, sprite_writers, sprite_lanes)
+    reset_pcs = {reset.pc for reset in sprite_groups.resets}
+    pinned = fallback_entries | unit_enter.keys() | unit_exit.keys() | reset_pcs
     liveness = analyse(discovery.instructions, pc_to_name, pinned=pinned)
     idle_loops = find_idle_loops(discovery.instructions, lambda pc: pc in pc_to_name and pc not in pinned)
     flag_emitted = Counter()
@@ -265,7 +281,7 @@ def generate(
                 lazy, eager_x = _count_flag_stores(statements)
                 flag_emitted["lazy"] += lazy
                 flag_emitted["eager_x"] += eager_x
-                lines.extend("    " + _inline_memory(statement) for statement in statements)
+                lines.extend("    " + _inline_memory(statement, pc not in reset_pcs) for statement in statements)
                 # Chain into a statically known successor instead of returning
                 # to the dispatcher. One guard per successor proves the pending
                 # boundary() would only republish the same deadline; anything
@@ -371,7 +387,6 @@ def generate(
             }
             for unit in units.units
         },
-        "frame_writer_ranges": len(units.frame_writers),
     }
 
     exception_entries = Counter()
@@ -472,6 +487,7 @@ def generate(
         "generated_c_bytes": sum((output / name).stat().st_size for name in source_names),
     }
     write_if_changed(output / "profile_inventory.json", json.dumps(inventory, indent=2) + "\n")
+    write_sprite_groups(sprite_groups, output, write_if_changed)
     report = {
         "decoded_instructions": len(discovery.instructions),
         "registered_entries": len(table),
@@ -511,6 +527,7 @@ def generate(
         "indirect_chain_cold": {"sites": indirect_sites["cold"], "cases": indirect_cases["cold"]},
         "indirect_chain_capped_sites": indirect_capped,
         "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
+        "sprite_groups": dict(sprite_groups.stats),
     }
     write_if_changed(output / "lowering.json", json.dumps(report, indent=2) + "\n")
     write_if_changed(output / "coverage.json", json.dumps(discovery.report, indent=2) + "\n")
@@ -521,6 +538,8 @@ def generate(
         "profile_inventory.json",
         "lowering.json",
         "coverage.json",
+        "sprite_groups.hpp",
+        "sprite_groups.json",
     }
     for item in output.iterdir():
         if (

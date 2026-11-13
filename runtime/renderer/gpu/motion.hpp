@@ -10,14 +10,19 @@ inline constexpr unsigned MOTION_LAYER_MASK = 0x80000000u;
 struct MotionInterpolationStats {
     unsigned sprites = 0, playfield_rows = 0, text_rows = 0;
     // Native-pair census, independent of alpha and repeated apply calls.
-    // Moving sprites require a known match; unknown identities are separate rejects.
+    // Moving sprites require a paired group (or a keyless appearance partner); unresolved
+    // sprites are separate rejects.
     // Row counts are layer/scanline pairs; a partially accepted row can also reject
     // its other moving axis. Unchanged geometry never contributes to motion/rejects.
     unsigned moving_sprites = 0, moving_playfield_rows = 0, moving_text_rows = 0;
     unsigned rejected_sprites = 0, rejected_rows = 0;
-    unsigned sprite_count_rejections = 0, sprite_identity_rejections = 0;
-    // Count rejections are the subset of unknown identities on count-changing pairs,
-    // not a veto of the remaining matched sprites.
+    // Sprite rejections: sprites with no usable pairing. A rigid group key that is absent from
+    // the other frame, ambiguous (one key, several origins), or a keyless sprite whose appearance
+    // fallback found no partner. Count rejections are the subset of those on count-changing pairs,
+    // not a veto of the remaining paired sprites.
+    unsigned sprite_count_rejections = 0, sprite_group_rejections = 0;
+    // Paired but ineligible: transform (pen mask, invalid geometry, scale/flip change, group
+    // members disagreeing on transform) versus motion beyond the 32 px limit.
     unsigned sprite_transform_rejections = 0, sprite_jump_rejections = 0;
     unsigned row_control_rejections = 0, row_transform_rejections = 0, row_jump_rejections = 0;
     bool paired = false;
@@ -67,6 +72,9 @@ private:
     };
     ClipRanges ranges(const SceneRow &row, LayerId id) const noexcept;
     bool same_controls(const SceneRow &a, const SceneRow &b, LayerId id) const noexcept;
+    // Fills dx/dy/eligible for the current frame's sprites from the previous frame.
+    void pair_sprites(const SceneSnapshot &scene, int32_t *dx, int32_t *dy,
+                      bool *eligible) noexcept;
     std::array<Sprite, SceneSnapshot::MAX_SPRITES> m_sprites{};
     std::array<Row, geometry::HEIGHT> m_rows{};
     uint64_t m_frame = 0;

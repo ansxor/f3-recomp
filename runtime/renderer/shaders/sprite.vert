@@ -31,8 +31,7 @@ void main() {
     // Nominal 24.8 rectangle is culled before raster rounding.
     uint flags = scene.words[base + F3_SPRITE_FLIP];
     bool culled = x + 16 * sx <= left * 256 || x > (365 + int(params.dimensions.y)) * 256 ||
-                  y + 16 * sy <= int(params.geometry.x) * 256 || y > 255 * 256 || x0 >= x1 ||
-                  ((flags & F3_SPRITE_SHADOW) != 0u && (params.controls.w & F3_MASK_HIDE_SHADOW) != 0u);
+                  y + 16 * sy <= int(params.geometry.x) * 256 || y > 255 * 256 || x0 >= x1;
     const ivec2 corners[6] = ivec2[6](ivec2(0,0),ivec2(1,0),ivec2(0,1),ivec2(0,1),ivec2(1,0),ivec2(1,1));
     ivec2 c = corners[gl_VertexIndex];
     vec2 pos = vec2(c.x == 0 ? x0 : x1, c.y == 0 ? y0 : y1);

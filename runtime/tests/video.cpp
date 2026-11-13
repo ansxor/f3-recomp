@@ -12,7 +12,7 @@
 #include "renderer/game/layer_visits.hpp"
 #include "renderer/game/ram_shadow.hpp"
 #include "renderer/game/row_workers.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
 #include <SDL3/SDL.h>
@@ -1019,7 +1019,7 @@ TEST(GameCompositor, IndexedMatchesGpu) {
         } catch (const std::exception &error) {
             GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
         }
-        machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+        machine->sprites = f3rt::make_game_sprites(*machine);
         f3rt::runner::SeededScheduleInputSource schedule(
             1, f3rt::runner::ScheduleConfig{.versus = false});
         GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
@@ -1099,7 +1099,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
     } catch (const std::exception &error) {
         GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
     }
-    machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+    machine->sprites = f3rt::make_game_sprites(*machine);
     GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
     if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
     const auto eeprom_path = std::filesystem::temp_directory_path() / "f3rt-bench-timeline.eeprom";
@@ -1181,7 +1181,7 @@ TEST(GameVideo, LazyNativeFrameMatchesFdpOracle) {
     for (const bool game_video : {true, false}) {
         auto machine = strict_machine_or_skip(game_video);
         if (!machine) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
-        if (game_video) machine->sprite_units = f3rt::make_game_sprite_units(*machine, false);
+        if (game_video) machine->sprites = f3rt::make_game_sprites(*machine);
         f3rt::runner::SeededScheduleInputSource input(
             1, f3rt::runner::ScheduleConfig{.versus = false});
         auto &frames = game_video ? game_frames : oracle_frames;

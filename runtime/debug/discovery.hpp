@@ -3,14 +3,10 @@
 // that the video HLE does not know about yet. Never part of machine or snapshot state.
 //
 // Categories (one deduplicated entry per (category, key), written and flushed on first sight):
-//   sprite-stray    sprite-RAM write outside every emit unit from a PC not in [video.frame_writers]
-//                   (the "UNACCOUNTED" PCs of f3rt-tool sprite-check). Needs a game with emit units.
-//   video-write     graphics/control RAM write from a PC the game's video code does not list as a known
-//                   producer, per layer. Sprite RAM is left to
-//                   sprite-stray when the game has emit units.
+//   video-write     graphics/control RAM write from a PC the game's video code does not list as a
+//                   known producer, per layer (sprite RAM included: an observed writer map).
 //   video-fallback  game renderer fell back to the FDP/oracle frame, with the component and reason.
-// With `--discovery-all` (set_log_all) known producers are logged too (tagged `known=1`) and sprite RAM
-// writes are logged as video-write even when emit units account for them: an observed writer map.
+// With `--discovery-all` (set_log_all) known producers are logged too (tagged `known=1`).
 // Format: text, one event per line, flushed on each write; `#` lines are comments.
 //   NEW <category> <fields>        first sighting of a (category, key); known=1 when logged under --discovery-all
 //   REPEAT <category> <key> count=N  hit count reached 10, 100, 1000, ...
@@ -18,10 +14,9 @@
 // Fields are key=value; PCs/addresses are 24-bit hex; frame is 1-based (Machine::frame + 1);
 // t is wall seconds since start; counts are byte writes; no screenshot is taken (the frame
 // buffer completes only at VBSTART and capture differs per renderer).
-// Triage: sprite-stray -> add the PC to [video.frame_writers] with evidence if it is frame
-// setup/clear, else extend or add [[video.emit_units]]; video-write -> add the PC to the game's
-// video_writer_known once understood; video-fallback -> only with --renderer enhanced or a
-// developer renderer. unit-replay-abort and unit-stats appear only in the summary.
+// Triage: video-write -> add the PC to the game's video_writer_known once understood;
+// video-fallback -> only with --renderer enhanced or a developer renderer. unit-replay-abort and
+// unit-stats appear only in the summary.
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -62,20 +57,15 @@ public:
     DiscoveryLog(const DiscoveryLog &) = delete;
     DiscoveryLog &operator=(const DiscoveryLog &) = delete;
 
-    // Sprite RAM belongs to the emit-unit accounting (sprite-stray) when the game has units.
-    void set_sprites_accounted_by_units(bool on) { m_sprites_by_units = on; }
-    // Also log known producers (tagged known=1) and unit-accounted sprite writes.
+    // Also log known producers (tagged known=1).
     void set_log_all(bool on) {
         m_log_all = on;
         if (on)
-            line("# ALL observed writers: known producers are listed with known=1, sprite RAM "
-                 "included");
+            line("# ALL observed writers: known producers are listed with known=1");
     }
 
     // Machine::write8 for graphics RAM and control registers (`address` is a full 24-bit bus address).
     void video_write(uint32_t pc, uint32_t address);
-    // SpriteUnits: byte write into sprite RAM outside any unit from a PC outside frame_writers.
-    void sprite_stray(uint32_t pc, uint32_t address);
     // GameVideo: oracle fallback frame. `component`/`reason` are string literals; `frame` is 1-based.
     void video_fallback(const char *component, const char *reason, uint64_t frame);
 
@@ -83,7 +73,7 @@ public:
     void finish(const Machine &machine);
 
 private:
-    enum class Category : uint8_t { SpriteStray, VideoWrite, VideoFallback };
+    enum class Category : uint8_t { VideoWrite, VideoFallback };
     struct Entry {
         Category category = Category::VideoWrite;
         VideoLayer layer = VideoLayer::Control;
@@ -103,11 +93,10 @@ private:
     std::FILE *m_file = nullptr;
     const Machine &m_machine;
     std::chrono::steady_clock::time_point m_start;
-    bool m_sprites_by_units = false, m_log_all = false, m_finished = false;
+    bool m_log_all = false, m_finished = false;
     // (category, layer, pc) -> entry. Node-stable, so the one-entry caches below stay valid.
     std::unordered_map<uint64_t, Entry> m_entries;
     std::vector<std::unique_ptr<Entry>> m_fallbacks;
     std::array<Entry *, size_t(VideoLayer::Count)> m_last_video{};
-    Entry *m_last_stray = nullptr;
 };
 } // namespace f3rt

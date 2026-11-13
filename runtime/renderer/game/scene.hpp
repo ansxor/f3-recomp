@@ -55,15 +55,12 @@ struct SceneSprite {
     uint32_t tile = 0;
     uint8_t palette = 0;
     bool flip_x = false, flip_y = false;
-    // Render-only stable object identity (0 = unknown); never serialized and not part of
-    // geometry equality, so identity-only changes are not motion.
-    uint64_t identity = 0;
-    // Owning invocation identity shared by all parts of one object (0 = unknown); render-only and
-    // excluded from equality like `identity`. Motion uses it for the per-object rigid check.
-    uint64_t object = 0;
-    // Render-only flicker shadow tag (sprite_flag_shadow: written by the game's shadow emit path); the
-    // GPU presenter picks its visibility per presented frame. Excluded from equality like `identity`.
-    bool shadow = false;
+    // Render-only stable sprite group (0 = unresolved); never serialized and not part of
+    // geometry equality, so group-only changes are not motion. `group_x`/`group_y` are the
+    // group origin at draw time (24.8 scanout units); `group_pc` is the sprite-RAM writer PC.
+    uint64_t group = 0;
+    int32_t group_x = 0, group_y = 0;
+    uint32_t group_pc = 0;
     bool operator==(const SceneSprite &o) const {
         return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y &&
                tile == o.tile && palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;

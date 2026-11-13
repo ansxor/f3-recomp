@@ -11,7 +11,7 @@
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/indexed_compositor.hpp"
 #include "state_io.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -121,8 +121,6 @@ struct GameVideo::Impl {
         const auto canonical = sprites.sprites();
         frame.canonical_sprite_count = unsigned(canonical.size());
         std::copy(canonical.begin(), canonical.end(), frame.canonical_sprites.begin());
-        frame.shadow_count = unsigned(std::count_if(current.begin(), current.end(),
-                                                    [](const SceneSprite &s) { return s.shadow; }));
         frame.pen_mask = sprites.pen_mask();
         frame.flipped = sprites.flipped();
         if (frame.colors_version != colors_version) {
@@ -242,11 +240,11 @@ void GameVideo::render_frame() {
     // Render below still uses the previously latched sprite plane, preserving the
     // one-frame FDP sprite lag.
     const VideoRam vram{m.graphics, m.control, m.frame + 1};
-    // Render-only unit presentation (identities/splices) valid for this decode only.
+    // Render-only sprite presentation (groups/splices) valid for this decode only.
     SpritePresentation presentation;
-    const bool have_presentation = m.sprite_units && m.sprite_units->active();
+    const bool have_presentation = m.sprites && m.sprites->active();
     if (have_presentation) {
-        presentation = m.sprite_units->presentation();
+        presentation = m.sprites->presentation();
         state.sprites.set_presentation(&presentation);
     }
     std::apply([&](auto &...c) { Impl::decode_all(vram, c...); }, state.sources());

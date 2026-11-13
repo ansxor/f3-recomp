@@ -2,7 +2,7 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/block_profile.h"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -11,9 +11,9 @@ namespace {
 f3rt::Machine &machine(f3_cpu *cpu) { return *static_cast<f3rt::Machine *>(cpu->runtime); }
 // Emit-unit replay clone of the main CPU, or null for every other CPU (including the real one).
 // Sandbox CPUs never reach devices: every entry point below diverts them before side effects.
-f3rt::SpriteUnits *sandbox(f3_cpu *cpu) {
-    auto *units = machine(cpu).sprite_units.get();
-    return units && units->is_sandbox(cpu) ? units : nullptr;
+f3rt::SpriteSystem *sandbox(f3_cpu *cpu) {
+    auto *sprites = machine(cpu).sprites.get();
+    return sprites && sprites->is_sandbox(cpu) ? sprites : nullptr;
 }
 f3rt::Machine &bus(f3_cpu *cpu, uint32_t address, uint32_t width) {
     auto &m = machine(cpu);
@@ -92,7 +92,7 @@ void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
 }
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::SpriteUnits::Abort::Exception);
+        s->sandbox_abort(f3rt::Sandbox::Abort::Exception);
         return;
     }
     if (vector > 255) {
@@ -122,7 +122,7 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
 }
 void f3_reset_devices(f3_cpu *cpu) {
     if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::SpriteUnits::Abort::ResetDevices);
+        s->sandbox_abort(f3rt::Sandbox::Abort::ResetDevices);
         return;
     }
     auto &m = machine(cpu);
@@ -131,7 +131,7 @@ void f3_reset_devices(f3_cpu *cpu) {
 }
 int f3_boundary(f3_cpu *cpu) {
     if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::SpriteUnits::Abort::Stopped);
+        s->sandbox_abort(f3rt::Sandbox::Abort::Stopped);
         return 1;
     }
     return machine(cpu).boundary();
@@ -247,16 +247,16 @@ int f3_dispatch(f3_cpu *cpu) {
 int f3_fallback(f3_cpu *cpu) {
     // Untranslated or excluded instruction inside a replay: abandon it.
     if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::SpriteUnits::Abort::Untranslated);
+        s->sandbox_abort(f3rt::Sandbox::Abort::Untranslated);
         return 0;
     }
     return machine(cpu).fallback();
 }
 void f3_unit_enter(f3_cpu *cpu, uint32_t unit) {
-    if (auto *s = machine(cpu).sprite_units.get()) s->unit_enter(cpu, unit);
+    if (auto *s = machine(cpu).sprites.get()) s->unit_enter(cpu, unit);
 }
 int f3_unit_exit(f3_cpu *cpu, uint32_t unit) {
-    auto *s = machine(cpu).sprite_units.get();
+    auto *s = machine(cpu).sprites.get();
     return s ? s->unit_exit(cpu, unit) : 0;
 }
 }

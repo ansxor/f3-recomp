@@ -12,7 +12,7 @@
 namespace f3rt {
 class Video;
 class GameVideo;
-class SpriteUnits;
+class SpriteSystem;
 class DiscoveryLog;
 class Machine {
 public:
@@ -42,8 +42,8 @@ public:
     std::unique_ptr<Video> video;
     // Host-only `--discovery-log` observer of graphics/control stores; null = off. Never serialized.
     std::unique_ptr<DiscoveryLog> discovery;
-    // Render-only emit-unit tracking/replay; null = feature off. Never serialized.
-    std::unique_ptr<SpriteUnits> sprite_units;
+    // Render-only sprite group and behaviour tracking; null = feature off. Never serialized.
+    std::unique_ptr<SpriteSystem> sprites;
     // Host-only per-slot writer attribution (one PC per 16-byte sprite RAM entry); null = off. Never serialized.
     std::unique_ptr<std::array<uint32_t, 0x1000>> sprite_writers;
     std::unique_ptr<GameVideo> game_video;

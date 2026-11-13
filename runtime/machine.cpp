@@ -5,7 +5,7 @@
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
 #include "debug/discovery.hpp"
-#include "sprites/units.hpp"
+#include "sprites/sprite_system.hpp"
 #include "state_io.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -100,7 +100,7 @@ void Machine::bind_cpu_windows() {
     cpu.ram = ram.data();
     cpu.rom = roms.main.data();
     cpu.rom_size = uint32_t(roms.main.size());
-    cpu.ram_writer = sprite_units ? sprite_units->writer_table() : nullptr;
+    cpu.ram_writer = nullptr;
 }
 void Machine::reset_devices() {
     cpu.dispatch_deadline = 0;
@@ -111,7 +111,7 @@ void Machine::reset_devices() {
     m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
 }
 void Machine::reset() {
-    if (sprite_units) sprite_units->reset();
+    if (sprites) sprites->reset();
     native_pixels();
     cpu = {};
     cpu.runtime = this;
@@ -185,7 +185,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
     a &= 0xffffff;
     if (a >= RAM_BASE && a < RAM_END) {
         ram[a & RAM_MIRROR_MASK] = v;
-        if (sprite_units) sprite_units->note_write(a, 1);
+        if (sprites) sprites->note_write(a, 1);
         return;
     }
     if (a >= PALETTE_BASE && a < PALETTE_END) {
@@ -197,7 +197,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         const uint32_t offset = a - GRAPHICS_BASE;
         if (sprite_writers && offset < SPRITE_RAM_SIZE) (*sprite_writers)[offset >> 4] = cpu.pc;
         graphics[offset] = v;
-        if (sprite_units) sprite_units->note_write(a, 1);
+        if (sprites) sprites->note_write(a, 1);
         return;
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
@@ -250,7 +250,7 @@ void Machine::write16(uint32_t a, uint16_t v) {
     if (auto *p = direct_bytes<2, true>(*this, a)) {
         p[0] = uint8_t(v >> 8);
         p[1] = uint8_t(v);
-        if (sprite_units) sprite_units->note_write(a, 2);
+        if (sprites) sprites->note_write(a, 2);
         return;
     }
     if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
@@ -271,7 +271,7 @@ void Machine::write32(uint32_t a, uint32_t v) {
         p[1] = uint8_t(v >> 16);
         p[2] = uint8_t(v >> 8);
         p[3] = uint8_t(v);
-        if (sprite_units) sprite_units->note_write(a, 4);
+        if (sprites) sprites->note_write(a, 4);
         return;
     }
     if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
@@ -298,7 +298,7 @@ void Machine::advance_to(uint64_t cycles) {
             m_irq3_at = m_next_vblank + 10000;
             ++frame;
             m_next_vblank = raster_cycle((frame + 1) * FRAME_PIXELS);
-            if (sprite_units) sprite_units->frame_end();
+            if (sprites) sprites->frame_end();
         }
         if (m_hardware_cycles == m_irq3_at) {
             pending_irqs |= 1u << 3;
@@ -326,7 +326,6 @@ int Machine::boundary() {
                 write16(cpu.a[7] + 6, uint16_t(0x1000 | ((24 + level) * 4)));
             }
             f3_set_sr(&cpu, uint16_t((cpu.sr & ~0x0700) | (level << 8)));
-            if (sprite_units) sprite_units->note_irq(unsigned(level));
             if (!cpu.pc) cpu.pc = read32(cpu.vbr + 15 * 4);
             return 1;
         }
@@ -499,7 +498,7 @@ void Machine::load_state(std::span<const uint8_t> src) {
                                     std::to_string(expected) + ", got " +
                                     std::to_string(src.size()));
     }
-    if (sprite_units) sprite_units->reset();
+    if (sprites) sprites->reset();
     StateReader reader(src);
     // 1. Native CPU
     CanonicalF3Cpu cpu_st;
