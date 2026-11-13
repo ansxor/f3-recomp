@@ -1,5 +1,10 @@
 # f3rt Audio System
 
+> [!WARNING]
+> This is currently a WIP translation from the original high-level C++ code to Rust, therefore,
+> there are currently some bad decisions regarding pointer management that are currently being
+> visited since they were mostly trivial to write in C++.
+
 The Taito F3 uses a SQ-1 Plus (32-voice) design.
 
 The purpose of this document is to explain how the HLE audio system works that is
