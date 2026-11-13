@@ -2,7 +2,7 @@
 #include "runner.hpp"
 #include "inputs.hpp"
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "renderer/decode.hpp"
 #include "sprites/behaviour.hpp"
 #include "sprites/units.hpp"
@@ -135,14 +135,14 @@ struct Inputs {
 
 void drain_audio(Machine &m) {
     std::array<int16_t, 8192> buffer;
-    while (m.audio->render(buffer.data(), buffer.size() / 2) != 0) {
+    while (f3rt_audio_render(buffer.data(), buffer.size() / 2) != 0) {
     }
 }
 
 bool run_one(Machine &m, uint64_t frame, const char *label, std::string &error) {
     bool ok = false;
     try {
-        ok = m.run_frame(true);
+        ok = m.run_frame();
     } catch (const std::exception &e) {
         error =
             std::string(label) + ": exception at frame " + std::to_string(frame) + ": " + e.what();
@@ -152,12 +152,6 @@ bool run_one(Machine &m, uint64_t frame, const char *label, std::string &error) 
         std::ostringstream ss;
         ss << label << ": CPU halted at frame " << frame << " pc=0x" << std::hex << m.cpu.pc;
         error = ss.str();
-        return false;
-    }
-    if (m.fallback_instructions) {
-        error = std::string(label) +
-                ": fallback instruction executed under strict native mode at frame " +
-                std::to_string(frame);
         return false;
     }
     drain_audio(m);

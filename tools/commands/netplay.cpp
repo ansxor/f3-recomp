@@ -201,10 +201,10 @@ int cmd_netplay(int argc, char **argv) try {
             }
             std::array<LocalInputWord, LOCAL_PLAYER_COUNT> local_words{p1, p2, 0, 0};
             apply_local_inputs(*machine, local_words);
-            if (!machine->run_frame(true)) {
+            if (!machine->run_frame()) {
                 throw std::runtime_error("Emulation failure while waiting for versus trigger");
             }
-            machine->audio->finish_frame();
+            f3rt_audio_finish_frame();
 
             bool in_vs = netplay_hook->in_versus(*machine);
             if (!prev_in_vs && in_vs) {

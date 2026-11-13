@@ -4,7 +4,6 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
-#include "interpreter.hpp"
 
 #if defined(F3RT_GAME_VIDEO)
 #include "f3rt/game_video.hpp"
@@ -32,8 +31,7 @@ void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame,
               << "  pc: 0x" << std::hex << m.cpu.pc << std::dec << "\n"
               << "  sr: 0x" << std::hex << m.cpu.sr << std::dec << " halted: " << int(m.cpu.halted)
               << " stopped: " << int(m.cpu.stopped) << "\n"
-              << "  cycles: " << m.cpu.cycles << " native_blocks: " << m.native_blocks
-              << " fallback_instructions: " << m.fallback_instructions << "\n";
+              << "  cycles: " << m.cpu.cycles << " native_blocks: " << m.native_blocks << "\n";
 
     std::cerr << "  registers:\n";
     for (int i = 0; i < 8; ++i) {
@@ -134,8 +132,6 @@ int cmd_gameplay(int argc, char **argv) try {
             "ROM directory must be specified via --rom-dir or compiled F3RT_DEFAULT_ROM_DIR");
     }
 
-    cfg.allow_fallback = false;
-    cfg.translated = true;
     cfg.input_source = std::make_shared<runner::SeededScheduleInputSource>(
         seed, runner::ScheduleConfig{.versus = false});
 
@@ -148,11 +144,6 @@ int cmd_gameplay(int argc, char **argv) try {
             std::ostringstream ss;
             ss << "CPU halted at PC 0x" << std::hex << m.cpu.pc;
             print_failure_state(m, seed, frame, ss.str());
-            return false;
-        }
-        if (m.fallback_instructions > 0) {
-            print_failure_state(m, seed, frame,
-                                "Fallback instruction executed under strict native mode");
             return false;
         }
 #if defined(F3RT_GAME_VIDEO)
@@ -200,7 +191,6 @@ int cmd_gameplay(int argc, char **argv) try {
                   << "\",\"frame_crc\":\"0x" << frame_crc
                   << "\",\"cycles\":" << std::dec << m.cpu.cycles
                   << ",\"native_blocks\":" << m.native_blocks
-                  << ",\"fallback_instructions\":" << m.fallback_instructions
                   << ",\"audio_frames\":" << runner.audio_frames()
                   << ",\"audio_peak\":" << runner.audio_peak()
                   << ",\"nonzero_samples\":" << runner.nonzero_samples() << ",\"fps\":" << fps
@@ -210,7 +200,6 @@ int cmd_gameplay(int argc, char **argv) try {
                   << " pc=0x" << std::hex << m.cpu.pc << " frame_crc=0x"
                   << frame_crc << std::dec << " cycles=" << m.cpu.cycles
                   << " native_blocks=" << m.native_blocks
-                  << " fallback_instructions=" << m.fallback_instructions
                   << " audio_frames=" << runner.audio_frames()
                   << " audio_peak=" << runner.audio_peak()
                   << " nonzero_samples=" << runner.nonzero_samples() << " fps=" << std::fixed

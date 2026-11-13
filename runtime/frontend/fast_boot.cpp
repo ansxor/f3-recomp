@@ -1,6 +1,6 @@
 #include "frontend/fast_boot.hpp"
 #include "frontend/state.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "f3rt/game_boot.hpp"
 #include "f3rt/input.hpp"
 #include "f3rt/machine.hpp"
@@ -47,11 +47,11 @@ FastBootResult run_fast_boot(Machine &machine, const GameBoot &boot,
                 break;
             }
             apply_local_inputs(machine, {});
-            if (!machine.run_frame(request.translated))
+            if (!machine.run_frame())
                 throw std::runtime_error("CPU halted at " + std::to_string(machine.cpu.pc));
             ++result.frames;
             size_t count;
-            while ((count = machine.audio->render(samples.data(), samples.size() / 2)) != 0)
+            while ((count = f3rt_audio_render(samples.data(), samples.size() / 2)) != 0)
                 if (request.audio)
                     request.audio(std::span<const int16_t>(samples.data(), count * 2));
             if (request.cancelled && result.frames % 30 == 0 && request.cancelled()) break;

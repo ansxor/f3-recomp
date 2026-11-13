@@ -13,7 +13,6 @@ struct FastBootRequest {
     std::filesystem::path eeprom_init;
     std::filesystem::path boot_cache;
     GameVideoOptions snapshot{};
-    bool translated = false;
     uint64_t frame_budget = 0;
     std::function<void(std::span<const int16_t>)> audio;
     std::function<bool()> cancelled;

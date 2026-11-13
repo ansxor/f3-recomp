@@ -1,0 +1,31 @@
+# Land Maker timeline for the indexed-vs-GPU compositor comparison (GameCompositor.IndexedMatchesGpuOnBenchTimeline).
+# Format: runtime/debug/input_script.hpp. Frames are Machine::frame + 1.
+#
+# Timeline (frames):
+#   479-4778    attract: licence notice, Taito logo, intro movie, title, demo play
+#   4779-9439   main menu: GAME SELECT (attract coin + start, tutorial skipped)
+#   9440-13929  character select: PLAYER SELECT (b1 on the highlighted 1P BATTLE)
+#   13930-18579 gameplay: map, VS, READY/GO, then 1P vs CPU with seeded random mashing
+#   18580       end of the run
+#
+# The select screens count a timer down (a word at 0x407908, one per frame from 1200, digits are
+# 120-frame steps) and leave when it expires, so each hold pokes it back to 1000 every frame.
+# Mashing (seed=1 period=10) was picked from a sweep of seeds: it neither loses nor wins a round
+# for over 6600 frames, with boss and dense sprite moments.
+
+# One coin and START presses during the demo: the first starts the tutorial, the others skip it.
+4780+20 coin
+4830+5 start
+4930+5 start
+4980+5 start
+5030+5 start
+
+5140-9439 poke 0x407908.w=1000
+# Choose 1P BATTLE (the cursor starts on it).
+9440+5 b1
+
+9630-13929 poke 0x407908.w=1000
+# Choose the highlighted character; the map, VS screen and READY/GO follow.
+13930+5 b1
+
+14580-end mash seed=1 period=10

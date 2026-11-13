@@ -52,8 +52,7 @@ bool write_config_atomic(const std::filesystem::path &path, std::string_view tex
         return false;
     }
     std::error_code ec;
-    if (!path.parent_path().empty())
-        std::filesystem::create_directories(path.parent_path(), ec);
+    if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) {
         error = ec.message();
         return false;

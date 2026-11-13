@@ -11,9 +11,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("generated_ops", type=Path)
-    parser.add_argument(
-        "--output", type=Path, default=Path(__file__).resolve().parents[2] / "tools/recomp_py/68020_cycles.csv"
-    )
+    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[2] / "recomp/68020_cycles.csv")
     args = parser.parse_args()
     rows = re.findall(
         r"\{m68k_op_\w+\s*,\s*(0x[0-9a-f]+),\s*(0x[0-9a-f]+),\s*\{\s*\d+,\s*\d+,\s*(\d+),",

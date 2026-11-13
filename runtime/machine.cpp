@@ -1,10 +1,9 @@
 #include "f3rt/machine.hpp"
 #include "f3rt/memory_map.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
+#include "f3rt/abi/eeprom.h"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
-#include "eeprom.hpp"
-#include "interpreter.hpp"
 #include "debug/discovery.hpp"
 #include "sprites/units.hpp"
 #include "state_io.hpp"
@@ -13,6 +12,12 @@
 #include <sstream>
 
 namespace f3rt {
+Machine::AudioLease::~AudioLease() {
+    if (held) f3rt_audio_shutdown();
+}
+Machine::EepromLease::~EepromLease() {
+    if (held) f3rt_eeprom_shutdown();
+}
 namespace {
 
 // Decode once only when every byte is contiguous and has no observable bus
@@ -48,7 +53,7 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
 } // namespace
 Machine::Machine(RomSet set)
     : m_pixels(size_t(320) * set.video.visible_height), roms(std::move(set)),
-      video(std::make_unique<Video>()), eeprom(std::make_unique<Eeprom>()),
+      video(std::make_unique<Video>()),
       sound_bankswitch(roms.sound_bankswitch) {
     if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
         roms.main.size() % 4)
@@ -60,19 +65,24 @@ Machine::Machine(RomSet set)
     std::vector<uint8_t>().swap(roms.sprites_hi);
     std::vector<uint8_t>().swap(roms.tiles);
     std::vector<uint8_t>().swap(roms.tiles_hi);
-    auto sample_words = decode_sample_words(roms.samples);
-    if (!Audio::supported(roms.sound, sample_words))
+    switch (f3rt_audio_init(roms.sound.data(), roms.sound.size(), roms.samples.data(),
+                            roms.samples.size(), shared.data())) {
+    case F3RT_AUDIO_OK:
+        m_audio_lease.held = true;
+        break;
+    case F3RT_AUDIO_UNSUPPORTED_ROM:
         throw std::runtime_error("Audio is not supported for this game");
-    audio = std::make_unique<Audio>(roms.sound, std::move(sample_words), shared.data());
+    default:
+        throw std::runtime_error("Audio is already initialized");
+    }
     std::vector<uint8_t>().swap(roms.samples);
-    interpreter = std::make_unique<Interpreter>(*this);
+    if (f3rt_eeprom_init() != F3RT_EEPROM_OK) throw std::runtime_error("EEPROM is already initialized");
+    m_eeprom_lease.held = true;
     if (!roms.factory_eeprom.empty()) {
-        if (roms.factory_eeprom.size() != eeprom->words.size() * 2)
+        if (roms.factory_eeprom.size() != F3RT_EEPROM_FILE_BYTES)
             throw std::runtime_error("Factory EEPROM ROM must be exactly 128 bytes");
         // Seed once: resets preserve guest settings, and explicit EEPROM loads override these words.
-        for (size_t i = 0; i < eeprom->words.size(); ++i)
-            eeprom->words[i] = uint16_t(uint16_t(roms.factory_eeprom[2 * i]) << 8 |
-                                        roms.factory_eeprom[2 * i + 1]);
+        f3rt_eeprom_seed_be_bytes(roms.factory_eeprom.data());
     }
     // Analog ports start at counter zero; resets preserve the serialized counters.
     if (roms.input.dial) inputs[2] = inputs[3] = 0xffff0000;
@@ -94,8 +104,8 @@ void Machine::bind_cpu_windows() {
 }
 void Machine::reset_devices() {
     cpu.dispatch_deadline = 0;
-    audio->set_reset(true);
-    eeprom->pins(0, cpu.cycles);
+    f3rt_audio_set_reset(true);
+    f3rt_eeprom_pins(0, cpu.cycles);
     pending_irqs = 0;
     m_irq3_at = UINT64_MAX;
     m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
@@ -106,12 +116,12 @@ void Machine::reset() {
     cpu = {};
     cpu.runtime = this;
     bind_cpu_windows();
-    eeprom->reset();
+    f3rt_eeprom_reset();
     frame = m_hardware_cycles = 0;
     // Reference beam time zero is VBSTART, not scanline zero.
     m_next_vblank = raster_cycle(FRAME_PIXELS);
     reset_devices();
-    audio->reset_board();
+    f3rt_audio_set_reset(true);
     video->reset();
     if (game_video) game_video->reset();
     reset_main_cpu();
@@ -134,7 +144,7 @@ uint32_t Machine::input_word(unsigned index) const {
     if (index >= inputs.size()) return 0xffffffff;
     uint32_t value = inputs[index];
     if (index == 0) {
-        const uint32_t io = (system_inputs & 0xfe) | unsigned(eeprom->output(cpu.cycles));
+        const uint32_t io = (system_inputs & 0xfe) | unsigned(f3rt_eeprom_output(cpu.cycles));
         value = (value & 0xffff) | (io << 16) | (io << 24);
     } else if (index == 1 || index == 5) {
         value = (value & 0xffff) | (uint32_t(coin_word[index == 5]) << 16);
@@ -197,12 +207,12 @@ void Machine::write8(uint32_t a, uint8_t v) {
     }
     if (a >= SHARED_BASE && a < SHARED_END) {
         shared[a - SHARED_BASE] = v;
-        audio->shared_write(a - SHARED_BASE);
+        f3rt_audio_shared_write(a - SHARED_BASE);
         return;
     }
     if ((a >= SOUND_RESET_RELEASE && a < SOUND_RESET_RELEASE + 4) ||
         (a >= SOUND_RESET_ASSERT && a < SOUND_RESET_ASSERT + 4)) {
-        audio->set_reset(a >= SOUND_RESET_ASSERT);
+        f3rt_audio_set_reset(a >= SOUND_RESET_ASSERT);
         return;
     }
     // Watchdog deadline: 3 seconds.
@@ -220,7 +230,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a == EEPROM_PINS) {
-        eeprom->pins(v, cpu.cycles);
+        f3rt_eeprom_pins(v, cpu.cycles);
         return;
     }
     if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
@@ -229,7 +239,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         uint32_t idx = (offset << 1) & 0x1e;
         if (low16) idx += 1;
         if (idx >= 8) idx -= 8;
-        audio->set_sound_bank(idx);
+        f3rt_audio_set_sound_bank(idx);
         return;
     }
     if (a == TIMER_CONTROL) timer_control = uint16_t((timer_control & 0xff) | (v << 8));
@@ -249,7 +259,7 @@ void Machine::write16(uint32_t a, uint16_t v) {
         uint32_t idx = (offset << 1) & 0x1e;
         if (low16) idx += 1;
         if (idx >= 8) idx -= 8;
-        audio->set_sound_bank(idx);
+        f3rt_audio_set_sound_bank(idx);
         return;
     }
     write8(a, uint8_t(v >> 8));
@@ -268,7 +278,7 @@ void Machine::write32(uint32_t a, uint32_t v) {
         uint32_t offset = (a - MAIN_SOUND_BANKSWITCH_BASE) >> 2;
         uint32_t idx = ((offset << 1) & 0x1e) + 1;
         if (idx >= 8) idx -= 8;
-        audio->set_sound_bank(idx);
+        f3rt_audio_set_sound_bank(idx);
         return;
     }
     write16(a, uint16_t(v >> 16));
@@ -279,7 +289,7 @@ void Machine::advance_to(uint64_t cycles) {
     while (m_hardware_cycles < cycles) {
         const uint64_t event = std::min(m_next_vblank, m_irq3_at);
         const uint64_t end = std::min(cycles, event);
-        audio->advance(uint32_t(end - m_hardware_cycles));
+        f3rt_audio_advance(uint32_t(end - m_hardware_cycles));
         m_hardware_cycles = end;
         if (m_hardware_cycles == m_next_vblank) {
             if (game_video) game_video->render_frame();
@@ -323,7 +333,7 @@ int Machine::boundary() {
     }
     if (cpu.cycles >= m_watchdog_at) {
         reset_devices();
-        audio->reset_board();
+        f3rt_audio_set_reset(true);
         reset_main_cpu();
         return 1;
     }
@@ -350,36 +360,36 @@ int Machine::fallback() {
             throw std::runtime_error(message.str());
         }
     }
-    if (!allow_main_fallback) {
-        std::ostringstream message;
-        message << "Untranslated main CPU instruction at PC 0x" << std::hex << cpu.pc;
-        throw std::runtime_error(message.str());
-    }
-    ++fallback_instructions;
-    if (!fallback_hits.empty()) ++fallback_hits[physical_pc >> 1];
-    if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
-    return interpreter->run_main(1) > 0 && !cpu.halted;
+    std::ostringstream message;
+    message << "Untranslated main CPU instruction at PC 0x" << std::hex << cpu.pc;
+    throw std::runtime_error(message.str());
 }
-bool Machine::run_frame(bool translated) {
+bool Machine::run_frame() {
     const uint64_t target = frame + 1;
     while (frame < target && !cpu.halted) {
-        if (translated) {
-            if (!f3_dispatch(&cpu)) {
-                audio->finish_frame();
-                return false;
-            }
-        } else if (!boundary()) {
-            // Reference execution must hand MMIO/IRQ changes back at every
-            // instruction boundary. Coarse slices alter the ROM boot checks.
-            if (sprite_units) sprite_units->interpreted_instruction(cpu.pc);
-            interpreter->run_main(1);
+        if (!f3_dispatch(&cpu)) {
+            f3rt_audio_finish_frame();
+            return false;
         }
     }
-    audio->finish_frame();
+    f3rt_audio_finish_frame();
     return !cpu.halted;
 }
-void Machine::load_eeprom(const std::filesystem::path &p) { eeprom->load(p); }
-void Machine::save_eeprom(const std::filesystem::path &p) const { eeprom->save(p); }
+void Machine::load_eeprom(const std::filesystem::path &p) {
+    const std::string path = p.string();
+    switch (f3rt_eeprom_load_file(path.c_str())) {
+    case F3RT_EEPROM_OK:
+        return;
+    case F3RT_EEPROM_INVALID_FILE:
+        throw std::runtime_error("Invalid EEPROM file: " + path);
+    default:
+        throw std::runtime_error("EEPROM read failed");
+    }
+}
+void Machine::save_eeprom(const std::filesystem::path &p) const {
+    if (f3rt_eeprom_save_file(p.string().c_str()) != F3RT_EEPROM_OK)
+        throw std::runtime_error("EEPROM write failed");
+}
 void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
     if (port >= inputs.size()) throw std::out_of_range("Input port index");
     if (pressed) inputs[port] &= ~mask;
@@ -388,7 +398,7 @@ void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
 size_t Machine::state_size() const {
     size_t sz = sizeof(CanonicalF3Cpu) + sizeof(CanonicalMachineClocks) + ram.size() +
                 palette.size() + graphics.size() + control.size() + shared.size() +
-                sizeof(uint32_t) * m_pixels.size() + eeprom->state_size() + audio->state_size() +
+                sizeof(uint32_t) * m_pixels.size() + F3RT_EEPROM_STATE_SIZE + F3RT_AUDIO_STATE_SIZE +
                 video->state_size();
     if (game_video) sz += game_video->state_size();
     return sz;
@@ -457,14 +467,12 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     writer.write_span(std::span<const uint32_t>(native_pixels()));
 
     // 4. EEPROM
-    eeprom->save_state(writer);
+    f3rt_eeprom_save_state(writer.current());
+    writer.advance(F3RT_EEPROM_STATE_SIZE);
 
     // 5. Audio
-    {
-        std::span<uint8_t> audio_slice(writer.current(), audio->state_size());
-        audio->save_state(audio_slice);
-        writer.advance(audio->state_size());
-    }
+    f3rt_audio_save_state(writer.current());
+    writer.advance(F3RT_AUDIO_STATE_SIZE);
 
     {
         std::span<uint8_t> v_slice(writer.current(), video->state_size());
@@ -550,19 +558,14 @@ void Machine::load_state(std::span<const uint8_t> src) {
     reader.read_span(std::span<uint32_t>(m_pixels));
 
     // 4. EEPROM
-    eeprom->load_state(reader);
+    if (f3rt_eeprom_load_state(reader.current()) != F3RT_EEPROM_OK)
+        throw std::invalid_argument("Invalid EEPROM snapshot");
+    reader.skip(F3RT_EEPROM_STATE_SIZE);
 
     // 5. Audio
-    {
-        std::span<const uint8_t> audio_slice(reader.current(), audio->state_size());
-        audio->load_state(audio_slice);
-        reader.skip(audio->state_size());
-    }
-
-    // Also sync main interpreter context so Musashi is ready for any fallback
-    if (interpreter) {
-        interpreter->sync_main_from_cpu();
-    }
+    if (f3rt_audio_load_state(reader.current()) != F3RT_AUDIO_OK)
+        throw std::invalid_argument("Invalid audio snapshot");
+    reader.skip(F3RT_AUDIO_STATE_SIZE);
 
     {
         std::span<const uint8_t> v_slice(reader.current(), video->state_size());

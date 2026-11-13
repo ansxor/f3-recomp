@@ -233,7 +233,7 @@ int f3_dispatch(f3_cpu *cpu) {
     }
 #ifdef F3_PROFILE_SLIM_ENABLED
     // ABI 3 exclusions take precedence over opt-in slim misses, including
-    // odd PCs and 24-bit aliases; fallback rejects them before interpretation.
+    // odd PCs and 24-bit aliases; fallback rejects them as an untranslated instruction.
     const uint32_t physical_pc = cpu->pc & 0xffffffu;
     for (const auto &range : m.excluded_code) {
         if (physical_pc < range.start) break;
@@ -245,7 +245,7 @@ int f3_dispatch(f3_cpu *cpu) {
     return f3_fallback(cpu);
 }
 int f3_fallback(f3_cpu *cpu) {
-    // Untranslated or excluded instruction inside a replay: abandon it, never interpret.
+    // Untranslated or excluded instruction inside a replay: abandon it.
     if (auto *s = sandbox(cpu)) {
         s->sandbox_abort(f3rt::SpriteUnits::Abort::Untranslated);
         return 0;

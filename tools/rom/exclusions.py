@@ -18,12 +18,12 @@ from collections import Counter, deque
 from copy import deepcopy
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 # sys.path is patched above so this script can run directly; import must follow it.
-from tools.recomp_py.discovery import (  # noqa: E402
+from recomp.discovery import (  # noqa: E402
     CALL_MNEMONICS,
     COND_BRANCH_MNEMONICS,
     TERMINAL_MNEMONICS,
@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         rom, config = load_rom(args.config, args.rom_dir)
     else:
         config = tomllib.loads(args.config.read_text("utf-8"))
-        from tools.recomp_py.compile.sound import load_sound_rom
+        from recomp.compile.sound import load_sound_rom
 
         rom = load_sound_rom(args.rom_dir, config)
     profile = json.loads(args.profile.read_text("utf-8")) if args.profile else None

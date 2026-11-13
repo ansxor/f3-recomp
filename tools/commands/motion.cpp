@@ -2,7 +2,7 @@
 #include "../runner/runner.hpp"
 #include "../runner/inputs.hpp"
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/rom.hpp"
@@ -117,7 +117,7 @@ Options parse(int argc, char **argv) {
 }
 
 void advance(f3rt::Machine &m) {
-    require(m.run_frame(true) && !m.cpu.halted && !m.fallback_instructions,
+    require(m.run_frame() && !m.cpu.halted,
             "Strict-native failure at frame " + std::to_string(m.frame));
 }
 
@@ -376,8 +376,7 @@ int comparison(const Options &o) {
               << " drawable_submissions=" << submitted
               << " interpolated_submissions=" << interpolated << " moving_inbetweens=" << moving
               << " alpha=" << min_alpha << ':' << max_alpha << " frozen_state_native=exact"
-              << " emulated_frame=" << m.frame
-              << " fallback_instructions=" << m.fallback_instructions << '\n';
+              << " emulated_frame=" << m.frame << '\n';
     return 0;
 }
 
@@ -596,7 +595,7 @@ int cmd_motion(int argc, char **argv) try {
                   << " synthetic_phase_grids=halves,twelfths alpha1=exact repeated_draws=exact "
                      "state_audio_replay=exact"
                   << " reset_gap_duplicate_fallback=snap replay=exact native_blocks="
-                  << m.native_blocks << " fallback_instructions=" << m.fallback_instructions
+                  << m.native_blocks
                   << " audio_samples=" << audio_samples << " audio_crc=0x" << std::hex
                   << (audio_crc ^ 0xffffffffu) << " native_crc=0x" << hash(m.native_pixels())
                   << " state_crc=0x" << m.state_crc() << std::dec << '\n';

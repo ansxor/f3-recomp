@@ -1,46 +1,37 @@
 # f3-recomp
 
-Static recompilation of Taito F3 arcade games into native C, with a runtime built on SDL3.
+Static recompilation+runtime for Taito F3 games into native C.
 
 ## Building
 
-**Requirements:** CMake 3.24+, Ninja, C11/C++20 compiler, Git, Go (version in `go.mod`), and the Capstone C library (libcapstone 5.x) with pkg-config.
-CMake builds the recompiler (`recomp/`) with `go build` at configure time; pass `-DF3_RECOMP_EXECUTABLE=<path>` to use a prebuilt one.
-`F3RT_GPU=ON` builds also need `uv` (shader compilation runs `runtime/renderer/shaders/compile.py`). The Python tools under `tools/` (analysis, differential, profile, ROM exclusions) use `uv` separately; the build does not.
+> [!NOTE]
+> I'm choosing to use `landmakrj` (Land Maker JAPAN) as the example simply because that's the game I'm primarily targetting and for the sake of simplicity.
 
-**macOS:**
+My preferred method of building this on both Linux and macOS is with Nix:
 
 ```sh
-brew install cmake ninja go capstone pkg-config
-# Optional: prebuilt libraries/tools, used instead of source builds when present.
-brew install sdl3 yyjson cpp-httplib googletest glslang spirv-cross
+nix run .#default <ROM>
+# For example, to build Land Maker (JAPAN)
+nix run .#default landmakrj
+
+# Link compile_commands.json to the repo root for clangd (configures first if needed)
+nix run .#compdb [<ROM>]   # defaults to landmakrj
 ```
 
-C/C++ dependencies come from [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) (`cmake/dependencies.cmake`).
-Installed packages (Homebrew, distro, Vulkan SDK) are linked as-is; anything missing is fetched at a
-pinned tag and built from source, with sources cached in `~/.cache/CPM` across build directories.
-Pass `-DCPM_DOWNLOAD_ALL=ON` to ignore installed packages.
+Otherwise, alternative build steps are included below.
 
-FAUST 2.x is not needed to build: the DSP headers under `runtime/audio/hle/faust/generated/` are
-checked in, and without a FAUST compiler (the default) no build runs it. If one is configured
-(`-DFAUST_EXECUTABLE=<path to faust>`, or `faust` on `PATH` when configuring), ordinary builds also
-run it for any header older than its `.dsp`, `architecture.hpp` or `.lib` inputs, then recompile the
-code that includes it. `cmake --build <build-dir> --target faust-regen` does the same on request and
-leaves up-to-date headers alone; touch the `.dsp` (or delete the header) to force one.
+### Requirements
 
-**Linux (apt):** `sudo apt install cmake ninja-build golang libcapstone-dev pkg-config`
+- CMake 3.24+
+- Ninja, C11/C++20 compiler
+- Rust (cargo, rustc; edition 2024)
+- Git
+- `uv` (managing Python 3.11+ and Capstone 5.0.9).
 
-**Build steps** (using your own legally obtained ROMs):
+### Build steps
 
 ```sh
 make build GAME=landmakrj ROM_DIR=roms/landmakrj
-```
-
-Also available:
-
-```sh
-make list-games
-make help
 ```
 
 ## Running
@@ -51,23 +42,6 @@ make help
 
 Run with `--help` for all command-line options.
 
-## Nintendo 3DS
-
-```sh
-nix run .#3ds-3dsx              # build build/landmakrj-3ds/landmakrj.3dsx
-nix run .#3ds-cia               # build build/landmakrj-3ds/landmakrj.cia
-nix run .#3ds-azahar            # build the 3dsx and launch it in Azahar
-nix develop .#3ds               # devkitARM, makerom, bannertool, ctrtool, cmake, ninja
-```
-
-**Frame-budget bench (dev only):** `nix run .#3ds-bench` builds a separate 3dsx that replays a scripted
-playthrough (attract, menu, character select, gameplay) to check frame timing. `tools/bench/n3ds-bench.sh`
-runs it in Azahar and reports per-scenario results. It is never part of the shipped build.
-
-**Real hardware:** audio needs `sdmc:/3ds/dspfirm.cdc`, a firmware dump taken from the console itself.
-Without it the app runs silently and the bottom screen shows `Audio off: sdmc:/3ds/dspfirm.cdc missing`.
-Azahar's HLE DSP ignores the file's contents, so a placeholder is enough there.
-
 ## Supported Games
 
 The following ROM sets have tested native builds:
@@ -77,13 +51,10 @@ The following ROM sets have tested native builds:
 - **Command War** (0.0J prototype, `commandw`) — Native execution (some graphics limitations)
 - **Riding Fight** (World 1.0O, `ridingf`) — Native execution (missing upper planes/sprite trails)
 
-## Documentation
-
-- `make help` lists build, test and run targets; each program's `--help` lists its options.
-- [docs/notes/](docs/notes/index.md): per-routine, hardware, quirk and measurement notes for the supported games.
-
 ## Credits
 
-Architecture inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp). Video and sound algorithms adapted from BSD-3-Clause-licensed [MAME](https://github.com/mamedev/mame) sources. CPU interpreter based on Musashi. Built with SDL3.
+- 12 and Y for the research spent on the Taito F3 + helping me learn about hardware facts for this project.
+- Architecture inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp).
+- Video and sound algorithms adapted from BSD-3-Clause-licensed [MAME](https://github.com/mamedev/mame) sources.
 
 See [runtime/LICENSES.txt](runtime/LICENSES.txt) for full attribution.

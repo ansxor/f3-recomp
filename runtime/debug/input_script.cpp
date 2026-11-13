@@ -76,13 +76,8 @@ InputScript InputScript::parse(std::string_view text, const std::string &source)
             ++next;
         }
         if (next >= tokens.size())
-            throw std::runtime_error(where + ": missing controls, 'mash', 'poke' or 'scenario'");
-        if (tokens[next] == "scenario") {
-            if (next != 1) throw std::runtime_error(where + ": scenario takes no player");
-            if (rule.end != rule.begin || next + 2 != tokens.size())
-                throw std::runtime_error(where + ": expected 'FRAME scenario NAME'");
-            rule.scenario = tokens[next + 1];
-        } else if (tokens[next] == "poke") {
+            throw std::runtime_error(where + ": missing controls, 'mash' or 'poke'");
+        if (tokens[next] == "poke") {
             if (next != 1) throw std::runtime_error(where + ": poke takes no player");
             if (next + 2 != tokens.size())
                 throw std::runtime_error(where + ": expected 'poke ADDR.b|.w|.l=VALUE'");
@@ -183,11 +178,6 @@ void InputScript::poke(Machine &machine, uint64_t frame) const {
             machine.ram[rule.poke_address - RAM_BASE + i] =
                 uint8_t(rule.poke_value >> (8 * (rule.poke_size - 1 - i)));
     }
-}
-const std::string *InputScript::scenario_at(uint64_t frame) const {
-    for (const Rule &rule : m_rules)
-        if (!rule.scenario.empty() && rule.begin == frame) return &rule.scenario;
-    return nullptr;
 }
 bool InputScript::has_pokes() const {
     for (const auto &rule : m_rules) {

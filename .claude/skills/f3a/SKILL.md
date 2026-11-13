@@ -182,7 +182,7 @@ needed `poke`, then 3–4 runs.
 - A poke run proves reachability, not that normal play gets there; say so wherever you use it.
 - Pokes write main RAM only (`0x400000..0x41ffff`; `xref` prints an a5 global's absolute address). A
   range re-pokes at the start of each frame; the game can change it within the frame. Netplay rejects
-  poke scripts. Any `--inputs` script disables fast boot, so frame numbers are cold-boot frames.
+  poke scripts.
 - Dumps are taken at the end of each emulated frame.
 - `--field` excludes `a5`/`a7`; use `xref a5-0xNNNN` for globals. Write negative offsets as
   `--field=-0x10`.

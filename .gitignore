@@ -1,7 +1,6 @@
 build/
-/result
 *.zip
-/roms/
+roms/
 games/*/generated/
 games/*/rom/
 *.bin
@@ -16,13 +15,15 @@ nvram/
 cfg/
 *.wav
 *.flac
-!games/*/n3ds/banner.wav
 netplay-logs/
 # Block execution profiles (raw ROM-derived evidence; regenerate with block_profile.py)
 *.profile
 *.profile.*
 !profiles/.gitkeep
 f3-cold-hits.log
+.cache/
+result/
+.direnv/
 
 # In-source CMake leftovers from a configure run in the source root
 CMakeFiles/
@@ -47,3 +48,4 @@ Testing/
 /html/
 /latex/
 /Doxyfile
+/target/

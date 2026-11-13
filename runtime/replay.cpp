@@ -1,97 +1,29 @@
 #include "f3rt/rom.hpp"
 #include "f3rt/video.hpp"
-#include "audio/reference/board.hpp"
 #include "capture_io.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
 
-namespace {
-// F3AUD2 trace (tools/mame/README.md): 8-byte header "F3AUD2\0\0", then 16-byte little-endian records:
-//   u64 timestamp (16 MHz ticks), u32 sound-bus address, u16 data, u16 byte-lane mask.
-//   mask 0xffff writes data as 16 bits; otherwise 0xff00 writes data>>8 to address and
-//   0x00ff writes data&0xff to address+1. Address RECORD_RESET resets the sound board; RECORD_END ends the stream.
-constexpr uint32_t RECORD_END = 0xffffffffu;
-constexpr uint32_t RECORD_RESET = 0xfffffffeu;
-int replay_audio(const f3rt::RomSet &roms, const std::filesystem::path &trace,
-                 const std::filesystem::path &output) {
-    std::ifstream input(trace, std::ios::binary);
-    std::array<char, 8> magic{};
-    input.read(magic.data(), magic.size());
-    if (magic != std::array<char, 8>{'F', '3', 'A', 'U', 'D', '2', 0, 0})
-        throw std::runtime_error("Invalid F3 audio trace header");
-    f3rt::reference::Board audio({}, roms.samples, nullptr);
-    f3rt::WavWriter wav(output, audio.sample_rate());
-    std::array<int16_t, 1024> samples{};
-    std::array<uint8_t, 16> record{};
-    uint64_t now = 0, writes = 0, frames = 0;
-    int peak = 0;
-    bool ended = false;
-    const auto little = [](const uint8_t *p, unsigned bytes) {
-        uint64_t value = 0;
-        for (unsigned i = 0; i < bytes; ++i) value |= uint64_t(p[i]) << (8 * i);
-        return value;
-    };
-    while (input.read(reinterpret_cast<char *>(record.data()), record.size())) {
-        const uint64_t at = little(record.data(), 8);
-        if (at < now) throw std::runtime_error("Audio trace time moved backwards");
-        while (now < at) {
-            const auto cycles = uint32_t(std::min<uint64_t>(at - now, 16000));
-            audio.advance(cycles);
-            now += cycles;
-            const size_t count = audio.render(samples.data(), samples.size() / 2);
-            wav.append(std::span(samples).first(count * 2));
-            frames += count;
-            for (size_t i = 0; i < count * 2; ++i) peak = std::max(peak, std::abs(int(samples[i])));
-        }
-        const auto address = uint32_t(little(record.data() + 8, 4));
-        const auto data = uint16_t(little(record.data() + 12, 2));
-        const auto mask = uint16_t(little(record.data() + 14, 2));
-        if (address == RECORD_END) {
-            ended = true;
-            break;
-        }
-        if (address == RECORD_RESET) {
-            audio.reset_board();
-            continue;
-        }
-        if (mask == 0xffff) audio.write16(address, data);
-        else {
-            if (mask & 0xff00) audio.write8(address, uint8_t(data >> 8));
-            if (mask & 0x00ff) audio.write8(address + 1, uint8_t(data));
-        }
-        ++writes;
-    }
-    if (!ended) throw std::runtime_error("Truncated audio trace: missing end timestamp");
-    std::cout << "audio_writes=" << writes << " frames=" << frames
-              << " sample_rate=" << audio.sample_rate() << " peak=" << peak << '\n';
-    return 0;
-}
-} // namespace
-
 int main(int argc, char **argv) try {
-    std::filesystem::path romdir, captures, output, audio_trace;
+    std::filesystem::path romdir, captures, output;
     std::string set = F3RT_DEFAULT_SET;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if ((arg == "--rom-dir" || arg == "--captures" || arg == "--output" ||
-             arg == "--audio-trace" || arg == "--set") &&
+             arg == "--set") &&
             i + 1 < argc) {
             const std::string value = argv[++i];
             if (arg == "--rom-dir") romdir = value;
             if (arg == "--captures") captures = value;
             if (arg == "--output") output = value;
-            if (arg == "--audio-trace") audio_trace = value;
             if (arg == "--set") set = value;
         } else
-            throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR (--captures DIR | "
-                                     "--audio-trace FILE) --output PATH [--set SET]");
+            throw std::runtime_error("Usage: f3rt-replay --rom-dir DIR --captures DIR --output PATH [--set SET]");
     }
-    if (romdir.empty() || output.empty() || (captures.empty() == audio_trace.empty()))
-        throw std::runtime_error(
-            "--rom-dir, --output and exactly one of --captures/--audio-trace are required");
+    if (romdir.empty() || output.empty() || captures.empty())
+        throw std::runtime_error("--rom-dir, --captures and --output are required");
     auto roms = f3rt::RomSet::load(romdir, set);
-    if (!audio_trace.empty()) return replay_audio(roms, audio_trace, output);
     f3rt::Video video;
     if (!video.load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
         throw std::runtime_error("Video ROM decode failed");

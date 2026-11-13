@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(f3_recompiled C)
 
-set(F3_GENERATED_DIR "" CACHE PATH "Directory emitted by f3-recomp emit")
+set(F3_GENERATED_DIR "" CACHE PATH "Directory emitted by uv run python -m recomp emit")
 # Standalone builds pass it as a cache entry; the parent build sets a normal variable,
 # which a CACHE set here would hide under policy CMP0126 OLD (minimum 3.20).
 if(NOT DEFINED F3_GENERATED_CONFIG_DIR)
-    set(F3_GENERATED_CONFIG_DIR "" CACHE PATH "Directory with sprite_units.h from f3-recomp compile-sprite-units")
+    set(F3_GENERATED_CONFIG_DIR "" CACHE PATH "Directory with sprite_units.h from recomp/compile/sprite_units.py")
 endif()
 if(NOT EXISTS "${F3_GENERATED_DIR}/sources.cmake")
     message(FATAL_ERROR "Set F3_GENERATED_DIR to emitted program directory (sources.cmake missing)")
@@ -13,6 +13,7 @@ endif()
 include("${F3_GENERATED_DIR}/sources.cmake")
 add_library(f3_recompiled STATIC ${F3_GENERATED_SOURCES})
 target_compile_features(f3_recompiled PUBLIC c_std_11)
+target_compile_definitions(f3_recompiled INTERFACE F3RT_GENERATED=1)
 target_include_directories(f3_recompiled PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/../include"
     "${CMAKE_CURRENT_SOURCE_DIR}/.."
@@ -22,6 +23,13 @@ if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3_recompiled PRIVATE F3_PROFILE_INSTRUMENT=1)
 endif()
 if(F3_PROFILE_TIERS)
+    if(NOT DEFINED F3_PROFILE_COLD_OPT)
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+            set(F3_PROFILE_COLD_OPT -Oz)
+        else()
+            set(F3_PROFILE_COLD_OPT -Os)
+        endif()
+    endif()
     set_source_files_properties(${F3_GENERATED_HOT_SOURCES} PROPERTIES COMPILE_OPTIONS -O2)
     if(F3_GENERATED_COLD_SOURCES)
         set_source_files_properties(${F3_GENERATED_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${F3_PROFILE_COLD_OPT}")

@@ -1,10 +1,6 @@
 Standalone hardware implementations derived from MAME BSD-3-Clause files:
   video.cpp / video.hpp: Bryan McPhail, ywy, 12Me21
   audio.cpp: Bryan McPhail, Aaron Giles, R. Belmont, Philip Bennett
-  third_party/audio/es5505.*: Aaron Giles
-  third_party/audio/es5510.*: Christian Brunschen
-  third_party/audio/mc68681.*: Mariusz Wojcieszek, R. Belmont
-  third_party/audio/mb87078.*: Fabio Priuli, Philip Bennett, hap
 Reference source: https://github.com/mamedev/mame, revision
 cfc4760a3be9c5a79846b19b6a573cb38459fa7e, local source headers retain authors.
 FDA 15-bit palette interpretation, per-line selection and forward blur also
@@ -66,29 +62,12 @@ their license files in the CPM source cache (CPM_SOURCE_CACHE, default
 No ROMs, generated game code, decoded graphics, or captured game media are
 included in the committed runtime sources.
 
-FAUST 2.88.0 (https://faust.grame.fr): third_party/faust/faust/{export.h, dsp/dsp.h, gui/UI.h,
-gui/meta.h} are FAUST's architecture headers, copied byte-for-byte and unmodified from
-architecture/faust/ (copyright GRAME, Centre National de Creation Musicale). third_party/faust/
-COPYING.txt is FAUST's COPYING.txt, which carries the LGPL-2.1 text. The headers are licensed under
-the GNU Lesser General Public License, version 2.1 or (at your option) any later version, with the
-FAUST architecture exception: "As a special exception, you may create a larger work that contains
-this FAUST architecture section and distribute that work under terms of your choice, so long as
-this FAUST architecture section is not modified."
-The FAUST compiler (LGPL-2.1 or later) is build-time only: the faust-regen target
-(cmake/faust.cmake) runs it to write the checked-in runtime/audio/hle/faust/generated/*.hpp. It is
-not linked into or shipped with f3rt. The generated headers contain the compiler's output for our
-.dsp sources and our architecture.hpp; they #include the vendored headers and copy no text from
-them. The DSP sources import no FAUST standard library; the only import is the in-repo
-runtime/audio/hle/faust/es5510.lib. runtime/audio/hle/faust/support.hpp (Controls, the
-name-to-zone registry) is project code, not derived from FAUST.
+FAUST 2.88.0 (https://faust.grame.fr): no FAUST library or architecture file is vendored. The FAUST compiler
+(LGPL-2.1 or later) is build-time only: crates/f3rt-audio/faust/regen.sh runs it (-lang rust -double) to write the
+checked-in crates/f3rt-audio/src/hle/faust/generated/*.rs. It is not linked into or shipped with f3rt. The generated
+files contain the compiler's output for our .dsp sources and our architecture.rs. The DSP sources import no FAUST
+standard library; the only import is the in-repo crates/f3rt-audio/faust/es5510.lib. The registry of named controls
+(crates/f3rt-audio/src/hle/faust/support.rs) is project code, not derived from FAUST.
 
 third_party/sha1dc: SHA-1 with collision detection, https://github.com/cr-marcstevens/sha1collisiondetection
 revision a06f1adbe5522f3c939cd6a3f13d5ec7f4c1a988 (MIT, Marc Stevens and Dan Shumow; license in third_party/sha1dc/LICENSE.txt). Unmodified lib/ sources.
-
-third_party/ftpd: Dear ImGui 3DS platform and citro3d backends plus the system-font loader from
-ftpd (https://github.com/mtheall/ftpd), revision 8cd5e109fedcdc087744338ce73aea5266650a0b.
-imgui_citro3d.{cpp,h} and imgui_ctru.{cpp,h} are MIT (Michael Theall); imgui_font.{cpp,h},
-vshader.v.pica and the full GPL-3.0 text in third_party/ftpd/LICENSE are GPL-3.0. These sources are
-compiled only into the Nintendo 3DS executable of a generated game; desktop builds do not link
-them. libctru and citro3d (zlib licenses, devkitPro) are linked from the same 3DS toolchain for
-that target only.

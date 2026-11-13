@@ -1,6 +1,5 @@
 #include "settings.hpp"
 #include "config_file.hpp"
-#include "f3rt/audio.hpp"
 #include "rom_manifest.hpp"
 #include <algorithm>
 #include <charconv>

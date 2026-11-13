@@ -143,7 +143,7 @@ void f3_write8(f3_cpu *cpu, uint32_t address, uint8_t value);
 void f3_write16(f3_cpu *cpu, uint32_t address, uint16_t value);
 void f3_write32(f3_cpu *cpu, uint32_t address, uint32_t value);
 
-/* Direct access to main work RAM for idle-loop fast-forward (internal/idle):
+/* Direct access to main work RAM for idle-loop fast-forward (recomp/idle.py):
  * a pointer to `size` contiguous bytes at `address`, or NULL when the range is
  * not plain RAM (device, mirror wrap, ROM) or cpu is a replay sandbox. Loads
  * and stores through it have no bus side effects, but a store bypasses
@@ -168,23 +168,20 @@ int f3_register_blocks(f3_cpu *cpu, const f3_block *blocks, size_t count);
 /* Bind generated main code to the loaded image before registering any entries. */
 int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc);
 /* Sorted nonoverlapping even ROM intervals, disjoint from registered blocks.
- * Excluded PCs fail before fallback, even when interpretation is enabled. */
+ * An excluded PC fails before the untranslated-instruction failure. */
 int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count);
-/* Execute one block at pc (or fallback), including boundary. Returns 1 for
- * progress, IRQ entry, or STOP time advancement; 0 on fatal host error/halt. */
+/* Execute one block at pc, including boundary. Returns 1 for progress, IRQ
+ * entry, or STOP time advancement; 0 on fatal host error/halt. */
 int f3_dispatch(f3_cpu *cpu);
-/* Execute exactly one instruction at cpu->pc through the interpreter, which
- * flushes pending flags before reading CCR; canonical SR on exit. Return
- * nonzero on success; zero means no fallback is available. */
+/* Dispatch miss: no fallback execution exists, so an untranslated instruction
+ * at cpu->pc is fatal (Machine::fallback throws). Generated code calls this as
+ * `if (!f3_fallback(cpu)) cpu->halted = 1;`. Returns 0 only for a sandbox replay
+ * CPU, which abandons the replay at the untranslated PC. */
 int f3_fallback(f3_cpu *cpu);
-/* Musashi bridge (runtime/core_state.c): load/store CPU state around a run. */
-void f3rt_core_import(const f3_cpu *cpu);
-void f3rt_core_export(f3_cpu *cpu);
 
 /* Render-only emit-unit hooks (ABI 4). Generated code calls these at the label
  * of a declared unit start/end PC, after flushing pending flags and before that
- * instruction executes; the interpreter calls them at the same instruction
- * boundary. They never change emulated state of the real CPU. `unit` is the
+ * instruction executes. They never change emulated state of the real CPU. `unit` is the
  * EmitUnit id from the generated sprite_units.h. f3_unit_exit returns nonzero
  * only for a sandbox replay CPU that reached its unit end: the caller must then
  * return without executing the instruction at cpu->pc. */

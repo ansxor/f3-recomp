@@ -1,7 +1,7 @@
 #include "session.hpp"
 #include "recorder.hpp"
 #include "f3rt/machine.hpp"
-#include "f3rt/audio.hpp"
+#include "f3rt/abi/audio.h"
 #include "f3rt/game_netplay.hpp"
 
 #include <algorithm>
@@ -480,12 +480,10 @@ bool run_lockstep_frame(Machine &m, const std::array<LocalInputWord, LOCAL_PLAYE
     if (hook && hook->on_match_frame) {
         hook->on_match_frame(m, seed, match_frame);
     }
-    if (!m.run_frame(true)) {
+    if (!m.run_frame()) {
         return false;
     }
-    if (m.audio) {
-        m.audio->finish_frame();
-    }
+    f3rt_audio_finish_frame();
     return true;
 }
 
