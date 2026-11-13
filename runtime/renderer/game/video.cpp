@@ -240,7 +240,6 @@ void GameVideo::render_frame() {
     // Render below still uses the previously latched sprite plane, preserving the
     // one-frame FDP sprite lag.
     const VideoRam vram{m.graphics, m.control, m.frame + 1};
-    // Render-only sprite presentation (groups/splices) valid for this decode only.
     SpritePresentation presentation;
     const bool have_presentation = m.sprites && m.sprites->active();
     if (have_presentation) {
