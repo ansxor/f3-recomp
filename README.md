@@ -2,6 +2,8 @@
 
 Static recompilation+runtime for Taito F3 games into native C.
 
+![Screenshot of Land Maker running](./docs/screenshot.png)
+
 ## Building
 
 > [!NOTE]
