@@ -157,8 +157,6 @@ private:
     bool m_reg_trails = false;
     bool m_reg_bank = false;
 
-    // Render-only splice view of the submitted/current lists (never serialized, so snapshots and
-    // CRCs match the canonical decode). Valid only when the last decode had splices or tagged real entries.
     const SpritePresentation *m_presentation = nullptr;
     std::vector<SceneSprite> m_presented_submitted, m_presented_current;
     size_t m_presented_submitted_count = 0, m_presented_current_count = 0;

@@ -1,11 +1,3 @@
-"""Emit-unit declarations ([[video.emit_units]], [video.frame_writers]).
-
-A unit is a span of game code that draws one object/record into sprite RAM.
-This module is the single parser for the schema: recomp/compile/sprite_units.py
-renders the C/C++ headers from it and recomp/generate.py plants the hooks and
-the digest guard from it, so both sides always agree on ids and PCs.
-"""
-
 from __future__ import annotations
 
 import re
@@ -13,14 +5,12 @@ import zlib
 from dataclasses import dataclass
 
 REGISTERS = tuple(f"d{i}" for i in range(8)) + tuple(f"a{i}" for i in range(7))
-OWNERS = ("unit", "writer")
-_UNIT_KEYS = {"name", "start", "end", "unit", "size", "owner"}
+_UNIT_KEYS = {"name", "start", "end", "unit", "size"}
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 # Names the generated namespace already defines, plus C++ keywords that a plain
 # `inline constexpr EmitUnit <name>` would not survive.
 _RESERVED = {
     "all",
-    "frame_writers",
     "digest",
     "detail",
     "alignas",
@@ -98,13 +88,11 @@ class EmitUnitSpec:
     ends: tuple[int, ...]
     reg: str
     size: int
-    owner: str
 
 
 @dataclass(frozen=True)
 class SpriteUnitsSpec:
     units: tuple[EmitUnitSpec, ...]
-    frame_writers: tuple[tuple[int, int], ...]
 
     def hook_pcs(self) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
         """(enter, exit) maps: PC -> unit ids, in declaration order."""
@@ -147,7 +135,9 @@ def parse_sprite_units(config: dict) -> SpriteUnitsSpec:
             raise ValueError(f"video.emit_units[{index}] must be a table")
         unknown = set(raw) - _UNIT_KEYS
         if unknown:
-            raise ValueError(f"video.emit_units[{index}]: unknown keys {sorted(unknown)}")
+            raise ValueError(
+                f"video.emit_units[{index}]: unknown keys {sorted(unknown)} (allowed: {sorted(_UNIT_KEYS)})"
+            )
         for key in ("name", "start", "end", "unit"):
             if key not in raw:
                 raise ValueError(f"video.emit_units[{index}]: missing '{key}'")
@@ -173,39 +163,18 @@ def parse_sprite_units(config: dict) -> SpriteUnitsSpec:
         size = raw.get("size", 0)
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             raise ValueError(f"{where}: size must be a non-negative integer")
-        owner = raw.get("owner", "unit")
-        if owner not in OWNERS:
-            raise ValueError(f"{where}: owner must be 'unit' or 'writer', got {owner!r}")
-        units.append(EmitUnitSpec(len(units), name, starts, ends, reg, size, owner))
+        units.append(EmitUnitSpec(len(units), name, starts, ends, reg, size))
 
-    writers_table = video.get("frame_writers", {})
-    if not isinstance(writers_table, dict) or set(writers_table) - {"ranges"}:
-        raise ValueError("video.frame_writers must be a table with only 'ranges'")
-    writers: list[tuple[int, int]] = []
-    for index, raw in enumerate(writers_table.get("ranges", [])):
-        if (
-            not isinstance(raw, list)
-            or len(raw) != 2
-            or any(isinstance(v, bool) or not isinstance(v, int) for v in raw)
-        ):
-            raise ValueError(f"video.frame_writers.ranges[{index}] must be [first, last]")
-        first, last = raw
-        # `last` is inclusive and may name the final byte of a word.
-        _pc(first, f"frame writer range {index} first")
-        if last < first or last >= _MAX_PC:
-            raise ValueError(f"frame writer range {index}: invalid [{first:#x}, {last:#x}]")
-        writers.append((first, last))
-    return SpriteUnitsSpec(tuple(units), tuple(writers))
+    return SpriteUnitsSpec(tuple(units))
 
 
 def canonical(spec: SpriteUnitsSpec) -> str:
+    """Stable text hashed into the digest: units only (name/start/end/reg/size)."""
     units = ";".join(
-        f"{u.name}|{','.join(f'{pc:x}' for pc in u.starts)}|"
-        f"{','.join(f'{pc:x}' for pc in u.ends)}|{u.reg}|{u.size}|{u.owner}"
+        f"{u.name}|{','.join(f'{pc:x}' for pc in u.starts)}|{','.join(f'{pc:x}' for pc in u.ends)}|{u.reg}|{u.size}"
         for u in spec.units
     )
-    writers = ",".join(f"{a:x}-{b:x}" for a, b in spec.frame_writers)
-    return f"units:{units}\nframe_writers:{writers}\n"
+    return f"units:{units}\n"
 
 
 def digest(spec: SpriteUnitsSpec) -> int:
@@ -262,16 +231,11 @@ def render_cpp_header(spec: SpriteUnitsSpec) -> str:
         out.append(
             f'inline constexpr EmitUnit {unit.name}{{{unit.id}u, "{unit.name}", '
             f"detail::{unit.name}_starts, detail::{unit.name}_ends, "
-            f"UnitRegister::{unit.reg.upper()}, {unit.size}u, "
-            f"UnitOwner::{unit.owner.capitalize()}}};\n"
+            f"UnitRegister::{unit.reg.upper()}, {unit.size}u}};\n"
         )
     out.append(
         f"\ninline constexpr std::array<const EmitUnit *, {len(spec.units)}> all{{"
         f"{_array(spec.units, lambda u: '&' + u.name)}}};\n"
-    )
-    out.append(
-        f"inline constexpr std::array<PcRange, {len(spec.frame_writers)}> "
-        f"frame_writers{{{_array(spec.frame_writers, lambda r: f'PcRange{{0x{r[0]:x}u, 0x{r[1]:x}u}}')}}};\n"
     )
     out.append("inline constexpr uint32_t digest = F3_SPRITE_UNITS_DIGEST;\n\n")
     out.append(

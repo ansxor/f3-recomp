@@ -82,7 +82,10 @@ set(F3RT_CORE_SOURCES
     runtime/debug/profile.cpp
     runtime/input.cpp
     runtime/debug/input_script.cpp
-    runtime/sprites/units.cpp
+    runtime/sprites/groups.cpp
+    runtime/sprites/replay.cpp
+    runtime/sprites/sandbox.cpp
+    runtime/sprites/sprite_system.cpp
     runtime/sprites/behaviours.cpp
     runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
@@ -150,6 +153,9 @@ target_include_directories(f3rt
     PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}"
     PRIVATE runtime "${CMAKE_CURRENT_SOURCE_DIR}"
 )
+if(F3_GENERATED_DIR)
+    target_include_directories(f3rt PRIVATE "${F3_GENERATED_DIR}")
+endif()
 
 # Header-only sprite behaviour registry: sprites/behaviours.cpp includes it directly
 # so static registrars cannot be dead-stripped from the archive.
@@ -374,11 +380,8 @@ if(BUILD_TESTING)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
     endif()
 
-    # Emit-unit replay check (needs the game ROMs and a game that declares emit units).
-    file(READ "${F3_GAME_CONFIG}" F3_GAME_CONFIG_TEXT)
-    string(FIND "${F3_GAME_CONFIG_TEXT}" "[[video.emit_units]]" F3_EMIT_UNITS_POS)
-    if(F3_ROM_DIR AND NOT F3_EMIT_UNITS_POS EQUAL -1)
-        add_test(NAME sprite-units COMMAND f3rt-test-sprites --gtest_filter=SpriteUnits.RomReplayAndInvariants)
+    if(F3_ROM_DIR)
+        add_test(NAME sprite-groups COMMAND f3rt-test-sprites --gtest_filter=SpriteSystem.RomGroupCoverage)
     endif()
 
     if(TARGET f3rt-ui)

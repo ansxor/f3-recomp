@@ -1780,7 +1780,7 @@ def cmd_run(args) -> None:
         out.done()
         code = code or 0
     for line in text.splitlines():  # game diagnostics worth seeing without opening run.txt
-        if re.match(r"^(flicker_shadows|DISCOVERY|warning|error)\b", line, re.I):
+        if re.match(r"^(sprite_groups|sprite groups|DISCOVERY|warning|error)\b", line, re.I):
             print(f"  {line}")
     if code:
         errors = [line for line in text.splitlines() if re.search(r"cannot|error|fail|missing", line, re.I)]

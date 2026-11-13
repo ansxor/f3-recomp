@@ -42,9 +42,9 @@ struct DecodedSpriteEntry {
     uint8_t color;
     bool flip_x, flip_y;
     uint8_t pri;
-    uint64_t identity;
-    uint64_t object;
-    uint8_t flags;
+    uint64_t group;
+    int32_t group_x, group_y;
+    uint32_t group_pc;
 };
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)
