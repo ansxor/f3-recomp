@@ -408,7 +408,7 @@ class Run:
 
     @property
     def summary(self) -> dict[str, str]:
-        """key=value pairs of the game's summary lines (frame_crc, cycles, video_write, ...)."""
+        """key=value pairs of the game's summary lines (frame_crc, steps, video_write, ...)."""
         return {k: v for line in self.output.splitlines() for k, v in re.findall(r"(\w+)=(\S+)", line)}
 
     def _file(self, frame: int, name: str) -> bytes:

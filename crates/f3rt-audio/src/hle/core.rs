@@ -196,8 +196,8 @@ impl Core {
             }
             let mut frame_tick = self.render_state.tick;
             let mut remainder = self.render_state.tick_remainder;
-            for f in 0..n {
-                self.render_state.frame_ticks[f] = frame_tick;
+            for slot in &mut self.render_state.frame_ticks[..n] {
+                *slot = frame_tick;
                 remainder += MAIN_CLOCK;
                 frame_tick += u64::from(remainder / SAMPLE_RATE);
                 remainder %= SAMPLE_RATE;

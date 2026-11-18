@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <sstream>
+#include <utility>
 
 namespace f3rt {
 Machine::AudioLease::~AudioLease() {
@@ -90,7 +91,7 @@ const std::vector<uint32_t> &Machine::native_pixels() const {
     if (game_video) game_video->materialize_native();
     return m_pixels;
 }
-uint64_t Machine::raster_cycle(uint64_t pixels) const {
+uint64_t Machine::raster_time(uint64_t pixels) const {
     return (pixels * MAIN_CLOCK + PIXEL_CLOCK - 1) / PIXEL_CLOCK;
 }
 void Machine::bind_cpu_windows() {
@@ -102,10 +103,10 @@ void Machine::bind_cpu_windows() {
 void Machine::reset_devices() {
     cpu.dispatch_deadline = 0;
     f3rt_audio_set_reset(true);
-    f3rt_eeprom_pins(0, cpu.cycles);
+    f3rt_eeprom_pins(0);
     pending_irqs = 0;
     m_irq3_at = UINT64_MAX;
-    m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
+    m_watchdog_at = m_time + 3ull * MAIN_CLOCK;
 }
 void Machine::reset() {
     if (sprites) sprites->reset();
@@ -114,9 +115,10 @@ void Machine::reset() {
     cpu.runtime = this;
     bind_cpu_windows();
     f3rt_eeprom_reset();
-    frame = m_hardware_cycles = 0;
+    frame = m_time = 0;
+    m_idle = false;
     // Reference beam time zero is VBSTART, not scanline zero.
-    m_next_vblank = raster_cycle(FRAME_PIXELS);
+    m_next_vblank = raster_time(FRAME_PIXELS);
     reset_devices();
     f3rt_audio_set_reset(true);
     if (game_video) game_video->reset();
@@ -134,13 +136,13 @@ void Machine::reset_main_cpu() {
     cpu.a[7] = read32(0);
     cpu.ssp = cpu.a[7];
     cpu.pc = read32(4);
-    cpu.cycles += 4; // RESET_CYCLES for the 68EC020 (Musashi CYC_EXCEPTION[EXCEPTION_RESET]).
+    m_slice_end = cpu.steps + SLICE_STEPS;
 }
 uint32_t Machine::input_word(unsigned index) const {
     if (index >= inputs.size()) return 0xffffffff;
     uint32_t value = inputs[index];
     if (index == 0) {
-        const uint32_t io = (system_inputs & 0xfe) | unsigned(f3rt_eeprom_output(cpu.cycles));
+        const uint32_t io = (system_inputs & 0xfe) | unsigned(f3rt_eeprom_output());
         value = (value & 0xffff) | (io << 16) | (io << 24);
     } else if (index == 1 || index == 5) {
         value = (value & 0xffff) | (uint32_t(coin_word[index == 5]) << 16);
@@ -209,9 +211,9 @@ void Machine::write8(uint32_t a, uint8_t v) {
         f3rt_audio_set_reset(a >= SOUND_RESET_ASSERT);
         return;
     }
-    // Watchdog deadline: 3 seconds.
+    // Watchdog deadline: 3 seconds of device time.
     if (a >= WATCHDOG && a < WATCHDOG + 4) {
-        m_watchdog_at = cpu.cycles + 3ull * MAIN_CLOCK;
+        m_watchdog_at = m_time + 3ull * MAIN_CLOCK;
         return;
     }
     if (a == COIN_BANK0 || a == COIN_BANK1) {
@@ -224,7 +226,7 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a == EEPROM_PINS) {
-        f3rt_eeprom_pins(v, cpu.cycles);
+        f3rt_eeprom_pins(v);
         return;
     }
     if (sound_bankswitch && a >= MAIN_SOUND_BANKSWITCH_BASE && a < MAIN_SOUND_BANKSWITCH_END) {
@@ -278,32 +280,39 @@ void Machine::write32(uint32_t a, uint32_t v) {
     write16(a, uint16_t(v >> 16));
     write16(a + 2, uint16_t(v));
 }
-void Machine::advance_to(uint64_t cycles) {
-    if (cycles < m_hardware_cycles) throw std::runtime_error("CPU cycle clock moved backwards");
-    while (m_hardware_cycles < cycles) {
-        const uint64_t event = std::min(m_next_vblank, m_irq3_at);
-        const uint64_t end = std::min(cycles, event);
-        f3rt_audio_advance(uint32_t(end - m_hardware_cycles));
-        m_hardware_cycles = end;
-        if (m_hardware_cycles == m_next_vblank) {
-            if (game_video) game_video->render_frame();
-            else if (inspect_scanout) inspect_scanout(m_pixels);
-            pending_irqs |= 1u << 2;
-            m_irq3_at = m_next_vblank + 10000;
-            ++frame;
-            m_next_vblank = raster_cycle((frame + 1) * FRAME_PIXELS);
-            if (sprites) sprites->frame_end();
-        }
-        if (m_hardware_cycles == m_irq3_at) {
-            pending_irqs |= 1u << 3;
-            m_irq3_at = UINT64_MAX;
-        }
+void Machine::idle() {
+    m_idle = true;
+    cpu.dispatch_deadline = 0;
+}
+// Advance device time to the next event and raise it. The watchdog is checked
+// whenever time moves, so it fires at the first event past its deadline.
+void Machine::next_event() {
+    const uint64_t at = std::min(m_next_vblank, m_irq3_at);
+    f3rt_audio_advance(uint32_t(at - m_time));
+    m_time = at;
+    if (m_time == m_next_vblank) {
+        if (game_video) game_video->render_frame();
+        else if (inspect_scanout) inspect_scanout(m_pixels);
+        pending_irqs |= 1u << 2;
+        m_irq3_at = m_next_vblank + IRQ3_DELAY;
+        ++frame;
+        m_next_vblank = raster_time((frame + 1) * FRAME_PIXELS);
+        if (sprites) sprites->frame_end();
+    } else {
+        pending_irqs |= 1u << 3;
+        m_irq3_at = UINT64_MAX;
     }
+    if (m_time >= m_watchdog_at) {
+        reset_devices();
+        f3rt_audio_set_reset(true);
+        reset_main_cpu();
+    }
+    m_slice_end = cpu.steps + SLICE_STEPS;
 }
 int Machine::boundary() {
     cpu.dispatch_deadline = 0;
-    advance_to(cpu.cycles);
     if (cpu.halted) return 1;
+    const bool idle = std::exchange(m_idle, false);
     for (int level = 7; level > int((cpu.sr >> 8) & 7); --level) {
         if (pending_irqs & (1u << level)) {
             pending_irqs &= uint8_t(~(1u << level));
@@ -324,19 +333,12 @@ int Machine::boundary() {
             return 1;
         }
     }
-    if (cpu.cycles >= m_watchdog_at) {
-        reset_devices();
-        f3rt_audio_set_reset(true);
-        reset_main_cpu();
+    // A waiting, stopped or long-running CPU moves time to the next device event.
+    if (idle || cpu.stopped || cpu.steps >= m_slice_end) {
+        next_event();
         return 1;
     }
-    const uint64_t next_event = std::min({m_next_vblank, m_irq3_at, m_watchdog_at});
-    if (cpu.stopped) {
-        cpu.cycles = next_event;
-        advance_to(cpu.cycles);
-        return 1;
-    }
-    cpu.dispatch_deadline = next_event;
+    cpu.dispatch_deadline = m_slice_end;
     return 0;
 }
 int Machine::fallback() {
@@ -428,16 +430,18 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     cpu_st.cc_op = cpu.cc_op;
     cpu_st.cc_width = cpu.cc_width;
     cpu_st.cc_mask = cpu.cc_mask;
-    cpu_st.cycles = cpu.cycles;
+    cpu_st.steps = cpu.steps;
     cpu_st.dispatch_deadline = cpu.dispatch_deadline;
     writer.write(cpu_st);
 
     // 2. Machine clocks, scheduler, inputs & coins
     CanonicalMachineClocks mcl{};
-    mcl.hardware_cycles = m_hardware_cycles;
+    mcl.time = m_time;
     mcl.next_vblank = m_next_vblank;
     mcl.irq3_at = m_irq3_at;
     mcl.watchdog_at = m_watchdog_at;
+    mcl.slice_end = m_slice_end;
+    mcl.idle = m_idle ? 1 : 0;
     mcl.frame = frame;
     mcl.pending_irqs = pending_irqs;
     mcl.timer_control = timer_control;
@@ -513,17 +517,19 @@ void Machine::load_state(std::span<const uint8_t> src) {
     cpu.cc_width = cpu_st.cc_width;
     cpu.cc_mask = cpu_st.cc_mask;
     cpu.cc_pad = 0;
-    cpu.cycles = cpu_st.cycles;
+    cpu.steps = cpu_st.steps;
     cpu.dispatch_deadline = cpu_st.dispatch_deadline;
     cpu.runtime = this;
 
     // 2. Machine clocks, scheduler, inputs & coins
     CanonicalMachineClocks mcl;
     reader.read(mcl);
-    m_hardware_cycles = mcl.hardware_cycles;
+    m_time = mcl.time;
     m_next_vblank = mcl.next_vblank;
     m_irq3_at = mcl.irq3_at;
     m_watchdog_at = mcl.watchdog_at;
+    m_slice_end = mcl.slice_end;
+    m_idle = mcl.idle != 0;
     frame = mcl.frame;
     pending_irqs = mcl.pending_irqs;
     timer_control = mcl.timer_control;

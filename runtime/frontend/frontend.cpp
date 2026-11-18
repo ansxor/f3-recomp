@@ -1843,7 +1843,7 @@ int main(int argc, char **argv) try {
               << " frame_crc=0x"
               << f3rt::crc32(reinterpret_cast<const uint8_t *>(m.native_pixels().data()),
                              m.native_pixels().size() * 4)
-              << std::dec << " cycles=" << m.cpu.cycles << " native_blocks=" << m.native_blocks
+              << std::dec << " steps=" << m.cpu.steps << " native_blocks=" << m.native_blocks
               << " audio_frames=" << audio_frames << " audio_peak=" << audio_peak
               << " nonzero_samples=" << nonzero_samples << '\n';
     if (compare_gpu)

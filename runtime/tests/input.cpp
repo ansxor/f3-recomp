@@ -10,10 +10,13 @@ using f3test::fixture;
 
 namespace {
 using Words = std::array<f3rt::LocalInputWord, f3rt::LOCAL_PLAYER_COUNT>;
-// The fixture ROM has no recompiled code: one native block at its reset PC stands in for the game and spins
+// The fixture ROM has no recompiled code: one native block at its reset PC stands in for the game and idles
 // until the frame ends.
 constexpr uint32_t FIXTURE_RESET_PC = 0x100;
-void spin(f3_cpu *cpu) { cpu->cycles += 64; }
+void spin(f3_cpu *cpu) {
+    cpu->steps += 1;
+    f3_idle(cpu);
+}
 const f3_block SPIN_BLOCK[] = {{FIXTURE_RESET_PC, spin}};
 // Input MMIO lines, as offsets from f3rt::IO_BASE.
 constexpr uint32_t IO_SYSTEM = f3rt::IO_BASE;

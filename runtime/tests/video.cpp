@@ -1304,7 +1304,8 @@ struct BenchWindow {
     unsigned first, last, stride;
 };
 constexpr std::array<BenchWindow, 6> BENCH_WINDOWS{{
-    {"portrait cross-fade", 1444, 1522, 1},
+    // The event scheduler moves the attract-mode cross-fade earlier.
+    {"portrait cross-fade", 1323, 1471, 1},
     {"attract to tutorial", 4844, 5045, 1},
     {"map and VS screens", 14001, 14036, 1},
     {"gameplay priority ties", 15399, 15403, 1},

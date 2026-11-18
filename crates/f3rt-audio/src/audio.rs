@@ -265,8 +265,8 @@ impl Audio {
         p.pcm().close_frame(frames);
     }
 
-    pub fn advance(&mut self, main_cycles: u32) {
-        self.clock += u64::from(main_cycles);
+    pub fn advance(&mut self, ticks: u32) {
+        self.clock += u64::from(ticks);
     }
 
     /// Continuous effective device time, not the caller's main-block endpoint.

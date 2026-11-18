@@ -21,7 +21,7 @@ typedef int32_t f3rt_eeprom_status;
 
 #define F3RT_EEPROM_WORDS 64u
 #define F3RT_EEPROM_FILE_BYTES 128u
-#define F3RT_EEPROM_STATE_SIZE 157u
+#define F3RT_EEPROM_STATE_SIZE 149u
 
 /* Initializes the EEPROM with all 64 words set to 0xffff. */
 f3rt_eeprom_status f3rt_eeprom_init(void);
@@ -32,10 +32,10 @@ void f3rt_eeprom_seed_be_bytes(const uint8_t *bytes);
 
 /* Resets serial-interface state; keeps the stored words. */
 void f3rt_eeprom_reset(void);
-/* Drives CS/CLK/DI (bits 4/3/2 of `pins`) at main-clock tick `now`. */
-void f3rt_eeprom_pins(uint8_t pins, uint64_t now);
-/* DO pin level at main-clock tick `now` (reports ready/busy when CS is polled). */
-bool f3rt_eeprom_output(uint64_t now);
+/* Drives CS/CLK/DI (bits 4/3/2 of `pins`). Programming completes instantly. */
+void f3rt_eeprom_pins(uint8_t pins);
+/* DO pin level (reports ready when CS is polled after programming). */
+bool f3rt_eeprom_output(void);
 
 /* 128-byte big-endian file IO. A missing file on load is a no-op returning OK. */
 f3rt_eeprom_status f3rt_eeprom_load_file(const char *path);

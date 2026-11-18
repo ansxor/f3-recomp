@@ -1,4 +1,4 @@
-"""Idle-loop fast-forward: shape recognition and exact equivalence with plain native execution."""
+"""Idle-loop yields: shape recognition, and yielding never changes what native execution computes."""
 
 import os
 import subprocess
@@ -60,8 +60,7 @@ void f3_profile_cold_abort(unsigned region, uint32_t rom_crc, uint32_t address) 
 #define RAM_BASE 0x400000u
 static uint8_t ram[0x1000];
 static uint32_t offset(uint32_t a) { assert(a - RAM_BASE < sizeof ram); return a - RAM_BASE; }
-static uint64_t reads;
-uint8_t f3_read8(f3_cpu *cpu, uint32_t a) { (void)cpu; ++reads; return ram[offset(a)]; }
+uint8_t f3_read8(f3_cpu *cpu, uint32_t a) { (void)cpu; return ram[offset(a)]; }
 uint16_t f3_read16(f3_cpu *cpu, uint32_t a) { return (uint16_t)(f3_read8(cpu, a) << 8 | f3_read8(cpu, a + 1)); }
 uint32_t f3_read32(f3_cpu *cpu, uint32_t a) { return (uint32_t)f3_read16(cpu, a) << 16 | f3_read16(cpu, a + 2); }
 void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) { (void)cpu; ram[offset(a)] = v; }
@@ -72,6 +71,8 @@ uint8_t *f3_ram(f3_cpu *cpu, uint32_t a, uint32_t size) {
     a -= RAM_BASE;
     return a < sizeof ram && size <= sizeof ram - a ? ram + a : NULL;
 }
+static int idle;
+void f3_idle(f3_cpu *cpu) { idle = 1; cpu->dispatch_deadline = 0; }
 int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc) { (void)cpu; (void)size; (void)crc; return 1; }
 static const f3_block *blocks;
 static size_t block_count;
@@ -98,15 +99,14 @@ static uint32_t crc(const void *data, size_t size) {
     return h;
 }
 
+/* With hooks (YIELD=1) a round runs until its budget or an idle yield and prints
+ * the step count it stopped at; without hooks a round runs to exactly that count,
+ * read back from stdin. Both print the same state line. */
 int main(void) {
     f3_cpu base = {0};
     assert(f3_generated_register(&base));
-    for (uint32_t n = 0; n < 300; ++n) {
-        uint32_t x = 0x12345678u + n, expected = x;
-        for (uint32_t i = 0; i < n; ++i) expected = 7u * expected + 5u;
-        assert(f3_affine_power(x, 7u, 5u, n) == expected);
-    }
     static const uint32_t heads[] = {0x400, 0x410, 0x420, 0x440};
+    unsigned yields = 0;
     for (unsigned round = 0; round < 6000; ++round) {
         f3_cpu cpu = base;
         for (unsigned i = 0; i < sizeof ram; ++i) ram[i] = (uint8_t)random32();
@@ -120,18 +120,30 @@ int main(void) {
         cpu.cc_op = (uint8_t)(random32() % 5);
         cpu.cc_src = random32(); cpu.cc_dst = random32(); cpu.cc_result = random32();
         cpu.cc_width = (uint8_t)(1u << (random32() % 3)); cpu.cc_mask = (uint8_t)random32();
-        cpu.cycles = random32() & 0xffff;
+        cpu.steps = random32() & 0xffff;
         if (random32() & 3) { ram[0x110] = 0; ram[0x120] = ram[0x121] = 0; }
         if (random32() % 7 == 0) ram[0x110] = (uint8_t)random32();
-        const uint64_t budget = random32() % (round % 3 == 0 ? 150 : 4000) + 1;
-        cpu.dispatch_deadline = cpu.cycles + budget;
-        while (cpu.cycles < cpu.dispatch_deadline && dispatch(&cpu)) {}
-        printf("%u pc=%" PRIx32 " cyc=%" PRIu64 " sr=%" PRIx16 " op=%u width=%u src=%" PRIx32 " dst=%" PRIx32
+        const uint64_t start = cpu.steps;
+        uint64_t deadline = start + random32() % (round % 3 == 0 ? 40 : 1000) + 1;
+#if YIELD
+        idle = 0;
+        cpu.dispatch_deadline = deadline;
+        while (!idle && cpu.steps < cpu.dispatch_deadline && dispatch(&cpu)) {}
+        if (idle) ++yields;
+        if (head == 0x400) assert(idle && cpu.steps - start <= 1); /* bra * waits at once */
+        printf("%" PRIu64 " ", cpu.steps);
+#else
+        assert(scanf("%" SCNu64, &deadline) == 1);
+        cpu.dispatch_deadline = deadline;
+        while (cpu.steps < cpu.dispatch_deadline && dispatch(&cpu)) {}
+        printf("%" PRIu64 " ", cpu.steps);
+#endif
+        printf("%u pc=%" PRIx32 " sr=%" PRIx16 " op=%u width=%u src=%" PRIx32 " dst=%" PRIx32
                " res=%" PRIx32 " mask=%u a7=%" PRIx32 " d=%" PRIx32 ",%" PRIx32 ",%" PRIx32 " ram=%" PRIx32 "\n",
-               round, cpu.pc, cpu.cycles, cpu.sr, cpu.cc_op, cpu.cc_width, cpu.cc_src, cpu.cc_dst, cpu.cc_result,
+               round, cpu.pc, cpu.sr, cpu.cc_op, cpu.cc_width, cpu.cc_src, cpu.cc_dst, cpu.cc_result,
                cpu.cc_mask, cpu.a[7], cpu.d[0], cpu.d[1], cpu.d[2], crc(ram, sizeof ram));
     }
-    fprintf(stderr, "%" PRIu64 "\n", reads);
+    fprintf(stderr, "%u\n", yields);
     return 0;
 }
 """
@@ -142,14 +154,10 @@ class IdleLoopShapeTests(unittest.TestCase):
         _, discovery = _synthetic(CHUNKS)
         loops = find_idle_loops(discovery.instructions, lambda pc: True)
         self.assertEqual({pc: shape for pc, (shape, _) in loops.items()}, {0x400: "spin", 0x410: "poll", 0x420: "poll", 0x440: "affine"})
-        self.assertEqual(loops[0x400][1], ["F3_IDLE_SPIN(cpu, 10u);"])
-        self.assertEqual(
-            loops[0x410][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0, 13u);"]
-        )
-        self.assertEqual(loops[0x420][1], ["F3_IDLE_POLL_BCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(32)), 2, 6, 13u);"])
-        self.assertEqual(
-            loops[0x440][1], ["F3_IDLE_AFFINE_CALL(cpu, (uint32_t)(cpu->a[5] + (int32_t)(48)), 8u, 7u, 5u, 103u);"]
-        )
+        self.assertEqual(loops[0x400][1], ["F3_IDLE(cpu);"])
+        self.assertEqual(loops[0x410][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0);"])
+        self.assertEqual(loops[0x420][1], ["F3_IDLE_POLL_BCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(32)), 2, 6);"])
+        self.assertEqual(loops[0x440][1], ["F3_IDLE(cpu);"])
 
     def test_instructions_that_are_not_plain_native_code_keep_their_loop_unmodified(self):
         _, discovery = _synthetic(CHUNKS)
@@ -160,9 +168,7 @@ class IdleLoopShapeTests(unittest.TestCase):
     def test_poll_counter_is_the_dbcc_register(self):
         instructions = {insn.address: insn for insn in _decoder().disasm(bytes.fromhex("4a2d001056c9fffa"), 0x400)}
         loops = find_idle_loops(instructions, lambda pc: True)
-        self.assertEqual(
-            loops[0x400][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 1, 13u);"]
-        )
+        self.assertEqual(loops[0x400][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 1);"])
 
     def test_rejects_polls_whose_address_can_change_inside_the_loop(self):
         for code in (
@@ -175,7 +181,7 @@ class IdleLoopShapeTests(unittest.TestCase):
 
 
 class IdleLoopEquivalenceTests(unittest.TestCase):
-    def test_fast_forward_matches_plain_execution_at_every_deadline_phase(self):
+    def test_yield_stops_where_plain_execution_would_be_after_the_same_steps(self):
         rom, discovery = _synthetic(CHUNKS)
         root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as directory:
@@ -184,9 +190,9 @@ class IdleLoopEquivalenceTests(unittest.TestCase):
             self.assertEqual(report["idle_loops"], {"0x000400": "spin", "0x000410": "poll", "0x000420": "poll", "0x000440": "affine"})
             driver = output / "driver.c"
             driver.write_text(DRIVER)
-            results = []
-            for name, extra in (("fast", []), ("plain", ["-DF3_PROFILE_INSTRUMENT=1"])):
-                executable = output / name
+            executables = {}
+            for name, extra in (("yield", ["-DYIELD=1"]), ("plain", ["-DYIELD=0", "-DF3_PROFILE_INSTRUMENT=1"])):
+                executables[name] = output / name
                 subprocess.run(
                     [
                         os.environ.get("CC", "cc"),
@@ -205,16 +211,18 @@ class IdleLoopEquivalenceTests(unittest.TestCase):
                         str(driver),
                         *(str(output / source) for source in report["source_files"]),
                         "-o",
-                        str(executable),
+                        str(executables[name]),
                     ],
                     check=True,
                 )
-                run = subprocess.run([str(executable)], check=True, capture_output=True, text=True)
-                results.append((run.stdout, int(run.stderr)))
-            (fast, fast_reads), (plain, plain_reads) = results
-            self.assertEqual(fast.count("\n"), 6000)
-            self.assertEqual(fast, plain)
-            self.assertLess(fast_reads * 4, plain_reads)
+            yielded = subprocess.run([str(executables["yield"])], check=True, capture_output=True, text=True)
+            stops = "\n".join(line.split(" ", 1)[0] for line in yielded.stdout.splitlines())
+            plain = subprocess.run(
+                [str(executables["plain"])], input=stops, check=True, capture_output=True, text=True
+            )
+            self.assertEqual(yielded.stdout.count("\n"), 6000)
+            self.assertEqual(yielded.stdout, plain.stdout)
+            self.assertGreater(int(yielded.stderr), 6000 // 4)
 
 
 if __name__ == "__main__":

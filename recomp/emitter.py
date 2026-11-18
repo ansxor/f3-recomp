@@ -9,7 +9,9 @@ from __future__ import annotations
 import capstone.m68k as m68k
 from capstone import CsInsn
 
-from .timing import instruction_cycles
+# Every completed instruction counts one step. Steps bound how long the CPU may
+# run before the scheduler forces the next device event; they are not timing.
+STEP = "cpu->steps += 1u;"
 
 # Condition code map for Bcc, DBcc, Scc
 COND_MAP = {
@@ -492,7 +494,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
     f3_read*/f3_write* ABI callbacks; keep untouched bits of a partial data
     register; sign-extend where the instruction requires it; keep X current
     while NZVC stays pending; f3_cc_flush before any call that needs canonical
-    SR; update pc and cumulative cycles on normal completion; return after an
+    SR; update pc and count one step on normal completion; return after an
     exception or terminal control op. Use unsigned arithmetic for guest
     wraparound and guard host division/shift edge cases. A helper that changes
     only Z must materialize pending flags first; a full NZVC producer can
@@ -518,7 +520,6 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
     mnem = _get_base_mnemonic(insn)
     size = _get_size(insn)
     next_pc = insn.address + insn.size
-    cycles = instruction_cycles(insn, _pc_base, _ea_extension_bytes)
 
     if mnem == "reset":
         return [
@@ -526,7 +527,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"if (!(cpu->sr & 0x2000u)) {{ f3_exception(cpu, 8, 0x{insn.address:x}u); return; }}",
             "f3_reset_devices(cpu);",
             f"cpu->pc = 0x{next_pc:x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem == "chk":
@@ -547,7 +548,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 f"    f3_exception(cpu, 6, 0x{next_pc:x}u); return;",
                 "}",
                 f"cpu->pc = 0x{next_pc:x}u;",
-                f"cpu->cycles += {cycles};",
+                STEP,
             ]
         )
 
@@ -581,7 +582,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "}",
             *ea.post_step,
             f"cpu->pc = 0x{next_pc:x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem in ("abcd", "sbcd", "pack", "unpk"):
@@ -654,7 +655,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             next_pc = insn.address + 4
         else:
             return None
-        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     if mnem == "movep":
         register = (opcode >> 9) & 7
@@ -674,7 +675,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 stmts.append(f"value = (value << 8) | f3_read8(cpu, ea + {byte * 2}u);")
             high = f"(cpu->d[{register}] & 0xffff0000u) | " if width == 2 else ""
             stmts.append(f"cpu->d[{register}] = {high}value;")
-        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     if mnem == "moves":
         extension = int.from_bytes(insn.bytes[2:4], "big")
@@ -697,9 +698,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 stmts.append(f"{field} = (uint32_t)(int32_t)(int{size * 8}_t)value;")
             else:
                 stmts.append(f"{field} = ({field} & 0x{(~MASK_MAP[size]) & 0xFFFFFFFF:x}u) | value;")
-        # EC020 memory-to-register and long register-to-memory charge two extra.
-        extra = 2 if not store or size == 4 else 0
-        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles} + {extra}u;"]
+        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     if mnem == "cas":
         extension = int.from_bytes(insn.bytes[2:4], "big")
@@ -717,13 +716,12 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "f3_cc_flush(cpu);",
             f"cpu->cc_op = F3_CC_OP_CMP; cpu->cc_src = compared; cpu->cc_dst = value; cpu->cc_result = result; cpu->cc_width = {size};",
             "if (result == 0) {",
-            "    cpu->cycles += 3u;",
             f"    f3_write{size * 8}(cpu, ea, (uint{size * 8}_t)cpu->d[{update}]);",
             "} else {",
             f"    cpu->d[{compare}] = (cpu->d[{compare}] & 0x{~MASK_MAP[size] & 4294967295:x}u) | value;",
             "}",
             f"cpu->pc = 0x{next_pc:x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
         return stmts
 
@@ -745,7 +743,6 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "cpu->cc_dst = result0 ? value0 : value1;",
             "cpu->cc_result = result0 ? result0 : result1;",
             "if (result0 == 0 && result1 == 0) {",
-            "    cpu->cycles += 3u;",
         ]
         for index, extension in enumerate(extensions):
             stmts.append(f"    f3_write{size * 8}(cpu, ea{index}, (uint{size * 8}_t)cpu->d[{(extension >> 6) & 7}]);")
@@ -759,7 +756,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 else f"({field} & 0x{(~MASK_MAP[size]) & 0xFFFFFFFF:x}u) | value{index}"
             )
             stmts.append(f"    {field} = {value};")
-        return [*stmts, "}", f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return [*stmts, "}", f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     if mnem == "tas":
         ea = _decode_ea(insn, ops[0], 1, "tas")
@@ -774,7 +771,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 "cpu->cc_op = F3_CC_OP_LOGIC; cpu->cc_result = original; cpu->cc_width = 1;",
             ]
             + _gen_write(ea, "(original | 0x80u)", 1)
-            + [f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+            + [f"cpu->pc = 0x{next_pc:x}u;", STEP]
         )
 
     if mnem == "trapv" or (mnem.startswith("trap") and mnem[4:] in COND_MAP):
@@ -783,7 +780,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "f3_cc_flush(cpu);",
             f"if (f3_eval_cond(cpu, {condition})) {{ f3_exception(cpu, 7, 0x{next_pc:x}u); return; }}",
             f"cpu->pc = 0x{next_pc:x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem == "movec":
@@ -819,7 +816,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 stmts.append(f"if ({active}) cpu->a[7] = {value}; else {field} = {value};")
             else:
                 stmts.append(f"{field} = {value};")
-        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     if mnem == "rte":
         return [
@@ -835,7 +832,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "    f3_set_sr(cpu, sr);",
             "    if (format != 1) { cpu->pc = pc; break; }",
             "}",
-            f"cpu->cycles += {cycles};",
+            STEP,
             "return;",
         ]
 
@@ -854,7 +851,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             *ea.ea_setup,
             f"f3_bitfield(cpu, {operation}, {int(ea.is_mem)}, {location}, {offset}, {width}, {ext >> 12 & 7});",
             f"cpu->pc = 0x{next_pc:x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem in ("cmp2", "chk2"):
@@ -875,13 +872,13 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         ]
         if ext & 0x800:
             stmts.append(f"if (outside) {{ f3_exception(cpu, 6, 0x{next_pc:x}u); return; }}")
-        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", f"cpu->cycles += {cycles};"]
+        return [*stmts, f"cpu->pc = 0x{next_pc:x}u;", STEP]
 
     # 1. NOP
     if mnem == "nop":
         return [
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 2. Branches: BRA, BSR, Bcc
@@ -891,7 +888,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         target = (insn.address + 2 + ops[0].br_disp.disp) & 0xFFFFFFFF
         return [
             f"cpu->pc = 0x{target:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem == "bsr":
@@ -902,7 +899,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "cpu->a[7] -= 4u;",
             f"f3_write32(cpu, cpu->a[7], 0x{next_pc:08x}u);",
             f"cpu->pc = 0x{target:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem.startswith("b") and mnem[1:] in COND_MAP:
@@ -913,7 +910,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         target = (insn.address + 2 + ops[0].br_disp.disp) & 0xFFFFFFFF
         return [
             f"if (f3_eval_cond(cpu, {cond_val})) {{ cpu->pc = 0x{target:08x}u; }} else {{ cpu->pc = 0x{next_pc:08x}u; }}",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 3. DBcc
@@ -930,11 +927,11 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"if (!f3_eval_cond(cpu, {cond_val})) {{",
             f"    int16_t cnt = (int16_t)(cpu->d[{reg_num}] & 0xffffu) - 1;",
             f"    cpu->d[{reg_num}] = (cpu->d[{reg_num}] & 0xffff0000u) | ((uint16_t)cnt & 0xffffu);",
-            f"    if (cnt != -1) {{ cpu->pc = 0x{target:08x}u; }} else {{ cpu->pc = 0x{next_pc:08x}u; cpu->cycles += 4u; }}",
+            f"    if (cnt != -1) {{ cpu->pc = 0x{target:08x}u; }} else {{ cpu->pc = 0x{next_pc:08x}u; }}",
             "} else {",
             f"    cpu->pc = 0x{next_pc:08x}u;",
             "}",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 4. Scc
@@ -955,7 +952,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             val_s = f"(f3_eval_cond(cpu, {cond_val}) ? 0xffu : 0x00u)"
         stmts.extend(_gen_write(dst_ea, val_s, 1))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 5. JMP & JSR
@@ -967,7 +964,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             return None
         stmts = list(target_ea.ea_setup)
         stmts.append(f"cpu->pc = {target_ea.ea_expr};")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     if mnem == "jsr":
@@ -981,7 +978,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         stmts.append("cpu->a[7] -= 4u;")
         stmts.append(f"f3_write32(cpu, cpu->a[7], 0x{next_pc:08x}u);")
         stmts.append("cpu->pc = jsr_target;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 6. RTS, RTR, RTD
@@ -989,7 +986,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         return [
             "cpu->pc = f3_read32(cpu, cpu->a[7]);",
             "cpu->a[7] += 4u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
             "f3_cc_flush(cpu);",
             "return;",
         ]
@@ -999,7 +996,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         return [
             "cpu->pc = f3_read32(cpu, cpu->a[7]);",
             f"cpu->a[7] = (uint32_t)(cpu->a[7] + 4u + (int32_t)(int16_t)({disp}));",
-            f"cpu->cycles += {cycles};",
+            STEP,
             "f3_cc_flush(cpu);",
             "return;",
         ]
@@ -1012,7 +1009,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             "cpu->cc_op = F3_CC_OP_NONE;",
             "cpu->pc = f3_read32(cpu, cpu->a[7]);",
             "cpu->a[7] += 4u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
             "return;",
         ]
 
@@ -1027,7 +1024,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         stmts = list(src_ea.ea_setup)
         stmts.append(f"cpu->a[{dst_reg}] = {src_ea.ea_expr};")
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     if mnem == "pea":
@@ -1041,7 +1038,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         stmts.append("cpu->a[7] -= 4u;")
         stmts.append("f3_write32(cpu, cpu->a[7], pea_target);")
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 8. LINK & UNLK
@@ -1057,7 +1054,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"cpu->a[{reg_num}] = cpu->a[7];",
             f"cpu->a[7] = (uint32_t)(cpu->a[7] + {cast_disp}({disp}));",
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem == "unlk":
@@ -1069,7 +1066,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"cpu->a[{reg_num}] = f3_read32(cpu, cpu->a[7]);",
             "cpu->a[7] += 4u;" if reg_num != 7 else "(void)cpu;",
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 9. EXT, EXTB, SWAP
@@ -1094,7 +1091,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.append(f"cpu->d[{reg_num}] = (cpu->d[{reg_num}] >> 16) | (cpu->d[{reg_num}] << 16);")
             stmts.extend(_cc_logic(live_out, f"cpu->d[{reg_num}]", 4))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 10. MOVEQ
@@ -1108,7 +1105,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"cpu->d[{dst_reg}] = 0x{(s32 & 0xFFFFFFFF):08x}u;",
             *_cc_logic(live_out, f"cpu->d[{dst_reg}]", 4),
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     if mnem == "exg" and len(ops) == 2:
@@ -1121,7 +1118,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             *_gen_write(left, right.val_expr, 4),
             *_gen_write(right, "exchanged", 4),
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 11. MOVE & MOVEA
@@ -1155,7 +1152,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             if not special and (not dst_ea.is_reg or dst_ea.reg_type in ("d", None)):
                 stmts.extend(_cc_logic(live_out, val_expr, size))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 12. MOVEM
@@ -1198,7 +1195,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                             stmts.append(f"f3_write32(cpu, movem_addr, {val_s});")
                         stmts.append(f"movem_addr += {movem_size}u;")
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         elif ops[1].type == m68k.M68K_OP_REG_BITS:
             # Memory to Registers
@@ -1236,7 +1233,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                         stmts.append(f"{dst_reg} = {val_read};")
                         stmts.append(f"movem_addr += {movem_size}u;")
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         return None
 
@@ -1251,7 +1248,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         stmts.extend(_gen_write(dst_ea, "0u", size))
         stmts.extend(_cc_logic(live_out, "0u", size))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 14. TST
@@ -1265,7 +1262,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         stmts.extend(src_ea.read_stmts)
         stmts.extend(_cc_logic(live_out, src_ea.val_expr, size) or _discard_value(src_ea))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 15. ADD, ADDA, ADDI, ADDQ
@@ -1285,7 +1282,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             cast = "(uint32_t)(int32_t)(int16_t)" if size == 2 else "(uint32_t)"
             stmts.append(f"cpu->a[{dst_reg}] = (uint32_t)(cpu->a[{dst_reg}] + {cast}({src_ea.val_expr}));")
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         else:
             src_ea = _decode_ea(insn, ops[0], size, "src")
@@ -1313,7 +1310,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 )
             )
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
 
     # 16. SUB, SUBA, SUBI, SUBQ
@@ -1333,7 +1330,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             cast = "(uint32_t)(int32_t)(int16_t)" if size == 2 else "(uint32_t)"
             stmts.append(f"cpu->a[{dst_reg}] = (uint32_t)(cpu->a[{dst_reg}] - {cast}({src_ea.val_expr}));")
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         else:
             src_ea = _decode_ea(insn, ops[0], size, "src")
@@ -1361,7 +1358,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 )
             )
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
 
     # Capstone describes CMPM's postincrement operands as registers. Decode
@@ -1379,7 +1376,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 f"(void)f3_read{size * 8}(cpu, cpu->a[{destination}]);",
                 f"cpu->a[{destination}] += {destination_step}u;",
                 f"cpu->pc = 0x{next_pc:08x}u;",
-                f"cpu->cycles += {cycles};",
+                STEP,
             ]
         return [
             f"uint32_t cmp_src = f3_read{size * 8}(cpu, cpu->a[{source}]);",
@@ -1389,7 +1386,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"uint32_t cmp_res = (cmp_dst - cmp_src) & 0x{MASK_MAP[size]:x}u;",
             *_cc_cmp(live_out, "cmp_src", "cmp_dst", "cmp_res", size),
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
         ]
 
     # 17. CMP, CMPA, CMPI
@@ -1415,7 +1412,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             else:
                 stmts.extend(_discard_value(src_ea))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         else:
             src_ea = _decode_ea(insn, ops[0], size, "src")
@@ -1436,7 +1433,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                 stmts.extend(_discard_value(src_ea))
                 stmts.extend(_discard_value(dst_ea))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
 
     # 18. NEG & NEGX
@@ -1471,7 +1468,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             )
             stmts.append("cpu->cc_op = F3_CC_OP_NONE;")
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 19. ADDX & SUBX
@@ -1511,7 +1508,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
         )
         stmts.append("cpu->cc_op = F3_CC_OP_NONE;")
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 20. AND, ANDI, OR, ORI, EOR, EORI, NOT
@@ -1529,7 +1526,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.extend(_gen_write(dst_ea, "not_res", size))
             stmts.extend(_cc_logic(live_out, "not_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         else:
             if len(ops) < 2:
@@ -1549,7 +1546,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
                     stmts.append(f"f3_set_sr(cpu, (uint16_t)(cpu->sr {op_sym} 0x{imm_val:x}u));")
                 stmts.append("cpu->cc_op = F3_CC_OP_NONE;")
                 stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-                stmts.append(f"cpu->cycles += {cycles};")
+                stmts.append(STEP)
                 return stmts
 
             src_ea = _decode_ea(insn, ops[0], size, "src")
@@ -1565,7 +1562,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.extend(_gen_write(dst_ea, "log_res", size))
             stmts.extend(_cc_logic(live_out, "log_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
 
     # 21. Bit Operations: BTST, BSET, BCLR, BCHG
@@ -1597,7 +1594,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.append(f"uint32_t bit_res = {fn_name}(cpu, {dst_ea.val_expr}, {bit_s}, {bit_size});")
             stmts.extend(_gen_write(dst_ea, "bit_res", bit_size))
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 22. Shifts & Rotates: ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
@@ -1615,7 +1612,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.append(f"uint32_t shift_res = {fn}(cpu, {dst_ea.val_expr}, 1u, 2);")
             stmts.extend(_gen_write(dst_ea, "shift_res", 2))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
         else:
             # Register shift
@@ -1632,7 +1629,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.append(f"uint32_t shift_res = {fn}(cpu, {dst_ea.val_expr}, {cnt_s}, {size});")
             stmts.extend(_gen_write(dst_ea, "shift_res", size))
             stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-            stmts.append(f"cpu->cycles += {cycles};")
+            stmts.append(STEP)
             return stmts
 
     # 23. Multiply: MULU, MULS
@@ -1674,7 +1671,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             else:
                 return None
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 24. Divide: DIVU, DIVS
@@ -1713,7 +1710,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             stmts.append(f"cpu->d[{reg_rem}] = div_rem;")
             stmts.append(f"cpu->d[{reg_quot}] = div_quot;")
         stmts.append(f"cpu->pc = 0x{next_pc:08x}u;")
-        stmts.append(f"cpu->cycles += {cycles};")
+        stmts.append(STEP)
         return stmts
 
     # 25. TRAP & STOP
@@ -1736,7 +1733,7 @@ def lower(insn: CsInsn, live_out: int = CCR_ALL) -> list[str] | None:
             f"f3_set_sr(cpu, 0x{imm16:04x}u);",
             "cpu->stopped = 1;",
             f"cpu->pc = 0x{next_pc:08x}u;",
-            f"cpu->cycles += {cycles};",
+            STEP,
             "return;",
         ]
 

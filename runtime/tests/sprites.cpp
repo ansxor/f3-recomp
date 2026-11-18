@@ -79,37 +79,37 @@ void synth_start(f3_cpu *cpu) {
     f3_write16(cpu, f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0xabcd);
     f3_write16(cpu, f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3 + 2, v);
     cpu->pc = UNIT0_BLOCK1;
-    cpu->cycles += 8;
+    cpu->steps += 1;
 }
 
 void synth_mid(f3_cpu *cpu) {
     f3_write16(cpu, f3rt::GRAPHICS_BASE + SPRITE_ENTRY_4, 0x1111);
     cpu->pc = UNIT0_BLOCK2;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 void synth_end(f3_cpu *cpu) {
     if (f3_unit_exit(cpu, 0)) return;
     cpu->pc = UNIT0_RESUME;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 void synth_io(f3_cpu *cpu) {
     f3_unit_enter(cpu, 1);
     cpu->d[2] = f3_read32(cpu, f3rt::IO_BASE);
     cpu->pc = UNIT1_BLOCK1;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 void synth_io_mid(f3_cpu *cpu) {
     cpu->pc = UNIT1_BLOCK2;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 void synth_io_end(f3_cpu *cpu) {
     if (f3_unit_exit(cpu, 1)) return;
     cpu->pc = UNIT1_RESUME;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 constexpr f3rt::SpriteGroupWrite SYNTH_GROUP_WRITES[] = {
@@ -155,12 +155,12 @@ struct SynthSnapshot {
     std::array<uint32_t, 8> d, a;
     uint32_t pc;
     uint16_t sr;
-    uint64_t cycles, native_blocks;
+    uint64_t steps, native_blocks;
     uint32_t crc;
 
     explicit SynthSnapshot(f3rt::Machine &m)
         : ram(m.ram), graphics(m.graphics), palette(m.palette), pc(m.cpu.pc),
-          sr((f3_cc_flush(&m.cpu), m.cpu.sr)), cycles(m.cpu.cycles), native_blocks(m.native_blocks),
+          sr((f3_cc_flush(&m.cpu), m.cpu.sr)), steps(m.cpu.steps), native_blocks(m.native_blocks),
           crc(m.state_crc()) {
         std::copy(std::begin(m.cpu.d), std::end(m.cpu.d), d.begin());
         std::copy(std::begin(m.cpu.a), std::end(m.cpu.a), a.begin());
@@ -168,7 +168,7 @@ struct SynthSnapshot {
 
     bool operator==(const SynthSnapshot &o) const {
         return ram == o.ram && graphics == o.graphics && palette == o.palette && d == o.d &&
-               a == o.a && pc == o.pc && sr == o.sr && cycles == o.cycles &&
+               a == o.a && pc == o.pc && sr == o.sr && steps == o.steps &&
                native_blocks == o.native_blocks && crc == o.crc;
     }
 };
@@ -283,7 +283,7 @@ TEST(SpriteSystem, CompletedReplayLeavesMachineUntouched) {
     const SynthSnapshot at_unit(*m);
     f3_unit_enter(&m->cpu, 0);
     EXPECT_TRUE(SynthSnapshot(*m) == at_unit)
-        << "Sandbox replay leaves RAM, graphics, cycles, native_blocks and CPU untouched";
+        << "Sandbox replay leaves RAM, graphics, steps, native_blocks and CPU untouched";
     const auto report = m->sprites->report();
     EXPECT_TRUE(report.replays == 1 && report.completed == 1 && report.aborted == 0)
         << "Unit replay runs to its end PC";
@@ -312,7 +312,7 @@ TEST(SpriteSystem, BehaviourSplicingNeverChangesEmulatedState) {
     ASSERT_EQ(with_groups->sprites->presentation().splices.size(), 1)
         << "Splice must actually happen";
     EXPECT_TRUE(SynthSnapshot(*with_groups) == *without_snapshot)
-        << "ram, graphics, cpu, cycles, native_blocks and state_crc match without groups";
+        << "ram, graphics, cpu, steps, native_blocks and state_crc match without groups";
 }
 
 TEST(SpriteSystem, BehaviourSplicesReplacementEntries) {

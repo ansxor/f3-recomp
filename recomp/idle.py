@@ -1,24 +1,21 @@
-"""Exact fast-forward of idle loops: loops that burn cycles until a device deadline.
+"""Idle-loop yields: loops that only wait for an interrupt end the scheduling slice.
 
 A game spends most of a frame spinning in a few tiny loops that wait for the next
-interrupt. Natively each iteration costs a handful of guarded instructions (and,
-across subroutine calls, several dispatcher round trips), yet nothing observable
-changes except time. This module recognises three loop shapes from decoded
-instructions alone and plants an ``F3_IDLE_*`` call (recomp/cpu_ops.h) at the loop
-head that skips whole iterations up to the dispatch deadline:
+interrupt. Nothing those loops do is observable except that they keep waiting, so
+the scheduler need not run them at all: the CPU is modelled as infinitely fast,
+and a waiting CPU skips straight to the next device event. This module recognises
+three loop shapes from decoded instructions alone and plants an ``F3_IDLE*`` call
+(recomp/cpu_ops.h) at the loop head that calls f3_idle when the loop would wait:
 
 * spin:   ``bra *``
 * poll:   ``tst.size <ram>`` closed by ``Bcc head`` or ``DBcc Dn,head``
 * affine: ``jsr`` chain that advances one RAM longword by x -> m*x + a
           (an LCG random-number generator) and branches back to the head
 
-Exactness rests on three properties that the shapes guarantee and cpu_ops.h
-enforces at run time: the skipped iterations touch nothing the loop's next
-iteration reads except what the helper advances itself (the poll counter, the
-RNG word); every register, flag and lazy-flag field they write is rewritten by a
-complete iteration from the RNG word or memory alone; and at least one complete
-iteration is left to native execution, so those fields hold exactly what real
-execution leaves and the deadline lands on the same instruction.
+Only an interrupt handler can change what such a loop reads, so the yield never
+changes the result of the wait. The loop still runs one native iteration per
+yield: a DBcc counter or an RNG word advances once per device event rather than
+once per iteration of real hardware.
 
 Every instruction on the loop's path must be emitted natively (retained, lowered,
 no emit-unit hook), otherwise the loop is left alone.
@@ -26,18 +23,15 @@ no emit-unit hook), otherwise the loop is left alone.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping
 
 import capstone.m68k as m68k
 from capstone import CsInsn
 
-from .emitter import COND_MAP, _ea_extension_bytes, _get_base_mnemonic, _get_size, _pc_base, static_flow
-from .timing import instruction_cycles
+from .emitter import COND_MAP, _get_base_mnemonic, _get_size, static_flow
 
 _MASK = 0xFFFFFFFF
 _MAX_PATH = 32
-_RETURN_ADDRESS_BYTES = 4
 
 _INVARIANT_MODES = (
     m68k.M68K_AM_REGI_ADDR,
@@ -45,15 +39,8 @@ _INVARIANT_MODES = (
     m68k.M68K_AM_ABSOLUTE_DATA_SHORT,
     m68k.M68K_AM_ABSOLUTE_DATA_LONG,
 )
-_AFFINE_ADD = {"addq": 1, "addi": 1, "add": 1, "subq": -1, "subi": -1, "sub": -1}
+_AFFINE_ADD = ("addq", "addi", "add", "subq", "subi", "sub")
 _AFFINE_MUL = ("muls", "mulu")
-
-
-def _cycles(insn: CsInsn) -> int:
-    """Charge of one execution; a taken Bcc.b costs more than a fall-through."""
-    text = instruction_cycles(insn, _pc_base, _ea_extension_bytes)
-    conditional = re.fullmatch(r"\(cpu->pc == 0x[0-9a-f]+u \? (\d+)u : (\d+)u\)", text)
-    return int(conditional.group(2) if conditional else re.fullmatch(r"(\d+)u", text).group(1))
 
 
 def _address(op, allow_stack: bool = True) -> str | None:
@@ -83,7 +70,7 @@ def _target(insn: CsInsn) -> int | None:
 def _spin(insn: CsInsn) -> list[str] | None:
     if _get_base_mnemonic(insn) != "bra" or _target(insn) != insn.address:
         return None
-    return [f"F3_IDLE_SPIN(cpu, {_cycles(insn)}u);"]
+    return ["F3_IDLE(cpu);"]
 
 
 def _poll(instructions: Mapping[int, CsInsn], insn: CsInsn) -> list[str] | None:
@@ -97,18 +84,15 @@ def _poll(instructions: Mapping[int, CsInsn], insn: CsInsn) -> list[str] | None:
     mnemonic = _get_base_mnemonic(closing)
     if mnemonic.startswith("db") and mnemonic[2:] in COND_MAP and _data_register(closing.operands[0]) is not None:
         counter = _data_register(closing.operands[0])
-        cycles = _cycles(insn) + _cycles(closing)
-        return [f"F3_IDLE_POLL_DBCC(cpu, {address}, {size}, {COND_MAP[mnemonic[2:]]}, {counter}, {cycles}u);"]
+        return [f"F3_IDLE_POLL_DBCC(cpu, {address}, {size}, {COND_MAP[mnemonic[2:]]}, {counter});"]
     if mnemonic.startswith("b") and mnemonic[1:] in COND_MAP and mnemonic not in ("bra", "bsr"):
-        cycles = _cycles(insn) + _cycles(closing)
-        return [f"F3_IDLE_POLL_BCC(cpu, {address}, {size}, {COND_MAP[mnemonic[1:]]}, {cycles}u);"]
+        return [f"F3_IDLE_POLL_BCC(cpu, {address}, {size}, {COND_MAP[mnemonic[1:]]});"]
     return None
 
 
-def _call_path(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn], int] | None:
-    """Straight-line execution from head back to head through direct calls and
-    returns, and the deepest call nesting reached."""
-    path, stack, depth, pc = [], [], 0, head
+def _call_path(instructions: Mapping[int, CsInsn], head: int) -> list[CsInsn] | None:
+    """Straight-line execution from head back to head through direct calls and returns."""
+    path, stack, pc = [], [], head
     while len(path) < _MAX_PATH:
         insn = instructions.get(pc)
         if insn is None:
@@ -118,12 +102,11 @@ def _call_path(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsIn
         flow = static_flow(insn)
         if mnemonic == "jsr" and len(flow.targets) == 1:
             stack.append(insn.address + insn.size)
-            depth = max(depth, len(stack))
             pc = flow.targets[0]
         elif mnemonic == "rts" and stack:
             pc = stack.pop()
         elif mnemonic == "bra":
-            return (path, depth) if _target(insn) == head and not stack else None
+            return path if _target(insn) == head and not stack else None
         elif flow.targets or flow.escapes:
             return None
         else:
@@ -144,7 +127,7 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
     called = _call_path(instructions, head)
     if called is None:
         return None
-    path, depth = called
+    path = called
     body = [insn for insn in path if _get_base_mnemonic(insn) not in ("jsr", "rts", "bra")]
     load = body[0] if body else None
     if load is None or _get_base_mnemonic(load) != "move" or _get_size(load) != 4 or len(load.operands) != 2:
@@ -152,7 +135,7 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
     register, address = _data_register(load.operands[1]), _address(load.operands[0], allow_stack=False)
     if register is None or address is None:
         return None
-    multiplier, addend, index = 1, 0, 1
+    index = 1
     while index < len(body):
         insn = body[index]
         mnemonic, operands = _get_base_mnemonic(insn), insn.operands
@@ -160,12 +143,8 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
             break
         if operands[0].type != m68k.M68K_OP_IMM:
             break
-        immediate = operands[0].imm & _MASK
-        if mnemonic in _AFFINE_ADD:
-            addend = (addend + _AFFINE_ADD[mnemonic] * immediate) & _MASK
-        elif mnemonic in _AFFINE_MUL and not int.from_bytes(insn.bytes[2:4], "big") & 0x0400:
-            multiplier, addend = multiplier * immediate & _MASK, addend * immediate & _MASK
-        else:
+        multiply = mnemonic in _AFFINE_MUL and not int.from_bytes(insn.bytes[2:4], "big") & 0x0400
+        if mnemonic not in _AFFINE_ADD and not multiply:
             break
         index += 1
     if index == 1 or index >= len(body):
@@ -183,9 +162,7 @@ def _affine(instructions: Mapping[int, CsInsn], head: int) -> tuple[list[CsInsn]
         _get_base_mnemonic(insn) != "swap" or _data_register(insn.operands[0]) != register for insn in body[index + 1 :]
     ):
         return None
-    cycles = sum(_cycles(insn) for insn in path)
-    stack = depth * _RETURN_ADDRESS_BYTES
-    return path, [f"F3_IDLE_AFFINE_CALL(cpu, {address}, {stack}u, {multiplier}u, {addend}u, {cycles}u);"]
+    return path, ["F3_IDLE(cpu);"]
 
 
 def find_idle_loops(
@@ -195,7 +172,7 @@ def find_idle_loops(
 
     ``native(pc)`` tells whether an instruction is emitted as plain native code
     (retained, lowered and without hooks); a loop that touches any other
-    instruction is not fast-forwarded.
+    instruction never yields.
     """
     loops = {}
     for pc, insn in instructions.items():

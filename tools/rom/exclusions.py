@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         rom, config = load_rom(args.config, args.rom_dir)
     else:
         config = tomllib.loads(args.config.read_text("utf-8"))
-        from recomp.compile.sound import load_sound_rom
+        from recomp.roms import load_sound_rom
 
         rom = load_sound_rom(args.rom_dir, config)
     profile = json.loads(args.profile.read_text("utf-8")) if args.profile else None

@@ -29,7 +29,7 @@ void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame,
               << "  pc: 0x" << std::hex << m.cpu.pc << std::dec << "\n"
               << "  sr: 0x" << std::hex << m.cpu.sr << std::dec << " halted: " << int(m.cpu.halted)
               << " stopped: " << int(m.cpu.stopped) << "\n"
-              << "  cycles: " << m.cpu.cycles << " native_blocks: " << m.native_blocks << "\n";
+              << "  steps: " << m.cpu.steps << " native_blocks: " << m.native_blocks << "\n";
 
     std::cerr << "  registers:\n";
     for (int i = 0; i < 8; ++i) {
@@ -183,7 +183,7 @@ int cmd_gameplay(int argc, char **argv) try {
         std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << cfg.set << "\",\"seed\":" << seed
                   << ",\"frames\":" << m.frame << ",\"pc\":\"0x" << std::hex << m.cpu.pc
                   << "\",\"frame_crc\":\"0x" << frame_crc
-                  << "\",\"cycles\":" << std::dec << m.cpu.cycles
+                  << "\",\"steps\":" << std::dec << m.cpu.steps
                   << ",\"native_blocks\":" << m.native_blocks
                   << ",\"audio_frames\":" << runner.audio_frames()
                   << ",\"audio_peak\":" << runner.audio_peak()
@@ -192,7 +192,7 @@ int cmd_gameplay(int argc, char **argv) try {
     } else {
         std::cout << "SUCCESS set=" << cfg.set << " seed=" << seed << " frames=" << m.frame
                   << " pc=0x" << std::hex << m.cpu.pc << " frame_crc=0x"
-                  << frame_crc << std::dec << " cycles=" << m.cpu.cycles
+                  << frame_crc << std::dec << " steps=" << m.cpu.steps
                   << " native_blocks=" << m.native_blocks
                   << " audio_frames=" << runner.audio_frames()
                   << " audio_peak=" << runner.audio_peak()

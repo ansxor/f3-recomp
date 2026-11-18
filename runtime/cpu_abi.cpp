@@ -15,23 +15,6 @@ f3rt::SpriteSystem *sandbox(f3_cpu *cpu) {
     auto *sprites = machine(cpu).sprites.get();
     return sprites && sprites->is_sandbox(cpu) ? sprites : nullptr;
 }
-f3rt::Machine &bus(f3_cpu *cpu, uint32_t address, uint32_t width) {
-    auto &m = machine(cpu);
-    const uint32_t start = address & 0xffffff;
-    const uint32_t end = start + width;
-    // Native blocks can run ahead of devices. Sound must finish preceding
-    // time before a mailbox access or reset-line change becomes visible.
-    // Include unaligned accesses crossing into a mapped range. Only advance
-    // devices here: IRQ entry still belongs to the next instruction boundary.
-    if (end > f3rt::SHARED_BASE &&
-        (start < f3rt::SHARED_END ||
-         (start < f3rt::SOUND_RESET_RELEASE + f3rt::SOUND_RESET_WINDOW_SIZE &&
-          end > f3rt::SOUND_RESET_RELEASE) ||
-         (start < f3rt::SOUND_RESET_ASSERT + f3rt::SOUND_RESET_WINDOW_SIZE &&
-          end > f3rt::SOUND_RESET_ASSERT)))
-        m.advance_to(cpu->cycles);
-    return m;
-}
 uint32_t &stack(f3_cpu *cpu, uint16_t sr) {
     return !(sr & 0x2000) ? cpu->usp : (sr & 0x1000) ? cpu->msp : cpu->ssp;
 }
@@ -39,36 +22,36 @@ uint32_t &stack(f3_cpu *cpu, uint16_t sr) {
 extern "C" {
 uint8_t f3_read8(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return uint8_t(s->sandbox_read(a, 1));
-    return bus(cpu, a, 1).read8(a);
+    return machine(cpu).read8(a);
 }
 uint16_t f3_read16(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return uint16_t(s->sandbox_read(a, 2));
-    return bus(cpu, a, 2).read16(a);
+    return machine(cpu).read16(a);
 }
 uint32_t f3_read32(f3_cpu *cpu, uint32_t a) {
     if (auto *s = sandbox(cpu)) return s->sandbox_read(a, 4);
-    return bus(cpu, a, 4).read32(a);
+    return machine(cpu).read32(a);
 }
 void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) {
     if (auto *s = sandbox(cpu)) {
         s->sandbox_write(a, v, 1);
         return;
     }
-    bus(cpu, a, 1).write8(a, v);
+    machine(cpu).write8(a, v);
 }
 void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) {
     if (auto *s = sandbox(cpu)) {
         s->sandbox_write(a, v, 2);
         return;
     }
-    bus(cpu, a, 2).write16(a, v);
+    machine(cpu).write16(a, v);
 }
 void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) {
     if (auto *s = sandbox(cpu)) {
         s->sandbox_write(a, v, 4);
         return;
     }
-    bus(cpu, a, 4).write32(a, v);
+    machine(cpu).write32(a, v);
 }
 uint8_t *f3_ram(f3_cpu *cpu, uint32_t a, uint32_t size) {
     if (sandbox(cpu)) return nullptr;
@@ -111,23 +94,17 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     f3_write16(cpu, cpu->a[7] + 6, uint16_t((format2 ? 0x2000 : 0) | (vector * 4)));
     if (format2) f3_write32(cpu, cpu->a[7] + 8, instruction_pc);
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
-    // Full exception charge, matching the pinned 68EC020 timing model.
-    // Generated instructions must not add their normal base charge on this path.
-    static constexpr uint8_t SYSTEM_CYCLES[16] = {4,  4,  50, 50, 20, 38, 40, 20,
-                                                  34, 25, 20, 20, 4,  4,  4,  30};
-    cpu->cycles += vector < 16                   ? SYSTEM_CYCLES[vector]
-                   : vector >= 24 && vector < 32 ? 30
-                   : vector >= 32 && vector < 48 ? 24
-                                                 : 4;
 }
 void f3_reset_devices(f3_cpu *cpu) {
     if (auto *s = sandbox(cpu)) {
         s->sandbox_abort(f3rt::Sandbox::Abort::ResetDevices);
         return;
     }
-    auto &m = machine(cpu);
-    m.advance_to(cpu->cycles);
-    m.reset_devices();
+    machine(cpu).reset_devices();
+}
+void f3_idle(f3_cpu *cpu) {
+    if (sandbox(cpu)) return;
+    machine(cpu).idle();
 }
 int f3_boundary(f3_cpu *cpu) {
     if (auto *s = sandbox(cpu)) {

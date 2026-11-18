@@ -14,8 +14,3 @@ def test_header_abi_version_matches_generator():
     assert match, "F3RT_ABI_VERSION not found in include/f3rt/cpu_abi.h"
     assert int(match.group(1)) == _RUNTIME_ABI_VERSION
 
-
-def test_sound_compiler_uses_generator_abi_version():
-    source = (REPO / "recomp" / "compile" / "sound.py").read_text("utf-8")
-    assert "_RUNTIME_ABI_VERSION" in source
-    assert not re.search(r"F3RT_ABI_VERSION\s*(!=\s*)?\d", source)

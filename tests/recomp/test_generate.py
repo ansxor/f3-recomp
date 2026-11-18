@@ -54,27 +54,27 @@ int main(void) {
     f3_cpu cpu = {0};
     assert(f3_generated_register(&cpu));
     cpu.pc = 0x400; cpu.sr = 0x10; cpu.d[1] = 0x12345678;
-    cpu.dispatch_deadline = 2;
+    cpu.dispatch_deadline = 1;
     blocks[0].execute(&cpu);
-    assert(cpu.pc == 0x402 && cpu.cycles == 2);
+    assert(cpu.pc == 0x402 && cpu.steps == 1);
     assert(cpu.d[0] == UINT32_MAX && cpu.d[1] == 0x12345678);
     f3_cc_flush(&cpu);
     assert(cpu.sr == 0x18 && cpu.cc_op == 0);
 
-    cpu.dispatch_deadline = cpu.cycles + 1;            /* MOVE CCR,D3 */
+    cpu.dispatch_deadline = cpu.steps + 1;            /* MOVE CCR,D3 */
     blocks[0].execute(&cpu);
     assert(cpu.pc == 0x404 && (cpu.d[3] & 0x1f) == 0x18);
 
-    cpu.dispatch_deadline = cpu.cycles + 1;            /* ADDQ.W #1,D0 */
+    cpu.dispatch_deadline = cpu.steps + 1;            /* ADDQ.W #1,D0 */
     blocks[0].execute(&cpu);
     assert(cpu.pc == 0x406 && cpu.d[0] == 0xffff0000);
     f3_cc_flush(&cpu);
     assert(cpu.sr == 0x15 && cpu.cc_op == 0);
 
-    uint64_t resumed = cpu.cycles;
+    uint64_t resumed = cpu.steps;
     cpu.dispatch_deadline = UINT64_MAX;
     blocks[0].execute(&cpu);
-    assert(cpu.pc == 0x40c && cpu.cycles > resumed);
+    assert(cpu.pc == 0x40c && cpu.steps > resumed);
     assert(cpu.d[0] == 0xffff0000 && cpu.d[1] == 1);
     assert((cpu.d[4] & 0x1f) == 0x15 && (cpu.d[5] & 0x1f) == 0x10);
     f3_cc_flush(&cpu);
@@ -151,7 +151,7 @@ int main(void) {
     while (cpu.pc != 0x40a) dispatch(&cpu);
     assert(cpu.d[1] == 99 && cpu.d[2] == 3);
     cpu.pc = 0x402; cpu.d[0] = 0; cpu.d[1] = 99;
-    cpu.dispatch_deadline = cpu.cycles + 1;
+    cpu.dispatch_deadline = cpu.steps + 1;
     dispatch(&cpu);
     assert(cpu.pc == 0x404 && cpu.d[0] == 1 && cpu.d[1] == 99);
     f3_cc_flush(&cpu);
@@ -461,7 +461,7 @@ def _indirect_fixture(decoder):
 
 
 class BlockChainingTests(unittest.TestCase):
-    def test_backward_loop_chains_in_one_call_with_unchained_cycle_sum(self):
+    def test_backward_loop_chains_in_one_call_with_unchained_step_count(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         # MOVEQ #4,D0; NOP; DBRA D0,-4 (5 iterations); MOVEQ #7,D1.
@@ -485,7 +485,7 @@ int main(void) {
     while (stepped.pc != 0x40a) { assert(dispatch(&stepped)); ++calls; }
     assert(calls == 12);                           /* 5 NOP + 5 DBRA + 2 MOVEQ */
     assert(stepped.d[0] == chained.d[0] && stepped.d[1] == chained.d[1]);
-    assert(chained.cycles == stepped.cycles);
+    assert(chained.steps == stepped.steps);
     return 0;
 }
 """,
@@ -505,15 +505,15 @@ int main(void) {
 int main(void) {
     f3_cpu probe = fresh_cpu(), yielding = fresh_cpu(), resumed = fresh_cpu();
     probe.pc = 0x400; probe.dispatch_deadline = 0;
-    uint32_t stop_pc = 0; uint64_t stop_cycles = 0;
+    uint32_t stop_pc = 0; uint64_t stop_steps = 0;
     while (probe.pc != 0x40a) {
         assert(dispatch(&probe));                  /* one instruction per call */
-        if (probe.cycles >= 16) { stop_pc = probe.pc; stop_cycles = probe.cycles; break; }
+        if (probe.steps >= 5) { stop_pc = probe.pc; stop_steps = probe.steps; break; }
     }
     assert(stop_pc != 0);
-    yielding.pc = 0x400; yielding.dispatch_deadline = 16;
+    yielding.pc = 0x400; yielding.dispatch_deadline = 5;
     assert(dispatch(&yielding));                    /* chains until the deadline */
-    assert(yielding.pc == stop_pc && yielding.cycles == stop_cycles);
+    assert(yielding.pc == stop_pc && yielding.steps == stop_steps);
     f3_cc_flush(&yielding);
     assert(yielding.cc_op == 0);                    /* flags materialized at flush */
     yielding.dispatch_deadline = UINT64_MAX;
@@ -521,7 +521,7 @@ int main(void) {
     resumed.pc = 0x400; resumed.dispatch_deadline = 0;
     while (resumed.pc != 0x40a) assert(dispatch(&resumed));
     assert(yielding.d[0] == resumed.d[0] && yielding.d[1] == resumed.d[1]);
-    assert(yielding.cycles == resumed.cycles);
+    assert(yielding.steps == resumed.steps);
     return 0;
 }
 """,
@@ -626,7 +626,7 @@ int main(void) {
 
 class IndirectChainTests(unittest.TestCase):
     @requires_musttail
-    def test_table_indexes_chain_in_one_call_with_dispatcher_cycle_sum(self):
+    def test_table_indexes_chain_in_one_call_with_dispatcher_step_count(self):
         decoder = Cs(CS_ARCH_M68K, CS_MODE_BIG_ENDIAN | CS_MODE_M68K_020)
         decoder.detail = True
         rom, discovery = _indirect_fixture(decoder)
@@ -662,7 +662,7 @@ int main(void) {
     while (stepped.pc != 0x40c && calls < 32) { assert(dispatch(&stepped)); ++calls; }
     assert(stepped.pc == 0x40c && calls > 1);
     assert(stepped.d[1] == chained.d[1] && stepped.d[0] == chained.d[0]);
-    assert(stepped.cycles == chained.cycles);
+    assert(stepped.steps == chained.steps);
 
     f3_cpu crossed = fresh_cpu();
     seed_tables(&crossed);
@@ -685,7 +685,7 @@ int main(void) {
         assert(dispatch(&staged_stepped)); ++calls;
     }
     assert(staged_stepped.pc == 0x60a && staged_stepped.a[0] == staged.a[0]);
-    assert(staged_stepped.d[1] == staged.d[1] && staged_stepped.cycles == staged.cycles);
+    assert(staged_stepped.d[1] == staged.d[1] && staged_stepped.steps == staged.steps);
 
     f3_cpu staged_cross = fresh_cpu();
     seed_tables(&staged_cross);
@@ -1186,7 +1186,7 @@ static uint32_t value(void) {{
     return next() % 3 ? edge[next() % 11] : next();
 }}
 static int same(const f3_cpu *a, const f3_cpu *b) {{
-    return a->pc == b->pc && a->sr == b->sr && a->usp == b->usp && a->cycles == b->cycles &&
+    return a->pc == b->pc && a->sr == b->sr && a->usp == b->usp && a->steps == b->steps &&
         !memcmp(a->d, b->d, sizeof a->d) && !memcmp(a->a, b->a, sizeof a->a);
 }}
 int main(void) {{
