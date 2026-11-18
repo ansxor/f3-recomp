@@ -20,7 +20,7 @@ bool same_ranges(const ClipRanges &a, const ClipRanges &b) {
 // A scrolled layer may move only while enabled, unmosaiced and with non-empty,
 // bounded visible ranges.
 bool valid_layer(const SceneLayer &layer, const ClipRanges &clips) {
-    if (!layer.enabled || layer.mosaic || clips.count == 0 || clips.count > 16) return false;
+    if (!layer.enabled || layer.mosaic || clips.count == 0) return false;
     for (unsigned i = 0; i < clips.count; ++i) {
         const int32_t lo = clips.ranges[i].left, hi = clips.ranges[i].right;
         if (lo >= hi || lo < -4096 || hi > 4096) return false;

@@ -1,0 +1,36 @@
+---
+source_url: relayed by user from 12
+ingested: 2026-11-18
+sha256: 790115eb946f7e0fd5099f85aef9424c6a8598a43ce4ee8370df9a6d92b7f1c6
+captured_with: "relayed by user from 12; the line \"12 and y worked in ...\" is the user's own note"
+---
+Question (sent to 12): clip windows with the inverted-plane mode; we follow MAME's rule for a plane whose clip is inverted. Does an inverted clip on one plane behave the way MAME does it?
+
+from 12:
+3: ok this depends on which version of mame this is
+i remember we struggled with it for a while and then i figured out how it really works and we fixed mame to be correct.  idr if this got submitted though 
+
+12 and y worked in https://github.com/y-ack/mame mostly so maybe it's somewhere in there, we used an fdp-collapse branch from there or similar to implement changes
+
+(follow-up, after being told every y-ack/mame branch has the same calc_clip as MAME 0.289)
+from 12:
+i mean it's described on my website..
+maybe not in particularly exact detail but i think it is pretty easy to understand what it means
+
+(follow-up, asked whether a layer with no windows enabled and I=0 is hidden)
+from 12:
+uhh what's the result of an n-ary union when n is 0
+an empty set
+so, with no clip windows enabled, the union outputs no visible pixels, and so with invert disabled, you get nothing
+or everything, if invert is enabled
+from 12:
+it is common to "disable" clipping by turning off all the clip windows and just setting the global invert to 1, making everything visible
+
+(follow-up, on clip.html saying c=0 is enabled vs line-ram.txt saying 1 = enable)
+from 12:
+1)  umm line-ram.txt is outdated, forgot about that one
+
+wait
+no i think 1 is enable actually
+that's probably a typo
+this one is correct in mame

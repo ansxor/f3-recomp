@@ -1,0 +1,26 @@
+---
+source_url: relayed by user from 12
+ingested: 2026-11-18
+sha256: 0f3e306ec06f7f50a5df3b23cf51f91b6f2d5e10be68e0aad1ea92ba7ede6d73
+captured_with: "relayed by user from 12 (board observation); question 3 (inverted-plane clip) not answered"
+---
+Question (sent to 12): line RAM 0x7000 word 0 ("pivot_enable" in MAME); sprite command word bits 12, 7, 6:4; inverted-plane clip rule.
+
+from 12:
+ok so
+1: 7000 is the blend controls for the highcolor layer (same format as B000)
+which is in my documentation 
+this layer is not emulated by mame because no game uses it and we don't fully understand it but it's pretty simple overall.
+
+2: (also no games use these afaik) bit 12 changes the video sync timings in a way that feels like an unfinished interlaced mode which doesn't work properly (ie you would alternate between this bit being set and unset to create even and odd interlaced frames).  and it also affects bit 0 of the pivot tile ids for some reason.  perhaps this is to allow swapping between the even and odd pivot tile textures on even and odd frames to get doubled horizontal resolution in interlaced mode, if it worked.
+
+bits 4-6   honestly i don't know.   really we only fully understand like,  4 of the 16 bits in this register, and there are at least 6 more which i have observed to have an effect, and 4 more which i think are likely to have an effect (as i doubt there would be unused bits in the middle of the register)
+sprites are difficult to test because like
+there are bits which affect the bank which affects which sprite commands run
+and also bits which affect how sprite textures are read from rom
+and bits which affect how sprites get drawn to the framebuffer
+and bits which affect how the framebuffer is drawn to the screen
+and which framebuffer is used
+and whether it's cleared
+presumably
+so it can be hard to tell exactly which one does what.  especially since most games do the same thing and leave many possibilities unused

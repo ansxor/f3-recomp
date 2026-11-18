@@ -77,6 +77,69 @@ void set_word(std::array<uint8_t, 0x20> &bytes, size_t at, uint16_t value) {
 void set_color(std::array<uint8_t, 0x8000> &bytes, size_t at, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) bytes[at + i] = uint8_t(value >> (24 - 8 * i));
 }
+
+using f3rt::SceneClip;
+
+void expect_clip_ranges(const std::array<SceneClip, 4> &windows, unsigned c, unsigned i, bool invert,
+                        const std::vector<SceneClip> &expected) {
+    SCOPED_TRACE(::testing::Message() << "c=" << c << " I=" << invert << " i=" << i);
+    const auto ranges = f3rt::clip_ranges(windows, c, i, invert, 46, 66);
+    EXPECT_EQ(std::vector<SceneClip>(ranges.begin(), ranges.end()), expected);
+}
+
+TEST(ClipWindows, AllWindowsEnabled) {
+    const std::array<SceneClip, 4> windows{{{47, 49}, {51, 53}, {55, 57}, {59, 61}}};
+    expect_clip_ranges(windows, 15, 15, false, {{47, 49}, {51, 53}, {55, 57}, {59, 61}});
+    expect_clip_ranges(windows, 15, 15, true, {{46, 47}, {49, 51}, {53, 55}, {57, 59}, {61, 66}});
+    expect_clip_ranges(windows, 15, 14, false, {{46, 47}, {49, 66}});
+
+    const std::array<SceneClip, 4> mixed{{{47, 51}, {52, 55}, {56, 60}, {46, 63}}};
+    expect_clip_ranges(mixed, 15, 7, false, {{47, 51}, {52, 55}, {56, 60}, {63, 66}});
+    const std::array<SceneClip, 4> five_ranges{{{49, 51}, {52, 55}, {56, 60}, {47, 63}}};
+    expect_clip_ranges(five_ranges, 15, 7, false,
+                       {{46, 47}, {49, 51}, {52, 55}, {56, 60}, {63, 66}});
+}
+
+TEST(ClipWindows, SingleWindowModes) {
+    const std::array<SceneClip, 4> windows{{{50, 60}}};
+    expect_clip_ranges(windows, 1, 0, false, {{46, 50}, {60, 66}});
+    expect_clip_ranges(windows, 1, 0, true, {{50, 60}});
+    expect_clip_ranges(windows, 1, 1, false, {{50, 60}});
+    expect_clip_ranges(windows, 1, 1, true, {{46, 50}, {60, 66}});
+}
+
+TEST(ClipWindows, UnionThenComplement) {
+    const std::array<SceneClip, 4> disjoint{{{50, 53}, {56, 60}}};
+    expect_clip_ranges(disjoint, 3, 3, false, {{50, 53}, {56, 60}});
+    expect_clip_ranges(disjoint, 3, 3, true, {{46, 50}, {53, 56}, {60, 66}});
+    expect_clip_ranges(disjoint, 3, 0, false, {{46, 66}});
+    expect_clip_ranges(disjoint, 3, 0, true, {});
+
+    const std::array<SceneClip, 4> overlap{{{50, 57}, {55, 60}}};
+    expect_clip_ranges(overlap, 3, 3, false, {{50, 60}});
+    expect_clip_ranges(overlap, 3, 3, true, {{46, 50}, {60, 66}});
+    expect_clip_ranges(overlap, 3, 0, false, {{46, 55}, {57, 66}});
+    expect_clip_ranges(overlap, 3, 0, true, {{55, 57}});
+}
+
+TEST(ClipWindows, AllWindowsDisabled) {
+    const std::array<SceneClip, 4> windows{{{50, 53}, {56, 60}}};
+    for (unsigned i = 0; i < 16; ++i) {
+        expect_clip_ranges(windows, 0, i, false, {});
+        expect_clip_ranges(windows, 0, i, true, {{46, 66}});
+    }
+}
+
+TEST(ClipWindows, EmptyAndReversedWindows) {
+    for (const auto window : {SceneClip{55, 55}, SceneClip{55, 52}}) {
+        const std::array<SceneClip, 4> windows{{window}};
+        expect_clip_ranges(windows, 1, 0, false, {{46, 66}});
+        expect_clip_ranges(windows, 1, 0, true, {});
+        expect_clip_ranges(windows, 1, 1, false, {});
+        expect_clip_ranges(windows, 1, 1, true, {{46, 66}});
+    }
+}
+
 } // namespace
 
 TEST(Video, RomPlaneLoading4BppAndCustomVisibleScanline) {
@@ -288,7 +351,7 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     set_word(graphics, LINE_SELECT_TABLE, 0xff00);
     set_word(graphics, LINE_MODE_TABLE, 0x6000);
     set_word(graphics, PF_SELECT_TABLE, 4);
-    set_word(graphics, PF_ALT_ENABLE_0, 0x2001);
+    set_word(graphics, PF_ALT_ENABLE_0, 0x3001);
     palette[5 * 4 + 1] = 0x12;
     palette[5 * 4 + 2] = 0x34;
     palette[5 * 4 + 3] = 0x56;
@@ -300,7 +363,7 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
 
     set_word(graphics, PF_SELECT_TABLE, 12);
     set_word(graphics, PF_ALT_ENABLE_0, 0);
-    set_word(graphics, PF_ALT_ENABLE_1, 0x2001);
+    set_word(graphics, PF_ALT_ENABLE_1, 0x3001);
     set_word(graphics, f3rt::OFFS_LINERAM, 8);
     set_word(graphics, PF_ROW_TABLE_24600, 0x200);
     palette[4 + 1] = 0x65;
@@ -376,8 +439,8 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
     for (unsigned pen = 1; pen <= 5; ++pen) palette[pen * 4 + 3] = uint8_t(pen * 0x11);
     for (unsigned pf = 2; pf <= 3; ++pf) {
         set_word(graphics, PF_SELECT_TABLE, uint16_t(1u << pf));
-        set_word(graphics, PF_ALT_ENABLE_0, pf == 2 ? 0x2001 : 0);
-        set_word(graphics, PF_ALT_ENABLE_1, pf == 3 ? 0x2001 : 0);
+        set_word(graphics, PF_ALT_ENABLE_0, pf == 2 ? 0x3001 : 0);
+        set_word(graphics, PF_ALT_ENABLE_1, pf == 3 ? 0x3001 : 0);
         for (unsigned y = 0; y < 4; ++y) {
             set_word(graphics, f3rt::OFFS_LINERAM + y * 2, y == 2 ? 0 : uint16_t(1u << pf));
             set_word(graphics, PF_ROW_TABLE_24000 + pf * PF_ROW_STRIDE + y * 2, y == 1 ? 0x200 : 0);
@@ -1018,6 +1081,7 @@ TEST(GameCompositor, GpuSpriteBlendUsesLinearLight) {
     for (auto &row : frame.rows) {
         auto &layer = row.layer(f3rt::LayerId::Sp0);
         layer.enabled = true;
+        layer.clip_inverse = true;
         layer.priority = 1;
         row.blend[2] = 8;
     }
@@ -1056,7 +1120,7 @@ TEST(GameCompositor, FlippedBitmapPivotMatchesFdpWithWrappedAttributeBank) {
     set_word(graphics, LINE_MODE_TABLE + LAST_SCANLINE * 2, 0x6000);
     set_word(graphics, PIVOT_LATCH_TABLE + LAST_SCANLINE * 2,
              0x20);
-    set_word(graphics, LINE_PIVOT_MIX + LAST_SCANLINE * 2, 0x2001);
+    set_word(graphics, LINE_PIVOT_MIX + LAST_SCANLINE * 2, 0x3001);
     std::mt19937_64 rng(73);
     for (auto at = graphics.begin() + f3rt::OFFS_PIVOT; at != graphics.end(); ++at)
         *at = uint8_t(rng());
@@ -1138,6 +1202,7 @@ TEST(GameCompositor, TrailSeedKeepsPreviousPixelsAcrossFramesAndStateLoad) {
     for (auto &row : frame->rows) {
         auto &layer = row.layer(f3rt::LayerId::Sp0);
         layer.enabled = true;
+        layer.clip_inverse = true;
         layer.priority = 1;
         row.blend[2] = 8;
     }
@@ -1590,10 +1655,12 @@ f3rt::SceneSnapshot priority_tie_frame(bool with_sp1_pixel, std::vector<uint8_t>
         row.blend = {4, 4, 4, 4};
         auto &sp0 = row.layer(f3rt::LayerId::Sp0);
         sp0.enabled = true;
+        sp0.clip_inverse = true;
         sp0.priority = 5;
         sp0.blend_mode = 0;
         auto &sp1 = row.layer(f3rt::LayerId::Sp1);
         sp1.enabled = true;
+        sp1.clip_inverse = true;
         sp1.priority = 5;
         sp1.blend_mode = 1;
     }

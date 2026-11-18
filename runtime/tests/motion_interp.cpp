@@ -49,6 +49,7 @@ f3rt::ScenePlayfield &pf0(SceneSnapshot &s) { return row24(s).playfields[0]; }
 void layer(SceneSnapshot &s) {
     auto &p = pf0(s);
     p.layer.enabled = true;
+    p.layer.clip_inverse = true;
     p.source_x = 100 * 256;
     p.source_y = 100;
     p.x_step = 256;
@@ -559,7 +560,8 @@ TEST(MotionInterp, PlayfieldScrollAndIndependentGuards) {
 
     // Clip change snaps.
     pf0(*b).layer.clip_enabled = 1;
-    pf0(*b).layer.clip_inverse = true;
+    pf0(*b).layer.clip_inverted = 1;
+    pf0(*b).layer.clip_inverse = false;
     row24(*b).clips[0] = {50, 300};
     result = pair(*a, *b);
     EXPECT_EQ(result.stats.playfield_rows, 0u) << "own PF clip change interpolated";
@@ -574,6 +576,7 @@ TEST(MotionInterp, TextScrollAndIndependentWrap) {
     a->fallback = false;
     auto &text = row24(*a).text;
     text.enabled = true;
+    text.clip_inverse = true;
     row24(*a).text_x = 100;
     row24(*a).text_y = 100;
     auto b = std::make_unique<SceneSnapshot>(*a);
@@ -589,6 +592,8 @@ TEST(MotionInterp, TextScrollAndIndependentWrap) {
 
     // Own text clip change snaps.
     row24(*b).text.clip_enabled = 1;
+    row24(*b).text.clip_inverse = false;
+    row24(*b).clips[0] = {50, 300};
     result = pair(*a, *b);
     EXPECT_EQ(result.stats.text_rows, 0u) << "own text clip change interpolated";
     EXPECT_EQ(result.state.rows[f3rt::geometry::FIRST_LINE].text_x, 101 * 256)
@@ -596,6 +601,7 @@ TEST(MotionInterp, TextScrollAndIndependentWrap) {
 
     // Text wrap snaps independently.
     row24(*b).text.clip_enabled = 0;
+    row24(*b).text.clip_inverse = true;
     row24(*a).text_x = 511;
     row24(*b).text_x = 0;
     result = pair(*a, *b);

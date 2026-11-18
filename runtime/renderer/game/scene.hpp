@@ -69,6 +69,7 @@ struct SceneSprite {
 struct SceneLayer {
     uint8_t priority = 0;
     uint8_t blend_mode = 0;
+    // Raw mix-word fields. A set c bit enables that window, and a set i bit selects inside.
     uint8_t clip_enabled = 0, clip_inverted = 0;
     bool clip_inverse = false;
     bool enabled = false;

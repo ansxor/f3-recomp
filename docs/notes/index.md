@@ -37,7 +37,7 @@
 - [[hardware/fdp]] (hypothesis) — TC0630FDP: layers, graphics RAM map 0x600000–0x66001F, scroll/settings registers, framebuffer
 - [[hardware/glossary]] (hypothesis) — 12Me21's video terms: half-pixel, priority cell, blend mode/select, subglobal scroll
 - [[hardware/sprites]] (hypothesis) — 8-word sprite entry, zoom, global/subglobal scroll, block (tessellation) controls, groups, MAME sprite lag
-- [[hardware/sprite-command-word]] (hypothesis) — sprite settings word: flipscreen, bpp, bank select, framebuffer clear
+- [[hardware/sprite-command-word]] (hypothesis) — sprite settings word: flipscreen, bpp, bank select, framebuffer clear; bit 12 = unfinished interlace mode (12)
 - [[hardware/tilemaps]] (hypothesis) — PF1–4 tile RAM decode, tile word bits, global scroll, rowscroll/colscroll/zoom/palette add
 - [[hardware/pivot-layer]] (hypothesis) — pivot text vs pixel mode, text/font/pixel RAM layouts, bottom-half reuse, pivot port
 - [[hardware/line-ram]] (hypothesis) — line RAM latch table at 0x620000, sections, alt bank, latch semantics
@@ -45,7 +45,7 @@
 - [[hardware/fda]] (hypothesis) — TC0650FDA: color RAM format, half-pixel blend of two color indexes, blur/mode signals
 - [[hardware/priority-and-blend]] (hypothesis) — 16×2 priority-cell model, mix words, blend modes, alpha select, background color
 - [[hardware/clip-and-mosaic]] (hypothesis) — four clip windows, per-layer enable/invert bits, combine rules, mosaic
-- [[hardware/highcolor-layer]] (hypothesis) — hidden 16bpp "mystery" layer reusing tilemap data; registers 6000/6400/7000
+- [[hardware/highcolor-layer]] (hypothesis) — hidden 16bpp "mystery" layer reusing tilemap data; registers 6000/6400/7000 (7000 = its blend word, confirmed by 12)
 - [[hardware/shadow-mode]] (hypothesis) — shadow modes 2/3: palette-bit modification between neighbouring priorities
 - [[hardware/video-timing]] (hypothesis) — 6.6715 MHz pixel clock, 432×262 (~58.94 Hz), sync table, frame pulse, startup frames
 

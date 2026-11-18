@@ -1,10 +1,10 @@
 ---
 title: Clip windows and mosaic
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-11-18
 type: hardware
 tags: [video, clip, line-ram]
-sources: [raw/docs/taito-f3/website/fdp/clip.html, raw/docs/taito-f3/clip.txt, raw/docs/taito-f3/website/fdp/mosaic.html, raw/docs/taito-f3/website/fdp/layer.html, raw/docs/taito-f3/website/fdp/lineram.html, raw/docs/taito-f3/line-ram.txt, raw/docs/taito-f3/graphics.txt, raw/docs/taito-f3/terms.txt, raw/emu-source/mame-0.289/taito_f3_v.cpp, raw/emu-source/mame-0.289/taito_f3.h]
+sources: [raw/docs/taito-f3/website/fdp/clip.html, raw/docs/taito-f3/clip.txt, raw/docs/taito-f3/website/fdp/mosaic.html, raw/docs/taito-f3/website/fdp/layer.html, raw/docs/taito-f3/website/fdp/lineram.html, raw/docs/taito-f3/line-ram.txt, raw/docs/taito-f3/graphics.txt, raw/docs/taito-f3/terms.txt, raw/emu-source/mame-0.289/taito_f3_v.cpp, raw/emu-source/mame-0.289/taito_f3.h, raw/docs/fdp-clip-12-remark-2026-11-18.txt, raw/tests/2026-11-18-calc-clip-y-ack-branches.md]
 games: []
 addresses: [0x00620000]
 status: hypothesis
@@ -13,16 +13,50 @@ evidence:
   - {kind: doc, ref: raw/docs/taito-f3/clip.txt, note: "author's scratch algorithm for combining windows (not hardware)"}
   - {kind: doc, ref: raw/docs/taito-f3/website/fdp/mosaic.html, note: "mosaic sampling description"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_f3_v.cpp, note: "calc_clip() and mosaic() implementations"}
+  - {kind: doc, ref: raw/docs/fdp-clip-12-remark-2026-11-18.txt, note: "12 (2026-11-18): worked out the real clip behaviour on hardware; the website page describes it"}
+  - {kind: test, ref: raw/tests/2026-11-18-calc-clip-y-ack-branches.md, note: "every y-ack/mame branch with calc_clip has the same rule as MAME 0.289; our FDP oracle and GameVideo port it"}
 contradictions:
-  - "Clip enable polarity: website/fdp/clip.html says c_n 0 = enabled, 1 = disabled; line-ram.txt ('1 = enable clip plane') and MAME ('If set, enable corresponding clip plane') say 1 = enabled."
-  - "Multi-window combination: clip.html says the visible parts of the selected windows are unioned; MAME intersects the enabled windows (with inverted windows as complements), and clip.txt's scratch code uses a union-style nonzero mask."
+  - "Clip enable polarity: website/fdp/clip.html says c_n 0 = enabled, 1 = disabled; line-ram.txt ('1 = enable clip plane') and MAME ('If set, enable corresponding clip plane') say 1 = enabled. Resolved 2026-11-18: 12 says clip.html's 0 = enabled is probably a typo; 1 = enabled."
+  - "Multi-window combination: clip.html says the visible parts of the selected windows are unioned; MAME intersects the enabled windows (with inverted windows as complements), and clip.txt's scratch code uses a union-style nonzero mask. Resolved 2026-11-18: 12 points to clip.html as the board-verified rule, so union and MAME is wrong."
   - "'Global invert' I: clip.html/line-ram.txt say I=1 inverts; MAME's comment says 'if on, 1 = invert; if off, 0 = invert' and swaps the plane modes when I=0."
-  - "No windows enabled: clip.txt's layer_calc_ranges only makes the layer visible when invert_all is set; MAME leaves the whole line visible."
+  - "No windows enabled: clip.txt's layer_calc_ranges only makes the layer visible when invert_all is set; MAME leaves the whole line visible. Resolved 2026-11-18: 12 confirmed hidden with I=0, fully visible with I=1; MAME is wrong."
   - "Bit 9 of line register 2.2: 12Me21 says highcolor-layer mosaic enable (line-ram.txt: 'NOT pivot mosaic'); MAME uses it as pivot-layer mosaic enable."
 supersedes: []
 ---
 
 # Clip windows and mosaic
+
+## Inverted windows: 12's rule (2026-11-18)
+
+12 worked out the real behaviour on a board and points to the website page as the description of it
+("maybe not in particularly exact detail"). ^[raw/docs/fdp-clip-12-remark-2026-11-18.txt] ^[raw/docs/taito-f3/website/fdp/clip.html]
+So the hardware rule is the website's: each enabled window contributes its visible part (inside if `i`=1,
+outside if `i`=0), the visible parts are **unioned**, and `I`=1 inverts the result.
+
+Enable polarity: clip.html says `c`=0 is enabled, but 12 said on 2026-11-18 that this is probably a typo and
+**`c`=1 is enabled**, adding "this one is correct in mame" (line-ram.txt agrees). ^[raw/docs/fdp-clip-12-remark-2026-11-18.txt] In raw bits, the hardware rule per line and layer is:
+
+```
+visible(x) = I XOR OR over n with c[n] == 1 of ( i[n] ? inside(n, x) : outside(n, x) )
+inside(n, x) = (left[n] - 47) <= x < (right[n] - 48)      # empty window: inside never true
+```
+
+With `c`=0000 (no windows enabled) the union is empty, so the layer is hidden when `I`=0 and fully shown when `I`=1
+(clip.txt's scratch code agrees; 12 confirmed this case directly on 2026-11-18). ^[raw/docs/taito-f3/website/fdp/clip.html] ^[raw/docs/taito-f3/clip.txt] ^[raw/docs/fdp-clip-12-remark-2026-11-18.txt]
+12: games commonly "disable" clipping this way, with all windows off (`c`=0000) and `I`=1, so the whole line is visible.
+^[raw/docs/fdp-clip-12-remark-2026-11-18.txt]
+
+MAME 0.289's `calc_clip`, and both our renderers, which port it, use the same enable polarity but differ in two ways: ^[raw/emu-source/mame-0.289/taito_f3_v.cpp] ^[raw/tests/2026-11-18-calc-clip-y-ack-branches.md]
+
+1. **No windows enabled:** MAME shows the whole line whatever `I` is; on hardware `c`=0000 with `I`=0 hides the layer.
+2. **Combination:** MAME intersects windows (and with `I`=0 it swaps the meaning of `i`). That equals the
+   website's union-then-invert only for one window or `I`=1; with `I`=0 and two or more windows, MAME
+   intersects where the hardware unions.
+
+The y-ack/mame fork 12 mentioned has the same `calc_clip` as 0.289 in every branch (including
+`fdp-collapse`), so it does not contain the website's rule. ^[raw/tests/2026-11-18-calc-clip-y-ack-branches.md]
+Not yet measured: which games and lines change under the hardware rule. Screenshots before and after the change are needed
+so 12 can check them.
 
 Both effects are per-scanline settings in [[hardware/line-ram]]. Clip bits live in each layer's mix word
 (see [[hardware/priority-and-blend]]); mosaic is a global strength plus per-layer enables in line
@@ -63,7 +97,7 @@ priority, 15–14 blend mode): ^[raw/docs/taito-f3/website/fdp/clip.html] ^[raw/
 |---|---|---|
 | 13 | E | layer enable (1 = displayed) |
 | 12 | I | global invert of the clip result (1 = inverted) |
-| 11–8 | c3..c0 | window n enable — website: 0 = enabled, 1 = disabled; line-ram.txt/MAME: 1 = enabled |
+| 11–8 | c3..c0 | window n enable: 1 = enabled (12, 2026-11-18; clip.html's "0 = enabled" is probably a typo) |
 | 7–4 | i3..i0 | window n mode: 0 = outside visible ("hide inside"), 1 = inside visible ("hide outside") |
 
 MAME's header names these bits `BAEI cccc iiii pppp` for B,A = blend bits, E = enable line, I = affects

@@ -5,7 +5,7 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
-#include "renderer/game/scene.hpp"
+#include "renderer/game/clip.hpp"
 #include "renderer/decode.hpp"
 
 #include <algorithm>
@@ -43,9 +43,6 @@ inline int mosaic(int x, uint8_t sample) {
 struct ClipPlaneInf {
     int16_t l = 0;
     int16_t r = 0;
-
-    ClipPlaneInf() = default;
-    ClipPlaneInf(int16_t left, int16_t right) : l(left), r(right) {}
 
     ClipPlaneInf &set_upper(int8_t left, int8_t right) {
         l = int16_t((l & 0xff) | (int16_t(left) << 8));
@@ -172,56 +169,9 @@ struct Tempsprite {
     uint8_t pri = 0;
 };
 
-struct ClipRanges {
-    // Each of four planes can at most split every preceding interval in two.
-    std::array<ClipPlaneInf, 1 << NUM_CLIPPLANES> values;
-    size_t count = 0;
-    const ClipPlaneInf *begin() const { return values.data(); }
-    const ClipPlaneInf *end() const { return values.data() + count; }
-};
-
-ClipRanges calc_clip(const ClipPlaneInf clip[NUM_CLIPPLANES], const Mixable &layer) {
-    constexpr int16_t INF_L = H_START;
-    constexpr int16_t INF_R = H_START + H_VIS;
-    uint8_t normal_planes = layer.clip_enable() & ~layer.clip_inv();
-    uint8_t invert_planes = layer.clip_enable() & layer.clip_inv();
-    if (!layer.clip_inv_mode()) std::swap(normal_planes, invert_planes);
-
-    ClipRanges ranges;
-    ranges.values[ranges.count++] = {INF_L, INF_R};
-    for (int plane = 0; plane < NUM_CLIPPLANES; ++plane) {
-        const int16_t clip_l = int16_t(clip[plane].l - 1);
-        const int16_t clip_r = int16_t(clip[plane].r - 2);
-        if (normal_planes & (1 << plane)) {
-            size_t kept = 0;
-            for (auto range : ranges) {
-                if (clip_l <= clip_r && range.r >= clip_l && range.l <= clip_r)
-                    ranges.values[kept++] = {std::max(range.l, clip_l), std::min(range.r, clip_r)};
-            }
-            ranges.count = kept;
-        } else if ((invert_planes & (1 << plane)) && clip_l <= clip_r) {
-            ClipRanges next;
-            for (size_t i = 0; i < 2 * ranges.count; ++i) {
-                ClipPlaneInf candidate =
-                    i < ranges.count ? ClipPlaneInf{INF_L, clip_l} : ClipPlaneInf{clip_r, INF_R};
-                bool keep = true;
-                for (const auto &range : ranges) {
-                    // Preserve the observed baseline's inverted-plane combining
-                    // rule; the hardware notes still investigate this case.
-                    candidate.l = std::max(range.l, candidate.l);
-                    candidate.r = std::max(range.l, candidate.r);
-                    if (candidate.l >= candidate.r) {
-                        keep = false;
-                        break;
-                    }
-                }
-                if (keep) next.values[next.count++] = candidate;
-            }
-            std::copy_n(next.values.begin(), next.count, ranges.values.begin());
-            ranges.count = next.count;
-        }
-    }
-    return ranges;
+ClipRanges calc_clip(const std::array<SceneClip, NUM_CLIPPLANES> &windows, const Mixable &layer) {
+    return clip_ranges(windows, layer.clip_enable(), layer.clip_inv(), layer.clip_inv_mode(),
+                       H_START, H_START + H_VIS);
 }
 
 } // namespace
@@ -840,10 +790,8 @@ struct Video::Impl {
 
     template <typename LayerType>
     void mix_line_layer(const LayerType &gfx, MixPix &z, PriMode &pri, const F3LineInf &line,
-                        const ClipPlaneInf &range, const uint16_t *src, const uint8_t *flags) {
-        const int left = std::max<int>(range.l, H_START);
-        const int right = std::min<int>(range.r, H_START + H_VIS);
-        for (int x = left; x < right; ++x) {
+                        const SceneClip &range, const uint16_t *src, const uint8_t *flags) {
+        for (int x = range.left; x < range.right; ++x) {
             if (gfx.blend_mode == pri.src_blendmode[x]) continue;
 
             const int real_x = gfx.x_sample_enable ? mosaic(x, line.x_sample) : x;
@@ -1016,12 +964,12 @@ struct Video::Impl {
                 pf.reg_fx_x = pf.reg_sx + pf.rowscroll;
                 pf.reg_fx_x += 10 * (pf.x_scale - (1 << 8));
             }
+            std::array<SceneClip, NUM_CLIPPLANES> windows;
+            for (int i = 0; i < NUM_CLIPPLANES; ++i)
+                windows[i] = {int16_t(line_data.clip[i].l - 1), int16_t(line_data.clip[i].r - 2)};
             if (m_scene_inspection_enabled) {
                 auto &oracle_row = oracle_scene_rows[screen_y];
-                for (int i = 0; i < NUM_CLIPPLANES; ++i) {
-                    oracle_row.clips[i].left = int16_t(line_data.clip[i].l - 1);
-                    oracle_row.clips[i].right = int16_t(line_data.clip[i].r - 2);
-                }
+                oracle_row.clips = windows;
                 for (int i = 0; i < 4; ++i) {
                     oracle_row.blend[i] = line_data.blend[i];
                 }
@@ -1100,7 +1048,7 @@ struct Video::Impl {
                     if (layer == &line_data.pivot) {
                         if (line_data.pivot.layer_enable() &&
                             is_used(line_data.pivot, static_cast<int>(screen_y))) {
-                            auto clip_ranges = calc_clip(line_data.clip, line_data.pivot);
+                            auto clip_ranges = calc_clip(windows, line_data.pivot);
                             int line_y = line_data.pivot.y_index(line_data.y);
                             if (line_data.pivot.use_pix()) {
                                 generate_pixel_line(line_y, textram);
@@ -1122,7 +1070,7 @@ struct Video::Impl {
                                layer == &line_data.sp[2] || layer == &line_data.sp[3]) {
                         auto &sp = static_cast<SpriteInf &>(*layer);
                         if (sp.layer_enable() && is_used(sp, static_cast<int>(screen_y))) {
-                            auto clip_ranges = calc_clip(line_data.clip, sp);
+                            auto clip_ranges = calc_clip(windows, sp);
                             const uint16_t *src =
                                 &sprite_framebuffer[size_t(line_data.y) * H_TOTAL];
                             for (const auto &clip : clip_ranges) {
@@ -1133,7 +1081,7 @@ struct Video::Impl {
                     } else {
                         auto &pf = static_cast<PlayfieldInf &>(*layer);
                         if (pf.layer_enable() && is_used(pf, static_cast<int>(screen_y))) {
-                            auto clip_ranges = calc_clip(line_data.clip, pf);
+                            auto clip_ranges = calc_clip(windows, pf);
                             int line_y = pf.y_index(line_data.y);
                             const int map = pf.index + 2 * pf.alt_tilemap;
                             generate_playfield_line(map, line_y, pf_ram);

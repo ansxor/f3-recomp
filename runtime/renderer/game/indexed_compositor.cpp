@@ -27,7 +27,7 @@ struct LayerPlan {
 
 struct ColumnRanges {
     unsigned count = 0;
-    std::array<std::array<int, 2>, 16> range;
+    std::array<std::array<int, 2>, ClipRanges::capacity> range;
 };
 
 constexpr unsigned SLOT_ZERO = LAYER_COUNT, SLOT_BACKGROUND = LAYER_COUNT + 1;
@@ -228,16 +228,11 @@ template <class Body>
 ColumnRanges column_ranges(const SceneRow &row, const SceneLayer &layer, int left_edge,
                            int right_edge) {
     ColumnRanges result;
-    if (!layer.clip_enabled) {
-        result.count = 1;
-        result.range[0] = {0, right_edge - left_edge};
-        return result;
-    }
     const ClipRanges clips = clip_ranges(row, layer, int16_t(left_edge), int16_t(right_edge));
     result.count = clips.count;
     for (unsigned r = 0; r < clips.count; ++r)
-        result.range[r] = {std::max(left_edge, int(clips.ranges[r].left)) - left_edge,
-                           std::min(right_edge, int(clips.ranges[r].right)) - left_edge};
+        result.range[r] = {int(clips.ranges[r].left) - left_edge,
+                           int(clips.ranges[r].right) - left_edge};
     return result;
 }
 

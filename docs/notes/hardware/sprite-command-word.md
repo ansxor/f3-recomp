@@ -1,14 +1,15 @@
 ---
 title: FDP sprite command word (sprite settings register)
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-11-18
 type: hardware
 tags: [video, sprite, undocumented]
-sources: [raw/docs/taito-f3/website/fdp/sprite.html, raw/docs/taito-f3/sprite-ram.txt, raw/docs/taito-f3/website/fdp-memory.html, raw/emu-source/mame-0.289/taito_f3_v.cpp]
+sources: [raw/docs/taito-f3/website/fdp/sprite.html, raw/docs/taito-f3/sprite-ram.txt, raw/docs/taito-f3/website/fdp-memory.html, raw/emu-source/mame-0.289/taito_f3_v.cpp, raw/docs/fdp-7000-and-sprite-command-12-remark-2026-11-18.txt]
 games: []
 addresses: [0x00604000, 0x0060C000]
 status: hypothesis
 evidence:
+  - {kind: doc, ref: raw/docs/fdp-7000-and-sprite-command-12-remark-2026-11-18.txt, note: "12 (2026-11-18): bit 12 = unfinished interlace timing mode that also affects pivot tile id bit 0; bits 6:4 unknown; no known game uses either"}
   - {kind: doc, ref: raw/docs/taito-f3/sprite-ram.txt, note: "bit-by-bit hardware experiments on word 5 of command sprites"}
   - {kind: doc, ref: raw/docs/taito-f3/website/fdp/sprite.html, note: "sprite settings register layout (draft, many '?')"}
   - {kind: emu-source, ref: raw/emu-source/mame-0.289/taito_f3_v.cpp, note: "get_sprite_info(): command bits 13, 9:8, 1, 0 and jump ordering"}
@@ -16,7 +17,7 @@ contradictions:
   - "Bits 9:8: sprite.html and MAME = texture bit planes (00 4bpp, 01 5bpp, 11 6bpp); sprite-ram.txt lists them as 'f'/'g' with garbage-palette effects."
   - "Bit 10: sprite-ram.txt = bank-select-2 (list at 0x604000); sprite.html names it b0, 'lower bit' of the bank number; MAME ignores it."
   - "Bit 1: sprite.html 'supposedly disables clearing framebuffer but seems to be something else'; fdp-memory.html and MAME = preserve/trails (do not clear framebuffer)."
-  - "Bit 12: sprite.html (j) = invert pivot text-tile id bit 0 + timing change; sprite-ram.txt = changes video signal; MAME = 'disabled? (from F2 driver)', logged as unknown."
+  - "Bit 12: sprite.html (j) = invert pivot text-tile id bit 0 + timing change; sprite-ram.txt = changes video signal; MAME = 'disabled? (from F2 driver)', logged as unknown. 12 (2026-11-18) confirms the sync change and the pivot tile id bit 0 effect and reads it as an unfinished interlace mode; MAME's 'disabled' is wrong."
 supersedes: []
 ---
 
@@ -35,11 +36,11 @@ A command bit set on a *visible* sprite does both jobs. ^[raw/docs/taito-f3/webs
 | Bit(s) | Name in notes | Meaning / observation |
 |---|---|---|
 | 13 | k | 1 = flipscreen (sprite.html, sprite-ram.txt; fdp-memory.html "set screen orientation") |
-| 12 | j | sprite.html: 1 = lowest bit of all pivot-layer texture ids is treated as inverted (44 <-> 45, 45 <-> 44) and the video timing shifts slightly; seems to need setting near the start of the frame (sprite index <= 16). sprite-ram.txt: "changes video signal (causes us to lose sync, but still outputting a picture)" |
+| 12 | j | sprite.html: 1 = lowest bit of all pivot-layer texture ids is treated as inverted (44 <-> 45, 45 <-> 44) and the video timing shifts slightly; seems to need setting near the start of the frame (sprite index <= 16). sprite-ram.txt: "changes video signal (causes us to lose sync, but still outputting a picture)". 12 (2026-11-18): the sync change "feels like an unfinished interlaced mode which doesn't work properly" (toggle the bit on alternate frames for even/odd fields); the pivot tile id bit 0 effect might have been for swapping even/odd pivot textures to double horizontal resolution. No known game sets it |
 | 10 | b0 / h | sprite RAM bank bit (see below) |
 | 9:8 | bpp / f,g | texture bit planes: 00 = 4bpp, 01 = 5bpp, 11 = 6bpp (fdp-memory.html). sprite-ram.txt: f "sets palettes to 0(?) and adds garbage pixels", g "similar to f but different" |
 | 7 | ? / e | sprite-ram.txt: "squish vertically and display bottom different?" |
-| 6:4 | a (3 bits) | "affects visibility of sprites or something" (sprite.html); in sprite-ram.txt `d`, `c`, `a` = "display right half different?", "mix up rows?", "flip each group of 4 columns (texture relative)?" |
+| 6:4 | a (3 bits) | "affects visibility of sprites or something" (sprite.html); in sprite-ram.txt `d`, `c`, `a` = "display right half different?", "mix up rows?", "flip each group of 4 columns (texture relative)?". 12 (2026-11-18): unknown |
 | 1 | t | framebuffer clear disable (see contradictions) |
 | 0 | b1 / b | bank bit; sprite-ram.txt: "(command mode only) set bank" |
 
@@ -50,6 +51,15 @@ regardless of whether we're in command mode"; sprite.html places the 2-bit `tex2
 of word 5, i.e. the same bits as `t` and `b`, and MAME uses only bit 0 as tile bit 16. A command
 sprite is still rendered (sprite-ram.txt). ^[raw/docs/taito-f3/sprite-ram.txt]
 ^[raw/docs/taito-f3/website/fdp/sprite.html] ^[raw/emu-source/mame-0.289/taito_f3_v.cpp]
+
+## How much of this register is understood
+
+12 (2026-11-18): only about 4 of the 16 bits are fully understood; at least 6 more have a visible effect on
+a board, and about 4 more probably do. Testing is hard because separate bits change which bank (and so
+which commands) runs, how textures are read from ROM, how sprites are drawn into the framebuffer, how the
+framebuffer is scanned out, which framebuffer is used, and presumably whether it is cleared; most games
+use the same settings, so most combinations are never exercised. Neither of our renderers acts on bits
+12, 7 or 6:4. ^[raw/docs/fdp-7000-and-sprite-command-12-remark-2026-11-18.txt]
 
 ## Bank switching
 

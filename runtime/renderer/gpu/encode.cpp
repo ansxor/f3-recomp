@@ -21,7 +21,7 @@ static_assert(F3_SCENE_LAYER_SP0 == unsigned(LayerId::Sp0));
 static_assert(F3_SCENE_LAYER_TEXT == unsigned(LayerId::Text));
 static_assert(F3_ROW_ORDER + LAYER_COUNT <= F3_ROW_MOTION_TEXT_X &&
               F3_ROW_MOTION_TEXT_Y < F3_ROW_LAYERS);
-static_assert(F3_LAYER_CLIPS + 2 * 16 == F3_LAYER_STRIDE);
+static_assert(F3_LAYER_CLIPS + 2 * ClipRanges::capacity <= F3_LAYER_STRIDE);
 static_assert(F3_ROW_LAYERS + LAYER_COUNT * F3_LAYER_STRIDE == F3_ROW_PF);
 static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE == F3_ROW_BITMAP_MAP_ROW);
 static_assert(F3_ROW_BITMAP_MAP_ROW < F3_SCENE_ROW_STRIDE);
