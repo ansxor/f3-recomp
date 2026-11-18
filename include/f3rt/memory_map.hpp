@@ -65,6 +65,7 @@ constexpr size_t LINERAM_BANK_OFFSET = 0x800;       // Bank offset for alternate
 
 // Control Registers (0x660000 - 0x660020 / 0x660040)
 constexpr uint32_t CONTROL_BASE = 0x660000; // PF0-3 X/Y scroll, pivot/text regs
+constexpr unsigned CONTROL_TEXT_SCROLL_Y_WORD = 8 + 5; // control_1[5]
 constexpr uint32_t CONTROL_END = 0x660020;
 constexpr uint32_t CONTROL_EXTENDED_END = 0x660040;
 

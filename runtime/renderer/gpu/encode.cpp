@@ -14,12 +14,7 @@ static_assert(F3_SCENE_TEXT_CELLS + 4096 == F3_SCENE_GLYPHS);
 static_assert(F3_SCENE_GLYPHS + 4096 == F3_SCENE_PALETTE);
 static_assert(F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS <= F3_SCENE_ROWS);
 static_assert(F3_SCENE_ROWS + F3_SCENE_ROW_COUNT * F3_SCENE_ROW_STRIDE == F3_SCENE_SPRITES);
-static_assert(F3_SCENE_SPRITES + F3_SCENE_SPRITE_COUNT * F3_SCENE_SPRITE_STRIDE ==
-              F3_SCENE_WORD_COUNT);
-static_assert(F3_SCENE_INTERP == F3_SCENE_WORD_COUNT);
 static_assert(4 * F3_INTERP_PF_STRIDE == F3_SCENE_INTERP_ROW_STRIDE);
-static_assert(F3_SCENE_INTERP + F3_SCENE_ROW_COUNT * F3_SCENE_INTERP_ROW_STRIDE ==
-              F3_SCENE_INTERP_WORD_COUNT);
 // scene.glsl LAYER_COUNT/LAYER_SP0/LAYER_TEXT come from these macros: they must track LayerId.
 static_assert(F3_SCENE_LAYER_COUNT == LAYER_COUNT);
 static_assert(F3_SCENE_LAYER_SP0 == unsigned(LayerId::Sp0));
@@ -28,7 +23,8 @@ static_assert(F3_ROW_ORDER + LAYER_COUNT <= F3_ROW_MOTION_TEXT_X &&
               F3_ROW_MOTION_TEXT_Y < F3_ROW_LAYERS);
 static_assert(F3_LAYER_CLIPS + 2 * 16 == F3_LAYER_STRIDE);
 static_assert(F3_ROW_LAYERS + LAYER_COUNT * F3_LAYER_STRIDE == F3_ROW_PF);
-static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE <= F3_SCENE_ROW_STRIDE);
+static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE == F3_ROW_BITMAP_MAP_ROW);
+static_assert(F3_ROW_BITMAP_MAP_ROW < F3_SCENE_ROW_STRIDE);
 static_assert(GameTiles::MAP_COUNT == 4 || GameTiles::MAP_COUNT == 6);
 static_assert(SceneSnapshot::MAX_SPRITES == F3_SCENE_SPRITE_COUNT &&
               SceneSnapshot::PALETTE_SIZE == F3_SCENE_PALETTE_WORDS);
@@ -62,6 +58,7 @@ void encode_row(const SceneRow &r, const GameText &text, bool flipped,
         r.mosaic_period | (r.palette_15bit ? F3_ROW_PALETTE15 : 0u) | (r.blur ? F3_ROW_BLUR : 0u);
     at[F3_ROW_TEXT_X] = uint32_t(int32_t(r.text_x));
     at[F3_ROW_TEXT_Y] = uint32_t(int32_t(r.text_y));
+    at[F3_ROW_BITMAP_MAP_ROW] = r.bitmap ? text.bitmap_map_row(unsigned(r.text_y), flipped) : 0u;
     at[F3_ROW_BLEND] = r.blend[0] | (uint32_t(r.blend[1]) << 8) | (uint32_t(r.blend[2]) << 16) |
                        (uint32_t(r.blend[3]) << 24);
     const auto order = scene_order(r);
@@ -73,9 +70,13 @@ void encode_row(const SceneRow &r, const GameText &text, bool flipped,
         if (i < 4 && pf[i].alt_map) la[F3_LAYER_FLAGS] |= F3_LAYER_ALT_MAP;
         if (i < 4 && game_config::video.extend) la[F3_LAYER_FLAGS] |= F3_LAYER_EXTEND;
         if (i < 4 && r.playfields[i].empty_row) la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
-        const int text_y_adj = flipped ? (511 - r.text_y) : r.text_y;
-        if (i == unsigned(LayerId::Text) && !text.row_used(unsigned(text_y_adj)))
-            la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
+        if (i == unsigned(LayerId::Text)) {
+            const int text_y_adj = flipped ? (511 - r.text_y) : r.text_y;
+            if (r.bitmap)
+                la[F3_LAYER_FLAGS] |= F3_LAYER_BITMAP;
+            else if (!text.row_used(unsigned(text_y_adj)))
+                la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
+        }
         const auto clips = clip_ranges(r, l, left, right);
         la[F3_LAYER_CLIP_COUNT] = clips.count;
         for (unsigned c = 0; c < clips.count; ++c) {
@@ -161,6 +162,9 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
     // Raw glyph RAM, byte-packed four bytes per word; the shader indexes it as bytes.
     static_assert(0x2000 == F3_SCENE_GLYPH_WORDS * sizeof(uint32_t));
     std::memcpy(w + F3_SCENE_GLYPHS, frame.text.glyphs().data(), 0x2000);
+    const auto pivot = frame.text.pivot();
+    static_assert(decltype(pivot)::extent == F3_SCENE_PIVOT_WORDS * sizeof(uint32_t));
+    std::memcpy(w + F3_SCENE_PIVOT, pivot.data(), pivot.size_bytes());
     std::memcpy(w + F3_SCENE_PALETTE, frame.colors.data(),
                 F3_SCENE_PALETTE_WORDS * sizeof(uint32_t));
     const int16_t left = int16_t(46 - int(options.border)), right = int16_t(366 + options.border);

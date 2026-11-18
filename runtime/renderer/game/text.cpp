@@ -7,6 +7,8 @@ namespace f3rt {
 void GameText::reset() {
     m_map.fill(0);
     m_glyph_ram.fill(0);
+    m_pivot_ram.fill(0);
+    m_scroll_y = 0;
     m_row_used = 0;
     touch();
 }
@@ -25,7 +27,13 @@ void GameText::decode(const VideoRam &vram) {
     }
     if (glyphs_changed)
         std::memcpy(m_glyph_ram.data(), &vram.graphics[OFFS_TEXTRAM_GLYPHS], m_glyph_ram.size());
-    if (map_changed || glyphs_changed) m_version = fresh_content_version();
+    const bool pivot_changed = m_shadow_pivot.changed(&vram.graphics[OFFS_PIVOT]);
+    if (pivot_changed)
+        std::memcpy(m_pivot_ram.data(), &vram.graphics[OFFS_PIVOT], m_pivot_ram.size());
+    const uint16_t scroll_y = vram.control_u16(CONTROL_TEXT_SCROLL_Y_WORD);
+    if (map_changed || glyphs_changed || pivot_changed || scroll_y != m_scroll_y)
+        m_version = fresh_content_version();
+    m_scroll_y = scroll_y;
 }
 
 } // namespace f3rt

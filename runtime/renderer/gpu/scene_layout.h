@@ -30,12 +30,14 @@
 #define F3_SCENE_SPRITES 122880u
 #define F3_SCENE_SPRITE_COUNT 4096u
 #define F3_SCENE_SPRITE_STRIDE 8u
-// Canonical scene size, and the opt-in interpolation coefficient region that
-// follows it.
-#define F3_SCENE_WORD_COUNT 155648u
-#define F3_SCENE_INTERP 155648u
+// Pivot RAM: 64 KiB of raw bitmap tiles, packed four bytes per word.
+#define F3_SCENE_PIVOT (F3_SCENE_SPRITES + F3_SCENE_SPRITE_COUNT * F3_SCENE_SPRITE_STRIDE)
+#define F3_SCENE_PIVOT_WORDS 16384u
+// Canonical scene size, and the opt-in interpolation coefficient region that follows it.
+#define F3_SCENE_WORD_COUNT (F3_SCENE_PIVOT + F3_SCENE_PIVOT_WORDS)
+#define F3_SCENE_INTERP F3_SCENE_WORD_COUNT
 #define F3_SCENE_INTERP_ROW_STRIDE 52u
-#define F3_SCENE_INTERP_WORD_COUNT 168960u
+#define F3_SCENE_INTERP_WORD_COUNT (F3_SCENE_INTERP + F3_SCENE_ROW_COUNT * F3_SCENE_INTERP_ROW_STRIDE)
 
 // Row header fields (relative to a row base).
 #define F3_ROW_BACKGROUND 0u
@@ -68,6 +70,7 @@
 #define F3_LAYER_SELECT_SHIFT 7u
 #define F3_LAYER_MOSAIC 256u
 #define F3_LAYER_ALT_MAP 512u // playfield rows sampling the alternate map (word 1 of the cell slot)
+#define F3_LAYER_BITMAP 2048u // text rows sampling bitmap tiles
 #define F3_LAYER_EXTEND 1024u // playfield 64 columns (extend=true) vs 32 columns (extend=false)
 
 // Playfield geometry blocks: four per row, after the layer blocks.
@@ -79,6 +82,7 @@
 #define F3_PF_Y_STEP 3u
 #define F3_PF_Y_FRACTION 4u
 #define F3_PF_PALETTE_ADD 5u
+#define F3_ROW_BITMAP_MAP_ROW 346u
 
 // Sprite descriptor fields.
 #define F3_SPRITE_X 0u

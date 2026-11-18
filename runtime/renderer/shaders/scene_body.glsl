@@ -197,22 +197,25 @@ uint shade(ivec2 pos, bool plane_b, out uint weight) {
                 weight = max(weight, packed >> F3_SPRITE_WEIGHT_SHIFT);
             } else {
                 int x = floor_scale(int(scene.words[row + F3_ROW_TEXT_X]) * s + q - 46 * s, s) & 511;
-                int y = int(scene.words[row + F3_ROW_TEXT_Y]) & 511;
+                bool bitmap = (flags & F3_LAYER_BITMAP) != 0u;
+                int y = int(scene.words[row + F3_ROW_TEXT_Y]) & (bitmap ? 255 : 511);
                 // Motion-only 24.8 text scroll; floor sampling matches native at integer endpoints.
-                if ((params.controls.w & 0x80000000u) != 0u) {
+                if (!bitmap && (params.controls.w & 0x80000000u) != 0u) {
                     x = floor_scale((int(scene.words[row + F3_ROW_MOTION_TEXT_X]) * s + (q - 46 * s) * 256) >> 8, s) & 511;
                     y = (floor_scale(int(scene.words[row + F3_ROW_MOTION_TEXT_Y]) * s + sub_y * 256, s) >> 8) & 511;
                 }
                 // Raw big-endian text-map word (bit layout shared with
                 // GameText::pixel, see runtime/renderer/game/text.hpp): bits 0-7 glyph,
                 // bit 8 flip X, bits 9-14 palette code, bit 15 flip Y.
-                uint cell = scene.words[TEXT_CELLS + uint(y / 8 * 64 + x / 8)];
+                uint map_row = bitmap ? scene.words[row + F3_ROW_BITMAP_MAP_ROW] : uint(y / 8);
+                uint cell = scene.words[TEXT_CELLS + map_row * 64u + uint(x / 8)];
                 uint tx = uint(x & 7) ^ ((cell & 0x0100u) != 0u ? 7u : 0u);
                 uint ty = uint(y & 7) ^ ((cell & 0x8000u) != 0u ? 7u : 0u);
-                // Raw glyph RAM byte-packed at GLYPHS: pixel (tx, ty) is nibble
-                // (tx & 1) of byte ty*4 + (3 - tx/2).
-                uint glyph_byte = (cell & 255u) * 32u + ty * 4u + (3u - tx / 2u);
-                uint pen = (byte_pen(scene.words[GLYPHS + (glyph_byte >> 2u)], glyph_byte) >>
+                // Glyph and bitmap tiles share the same byte and nibble packing.
+                uint tile = bitmap ? uint(x / 8 * 32 + y / 8) : cell & 255u;
+                uint tile_byte = tile * 32u + ty * 4u + (3u - tx / 2u);
+                uint ram = bitmap ? F3_SCENE_PIVOT : GLYPHS;
+                uint pen = (byte_pen(scene.words[ram + (tile_byte >> 2u)], tile_byte) >>
                     ((tx & 1u) * 4u)) & 15u;
                 if (pen == 0u) continue;
                 color = ((cell >> 9u) & 63u) * 16u + pen;

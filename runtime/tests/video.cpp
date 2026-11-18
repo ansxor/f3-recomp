@@ -622,8 +622,13 @@ TEST(GameVideo, UnchangedRegionDecodeMatchesFreshDecode) {
         else if (kind == 2) tiles_edit = store(in(f3rt::OFFS_PLAYFIELDS, pf_bytes));
         else if (kind == 3) text_edit = store(in(f3rt::OFFS_TEXTRAM_MAP, 0x2000));
         else if (kind == 4) text_edit = store(in(f3rt::OFFS_TEXTRAM_GLYPHS, f3rt::TEXTRAM_GLYPH_SIZE));
-        else if (kind == 5) control[rng() % control.size()] = uint8_t(rng());
-        else if (kind == 6) graphics[in(0x21000, 0x3000)] = uint8_t(rng());
+        else if (kind == 5) {
+            const auto index = rng() % control.size();
+            const auto value = uint8_t(rng());
+            text_edit = index / 2 == f3rt::CONTROL_TEXT_SCROLL_Y_WORD && control[index] != value;
+            control[index] = value;
+        } else if (kind == 6) graphics[in(0x21000, 0x3000)] = uint8_t(rng());
+        else text_edit = store(in(f3rt::OFFS_PIVOT, text->pivot().size()));
         const bool flipped = rng() & 1;
         const uint64_t tiles_before = tiles->version(), text_before = text->version();
         tiles->decode(vram);
@@ -650,7 +655,11 @@ TEST(GameVideo, UnchangedRegionDecodeMatchesFreshDecode) {
         ASSERT_TRUE(std::equal(map.begin(), map.end(), fresh_map.begin())) << "round " << round;
         const auto glyphs = std::as_const(*text).glyphs(), fresh_glyphs = std::as_const(*fresh_text).glyphs();
         ASSERT_TRUE(std::equal(glyphs.begin(), glyphs.end(), fresh_glyphs.begin())) << "round " << round;
-        for (unsigned y = 0; y < 512; y += 8) ASSERT_EQ(text->row_used(y), fresh_text->row_used(y));
+        ASSERT_TRUE(std::ranges::equal(text->pivot(), fresh_text->pivot())) << "round " << round;
+        for (unsigned y = 0; y < 512; y += 8)
+            ASSERT_EQ(text->row_used(y), fresh_text->row_used(y));
+        for (unsigned y = 0; y < 256; y += 8)
+            ASSERT_EQ(text->bitmap_map_row(y, flipped), fresh_text->bitmap_map_row(y, flipped));
         ASSERT_EQ(lines_state(*lines), lines_state(*fresh_lines)) << "round " << round;
     }
 }

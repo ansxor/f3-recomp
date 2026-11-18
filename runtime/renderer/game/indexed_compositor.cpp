@@ -285,7 +285,8 @@ ScenePlayfield playfield_row(const RowWork &work, LayerId id) {
                 source.palette = plane[source_x];
             } else {
                 const int source_x = work.row.text_x + sample_x - 46;
-                source = work.job.scene.text.pixel(source_x, work.row.text_y, work.flipped);
+                source = work.job.scene.text.pixel(source_x, work.row.text_y, work.flipped,
+                                                       work.row.bitmap);
                 if (!(source.flags & 0x10)) return;
             }
             visit(work, x, source.palette, select, plan);
@@ -478,13 +479,15 @@ struct PlayfieldCell {
     const auto &text = work.job.scene.text;
     const LayerPlan plan = work.plan(layer, id);
     const bool resolves = plan.resolves[layer.blend_select];
-    int y = work.row.text_y & 511;
-    if (work.flipped) y = 511 - y;
+    const bool bitmap = work.row.bitmap;
+    const int y_mask = bitmap ? 255 : 511;
+    const int source_y = work.row.text_y & y_mask;
+    const unsigned y = unsigned(work.flipped ? y_mask - source_y : source_y);
     const uint16_t *map = text.map().data();
-    const uint8_t *glyphs = text.glyphs().data();
+    const uint8_t *ram = bitmap ? text.pivot().data() : text.glyphs().data();
     const uint8_t *glyph_rows = work.job.glyph_rows.data();
-    const unsigned row_base = unsigned(y / 8) * 64;
-    const unsigned texel_y = unsigned(y & 7);
+    const unsigned map_row = bitmap ? text.bitmap_map_row(unsigned(source_y), work.flipped) : y / 8;
+    const unsigned texel_y = y & 7;
     for (unsigned r = 0; r < ranges.count; ++r) {
         const int left = ranges.range[r][0], right = ranges.range[r][1];
         int x = left;
@@ -493,10 +496,11 @@ struct PlayfieldCell {
             const unsigned phase = u & 7;
             const unsigned len = std::min(8 - phase, unsigned(right - x));
             const unsigned cell = work.flipped ? 63 - (u >> 3) : u >> 3;
-            const uint16_t word = map[row_base + cell];
+            const uint16_t word = map[map_row * 64 + cell];
+            const unsigned tile = bitmap ? cell * 32 + y / 8 : word & 0xff;
             const unsigned flip_y = (word & 0x8000) ? 7u : 0u;
             const unsigned glyph_y = texel_y ^ flip_y;
-            const bool visible = glyph_rows[word & 0xff] >> glyph_y & 1;
+            const bool visible = bitmap || ((glyph_rows[tile] >> glyph_y) & 1);
             const uint32_t unresolved =
                 visible ? extract_columns(work.unresolved.data(), x, len) : 0;
             const uint32_t open = work.any_pending && visible
@@ -505,7 +509,7 @@ struct PlayfieldCell {
             if (open) {
                 const bool mirrored = work.flipped != ((word & 0x0100) != 0);
                 const uint32_t pens = glyph_row_pens(
-                    glyphs + size_t(word & 0xff) * 32 + size_t(glyph_y * 4), mirrored);
+                    ram + size_t(tile) * 32 + size_t(glyph_y * 4), mirrored);
                 const uint32_t live = open & (nonzero_nibbles(pens) >> phase);
                 const unsigned palette_base = ((word >> 9) & 0x3f) * 16;
                 const uint32_t *palette = work.lut + palette_base;
@@ -673,7 +677,7 @@ void compose_row(const IndexedComposeJob &job, unsigned y, RowSetup &setup,
         const int text_y = flipped ? (511 - row.text_y) : row.text_y;
         const bool empty =
             (kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row) ||
-            (id == LayerId::Text && !scene.text.row_used(unsigned(text_y))) ||
+            (id == LayerId::Text && !row.bitmap && !scene.text.row_used(unsigned(text_y))) ||
             (kind(id) == LayerKind::Sprite && !sprite_cover.covers(sub_index(id)));
         if (row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 && !empty)
             active |= 1u << i;

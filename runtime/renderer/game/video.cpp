@@ -295,11 +295,6 @@ void GameVideo::render() {
     }
     state.lines.prepare(state.sprites.flipped());
     state.lines.cull_empty_rows(state.tiles);
-    for (unsigned y = geometry::FIRST_LINE; y < geometry::END_LINE; ++y)
-        if (state.lines.row(y).bitmap) {
-            state.fallback("text", "bitmap-pivot");
-            return;
-        }
     if constexpr (game_config::video.full_resolution_alt_maps) {
         state.alt_maps.update(state.tiles, state.machine.video->playfield_tiles());
         const auto counts = state.lines.resolve_full_resolution_alt(state.alt_maps);
