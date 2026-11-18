@@ -87,6 +87,7 @@ public:
     void save_eeprom(const std::filesystem::path &path) const;
     void set_input(unsigned port, uint32_t mask, bool pressed);
     size_t state_size() const;
+    bool accepts_state_size(size_t size) const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
     uint32_t state_crc() const;

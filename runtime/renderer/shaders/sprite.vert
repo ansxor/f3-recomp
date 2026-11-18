@@ -13,6 +13,7 @@ layout(location = 0) flat out ivec4 raster;
 layout(location = 1) flat out uint texel_base;
 layout(location = 2) flat out uint color_base;
 layout(location = 3) flat out uint blend_weight;
+layout(location = 4) flat out uint retain_trails;
 // One quad per descriptor covers the union of its 16x16 texel spans; the
 // fragment shader inverts the CPU span formulas (see sprite.frag).
 void main() {
@@ -25,12 +26,14 @@ void main() {
     vec2 extent = native_plane ? vec2(432,256) : vec2(params.dimensions.zw);
     // Texel a starts at ((px + a*kx) >> 8) - origin_x; texel row b likewise.
     // Biases stay in output-grid 24.8 units; scaling them changes CPU phases.
-    int px = x * s + 128, py = y * s + 255, kx = sx * s, ky = sy * s;
+    uint flags = scene.words[base + F3_SPRITE_FLIP];
+    int px = x * s + 128, py = y * s + ((flags & F3_SPRITE_SCREEN_FLIPPED) == 0u ? 255 : 0);
+    int kx = sx * s, ky = sy * s;
     int x0 = (px >> 8) - origin_x, x1 = ((px + 16 * kx) >> 8) - origin_x;
     int y0 = (py >> 8) - origin_y;
     int y1 = max(((py + 15 * ky) >> 8) - origin_y + 1, ((py + 16 * ky) >> 8) - origin_y);
     // Nominal 24.8 rectangle is culled before raster rounding.
-    uint flags = scene.words[base + F3_SPRITE_FLIP];
+    retain_trails = params.controls.w & F3_MASK_SPRITE_TRAILS;
     blend_weight = scene.words[base + F3_SPRITE_WEIGHT];
     bool culled = x + 16 * sx <= left * 256 || x > (365 + int(params.dimensions.y)) * 256 ||
                   y + 16 * sy <= int(params.geometry.x) * 256 || y > 255 * 256 || x0 >= x1 ||

@@ -15,6 +15,7 @@ void GameSprites::reset() {
     m_current_flipped = false;
     m_current_pen_mask = 15;
     m_current_trails = false;
+    m_trail_seed.fill(0);
 
     m_reg_flipped = false;
     m_reg_pen_mask = 15;
@@ -52,12 +53,10 @@ void GameSprites::decode(const VideoRam &vram, const SpritePresentation &present
     const SpritePresentation groups{presentation.groups, {}};
     std::array<DecodedSpriteEntry, MAX_SPRITES> decoded;
     const size_t count = decode_sprite_list(vram.graphics.data(), int(geometry::FIRST_LINE),
-                                            int(geometry::HEIGHT), decoded, state, false,
+                                            int(geometry::HEIGHT), decoded, state, true,
                                             groups.groups.empty() ? nullptr : &groups);
 
     for (size_t i = 0; i < count; ++i) m_staging_sprites[i] = scene_sprite(decoded[i]);
-    // The decoded list is this frame's submission; GameVideo::latch_sprites()
-    // applies the scanout origin and the one-frame lag.
     std::copy_n(m_staging_sprites.begin(), count, m_submitted_sprites.begin());
     m_submitted_count = count;
     m_staging_count = 0;
@@ -69,7 +68,7 @@ void GameSprites::decode(const VideoRam &vram, const SpritePresentation &present
         std::array<DecodedSpriteEntry, MAX_PRESENTED_SPRITES> presented;
         const size_t n = decode_sprite_list(vram.graphics.data(), int(geometry::FIRST_LINE),
                                             int(geometry::HEIGHT), presented, presented_state,
-                                            false, &presentation);
+                                            true, &presentation);
         m_presented_submitted.resize(MAX_PRESENTED_SPRITES);
         for (size_t i = 0; i < n; ++i) m_presented_submitted[i] = scene_sprite(presented[i]);
         m_presented_submitted_count = n;
@@ -84,32 +83,24 @@ void GameSprites::decode(const VideoRam &vram, const SpritePresentation &present
     m_reg_bank = state.bank;
 }
 
-void GameSprites::latch() {
+void GameSprites::latch(std::span<const uint8_t> assets) {
+    // The framebuffer drawn with the old list and flags seeds the next draw.
+    // Reconstruct it only when the incoming draw will retain its pixels.
+    if (m_reg_trails) raster(assets, m_trail_seed);
+    else if (m_current_trails) m_trail_seed.fill(0);
     m_current_flipped = m_reg_flipped;
     m_current_pen_mask = m_reg_pen_mask;
     m_current_trails = m_reg_trails;
     m_current_count = m_submitted_count;
 
-    // Decoded positions are already in scanout space (Video::get_sprite_info);
-    // the latch only mirrors them for flipscreen.
-    auto mirror = [&](const SceneSprite &src, SceneSprite &dst) {
-        dst = src;
-        if (m_current_flipped) {
-            dst.x = (512 << 8) - int32_t(src.scale_x) * 16 - src.x;
-            dst.y = (256 << 8) - int32_t(src.scale_y) * 16 - src.y;
-            dst.flip_x = !src.flip_x;
-            dst.flip_y = !src.flip_y;
-        }
-    };
-    for (size_t i = 0; i < m_submitted_count; ++i)
-        mirror(m_submitted_sprites[i], m_current_sprites[i]);
+    std::copy_n(m_submitted_sprites.begin(), m_current_count, m_current_sprites.begin());
 
     m_presented_current_valid = m_presented_submitted_valid;
     if (m_presented_current_valid) {
         m_presented_current.resize(MAX_PRESENTED_SPRITES);
         m_presented_current_count = m_presented_submitted_count;
-        for (size_t i = 0; i < m_presented_current_count; ++i)
-            mirror(m_presented_submitted[i], m_presented_current[i]);
+        std::copy_n(m_presented_submitted.begin(), m_presented_current_count,
+                    m_presented_current.begin());
     }
 }
 
@@ -179,7 +170,6 @@ void draw_aligned_sprite(const SceneSprite &sprite, const uint8_t *pixels,
     const int first_x = std::max(0, g.left - base_x), last_x = std::min(16, g.right - base_x);
     if (first_x >= last_x) return;
     const uint16_t color_base = uint16_t(0x1000 + (unsigned(sprite.palette) << 4));
-    const bool one_layer = sprite_layer(uint16_t(color_base + mask)) == sprite_layer(color_base);
     const unsigned layer = unsigned(sprite_layer(color_base)) - unsigned(LayerId::Sp0);
     const unsigned window_width = unsigned(last_x - first_x);
     const uint32_t window = (1u << window_width) - 1;
@@ -213,37 +203,24 @@ void draw_aligned_sprite(const SceneSprite &sprite, const uint8_t *pixels,
             if (!opaque) break;
             const uint32_t fresh = opaque & ~claimed;
             if (!fresh) continue;
-            if (!coverage || one_layer) {
-                if (coverage) coverage->row(plane_row).mark(layer, column, fresh);
-                const uint32_t columns = fresh << first_x;
-                for (unsigned group = 0; group < 4; ++group) {
-                    const uint32_t nibble = columns >> (4 * group) & 0xf;
-                    if (!nibble) continue;
-                    const uint32_t four = pens->group(group, sprite.flip_x);
-                    const int offset = int(4 * group) - first_x;
-                    if (nibble == 0xf) {
-                        line[offset] = uint16_t(color_base + (four & 0xff));
-                        line[offset + 1] = uint16_t(color_base + ((four >> 8) & 0xff));
-                        line[offset + 2] = uint16_t(color_base + ((four >> 16) & 0xff));
-                        line[offset + 3] = uint16_t(color_base + (four >> 24));
-                    } else {
-                        for (uint32_t rest = nibble; rest; rest &= rest - 1) {
-                            const unsigned i = unsigned(__builtin_ctz(rest));
-                            line[offset + int(i)] =
-                                uint16_t(color_base + ((four >> (8 * i)) & 0xff));
-                        }
+            if (coverage) coverage->row(plane_row).mark(layer, column, fresh);
+            const uint32_t columns = fresh << first_x;
+            for (unsigned group = 0; group < 4; ++group) {
+                const uint32_t nibble = columns >> (4 * group) & 0xf;
+                if (!nibble) continue;
+                const uint32_t four = pens->group(group, sprite.flip_x);
+                const int offset = int(4 * group) - first_x;
+                if (nibble == 0xf) {
+                    line[offset] = uint16_t(color_base | (four & 0xff));
+                    line[offset + 1] = uint16_t(color_base | ((four >> 8) & 0xff));
+                    line[offset + 2] = uint16_t(color_base | ((four >> 16) & 0xff));
+                    line[offset + 3] = uint16_t(color_base | (four >> 24));
+                } else {
+                    for (uint32_t rest = nibble; rest; rest &= rest - 1) {
+                        const unsigned i = unsigned(__builtin_ctz(rest));
+                        line[offset + int(i)] =
+                            uint16_t(color_base | ((four >> (8 * i)) & 0xff));
                     }
-                }
-            } else {
-                for (uint32_t rest = fresh; rest; rest &= rest - 1) {
-                    const unsigned i = unsigned(__builtin_ctz(rest));
-                    const uint16_t color =
-                        uint16_t(color_base + ((pens->group((first_x + i) / 4, sprite.flip_x) >>
-                                                (8 * ((first_x + i) % 4))) &
-                                               0xff));
-                    line[i] = color;
-                    coverage->row(plane_row).mark(
-                        unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0), column + i, 1);
                 }
             }
         }
@@ -293,7 +270,7 @@ void draw_scaled_sprite_covered(const SceneSprite &sprite, const uint8_t *pixels
             for (const SpriteColumn &column : columns) {
                 if (!(opaque >> column.x & 1)) continue;
                 const uint16_t color = uint16_t(
-                    color_base + ((pens.group(column.x / 4, sprite.flip_x) >> (8 * (column.x % 4))) &
+                    color_base | ((pens.group(column.x / 4, sprite.flip_x) >> (8 * (column.x % 4))) &
                                   0xff));
                 const unsigned layer = unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0);
                 const unsigned first = unsigned(column.left), last = unsigned(column.right);
@@ -350,7 +327,7 @@ void draw_sprite(const SceneSprite &sprite, std::span<const uint8_t> assets,
             const SpriteColumn &column = columns[i];
             const uint8_t pen = row[column.x ^ (sprite.flip_x ? 15 : 0)] & mask;
             if (!pen) continue;
-            const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
+            const uint16_t color = uint16_t(0x1000 | (unsigned(sprite.palette) << 4) | pen);
             for (int dy = rows.first; dy < rows.last; ++dy)
                 for (int dx = column.left + g.left; dx < column.right + g.left; ++dx) {
                     auto &destination = plane[size_t(dy) * g.width + size_t(dx)];
@@ -394,13 +371,27 @@ void SpriteBins::bin(std::span<const SceneSprite> sprites, SpriteRasterOptions r
 void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites,
                          unsigned chunk, uint8_t mask, std::span<const uint8_t> assets,
                          std::span<uint16_t> plane, SpriteRasterOptions raster,
-                         SpriteCoverage &coverage) {
+                         SpriteCoverage &coverage, std::span<const uint16_t> trail_seed) {
     const RasterGeometry g = make_geometry(assets, raster);
     const unsigned first = unsigned(g.top) + chunk * COMPOSE_CHUNK_ROWS;
     const unsigned last =
         std::min(unsigned(g.top) + (chunk + 1) * COMPOSE_CHUNK_ROWS, unsigned(g.bottom));
     if (first >= last) return;
-    for (unsigned row = first; row < last; ++row) coverage.row(row).clear();
+    for (unsigned row = first; row < last; ++row) {
+        const auto cover = coverage.row(row);
+        cover.clear();
+        if (trail_seed.empty()) continue;
+        const unsigned native_y = g.expanded ? row + geometry::FIRST_LINE : row;
+        for (int x = g.left; x < g.right; ++x) {
+            const int native_x = x + g.origin_x;
+            const uint16_t color = native_x >= 46 && native_x < 366
+                                       ? trail_seed[size_t(native_y) * 432 + native_x]
+                                       : 0;
+            plane[size_t(row) * g.width + x] = color;
+            if (color) cover.mark(unsigned(sprite_layer(color)) - unsigned(LayerId::Sp0),
+                                  unsigned(x - g.left), 1);
+        }
+    }
     if (assets.empty()) return;
     const auto bucket = bins.chunk(chunk);
     const RasterGeometry windowed{g.options,
@@ -550,6 +541,15 @@ void GameSprites::load_state(StateReader &reader) {
     reader.read(u8);
     m_reg_bank = u8 != 0;
     m_presented_submitted_valid = m_presented_current_valid = false;
+}
+
+void GameSprites::save_trails(StateWriter &writer) const {
+    writer.write_array(m_trail_seed);
+}
+
+void GameSprites::load_trails(StateReader &reader) {
+    if (reader.remaining()) reader.read_array(m_trail_seed);
+    else m_trail_seed.fill(0);
 }
 
 static_assert(Snapshotable<GameSprites>);

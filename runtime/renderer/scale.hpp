@@ -7,7 +7,9 @@ namespace f3rt {
 enum class VideoScaleMode { Fixed, Auto, AutoInteger };
 
 inline unsigned video_scale_for_window(VideoScaleMode mode, unsigned pixel_width,
-                                       unsigned pixel_height, unsigned border) {
+                                       unsigned pixel_height, unsigned border,
+                                       bool portrait = false) {
+    if (portrait) std::swap(pixel_width, pixel_height);
     const unsigned native_width = geometry::NATIVE_WIDTH + border * 2;
     unsigned scale;
     if (mode == VideoScaleMode::Auto) {
@@ -28,8 +30,10 @@ struct VideoBlit {
 };
 
 inline VideoBlit video_blit_for_window(VideoScaleMode mode, GameVideoOptions options,
-                                       unsigned pixel_width, unsigned pixel_height) {
-    const unsigned source_width = options.width(), source_height = options.height();
+                                       unsigned pixel_width, unsigned pixel_height,
+                                       bool portrait = false) {
+    const unsigned source_width = portrait ? options.height() : options.width();
+    const unsigned source_height = portrait ? options.width() : options.height();
     if (mode == VideoScaleMode::AutoInteger) {
         const unsigned width = std::min(pixel_width, source_width);
         const unsigned height = std::min(pixel_height, source_height);

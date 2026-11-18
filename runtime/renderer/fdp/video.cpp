@@ -1190,8 +1190,9 @@ void Video::set_active_spriteram(std::span<const uint8_t> spriteram) {
 
 void Video::vblank(std::span<const uint8_t> graphics_ram) {
     if (graphics_ram.size() >= GRAPHICS_RAM_SIZE) {
+        if (m_impl->config.sprite_lag == 2) m_impl->draw_sprites();
         m_impl->get_sprite_info(&graphics_ram[OFFS_SPRITERAM]);
-        m_impl->sprite_draw_pending = true;
+        m_impl->sprite_draw_pending = m_impl->config.sprite_lag != 2;
         std::memcpy(m_impl->buffered_spriteram.data(), &graphics_ram[OFFS_SPRITERAM],
                     SPRITE_RAM_SIZE);
         m_impl->has_buffered_spriteram = true;

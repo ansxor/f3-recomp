@@ -397,6 +397,14 @@ size_t Machine::state_size() const {
     return sz;
 }
 
+bool Machine::accepts_state_size(size_t size) const {
+    const size_t expected = state_size();
+    if (size == expected) return true;
+    if (!game_video) return false;
+    const size_t base = expected - game_video->state_size();
+    return size >= base && game_video->accepts_state_size(size - base);
+}
+
 void Machine::save_state(std::span<uint8_t> dst) const {
     const size_t expected = state_size();
     if (dst.size() != expected) {
@@ -487,7 +495,7 @@ void Machine::save_state(std::span<uint8_t> dst) const {
 
 void Machine::load_state(std::span<const uint8_t> src) {
     const size_t expected = state_size();
-    if (src.size() != expected) {
+    if (!accepts_state_size(src.size())) {
         throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
                                     std::to_string(expected) + ", got " +
                                     std::to_string(src.size()));
@@ -567,7 +575,7 @@ void Machine::load_state(std::span<const uint8_t> src) {
     }
 
     if (game_video) {
-        const size_t size = game_video->state_size();
+        const size_t size = reader.remaining();
         std::span<const uint8_t> gv_slice(reader.current(), size);
         game_video->load_state(gv_slice);
         reader.skip(size);

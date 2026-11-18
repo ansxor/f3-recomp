@@ -95,10 +95,13 @@
 #define F3_SPRITE_WEIGHT 7u
 #define F3_SPRITE_WEIGHT_SHIFT 16u
 #define F3_SPRITE_WEIGHT_SCALE 65536u
+#define F3_MASK_SPRITE_TRAILS 0x04000000u
+#define F3_MASK_SCREEN_FLIPPED 0x08000000u
 #define F3_MASK_HIDE_WEIGHTED 0x10000000u
 #define F3_MASK_BLEND_WEIGHTED 0x20000000u
 #define F3_SPRITE_FLIP_X 1u
 #define F3_SPRITE_FLIP_Y 2u
+#define F3_SPRITE_SCREEN_FLIPPED 4u
 
 // Interpolation coefficients: per row, four playfield blocks of PF_STRIDE words:
 // [flags][3 source][3 zoom][3 vertical][3 palette], each triple being

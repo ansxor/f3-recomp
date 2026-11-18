@@ -19,7 +19,8 @@ public:
              std::span<const uint8_t> playfield_assets, std::span<const uint8_t> sprite_assets,
              bool linear = false, bool vsync = true,
              VideoInterpolation interpolation = VideoInterpolation::Off,
-             InterpolationFields fields = InterpolationFields::Geometry);
+             InterpolationFields fields = InterpolationFields::Geometry,
+             unsigned rotation = 0);
     ~GpuVideo();
     GpuVideo(const GpuVideo &) = delete;
     GpuVideo &operator=(const GpuVideo &) = delete;

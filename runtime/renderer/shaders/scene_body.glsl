@@ -106,6 +106,7 @@ uint shade(ivec2 pos, bool plane_b, out uint weight) {
     int s = int(params.dimensions.x), left = 46 - int(params.dimensions.y);
     int native_x = floor_scale(pos.x, s), native_y = floor_scale(pos.y, s);
     int sub_y = pos.y - native_y * s;
+    bool flipped = (params.controls.w & F3_MASK_SCREEN_FLIPPED) != 0u;
     uint row = ROWS + (params.geometry.x + uint(native_y)) * ROW_STRIDE;
     uint packed_blend = scene.words[row + F3_ROW_BLEND];
     uvec4 blend = uvec4(packed_blend & 255u,(packed_blend >> 8u) & 255u,(packed_blend >> 16u) & 255u,packed_blend >> 24u);
@@ -160,6 +161,10 @@ uint shade(ivec2 pos, bool plane_b, out uint weight) {
                     y = (int(floor(interpolated_field(metadata + F3_INTERP_VERTICAL, phase, fraction))) >> 8) & 511;
                 }
 #endif
+                if (flipped) {
+                    x ^= extend ? 1023 : 511;
+                    y ^= 511;
+                }
                 // Raw 4-byte PF cell (bit layout shared with GameTiles::RowSampler,
                 // see runtime/renderer/game/tiles.hpp): attributes<<16 | code.
                 uint cell = PF_CELLS + (index * 2048u + uint(y / 16 * (extend ? 64 : 32) + x / 16)) * 2u +
@@ -203,6 +208,10 @@ uint shade(ivec2 pos, bool plane_b, out uint weight) {
                 if (!bitmap && (params.controls.w & 0x80000000u) != 0u) {
                     x = floor_scale((int(scene.words[row + F3_ROW_MOTION_TEXT_X]) * s + (q - 46 * s) * 256) >> 8, s) & 511;
                     y = (floor_scale(int(scene.words[row + F3_ROW_MOTION_TEXT_Y]) * s + sub_y * 256, s) >> 8) & 511;
+                }
+                if (flipped) {
+                    x ^= 511;
+                    y ^= bitmap ? 255 : 511;
                 }
                 // Raw big-endian text-map word (bit layout shared with
                 // GameText::pixel, see runtime/renderer/game/text.hpp): bits 0-7 glyph,

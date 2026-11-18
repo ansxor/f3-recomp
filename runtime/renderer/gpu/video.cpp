@@ -196,11 +196,14 @@ struct GpuVideo::Impl {
     SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr,
                             *interpolation_pipeline = nullptr;
     uint64_t presented_frames = 0; // accepted swapchain submissions
-    SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr;
+    SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr, *trail_upload = nullptr;
     std::vector<uint32_t> saved_pixels;
     Postprocess postprocess = Postprocess::Off;
     SDL_GPUGraphicsPipeline *post_pipeline = nullptr;
     SDL_GPUTexture *post_surface = nullptr;
+    unsigned rotation = 0;
+    SDL_GPUGraphicsPipeline *rotation_pipeline = nullptr;
+    SDL_GPUTexture *rotated_surface = nullptr;
     SDL_GPUTexture *comparison_native = nullptr;
     bool comparison_native_valid = false;
     bool rendered_post = false;
@@ -212,6 +215,8 @@ struct GpuVideo::Impl {
 #endif
         if (!device) return;
         SDL_WaitForGPUIdle(device);
+        if (trail_upload) SDL_ReleaseGPUTransferBuffer(device, trail_upload);
+        if (rotation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, rotation_pipeline);
         if (sprite_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, sprite_pipeline);
         if (scene_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, scene_pipeline);
         if (interpolation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, interpolation_pipeline);
@@ -221,6 +226,7 @@ struct GpuVideo::Impl {
         if (sprite_plane_b) SDL_ReleaseGPUTexture(device, sprite_plane_b);
         if (surface) SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
+        if (rotated_surface) SDL_ReleaseGPUTexture(device, rotated_surface);
         if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
         for (auto *buffer : {scene_buffer, pf_assets, sp_assets, native_buffer})
             if (buffer) SDL_ReleaseGPUBuffer(device, buffer);
@@ -242,7 +248,7 @@ struct GpuVideo::Impl {
         return checked(SDL_CreateGPUTransferBuffer(device, &info), "Create GPU transfer buffer");
     }
     SDL_GPUTexture *texture(SDL_GPUTextureFormat format, GameVideoOptions geometry,
-                            bool sprite = false) {
+                            bool sprite = false, bool portrait = false) {
         SDL_GPUTextureCreateInfo info{};
         info.type = SDL_GPU_TEXTURETYPE_2D;
         info.format = format;
@@ -250,6 +256,7 @@ struct GpuVideo::Impl {
         bool native_plane = sprite && !geometry.expanded();
         info.width = native_plane ? 432 : geometry.width();
         info.height = native_plane ? 256 : geometry.height();
+        if (portrait) std::swap(info.width, info.height);
         info.layer_count_or_depth = 1;
         info.num_levels = 1;
         info.sample_count = SDL_GPU_SAMPLECOUNT_1;
@@ -442,6 +449,11 @@ struct GpuVideo::Impl {
                                    SDL_GPU_TEXTUREFORMAT_R32_UINT);
         scene_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_frag,
                                   SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+        if (rotation) {
+            rotation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::rotate_frag,
+                                         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+            rotated_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options, false, true);
+        }
         if (interpolation != VideoInterpolation::Off) ensure_interpolation_pipeline();
         upload = transfer(pf_asset_bytes + sp_asset_bytes, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
         // Built unconditionally: palette interpolation may be enabled live (256 KiB per 8 MiB of tiles).
@@ -479,13 +491,15 @@ struct GpuVideo::Impl {
         auto geometry = options;
         geometry.scale = scale;
         SDL_GPUTexture *next_plane = nullptr, *next_plane_b = nullptr, *next_surface = nullptr,
-                       *next_post = nullptr;
+                       *next_post = nullptr, *next_rotated = nullptr;
         SDL_GPUTransferBuffer *next_download = nullptr;
         std::vector<uint32_t> next_pixels;
         try {
             next_plane = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, geometry, true);
             next_plane_b = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, geometry, true);
             next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
+            if (rotation)
+                next_rotated = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry, false, true);
             if (post_surface) next_post = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
             if (download)
                 next_download = transfer(geometry.width() * geometry.height() * 4,
@@ -497,6 +511,7 @@ struct GpuVideo::Impl {
             if (next_plane_b) SDL_ReleaseGPUTexture(device, next_plane_b);
             if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
             if (next_post) SDL_ReleaseGPUTexture(device, next_post);
+            if (next_rotated) SDL_ReleaseGPUTexture(device, next_rotated);
             if (next_download) SDL_ReleaseGPUTransferBuffer(device, next_download);
             throw;
         }
@@ -505,10 +520,14 @@ struct GpuVideo::Impl {
         SDL_ReleaseGPUTexture(device, sprite_plane_b);
         SDL_ReleaseGPUTexture(device, surface);
         if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
+        if (rotated_surface) SDL_ReleaseGPUTexture(device, rotated_surface);
+        rotated_surface = next_rotated;
         if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
         comparison_native = nullptr;
         comparison_native_valid = false;
         if (download) SDL_ReleaseGPUTransferBuffer(device, download);
+        if (trail_upload) SDL_ReleaseGPUTransferBuffer(device, trail_upload);
+        trail_upload = nullptr;
         sprite_plane = next_plane;
         sprite_plane_b = next_plane_b;
         surface = next_surface;
@@ -519,22 +538,66 @@ struct GpuVideo::Impl {
         rendered = false;
         interpolation_stats = {};
     }
-    SDL_GPURenderPass *render_pass(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target) {
+    SDL_GPURenderPass *render_pass(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target,
+                                      bool load = false) {
         SDL_GPUColorTargetInfo info{};
         info.texture = target;
-        info.load_op = SDL_GPU_LOADOP_CLEAR;
+        info.load_op = load ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         info.store_op = SDL_GPU_STOREOP_STORE;
         info.clear_color = {0, 0, 0, 1};
-        info.cycle = true;
+        info.cycle = !load;
         return checked(SDL_BeginGPURenderPass(command, &info, 1, nullptr), "Begin GPU render pass");
     }
-    void queue_download(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target) {
+    void upload_trail_seed(SDL_GPUCopyPass *copy, std::span<const uint16_t> seed) {
+        const bool expanded = options.expanded();
+        const unsigned width = expanded ? options.width() : 432;
+        const unsigned height = expanded ? options.height() : 256;
+        if (!trail_upload)
+            trail_upload = transfer(width * height * sizeof(uint32_t),
+                                    SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
+        auto *mapped = static_cast<uint32_t *>(
+            checked(SDL_MapGPUTransferBuffer(device, trail_upload, true), "Map GPU sprite trails"));
+        if (!expanded) {
+            std::copy(seed.begin(), seed.end(), mapped);
+        } else {
+            for (unsigned y = 0; y < height; ++y) {
+                const unsigned native_y = y / options.scale + geometry::FIRST_LINE;
+                for (unsigned x = 0; x < width; ++x) {
+                    const int native_x = int(x / options.scale) + 46 - int(options.border);
+                    mapped[size_t(y) * width + x] = native_x >= 46 && native_x < 366
+                        ? seed[size_t(native_y) * 432 + native_x] : 0;
+                }
+            }
+        }
+        SDL_UnmapGPUTransferBuffer(device, trail_upload);
+        // Display threads can skip scenes. Each snapshot carries its own hardware history.
+        const SDL_GPUTextureTransferInfo source{trail_upload, 0, width, height};
+        for (auto *plane : {sprite_plane, sprite_plane_b}) {
+            const SDL_GPUTextureRegion destination{plane, 0, 0, 0, 0, 0, width, height, 1};
+            SDL_UploadToGPUTexture(copy, &source, &destination, true);
+        }
+    }
+    void rotate_surface(SDL_GPUCommandBuffer *command, SDL_GPUTexture *source,
+                        SDL_GPUTexture *destination) {
+        const std::array<Uint32, 4> uniform{rotation};
+        SDL_PushGPUFragmentUniformData(command, 0, uniform.data(), sizeof(uniform));
+        auto *pass = render_pass(command, destination);
+        SDL_BindGPUGraphicsPipeline(pass, rotation_pipeline);
+        const SDL_GPUTextureSamplerBinding binding{source, sampler};
+        SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+        SDL_EndGPURenderPass(pass);
+    }
+    void queue_download(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target,
+                        bool portrait = false) {
+        const unsigned width = portrait ? options.height() : options.width();
+        const unsigned height = portrait ? options.width() : options.height();
         if (!download)
-            download = transfer(options.width() * options.height() * 4,
+            download = transfer(width * height * 4,
                                 SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
         auto *copy = checked(SDL_BeginGPUCopyPass(command), "Begin GPU readback copy");
-        SDL_GPUTextureRegion from{target, 0, 0, 0, 0, 0, options.width(), options.height(), 1};
-        SDL_GPUTextureTransferInfo to{download, 0, options.width(), options.height()};
+        SDL_GPUTextureRegion from{target, 0, 0, 0, 0, 0, width, height, 1};
+        SDL_GPUTextureTransferInfo to{download, 0, width, height};
         SDL_DownloadFromGPUTexture(copy, &from, &to);
         SDL_EndGPUCopyPass(copy);
     }
@@ -593,20 +656,20 @@ struct GpuVideo::Impl {
             draw(scene, {}, layer_mask, process_diagnostic, false, 1.0f, nullptr, {},
                  Presentation::Offscreen);
             if (!comparison_native)
-                comparison_native = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
+                comparison_native = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options,
+                                            false, rotation != 0);
             Command cache(device);
-            SDL_GPUBlitInfo blit{};
-            blit.source = {rendered_post ? post_surface : surface,
-                           0,
-                           0,
-                           0,
-                           0,
-                           options.width(),
-                           options.height()};
-            blit.destination = {comparison_native, 0, 0, 0, 0, options.width(), options.height()};
-            blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
-            blit.filter = SDL_GPU_FILTER_NEAREST;
-            SDL_BlitGPUTexture(cache.value, &blit);
+            auto *source = rendered_post ? post_surface : surface;
+            if (rotation) {
+                rotate_surface(cache.value, source, comparison_native);
+            } else {
+                SDL_GPUBlitInfo blit{};
+                blit.source = {source, 0, 0, 0, 0, options.width(), options.height()};
+                blit.destination = {comparison_native, 0, 0, 0, 0, options.width(), options.height()};
+                blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+                blit.filter = SDL_GPU_FILTER_NEAREST;
+                SDL_BlitGPUTexture(cache.value, &blit);
+            }
             if (!SDL_SubmitGPUCommandBuffer(cache.take())) fail("Submit native comparison cache");
             comparison_native_valid = true;
         }
@@ -660,7 +723,7 @@ struct GpuVideo::Impl {
         } else {
             // Per present: temporal geometry -> interpolation analysis -> one-way encode.
             MotionResult temporal_state;
-            if (temporal && motion) {
+            if (temporal && motion && scene.sprite_trail_seed.empty()) {
                 temporal_state = motion->apply(scene, alpha);
                 motion_stats = temporal_state.stats;
             }
@@ -686,21 +749,27 @@ struct GpuVideo::Impl {
         auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU frame copy");
         upload_buffer(copy, upload, scene.fallback ? native_buffer : scene_buffer, 0,
                       scene.fallback ? NATIVE_BYTES : frame_scene_bytes, true);
+        const bool trails = !scene.fallback && !scene.sprite_trail_seed.empty();
+        if (trails) upload_trail_seed(copy, scene.sprite_trail_seed);
         SDL_EndGPUCopyPass(copy);
         GpuUniforms uniforms{options.scale,           options.border,         options.width(),
                              options.height(),        uint32_t(sprites.size()), scene.pen_mask,
                              unsigned(scene.fallback), layer_mask & ALL_LAYERS};
+        if (trails) uniforms.layer_mask |= F3_MASK_SPRITE_TRAILS;
+        if (scene.flipped) uniforms.layer_mask |= F3_MASK_SCREEN_FLIPPED;
         uniforms.pf_tile_count = pf_asset_bytes / 256;
         uniforms.sp_tile_count = sp_asset_bytes / 256;
         if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
             uniforms.layer_mask |= MOTION_LAYER_MASK;
-        const bool blend = !scene.fallback && std::ranges::any_of(sprites, &SceneSprite::weighted);
+        const bool blend = !scene.fallback && !trails &&
+                           std::ranges::any_of(sprites, &SceneSprite::weighted);
         if (!scene.fallback) {
-            const auto sprite_pass = [&](SDL_GPUTexture *plane, uint32_t mask) {
+            const auto sprite_pass = [&](SDL_GPUTexture *plane, SDL_GPUTexture *seed,
+                                         uint32_t mask) {
                 auto pass_uniforms = uniforms;
                 pass_uniforms.layer_mask |= mask;
                 SDL_PushGPUVertexUniformData(command.value, 0, &pass_uniforms, sizeof(pass_uniforms));
-                auto *pass = render_pass(command.value, plane);
+                auto *pass = render_pass(command.value, plane, trails);
                 SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
                 if (!options.expanded()) {
                     SDL_Rect scissor{46, int(geometry::FIRST_LINE), int(geometry::NATIVE_WIDTH),
@@ -708,12 +777,14 @@ struct GpuVideo::Impl {
                     SDL_SetGPUScissor(pass, &scissor);
                 }
                 SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);
+                const SDL_GPUTextureSamplerBinding trail_binding{seed, sampler};
+                SDL_BindGPUFragmentSamplers(pass, 0, &trail_binding, 1);
                 SDL_BindGPUFragmentStorageBuffers(pass, 0, &sp_assets, 1);
                 SDL_DrawGPUPrimitives(pass, 6, uint32_t(sprites.size()), 0, 0);
                 SDL_EndGPURenderPass(pass);
             };
-            sprite_pass(sprite_plane, 0);
-            if (blend) sprite_pass(sprite_plane_b, F3_MASK_HIDE_WEIGHTED);
+            sprite_pass(sprite_plane, sprite_plane_b, 0);
+            if (blend) sprite_pass(sprite_plane_b, sprite_plane, F3_MASK_HIDE_WEIGHTED);
         }
         if (blend) uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
         SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
@@ -779,11 +850,15 @@ struct GpuVideo::Impl {
                     capture.download =
                         transfer(Uint32(bytes), SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
                 }
+                if (rotation) {
+                    rotate_surface(command.value, present_surface, rotated_surface);
+                    present_surface = rotated_surface;
+                }
                 const unsigned panes = comparison && w >= 2 ? 2 : 1;
                 for (unsigned pane = 0; pane < panes; ++pane) {
                     const Uint32 offset = panes == 2 && pane == 1 ? w / 2 : 0;
                     const Uint32 pane_width = panes == 1 ? w : (pane == 0 ? w / 2 : w - w / 2);
-                    const auto viewport = video_blit_for_window(scale_mode, options, pane_width, h);
+                    const auto viewport = video_blit_for_window(scale_mode, options, pane_width, h, rotation != 0);
                     SDL_GPUBlitInfo blit{};
                     blit.source = {panes == 2 && pane == 0 ? comparison_native : present_surface,
                                    0,
@@ -852,8 +927,11 @@ struct GpuVideo::Impl {
 GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options,
                    std::span<const uint8_t> playfield_assets,
                    std::span<const uint8_t> sprite_assets, bool linear, bool vsync,
-                   VideoInterpolation interpolation, InterpolationFields fields)
+                   VideoInterpolation interpolation, InterpolationFields fields, unsigned rotation)
     : m_impl(std::make_unique<Impl>()) {
+    if (rotation != 0 && rotation != 90 && rotation != 270)
+        throw std::invalid_argument("Unsupported GPU presentation rotation");
+    m_impl->rotation = rotation;
     m_impl->window = window;
     m_impl->options = options;
     m_impl->linear = linear;
@@ -914,7 +992,8 @@ void GpuVideo::capture_motion(const SceneSnapshot &scene, uint64_t frame) {
         enable_display_pacing();
         m_impl->motion = std::make_unique<GpuMotionHistory>(m_impl->options);
     }
-    m_impl->motion->capture(scene, frame);
+    if (scene.sprite_trail_seed.empty()) m_impl->motion->capture(scene, frame);
+    else m_impl->motion->reset();
     m_impl->comparison_native_valid = false;
 }
 void GpuVideo::reset_motion() {
@@ -978,14 +1057,19 @@ void GpuVideo::save_surface(const char *path) {
     if (!m_impl->rendered) throw std::runtime_error("No GPU surface has been drawn");
     m_impl->saved_pixels.resize(size_t(m_impl->options.width()) * m_impl->options.height());
     Command command(m_impl->device);
-    m_impl->queue_download(command.value,
-                           m_impl->rendered_post ? m_impl->post_surface : m_impl->surface);
+    auto *source = m_impl->rendered_post ? m_impl->post_surface : m_impl->surface;
+    const bool portrait = m_impl->rotation != 0;
+    if (portrait) {
+        m_impl->rotate_surface(command.value, source, m_impl->rotated_surface);
+        source = m_impl->rotated_surface;
+    }
+    m_impl->queue_download(command.value, source, portrait);
     m_impl->finish_readback(command, m_impl->saved_pixels);
-    auto *surface =
-        checked(SDL_CreateSurfaceFrom(int(m_impl->options.width()), int(m_impl->options.height()),
-                                      SDL_PIXELFORMAT_ARGB8888, m_impl->saved_pixels.data(),
-                                      int(m_impl->options.width() * 4)),
-                "Create GPU capture surface");
+    const unsigned width = portrait ? m_impl->options.height() : m_impl->options.width();
+    const unsigned height = portrait ? m_impl->options.width() : m_impl->options.height();
+    auto *surface = checked(SDL_CreateSurfaceFrom(int(width), int(height), SDL_PIXELFORMAT_ARGB8888,
+                                                   m_impl->saved_pixels.data(), int(width * 4)),
+                            "Create GPU capture surface");
     const char *extension = std::strrchr(path, '.');
     bool saved = extension && SDL_strcasecmp(extension, ".png") == 0 ? SDL_SavePNG(surface, path)
                                                                      : SDL_SaveBMP(surface, path);

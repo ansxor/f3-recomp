@@ -843,7 +843,8 @@ void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept {
     const unsigned last = std::min(first + COMPOSE_CHUNK_ROWS, rows);
     if (first >= last) return;
     raster_sprite_chunk(*job.bins, job.sprites, chunk, job.pen_mask, job.sprite_tiles, job.plane,
-                        SpriteRasterOptions{job.geometry}, job.coverage);
+                        SpriteRasterOptions{job.geometry, job.sprite_flipped}, job.coverage,
+                        job.sprite_trail_seed);
     std::array<uint32_t, MAX_WIDTH> argb_scratch;
     RowSetup setup;
     setup.valid = false;

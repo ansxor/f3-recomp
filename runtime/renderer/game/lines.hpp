@@ -18,7 +18,7 @@ public:
 
     void reset();
     // Decode the per-scanline line RAM plus the control registers from VRAM.
-    void decode(const VideoRam &vram);
+    void decode(const VideoRam &vram, bool flipped = false);
     void prepare(bool flipped);
     // After prepare(): flag playfield rows whose sampled map row holds no tile codes.
     void cull_empty_rows(const class GameTiles &tiles);
@@ -135,7 +135,7 @@ private:
     RamShadow<LATCH_BYTES> m_shadow_latches;
     RamShadow<SECTION_BYTES> m_shadow_sections;
     RamShadow<0x20> m_shadow_control;
-    bool m_rows_current = false, m_rows_flipped = false;
+    bool m_rows_current = false, m_rows_flipped = false, m_decode_flipped = false;
     uint64_t m_rows_version = fresh_content_version();
     void forget_decode() {
         m_shadow_latches.invalidate();

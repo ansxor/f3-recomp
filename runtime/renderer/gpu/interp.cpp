@@ -77,11 +77,12 @@ bool safe_palette(const SceneSnapshot &frame, const Row &a, const Row &b, unsign
     const int y0 = int(floor_divide(std::min(a.phase, phase_b), int64_t(16) * 256));
     const int y1 = int(floor_divide(std::max(a.phase, phase_b) + 256, int64_t(16) * 256));
     const int low = std::min(a.palette, b.palette), high = std::max(a.palette, b.palette);
+    const unsigned flip = frame.flipped ? ~0u : 0u;
     for (int cy = y0; cy <= y1; ++cy) {
         for (int64_t cx = floor_divide(x0 - 256, int64_t(16) * 256);
              cx <= floor_divide(x1 + 256, int64_t(16) * 256); ++cx) {
-            const unsigned cell = (unsigned(cy) & 31) * GameTiles::COLUMNS +
-                                  (unsigned(cx) & (GameTiles::COLUMNS - 1));
+            const unsigned cell = ((unsigned(cy) ^ flip) & 31) * GameTiles::COLUMNS +
+                                  ((unsigned(cx) ^ flip) & (GameTiles::COLUMNS - 1));
             // Raw 4-byte PF cell (attributes<<16 | code); see runtime/renderer/game/tiles.hpp.
             const uint32_t raw = frame.tiles.cells(pf)[cell];
             const unsigned attr = raw >> 16, code = raw & 65535;

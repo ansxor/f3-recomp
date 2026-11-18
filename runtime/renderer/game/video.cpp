@@ -115,15 +115,19 @@ struct GameVideo::Impl {
             std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
             frame.rows_version = lines.rows_version();
         }
-        const auto current =
-            enhancements.empty() ? sprites.presented_sprites() : enhancements.sprites();
+        auto current = sprites.sprites();
+        if (!sprites.trails())
+            current = enhancements.empty() ? sprites.presented_sprites() : enhancements.sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
         const auto canonical = sprites.sprites();
         frame.canonical_sprite_count = unsigned(canonical.size());
         std::copy(canonical.begin(), canonical.end(), frame.canonical_sprites.begin());
         frame.pen_mask = sprites.pen_mask();
-        frame.flipped = sprites.flipped();
+        frame.flipped = scanout_flipped();
+        frame.sprite_flipped = sprites.flipped();
+        const auto trail_seed = sprites.trail_seed();
+        frame.sprite_trail_seed.assign(trail_seed.begin(), trail_seed.end());
         if (frame.colors_version != colors_version) {
             frame.colors = colors;
             frame.colors_version = colors_version;
@@ -153,11 +157,18 @@ struct GameVideo::Impl {
     auto stateful() { return std::tie(sprites, lines); }
     auto stateful() const { return std::tie(sprites, lines); }
     template <SceneSource... S> static void reset_all(S &...s) { (s.reset(), ...); }
-    void decode(const VideoRam &vram, const SpritePresentation &presentation) {
-        tiles.decode(vram);
-        text.decode(vram);
-        sprites.decode(vram, presentation);
-        lines.decode(vram);
+    bool scanout_flipped() const {
+        // Lag 2 delays the sprite framebuffer, while the scanout sees the latest register.
+        return game_config::video.sprite_lag == 2 ? sprites.m_reg_flipped : sprites.flipped();
+    }
+    void latch_sprites() {
+        sprites.latch(machine.video->sprite_tiles());
+        if (!enhancements.empty()) {
+            const auto frame = machine.sprites
+                                   ? SpriteFrame::read(machine.sprites->tracker(), sprites.flipped())
+                                   : std::nullopt;
+            enhancements.present(sprites.presented_sprites(), frame);
+        }
     }
     template <Snapshotable... S> static size_t state_size_all(const S &...s) {
         return (size_t(0) + ... + s.state_size());
@@ -171,19 +182,21 @@ struct GameVideo::Impl {
     // Playfield tiles and text are derived from serialized video RAM, so
     // their caches are not serialized.
     size_t state_size() const {
-        return 1 +
+        return 1 + GameSprites::TRAIL_STATE_SIZE +
                std::apply([](const auto &...c) { return Impl::state_size_all(c...); }, stateful());
     }
     void save_state(StateWriter &writer) const {
         uint8_t r = rendered ? 1 : 0;
         writer.write(r);
         std::apply([&](const auto &...c) { Impl::save_all(writer, c...); }, stateful());
+        sprites.save_trails(writer);
     }
     void load_state(StateReader &reader) {
         uint8_t r;
         reader.read(r);
         rendered = r != 0;
         std::apply([&](auto &...c) { Impl::load_all(reader, c...); }, stateful());
+        sprites.load_trails(reader);
         native_pending = false;
     }
 };
@@ -198,10 +211,6 @@ Machine &require_matching_video(Machine &machine) {
             "differs from the geometry this build was configured for");
     return machine;
 }
-static_assert(game_config::video.rotation == 0,
-              "GameVideo does not rotate the scanout (video.rotation == 0)");
-static_assert(game_config::video.sprite_lag == 1,
-              "GameVideo latches sprites with exactly one frame of lag (video.sprite_lag == 1)");
 } // namespace
 
 GameVideo::GameVideo(Machine &machine, GameVideoMode mode, RenderEnhancements enhancements)
@@ -238,18 +247,18 @@ void GameVideo::render_frame() {
     auto &state = *m_impl;
     auto &m = state.machine;
     state.enter(VideoStage::Decode);
-    // VBSTART: video RAM is the source of truth. Decode this frame's playfield,
-    // text, sprite (next submission) and scanline layers from it before rendering.
-    // Render below still uses the previously latched sprite plane, preserving the
-    // one-frame FDP sprite lag.
     const VideoRam vram{m.graphics, m.control, m.frame + 1};
-    state.decode(vram, m.sprites && m.sprites->active() ? m.sprites->presentation()
-                                                        : SpritePresentation{});
+    const auto decode_sprites = [&] {
+        state.sprites.decode(vram, m.sprites && m.sprites->active() ? m.sprites->presentation()
+                                                                   : SpritePresentation{});
+    };
+    state.tiles.decode(vram);
+    state.text.decode(vram);
+    // Lag 0 draws before scanout. Lag 2 draws the old submission after scanout.
+    if constexpr (game_config::video.sprite_lag != 2) decode_sprites();
+    if constexpr (game_config::video.sprite_lag == 0) state.latch_sprites();
+    state.lines.decode(vram, state.scanout_flipped());
     state.refresh_colors();
-    if (state.sprites.presented_valid()) {
-        ++state.presented_frames;
-        state.presented_overflow_frames += state.sprites.presented_overflow();
-    }
     state.enter(VideoStage::Scene);
     render();
     state.enter(VideoStage::Oracle);
@@ -267,13 +276,11 @@ void GameVideo::render_frame() {
     state.native_pending = state.rendered && state.mode == GameVideoMode::Game;
     if (state.rendered && state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
     state.enter(VideoStage::Latch);
-    state.sprites.latch();
-    if (!state.enhancements.empty()) {
-        const auto latched = state.sprites.presented_sprites();
-        const auto frame = state.rendered && m.sprites
-                               ? SpriteFrame::read(m.sprites->tracker(), state.sprites.flipped())
-                               : std::nullopt;
-        state.enhancements.present(latched, frame);
+    if constexpr (game_config::video.sprite_lag != 0) state.latch_sprites();
+    if constexpr (game_config::video.sprite_lag == 2) decode_sprites();
+    if (state.sprites.presented_valid()) {
+        ++state.presented_frames;
+        state.presented_overflow_frames += state.sprites.presented_overflow();
     }
     state.enter(VideoStage::Idle);
 }
@@ -283,17 +290,7 @@ void GameVideo::set_probe(VideoProbe *probe) { m_impl->probe = probe; }
 void GameVideo::render() {
     auto &state = *m_impl;
     state.rendered = false;
-    // Every layer decodes from video RAM, so only these features the scene
-    // renderer does not draw force the FDP oracle fallback.
-    if (state.sprites.flipped()) {
-        state.fallback("sprites", "flipped-screen");
-        return;
-    }
-    if (state.sprites.trails()) {
-        state.fallback("sprites", "sprite-trails");
-        return;
-    }
-    state.lines.prepare(state.sprites.flipped());
+    state.lines.prepare(state.scanout_flipped());
     state.lines.cull_empty_rows(state.tiles);
     if constexpr (game_config::video.full_resolution_alt_maps) {
         state.alt_maps.update(state.tiles, state.machine.video->playfield_tiles());
@@ -316,6 +313,9 @@ void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
     const auto assets = m.video->playfield_tiles();
     auto &plane = m_impl->sprite_plane;
     plane.resize(size_t(432) * 256);
+    std::ranges::fill(plane, 0);
+    const auto seed = m_impl->sprites.trail_seed();
+    std::ranges::copy(seed, plane.begin());
     m_impl->sprites.raster(m.video->sprite_tiles(), plane);
     if (layer_mask & layer_bit(LayerId::Text)) m.video->prepare_text_inspection(m.graphics);
     if (layer_mask == ALL_LAYERS) m_impl->lines.compare_rows(*m.video, frame);
@@ -501,6 +501,9 @@ void GameVideo::report(std::ostream &output) const {
     }
 }
 size_t GameVideo::state_size() const { return m_impl->state_size(); }
+bool GameVideo::accepts_state_size(size_t size) const {
+    return size == state_size() || size == state_size() - GameSprites::TRAIL_STATE_SIZE;
+}
 void GameVideo::save_state(std::span<uint8_t> dst) const {
     static_assert(Snapshotable<Impl>);
     if (dst.size() != state_size()) {
@@ -514,11 +517,16 @@ void GameVideo::save_state(std::span<uint8_t> dst) const {
     }
 }
 void GameVideo::load_state(std::span<const uint8_t> src) {
-    if (src.size() != state_size()) {
+    if (!accepts_state_size(src.size())) {
         throw std::invalid_argument("GameVideo::load_state size mismatch");
     }
     StateReader reader(src);
     m_impl->load_state(reader);
+    if (src.size() != state_size() && m_impl->sprites.trails()) {
+        // Older slots saved this framebuffer in FDP while GameVideo fell back.
+        const auto plane = m_impl->machine.video->sprite_plane();
+        std::ranges::copy(plane, m_impl->sprites.m_trail_seed.begin());
+    }
     if (!m_impl->enhancements.empty())
         m_impl->enhancements.present(m_impl->sprites.presented_sprites(), std::nullopt);
     {

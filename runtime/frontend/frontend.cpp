@@ -738,20 +738,21 @@ int main(int argc, char **argv) try {
         if (backend == f3rt::VideoBackend::Gpu) {
             const SDL_WindowFlags flags =
                 SDL_WINDOW_RESIZABLE | (automatic_scale ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0);
-            sdl.window = SDL_CreateWindow(("f3rt — " + set).c_str(),
-                                          int((320 + video_options.border * 2) * 3), 696, flags);
+            const int window_height = portrait ? int(display_height * 3) : 696;
+            sdl.window = SDL_CreateWindow(("f3rt — " + set).c_str(), int(display_width * 3),
+                                          window_height, flags);
             check(sdl.window != nullptr);
             if (automatic_scale) {
                 int pixel_width = 0, pixel_height = 0;
                 check(SDL_GetWindowSizeInPixels(sdl.window, &pixel_width, &pixel_height));
                 video_options.scale = f3rt::video_scale_for_window(
                     video_scale_mode, unsigned(std::max(pixel_width, 0)),
-                    unsigned(std::max(pixel_height, 0)), video_options.border);
+                    unsigned(std::max(pixel_height, 0)), video_options.border, portrait);
             }
             sdl.gpu = std::make_unique<f3rt::GpuVideo>(
                 sdl.window, video_options, m.video->playfield_tiles(), m.video->sprite_tiles(),
                 video_filter == "linear", throttle, parse_interpolation_mode(video_interp),
-                *interpolation_fields);
+                *interpolation_fields, rotation);
             sdl.gpu->set_scale_mode(video_scale_mode);
             if (postprocess != "off")
                 sdl.gpu->set_postprocess(postprocess == "crt" ? f3rt::Postprocess::Crt
@@ -1592,7 +1593,7 @@ int main(int argc, char **argv) try {
                                                                 &pixel_height));
                                 requested.scale = f3rt::video_scale_for_window(
                                     video_scale_mode, unsigned(std::max(pixel_width, 0)),
-                                    unsigned(std::max(pixel_height, 0)), video_options.border);
+                                    unsigned(std::max(pixel_height, 0)), video_options.border, portrait);
                             }
                             if (requested.scale != video_options.scale) {
                                 // Applied to the GPU once a snapshot captured at this scale arrives.
@@ -1760,7 +1761,7 @@ int main(int argc, char **argv) try {
                             scale_pending = false;
                             const unsigned target = f3rt::video_scale_for_window(
                                 video_scale_mode, unsigned(std::max(pixel_width, 0)),
-                                unsigned(std::max(pixel_height, 0)), video_options.border);
+                                unsigned(std::max(pixel_height, 0)), video_options.border, portrait);
                             const unsigned previous = video_options.scale;
                             if (target != previous) {
                                 // The GPU follows when the first snapshot at the new scale arrives.

@@ -144,8 +144,8 @@ void GpuMotionHistory::pair_sprites(const SceneSnapshot &scene, int32_t *dx, int
                           motion_delta(origin.group_y, v.group_y);
         eligible[i] = geometry && jump;
         if (eligible[i]) {
-            dx[i] = gx;
-            dy[i] = gy;
+            dx[i] = scene.sprite_flipped ? -gx : gx;
+            dy[i] = scene.sprite_flipped ? -gy : gy;
         } else if (gx || gy) {
             ++m_pair_stats.rejected_sprites;
             if (!geometry) ++m_pair_stats.sprite_transform_rejections;
@@ -254,7 +254,8 @@ void GpuMotionHistory::capture(const SceneSnapshot &scene, uint64_t frame) noexc
         return;
     }
     m_paired =
-        m_captured && m_frame != std::numeric_limits<uint64_t>::max() && frame == m_frame + 1;
+        m_captured && m_frame != std::numeric_limits<uint64_t>::max() && frame == m_frame + 1 &&
+        scene.flipped == m_flipped && scene.sprite_flipped == m_sprite_flipped;
     m_pair_stats = {};
     const auto &current = scene.sprites;
     bool sprites_changed = m_sprite_count != scene.sprite_count;
@@ -339,11 +340,14 @@ void GpuMotionHistory::capture(const SceneSnapshot &scene, uint64_t frame) noexc
     m_frame = frame;
     m_sprite_count = scene.sprite_count;
     m_pen_mask = scene.pen_mask;
+    m_flipped = scene.flipped;
+    m_sprite_flipped = scene.sprite_flipped;
     m_captured = true;
 }
 MotionResult GpuMotionHistory::apply(const SceneSnapshot &scene, float alpha) const noexcept {
     if (!std::isfinite(alpha) || alpha < 0 || alpha > 1 || !m_paired || scene.fallback ||
-        scene.sprite_count != m_sprite_count || scene.pen_mask != m_pen_mask)
+        scene.sprite_count != m_sprite_count || scene.pen_mask != m_pen_mask ||
+        scene.flipped != m_flipped || scene.sprite_flipped != m_sprite_flipped)
         return {};
     MotionResult result;
     MotionInterpolationStats &stats = result.stats;

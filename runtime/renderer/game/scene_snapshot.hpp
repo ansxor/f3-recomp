@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace f3rt {
 
@@ -29,6 +30,8 @@ struct SceneSnapshot {
     uint64_t rows_version = 0, colors_version = 0;
     uint8_t pen_mask = 15;
     bool flipped = false;
+    bool sprite_flipped = false;
+    std::vector<uint16_t> sprite_trail_seed;
     // Oracle-fallback frame: only native_pixels (320 x geometry::HEIGHT ARGB) is meaningful.
     bool fallback = true;
     std::array<uint32_t, geometry::NATIVE_PIXELS> native_pixels{};

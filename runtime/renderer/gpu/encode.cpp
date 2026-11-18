@@ -188,7 +188,8 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
             at[F3_SPRITE_WEIGHT] = std::clamp(fixed, 1u, F3_SPRITE_WEIGHT_SCALE - 1);
         }
         at[F3_SPRITE_FLIP] = (s.flip_x ? F3_SPRITE_FLIP_X : 0u) |
-                             (s.flip_y ? F3_SPRITE_FLIP_Y : 0u);
+                             (s.flip_y ? F3_SPRITE_FLIP_Y : 0u) |
+                             (frame.sprite_flipped ? F3_SPRITE_SCREEN_FLIPPED : 0u);
     }
     if (coefficients) encode_coefficients(*coefficients, w + F3_SCENE_INTERP);
 }

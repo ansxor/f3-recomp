@@ -15,7 +15,7 @@ inline void frontend_state_slot(Machine &machine, const std::filesystem::path &p
     // Layout: magic[0,8) ROM CRCs[8,36) state size[36,40) state CRC[40,44) scale[44,48) border[48,52).
     constexpr size_t HEADER_SIZE = 52;
     std::array<uint8_t, HEADER_SIZE> header{};
-    constexpr std::array<uint8_t, 8> MAGIC{'F', '3', 'S', 'L', 'O', 'T', '0', '2'};
+    constexpr std::array<uint8_t, 8> MAGIC{'F', '3', 'S', 'L', 'O', 'T', '0', '3'};
     std::copy(MAGIC.begin(), MAGIC.end(), header.begin());
     auto put = [&](size_t offset, uint32_t value) {
         for (unsigned i = 0; i < 4; ++i) header[offset + i] = uint8_t(value >> (24 - i * 8));
@@ -51,17 +51,23 @@ inline void frontend_state_slot(Machine &machine, const std::filesystem::path &p
         return;
     }
     std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in || in.tellg() < 0 ||
-        static_cast<size_t>(in.tellg()) != HEADER_SIZE + machine.state_size())
+    const auto file_size = in.tellg();
+    if (!in || file_size < std::streamoff(HEADER_SIZE) ||
+        !machine.accepts_state_size(size_t(file_size) - HEADER_SIZE))
         throw std::runtime_error("Save-state slot is missing or has an incompatible size: " +
                                  path.string());
+    const size_t state_size = size_t(file_size) - HEADER_SIZE;
     in.seekg(0);
     std::array<uint8_t, HEADER_SIZE> received{};
     in.read(reinterpret_cast<char *>(received.data()), received.size());
-    if (!in || !std::equal(header.begin(), header.begin() + 40, received.begin()) ||
+    const bool legacy = received[7] == '2';
+    if (legacy) header[7] = '2';
+    put(36, uint32_t(state_size));
+    if (!in || (!legacy && state_size != machine.state_size()) ||
+        !std::equal(header.begin(), header.begin() + 40, received.begin()) ||
         !std::equal(header.begin() + 44, header.end(), received.begin() + 44))
         throw std::runtime_error("Save-state ROM/scale/border does not match this session");
-    std::vector<uint8_t> bytes(machine.state_size()), previous(machine.state_size());
+    std::vector<uint8_t> bytes(state_size), previous(machine.state_size());
     in.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     uint32_t checksum = 0;
     for (unsigned i = 0; i < 4; ++i) checksum = (checksum << 8) | received[40 + i];

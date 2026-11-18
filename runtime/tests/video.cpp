@@ -1032,6 +1032,143 @@ TEST(GameCompositor, GpuSpriteBlendUsesLinearLight) {
     }
 }
 
+TEST(GameCompositor, FlippedBitmapPivotMatchesFdpWithWrappedAttributeBank) {
+    constexpr unsigned SPRITE_Y = 6, SPRITE_COMMAND = 10;
+    constexpr unsigned PIVOT_MODE_TABLE = LINE_SELECT_TABLE - f3rt::LINERAM_SUBSECTION_STRIDE;
+    constexpr unsigned PIVOT_LATCH_TABLE = LINE_LATCH_TABLE + f3rt::LINERAM_LATCH_STRIDE;
+    constexpr unsigned LINE_PIVOT_MIX = f3rt::OFFS_LINERAM + f3rt::LINERAM_SECTIONS_OFFSET +
+                                        3 * f3rt::LINERAM_SECTION_STRIDE +
+                                        f3rt::LINERAM_SUBSECTION_STRIDE +
+                                        f3rt::LINERAM_BANK_OFFSET;
+    constexpr unsigned PIVOT_Y_CONTROL = 26;
+    constexpr unsigned LAST_SCANLINE = 255;
+    std::array<uint8_t, f3rt::GRAPHICS_RAM_SIZE> graphics{};
+    std::array<uint8_t, f3rt::PALETTE_RAM_SIZE> palette{};
+    std::array<uint8_t, 32> control{};
+    std::array<uint8_t, 128> rom{};
+    set_word(graphics, SPRITE_Y, 0x8000);
+    set_word(graphics, SPRITE_COMMAND, 0x2000);
+    set_word(control, PIVOT_Y_CONTROL, 0x28);
+    set_word(graphics, LINE_LATCH_TABLE + LAST_SCANLINE * 2, 7);
+    set_word(graphics, PIVOT_MODE_TABLE + LAST_SCANLINE * 2,
+             0xa000);
+    set_word(graphics, LINE_SELECT_TABLE + LAST_SCANLINE * 2, 0);
+    set_word(graphics, LINE_MODE_TABLE + LAST_SCANLINE * 2, 0x6000);
+    set_word(graphics, PIVOT_LATCH_TABLE + LAST_SCANLINE * 2,
+             0x20);
+    set_word(graphics, LINE_PIVOT_MIX + LAST_SCANLINE * 2, 0x2001);
+    std::mt19937_64 rng(73);
+    for (auto at = graphics.begin() + f3rt::OFFS_PIVOT; at != graphics.end(); ++at)
+        *at = uint8_t(rng());
+    for (unsigned i = 0; i < f3rt::TEXTRAM_TILES; ++i)
+        set_word(graphics, f3rt::OFFS_TEXTRAM_MAP + i * 2, uint16_t(rng()));
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    for (unsigned i = 0; i < scene->colors.size(); ++i) {
+        const uint32_t color = i * 1234567u & 0xffffff;
+        scene->colors[i] = color;
+        set_color(palette, i * 4, color);
+    }
+    const f3rt::VideoRam vram{graphics, control, 0};
+    f3rt::GameLines lines;
+    lines.decode(vram, true);
+    lines.prepare(true);
+    std::ranges::copy(lines.rows(), scene->rows.begin());
+    scene->text.decode(vram);
+    scene->flipped = true;
+    scene->fallback = false;
+    const unsigned y = f3rt::geometry::FIRST_LINE;
+    ASSERT_TRUE(scene->rows[y].bitmap && scene->rows[y].text.enabled);
+
+    f3rt::Video fdp;
+    const f3rt::VideoConfig config{0, 0, f3rt::geometry::FIRST_LINE, f3rt::geometry::HEIGHT};
+    ASSERT_TRUE(fdp.load_roms(rom, {}, rom, {}, config));
+    std::vector<uint32_t> expected(f3rt::geometry::NATIVE_PIXELS), actual(expected.size());
+    fdp.render_frame(palette, graphics, control, expected);
+    ASSERT_NE(std::ranges::count(expected, 0xff000000u), std::ssize(expected));
+    const f3rt::TileRowTable tiles(fdp.playfield_tiles());
+    f3rt::IndexedScratch scratch;
+    f3rt::compose_snapshot_indexed(*scene, tiles, fdp.sprite_tiles(), scratch, actual, 320,
+                                    f3rt::PixelFormat::Argb8888, {});
+    EXPECT_EQ(actual, expected);
+    GpuReference gpu(fdp.playfield_tiles(), fdp.sprite_tiles());
+    if (const auto pixels = gpu.render(*scene, {})) EXPECT_EQ(*pixels, expected);
+}
+
+TEST(GameCompositor, TrailSeedKeepsPreviousPixelsAcrossFramesAndStateLoad) {
+    std::vector<uint8_t> graphics(f3rt::GRAPHICS_RAM_SIZE);
+    const std::array<uint8_t, 32> control{};
+    const f3rt::VideoRam vram{graphics, control, 0};
+    std::array<uint8_t, 512> sprites{};
+    std::fill_n(sprites.begin() + 256, 256, uint8_t(0x1f));
+    std::array<uint8_t, 256> tiles{};
+    const f3rt::TileRowTable tile_rows(tiles);
+    const unsigned y = f3rt::geometry::FIRST_LINE;
+    constexpr unsigned ENTRY_BYTES = 16;
+    constexpr unsigned SPRITE_X = 4, SPRITE_Y = 6, SPRITE_COLOR = 8, SPRITE_COMMAND = 10;
+    constexpr unsigned SPRITE_TERMINATOR = 12;
+    set_word(graphics, SPRITE_Y, 0x8000);
+    set_word(graphics, ENTRY_BYTES, 1);
+    set_word(graphics, ENTRY_BYTES + SPRITE_Y, uint16_t(y));
+    set_word(graphics, 2 * ENTRY_BYTES + SPRITE_TERMINATOR, 0x8001);
+
+    f3rt::GameSprites source;
+    auto submit = [&](unsigned x, uint8_t palette, bool trails) {
+        set_word(graphics, SPRITE_COMMAND, trails ? 0x0102 : 0x0100);
+        set_word(graphics, ENTRY_BYTES + SPRITE_X, uint16_t(x));
+        set_word(graphics, ENTRY_BYTES + SPRITE_COLOR, palette);
+        source.decode(vram);
+        source.latch(sprites);
+    };
+    submit(46, 1, false);
+    submit(54, 2, true);
+
+    std::vector<uint8_t> state(source.state_size() + f3rt::GameSprites::TRAIL_STATE_SIZE);
+    f3rt::StateWriter writer(state);
+    source.save_state(writer);
+    source.save_trails(writer);
+    source.reset();
+    f3rt::StateReader reader(state);
+    source.load_state(reader);
+    source.load_trails(reader);
+
+    auto frame = std::make_unique<f3rt::SceneSnapshot>();
+    frame->fallback = false;
+    frame->colors[0x101f] = 0xff0000;
+    frame->colors[0x103f] = 0x00ff00;
+    for (auto &row : frame->rows) {
+        auto &layer = row.layer(f3rt::LayerId::Sp0);
+        layer.enabled = true;
+        layer.priority = 1;
+        row.blend[2] = 8;
+    }
+    GpuReference gpu(tiles, sprites);
+    f3rt::IndexedScratch scratch;
+    std::vector<uint32_t> pixels(f3rt::geometry::NATIVE_PIXELS);
+    const auto draw = [&] {
+        const auto seed = source.trail_seed();
+        frame->sprite_trail_seed.assign(seed.begin(), seed.end());
+        frame->pen_mask = source.pen_mask();
+        frame->sprite_count = unsigned(source.sprites().size());
+        std::ranges::copy(source.sprites(), frame->sprites.begin());
+        f3rt::compose_snapshot_indexed(*frame, tile_rows, sprites, scratch, pixels, 320,
+                                        f3rt::PixelFormat::Argb8888, {});
+        if (const auto gpu_pixels = gpu.render(*frame, {})) EXPECT_EQ(*gpu_pixels, pixels);
+    };
+    draw();
+    EXPECT_EQ(pixels[0], 0xffff0000u);
+    EXPECT_EQ(pixels[8], 0xffff0000u);
+    EXPECT_EQ(pixels[16], 0xff00ff00u);
+    submit(78, 2, true);
+    draw();
+    EXPECT_EQ(pixels[16], 0xff00ff00u);
+    EXPECT_EQ(pixels[32], 0xff00ff00u);
+    submit(78, 2, false);
+    draw();
+    EXPECT_EQ(pixels[0], 0xff000000u);
+    EXPECT_EQ(pixels[16], 0xff000000u);
+    EXPECT_EQ(pixels[32], 0xff00ff00u);
+}
+
 TEST(GameCompositor, IndexedMatchesGpu) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
@@ -1356,7 +1493,7 @@ std::vector<uint16_t> reference_sprite_raster(std::span<const f3rt::SceneSprite>
                     pixels[(y ^ (sprite.flip_y ? 15 : 0)) * 16 + (x ^ (sprite.flip_x ? 15 : 0))] &
                     pen_mask;
                 if (!pen) continue;
-                const uint16_t color = uint16_t(0x1000 + (unsigned(sprite.palette) << 4) + pen);
+                const uint16_t color = uint16_t(0x1000 | (unsigned(sprite.palette) << 4) | pen);
                 const int first_x = std::max(left, start_x), last_x = std::min(right, end_x);
                 for (int dy = std::max(top, start_y); dy < std::min(bottom, end_y); ++dy)
                     for (int dx = first_x; dx < last_x; ++dx)

@@ -68,6 +68,7 @@ private:
     uint64_t m_frame = 0;
     unsigned m_sprite_count = 0;
     uint8_t m_pen_mask = 0;
+    bool m_flipped = false, m_sprite_flipped = false;
     int m_border = 0;
     bool m_captured = false, m_paired = false;
     MotionInterpolationStats m_pair_stats{};

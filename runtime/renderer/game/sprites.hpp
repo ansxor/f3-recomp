@@ -107,7 +107,8 @@ private:
 void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sprites,
                          unsigned chunk, uint8_t pen_mask, std::span<const uint8_t> assets,
                          std::span<uint16_t> plane, SpriteRasterOptions options,
-                         SpriteCoverage &coverage);
+                         SpriteCoverage &coverage,
+                         std::span<const uint16_t> trail_seed = {});
 
 struct DecodedSpriteEntry;
 SceneSprite scene_sprite(const DecodedSpriteEntry &entry);
@@ -117,15 +118,20 @@ public:
     GameSprites() { reset(); }
 
     void reset();
-    // Decode the sprite display list from VRAM (0x00000, 0x10000 bytes) into the
-    // next submission. Defined per game under games/<game>/video/.
+    // Decode the sprite display list from VRAM into the next submission.
     void decode(const VideoRam &vram, const SpritePresentation &presentation = {});
-    void latch();
+    void latch(std::span<const uint8_t> assets = {});
+    std::span<const uint16_t> trail_seed() const {
+        return trails() ? std::span<const uint16_t>(m_trail_seed) : std::span<const uint16_t>{};
+    }
+    static constexpr size_t TRAIL_STATE_SIZE = sprite_plane_size({}) * sizeof(uint16_t);
+    void save_trails(StateWriter &writer) const;
+    void load_trails(StateReader &reader);
     void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
                 GameVideoOptions options = {}) const;
     std::span<const SceneSprite> sprites() const;
     // Presentation source for the next decode (null = none); set by GameVideo around decode.
-    // Render-only: current sprites with unit splices applied, else sprites(). Same flip mirroring.
+    // Render-only: latched sprite list with unit splices applied.
     std::span<const SceneSprite> presented_sprites() const;
     bool flipped() const;
     // The last decode produced a presented list (splices) and whether it hit MAX_PRESENTED_SPRITES.
@@ -153,6 +159,7 @@ private:
     bool m_current_flipped = false;
     uint8_t m_current_pen_mask = 15;
     bool m_current_trails = false;
+    std::array<uint16_t, sprite_plane_size({})> m_trail_seed{};
 
     bool m_reg_flipped = false;
     uint8_t m_reg_pen_mask = 15;

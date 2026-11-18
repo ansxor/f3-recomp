@@ -96,6 +96,8 @@ struct IndexedComposeJob {
     PixelFormat format = PixelFormat::Argb8888;
     GameVideoOptions geometry{};
     IndexedFrameStats *stats = nullptr;
+    bool sprite_flipped = false;
+    std::span<const uint16_t> sprite_trail_seed;
 };
 
 void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept;

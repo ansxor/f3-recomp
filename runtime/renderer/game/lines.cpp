@@ -33,12 +33,14 @@ void GameLines::reset() {
 // Decode line RAM and FDP controls, mirroring Video::read_line_ram. Fields carry
 // forward when a subsection latch is absent, so all 256 scanlines are walked
 // in order with a persistent scratch line.
-void GameLines::decode(const VideoRam &vram) {
+void GameLines::decode(const VideoRam &vram, bool flipped) {
     const uint8_t *lineram = &vram.graphics[OFFS_LINERAM];
     const bool latches_changed = m_shadow_latches.changed(lineram);
     const bool sections_changed = m_shadow_sections.changed(lineram + LINERAM_SECTIONS_OFFSET);
     const bool control_changed = m_shadow_control.changed(vram.control.data());
-    if (!latches_changed && !sections_changed && !control_changed) return;
+    if (!latches_changed && !sections_changed && !control_changed && m_decode_flipped == flipped)
+        return;
+    m_decode_flipped = flipped;
     m_rows_current = false;
     for (int i = 0; i < 8; ++i) {
         m_control_0[i] = vram.control_u16(unsigned(i));
@@ -66,7 +68,8 @@ void GameLines::decode(const VideoRam &vram) {
     };
 
     LineParams line{};
-    for (int y = 0; y < 256; ++y) {
+    for (int screen_y = 0; screen_y < 256; ++screen_y) {
+        const int y = flipped ? 255 - screen_y : screen_y;
         for (int s = 0; s < 8; ++s)
             latches[s] = read_be16(&lineram[s * LINERAM_LATCH_STRIDE + size_t(y) * 2]);
 
@@ -182,7 +185,7 @@ void GameLines::decode(const VideoRam &vram) {
                 line.pf[i].set_mix(read_be16(&lineram[where]));
         }
 
-        m_lines[y] = line;
+        m_lines[screen_y] = line;
     }
 }
 
@@ -233,8 +236,7 @@ void GameLines::prepare(bool flipped) {
         int16_t(flipped ? int16_t(m_control_1[5]) : -int16_t(m_control_1[5]));
 
     for (unsigned screen_y = 0; screen_y < 256; ++screen_y) {
-        const int y = flipped ? (255 - int(screen_y)) : int(screen_y);
-        const auto &line = m_lines[y];
+        const auto &line = m_lines[screen_y];
         auto &row = m_rows[screen_y];
 
         // Clips (calibrated oracle l-1/r-2)
@@ -325,8 +327,8 @@ void GameLines::cull_empty_rows(const GameTiles &tiles) {
     for (auto &row : m_rows)
         for (unsigned i = 0; i < 4; ++i) {
             auto &pf = row.playfields[i];
-            const bool empty = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map),
-                                               unsigned(pf.source_y) & 511);
+            const unsigned source_y = (unsigned(pf.source_y) & 511) ^ (m_rows_flipped ? 511 : 0);
+            const bool empty = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map), source_y);
             changed |= pf.empty_row != empty;
             pf.empty_row = empty;
         }
@@ -341,7 +343,7 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
             for (unsigned i = 2; i < 4; ++i) {
                 auto &pf = m_rows[y].playfields[i];
                 pf.full_res_offset = -1;
-                if (!pf.alt_map || pf.empty_row) continue;
+                if (!pf.alt_map || pf.empty_row || m_rows_flipped) continue;
                 // Every map row the scanline can sample: the highest sub-row phase stays below
                 // y_fraction + y_step (expanded sub-rows, GameLines/compositor vertical phase).
                 const int rows_spanned =
@@ -358,7 +360,7 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
 }
 
 void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
-    prepare(oracle.flipscreen());
+    prepare(m_decode_flipped);
     for (unsigned screen_y = geometry::FIRST_LINE; screen_y < geometry::END_LINE; ++screen_y) {
         const auto &g = row(screen_y);
         const auto &o = oracle.inspect_scene_row(screen_y);

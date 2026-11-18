@@ -295,6 +295,7 @@ if(F3RT_SDL)
                 runtime/renderer/shaders/scene.frag
                 runtime/renderer/shaders/scene_interp.frag
                 runtime/renderer/shaders/scene_body.glsl
+                runtime/renderer/shaders/rotate.frag
                 runtime/renderer/shaders/postprocess.frag
                 runtime/renderer/gpu/scene_layout.h
                 ${F3_SHADER_TOOL_TARGETS}

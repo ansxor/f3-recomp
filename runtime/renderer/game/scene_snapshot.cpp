@@ -42,7 +42,7 @@ void compose_snapshot_indexed(const SceneSnapshot &frame, const TileRowTable &pl
     const bool palette_15bit = scratch.prepare(scene, format);
     scratch.stats.reset();
     const auto sprite_list = frame.sprite_list(list);
-    scratch.bins.bin(sprite_list, SpriteRasterOptions{options});
+    scratch.bins.bin(sprite_list, SpriteRasterOptions{options, frame.sprite_flipped});
     IndexedComposeJob job{scene,
                           scratch.plane,
                           scratch.coverage(options),
@@ -59,7 +59,9 @@ void compose_snapshot_indexed(const SceneSnapshot &frame, const TileRowTable &pl
                           stride,
                           format,
                           options,
-                          &scratch.stats};
+                          &scratch.stats,
+                          frame.sprite_flipped,
+                          frame.sprite_trail_seed};
     if (mode == ComposeMode::Serial) {
         for (unsigned chunk = 0; chunk < compose_chunk_count(); ++chunk)
             compose_indexed_chunk(job, chunk);
