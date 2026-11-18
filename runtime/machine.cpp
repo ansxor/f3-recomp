@@ -2,7 +2,6 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/abi/audio.h"
 #include "f3rt/abi/eeprom.h"
-#include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
 #include "sprites/sprite_system.hpp"
 #include "state_io.hpp"
@@ -49,13 +48,15 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
 } // namespace
 Machine::Machine(RomSet set)
     : m_pixels(size_t(320) * set.video.visible_height), roms(std::move(set)),
-      video(std::make_unique<Video>()),
       sound_bankswitch(roms.sound_bankswitch) {
     if (roms.main.size() < CPU_VECTOR_TABLE_SIZE || roms.main.size() > ROM_END ||
         roms.main.size() % 4)
         throw std::runtime_error("Main ROM must hold vectors and fit the 2 MiB F3 window");
     m_rom_crcs = f3rt::rom_region_crcs(roms);
-    if (!video->load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi, roms.video))
+    const auto &video = roms.video;
+    if (video.sprite_lag > 2 || !video.visible_height || video.visible_y >= 256 ||
+        video.visible_height > 256 - video.visible_y ||
+        !graphics_assets.load_roms(roms.sprites, roms.sprites_hi, roms.tiles, roms.tiles_hi))
         throw std::runtime_error("Invalid video ROM regions");
     std::vector<uint8_t>().swap(roms.sprites);
     std::vector<uint8_t>().swap(roms.sprites_hi);
@@ -118,7 +119,6 @@ void Machine::reset() {
     m_next_vblank = raster_cycle(FRAME_PIXELS);
     reset_devices();
     f3rt_audio_set_reset(true);
-    video->reset();
     if (game_video) game_video->reset();
     reset_main_cpu();
 }
@@ -287,7 +287,7 @@ void Machine::advance_to(uint64_t cycles) {
         m_hardware_cycles = end;
         if (m_hardware_cycles == m_next_vblank) {
             if (game_video) game_video->render_frame();
-            else video->render_frame(palette, graphics, control, m_pixels);
+            else if (inspect_scanout) inspect_scanout(m_pixels);
             pending_irqs |= 1u << 2;
             m_irq3_at = m_next_vblank + 10000;
             ++frame;
@@ -391,18 +391,9 @@ void Machine::set_input(unsigned port, uint32_t mask, bool pressed) {
 size_t Machine::state_size() const {
     size_t sz = sizeof(CanonicalF3Cpu) + sizeof(CanonicalMachineClocks) + ram.size() +
                 palette.size() + graphics.size() + control.size() + shared.size() +
-                sizeof(uint32_t) * m_pixels.size() + F3RT_EEPROM_STATE_SIZE + F3RT_AUDIO_STATE_SIZE +
-                video->state_size();
+                sizeof(uint32_t) * m_pixels.size() + F3RT_EEPROM_STATE_SIZE + F3RT_AUDIO_STATE_SIZE;
     if (game_video) sz += game_video->state_size();
     return sz;
-}
-
-bool Machine::accepts_state_size(size_t size) const {
-    const size_t expected = state_size();
-    if (size == expected) return true;
-    if (!game_video) return false;
-    const size_t base = expected - game_video->state_size();
-    return size >= base && game_video->accepts_state_size(size - base);
 }
 
 void Machine::save_state(std::span<uint8_t> dst) const {
@@ -475,12 +466,6 @@ void Machine::save_state(std::span<uint8_t> dst) const {
     f3rt_audio_save_state(writer.current());
     writer.advance(F3RT_AUDIO_STATE_SIZE);
 
-    {
-        std::span<uint8_t> v_slice(writer.current(), video->state_size());
-        video->save_state(v_slice);
-        writer.advance(video->state_size());
-    }
-
     if (game_video) {
         const size_t size = game_video->state_size();
         std::span<uint8_t> gv_slice(writer.current(), size);
@@ -495,7 +480,7 @@ void Machine::save_state(std::span<uint8_t> dst) const {
 
 void Machine::load_state(std::span<const uint8_t> src) {
     const size_t expected = state_size();
-    if (!accepts_state_size(src.size())) {
+    if (src.size() != expected) {
         throw std::invalid_argument("Machine snapshot load size mismatch: expected " +
                                     std::to_string(expected) + ", got " +
                                     std::to_string(src.size()));
@@ -567,12 +552,6 @@ void Machine::load_state(std::span<const uint8_t> src) {
     if (f3rt_audio_load_state(reader.current()) != F3RT_AUDIO_OK)
         throw std::invalid_argument("Invalid audio snapshot");
     reader.skip(F3RT_AUDIO_STATE_SIZE);
-
-    {
-        std::span<const uint8_t> v_slice(reader.current(), video->state_size());
-        video->load_state(v_slice);
-        reader.skip(video->state_size());
-    }
 
     if (game_video) {
         const size_t size = reader.remaining();

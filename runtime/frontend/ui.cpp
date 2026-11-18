@@ -278,18 +278,7 @@ void FrontendUi::draw(const FrontendUiState &state) {
         if (ImGui::Begin("F3 runtime - F1 menu", &visible)) {
             if (!state.message.empty()) ImGui::TextWrapped("%s", state.message.c_str());
             if (ImGui::BeginTabBar("Panels")) {
-                if (ImGui::BeginTabItem("Video")) {
-                    changed |= combo("Renderer (restart)", s.renderer, {"accurate", "enhanced"});
-                    ImGui::TextWrapped("Active this session: %s.%s", state.active_renderer.c_str(),
-                                       s.renderer == "enhanced"
-                                           ? ""
-                                           : " Accurate is the MAME-derived reference picture; the "
-                                             "options below belong to Enhanced.");
-                    if (!state.gpu_available)
-                        ImGui::TextWrapped(
-                            "Enhanced is unavailable in this build (no GPU support); selecting it "
-                            "requires a GPU-enabled build on restart.");
-                    ImGui::BeginDisabled(s.renderer == "accurate");
+                if (p.gpu && ImGui::BeginTabItem("Video")) {
                     changed |=
                         combo("Scale", s.video_scale, {"1", "2", "3", "4", "auto", "auto-integer"});
                     int border = int(s.border);
@@ -302,21 +291,15 @@ void FrontendUi::draw(const FrontendUiState &state) {
                     changed |= combo("Interpolation fields", s.interpolation_fields,
                                      {"none", "geometry", "palette", "geometry,palette"});
                     changed |= ImGui::Checkbox("Motion interpolation", &s.motion_interp);
-                    ImGui::EndDisabled();
                     ImGui::TextWrapped("Motion interpolation: experimental temporal sprite/scroll "
                                        "interpolation at display refresh; adds one native frame of "
-                                       "positional latency. Requires the Enhanced renderer.");
+                                       "positional latency.");
                     ImGui::TextWrapped(
-                        "Scale, filtering, interpolation and motion interpolation apply live under "
-                        "Enhanced; the renderer and border apply on restart. Settings are "
-                        "preferences; CLI flags override them on launch.");
+                        "Scale, filtering and interpolation apply live. Border changes apply on restart. "
+                        "CLI flags override preferences on launch.");
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Shaders")) {
-                    if (!p.gpu)
-                        ImGui::TextUnformatted(
-                            "Requires the Enhanced renderer (Video tab; restart).");
-                    ImGui::BeginDisabled(!p.gpu);
+                if (p.gpu && ImGui::BeginTabItem("Shaders")) {
                     if (combo("Post-process", s.postprocess, {"off", "crt", "user"}) &&
                         s.postprocess != "user")
                         p.action(UiActionKind::ApplyPostprocess);
@@ -333,7 +316,6 @@ void FrontendUi::draw(const FrontendUiState &state) {
                             p.action(UiActionKind::ApplyPostprocess);
                         ImGui::EndDisabled();
                     }
-                    ImGui::EndDisabled();
                     ImGui::Text("Active: %s", state.active_postprocess.c_str());
                     ImGui::TextWrapped(
                         "Default off. Post-processing affects GPU presentation/screenshots only, "

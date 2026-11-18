@@ -548,8 +548,7 @@ void GameSprites::save_trails(StateWriter &writer) const {
 }
 
 void GameSprites::load_trails(StateReader &reader) {
-    if (reader.remaining()) reader.read_array(m_trail_seed);
-    else m_trail_seed.fill(0);
+    reader.read_array(m_trail_seed);
 }
 
 static_assert(Snapshotable<GameSprites>);

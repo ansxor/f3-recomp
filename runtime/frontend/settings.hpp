@@ -18,7 +18,7 @@ struct InputProfile {
     std::array<InputBinding, LOCAL_CONTROL_COUNT> controls{};
 };
 struct FrontendSettings {
-    std::string renderer = "accurate", video_scale = "1"; // renderer: accurate | enhanced
+    std::string video_scale = "1";
     unsigned border = 0;
     std::string filter = "nearest", interpolation = "off", interpolation_fields = "geometry";
     std::string postprocess = "off", user_shader;

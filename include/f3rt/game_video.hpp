@@ -44,7 +44,7 @@ public:
 
 class GameVideo {
 public:
-    explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Diagnostic,
+    explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Game,
                        RenderEnhancements enhancements = {});
     ~GameVideo();
     GameVideo(const GameVideo &) = delete;
@@ -61,7 +61,6 @@ public:
     // (the caller picks a target that is neither the newest frame nor in use elsewhere).
     void set_snapshot_target(SceneSnapshot *target);
     size_t state_size() const;
-    bool accepts_state_size(size_t size) const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
 

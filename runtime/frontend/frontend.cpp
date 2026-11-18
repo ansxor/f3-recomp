@@ -22,7 +22,6 @@
 #include "sprites/enhancements.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
-#include "f3rt/video.hpp"
 #endif
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -177,7 +176,6 @@ f3rt::VideoInterpolation parse_interpolation_mode(const std::string &mode) {
                               : f3rt::VideoInterpolation::Off;
 }
 enum Preference : uint32_t {
-    Renderer = 1u << 0,
     Scale = 1u << 2,
     Border = 1u << 3,
     Filter = 1u << 4,
@@ -245,13 +243,18 @@ struct Link {
     // Emulation thread: scheduled start of its next frame (steady_clock ns), 0 while paused or unthrottled. Lets the
     // video thread sample input just before the frame latches it.
     std::atomic<int64_t> deadline{0};
-    void publish(bool frame_boundary = true) {
-        {
-            std::lock_guard lock(mutex);
-            frames.publish();
-            if (frame_boundary) frames_published.fetch_add(1, std::memory_order_relaxed);
-        }
+    void publish(bool frame_boundary, bool wait_for_reader) {
+        std::unique_lock lock(mutex);
+        frames.publish();
+        if (frame_boundary) frames_published.fetch_add(1, std::memory_order_relaxed);
         cv.notify_all();
+        if (wait_for_reader) cv.wait(lock, [&] { return stop || !frames.unseen(); });
+    }
+    const f3rt::FrameSnapshot *take_for_comparison(bool &fresh) {
+        std::lock_guard lock(mutex);
+        const auto *snapshot = frames.take(fresh);
+        if (fresh) cv.notify_all();
+        return snapshot;
     }
     // Emulation thread, GPU path: re-issue the newest frame with a new scale while no new frame is coming.
     void restate(unsigned scale) {
@@ -358,7 +361,6 @@ int main(int argc, char **argv) try {
         indirect_path;
     std::vector<uint32_t> watch_entries;
     std::string set = F3RT_DEFAULT_SET;
-    std::string renderer;
     f3rt::GameVideoOptions video_options;
     f3rt::VideoScaleMode video_scale_mode = f3rt::VideoScaleMode::Fixed;
     std::string video_filter = "nearest";
@@ -371,6 +373,7 @@ int main(int argc, char **argv) try {
     uint64_t frames = 0, dump_start = 1, dump_every = 1;
     f3rt::EnhancementSet enhancements;
     bool list_enhancements = false;
+    bool compare_gpu = false;
     bool headless = false, sound = true, throttle = true;
     bool motion_interp = false;
     bool fast_boot = true, boot_cache = false;
@@ -435,10 +438,8 @@ int main(int argc, char **argv) try {
                 throw std::runtime_error("--volume must be 0..100");
             cli_preferences |= Volume;
         } else if (arg == "--surface") surface = value();
-        else if (arg == "--renderer") {
-            renderer = value();
-            cli_preferences |= Renderer;
-        } else if (arg == "--video-scale") {
+        else if (arg == "--compare-gpu") compare_gpu = true;
+        else if (arg == "--video-scale") {
             video_scale = value();
             cli_preferences |= Scale;
         } else if (arg == "--video-border") {
@@ -507,10 +508,7 @@ int main(int argc, char **argv) try {
                    "--profile-out: per-frame execution counts of those main-CPU instructions)\n"
                 << "  [--indirect-log FILE] (instrumented build with --profile-out: log observed "
                    "targets of computed jmp/jsr sites)\n"
-                << "  [--renderer accurate|enhanced] (accurate: MAME-derived reference renderer; "
-                   "enhanced: game-data GPU renderer, needs strict native execution and "
-                   "games/<game>/video/)\n"
-                << "  [--renderer compare-gpu] (developer-only: reads back each GPU frame and "
+                << "  [--compare-gpu] (developer-only: reads back each GPU frame and "
                    "compares it to the FDP frame; needs a window, scale 1, border 0)\n"
                 << "  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] "
                    "[--video-filter nearest|linear]\n"
@@ -526,7 +524,7 @@ int main(int argc, char **argv) try {
                 << "  [--netplay-auto host|join:CODE] (automate 2P versus netplay trigger; host, "
                    "host:file:PATH, join:CODE, join:file:PATH)\n"
                 << "  [--netplay-name NAME] [--netplay-delay 1..8] (player name and frame delay)\n"
-                << "  Presentation options require game/compare; defaults: scale 1, border 0, "
+                << "  GPU presentation defaults: scale 1, border 0, "
                    "nearest.\n"
                 << "  Auto scales follow window pixels (GPU only); auto-integer uses nearest "
                    "filtering.\n"
@@ -548,9 +546,6 @@ int main(int argc, char **argv) try {
         throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if (headless && !frames) throw std::runtime_error("Headless execution requires --frames");
     f3rt::FrontendSettings settings;
-#ifdef F3RT_GPU
-    settings.renderer = "enhanced";
-#endif
     if (config_path.empty()) config_path = f3rt::default_config_path(set);
     std::string settings_error;
     if (!config_path.empty() &&
@@ -560,59 +555,13 @@ int main(int argc, char **argv) try {
         if (cli_preferences & field) saved = option;
         else option = saved;
     };
-    // Developer renderers exist only on the command line; the settings file and UI hold accurate|enhanced.
-    if (cli_preferences & Renderer) {
-        if (renderer == "accurate" || renderer == "enhanced") settings.renderer = renderer;
-    } else renderer = settings.renderer;
-    std::string video_mode;
-    f3rt::VideoBackend backend;
-    auto select_renderer = [&] {
-        if (renderer == "accurate") {
-            video_mode = "fdp";
-            backend = f3rt::VideoBackend::Cpu;
-        } else if (renderer == "enhanced") {
-            video_mode = "game";
-            backend = f3rt::VideoBackend::Gpu;
-        } else if (renderer == "compare-gpu") {
-            video_mode = "compare";
-            backend = f3rt::VideoBackend::Gpu;
-        } else throw std::runtime_error("--renderer must be accurate, enhanced or compare-gpu");
-    };
-    select_renderer();
 #ifdef F3RT_GPU
-    // A renderer that came from the default or the settings file must not leave the user unable to launch:
-    // probe the GPU (hidden window + device + window claim) and fall back to accurate. An explicit
-    // --renderer keeps failing hard in the normal start-up path.
-    if (!(cli_preferences & Renderer) && !headless && backend == f3rt::VideoBackend::Gpu) {
-        std::string reason;
-        if (!SDL_Init(SDL_INIT_VIDEO)) {
-            reason = SDL_GetError();
-        } else {
-            if (auto *probe = SDL_CreateWindow("f3rt gpu probe", 64, 64, SDL_WINDOW_HIDDEN)) {
-                if (auto *device =
-                        SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL |
-                                                SDL_GPU_SHADERFORMAT_METALLIB,
-                                            false, nullptr)) {
-                    if (!SDL_ClaimWindowForGPUDevice(device, probe)) reason = SDL_GetError();
-                    else SDL_ReleaseWindowFromGPUDevice(device, probe);
-                    SDL_DestroyGPUDevice(device);
-                } else {
-                    reason = SDL_GetError();
-                }
-                SDL_DestroyWindow(probe);
-            } else {
-                reason = SDL_GetError();
-            }
-        }
-        if (!reason.empty()) {
-            std::cerr << "f3rt: warning: GPU renderer unavailable (" << reason
-                      << "); falling back to --renderer accurate. "
-                         "Pass --renderer enhanced to make this an error.\n";
-            renderer = "accurate";
-            select_renderer();
-        }
-    }
+    const auto backend = headless ? f3rt::VideoBackend::Cpu : f3rt::VideoBackend::Gpu;
+#else
+    const auto backend = f3rt::VideoBackend::Cpu;
+    if (compare_gpu) throw std::runtime_error("--compare-gpu requires a GPU-enabled build");
 #endif
+    if (compare_gpu && headless) throw std::runtime_error("--compare-gpu requires a window");
     preference(video_scale, settings.video_scale, Scale);
     preference(video_options.border, settings.border, Border);
     preference(video_filter, settings.filter, Filter);
@@ -627,16 +576,15 @@ int main(int argc, char **argv) try {
     if (!netplay_server_cli.empty()) settings.netplay_server = netplay_server_cli;
     if (!netplay_name_cli.empty()) settings.netplay_name = netplay_name_cli;
     if (netplay_delay_cli != 0) settings.netplay_delay = netplay_delay_cli;
-    // Presentation options only exist for the game-data renderers. Saved values are ignored under accurate
-    // (and stay in the settings file for enhanced); explicit command-line options are rejected below.
-    if (video_mode == "fdp" || headless) {
+    // CPU rendering uses native presentation defaults.
+    if (backend == f3rt::VideoBackend::Cpu) {
         if (!(cli_preferences & Scale)) video_scale = "1";
         if (!(cli_preferences & Border)) video_options.border = 0;
         if (!(cli_preferences & Filter)) video_filter = "nearest";
         if (!(cli_preferences & Interpolation)) video_interp = "off";
         if (!(cli_preferences & Fields)) video_interp_fields = "geometry";
         if (!(cli_preferences & MotionInterp)) motion_interp = false;
-    } else if (video_mode == "compare") {
+    } else if (compare_gpu) {
         if (!(cli_preferences & Scale)) video_scale = "1";
         if (!(cli_preferences & Border)) video_options.border = 0;
         if (!(cli_preferences & Interpolation)) video_interp = "off";
@@ -649,39 +597,33 @@ int main(int argc, char **argv) try {
 #endif
     if (video_filter != "nearest" && video_filter != "linear")
         throw std::runtime_error("--video-filter must be nearest or linear");
-    if ((video_mode == "fdp" || headless) &&
+    if (backend == f3rt::VideoBackend::Cpu &&
         (video_options.expanded() || video_filter != "nearest"))
-        throw std::runtime_error("Scale, border and filter options require --renderer enhanced (or "
-                                 "compare-gpu) with a window");
+        throw std::runtime_error("Scale, border and filter options require a GPU-enabled window");
     bool automatic_scale = video_scale_mode != f3rt::VideoScaleMode::Fixed;
     if (automatic_scale && backend != f3rt::VideoBackend::Gpu)
-        throw std::runtime_error(
-            "--video-scale auto/auto-integer requires --renderer enhanced or compare-gpu");
+        throw std::runtime_error("--video-scale auto/auto-integer requires a GPU-enabled window");
     if (video_interp != "off" && video_interp != "linear" && video_interp != "fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
     if (video_interp != "off" && backend != f3rt::VideoBackend::Gpu)
-        throw std::runtime_error("--video-interp requires --renderer enhanced or compare-gpu");
+        throw std::runtime_error("--video-interp requires a GPU-enabled window");
     if (motion_interp && backend != f3rt::VideoBackend::Gpu)
-        throw std::runtime_error("--motion-interp requires --renderer enhanced or compare-gpu");
-    if (video_mode == "compare" && (headless || video_options.expanded() || automatic_scale ||
-                                    video_interp != "off" || motion_interp))
+        throw std::runtime_error("--motion-interp requires a GPU-enabled window");
+    if (compare_gpu && (video_options.expanded() || automatic_scale ||
+                        video_interp != "off" || motion_interp))
         throw std::runtime_error(
-            "--renderer compare-gpu reads back the GPU frame and compares it to the FDP frame "
+            "--compare-gpu reads back the GPU frame and compares it to the FDP frame "
             "pixel for pixel: it needs a window, --video-scale 1, --video-border 0, "
             "--video-interp off and no --motion-interp");
     if (postprocess != "off" && postprocess != "crt" && postprocess != "user")
         throw std::runtime_error("--postprocess must be off, crt or user");
     if (postprocess != "off" && backend != f3rt::VideoBackend::Gpu)
         std::cerr
-            << "f3rt: post-processing requires the enhanced renderer; preference is inactive\n";
+            << "f3rt: post-processing requires a GPU-enabled window\n";
     const auto interpolation_fields = f3rt::parse_interpolation_fields(video_interp_fields);
     if (!interpolation_fields)
         throw std::runtime_error(
             "--video-interp-fields must be none, geometry, palette or geometry,palette");
-#ifndef F3RT_GPU
-    if (backend == f3rt::VideoBackend::Gpu && !headless)
-        throw std::runtime_error("The GPU renderer requires F3RT_GPU build support");
-#endif
     if (watch_entries.empty() != watch_path.empty())
         throw std::runtime_error("--watch-entries and --watch-log go together");
     std::optional<f3rt::InputScript> input_script;
@@ -702,18 +644,16 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if (!indirect_path.empty())
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
-    if (video_mode != "fdp")
-        m.game_video = std::make_unique<f3rt::GameVideo>(
-            m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
-            enhancements.render(backend));
+    m.game_video = std::make_unique<f3rt::GameVideo>(
+        m, compare_gpu ? f3rt::GameVideoMode::Compare : f3rt::GameVideoMode::Game,
+        enhancements.render(backend));
     m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     }
     const auto snapshot_video_options = video_options;
     const unsigned frame_width = video_options.width();
-    const unsigned frame_height =
-        m.game_video ? video_options.height() : m.roms.video.visible_height;
+    const unsigned frame_height = video_options.height();
     const unsigned rotation = m.roms.video.rotation;
     const bool portrait = rotation == 90 || rotation == 270;
     const unsigned display_width = portrait ? frame_height : frame_width;
@@ -750,7 +690,8 @@ int main(int argc, char **argv) try {
                     unsigned(std::max(pixel_height, 0)), video_options.border, portrait);
             }
             sdl.gpu = std::make_unique<f3rt::GpuVideo>(
-                sdl.window, video_options, m.video->playfield_tiles(), m.video->sprite_tiles(),
+                sdl.window, video_options, m.graphics_assets.playfield_tiles(),
+                m.graphics_assets.sprite_tiles(),
                 video_filter == "linear", throttle, parse_interpolation_mode(video_interp),
                 *interpolation_fields, rotation);
             sdl.gpu->set_scale_mode(video_scale_mode);
@@ -805,7 +746,8 @@ int main(int argc, char **argv) try {
         sdl.ui = std::make_unique<f3rt::FrontendUi>(sdl.window, sdl.renderer, ui_device, settings,
                                                     *sdl.input);
         std::cout << "window_open video_driver=" << SDL_GetCurrentVideoDriver()
-                  << " renderer=" << renderer << " internal=" << display_width << 'x'
+                  << " renderer=" << (sdl.renderer ? "cpu" : "enhanced")
+                  << " internal=" << display_width << 'x'
                   << display_height << " pixels=" << pixel_width << 'x' << pixel_height
                   << " scale=" << video_options.scale << " filter=" << video_filter
                   << " interp=" << video_interp
@@ -828,10 +770,8 @@ int main(int argc, char **argv) try {
     bool quit = false;
     f3rt::FrontendUiState ui_state;
 #ifdef F3RT_GPU
-    ui_state.gpu_available = true;
     if (sdl.gpu) ui_state.active_postprocess = postprocess;
 #endif
-    ui_state.active_renderer = renderer;
     ui_state.set = set;
     ui_state.message = settings_error;
     const auto *netplay_hook = f3rt::game_netplay();
@@ -856,7 +796,8 @@ int main(int argc, char **argv) try {
     const f3rt::GameBoot *boot = f3rt::game_boot();
     const bool explicit_fast_boot = (cli_preferences & FastBoot) != 0 && fast_boot;
     const bool fast_boot_active =
-        boot && ((!headless && settings.fast_boot) || explicit_fast_boot) && wav_path.empty() &&
+        boot && !compare_gpu && ((!headless && settings.fast_boot) || explicit_fast_boot) &&
+        wav_path.empty() &&
         dumpdir.empty() && profile_path.empty() && inputs_path.empty();
     std::filesystem::path config_dir;
     if (!config_path.empty()) config_dir = std::filesystem::absolute(config_path).parent_path();
@@ -980,7 +921,7 @@ int main(int argc, char **argv) try {
         next_frame = std::chrono::steady_clock::now();
         if (slot) {
             fill_snapshot(*slot, next_frame);
-            link.publish(false);
+            link.publish(false, compare_gpu);
         }
     };
     // Restores the lobby-trigger snapshot and runs input-0 local frames to the in_versus edge: the exact frame
@@ -1275,7 +1216,7 @@ int main(int argc, char **argv) try {
                 link.deadline.store((next_frame + frame_time).time_since_epoch().count(),
                                     std::memory_order_relaxed);
             fill_snapshot(*slot, scheduled);
-            link.publish();
+            link.publish(true, compare_gpu);
         }
         if (!dumpdir.empty() && m.frame >= dump_start && (m.frame - dump_start) % dump_every == 0)
             f3rt::dump_machine(m, dumpdir);
@@ -1582,7 +1523,7 @@ int main(int argc, char **argv) try {
                     case Action::ApplySettings:
                         sdl.input->configure(settings);
                         if (sdl.audio) check(SDL_SetAudioStreamGain(sdl.audio, settings.volume));
-                        if (video_mode != "fdp") video_filter = settings.filter;
+                        if (backend == f3rt::VideoBackend::Gpu) video_filter = settings.filter;
 #ifdef F3RT_GPU
                         if (sdl.gpu) {
                             auto requested = video_options;
@@ -1640,7 +1581,7 @@ int main(int argc, char **argv) try {
                             break;
                         }
 #endif
-                        throw std::runtime_error("Post-processing requires the enhanced renderer");
+                        throw std::runtime_error("Post-processing requires a GPU-enabled window");
                     case Action::SavePreferences:
                         if (!f3rt::save_frontend_settings(config_path.string(), settings,
                                                           ui_state.message))
@@ -1696,7 +1637,7 @@ int main(int argc, char **argv) try {
 #endif
             const bool finished = link.finished();
             bool fresh = false;
-            const f3rt::FrameSnapshot *shot = link.frames.take(fresh);
+            const auto *shot = compare_gpu ? link.take_for_comparison(fresh) : link.frames.take(fresh);
             if (finished && emulation_error) break;
             if (shot && fresh)
                 for (const uint64_t screenshot_frame : screenshot_frames)
@@ -1807,9 +1748,7 @@ int main(int argc, char **argv) try {
                             }
                         }
                     } else {
-                        if (screenshot_pending)
-                            sdl.gpu->present(*shot->scene_snapshot, screenshot.string().c_str());
-                        else if (video_mode == "compare" && fresh) {
+                        if (compare_gpu && fresh) {
                             gpu_fdp_readback.resize(video_options.width() * video_options.height());
                             const auto &scene = *shot->scene_snapshot;
                             const bool enhanced_sprites = scene.presents_enhanced_sprites();
@@ -1835,9 +1774,13 @@ int main(int argc, char **argv) try {
                                       << fdp[first];
                                 throw std::runtime_error(error.str());
                             }
-                            if (enhanced_sprites) sdl.gpu->draw(scene);
-                        } else if (capture_final || !throttle) sdl.gpu->draw(*shot->scene_snapshot);
-                        else sdl.gpu->present(*shot->scene_snapshot);
+                            if (enhanced_sprites && !screenshot_pending) sdl.gpu->draw(scene);
+                        } else if (!screenshot_pending) {
+                            if (capture_final || !throttle) sdl.gpu->draw(*shot->scene_snapshot);
+                            else sdl.gpu->present(*shot->scene_snapshot);
+                        }
+                        if (screenshot_pending)
+                            sdl.gpu->present(*shot->scene_snapshot, screenshot.string().c_str());
                         if (capture_final) sdl.gpu->save_surface(surface.string().c_str());
                     }
                 } else
@@ -1903,7 +1846,7 @@ int main(int argc, char **argv) try {
               << std::dec << " cycles=" << m.cpu.cycles << " native_blocks=" << m.native_blocks
               << " audio_frames=" << audio_frames << " audio_peak=" << audio_peak
               << " nonzero_samples=" << nonzero_samples << '\n';
-    if (video_mode == "compare")
+    if (compare_gpu)
         std::cout << "GPU-VS-FDP frames=" << gpu_fdp_frames << " pixel_mismatches=0\n";
     if (motion_interp && motion_presentation)
         std::cout << "MOTION-TOTAL native_frames=" << executed_frames

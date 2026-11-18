@@ -2,15 +2,16 @@
 #include "f3rt/cpu_abi.h"
 #include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
+#include "f3rt/renderer/graphics_assets.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
 
 namespace f3rt {
-class Video;
 class GameVideo;
 class SpriteSystem;
 class Machine {
@@ -38,7 +39,9 @@ public:
     const std::vector<uint32_t> &native_pixels() const;
     const std::array<uint32_t, 7> &rom_region_crcs() const { return m_rom_crcs; }
     RomSet roms;
-    std::unique_ptr<Video> video;
+    GraphicsAssets graphics_assets;
+    // Tool-only scanout at VBSTART, when no GameVideo is installed.
+    std::function<void(std::span<uint32_t>)> inspect_scanout;
     // Render-only sprite group and behaviour tracking; null = feature off. Never serialized.
     std::unique_ptr<SpriteSystem> sprites;
     // Host-only per-slot writer attribution (one PC per 16-byte sprite RAM entry); null = off. Never serialized.
@@ -87,7 +90,6 @@ public:
     void save_eeprom(const std::filesystem::path &path) const;
     void set_input(unsigned port, uint32_t mask, bool pressed);
     size_t state_size() const;
-    bool accepts_state_size(size_t size) const;
     void save_state(std::span<uint8_t> dst) const;
     void load_state(std::span<const uint8_t> src);
     uint32_t state_crc() const;

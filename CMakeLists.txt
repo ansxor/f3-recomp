@@ -62,6 +62,7 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/game/video.cpp
     runtime/renderer/game/video_log.cpp
     runtime/renderer/decode.cpp
+    runtime/renderer/graphics_assets.cpp
     runtime/renderer/game/tiles.cpp
     runtime/renderer/game/text.cpp
     runtime/renderer/game/sprites.cpp

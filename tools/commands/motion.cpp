@@ -230,7 +230,7 @@ int comparison(const Options &o) {
     const auto pixels = m.native_pixels();
     ScopedWindow window("GPU temporal motion proof (LEFT: native / RIGHT: motion)",
                         int(o.video.width() * 2), int(o.video.height()));
-    f3rt::GpuVideo gpu(window.value, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(),
+    f3rt::GpuVideo gpu(window.value, o.video, m.graphics_assets.playfield_tiles(), m.graphics_assets.sprite_tiles(),
                        false, true, o.interp);
     gpu.set_scale_mode(f3rt::VideoScaleMode::Auto);
     auto scene = std::make_unique<f3rt::SceneSnapshot>(base);
@@ -410,7 +410,7 @@ int cmd_motion(int argc, char **argv) try {
         m.sprites = std::make_unique<f3rt::SpriteSystem>(
             m, f3rt::SpriteSystem::game_table(), f3rt::SpriteSystem::game_units(),
             f3rt::SpriteSystem::Options{});
-    f3rt::GpuVideo gpu(nullptr, o.video, m.video->playfield_tiles(), m.video->sprite_tiles(), false,
+    f3rt::GpuVideo gpu(nullptr, o.video, m.graphics_assets.playfield_tiles(), m.graphics_assets.sprite_tiles(), false,
                        false, o.interp);
     if (!o.dump_dir.empty()) std::filesystem::create_directories(o.dump_dir);
     std::vector<uint32_t> canonical(size_t(o.video.width()) * o.video.height()),

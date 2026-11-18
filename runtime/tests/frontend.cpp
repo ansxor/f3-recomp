@@ -70,7 +70,7 @@ struct ScopedTempFile {
 };
 
 bool settings_equal(const f3rt::FrontendSettings &a, const f3rt::FrontendSettings &b) {
-    if (a.renderer != b.renderer || a.video_scale != b.video_scale || a.border != b.border ||
+    if (a.video_scale != b.video_scale || a.border != b.border ||
         a.filter != b.filter || a.interpolation != b.interpolation ||
         a.interpolation_fields != b.interpolation_fields || a.postprocess != b.postprocess ||
         a.user_shader != b.user_shader || std::abs(a.volume - b.volume) >= 0.001f ||
@@ -313,7 +313,7 @@ TEST_F(Frontend, LegacySettingsCompatibility) {
                                                    SDL_SCANCODE_E, SDL_SCANCODE_R, SDL_SCANCODE_T,
                                                    SDL_SCANCODE_Y, SDL_SCANCODE_U};
     std::ostringstream old;
-    old << "audio=reference\ndevice0=2\ndevice1=3\n";
+    old << "renderer=accurate\naudio=reference\ndevice0=2\ndevice1=3\n";
     for (unsigned c = 0; c < old_keys.size(); ++c) {
         old << "binding0." << c << '=' << int(old_keys[c]) << " -1 -1 1\n";
     }
@@ -451,7 +451,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     };
 
     f3rt::FrontendSettings s;
-    s.renderer = *rc::gen::element<std::string>("accurate", "enhanced");
     s.video_scale = *rc::gen::element<std::string>("1", "2", "3", "4", "auto", "auto-integer");
     s.border = *rc::gen::inRange(0u, 161u);
     s.filter = *rc::gen::element<std::string>("nearest", "linear");
@@ -482,7 +481,6 @@ RC_GTEST_PROP(FrontendSettings, SaveLoadRoundTrip, ()) {
     f3rt::FrontendSettings loaded;
     RC_ASSERT(f3rt::load_frontend_settings(file.path.string(), loaded, error));
 
-    RC_ASSERT(loaded.renderer == s.renderer);
     RC_ASSERT(loaded.video_scale == s.video_scale);
     RC_ASSERT(loaded.border == s.border);
     RC_ASSERT(loaded.filter == s.filter);

@@ -21,11 +21,8 @@ struct UiAction {
     unsigned slot = 0;
 };
 struct FrontendUiState {
-    bool gpu_available = false;
     std::string status = "Solo", message;
     std::string active_postprocess = "off";
-    std::string
-        active_renderer; // this session's renderer; differs from the saved preference after a restart-only change or a developer --renderer
     std::string set;
 
     // Netplay

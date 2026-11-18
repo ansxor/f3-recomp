@@ -2,6 +2,7 @@
 #include "f3rt/rom.hpp"
 
 #include "f3rt/game_video.hpp"
+#include "f3rt/video.hpp"
 
 #if defined(F3RT_GENERATED)
 #include "program.h"
@@ -155,7 +156,14 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
             (config_.video_layer_mask & ~511u)) {
             throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
         }
-        machine_->game_video = std::make_unique<GameVideo>(*machine_);
+        machine_->game_video = std::make_unique<GameVideo>(*machine_, GameVideoMode::Diagnostic);
+    } else {
+        auto &m = *machine_;
+        oracle_ = std::make_unique<Video>(m.graphics_assets, m.roms.video);
+        m.inspect_scanout = [this](std::span<uint32_t> pixels) {
+            const auto &m = *machine_;
+            oracle_->render_frame(m.palette, m.graphics, m.control, pixels);
+        };
     }
 
 #if defined(F3RT_GENERATED)

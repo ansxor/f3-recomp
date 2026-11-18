@@ -16,7 +16,7 @@ evidence:
   - {kind: doc, ref: raw/docs/fdp-clip-12-remark-2026-11-18.txt, note: "12 (2026-11-18): worked out the real clip behaviour on hardware; the website page describes it"}
   - {kind: test, ref: raw/tests/2026-11-18-calc-clip-y-ack-branches.md, note: "every y-ack/mame branch with calc_clip has the same rule as MAME 0.289; our FDP oracle and GameVideo port it"}
 contradictions:
-  - "Clip enable polarity: website/fdp/clip.html says c_n 0 = enabled, 1 = disabled; line-ram.txt ('1 = enable clip plane') and MAME ('If set, enable corresponding clip plane') say 1 = enabled. Resolved 2026-11-18: 12 says clip.html's 0 = enabled is probably a typo; 1 = enabled."
+  - "Clip enable polarity: website/fdp/clip.html says c_n 0 = enabled, 1 = disabled; line-ram.txt ('1 = enable clip plane') and MAME ('If set, enable corresponding clip plane') say 1 = enabled. Resolved 2026-11-18: 12 confirmed clip.html's 0 = enabled is a typo; 1 = enabled, 0 = disabled."
   - "Multi-window combination: clip.html says the visible parts of the selected windows are unioned; MAME intersects the enabled windows (with inverted windows as complements), and clip.txt's scratch code uses a union-style nonzero mask. Resolved 2026-11-18: 12 points to clip.html as the board-verified rule, so union and MAME is wrong."
   - "'Global invert' I: clip.html/line-ram.txt say I=1 inverts; MAME's comment says 'if on, 1 = invert; if off, 0 = invert' and swaps the plane modes when I=0."
   - "No windows enabled: clip.txt's layer_calc_ranges only makes the layer visible when invert_all is set; MAME leaves the whole line visible. Resolved 2026-11-18: 12 confirmed hidden with I=0, fully visible with I=1; MAME is wrong."
@@ -33,7 +33,7 @@ supersedes: []
 So the hardware rule is the website's: each enabled window contributes its visible part (inside if `i`=1,
 outside if `i`=0), the visible parts are **unioned**, and `I`=1 inverts the result.
 
-Enable polarity: clip.html says `c`=0 is enabled, but 12 said on 2026-11-18 that this is probably a typo and
+Enable polarity: clip.html says `c`=0 is enabled, but 12 confirmed on 2026-11-18 that this is a typo and
 **`c`=1 is enabled**, adding "this one is correct in mame" (line-ram.txt agrees). ^[raw/docs/fdp-clip-12-remark-2026-11-18.txt] In raw bits, the hardware rule per line and layer is:
 
 ```
@@ -97,7 +97,7 @@ priority, 15–14 blend mode): ^[raw/docs/taito-f3/website/fdp/clip.html] ^[raw/
 |---|---|---|
 | 13 | E | layer enable (1 = displayed) |
 | 12 | I | global invert of the clip result (1 = inverted) |
-| 11–8 | c3..c0 | window n enable: 1 = enabled (12, 2026-11-18; clip.html's "0 = enabled" is probably a typo) |
+| 11–8 | c3..c0 | window n enable: 1 = enabled (12, 2026-11-18; clip.html's "0 = enabled" is a typo) |
 | 7–4 | i3..i0 | window n mode: 0 = outside visible ("hide inside"), 1 = inside visible ("hide outside") |
 
 MAME's header names these bits `BAEI cccc iiii pppp` for B,A = blend bits, E = enable line, I = affects

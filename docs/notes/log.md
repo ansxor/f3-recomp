@@ -1,5 +1,9 @@
 # Log
 
+## [2026-11-18] confirm | 12 on clip enable polarity and source trust
+12 confirmed clip.html's "0 = enabled" is a typo (c=1 enabled, 0 disabled) and said the website html files should generally be trusted; the .txt files are 12's experiment notes, sometimes newer but unstable and eventually outdated.
+Touched: raw/docs/fdp-clip-12-remark-2026-11-18.txt, hardware/clip-and-mosaic.md, comparisons/hardware-vs-mame-video.md, log.md.
+
 ## [2026-11-18] confirm | 12: clip windows work as the website describes
 Saved 12's replies in raw/docs/fdp-clip-12-remark-2026-11-18.txt. 12 points to website/fdp/clip.html as the board-verified rule: the visible parts of enabled windows are unioned, then `I` inverts. Compared calc_clip in every y-ack/mame branch with MAME 0.289 (raw/tests/2026-11-18-calc-clip-y-ack-branches.md): all the same, and both our renderers port it. MAME/ours matches the website for one window and for `I`=1, but intersects instead of unioning when `I`=0 with two or more windows, and shows the whole line when no windows are enabled (the website rule hides it). 12 then said clip.html's "0 = enabled" is probably a typo: `c`=1 is enabled, as MAME and our renderers have it. 12 also said games commonly disable clipping with all windows off and `I`=1. 12 confirmed that with no windows enabled the layer is hidden (I=0) or fully visible (I=1). Recorded the hardware rule in raw bits and marked both contradictions resolved; comparisons/hardware-vs-mame-video.md: enable polarity agrees with MAME; combination and no-window rows are MAME bugs.
 Touched: raw/docs/fdp-clip-12-remark-2026-11-18.txt, raw/tests/2026-11-18-calc-clip-y-ack-branches.md, hardware/clip-and-mosaic.md, comparisons/hardware-vs-mame-video.md, log.md.

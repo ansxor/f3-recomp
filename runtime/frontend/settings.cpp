@@ -49,8 +49,7 @@ bool choice(const std::string &s, std::initializer_list<const char *> values) {
     return false;
 }
 bool valid(const FrontendSettings &s) {
-    if (!choice(s.renderer, {"accurate", "enhanced"}) ||
-        !choice(s.video_scale, {"1", "2", "3", "4", "auto", "auto-integer"}) || s.border > 160 ||
+    if (!choice(s.video_scale, {"1", "2", "3", "4", "auto", "auto-integer"}) || s.border > 160 ||
         !choice(s.filter, {"nearest", "linear"}) ||
         !choice(s.interpolation, {"off", "linear", "fit"}) ||
         !choice(s.interpolation_fields, {"none", "geometry", "palette", "geometry,palette"}) ||
@@ -84,15 +83,14 @@ bool load_frontend_settings(const std::string &path, FrontendSettings &settings,
         path,
         [&](std::string_view key, std::string_view value, std::string &reject) {
             int n = 0;
-            if (key == "renderer") s.renderer = value;
-            else if (key == "scale") s.video_scale = value;
+            if (key == "scale") s.video_scale = value;
             else if (key == "filter") s.filter = value;
             else if (key == "interpolation") s.interpolation = value;
             else if (key == "fields") s.interpolation_fields = value;
             else if (key == "postprocess") s.postprocess = value;
             else if (key == "user_shader") s.user_shader = value;
             else if (key == "sprite_behaviour" || key == "video" || key == "backend" ||
-                     key == "audio") {
+                     key == "audio" || key == "renderer") {
             } else if (key == "volume") {
                 std::istringstream in{std::string(value)};
                 in >> s.volume;
@@ -172,8 +170,7 @@ bool save_frontend_settings(const std::string &path, const FrontendSettings &s,
         return false;
     }
     std::ostringstream text;
-    text << "# f3rt settings, Dear ImGui frontend\nrenderer=" << s.renderer
-         << "\nscale=" << s.video_scale << "\nborder=" << s.border << "\nfilter=" << s.filter
+    text << "# f3rt settings, Dear ImGui frontend\nscale=" << s.video_scale << "\nborder=" << s.border << "\nfilter=" << s.filter
          << "\ninterpolation=" << s.interpolation << "\nfields=" << s.interpolation_fields
          << "\nvolume=" << s.volume << '\n';
     text << "postprocess=" << s.postprocess << "\nuser_shader=" << s.user_shader << '\n';

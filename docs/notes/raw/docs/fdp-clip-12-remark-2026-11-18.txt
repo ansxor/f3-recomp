@@ -1,7 +1,7 @@
 ---
 source_url: relayed by user from 12
 ingested: 2026-11-18
-sha256: 790115eb946f7e0fd5099f85aef9424c6a8598a43ce4ee8370df9a6d92b7f1c6
+sha256: 03191ad8651c224d07eb838198f6b3deeb0b123ccb7fb14ce3156e0d87031c91
 captured_with: "relayed by user from 12; the line \"12 and y worked in ...\" is the user's own note"
 ---
 Question (sent to 12): clip windows with the inverted-plane mode; we follow MAME's rule for a plane whose clip is inverted. Does an inverted clip on one plane behave the way MAME does it?
@@ -34,3 +34,13 @@ wait
 no i think 1 is enable actually
 that's probably a typo
 this one is correct in mame
+
+(later confirmation)
+from 12:
+ok yeah 1) is actually 
+c=1 is enabled, 0 is disabled
+idk how i made that typo
+generally the website html files should be trusted
+text files are generally for
+my own notes while testing, which
+can sometimes be newer but also more unstable and eventually become outdated.  they are experiment notes more than documentation

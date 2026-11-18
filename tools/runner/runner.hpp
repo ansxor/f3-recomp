@@ -15,6 +15,10 @@
 #include <string_view>
 #include <vector>
 
+namespace f3rt {
+class Video;
+}
+
 namespace f3rt::runner {
 
 struct ScheduledPacket {
@@ -112,6 +116,7 @@ public:
 private:
     RunnerConfig config_;
     std::unique_ptr<Machine> machine_;
+    std::unique_ptr<Video> oracle_;
     std::unique_ptr<WavWriter> wav_;
     std::unique_ptr<BlockProfileSession> profile_;
     std::array<int16_t, 8192> audio_buffer_{};

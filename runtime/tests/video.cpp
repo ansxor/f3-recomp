@@ -838,7 +838,7 @@ TEST(GameCompositor, IndexedParallelMatchesSerial) {
     ASSERT_NE(machine->game_video, nullptr);
     const auto &captured = machine->game_video->scene_snapshot();
     ASSERT_FALSE(captured.fallback) << "Frame 900 must be a supported native scanout";
-    const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
+    const f3rt::TileRowTable playfield(machine->graphics_assets.playfield_tiles());
     for (const unsigned border : {0u, 40u}) {
         f3rt::GameVideoOptions options;
         options.scale = 1;
@@ -846,10 +846,10 @@ TEST(GameCompositor, IndexedParallelMatchesSerial) {
         f3rt::IndexedScratch scratch;
         std::vector<uint32_t> serial(size_t(options.width()) * options.height()),
             parallel(serial.size());
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(), scratch,
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->graphics_assets.sprite_tiles(), scratch,
                                        serial, options.width(), f3rt::PixelFormat::Argb8888,
                                        options, f3rt::ComposeMode::Serial);
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->video->sprite_tiles(), scratch,
+        f3rt::compose_snapshot_indexed(captured, playfield, machine->graphics_assets.sprite_tiles(), scratch,
                                        parallel, options.width(), f3rt::PixelFormat::Argb8888,
                                        options, f3rt::ComposeMode::Parallel);
         EXPECT_EQ(parallel, serial) << "border=" << border;
@@ -1254,9 +1254,9 @@ TEST(GameCompositor, IndexedMatchesGpu) {
         machine->sprites = f3rt::make_game_sprites(*machine);
         f3rt::runner::SeededScheduleInputSource schedule(
             1, f3rt::runner::ScheduleConfig{.versus = false});
-        GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
+        GpuReference gpu(machine->graphics_assets.playfield_tiles(), machine->graphics_assets.sprite_tiles());
         if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
-        const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
+        const f3rt::TileRowTable playfield(machine->graphics_assets.playfield_tiles());
         f3rt::IndexedScratch scratch;
         for (unsigned index = 0; index < 3600; ++index) {
             if (play) schedule.apply(*machine, index);
@@ -1267,7 +1267,7 @@ TEST(GameCompositor, IndexedMatchesGpu) {
             ASSERT_FALSE(captured.fallback) << "frame " << index << " must be a native scanout";
             for (const unsigned border : {0u, 40u}) {
                 const auto result = compare_indexed_frame(
-                    captured, playfield, machine->video->sprite_tiles(), border, scratch, gpu);
+                    captured, playfield, machine->graphics_assets.sprite_tiles(), border, scratch, gpu);
                 ++frames;
                 rows += result.rows;
                 mismatches += result.mismatches;
@@ -1332,7 +1332,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
         GTEST_SKIP() << "Strict-native machine unavailable: " << error.what();
     }
     machine->sprites = f3rt::make_game_sprites(*machine);
-    GpuReference gpu(machine->video->playfield_tiles(), machine->video->sprite_tiles());
+    GpuReference gpu(machine->graphics_assets.playfield_tiles(), machine->graphics_assets.sprite_tiles());
     if (!gpu.available()) GTEST_SKIP() << "No GPU device for the reference render";
     const auto eeprom_path = std::filesystem::temp_directory_path() / "f3rt-bench-timeline.eeprom";
     {
@@ -1348,7 +1348,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
         size_t frames = 0, special_px = 0, mismatches = 0;
     };
     std::array<Totals, BENCH_WINDOWS.size() + 1> totals{};
-    const f3rt::TileRowTable playfield(machine->video->playfield_tiles());
+    const f3rt::TileRowTable playfield(machine->graphics_assets.playfield_tiles());
     f3rt::IndexedScratch scratch;
     for (unsigned index = 0; index < BENCH_FRAMES; ++index) {
         input->apply(*machine, index);
@@ -1369,7 +1369,7 @@ TEST(GameCompositor, IndexedMatchesGpuOnBenchTimeline) {
         ASSERT_FALSE(captured.fallback) << "frame " << frame << " must be a native scanout";
         for (const unsigned border : {0u, 40u}) {
             const auto result = compare_indexed_frame(
-                captured, playfield, machine->video->sprite_tiles(), border, scratch, gpu);
+                captured, playfield, machine->graphics_assets.sprite_tiles(), border, scratch, gpu);
             Totals &total = totals[slot];
             ++total.frames;
             total.special_px += result.special_px;
@@ -1413,7 +1413,16 @@ TEST(GameVideo, LazyNativeFrameMatchesFdpOracle) {
     for (const bool game_video : {true, false}) {
         auto machine = strict_machine_or_skip(game_video);
         if (!machine) GTEST_SKIP() << "ROM-backed strict-native machine unavailable";
-        if (game_video) machine->sprites = f3rt::make_game_sprites(*machine);
+        std::optional<f3rt::Video> oracle;
+        if (game_video) {
+            machine->sprites = f3rt::make_game_sprites(*machine);
+        } else {
+            oracle.emplace(machine->graphics_assets, machine->roms.video);
+            machine->inspect_scanout = [&](std::span<uint32_t> pixels) {
+                oracle->render_frame(machine->palette, machine->graphics, machine->control,
+                                     pixels);
+            };
+        }
         f3rt::runner::SeededScheduleInputSource input(
             1, f3rt::runner::ScheduleConfig{.versus = false});
         auto &frames = game_video ? game_frames : oracle_frames;

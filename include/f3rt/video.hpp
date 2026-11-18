@@ -17,11 +17,13 @@ struct VideoLine {
 };
 struct SceneRow;
 struct VideoConfig;
+class GraphicsAssets;
 
 // Standalone TC0630FDP software renderer for configured Taito F3 games
 class Video {
 public:
     Video();
+    Video(const GraphicsAssets &assets, const VideoConfig &config);
     ~Video();
 
     Video(const Video &) = delete;
@@ -54,7 +56,6 @@ public:
     // Direct injection of active spriteram (for single-frame capture tests)
     void set_active_spriteram(std::span<const uint8_t> spriteram);
 
-    // Immutable decoded assets can be shared with the independent game renderer.
     std::span<const uint8_t> sprite_tiles() const;
     std::span<const uint8_t> playfield_tiles() const;
 
