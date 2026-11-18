@@ -63,7 +63,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
       - name: Build runtime unit tests
-        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-input_script f3rt-test-eeprom f3rt-test-cpu f3rt-test-sprites f3rt-test-audio f3rt-test-motion_interp f3rt-test-state f3rt-test-netplay f3-netplay-server f3-netplay-relay-test
+        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-input_script f3rt-test-bytes f3rt-test-cpu f3rt-test-sprites f3rt-test-motion_interp f3rt-test-state f3rt-test-netplay f3-netplay-server f3-netplay-relay-test
       - name: Run runtime unit tests
         run: ctest --test-dir build -R '^(runtime-|netplay-relay\.)' --output-on-failure
 

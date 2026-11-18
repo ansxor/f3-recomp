@@ -2,8 +2,8 @@
 
 The committed CSVs hold CPU opcode metadata, never game ROM data. Each row is
 mask,match,legal; rows apply in order, so a later, narrower row overrides an
-earlier, broader one. RESET (0x4e70) is legal on both CPUs although Musashi
-gives it no descriptor cost; callers keep that special case.
+earlier, broader one. RESET (0x4e70) is legal although Musashi gives it no
+descriptor cost; callers keep that special case.
 """
 
 from pathlib import Path
@@ -27,4 +27,3 @@ def _load(name: str) -> bytes:
 
 
 LEGAL_68020 = _load("68020_opcodes.csv")
-LEGAL_68000 = _load("68000_opcodes.csv")

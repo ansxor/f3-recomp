@@ -109,6 +109,10 @@ def fixture_discovery(code: bytes, entry: int = 0x400):
 FIXTURE_CODE = bytes.fromhex("49f900600340425c425c322b000c7404080300006704d2426002924238c14e75")
 
 
+LANDMAKRJ_AVAILABLE = unittest.skipUnless(LANDMAKRJ_ROMS.is_dir(), "landmakrj ROMs not available (roms/landmakrj)")
+
+
+@LANDMAKRJ_AVAILABLE
 class LandmakrjTraceTests(unittest.TestCase):
     def test_exact_writer_table(self):
         result = landmakrj_trace()
@@ -200,6 +204,7 @@ class HeaderTests(unittest.TestCase):
     WRITE_ROW = re.compile(r"\{0x([0-9a-f]+)u, (\d+)u, (\d+)u, (\d+)u, (\d+)u, 0x([0-9a-f]+)u, 0x([0-9a-f]+)u\}")
     RESET_ROW = re.compile(r"\{0x([0-9a-f]+)u, (\d+)u, 0u, 0x([0-9a-f]+)u\}")
 
+    @LANDMAKRJ_AVAILABLE
     def test_renders_and_parses(self):
         result = landmakrj_trace()
         header = render_header(result)
@@ -219,6 +224,7 @@ class HeaderTests(unittest.TestCase):
         self.assertIn("inline constexpr SpriteGroupTable table{", header)
         self.assertNotIn(", }", header)
 
+    @LANDMAKRJ_AVAILABLE
     @unittest.skipUnless((ROOT / "include" / "f3rt" / "sprite_group.hpp").is_file(), "runtime header not present")
     def test_compiles_with_cxx20(self):
         compiler = os.environ.get("CXX") or shutil.which("c++")

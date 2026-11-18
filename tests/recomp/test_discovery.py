@@ -376,7 +376,7 @@ class LoadRomUnknownKeyTests(unittest.TestCase):
         config_path = REPO / "games" / "landmakrj" / "config.toml"
         if not rom_dir.is_dir():
             self.skipTest("landmakrj ROM directory missing")
-        from recomp.compile.sound import load_sound_rom
+        from recomp.roms import load_sound_rom
 
         rom, config = load_rom(config_path, rom_dir)
         main = parse_exclusions(config, len(rom), image=rom)

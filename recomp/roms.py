@@ -122,3 +122,11 @@ def load_region(config: dict, name: str, rom_dir: Path) -> bytes:
     if mapped_size < size or (size and mapped_size % size) or (not size and mapped_size):
         raise ValueError(f"Invalid {name} mirrored size")
     return bytes(image) * (mapped_size // size if size else 1)
+
+
+def load_sound_rom(rom_dir: Path, config: dict) -> bytes:
+    """Validate chips and assemble the mapped 512 KiB sound CPU window."""
+    rom = load_region(config, "sound", rom_dir)
+    if len(rom) < 0x80000:
+        raise ValueError("Sound manifest must cover the 512 KiB CPU window")
+    return rom[:0x80000]

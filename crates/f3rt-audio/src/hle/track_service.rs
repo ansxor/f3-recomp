@@ -290,9 +290,9 @@ impl TrackService {
 
             TrackEventKind::SequencePan => {
                 let index = event.sequence as usize;
-                for i in 0..TRACK_COUNT {
-                    if self.tracks[index][i].is_live() {
-                        self.tracks[index][i].config.parameters.set_pan(event.value);
+                for track in &mut self.tracks[index][..TRACK_COUNT] {
+                    if track.is_live() {
+                        track.config.parameters.set_pan(event.value);
                     }
                 }
             }
@@ -372,9 +372,9 @@ impl TrackService {
 
     fn set_sequence_volume(&mut self, sequence: u8, volume: u8) {
         let index = sequence as usize;
-        for i in 0..TRACK_COUNT {
-            if self.tracks[index][i].is_live() {
-                self.tracks[index][i].sequence_volume = volume;
+        for track in &mut self.tracks[index][..TRACK_COUNT] {
+            if track.is_live() {
+                track.sequence_volume = volume;
             }
         }
     }

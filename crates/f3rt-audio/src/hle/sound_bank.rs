@@ -445,10 +445,9 @@ impl SoundBank {
                     if record[PROGRAM_MAGIC_OFFSET_0] == b'X'
                         && record[PROGRAM_MAGIC_OFFSET_1] == b'E'
                     {
-                        for i in 0..17 {
+                        for (i, bank) in data.sample_banks.iter_mut().enumerate().take(17) {
                             if (mask & (1u32 << i)) != 0 {
-                                data.sample_banks[i] =
-                                    find_bank(record[PROGRAM_DEFAULT_BANK_OFFSET]);
+                                *bank = find_bank(record[PROGRAM_DEFAULT_BANK_OFFSET]);
                             }
                         }
                     }
