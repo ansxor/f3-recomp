@@ -3,7 +3,7 @@
 #include <iosfwd>
 #include <memory>
 #include <span>
-#include "generated_config/enhancements.hpp"
+#include "f3rt/renderer/game/enhancements.hpp"
 #include "generated_config/game_video_config.hpp"
 
 namespace f3rt {
@@ -45,7 +45,7 @@ public:
 class GameVideo {
 public:
     explicit GameVideo(Machine &machine, GameVideoMode mode = GameVideoMode::Diagnostic,
-                       std::span<const game_config::FlickerHold> flicker_holds = {});
+                       RenderEnhancements enhancements = {});
     ~GameVideo();
     GameVideo(const GameVideo &) = delete;
     GameVideo &operator=(const GameVideo &) = delete;

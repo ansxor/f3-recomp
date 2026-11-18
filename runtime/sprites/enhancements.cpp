@@ -1,8 +1,10 @@
 #include "sprites/enhancements.hpp"
+#include "renderer/game/flicker_hold.hpp"
 #include <algorithm>
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace f3rt {
 
@@ -10,7 +12,9 @@ EnhancementSet::EnhancementSet() {
     for (const auto *behaviour : registered_sprite_behaviours())
         m_entries.push_back({behaviour});
     for (const auto &hold : game_config::flicker_holds)
-        m_entries.push_back({&hold});
+        m_entries.push_back({RenderEntry{
+            hold.name, "flicker_hold", {VideoBackend::Gpu},
+            [hold] { return std::make_unique<FlickerHoldStage>(hold); }}});
 }
 
 EnhancementSet &EnhancementSet::override_setting(std::string_view setting) {
@@ -30,11 +34,13 @@ EnhancementSet &EnhancementSet::set(std::string_view name, bool enabled) {
 }
 
 std::string_view EnhancementSet::Entry::kind() const {
-    return std::holds_alternative<const SpriteBehaviour *>(target) ? "behaviour" : "flicker_hold";
+    if (const auto *render = std::get_if<RenderEntry>(&target)) return render->kind;
+    return "behaviour";
 }
 
 std::string_view EnhancementSet::Entry::name() const {
-    return std::visit([](const auto *value) -> std::string_view { return value->name; }, target);
+    if (const auto *render = std::get_if<RenderEntry>(&target)) return render->name;
+    return std::get<const SpriteBehaviour *>(target)->name;
 }
 
 EnhancementSet &EnhancementSet::enable_only_behaviours(std::span<const std::string> names) {
@@ -64,13 +70,15 @@ std::vector<const SpriteBehaviour *> EnhancementSet::behaviours() const {
     return result;
 }
 
-std::vector<game_config::FlickerHold> EnhancementSet::flicker_holds() const {
-    std::vector<game_config::FlickerHold> result;
-    for (const auto &entry : m_entries)
-        if (const auto *hold = std::get_if<const game_config::FlickerHold *>(&entry.target);
-            entry.enabled && hold)
-            result.push_back(**hold);
-    return result;
+RenderEnhancements EnhancementSet::render(VideoBackend backend) const {
+    std::vector<std::unique_ptr<SpriteStage>> stages;
+    for (const auto &entry : m_entries) {
+        const auto *render = std::get_if<RenderEntry>(&entry.target);
+        if (entry.enabled && render &&
+            std::ranges::find(render->backends, backend) != render->backends.end())
+            stages.push_back(render->make_stage());
+    }
+    return RenderEnhancements(std::move(stages));
 }
 
 }

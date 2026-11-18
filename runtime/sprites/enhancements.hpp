@@ -1,6 +1,7 @@
 #pragma once
-#include "generated_config/enhancements.hpp"
+#include "f3rt/renderer/game/enhancements.hpp"
 #include "sprites/behaviour.hpp"
+#include <functional>
 #include <iosfwd>
 #include <span>
 #include <string>
@@ -12,8 +13,15 @@ namespace f3rt {
 
 class EnhancementSet {
 public:
+    struct RenderEntry {
+        std::string_view name;
+        std::string_view kind;
+        std::vector<VideoBackend> backends;
+        std::function<std::unique_ptr<SpriteStage>()> make_stage;
+    };
+
     struct Entry {
-        std::variant<const SpriteBehaviour *, const game_config::FlickerHold *> target;
+        std::variant<const SpriteBehaviour *, RenderEntry> target;
         std::string_view kind() const;
         std::string_view name() const;
         bool enabled = true;
@@ -26,7 +34,7 @@ public:
     EnhancementSet &enable_only_behaviours(std::span<const std::string> names);
     void list(std::ostream &out) const;
     std::vector<const SpriteBehaviour *> behaviours() const;
-    std::vector<game_config::FlickerHold> flicker_holds() const;
+    RenderEnhancements render(VideoBackend backend) const;
 
 private:
     std::vector<Entry> m_entries;

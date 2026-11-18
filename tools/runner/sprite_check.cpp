@@ -6,7 +6,6 @@
 #include "renderer/decode.hpp"
 #include "renderer/game/scene.hpp"
 #include "sprites/enhancements.hpp"
-#include "renderer/game/flicker_hold.hpp"
 #include "renderer/game/sprites.hpp"
 #include "sprites/sprite_system.hpp"
 
@@ -143,7 +142,8 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     EnhancementSet enhancements;
     enhancements.enable_only_behaviours(args.behaviours);
     const SpriteSystem::Options options{enhancements.behaviours()};
-    FlickerHoldStage flicker_hold(enhancements.flicker_holds());
+    auto render_enhancements = enhancements.render(VideoBackend::Gpu);
+    const bool has_stages = !render_enhancements.empty();
 
     if (SpriteSystem::game_table().writes.empty() &&
         (SpriteSystem::game_units().units.empty() || options.behaviours.empty())) {
@@ -178,7 +178,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     Inputs inputs_on(args.seed);
     uint64_t state_compares = 0, group_frames = 0, max_groups = 0;
     FrameCoverage total;
-    std::vector<SceneSprite> held_sprites;
+    std::vector<SceneSprite> latched_sprites;
     SpriteRamState latch;
     size_t checkpoint_index = 0;
 
@@ -198,14 +198,15 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
         }
         if (!run_one(*on, frame, "groups on", error)) break;
         const bool compare = (frame + 1) % args.compare_every == 0 || frame + 1 == args.frames;
-        const uint32_t pre_hold_crc = compare && flicker_hold.active() ? on->state_crc() : 0;
+        const uint32_t pre_render_crc = compare && has_stages ? on->state_crc() : 0;
         if (groups_available) {
             const SpritePresentation presentation = on->sprites->presentation();
             SpriteRamState presented_state = latch;
             const FrameCoverage coverage =
-                cover(*on, presentation, presented_state, flicker_hold.active() ? &held_sprites : nullptr);
-            if (flicker_hold.active())
-                flicker_hold.present(held_sprites, FlickerFrame::read(on->sprites->tracker(), false));
+                cover(*on, presentation, presented_state, has_stages ? &latched_sprites : nullptr);
+            if (has_stages)
+                render_enhancements.present(latched_sprites,
+                                            SpriteFrame::read(on->sprites->tracker(), false));
             latch = presented_state;
             total.groups += coverage.groups;
             total.entries += coverage.entries;
@@ -214,7 +215,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             max_groups = std::max(max_groups, coverage.groups);
         }
         if (compare) {
-            if (flicker_hold.active() && pre_hold_crc != on->state_crc()) {
+            if (has_stages && pre_render_crc != on->state_crc()) {
                 error = "flicker hold changed state_crc at frame " + std::to_string(frame + 1);
                 break;
             }
@@ -238,7 +239,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     const auto report = on->sprites->report();
     if (out) {
         on->sprites->write_report(*out);
-        flicker_hold.report(*out);
+        render_enhancements.report(*out);
     }
 
     bool failed = !error.empty();

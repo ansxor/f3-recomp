@@ -573,17 +573,18 @@ int main(int argc, char **argv) try {
     if (cli_preferences & Renderer) {
         if (renderer == "accurate" || renderer == "enhanced") settings.renderer = renderer;
     } else renderer = settings.renderer;
-    std::string video_mode, video_backend;
+    std::string video_mode;
+    f3rt::VideoBackend backend;
     auto select_renderer = [&] {
         if (renderer == "accurate") {
             video_mode = "fdp";
-            video_backend = "cpu";
+            backend = f3rt::VideoBackend::Cpu;
         } else if (renderer == "enhanced") {
             video_mode = "game";
-            video_backend = "gpu";
+            backend = f3rt::VideoBackend::Gpu;
         } else if (renderer == "compare-gpu") {
             video_mode = "compare";
-            video_backend = "gpu";
+            backend = f3rt::VideoBackend::Gpu;
         } else throw std::runtime_error("--renderer must be accurate, enhanced or compare-gpu");
     };
     select_renderer();
@@ -591,7 +592,7 @@ int main(int argc, char **argv) try {
     // A renderer that came from the default or the settings file must not leave the user unable to launch:
     // probe the GPU (hidden window + device + window claim) and fall back to accurate. An explicit
     // --renderer keeps failing hard in the normal start-up path.
-    if (!(cli_preferences & Renderer) && !headless && video_backend == "gpu") {
+    if (!(cli_preferences & Renderer) && !headless && backend == f3rt::VideoBackend::Gpu) {
         std::string reason;
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reason = SDL_GetError();
@@ -666,14 +667,14 @@ int main(int argc, char **argv) try {
         throw std::runtime_error("Scale, border and filter options require --renderer enhanced (or "
                                  "compare-gpu) with a window");
     bool automatic_scale = video_scale_mode != f3rt::VideoScaleMode::Fixed;
-    if (automatic_scale && video_backend != "gpu")
+    if (automatic_scale && backend != f3rt::VideoBackend::Gpu)
         throw std::runtime_error(
             "--video-scale auto/auto-integer requires --renderer enhanced or compare-gpu");
     if (video_interp != "off" && video_interp != "linear" && video_interp != "fit")
         throw std::runtime_error("--video-interp must be off, linear or fit");
-    if (video_interp != "off" && video_backend != "gpu")
+    if (video_interp != "off" && backend != f3rt::VideoBackend::Gpu)
         throw std::runtime_error("--video-interp requires --renderer enhanced or compare-gpu");
-    if (motion_interp && video_backend != "gpu")
+    if (motion_interp && backend != f3rt::VideoBackend::Gpu)
         throw std::runtime_error("--motion-interp requires --renderer enhanced or compare-gpu");
     if (video_mode == "compare" && (headless || video_options.expanded() || automatic_scale ||
                                     video_interp != "off" || motion_interp))
@@ -683,7 +684,7 @@ int main(int argc, char **argv) try {
             "--video-interp off and no --motion-interp");
     if (postprocess != "off" && postprocess != "crt" && postprocess != "user")
         throw std::runtime_error("--postprocess must be off, crt or user");
-    if (postprocess != "off" && video_backend != "gpu")
+    if (postprocess != "off" && backend != f3rt::VideoBackend::Gpu)
         std::cerr
             << "f3rt: post-processing requires the enhanced renderer; preference is inactive\n";
     const auto interpolation_fields = f3rt::parse_interpolation_fields(video_interp_fields);
@@ -691,7 +692,7 @@ int main(int argc, char **argv) try {
         throw std::runtime_error(
             "--video-interp-fields must be none, geometry, palette or geometry,palette");
 #ifndef F3RT_GPU
-    if (video_backend == "gpu" && !headless)
+    if (backend == f3rt::VideoBackend::Gpu && !headless)
         throw std::runtime_error("The GPU renderer requires F3RT_GPU build support");
 #endif
     if (watch_entries.empty() != watch_path.empty())
@@ -718,8 +719,7 @@ int main(int argc, char **argv) try {
     if (video_mode != "fdp")
         m.game_video = std::make_unique<f3rt::GameVideo>(
             m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
-            video_backend == "gpu" ? enhancements.flicker_holds()
-                                   : std::vector<f3rt::game_config::FlickerHold>{});
+            enhancements.render(backend));
 #endif
     m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
     if (!dumpdir.empty()) {
@@ -758,7 +758,7 @@ int main(int argc, char **argv) try {
     if (!headless) {
         check(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | (sound ? SDL_INIT_AUDIO : 0)));
 #ifdef F3RT_GPU
-        if (video_backend == "gpu") {
+        if (backend == f3rt::VideoBackend::Gpu) {
             const SDL_WindowFlags flags =
                 SDL_WINDOW_RESIZABLE | (automatic_scale ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0);
             sdl.window = SDL_CreateWindow(("f3rt — " + set).c_str(),

@@ -12,7 +12,6 @@
 #include "renderer/game/indexed_compositor.hpp"
 #include "state_io.hpp"
 #include "sprites/sprite_system.hpp"
-#include "renderer/game/flicker_hold.hpp"
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -31,8 +30,8 @@ bool differs(ScenePixel game, ScenePixel oracle) {
 }
 } // namespace
 struct GameVideo::Impl {
-    Impl(Machine &value, GameVideoMode selected, std::span<const game_config::FlickerHold> holds)
-        : machine(value), mode(selected), flicker_hold(holds) {}
+    Impl(Machine &value, GameVideoMode selected, RenderEnhancements stages)
+        : machine(value), mode(selected), enhancements(std::move(stages)) {}
     Machine &machine;
     GameVideoMode mode;
     VideoProbe *probe = nullptr;
@@ -66,7 +65,7 @@ struct GameVideo::Impl {
     GameTiles tiles;
     GameText text;
     GameSprites sprites;
-    FlickerHoldStage flicker_hold;
+    RenderEnhancements enhancements;
     GameLines lines;
     bool native_pending = false;
     bool rendered = false;
@@ -118,7 +117,8 @@ struct GameVideo::Impl {
             std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
             frame.rows_version = lines.rows_version();
         }
-        const auto current = presented_sprites();
+        const auto current =
+            enhancements.empty() ? sprites.presented_sprites() : enhancements.sprites();
         frame.sprite_count = unsigned(current.size());
         std::copy(current.begin(), current.end(), frame.sprites.begin());
         const auto canonical = sprites.sprites();
@@ -160,16 +160,6 @@ struct GameVideo::Impl {
         text.decode(vram);
         sprites.decode(vram, presentation);
         lines.decode(vram);
-    }
-    std::optional<FlickerFrame> flicker_frame() const {
-        if (!rendered || !machine.sprites) return std::nullopt;
-        return FlickerFrame::read(machine.sprites->tracker(), sprites.flipped());
-    }
-    void hold_flicker(std::optional<FlickerFrame> frame) {
-        if (flicker_hold.active()) flicker_hold.present(sprites.presented_sprites(), frame);
-    }
-    std::span<const SceneSprite> presented_sprites() const {
-        return flicker_hold.active() ? flicker_hold.sprites() : sprites.presented_sprites();
     }
     template <Snapshotable... S> static size_t state_size_all(const S &...s) {
         return (size_t(0) + ... + s.state_size());
@@ -218,9 +208,8 @@ static_assert(game_config::video.sprite_lag == 1,
 #endif
 } // namespace
 
-GameVideo::GameVideo(Machine &machine, GameVideoMode mode,
-                     std::span<const game_config::FlickerHold> flicker_holds)
-    : m_impl(std::make_unique<Impl>(require_matching_video(machine), mode, flicker_holds)) {
+GameVideo::GameVideo(Machine &machine, GameVideoMode mode, RenderEnhancements enhancements)
+    : m_impl(std::make_unique<Impl>(require_matching_video(machine), mode, std::move(enhancements))) {
     machine.video->enable_scene_inspection(mode != GameVideoMode::Game);
     reset();
 }
@@ -229,7 +218,7 @@ void GameVideo::reset() {
     m_impl->materialize_native();
     std::apply([](auto &...c) { Impl::reset_all(c...); }, m_impl->sources());
     m_impl->native_pending = false;
-    m_impl->hold_flicker(std::nullopt);
+    m_impl->enhancements.reset();
     {
         auto &frame = m_impl->snapshot_dest();
         m_impl->snapshot = &frame;
@@ -283,7 +272,13 @@ void GameVideo::render_frame() {
     if (state.rendered && state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
     state.enter(VideoStage::Latch);
     state.sprites.latch();
-    state.hold_flicker(state.flicker_frame());
+    if (!state.enhancements.empty()) {
+        const auto latched = state.sprites.presented_sprites();
+        const auto frame = state.rendered && m.sprites
+                               ? SpriteFrame::read(m.sprites->tracker(), state.sprites.flipped())
+                               : std::nullopt;
+        state.enhancements.present(latched, frame);
+    }
     state.enter(VideoStage::Idle);
 }
 
@@ -471,7 +466,7 @@ void GameVideo::compare_composite(uint64_t frame) {
 }
 
 void GameVideo::report(std::ostream &output) const {
-    m_impl->flicker_hold.report(output);
+    m_impl->enhancements.report(output);
     for (unsigned layer = 0; layer < LAYER_COUNT; ++layer) {
         if (!m_impl->frames[layer]) continue;
         const unsigned pixels = LAYER_INFO[layer].width * LAYER_INFO[layer].height;
@@ -533,7 +528,8 @@ void GameVideo::load_state(std::span<const uint8_t> src) {
     }
     StateReader reader(src);
     m_impl->load_state(reader);
-    m_impl->hold_flicker(std::nullopt);
+    if (!m_impl->enhancements.empty())
+        m_impl->enhancements.present(m_impl->sprites.presented_sprites(), std::nullopt);
     {
         auto &frame = m_impl->snapshot_dest();
         m_impl->snapshot = &frame;

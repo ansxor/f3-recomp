@@ -83,6 +83,7 @@ set(F3RT_CORE_SOURCES
     runtime/input.cpp
     runtime/debug/input_script.cpp
     runtime/sprites/enhancements.cpp
+    runtime/renderer/game/enhancements.cpp
     runtime/renderer/game/flicker_hold.cpp
     runtime/sprites/groups.cpp
     runtime/sprites/replay.cpp
