@@ -7,7 +7,7 @@
 
 namespace f3rt {
 namespace {
-constexpr uint64_t REPLAY_BUDGET_CYCLES = 1000000;
+constexpr uint64_t REPLAY_BUDGET_STEPS = 200000;
 constexpr uint32_t REPLAY_BUDGET_BLOCKS = 500000;
 constexpr uint32_t BANK_BYTES = SPRITE_BANK_STRIDE;
 }
@@ -187,9 +187,9 @@ void Sandbox::begin(uint32_t unit, uint32_t start_pc, uint32_t end_pc) {
 }
 
 Sandbox::Abort Sandbox::run() {
-    const uint64_t limit = m_cpu.cycles + REPLAY_BUDGET_CYCLES;
+    const uint64_t limit = m_cpu.steps + REPLAY_BUDGET_STEPS;
     for (uint32_t blocks = 0; m_abort == Abort::Count && !m_done; ++blocks) {
-        if (blocks >= REPLAY_BUDGET_BLOCKS || m_cpu.cycles >= limit) {
+        if (blocks >= REPLAY_BUDGET_BLOCKS || m_cpu.steps >= limit) {
             abort(Abort::Budget);
             break;
         }

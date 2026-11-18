@@ -2,7 +2,7 @@
 """Taito F3 68000 sound driver native compiler.
 
 Compiles sound ROM instructions into statically compiled native C blocks
-with pinned 68000 instruction-boundary timing.
+counting one scheduler step per instruction.
 """
 
 from __future__ import annotations
@@ -35,9 +35,10 @@ from recomp.discovery import (  # noqa: E402
     exclusion_at,
     parse_exclusions,
 )
-from recomp.emitter import _decode_ea  # noqa: E402
+from recomp.emitter import STEP, _decode_ea  # noqa: E402
 from recomp.emitter import lower as emitter_lower  # noqa: E402
 from recomp.generate import _RUNTIME_ABI_VERSION  # noqa: E402
+from recomp.opcodes import LEGAL_68000  # noqa: E402
 
 
 def write_if_changed(path: Path, data: str | bytes, encoding: str = "utf-8") -> bool:
@@ -52,51 +53,6 @@ def write_if_changed(path: Path, data: str | bytes, encoding: str = "utf-8") -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return True
-
-
-def load_68000_base_cycles() -> bytes:
-    """Load Musashi 68000 base cycles from recomp/68000_cycles.csv."""
-    csv_path = ROOT_DIR / "recomp" / "68000_cycles.csv"
-
-    table = bytearray(65536)
-    for line in csv_path.read_text().splitlines():
-        if not line or line.startswith("#"):
-            continue
-        mask_s, match_s, cyc_s = line.split(",")
-        mask, match, cyc = int(mask_s, 16), int(match_s, 16), int(cyc_s)
-        free = (~mask) & 0xFFFF
-        sub = free
-        while True:
-            table[match | sub] = cyc
-            if sub == 0:
-                break
-            sub = (sub - 1) & free
-    return bytes(table)
-
-
-BASE_CYCLES = load_68000_base_cycles()
-
-
-def sound_instruction_cycles(insn: cs.CsInsn) -> str:
-    """Cost evaluated before register mutation; memory operands are handled once."""
-    opcode = int.from_bytes(insn.bytes[:2], "big")
-    mnem = insn.mnemonic.split(".")[0]
-    cycles = BASE_CYCLES[opcode]
-    if opcode & 0xF000 == 0x6000 and (opcode >> 8) & 15 >= 2:
-        untaken = cycles + (-2 if insn.size == 2 else 2)
-        return f"(f3_eval_cond(cpu, {(opcode >> 8) & 15}) ? {cycles}u : {untaken}u)"
-    if mnem == "movem":
-        count = int.from_bytes(insn.bytes[2:4], "big").bit_count()
-        return f"{cycles + count * (8 if opcode & 0x40 else 4)}u"
-    if opcode & 0xF000 == 0xE000 and opcode & 0xC0 != 0xC0:
-        count = f"(cpu->d[{(opcode >> 9) & 7}] & 63u)" if opcode & 0x20 else f"{((opcode >> 9) & 7) or 8}u"
-        return f"({cycles}u + 2u * {count})"
-    if mnem in ("bchg", "bclr", "bset") and opcode & 0x38 == 0:
-        bit = f"cpu->d[{(opcode >> 9) & 7}]" if opcode & 0x100 else f"{insn.operands[0].imm}u"
-        return f"({cycles}u - ((({bit}) & 31u) < 16u ? 2u : 0u))"
-    if opcode & 0xF0F8 == 0x50C0 and (opcode >> 8) & 15 >= 2:
-        return f"({cycles}u + (f3_eval_cond(cpu, {(opcode >> 8) & 15}) ? 2u : 0u))"
-    return "132u" if mnem == "reset" else f"{cycles}u"
 
 
 def sound_lower(insn: cs.CsInsn) -> list[str] | None:
@@ -169,15 +125,15 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
             f"    cpu->d[{reg_num}] = (cpu->d[{reg_num}] & 0xffff0000u) | count;",
             "    if (count != 0xffffu) {",
             f"        cpu->pc = 0x{target:08x}u;",
-            "        cpu->cycles += 10u;",
+            f"        {STEP}",
             "        return;",
             "    }",
             f"    cpu->pc = 0x{next_pc:08x}u;",
-            "    cpu->cycles += 14u;",
+            f"    {STEP}",
             "    return;",
             "}",
             f"cpu->pc = 0x{next_pc:08x}u;",
-            "cpu->cycles += 12u;",
+            STEP,
             "return;",
         ]
     if mnem in ("mulu", "muls", "divu", "divs"):
@@ -185,7 +141,6 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
         if not ea:
             return None
         register = (opcode >> 9) & 7
-        base = BASE_CYCLES[opcode]
         statements = (
             ea.ea_setup
             + ea.read_stmts
@@ -197,17 +152,16 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
         if mnem.startswith("mul"):
             cast = "int16_t" if mnem == "muls" else "uint16_t"
             statements += [
-                f"cpu->cycles += {base}u + f3_sound_{mnem}_cycles(source);",
+                STEP,
                 f"cpu->d[{register}] = f3_{mnem}_w(cpu, ({cast})source, ({cast})destination);",
             ]
         else:
             cast = "int16_t" if mnem == "divs" else "uint16_t"
-            cost = f"{base - 140}u + f3_sound_divu_cycles(destination, source)" if mnem == "divu" else f"{base}u"
             statements += [
                 "int exception = 0;",
                 f"uint32_t result = f3_sound_{mnem}_w(cpu, ({cast})source, destination, 0x{next_pc:x}u, &exception);",
                 "if (exception) return;",
-                f"cpu->cycles += {cost};",
+                STEP,
                 f"cpu->d[{register}] = result;",
             ]
         statements += [f"cpu->pc = 0x{next_pc:x}u;"]
@@ -216,9 +170,7 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
     if stmts is None:
         return None
 
-    cyc_expr = sound_instruction_cycles(insn)
-
-    remapped = [f"const uint32_t sound_cycles = {cyc_expr};"]
+    remapped = []
     writes_sr = any("f3_set_sr(" in s for s in stmts)
     reads_sr = (
         mnem == "move"
@@ -243,10 +195,6 @@ def sound_lower(insn: cs.CsInsn) -> list[str] | None:
         s = re.sub(r"\bf3_reset_devices\b", r"f3_sound_reset_devices", s)
         s = re.sub(r"\bf3_div([su])_w\b", r"f3_sound_div\1_w", s)
         s = re.sub(r"\bf3_mul([su])_w\b", r"f3_sound_mul\1_w", s)
-
-        # Replace 68020 cycle cost statement
-        if re.search(r"cpu->cycles \+= [^;]+;", s):
-            s = re.sub(r"cpu->cycles \+= [^;]+;", "cpu->cycles += sound_cycles;", s)
 
         remapped.append(s)
 
@@ -338,7 +286,7 @@ def compile_sound_rom(
             table.append((pc, f"f3_sound_vector_{10 if opcode >> 12 == 10 else 11}"))
             supported["line_exception"] += 1
             continue
-        if not BASE_CYCLES[opcode] and opcode != 0x4E70:
+        if not LEGAL_68000[opcode] and opcode != 0x4E70:
             table.append((pc, "f3_sound_vector_4"))
             supported["illegal_exception"] += 1
             continue
@@ -392,7 +340,7 @@ def compile_sound_rom(
                 else 11
                 if (opcode >> 12) == 15
                 else 4
-                if not BASE_CYCLES[opcode] and opcode != 0x4E70
+                if not LEGAL_68000[opcode] and opcode != 0x4E70
                 else None
             )
             if vector is not None:

@@ -48,7 +48,7 @@ struct RingBufferState {
     }
 };
 
-void publish_packet(Machine &m, const std::vector<uint8_t> &pkt, uint64_t current_cycles);
+void publish_packet(Machine &m, const std::vector<uint8_t> &pkt);
 
 inline void crc_byte(uint32_t &crc, uint8_t byte) {
     crc ^= byte;

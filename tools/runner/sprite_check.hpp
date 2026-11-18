@@ -21,7 +21,7 @@ struct SpriteCheckArgs {
 struct SpriteCheckResult {
     bool passed = false;
     uint64_t frames = 0;
-    uint64_t cycles = 0;
+    uint64_t steps = 0;
     uint64_t native_blocks = 0;
     uint64_t state_compares = 0;
     uint64_t groups = 0;
@@ -35,7 +35,7 @@ struct SpriteCheckResult {
     std::string error;
 };
 
-// Runs the game with render-only sprite groups and checks that emulated state (cycles,
+// Runs the game with render-only sprite groups and checks that emulated state (steps,
 // native block count, state CRC) is identical with groups off; reports group coverage.
 SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *out = nullptr);
 

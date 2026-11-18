@@ -48,8 +48,8 @@ void f3rt_audio_shared_write(uint32_t offset);
 void f3rt_audio_set_reset(bool asserted);
 /* Sound program ROM bank for the 0xc20000-0xc3ffff window; page 1 after init. */
 void f3rt_audio_set_sound_bank(uint32_t page);
-/* Advances board time by main-CPU cycles. */
-void f3rt_audio_advance(uint32_t main_cycles);
+/* Advances board time by 16 MHz main-clock ticks of device time. */
+void f3rt_audio_advance(uint32_t ticks);
 /* Closes the video frame's audio: submits pending time and marks the frame boundary. */
 void f3rt_audio_finish_frame(void);
 

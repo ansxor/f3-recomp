@@ -8,14 +8,15 @@
 extern "C" {
 #endif
 
-#define F3RT_ABI_VERSION 6u
+#define F3RT_ABI_VERSION 7u
 
 /* a[7] is the active stack. usp/ssp/msp store inactive user/interrupt/master
  * stacks. All addresses/registers are host integers; bus accesses are big-endian.
  * cc_* is part of CPU state; any code outside generated blocks that reads CCR
  * bits of sr must call f3_cc_flush first. Generated code does not flush at block
- * exits or chains. Runtime writes to SR invalidate cc_op. cycles is a monotonic
- * scheduling clock, not exact timing. */
+ * exits or chains. Runtime writes to SR invalidate cc_op. steps counts completed
+ * instructions; it only bounds how long the CPU runs between device events and
+ * carries no instruction timing. */
 typedef struct
     f3_cpu { // NOLINT(readability-identifier-naming): C ABI struct used by generated code
     uint32_t d[8], a[8];
@@ -25,9 +26,9 @@ typedef struct
     uint8_t stopped, halted;
     uint32_t cc_src, cc_dst, cc_result;
     uint8_t cc_op, cc_width, cc_mask, cc_pad;
-    uint64_t cycles;
-    /* Conservative event threshold. Zero forces a boundary recheck.
-     * Native blocks yield between instructions when due. */
+    uint64_t steps;
+    /* Step count at which native code must return to the dispatcher. Zero
+     * forces a boundary recheck. Native blocks yield between instructions when due. */
     uint64_t dispatch_deadline;
     void *runtime;
     /* Direct memory windows for generated main-CPU code (recomp/cpu_ops.h f3_ld*,
@@ -133,9 +134,8 @@ typedef struct
     const char *reason, *evidence;
 } f3_excluded_range;
 
-/* Native sound-mailbox/reset accesses catch device time up to cycles before
- * taking effect, including unaligned accesses crossing into the mapped range.
- * This does not deliver main-CPU IRQs or require pending flags to be flushed. */
+/* Bus callbacks. They do not deliver main-CPU IRQs or require pending flags
+ * to be flushed. */
 uint8_t f3_read8(f3_cpu *cpu, uint32_t address);
 uint16_t f3_read16(f3_cpu *cpu, uint32_t address);
 uint32_t f3_read32(f3_cpu *cpu, uint32_t address);
@@ -161,6 +161,10 @@ int f3_boundary(f3_cpu *cpu);
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc);
 void f3_set_sr(f3_cpu *cpu, uint16_t sr);
 void f3_reset_devices(f3_cpu *cpu);
+/* An idle loop at cpu->pc waits for an interrupt (recomp/idle.py): end the
+ * scheduling slice so the next boundary advances to the next device event.
+ * Accepts pending lazy flags; a no-op for replay sandboxes. */
+void f3_idle(f3_cpu *cpu);
 
 /* Table is sorted by address and remains valid for the CPU's lifetime.
  * Returns 1 on success, 0 if invalid. Duplicate addresses are rejected. */
@@ -171,7 +175,7 @@ int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc);
  * An excluded PC fails before the untranslated-instruction failure. */
 int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count);
 /* Execute one block at pc, including boundary. Returns 1 for progress, IRQ
- * entry, or STOP time advancement; 0 on fatal host error/halt. */
+ * entry, or a device event; 0 on fatal host error/halt. */
 int f3_dispatch(f3_cpu *cpu);
 /* Dispatch miss: no fallback execution exists, so an untranslated instruction
  * at cpu->pc is fatal (Machine::fallback throws). Generated code calls this as

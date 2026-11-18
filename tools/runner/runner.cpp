@@ -113,12 +113,11 @@ ScheduledPacket parse_at_schedule(std::string_view spec) {
     return ScheduledPacket{sec, std::move(packet), uint64_t(std::round(sec * Machine::MAIN_CLOCK))};
 }
 
-void publish_packet(Machine &m, const std::vector<uint8_t> &pkt, uint64_t current_cycles) {
+void publish_packet(Machine &m, const std::vector<uint8_t> &pkt) {
     uint16_t prod_d = RingBufferState::read_producer(m);
     size_t prod_byte = (prod_d / 2) & 0x3ff;
 
     m.cpu.pc = 0xffffffff;
-    m.cpu.cycles = current_cycles;
 
     for (size_t i = 0; i < pkt.size(); ++i) {
         uint32_t ring_addr = SHARED_BASE + ((prod_byte + i) & MAILBOX_RING_MASK);

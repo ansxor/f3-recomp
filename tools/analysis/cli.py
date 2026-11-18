@@ -1445,7 +1445,7 @@ def run_game(exe: Path, g: Game, frames: int, extra: list[str]) -> tuple[str, in
     return text, result.returncode
 
 
-SUMMARY_KEYS = ("frame_crc", "cycles", "native_blocks", "fallback_instructions", "pc")
+SUMMARY_KEYS = ("frame_crc", "steps", "native_blocks", "fallback_instructions", "pc")
 
 
 def summary_fields(text: str) -> dict:
@@ -2762,7 +2762,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dump-start", type=int, default=1)
     p.add_argument("--dump-every", type=int, default=0, help="dump machine state every N frames (1 = dense)")
     p.add_argument(
-        "--check-inert", action="store_true", help="rerun without instrumentation and compare frame_crc/cycles"
+        "--check-inert", action="store_true", help="rerun without instrumentation and compare frame_crc/steps"
     )
     p.add_argument("--out", help="output directory (default build/f3a/<game>-<frames>-s<shell session>)")
     p.add_argument("--exe", help="game executable (default: found via build*/CMakeCache.txt)")

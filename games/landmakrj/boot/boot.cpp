@@ -6,8 +6,8 @@
 // cacr 0, so this flag is never set by a failed boot.
 //
 // Verified read-only from a throwaway harness (native main+sound, strict native):
-//   blank EEPROM:        cacr == 0 on every boundary 1..780, first == 1 at frame 781
-//   initialised EEPROM:  cacr == 0 on every boundary 1..477, first == 1 at frame 478
+//   blank EEPROM:        cacr == 0 on every boundary 1..570, first == 1 at frame 571
+//   initialised EEPROM:  cacr == 0 on every boundary 1..376, first == 1 at frame 377
 // No regression after the first 1. The predicate therefore fires exactly once, at
 // the end of the WAIT A MOMENT phase, and always after attract begins.
 #include "f3rt/game_boot.hpp"

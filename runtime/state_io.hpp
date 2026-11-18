@@ -177,15 +177,17 @@ struct CanonicalF3Cpu {
     uint8_t cc_op;
     uint8_t cc_width;
     uint8_t cc_mask;
-    uint64_t cycles;
+    uint64_t steps;
     uint64_t dispatch_deadline;
 };
 
 struct CanonicalMachineClocks {
-    uint64_t hardware_cycles;
+    uint64_t time;
     uint64_t next_vblank;
     uint64_t irq3_at;
     uint64_t watchdog_at;
+    uint64_t slice_end;
+    uint8_t idle;
     uint64_t frame;
     uint8_t pending_irqs;
     uint16_t timer_control;
@@ -207,7 +209,6 @@ struct CanonicalEeprom {
     uint32_t count;
     uint32_t address;
     uint32_t read_bit;
-    uint64_t ready_at;
 };
 
 struct CanonicalMC68681Tx {
@@ -519,9 +520,9 @@ struct CanonicalGameVideoHeader {
 // format changed: update save/load, state_size and the snapshot version together.
 // Snapshots never store pointers.
 static_assert(sizeof(CanonicalF3Cpu) == 135, "CanonicalF3Cpu snapshot layout changed");
-static_assert(sizeof(CanonicalMachineClocks) == 108,
+static_assert(sizeof(CanonicalMachineClocks) == 117,
               "CanonicalMachineClocks snapshot layout changed");
-static_assert(sizeof(CanonicalEeprom) == 157, "CanonicalEeprom snapshot layout changed");
+static_assert(sizeof(CanonicalEeprom) == 149, "CanonicalEeprom snapshot layout changed");
 static_assert(sizeof(CanonicalMC68681Tx) == 19, "CanonicalMC68681Tx snapshot layout changed");
 static_assert(sizeof(CanonicalMC68681) == 66, "CanonicalMC68681 snapshot layout changed");
 static_assert(sizeof(CanonicalMB87078) == 14, "CanonicalMB87078 snapshot layout changed");
@@ -551,7 +552,7 @@ static_assert(sizeof(CanonicalGameVideoHeader) == 20,
 static_assert(offsetof(CanonicalF3Cpu, pc) == 64, "CanonicalF3Cpu layout changed");
 static_assert(offsetof(CanonicalF3Cpu, sr) == 100, "CanonicalF3Cpu layout changed");
 static_assert(offsetof(CanonicalF3Cpu, cc_op) == 116, "CanonicalF3Cpu layout changed");
-static_assert(offsetof(CanonicalF3Cpu, cycles) == 119, "CanonicalF3Cpu layout changed");
+static_assert(offsetof(CanonicalF3Cpu, steps) == 119, "CanonicalF3Cpu layout changed");
 static_assert(offsetof(CanonicalF3Cpu, dispatch_deadline) == 127, "CanonicalF3Cpu layout changed");
 
 inline void require_state(bool valid,

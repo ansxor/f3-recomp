@@ -130,7 +130,7 @@ FrameCoverage cover(const Machine &m, const SpritePresentation &presentation,
 
 struct OffCheckpoint {
     uint64_t frame = 0;
-    uint64_t cycles = 0;
+    uint64_t steps = 0;
     uint64_t native_blocks = 0;
     uint32_t state_crc = 0;
 };
@@ -165,7 +165,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             if (!run_one(*off, frame, "groups off", error)) break;
             if ((frame + 1) % args.compare_every == 0 || frame + 1 == args.frames) {
                 off_checkpoints.push_back(
-                    {frame, off->cpu.cycles, off->native_blocks, off->state_crc()});
+                    {frame, off->cpu.steps, off->native_blocks, off->state_crc()});
             }
         }
     }
@@ -185,9 +185,9 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     const auto diverged = [&](uint64_t frame, const char *what, const OffCheckpoint &off) {
         std::ostringstream ss;
         ss << "groups on/off diverged at frame " << frame << " (" << what
-           << "): on cycles=" << on->cpu.cycles << " native_blocks=" << on->native_blocks
-           << std::hex << " state_crc=0x" << on->state_crc() << "; off cycles=" << std::dec
-           << off.cycles << " native_blocks=" << off.native_blocks << std::hex << " state_crc=0x"
+           << "): on steps=" << on->cpu.steps << " native_blocks=" << on->native_blocks
+           << std::hex << " state_crc=0x" << on->state_crc() << "; off steps=" << std::dec
+           << off.steps << " native_blocks=" << off.native_blocks << std::hex << " state_crc=0x"
            << off.state_crc;
         error = ss.str();
     };
@@ -221,8 +221,8 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             }
             const OffCheckpoint &off = off_checkpoints[checkpoint_index++];
             ++state_compares;
-            if (on->cpu.cycles != off.cycles) {
-                diverged(frame, "cycles", off);
+            if (on->cpu.steps != off.steps) {
+                diverged(frame, "steps", off);
                 break;
             }
             if (on->native_blocks != off.native_blocks) {
@@ -263,7 +263,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     }
     result.passed = !failed;
     result.frames = on->frame;
-    result.cycles = on->cpu.cycles;
+    result.steps = on->cpu.steps;
     result.native_blocks = on->native_blocks;
     result.state_compares = state_compares;
     result.groups = max_groups;
@@ -276,7 +276,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     result.aborted = report.aborted;
     result.error = error;
     if (out) {
-        *out << std::dec << "frames=" << on->frame << " cycles=" << on->cpu.cycles
+        *out << std::dec << "frames=" << on->frame << " steps=" << on->cpu.steps
              << " native_blocks=" << on->native_blocks << " state_compares=" << state_compares
              << " set=" << args.set << '\n'
              << (failed ? "FAIL" : "PASS") << '\n';

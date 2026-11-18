@@ -21,9 +21,9 @@ from .sprite_trace import trace as trace_sprite_groups
 from .sprite_trace import write_outputs as write_sprite_groups
 from .sprite_units import digest as sprite_units_digest
 from .sprite_units import guard_lines, parse_sprite_units
-from .timing import BASE_CYCLES
+from .opcodes import LEGAL_68020
 
-_RUNTIME_ABI_VERSION = 6
+_RUNTIME_ABI_VERSION = 7
 
 
 _MEMORY_ACCESS = re.compile(r"\bf3_(read|write)(8|16|32)\(")
@@ -139,12 +139,12 @@ def generate(
                 else 11
                 if opcode >> 12 == 15
                 else 4
-                if not BASE_CYCLES[opcode] and opcode != 0x4E70
+                if not LEGAL_68020[opcode] and opcode != 0x4E70
                 else None
             )
             if vector is not None:
                 # A valid primary word rejected on its extensions is not proof
-                # of an illegal opcode. RESET is valid despite its zero cost.
+                # of an illegal opcode. RESET is valid despite having no descriptor.
                 rom_exceptions[pc] = vector
     original_entries = sorted(set(discovery.instructions) | set(rom_exceptions))
     profile_path = profile_tiers if profile_tiers is not None else profile_slim
@@ -304,7 +304,7 @@ def generate(
                             # f3_dispatch refuses native blocks while trace bits
                             # are set; a chained transfer must refuse them too.
                             guard += "!(cpu->sr & 0xc000u) && "
-                        guard += "cpu->cycles < cpu->dispatch_deadline"
+                        guard += "cpu->steps < cpu->dispatch_deadline"
                         if owner == name:
                             lines.append(f"    if ({guard}) goto L_{target:06x};")
                         else:
@@ -331,7 +331,7 @@ def generate(
                             indirect_sites[tier] += 1
                             indirect_cases[tier] += len(cases)
                             lines.append(
-                                "    if (!(cpu->sr & 0xc000u) && cpu->cycles < cpu->dispatch_deadline) {"
+                                "    if (!(cpu->sr & 0xc000u) && cpu->steps < cpu->dispatch_deadline) {"
                             )
                             lines.append("        switch (cpu->pc) {")
                             for target, owner in cases:
@@ -523,7 +523,7 @@ def generate(
         "indirect_chain_hot": {"sites": indirect_sites["hot"], "cases": indirect_cases["hot"]},
         "indirect_chain_cold": {"sites": indirect_sites["cold"], "cases": indirect_cases["cold"]},
         "indirect_chain_capped_sites": indirect_capped,
-        "timing": "68EC020 reference instruction costs; runtime deadlines end native blocks at instruction boundaries",
+        "scheduling": "one step per instruction; runtime deadlines end native blocks at instruction boundaries",
         "sprite_groups": dict(sprite_groups.stats),
     }
     write_if_changed(output / "lowering.json", json.dumps(report, indent=2) + "\n")

@@ -74,13 +74,13 @@ constexpr uint32_t EXCLUDED_ALIAS_BASE = 0xff000200; // physical alias of EXCLUD
 void native(f3_cpu *cpu) {
     cpu->d[0] = 99;
     cpu->pc += 2;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 void native_other(f3_cpu *cpu) {
     cpu->d[0] = 17;
     cpu->pc += 2;
-    cpu->cycles += 4;
+    cpu->steps += 1;
 }
 
 // The audio board and EEPROM are process-wide: the RapidCheck properties share one machine, and every
@@ -262,49 +262,56 @@ TEST_F(CpuTest, MainRomBindingAndColdReset) {
         mismatched = true;
     }
     EXPECT_TRUE(mismatched) << "Native image length is bound even when its CRC matches";
-    EXPECT_TRUE(m_m->cpu.cycles == 4 && m_m->cpu.pc == TEST_RESET_PC && m_m->cpu.d[0] == 0)
-        << "Cold reset charges four cycles without executing the first opcode";
+    EXPECT_TRUE(m_m->cpu.steps == 0 && m_m->cpu.pc == TEST_RESET_PC && m_m->cpu.d[0] == 0)
+        << "Cold reset does not execute the first opcode";
     EXPECT_EQ(m_m->cpu.dispatch_deadline, 0) << "Reset requires a fresh scheduling boundary";
 }
 
-TEST_F(CpuTest, VblankSchedule) {
-    const auto raster_tick = [](uint64_t pixels) {
-        return (pixels * f3rt::Machine::MAIN_CLOCK + f3rt::Machine::PIXEL_CLOCK - 1) /
-               f3rt::Machine::PIXEL_CLOCK;
-    };
-    const auto boundary_at = [&](uint64_t tick) {
-        m_m->cpu.cycles = tick;
-        m_m->boundary();
-    };
-    const auto first_vblank = raster_tick(f3rt::Machine::FRAME_PIXELS);
-    boundary_at(first_vblank - 1);
-    EXPECT_TRUE(m_m->frame == 0 && m_m->pending_irqs == 0)
-        << "First vblank waits one full frame from the VBSTART epoch";
-    EXPECT_EQ(m_m->cpu.dispatch_deadline, first_vblank)
-        << "Native deadline is the first vblank event";
-    boundary_at(first_vblank);
+TEST_F(CpuTest, EventSchedule) {
+    auto &cpu = m_m->cpu;
+    cpu.sr = 0x2700; // Masked: requested IRQs stay pending for inspection.
+    EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline == cpu.steps + f3rt::Machine::SLICE_STEPS)
+        << "A running CPU gets one slice of steps before the next event";
+    EXPECT_TRUE(m_m->frame == 0 && m_m->pending_irqs == 0) << "Running code does not move device time";
+    f3_idle(&cpu);
+    EXPECT_EQ(cpu.dispatch_deadline, 0) << "An idle loop ends the slice at once";
+    EXPECT_NE(m_m->boundary(), 0) << "An idle CPU advances to the next event";
     EXPECT_TRUE(m_m->frame == 1 && m_m->pending_irqs == (1 << 2))
-        << "First vblank renders and requests IRQ2 at its deadline";
-    EXPECT_EQ(m_m->cpu.dispatch_deadline, first_vblank + 10000)
-        << "Delayed IRQ3 becomes the next native deadline";
-    boundary_at(first_vblank + 9999);
-    EXPECT_EQ(m_m->pending_irqs, 1 << 2) << "IRQ3 is not requested before its 10000-cycle delay";
-    boundary_at(first_vblank + 10000);
-    EXPECT_EQ(m_m->pending_irqs, (1 << 2) | (1 << 3))
-        << "IRQ3 is requested at its delayed deadline";
-    EXPECT_EQ(m_m->cpu.dispatch_deadline, raster_tick(2ull * f3rt::Machine::FRAME_PIXELS))
-        << "Serviced timer deadlines advance to the next absolute frame";
+        << "The first event is vblank: it renders and requests IRQ2";
+    EXPECT_EQ(m_m->boundary(), 0) << "Idling is consumed by one event";
+    f3_idle(&cpu);
+    m_m->boundary();
+    EXPECT_TRUE(m_m->frame == 1 && m_m->pending_irqs == ((1 << 2) | (1 << 3)))
+        << "The next event after vblank is IRQ3";
     m_m->pending_irqs = 0;
-    const auto second_vblank = raster_tick(2ull * f3rt::Machine::FRAME_PIXELS);
-    boundary_at(second_vblank - 1);
-    EXPECT_TRUE(m_m->frame == 1 && m_m->pending_irqs == 0)
-        << "Next vblank retains the absolute raster phase";
-    boundary_at(second_vblank);
-    EXPECT_TRUE(m_m->frame == 2 && m_m->pending_irqs == (1 << 2))
-        << "Second vblank uses the full-frame epoch";
+    cpu.steps = cpu.dispatch_deadline = 0;
+    m_m->boundary();
+    cpu.steps = cpu.dispatch_deadline;
+    EXPECT_NE(m_m->boundary(), 0) << "An exhausted slice forces the next event";
+    EXPECT_TRUE(m_m->frame == 2 && m_m->pending_irqs == (1 << 2)) << "Second vblank";
+    cpu.stopped = 1;
+    EXPECT_NE(m_m->boundary(), 0) << "STOP advances to the next event";
+    EXPECT_EQ(m_m->pending_irqs, (1 << 2) | (1 << 3)) << "STOP waits for IRQ3";
 }
 
-TEST_F(CpuTest, TrapCycles) {
+TEST_F(CpuTest, IdleYieldsToPendingIrq) {
+    auto &cpu = m_m->cpu;
+    cpu.usp = WORK_USP;
+    cpu.ssp = WORK_STACK_TOP;
+    cpu.a[7] = WORK_USP;
+    cpu.vbr = f3rt::RAM_BASE;
+    m_m->write32(f3rt::RAM_BASE + 26 * 4, WORK_IRQ_HANDLER);
+    cpu.sr = 0;
+    cpu.pc = TEST_RESET_PC;
+    f3_idle(&cpu);
+    EXPECT_NE(m_m->boundary(), 0) << "Idle reaches vblank";
+    EXPECT_EQ(m_m->frame, 1u);
+    EXPECT_NE(m_m->boundary(), 0) << "The requested IRQ2 is taken at the next boundary";
+    EXPECT_TRUE(cpu.pc == WORK_IRQ_HANDLER && m_m->frame == 1)
+        << "Taking the interrupt does not advance device time";
+}
+
+TEST_F(CpuTest, TrapFrames) {
     const auto old_vbr = m_m->cpu.vbr;
     for (unsigned trap = 0; trap < 16; ++trap) {
         {
@@ -314,10 +321,8 @@ TEST_F(CpuTest, TrapCycles) {
             m_m->cpu.vbr = f3rt::RAM_BASE;
             m_m->write16(WORK_TRAP_CODE, uint16_t(0x4e40 | trap));
             m_m->write32(m_m->cpu.vbr + (32 + trap) * 4, WORK_TRAP_HANDLER);
-            const auto before = m_m->cpu.cycles;
             f3_exception(&m_m->cpu, 32 + trap, WORK_TRAP_CODE + 2);
-            EXPECT_TRUE(m_m->cpu.cycles - before == 24 && m_m->cpu.pc == WORK_TRAP_HANDLER)
-                << "TRAP #n charges 24 cycles before entering its vector";
+            EXPECT_EQ(m_m->cpu.pc, WORK_TRAP_HANDLER) << "TRAP #n enters its vector";
             EXPECT_TRUE(m_m->cpu.a[7] == WORK_EXCEPTION_SP &&
                         m_m->read16(m_m->cpu.a[7]) == 0x2700 &&
                         m_m->read32(m_m->cpu.a[7] + 2) == WORK_TRAP_CODE + 2 &&
@@ -345,7 +350,7 @@ TEST_F(CpuTest, SrMaskAndWatchdogArming) {
     cpu.usp = WORK_USP;
     cpu.a[7] = WORK_STACK_TOP;
     cpu.sr = 0x2600;
-    EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline > cpu.cycles)
+    EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline > cpu.steps)
         << "Runnable boundary publishes a future deadline";
     const auto masked_deadline = cpu.dispatch_deadline;
     f3_set_sr(&cpu, 0x2715);
@@ -387,11 +392,9 @@ TEST_F(CpuTest, ExceptionFrames) {
     m_m->write32(cpu.vbr + 5 * 4, WORK_RTE_HANDLER);
     cpu.pc = TEST_RESET_PC;
     cpu.sr = 0x2700;
-    const auto exception_cycles = cpu.cycles;
     f3_exception(&cpu, 5, TEST_RESET_PC + 2);
-    EXPECT_TRUE(cpu.cycles - exception_cycles == 38 && m_m->read16(cpu.a[7] + 6) == 0x2014 &&
-                m_m->read32(cpu.a[7] + 8) == TEST_RESET_PC)
-        << "Divide-by-zero full charge and format-2 instruction PC";
+    EXPECT_TRUE(m_m->read16(cpu.a[7] + 6) == 0x2014 && m_m->read32(cpu.a[7] + 8) == TEST_RESET_PC)
+        << "Divide-by-zero format-2 frame and instruction PC";
 }
 
 TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
@@ -403,12 +406,9 @@ TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
     EXPECT_TRUE(f3_dispatch(&cpu) && cpu.d[0] == 99) << "Native dispatch executes matching block";
     cpu.d[0] = 0xdeadbeef;
     cpu.sr = 0x2015;
-    const auto reset_cycles = cpu.cycles;
     m_m->reset_main_cpu();
     EXPECT_TRUE(cpu.d[0] == 0xdeadbeef && cpu.sr == 0x2715 && cpu.pc == TEST_RESET_PC)
         << "Reset preserves canonical native D/CCR";
-    EXPECT_EQ(cpu.cycles - reset_cycles, 4)
-        << "Warm reset charges its four-cycle latency exactly once";
     bool rejected = false;
     try {
         f3_fallback(&cpu);
@@ -456,24 +456,26 @@ TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
 
 TEST_F(CpuTest, WatchdogWholeBoardReset) {
     auto &cpu = m_m->cpu;
-    cpu.usp = WORK_USP;
-    cpu.a[7] = WORK_STACK_TOP;
-    cpu.sr = 0x2600;
-    m_m->boundary();
-    f3_set_sr(&cpu, 0);
-    m_m->write8(f3rt::WATCHDOG, 0);
-    const auto watchdog_deadline = cpu.cycles + 3ull * f3rt::Machine::MAIN_CLOCK;
-
-    f3rt_audio_set_reset(false);
     cpu.sr = 0x2700;
-    cpu.cycles = watchdog_deadline - 1;
-    EXPECT_TRUE(m_m->boundary() == 0 && cpu.dispatch_deadline == watchdog_deadline)
-        << "Watchdog expiry can precede the next raster interrupt";
-    cpu.stopped = 1;
-    EXPECT_TRUE(m_m->boundary() != 0 && cpu.cycles == watchdog_deadline &&
-                cpu.dispatch_deadline == 0)
-        << "STOP advances to watchdog expiry without skipping it";
-    EXPECT_TRUE(m_m->boundary() != 0) << "Watchdog expiry resets the board";
+    m_m->write8(f3rt::WATCHDOG, 0); // Kicked at device time zero.
+    // The first event at or past three seconds of device time: a vblank or the IRQ3 that follows one.
+    const auto vblank = [](uint64_t frame) {
+        return (frame * f3rt::Machine::FRAME_PIXELS * f3rt::Machine::MAIN_CLOCK + f3rt::Machine::PIXEL_CLOCK -
+                1) /
+               f3rt::Machine::PIXEL_CLOCK;
+    };
+    const uint64_t deadline = 3ull * f3rt::Machine::MAIN_CLOCK;
+    uint64_t expected_frame = 1;
+    while (vblank(expected_frame) < deadline && vblank(expected_frame) + f3rt::Machine::IRQ3_DELAY < deadline)
+        ++expected_frame;
+    f3rt_audio_set_reset(false);
+    cpu.pc = WORK_IRQ_HANDLER;
+    while (cpu.pc != TEST_RESET_PC && m_m->frame <= expected_frame) {
+        f3_idle(&cpu);
+        m_m->boundary();
+    }
+    EXPECT_TRUE(cpu.pc == TEST_RESET_PC && m_m->frame == expected_frame)
+        << "Watchdog expiry resets the board at the first event past its deadline";
     EXPECT_EQ(cpu.dispatch_deadline, 0) << "Watchdog reset invalidates the native deadline";
 }
 

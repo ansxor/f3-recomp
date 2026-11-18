@@ -1,7 +1,8 @@
 //! `runtime/eeprom.hpp` — the 93C46 serial EEPROM — and `include/f3rt/abi/eeprom.h` over it.
 //!
 //! The C++ and this crate are the same machine: same 64 words, same modes, same serial-interface
-//! state, same operation order and the same programming delays. `abi` holds the one process-wide
+//! state and same operation order. Programming completes instantly: the runtime has no CPU clock
+//! to measure a delay against, so DO never reports busy. `abi` holds the one process-wide
 //! instance; the C++ shim's failure line (an abort with the message) is reproduced here.
 
 use std::fs::File;
@@ -13,14 +14,7 @@ pub const WORDS: usize = 64;
 /// The file image: 64 big-endian words.
 pub const FILE_BYTES: usize = 128;
 /// `sizeof(CanonicalEeprom)`: the save-state blob.
-pub const STATE_BYTES: usize = 157;
-
-/// Absolute 16 MHz main-clock ticks a single-word erase takes.
-const ERASE_CYCLES: u64 = 16000;
-/// Absolute 16 MHz main-clock ticks a single-word write takes.
-const WRITE_CYCLES: u64 = 28000;
-/// Absolute 16 MHz main-clock ticks a write-all or erase-all takes.
-const WRITE_ALL_CYCLES: u64 = 128000;
+pub const STATE_BYTES: usize = 149;
 
 /// The C++ `require_state` message for a blob outside the canonical representation.
 const OUTSIDE_CANONICAL: &str = "Snapshot field outside canonical representation";
@@ -62,7 +56,6 @@ pub struct Eeprom {
     count: u32,
     address: u32,
     read_bit: u32,
-    ready_at: u64,
 }
 
 impl Default for Eeprom {
@@ -78,17 +71,15 @@ impl Default for Eeprom {
             count: 0,
             address: 0,
             read_bit: 0,
-            ready_at: 0,
         }
     }
 }
 
 impl Eeprom {
-    /// Absolute 16 MHz main-clock ticks. Programming completion is independent of serial clock
-    /// edges; DO reports busy when CS is raised to poll it.
-    pub fn output(&self, now: u64) -> bool {
+    /// DO reports ready when CS is raised to poll a finished programming operation.
+    pub fn output(&self) -> bool {
         if self.selected && self.mode == Mode::Command && self.count == 0 {
-            now >= self.ready_at
+            true
         } else {
             self.data_out
         }
@@ -98,11 +89,10 @@ impl Eeprom {
         self.selected = false;
         self.old_clock = false;
         self.writable = false;
-        self.ready_at = 0;
         self.reset_command();
     }
 
-    pub fn pins(&mut self, pins: u8, now: u64) {
+    pub fn pins(&mut self, pins: u8) {
         let select = (pins & 0x10) != 0;
         let clock = (pins & 0x08) != 0;
         let bit = (pins & 0x04) != 0;
@@ -117,7 +107,7 @@ impl Eeprom {
             self.reset_command();
         }
         if clock && !self.old_clock {
-            self.edge(bit, now);
+            self.edge(bit);
         }
         self.old_clock = clock;
     }
@@ -166,7 +156,6 @@ impl Eeprom {
             count: self.count,
             address: self.address,
             read_bit: self.read_bit,
-            ready_at: self.ready_at,
         };
         state.write(dst);
     }
@@ -185,7 +174,6 @@ impl Eeprom {
         self.count = state.count;
         self.address = state.address;
         self.read_bit = state.read_bit;
-        self.ready_at = state.ready_at;
         Ok(())
     }
 
@@ -196,7 +184,7 @@ impl Eeprom {
         self.data_out = true;
     }
 
-    fn edge(&mut self, bit: bool, now: u64) {
+    fn edge(&mut self, bit: bool) {
         if self.mode == Mode::Read {
             self.data_out = ((self.words[self.address as usize] >> (15 - self.read_bit)) & 1) != 0;
             self.read_bit += 1;
@@ -209,7 +197,7 @@ impl Eeprom {
         if self.mode == Mode::Done {
             return;
         }
-        if self.mode == Mode::Command && self.count == 0 && (!bit || now < self.ready_at) {
+        if self.mode == Mode::Command && self.count == 0 && !bit {
             return;
         }
         self.shift = (self.shift << 1) | bit as u32;
@@ -222,12 +210,6 @@ impl Eeprom {
                     } else {
                         self.words[self.address as usize] = self.shift as u16;
                     }
-                    self.ready_at = now
-                        + if self.mode == Mode::WriteAll {
-                            WRITE_ALL_CYCLES
-                        } else {
-                            WRITE_CYCLES
-                        };
                 }
                 self.mode = Mode::Done;
                 self.data_out = true;
@@ -252,7 +234,6 @@ impl Eeprom {
             3 => {
                 if self.writable {
                     self.words[self.address as usize] = 0xffff;
-                    self.ready_at = now + ERASE_CYCLES;
                 }
                 self.mode = Mode::Done;
             }
@@ -269,7 +250,6 @@ impl Eeprom {
                 2 => {
                     if self.writable {
                         self.words.fill(0xffff);
-                        self.ready_at = now + WRITE_ALL_CYCLES;
                     }
                     self.mode = Mode::Done;
                 }
@@ -303,12 +283,11 @@ pub const SHIFT_AT: usize = 133;
 pub const COUNT_AT: usize = 137;
 pub const ADDRESS_AT: usize = 141;
 pub const READ_BIT_AT: usize = 145;
-pub const READY_AT: usize = 149;
 
 const _: () = assert!(WORDS_AT == 0 && MODE_AT == WORDS * 2);
-const _: () = assert!(READY_AT + 8 == STATE_BYTES);
+const _: () = assert!(READ_BIT_AT + 4 == STATE_BYTES);
 const _: () = assert!(SHIFT_AT + 4 == COUNT_AT && COUNT_AT + 4 == ADDRESS_AT);
-const _: () = assert!(ADDRESS_AT + 4 == READ_BIT_AT && READ_BIT_AT + 4 == READY_AT);
+const _: () = assert!(ADDRESS_AT + 4 == READ_BIT_AT);
 
 /// The serialized `Eeprom`: `#pragma pack(1)` in C++, so this is a field-by-field byte view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -323,7 +302,6 @@ pub struct CanonicalEeprom {
     pub count: u32,
     pub address: u32,
     pub read_bit: u32,
-    pub ready_at: u64,
 }
 
 impl CanonicalEeprom {
@@ -343,7 +321,6 @@ impl CanonicalEeprom {
             count: read_ne_u32_at(src, COUNT_AT),
             address: read_ne_u32_at(src, ADDRESS_AT),
             read_bit: read_ne_u32_at(src, READ_BIT_AT),
-            ready_at: read_ne_u64_at(src, READY_AT),
         };
         if state.valid() {
             Ok(state)
@@ -365,7 +342,6 @@ impl CanonicalEeprom {
         write_ne_u32_at(dst, COUNT_AT, self.count);
         write_ne_u32_at(dst, ADDRESS_AT, self.address);
         write_ne_u32_at(dst, READ_BIT_AT, self.read_bit);
-        write_ne_u64_at(dst, READY_AT, self.ready_at);
     }
 
     /// `validate_state_value(const CanonicalEeprom &)`.
@@ -385,25 +361,8 @@ fn read_ne_u32_at(src: &[u8; STATE_BYTES], at: usize) -> u32 {
     u32::from_ne_bytes([src[at], src[at + 1], src[at + 2], src[at + 3]])
 }
 
-fn read_ne_u64_at(src: &[u8; STATE_BYTES], at: usize) -> u64 {
-    u64::from_ne_bytes([
-        src[at],
-        src[at + 1],
-        src[at + 2],
-        src[at + 3],
-        src[at + 4],
-        src[at + 5],
-        src[at + 6],
-        src[at + 7],
-    ])
-}
-
 fn write_ne_u32_at(dst: &mut [u8; STATE_BYTES], at: usize, value: u32) {
     dst[at..at + 4].copy_from_slice(&value.to_ne_bytes());
-}
-
-fn write_ne_u64_at(dst: &mut [u8; STATE_BYTES], at: usize, value: u64) {
-    dst[at..at + 8].copy_from_slice(&value.to_ne_bytes());
 }
 
 pub mod abi {
@@ -431,7 +390,7 @@ pub mod abi {
     /// `F3RT_EEPROM_FILE_BYTES`: the big-endian file image.
     pub const F3RT_EEPROM_FILE_BYTES: u32 = 128;
     /// `F3RT_EEPROM_STATE_SIZE`: `sizeof(CanonicalEeprom)`.
-    pub const F3RT_EEPROM_STATE_SIZE: u32 = 157;
+    pub const F3RT_EEPROM_STATE_SIZE: u32 = 149;
 
     const _: () = assert!(F3RT_EEPROM_WORDS as usize == WORDS);
     const _: () = assert!(F3RT_EEPROM_FILE_BYTES as usize == FILE_BYTES);
@@ -507,13 +466,13 @@ pub mod abi {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn f3rt_eeprom_pins(pins: u8, now: u64) {
-        with("f3rt_eeprom_pins", |eeprom| eeprom.pins(pins, now));
+    pub extern "C" fn f3rt_eeprom_pins(pins: u8) {
+        with("f3rt_eeprom_pins", |eeprom| eeprom.pins(pins));
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn f3rt_eeprom_output(now: u64) -> bool {
-        with("f3rt_eeprom_output", |eeprom| eeprom.output(now))
+    pub extern "C" fn f3rt_eeprom_output() -> bool {
+        with("f3rt_eeprom_output", |eeprom| eeprom.output())
     }
 
     /// # Safety
@@ -578,37 +537,37 @@ mod tests {
     use std::ffi::CString;
     use std::path::PathBuf;
 
-    fn send_bit(eeprom: &mut Eeprom, bit: bool, now: u64) {
+    fn send_bit(eeprom: &mut Eeprom, bit: bool) {
         let pins = 0x10 | if bit { 4 } else { 0 };
-        eeprom.pins(pins, now);
-        eeprom.pins(pins | 8, now);
+        eeprom.pins(pins);
+        eeprom.pins(pins | 8);
     }
 
-    fn command(eeprom: &mut Eeprom, word: u16, now: u64) {
-        eeprom.pins(0, now);
+    fn command(eeprom: &mut Eeprom, word: u16) {
+        eeprom.pins(0);
         for bit in (0..9).rev() {
-            send_bit(eeprom, ((word >> bit) & 1) != 0, now);
+            send_bit(eeprom, ((word >> bit) & 1) != 0);
         }
     }
 
-    fn ewen(eeprom: &mut Eeprom, now: u64) {
-        command(eeprom, 0x130, now);
-        eeprom.pins(0, now);
+    fn ewen(eeprom: &mut Eeprom) {
+        command(eeprom, 0x130);
+        eeprom.pins(0);
     }
 
-    fn serial_write(eeprom: &mut Eeprom, address: u16, value: u16, now: u64) {
-        command(eeprom, 0x140 | address, now);
+    fn serial_write(eeprom: &mut Eeprom, address: u16, value: u16) {
+        command(eeprom, 0x140 | address);
         for bit in (0..16).rev() {
-            send_bit(eeprom, ((value >> bit) & 1) != 0, now);
+            send_bit(eeprom, ((value >> bit) & 1) != 0);
         }
-        eeprom.pins(0, now);
+        eeprom.pins(0);
     }
 
-    fn read_word(eeprom: &mut Eeprom, now: u64) -> u16 {
+    fn read_word(eeprom: &mut Eeprom) -> u16 {
         let mut value = 0u16;
         for _ in 0..16 {
-            send_bit(eeprom, false, now);
-            value = (value << 1) | eeprom.output(now) as u16;
+            send_bit(eeprom, false);
+            value = (value << 1) | eeprom.output() as u16;
         }
         value
     }
@@ -630,111 +589,97 @@ mod tests {
         eeprom.words[0] = 0x1234;
         eeprom.words[1] = 0x89ab;
         eeprom.words[63] = 0xfedc;
-        command(&mut eeprom, 0x1bf, 0);
-        assert!(!eeprom.output(0), "a read starts with the serial dummy bit");
-        assert_eq!(read_word(&mut eeprom, 0), 0xfedc);
-        assert_eq!(read_word(&mut eeprom, 0), 0x1234);
-        assert_eq!(read_word(&mut eeprom, 0), 0x89ab);
+        command(&mut eeprom, 0x1bf);
+        assert!(!eeprom.output(), "a read starts with the serial dummy bit");
+        assert_eq!(read_word(&mut eeprom), 0xfedc);
+        assert_eq!(read_word(&mut eeprom), 0x1234);
+        assert_eq!(read_word(&mut eeprom), 0x89ab);
     }
 
     #[test]
     fn writes_need_ewen_and_ewds_locks_again() {
         let mut eeprom = Eeprom::default();
-        serial_write(&mut eeprom, 0, 0xa65c, 1000);
+        serial_write(&mut eeprom, 0, 0xa65c);
         assert_eq!(eeprom.words[0], 0xffff, "writes are ignored until EWEN");
-        assert_eq!(eeprom.ready_at, 0);
 
-        ewen(&mut eeprom, 2000);
-        serial_write(&mut eeprom, 0, 0xa65c, 3000);
+        ewen(&mut eeprom);
+        serial_write(&mut eeprom, 0, 0xa65c);
         assert_eq!(eeprom.words[0], 0xa65c);
-        assert_eq!(eeprom.ready_at, 3000 + WRITE_CYCLES);
 
-        command(&mut eeprom, 0x180, 40000);
-        assert_eq!(read_word(&mut eeprom, 40000), 0xa65c);
+        command(&mut eeprom, 0x180);
+        assert_eq!(read_word(&mut eeprom), 0xa65c);
 
-        command(&mut eeprom, 0x100, 50000);
-        eeprom.pins(0, 50000);
-        serial_write(&mut eeprom, 0, 0x0001, 60000);
+        command(&mut eeprom, 0x100);
+        eeprom.pins(0);
+        serial_write(&mut eeprom, 0, 0x0001);
         assert_eq!(eeprom.words[0], 0xa65c, "EWDS locks writing again");
     }
 
     #[test]
-    fn erase_needs_ewen_and_takes_erase_cycles() {
+    fn erase_needs_ewen() {
         let mut eeprom = Eeprom::default();
         eeprom.words[5] = 0x1234;
-        command(&mut eeprom, 0x1c0 | 5, 10);
+        command(&mut eeprom, 0x1c0 | 5);
         assert_eq!(eeprom.words[5], 0x1234, "erase is ignored until EWEN");
-        assert_eq!(eeprom.ready_at, 0);
         assert_eq!(eeprom.mode, Mode::Done);
 
-        ewen(&mut eeprom, 100);
-        command(&mut eeprom, 0x1c0 | 5, 200);
+        ewen(&mut eeprom);
+        command(&mut eeprom, 0x1c0 | 5);
         assert_eq!(eeprom.words[5], 0xffff);
-        assert_eq!(eeprom.ready_at, 200 + ERASE_CYCLES);
         assert_eq!(eeprom.mode, Mode::Done);
     }
 
     #[test]
     fn write_all_programs_every_word() {
         let mut eeprom = Eeprom::default();
-        command(&mut eeprom, 0x110, 100);
+        command(&mut eeprom, 0x110);
         assert_eq!(eeprom.words[0], 0xffff, "write-all is ignored until EWEN");
 
-        ewen(&mut eeprom, 200);
-        command(&mut eeprom, 0x110, 300);
+        ewen(&mut eeprom);
+        command(&mut eeprom, 0x110);
         for bit in (0..16).rev() {
-            send_bit(&mut eeprom, ((0x5a5au16 >> bit) & 1) != 0, 300);
+            send_bit(&mut eeprom, ((0x5a5au16 >> bit) & 1) != 0);
         }
-        eeprom.pins(0, 300);
+        eeprom.pins(0);
         assert!(eeprom.words.iter().all(|&word| word == 0x5a5a));
-        assert_eq!(eeprom.ready_at, 300 + WRITE_ALL_CYCLES);
     }
 
     #[test]
     fn erase_all_clears_every_word() {
         let mut eeprom = Eeprom::default();
         eeprom.words[0] = 0x1234;
-        command(&mut eeprom, 0x120, 100);
+        command(&mut eeprom, 0x120);
         assert_eq!(eeprom.words[0], 0x1234, "erase-all is ignored until EWEN");
 
-        ewen(&mut eeprom, 200);
-        command(&mut eeprom, 0x120, 300);
+        ewen(&mut eeprom);
+        command(&mut eeprom, 0x120);
         assert!(eeprom.words.iter().all(|&word| word == 0xffff));
-        assert_eq!(eeprom.ready_at, 300 + WRITE_ALL_CYCLES);
     }
 
     #[test]
-    fn busy_polling_blocks_commands_until_ready_at() {
+    fn programming_completes_instantly() {
         let mut eeprom = Eeprom::default();
-        ewen(&mut eeprom, 0);
-        serial_write(&mut eeprom, 7, 0xbeef, 1000);
-        let ready_at = eeprom.ready_at;
-        assert_eq!(ready_at, 1000 + WRITE_CYCLES);
+        ewen(&mut eeprom);
+        serial_write(&mut eeprom, 7, 0xbeef);
+        assert_eq!(eeprom.words[7], 0xbeef);
 
-        eeprom.pins(0, 2000);
-        eeprom.pins(0x10, 2000);
-        assert!(!eeprom.output(ready_at - 1), "DO is low while programming");
-        assert!(eeprom.output(ready_at), "DO reports ready at ready_at");
+        eeprom.pins(0x10);
+        assert!(eeprom.output(), "DO reports ready as soon as CS is raised");
 
-        command(&mut eeprom, 0x100, 2000);
-        eeprom.pins(0, 2000);
-        assert!(eeprom.writable, "bits clocked while busy are dropped");
-
-        command(&mut eeprom, 0x100, ready_at);
-        eeprom.pins(0, ready_at);
-        assert!(!eeprom.writable, "EWDS takes effect once ready");
+        command(&mut eeprom, 0x100);
+        eeprom.pins(0);
+        assert!(!eeprom.writable, "the next command is accepted immediately");
     }
 
     #[test]
-    fn reset_keeps_words_and_clears_the_pending_delay() {
+    fn reset_keeps_words() {
         let mut eeprom = Eeprom::default();
-        ewen(&mut eeprom, 0);
-        serial_write(&mut eeprom, 0, 0xa65c, 1000);
+        ewen(&mut eeprom);
+        serial_write(&mut eeprom, 0, 0xa65c);
         eeprom.reset();
         let mut expected = Eeprom::default();
         expected.words[0] = 0xa65c;
         assert_eq!(eeprom, expected, "reset keeps the stored words");
-        assert!(eeprom.output(2000), "reset clears the pending delay");
     }
 
     #[test]
@@ -754,12 +699,11 @@ mod tests {
         eeprom.count = 12;
         eeprom.address = 42;
         eeprom.read_bit = 7;
-        eeprom.ready_at = 0x1122_3344_5566_7788;
 
         let mut blob = [0xa5u8; STATE_BYTES];
         eeprom.save_state(&mut blob);
 
-        assert_eq!(STATE_BYTES, 157);
+        assert_eq!(STATE_BYTES, 149);
         assert_eq!(MODE_AT, 128);
         assert_eq!(SELECTED_AT, 129);
         assert_eq!(OLD_CLOCK_AT, 130);
@@ -769,7 +713,6 @@ mod tests {
         assert_eq!(COUNT_AT, 137);
         assert_eq!(ADDRESS_AT, 141);
         assert_eq!(READ_BIT_AT, 145);
-        assert_eq!(READY_AT, 149);
 
         assert_eq!(&blob[0..2], &0x1234u16.to_ne_bytes(), "words[0]");
         assert_eq!(&blob[2..4], &0x0102u16.to_ne_bytes(), "words[1]");
@@ -791,21 +734,15 @@ mod tests {
             "address"
         );
         assert_eq!(
-            &blob[READ_BIT_AT..READY_AT],
+            &blob[READ_BIT_AT..STATE_BYTES],
             &7u32.to_ne_bytes(),
             "read_bit"
-        );
-        assert_eq!(
-            &blob[READY_AT..STATE_BYTES],
-            &0x1122_3344_5566_7788u64.to_ne_bytes(),
-            "ready_at"
         );
 
         let state = CanonicalEeprom::parse(&blob).unwrap();
         assert_eq!(state.words, eeprom.words);
         assert_eq!(state.mode, 3);
         assert_eq!(state.shift, 0xdead_beef);
-        assert_eq!(state.ready_at, 0x1122_3344_5566_7788);
 
         let mut restored = Eeprom::default();
         restored.load_state(&blob).unwrap();
@@ -851,7 +788,7 @@ mod tests {
         let mut blob = valid_blob();
         blob[MODE_AT] = 4;
         blob[ADDRESS_AT..READ_BIT_AT].copy_from_slice(&63u32.to_ne_bytes());
-        blob[READ_BIT_AT..READY_AT].copy_from_slice(&15u32.to_ne_bytes());
+        blob[READ_BIT_AT..STATE_BYTES].copy_from_slice(&15u32.to_ne_bytes());
         blob[COUNT_AT..ADDRESS_AT].copy_from_slice(&16u32.to_ne_bytes());
         assert_eq!(target.load_state(&blob), Ok(()));
         assert_eq!(target.mode, Mode::Done);
@@ -931,8 +868,8 @@ mod tests {
         let mut reset_state = [0u8; STATE_BYTES];
         // SAFETY: both blobs are F3RT_EEPROM_STATE_SIZE bytes.
         unsafe { f3rt_eeprom_save_state(reset_state.as_mut_ptr()) };
-        assert!(f3rt_eeprom_output(0), "DO is ready after a reset");
-        f3rt_eeprom_pins(0x10, 0);
+        assert!(f3rt_eeprom_output(), "DO is ready after a reset");
+        f3rt_eeprom_pins(0x10);
         let mut selected_state = [0u8; STATE_BYTES];
         unsafe { f3rt_eeprom_save_state(selected_state.as_mut_ptr()) };
         assert_ne!(selected_state, reset_state);

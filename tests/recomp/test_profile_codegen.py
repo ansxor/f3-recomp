@@ -109,7 +109,7 @@ int main(void) {
     assert(cpu.d[1]==2 && cpu.d[2]==3);
     assert(counts[0x402/2]==1 && counts[0x404/2]==1);
 #endif
-    cpu.pc=0x404; cpu.d[2]=99; cpu.dispatch_deadline=cpu.cycles+1;
+    cpu.pc=0x404; cpu.d[2]=99; cpu.dispatch_deadline=cpu.steps+1;
     assert(dispatch(&cpu)); f3_cc_flush(&cpu); assert(cpu.pc==0x406 && cpu.d[2]==3 && !cpu.cc_op);
     assert(counts[0x404/2]==(SLIM ? 1u : 2u));
     counts[0x404/2]=UINT64_MAX; cpu.pc=0x404;
@@ -237,7 +237,7 @@ int main(void) {
         assert(blocks[i].address==expected[i]);
         /* Deadline already reached: each entry yields after one instruction,
            so block chaining (covered by tools/test_generate.py) stays out. */
-        cpu.pc=blocks[i].address; cpu.dispatch_deadline=cpu.cycles; exception=0;
+        cpu.pc=blocks[i].address; cpu.dispatch_deadline=cpu.steps; exception=0;
         blocks[i].execute(&cpu);
         if(expected[i]>=6) assert(exception==(expected[i]==10 ? 11u : 10u));
         else assert(cpu.pc==expected[i]+2);
@@ -319,7 +319,7 @@ int main(void) {
         unsigned index=(cpu.pc-0xc00000u)/2;
         exception=0; f3_sound_blocks[i].execute(&cpu);
         assert(counts[index]==1);
-        if(index<2) assert(cpu.pc==0xc00000u+(index+1)*2 && cpu.cycles==4);
+        if(index<2) assert(cpu.pc==0xc00000u+(index+1)*2 && cpu.steps==1);
         else assert(exception==(index==2 ? 10u : index==3 ? 11u : 4u));
     }
     if(SLIM) assert(!counts[1] && !counts[3] && !counts[4]);
@@ -394,7 +394,7 @@ int main(void) {
         assert(cpu.pc==0xc00000u+expected[i]); exception=0;
         f3_sound_blocks[i].execute(&cpu);
         if(expected[i]>=6) assert(exception==(expected[i]==10 ? 11u : 10u));
-        else assert(cpu.pc==0xc00000u+expected[i]+2 && cpu.cycles==4);
+        else assert(cpu.pc==0xc00000u+expected[i]+2 && cpu.steps==1);
     }
     assert(counts[0]==1 && counts[3]==1 && !counts[2]);
     assert(counts[1]==(SLIM ? 0u : 1u));

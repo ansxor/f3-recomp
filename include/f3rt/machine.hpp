@@ -16,9 +16,22 @@ class GameVideo;
 class SpriteSystem;
 class Machine {
 public:
+    // Device time is counted in 16 MHz main-clock ticks. It advances only at
+    // device events (vblank, IRQ3), never per CPU instruction: the main CPU is
+    // modelled as infinitely fast and runs until it waits for an interrupt.
     static constexpr uint32_t MAIN_CLOCK = 16000000;
     static constexpr uint32_t PIXEL_CLOCK = 6671500;
     static constexpr uint32_t FRAME_PIXELS = 432 * 262;
+    static constexpr uint64_t IRQ3_DELAY = 10000; // MAME's level 3 delay after vblank.
+    // Instructions the CPU may run between device events before the scheduler
+    // forces the next one anyway: the backstop for wait loops recomp/idle.py
+    // does not recognise, and for code that never waits. A burst of real work
+    // must finish inside one slice, because an event landing mid-burst can split
+    // work that hardware timing keeps whole: landmakrj's vblank task drops the
+    // EEPROM chip select, and its write-then-verify burst runs ~150k steps once
+    // programming is instant. An unrecognised wait loop (commandw's attract loop)
+    // spins the whole slice every frame, ~1 ms of host time at this size.
+    static constexpr uint64_t SLICE_STEPS = 200000;
     explicit Machine(RomSet roms);
     ~Machine();
     Machine(const Machine &) = delete;
@@ -77,8 +90,9 @@ public:
     void reset_devices();
     void reset_main_cpu();
     bool run_frame();
-    void advance_to(uint64_t cycles);
     int boundary();
+    // An idle loop is waiting for an interrupt: end the slice at the next boundary.
+    void idle();
     int fallback();
     uint8_t read8(uint32_t address);
     uint16_t read16(uint32_t address);
@@ -114,11 +128,14 @@ private:
     };
     AudioLease m_audio_lease;
     EepromLease m_eeprom_lease;
-    uint64_t m_hardware_cycles = 0;
+    uint64_t m_time = 0;
     std::array<uint32_t, 7> m_rom_crcs{};
     uint64_t m_next_vblank = 0, m_irq3_at = UINT64_MAX;
     uint64_t m_watchdog_at = 0;
-    uint64_t raster_cycle(uint64_t pixels) const;
+    uint64_t m_slice_end = 0;
+    bool m_idle = false;
+    uint64_t raster_time(uint64_t pixels) const;
+    void next_event();
     uint32_t input_word(unsigned index) const;
     void coin_write(unsigned bank, uint8_t value);
     mutable std::vector<uint8_t> m_state_scratch;

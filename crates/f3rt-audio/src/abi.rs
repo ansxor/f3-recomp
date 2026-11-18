@@ -153,8 +153,8 @@ pub extern "C" fn f3rt_audio_set_sound_bank(page: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn f3rt_audio_advance(main_cycles: u32) {
-    guarded("f3rt_audio_advance", |a| a.advance(main_cycles));
+pub extern "C" fn f3rt_audio_advance(ticks: u32) {
+    guarded("f3rt_audio_advance", |a| a.advance(ticks));
 }
 
 #[unsafe(no_mangle)]
