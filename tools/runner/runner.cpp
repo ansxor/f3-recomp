@@ -1,9 +1,7 @@
 #include "runner.hpp"
 #include "f3rt/rom.hpp"
 
-#if defined(F3RT_GAME_VIDEO)
 #include "f3rt/game_video.hpp"
-#endif
 
 #if defined(F3RT_GENERATED)
 #include "program.h"
@@ -36,11 +34,9 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
     throw std::runtime_error(
         "Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
 #endif
-#if defined(F3RT_GAME_VIDEO)
     if (enable_game_video) {
         machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Game);
     }
-#endif
     return machine;
 }
 
@@ -155,15 +151,11 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
     }
 
     if (config_.video_diff) {
-#if defined(F3RT_GAME_VIDEO)
         if (!config_.video_diff_every || !config_.video_layer_mask ||
             (config_.video_layer_mask & ~511u)) {
             throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
         }
         machine_->game_video = std::make_unique<GameVideo>(*machine_);
-#else
-        throw std::runtime_error("Video diff requires F3RT_GAME_VIDEO");
-#endif
     }
 
 #if defined(F3RT_GENERATED)

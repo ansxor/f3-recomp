@@ -27,14 +27,7 @@ include(cmake/codegen.cmake)
 
 # --- Core runtime (f3rt) ----------------------------------------------------
 
-# Games opt into custom scene/boot/netplay implementations via games/<game>/{video,boot,netplay}/.
-file(GLOB GAME_VIDEO_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/video/*.cpp")
-if(GAME_VIDEO_SOURCES)
-    set(F3RT_GAME_VIDEO ON)
-    set(F3RT_GAME_VIDEO_SOURCES ${GAME_VIDEO_SOURCES})
-else()
-    set(F3RT_GAME_VIDEO_SOURCES runtime/renderer/game/video_generic.cpp)
-endif()
+# Games opt into custom boot/netplay implementations via games/<game>/{boot,netplay}/.
 
 file(GLOB GAME_BOOT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/boot/*.cpp")
 if(GAME_BOOT_SOURCES)
@@ -76,7 +69,6 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/game/row_workers.cpp
     runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
-    ${F3RT_GAME_VIDEO_SOURCES}
     ${F3RT_GAME_BOOT_SOURCES}
     ${F3RT_GAME_NETPLAY_SOURCES}
     runtime/debug/profile.cpp
@@ -90,7 +82,6 @@ set(F3RT_CORE_SOURCES
     runtime/sprites/sandbox.cpp
     runtime/sprites/sprite_system.cpp
     runtime/sprites/behaviours.cpp
-    runtime/debug/discovery.cpp
     ${F3RT_NETPLAY_SOURCES}
 )
 
@@ -179,9 +170,6 @@ endif()
 
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
-if(F3RT_GAME_VIDEO)
-    target_compile_definitions(f3rt PUBLIC F3RT_GAME_VIDEO=1)
-endif()
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
 endif()

@@ -7,7 +7,6 @@
 #include "renderer/game/lines.hpp"
 #include "renderer/game/clip.hpp"
 #include "renderer/game/video_log.hpp"
-#include "debug/discovery.hpp"
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/indexed_compositor.hpp"
 #include "state_io.hpp"
@@ -49,7 +48,6 @@ struct GameVideo::Impl {
     void fallback(const char *component, const char *reason) {
         const uint64_t frame = machine.frame + 1;
         log_unsupported_video(component, reason, frame);
-        if (machine.discovery) machine.discovery->video_fallback(component, reason, frame);
         ++fallback_frames;
         for (unsigned i = 0; i < fallback_count; ++i) {
             auto &entry = fallbacks[i];
@@ -200,12 +198,10 @@ Machine &require_matching_video(Machine &machine) {
             "differs from the geometry this build was configured for");
     return machine;
 }
-#if F3RT_GAME_VIDEO
 static_assert(game_config::video.rotation == 0,
               "GameVideo does not rotate the scanout (video.rotation == 0)");
 static_assert(game_config::video.sprite_lag == 1,
               "GameVideo latches sprites with exactly one frame of lag (video.sprite_lag == 1)");
-#endif
 } // namespace
 
 GameVideo::GameVideo(Machine &machine, GameVideoMode mode, RenderEnhancements enhancements)

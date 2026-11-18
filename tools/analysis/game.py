@@ -52,7 +52,7 @@ from recomp.emitter import _ea_extension_bytes, _pc_base  # noqa: E402
 
 DISPATCH = -1  # pseudo routine: f3_dispatch / anything the static pass cannot attribute
 
-# Fixed Taito F3 main-CPU map. Layer names match runtime/debug/discovery.cpp.
+# Fixed Taito F3 main-CPU map.
 REGIONS = [
     (0x000000, 0x200000, "rom"),
     (0x400000, 0x440000, "ram"),
@@ -89,7 +89,7 @@ VIDEO_REGIONS = {
     "control",
     "palette",
 }
-# runtime/debug/discovery.cpp folds charram into text and pivot into lines.
+# Video layers fold charram into text and pivot into lines.
 LOG_LAYER = {"charram": "text", "pivot": "lines"}
 
 VECTOR_NAMES = {

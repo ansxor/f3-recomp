@@ -31,7 +31,7 @@ class Game:
     def vectors(**o) -> Result; def dis(target, **o) -> Result; def xref(*targets, **o) -> Result
     def flow(target, **o) -> Result; def writes(*targets, **o) -> Result
     def struct(routine, reg, **o) -> Result; def graph(**o) -> Result; def profile(**o) -> Result
-    def discover(log=None, **o) -> Result; def mametap(**o) -> Result
+    def mametap(**o) -> Result
     def run(out=None, **o) -> Run                 # headless run; frames=1200 by default
     def address(text) -> int                      # "a5-0x60ac", "irq2", "sub_009b32", symbol, hex
     def label(address: int) -> str
@@ -56,7 +56,6 @@ class Run:
     frames: list[int]                             # dumped frames, 1-based
     output: str; summary: dict[str, str]          # run.txt and its key=value pairs (strings)
     def records(frame=None, **o) -> Result; def sprites(frame=None, **o) -> Result
-    def discover(**o) -> Result                   # on this run's discovery.log
     def mem(frame, address, size=1) -> bytes      # address: int, hex text or "a5-0x60ac"
     def b(frame, address) -> int; def w(frame, address) -> int; def l(frame, address) -> int
     def series(address, size=1, frames=None) -> list[tuple[int, int]]   # (frame, value)
@@ -107,13 +106,9 @@ rec.notes                                            # "holds for N/M active rec
 **Who writes this video RAM?**
 ```python
 g.writes(region="sprites", ranges=True)              # static; or region="0x660000-0x66001f"
-aw = g.run(frames=3000, all_writers=True, out="build/f3a/writers")
-obs = aw.discover(ranges=True)                       # observed writers per (layer, routine)
-obs.where(lambda r: r.unknown_pcs)                   # PCs video.cpp does not list yet
+g.run(frames=3000, watch="sub_009b32")               # observed: did a candidate writer run?
 ```
-Static and observed disagree when the static pass cannot place a pointer (`unknown`/`mixed`/`?`) or
-the writer only runs in gameplay (next section). To triage discovery-log `NEW` lines or extend
-`video_writer_known` / `[[video.emit_units]]`, read `references/discovery-log.md`.
+The static pass cannot place every pointer (`unknown`/`mixed`/`?`); confirm a candidate with `watch`.
 
 **Computed jumps, hooks, interpreters**
 ```python

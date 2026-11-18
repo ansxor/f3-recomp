@@ -4,7 +4,6 @@
 #include "f3rt/abi/eeprom.h"
 #include "f3rt/video.hpp"
 #include "f3rt/game_video.hpp"
-#include "debug/discovery.hpp"
 #include "sprites/sprite_system.hpp"
 #include "state_io.hpp"
 #include <algorithm>
@@ -31,9 +30,6 @@ template <unsigned Width, bool Write> uint8_t *direct_bytes(Machine &m, uint32_t
         if (a - GRAPHICS_BASE > m.graphics.size() - Width) return nullptr;
         if constexpr (Write)
             if (m.sprite_writers && a - GRAPHICS_BASE < SPRITE_RAM_SIZE) return nullptr;
-        // Discovery logging must see every graphics store byte by byte (PC attribution).
-        if constexpr (Write)
-            if (m.discovery) return nullptr;
         return m.graphics.data() + (a - GRAPHICS_BASE);
     };
     if constexpr (Write) {
@@ -193,7 +189,6 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a >= GRAPHICS_BASE && a < GRAPHICS_END) {
-        if (discovery) discovery->video_write(cpu.pc, a);
         const uint32_t offset = a - GRAPHICS_BASE;
         if (sprite_writers && offset < SPRITE_RAM_SIZE) (*sprite_writers)[offset >> 4] = cpu.pc;
         graphics[offset] = v;
@@ -201,7 +196,6 @@ void Machine::write8(uint32_t a, uint8_t v) {
         return;
     }
     if (a >= CONTROL_BASE && a < CONTROL_END) {
-        if (discovery) discovery->video_write(cpu.pc, a);
         control[a - CONTROL_BASE] = v;
         return;
     }

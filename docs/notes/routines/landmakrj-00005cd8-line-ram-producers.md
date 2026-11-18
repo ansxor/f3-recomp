@@ -22,8 +22,7 @@ supersedes: []
 # Land Maker video producers by layer
 
 Japan 2.01J. The runtime does not observe producers to render (it decodes video RAM at VBSTART); these
-PCs matter to `--discovery-log`, which suppresses a store PC once it is listed as understood.
-^[raw/docs/runtime-video-producers.md] They are also the best map of which game routines write which layer
+PCs were the mute list of the since-removed `--discovery-log`. ^[raw/docs/runtime-video-producers.md] They are also the best map of which game routines write which layer
 and in which scene. All entries are hypothesis: classification of PCs by the runtime authors, not board
 observation. Sprite writers are on [[routines/landmakrj-000041d0-sprite-list-writers]] and
 [[routines/landmakrj-000a8e0c-display-object-loop]].

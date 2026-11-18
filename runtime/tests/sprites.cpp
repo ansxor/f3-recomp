@@ -8,7 +8,6 @@
 #include "sprites/behaviour.hpp"
 #include "sprites/enhancements.hpp"
 #include "renderer/game/flicker_hold.hpp"
-#include "debug/discovery.hpp"
 #include "renderer/decode.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "sprite_check.hpp"
@@ -50,8 +49,6 @@ constexpr uint32_t UNIT1_RESUME = 0x20a;
 // Sprite RAM entry offsets from f3rt::GRAPHICS_BASE, and the playfield/control probes.
 constexpr uint32_t SPRITE_ENTRY_3 = 0x30;
 constexpr uint32_t SPRITE_ENTRY_4 = 0x40;
-constexpr uint32_t SPRITE_ENTRY_HIGH = 0x200;
-constexpr uint32_t PLAYFIELD_RAM_PROBE = f3rt::GRAPHICS_BASE + f3rt::OFFS_PLAYFIELDS + 1;
 // Work-RAM scratch used by the synthetic units: array offset and bus address.
 constexpr uint32_t SYNTH_DATA_OFFSET = 0x100;
 constexpr uint32_t SYNTH_DATA = f3rt::RAM_BASE + SYNTH_DATA_OFFSET;
@@ -316,39 +313,6 @@ TEST(SpriteSystem, BehaviourSplicingNeverChangesEmulatedState) {
         << "Splice must actually happen";
     EXPECT_TRUE(SynthSnapshot(*with_groups) == *without_snapshot)
         << "ram, graphics, cpu, cycles, native_blocks and state_crc match without groups";
-}
-
-TEST(DiscoveryLog, IsObserveOnly) {
-    const auto path = std::filesystem::temp_directory_path() / "f3rt-test-discovery.log";
-    for (const bool log_all : {false, true}) {
-        const auto stores = [](f3rt::Machine &m) {
-            synth_span(m);
-            m.write16(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 0x0001);
-            m.write8(PLAYFIELD_RAM_PROBE, 0x5a);                     // playfield RAM
-            m.write16(f3rt::CONTROL_BASE, 0x1234);                   // control register
-            m.write32(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_HIGH, 0xdeadbeef);
-        };
-        std::unique_ptr<SynthSnapshot> plain_snapshot;
-        std::array<uint8_t, 0x20> plain_control{};
-        {
-            auto plain = synth_machine(true);
-            stores(*plain);
-            plain_snapshot = std::make_unique<SynthSnapshot>(*plain);
-            plain_control = plain->control;
-        }
-        auto logged = synth_machine(true);
-        logged->discovery = std::make_unique<f3rt::DiscoveryLog>(path.string(), *logged, "test");
-        logged->discovery->set_log_all(log_all);
-        stores(*logged);
-        EXPECT_TRUE(*plain_snapshot == SynthSnapshot(*logged))
-            << "ram, graphics, palette, cpu, cycles, native_blocks and state_crc, log_all="
-            << log_all;
-        EXPECT_EQ(plain_control, logged->control);
-        logged->discovery->finish(*logged);
-        EXPECT_GT(std::filesystem::file_size(path), 0u) << "The log must have observed something";
-    }
-    std::error_code ignored;
-    std::filesystem::remove(path, ignored);
 }
 
 TEST(SpriteSystem, BehaviourSplicesReplacementEntries) {

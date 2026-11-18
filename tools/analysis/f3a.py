@@ -292,9 +292,6 @@ class Game:
     def mametap(self, **options) -> Result:
         return self.call("mametap", **options)
 
-    def discover(self, log=None, **options) -> Result:
-        return self.call("discover", *([str(log)] if log else []), **options)
-
     def run(self, out: str | Path | None = None, **options) -> Run:
         """Headless run (options as `f3a run`); returns the Run, whose .log is the run's output."""
         frames = options.get("frames", 1200)
@@ -328,7 +325,7 @@ class Game:
         return [int.from_bytes(data[i : i + 4], "big") for i in range(0, len(data), 4)]
 
 
-for _name in ("vectors", "dis", "xref", "flow", "writes", "struct", "graph", "mametap", "discover", "run", "profile"):
+for _name in ("vectors", "dis", "xref", "flow", "writes", "struct", "graph", "mametap", "run", "profile"):
     _method = getattr(Game, _name)
     _method.__doc__ = (
         f"`f3a {_name}` as a call: positional arguments as the CLI's, long options as keywords "
@@ -413,9 +410,6 @@ class Run:
     def summary(self) -> dict[str, str]:
         """key=value pairs of the game's summary lines (frame_crc, cycles, video_write, ...)."""
         return {k: v for line in self.output.splitlines() for k, v in re.findall(r"(\w+)=(\S+)", line)}
-
-    def discover(self, **options) -> Result:
-        return self.game.discover(self.path / "discovery.log", **options)
 
     def _file(self, frame: int, name: str) -> bytes:
         key = (frame, name)

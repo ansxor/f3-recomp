@@ -5,9 +5,7 @@
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
 
-#if defined(F3RT_GAME_VIDEO)
 #include "f3rt/game_video.hpp"
-#endif
 
 #include <chrono>
 #include <filesystem>
@@ -146,7 +144,6 @@ int cmd_gameplay(int argc, char **argv) try {
             print_failure_state(m, seed, frame, ss.str());
             return false;
         }
-#if defined(F3RT_GAME_VIDEO)
         if (cfg.video_diff && frame >= 600 && (frame - 600) % cfg.video_diff_every == 0) {
             try {
                 m.game_video->compare_layers(frame, cfg.video_layer_mask);
@@ -156,7 +153,6 @@ int cmd_gameplay(int argc, char **argv) try {
                 throw;
             }
         }
-#endif
         return true;
     });
 
@@ -179,11 +175,9 @@ int cmd_gameplay(int argc, char **argv) try {
     if (!capture_surface.empty()) {
         runner.save_bmp(capture_surface);
     }
-#if defined(F3RT_GAME_VIDEO)
     if (m.game_video) {
         m.game_video->report(std::cout);
     }
-#endif
 
     if (json_output) {
         std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << cfg.set << "\",\"seed\":" << seed

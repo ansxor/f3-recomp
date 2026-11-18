@@ -57,12 +57,8 @@ constexpr uint32_t PF_EXT_ALT_BASE = 0x1a000;
 // Sprite and high-plane ROM offsets of the second sprite bank (Command War).
 constexpr size_t SPRITE_ROM_BANK1 = 0x400000;
 constexpr size_t HIGH_PLANE_ROM_BANK1 = 0x200000;
-#ifdef F3RT_GAME_VIDEO
 // Game tile cell table offset within graphics RAM (test fixture: layer 1).
 constexpr uint32_t GAME_TILE_CELLS = f3rt::OFFS_PLAYFIELDS + 1 * f3rt::GameTiles::MAP_STRIDE;
-#else
-constexpr uint32_t GAME_TILE_CELLS = 0x12000;
-#endif
 void set_word(std::vector<uint8_t> &bytes, size_t at, uint16_t value) {
     bytes[at] = uint8_t(value >> 8);
     bytes[at + 1] = uint8_t(value);
@@ -419,7 +415,6 @@ TEST(Video, FdpGeometryAndNonPowerOfTwoAssets) {
         << "Extended alternate scanout wraps x at 1024 and y at 512 without a 32-column mask";
 }
 
-#ifdef F3RT_GAME_VIDEO
 TEST(Video, GameTileObservation) {
     std::vector<uint8_t> graphics(0x40000, 0);
     std::array<uint8_t, 0x20> control{};
@@ -659,9 +654,7 @@ TEST(GameVideo, UnchangedRegionDecodeMatchesFreshDecode) {
         ASSERT_EQ(lines_state(*lines), lines_state(*fresh_lines)) << "round " << round;
     }
 }
-#endif
 
-#ifdef F3RT_GAME_VIDEO
 // RapidCheck property: GameText::pixel decodes arbitrary glyph pixels and correctly mirrors texel
 // coordinates when flip X or flip Y bits are set in the text map VRAM words.
 RC_GTEST_PROP(Video, GameTextFlipMirrorsTexels, ()) {
@@ -705,7 +698,6 @@ RC_GTEST_PROP(Video, GameTextFlipMirrorsTexels, ()) {
     RC_ASSERT(px.palette == expected_palette);
     RC_ASSERT(px.flags == 0x10);
 }
-#endif
 
 // RapidCheck property: Video::render_frame converts arbitrary 15-bit palette words
 // (RRRRGGGGBBBBRGBx) to 32-bit ARGB pixels matching independent 5-to-8-bit channel expansion.
@@ -753,7 +745,6 @@ RC_GTEST_PROP(Video, Color15BitUnpackingInvariant, ()) {
     RC_ASSERT(pixels[0] == expected_pixel);
 }
 
-#if defined(F3RT_GAME_VIDEO)
 TEST(GameCompositor, IndexedParallelMatchesSerial) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
@@ -1742,7 +1733,6 @@ TEST(RamShadow, CopiesStartUnprimed) {
 
     EXPECT_FALSE(source.changed(content.data()));
 }
-#endif
 
 TEST(GameSprites, DecodeWithPresentationBuildsPresentedList) {
     std::vector<uint8_t> graphics(f3rt::GRAPHICS_RAM_SIZE);

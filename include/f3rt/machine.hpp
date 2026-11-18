@@ -13,7 +13,6 @@ namespace f3rt {
 class Video;
 class GameVideo;
 class SpriteSystem;
-class DiscoveryLog;
 class Machine {
 public:
     static constexpr uint32_t MAIN_CLOCK = 16000000;
@@ -40,8 +39,6 @@ public:
     const std::array<uint32_t, 7> &rom_region_crcs() const { return m_rom_crcs; }
     RomSet roms;
     std::unique_ptr<Video> video;
-    // Host-only `--discovery-log` observer of graphics/control stores; null = off. Never serialized.
-    std::unique_ptr<DiscoveryLog> discovery;
     // Render-only sprite group and behaviour tracking; null = feature off. Never serialized.
     std::unique_ptr<SpriteSystem> sprites;
     // Host-only per-slot writer attribution (one PC per 16-byte sprite RAM entry); null = off. Never serialized.

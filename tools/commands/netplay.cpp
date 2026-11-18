@@ -180,9 +180,6 @@ int cmd_netplay(int argc, char **argv) try {
 
     // Boot machine strictly deterministically
     auto machine = runner::create_strict_machine(rom_dir, set, use_gpu);
-    if (use_gpu && !machine->game_video) {
-        throw std::runtime_error("--gpu 1 needs an f3rt-tool built with F3RT_GAME_VIDEO");
-    }
     const auto *netplay_hook = f3rt::game_netplay();
 
     // If --until-trigger, run locally until 2P versus edge fires

@@ -20,7 +20,6 @@
 #include "debug/input_script.hpp"
 #include "sprites/sprite_system.hpp"
 #include "sprites/enhancements.hpp"
-#include "debug/discovery.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
 #include "f3rt/video.hpp"
@@ -355,7 +354,7 @@ struct EmulationThread {
 } // namespace
 int main(int argc, char **argv) try {
     std::filesystem::path romdir, dumpdir, eeprom, wav_path, surface;
-    std::filesystem::path profile_path, config_path, discovery_path, inputs_path, watch_path,
+    std::filesystem::path profile_path, config_path, inputs_path, watch_path,
         indirect_path;
     std::vector<uint32_t> watch_entries;
     std::string set = F3RT_DEFAULT_SET;
@@ -378,7 +377,6 @@ int main(int argc, char **argv) try {
 #ifdef F3RT_GAME
     romdir = F3RT_DEFAULT_ROM_DIR;
 #endif
-    bool discovery_all = false;
     std::string netplay_auto;
     std::string netplay_server_cli;
     std::string netplay_name_cli;
@@ -417,8 +415,6 @@ int main(int argc, char **argv) try {
             cli_preferences |= BootCache;
         } else if (arg == "--wav") wav_path = value();
         else if (arg == "--profile-out") profile_path = value();
-        else if (arg == "--discovery-log") discovery_path = value();
-        else if (arg == "--discovery-all") discovery_all = true;
         else if (arg == "--inputs") inputs_path = value();
         else if (arg == "--watch-log") watch_path = value();
         else if (arg == "--indirect-log") indirect_path = value();
@@ -505,10 +501,6 @@ int main(int argc, char **argv) try {
                    "overrides)\n"
                 << "  [--profile-out FILE] (instrumented build: merged entry counts, atomic flush "
                    "every 30s and at exit)\n"
-                << "  [--discovery-log FILE] (host-only: log unhandled video writers/fallbacks "
-                   "seen during play; see docs)\n"
-                << "  [--discovery-all] (with --discovery-log: also log known writers (known=1) "
-                   "and unit-accounted sprite writes)\n"
                 << "  [--inputs FILE] (host-only script: buttons OR'd with live input, main-RAM "
                    "pokes; format in runtime/debug/input_script.hpp; disables fast boot)\n"
                 << "  [--watch-entries HEX,HEX --watch-log FILE] (instrumented build with "
@@ -556,8 +548,7 @@ int main(int argc, char **argv) try {
         throw std::runtime_error("--rom-dir required; --dump-every must be positive");
     if (headless && !frames) throw std::runtime_error("Headless execution requires --frames");
     f3rt::FrontendSettings settings;
-#if defined(F3RT_GAME_VIDEO) && defined(F3RT_GPU)
-    // Enhanced needs game-data video (strict native execution) and a GPU-enabled build; otherwise accurate.
+#ifdef F3RT_GPU
     settings.renderer = "enhanced";
 #endif
     if (config_path.empty()) config_path = f3rt::default_config_path(set);
@@ -656,10 +647,6 @@ int main(int argc, char **argv) try {
     if (set != F3RT_DEFAULT_SET)
         throw std::runtime_error("This generated executable requires " F3RT_DEFAULT_SET);
 #endif
-#ifndef F3RT_GAME_VIDEO
-    if (video_mode != "fdp")
-        throw std::runtime_error("Game-data video is unavailable for this game");
-#endif
     if (video_filter != "nearest" && video_filter != "linear")
         throw std::runtime_error("--video-filter must be nearest or linear");
     if ((video_mode == "fdp" || headless) &&
@@ -715,23 +702,13 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if (!indirect_path.empty())
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
-#ifdef F3RT_GAME_VIDEO
     if (video_mode != "fdp")
         m.game_video = std::make_unique<f3rt::GameVideo>(
             m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
             enhancements.render(backend));
-#endif
     m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
-    }
-    if (!discovery_path.empty()) {
-        m.discovery = std::make_unique<f3rt::DiscoveryLog>(
-            discovery_path, m,
-            "set=" + set + " renderer=" + (renderer.empty() ? "default" : renderer) +
-                " exec=native sprite_groups=" + (m.sprites ? "yes" : "no") +
-                " game_video=" + (m.game_video ? "yes" : "no"));
-        m.discovery->set_log_all(discovery_all);
     }
     const auto snapshot_video_options = video_options;
     const unsigned frame_width = video_options.width();
@@ -1917,7 +1894,6 @@ int main(int argc, char **argv) try {
     if (!eeprom.empty()) m.save_eeprom(eeprom);
     if (m.game_video) m.game_video->report(std::cout);
     if (m.sprites) m.sprites->write_summary(std::cout);
-    if (m.discovery) m.discovery->finish(m);
     profile.flush();
     std::cout << "set=" << set << " frames=" << m.frame << " pc=0x" << std::hex << m.cpu.pc
               << " frame_crc=0x"

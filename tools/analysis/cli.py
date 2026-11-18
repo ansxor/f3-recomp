@@ -1188,7 +1188,7 @@ def cmd_writes(args) -> None:
             raise SystemExit(f"f3a: unknown region {text!r}; regions: {', '.join(sorted(names))}, or START-END")
     if args.video:
         regions |= VIDEO_REGIONS
-    # Discovery-log layer names cover two regions each.
+    # Video layer names cover two regions each.
     regions |= {name for name, layer in LOG_LAYER.items() if layer in regions}
     if args.targets:
         entries = []
@@ -1338,16 +1338,16 @@ def cmd_writes(args) -> None:
                         if args.ranges
                         else "--unresolved lists them; "
                     )
-                    + "`f3a run --all-writers` + `f3a discover LOG --ranges` observe the real writers"
+                    + "`f3a run --watch` on candidate routines observes which ones run"
                 )
     if args.ranges:
         out.note(
-            "// Store-PC ranges per discovery-log layer (games/<id>/video/video.cpp style), static only. "
+            "// Store-PC ranges per video layer, static only. "
             "{first, last} store PC per routine, not a tight set."
         )
         out.note(
             "// placed = destination resolved to this layer; mixed = candidates span layers/RAM (weak); "
-            "unknown = pointer not followed. Observed writers: f3a run --all-writers, f3a discover LOG --ranges."
+            "unknown = pointer not followed."
         )
         wanted = sorted(
             {LOG_LAYER.get(r, r) for r in regions if r in VIDEO_REGIONS - {"palette"}} | {layer for layer, _ in ranges}
@@ -1393,7 +1393,7 @@ def cmd_struct(args) -> None:
     _cmd_struct(args)
 
 
-# ---------------------------------------------------------------- run / discover
+# ---------------------------------------------------------------- run
 def game_executable(g: Game, explicit: str | None, instrumented: bool = False) -> Path:
     """The game's built executable; `instrumented` wants an F3_PROFILE_INSTRUMENT=ON build (watch runs), else
     a plain build is preferred (instrumentation slows the game down)."""
@@ -1548,13 +1548,10 @@ def run_game_until(
     frames: int,
     extra: list[str],
     transcript: Path,
-    discovery: Path,
     entries: Path,
-    store_targets: set[int],
     entry_targets: set[int],
 ) -> tuple[str, int | None, dict]:
-    """Run the game, tailing its logs; stop once every target ran. Routines in `store_targets` count when they
-    store to video/control RAM (discovery log), PCs in `entry_targets` when they execute (entry watch log).
+    """Run the game, tailing its entry watch log; stop once every PC in `entry_targets` executed.
     Returns (output, exit code, {target: {frame, pc, via}}); a run stopped early has exit code None."""
     command = [
         str(exe),
@@ -1568,32 +1565,19 @@ def run_game_until(
         *extra,
     ]
     reached: dict[int, dict] = {}
-    discovery_tail, entries_tail = LogTail(discovery), LogTail(entries)
+    entries_tail = LogTail(entries)
     with transcript.open("w") as sink:
         process = subprocess.Popen(command, stdout=sink, stderr=subprocess.STDOUT)
         while True:
             code = process.poll()
-            for line in discovery_tail.lines() if store_targets else []:
-                match = LOG_LINE.match(line)
-                if not match or match.group(1) != "NEW" or match.group(2) == "video-fallback":
-                    continue
-                fields = dict(re.findall(r"(\w+)=(\S+)", match.group(3)))
-                pc = int(fields["pc"], 16)
-                for owner in g.owners.get(pc) or [g.routine_of(pc)]:
-                    if owner in store_targets and owner not in reached:
-                        reached[owner] = {
-                            "frame": int(fields["frame"]),
-                            "pc": pc,
-                            "via": f"first store pc 0x{pc:06x} into {fields.get('layer', 'sprites')}",
-                        }
-            for line in entries_tail.lines() if entry_targets else []:
+            for line in entries_tail.lines():
                 match = ENTRY_LINE.match(line)
                 pc = int(match.group(1), 16) if match else None
                 if pc in entry_targets and pc not in reached:
                     reached[pc] = {"frame": int(match.group(2)), "pc": pc, "via": "executed"}
             if code is not None:
                 break
-            if len(reached) == len(store_targets | entry_targets):
+            if len(reached) == len(entry_targets):
                 process.terminate()
                 process.wait()
                 code = None
@@ -1608,18 +1592,10 @@ def run_game_until(
     return text, code, reached
 
 
-def code_targets(g: Game, items: list[str] | None, option: str, entries_only: bool) -> dict[int, str]:
+def code_targets(g: Game, items: list[str] | None, option: str) -> dict[int, str]:
     targets = {}
     for text in (part.strip() for item in items or [] for part in item.split(",") if part.strip()):
         pc = resolve_target(g, text)
-        owner = g.routine_of(pc)
-        where = g.label(owner) if owner is not None else "no routine"
-        if entries_only and pc not in g.routines:
-            raise SystemExit(
-                f"f3a: {option} {text}: 0x{pc:06x} is not a routine entry (it is in {where}); "
-                "without --watch, --until sees routines through their video stores. Add --watch to "
-                "stop on any instruction"
-            )
         if pc not in g.code:
             raise SystemExit(f"f3a: {option} {text}: 0x{pc:06x} is not a decoded instruction start")
         targets[pc] = text
@@ -1636,20 +1612,16 @@ def target_label(g: Game, pc: int) -> str:
 
 def cmd_run(args) -> None:
     g = load(args)
-    watch = code_targets(g, args.watch, "--watch", entries_only=False)
-    until = code_targets(g, args.until, "--until", entries_only=not watch)
-    watch.update(until if watch else {})  # an instrumented run watches its --until targets by execution
+    watch = code_targets(g, args.watch, "--watch")
+    until = code_targets(g, args.until, "--until")
+    watch.update(until)
     exe = game_executable(g, args.exe, instrumented=bool(watch or getattr(args, "indirect", False)))
     outdir = Path(args.out) if args.out else default_out(g, str(args.frames))
     outdir.mkdir(parents=True, exist_ok=True)
     extra = list(args.extra)
-    log, entries = outdir / "discovery.log", outdir / "entries.log"
+    entries = outdir / "entries.log"
     if until and args.check_inert:
         raise SystemExit("f3a: --check-inert compares whole runs; --until cuts the run short")
-    all_writers = args.all_writers or bool(until and not watch)  # known writers are only logged with --discovery-all
-    if args.discovery or all_writers:
-        log.unlink(missing_ok=True)
-        extra += ["--discovery-log", str(log)] + (["--discovery-all"] if all_writers else [])
     if watch:
         entries.unlink(missing_ok=True)
         (outdir / "run.profile").unlink(missing_ok=True)
@@ -1694,10 +1666,8 @@ def cmd_run(args) -> None:
             args.frames,
             extra,
             outdir / "run.txt",
-            log,
             entries,
-            set() if watch else set(until),
-            set(until) if watch else set(),
+            set(until),
         )
     else:
         text, code = run_game(exe, g, args.frames, extra)
@@ -1722,20 +1692,13 @@ def cmd_run(args) -> None:
                 )
             else:
                 out.row(
-                    f"  NOT reached {label:<22} ("
-                    + ("never executed" if watch else "no store to video/control RAM")
-                    + f" in {args.frames} frames)",
+                    f"  NOT reached {label:<22} (never executed in {args.frames} frames)",
                     target=label,
                     reached=False,
                     frame=None,
                     pc=h(pc),
                     via=None,
                 )
-        if len(reached) < len(until) and not watch:
-            out.note(
-                "--until without --watch only sees routines that store to video/control RAM themselves; "
-                "add --watch (instrumented build) to stop on any routine or branch target"
-            )
         if watch:
             seen: dict[int, list[tuple[int, int]]] = defaultdict(list)
             for line in entries.read_text().splitlines() if entries.is_file() else []:
@@ -1780,7 +1743,7 @@ def cmd_run(args) -> None:
         out.done()
         code = code or 0
     for line in text.splitlines():  # game diagnostics worth seeing without opening run.txt
-        if re.match(r"^(sprite_groups|sprite groups|DISCOVERY|warning|error)\b", line, re.I):
+        if re.match(r"^(sprite_groups|sprite groups|warning|error)\b", line, re.I):
             print(f"  {line}")
     if code:
         errors = [line for line in text.splitlines() if re.search(r"cannot|error|fail|missing", line, re.I)]
@@ -1789,8 +1752,6 @@ def cmd_run(args) -> None:
             + ("; ".join(errors[:3]) or text[-600:])
             + f" (full output: {outdir / 'run.txt'})"
         )
-    if args.discovery or args.all_writers:
-        print(f"discovery log: {log}; next: f3a discover {log}" + (" --ranges" if args.all_writers else ""))
     if args.dump_every:
         dumps = outdir / "dumps"
         if not any(dumps.glob("frame_*")):
@@ -1817,139 +1778,6 @@ def cmd_run(args) -> None:
             + ": instrumented vs plain "
             + " ".join(f"{k}={base.get(k)}/{fields.get(k)}" for k in SUMMARY_KEYS if k in base)
         )
-
-
-LOG_LINE = re.compile(r"^(NEW|REPEAT|SUM) (sprite-stray|video-write|video-fallback) (.*)$")
-
-
-def parse_log(path: Path) -> list[dict]:
-    entries = []
-    for line in path.read_text().splitlines():
-        match = LOG_LINE.match(line)
-        if not match:
-            continue
-        fields = dict(re.findall(r'(\w+)=("[^"]*"|\S+)', match.group(3)))
-        fields = {k: v.strip('"') for k, v in fields.items()}
-        entries.append({"tag": match.group(1), "category": match.group(2), **fields})
-    return entries
-
-
-def cmd_discover(args) -> None:
-    g = load(args, Path(args.log).parent if args.log else None)
-    out = Out(args)
-    if args.log:
-        log = Path(args.log)
-        if log.is_dir():
-            log = log / "discovery.log"  # the `f3a run --out` directory
-        if not log.is_file():
-            raise SystemExit(f"f3a: no discovery log at {log} (f3a run --discovery or --all-writers writes one)")
-    else:
-        exe = game_executable(g, args.exe)
-        outdir = Path(args.out) if args.out else default_out(g, f"discover{args.frames}")
-        outdir.mkdir(parents=True, exist_ok=True)
-        log = outdir / "discovery.log"
-        out.note(f"[{g.id}] running {exe.name} headless for {args.frames} frames (attract mode: no input) → {log}")
-        text, code = run_game(
-            exe, g, args.frames, ["--discovery-log", str(log)] + (["--discovery-all"] if args.all else [])
-        )
-        if code:
-            raise SystemExit(f"f3a: game exited {code}:\n{text[-2000:]}")
-    entries = parse_log(log)
-    final = [e for e in entries if e["tag"] == "SUM"] or [e for e in entries if e["tag"] == "NEW"]
-    text = log.read_text()
-    header = text.split("\n", 1)[0]
-    observed_all = "# ALL observed writers" in text
-    units = "emit_units=yes" in header
-    if observed_all:
-        out.note(f"{log}: every observed video/control writer (known=1: already listed in games/{g.id}/video/)")
-    else:
-        out.note(
-            f"{log}: only writers NOT already listed in games/{g.id}/video/ (known writers suppressed"
-            + ("; sprite RAM is accounted by emit units: see sprite-stray" if units else "")
-            + "). `--all` logs every observed writer"
-        )
-    groups: dict[tuple[str, int | None], list[dict]] = defaultdict(list)
-    for entry in final:
-        if entry["category"] in ("video-write", "sprite-stray"):
-            pc = int(entry["pc"], 16)
-            owners = g.owners.get(pc) or [g.routine_of(pc)]
-            groups[
-                (
-                    entry.get("layer", "sprites" if entry["category"] == "sprite-stray" else "?")
-                    + ("" if entry["category"] == "video-write" else " (stray)"),
-                    min(owners),
-                )
-            ].append(entry)
-    out.note(f"{len(final)} entries in {len(groups)} (layer, routine) groups; frames are 1-based emulated frames")
-    for (layer, entry), items in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0)):
-        pcs = sorted({int(i["pc"], 16) for i in items})
-        count = sum(int(i.get("count", 0)) for i in items)
-        first = min(int(i.get("frame", 0)) for i in items)
-        known_pcs = sorted({int(i["pc"], 16) for i in items if i.get("known") == "1"})
-        unknown_pcs = sorted({int(i["pc"], 16) for i in items if i.get("known") != "1"})
-        known = len(known_pcs)
-        if getattr(args, "unknown_only", False) and observed_all and not unknown_pcs:
-            continue
-        sharers = sorted(set().union(*(g.owners.get(p, []) for p in pcs)) - {entry})
-        label = g.label(entry) if entry is not None else "?"
-        also = f" (shared code: also {', '.join(g.label(s) for s in sharers[:3])})" if sharers else ""
-        known_pcs_h = [h(p) for p in known_pcs]
-        unknown_pcs_h = [h(p) for p in unknown_pcs]
-        if args.ranges:
-            status = ""
-            if observed_all:
-                if known_pcs and not unknown_pcs:
-                    status = ", known"
-                elif unknown_pcs and not known_pcs:
-                    pass
-                elif unknown_pcs:
-                    status = f", unknown: {', '.join(unknown_pcs_h)}"
-            out.row(
-                f"{{0x{pcs[0]:06x}, 0x{pcs[-1]:06x}}}, // {layer}: {label}{also}, {len(pcs)} PCs, "
-                f"{count} bytes, first frame {first}{status}",
-                layer=layer,
-                routine=label,
-                start=h(pcs[0]),
-                end=h(pcs[-1]),
-                pcs=[h(p) for p in pcs],
-                known_pcs=known_pcs_h,
-                unknown_pcs=unknown_pcs_h,
-                count=count,
-                first_frame=first,
-                known=known,
-            )
-            continue
-        pcs_text = ", ".join(h(p) for p in pcs[:6]) + (f" +{len(pcs) - 6}" if len(pcs) > 6 else "")
-        known_text = ""
-        if observed_all:
-            if known_pcs and not unknown_pcs:
-                known_text = f"known={known}/{len(pcs)} "
-            elif not known_pcs and unknown_pcs:
-                known_text = "unknown "
-            else:
-                known_text = f"known={known}/{len(pcs)} unknown: {', '.join(unknown_pcs_h)} "
-        out.row(
-            f"  {layer:<16} {label:<22} first_frame={first:<6} bytes={count:<9} "
-            + f"{known_text}pcs: {pcs_text}{also}",
-            layer=layer,
-            routine=label,
-            first_frame=first,
-            count=count,
-            pcs=[h(p) for p in pcs],
-            known_pcs=known_pcs_h,
-            unknown_pcs=unknown_pcs_h,
-            known=known,
-        )
-    for entry in final:
-        if entry["category"] == "video-fallback":
-            out.row(
-                f"  fallback {entry.get('component')}: {entry.get('reason')} (frame {entry.get('frame')}, "
-                f"count {entry.get('count', '?')})",
-                **entry,
-            )
-    if groups and not args.ranges:
-        out.note("next: f3a discover LOG --ranges (observed ranges per layer), f3a writes <routine> (static view)")
-    out.done()
 
 
 # ---------------------------------------------------------------- records
@@ -2438,7 +2266,7 @@ def cmd_sprites(args) -> None:
     out.done()
     out.note(
         "  all-zero entries hidden (--all shows every walked entry). Who wrote an entry: "
-        "f3a run --all-writers + f3a discover LOG, f3a writes --region sprites, or f3a mametap (landmakrj)"
+        "f3a writes --region sprites, or f3a mametap (landmakrj)"
     )
 
 
@@ -2907,7 +2735,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="only stores at this displacement through an address "
         "register, e.g. 0x1 for byte +1 of every record (includes unknown bases)",
     )
-    p.add_argument("--ranges", action="store_true", help="print only store-PC ranges per discovery-log layer")
+    p.add_argument("--ranges", action="store_true", help="print only store-PC ranges per video layer")
     p.add_argument(
         "--unresolved",
         action="store_true",
@@ -2929,17 +2757,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--depth", type=int, default=2, help="callee follow depth (default 2)")
     p.set_defaults(func=cmd_struct)
 
-    p = sub.add_parser("run", parents=[common], help="run the game headless with discovery log and/or RAM dumps")
+    p = sub.add_parser("run", parents=[common], help="run the game headless with RAM dumps and/or entry watches")
     p.add_argument("--frames", type=int, default=1200)
-    p.add_argument(
-        "--discovery", action="store_true", help="write discovery.log (video writers missing from games/<id>/video/)"
-    )
-    p.add_argument(
-        "--all-writers",
-        action="store_true",
-        help="discovery.log of EVERY observed video/control writer, "
-        "known ones tagged known=1, sprite RAM included (f3a discover LOG --ranges summarises it)",
-    )
     p.add_argument("--dump-start", type=int, default=1)
     p.add_argument("--dump-every", type=int, default=0, help="dump machine state every N frames (1 = dense)")
     p.add_argument(
@@ -2964,9 +2783,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--until",
         action="append",
         metavar="ROUTINE[,ROUTINE]",
-        help="stop as soon as every listed routine has run and report the frame each first did. Without "
-        "--watch a routine counts when it stores to video/control RAM (implies --all-writers); with "
-        "--watch, when it executes (any instruction address)",
+        help="stop as soon as every listed instruction has executed and report the frame each first did "
+        "(any instruction address; watched like --watch, so it needs an instrumented build)",
     )
     p.add_argument(
         "--watch",
@@ -2984,25 +2802,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="log observed targets of computed jmp/jsr sites (implies instrumented build, writes indirect.log in run dir)",
     )
     p.set_defaults(func=cmd_run)
-
-    p = sub.add_parser(
-        "discover", parents=[common], help="group discovery-log writers by routine (observed, not static)"
-    )
-    p.add_argument("log", nargs="?", help="existing discovery.log (default: run the game first)")
-    p.add_argument("--frames", type=int, default=3000)
-    p.add_argument("--exe")
-    p.add_argument("--out", help="output directory for the run (default build/f3a/<game>-discoverN-s<shell session>)")
-    p.add_argument(
-        "--all",
-        action="store_true",
-        help="log every observed writer, not only those missing from "
-        "games/<id>/video/ (needs a build with --discovery-all)",
-    )
-    p.add_argument(
-        "--ranges", action="store_true", help="print {first, last} store PCs per (layer, routine), video.cpp style"
-    )
-    p.add_argument("--unknown-only", action="store_true", help="show only groups with at least one unknown PC")
-    p.set_defaults(func=cmd_discover)
 
     p = sub.add_parser(
         "records", parents=[common], help="analyse RAM dumps: watch values, find toggles/counters, decode records"

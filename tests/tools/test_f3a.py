@@ -404,27 +404,6 @@ class LandmakrjRuntimeFactsTests(unittest.TestCase):
             err_msg = str(ctx.exception)
             self.assertTrue("inputs.txt:2" in err_msg or "expected a number" in err_msg)
 
-    def test_run_all_writers_discover_known_and_unknown_pcs(self):
-        # run --frames 1500 --all-writers writes discovery.log with every observed writer;
-        # discover groups rows with known_pcs / unknown_pcs; unknown_only=True filters fully known groups
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_dir = Path(tmpdir) / "run_writers"
-            self.g.run(frames=1500, all_writers=True, out=str(out_dir))
-            disc_log = out_dir / "discovery.log"
-            self.assertTrue(disc_log.is_file())
-
-            rows = self.g.discover(disc_log)
-            target_row = next((r for r in rows if r.get("routine") == "sub_01008a" and r.get("layer") == "lines"), None)
-            self.assertIsNotNone(target_row)
-            self.assertEqual(target_row.known_pcs, ["0x0100ba"])
-            self.assertEqual(target_row.unknown_pcs, ["0x0100d0"])
-
-            unk_rows = self.g.discover(disc_log, unknown_only=True)
-            self.assertTrue(any(r.get("routine") == "sub_01008a" and r.get("layer") == "lines" for r in unk_rows))
-            # unknown_only=True excludes fully known groups (groups where known_pcs is non-empty and unknown_pcs is empty)
-            self.assertFalse(any(r.get("known_pcs") and not r.get("unknown_pcs") for r in unk_rows))
-            self.assertLess(len(unk_rows), len(rows))
-
     def test_run_dump_sprite_writers(self):
         # run dumping frame 1500 writes sprite_writers.bin (16384 bytes) and sprites decode shows writer PC/routine
         with tempfile.TemporaryDirectory() as tmpdir:
