@@ -34,6 +34,8 @@ struct SceneSnapshot {
     std::array<uint32_t, geometry::NATIVE_PIXELS> native_pixels{};
 
     std::span<const SceneSprite> sprite_list() const { return {sprites.data(), sprite_count}; }
+    std::span<const SceneSprite> sprite_list(SpriteList list) const;
+    bool presents_enhanced_sprites() const;
     std::span<const SceneSprite> canonical_sprite_list() const {
         return {canonical_sprites.data(), canonical_sprite_count};
     }

@@ -171,9 +171,13 @@ TEST(MotionDecode, SplicedReplacementAndChaining) {
     splice.last = 1;
     splice.real = real;
     splice.replacement = replacement;
-    splice.group = 0x1234;
-    splice.group_x = 150 * 256;
-    splice.group_y = 70 * 256;
+    constexpr uint32_t FIRST_WRITER_PC = 0x1000;
+    constexpr uint32_t SECOND_WRITER_PC = 0x2000;
+    const f3rt::SpriteGroupSlot groups[] = {
+        {0x200001234u, 150 * 256, 70 * 256, FIRST_WRITER_PC},
+        {0x100001234u, 151 * 256, 71 * 256, SECOND_WRITER_PC},
+    };
+    splice.groups = groups;
     f3rt::SpritePresentation spliced;
     spliced.splices = std::span<const f3rt::SpriteSplice>(&splice, 1);
     const auto out = decode(ram, &spliced);
@@ -186,10 +190,10 @@ TEST(MotionDecode, SplicedReplacementAndChaining) {
     EXPECT_EQ(out[1].scale_x, 128) << "replacement zoom not applied to entry 1";
     EXPECT_EQ(out[1].x, 150 * 256 + 128 * 16) << "replacement chaining x wrong";
     EXPECT_EQ(out[1].y, 70 * 256 + 256 * 16) << "replacement chaining y wrong";
-    EXPECT_EQ(out[0].group, 0x1234u) << "replacement group 0 wrong";
-    EXPECT_EQ(out[1].group, 0x1234u) << "replacement group 1 wrong";
+    EXPECT_EQ(out[0].group, groups[0].key) << "replacement group 0 wrong";
+    EXPECT_EQ(out[1].group, groups[1].key) << "replacement group 1 wrong";
     EXPECT_EQ(out[0].group_x, 150 * 256) << "replacement group origin 0 wrong";
-    EXPECT_EQ(out[1].group_x, 150 * 256) << "replacement group origin 1 wrong";
+    EXPECT_EQ(out[1].group_x, 151 * 256) << "replacement group origin 1 wrong";
     EXPECT_EQ(out[2].group, 0u) << "post-splice group should be zero";
     EXPECT_TRUE(same_geometry(out[2], baseline[2])) << "entry after splice changed";
 

@@ -1002,6 +1002,36 @@ f3rt::SceneSnapshot synthetic_frame(std::mt19937_64 &rng) {
 }
 } // namespace
 
+TEST(GameCompositor, GpuSpriteBlendUsesLinearLight) {
+    std::array<uint8_t, 256> tiles{};
+    std::array<uint8_t, 256> sprites;
+    sprites.fill(1);
+    GpuReference gpu(tiles, sprites);
+    if (!gpu.available()) GTEST_SKIP() << "No GPU device";
+
+    f3rt::SceneSnapshot frame;
+    frame.fallback = false;
+    frame.sprite_count = 1;
+    frame.sprites[0].x = 46 * 256;
+    frame.sprites[0].y = f3rt::geometry::FIRST_LINE * 256;
+    frame.colors[0x1001] = 0xffffff;
+    for (auto &row : frame.rows) {
+        auto &layer = row.layer(f3rt::LayerId::Sp0);
+        layer.enabled = true;
+        layer.priority = 1;
+        row.blend[2] = 8;
+    }
+    for (const auto &[weight, expected] : {std::pair{1.0f, 0xffffffffu},
+                                         std::pair{0.5f, 0xffbcbcbcu},
+                                         std::pair{0.25f, 0xff898989u}}) {
+        frame.sprites[0].blend_weight = weight;
+        const auto pixels = gpu.render(frame, {});
+        ASSERT_TRUE(pixels);
+        EXPECT_EQ((*pixels)[0], expected) << "weight " << weight;
+        EXPECT_EQ((*pixels)[16], 0xff000000u);
+    }
+}
+
 TEST(GameCompositor, IndexedMatchesGpu) {
     const char *rom_env = std::getenv("F3_ROM_DIR");
 #ifdef F3RT_DEFAULT_ROM_DIR
@@ -1713,3 +1743,68 @@ TEST(RamShadow, CopiesStartUnprimed) {
     EXPECT_FALSE(source.changed(content.data()));
 }
 #endif
+
+TEST(GameSprites, DecodeWithPresentationBuildsPresentedList) {
+    std::vector<uint8_t> graphics(f3rt::GRAPHICS_RAM_SIZE);
+    const std::array<uint8_t, 0x20> control{};
+    graphics[1] = 1;
+    graphics[5] = 50;
+    graphics[7] = 30;
+    const f3rt::VideoRam vram{graphics, control, 0};
+
+    f3rt::GameSprites canonical;
+    canonical.decode(vram);
+    canonical.latch();
+    ASSERT_EQ(canonical.sprites().size(), 1u);
+    EXPECT_TRUE(std::ranges::equal(canonical.sprites(), canonical.presented_sprites()));
+
+    const std::span<const uint8_t> real(graphics.data(), 16);
+    std::array<uint8_t, 16> replacement{};
+    std::ranges::copy(real, replacement.begin());
+    replacement[1] = 2;
+    const std::array groups{f3rt::SpriteGroupSlot{42, 1, 2, 3}};
+    const std::array splices{f3rt::SpriteSplice{false, 0, 0, real, replacement, groups}};
+    f3rt::GameSprites enhanced;
+    enhanced.decode(vram, {{}, splices});
+    enhanced.latch();
+
+    ASSERT_EQ(enhanced.presented_sprites().size(), 1u);
+    EXPECT_EQ(enhanced.presented_sprites().front().tile, 2u);
+    EXPECT_EQ(enhanced.presented_sprites().front().group, 42u);
+    EXPECT_TRUE(std::ranges::equal(enhanced.sprites(), canonical.sprites()));
+    std::vector<uint8_t> before(canonical.state_size()), after(enhanced.state_size());
+    f3rt::StateWriter before_writer(before), after_writer(after);
+    canonical.save_state(before_writer);
+    enhanced.save_state(after_writer);
+    EXPECT_EQ(after, before);
+}
+
+TEST(SceneSnapshot, PresentsEnhancedSpritesTruthTable) {
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    scene->sprite_count = 1;
+    EXPECT_FALSE(scene->presents_enhanced_sprites());
+
+    scene->fallback = false;
+    scene->canonical_sprite_count = 1;
+    EXPECT_FALSE(scene->presents_enhanced_sprites());
+
+    scene->sprite_count = 2;
+    EXPECT_TRUE(scene->presents_enhanced_sprites());
+
+    scene->sprite_count = 1;
+    scene->sprites[0].blend_weight = 0.5f;
+    ASSERT_EQ(scene->sprites[0], scene->canonical_sprites[0]);
+    EXPECT_TRUE(scene->presents_enhanced_sprites());
+}
+
+TEST(SceneSnapshot, SpriteListSelectsCanonicalOrPresented) {
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    scene->sprite_count = 2;
+    scene->canonical_sprite_count = 1;
+    const auto presented = scene->sprite_list(f3rt::SpriteList::Presented);
+    const auto canonical = scene->sprite_list(f3rt::SpriteList::Canonical);
+    EXPECT_EQ(presented.data(), scene->sprites.data());
+    EXPECT_EQ(presented.size(), 2u);
+    EXPECT_EQ(canonical.data(), scene->canonical_sprites.data());
+    EXPECT_EQ(canonical.size(), 1u);
+}

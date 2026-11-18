@@ -22,30 +22,41 @@ const SpriteUnitTable &SpriteSystem::game_units() {
 }
 
 std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine) {
+    const auto behaviours = registered_sprite_behaviours();
+    return make_game_sprites(machine, {behaviours.begin(), behaviours.end()});
+}
+
+std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine,
+                                               std::vector<const SpriteBehaviour *> behaviours) {
     const auto &group_table = SpriteSystem::game_table();
     const auto &unit_table = SpriteSystem::game_units();
     if (group_table.writes.empty() && unit_table.units.empty()) return nullptr;
     SpriteSystem::Options options;
-    const auto registered = registered_sprite_behaviours();
-    options.behaviours.assign(registered.begin(), registered.end());
+    options.behaviours = std::move(behaviours);
     return std::make_unique<SpriteSystem>(machine, group_table, unit_table, std::move(options));
 }
 
 SpriteSystem::SpriteSystem(Machine &machine, const SpriteGroupTable &table,
                            const SpriteUnitTable &units, Options options)
-    : m_tracker(machine, table), m_sandbox(machine),
-      m_replay(machine, m_sandbox, m_tracker, units, std::move(options.behaviours)) {
-    m_tracker.add_listener(&m_replay);
+    : m_tracker(machine, table), m_sandbox(machine, m_tracker),
+      m_replay(machine, m_sandbox, units, std::move(options.behaviours)) {}
+
+void SpriteSystem::note_write(uint32_t address, unsigned width) {
+    if (const auto write = m_tracker.note_write(address, width)) m_replay.note_sprite_write(*write);
+}
+
+void SpriteSystem::unit_enter(f3_cpu *cpu, uint32_t unit) {
+    if (!m_sandbox.owns(cpu)) m_replay.unit_enter(cpu, unit);
+}
+
+int SpriteSystem::unit_exit(f3_cpu *cpu, uint32_t unit) {
+    return m_sandbox.owns(cpu) ? m_sandbox.unit_exit(unit) : m_replay.unit_exit(cpu, unit);
 }
 
 SpritePresentation SpriteSystem::presentation() {
     m_tracker.count_ambiguity();
-    m_replay.presentation();
-
-    SpritePresentation out;
-    if (m_tracker.groups_active()) out.groups = m_tracker.slots();
-    out.splices = m_replay.splices();
-    return out;
+    return {m_tracker.groups_active() ? m_tracker.slots() : std::span<const SpriteGroupSlot>{},
+            m_replay.present()};
 }
 
 void SpriteSystem::frame_end() {
@@ -126,6 +137,11 @@ void SpriteSystem::write_report(std::ostream &out) const {
         << " aborted=" << replay.aborted << " spliced=" << replay.spliced
         << " unmatched_exits=" << replay.unmatched_exits << " discarded=" << replay.discarded
         << " no_native_skips=" << replay.no_native_skips << '\n';
+    out << "  replacement entries:";
+    for (size_t cls = 0; cls < replay.replacement_classes.size(); ++cls)
+        if (replay.replacement_classes[cls])
+            out << " class" << cls << "=" << replay.replacement_classes[cls];
+    out << '\n';
     for (const BehaviourReplay::UnitStats &unit : replay.units) {
         out << "  unit " << unit.name << ": invocations=" << unit.invocations
             << " replays=" << unit.replays << " completed=" << unit.completed

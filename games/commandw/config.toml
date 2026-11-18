@@ -347,3 +347,13 @@ origin_pixels = [0, 64]
 destinations = [0x612400, 0x612480]
 condition = "signed byte[A5-0x704f] <= 0"
 evidence_pcs = [0x2787c, 0x2788a, 0x278a6]
+
+[enhancements]
+game_frame_counter = 0x408328
+
+[[enhancements.flicker_hold]]
+name = "object-shadow"
+group_writer = 0x9c90
+anchor_writer = 0x9e9a
+period = 2
+follow = "self"

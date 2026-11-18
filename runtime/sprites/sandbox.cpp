@@ -1,4 +1,5 @@
 #include "sprites/sandbox.hpp"
+#include "sprites/groups.hpp"
 #include "f3rt/machine.hpp"
 #include "sprites/presentation.hpp"
 #include <algorithm>
@@ -40,11 +41,13 @@ void Sandbox::Result::clear() {
     reason = Abort::Count;
     written.clear();
     dense.clear();
+    groups.clear();
     first = last = 0;
     bank = false;
 }
 
-Sandbox::Sandbox(Machine &machine) : m_machine(machine) {
+Sandbox::Sandbox(Machine &machine, const SpriteGroupTracker &groups)
+    : m_machine(machine), m_groups(groups) {
     m_cpu.runtime = &machine;
     m_page_slot.fill(-1);
     m_capture_slot.fill(-1);
@@ -115,21 +118,33 @@ void Sandbox::write8(uint32_t address, uint8_t value) {
     if (a - GRAPHICS_BASE < SPRITE_RAM_SIZE) {
         const uint32_t offset = a - GRAPHICS_BASE;
         if (!sprite_slot_listed(offset)) return;
-        const uint16_t key = sprite_slot_for(offset);
-        int16_t &slot = m_capture_slot[key];
-        if (slot < 0) {
-            Entry entry{key, {}};
-            std::memcpy(entry.bytes.data(), m_machine.graphics.data() + (offset & ~15u), 16);
-            slot = int16_t(m_capture.size());
-            m_capture.push_back(entry);
-        }
-        m_capture[size_t(slot)].bytes[offset & 15] = value;
+        Entry &entry = capture(offset);
+        entry.bytes[offset & 15] = value;
+        entry.group = entry.group.after_write(offset & 15, m_groups.resolve_write(m_cpu, *this));
         return;
     }
     if (a < ROM_END || a - PALETTE_BASE < PALETTE_RAM_SIZE ||
         a - GRAPHICS_BASE < GRAPHICS_RAM_SIZE)
         abort(Abort::ForbiddenWrite);
     else abort(Abort::Device);
+}
+
+Sandbox::Entry &Sandbox::capture(uint32_t offset) {
+    const uint16_t key = sprite_slot_for(offset);
+    int16_t &slot = m_capture_slot[key];
+    if (slot < 0) {
+        Entry entry{key, {}, m_groups.slot(key)};
+        std::memcpy(entry.bytes.data(), m_machine.graphics.data() + (offset & ~15u), 16);
+        slot = int16_t(m_capture.size());
+        m_capture.push_back(entry);
+    }
+    return m_capture[size_t(slot)];
+}
+
+std::optional<int16_t> Sandbox::read_ram16(uint32_t address) const {
+    const auto offset = m_groups.ram().offset16(address);
+    if (!offset) return std::nullopt;
+    return int16_t(uint16_t(ram_get(*offset)) << 8 | ram_get((*offset + 1) & RAM_MIRROR_MASK));
 }
 
 uint32_t Sandbox::read(uint32_t address, unsigned width) {
@@ -208,6 +223,7 @@ void Sandbox::collect(Result &out) const {
     out.first = lo;
     out.last = hi;
     out.dense.resize((size_t(hi) - lo + 1) * 16);
+    out.groups.resize(size_t(hi) - lo + 1);
     for (uint16_t entry = lo; entry <= hi; ++entry) {
         const uint16_t key = uint16_t((out.bank ? SPRITE_ENTRIES : 0) + entry);
         const int16_t slot = m_capture_slot[key];
@@ -215,6 +231,8 @@ void Sandbox::collect(Result &out) const {
             slot >= 0 ? m_capture[size_t(slot)].bytes.data()
                       : m_machine.graphics.data() + (out.bank ? BANK_BYTES : 0) +
                             size_t(entry) * 16;
+        if (slot >= 0) out.groups[entry - lo] = m_capture[size_t(slot)].group;
+        else out.groups[entry - lo] = m_groups.slot(key);
         std::memcpy(out.dense.data() + size_t(entry - lo) * 16, source, 16);
     }
 }

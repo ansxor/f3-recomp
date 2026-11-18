@@ -23,7 +23,24 @@ void GameSprites::reset() {
     m_presented_submitted_valid = m_presented_current_valid = false;
 }
 
-void GameSprites::decode(const VideoRam &vram) {
+SceneSprite scene_sprite(const DecodedSpriteEntry &d) {
+    SceneSprite dst;
+    dst.x = d.x;
+    dst.y = d.y;
+    dst.scale_x = uint16_t(d.scale_x);
+    dst.scale_y = uint16_t(d.scale_y);
+    dst.tile = d.tile;
+    dst.palette = d.color;
+    dst.flip_x = d.flip_x;
+    dst.flip_y = d.flip_y;
+    dst.group = d.group;
+    dst.group_x = d.group_x;
+    dst.group_y = d.group_y;
+    dst.group_pc = d.group_pc;
+    return dst;
+}
+
+void GameSprites::decode(const VideoRam &vram, const SpritePresentation &presentation) {
     SpriteRamState state;
     state.flipscreen = m_reg_flipped;
     state.bank = m_reg_bank;
@@ -32,28 +49,13 @@ void GameSprites::decode(const VideoRam &vram) {
     state.extra_planes = uint8_t(m_reg_pen_mask >> 4);
     const SpriteRamState initial = state;
 
-    SpritePresentation groups;
-    if (m_presentation) groups.groups = m_presentation->groups;
+    const SpritePresentation groups{presentation.groups, {}};
     std::array<DecodedSpriteEntry, MAX_SPRITES> decoded;
     const size_t count = decode_sprite_list(vram.graphics.data(), int(geometry::FIRST_LINE),
                                             int(geometry::HEIGHT), decoded, state, false,
                                             groups.groups.empty() ? nullptr : &groups);
 
-    auto convert = [](const DecodedSpriteEntry &d, SceneSprite &dst) {
-        dst.x = d.x;
-        dst.y = d.y;
-        dst.scale_x = uint16_t(d.scale_x);
-        dst.scale_y = uint16_t(d.scale_y);
-        dst.tile = d.tile;
-        dst.palette = d.color;
-        dst.flip_x = d.flip_x;
-        dst.flip_y = d.flip_y;
-        dst.group = d.group;
-        dst.group_x = d.group_x;
-        dst.group_y = d.group_y;
-        dst.group_pc = d.group_pc;
-    };
-    for (size_t i = 0; i < count; ++i) convert(decoded[i], m_staging_sprites[i]);
+    for (size_t i = 0; i < count; ++i) m_staging_sprites[i] = scene_sprite(decoded[i]);
     // The decoded list is this frame's submission; GameVideo::latch_sprites()
     // applies the scanout origin and the one-frame lag.
     std::copy_n(m_staging_sprites.begin(), count, m_submitted_sprites.begin());
@@ -61,15 +63,15 @@ void GameSprites::decode(const VideoRam &vram) {
     m_staging_count = 0;
 
     // Render-only presented list with splices; capacity-truncated like the canonical one.
-    m_presented_submitted_valid = m_presentation && !m_presentation->splices.empty();
+    m_presented_submitted_valid = !presentation.splices.empty();
     if (m_presented_submitted_valid) {
         SpriteRamState presented_state = initial;
         std::array<DecodedSpriteEntry, MAX_PRESENTED_SPRITES> presented;
         const size_t n = decode_sprite_list(vram.graphics.data(), int(geometry::FIRST_LINE),
                                             int(geometry::HEIGHT), presented, presented_state,
-                                            false, m_presentation);
+                                            false, &presentation);
         m_presented_submitted.resize(MAX_PRESENTED_SPRITES);
-        for (size_t i = 0; i < n; ++i) convert(presented[i], m_presented_submitted[i]);
+        for (size_t i = 0; i < n; ++i) m_presented_submitted[i] = scene_sprite(presented[i]);
         m_presented_submitted_count = n;
         m_presented_overflow = n == MAX_PRESENTED_SPRITES;
     } else {

@@ -31,5 +31,6 @@ struct GpuUniforms {
 //     (encoded_interpolation_words in total).
 // `options.border` bounds layer clip ranges. Throws std::invalid_argument if `out` is too small.
 void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
-            const InterpolationCoefficients *coefficients, std::span<uint32_t> out);
+            const InterpolationCoefficients *coefficients, std::span<uint32_t> out,
+            SpriteList list = SpriteList::Presented);
 } // namespace f3rt

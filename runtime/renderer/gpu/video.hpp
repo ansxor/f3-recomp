@@ -49,6 +49,7 @@ public:
     // explicitly true. Optional output receives width*height ARGB8888 pixels.
     void draw(const SceneSnapshot &scene, std::span<uint32_t> output = {},
               unsigned layer_mask = 511, bool process_diagnostic = false);
+    void draw_canonical(const SceneSnapshot &scene, std::span<uint32_t> output);
     // Skip busy in-flight frames before uploading/rendering. No fence wait or
     // readback; draw() still waits for explicit captures and diagnostics.
     bool present(const SceneSnapshot &scene, const char *capture_path = nullptr);

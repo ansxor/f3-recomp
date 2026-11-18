@@ -1,10 +1,11 @@
 // Shared compositor body; VIDEO_INTERP builds the separate opt-in variant.
 layout(set = 2, binding = 0) uniform usampler2D sprite_plane;
+layout(set = 2, binding = 1) uniform usampler2D sprite_plane_b;
 // SDL: Vulkan storage buffers follow the samplers in set 2; Metal numbers buffers separately.
 #ifdef VIDEO_MSL
 #define STORAGE_BINDING 1
 #else
-#define STORAGE_BINDING 1
+#define STORAGE_BINDING 2
 #endif
 layout(std430, set = 2, binding = STORAGE_BINDING) readonly buffer Scene { uint words[]; } scene;
 layout(std430, set = 2, binding = STORAGE_BINDING + 1) readonly buffer Assets { uint words[]; } assets;
@@ -100,7 +101,8 @@ uint color15(uint c) {
     return ((c & 0xf000u) << 8) | ((c & 8u) << 16) | ((c & 0x0f00u) << 4) | ((c & 4u) << 9) | (c & 0x00f0u) | ((c & 2u) << 2);
 }
 // One output pixel before the optional row blur: the native rgb at fragment position `pos`.
-uint shade(ivec2 pos) {
+uint shade(ivec2 pos, bool plane_b, out uint weight) {
+    weight = 0u;
     int s = int(params.dimensions.x), left = 46 - int(params.dimensions.y);
     int native_x = floor_scale(pos.x, s), native_y = floor_scale(pos.y, s);
     int sub_y = pos.y - native_y * s;
@@ -188,8 +190,11 @@ uint shade(ivec2 pos) {
                 int x = native_plane ? q : q - left * s;
                 if (x < 0 || x >= (native_plane ? 432 : int(params.dimensions.z))) continue;
                 ivec2 at = ivec2(x,pos.y + (native_plane ? int(params.geometry.x) : 0));
-                color = texelFetch(sprite_plane,at,0).r;
+                uint packed = plane_b ? texelFetch(sprite_plane_b,at,0).r
+                                      : texelFetch(sprite_plane,at,0).r;
+                color = packed & 65535u;
                 if (color == 0u || ((color >> 10u) & 3u) != index - LAYER_SP0) continue;
+                weight = max(weight, packed >> F3_SPRITE_WEIGHT_SHIFT);
             } else {
                 int x = floor_scale(int(scene.words[row + F3_ROW_TEXT_X]) * s + q - 46 * s, s) & 511;
                 int y = int(scene.words[row + F3_ROW_TEXT_Y]) & 511;
@@ -234,6 +239,24 @@ uint shade(ivec2 pos) {
     }
     return rgb;
 }
+float srgb_to_linear(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+float linear_to_srgb(float v) { return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055; }
+uint shade_mixed(ivec2 pos) {
+    uint weight;
+    uint a = shade(pos, false, weight);
+    if (weight == 0u || (params.controls.w & F3_MASK_BLEND_WEIGHTED) == 0u) return a;
+    uint unused;
+    uint b = shade(pos, true, unused);
+    if (a == b) return a;
+    float alpha = float(weight) / float(F3_SPRITE_WEIGHT_SCALE);
+    uint rgb = 0u;
+    for (uint shift = 0u; shift < 24u; shift += 8u) {
+        float la = srgb_to_linear(float((a >> shift) & 255u) / 255.0);
+        float lb = srgb_to_linear(float((b >> shift) & 255u) / 255.0);
+        rgb |= uint(floor(linear_to_srgb(mix(lb, la, alpha)) * 255.0 + 0.5)) << shift;
+    }
+    return rgb;
+}
 void main() {
     ivec2 pos = ivec2(gl_FragCoord.xy);
     int s = int(params.dimensions.x);
@@ -243,11 +266,11 @@ void main() {
         output_color = x < 0 || x >= 320 ? vec4(0,0,0,1) : unpack_rgb(native_frame.words[uint(native_y * 320 + x)]);
         return;
     }
-    uint rgb = shade(pos);
+    uint rgb = shade_mixed(pos);
     uint row = ROWS + (params.geometry.x + uint(native_y)) * ROW_STRIDE;
     if ((scene.words[row + F3_ROW_MOSAIC] & F3_ROW_BLUR) != 0u) {
         // Average with the previous native column (same subpixel phase); black before the first.
-        uint previous = pos.x >= s ? shade(ivec2(pos.x - s, pos.y)) : 0u;
+        uint previous = pos.x >= s ? shade_mixed(ivec2(pos.x - s, pos.y)) : 0u;
         rgb = ((((rgb & 0x00ff00ffu) + (previous & 0x00ff00ffu)) >> 1) & 0x00ff00ffu) |
               ((((rgb & 0x0000ff00u) + (previous & 0x0000ff00u)) >> 1) & 0x0000ff00u);
     }

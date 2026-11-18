@@ -12,13 +12,12 @@
 
 namespace f3rt {
 class Machine;
-class SpriteGroupTracker;
 
 struct SpriteUnitTable {
     std::span<const EmitUnit *const> units;
 };
 
-class BehaviourReplay final : public SpriteRamWriteListener {
+class BehaviourReplay {
 public:
     struct UnitStats {
         std::string name;
@@ -34,10 +33,11 @@ public:
         uint64_t invocations = 0, replays = 0, completed = 0, aborted = 0, spliced = 0;
         uint64_t unmatched_exits = 0;
         uint64_t discarded = 0;
+        std::array<uint64_t, 256> replacement_classes{};
         uint64_t no_native_skips = 0;
     };
 
-    BehaviourReplay(Machine &machine, Sandbox &sandbox, const SpriteGroupTracker &tracker,
+    BehaviourReplay(Machine &machine, Sandbox &sandbox,
                     const SpriteUnitTable &units,
                     std::vector<const SpriteBehaviour *> behaviours);
     BehaviourReplay(const BehaviourReplay &) = delete;
@@ -50,12 +50,11 @@ public:
     void frame_end();
     void reset();
 
-    void presentation();
-    std::span<const SpriteSplice> splices() const { return m_view; }
+    std::span<const SpriteSplice> present();
 
     const Stats &stats() const { return m_stats; }
 
-    void sprite_group_write(const SpriteRamWrite &write) override;
+    void note_sprite_write(const SpriteRamWrite &write);
 
 private:
     struct Invocation {
@@ -67,9 +66,8 @@ private:
     struct Splice {
         bool bank = false;
         uint16_t first = 0, last = 0;
-        uint64_t frame = 0, group = 0;
-        int32_t group_x = 0, group_y = 0;
-        uint32_t group_pc = 0;
+        uint64_t frame = 0;
+        std::vector<SpriteGroupSlot> groups;
         std::vector<uint8_t> real, replacement;
     };
 
@@ -85,7 +83,6 @@ private:
 
     Machine &m_machine;
     Sandbox &m_sandbox;
-    const SpriteGroupTracker &m_tracker;
     std::vector<const EmitUnit *> m_units;
     std::vector<std::vector<const SpriteBehaviour *>> m_behaviours;
 

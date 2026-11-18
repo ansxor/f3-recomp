@@ -19,6 +19,7 @@
 #include "debug/profile.hpp"
 #include "debug/input_script.hpp"
 #include "sprites/sprite_system.hpp"
+#include "sprites/enhancements.hpp"
 #include "debug/discovery.hpp"
 #ifdef F3RT_GPU
 #include "renderer/gpu/video.hpp"
@@ -369,6 +370,8 @@ int main(int argc, char **argv) try {
     float volume = 1;
     uint32_t cli_preferences = 0;
     uint64_t frames = 0, dump_start = 1, dump_every = 1;
+    f3rt::EnhancementSet enhancements;
+    bool list_enhancements = false;
     bool headless = false, sound = true, throttle = true;
     bool motion_interp = false;
     bool fast_boot = true, boot_cache = false;
@@ -393,6 +396,8 @@ int main(int argc, char **argv) try {
         };
         if (arg == "--rom-dir") romdir = value();
         else if (arg == "--set") set = value();
+        else if (arg == "--enhance") enhancements.override_setting(value());
+        else if (arg == "--list-enhancements") list_enhancements = true;
         else if (arg == "--frames") frames = std::stoull(value());
         else if (arg == "--dump-dir") dumpdir = value();
         else if (arg == "--dump-start") dump_start = std::stoull(value());
@@ -517,6 +522,7 @@ int main(int argc, char **argv) try {
                    "compares it to the FDP frame; needs a window, scale 1, border 0)\n"
                 << "  [--video-scale 1..4|auto|auto-integer] [--video-border 0..160] "
                    "[--video-filter nearest|linear]\n"
+                << "  [--enhance NAME=on|off] [--list-enhancements]\n"
                 << "  [--video-interp off|linear|fit] (opt-in GPU line sampling; default off)\n"
                 << "  [--video-interp-fields none|geometry|palette|geometry,palette] (default "
                    "geometry; native alpha stays discrete)\n"
@@ -541,6 +547,10 @@ int main(int argc, char **argv) try {
                    "remapping.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: " + arg);
+    }
+    if (list_enhancements) {
+        enhancements.list(std::cout);
+        return 0;
     }
     if (romdir.empty() || !dump_every)
         throw std::runtime_error("--rom-dir required; --dump-every must be positive");
@@ -707,9 +717,11 @@ int main(int argc, char **argv) try {
 #ifdef F3RT_GAME_VIDEO
     if (video_mode != "fdp")
         m.game_video = std::make_unique<f3rt::GameVideo>(
-            m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare);
+            m, video_mode == "game" ? f3rt::GameVideoMode::Game : f3rt::GameVideoMode::Compare,
+            video_backend == "gpu" ? enhancements.flicker_holds()
+                                   : std::vector<f3rt::game_config::FlickerHold>{});
 #endif
-    m.sprites = f3rt::make_game_sprites(m);
+    m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     }
@@ -1821,7 +1833,10 @@ int main(int argc, char **argv) try {
                             sdl.gpu->present(*shot->scene_snapshot, screenshot.string().c_str());
                         else if (video_mode == "compare" && fresh) {
                             gpu_fdp_readback.resize(video_options.width() * video_options.height());
-                            sdl.gpu->draw(*shot->scene_snapshot, gpu_fdp_readback);
+                            const auto &scene = *shot->scene_snapshot;
+                            const bool enhanced_sprites = scene.presents_enhanced_sprites();
+                            if (enhanced_sprites) sdl.gpu->draw_canonical(scene, gpu_fdp_readback);
+                            else sdl.gpu->draw(scene, gpu_fdp_readback);
                             const auto &fdp = shot->scene_snapshot->native_pixels;
                             if (gpu_fdp_readback.size() != fdp.size())
                                 throw std::runtime_error("GPU/FDP comparison size mismatch");
@@ -1842,6 +1857,7 @@ int main(int argc, char **argv) try {
                                       << fdp[first];
                                 throw std::runtime_error(error.str());
                             }
+                            if (enhanced_sprites) sdl.gpu->draw(scene);
                         } else if (capture_final || !throttle) sdl.gpu->draw(*shot->scene_snapshot);
                         else sdl.gpu->present(*shot->scene_snapshot);
                         if (capture_final) sdl.gpu->save_surface(surface.string().c_str());

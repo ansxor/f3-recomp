@@ -58,6 +58,8 @@ struct SceneSprite {
     uint64_t group = 0;
     int32_t group_x = 0, group_y = 0;
     uint32_t group_pc = 0;
+    float blend_weight = 1.0f;
+    bool weighted() const { return blend_weight < 1.0f; }
     bool operator==(const SceneSprite &o) const {
         return x == o.x && y == o.y && scale_x == o.scale_x && scale_y == o.scale_y &&
                tile == o.tile && palette == o.palette && flip_x == o.flip_x && flip_y == o.flip_y;

@@ -6,6 +6,8 @@
 #include "state_io.hpp"
 #include "sprites/sprite_system.hpp"
 #include "sprites/behaviour.hpp"
+#include "sprites/enhancements.hpp"
+#include "renderer/game/flicker_hold.hpp"
 #include "debug/discovery.hpp"
 #include "renderer/decode.hpp"
 #include "renderer/gpu/motion.hpp"
@@ -112,6 +114,12 @@ void synth_io_end(f3_cpu *cpu) {
     cpu->pc = UNIT1_RESUME;
     cpu->cycles += 4;
 }
+
+constexpr f3rt::SpriteGroupWrite SYNTH_GROUP_WRITES[] = {
+    {UNIT0_BLOCK0, 11, 3, 2, 8, 0, 2},
+    {UNIT0_BLOCK1, 11, 3, 1, 8, 4, 6},
+};
+constexpr f3rt::SpriteGroupTable SYNTH_GROUPS{SYNTH_GROUP_WRITES, {}};
 
 const f3_block SYNTH_BLOCKS[] = {{UNIT0_BLOCK0, synth_start},  {UNIT0_BLOCK1, synth_mid},
                                  {UNIT0_BLOCK2, synth_end},    {UNIT1_BLOCK0, synth_io},
@@ -344,7 +352,11 @@ TEST(DiscoveryLog, IsObserveOnly) {
 }
 
 TEST(SpriteSystem, BehaviourSplicesReplacementEntries) {
-    auto m = synth_machine(true, &SYNTH_BUMP_BEHAVIOUR);
+    auto m = synth_machine(false);
+    f3rt::SpriteSystem::Options options;
+    options.behaviours = {&SYNTH_BUMP_BEHAVIOUR};
+    m->sprites = std::make_unique<f3rt::SpriteSystem>(
+        *m, SYNTH_GROUPS, f3rt::SpriteUnitTable{SYNTH_UNITS}, std::move(options));
     synth_span(*m);
     EXPECT_TRUE(m->ram[SYNTH_DATA_OFFSET + 2] == 0x12 && m->ram[SYNTH_DATA_OFFSET + 3] == 0x35 &&
                 m->graphics[SPRITE_ENTRY_3 + 2] == 0x12 && m->graphics[SPRITE_ENTRY_3 + 3] == 0x34)
@@ -361,7 +373,85 @@ TEST(SpriteSystem, BehaviourSplicesReplacementEntries) {
         splice.replacement[2] == 0x12 && splice.replacement[3] == 0x39 &&
         splice.replacement[16] == 0x11)
         << "Splice holds the real range and the patched replay's entries";
+    ASSERT_EQ(splice.groups.size(), 2u);
+    EXPECT_EQ(f3rt::group_key_class(splice.groups[0].key), 2u);
+    EXPECT_EQ(f3rt::group_key_class(splice.groups[1].key), 1u);
+    EXPECT_EQ(splice.groups[0].pc, UNIT0_BLOCK0);
+    EXPECT_EQ(splice.groups[1].pc, UNIT0_BLOCK1);
+    EXPECT_EQ(splice.groups[0].x, 0x1239 * 256);
     EXPECT_EQ(m->sprites->report().spliced, 1) << "Splice is counted";
+}
+
+TEST(FlickerHold, UsesGameFramesAndWrapsTheCounter) {
+    auto m = synth_machine(false);
+    f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    using Hold = f3rt::game_config::FlickerHold;
+    constexpr Hold configs[] = {{"test", 2, 1, 2, Hold::Follow::Self}};
+    f3rt::FlickerHoldStage stage(configs);
+    const f3rt::SceneSprite shadow{
+        .x = 20 * 256, .group = f3rt::pack_group_key(SYNTH_DATA, 2, 0, 0), .group_x = 10 * 256};
+    const f3rt::SceneSprite body{.group = f3rt::pack_group_key(SYNTH_DATA, 1, 0, 0)};
+    std::vector sprites{shadow, body};
+
+    stage.present(sprites, f3rt::FlickerFrame{&tracker, 0xffff, false});
+    EXPECT_FLOAT_EQ(stage.sprites()[0].blend_weight, 0.5f);
+    EXPECT_FLOAT_EQ(stage.sprites()[1].blend_weight, 1.0f);
+    m->write16(SYNTH_DATA, 12);
+    for (int i = 0; i < 2; ++i) {
+        sprites = {body};
+        stage.present(sprites, f3rt::FlickerFrame{&tracker, 0, false});
+        ASSERT_EQ(stage.sprites().size(), 2u);
+        EXPECT_EQ(stage.sprites()[0].group, shadow.group);
+        EXPECT_EQ(stage.sprites()[0].x, 22 * 256);
+        EXPECT_FLOAT_EQ(stage.sprites()[0].blend_weight, 0.5f);
+    }
+    sprites = {body};
+    stage.present(sprites, f3rt::FlickerFrame{&tracker, 1, false});
+    EXPECT_EQ(stage.sprites().size(), 1u);
+    std::ostringstream report;
+    stage.report(report);
+    EXPECT_NE(report.str().find("held_frames=2 drops=1 anchor_missing=0"), std::string::npos);
+}
+
+TEST(FlickerHold, FollowsAnchorAndDropsOnGenerationMismatch) {
+    auto m = synth_machine(false);
+    f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    using Hold = f3rt::game_config::FlickerHold;
+    constexpr Hold configs[] = {{"test", 2, 1, 2, Hold::Follow::Anchor}};
+    f3rt::FlickerHoldStage stage(configs);
+    const f3rt::SceneSprite shadow{
+        .x = 20 * 256, .group = f3rt::pack_group_key(SYNTH_DATA, 2, 0, 0)};
+    f3rt::SceneSprite body{
+        .group = f3rt::pack_group_key(SYNTH_DATA, 1, 0, 0), .group_x = 70 * 256};
+    std::vector sprites{shadow, body};
+
+    stage.present(sprites, f3rt::FlickerFrame{&tracker, 4, false});
+    body.group_x += 5 * 256;
+    sprites = {body};
+    stage.present(sprites, f3rt::FlickerFrame{&tracker, 5, false});
+    ASSERT_EQ(stage.sprites().size(), 2u);
+    EXPECT_EQ(stage.sprites()[0].x, 25 * 256);
+    body.group = f3rt::pack_group_key(SYNTH_DATA, 1, 1, 0);
+    sprites = {body};
+    stage.present(sprites, f3rt::FlickerFrame{&tracker, 5, false});
+    EXPECT_EQ(stage.sprites().size(), 1u);
+    std::ostringstream report;
+    stage.report(report);
+    EXPECT_NE(report.str().find("held_frames=1 drops=1 anchor_missing=1"), std::string::npos);
+}
+
+TEST(EnhancementSet, EnabledByDefaultAndLastOverrideWins) {
+    f3rt::EnhancementSet enhancements;
+    for (const auto &entry : enhancements.entries()) {
+        EXPECT_TRUE(entry.enabled);
+        const std::string name(entry.name());
+        enhancements.override_setting(name + "=off");
+        EXPECT_FALSE(entry.enabled);
+        enhancements.override_setting(name + "=on");
+        EXPECT_TRUE(entry.enabled);
+    }
+    EXPECT_THROW(enhancements.override_setting("invalid"), std::invalid_argument);
+    EXPECT_THROW(enhancements.override_setting("=on"), std::invalid_argument);
 }
 
 RC_GTEST_PROP(SpriteSystem, ReplayPipelineSplicesPatchedCounter, ()) {
@@ -786,3 +876,141 @@ TEST(SpriteSystem, RomGroupCoverage) {
 }
 
 #endif
+
+TEST(SpriteGroupSlot, AfterWriteRetagsClearsOrKeeps) {
+    constexpr f3rt::SpriteGroupSlot old_tag{1, 2, 3, 4};
+    constexpr f3rt::SpriteGroupSlot writer{5, 6, 7, 8};
+    for (unsigned byte = 0; byte < 16; ++byte) {
+        EXPECT_EQ(old_tag.after_write(byte, writer), writer);
+        EXPECT_EQ(old_tag.after_write(byte, {}),
+                  byte >= 4 && byte < 8 ? f3rt::SpriteGroupSlot{} : old_tag);
+    }
+}
+
+static_assert(f3rt::WorkRam<f3rt::MachineRam> && f3rt::WorkRam<f3rt::Sandbox>);
+
+TEST(SpriteGroupTracker, ResolvesThroughAnyWorkRam) {
+    struct FakeRam {
+        bool readable;
+        std::optional<int16_t> read_ram16(uint32_t address) const {
+            if (!readable) return std::nullopt;
+            if (address == SYNTH_DATA) return -3;
+            if (address == SYNTH_DATA + 2) return 7;
+            return std::nullopt;
+        }
+    };
+    auto m = synth_machine(false);
+    m->cpu.pc = UNIT0_BLOCK0;
+    m->cpu.a[3] = SYNTH_DATA;
+    const f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    const f3rt::SpriteGroupSlot expected{
+        f3rt::pack_group_key(SYNTH_DATA, 2, 0, 0), -3 * 256, 7 * 256, UNIT0_BLOCK0};
+    EXPECT_EQ(tracker.resolve_write(m->cpu, FakeRam{true}), expected);
+    EXPECT_EQ(tracker.resolve_write(m->cpu, FakeRam{false}), f3rt::SpriteGroupSlot{});
+}
+
+TEST(SpriteGroupTracker, NoteWriteReturnsSpriteWritesOnly) {
+    auto m = synth_machine(false);
+    f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    EXPECT_FALSE(tracker.note_write(SYNTH_DATA, 2));
+    const auto write = tracker.note_write(f3rt::GRAPHICS_BASE + SPRITE_ENTRY_3, 4);
+    ASSERT_TRUE(write);
+    EXPECT_EQ(write->start, SPRITE_ENTRY_3);
+    EXPECT_EQ(write->width, 4u);
+    EXPECT_FALSE(tracker.note_write(f3rt::GRAPHICS_BASE + f3rt::SPRITE_RAM_SIZE, 1));
+}
+
+TEST(EnhancementSet, ListPrintsKindAndName) {
+    const f3rt::EnhancementSet enhancements;
+    std::ostringstream actual, expected;
+    for (const auto &entry : enhancements.entries())
+        expected << entry.kind() << ' ' << entry.name() << '\n';
+    enhancements.list(actual);
+    EXPECT_EQ(actual.str(), expected.str());
+}
+
+TEST(EnhancementSet, EnableOnlyBehavioursRejectsHoldsAndUnknown) {
+    f3rt::EnhancementSet enhancements;
+    const auto reject = [&](std::string name) {
+        const std::array names{name};
+        try {
+            enhancements.enable_only_behaviours(names);
+            ADD_FAILURE() << "Accepted " << name;
+        } catch (const std::invalid_argument &error) {
+            EXPECT_EQ(error.what(), "Unknown --behaviour '" + name + "'");
+        }
+    };
+    reject("bogus");
+    const auto holds = enhancements.flicker_holds();
+    for (const auto &hold : holds) reject(hold.name);
+    const auto behaviours = enhancements.behaviours();
+    if (behaviours.empty()) return;
+    const std::array names{std::string(behaviours.front()->name)};
+    enhancements.enable_only_behaviours(names);
+    EXPECT_EQ(enhancements.behaviours(),
+              (std::vector<const f3rt::SpriteBehaviour *>{behaviours.front()}));
+    EXPECT_TRUE(std::ranges::equal(enhancements.flicker_holds(), holds, {},
+                                   &f3rt::game_config::FlickerHold::name,
+                                   &f3rt::game_config::FlickerHold::name));
+}
+
+TEST(EnhancementSet, SelectionsFollowEnabledFlags) {
+    f3rt::EnhancementSet enhancements;
+    const auto behaviours = enhancements.behaviours();
+    const auto holds = enhancements.flicker_holds();
+    for (const auto &entry : enhancements.entries()) {
+        auto expected_behaviours = behaviours;
+        auto expected_holds = holds;
+        std::erase_if(expected_behaviours, [&](auto *b) { return b->name == entry.name(); });
+        std::erase_if(expected_holds, [&](const auto &hold) { return hold.name == entry.name(); });
+        enhancements.set(entry.name(), false);
+        EXPECT_EQ(enhancements.behaviours(), expected_behaviours);
+        EXPECT_TRUE(std::ranges::equal(enhancements.flicker_holds(), expected_holds, {},
+                                       &f3rt::game_config::FlickerHold::name,
+                                       &f3rt::game_config::FlickerHold::name));
+        enhancements.set(entry.name(), true);
+    }
+}
+
+TEST(EnhancementSet, NamesAreUnique) {
+    const f3rt::EnhancementSet enhancements;
+    std::unordered_set<std::string_view> names;
+    for (const auto &entry : enhancements.entries())
+        EXPECT_TRUE(names.insert(entry.name()).second) << entry.name();
+}
+
+TEST(FlickerHold, NulloptPassesLatchedThroughAndDropsHeld) {
+    auto m = synth_machine(false);
+    f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    using Hold = f3rt::game_config::FlickerHold;
+    constexpr Hold configs[] = {{"test", 2, 1, 2, Hold::Follow::Anchor}};
+    f3rt::FlickerHoldStage stage(configs);
+    const f3rt::SceneSprite shadow{.tile = 1, .group = f3rt::pack_group_key(SYNTH_DATA, 2, 0, 0)};
+    const f3rt::SceneSprite body{.tile = 2, .group = f3rt::pack_group_key(SYNTH_DATA, 1, 0, 0)};
+    const std::array first{shadow, body};
+    const std::array latched{body};
+    stage.present(first, f3rt::FlickerFrame{&tracker, 4, false});
+    stage.present(latched, std::nullopt);
+    ASSERT_TRUE(std::ranges::equal(stage.sprites(), latched));
+    EXPECT_EQ(stage.sprites().front().group, body.group);
+    EXPECT_FLOAT_EQ(stage.sprites().front().blend_weight, 1.0f);
+    stage.present(latched, f3rt::FlickerFrame{&tracker, 5, false});
+    EXPECT_TRUE(std::ranges::equal(stage.sprites(), latched));
+}
+
+TEST(FlickerHold, InactiveWithoutHolds) {
+    EXPECT_FALSE(f3rt::FlickerHoldStage{}.active());
+}
+
+TEST(FlickerFrame, ReadsGameFrameCounter) {
+    constexpr auto counter = f3rt::game_config::game_frame_counter;
+    if (counter == 0) GTEST_SKIP() << "No configured game frame counter";
+    auto m = synth_machine(false);
+    const f3rt::SpriteGroupTracker tracker(*m, SYNTH_GROUPS);
+    m->write16(counter, 0xfedc);
+    const auto frame = f3rt::FlickerFrame::read(tracker, true);
+    ASSERT_TRUE(frame);
+    EXPECT_EQ(frame->groups, &tracker);
+    EXPECT_EQ(frame->game_frame, 0xfedc);
+    EXPECT_TRUE(frame->flipped);
+}

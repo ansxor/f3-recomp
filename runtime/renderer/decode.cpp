@@ -174,8 +174,8 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
             const size_t reps = hit->replacement.size() / 16;
             for (size_t k = 0; k < reps; ++k) {
                 int dummy = offs;
-                step(&hit->replacement[k * 16], dummy, false, hit->group, hit->group_x,
-                     hit->group_y, hit->group_pc);
+                const auto group = k < hit->groups.size() ? hit->groups[k] : SpriteGroupSlot{};
+                step(&hit->replacement[k * 16], dummy, false, group.key, group.x, group.y, group.pc);
             }
             total_sprites += int(n) - 1;
             offs = hit->last;

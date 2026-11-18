@@ -48,60 +48,55 @@ uint32_t SpriteGroupTracker::register_value(unsigned reg) const {
     return unit_register_value(m_machine.cpu, reg);
 }
 
-bool SpriteGroupTracker::read_ram16(uint32_t address, int16_t &value) const {
+std::optional<uint32_t> MachineRam::offset16(uint32_t address) const {
     const uint32_t a = address & 0xffffff;
-    if (a - RAM_BASE >= RAM_END - RAM_BASE) return false;
+    if (a - RAM_BASE >= RAM_END - RAM_BASE) return std::nullopt;
     const uint32_t offset = a & RAM_MIRROR_MASK;
-    if (offset + 2 > m_machine.ram.size()) return false;
-    value = int16_t(uint16_t(uint16_t(m_machine.ram[offset]) << 8 | m_machine.ram[offset + 1]));
-    return true;
+    if (offset + 2 > m_ram.size()) return std::nullopt;
+    return offset;
 }
+
+std::optional<int16_t> MachineRam::read_ram16(uint32_t address) const {
+    const auto offset = offset16(address);
+    if (!offset) return std::nullopt;
+    return int16_t(uint16_t(m_ram[*offset]) << 8 | m_ram[*offset + 1]);
+}
+
+MachineRam SpriteGroupTracker::ram() const { return MachineRam(m_machine.ram); }
 
 uint16_t SpriteGroupTracker::generation(uint32_t address) const {
     const auto it = m_generation.find(address & 0xffffff);
     return it == m_generation.end() ? 0 : it->second;
 }
 
-bool SpriteGroupTracker::resolve_write(uint32_t pc, uint32_t &base, uint64_t &key,
-                                       int32_t &origin_x, int32_t &origin_y) {
+SpriteGroupSlot SpriteGroupTracker::current_root(uint64_t key) const {
+    const auto &info = class_info(group_key_class(key));
+    const uint32_t base = group_key_base(key);
+    const uint32_t root_x = info.x_offset == NO_OFFSET ? NO_ROOT : (base + info.x_offset) & 0xffffff;
+    const uint32_t root_y = info.y_offset == NO_OFFSET ? NO_ROOT : (base + info.y_offset) & 0xffffff;
+    if (generation(root_x) != uint16_t(key >> 16) || generation(root_y) != uint16_t(key))
+        return {};
+    const auto memory = ram();
+    const auto x = memory.read_ram16(root_x);
+    const auto y = memory.read_ram16(root_y);
+    if (!x && !y) return {};
+    return {key, int32_t(x.value_or(0)) << info.shift, int32_t(y.value_or(0)) << info.shift};
+}
+
+const SpriteGroupTracker::WriteRule *SpriteGroupTracker::write_rule(uint32_t pc) const {
     const auto found = std::lower_bound(m_writes.begin(), m_writes.end(), pc,
                                         [](const WriteRule &rule, uint32_t value) {
                                             return rule.pc < value;
                                         });
-    if (found == m_writes.end() || found->pc != pc) return false;
-    const WriteRule &rule = *found;
-    base = register_value(rule.base) & 0xffffff;
-    const ClassInfo &info = m_classes[rule.group_class];
-    const uint16_t x_offset = info.x_offset != 0xffff ? info.x_offset : rule.x_offset;
-    const uint16_t y_offset = info.y_offset != 0xffff ? info.y_offset : rule.y_offset;
-    const uint32_t root_x = x_offset != 0xffff ? (base + x_offset) & 0xffffff : NO_ROOT;
-    const uint32_t root_y = y_offset != 0xffff ? (base + y_offset) & 0xffffff : NO_ROOT;
-    int16_t value = 0;
-    int32_t ox = 0, oy = 0;
-    bool resolved = false;
-    if (root_x != NO_ROOT && read_ram16(root_x, value)) {
-        ox = int32_t(value) << rule.shift;
-        resolved = true;
-    }
-    if (root_y != NO_ROOT && read_ram16(root_y, value)) {
-        oy = int32_t(value) << rule.shift;
-        resolved = true;
-    }
-    if (!resolved) return false;
-    origin_x = ox;
-    origin_y = oy;
-    key = pack_key(base, rule.group_class, root_x != NO_ROOT ? generation(root_x) : uint16_t(0),
-                   root_y != NO_ROOT ? generation(root_y) : uint16_t(0));
-    return true;
+    return found == m_writes.end() || found->pc != pc ? nullptr : &*found;
 }
 
-void SpriteGroupTracker::note_write(uint32_t address, unsigned width) {
-    const uint32_t a = address & 0xffffff;
-    if (a - RAM_BASE < RAM_END - RAM_BASE) {
-        note_ram_write(a, width);
-        return;
-    }
-    if (a - GRAPHICS_BASE < SPRITE_RAM_SIZE) sprite_write(a, width);
+std::array<uint32_t, 2> SpriteGroupTracker::roots(uint32_t base, const WriteRule &rule) const {
+    const ClassInfo &info = m_classes[rule.group_class];
+    const uint16_t x_offset = info.x_offset != NO_OFFSET ? info.x_offset : rule.x_offset;
+    const uint16_t y_offset = info.y_offset != NO_OFFSET ? info.y_offset : rule.y_offset;
+    return {x_offset != NO_OFFSET ? (base + x_offset) & 0xffffff : NO_ROOT,
+            y_offset != NO_OFFSET ? (base + y_offset) & 0xffffff : NO_ROOT};
 }
 
 void SpriteGroupTracker::note_ram_write(uint32_t address, unsigned width) {
@@ -134,36 +129,31 @@ void SpriteGroupTracker::note_ram_write(uint32_t address, unsigned width) {
     }
 }
 
-void SpriteGroupTracker::sprite_write(uint32_t address, unsigned width) {
-    const uint32_t start = address - GRAPHICS_BASE;
-    if (start >= SPRITE_RAM_SIZE) return;
-    uint32_t base = 0;
-    uint64_t key = 0;
-    int32_t origin_x = 0, origin_y = 0;
+std::optional<SpriteRamWrite> SpriteGroupTracker::note_write(uint32_t address, unsigned width) {
+    const uint32_t a = address & 0xffffff;
+    if (a - RAM_BASE < RAM_END - RAM_BASE) {
+        note_ram_write(a, width);
+        return std::nullopt;
+    }
+    const uint32_t start = a - GRAPHICS_BASE;
+    if (start >= SPRITE_RAM_SIZE) return std::nullopt;
+    const SpriteGroupSlot slot_value = resolve_write(m_machine.cpu, ram());
     ++m_report.sprite_writes;
-    if (resolve_write(m_machine.cpu.pc, base, key, origin_x, origin_y)) {
+    if (slot_value.key) {
         ++m_report.grouped_writes;
-        ++m_report.class_writes[key_class(key)];
+        ++m_report.class_writes[group_key_class(slot_value.key)];
     } else {
-        key = 0;
         if (!m_report.unresolved_writes) m_report.first_unresolved_pc = m_machine.cpu.pc;
         ++m_report.unresolved_writes;
     }
-    const SpriteGroupSlot slot_value{key, origin_x, origin_y, m_machine.cpu.pc};
     for (unsigned i = 0; i < width; ++i) {
         const uint32_t offset = start + i;
         if (offset >= SPRITE_RAM_SIZE) break;
         if (!sprite_slot_listed(offset)) continue;
         const uint16_t slot = sprite_slot_for(offset);
-        const uint32_t word_offset = offset & 15;
-        if (key) {
-            m_slot[slot] = slot_value;
-        } else if (word_offset >= 4 && word_offset < 8) {
-            m_slot[slot] = {};
-        }
+        m_slot[slot] = m_slot[slot].after_write(offset & 15, slot_value);
     }
-    const SpriteRamWrite write{start, width};
-    for (SpriteRamWriteListener *listener : m_listeners) listener->sprite_group_write(write);
+    return SpriteRamWrite{start, width};
 }
 
 void SpriteGroupTracker::count_ambiguity() {

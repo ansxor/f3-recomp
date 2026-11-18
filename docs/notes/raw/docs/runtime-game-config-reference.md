@@ -339,3 +339,34 @@ Optional input configuration table.
 - Sound compiler options remain CLI arguments, but sound ROM placement, hashes, mirroring and exclusions come from the selected TOML.
 
 For how discovery and emit use these keys, read [Discovery](/developer/recompiler/discovery) and [ROM and config](/developer/recompiler/rom-and-config).
+
+## Flicker hold enhancements
+
+```toml
+[enhancements]
+game_frame_counter = 0x408328
+
+[[enhancements.flicker_hold]]
+name = "object-shadow"
+group_writer = 0x9c90
+anchor_writer = 0x9e9a
+period = 2
+follow = "self"
+```
+
+`game_frame_counter` is the address of the game's 16-bit loop counter.
+`group_writer` and `anchor_writer` must resolve to sprite-group stores using
+the same base register. `period` is measured in game-loop frames and must
+be in 2–255. `follow` selects the held group's own work-RAM root (`self`)
+or the matching anchor's root (`anchor`). A held group expires at the
+configured period or when the anchor key disappears. Runtime-only builds
+without a generated program emit an empty hold table.
+
+The frontend enables the registered behaviours and flicker holds by default.
+Use `--list-enhancements` to see their kinds and names. Repeat
+`--enhance NAME=on|off` for multiple overrides. Flicker blending applies in
+`enhanced` and `compare-gpu`. Compare mode checks an unenhanced GPU
+composition against FDP and presents the enhanced frame. The CPU and FDP
+compositors retain the emitted flicker.
+`sprite-check` reports replacement entries by class and hold statistics,
+and compares state CRCs before and after applying the render-only stage.

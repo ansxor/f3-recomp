@@ -28,11 +28,6 @@ question. See `runtime/sprites/groups.hpp` next to `pack_key`.
 
 ## Shadows (game-side)
 
-The former `F3RT_FLICKER_SHADOW` / `FlickerShadow` mechanism has been removed. The game still
-emits an alternating flicker shadow (below); the runtime does not synthesize the skipped
-frames, so the shadow snaps in motion mode. The game-side evidence is kept because it explains
-why the shadow group exists.
-
 **Command War** (`object_shadow`, unit `objects`), found by disassembly:
 
 - `0x680a  addq.w #1,-$7cd8(a5)` increments a 16-bit counter once per game loop iteration
@@ -43,3 +38,17 @@ why the shadow group exists.
   the object body. So the shadow exists only on odd counter parity. The game loop itself often
   runs every other frame, so the original shadow is on for two frames and off for two.
 - The calls inside the span (`0xa30e`/`0xa31e` tables) only adjust `a0`/`a2`.
+
+Sprite-group class 2 marks the shadow coordinate store at `0x9c90`. Class 1
+marks body coordinate stores at `0x9e9a` and `0xa0be`. The full-detail replay
+patches the entire object and resolves group metadata for each replacement
+entry using its own store PC and the sandbox's work RAM.
+
+The GPU's `object-shadow` enhancement holds the shadow through the skipped
+game-loop frame and uses a 1/2 linear-light blend on both emitted and held
+frames. The matching body key confirms the object is still present. For 576
+complete gaps in the native attract trace, the self root sampled on the final
+absent frame matched the first reappearing shadow root in 576 cases (mean L1
+error 0 pixels). Translating by the body-root delta matched 152 (mean L1
+error 1.87 pixels). The configured self root is at record offsets
+`+0x44/+0x46`. `--enhance object-shadow=off` restores the alternating GPU display.

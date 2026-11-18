@@ -1,5 +1,5 @@
 #include "sprites/replay.hpp"
-#include "sprites/groups.hpp"
+#include "f3rt/emit_unit.hpp"
 #include "f3rt/machine.hpp"
 #include <algorithm>
 #include <cstring>
@@ -8,10 +8,10 @@
 
 namespace f3rt {
 
-BehaviourReplay::BehaviourReplay(Machine &machine, Sandbox &sandbox, const SpriteGroupTracker &tracker,
+BehaviourReplay::BehaviourReplay(Machine &machine, Sandbox &sandbox,
                                  const SpriteUnitTable &units,
                                  std::vector<const SpriteBehaviour *> behaviours)
-    : m_machine(machine), m_sandbox(sandbox), m_tracker(tracker),
+    : m_machine(machine), m_sandbox(sandbox),
       m_units(units.units.begin(), units.units.end()), m_behaviours(m_units.size()),
       m_stats{} {
     m_stats.units.resize(m_units.size());
@@ -42,7 +42,6 @@ void BehaviourReplay::unit_enter(f3_cpu *cpu, uint32_t unit) {
 }
 
 int BehaviourReplay::unit_exit(f3_cpu *cpu, uint32_t unit) {
-    if (m_sandbox.owns(cpu)) return m_sandbox.unit_exit(unit);
     if (cpu != &m_machine.cpu || unit >= m_units.size()) return 0;
     return exit_real(unit);
 }
@@ -109,7 +108,7 @@ int BehaviourReplay::exit_real(uint32_t id) {
     return 0;
 }
 
-void BehaviourReplay::sprite_group_write(const SpriteRamWrite &write) {
+void BehaviourReplay::note_sprite_write(const SpriteRamWrite &write) {
     if (m_stack.empty()) return;
     std::vector<uint16_t> &keys = m_stack.back().keys;
     for (unsigned i = 0; i < write.width; ++i) {
@@ -148,19 +147,13 @@ void BehaviourReplay::finish(Invocation &invocation) {
     splice.first = lo[bank];
     splice.last = hi[bank];
     splice.frame = m_machine.frame;
-    for (uint16_t entry = splice.first; entry <= splice.last; ++entry) {
-        const SpriteGroupSlot &slot = m_tracker.slot(size_t(bank) * SPRITE_ENTRIES + entry);
-        if (!slot.key || SpriteGroupTracker::key_base(slot.key) != invocation.address) continue;
-        splice.group = slot.key;
-        splice.group_x = slot.x;
-        splice.group_y = slot.y;
-        splice.group_pc = slot.pc;
-        break;
-    }
     const uint8_t *real =
         m_machine.graphics.data() + size_t(bank) * SPRITE_BANK_STRIDE + size_t(splice.first) * 16;
     splice.real.assign(real, real + (size_t(splice.last) - splice.first + 1) * 16);
     splice.replacement = invocation.patched.dense;
+    splice.groups = invocation.patched.groups;
+    for (const auto &group : splice.groups)
+        ++m_stats.replacement_classes[group_key_class(group.key)];
     const auto at = std::lower_bound(
         m_splices.begin(), m_splices.end(), splice, [](const Splice &a, const Splice &b) {
             return a.bank != b.bank ? a.bank < b.bank : a.first < b.first;
@@ -191,7 +184,7 @@ void BehaviourReplay::reset() {
     m_splices.clear();
 }
 
-void BehaviourReplay::presentation() {
+std::span<const SpriteSplice> BehaviourReplay::present() {
     m_view.clear();
     for (const Splice &splice : m_splices) {
         SpriteSplice out;
@@ -200,12 +193,10 @@ void BehaviourReplay::presentation() {
         out.last = splice.last;
         out.real = splice.real;
         out.replacement = splice.replacement;
-        out.group = splice.group;
-        out.group_x = splice.group_x;
-        out.group_y = splice.group_y;
-        out.group_pc = splice.group_pc;
+        out.groups = splice.groups;
         m_view.push_back(out);
     }
+    return m_view;
 }
 
 void BehaviourReplay::run_replay(const EmitUnit &unit, const Invocation &invocation,

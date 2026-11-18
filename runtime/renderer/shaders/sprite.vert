@@ -12,6 +12,7 @@ layout(std430, set = 0, binding = SCENE_BINDING) readonly buffer Scene { uint wo
 layout(location = 0) flat out ivec4 raster;
 layout(location = 1) flat out uint texel_base;
 layout(location = 2) flat out uint color_base;
+layout(location = 3) flat out uint blend_weight;
 // One quad per descriptor covers the union of its 16x16 texel spans; the
 // fragment shader inverts the CPU span formulas (see sprite.frag).
 void main() {
@@ -30,8 +31,10 @@ void main() {
     int y1 = max(((py + 15 * ky) >> 8) - origin_y + 1, ((py + 16 * ky) >> 8) - origin_y);
     // Nominal 24.8 rectangle is culled before raster rounding.
     uint flags = scene.words[base + F3_SPRITE_FLIP];
+    blend_weight = scene.words[base + F3_SPRITE_WEIGHT];
     bool culled = x + 16 * sx <= left * 256 || x > (365 + int(params.dimensions.y)) * 256 ||
-                  y + 16 * sy <= int(params.geometry.x) * 256 || y > 255 * 256 || x0 >= x1;
+                  y + 16 * sy <= int(params.geometry.x) * 256 || y > 255 * 256 || x0 >= x1 ||
+                  (blend_weight != 0u && (params.controls.w & F3_MASK_HIDE_WEIGHTED) != 0u);
     const ivec2 corners[6] = ivec2[6](ivec2(0,0),ivec2(1,0),ivec2(0,1),ivec2(0,1),ivec2(1,0),ivec2(1,1));
     ivec2 c = corners[gl_VertexIndex];
     vec2 pos = vec2(c.x == 0 ? x0 : x1, c.y == 0 ? y0 : y1);
@@ -41,5 +44,6 @@ void main() {
     raster = ivec4(256 * (origin_x + 1) - px - 1, 256 * (origin_y + 1) - py - 1, kx, ky);
     texel_base = wrap_tile(scene.words[base + F3_SPRITE_TILE], params.geometry.w) * 256u |
                  ((flags & F3_SPRITE_FLIP_X) != 0u ? 15u : 0u) | ((flags & F3_SPRITE_FLIP_Y) != 0u ? 240u : 0u);
+    blend_weight <<= F3_SPRITE_WEIGHT_SHIFT;
     color_base = ((0x1000u + (scene.words[base + F3_SPRITE_PALETTE] << 4u)) & 65535u) | (params.controls.y << 16u);
 }

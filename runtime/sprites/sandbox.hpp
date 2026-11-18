@@ -1,11 +1,14 @@
 #pragma once
 #include "f3rt/cpu_abi.h"
+#include "sprites/presentation.hpp"
 #include <array>
+#include <optional>
 #include <cstdint>
 #include <vector>
 
 namespace f3rt {
 class Machine;
+class SpriteGroupTracker;
 
 class Sandbox {
 public:
@@ -25,6 +28,7 @@ public:
     struct Entry {
         uint16_t key = 0;
         std::array<uint8_t, 16> bytes{};
+        SpriteGroupSlot group;
     };
     struct Result {
         bool ok = false;
@@ -33,15 +37,17 @@ public:
         bool bank = false;
         uint16_t first = 0, last = 0;
         std::vector<uint8_t> dense;
+        std::vector<SpriteGroupSlot> groups;
         void clear();
     };
 
-    explicit Sandbox(Machine &machine);
+    Sandbox(Machine &machine, const SpriteGroupTracker &groups);
     Sandbox(const Sandbox &) = delete;
     Sandbox &operator=(const Sandbox &) = delete;
 
     bool owns(const f3_cpu *cpu) const { return cpu == &m_cpu; }
 
+    std::optional<int16_t> read_ram16(uint32_t address) const;
     uint32_t read(uint32_t address, unsigned width);
     void write(uint32_t address, uint32_t value, unsigned width);
     void abort(Abort reason);
@@ -54,11 +60,13 @@ public:
 private:
     uint8_t read8(uint32_t address);
     void write8(uint32_t address, uint8_t value);
+    Entry &capture(uint32_t offset);
     uint8_t ram_get(uint32_t offset) const;
     void ram_put(uint32_t offset, uint8_t value);
     const f3_block *find_block(uint32_t pc) const;
 
     Machine &m_machine;
+    const SpriteGroupTracker &m_groups;
     f3_cpu m_cpu{};
     static constexpr uint32_t OVERLAY_PAGE = 256;
     std::array<int16_t, 0x20000 / OVERLAY_PAGE> m_page_slot{};

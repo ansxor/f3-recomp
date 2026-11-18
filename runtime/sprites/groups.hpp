@@ -1,8 +1,10 @@
 #pragma once
-#include "f3rt/cpu_abi.h"
+#include "f3rt/emit_unit.hpp"
 #include "f3rt/sprite_group.hpp"
 #include "sprites/presentation.hpp"
 #include <array>
+#include <concepts>
+#include <optional>
 #include <cstdint>
 #include <span>
 #include <unordered_map>
@@ -11,10 +13,20 @@
 
 namespace f3rt {
 class Machine;
+template <class T>
+concept WorkRam = requires(const T &ram, uint32_t address) {
+    { ram.read_ram16(address) } -> std::same_as<std::optional<int16_t>>;
+};
 
-inline uint32_t unit_register_value(const f3_cpu &cpu, unsigned reg) {
-    return reg < 8 ? cpu.d[reg] : cpu.a[reg - 8];
-}
+class MachineRam {
+public:
+    explicit MachineRam(std::span<const uint8_t> ram) : m_ram(ram) {}
+    std::optional<uint32_t> offset16(uint32_t address) const;
+    std::optional<int16_t> read_ram16(uint32_t address) const;
+
+private:
+    std::span<const uint8_t> m_ram;
+};
 
 class SpriteGroupTracker {
 public:
@@ -44,8 +56,6 @@ public:
     SpriteGroupTracker(const SpriteGroupTracker &) = delete;
     SpriteGroupTracker &operator=(const SpriteGroupTracker &) = delete;
 
-    void add_listener(SpriteRamWriteListener *listener) { m_listeners.push_back(listener); }
-
     bool groups_active() const { return m_group_writes; }
     size_t write_rules() const { return m_writes.size(); }
     size_t reset_rules() const { return m_resets.size(); }
@@ -56,17 +66,23 @@ public:
         return m_classes[group_class & 0xff];
     }
     uint16_t generation(uint32_t address) const;
-    bool read_ram16(uint32_t address, int16_t &value) const;
+    MachineRam ram() const;
 
-    static constexpr uint64_t pack_key(uint32_t base, unsigned group_class, uint16_t gen_x,
-                                       uint16_t gen_y) {
-        return (uint64_t(base & 0xffffff) << 40) | (uint64_t(group_class & 0xff) << 32) |
-               (uint64_t(gen_x) << 16) | uint64_t(gen_y);
+    SpriteGroupSlot current_root(uint64_t key) const;
+    template <WorkRam Ram>
+    SpriteGroupSlot resolve_write(const f3_cpu &cpu, const Ram &ram) const {
+        const auto *rule = write_rule(cpu.pc);
+        if (!rule) return {};
+        const uint32_t base = unit_register_value(cpu, rule->base) & 0xffffff;
+        const auto [root_x, root_y] = roots(base, *rule);
+        const auto x = ram.read_ram16(root_x);
+        const auto y = ram.read_ram16(root_y);
+        if (!x && !y) return {};
+        return {pack_group_key(base, rule->group_class, generation(root_x), generation(root_y)),
+                int32_t(x.value_or(0)) << rule->shift, int32_t(y.value_or(0)) << rule->shift, cpu.pc};
     }
-    static constexpr uint32_t key_base(uint64_t key) { return uint32_t(key >> 40) & 0xffffff; }
-    static constexpr unsigned key_class(uint64_t key) { return unsigned((key >> 32) & 0xff); }
 
-    void note_write(uint32_t address, unsigned width);
+    std::optional<SpriteRamWrite> note_write(uint32_t address, unsigned width);
     void count_ambiguity();
     void reset();
 
@@ -87,15 +103,13 @@ private:
         uint16_t offset = 0;
     };
 
+    const WriteRule *write_rule(uint32_t pc) const;
+    std::array<uint32_t, 2> roots(uint32_t base, const WriteRule &rule) const;
     void compile_table(const SpriteGroupTable &table);
     uint32_t register_value(unsigned reg) const;
-    bool resolve_write(uint32_t pc, uint32_t &base, uint64_t &key, int32_t &origin_x,
-                       int32_t &origin_y);
     void note_ram_write(uint32_t address, unsigned width);
-    void sprite_write(uint32_t address, unsigned width);
 
     Machine &m_machine;
-    std::vector<SpriteRamWriteListener *> m_listeners;
 
     std::vector<WriteRule> m_writes;
     std::vector<ResetRule> m_resets;

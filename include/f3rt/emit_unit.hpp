@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt/cpu_abi.h"
 #include <cstdint>
 #include <span>
 
@@ -6,6 +7,10 @@ namespace f3rt {
 
 // Register whose value at unit start addresses the unit's bytes in work RAM.
 enum class UnitRegister : uint8_t { D0, D1, D2, D3, D4, D5, D6, D7, A0, A1, A2, A3, A4, A5, A6 };
+
+inline uint32_t unit_register_value(const f3_cpu &cpu, unsigned reg) {
+    return reg < 8 ? cpu.d[reg] : cpu.a[reg - 8];
+}
 
 struct EmitUnit {
     uint32_t id;                      // index into sprite_units::all, passed to f3_unit_enter/exit

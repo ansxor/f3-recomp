@@ -52,10 +52,12 @@ public:
 
     SpritePresentation presentation();
 
+    const SpriteGroupTracker &tracker() const { return m_tracker; }
+
     bool is_sandbox(const f3_cpu *cpu) const { return m_sandbox.owns(cpu); }
-    void unit_enter(f3_cpu *cpu, uint32_t unit) { m_replay.unit_enter(cpu, unit); }
-    int unit_exit(f3_cpu *cpu, uint32_t unit) { return m_replay.unit_exit(cpu, unit); }
-    void note_write(uint32_t address, unsigned width) { m_tracker.note_write(address, width); }
+    void unit_enter(f3_cpu *cpu, uint32_t unit);
+    int unit_exit(f3_cpu *cpu, uint32_t unit);
+    void note_write(uint32_t address, unsigned width);
     void frame_end();
     void reset();
     uint32_t sandbox_read(uint32_t address, unsigned width) {
@@ -78,5 +80,6 @@ private:
 };
 
 std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine);
+std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine, std::vector<const SpriteBehaviour *> behaviours);
 
 }

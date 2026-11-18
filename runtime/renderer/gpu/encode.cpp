@@ -121,7 +121,7 @@ void encode_coefficients(const InterpolationCoefficients &coefficients, uint32_t
 } // namespace
 
 void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
-            const InterpolationCoefficients *coefficients, std::span<uint32_t> out) {
+            const InterpolationCoefficients *coefficients, std::span<uint32_t> out, SpriteList list) {
     if (frame.fallback) {
         if (out.size() < ENCODED_NATIVE_WORDS)
             throw std::invalid_argument("GPU native upload too small");
@@ -129,8 +129,9 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
                     ENCODED_NATIVE_WORDS * sizeof(uint32_t));
         return;
     }
+    const auto sprites = frame.sprite_list(list);
     if (out.size() < (coefficients ? ENCODED_INTERPOLATION_WORDS : ENCODED_SCENE_WORDS) ||
-        frame.sprite_count > F3_SCENE_SPRITE_COUNT)
+        sprites.size() > F3_SCENE_SPRITE_COUNT)
         throw std::invalid_argument("GPU scene upload too small");
     uint32_t *w = out.data();
     for (unsigned l = 0; l < 4; ++l) {
@@ -167,8 +168,8 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
         encode_row(frame.rows[y], frame.text, frame.flipped,
                    motion ? &motion->rows[y] : nullptr, options.expanded(), left, right,
                    w + F3_SCENE_ROWS + size_t(y) * F3_SCENE_ROW_STRIDE);
-    for (unsigned i = 0; i < frame.sprite_count; ++i) {
-        const auto &s = frame.sprites[i];
+    for (unsigned i = 0; i < sprites.size(); ++i) {
+        const auto &s = sprites[i];
         uint32_t *at = w + F3_SCENE_SPRITES + size_t(i) * F3_SCENE_SPRITE_STRIDE;
         at[F3_SPRITE_X] = uint32_t(motion ? motion->sprite_x[i] : s.x);
         at[F3_SPRITE_Y] = uint32_t(motion ? motion->sprite_y[i] : s.y);
@@ -176,6 +177,12 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
         at[F3_SPRITE_SCALE_Y] = s.scale_y;
         at[F3_SPRITE_TILE] = s.tile;
         at[F3_SPRITE_PALETTE] = s.palette;
+        at[F3_SPRITE_WEIGHT] = 0;
+        if (s.weighted()) {
+            const float weight = std::max(0.0f, s.blend_weight);
+            const auto fixed = uint32_t(weight * F3_SPRITE_WEIGHT_SCALE + 0.5f);
+            at[F3_SPRITE_WEIGHT] = std::clamp(fixed, 1u, F3_SPRITE_WEIGHT_SCALE - 1);
+        }
         at[F3_SPRITE_FLIP] = (s.flip_x ? F3_SPRITE_FLIP_X : 0u) |
                              (s.flip_y ? F3_SPRITE_FLIP_Y : 0u);
     }

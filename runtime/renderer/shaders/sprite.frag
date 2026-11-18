@@ -3,6 +3,7 @@ layout(std430, set = 2, binding = 0) readonly buffer Assets { uint words[]; } as
 layout(location = 0) flat in ivec4 raster;
 layout(location = 1) flat in uint texel_base;
 layout(location = 2) flat in uint color_base;
+layout(location = 3) flat in uint blend_weight;
 layout(location = 0) out uint indexed_color;
 uint pen_at(uint a, uint b) {
     uint texel = texel_base ^ ((b << 4u) | a);
@@ -27,7 +28,7 @@ void main() {
     if (raster.w >= 256) {
         uint pen = last > 15 ? 0u : pen_at(uint(a), uint(last));
         if (pen == 0u) discard;
-        indexed_color = ((color_base & 65535u) + pen) & 65535u;
+        indexed_color = blend_weight | (((color_base & 65535u) + pen) & 65535u);
         return;
     }
     int first = before < 0 ? 0 : before / raster.w + 1;
@@ -35,7 +36,7 @@ void main() {
     for (int b = min(first, last); b <= hi; ++b) {
         uint pen = pen_at(uint(a), uint(b));
         if (pen != 0u) {
-            indexed_color = ((color_base & 65535u) + pen) & 65535u;
+            indexed_color = blend_weight | (((color_base & 65535u) + pen) & 65535u);
             return;
         }
     }

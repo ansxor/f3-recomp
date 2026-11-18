@@ -5,7 +5,9 @@
 #include "f3rt/machine.hpp"
 #include "renderer/decode.hpp"
 #include "renderer/game/scene.hpp"
-#include "sprites/behaviour.hpp"
+#include "sprites/enhancements.hpp"
+#include "renderer/game/flicker_hold.hpp"
+#include "renderer/game/sprites.hpp"
 #include "sprites/sprite_system.hpp"
 
 #include <array>
@@ -103,11 +105,16 @@ struct FrameCoverage {
 };
 
 FrameCoverage cover(const Machine &m, const SpritePresentation &presentation,
-                    SpriteRamState &state) {
-    std::array<DecodedSpriteEntry, MAX_HARDWARE_SPRITES> decoded;
+                    SpriteRamState &state, std::vector<SceneSprite> *sprites) {
+    std::array<DecodedSpriteEntry, MAX_PRESENTED_SPRITES> decoded;
     const size_t n = decode_sprite_list(m.graphics.data(), int(m.roms.video.visible_y),
                                         int(m.roms.video.visible_height), decoded, state, false,
                                         &presentation);
+    if (sprites) {
+        sprites->clear();
+        for (const auto &entry : std::span(decoded).first(n))
+            sprites->push_back(scene_sprite(entry));
+    }
     std::unordered_set<uint64_t> keys;
     FrameCoverage coverage;
     for (size_t i = 0; i < n; ++i) {
@@ -133,21 +140,10 @@ struct OffCheckpoint {
 
 SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *out) {
     SpriteCheckResult result;
-    SpriteSystem::Options options;
-    const auto registered = registered_sprite_behaviours();
-    for (const std::string &name : args.behaviours) {
-        const SpriteBehaviour *found = nullptr;
-        for (const SpriteBehaviour *candidate : registered)
-            if (name == candidate->name) found = candidate;
-        if (!found) {
-            std::string message = "unknown --behaviour '" + name + "'; registered:";
-            for (const SpriteBehaviour *candidate : registered)
-                message += std::string(" ") + candidate->name;
-            if (registered.empty()) message += " (none)";
-            throw std::runtime_error(message);
-        }
-        options.behaviours.push_back(found);
-    }
+    EnhancementSet enhancements;
+    enhancements.enable_only_behaviours(args.behaviours);
+    const SpriteSystem::Options options{enhancements.behaviours()};
+    FlickerHoldStage flicker_hold(enhancements.flicker_holds());
 
     if (SpriteSystem::game_table().writes.empty() &&
         (SpriteSystem::game_units().units.empty() || options.behaviours.empty())) {
@@ -182,6 +178,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     Inputs inputs_on(args.seed);
     uint64_t state_compares = 0, group_frames = 0, max_groups = 0;
     FrameCoverage total;
+    std::vector<SceneSprite> held_sprites;
     SpriteRamState latch;
     size_t checkpoint_index = 0;
 
@@ -200,10 +197,15 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             inputs_on.step(frame, [&](Key k, bool p) { apply_key(*on, k, p); });
         }
         if (!run_one(*on, frame, "groups on", error)) break;
+        const bool compare = (frame + 1) % args.compare_every == 0 || frame + 1 == args.frames;
+        const uint32_t pre_hold_crc = compare && flicker_hold.active() ? on->state_crc() : 0;
         if (groups_available) {
             const SpritePresentation presentation = on->sprites->presentation();
             SpriteRamState presented_state = latch;
-            const FrameCoverage coverage = cover(*on, presentation, presented_state);
+            const FrameCoverage coverage =
+                cover(*on, presentation, presented_state, flicker_hold.active() ? &held_sprites : nullptr);
+            if (flicker_hold.active())
+                flicker_hold.present(held_sprites, FlickerFrame::read(on->sprites->tracker(), false));
             latch = presented_state;
             total.groups += coverage.groups;
             total.entries += coverage.entries;
@@ -211,7 +213,11 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             if (coverage.groups) ++group_frames;
             max_groups = std::max(max_groups, coverage.groups);
         }
-        if ((frame + 1) % args.compare_every == 0 || frame + 1 == args.frames) {
+        if (compare) {
+            if (flicker_hold.active() && pre_hold_crc != on->state_crc()) {
+                error = "flicker hold changed state_crc at frame " + std::to_string(frame + 1);
+                break;
+            }
             const OffCheckpoint &off = off_checkpoints[checkpoint_index++];
             ++state_compares;
             if (on->cpu.cycles != off.cycles) {
@@ -230,7 +236,10 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     }
 
     const auto report = on->sprites->report();
-    if (out) on->sprites->write_report(*out);
+    if (out) {
+        on->sprites->write_report(*out);
+        flicker_hold.report(*out);
+    }
 
     bool failed = !error.empty();
     if (!error.empty() && out) *out << "FAIL: " << error << '\n';

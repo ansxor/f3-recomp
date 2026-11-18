@@ -1,9 +1,20 @@
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "renderer/game/sprites.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace f3rt {
+
+std::span<const SceneSprite> SceneSnapshot::sprite_list(SpriteList list) const {
+    return list == SpriteList::Canonical ? canonical_sprite_list() : sprite_list();
+}
+
+bool SceneSnapshot::presents_enhanced_sprites() const {
+    return !fallback && (!std::ranges::equal(sprite_list(), canonical_sprite_list()) ||
+                         std::ranges::any_of(sprite_list(), &SceneSprite::weighted));
+}
+
 void compose_snapshot_indexed(const SceneSnapshot &frame, const TileRowTable &playfield_tiles,
                               std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
                               std::span<uint32_t> output, size_t stride, PixelFormat format,
@@ -30,8 +41,7 @@ void compose_snapshot_indexed(const SceneSnapshot &frame, const TileRowTable &pl
     const FrameScene scene = frame.scene(playfield_tiles.pixels());
     const bool palette_15bit = scratch.prepare(scene, format);
     scratch.stats.reset();
-    const auto sprite_list =
-        list == SpriteList::Canonical ? frame.canonical_sprite_list() : frame.sprite_list();
+    const auto sprite_list = frame.sprite_list(list);
     scratch.bins.bin(sprite_list, SpriteRasterOptions{options});
     IndexedComposeJob job{scene,
                           scratch.plane,

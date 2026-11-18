@@ -109,6 +109,9 @@ void raster_sprite_chunk(const SpriteBins &bins, std::span<const SceneSprite> sp
                          std::span<uint16_t> plane, SpriteRasterOptions options,
                          SpriteCoverage &coverage);
 
+struct DecodedSpriteEntry;
+SceneSprite scene_sprite(const DecodedSpriteEntry &entry);
+
 class GameSprites {
 public:
     GameSprites() { reset(); }
@@ -116,13 +119,12 @@ public:
     void reset();
     // Decode the sprite display list from VRAM (0x00000, 0x10000 bytes) into the
     // next submission. Defined per game under games/<game>/video/.
-    void decode(const VideoRam &vram);
+    void decode(const VideoRam &vram, const SpritePresentation &presentation = {});
     void latch();
     void raster(std::span<const uint8_t> assets, std::span<uint16_t> output,
                 GameVideoOptions options = {}) const;
     std::span<const SceneSprite> sprites() const;
     // Presentation source for the next decode (null = none); set by GameVideo around decode.
-    void set_presentation(const SpritePresentation *presentation) { m_presentation = presentation; }
     // Render-only: current sprites with unit splices applied, else sprites(). Same flip mirroring.
     std::span<const SceneSprite> presented_sprites() const;
     bool flipped() const;
@@ -157,7 +159,6 @@ private:
     bool m_reg_trails = false;
     bool m_reg_bank = false;
 
-    const SpritePresentation *m_presentation = nullptr;
     std::vector<SceneSprite> m_presented_submitted, m_presented_current;
     size_t m_presented_submitted_count = 0, m_presented_current_count = 0;
     bool m_presented_submitted_valid = false, m_presented_current_valid = false;
