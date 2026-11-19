@@ -143,8 +143,22 @@ let lower =
   Cmd.v (Cmd.info "lower" ~doc:"Decode instructions and print their C statements.")
     Term.(const run $ pc $ hex $ count $ live_out)
 
+let coverage =
+  let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
+  let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
+  let run config_path rom_dir =
+    report_error (fun () ->
+        let config = Config.load config_path in
+        let manifest = Rom_manifest.of_configs [config] in
+        let rom = Rom_manifest.load_region manifest ~game:config.game.id Rom ~rom_dir in
+        let exclusions = Exclusion.of_config ~image:rom config.exclusions.main in
+        Coverage.unsupported ~rom ~exclusions |> Coverage.write stdout)
+  in
+  Cmd.v (Cmd.info "coverage" ~doc:"Count decoded ROM instructions the semantics cannot describe yet.")
+    Term.(const run $ config $ rom_dir)
+
 let () =
   let stubs = List.map stub [ "emit"; "enhancements" ] in
   exit
     (Cmd.eval'
-       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: lower :: stubs)))
+       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: lower :: coverage :: stubs)))

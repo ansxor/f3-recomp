@@ -13,7 +13,8 @@ let precedence () =
   let a = Name "a" and b = Name "b" and c = Name "c" in
   check_c "a - (b - c)" (Bin (Sub, a, Bin (Sub, b, c)));
   check_c "(a & b) == c" (Bin (Eq, Bin (And, a, b), c));
-  check_c "a & b == c" (Bin (And, a, Bin (Eq, b, c)));
+  check_c "a & (b == c)" (Bin (And, a, Bin (Eq, b, c)));
+  check_c "(a & b) | c" (Bin (Or, Bin (And, a, b), c));
   check_c "(uint32_t)(a + b)" (Cast (U32, Bin (Add, a, b)));
   check_c "(a ? b : c) ? a : b ? c : a" (Select (Select (a, b, c), a, Select (b, c, a)))
 
@@ -122,7 +123,7 @@ let syntax () =
         ["NZVC"; "X"; "none"];
       close_out out;
       let root = repo_root (Sys.getcwd ()) in
-      match process "cc" ["-std=gnu11"; "-fsyntax-only";
+      match process "cc" ["-std=gnu11"; "-Wall"; "-Wextra"; "-Werror"; "-fsyntax-only";
                           "-I"; Filename.concat root "include";
                           "-I"; Filename.concat root "recomp"; file] with
       | Unix.WEXITED 0, _ -> ()

@@ -199,18 +199,4 @@ let generate state =
   let op = (pick cases) () in
   { pc; length = Asm.length ~pc op; op }
 
-let constructor = function
-  | Move _ -> "Move" | Movea _ -> "Movea" | Moveq _ -> "Moveq" | Alu _ -> "Alu"
-  | Adda _ -> "Adda" | Suba _ -> "Suba" | Cmpa _ -> "Cmpa" | Addx _ -> "Addx" | Subx _ -> "Subx"
-  | Unary _ -> "Unary" | Ext _ -> "Ext" | Swap _ -> "Swap" | Shift _ -> "Shift"
-  | Bit _ -> "Bit" | Bitfield _ -> "Bitfield" | Mul_word _ -> "Mul_word" | Mul_long _ -> "Mul_long"
-  | Div_word _ -> "Div_word" | Div_long _ -> "Div_long" | Abcd _ -> "Abcd" | Sbcd _ -> "Sbcd"
-  | Pack _ -> "Pack" | Unpk _ -> "Unpk" | Cas _ -> "Cas" | Cas2 _ -> "Cas2"
-  | Chk _ -> "Chk" | Bounds _ -> "Bounds" | Bra _ -> "Bra" | Bsr _ -> "Bsr" | Bcc _ -> "Bcc"
-  | Dbcc _ -> "Dbcc" | Scc _ -> "Scc" | Jmp _ -> "Jmp" | Jsr _ -> "Jsr"
-  | Rts -> "Rts" | Rtd _ -> "Rtd" | Rtr -> "Rtr" | Rte -> "Rte" | Trap _ -> "Trap"
-  | Trapcc _ -> "Trapcc" | Trapv -> "Trapv" | Callm _ -> "Callm" | Rtm _ -> "Rtm"
-  | Lea _ -> "Lea" | Pea _ -> "Pea" | Link _ -> "Link" | Unlk _ -> "Unlk" | Exg _ -> "Exg"
-  | Movem _ -> "Movem" | Movep _ -> "Movep" | Moves _ -> "Moves" | Movec _ -> "Movec"
-  | From_status _ -> "From_status" | To_status _ -> "To_status" | Move_usp _ -> "Move_usp"
-  | Logic_status _ -> "Logic_status" | Stop _ -> "Stop" | Reset -> "Reset" | Nop -> "Nop"
+let constructor op = Insn.op_name op

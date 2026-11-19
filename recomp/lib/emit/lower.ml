@@ -31,7 +31,7 @@ let signed_types : Sem.width -> typ * typ = function
   | Byte -> U8, I8 | Word -> U16, I16 | Long -> U32, I32
 
 let binop : Sem.binop -> C.binop = function
-  | Add -> Add | Sub -> Sub | And -> And | Or -> Or | Xor -> Xor
+  | Add -> Add | Sub -> Sub | And -> And | Or -> Or | Xor -> Xor | Shl -> Shl
   | Eq -> Eq | Ne -> Ne | Lt -> Lt
 
 let rec expr : Sem.expr -> C.expr = function
@@ -162,4 +162,6 @@ and sequence ~exit_live ~live stmts =
 let entry sem ~live_out =
   match sem with
   | Sem.Unsupported reason -> Error reason
-  | Body stmts -> Ok (sequence ~exit_live:live_out ~live:live_out stmts)
+  | Body stmts ->
+      let lowered = sequence ~exit_live:live_out ~live:live_out stmts in
+      Ok { lowered with stmts = C.drop_unused_decls lowered.stmts }

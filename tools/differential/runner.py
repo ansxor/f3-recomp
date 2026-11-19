@@ -404,7 +404,7 @@ int main(int argc, char **argv) {
 
     cmd = [
         cc,
-        *(["-std=gnu11", "-Wno-parentheses", "-DDIFF_CPU_ONLY_RESET"] if lowerer == "ocaml" else []),
+        *(["-std=gnu11", "-DDIFF_CPU_ONLY_RESET"] if lowerer == "ocaml" else []),
         "-O1",
         "-g",
         "-Wall",

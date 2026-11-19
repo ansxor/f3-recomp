@@ -102,7 +102,7 @@ let run ?(liveness = local_liveness) ~seed ~samples ~base program =
       close_out out;
       let root = repo_root (Sys.getcwd ()) in
       let cc = Sys.getenv_opt "CC" |> Option.value ~default:"cc" in
-      (match process cc ["-std=gnu11"; "-O1"; "-I"; Filename.concat root "include";
+      (match process cc ["-std=gnu11"; "-Wall"; "-Wextra"; "-Werror"; "-O1"; "-I"; Filename.concat root "include";
                          "-I"; Filename.concat root "recomp"; source; "-o"; binary] with
        | Unix.WEXITED 0, _ -> ()
        | _ -> failwith "refinement runner failed to compile");

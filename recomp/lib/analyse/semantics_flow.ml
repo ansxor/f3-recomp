@@ -14,9 +14,9 @@ let of_op ctx : Insn.op -> Sem.t option =
                       [decrement; Set_reg (D reg, Word, Temp 0);
                        If (bin Eq (Temp 0) (int 0xffff), [goto next], [goto target])])])
   | Jsr ea ->
-      let setup, target = match address ea with
-        | Const _ as target -> [], target
-        | target -> [Let (0, target)], Temp 0
+      let setup, target = match address ~slot:0 ea with
+        | [], (Const _ as target) -> [], target
+        | reads, target -> reads @ [Let (0, target)], Temp 0
       in
       Some (Body (setup @ [Set_reg (A 7, Long, bin Sub (a 7) (int 4));
                            Store (Long, a 7, int next); Goto target]))

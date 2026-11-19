@@ -21,11 +21,39 @@ let supervisor ctx body = Body [If (Supervisor, body, [trap 8 ctx.pc])]
 let narrow width value =
   match width with Insn.Long -> value | Byte | Word -> truncate width value
 
-let address = function
-  | Insn.Ind reg -> a reg
-  | Disp { reg; disp } -> bin Add (a reg) (int disp)
-  | Absolute addr | Pc_rel addr -> int addr
-  | ea -> (match Insn.static_address ea with Some addr -> int addr | None -> raise Unsupported_operand)
+let index_value ({ reg; long; scale } : Insn.index) =
+  let value = match reg with D n -> d n | A n -> a n in
+  let value = if long then value else Sext (Word, value) in
+  match scale with
+  | 1 -> value
+  | 2 -> bin Shl value (int 1)
+  | 4 -> bin Shl value (int 2)
+  | _ -> bin Shl value (int 3)
+
+let add_all = function
+  | [] -> int 0
+  | first :: rest -> List.fold_left (bin Add) first rest
+
+(* The effective address of a memory operand, plus the bus reads that memory
+   indirect modes need first. The pointer read uses temp [100 + slot]. *)
+let address ~slot = function
+  | Insn.Ind reg -> [], a reg
+  | Disp { reg; disp } -> [], bin Add (a reg) (int disp)
+  | Absolute addr | Pc_rel addr -> [], int addr
+  | Indexed { base; disp; index; indirect } ->
+      let base = match base with Areg n -> [a n] | Pc_at pc -> [int pc] | Suppressed -> [] in
+      let disp = if disp = 0 then [] else [int disp] in
+      let index = Option.map index_value index |> Option.to_list in
+      let pointer = 100 + slot in
+      (match indirect with
+       | Direct -> [], add_all (base @ disp @ index)
+       | Pre outer ->
+           [Load (pointer, Long, add_all (base @ disp @ index))],
+           add_all ([Temp pointer] @ if outer = 0 then [] else [int outer])
+       | Post outer ->
+           [Load (pointer, Long, add_all (base @ disp))],
+           add_all ([Temp pointer] @ index @ if outer = 0 then [] else [int outer]))
+  | Register _ | Postinc _ | Predec _ | Immediate _ -> raise Unsupported_operand
 
 let place width slot = function
   | Insn.Register (D reg) -> [], Register (D reg), []
@@ -37,7 +65,9 @@ let place width slot = function
       [Let (slot, a reg)], Memory (Temp slot),
       [Set_reg (A reg, Long, bin Add (Temp slot) (int (Insn.auto_step width reg)))]
   | Immediate _ -> raise Unsupported_operand
-  | ea -> [Let (slot, address ea)], Memory (Temp slot), []
+  | ea ->
+      let reads, addr = address ~slot ea in
+      reads @ [Let (slot, addr)], Memory (Temp slot), []
 
 let read_place width slot = function
   | Register reg -> Let (slot, narrow width (Reg reg))
