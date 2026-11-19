@@ -1,3 +1,8 @@
 (test
  (name scaffold_test)
  (libraries alcotest))
+
+(test
+ (name config_test)
+ (libraries f3recomp alcotest str)
+ (deps (universe)))

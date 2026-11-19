@@ -1,4 +1,5 @@
 (include_subdirs unqualified)
 
 (library
- (name f3recomp))
+ (name f3recomp)
+ (libraries otoml checkseum.ocaml))

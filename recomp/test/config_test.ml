@@ -1,0 +1,204 @@
+open F3recomp
+
+let fixture ?(rom_extra = "") ?(lane_extra = "") ?(regions = "") ?(extra = "") () =
+  {|[game]
+id = "fixture"
+[rom]
+size = 0x1000
+interleave = 1
+|}
+  ^ rom_extra
+  ^ {|[[rom.lanes]]
+file = "program"
+size = 0x1000
+crc = "12345678"
+sha1 = "0123456789abcdef0123456789abcdef01234567"
+|}
+  ^ lane_extra
+  ^ {|[sprites_hi]
+size = 0
+[tiles]
+size = 0
+[tiles_hi]
+size = 0
+[sound]
+size = 0
+[samples]
+size = 0
+|}
+  ^ (if regions = "" then "[sprites]\nsize = 0\n" else regions)
+  ^ extra
+
+let parse source = Config.of_string ~path:"fixture/config.toml" source
+
+let rejects (name, expected, attempt) =
+  Alcotest.test_case name `Quick (fun () ->
+    match attempt () with
+    | () -> Alcotest.fail "expected Error.Invalid"
+    | exception Error.Invalid { where; what } ->
+        let message = where ^ ": " ^ what in
+        let found =
+          try ignore (Str.search_forward (Str.regexp_string expected) message 0); true
+          with Not_found -> false
+        in
+        if not found then Alcotest.failf "expected %S in %S" expected message)
+
+let rejects_config (name, expected, source) =
+  rejects (name, expected, fun () -> ignore (parse source))
+
+let rec find_games dir =
+  let games = Filename.concat dir "games" in
+  if Sys.file_exists games && Sys.is_directory games then games
+  else
+    let parent = Filename.dirname dir in
+    if parent = dir then Alcotest.fail "could not find the repository games directory";
+    find_games parent
+
+let shipped_configs () =
+  let games = find_games (Sys.getcwd ()) in
+  let paths =
+    Sys.readdir games |> Array.to_list |> List.sort String.compare
+    |> List.filter_map (fun game ->
+           let path = Filename.concat (Filename.concat games game) "config.toml" in
+           if Sys.file_exists path then Some path else None)
+  in
+  Alcotest.(check bool) "found the shipped configs" true (List.length paths >= 22);
+  Config.load_all paths
+  |> List.iter (fun config ->
+         let game = Filename.basename (Filename.dirname config.Config.path) in
+         Config.require_id game config)
+
+let lane = {|file = "chip"
+size = 4
+crc = "12345678"
+sha1 = "0123456789abcdef0123456789abcdef01234567"
+|}
+
+let rom_cases =
+  [ "chip in absent region", "exceeds region",
+      fixture ~regions:("[sprites]\nsize = 0\n[[sprites.lanes]]\n" ^ lane) ();
+    "group exceeds region", "exceeds region",
+      fixture ~regions:("[sprites]\nsize = 10\n[[sprites.lanes]]\n" ^ lane
+                        ^ "offset = 3\ngroup = 2\nstride = 6\n") ();
+    "unknown rom key", "unknown keys: bogus",
+      fixture ~rom_extra:"bogus = 1\n" ();
+    "unknown lane key", "unknown keys: typo",
+      fixture ~lane_extra:"typo = 1\n" () ]
+
+let exclusion ?(start = "0x800") ?(stop = "0x900") ?(evidence = "e") ?(fields = "") () =
+  Printf.sprintf "[[exclude]]\nstart = %s\nend = %s\nreason = %S\nevidence = %S\n%s"
+    start stop "r" evidence fields
+
+let exclusion_cases =
+  let config extra = fixture ~extra () in
+  [ "odd bounds", "invalid exclusion interval", config (exclusion ~start:"0x801" ());
+    "interval outside ROM", "invalid exclusion interval", config (exclusion ~stop:"0x1002" ());
+    "empty evidence", "requires nonempty evidence", config (exclusion ~evidence:"" ());
+    "overlap", "overlapping exclusions", config (exclusion () ^ exclusion ());
+    "explicit excluded target", "excluded PC 0x800",
+      config (exclusion () ^ "[[discovery.jump_tables]]\naddress = 0x500\ntargets = [0x800]\n") ]
+  @ List.map
+      (fun fill ->
+        "invalid fill " ^ fill, "fill must be a byte value",
+        config (exclusion ~fields:("fill = " ^ fill ^ "\n") ()))
+      ["256"; "-1"; "true"; "1.5"]
+
+let image_checks =
+  let spec = { Exclusion.start = 0x800; stop = 0x1000; reason = "r"; evidence = "e"; fill = Some 255 } in
+  let image = { Image.base = 0; bytes = String.make 0x2000 '\xff' } in
+  let sound = { spec with start = 0xc00800; stop = 0xc01000; fill = Some 0 } in
+  let sound_image = { Image.base = 0xc00000; bytes = String.make 0x2000 '\x00' } in
+  let corrupt image offset byte =
+    let bytes = Bytes.of_string image.Image.bytes in
+    Bytes.set bytes offset byte;
+    { image with bytes = Bytes.to_string bytes }
+  in
+  let check image spec = ignore (Exclusion.of_config ~image [spec]) in
+  [ Alcotest.test_case "matching fill and 24-bit alias" `Quick (fun () ->
+      check image spec;
+      check sound_image sound;
+      Alcotest.(check bool) "aliased start is included" true
+        (Exclusion.find [spec] 0xff000800 = Some spec);
+      Alcotest.(check bool) "stop is excluded from interval" true
+        (Exclusion.find [spec] 0xff001000 = None));
+    rejects ("contradicted fill", "fill 0xff contradicted by byte 0x00 at 0xa02",
+      fun () -> check (corrupt image 0xa02 '\x00') spec);
+    rejects ("contradicted sound fill", "contradicted by byte 0x01 at 0xc00900",
+      fun () -> check (corrupt sound_image 0x900 '\x01') sound);
+    rejects ("fill without image", "no program image",
+      fun () -> Exclusion.check ~image:None sound) ]
+
+let unit_record ?(name = "\"objects\"") ?(start = "0x400") ?(stop = "0x40a")
+    ?(register = "unit = \"a6\"\n") ?(size = "0x80") ?(extra = "") () =
+  Printf.sprintf "[[video.emit_units]]\nname = %s\nstart = %s\nend = %s\n%s size = %s\n%s"
+    name start stop register size extra
+
+let sprite_cases =
+  [ "odd start", "must be even", unit_record ~start:"0x401" ();
+    "odd end", "must be even", unit_record ~stop:"0x40b" ();
+    "unpaired hooks", "start has 2 entries, end has 1",
+      unit_record ~start:"[0x400, 0x500]" ~stop:"[0x40a]" ();
+    "duplicate unit name", "duplicate emit unit name", unit_record () ^ unit_record ();
+    "a7 register", "unit register", unit_record ~register:"unit = \"a7\"\n" ();
+    "sp register", "unit register", unit_record ~register:"unit = \"sp\"\n" ();
+    "invalid identifier", "invalid unit name", unit_record ~name:"\"1bad\"" ();
+    "reserved identifier", "invalid unit name", unit_record ~name:"\"all\"" ();
+    "reversed hooks", "must be below", unit_record ~start:"0x40a" ~stop:"0x400" ();
+    "negative unit size", "size must be a non-negative integer", unit_record ~size:"-1" ();
+    "extra unit key", "unknown keys: extra", unit_record ~extra:"extra = 1\n" ();
+    "retired owner key", "unknown keys: owner", unit_record ~extra:"owner = \"unit\"\n" ();
+    "missing register", "missing 'unit'", unit_record ~register:"" ();
+    "duplicate hook PC", "duplicate start or end PC", unit_record ~start:"[2, 2]" ~stop:"[4, 6]" () ]
+  |> List.map (fun (name, expected, extra) -> name, expected, fixture ~extra ())
+
+let hold ?(name = "object-shadow") ?(period = 2) ?(follow = "self") () =
+  Printf.sprintf
+    "[[enhancements.flicker_hold]]\nname = %S\ngroup_writer = 0x4010\nanchor_writer = 0x4020\nperiod = %d\nfollow = %S\n"
+    name period follow
+
+let enhancement_cases =
+  let config counter holds =
+    fixture ~extra:("[enhancements]\ngame_frame_counter = " ^ counter ^ "\n" ^ holds) ()
+  in
+  List.map
+    (fun counter ->
+      "invalid counter " ^ counter, "aligned game_frame_counter", config counter (hold ()))
+    ["true"; "0x3ffffe"; "0x420000"; "0x408329"]
+  @ ([ "duplicate hold name", "invalid or repeated flicker hold name", hold () ^ hold ();
+       "equals in name", "invalid or repeated flicker hold name", hold ~name:"object=shadow" ();
+       "period below range", "period must be in", hold ~period:1 ();
+       "period above range", "period must be in", hold ~period:256 ();
+       "unknown follow mode", "follow must be self or anchor", hold ~follow:"other" () ]
+     |> List.map (fun (name, expected, rows) -> name, expected, config "0x408328" rows))
+
+let base_values () =
+  let image = { Image.base = 0x100; bytes = "\xff\x80\x00\x01" } in
+  let check = Alcotest.(check int) in
+  check "u8" 255 (Image.u8 image 0x100);
+  check "s8" (-128) (Image.s8 image 0x101);
+  check "u16" 0xff80 (Image.u16 image 0x100);
+  check "s16" (-128) (Image.s16 image 0x100);
+  check "u32" 0xff800001 (Image.u32 image 0x100);
+  check "s32" (-8388607) (Image.s32 image 0x100);
+  Alcotest.(check string) "slice" "\x00\x01" (Image.slice image 0x102 ~length:2).bytes;
+  Alcotest.(check int32) "CRC32" 0xcbf43926l (Image.crc32 { base = 0; bytes = "123456789" })
+
+let interrupt_observers () =
+  let check = Alcotest.(check string) in
+  let flags config = Ccr.to_string config.Config.cpu.interrupt_observes in
+  check "empty default" "" (fixture () |> parse |> flags);
+  check "selected flags" "XNVC"
+    (fixture ~extra:"[cpu]\ninterrupt_observes = [\"C\", \"X\", \"V\", \"N\", \"C\"]\n" () |> parse |> flags)
+
+let () =
+  Alcotest.run "config"
+    [ "load",
+      [ Alcotest.test_case "all shipped configs" `Quick shipped_configs;
+        Alcotest.test_case "interrupt observers" `Quick interrupt_observers;
+        Alcotest.test_case "image reads and CRC32" `Quick base_values;
+        rejects_config ("recursive discovery", "recursive discovery is unsupported",
+          fixture ~extra:"[discovery]\ncoverage = \"recursive\"\n" ()) ];
+      "rom", List.map rejects_config rom_cases;
+      "exclusions", List.map rejects_config exclusion_cases @ image_checks;
+      "sprite units", List.map rejects_config sprite_cases;
+      "enhancements", List.map rejects_config enhancement_cases ]

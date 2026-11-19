@@ -3,4 +3,4 @@
 
 (package
  (name f3recomp)
- (depends ocaml dune cmdliner alcotest))
+ (depends ocaml dune cmdliner alcotest otoml checkseum))
