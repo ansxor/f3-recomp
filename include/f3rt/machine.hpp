@@ -4,6 +4,9 @@
 #include "f3rt/rom.hpp"
 #include "f3rt/renderer/graphics_assets.hpp"
 #include <array>
+#ifdef F3RT_TRACE_STACKED_SR
+#include <bitset>
+#endif
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -101,6 +104,16 @@ public:
     void write8(uint32_t address, uint8_t value);
     void write16(uint32_t address, uint16_t value);
     void write32(uint32_t address, uint32_t value);
+    void write_stacked_sr(uint32_t address, uint16_t value);
+#ifdef F3RT_TRACE_STACKED_SR
+    // Indexed by the work RAM offset of the big-endian SR's low byte.
+    std::bitset<RAM_MIRROR_MASK + 1> stacked_sr_low_bytes;
+
+private:
+    void invalidate_stacked_sr(uint32_t address, unsigned width);
+
+public:
+#endif
     void load_eeprom(const std::filesystem::path &path);
     void save_eeprom(const std::filesystem::path &path) const;
     void set_input(unsigned port, uint32_t mask, bool pressed);

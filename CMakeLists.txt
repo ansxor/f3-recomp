@@ -4,6 +4,7 @@ option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
 option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
+option(F3RT_TRACE_STACKED_SR "Record work RAM words written by main CPU exception entry" OFF)
 option(BUILD_TESTING "Build the unit tests" ON)
 
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
@@ -171,6 +172,10 @@ endif()
 
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_TRACE_STACKED_SR)
+    target_compile_definitions(f3rt PUBLIC F3RT_TRACE_STACKED_SR)
+endif()
+
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
 endif()

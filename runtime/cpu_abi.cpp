@@ -89,7 +89,7 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     f3_set_sr(cpu, uint16_t((old_sr | 0x2000) & ~0xc000));
     cpu->stopped = 0;
     cpu->a[7] -= format2 ? 12 : 8;
-    f3_write16(cpu, cpu->a[7], old_sr);
+    machine(cpu).write_stacked_sr(cpu->a[7], old_sr);
     f3_write32(cpu, cpu->a[7] + 2, return_pc);
     f3_write16(cpu, cpu->a[7] + 6, uint16_t((format2 ? 0x2000 : 0) | (vector * 4)));
     if (format2) f3_write32(cpu, cpu->a[7] + 8, instruction_pc);
