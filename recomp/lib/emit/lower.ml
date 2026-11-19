@@ -134,7 +134,10 @@ let rec statement ~exit_live ~live (stmt : Sem.stmt) =
         { stmts = [If (expr test, yes.stmts, no.stmts)]; elided = Ccr.union yes.elided no.elided }
     | Helper helper ->
         let name, args = Helper.abi helper in
-        no_elision [cpu_call name (List.map expr args)]
+        let value = call name (List.map expr args) in
+        no_elision [match Helper.result helper with
+          | Some slot -> decl slot value
+          | None -> Expr value]
     | Runtime runtime ->
         let name, args = Runtime_call.abi runtime in
         let prefix = if Runtime_call.needs_canonical_sr runtime then [flush] else [] in
