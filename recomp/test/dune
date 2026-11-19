@@ -6,7 +6,7 @@
 (test
  (name config_test)
  (modules config_test)
- (libraries f3recomp alcotest str)
+ (libraries f3recomp alcotest str unix)
  (deps (universe)))
 
 (executable

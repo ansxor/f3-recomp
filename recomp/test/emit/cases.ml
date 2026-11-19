@@ -134,10 +134,42 @@ let modes () = with_dir (fun dir ->
   expect_error (emit dir (config "" @ parity)) "at 0x404: imported poll, expected spin";
   expect_error (emit dir (config "" @ parity @ ["--flags"; "eager"])) "mutually exclusive")
 
+let sprite_artifacts () = with_dir (fun dir ->
+  let config = fixture dir [
+    0x49f9; 0x0060; 0x0340; 0x425c; 0x425c; 0x322b; 0x000c; 0x7404;
+    0x0803; 0x0000; 0x6704; 0xd242; 0x6002; 0x9242; 0x38c1; 0x4e75;
+  ] in
+  let status, output = emit dir (config {|interrupt_handlers_trusted = "synthetic handler"|}) in
+  Alcotest.(check bool) output true (status = Unix.WEXITED 0);
+  let out = Filename.concat dir "out" in
+  Alcotest.(check bool) "sprite JSON written" true
+    (Sys.file_exists (Filename.concat out "sprite_groups.json"));
+  let source = Filename.concat dir "verify.cpp" in
+  Output.write_file source {|
+#include "sprite_groups.hpp"
+using f3rt::sprite_groups::table;
+static_assert(table.writes.size() == 1);
+static_assert(table.writes[0].pc == 0x41c);
+static_assert(table.writes[0].lane == 1 && table.writes[0].x_offset == 0x0c);
+|};
+  let rec includes path =
+    let include_dir = Filename.concat path "include" in
+    if Sys.file_exists (Filename.concat include_dir "f3rt/sprite_group.hpp") then include_dir
+    else if Filename.dirname path = path then Alcotest.fail "Cannot locate runtime headers"
+    else includes (Filename.dirname path)
+  in
+  let compiler = "g++" in
+  let args = [|compiler; "-std=c++20"; "-fsyntax-only"; "-I"; includes (Sys.getcwd ());
+               "-I"; out; source|] in
+  let pid = Unix.create_process compiler args Unix.stdin Unix.stdout Unix.stderr in
+  Alcotest.(check bool) "compiled sprite writer table" true
+    (snd (Unix.waitpid [] pid) = Unix.WEXITED 0))
+
 let () =
   Alcotest.run "emit" [
     "layout", [Alcotest.test_case "RAM certificate" `Quick rejects_ram];
     "CLI", [Alcotest.test_case "argument errors" `Quick arguments;
             Alcotest.test_case "interrupt contract" `Quick irq;
-            Alcotest.test_case "eager flags and parity certificates" `Quick modes];
+            Alcotest.test_case "eager flags and parity certificates" `Quick modes;
+            Alcotest.test_case "sprite artifacts from emit" `Quick sprite_artifacts];
   ]

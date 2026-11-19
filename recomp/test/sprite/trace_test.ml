@@ -64,7 +64,6 @@ let branch_fixture () =
   check_writers [0x41c, (1, 0x0c, absent)] result;
   check_writer result ~base:11 ~cursor:12 ~class_id:1 ~rigid:true 0x41c;
   Alcotest.(check int) "resolved count" 1 (List.assoc "resolved_writers" result.stats);
-  check_string_contains (render_hpp result) "0x0000041cu";
   check_string_contains (String.concat "" (List.map snd (decision_rows result))) "0x00041c\tsprite-writer"
 
 let forced_lane () =
@@ -93,17 +92,38 @@ let seed_formats () =
   rejected "[1049]" "even";
   rejected {|{"writers": ["x"]}|} "invalid sprite writer"
 
+let check_cpp_table result =
+  let header = Filename.temp_file ~temp_dir:"." "sprite-groups-" ".hpp" in
+  Fun.protect ~finally:(fun () -> Sys.remove header) (fun () ->
+    Output.write_file header (render_hpp result);
+    let assertions = Buffer.create 256 in
+    let emit fmt = Printf.bprintf assertions fmt in
+    emit "#include %S\nusing f3rt::sprite_groups::table;\n" header;
+    emit "static_assert(table.writes.size() == %d);\n" (List.length result.writers);
+    emit "static_assert(table.resets.size() == %d);\n" (List.length result.resets);
+    List.iteri (fun i (w : writer) ->
+      emit "constexpr auto w%d = table.writes[%d];\n" i i;
+      emit "static_assert(w%d.pc == %d && w%d.base == %d && w%d.lane == %d && w%d.group_class == %d && w%d.shift == 8 && w%d.x_offset == %d && w%d.y_offset == %d);\n"
+        i w.pc i w.base i (lane_bits w.lane) i w.group_class i i w.x_offset i w.y_offset) result.writers;
+    List.iteri (fun i (r : classification) ->
+      emit "constexpr auto r%d = table.resets[%d];\n" i i;
+      emit "static_assert(r%d.pc == %d && r%d.base == %d && r%d.offset == %d);\n"
+        i r.pc i r.base i r.offset) result.resets;
+    with_file (Buffer.contents assertions)
+      (fun path ->
+        let compiler = Option.value (Sys.getenv_opt "CXX") ~default:"c++" in
+        let include_path = Filename.concat root "include" in
+        let args = [| compiler; "-std=c++20"; "-Wall"; "-Wextra"; "-Werror"; "-fsyntax-only";
+                      "-I"; include_path; "-x"; "c++"; path |] in
+        match Unix.create_process compiler args Unix.stdin Unix.stdout Unix.stderr with
+        | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Alcotest.skip ()
+        | pid ->
+            Alcotest.(check bool) "valid C++20 header" true (snd (Unix.waitpid [] pid) = Unix.WEXITED 0)))
+
 let empty_header () =
   let groups = make ~game_id:"empty" ~instructions:0 ~analysed:0 ~dispatch_targets:0
     ~writers:[] ~unresolved:[] ~classifications:[] in
-  let expected =
-    "/* Generated from user-supplied ROM. Do not commit. */\n\
-     #pragma once\n#include <span>\n#include \"f3rt/sprite_group.hpp\"\n\
-     namespace f3rt::sprite_groups {\n\
-     inline constexpr SpriteGroupTable table{std::span<const SpriteGroupWrite>{}, \
-     std::span<const SpriteGroupReset>{}};\n} // namespace f3rt::sprite_groups\n"
-  in
-  Alcotest.(check string) "empty spans" expected (render_hpp groups)
+  check_cpp_table groups
 
 let trace_rom id =
   lazy (
@@ -210,19 +230,8 @@ let commandw_coverage () =
 
 let compile_header () =
   let result = Lazy.force landmakrj in
-  let header = Filename.temp_file ~temp_dir:"." "sprite-groups-" ".hpp" in
-  Fun.protect ~finally:(fun () -> Sys.remove header) (fun () ->
-    Output.write_file header (render_hpp result);
-    with_file (Printf.sprintf "#include %S\nstatic_assert(f3rt::sprite_groups::table.writes.size() == 22);\n" header)
-      (fun path ->
-        let compiler = Option.value (Sys.getenv_opt "CXX") ~default:"c++" in
-        let include_path = Filename.concat root "include" in
-        let args = [| compiler; "-std=c++20"; "-Wall"; "-Wextra"; "-Werror"; "-fsyntax-only";
-                      "-I"; include_path; "-x"; "c++"; path |] in
-        match Unix.create_process compiler args Unix.stdin Unix.stdout Unix.stderr with
-        | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Alcotest.skip ()
-        | pid ->
-            Alcotest.(check bool) "valid C++20 header" true (snd (Unix.waitpid [] pid) = Unix.WEXITED 0)))
+  Alcotest.(check int) "writer count" 22 (List.length result.writers);
+  check_cpp_table result
 
 let commandw_output () =
   let result = Lazy.force commandw in
