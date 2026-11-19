@@ -20,7 +20,7 @@ let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
   in
   let semantics = Cfg.semantics selection in
   let cfg = Cfg.build selection semantics ~pins:(Pins.collect selection semantics groups) in
-  let liveness = Liveness.solve cfg in
+  let liveness = Liveness.solve ~yields:(Liveness.node_pcs cfg) cfg in
   let native pc = Cfg.native cfg pc in
   let idle = Idle_loop.find selection.program ~native in
   (match Idle_loop.check_all selection.program cfg idle with
@@ -62,3 +62,49 @@ let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
     emit_sprite_rows (Int.equal pc))
     selection.Selection.entries;
   emit_sprite_rows (fun _ -> true)
+
+let read path =
+  let fail line fmt =
+    Printf.ksprintf (fun message -> Error.fail ~where:path "line %d: %s" line message) fmt
+  in
+  let parse_flags line text =
+    if text = "-" then Ccr.none
+    else
+      let mask = String.fold_left (fun mask char ->
+        let flag = match char with
+          | 'X' -> Ccr.X | 'N' -> N | 'Z' -> Z | 'V' -> V | 'C' -> C
+          | _ -> fail line "invalid live_out %S" text in
+        Ccr.union mask (Ccr.singleton flag)) Ccr.none text in
+      if text <> flags mask then fail line "invalid live_out %S" text;
+      mask
+  in
+  In_channel.with_open_text path (fun input ->
+    if In_channel.input_line input <> Some header then fail 1 "invalid decisions header";
+    let rec rows line live_out idle =
+      match In_channel.input_line input with
+      | None -> live_out, idle
+      | Some text ->
+          match String.split_on_char '\t' text with
+          | [address; disposition; _; _; _; _; out; shape; _] ->
+              let pc = match int_of_string_opt address with
+                | Some pc when pc = Pc.physical pc && pc land 1 = 0 -> pc
+                | _ -> fail line "invalid PC %S" address in
+              let live_out, idle = match disposition with
+                | "sprite-writer" | "sprite-reset" -> live_out, idle
+                | kind when String.starts_with ~prefix:"exception:" kind ||
+                            String.starts_with ~prefix:"ram-exception:" kind ->
+                    if out <> "-" || shape <> "-" then
+                      fail line "exception at %#x has instruction decisions" pc;
+                    live_out, idle
+                | "native" | "fallback" | "ram" | "ram-fallback" ->
+                    if Pc.Map.mem pc live_out then fail line "duplicate instruction at %#x" pc;
+                    let idle = match shape with
+                      | "-" -> idle
+                      | "spin" | "poll" | "affine" -> Pc.Map.add pc shape idle
+                      | _ -> fail line "invalid idle shape %S at %#x" shape pc in
+                    Pc.Map.add pc (parse_flags line out) live_out, idle
+                | _ -> fail line "invalid disposition %S" disposition in
+              rows (line + 1) live_out idle
+          | _ -> fail line "expected nine TSV columns"
+    in
+    rows 2 Pc.Map.empty Pc.Map.empty)

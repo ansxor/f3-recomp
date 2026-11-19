@@ -52,24 +52,26 @@ let arguments () = with_dir (fun dir ->
   expect_error (emit dir (config @ ["--profile-tiers"; "tiers"; "--profile-slim"; "slim"]))
     "mutually exclusive")
 
-let irq () = with_dir (fun dir ->
-  let bytes = Bytes.make 0x402 '\000' in
+let fixture dir instructions =
+  let size = 0x400 + List.length instructions * 2 in
+  let bytes = Bytes.make size '\000' in
   List.iter (fun vector -> Bytes.set_int32_be bytes (4 * vector) 0x400l) [26; 27];
-  Bytes.set_uint16_be bytes 0x400 0x4ed0;
+  List.iteri (fun index opcode -> Bytes.set_uint16_be bytes (0x400 + index * 2) opcode)
+    instructions;
   let bytes = Bytes.to_string bytes in
   let crc = Image.crc32 { base = 0; bytes } in
   let sha = Digestif.SHA1.(to_hex (digest_string bytes)) in
   Output.write_file (Filename.concat dir "program") bytes;
   let config = Filename.concat dir "config.toml" in
-  let run cpu =
+  fun cpu ->
     Output.write_file config (Printf.sprintf {|[game]
 id = "fixture"
 [rom]
-size = 0x402
+size = %d
 interleave = 1
 [[rom.lanes]]
 file = "program"
-size = 0x402
+size = %d
 crc = "%08lx"
 sha1 = "%s"
 [sprites]
@@ -86,8 +88,12 @@ size = 0
 size = 0
 [cpu]
 %s
-|} crc sha cpu);
-    emit dir ["--config"; config] in
+|} size size crc sha cpu);
+    ["--config"; config]
+
+let irq () = with_dir (fun dir ->
+  let config = fixture dir [0x4ed0] in
+  let run cpu = emit dir (config cpu) in
   let result = run "" in
   expect_error result "Unproven interrupt handlers";
   expect_error result "handler 0x400, site 0x400:";
@@ -100,9 +106,38 @@ size = 0
   Alcotest.(check bool) "summary includes explicit empty set" true
     (contains output "interrupt_observes = none"))
 
+let modes () = with_dir (fun dir ->
+  let config = fixture dir [0x7000; 0x7200; 0x60fe] in
+  let path = Filename.concat dir "decisions.tsv" in
+  let write ~out ~idle =
+    let padding = List.init 0x200 (fun word ->
+      Printf.sprintf "0x%06x\tnative\t-\t-\t-\t-\tXNZVC\t-\t-\n" (2 * word)) in
+    Output.write_file path (Decisions.header ^ "\n" ^ String.concat "" (padding @ [
+      Printf.sprintf "0x000400\tnative\t2\tnext\t-\tNZVC\t%s\t-\t0x000402\n" out;
+      "0x000402\tnative\t2\tnext\t-\tNZVC\t-\t-\t0x000404\n";
+      Printf.sprintf "0x000404\tnative\t2\tbranch:0x000404\t-\t-\t-\t%s\t0x000404\n" idle;
+      "0x000400\tsprite-reset\t-\t-\t-\t-\t-\t-\t-\n";
+    ])) in
+  let succeeds args diagnostics =
+    let status, log = emit dir args in
+    Alcotest.(check bool) log true
+      (status = Unix.WEXITED 0 && List.for_all (contains log) diagnostics) in
+  succeeds (config "" @ ["--flags"; "eager"]) ["Flag producers elided: 0 emitted"];
+  write ~out:"XNZVC" ~idle:"spin";
+  let parity = ["--parity-from"; path] in
+  succeeds (config "" @ parity) ["Idle loops: 1 spin"; "Flag producers elided: 1 emitted"];
+  write ~out:"-" ~idle:"-";
+  succeeds (config "" @ parity) ["Idle loops: 0 spin"; "Flag producers elided: 2 emitted"];
+  let observed = config {|interrupt_observes = ["Z"]|} in
+  expect_error (emit dir (observed @ parity)) "missing boundary flags at 0x400";
+  write ~out:"XNZVC" ~idle:"poll";
+  expect_error (emit dir (config "" @ parity)) "at 0x404: imported poll, expected spin";
+  expect_error (emit dir (config "" @ parity @ ["--flags"; "eager"])) "mutually exclusive")
+
 let () =
   Alcotest.run "emit" [
     "layout", [Alcotest.test_case "RAM certificate" `Quick rejects_ram];
     "CLI", [Alcotest.test_case "argument errors" `Quick arguments;
-            Alcotest.test_case "interrupt contract" `Quick irq];
+            Alcotest.test_case "interrupt contract" `Quick irq;
+            Alcotest.test_case "eager flags and parity certificates" `Quick modes];
   ]

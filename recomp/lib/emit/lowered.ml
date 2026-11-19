@@ -16,9 +16,9 @@ let rec producer_writes acc = function
   | Repeat body -> List.fold_left producer_writes acc body
   | _ -> acc
 
-let make inputs =
+let make ?(flags = `Lazy) inputs =
   let bodies = Pc.Map.map (fun { sem; live_out; memory } ->
-      match Lower.entry sem ~live_out ~memory with
+      match Lower.entry ~flags sem ~live_out ~memory with
       | Ok entry -> Native entry
       | Error _ -> Fallback) inputs in
   let producer_writes = Pc.Map.map (fun input ->

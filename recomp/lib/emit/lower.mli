@@ -12,7 +12,7 @@ type entry = {
   counts : counts;
 }
 
-val entry : Sem.t -> live_out:Ccr.t -> memory:Memory_path.t -> (entry, string) result
+val entry : ?flags:[ `Lazy | `Eager ] -> Sem.t -> live_out:Ccr.t -> memory:Memory_path.t -> (entry, string) result
 
 val field : string -> C.expr
 val call : string -> C.expr list -> C.expr

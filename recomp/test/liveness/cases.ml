@@ -17,8 +17,8 @@ let make_graph ~size ~observers ~successors ~boundary ~reads ~writes =
   { Cfg.nodes; interrupt_observes = observers }
 
 (* Enumerate simple paths for one flag, stopping at its first must-write. *)
-let truly_live (cfg : Cfg.t) pc flag =
-  let observes node = node.Cfg.boundaries <> [] || Ccr.subset flag cfg.interrupt_observes in
+let truly_live ~yields (cfg : Cfg.t) pc flag =
+  let observes node = node.Cfg.boundaries <> [] || (Pc.Set.mem node.pc yields && Ccr.subset flag cfg.interrupt_observes) in
   let rec visit seen pc =
     let node = Pc.Map.find pc cfg.nodes in
     Ccr.subset flag node.effects.reads ||
@@ -30,12 +30,13 @@ let truly_live (cfg : Cfg.t) pc flag =
   observes node || List.exists (visit (Pc.Set.singleton pc)) node.succ
 
 let validate (cfg : Cfg.t) =
-  let solution = Liveness.solve cfg in
-  Result.is_ok (Liveness.check cfg solution) &&
+  let yields = Pc.Set.filter (fun pc -> pc mod 2 = 0) (Liveness.node_pcs cfg) in
+  let solution = Liveness.solve ~yields cfg in
+  Result.is_ok (Liveness.check ~yields cfg solution) &&
   Pc.Map.for_all (fun pc (node : Cfg.node) ->
     let out = Pc.Map.find pc solution.live_out in
     List.for_all (fun flag ->
-      let expected = truly_live cfg pc flag in
+      let expected = truly_live ~yields cfg pc flag in
       expected = Ccr.subset flag out &&
       (not expected ||
        let out = Ccr.diff out flag in
@@ -43,7 +44,7 @@ let validate (cfg : Cfg.t) =
          Liveness.live_out = Pc.Map.add pc out solution.live_out;
          live_in = Pc.Map.add pc (Effects.live_in node.effects ~live_out:out) solution.live_in;
        } in
-       Result.is_error (Liveness.check cfg mutated)))
+       Result.is_error (Liveness.check ~yields cfg mutated)))
       abstract_flags)
     cfg.nodes
 
@@ -87,6 +88,8 @@ let random_graphs =
       ~writes:(fun pc -> mask (effects.(pc) lsr 2))
   in
   Test.make ~name:"8–20 node graphs with interrupt observers" ~count:1000 (make gen) validate
+
+let solve cfg = Liveness.solve ~yields:(Liveness.node_pcs cfg) cfg
 
 let decode pc hex =
   let bytes = String.init (String.length hex / 2)
@@ -153,14 +156,14 @@ let check_call () =
   List.iter (fun (callee, expected) ->
     let _, cfg = graph [0x400, "b081610000fa76004e75"; 0x4fe, callee] in
     Alcotest.(check (list int)) "direct successor only" [0x4fe] (Pc.Map.find 0x402 cfg.nodes).succ;
-    check_live (Liveness.solve cfg) 0x400 expected)
+    check_live (solve cfg) 0x400 expected)
     ["76004e75", "X"; "4e714e75", "XNZVC"]
 
 let check_pending_state () =
   let open F3recomp_test.Asm in
   let check hex program =
     let _, cfg = graph [0x400, hex] in
-    let solved = Liveness.solve cfg in
+    let solved = solve cfg in
     let liveness _ pc = Liveness.live_out solved pc ~flags:`Lazy in
     match Refinement.Harness.run ~liveness ~seed:15 ~samples:64 ~base:0x400 program with
     | Passed _ -> ()
@@ -175,7 +178,7 @@ let check_pending_state () =
 
 let check_merge () =
   let _, cfg = graph [0x400, "70004e71670272014e71"] in
-  let solved = Liveness.solve cfg in
+  let solved = solve cfg in
   check_live solved 0x400 "XNZVC";
   check_live solved 0x406 "XNZVC";
   Alcotest.(check (list int)) "both predecessors flow into shared tail"
@@ -262,7 +265,7 @@ interrupt_observes = ["Z"]
   let semantics = Cfg.semantics selection in
   let build resets = Cfg.build selection semantics ~pins:(Pins.collect selection semantics { Sprite_groups.empty with reset_pcs = resets }) in
   let plain = build Pc.Set.empty in
-  check_live (Liveness.solve plain) 0x400 "XZ";
+  check_live (solve plain) 0x400 "XZ";
   let cfg = build (Pc.Set.singleton 0x402) in
   Alcotest.(check bool) "sprite reset is not native" false (Cfg.native cfg 0x402);
   let node = Pc.Map.find 0x400 cfg.nodes in
@@ -363,7 +366,7 @@ let () =
      "instructions",
        List.map (fun (name, chunks, pins, expected, code) -> case name (fun () ->
          let insns, cfg = graph ~pins chunks in
-         let solution = Liveness.solve cfg in
+         let solution = solve cfg in
          List.iter (fun (pc, flags) -> check_live solution pc flags) expected;
          List.iter (fun (pc, present, marker) ->
            check_code ~present (lowered insns solution pc) marker) code)) instruction_cases

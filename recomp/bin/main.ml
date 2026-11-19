@@ -236,20 +236,17 @@ let emit =
   let run config rom_dir output config_output tiers slim writers parity flags max_block allow_unproven =
     report_error (fun () ->
       if max_block < 1 then Error.fail "--max-block-instructions must be positive";
-      if Option.is_some parity then Error.fail "--parity-from is not implemented";
-      if flags = `Eager then Error.fail "--flags eager is not implemented";
+      if Option.is_some parity && flags = `Eager then
+        Error.fail "--parity-from and --flags eager are mutually exclusive";
       let profile = load_profile tiers slim in
       let writers = Option.fold ~none:[] ~some:Sprite_trace.load_writer_seeds writers in
       let analysis =
         Game.load config ~rom_dir |> Game.discover |> Program.select ~profile
-        |> Analysis.run ~allow_unproven ~writers in
+        |> Analysis.run ~parity ~allow_unproven ~writers in
       let layout =
-        Analysis.lower analysis
+        Analysis.lower ~flags analysis
         |> Layout.make ~max_block ~selection:analysis.selection ~idle:analysis.idle in
-      (match Layout.check_layout layout with
-       | Ok () -> ()
-       | Error message -> Error.fail ~where:"layout" "%s" message);
-      let sources = Blocks_c.files layout |> Program_c.files layout in
+      let sources = Analysis.sources analysis layout in
       let groups = analysis.groups in
       let enhancements = Enhancements.of_config analysis.selection.config groups |> Enhancements.render in
       let summary = Summary.of_layout layout analysis in

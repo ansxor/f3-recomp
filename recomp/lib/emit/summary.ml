@@ -1,6 +1,10 @@
 let of_layout (layout : Layout.t) (analysis : Analysis.t) =
   let counts = Lowered.counts layout.lowered in
-  let full = Analysis.full_observer_counts analysis in
+  let full = Analysis.producer_counts analysis ~flags:`Eager analysis.liveness in
+  let empty = Analysis.observer_counts analysis Ccr.none in
+  let observed = Analysis.observer_counts analysis Ccr.all in
+  let elided counts = full.lazy_producers - counts.Lower.lazy_producers in
+  let x_elided counts = full.eager_x_writes - counts.Lower.eager_x_writes in
   let rom, exceptional, ram, hot, cold = Pc.Map.fold (fun _ (entry, tier) (rom, exceptional, ram, hot, cold) ->
     let hot, cold = match tier with Selection.Hot -> hot + 1, cold | Cold -> hot, cold + 1 in
     match entry with
@@ -22,10 +26,11 @@ let of_layout (layout : Layout.t) (analysis : Analysis.t) =
     Printf.sprintf "Tiers: %d hot, %d cold; %d functions in %d shards"
       hot cold (List.length (Layout.functions layout)) (List.length layout.shards);
     "Interrupt contract: " ^ analysis.irq;
-    Printf.sprintf "Flag producers elided: %d configured vs 0 with interrupt_observes = XNZVC"
-      (full.lazy_producers - counts.flags.lazy_producers);
-    Printf.sprintf "Standalone X writes elided: %d configured vs 0 with interrupt_observes = XNZVC"
-      (full.eager_x_writes - counts.flags.eager_x_writes);
+    Printf.sprintf "Interrupt yield points: %d" (Pc.Set.cardinal analysis.yields);
+    Printf.sprintf "Flag producers elided: %d emitted, %d empty vs %d XNZVC at yields"
+      (elided counts.flags) (elided empty) (elided observed);
+    Printf.sprintf "Standalone X writes elided: %d emitted, %d empty vs %d XNZVC at yields"
+      (x_elided counts.flags) (x_elided empty) (x_elided observed);
     Printf.sprintf "Idle loops: %d spin, %d poll, %d affine" spin poll affine;
     Printf.sprintf "Chains: %d direct, %d indirect sites, %d indirect cases" direct sites cases;
     Printf.sprintf "Sprite writers: %d resolved, %d unresolved, %d resets"
