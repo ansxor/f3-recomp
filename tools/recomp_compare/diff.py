@@ -7,8 +7,11 @@ at those PCs and any pair of values in the specified column.
 
 PC is the address key. Sprite rows have a separate key at the same PC for
 each sprite kind. An added or removed row is a disposition difference.
---columns selects which differences to report. Exit status is 0 for no
-unexplained differences, 1 for differences, or 2 for invalid input.
+--columns selects which differences to report. With --rom-image, compare
+baseline decoder entries and check for missing ordinary rows. This mode
+omits sprite metadata. The expected table selects decoder rules with
+rule:NAME in the pc field. Exit status is 0 for no unexplained differences,
+1 for unexplained differences, or 2 for invalid input.
 """
 
 from __future__ import annotations
@@ -18,12 +21,13 @@ import csv
 import re
 import shutil
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 
 from tools.recomp_compare.decisions import COLUMNS, SPRITE_KINDS, pc_text
+from tools.recomp_compare.decoder import category
 
 EXPECTED_HEADER = ("pc", "column", "reason")
 EXPECTED_PATH = Path(__file__).with_name("expected.tsv")
@@ -44,7 +48,11 @@ def read_tsv(path, header):
 
 def read_expected(path):
     ranges = defaultdict(list)
+    rules = {}
     for line, (address, column, reason) in read_tsv(path, EXPECTED_HEADER):
+        if address.startswith("rule:") and column in (*COLUMNS[1:], "entry") and reason.strip():
+            rules[address.removeprefix("rule:"), column] = reason
+            continue
         match = PC_RANGE.fullmatch(address)
         if not match or column not in COLUMNS[1:] or not reason.strip():
             raise ValueError(f"{path}:{line}: invalid expected difference")
@@ -53,7 +61,7 @@ def read_expected(path):
         if end < start:
             raise ValueError(f"{path}:{line}: PC range is reversed")
         ranges[column].append((start, end))
-    return ranges
+    return ranges, rules
 
 
 def decision_records(path):
@@ -69,16 +77,20 @@ def decision_records(path):
         previous = key
 
 
-def changes(before, after, columns):
+def changes(before, after, columns, *, decoder=False):
     left = next(before, None)
     right = next(after, None)
     while left is not None or right is not None:
         if right is None or (left is not None and left[0] < right[0]):
-            if "disposition" in columns:
+            if decoder:
+                yield left[0], "entry", ", ".join(left[1][2:4]), "<missing>"
+            elif "disposition" in columns:
                 yield left[0], "disposition", left[1][1], "<missing>"
             left = next(before, None)
         elif left is None or right[0] < left[0]:
-            if "disposition" in columns:
+            if decoder:
+                yield right[0], "entry", "<missing>", ", ".join(right[1][2:4])
+            elif "disposition" in columns:
                 yield right[0], "disposition", "<missing>", right[1][1]
             right = next(after, None)
         else:
@@ -95,26 +107,44 @@ def main() -> int:
     parser.add_argument("after", type=Path)
     parser.add_argument("--columns", default=",".join(COLUMNS[1:]), help="comma-separated comparison columns")
     parser.add_argument("--expected", type=Path, default=EXPECTED_PATH, help="expected differences TSV")
+    parser.add_argument("--rom-image", type=Path, help="main ROM image for baseline decoder rules")
     args = parser.parse_args()
     columns = {column.strip() for column in args.columns.split(",")}
     if unknown := columns.difference(COLUMNS[1:]):
         parser.error(f"unknown comparison columns: {', '.join(sorted(unknown))}")
     try:
-        expected = read_expected(args.expected)
+        expected, rules = read_expected(args.expected)
+        rom = args.rom_image.read_bytes() if args.rom_image else None
+        left, right = decision_records(args.before), decision_records(args.after)
+        if rom is not None:
+            left = (record for record in left if record[0][1] == 0)
+            right = (record for record in right if record[0][1] == 0)
+        counts = Counter()
+        samples = {}
         with ExitStack() as stack:
             reports = {}
-            for (pc, kind), column, before, after in changes(
-                decision_records(args.before), decision_records(args.after), columns
-            ):
+            for (pc, kind), column, before, after in changes(left, right, columns, decoder=rom is not None):
                 if any(start <= pc <= end for start, end in expected[column]):
                     continue
+                if rom is not None and not kind:
+                    rule = category(rom, pc, column, before, after)
+                    if (rule, column) in rules:
+                        counts[rule] += 1
+                        samples.setdefault(rule, (pc, before, after))
+                        continue
                 if column not in reports:
                     reports[column] = stack.enter_context(
                         SpooledTemporaryFile(max_size=1 << 20, mode="w+t", encoding="utf-8")
                     )
                 row_kind = SPRITE_KINDS[kind - 1] if kind else "entry"
                 reports[column].write(f"{pc_text(pc)}\t{row_kind}\t{before}\t{after}\n")
-            for column in COLUMNS:
+            if counts:
+                print("[expected decoder differences]")
+                for rule, count in sorted(counts.items()):
+                    pc, before, after = samples[rule]
+                    window = rom[pc : pc + 12].hex(" ")
+                    print(f"{rule}\t{count}\t{pc_text(pc)}\t{window}\t{before}\t{after}")
+            for column in (*COLUMNS, "entry"):
                 if column in reports:
                     print(f"[{column}]")
                     reports[column].seek(0)

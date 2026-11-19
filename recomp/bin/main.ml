@@ -70,8 +70,21 @@ let compile_roms =
   Cmd.v (Cmd.info "compile-roms")
     Term.(const run $ configs $ more_configs $ output $ game $ game_output)
 
+let decisions =
+  let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
+  let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
+  let run config_path rom_dir =
+    report_error (fun () ->
+        let config = Config.load config_path in
+        let manifest = Rom_manifest.of_configs [config] in
+        let rom = Rom_manifest.load_region manifest ~game:config.game.id Rom ~rom_dir in
+        Decisions.write stdout ~rom config)
+  in
+  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline decoder decisions.")
+    Term.(const run $ config $ rom_dir)
+
 let () =
-  let stubs = List.map stub [ "emit"; "enhancements"; "lower"; "decisions" ] in
+  let stubs = List.map stub [ "emit"; "enhancements"; "lower" ] in
   exit
     (Cmd.eval'
-       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: stubs)))
+       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: stubs)))

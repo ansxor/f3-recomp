@@ -1,1 +1,26 @@
 pc	column	reason
+rule:line-exception	length	D4 takes vector 10 or 11 from the primary word. Python retains Capstone line instructions with a decoded size even when lowering them to exceptions.
+rule:line-exception	flow	Python static_flow can retain Capstone's coprocessor or integer mnemonic flow for a line-A or line-F primary word.
+rule:illegal-bkpt	length	ILLEGAL and D4 BKPT are exception rows. Python assigns lengths to Capstone ILLEGAL and BKPT instruction rows.
+rule:illegal-bkpt	flow	Python static_flow falls through ILLEGAL and BKPT. Both enter vector 4.
+rule:movec-control	length	Capstone emits MOVEC even with an unassigned EC020 control register. D4 gives vector 4 after the privilege check.
+rule:movec-control	flow	An unassigned MOVEC code cannot fall through after either privilege or control-code validation.
+rule:bit-immediate-padding	entry	Capstone rejects bits in its 0xff00 word2 mask (0xfe00 for BSET). The processor reads the low byte and masks the bit index by the operand width.
+rule:ccr-immediate-padding	entry	Capstone requires the high immediate byte to be zero. Logic on CCR consumes the low byte and only updates CCR bits.
+rule:bounds-extension	entry	Capstone rejects nonzero bits 10–0 of the CMP2/CHK2 extension. The register and CHK2 selector occupy bits 15–11.
+rule:callm-extension	entry	Capstone rejects the high byte of CALLM's argument-count word. The encoded count is the low byte.
+rule:cas-extension	entry	Capstone rejects reserved bits of the CAS extension. The EC020 register fields are decoded independently.
+rule:cas2-extension	entry	Capstone applies its 0x0e38 reserved-bit mask to both CAS2 operand words. The EC020 decodes the address, compare and update register fields independently.
+rule:moves-extension	entry	Capstone requires bits 10–0 of the MOVES extension to be zero. The register and direction occupy bits 15–11.
+rule:mul-div-extension	entry	Capstone rejects bits selected by 0x83f8 in the long multiply/divide extension. Sign, width and register fields are decoded independently.
+rule:bitfield-extension	entry	Capstone requires the unused high bit on register bitfield forms, or unused high nibble on the others, to be zero. The decoder reads the defined fields.
+rule:rom-tail	entry	The final word encodes ORI.B to a data register and has no immediate word left in the image. Frozen discovery omits the entry. OCaml reports truncation.
+rule:sbcd-length	length	Capstone's memory SBCD handler consumes a spurious word and prints it as an adjustment. SBCD has no extension word.
+rule:btst-immediate-length	length	Capstone reads a long immediate operand for register BTST with immediate EA. On the EC020 the EA operand is byte-sized and occupies one word.
+rule:indexed-outer-length	length	Capstone suppresses the outer word or long when IS and I/IS bit 2 are both set. D4 uses the low selector bits to size the displacement, including IS=1 I/IS=6 or 7. In a two-EA MOVE the missing displacement can also make Capstone read the destination extension at the wrong offset.
+rule:conditional-exception-flow	flow	Python static_flow ignores the explicit condition or arithmetic exception. The OCaml graph carries both normal completion and the exception escape.
+rule:trap-flow	flow	Python static_flow falls through TRAP and TRAPT. Both always raise a trap.
+rule:stop-flow	flow	Python static_flow treats STOP as sequential. STOP halts pending an interrupt.
+rule:module-flow	flow	Python static_flow falls through CALLM and RTM. CALLM transfers through a module descriptor and RTM returns.
+rule:dbt-flow	flow	Python static_flow keeps a DBT branch edge. Its condition is always true and permits only fallthrough.
+rule:constant-indexed-transfer	flow	Python resolves only absolute and nonindexed PC-relative jumps/calls. Full-format direct EAs with no runtime base or index have a constant target.

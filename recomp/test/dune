@@ -18,3 +18,9 @@
  (name rom_manifest_test)
  (modules rom_manifest_test)
  (libraries f3recomp alcotest))
+
+(test
+ (name decode_test)
+ (modules decode_test)
+ (libraries f3recomp alcotest)
+ (deps ../68020_opcodes.csv))
