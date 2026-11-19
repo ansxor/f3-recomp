@@ -54,7 +54,7 @@ let decode (image : Image.t) =
 
 let emit out name live entries =
   List.iteri (fun index { pc; sem } ->
-      let body = match Lower.entry sem ~live_out:(live pc) with
+      let body = match Lower.entry ~memory:Memory_path.Inline sem ~live_out:(live pc) with
         | Ok entry -> entry.stmts
         | Error reason -> failwith (Printf.sprintf "cannot lower %#x: %s" pc reason)
       in

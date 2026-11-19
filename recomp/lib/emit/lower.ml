@@ -1,6 +1,14 @@
 open C
 
-type entry = { stmts : C.stmt list; elided : Ccr.t }
+type counts = { lazy_producers : int; eager_x_writes : int }
+
+let no_flags = { lazy_producers = 0; eager_x_writes = 0 }
+
+let add_counts left right =
+  { lazy_producers = left.lazy_producers + right.lazy_producers;
+    eager_x_writes = left.eager_x_writes + right.eager_x_writes }
+
+type entry = { stmts : C.stmt list; elided : Ccr.t; counts : counts }
 
 let uint value = UInt value
 let cpu = Name "cpu"
@@ -82,27 +90,26 @@ let install (producer : Sem.producer) =
 let complete pc =
   [assign "pc" pc; assign "steps" (bin Add (field "steps") (uint 1)); Return]
 
-let store width addr value =
-  cpu_call ("f3_write" ^ string_of_int (8 * Sem.bytes width)) [addr; value]
+let store memory width addr value =
+  cpu_call (Memory_path.store memory width) [addr; value]
 
 let or_bits = function
   | [] -> uint 0
   | bit :: rest -> List.fold_left (bin Or) bit rest
 
-let no_elision stmts = { stmts; elided = Ccr.none }
+let no_elision stmts = { stmts; elided = Ccr.none; counts = no_flags }
 
-let rec statement ~exit_live ~live (stmt : Sem.stmt) =
+let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
   let summary = Effects.of_stmt stmt in
   let lower = function
     | Sem.Let (slot, value) -> no_elision [decl slot (expr value)]
     | Load (slot, width, addr) ->
-        let name = "f3_read" ^ string_of_int (8 * Sem.bytes width) in
-        no_elision [decl slot (call name [expr addr])]
-    | Store (width, addr, value) -> no_elision [store width (expr addr) (expr value)]
+        no_elision [decl slot (call (Memory_path.load memory width) [expr addr])]
+    | Store (width, addr, value) -> no_elision [store memory width (expr addr) (expr value)]
     | Store_long_low_first (addr, value) ->
         let addr = expr addr and value = expr value in
-        no_elision [store Word (bin Add addr (uint 2)) value;
-                    store Word addr (bin Shr value (uint 16))]
+        no_elision [store memory Word (bin Add addr (uint 2)) value;
+                    store memory Word addr (bin Shr value (uint 16))]
     | Set_reg (reg, width, value) ->
         let dest = register reg and value = expr value in
         let value = match width with
@@ -123,17 +130,22 @@ let rec statement ~exit_live ~live (stmt : Sem.stmt) =
               let written = if Option.is_some x then Ccr.all else Ccr.nzvc in
               install producer, written
         in
-        { stmts = update @ write_x; elided = Ccr.diff (Flags.writes producer) materialised }
+        let counts =
+          { lazy_producers = (match pending with Install _ -> 1 | Keep | Clear -> 0);
+            eager_x_writes = List.length write_x }
+        in
+        { stmts = update @ write_x; elided = Ccr.diff (Flags.writes producer) materialised; counts }
     | Set_flags values ->
         let written = List.map (fun (flag, _) -> flag_bit flag) values |> or_bits in
         let bits = List.map (fun (flag, value) -> bool_bit flag value) values |> or_bits in
-        let preserve = if summary.writes = Ccr.all then [] else [flush] in
-        no_elision (preserve @ [set_sr_bits written bits; clear_pending])
+        no_elision [set_sr_bits written bits; clear_pending]
     | Set_ccr value ->
         no_elision [set_sr_bits (uint 0x1f) (bin And (expr value) (uint 0x1f)); clear_pending]
     | If (test, yes, no) ->
-        let yes = sequence ~exit_live ~live yes and no = sequence ~exit_live ~live no in
-        { stmts = [If (expr test, yes.stmts, no.stmts)]; elided = Ccr.union yes.elided no.elided }
+        let yes = sequence ~memory ~exit_live ~live yes and no = sequence ~memory ~exit_live ~live no in
+        { stmts = [If (expr test, yes.stmts, no.stmts)];
+          elided = Ccr.union yes.elided no.elided;
+          counts = add_counts yes.counts no.counts }
     | Helper helper ->
         let name, args = Helper.abi helper in
         let value = call name (List.map expr args) in
@@ -142,39 +154,55 @@ let rec statement ~exit_live ~live (stmt : Sem.stmt) =
           | None -> Expr value]
     | Runtime runtime ->
         let name, args = Runtime_call.abi runtime in
-        let prefix = if Runtime_call.needs_canonical_sr runtime then [flush] else [] in
-        no_elision (prefix @ [cpu_call name (List.map expr args)])
+        no_elision [cpu_call name (List.map expr args)]
     | Raise { vector; return_pc } ->
-        no_elision [flush; cpu_call "f3_exception" [uint vector; uint return_pc]; Return]
+        no_elision [cpu_call "f3_exception" [uint vector; uint return_pc]; Return]
     | Goto addr -> no_elision (complete (expr addr))
     | Stop next -> no_elision (assign "stopped" (uint 1) :: complete (uint next))
     | Repeat body ->
-        let body = sequence ~exit_live ~live:Ccr.all body in
+        let body = sequence ~memory ~exit_live ~live:Ccr.all body in
         { body with stmts = [Repeat body.stmts] }
   in
-  let reads = match stmt with
-    | If (test, _, _) -> Effects.expr test
-    | Runtime call when Runtime_call.needs_canonical_sr call -> Ccr.none
-    | Raise _ | Repeat _ -> Ccr.none
-    | Set_flags _ when summary.writes <> Ccr.all -> Ccr.none
-    | _ -> summary.reads
+  let needs_canonical = match stmt with
+    | If (test, _, _) -> Effects.expr test <> Ccr.none
+    | Raise _ -> true
+    | Repeat _ -> false
+    | Set_flags _ -> summary.writes <> Ccr.all || summary.reads <> Ccr.none
+    | _ -> summary.reads <> Ccr.none
   in
   let result = lower stmt in
-  if reads = Ccr.none then result else { result with stmts = flush :: result.stmts }
-
-and sequence ~exit_live ~live stmts =
-  let prepend stmt (tail, live) =
-    let head = statement ~exit_live ~live stmt in
-    let exit = Effects.make ~reads:exit_live () in
-    let next = Effects.make ~reads:live () in
-    let live_before = (Effects.before ~exit stmt next).reads in
-    { stmts = head.stmts @ tail.stmts; elided = Ccr.union head.elided tail.elided }, live_before
+  let result =
+    if needs_canonical && not canonical then { result with stmts = flush :: result.stmts }
+    else result
   in
-  fst (List.fold_right prepend stmts (no_elision [], live))
+  (* Guest memory accesses preserve the pending CCR state. Calls with other
+     effects and control flow conservatively lose the known state. *)
+  let canonical = match stmt with
+    | Sem.Set_flags _ | Set_ccr _ -> true
+    | Let _ | Load _ | Store _ | Store_long_low_first _ | Set_reg _ ->
+        canonical || needs_canonical
+    | _ -> false
+  in
+  result, canonical
 
-let entry sem ~live_out =
+and sequence ~memory ~exit_live ~live stmts =
+  let exit = Effects.make ~reads:exit_live () in
+  let annotate stmt (tail, next) =
+    (stmt, next.Effects.reads) :: tail, Effects.before ~exit stmt next
+  in
+  let stmts, _ = List.fold_right annotate stmts ([], Effects.make ~reads:live ()) in
+  let lower (acc, canonical) (stmt, live) =
+    let head, canonical = statement ~memory ~exit_live ~live ~canonical stmt in
+    { stmts = List.rev_append head.stmts acc.stmts;
+      elided = Ccr.union acc.elided head.elided;
+      counts = add_counts acc.counts head.counts }, canonical
+  in
+  let result, _ = List.fold_left lower (no_elision [], false) stmts in
+  { result with stmts = List.rev result.stmts }
+
+let entry sem ~live_out ~memory =
   match sem with
   | Sem.Unsupported reason -> Error reason
   | Body stmts ->
-      let lowered = sequence ~exit_live:live_out ~live:live_out stmts in
+      let lowered = sequence ~memory ~exit_live:live_out ~live:live_out stmts in
       Ok { lowered with stmts = C.drop_unused_decls lowered.stmts }
