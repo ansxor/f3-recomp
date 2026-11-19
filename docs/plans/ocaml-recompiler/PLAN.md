@@ -577,6 +577,17 @@ baseline, tiers and slim modes.
 
 ### 8.3 Parity builds and runtime replay
 
+*Amended after T19b (2026-11-19).* The certificate rejects the frozen Python
+decisions for landmakrj. OCaml decodes 11,842 entries that Python lacks.
+5,630 Python instruction rows are OCaml `Mame_default` exception stubs. Python
+gives a divide-exception boundary only `X` where a stacked SR needs `XNZVC`.
+So OCaml-with-Python-decisions cannot be built, and steps 1–2 below cannot be
+byte for byte. T21 therefore compares the frozen Python build with the OCaml
+build using step 3's masked relation directly: frame, palette, graphics and
+non-stack RAM exact; CPU registers exact except CCR bits outside
+`live_in_A ∩ live_in_B`; stacked-SR CCR bits masked. `--parity-from` stays for
+OCaml-vs-OCaml comparisons.
+
 `emit --parity-from DECISIONS.tsv` (test-only flag) makes OCaml use the
 imported `live_out` and idle-loop set instead of its own, after its checkers
 accept them. With identical decisions, elided flags and idle yields are
