@@ -37,11 +37,8 @@ crc = "b073cda9"
 sha1 = "a8b713c3e17e431b5789a70d6f9b0e0a6b02624a"
 
 [discovery]
-# Config-only: World lanes were not supplied, so no Japan-specific addresses.
-entry_points = []
-scan_jump_tables = true
-scan_task_traps = true
-scan_callbacks = true
+# Boot dispatch at 0xc42 jumps directly into code at 0xc46 or 0xc48.
+coverage = "all_aligned"
 
 [video]
 rotation = 0

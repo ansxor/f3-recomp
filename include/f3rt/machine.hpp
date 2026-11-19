@@ -83,6 +83,7 @@ public:
     };
     std::array<NativePage, 0x200000 / 0x1000> native_pages{};
     std::span<const f3_excluded_range> excluded_code;
+    std::span<const f3_ram_code_range> ram_code;
     uint64_t native_blocks = 0;
 
     void reset();

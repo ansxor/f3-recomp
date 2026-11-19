@@ -153,9 +153,8 @@ class IdleLoopShapeTests(unittest.TestCase):
     def test_recognises_the_three_shapes(self):
         _, discovery = _synthetic(CHUNKS)
         loops = find_idle_loops(discovery.instructions, lambda pc: True)
-        self.assertEqual({pc: shape for pc, (shape, _) in loops.items()}, {0x400: "spin", 0x410: "poll", 0x420: "poll", 0x440: "affine"})
+        self.assertEqual({pc: shape for pc, (shape, _) in loops.items()}, {0x400: "spin", 0x420: "poll", 0x440: "affine"})
         self.assertEqual(loops[0x400][1], ["F3_IDLE(cpu);"])
-        self.assertEqual(loops[0x410][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 0);"])
         self.assertEqual(loops[0x420][1], ["F3_IDLE_POLL_BCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(32)), 2, 6);"])
         self.assertEqual(loops[0x440][1], ["F3_IDLE(cpu);"])
 
@@ -163,18 +162,21 @@ class IdleLoopShapeTests(unittest.TestCase):
         _, discovery = _synthetic(CHUNKS)
         loops = find_idle_loops(discovery.instructions, lambda pc: pc != 0x47C)
         self.assertNotIn(0x440, loops)
-        self.assertIn(0x410, loops)
+        self.assertIn(0x420, loops)
 
-    def test_poll_counter_is_the_dbcc_register(self):
-        instructions = {insn.address: insn for insn in _decoder().disasm(bytes.fromhex("4a2d001056c9fffa"), 0x400)}
-        loops = find_idle_loops(instructions, lambda pc: True)
-        self.assertEqual(loops[0x400][1], ["F3_IDLE_POLL_DBCC(cpu, (uint32_t)(cpu->a[5] + (int32_t)(16)), 1, 6, 1);"])
+    def test_rejects_counted_polls(self):
+        for code in (
+            "4a2d001056c8fffa",  # TST.B (16,A5); DBNE D0
+            "4a2d001051c9fffa",  # TST.B (16,A5); DBF D1
+        ):
+            instructions = {insn.address: insn for insn in _decoder().disasm(bytes.fromhex(code), 0x400)}
+            self.assertEqual(find_idle_loops(instructions, lambda pc: True), {}, code)
 
     def test_rejects_polls_whose_address_can_change_inside_the_loop(self):
         for code in (
-            "4a1d56c8fffc",  # TST.B (A5)+ ; DBNE: the address moves
-            "4a35000056c8fffa",  # TST.B (0,A5,D0.W): indexed by the loop counter
-            "4a3a000256c8fffa",  # TST.B (2,PC): reads ROM
+            "4a1d67fc",  # TST.B (A5)+; BEQ: the address moves
+            "4a35000067fa",  # TST.B (0,A5,D0.W); BEQ: indexed address
+            "4a3a000267fa",  # TST.B (2,PC); BEQ: reads ROM
         ):
             instructions = {insn.address: insn for insn in _decoder().disasm(bytes.fromhex(code), 0x400)}
             self.assertEqual(find_idle_loops(instructions, lambda pc: True), {}, code)
@@ -187,7 +189,7 @@ class IdleLoopEquivalenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             report = generate(rom, discovery, output, {})
-            self.assertEqual(report["idle_loops"], {"0x000400": "spin", "0x000410": "poll", "0x000420": "poll", "0x000440": "affine"})
+            self.assertEqual(report["idle_loops"], {"0x000400": "spin", "0x000420": "poll", "0x000440": "affine"})
             driver = output / "driver.c"
             driver.write_text(DRIVER)
             executables = {}

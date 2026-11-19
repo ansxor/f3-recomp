@@ -397,6 +397,28 @@ TEST_F(CpuTest, ExceptionFrames) {
         << "Divide-by-zero format-2 frame and instruction PC";
 }
 
+TEST_F(CpuTest, NativeRamDispatchRequiresMatchingPayload) {
+    constexpr uint32_t destination = f3rt::GRAPHICS_BASE;
+    constexpr uint32_t entry = destination + 2;
+    const uint8_t payload[] = {0xab, 0xcd, 0x4e, 0x75};
+    const f3_ram_code_range ranges[] = {{destination, sizeof(payload), payload}};
+    const f3_block blocks[] = {{entry, native}};
+    auto &cpu = m_m->cpu;
+    cpu.sr = 0x2700;
+    ASSERT_TRUE(f3_register_blocks(&cpu, blocks, 1));
+    ASSERT_TRUE(f3_register_ram_code(&cpu, ranges, 1));
+    for (size_t i = 0; i < sizeof(payload); ++i) m_m->write8(destination + i, payload[i]);
+    cpu.pc = entry;
+    ASSERT_TRUE(f3_dispatch(&cpu));
+    EXPECT_EQ(cpu.d[0], 99u);
+
+    m_m->write8(destination, 0);
+    cpu.pc = entry;
+    cpu.d[0] = 42;
+    EXPECT_THROW(f3_dispatch(&cpu), std::runtime_error);
+    EXPECT_EQ(cpu.d[0], 42u);
+}
+
 TEST_F(CpuTest, NativeDispatchFallbackAndExclusions) {
     auto &cpu = m_m->cpu;
     const f3_block blocks[] = {{TEST_RESET_PC, native}};

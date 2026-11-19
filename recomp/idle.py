@@ -8,14 +8,13 @@ three loop shapes from decoded instructions alone and plants an ``F3_IDLE*`` cal
 (recomp/cpu_ops.h) at the loop head that calls f3_idle when the loop would wait:
 
 * spin:   ``bra *``
-* poll:   ``tst.size <ram>`` closed by ``Bcc head`` or ``DBcc Dn,head``
+* poll:   ``tst.size <ram>`` closed by ``Bcc head``
 * affine: ``jsr`` chain that advances one RAM longword by x -> m*x + a
           (an LCG random-number generator) and branches back to the head
 
-Only an interrupt handler can change what such a loop reads, so the yield never
-changes the result of the wait. The loop still runs one native iteration per
-yield: a DBcc counter or an RNG word advances once per device event rather than
-once per iteration of real hardware.
+A Bcc RAM poll can wait for an external change. A DBcc loop can time out
+through its own counter, so it runs at the normal instruction budget. An
+affine loop still advances its RNG word once per device event.
 
 Every instruction on the loop's path must be emitted natively (retained, lowered,
 no emit-unit hook), otherwise the loop is left alone.
@@ -82,9 +81,6 @@ def _poll(instructions: Mapping[int, CsInsn], insn: CsInsn) -> list[str] | None:
     if address is None or closing is None or _target(closing) != insn.address:
         return None
     mnemonic = _get_base_mnemonic(closing)
-    if mnemonic.startswith("db") and mnemonic[2:] in COND_MAP and _data_register(closing.operands[0]) is not None:
-        counter = _data_register(closing.operands[0])
-        return [f"F3_IDLE_POLL_DBCC(cpu, {address}, {size}, {COND_MAP[mnemonic[2:]]}, {counter});"]
     if mnemonic.startswith("b") and mnemonic[1:] in COND_MAP and mnemonic not in ("bra", "bsr"):
         return [f"F3_IDLE_POLL_BCC(cpu, {address}, {size}, {COND_MAP[mnemonic[1:]]});"]
     return None

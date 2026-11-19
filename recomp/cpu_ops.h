@@ -618,20 +618,12 @@ static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size
     if (p && f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond)) f3_idle(cpu);
 }
 
-static inline void f3_idle_poll_dbcc(f3_cpu *cpu, uint32_t address, unsigned size, unsigned cond,
-                                     unsigned counter) {
-    const uint8_t *p = f3_ram(cpu, address, size);
-    if (p && !f3_cond_ccr(f3_tst_ccr(p, size), (uint8_t)cond) && (cpu->d[counter] & 0xffffu)) f3_idle(cpu);
-}
 #if defined(F3_PROFILE_INSTRUMENT) && F3_PROFILE_INSTRUMENT
 #  define F3_IDLE(cpu) ((void)0)
 #  define F3_IDLE_POLL_BCC(cpu, address, size, cond) ((void)0)
-#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter) ((void)0)
 #else
 #  define F3_IDLE(cpu) f3_idle(cpu)
 #  define F3_IDLE_POLL_BCC(cpu, address, size, cond) f3_idle_poll_bcc((cpu), (address), (size), (cond))
-#  define F3_IDLE_POLL_DBCC(cpu, address, size, cond, counter) \
-      f3_idle_poll_dbcc((cpu), (address), (size), (cond), (counter))
 #endif
 
 #include "bitfield.h"

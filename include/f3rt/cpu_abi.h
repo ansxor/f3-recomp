@@ -174,6 +174,15 @@ int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc);
 /* Sorted nonoverlapping even ROM intervals, disjoint from registered blocks.
  * An excluded PC fails before the untranslated-instruction failure. */
 int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t count);
+typedef struct {
+    uint32_t destination;
+    uint32_t length;
+    const uint8_t *bytes;
+} f3_ram_code_range;
+
+/* Sorted, disjoint ranges of immutable expected bytes for translated RAM code.
+ * The ranges and byte arrays remain valid for the CPU's lifetime. */
+int f3_register_ram_code(f3_cpu *cpu, const f3_ram_code_range *ranges, size_t count);
 /* Execute one block at pc, including boundary. Returns 1 for progress, IRQ
  * entry, or a device event; 0 on fatal host error/halt. */
 int f3_dispatch(f3_cpu *cpu);

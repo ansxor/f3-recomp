@@ -41,6 +41,14 @@ sha1 = "0a8e973bb1d8c6dea9124d2742d354c6f20c08ee"
 [discovery]
 coverage = "all_aligned"
 
+# The copy loop reads the destination and DBRA count before the payload.
+[[ram_code]]
+destination = 0x604ff0
+source = 0x00ba9e
+length = 96
+transform = "negate_be32"
+entry = 0x605000
+
 [sprites]
 size = 2097152
 fill = 0

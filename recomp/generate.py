@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 import zlib
-from collections import Counter
+from collections import ChainMap, Counter
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
@@ -17,11 +17,12 @@ from .discovery import exclusion_at, parse_exclusions
 from .emitter import lower, static_flow
 from .idle import find_idle_loops
 from .liveness import analyse
+from .opcodes import LEGAL_68020
+from .ram_code import decode_ram_routines
 from .sprite_trace import trace as trace_sprite_groups
 from .sprite_trace import write_outputs as write_sprite_groups
 from .sprite_units import digest as sprite_units_digest
 from .sprite_units import guard_lines, parse_sprite_units
-from .opcodes import LEGAL_68020
 
 _RUNTIME_ABI_VERSION = 7
 
@@ -187,6 +188,13 @@ def generate(
             if cold_pcs and profile_slim is None:
                 emission_blocks.append(("cold", cold_pcs))
 
+    ram_routines = decode_ram_routines(rom, config)
+    ram_instructions = {pc: insn for routine in ram_routines for pc, insn in routine.instructions.items()}
+    instructions = ChainMap(discovery.instructions, ram_instructions) if ram_instructions else discovery.instructions
+    # RAM entries are required even in a slim build. Every RAM instruction
+    # returns through dispatch before another RAM instruction can execute.
+    emission_blocks.extend(("hot", [pc]) for pc in sorted(ram_instructions))
+
     abi_guard = (
         f"#if F3RT_ABI_VERSION != {_RUNTIME_ABI_VERSION}\n"
         '#error "Generated program and f3rt ABI versions differ"\n'
@@ -216,7 +224,7 @@ def generate(
     fallback_entries = set()
     unflagged = {}
     for pc in pc_to_name:
-        statements = lower(discovery.instructions[pc])
+        statements = lower(instructions[pc])
         if statements is None:
             fallback_entries.add(pc)
             continue
@@ -227,8 +235,8 @@ def generate(
             unflagged[pc] = statements
     sprite_groups = trace_sprite_groups(rom, discovery, config, sprite_writers, sprite_lanes)
     reset_pcs = {reset.pc for reset in sprite_groups.resets}
-    pinned = fallback_entries | unit_enter.keys() | unit_exit.keys() | reset_pcs
-    liveness = analyse(discovery.instructions, pc_to_name, pinned=pinned)
+    pinned = fallback_entries | unit_enter.keys() | unit_exit.keys() | reset_pcs | ram_instructions.keys()
+    liveness = analyse(instructions, pc_to_name, pinned=pinned)
     idle_loops = find_idle_loops(discovery.instructions, lambda pc: pc in pc_to_name and pc not in pinned)
     flag_emitted = Counter()
     source_names = []
@@ -251,7 +259,7 @@ def generate(
         lines.extend(f"    case 0x{pc:08x}u: goto L_{pc:06x};" for pc in pcs)
         lines.extend(["    default: return;", "    }"])
         for pc in pcs:
-            insn = discovery.instructions[pc]
+            insn = instructions[pc]
             lines.append(f"L_{pc:06x}: {{")
             # Exit before enter: a PC that ends one unit and starts another
             # closes the first invocation before opening the next.
@@ -263,7 +271,8 @@ def generate(
                 lines.append(f"    F3_UNIT_ENTER(cpu, {unit_id});")
                 unit_hooks[(unit_id, "enter")] += 1
                 shard_hooked[tier] = True
-            lines.append(f"    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);")
+            if pc not in ram_instructions:
+                lines.append(f"    F3_PROFILE_HIT_MAIN(0x{pc:08x}u);")
             if pc in idle_loops:
                 lines.extend(f"    {statement}" for statement in idle_loops[pc][1])
             statements = None if pc in fallback_entries else unflagged.get(pc) or lower(insn, liveness.live_out[pc])
@@ -311,7 +320,7 @@ def generate(
                             shard_calls[tier].add(owner)
                             lines.append(f"    if ({guard}) {{ F3_CHAIN({owner}, cpu); }}")
                     base_mnem = insn.mnemonic.split(".")[0].lower()
-                    if base_mnem in ("jmp", "jsr") and not flow.targets:
+                    if pc not in ram_instructions and base_mnem in ("jmp", "jsr") and not flow.targets:
                         lines.append(f"    F3_PROFILE_INDIRECT_MAIN(0x{pc:08x}u, cpu->pc);")
                     candidates = indirect_targets.get(pc)
                     if candidates:
@@ -431,6 +440,17 @@ def generate(
             for region in exclusions
         )
         program += "};\n"
+    if ram_routines:
+        for index, routine in enumerate(ram_routines):
+            program += f"static const uint8_t ram_payload_{index}[] = {{\n"
+            for offset in range(0, len(routine.payload), 16):
+                data = ", ".join(f"0x{byte:02x}" for byte in routine.payload[offset : offset + 16])
+                program += f"    {data},\n"
+            program += "};\n"
+        program += "static const f3_ram_code_range ram_code[] = {\n"
+        for index, routine in enumerate(ram_routines):
+            program += f"    {{ 0x{routine.destination:08x}u, sizeof(ram_payload_{index}), ram_payload_{index} }},\n"
+        program += "};\n"
     program += (
         "f3_block_fn f3_entry_by_word[F3_ENTRY_WORDS];\n"
         "int f3_generated_register(f3_cpu *cpu) {\n"
@@ -438,8 +458,11 @@ def generate(
         "    if (!f3_register_blocks(cpu, translated_blocks,\n"
         "        sizeof(translated_blocks) / sizeof(translated_blocks[0]))) return 0;\n"
         "    for (size_t i = 0; i < sizeof(translated_blocks) / sizeof(translated_blocks[0]); ++i)\n"
-        "        f3_entry_by_word[translated_blocks[i].address >> 1] = translated_blocks[i].execute;\n"
+        "        if (translated_blocks[i].address < 2u * F3_ENTRY_WORDS)\n"
+        "            f3_entry_by_word[translated_blocks[i].address >> 1] = translated_blocks[i].execute;\n"
     )
+    if ram_routines:
+        program += "    if (!f3_register_ram_code(cpu, ram_code, sizeof(ram_code) / sizeof(ram_code[0]))) return 0;\n"
     if exclusions:
         program += (
             "    return f3_register_exclusions(cpu, excluded_ranges,\n"
@@ -478,7 +501,7 @@ def generate(
         "base": 0,
         "size": len(rom),
         "entries": original_entries,
-        "retained_entries": len(table),
+        "retained_entries": len(table) - len(ram_instructions),
         "hot_entries": len(hot),
         "cold_entries": len(original_entries) - len(hot),
         "generated_c_bytes": sum((output / name).stat().st_size for name in source_names),
@@ -488,6 +511,7 @@ def generate(
     report = {
         "decoded_instructions": len(discovery.instructions),
         "registered_entries": len(table),
+        "ram_entries": len(ram_instructions),
         "native_instructions": sum(supported.values()),
         "exception_entries": dict(sorted(exception_entries.items())),
         "undecoded_valid_primary_entries": (len(discovery.invalid_pcs) - len(rom_exceptions) if exhaustive else 0),

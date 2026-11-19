@@ -38,6 +38,14 @@ size = 0x80000
 crc = "44ccf2f6"
 sha1 = "60877525feaa992b1b374acfb5c16439e5f32161"
 
+# The copy loop reads the destination and DBRA count before the payload.
+[[ram_code]]
+destination = 0x604ff0
+source = 0x00b996
+length = 96
+transform = "negate_be32"
+entry = 0x605000
+
 [sprites]
 size = 0x200000
 fill = 0

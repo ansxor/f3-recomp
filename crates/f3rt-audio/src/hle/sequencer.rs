@@ -410,9 +410,16 @@ fn parse_sound_bank(rom: &RomView) -> [SongData; SONG_SLOTS] {
         }
 
         let mut offsets = [0u32; TOTAL_SONG_STREAMS];
-        for t in 0..TOTAL_SONG_STREAMS {
-            offsets[t] =
-                rom.read_u32(start.wrapping_add(4).wrapping_add((t as u32).wrapping_mul(4)));
+        // The driver only reads music stream offsets for channels assigned by the header.
+        // The HLE plays the conductor, the assigned music channels, and the arrangement.
+        let music_streams = song.initial.iter().enumerate().filter_map(|(track, config)| {
+            (config.program != NO_PROGRAM).then_some(FIRST_MUSIC_STREAM_INDEX + track)
+        });
+        for stream in [CONDUCTOR_STREAM_INDEX, ARRANGEMENT_STREAM_INDEX]
+            .into_iter()
+            .chain(music_streams)
+        {
+            offsets[stream] = rom.read_u32(start + 4 + stream as u32 * 4);
         }
 
         // The index is the stream id: it addresses the offset table and the song's stream slot.

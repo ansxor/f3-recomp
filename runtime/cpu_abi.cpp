@@ -178,6 +178,23 @@ int f3_register_exclusions(f3_cpu *cpu, const f3_excluded_range *ranges, size_t 
     m.excluded_code = std::span(ranges, count);
     return 1;
 }
+int f3_register_ram_code(f3_cpu *cpu, const f3_ram_code_range *ranges, size_t count) {
+    if (!cpu || !cpu->runtime || (count && !ranges)) return 0;
+    uint32_t previous_end = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const auto &range = ranges[i];
+        const uint64_t end = uint64_t(range.destination) + range.length;
+        const bool work_ram = range.destination >= f3rt::RAM_BASE && end <= f3rt::RAM_END;
+        const bool sprite_ram = range.destination >= f3rt::GRAPHICS_BASE &&
+                                end <= f3rt::GRAPHICS_BASE + f3rt::SPRITE_RAM_SIZE;
+        if ((!work_ram && !sprite_ram) || !range.bytes || !range.length ||
+            ((range.destination | range.length) & 1) || previous_end > range.destination)
+            return 0;
+        previous_end = uint32_t(end);
+    }
+    machine(cpu).ram_code = std::span(ranges, count);
+    return 1;
+}
 int f3_dispatch(f3_cpu *cpu) {
     if (!cpu || !cpu->runtime || cpu->halted) return 0;
     if (sandbox(cpu)) {
@@ -206,6 +223,25 @@ int f3_dispatch(f3_cpu *cpu) {
                 block->execute(cpu);
                 return !cpu->halted;
             }
+        }
+    }
+    if (cpu->pc >= f3rt::ROM_END && !m.ram_code.empty()) {
+        for (const auto &range : m.ram_code) {
+            if (cpu->pc < range.destination) break;
+            if (cpu->pc - range.destination >= range.length) continue;
+            if ((cpu->sr & 0xc000) || !m.block_count) return f3_fallback(cpu);
+            const auto *end = m.blocks + m.block_count;
+            const auto *block = std::lower_bound(
+                m.blocks, end, cpu->pc,
+                [](const f3_block &entry, uint32_t pc) { return entry.address < pc; });
+            if (block == end || block->address != cpu->pc) return f3_fallback(cpu);
+            // RAM remains writable. Recheck the whole payload after every
+            // scheduling boundary and before executing another RAM instruction.
+            for (uint32_t offset = 0; offset < range.length; ++offset)
+                if (m.read8(range.destination + offset) != range.bytes[offset]) return f3_fallback(cpu);
+            ++m.native_blocks;
+            block->execute(cpu);
+            return !cpu->halted;
         }
     }
 #ifdef F3_PROFILE_SLIM_ENABLED
