@@ -7,7 +7,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-from recomp.block_profile import read_profile
+from tools.recomp_py.block_profile import read_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
                     str(ROOT),
                     "--locked",
                     "python",
-                    str(ROOT / "recomp/compile/roms.py"),
+                    str(ROOT / "tools/recomp_py/compile/roms.py"),
                     "--configs",
                     *map(str, sorted((ROOT / "games").glob("*/config.toml"))),
                     "--output",

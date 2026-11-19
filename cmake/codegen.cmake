@@ -91,8 +91,8 @@ set(F3_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_config")
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${F3_GAME_CONFIGS}
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/roms.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/roms.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
     "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
 )
@@ -105,8 +105,8 @@ set(F3_COMPILE_ROMS_ARGS
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
     INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/roms.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/roms.py"
         ${F3_GAME_CONFIGS}
         "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
         "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
@@ -114,12 +114,12 @@ f3_run_generator(
     OUTPUT_FILES
         "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
         "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp"
-    COMMAND ${F3_UV_PYTHON} recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS}
+    COMMAND ${F3_UV_PYTHON} tools/recomp_py/compile/roms.py ${F3_COMPILE_ROMS_ARGS}
 )
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/sprite_units.py"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/sprite_units.py"
 )
 set(F3_COMPILE_SPRITE_UNITS_ARGS
     --config "${F3_GAME_CONFIG}"
@@ -128,8 +128,8 @@ set(F3_COMPILE_SPRITE_UNITS_ARGS
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_sprite_units.stamp"
     INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/sprite_units.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/sprite_units.py"
         "${F3_GAME_CONFIG}"
         "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
         "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
@@ -137,7 +137,7 @@ f3_run_generator(
     OUTPUT_FILES
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.h"
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.hpp"
-    COMMAND ${F3_UV_PYTHON} recomp/compile/sprite_units.py ${F3_COMPILE_SPRITE_UNITS_ARGS}
+    COMMAND ${F3_UV_PYTHON} tools/recomp_py/compile/sprite_units.py ${F3_COMPILE_SPRITE_UNITS_ARGS}
 )
 
 option(F3_PROFILE_INSTRUMENT "Record every generated main/sound entry with --profile-out" OFF)
@@ -189,7 +189,7 @@ if(F3_ROM_DIR)
     endif()
 
     file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/*.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv"
     )
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -230,11 +230,11 @@ if(F3_ROM_DIR)
             "${F3_GENERATED_DIR}/program.bin"
             "${F3_GENERATED_DIR}/sprite_groups.hpp"
             "${F3_GENERATED_DIR}/sprite_groups.json"
-        COMMAND ${F3_UV_PYTHON} -m recomp emit ${F3_RECOMP_EMIT_ARGS}
+        COMMAND ${F3_UV_PYTHON} -m tools.recomp_py emit ${F3_RECOMP_EMIT_ARGS}
     )
 endif()
 
-set(F3_ENHANCEMENT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/enhancements.py")
+set(F3_ENHANCEMENT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/enhancements.py")
 set(F3_ENHANCEMENT_GROUPS)
 if(F3_GENERATED_DIR)
     set(F3_ENHANCEMENT_GROUPS "${F3_GENERATED_DIR}/sprite_groups.json")

@@ -11,7 +11,8 @@ from pathlib import Path
 
 def _load(name: str) -> bytes:
     table = bytearray(65536)
-    for line in Path(__file__).with_name(name).read_text().splitlines():
+    path = Path(__file__).resolve().parents[2] / "recomp" / name
+    for line in path.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
         mask_text, match_text, legal_text = line.split(",")

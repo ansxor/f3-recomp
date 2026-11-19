@@ -12,9 +12,9 @@ from types import SimpleNamespace
 from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
 from capstone.m68k import M68K_OP_BR_DISP
 
-from recomp.discovery import discover, load_rom
-from recomp.generate import generate, write_if_changed
-from recomp.sprite_trace import (
+from tools.recomp_py.discovery import discover, load_rom
+from tools.recomp_py.generate import generate, write_if_changed
+from tools.recomp_py.sprite_trace import (
     LANE_X,
     LANE_XY,
     LANE_Y,
