@@ -62,7 +62,12 @@ let rec print_at minimum expr =
         in
         level, operand level left ^ " " ^ symbol ^ " " ^ operand (level + 1) right
     | Select (test, yes, no) ->
-        1, print_at 2 test ^ " ? " ^ print_at 0 yes ^ " : " ^ print_at 1 no
+        (* Clang's -Wbitwise-conditional-parentheses flags a bare bitwise test. *)
+        let test = match test with
+          | Bin ((Or | Xor | And), _, _) -> "(" ^ print_at 0 test ^ ")"
+          | _ -> print_at 2 test
+        in
+        1, test ^ " ? " ^ print_at 0 yes ^ " : " ^ print_at 1 no
   in
   if precedence < minimum then "(" ^ text ^ ")" else text
 
