@@ -10,7 +10,7 @@ type error =
 
 type counts = { flags : Lower.counts; fallbacks : int }
 
-val make : input Pc.Map.t -> t
+val make : ?flags:[ `Lazy | `Eager ] -> input Pc.Map.t -> t
 val bodies : t -> body Pc.Map.t
 val check : t -> (unit, error) result
 val counts : t -> counts

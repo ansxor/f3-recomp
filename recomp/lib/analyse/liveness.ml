@@ -1,9 +1,19 @@
 type t = { live_in : Ccr.t Pc.Map.t; live_out : Ccr.t Pc.Map.t }
 
-let base (cfg : Cfg.t) (node : Cfg.node) =
-  match node.boundaries with [] -> cfg.interrupt_observes | _ -> Ccr.all
+let base ~yields (cfg : Cfg.t) (node : Cfg.node) =
+  if node.boundaries <> [] then Ccr.all
+  else if Pc.Set.mem node.pc yields then cfg.interrupt_observes
+  else Ccr.none
 
-let solve (cfg : Cfg.t) =
+let project_live_in (cfg : Cfg.t) live_out =
+  Pc.Map.filter_map (fun pc (node : Cfg.node) ->
+    Option.map (fun live_out -> Effects.live_in node.effects ~live_out)
+      (Pc.Map.find_opt pc live_out)) cfg.nodes
+
+let node_pcs (cfg : Cfg.t) =
+  Pc.Map.fold (fun pc _ pcs -> Pc.Set.add pc pcs) cfg.nodes Pc.Set.empty
+
+let solve ~yields (cfg : Cfg.t) =
   let work = Queue.create () in
   let size = Pc.Map.cardinal cfg.nodes in
   let states = Hashtbl.create size in
@@ -26,7 +36,7 @@ let solve (cfg : Cfg.t) =
     queued.(i) <- false;
     let node = nodes.(i) in
     let out = List.fold_left (fun acc target -> Ccr.union acc live_in.(target))
-        (base cfg node) successors.(i) in
+        (base ~yields cfg node) successors.(i) in
     live_out.(i) <- out;
     let incoming = Effects.live_in node.effects ~live_out:out in
     if incoming <> live_in.(i) then begin
@@ -47,13 +57,13 @@ let solve (cfg : Cfg.t) =
 type violation = Missing of int | Unexpected of int | Invalid_live_in of int
   | Boundary of int | Edge of int * int
 
-let check (cfg : Cfg.t) cert =
+let check ~yields (cfg : Cfg.t) cert =
   let violations = Pc.Map.fold (fun pc (node : Cfg.node) acc ->
     match Pc.Map.find_opt pc cert.live_in, Pc.Map.find_opt pc cert.live_out with
     | Some incoming, Some out ->
         let acc = if incoming = Effects.live_in node.effects ~live_out:out
           then acc else Invalid_live_in pc :: acc in
-        let acc = if Ccr.subset (base cfg node) out then acc else Boundary pc :: acc in
+        let acc = if Ccr.subset (base ~yields cfg node) out then acc else Boundary pc :: acc in
         List.fold_left (fun acc target ->
           match Pc.Map.find_opt target cfg.nodes, Pc.Map.find_opt target cert.live_out with
           | Some successor, Some live_out

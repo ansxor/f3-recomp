@@ -43,11 +43,21 @@ let rec splice_transfer tail = List.concat_map (function
   | Repeat body -> [Repeat (splice_transfer tail body)]
   | stmt -> [stmt])
 
-let function_body (layout : Layout.t) (func : Layout.func) =
+let rec can_return = function
+  | Return | Transfer | Chain _ | Dispatch_pc -> true
+  | If (_, yes, no) -> List.exists can_return yes || List.exists can_return no
+  | Block body | Repeat body -> List.exists can_return body
+  | Switch (_, cases, default) ->
+      List.exists (fun (_, body) -> List.exists can_return body) cases ||
+      List.exists can_return default
+  | _ -> false
+
+let function_body ~check_yield (layout : Layout.t) (func : Layout.func) =
   let starts, ends = Emit_units.hooks layout.selection.units in
   let hooks table key pc =
     Pc.Map.find_opt pc table |> Option.value ~default:[]
     |> List.map (fun id -> Lower.cpu_call key [UInt id]) in
+  let last = List.hd (List.rev func.pcs) in
   let entry address =
     let rom = not (Layout.is_ram layout address) in
     let profile = if rom then [Expr (Call ("F3_PROFILE_HIT_MAIN", [UInt address]))] else [] in
@@ -70,6 +80,7 @@ let function_body (layout : Layout.t) (func : Layout.func) =
             | _ -> [] in
           splice_transfer (profile_indirect @ transfers layout func.name transfer) lowered.stmts
     in
+    if address = last || List.exists can_return body then check_yield address;
     [Label (Layout.label address);
      Block (hooks ends "F3_UNIT_EXIT" address @ hooks starts "F3_UNIT_ENTER" address @
             profile @ idle @ body)]
@@ -79,7 +90,7 @@ let function_body (layout : Layout.t) (func : Layout.func) =
 
 module Names = Set.Make (String)
 
-let file (layout : Layout.t) (shard : Layout.shard) =
+let file ~check_yield (layout : Layout.t) (shard : Layout.shard) =
   let starts, ends = Emit_units.hooks layout.selection.units in
   let hooked = List.exists (fun (func : Layout.func) ->
     List.exists (fun pc -> Pc.Map.mem pc starts || Pc.Map.mem pc ends) func.pcs) shard.functions in
@@ -93,7 +104,7 @@ let file (layout : Layout.t) (shard : Layout.shard) =
   Buffer.add_string output preamble;
   if hooked then Buffer.add_string output (Emit_units.guard_lines layout.selection.units);
   Names.iter (fun name -> Buffer.add_string output (declaration name)) externs;
-  List.iter (fun func -> Buffer.add_string output (print_func (function_body layout func))) shard.functions;
+  List.iter (fun func -> Buffer.add_string output (print_func (function_body ~check_yield layout func))) shard.functions;
   shard.filename, Buffer.contents output
 
-let files (layout : Layout.t) = List.map (file layout) layout.shards
+let files ~check_yield (layout : Layout.t) = List.map (file ~check_yield layout) layout.shards

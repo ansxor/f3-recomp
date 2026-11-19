@@ -99,7 +99,7 @@ let or_bits = function
 
 let no_elision stmts = { stmts; elided = Ccr.none; counts = no_flags }
 
-let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
+let rec statement ~flags ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
   let summary = Effects.of_stmt stmt in
   let lower = function
     | Sem.Let (slot, value) -> no_elision [decl slot (expr value)]
@@ -120,6 +120,7 @@ let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
         in
         no_elision [Assign (dest, value)]
     | Flags producer ->
+        let live = if flags = `Eager then Ccr.all else live in
         let { Flags.x; pending } = Flags.specialise producer ~live in
         let write_x = Option.to_list (Option.map (fun value ->
             set_sr_bits (flag_bit X) (bool_bit X value)) x) in
@@ -142,7 +143,7 @@ let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
     | Set_ccr value ->
         no_elision [set_sr_bits (uint 0x1f) (bin And (expr value) (uint 0x1f)); clear_pending]
     | If (test, yes, no) ->
-        let yes = sequence ~memory ~exit_live ~live yes and no = sequence ~memory ~exit_live ~live no in
+        let yes = sequence ~flags ~memory ~exit_live ~live yes and no = sequence ~flags ~memory ~exit_live ~live no in
         { stmts = [If (expr test, yes.stmts, no.stmts)];
           elided = Ccr.union yes.elided no.elided;
           counts = add_counts yes.counts no.counts }
@@ -160,7 +161,7 @@ let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
     | Goto addr -> no_elision (complete (expr addr) Transfer)
     | Stop next -> no_elision (assign "stopped" (uint 1) :: complete (uint next) Return)
     | Repeat body ->
-        let body = sequence ~memory ~exit_live ~live:Ccr.all body in
+        let body = sequence ~flags ~memory ~exit_live ~live:Ccr.all body in
         { body with stmts = [Repeat body.stmts] }
   in
   let needs_canonical = match stmt with
@@ -185,14 +186,14 @@ let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
   in
   result, canonical
 
-and sequence ~memory ~exit_live ~live stmts =
+and sequence ~flags ~memory ~exit_live ~live stmts =
   let exit = Effects.make ~reads:exit_live () in
   let annotate stmt (tail, next) =
     (stmt, next.Effects.reads) :: tail, Effects.before ~exit stmt next
   in
   let stmts, _ = List.fold_right annotate stmts ([], Effects.make ~reads:live ()) in
   let lower (acc, canonical) (stmt, live) =
-    let head, canonical = statement ~memory ~exit_live ~live ~canonical stmt in
+    let head, canonical = statement ~flags ~memory ~exit_live ~live ~canonical stmt in
     { stmts = List.rev_append head.stmts acc.stmts;
       elided = Ccr.union acc.elided head.elided;
       counts = add_counts acc.counts head.counts }, canonical
@@ -200,9 +201,9 @@ and sequence ~memory ~exit_live ~live stmts =
   let result, _ = List.fold_left lower (no_elision [], false) stmts in
   { result with stmts = List.rev result.stmts }
 
-let entry sem ~live_out ~memory =
+let entry ?(flags = `Lazy) sem ~live_out ~memory =
   match sem with
   | Sem.Unsupported reason -> Error reason
   | Body stmts ->
-      let lowered = sequence ~memory ~exit_live:live_out ~live:live_out stmts in
+      let lowered = sequence ~flags ~memory ~exit_live:live_out ~live:live_out stmts in
       Ok { lowered with stmts = C.drop_unused_decls lowered.stmts }
