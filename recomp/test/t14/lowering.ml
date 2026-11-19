@@ -13,9 +13,9 @@ let memory_paths () =
       Store (Byte, addr, Temp 0); Store (Word, addr, Temp 1); Store (Long, addr, Temp 2);
       Store_long_low_first (addr, Temp 2);
     ] in
-  let reset_pcs = Pc.Set.singleton 0x1000 in
+  let groups = { Sprite_groups.empty with reset_pcs = Pc.Set.singleton 0x1000 } in
   let calls pc =
-    lower sem ~memory:(Memory_path.at ~reset_pcs pc)
+    lower sem ~memory:(Memory_path.at groups pc)
     |> List.map (function
       | C.Decl (_, _, Call (name, _)) | Expr (Call (name, _)) -> name
       | _ -> Alcotest.fail "expected a memory access")
@@ -43,7 +43,7 @@ let check_elision () =
   | Error (Live_flags_elided { pc = actual_pc; flags }) ->
       Alcotest.(check int) "PC" pc actual_pc;
       Alcotest.(check string) "overlap" "Z" (Ccr.to_string flags)
-  | Ok () -> Alcotest.fail "expected a live flag elision"
+  | Error _ | Ok () -> Alcotest.fail "expected a live flag elision"
 
 let summary () =
   let open Sem in

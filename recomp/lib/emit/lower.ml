@@ -87,8 +87,8 @@ let install (producer : Sem.producer) =
   [assign "cc_result" (expr result); assign "cc_width" (uint (Sem.bytes width));
    assign "cc_op" (Name ("F3_CC_OP_" ^ op))]
 
-let complete pc =
-  [assign "pc" pc; assign "steps" (bin Add (field "steps") (uint 1)); Return]
+let complete pc exit =
+  [assign "pc" pc; assign "steps" (bin Add (field "steps") (uint 1)); exit]
 
 let store memory width addr value =
   cpu_call (Memory_path.store memory width) [addr; value]
@@ -157,8 +157,8 @@ let rec statement ~memory ~exit_live ~live ~canonical (stmt : Sem.stmt) =
         no_elision [cpu_call name (List.map expr args)]
     | Raise { vector; return_pc } ->
         no_elision [cpu_call "f3_exception" [uint vector; uint return_pc]; Return]
-    | Goto addr -> no_elision (complete (expr addr))
-    | Stop next -> no_elision (assign "stopped" (uint 1) :: complete (uint next))
+    | Goto addr -> no_elision (complete (expr addr) Transfer)
+    | Stop next -> no_elision (assign "stopped" (uint 1) :: complete (uint next) Return)
     | Repeat body ->
         let body = sequence ~memory ~exit_live ~live:Ccr.all body in
         { body with stmts = [Repeat body.stmts] }

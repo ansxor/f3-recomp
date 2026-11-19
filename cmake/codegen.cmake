@@ -158,6 +158,7 @@ f3_run_generator(
     OCAML_COMMAND sprite-units ${F3_COMPILE_SPRITE_UNITS_ARGS}
 )
 
+option(F3_RECOMP_ALLOW_UNPROVEN_IRQ "Temporarily allow unproven OCaml interrupt handlers" OFF)
 option(F3_PROFILE_INSTRUMENT "Record every generated main/sound entry with --profile-out" OFF)
 if(F3_PROFILE_INSTRUMENT AND NOT F3_ROM_DIR)
     message(FATAL_ERROR "F3_PROFILE_INSTRUMENT requires F3_ROM_DIR to regenerate instrumentable main/sound entries")
@@ -230,6 +231,14 @@ if(F3_ROM_DIR)
         --output "${F3_GENERATED_DIR}"
         ${F3_PROFILE_GENERATOR_ARGS}
     )
+    set(F3_RECOMP_OCAML_EMIT_ARGS --config-output-dir "${F3_GENERATED_CONFIG_DIR}")
+    set(F3_RECOMP_EMIT_CONFIG_OUTPUTS)
+    if(F3_RECOMP_EXECUTABLE)
+        list(APPEND F3_RECOMP_EMIT_CONFIG_OUTPUTS "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp")
+        if(F3_RECOMP_ALLOW_UNPROVEN_IRQ)
+            list(APPEND F3_RECOMP_OCAML_EMIT_ARGS --allow-unproven-irq)
+        endif()
+    endif()
     f3_run_generator(
         STAMP_FILE "${F3_GENERATED_DIR}/recomp_emit.stamp"
         INPUT_FILES
@@ -241,6 +250,7 @@ if(F3_ROM_DIR)
         EXTRA_DATA
             "${_rom_identity}"
             "${F3_RECOMP_EMIT_ARGS}"
+            "${F3_RECOMP_OCAML_EMIT_ARGS}"
         OUTPUT_FILES
             "${F3_GENERATED_DIR}/sources.cmake"
             "${F3_GENERATED_DIR}/program.c"
@@ -248,24 +258,35 @@ if(F3_ROM_DIR)
             "${F3_GENERATED_DIR}/program.bin"
             "${F3_GENERATED_DIR}/sprite_groups.hpp"
             "${F3_GENERATED_DIR}/sprite_groups.json"
+            "${F3_GENERATED_DIR}/profile_inventory.json"
+            ${F3_RECOMP_EMIT_CONFIG_OUTPUTS}
         COMMAND ${F3_UV_PYTHON} -m tools.recomp_py emit ${F3_RECOMP_EMIT_ARGS}
+        OCAML_COMMAND emit ${F3_RECOMP_EMIT_ARGS} ${F3_RECOMP_OCAML_EMIT_ARGS}
     )
 endif()
 
-set(F3_ENHANCEMENT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/enhancements.py")
-set(F3_ENHANCEMENT_GROUPS)
-if(F3_GENERATED_DIR)
-    set(F3_ENHANCEMENT_GROUPS "${F3_GENERATED_DIR}/sprite_groups.json")
+if(F3_RECOMP_EXECUTABLE AND F3_ROM_DIR)
+    # The emit step wrote enhancements.hpp along with the translated program.
+elseif(F3_RECOMP_EXECUTABLE AND F3_GENERATED_DIR AND EXISTS "${F3_GENERATED_DIR}/enhancements.hpp")
+    configure_file("${F3_GENERATED_DIR}/enhancements.hpp"
+        "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp" COPYONLY)
+else()
+    set(F3_ENHANCEMENT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/tools/recomp_py/compile/enhancements.py")
+    set(F3_ENHANCEMENT_GROUPS)
+    if(F3_GENERATED_DIR)
+        set(F3_ENHANCEMENT_GROUPS "${F3_GENERATED_DIR}/sprite_groups.json")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GENERATOR}")
+    if(EXISTS "${F3_ENHANCEMENT_GROUPS}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GROUPS}")
+    endif()
+    f3_run_generator(
+        STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/enhancements.stamp"
+        INPUT_FILES "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}" ${F3_ENHANCEMENT_GROUPS}
+        EXTRA_DATA ${F3_ENHANCEMENT_GROUPS}
+        OUTPUT_FILES "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp"
+        COMMAND ${F3_UV_PYTHON} "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}"
+            "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp" ${F3_ENHANCEMENT_GROUPS}
+        OCAML_COMMAND enhancements --config "${F3_GAME_CONFIG}" --output-dir "${F3_GENERATED_CONFIG_DIR}"
+    )
 endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GENERATOR}")
-if(EXISTS "${F3_ENHANCEMENT_GROUPS}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GROUPS}")
-endif()
-f3_run_generator(
-    STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/enhancements.stamp"
-    INPUT_FILES "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}" ${F3_ENHANCEMENT_GROUPS}
-    EXTRA_DATA ${F3_ENHANCEMENT_GROUPS}
-    OUTPUT_FILES "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp"
-    COMMAND ${F3_UV_PYTHON} "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}"
-        "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp" ${F3_ENHANCEMENT_GROUPS}
-)

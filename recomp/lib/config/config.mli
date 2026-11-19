@@ -72,7 +72,11 @@ type flicker_hold = {
 }
 
 type enhancements = { game_frame_counter : int; flicker_holds : flicker_hold list }
-type cpu = { interrupt_observes : Ccr.t }
+type cpu = {
+  interrupt_observes : Ccr.t;
+  interrupt_observes_explicit : bool;
+  interrupt_handlers_trusted : string option;
+}
 
 type t = {
   path : string;

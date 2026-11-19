@@ -1,0 +1,4 @@
+(test
+ (name cases)
+ (libraries f3recomp alcotest digestif.ocaml str unix)
+ (deps ../../bin/main.exe))

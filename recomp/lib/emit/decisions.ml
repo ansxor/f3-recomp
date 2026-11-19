@@ -3,7 +3,7 @@ let header = "pc\tdisposition\tlength\tflow\treads\twrites\tlive_out\tidle\tchai
 let flags mask =
   if mask = Ccr.none then "-" else Ccr.to_string mask
 
-let write ?(sprite_rows = []) ?(sprite_resets = Pc.Set.empty) output selection =
+let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
   (match Selection.check selection with
    | Ok () -> ()
    | Error violations ->
@@ -18,9 +18,10 @@ let write ?(sprite_rows = []) ?(sprite_resets = Pc.Set.empty) output selection =
         emit_sprite_rows include_row
     | _ -> ()
   in
-  let cfg = Cfg.of_selection selection in
+  let semantics = Cfg.semantics selection in
+  let cfg = Cfg.build selection semantics ~pins:(Pins.collect selection semantics groups) in
   let liveness = Liveness.solve cfg in
-  let native pc = Cfg.native cfg pc && not (Pc.Set.mem pc sprite_resets) in
+  let native pc = Cfg.native cfg pc in
   let idle = Idle_loop.find selection.program ~native in
   (match Idle_loop.check_all selection.program cfg idle with
    | Ok () -> ()

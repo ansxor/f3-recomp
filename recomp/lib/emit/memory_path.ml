@@ -1,7 +1,7 @@
 type t = Inline | Bus_writes
 
-let at ~reset_pcs pc =
-  if Pc.Set.mem pc reset_pcs then Bus_writes else Inline
+let at groups pc =
+  if Sprite_groups.is_reset groups pc then Bus_writes else Inline
 
 let sized prefix width = prefix ^ string_of_int (8 * Sem.bytes width)
 

@@ -1,13 +1,6 @@
 open Cmdliner
 open F3recomp
 
-let stub name =
-  let run () =
-    prerr_endline "not implemented";
-    2
-  in
-  Cmd.v (Cmd.info name) Term.(const run $ const ())
-
 let report_error run =
   try
     run ();
@@ -82,6 +75,13 @@ let compile_roms =
   Cmd.v (Cmd.info "compile-roms")
     Term.(const run $ configs $ more_configs $ output $ game $ game_output)
 
+let load_profile tiers slim =
+  match tiers, slim with
+  | None, None -> None
+  | Some path, None -> Some (`Tiers (Profile.load path))
+  | None, Some path -> Some (`Slim (Profile.load path))
+  | Some _, Some _ -> Error.fail "--profile-tiers and --profile-slim are mutually exclusive"
+
 let decisions =
   let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
   let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
@@ -100,12 +100,7 @@ let decisions =
   in
   let run config_path rom_dir tiers slim sprite_writers sprite_only sprite_header sprite_stats =
     report_error (fun () ->
-        let profile = match tiers, slim with
-          | None, None -> None
-          | Some path, None -> Some (`Tiers (Profile.load path))
-          | None, Some path -> Some (`Slim (Profile.load path))
-          | Some _, Some _ -> Error.fail "--profile-tiers and --profile-slim are mutually exclusive"
-        in
+        let profile = load_profile tiers slim in
         let writers = Option.fold ~none:[] ~some:Sprite_trace.load_writer_seeds sprite_writers in
         let game = Game.load config_path ~rom_dir in
         let program = Game.discover game in
@@ -120,9 +115,7 @@ let decisions =
           print_endline Decisions.header;
           List.iter (fun (_, row) -> print_string row) rows)
         else
-          let sprite_resets = List.fold_left (fun pcs (reset : Sprite_groups.classification) ->
-            Pc.Set.add reset.pc pcs) Pc.Set.empty groups.resets in
-          Program.select ~profile program |> Decisions.write ~sprite_rows:rows ~sprite_resets stdout)
+          Program.select ~profile program |> Decisions.write ~sprite_rows:rows ~groups stdout)
   in
   Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery, selection and sprite decisions.")
     Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim
@@ -225,8 +218,53 @@ let coverage =
   Cmd.v (Cmd.info "coverage" ~doc:"Count decoded ROM instructions the semantics cannot describe yet.")
     Term.(const run $ config $ rom_dir)
 
+let emit =
+  let required_path name = Arg.(required & opt (some string) None & info [name]) in
+  let optional_path name = Arg.(value & opt (some string) None & info [name]) in
+  let config = required_path "config" in
+  let rom_dir = required_path "rom-dir" in
+  let output = required_path "output" in
+  let config_output = optional_path "config-output-dir" in
+  let tiers = optional_path "profile-tiers" in
+  let slim = optional_path "profile-slim" in
+  let writers = optional_path "sprite-writers" in
+  let parity = optional_path "parity-from" in
+  let flags = Arg.(value & opt (enum ["lazy", `Lazy; "eager", `Eager]) `Lazy & info ["flags"]) in
+  let max_block = Arg.(value & opt int 32 & info ["max-block-instructions"]) in
+  let allow_unproven =
+    Arg.(value & flag & info ["allow-unproven-irq"] ~doc:"Temporarily warn about unknown interrupt handlers.") in
+  let run config rom_dir output config_output tiers slim writers parity flags max_block allow_unproven =
+    report_error (fun () ->
+      if max_block < 1 then Error.fail "--max-block-instructions must be positive";
+      if Option.is_some parity then Error.fail "--parity-from is not implemented";
+      if flags = `Eager then Error.fail "--flags eager is not implemented";
+      let profile = load_profile tiers slim in
+      let writers = Option.fold ~none:[] ~some:Sprite_trace.load_writer_seeds writers in
+      let analysis =
+        Game.load config ~rom_dir |> Game.discover |> Program.select ~profile
+        |> Analysis.run ~allow_unproven ~writers in
+      let layout =
+        Analysis.lower analysis
+        |> Layout.make ~max_block ~selection:analysis.selection ~idle:analysis.idle in
+      (match Layout.check_layout layout with
+       | Ok () -> ()
+       | Error message -> Error.fail ~where:"layout" "%s" message);
+      let sources = Blocks_c.files layout |> Program_c.files layout in
+      let groups = analysis.groups in
+      let enhancements = Enhancements.of_config analysis.selection.config groups |> Enhancements.render in
+      let summary = Summary.of_layout layout analysis in
+      Program_c.write ~dir:output
+        (sources @ ["sprite_groups.hpp", Sprite_groups.render_hpp groups;
+                    "sprite_groups.json", Sprite_groups.render_json groups]);
+      Output.write ~dir:(Option.value config_output ~default:output) enhancements;
+      Summary.print summary)
+  in
+  Cmd.v (Cmd.info "emit" ~doc:"Generate the native main CPU program.")
+    Term.(const run $ config $ rom_dir $ output $ config_output $ tiers $ slim $ writers
+          $ parity $ flags $ max_block $ allow_unproven)
+
 let () =
   exit
     (Cmd.eval'
        (Cmd.group (Cmd.info "f3recomp")
-          [sprite_units; compile_roms; check_game; check_irq; decisions; lower; coverage; enhancements; stub "emit"]))
+          [sprite_units; compile_roms; check_game; check_irq; decisions; lower; coverage; enhancements; emit]))

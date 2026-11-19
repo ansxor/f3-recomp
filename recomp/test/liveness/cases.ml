@@ -260,7 +260,7 @@ interrupt_observes = ["Z"]
   let program = Game.discover { Game.config; rom; exclusions = [] } in
   let selection = Program.select program ~profile:None in
   let semantics = Cfg.semantics selection in
-  let build resets = Cfg.build selection semantics ~pins:(Pins.collect selection semantics resets) in
+  let build resets = Cfg.build selection semantics ~pins:(Pins.collect selection semantics { Sprite_groups.empty with reset_pcs = resets }) in
   let plain = build Pc.Set.empty in
   check_live (Liveness.solve plain) 0x400 "XZ";
   let cfg = build (Pc.Set.singleton 0x402) in
