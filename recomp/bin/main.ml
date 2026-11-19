@@ -119,7 +119,10 @@ let decisions =
         if sprite_only then (
           print_endline Decisions.header;
           List.iter (fun (_, row) -> print_string row) rows)
-        else Program.select ~profile program |> Decisions.write ~sprite_rows:rows stdout)
+        else
+          let sprite_resets = List.fold_left (fun pcs (reset : Sprite_groups.classification) ->
+            Pc.Set.add reset.pc pcs) Pc.Set.empty groups.resets in
+          Program.select ~profile program |> Decisions.write ~sprite_rows:rows ~sprite_resets stdout)
   in
   Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery, selection and sprite decisions.")
     Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim
