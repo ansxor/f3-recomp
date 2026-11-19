@@ -19,8 +19,18 @@
  (modules rom_manifest_test)
  (libraries f3recomp alcotest))
 
+(library
+ (name f3recomp_test)
+ (modules asm insn_gen)
+ (libraries f3recomp qcheck))
+
+(test
+ (name asm_test)
+ (modules asm_test)
+ (libraries f3recomp f3recomp_test alcotest qcheck))
+
 (test
  (name decode_test)
  (modules decode_test)
- (libraries f3recomp alcotest)
+ (libraries f3recomp f3recomp_test alcotest)
  (deps ../68020_opcodes.csv))

@@ -1,5 +1,6 @@
 open F3recomp
 open Insn
+open F3recomp_test
 
 let base = 0x1000
 let image words =
@@ -13,6 +14,11 @@ let expect ?length words op =
   let length = Option.value length ~default:(List.length words * 2) in
   if decode words <> Decode.Insn { pc = base; length; op } then
     Alcotest.failf "unexpected decoding of %04x" (List.hd words)
+
+let expect_asm length op =
+  let image = Asm.(assemble ~base [insn op]) in
+  if Decode.at image base <> Decode.Insn { pc = base; length; op } then
+    Alcotest.failf "unexpected decoding of assembled %s" (Insn_gen.constructor op)
 
 let illegal words vector reason length =
   if decode words <> Decode.Illegal { vector; reason; length } then
@@ -83,20 +89,26 @@ let exhaustive () =
   done
 
 let brief () =
-  expect [0x4ef0; 0x9e80]
+  expect_asm 4
     (Jmp (Indexed { base = Areg 0; disp = -128;
                     index = Some { reg = A 1; long = true; scale = 8 }; indirect = Direct }))
 
 let index = Some { reg = D 0; long = false; scale = 1 }
 
 let full () =
+  (* Suppression erases the encoded PC base, so keep the original word. *)
   expect [0x4efb; 0x01e3; 0xfffe; 0x7654; 0x3210]
     (Jmp (Indexed { base = Suppressed; disp = -2; index = None; indirect = Pre 0x76543210 }));
+  (* Force a long, sign-extended base displacement and a word outer displacement. *)
   expect [0x4efb; 0x0136; 0xffff; 0xfffc; 0xfffe]
     (Jmp (Indexed { base = Pc_at (base + 2); disp = -4; index; indirect = Post (-2) }));
-  expect [0x23b0; 0x0133; 0; 0; 0; 0; 0x0137; 0; 0; 0; 0]
-    (Move (Long, Indexed { base = Areg 0; disp = 0; index; indirect = Pre 0 },
-                 Indexed { base = Areg 1; disp = 0; index; indirect = Post 0 }))
+  let op = Move (Long, Indexed { base = Areg 0; disp = 0; index; indirect = Pre 0 },
+                       Indexed { base = Areg 1; disp = 0; index; indirect = Post 0 }) in
+  let length = 22 in
+  let instruction = { pc = base; length; op } in
+  let bytes = Asm.encode instruction in
+  Alcotest.(check bool) "both indexed operands use long displacements" true
+    (Decode.at { Image.base; bytes } base = Decode.Insn instruction)
 
 let reserved_base () =
   expect [0x4ef0; 0x0100] (Jmp (Indexed { base = Areg 0; disp = 0; index; indirect = Direct }))
@@ -116,49 +128,49 @@ let reserved_index_suppressed () =
 
 let pc_prefixes () =
   let pc_rel = Pc_rel (base + 2) in
-  expect [0xe8fa; 0; 0xfffe]
+  expect_asm 6
     (Bitfield { operation = Bftst; offset = Constant 0; width = Constant 32; operand = pc_rel });
-  expect [0x00fa; 0x1800; 0xfffe] (Bounds (Check, Byte, pc_rel, D 1));
-  expect [0x4cba; 0x0101; 0xfffe] (Movem (From_memory, Word, [D 0; A 0], pc_rel));
-  expect [0x4c3a; 0x1800; 0xfffe] (Mul_long { sign = Signed; operand = pc_rel; low = 1; high = None });
+  expect_asm 6 (Bounds (Check, Byte, pc_rel, D 1));
+  expect_asm 6 (Movem (From_memory, Word, [D 0; A 0], pc_rel));
+  expect_asm 6 (Mul_long { sign = Signed; operand = pc_rel; low = 1; high = None });
   expect [0x083a; 0x1234; 0xfffe] (Bit (Btst, Constant 0x34, pc_rel));
-  expect [0x0cba; 0x1234; 0x5678; 0xfffc] (Alu (Cmp, Long, Immediate 0x12345678, pc_rel));
-  expect [0x23fa; 0; 0x1234; 0x5678] (Move (Long, pc_rel, Absolute 0x12345678));
-  expect [0x2179; 0x1234; 0x5678; 0xfffe]
+  expect_asm 8 (Alu (Cmp, Long, Immediate 0x12345678, pc_rel));
+  expect_asm 8 (Move (Long, pc_rel, Absolute 0x12345678));
+  expect_asm 8
     (Move (Long, Absolute 0x12345678, Disp { reg = 0; disp = -2 }));
-  expect [0x0af0; 0x0081; 0x0008]
+  expect_asm 6
     (Cas (Byte, { compare = 1; update = 2 }, Indexed { base = Areg 0; disp = 8; index; indirect = Direct }));
-  expect [0x0e70; 0xa800; 0x0008]
+  expect_asm 6
     (Moves (To_memory, Word, A 2, Indexed { base = Areg 0; disp = 8; index; indirect = Direct }));
   illegal [0x0afa; 0; 0] 4 Decode.Unassigned 2;
   illegal [0x0e7a; 0; 0] 4 Decode.Unassigned 2;
   illegal [0x35c0; 0] 4 Decode.Unassigned 2
 
 let bcd () =
-  expect [0x830f] (Sbcd (Predec 7, Predec 1));
-  expect [0x834f; 0xfffe] (Pack (Predec 7, Predec 1, -2));
-  expect [0x838f; 0xfffe] (Unpk (Predec 7, Predec 1, -2));
-  expect [0xc30f] (Abcd (Predec 7, Predec 1))
+  expect_asm 2 (Sbcd (Predec 7, Predec 1));
+  expect_asm 4 (Pack (Predec 7, Predec 1, -2));
+  expect_asm 4 (Unpk (Predec 7, Predec 1, -2));
+  expect_asm 2 (Abcd (Predec 7, Predec 1))
 
 let divide () =
-  let check ext sign dividend =
-    expect [0x4c7a; ext; 0xfffe]
+  let check sign dividend =
+    expect_asm 6
       (Div_long { sign; operand = Pc_rel (base + 2); dividend; quotient = 1; remainder = 3 })
   in
-  check 0x1003 Unsigned (Single 1);
-  check 0x1803 Signed (Single 1);
-  check 0x1c03 Signed (Double { high = 3; low = 1 })
+  check Unsigned (Single 1);
+  check Signed (Single 1);
+  check Signed (Double { high = 3; low = 1 })
 
 let cas2 () =
   let first = { address = A 1; registers = { compare = 3; update = 2 } } in
   let second = { address = D 7; registers = { compare = 5; update = 4 } } in
-  expect [0x0cfc; 0x9083; 0x7105] (Cas2 (Word, first, second));
-  expect [0x0efc; 0x9083; 0x7105] (Cas2 (Long, first, second))
+  expect_asm 6 (Cas2 (Word, first, second));
+  expect_asm 6 (Cas2 (Long, first, second))
 
 let trapcc () =
-  expect [0x56fa; 0x1234] (Trapcc (Ne, Some (Word, 0x1234)));
-  expect [0x56fb; 0x1234; 0xabcd] (Trapcc (Ne, Some (Long, 0x1234abcd)));
-  expect [0x56fc] (Trapcc (Ne, None))
+  expect_asm 4 (Trapcc (Ne, Some (Word, 0x1234)));
+  expect_asm 6 (Trapcc (Ne, Some (Long, 0x1234abcd)));
+  expect_asm 2 (Trapcc (Ne, None))
 
 let branches () =
   expect [0x66fe] (Bcc (Ne, base));
@@ -182,8 +194,8 @@ let f_line () =
     [0xf000; 0xf050; 0xf048; 0xf07a; 0xf280; 0xffff]
 
 let a7 () =
-  expect [0xbf0f] (Alu (Cmp, Byte, Postinc 7, Postinc 7));
-  expect [0x1f1f] (Move (Byte, Postinc 7, Predec 7));
+  expect_asm 2 (Alu (Cmp, Byte, Postinc 7, Postinc 7));
+  expect_asm 2 (Move (Byte, Postinc 7, Predec 7));
   Alcotest.(check int) "A7 byte step" 2 (auto_step Byte 7)
 
 let flow () =
@@ -222,7 +234,7 @@ let () =
       test "ILLEGAL, unassigned and legal RESET" (fun () ->
         illegal [0x4afc] 4 Decode.Illegal_opcode 2;
         illegal [0x7100] 4 Decode.Unassigned 2;
-        expect [0x4e70] Reset);
+        expect_asm 2 Reset);
       test "register BTST with a byte-sized immediate EA" (fun () ->
         expect [0x013c; 0x1234] (Bit (Btst, Data_register 0, Immediate 0x34)));
       test "absolute short sign extension" (fun () -> expect [0x4ef8; 0x8000] (Jmp (Absolute 0xffff8000)));
