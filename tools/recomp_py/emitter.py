@@ -41,7 +41,7 @@ MASK_MAP = {1: 0xFF, 2: 0xFFFF, 4: 0xFFFFFFFF}
 SIGN_MAP = {1: 0x80, 2: 0x8000, 4: 0x80000000}
 
 # CCR flags as laid out in cpu->sr. lower() takes ``live_out``, the subset of
-# these that some successor may still observe (see recomp/liveness.py); flag
+# these that some successor may still observe (see tools/recomp_py/liveness.py); flag
 # producers whose results are all dead emit no condition-code stores.
 CCR_C, CCR_V, CCR_Z, CCR_N, CCR_X = 0x01, 0x02, 0x04, 0x08, 0x10
 CCR_NZVC = CCR_N | CCR_Z | CCR_V | CCR_C

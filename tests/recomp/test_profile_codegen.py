@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
 
-from recomp.block_profile import BlockProfile
-from recomp.generate import generate
+from tools.recomp_py.block_profile import BlockProfile
+from tools.recomp_py.generate import generate
 
 ROOT = Path(__file__).resolve().parents[2]
 

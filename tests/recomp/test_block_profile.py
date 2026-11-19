@@ -5,8 +5,8 @@ import unittest
 import zlib
 from pathlib import Path
 
-from recomp.block_profile import MAX_COUNT, BlockProfile, load_hot, read_profile
-from recomp.discovery import ExcludeRegion
+from tools.recomp_py.block_profile import MAX_COUNT, BlockProfile, load_hot, read_profile
+from tools.recomp_py.discovery import ExcludeRegion
 
 
 class ProfileTests(unittest.TestCase):

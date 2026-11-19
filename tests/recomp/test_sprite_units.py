@@ -6,7 +6,14 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from recomp.sprite_units import canonical, digest, guard_lines, parse_sprite_units, render_c_header, render_cpp_header
+from tools.recomp_py.sprite_units import (
+    canonical,
+    digest,
+    guard_lines,
+    parse_sprite_units,
+    render_c_header,
+    render_cpp_header,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -168,7 +175,7 @@ class GeneratorHookTests(unittest.TestCase):
         )
 
     def generate(self, config, **kwargs):
-        from recomp.generate import generate
+        from tools.recomp_py.generate import generate
 
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
@@ -205,7 +212,7 @@ class GeneratorHookTests(unittest.TestCase):
 
     def test_slim_profile_must_retain_hooks(self):
         # Retention is checked before emission, so the profile loader is stubbed.
-        import recomp.block_profile as block_profile
+        import tools.recomp_py.block_profile as block_profile
 
         original = block_profile.load_hot
         block_profile.load_hot = lambda *args, **kwargs: {0x400, 0x402}
@@ -213,7 +220,7 @@ class GeneratorHookTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 profile = Path(directory) / "p"
                 profile.write_text("")
-                from recomp.generate import generate
+                from tools.recomp_py.generate import generate
 
                 with self.assertRaisesRegex(ValueError, "not retained"):
                     generate(

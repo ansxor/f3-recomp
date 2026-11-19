@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
 
-from recomp.generate import generate
-from recomp.idle import find_idle_loops
+from tools.recomp_py.generate import generate
+from tools.recomp_py.idle import find_idle_loops
 
 CHUNKS = (
     (0x400, "60fe"),

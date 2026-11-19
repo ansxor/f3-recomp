@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 from capstone import CS_ARCH_M68K, CS_MODE_BIG_ENDIAN, CS_MODE_M68K_020, Cs
 
-from recomp.block_profile import BlockProfile
-from recomp.emitter import CCR_ALL, CCR_N, CCR_NZVC, CCR_V, CCR_X, CCR_Z, lower
-from recomp.generate import generate
-from recomp.liveness import analyse, condition_flags, flag_effects
+from tools.recomp_py.block_profile import BlockProfile
+from tools.recomp_py.emitter import CCR_ALL, CCR_N, CCR_NZVC, CCR_V, CCR_X, CCR_Z, lower
+from tools.recomp_py.generate import generate
+from tools.recomp_py.liveness import analyse, condition_flags, flag_effects
 
 
 class DeadlineTests(unittest.TestCase):

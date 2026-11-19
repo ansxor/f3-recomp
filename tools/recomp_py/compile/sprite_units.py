@@ -6,11 +6,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # sys.path is patched above so this script can run directly; import must follow it.
-from recomp.sprite_units import parse_sprite_units, render_c_header, render_cpp_header  # noqa: E402
+from tools.recomp_py.sprite_units import parse_sprite_units, render_c_header, render_cpp_header  # noqa: E402
 
 
 def write_if_changed(path: Path, text: str) -> None:

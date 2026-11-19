@@ -1,6 +1,6 @@
 import pytest
 
-from recomp.compile.enhancements import (
+from tools.recomp_py.compile.enhancements import (
     EnhancementsSpec,
     FlickerHoldSpec,
     parse_enhancements,

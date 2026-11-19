@@ -8,7 +8,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-from recomp.discovery import discover, exclusion_at, load_rom, parse_exclusions
+from tools.recomp_py.discovery import discover, exclusion_at, load_rom, parse_exclusions
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -360,7 +360,7 @@ class LoadRomUnknownKeyTests(unittest.TestCase):
             self.load(lane_extra="typo = 1")
 
     def test_every_game_config_uses_only_known_rom_keys(self):
-        from recomp.discovery import _ROM_KEYS, _ROM_LANE_KEYS
+        from tools.recomp_py.discovery import _ROM_KEYS, _ROM_LANE_KEYS
 
         configs = sorted((REPO / "games").glob("*/config.toml"))
         self.assertTrue(configs)
@@ -376,7 +376,7 @@ class LoadRomUnknownKeyTests(unittest.TestCase):
         config_path = REPO / "games" / "landmakrj" / "config.toml"
         if not rom_dir.is_dir():
             self.skipTest("landmakrj ROM directory missing")
-        from recomp.roms import load_sound_rom
+        from tools.recomp_py.roms import load_sound_rom
 
         rom, config = load_rom(config_path, rom_dir)
         main = parse_exclusions(config, len(rom), image=rom)

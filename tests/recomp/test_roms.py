@@ -6,7 +6,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-from recomp.roms import load_region, region_spec
+from tools.recomp_py.roms import load_region, region_spec
 
 
 def lane(name, data, offset=0, stride=1, group=1):

@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from recomp.generate import _RUNTIME_ABI_VERSION
+from tools.recomp_py.generate import _RUNTIME_ABI_VERSION
 
 REPO = Path(__file__).resolve().parents[2]
 
