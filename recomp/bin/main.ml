@@ -128,7 +128,7 @@ let lower =
             let decoded = Decode.at image pc in
             let length = match decoded with Insn insn -> insn.length | Illegal illegal -> illegal.length in
             let stmts =
-              decoded |> Semantics.of_decoded ~pc |> Lower.entry ~live_out
+              decoded |> Semantics.of_decoded ~pc |> Lower.entry ~memory:Memory_path.Inline ~live_out
               |> function
               | Ok entry -> entry.stmts
               | Error reason -> Error.fail ~where:(Printf.sprintf "0x%x" pc) "%s" reason

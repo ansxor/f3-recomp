@@ -76,7 +76,7 @@ let effects () =
     ~reads:Ccr.all ~writes:Ccr.all ~boundary:true;
   check [Let (0, Flag X); Goto (Temp 0)] ~reads:x ~writes:Ccr.none ~boundary:true;
   let nested = Body [logic; If (Supervisor, [exit], [exit])] in
-  match Lower.entry nested ~live_out:z with
+  match Lower.entry ~memory:Memory_path.Inline nested ~live_out:z with
   | Error reason -> Alcotest.fail reason
   | Ok entry -> Alcotest.(check bool) "terminal successors keep Z live" true (entry.elided = Ccr.none)
 
