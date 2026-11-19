@@ -1,0 +1,3 @@
+(test
+ (name cases)
+ (libraries f3recomp alcotest))

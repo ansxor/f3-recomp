@@ -3,7 +3,7 @@ let header = "pc\tdisposition\tlength\tflow\treads\twrites\tlive_out\tidle\tchai
 let flags mask =
   if mask = Ccr.none then "-" else Ccr.to_string mask
 
-let write ?(sprite_rows = []) output selection =
+let write ?(sprite_rows = []) ?(sprite_resets = Pc.Set.empty) output selection =
   (match Selection.check selection with
    | Ok () -> ()
    | Error violations ->
@@ -20,6 +20,13 @@ let write ?(sprite_rows = []) output selection =
   in
   let cfg = Cfg.of_selection selection in
   let liveness = Liveness.solve cfg in
+  let native pc = Cfg.native cfg pc && not (Pc.Set.mem pc sprite_resets) in
+  let idle = Idle_loop.find selection.program ~native in
+  (match Idle_loop.check_all selection.program cfg idle with
+   | Ok () -> ()
+   | Error violations ->
+       List.map Idle_loop.describe_violation violations
+       |> String.concat "\n" |> Error.fail ~where:"idle loops" "%s");
   output_string output (header ^ "\n");
   Pc.Map.iter (fun pc ((entry : Selection.disposition), _) ->
     emit_sprite_rows (fun sprite_pc -> sprite_pc < pc);
@@ -45,8 +52,12 @@ let write ?(sprite_rows = []) output selection =
           flags node.effects.reads, flags node.effects.writes,
           flags (Liveness.live_out liveness pc ~flags:`Lazy)
     in
-    Printf.fprintf output "0x%06x\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n"
-      pc disposition length flow reads writes live_out candidates;
+    let idle = match Pc.Map.find_opt pc idle with
+      | None -> "-"
+      | Some loop -> Idle_loop.to_tsv loop.shape
+    in
+    Printf.fprintf output "0x%06x\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
+      pc disposition length flow reads writes live_out idle candidates;
     emit_sprite_rows (Int.equal pc))
     selection.Selection.entries;
   emit_sprite_rows (fun _ -> true)
