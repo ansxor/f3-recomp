@@ -1,8 +1,20 @@
 (test
  (name scaffold_test)
+ (modules scaffold_test)
  (libraries alcotest))
 
 (test
  (name config_test)
+ (modules config_test)
  (libraries f3recomp alcotest str)
  (deps (universe)))
+
+(executable
+ (name dump_main_image)
+ (modules dump_main_image)
+ (libraries f3recomp))
+
+(test
+ (name rom_manifest_test)
+ (modules rom_manifest_test)
+ (libraries f3recomp alcotest))

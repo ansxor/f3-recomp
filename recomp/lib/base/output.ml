@@ -17,3 +17,7 @@ let write_if_changed path contents =
 let write ~dir files =
   make_directory dir;
   List.iter (fun (name, contents) -> write_if_changed (Filename.concat dir name) contents) files
+
+let write_file path contents =
+  make_directory (Filename.dirname path);
+  write_if_changed path contents
