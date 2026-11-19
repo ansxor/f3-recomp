@@ -73,14 +73,24 @@ let compile_roms =
 let decisions =
   let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
   let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
-  let run config_path rom_dir =
+  let profile_option name = Arg.(value & opt (some string) None & info [ name ] ~docv:"FILE") in
+  let profile_tiers = profile_option "profile-tiers" in
+  let profile_slim = profile_option "profile-slim" in
+  let run config_path rom_dir tiers slim =
     report_error (fun () ->
+        let profile = match tiers, slim with
+          | None, None -> None
+          | Some path, None -> Some (`Tiers (Profile.load path))
+          | None, Some path -> Some (`Slim (Profile.load path))
+          | Some _, Some _ -> Error.fail "--profile-tiers and --profile-slim are mutually exclusive"
+        in
         Game.load config_path ~rom_dir
         |> Game.discover
+        |> Program.select ~profile
         |> Decisions.write stdout)
   in
-  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline discovery decisions.")
-    Term.(const run $ config $ rom_dir)
+  Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery and selection decisions.")
+    Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim)
 
 let lower =
   let pc = Arg.(required & opt (some int) None & info [ "pc" ] ~docv:"ADDRESS") in

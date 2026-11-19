@@ -10,8 +10,10 @@ each sprite kind. An added or removed row is a disposition difference.
 --columns selects which differences to report. With --rom-image, compare
 baseline decoder entries and check for missing ordinary rows. This mode
 omits sprite metadata. Pass --config with the ROM image to enable discovery
-rules for disposition, chains and aligned RAM payloads. The expected table
-selects rules with rule:NAME in the pc field. Exit status is 0 for no unexplained differences,
+rules for disposition, chains and aligned RAM payloads. For slim dumps,
+pass --after-baseline with the unpruned OCaml dump for jump-table scan evidence.
+The expected table selects rules with rule:NAME in the pc field.
+Exit status is 0 for no unexplained differences,
 1 for unexplained differences, or 2 for invalid input.
 """
 
@@ -124,9 +126,12 @@ def main() -> int:
     parser.add_argument("--expected", type=Path, default=EXPECTED_PATH, help="expected differences TSV")
     parser.add_argument("--rom-image", type=Path, help="main ROM image for baseline decoder rules")
     parser.add_argument("--config", type=Path, help="game config for discovery rules and RAM payload bytes")
+    parser.add_argument("--after-baseline", type=Path, help="unpruned OCaml decisions for validating slim jump-table scans")
     args = parser.parse_args()
     if args.config and not args.rom_image:
         parser.error("--config requires --rom-image")
+    if args.after_baseline and not args.config:
+        parser.error("--after-baseline requires --config")
     columns = {column.strip() for column in args.columns.split(",")}
     if unknown := columns.difference(COLUMNS[1:]):
         parser.error(f"unknown comparison columns: {', '.join(sorted(unknown))}")
@@ -138,7 +143,10 @@ def main() -> int:
         discovery = None
         if args.config:
             config = tomllib.loads(args.config.read_text(encoding="utf-8"))
-            discovery = DiscoveryRules(rom, config, ordinary(args.before), ordinary(args.after))
+            after_baseline = ordinary(args.after_baseline) if args.after_baseline else None
+            discovery = DiscoveryRules(
+                rom, config, ordinary(args.before), ordinary(args.after), after_baseline=after_baseline
+            )
         counts = Counter()
         samples = {}
         with ExitStack() as stack:

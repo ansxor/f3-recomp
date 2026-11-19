@@ -1,0 +1,9 @@
+(test
+ (name profile)
+ (modules profile)
+ (libraries f3recomp alcotest str))
+
+(test
+ (name selection)
+ (modules selection)
+ (libraries f3recomp alcotest))
