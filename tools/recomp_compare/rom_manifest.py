@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from recomp.discovery import load_rom  # noqa: E402
+from tools.recomp_py.discovery import load_rom  # noqa: E402
 
 
 def compare_header(reference, actual):
@@ -37,7 +37,7 @@ def compare_headers(configs, game, directory, cli):
     filenames = ("rom_manifest.hpp", "generated_config/game_video_config.hpp")
     outputs = []
     for name, command in (
-        ("python", [sys.executable, "recomp/compile/roms.py"]),
+        ("python", [sys.executable, "tools/recomp_py/compile/roms.py"]),
         ("ocaml", [cli, "compile-roms"]),
     ):
         manifest, video = (directory / name / filename for filename in filenames)
