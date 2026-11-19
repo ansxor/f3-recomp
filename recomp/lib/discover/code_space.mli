@@ -10,3 +10,6 @@ val region : t -> Pc.t -> region
 
 (** Return the image for an executable physical PC. *)
 val image_at : t -> Pc.t -> Image.t option
+
+val of_game : Game_image.t -> ram:Ram_code.routine list -> t
+val ram : t -> Ram_code.routine list

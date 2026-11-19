@@ -5,7 +5,7 @@ type t = { targets : Pc.t list; falls_through : bool; escape : escape option }
 
 let next = { targets = []; falls_through = true; escape = None }
 let escape ?(falls_through = false) escape = { targets = []; falls_through; escape = Some escape }
-let branch ~falls_through target = { targets = [target]; falls_through; escape = None }
+let branch ~falls_through target = { targets = [Pc.physical target]; falls_through; escape = None }
 
 let transfer ea =
   match Insn.static_address ea with

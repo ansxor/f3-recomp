@@ -5,6 +5,11 @@ let make ~rom ~exclusions ~ram =
   let exclusions = Exclusion.of_config ~image:rom exclusions in
   { rom; exclusions; ram }
 
+let of_game (game : Game_image.t) ~ram =
+  { rom = game.rom; exclusions = game.exclusions; ram }
+
+let ram space = space.ram
+
 let region space pc =
   if Image.contains space.rom pc then
     match Exclusion.find space.exclusions pc with
