@@ -35,6 +35,18 @@ let sprite_units =
     (Cmd.info "sprite-units" ~doc:"Generate the sprite emit-unit headers.")
     Term.(const run $ config $ output_dir)
 
+let enhancements =
+  let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
+  let output_dir = Arg.(required & opt (some string) None & info [ "output-dir" ] ~docv:"DIR") in
+  let run config output_dir =
+    report_error (fun () ->
+        Config.load config |> Enhancements.default |> Enhancements.render
+        |> Output.write ~dir:output_dir)
+  in
+  Cmd.v
+    (Cmd.info "enhancements" ~doc:"Generate the default enhancements header.")
+    Term.(const run $ config $ output_dir)
+
 let check_game =
   let config = Arg.(required & pos 0 (some string) None & info [] ~docv:"CONFIG") in
   let id = Arg.(required & pos 1 (some string) None & info [] ~docv:"GAME") in
@@ -188,7 +200,7 @@ let coverage =
     Term.(const run $ config $ rom_dir)
 
 let () =
-  let stubs = List.map stub [ "emit"; "enhancements" ] in
   exit
     (Cmd.eval'
-       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: lower :: coverage :: stubs)))
+       (Cmd.group (Cmd.info "f3recomp")
+          [sprite_units; compile_roms; check_game; decisions; lower; coverage; enhancements; stub "emit"]))

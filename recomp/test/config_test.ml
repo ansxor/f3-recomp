@@ -254,25 +254,102 @@ let sprite_shipped_configs () =
       Alcotest.(check (list string)) game expected names)
     ["commandw", ["objects"]; "landmakrj", []; "landmakr", []]
 
-let hold ?(name = "object-shadow") ?(period = 2) ?(follow = "self") () =
+let hold ?(name = "object-shadow") ?(period = 2) ?(follow = "self")
+    ?(group_writer = 0x4010) ?(anchor_writer = 0x4020) () =
   Printf.sprintf
-    "[[enhancements.flicker_hold]]\nname = %S\ngroup_writer = 0x4010\nanchor_writer = 0x4020\nperiod = %d\nfollow = %S\n"
-    name period follow
+    "[[enhancements.flicker_hold]]\nname = %S\ngroup_writer = 0x%x\nanchor_writer = 0x%x\nperiod = %d\nfollow = %S\n"
+    name group_writer anchor_writer period follow
+
+let enhancements_fixture counter holds =
+  fixture ~extra:("[enhancements]\ngame_frame_counter = " ^ counter ^ "\n" ^ holds) ()
 
 let enhancement_cases =
-  let config counter holds =
-    fixture ~extra:("[enhancements]\ngame_frame_counter = " ^ counter ^ "\n" ^ holds) ()
-  in
   List.map
     (fun counter ->
-      "invalid counter " ^ counter, "aligned game_frame_counter", config counter (hold ()))
+      "invalid counter " ^ counter, "aligned game_frame_counter", enhancements_fixture counter (hold ()))
     ["true"; "0x3ffffe"; "0x420000"; "0x408329"]
   @ ([ "duplicate hold name", "invalid or repeated flicker hold name", hold () ^ hold ();
        "equals in name", "invalid or repeated flicker hold name", hold ~name:"object=shadow" ();
        "period below range", "period must be in", hold ~period:1 ();
        "period above range", "period must be in", hold ~period:256 ();
        "unknown follow mode", "follow must be self or anchor", hold ~follow:"other" () ]
-     |> List.map (fun (name, expected, rows) -> name, expected, config "0x408328" rows))
+     |> List.map (fun (name, expected, rows) -> name, expected, enhancements_fixture "0x408328" rows))
+
+let enhancement_groups ?(anchor_base = 11) () =
+  let writer pc base x_offset group_class : Sprite_groups.writer =
+    { pc; base; x_offset; group_class; cursor_reg = base; lane = XY;
+      y_offset = x_offset + 2; rigid = false; root_offsets = [] }
+  in
+  Sprite_groups.make ~game_id:"fixture" ~instructions:0 ~analysed:0 ~dispatch_targets:0
+    ~writers:[writer 0x4010 11 4 2; writer 0x4020 anchor_base 0 1]
+    ~unresolved:[] ~classifications:[]
+
+let enhancement_header_prefix = {|#pragma once
+#include <array>
+#include <cstdint>
+
+namespace f3rt::game_config {
+struct FlickerHold {
+    const char *name;
+    uint8_t group_class, anchor_class, period;
+    enum class Follow : uint8_t { Self, Anchor } follow;
+};
+|}
+
+let check_enhancement_header expected spec =
+  let header = Enhancements.render spec |> List.assoc "enhancements.hpp" in
+  Alcotest.(check string) "header" (enhancement_header_prefix ^ expected) header
+
+let enhancement_render () =
+  let config = enhancements_fixture "0x408328" (hold ()) |> parse in
+  let spec = Enhancements.of_config config (enhancement_groups ()) in
+  let expected : Enhancements.t =
+    { game_frame_counter = 0x408328;
+      flicker_holds =
+        [{ name = "object-shadow"; group_class = 2; anchor_class = 1; period = 2; follow = Self }] }
+  in
+  Alcotest.(check bool) "resolved spec" true (spec = expected);
+  check_enhancement_header {|inline constexpr uint32_t game_frame_counter = 0x408328;
+inline constexpr FlickerHold flicker_holds[] = {
+    {"object-shadow", 2, 1, 2, FlickerHold::Follow::Self},
+};
+}
+|} spec
+
+let enhancement_default () =
+  let config = enhancements_fixture "0x408328" (hold ()) |> parse in
+  let spec = Enhancements.default config in
+  Alcotest.(check bool) "default spec" true
+    (spec = { game_frame_counter = 0; flicker_holds = [] });
+  check_enhancement_header {|inline constexpr uint32_t game_frame_counter = 0x0;
+inline constexpr std::array<FlickerHold, 0> flicker_holds{};
+}
+|} spec
+
+let enhancement_escaped_name () =
+  let spec : Enhancements.t =
+    { game_frame_counter = 0x408328;
+      flicker_holds =
+        [{ name = "é😀\t\"\\"; group_class = 2; anchor_class = 1; period = 255; follow = Anchor }] }
+  in
+  check_enhancement_header {|inline constexpr uint32_t game_frame_counter = 0x408328;
+inline constexpr FlickerHold flicker_holds[] = {
+    {"\u00e9\ud83d\ude00\t\"\\", 2, 1, 255, FlickerHold::Follow::Anchor},
+};
+}
+|} spec
+
+let enhancement_group_cases =
+  let resolve holds groups () =
+    let config = enhancements_fixture "0x408328" holds |> parse in
+    ignore (Enhancements.of_config config groups)
+  in
+  [ "unknown group writer", "no sprite-group write at 0x9998",
+    resolve (hold ~group_writer:0x9998 ()) (enhancement_groups ());
+    "unknown anchor writer", "no sprite-group write at 0x9998",
+    resolve (hold ~anchor_writer:0x9998 ()) (enhancement_groups ());
+    "base mismatch", "base registers differ",
+    resolve (hold ()) (enhancement_groups ~anchor_base:12 ()) ]
 
 let base_values () =
   let image = { Image.base = 0x100; bytes = "\xff\x80\x00\x01" } in
@@ -312,4 +389,9 @@ let () =
           Alcotest.test_case "retired frame writers ignored" `Quick sprite_retired_frame_writers;
           Alcotest.test_case "digest guard" `Quick sprite_guard;
           Alcotest.test_case "shipped unit names" `Quick sprite_shipped_configs ];
-      "enhancements", List.map rejects_config enhancement_cases ]
+      "enhancements",
+      List.map rejects_config enhancement_cases
+      @ List.map rejects enhancement_group_cases
+      @ [ Alcotest.test_case "resolve holds and render header" `Quick enhancement_render;
+          Alcotest.test_case "default ignores holds" `Quick enhancement_default;
+          Alcotest.test_case "reference name escaping" `Quick enhancement_escaped_name ] ]
