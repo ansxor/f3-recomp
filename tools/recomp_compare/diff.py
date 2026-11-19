@@ -8,9 +8,9 @@ at those PCs and any pair of values in the specified column.
 PC is the address key. Sprite rows have a separate key at the same PC for
 each sprite kind. An added or removed row is a disposition difference.
 --columns selects which differences to report. With --rom-image, compare
-baseline decoder entries and check for missing ordinary rows. This mode
-omits sprite metadata. Pass --config with the ROM image to enable discovery
-rules for disposition, chains and aligned RAM payloads. For slim dumps,
+baseline decoder entries and check for missing ordinary rows when disposition
+is selected. This mode omits sprite metadata. Pass --config with the ROM image
+to enable discovery and CCR evidence rules. For slim dumps,
 pass --after-baseline with the unpruned OCaml dump for jump-table scan evidence.
 The expected table selects rules with rule:NAME in the pc field.
 Exit status is 0 for no unexplained differences,
@@ -33,6 +33,7 @@ from tempfile import SpooledTemporaryFile
 from tools.recomp_compare.decisions import COLUMNS, SPRITE_KINDS, pc_text
 from tools.recomp_compare.decoder import category
 from tools.recomp_compare.discovery import DiscoveryRules
+from tools.recomp_compare.flag_analysis import Replay, effect_category
 
 EXPECTED_HEADER = ("pc", "column", "reason")
 EXPECTED_PATH = Path(__file__).with_name("expected.tsv")
@@ -147,11 +148,18 @@ def main() -> int:
             discovery = DiscoveryRules(
                 rom, config, ordinary(args.before), ordinary(args.after), after_baseline=after_baseline
             )
+        replay = None
+        if discovery is not None and "live_out" in columns:
+            replay = (
+                Replay(discovery, config, decision_records(args.before), frozen=True),
+                Replay(discovery, config, decision_records(args.after), frozen=False),
+            )
         counts = Counter()
         samples = {}
         with ExitStack() as stack:
             reports = {}
-            for (pc, kind), column, old, new in changes(left, right, columns, decoder=rom is not None):
+            entries = rom is not None and "disposition" in columns
+            for (pc, kind), column, old, new in changes(left, right, columns, decoder=entries):
                 before, after = cell(old, column), cell(new, column)
                 if any(start <= pc <= end for start, end in expected[column]):
                     continue
@@ -159,6 +167,17 @@ def main() -> int:
                     rule = category(rom, pc, column, before, after)
                     if rule is None and discovery is not None:
                         rule = discovery.category(pc, column, before, after, old, new)
+                    if rule is None and discovery is not None:
+                        if column in ("reads", "writes"):
+                            rule = effect_category(discovery, pc, after, old, new)
+                        elif column == "live_out":
+                            if new[1].startswith(("exception:", "ram-exception:")):
+                                rule = effect_category(discovery, pc, after, old, new)
+                            elif replay and all(
+                                graph.matches(pc, flags)
+                                for graph, flags in zip(replay, (before, after), strict=True)
+                            ):
+                                rule = "flag-cfg-replay"
                     if (rule, column) in rules:
                         counts[rule] += 1
                         samples.setdefault(rule, (pc, before, after))

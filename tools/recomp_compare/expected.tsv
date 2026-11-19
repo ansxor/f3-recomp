@@ -39,3 +39,22 @@ rule:chain-pointer-exclusion	chain_candidates	The OCaml absolute scan stops at a
 rule:chain-pointer-extension	chain_candidates	The OCaml absolute scan continues past a destination with a legal primary opcode and reserved extension bits. Capstone stops at that pointer. Bubsymphj 0x0acf50: 4e fb 35 21 00 96, destination 0x0ad038 begins 06 f5 06 f5 (CALLM count padding).
 rule:chain-pointer-vector-header	chain_candidates	The OCaml heuristic skips pointer scans starting in the vector header. Dungeonm 0x012e46 (4e bb c9 a1 00 10) indexes through A4 and suppresses the PC base. Python treats base displacement 0x10 as an absolute table start and suggests exception handlers.
 rule:chain-pointer-line-exception	chain_candidates	The OCaml absolute scan stops at a line exception. Capstone disassembles that word and Python treats it as an executable destination, then scans further. Pbobble4j 0x0b1884 (4e bb 05 21 00 12) points first to 0x0918a4 beginning fe 72, which takes vector 11.
+rule:flag-exception-row	reads	D4 exception rows have no instruction effects in the decision table. Frozen Python still reports CCR reads for the decoded exception instruction.
+rule:flag-exception-row	writes	D4 exception rows have no instruction effects in the decision table. The frozen decoder can report an instruction instead.
+rule:flag-exception-row	live_out	D4 exception rows have no instruction live-out cell. The frozen decoder keeps line exceptions, ILLEGAL, BKPT and invalid MOVEC in its instruction graph.
+rule:flag-chk	reads	CHK writes Z/V/C before the trap and writes N on the trap path. Only X from the incoming CCR can be stacked.
+rule:flag-chk	writes	CHK writes Z/V/C on either path.
+rule:flag-divide	reads	DIV clears C on the divide-by-zero path before stacking SR. The remaining flags can be observed.
+rule:flag-divide	writes	DIV clears C on both the divide-by-zero path and normal completion.
+rule:flag-bounds	reads	CMP2 does not read CCR. CHK2 can stack X/N/V after writing Z/C.
+rule:flag-bounds	writes	CMP2 and CHK2 write Z/C before any transfer.
+rule:flag-shift	reads	Register-count AS/LS preserve X on zero count. They do not consume it to compute another result.
+rule:flag-shift	writes	Register-count ROX writes X even at zero count, where its new value equals the input X.
+rule:flag-nbcd	reads	NBCD reads X and sticky Z. Capstone can decline the operand, leaving the Python effect opaque.
+rule:flag-nbcd	writes	One NBCD path preserves Z, so Z is not a must-write.
+rule:flag-ccr-immediate	reads	The current Set_ccr IR summarizes immediate CCR logic as a whole-register read and write. Python uses the immediate to refine its effect.
+rule:flag-ccr-immediate	writes	The current Set_ccr IR assigns the whole register, including preserved bits. Python lists only bits the immediate forces.
+rule:flag-rtr	reads	RTR reloads CCR from the stack and does not observe the incoming CCR.
+rule:flag-rtr	writes	RTR restores all CCR bits from memory.
+rule:flag-trapf	reads	TRAPF never raises and does not read CCR.
+rule:flag-cfg-replay	live_out	Independent backward propagation reproduces both least solutions from the respective effects and successors, with each side's retained entries, hooks, fallback, RAM pins, exception boundaries and IRQ observers.

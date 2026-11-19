@@ -49,6 +49,8 @@ let rec before ~exit (stmt : Sem.stmt) next =
           (fun flags (flag, _) -> Ccr.union flags (Ccr.singleton flag)) Ccr.none values in
       then_ (make ~reads:(expressions (List.map snd values)) ~writes ()) next
   | Set_ccr value -> then_ (make ~reads:(expr value) ~writes:Ccr.all ()) next
+  | If (Cond T, yes, _) -> sequence ~exit yes next
+  | If (Cond F, _, no) -> sequence ~exit no next
   | If (test, yes, no) ->
       let yes = sequence ~exit yes next and no = sequence ~exit no next in
       { reads = Ccr.union (expr test) (Ccr.union yes.reads no.reads);

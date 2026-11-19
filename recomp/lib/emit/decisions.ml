@@ -1,11 +1,16 @@
 let header = "pc\tdisposition\tlength\tflow\treads\twrites\tlive_out\tidle\tchain_candidates"
 
+let flags mask =
+  if mask = Ccr.none then "-" else Ccr.to_string mask
+
 let write output selection =
   (match Selection.check selection with
    | Ok () -> ()
    | Error violations ->
        List.map Selection.describe_violation violations
        |> String.concat "\n" |> Error.fail ~where:"selection" "%s");
+  let cfg = Cfg.of_selection selection in
+  let liveness = Liveness.solve cfg in
   output_string output (header ^ "\n");
   Pc.Map.iter (fun pc ((entry : Selection.disposition), _) ->
     let instruction disposition (insn : Insn.t) =
@@ -24,6 +29,12 @@ let write output selection =
       | Native insn -> instruction "native" insn
       | Ram insn -> instruction "ram" insn
     in
-    Printf.fprintf output "0x%06x\t%s\t%s\t%s\t-\t-\t-\t-\t%s\n"
-      pc disposition length flow candidates)
+    let reads, writes, live_out = match Pc.Map.find_opt pc cfg.nodes with
+      | None -> "-", "-", "-"
+      | Some node ->
+          flags node.effects.reads, flags node.effects.writes,
+          flags (Liveness.live_out liveness pc ~flags:`Lazy)
+    in
+    Printf.fprintf output "0x%06x\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n"
+      pc disposition length flow reads writes live_out candidates)
     selection.Selection.entries

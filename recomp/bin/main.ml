@@ -92,6 +92,29 @@ let decisions =
   Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery and selection decisions.")
     Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim)
 
+let check_irq =
+  let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
+  let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
+  let run config_path rom_dir =
+    report_error (fun () ->
+        let program = Game.load config_path ~rom_dir |> Game.discover in
+        let cfg = Program.select program ~profile:None |> Cfg.of_selection in
+        let verdicts = Irq_contract.observed program cfg in
+        let describe handler = function
+          | Irq_contract.Proven flags ->
+              Printf.sprintf "%#x Proven %s%s" handler (Decisions.flags flags)
+                (if Ccr.subset flags cfg.interrupt_observes then "" else " (undeclared)")
+          | Unknown { handler; at; why } ->
+              Printf.sprintf "%#x Unknown at %#x (%s)" handler at why
+        in
+        Printf.printf "%s [interrupt_observes=%s] %s\n" program.game.config.game.id
+          (Decisions.flags cfg.interrupt_observes)
+          (List.map2 describe (Irq_contract.handlers program.game.rom) verdicts
+           |> String.concat ", "))
+  in
+  Cmd.v (Cmd.info "check-irq" ~doc:"Report the flag observations of each ROM interrupt handler.")
+    Term.(const run $ config $ rom_dir)
+
 let lower =
   let pc = Arg.(required & opt (some int) None & info [ "pc" ] ~docv:"ADDRESS") in
   let hex = Arg.(required & opt (some string) None & info [ "hex" ] ~docv:"BYTES") in
@@ -170,4 +193,4 @@ let () =
   let stubs = List.map stub [ "emit"; "enhancements" ] in
   exit
     (Cmd.eval'
-       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: lower :: coverage :: stubs)))
+       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: check_irq :: decisions :: lower :: coverage :: stubs)))
