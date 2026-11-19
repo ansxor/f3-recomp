@@ -1,0 +1,16 @@
+(rule
+ (target fixture.ml)
+ (deps runner.c)
+ (action
+  (with-stdout-to %{target}
+   (progn (echo "let source = {fixture|") (cat runner.c) (echo "|fixture}")))))
+
+(library
+ (name refinement)
+ (modules harness fixture)
+ (libraries f3recomp f3recomp_test unix))
+
+(test
+ (name cases)
+ (modules cases)
+ (libraries refinement f3recomp f3recomp_test alcotest))
