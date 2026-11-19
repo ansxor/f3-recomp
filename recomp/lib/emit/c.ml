@@ -4,6 +4,7 @@ type binop =
   | Add | Sub | Mul | And | Or | Xor | Shl | Shr | Eq | Ne | Lt
 type expr =
   | UInt of int
+  | And_then of expr list
   | Name of string
   | Field of expr * string
   | Index of expr * expr
@@ -24,6 +25,8 @@ type stmt =
   | Label of string
   | Switch of expr * (int * stmt list) list * stmt list
   | Return
+  | Transfer (* A completed instruction whose next PC may be chained. *)
+  | Break
   | Chain of string
   | Dispatch_pc
   | Repeat of stmt list
@@ -35,9 +38,9 @@ let type_name = function
   | I8 -> "int8_t" | I16 -> "int16_t" | I32 -> "int32_t"
 
 let operator = function
-  | Or -> "|", 2 | Xor -> "^", 3 | And -> "&", 4
-  | Eq -> "==", 5 | Ne -> "!=", 5 | Lt -> "<", 6
-  | Shl -> "<<", 7 | Shr -> ">>", 7 | Add -> "+", 8 | Sub -> "-", 8 | Mul -> "*", 9
+  | Or -> "|", 3 | Xor -> "^", 4 | And -> "&", 5
+  | Eq -> "==", 6 | Ne -> "!=", 6 | Lt -> "<", 7
+  | Shl -> "<<", 8 | Shr -> ">>", 8 | Add -> "+", 9 | Sub -> "-", 9 | Mul -> "*", 10
 
 (* Operators whose mixed-operator operands GCC's -Wparentheses flags. *)
 let warns_unparenthesised = function
@@ -46,14 +49,15 @@ let warns_unparenthesised = function
 
 let rec print_at minimum expr =
   let precedence, text = match expr with
-    | UInt value -> 12, Printf.sprintf "0x%xu" (value land 0xffffffff)
-    | Name name -> 12, name
-    | Field (base, field) -> 11, print_at 11 base ^ "->" ^ field
-    | Index (base, index) -> 11, print_at 11 base ^ "[" ^ print_at 0 index ^ "]"
-    | Call (name, args) -> 11, name ^ "(" ^ String.concat ", " (List.map (print_at 0) args) ^ ")"
-    | Cast (typ, value) -> 10, "(" ^ type_name typ ^ ")" ^ print_at 10 value
-    | Not value -> 10, "!" ^ print_at 10 value
-    | Bit_not value -> 10, "~" ^ print_at 10 value
+    | UInt value -> 13, Printf.sprintf "0x%xu" (value land 0xffffffff)
+    | And_then terms -> 2, String.concat " && " (List.map (print_at 3) terms)
+    | Name name -> 13, name
+    | Field (base, field) -> 12, print_at 12 base ^ "->" ^ field
+    | Index (base, index) -> 12, print_at 12 base ^ "[" ^ print_at 0 index ^ "]"
+    | Call (name, args) -> 12, name ^ "(" ^ String.concat ", " (List.map (print_at 0) args) ^ ")"
+    | Cast (typ, value) -> 11, "(" ^ type_name typ ^ ")" ^ print_at 11 value
+    | Not value -> 11, "!" ^ print_at 11 value
+    | Bit_not value -> 11, "~" ^ print_at 11 value
     | Bin (op, left, right) ->
         let symbol, level = operator op in
         let operand minimum operand = match operand with
@@ -101,7 +105,8 @@ let rec write_stmt buffer depth stmt =
       line "default:";
       body [Block otherwise];
       line "}"
-  | Return -> line "return;"
+  | Return | Transfer -> line "return;"
+  | Break -> line "break;"
   | Chain name -> line ("F3_CHAIN(" ^ name ^ ", cpu);")
   | Dispatch_pc -> line "F3_DISPATCH_PC(cpu);"
   | Repeat stmts -> line "for (;;) {"; body stmts; line "}"
@@ -118,6 +123,7 @@ let print_func { name; body } =
 
 (* Names an expression or statement list refers to. *)
 let rec expr_names acc = function
+  | And_then terms -> List.fold_left expr_names acc terms
   | UInt _ -> acc
   | Name name -> name :: acc
   | Field (e, _) | Cast (_, e) | Not e | Bit_not e -> expr_names acc e
@@ -135,10 +141,11 @@ let rec stmt_names acc = function
       let acc = expr_names acc test in
       let acc = List.fold_left (fun acc (_, stmts) -> List.fold_left stmt_names acc stmts) acc cases in
       List.fold_left stmt_names acc otherwise
-  | Goto _ | Label _ | Return | Chain _ | Dispatch_pc -> acc
+  | Goto _ | Label _ | Return | Transfer | Break | Chain _ | Dispatch_pc -> acc
   | Repeat stmts -> List.fold_left stmt_names acc stmts
 
 let rec has_call = function
+  | And_then terms -> List.exists has_call terms
   | Call _ -> true
   | UInt _ | Name _ -> false
   | Field (e, _) | Cast (_, e) | Not e | Bit_not e -> has_call e

@@ -90,4 +90,4 @@ let check (program : Program.t) cfg =
 
 let of_selection selection =
   let semantics = semantics selection in
-  build selection semantics ~pins:(Pins.collect selection semantics Pc.Set.empty)
+  build selection semantics ~pins:(Pins.collect selection semantics Sprite_groups.empty)

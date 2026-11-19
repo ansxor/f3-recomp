@@ -13,3 +13,10 @@ type entry = {
 }
 
 val entry : Sem.t -> live_out:Ccr.t -> memory:Memory_path.t -> (entry, string) result
+
+val field : string -> C.expr
+val call : string -> C.expr list -> C.expr
+val cpu_call : string -> C.expr list -> C.stmt
+val assign : string -> C.expr -> C.stmt
+val expr : Sem.expr -> C.expr
+val condition_code : Insn.cond -> int

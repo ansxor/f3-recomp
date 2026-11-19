@@ -324,3 +324,35 @@ let analyse ~rom:(_ : Image.t) ~(instruction : int -> Insn.t option) (cfg : Cfg.
 let observed (program : Program.t) cfg =
   let rom = program.game.rom in
   List.map (analyse ~rom ~instruction:(Program.insn program) cfg) (handlers rom)
+
+let require (cpu : Config.cpu) ~allow_unproven handlers verdicts =
+  let unknown = List.filter_map (function
+    | Unknown { handler; at; why } -> Some (Printf.sprintf "handler %#x, site %#x: %s" handler at why)
+    | Proven _ -> None) verdicts in
+  let undeclared =
+    List.map2 (fun handler -> function
+      | Proven flags when not (Ccr.subset flags cpu.interrupt_observes) ->
+          Printf.sprintf "handler %#x observes %s, configure interrupt_observes" handler (Ccr.to_string flags)
+      | _ -> "") handlers verdicts
+    |> List.filter (fun issue -> issue <> "") in
+  let overrides =
+    (if cpu.interrupt_observes_explicit then
+      ["interrupt_observes = " ^ (if cpu.interrupt_observes = Ccr.none then "none"
+                                 else Ccr.to_string cpu.interrupt_observes)] else [])
+    @ (match cpu.interrupt_handlers_trusted with
+      | Some evidence -> ["interrupt_handlers_trusted = " ^ Quoted.json evidence]
+      | None -> []) in
+  let unresolved = match unknown, overrides with
+    | _ :: _, [] ->
+        ["Unproven interrupt handlers"; String.concat "\n" unknown;
+         "Set [cpu] interrupt_observes or interrupt_handlers_trusted with evidence."]
+    | _ -> [] in
+  let violations = undeclared @ (if allow_unproven then [] else unresolved) in
+  if violations <> [] then
+    Error.fail ~where:"interrupt contract" "%s" (String.concat "\n" violations);
+  match unresolved, overrides with
+  | [], [] -> "proven"
+  | _, _ :: _ -> String.concat ", " overrides
+  | _ :: _, [] ->
+      prerr_endline ("warning: " ^ String.concat "\n" unresolved);
+      "--allow-unproven-irq"

@@ -4,7 +4,9 @@ type body = Native of Lower.entry | Fallback
 
 type t
 
-type error = Live_flags_elided of { pc : Pc.t; flags : Ccr.t }
+type error =
+  | Live_flags_elided of { pc : Pc.t; flags : Ccr.t }
+  | Unwritten_flags_elided of { pc : Pc.t; flags : Ccr.t }
 
 type counts = { flags : Lower.counts; fallbacks : int }
 

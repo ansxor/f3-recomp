@@ -72,7 +72,11 @@ type flicker_hold = {
 }
 
 type enhancements = { game_frame_counter : int; flicker_holds : flicker_hold list }
-type cpu = { interrupt_observes : Ccr.t }
+type cpu = {
+  interrupt_observes : Ccr.t;
+  interrupt_observes_explicit : bool;
+  interrupt_handlers_trusted : string option;
+}
 
 type t = {
   path : string;
@@ -494,7 +498,7 @@ let read_enhancements root =
 
 let read_cpu root =
   let table = Table.section root "cpu" in
-  Table.reject_unknown table ["interrupt_observes"];
+  Table.reject_unknown table ["interrupt_observes"; "interrupt_handlers_trusted"];
   let flag where value =
     let name = Table.string where value in
     let flag = match String.uppercase_ascii name with
@@ -504,10 +508,17 @@ let read_cpu root =
     Ccr.singleton flag
   in
   let interrupt_observes =
-    Table.default table "interrupt_observes" (Table.list flag) []
-    |> List.fold_left Ccr.union Ccr.none
+    Table.optional table "interrupt_observes" (Table.list flag)
   in
-  { interrupt_observes }
+  let interrupt_handlers_trusted =
+    Table.optional table "interrupt_handlers_trusted" (fun where value ->
+      let evidence = String.trim (Table.string where value) in
+      if evidence = "" then Error.fail ~where "expected non-empty evidence";
+      evidence)
+  in
+  { interrupt_observes = List.fold_left Ccr.union Ccr.none (Option.value ~default:[] interrupt_observes);
+    interrupt_observes_explicit = Option.is_some interrupt_observes;
+    interrupt_handlers_trusted }
 
 let read_id table = Table.required table "id" Table.string
 
