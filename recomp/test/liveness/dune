@@ -1,0 +1,10 @@
+(test
+ (name cases)
+ (modules cases)
+ (libraries f3recomp f3recomp_test refinement alcotest str qcheck qcheck-alcotest))
+
+(rule
+ (alias liveness-full)
+ (action
+  (setenv F3_LIVENESS_FULL 1
+   (run ./cases.exe test graphs 0))))
