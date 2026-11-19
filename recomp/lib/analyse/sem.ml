@@ -1,7 +1,8 @@
 type width = Insn.size = Byte | Word | Long
 type temp = int
 type register = D of int | A of int | Usp
-type binop = Add | Sub | And | Or | Xor | Shl | Eq | Ne | Lt
+(* Shr is logical, Sar arithmetic (on the 32-bit value); Mul keeps the low 32 bits. *)
+type binop = Add | Sub | And | Or | Xor | Shl | Shr | Sar | Mul | Eq | Ne | Lt
 type expr =
   | Const of int
   | Temp of temp

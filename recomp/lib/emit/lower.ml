@@ -30,9 +30,14 @@ let condition_code : Insn.cond -> int = function
 let signed_types : Sem.width -> typ * typ = function
   | Byte -> U8, I8 | Word -> U16, I16 | Long -> U32, I32
 
-let binop : Sem.binop -> C.binop = function
-  | Add -> Add | Sub -> Sub | And -> And | Or -> Or | Xor -> Xor | Shl -> Shl
-  | Eq -> Eq | Ne -> Ne | Lt -> Lt
+let expr_bin (op : Sem.binop) left right : C.expr =
+  let simple op = Bin (op, left, right) in
+  match op with
+  | Add -> simple Add | Sub -> simple Sub | Mul -> simple Mul
+  | And -> simple And | Or -> simple Or | Xor -> simple Xor
+  | Shl -> simple Shl | Shr -> simple Shr
+  | Sar -> Cast (U32, Bin (Shr, Cast (I32, left), right))
+  | Eq -> simple Eq | Ne -> simple Ne | Lt -> simple Lt
 
 let rec expr : Sem.expr -> C.expr = function
   | Const n -> uint n
@@ -45,7 +50,7 @@ let rec expr : Sem.expr -> C.expr = function
   | Cond T -> uint 1
   | Cond F -> uint 0
   | Cond cond -> Call ("f3_cond_ccr", [field "sr"; uint (condition_code cond)])
-  | Bin (op, left, right) -> bin (binop op) (expr left) (expr right)
+  | Bin (op, left, right) -> expr_bin op (expr left) (expr right)
   | Sext (width, value) ->
       let unsigned, signed = signed_types width in
       Cast (U32, Cast (signed, Cast (unsigned, expr value)))

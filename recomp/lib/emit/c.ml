@@ -1,7 +1,7 @@
 type typ = U8 | U16 | U32 | I8 | I16 | I32
 
 type binop =
-  | Add | Sub | And | Or | Xor | Shl | Shr | Eq | Ne | Lt
+  | Add | Sub | Mul | And | Or | Xor | Shl | Shr | Eq | Ne | Lt
 type expr =
   | UInt of int
   | Name of string
@@ -36,23 +36,23 @@ let type_name = function
 let operator = function
   | Or -> "|", 2 | Xor -> "^", 3 | And -> "&", 4
   | Eq -> "==", 5 | Ne -> "!=", 5 | Lt -> "<", 6
-  | Shl -> "<<", 7 | Shr -> ">>", 7 | Add -> "+", 8 | Sub -> "-", 8
+  | Shl -> "<<", 7 | Shr -> ">>", 7 | Add -> "+", 8 | Sub -> "-", 8 | Mul -> "*", 9
 
 (* Operators whose mixed-operator operands GCC's -Wparentheses flags. *)
 let warns_unparenthesised = function
   | Or | Xor | And | Shl | Shr | Eq | Ne | Lt -> true
-  | Add | Sub -> false
+  | Add | Sub | Mul -> false
 
 let rec print_at minimum expr =
   let precedence, text = match expr with
-    | UInt value -> 11, Printf.sprintf "0x%xu" (value land 0xffffffff)
-    | Name name -> 11, name
-    | Field (base, field) -> 10, print_at 10 base ^ "->" ^ field
-    | Index (base, index) -> 10, print_at 10 base ^ "[" ^ print_at 0 index ^ "]"
-    | Call (name, args) -> 10, name ^ "(" ^ String.concat ", " (List.map (print_at 0) args) ^ ")"
-    | Cast (typ, value) -> 9, "(" ^ type_name typ ^ ")" ^ print_at 9 value
-    | Not value -> 9, "!" ^ print_at 9 value
-    | Bit_not value -> 9, "~" ^ print_at 9 value
+    | UInt value -> 12, Printf.sprintf "0x%xu" (value land 0xffffffff)
+    | Name name -> 12, name
+    | Field (base, field) -> 11, print_at 11 base ^ "->" ^ field
+    | Index (base, index) -> 11, print_at 11 base ^ "[" ^ print_at 0 index ^ "]"
+    | Call (name, args) -> 11, name ^ "(" ^ String.concat ", " (List.map (print_at 0) args) ^ ")"
+    | Cast (typ, value) -> 10, "(" ^ type_name typ ^ ")" ^ print_at 10 value
+    | Not value -> 10, "!" ^ print_at 10 value
+    | Bit_not value -> 10, "~" ^ print_at 10 value
     | Bin (op, left, right) ->
         let symbol, level = operator op in
         let operand minimum operand = match operand with
