@@ -199,8 +199,11 @@ void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
 
 void f3_reset_devices(f3_cpu *cpu) {
     (void)cpu;
+    /* The OCaml CPU-only comparison models the same empty device bus as Musashi. */
+#ifndef DIFF_CPU_ONLY_RESET
     fprintf(stderr, "RESET device effects require the runtime integration harness\n");
     exit(1);
+#endif
 }
 
 void f3_idle(f3_cpu *cpu) { (void)cpu; }

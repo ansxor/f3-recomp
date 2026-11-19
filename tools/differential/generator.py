@@ -923,6 +923,40 @@ def generate_boundary_cases() -> list[RawTestCase]:
     return cases
 
 
+def generate_semantic_core_cases(start_id: int) -> list[RawTestCase]:
+    """Exercise OCaml entry boundaries and sequences absent from the shared corpus."""
+    cases = []
+
+    def add(name, code, *, sr=0x201F, d0=0, memory=(), count=1):
+        cases.append(
+            RawTestCase(
+                id=start_id + len(cases),
+                name=name,
+                code_bytes=bytes.fromhex(code),
+                initial_d=[d0, *([0] * 7)],
+                initial_sr=sr,
+                initial_mem=list(memory),
+                is_boundary=True,
+                boundary_kind="semantic_core",
+                instruction_count=count,
+            )
+        )
+
+    for sr in (0x001F, 0x201F):
+        add(f"read_sr_{sr:x}", "40c0", sr=sr)
+        add(f"set_sr_{sr:x}", "46fc0015", sr=sr)
+        add(f"read_usp_{sr:x}", "4e68", sr=sr)
+        add(f"set_usp_{sr:x}", "4e60", sr=sr)
+        add(f"reset_{sr:x}", "4e70", sr=sr)
+        add(f"stop_{sr:x}", "4e722015", sr=sr)
+    add("return_from_stack", "4e75", memory=[MemInitItem(TEST_SP, struct.pack(">I", TEST_PC + 0x80))])
+    add("move_long_low_word_first", "2300", d0=0x12345678)
+    add("moveq_then_read_ccr", "700042c1", count=2)
+    add("set_ccr_then_read_ccr", "44fc001542c0", count=2)
+    add("nop", "4e71")
+    return cases
+
+
 def generate_random_cases(count: int, seed: int, start_id: int) -> list[RawTestCase]:
     """Generate deterministic randomized instruction cases across all opcode families."""
     rng = random.Random(seed)
