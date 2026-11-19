@@ -1,0 +1,4 @@
+(test
+ (name trace_test)
+ (libraries f3recomp alcotest unix)
+ (deps ../../bin/main.exe (universe)))

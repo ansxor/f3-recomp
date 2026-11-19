@@ -73,14 +73,35 @@ let compile_roms =
 let decisions =
   let config = Arg.(required & opt (some string) None & info [ "config" ] ~docv:"FILE") in
   let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
-  let run config_path rom_dir =
-    report_error (fun () ->
-        Game.load config_path ~rom_dir
-        |> Game.discover
-        |> Decisions.write stdout)
+  let sprite_writers =
+    Arg.(value & opt (some string) None & info [ "sprite-writers" ] ~docv:"JSON" ~doc:"Load additional sprite writer PCs and optional lanes.")
   in
-  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline discovery decisions.")
-    Term.(const run $ config $ rom_dir)
+  let sprite_only = Arg.(value & flag & info [ "sprite-only" ] ~doc:"Print only sprite decision rows.") in
+  let sprite_header =
+    Arg.(value & opt (some string) None & info [ "sprite-header" ] ~docv:"PATH" ~doc:"Write the generated sprite_groups.hpp to PATH.")
+  in
+  let sprite_stats =
+    Arg.(value & opt (some string) None & info [ "sprite-stats" ] ~docv:"PATH" ~doc:"Write sprite trace counters as key/value TSV.")
+  in
+  let run config_path rom_dir sprite_writers sprite_only sprite_header sprite_stats =
+    report_error (fun () ->
+        let writers = Option.fold ~none:[] ~some:Sprite_trace.load_writer_seeds sprite_writers in
+        let game = Game.load config_path ~rom_dir in
+        let program = Game.discover game in
+        let groups = Sprite_trace.run program ~config:game.config ~writers in
+        Option.iter (fun path -> Output.write_file path (Sprite_groups.render_hpp groups)) sprite_header;
+        Option.iter (fun path ->
+            groups.stats
+            |> List.map (fun (key, count) -> Printf.sprintf "%s\t%d\n" key count)
+            |> String.concat "" |> Output.write_file path) sprite_stats;
+        let rows = Sprite_groups.decision_rows groups in
+        if sprite_only then (
+          print_endline Decisions.header;
+          List.iter (fun (_, row) -> print_string row) rows)
+        else Decisions.write ~sprite_rows:rows stdout program)
+  in
+  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline discovery and sprite decisions.")
+    Term.(const run $ config $ rom_dir $ sprite_writers $ sprite_only $ sprite_header $ sprite_stats)
 
 let lower =
   let pc = Arg.(required & opt (some int) None & info [ "pc" ] ~docv:"ADDRESS") in
