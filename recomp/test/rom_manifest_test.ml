@@ -78,6 +78,53 @@ let short = "\x01\x02"
 let wrong_sha = String.make 40 '0'
 let shortspec = short_with_sha short_sha
 
+let known_main () =
+  with_chips ["unused", full] (fun ~rom_dir ->
+    let config = Config.of_string ~path:"fixture/config.toml" (fixture ^ "[sound]\nsize = 0\n") in
+    let manifest = Rom_manifest.of_configs [config] in
+    let image = Rom_manifest.load_region manifest ~game:"fixture" Rom ~rom_dir in
+    Alcotest.(check string) "known main ROM" full image.bytes)
+
+let grouped_graphics () =
+  let config = {|[game]
+id = "fixture"
+[rom]
+size = 4
+interleave = 1
+[[rom.lanes]]
+|} ^ chipspec ^ {|[sprites]
+size = 0
+[sprites_hi]
+size = 0
+[tiles]
+size = 8
+[[tiles.lanes]]
+|} ^ chipspec ^ "group = 2\nstride = 4\n" ^
+    {|[[tiles.lanes]]
+file = "patch"
+size = 4
+crc = "538d4d69"
+sha1 = "85d9651d9a399a67e015d047fd9e6a941e6b20bb"
+offset = 2
+group = 2
+stride = 4
+[tiles_hi]
+size = 0
+[sound]
+size = 0
+[samples]
+size = 12
+[[samples.lanes]]
+|} ^ chipspec ^ "offset = 4\nstride = 2\n" in
+  let config = Config.of_string ~path:"fixture/config.toml" config in
+  let manifest = Rom_manifest.of_configs [config] in
+  with_chips ["chip", full; "patch", "\x05\x06\x07\x08"] (fun ~rom_dir ->
+    let image region = (Rom_manifest.load_region manifest ~game:"fixture" region ~rom_dir).bytes in
+    Alcotest.(check string) "grouped tiles" "\x01\x02\x05\x06\x03\x04\x07\x08" (image Tiles);
+    Alcotest.(check string) "zero-filled sample gaps"
+      "\x00\x00\x00\x00\x01\x00\x02\x00\x03\x00\x04\x00" (image Samples);
+    Alcotest.(check string) "absent high tile plane" "" (image Tiles_hi))
+
 let () =
   Alcotest.run "ROM manifest"
     ["chip validation",
@@ -99,7 +146,9 @@ let () =
       assert_image "validated short dump pads with 0xff" ~expected:"\x01\x02\xff\xff"
         ~files:["chip", short] (sound [shortspec])];
      "lane placement",
-     [assert_image "absent region" ~expected:"" ~files:[] (sound ~size:0 []);
+     [Alcotest.test_case "grouped graphics and sparse samples" `Quick grouped_graphics;
+      Alcotest.test_case "known main ROM keys load" `Quick known_main;
+      assert_image "absent region" ~expected:"" ~files:[] (sound ~size:0 []);
       assert_image "grouped sparse fill and mirror" ~expected:"\x01\x02\xff\xff\x03\x04\xff\xff\x01\x02\xff\xff\x03\x04\xff\xff"
         ~files:["chip", full]
         (sound ~size:8 ~settings:"fill = 255\nmirror_size = 16\n" [chipspec ^ "group = 2\nstride = 4\n"]);

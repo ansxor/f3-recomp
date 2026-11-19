@@ -121,10 +121,13 @@ let exceptions () =
     check_tier "RAM instruction always hot" (Some Selection.Hot) selected destination;
     check_tier "RAM exception always hot" (Some Selection.Hot) selected (destination + 2))
     [None, 7, Some Selection.Hot; Some (`Tiers profile), 7, Some Cold; Some (`Slim profile), 5, None];
-  let bad = { program with decoded = Pc.Map.add 4 (Decode.at program.game.rom 4) program.decoded } in
-  let bad = Program.select bad ~profile:None in
-  Alcotest.(check bool) "excluded discovery entry rejected" true
-    (Selection.check bad = Error [Inaccessible_entry 4])
+  List.iter (fun (label, bytes) ->
+    let entry = Decode.at { Image.base = 4; bytes } 4 in
+    let bad = { program with decoded = Pc.Map.add 4 entry program.decoded } in
+    let bad = Program.select bad ~profile:None in
+    Alcotest.(check bool) label true (Selection.check bad = Error [Inaccessible_entry 4]))
+    ["excluded native discovery entry", "\x70\x01";
+     "excluded exception discovery entry", "\xa0\x00"]
 
 let hooks () =
   let unit : Config.emit_unit = { id = 0; name = "fixture"; starts = [0]; ends = [2]; reg = Data 0; size = 1 } in

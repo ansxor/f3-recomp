@@ -118,30 +118,36 @@ let check_live solution pc expected =
   Alcotest.(check string) (Printf.sprintf "live after %#x" pc) expected
     (Ccr.to_string (Liveness.live_out solution pc ~flags:`Lazy))
 
-let check_code ~present code marker =
-  let found = try ignore (Str.search_forward (Str.regexp_string marker) code 0); true
-    with Not_found -> false in
-  Alcotest.(check bool) marker present found
-
 let lowered insns solution pc =
   let sem = Semantics.of_insn (Pc.Map.find pc insns) in
   match Lower.entry ~memory:Memory_path.Inline ~live_out:(Liveness.live_out solution pc ~flags:`Lazy) sem with
-  | Ok entry -> C.print_stmts entry.stmts
+  | Ok entry -> entry
   | Error why -> Alcotest.fail why
+
+let check_lowering (entry : Lower.entry) = function
+  | `Lazy expected -> Alcotest.(check int) "lazy flag producers" expected entry.counts.lazy_producers
+  | `X expected -> Alcotest.(check int) "standalone X writes" expected entry.counts.eager_x_writes
+  | `Clear ->
+      Alcotest.(check bool) "clear pending flags" true
+        (List.mem (C.Assign (Lower.field "cc_op", C.Name "F3_CC_OP_NONE")) entry.stmts)
+  | `Write_data ->
+      Alcotest.(check bool) "preserve data write" true
+        (List.exists (function
+          | C.Assign (Index (Field (_, "d"), _), _) -> true
+          | _ -> false) entry.stmts)
 
 let instruction_cases =
   [ "overwrite elides producer", [0x400, "700172024e75"], [],
       [0x400, "X"; 0x402, "XNZVC"],
-      [0x400, false, "cc_op"; 0x400, true, "cpu->d"; 0x402, true, "F3_CC_OP_LOGIC"];
+      [0x400, `Lazy 0; 0x400, `Write_data; 0x402, `Lazy 1];
     "conditional branch reads Z", [0x400, "b0816702760078004e75"], [],
-      [0x400, "XZ"], [0x400, true, "F3_CC_OP_CMP"];
+      [0x400, "XZ"], [0x400, `Lazy 1];
     "flagless move preserves Z", [0x400, "b08120406702760078004e75"], [],
-      [0x400, "XZ"], [0x400, true, "F3_CC_OP_CMP"];
+      [0x400, "XZ"], [0x400, `Lazy 1];
     "ADD keeps eager X and clears stale pending state", [0x400, "d2807400d98342c5"], [],
-      [0x400, "X"], [0x400, false, "F3_CC_OP_ADD"; 0x400, true, "~F3_CCR_X";
-                     0x400, true, "cpu->cc_op = F3_CC_OP_NONE;"];
+      [0x400, "X"], [0x400, `Lazy 0; 0x400, `X 1; 0x400, `Clear];
     "compare preserves X", [0x400, "d240b443e3544e75"], [],
-      [0x400, "X"; 0x402, "X"], [0x400, true, "~F3_CCR_X"; 0x402, false, "F3_CC_OP_CMP"];
+      [0x400, "X"; 0x402, "X"], [0x400, `X 1; 0x402, `Lazy 0];
     "logic preserves X", [0x400, "d2402602e3544e75"], [], [0x400, "X"], [];
     "RTS boundary", [0x400, "b0814e75"], [], [0x400, "XNZVC"], [];
     "computed JMP boundary", [0x400, "b0814ed0"], [], [0x400, "XNZVC"], [];
@@ -149,7 +155,7 @@ let instruction_cases =
     "known BRA", [0x400, "b08160044e714e7176004e75"], [], [0x400, "X"], [];
     "missing BSR destination", [0x400, "b08161000100"], [], [0x400, "XNZVC"], [];
     "loop back edge", [0x400, "76006706b44160fa4e717a004e75"], [],
-      [0x400, "XZ"; 0x404, "XZ"], [0x404, true, "F3_CC_OP_CMP"];
+      [0x400, "XZ"; 0x404, "XZ"], [0x404, `Lazy 1];
     "pin observes all", [0x400, "700172024e75"], [0x402], [0x400, "XNZVC"; 0x402, "XNZVC"], [] ]
 
 let check_call () =
@@ -368,8 +374,8 @@ let () =
          let insns, cfg = graph ~pins chunks in
          let solution = solve cfg in
          List.iter (fun (pc, flags) -> check_live solution pc flags) expected;
-         List.iter (fun (pc, present, marker) ->
-           check_code ~present (lowered insns solution pc) marker) code)) instruction_cases
+         List.iter (fun (pc, check) ->
+           check_lowering (lowered insns solution pc) check) code)) instruction_cases
        @ [case "known call enters callee" check_call;
           case "X survives pending flags in the runtime" check_pending_state;
           case "both branch predecessors supply the shared tail" check_merge;

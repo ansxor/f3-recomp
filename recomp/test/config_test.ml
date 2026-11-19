@@ -80,9 +80,9 @@ let rom_cases =
     "group exceeds region", "exceeds region",
       fixture ~regions:("[sprites]\nsize = 10\n[[sprites.lanes]]\n" ^ lane
                         ^ "offset = 3\ngroup = 2\nstride = 6\n") ();
-    "unknown rom key", "unknown keys: bogus",
+    "unknown rom key", "fixture/config.toml.rom: unknown keys: bogus",
       fixture ~rom_extra:"bogus = 1\n" ();
-    "unknown lane key", "unknown keys: typo",
+    "unknown lane key", "fixture/config.toml.rom.lanes[0]: unknown keys: typo",
       fixture ~lane_extra:"typo = 1\n" () ]
 
 let exclusion ?(start = "0x800") ?(stop = "0x900") ?(evidence = "e") ?(fields = "") () =
@@ -127,6 +127,24 @@ let image_checks =
       fun () -> check (corrupt sound_image 0x900 '\x01') sound);
     rejects ("fill without image", "no program image",
       fun () -> Exclusion.check ~image:None sound) ]
+
+let shipped_exclusion_fills () =
+  let games = find_games (Sys.getcwd ()) in
+  let root = Filename.dirname games in
+  let rom_root =
+    Option.value (Sys.getenv_opt "F3_RECOMP_ROM_ROOT") ~default:(Filename.concat root "roms") in
+  let rom_dir = Filename.concat rom_root "landmakrj" in
+  if not (Sys.file_exists rom_dir) then Alcotest.skip ();
+  let path = Filename.concat games "landmakrj/config.toml" in
+  let config = Config.load path in
+  let manifest = Rom_manifest.of_configs [config] in
+  let load region base specs =
+    let image = Rom_manifest.load_region manifest ~game:config.game.id region ~rom_dir in
+    Exclusion.of_config ~image:{ image with base } specs in
+  let main = load Rom 0 config.exclusions.main in
+  let sound = load Sound 0xc00000 config.exclusions.sound in
+  Alcotest.(check int) "verified fills across both CPUs" 4
+    (List.length (List.filter (fun (range : Exclusion.t) -> Option.is_some range.fill) (main @ sound)))
 
 let unit_record ?(name = "\"objects\"") ?(start = "0x400") ?(stop = "0x40a")
     ?(register = "unit = \"a6\"\n") ?(size = "0x80") ?(extra = "") () =
@@ -200,40 +218,47 @@ let sprite_digest () =
       "added unit", base ^ sprite_queue;
       "no units", "" ]
 
-let check_header text ~present ~absent =
-  let contains fragment =
-    try ignore (Str.search_forward (Str.regexp_string fragment) text 0); true
-    with Not_found -> false
-  in
-  List.iter (fun fragment -> Alcotest.(check bool) fragment true (contains fragment)) present;
-  List.iter (fun fragment -> Alcotest.(check bool) fragment false (contains fragment)) absent
+let compile_header ?(valid = true) headers source =
+  let dir = Filename.temp_file "f3-config-header" "" in
+  Sys.remove dir;
+  Unix.mkdir dir 0o700;
+  Fun.protect ~finally:(fun () ->
+    Sys.readdir dir |> Array.iter (fun name -> Sys.remove (Filename.concat dir name));
+    Unix.rmdir dir) (fun () ->
+    Output.write ~dir (("check.cpp", source) :: headers);
+    let include_path = Filename.concat (Filename.dirname (find_games (Sys.getcwd ()))) "include" in
+    let compiler = "g++" in
+    let args = [|compiler; "-std=c++20"; "-Werror"; "-fsyntax-only"; "-I"; include_path;
+                 Filename.concat dir "check.cpp"|] in
+    let pid = Unix.create_process compiler args Unix.stdin Unix.stdout Unix.stderr in
+    Alcotest.(check bool) "C++ compilation" valid (snd (Unix.waitpid [] pid) = Unix.WEXITED 0))
 
 let sprite_render_empty () =
   let config = fixture () |> parse in
   Alcotest.(check int) "no configured units" 0 (List.length config.video.emit_units);
-  let spec = Emit_units.of_config config in
-  let headers = Emit_units.render spec in
-  check_header (List.assoc "sprite_units.h" headers)
-    ~present:["#define F3_SPRITE_UNIT_COUNT 0\n"; "#define F3_SPRITE_UNITS_DIGEST 0xf2768d41u\n"]
-    ~absent:[];
-  check_header (List.assoc "sprite_units.hpp" headers)
-    ~present:["std::array<const EmitUnit *, 0> all{}"; "namespace f3rt::sprite_units {"]
-    ~absent:["frame_writers"; "UnitOwner"; "namespace detail"]
+  compile_header (Emit_units.render (Emit_units.of_config config)) {|
+#include "sprite_units.hpp"
+using namespace f3rt::sprite_units;
+static_assert(all.empty() && F3_SPRITE_UNIT_COUNT == 0);
+static_assert(digest == 0xf2768d41u);
+|}
 
 let sprite_render_units () =
   let rows = unit_record () ^ sprite_queue ^ "size = 18\n" in
-  let headers = rows |> sprite_spec |> Emit_units.render in
-  check_header (List.assoc "sprite_units.h" headers)
-    ~present:["#define F3_SPRITE_UNIT_COUNT 2\n"] ~absent:[];
-  check_header (List.assoc "sprite_units.hpp" headers)
-    ~present:[
-      {|EmitUnit objects{0u, "objects", detail::objects_starts, detail::objects_ends, UnitRegister::A6, 128u}|};
-      {|EmitUnit queue{1u, "queue", detail::queue_starts, detail::queue_ends, UnitRegister::D0, 18u}|};
-      "queue_starts{0x2u, 0x4u}";
-      "queue_ends{0x6u, 0x8u}";
-      "all{&objects, &queue}";
-      "static_assert(valid_units()" ]
-    ~absent:["frame_writers"; "UnitOwner"; "PcRange"]
+  compile_header (rows |> sprite_spec |> Emit_units.render) {|
+#include "sprite_units.hpp"
+#include <string_view>
+using namespace f3rt::sprite_units;
+using f3rt::UnitRegister;
+static_assert(F3_SPRITE_UNIT_COUNT == 2);
+static_assert(all[0] == &objects && all[1] == &queue && valid_units());
+static_assert(objects.id == 0 && std::string_view(objects.name) == "objects");
+static_assert(objects.reg == UnitRegister::A6 && objects.size == 128);
+static_assert(queue.id == 1 && std::string_view(queue.name) == "queue");
+static_assert(queue.reg == UnitRegister::D0 && queue.size == 18);
+static_assert(queue.starts[0] == 2 && queue.starts[1] == 4);
+static_assert(queue.ends[0] == 6 && queue.ends[1] == 8);
+|}
 
 let sprite_retired_frame_writers () =
   let config = fixture ~extra:("[video]\nframe_writers = \"retired\"\n" ^ unit_record ()) () |> parse in
@@ -241,8 +266,10 @@ let sprite_retired_frame_writers () =
   Alcotest.(check (list string)) "unit names" ["objects"] names
 
 let sprite_guard () =
-  let guard = unit_record () |> sprite_spec |> Emit_units.guard_lines in
-  check_header guard ~present:["#if F3_SPRITE_UNITS_DIGEST != 0xf1a6cfe9u\n"] ~absent:[]
+  let units = unit_record () |> sprite_spec in
+  let guard = Emit_units.guard_lines units in
+  compile_header (Emit_units.render units) guard;
+  compile_header ~valid:false (Emit_units.render (sprite_spec "")) guard
 
 let sprite_shipped_configs () =
   let games = find_games (Sys.getcwd ()) in
@@ -309,22 +336,28 @@ let enhancement_render () =
         [{ name = "object-shadow"; group_class = 2; anchor_class = 1; period = 2; follow = Self }] }
   in
   Alcotest.(check bool) "resolved spec" true (spec = expected);
-  check_enhancement_header {|inline constexpr uint32_t game_frame_counter = 0x408328;
-inline constexpr FlickerHold flicker_holds[] = {
-    {"object-shadow", 2, 1, 2, FlickerHold::Follow::Self},
-};
-}
-|} spec
+  compile_header (Enhancements.render spec) {|
+#include "enhancements.hpp"
+#include <string_view>
+using namespace f3rt::game_config;
+static_assert(game_frame_counter == 0x408328);
+static_assert(std::size(flicker_holds) == 1);
+constexpr auto hold = flicker_holds[0];
+static_assert(std::string_view(hold.name) == "object-shadow");
+static_assert(hold.group_class == 2 && hold.anchor_class == 1);
+static_assert(hold.period == 2 && hold.follow == FlickerHold::Follow::Self);
+|}
 
 let enhancement_default () =
   let config = enhancements_fixture "0x408328" (hold ()) |> parse in
   let spec = Enhancements.default config in
   Alcotest.(check bool) "default spec" true
     (spec = { game_frame_counter = 0; flicker_holds = [] });
-  check_enhancement_header {|inline constexpr uint32_t game_frame_counter = 0x0;
-inline constexpr std::array<FlickerHold, 0> flicker_holds{};
-}
-|} spec
+  compile_header (Enhancements.render spec) {|
+#include "enhancements.hpp"
+using namespace f3rt::game_config;
+static_assert(game_frame_counter == 0 && flicker_holds.empty());
+|}
 
 let enhancement_escaped_name () =
   let spec : Enhancements.t =
@@ -379,7 +412,8 @@ let () =
         rejects_config ("recursive discovery", "recursive discovery is unsupported",
           fixture ~extra:"[discovery]\ncoverage = \"recursive\"\n" ()) ];
       "rom", List.map rejects_config rom_cases;
-      "exclusions", List.map rejects_config exclusion_cases @ image_checks;
+      "exclusions", List.map rejects_config exclusion_cases @ image_checks
+        @ [Alcotest.test_case "shipped main and sound fills" `Quick shipped_exclusion_fills];
       "sprite units",
       List.map rejects_config sprite_cases
       @ [ Alcotest.test_case "defaults, scalar and list PCs, hook maps" `Quick sprite_defaults_and_hooks;
