@@ -509,11 +509,13 @@ let read_cpu root =
   in
   { interrupt_observes }
 
+let read_id table = Table.required table "id" Table.string
+
 let decode ~path value =
   let root = Table.create path value in
   let game =
     let table = Table.section root "game" in
-    let id = Table.required table "id" Table.string in
+    let id = read_id table in
     let pref_dir = Table.default table "pref_dir" Table.string id in
     let platform = Table.optional table "platform" Table.string in
     { id; pref_dir; platform }
@@ -545,6 +547,15 @@ let of_string ~path source = Otoml.Parser.from_string_result source |> parsed ~p
 let load path = Otoml.Parser.from_file_result path |> parsed ~path
 let load_all paths = List.map load paths
 
-let require_id id config =
-  if id <> config.game.id then
-    Error.fail ~where:config.path "expected game %S, got %S" id config.game.id
+let require_matching_id path expected actual =
+  if expected <> actual then
+    Error.fail "Configured game id does not match directory: %s" path
+
+let require_id id config = require_matching_id config.path id config.game.id
+
+let check_id ~path id =
+  match Otoml.Parser.from_file_result path with
+  | Error error -> Error.fail ~where:path "%s" error
+  | Ok value ->
+      let root = Table.create path value in
+      require_matching_id path id (read_id (Table.section root "game"))

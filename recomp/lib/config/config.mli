@@ -92,3 +92,4 @@ val of_string : path:string -> string -> t
 val load : string -> t
 val load_all : string list -> t list
 val require_id : string -> t -> unit
+val check_id : path:string -> string -> unit
