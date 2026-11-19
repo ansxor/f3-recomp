@@ -2,4 +2,4 @@
 
 (library
  (name f3recomp)
- (libraries otoml checkseum.ocaml))
+ (libraries otoml checkseum.ocaml unix))

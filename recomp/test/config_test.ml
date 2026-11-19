@@ -151,6 +151,109 @@ let sprite_cases =
     "duplicate hook PC", "duplicate start or end PC", unit_record ~start:"[2, 2]" ~stop:"[4, 6]" () ]
   |> List.map (fun (name, expected, extra) -> name, expected, fixture ~extra ())
 
+let sprite_spec extra = fixture ~extra () |> parse |> Emit_units.of_config
+
+let sprite_queue = {|[[video.emit_units]]
+name = "queue"
+start = [2, 4]
+end = [6, 8]
+unit = "d0"
+|}
+
+let sprite_defaults_and_hooks () =
+  let config = fixture ~extra:(unit_record () ^ sprite_queue) () |> parse in
+  let units = config.Config.video.emit_units in
+  Alcotest.(check (list int)) "IDs follow declaration order" [0; 1]
+    (List.map (fun (unit : Config.emit_unit) -> unit.id) units);
+  Alcotest.(check (list int)) "sizes include the default" [128; 0]
+    (List.map (fun (unit : Config.emit_unit) -> unit.size) units);
+  let check_hooks = Alcotest.(check (list (pair int (list int)))) in
+  let enter, leave = config |> Emit_units.of_config |> Emit_units.hooks in
+  check_hooks "enter map" [2, [1]; 4, [1]; 0x400, [0]] (Pc.Map.bindings enter);
+  check_hooks "exit map" [6, [1]; 8, [1]; 0x40a, [0]] (Pc.Map.bindings leave);
+  let shared =
+    unit_record () ^ unit_record ~name:"\"second\"" ()
+    |> sprite_spec |> Emit_units.hooks
+  in
+  check_hooks "shared starts retain declaration order" [0x400, [0; 1]]
+    (Pc.Map.bindings (fst shared));
+  check_hooks "shared ends retain declaration order" [0x40a, [0; 1]]
+    (Pc.Map.bindings (snd shared))
+
+let sprite_digest () =
+  let digest rows = sprite_spec rows |> Emit_units.digest in
+  let base = unit_record () in
+  let expected = digest base in
+  let check = Alcotest.(check int32) in
+  check "empty canonical CRC32" 0xf2768d41l (digest "");
+  check "populated canonical CRC32" 0xf1a6cfe9l expected;
+  check "stable" expected (digest base);
+  check "ignores discovery" expected (digest (base ^ "[discovery]\ncoverage = \"all_aligned\"\n"));
+  let retired = "[video]\nframe_writers = { ranges = [[0x10, 0x20]] }\n" ^ base in
+  check "ignores retired frame-writer table" expected (digest retired);
+  List.iter
+    (fun (field, changed) -> Alcotest.(check bool) field true (expected <> digest changed))
+    [ "size", unit_record ~size:"0x40" ();
+      "end", unit_record ~stop:"0x40c" ();
+      "register", unit_record ~register:"unit = \"a5\"\n" ();
+      "name", unit_record ~name:"\"renamed\"" ();
+      "added unit", base ^ sprite_queue;
+      "no units", "" ]
+
+let check_header text ~present ~absent =
+  let contains fragment =
+    try ignore (Str.search_forward (Str.regexp_string fragment) text 0); true
+    with Not_found -> false
+  in
+  List.iter (fun fragment -> Alcotest.(check bool) fragment true (contains fragment)) present;
+  List.iter (fun fragment -> Alcotest.(check bool) fragment false (contains fragment)) absent
+
+let sprite_render_empty () =
+  let config = fixture () |> parse in
+  Alcotest.(check int) "no configured units" 0 (List.length config.video.emit_units);
+  let spec = Emit_units.of_config config in
+  let headers = Emit_units.render spec in
+  check_header (List.assoc "sprite_units.h" headers)
+    ~present:["#define F3_SPRITE_UNIT_COUNT 0\n"; "#define F3_SPRITE_UNITS_DIGEST 0xf2768d41u\n"]
+    ~absent:[];
+  check_header (List.assoc "sprite_units.hpp" headers)
+    ~present:["std::array<const EmitUnit *, 0> all{}"; "namespace f3rt::sprite_units {"]
+    ~absent:["frame_writers"; "UnitOwner"; "namespace detail"]
+
+let sprite_render_units () =
+  let rows = unit_record () ^ sprite_queue ^ "size = 18\n" in
+  let headers = rows |> sprite_spec |> Emit_units.render in
+  check_header (List.assoc "sprite_units.h" headers)
+    ~present:["#define F3_SPRITE_UNIT_COUNT 2\n"] ~absent:[];
+  check_header (List.assoc "sprite_units.hpp" headers)
+    ~present:[
+      {|EmitUnit objects{0u, "objects", detail::objects_starts, detail::objects_ends, UnitRegister::A6, 128u}|};
+      {|EmitUnit queue{1u, "queue", detail::queue_starts, detail::queue_ends, UnitRegister::D0, 18u}|};
+      "queue_starts{0x2u, 0x4u}";
+      "queue_ends{0x6u, 0x8u}";
+      "all{&objects, &queue}";
+      "static_assert(valid_units()" ]
+    ~absent:["frame_writers"; "UnitOwner"; "PcRange"]
+
+let sprite_retired_frame_writers () =
+  let config = fixture ~extra:("[video]\nframe_writers = \"retired\"\n" ^ unit_record ()) () |> parse in
+  let names = List.map (fun (unit : Config.emit_unit) -> unit.name) config.video.emit_units in
+  Alcotest.(check (list string)) "unit names" ["objects"] names
+
+let sprite_guard () =
+  let guard = unit_record () |> sprite_spec |> Emit_units.guard_lines in
+  check_header guard ~present:["#if F3_SPRITE_UNITS_DIGEST != 0xf1a6cfe9u\n"] ~absent:[]
+
+let sprite_shipped_configs () =
+  let games = find_games (Sys.getcwd ()) in
+  List.iter
+    (fun (game, expected) ->
+      let path = Filename.concat (Filename.concat games game) "config.toml" in
+      let config = Config.load path in
+      let names = List.map (fun (unit : Config.emit_unit) -> unit.name) config.video.emit_units in
+      Alcotest.(check (list string)) game expected names)
+    ["commandw", ["objects"]; "landmakrj", []; "landmakr", []]
+
 let hold ?(name = "object-shadow") ?(period = 2) ?(follow = "self") () =
   Printf.sprintf
     "[[enhancements.flicker_hold]]\nname = %S\ngroup_writer = 0x4010\nanchor_writer = 0x4020\nperiod = %d\nfollow = %S\n"
@@ -200,5 +303,13 @@ let () =
           fixture ~extra:"[discovery]\ncoverage = \"recursive\"\n" ()) ];
       "rom", List.map rejects_config rom_cases;
       "exclusions", List.map rejects_config exclusion_cases @ image_checks;
-      "sprite units", List.map rejects_config sprite_cases;
+      "sprite units",
+      List.map rejects_config sprite_cases
+      @ [ Alcotest.test_case "defaults, scalar and list PCs, hook maps" `Quick sprite_defaults_and_hooks;
+          Alcotest.test_case "digest parity and sensitivity" `Quick sprite_digest;
+          Alcotest.test_case "empty headers" `Quick sprite_render_empty;
+          Alcotest.test_case "populated headers" `Quick sprite_render_units;
+          Alcotest.test_case "retired frame writers ignored" `Quick sprite_retired_frame_writers;
+          Alcotest.test_case "digest guard" `Quick sprite_guard;
+          Alcotest.test_case "shipped unit names" `Quick sprite_shipped_configs ];
       "enhancements", List.map rejects_config enhancement_cases ]
