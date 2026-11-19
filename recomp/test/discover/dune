@@ -1,0 +1,3 @@
+(test
+ (name ram_code_test)
+ (libraries f3recomp alcotest))
