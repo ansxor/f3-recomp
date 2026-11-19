@@ -91,10 +91,10 @@ PythonRuleSoundWithoutIrqObservers: check {
 } for 6 Node
 
 -- 2. The proposed rule is sound for every graph shape.
-OcamlRuleSound: check { ocamlFixpoint implies not unsoundElision[Ocaml.out] } for 6 Node
+OcamlRuleSound: check { ocamlFixpoint implies not unsoundElision[Ocaml.out] } for 8 Node
 
 -- 3. Checker soundness: anything it accepts elides only dead writes.
-CheckerSound: check { accepted[Cert.out] implies not unsoundElision[Cert.out] } for 6 Node
+CheckerSound: check { accepted[Cert.out] implies not unsoundElision[Cert.out] } for 8 Node
 
 -- 4. Checker completeness: the exact truth (the least solution) is accepted,
 --    so the checker never rejects the most precise sound result.
