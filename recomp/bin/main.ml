@@ -76,7 +76,17 @@ let decisions =
   let profile_option name = Arg.(value & opt (some string) None & info [ name ] ~docv:"FILE") in
   let profile_tiers = profile_option "profile-tiers" in
   let profile_slim = profile_option "profile-slim" in
-  let run config_path rom_dir tiers slim =
+  let sprite_writers =
+    Arg.(value & opt (some string) None & info [ "sprite-writers" ] ~docv:"JSON" ~doc:"Load additional sprite writer PCs and optional lanes.")
+  in
+  let sprite_only = Arg.(value & flag & info [ "sprite-only" ] ~doc:"Print only sprite decision rows.") in
+  let sprite_header =
+    Arg.(value & opt (some string) None & info [ "sprite-header" ] ~docv:"PATH" ~doc:"Write the generated sprite_groups.hpp to PATH.")
+  in
+  let sprite_stats =
+    Arg.(value & opt (some string) None & info [ "sprite-stats" ] ~docv:"PATH" ~doc:"Write sprite trace counters as key/value TSV.")
+  in
+  let run config_path rom_dir tiers slim sprite_writers sprite_only sprite_header sprite_stats =
     report_error (fun () ->
         let profile = match tiers, slim with
           | None, None -> None
@@ -84,13 +94,24 @@ let decisions =
           | None, Some path -> Some (`Slim (Profile.load path))
           | Some _, Some _ -> Error.fail "--profile-tiers and --profile-slim are mutually exclusive"
         in
-        Game.load config_path ~rom_dir
-        |> Game.discover
-        |> Program.select ~profile
-        |> Decisions.write stdout)
+        let writers = Option.fold ~none:[] ~some:Sprite_trace.load_writer_seeds sprite_writers in
+        let game = Game.load config_path ~rom_dir in
+        let program = Game.discover game in
+        let groups = Sprite_trace.run program ~config:game.config ~writers in
+        Option.iter (fun path -> Output.write_file path (Sprite_groups.render_hpp groups)) sprite_header;
+        Option.iter (fun path ->
+            groups.stats
+            |> List.map (fun (key, count) -> Printf.sprintf "%s\t%d\n" key count)
+            |> String.concat "" |> Output.write_file path) sprite_stats;
+        let rows = Sprite_groups.decision_rows groups in
+        if sprite_only then (
+          print_endline Decisions.header;
+          List.iter (fun (_, row) -> print_string row) rows)
+        else Program.select ~profile program |> Decisions.write ~sprite_rows:rows stdout)
   in
-  Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery and selection decisions.")
-    Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim)
+  Cmd.v (Cmd.info "decisions" ~doc:"Dump discovery, selection and sprite decisions.")
+    Term.(const run $ config $ rom_dir $ profile_tiers $ profile_slim
+          $ sprite_writers $ sprite_only $ sprite_header $ sprite_stats)
 
 let lower =
   let pc = Arg.(required & opt (some int) None & info [ "pc" ] ~docv:"ADDRESS") in
