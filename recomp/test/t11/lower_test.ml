@@ -142,8 +142,8 @@ let listing () =
   Alcotest.(check bool) "dead producer omitted" false (contains output "cc_op");
   Alcotest.(check bool) "X only clears pending flags" true
     (contains (lower "d280" ["--live-out"; "X"]) "cpu->cc_op = F3_CC_OP_NONE;");
-  Alcotest.(check bool) "CMP2 family unsupported" true
-    (match cli ["--hex"; "00d00000"] with Unix.WEXITED 1, "" -> true | _ -> false);
+  Alcotest.(check bool) "CALLM remains unsupported" true
+    (match cli ["--hex"; "06d00000"] with Unix.WEXITED 1, "" -> true | _ -> false);
   Alcotest.(check bool) "truncated instruction rejected" true
     (match cli ["--hex"; "4e72"] with Unix.WEXITED 1, "" -> true | _ -> false)
 
