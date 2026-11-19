@@ -801,6 +801,20 @@ script, committed under `tools/recomp_compare/inputs/`).
   a handler clean (e.g. a computed jump before every flag is written), emit
   fails; `[cpu] interrupt_observes` in the game config is the explicit
   override. A wrong silent default would break hardware equivalence.
+  *Amended after T15 (2026-11-19):* the sharpened analysis proves 30 of 81
+  handler entries clean, yet every game keeps at least one `Unknown`. The causes
+  are real but benign-looking: task switchers that spill A7 into a TCB
+  (`move.l a7,(a6)`, `move.l a7,d(a5)`), callback tables (`jsr (a0)`), and
+  A-line or TRAP dispatch. Neither of the two `interrupt_observes` choices fits.
+  An empty set is unproven. The full set is sound, but it may give up most
+  elision if interrupts can be taken at every block boundary. So `emit`
+  accepts two overrides:
+  - `interrupt_observes`, which is sound and costs elision;
+  - `[cpu] interrupt_handlers_trusted = "<evidence>"`, which records that the
+    handlers do not branch on the interrupted CCR, printed in the summary.
+
+  Each `Unknown` must be covered by one of the two. T19 reports the elision
+  cost of the sound option per game, so the choice can be made on numbers.
 - **Q5 RAM-code pins — decided: keep until the switch, then drop.** Python
   pins every RAM-code PC (reads all flags). They keep decision tables at
   parity during Phase E; the payload check makes them unnecessary for
