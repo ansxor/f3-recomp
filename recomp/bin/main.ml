@@ -83,8 +83,68 @@ let decisions =
   Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline decoder decisions.")
     Term.(const run $ config $ rom_dir)
 
+let lower =
+  let pc = Arg.(required & opt (some int) None & info [ "pc" ] ~docv:"ADDRESS") in
+  let hex = Arg.(required & opt (some string) None & info [ "hex" ] ~docv:"BYTES") in
+  let count = Arg.(value & opt int 1 & info [ "count" ] ~docv:"N") in
+  let live_out =
+    Arg.(value & opt string "XNZVC" & info [ "live-out" ] ~docv:"FLAGS"
+         ~doc:"Live flags at each instruction exit, as a subset of XNZVC or none.")
+  in
+  let parse_live_out value =
+    let value = String.uppercase_ascii value in
+    if value = "NONE" then Ccr.none
+    else
+      String.fold_left
+        (fun set char ->
+          let flag = match char with
+            | 'X' -> Ccr.X | 'N' -> N | 'Z' -> Z | 'V' -> V | 'C' -> C
+            | _ -> Error.fail "invalid --live-out %S" value
+          in
+          Ccr.union set (Ccr.singleton flag))
+        Ccr.none value
+  in
+  let parse_hex hex =
+    let digits = Buffer.create (String.length hex) in
+    String.iter
+      (function
+        | ' ' | '\t' | '\r' | '\n' -> ()
+        | ('0' .. '9' | 'a' .. 'f' | 'A' .. 'F') as digit -> Buffer.add_char digits digit
+        | _ -> Error.fail "invalid --hex byte string")
+      hex;
+    let digits = Buffer.contents digits in
+    if String.length digits mod 2 <> 0 then Error.fail "--hex requires whole bytes";
+    String.init (String.length digits / 2) (fun i ->
+        Char.chr (int_of_string ("0x" ^ String.sub digits (2 * i) 2)))
+  in
+  let run pc hex count live_out =
+    report_error (fun () ->
+        if pc < 0 || pc > 0xffffffff || pc mod 2 <> 0 then Error.fail "--pc must be an even 32-bit address";
+        if count < 1 then Error.fail "--count must be positive";
+        let live_out = parse_live_out live_out in
+        let image = { Image.base = pc; bytes = parse_hex hex } in
+        let rec listing pc remaining acc =
+          if remaining = 0 then List.rev acc
+          else
+            let decoded = Decode.at image pc in
+            let length = match decoded with Insn insn -> insn.length | Illegal illegal -> illegal.length in
+            let stmts =
+              decoded |> Semantics.of_decoded ~pc |> Lower.entry ~live_out
+              |> function
+              | Ok entry -> entry.stmts
+              | Error reason -> Error.fail ~where:(Printf.sprintf "0x%x" pc) "%s" reason
+            in
+            let c = if count = 1 then C.print_stmts stmts
+              else Printf.sprintf "/* 0x%x */\n%s" pc (C.print_stmt (Block stmts)) in
+            listing (pc + length) (remaining - 1) (c :: acc)
+        in
+        listing pc count [] |> List.iter print_string)
+  in
+  Cmd.v (Cmd.info "lower" ~doc:"Decode instructions and print their C statements.")
+    Term.(const run $ pc $ hex $ count $ live_out)
+
 let () =
-  let stubs = List.map stub [ "emit"; "enhancements"; "lower" ] in
+  let stubs = List.map stub [ "emit"; "enhancements" ] in
   exit
     (Cmd.eval'
-       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: stubs)))
+       (Cmd.group (Cmd.info "f3recomp") (sprite_units :: compile_roms :: check_game :: decisions :: lower :: stubs)))

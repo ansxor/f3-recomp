@@ -1,0 +1,10 @@
+(test
+ (name flags_test)
+ (modules flags_test)
+ (libraries f3recomp alcotest))
+
+(test
+ (name lower_test)
+ (modules lower_test)
+ (libraries f3recomp alcotest unix)
+ (deps ../../bin/main.exe (universe)))
