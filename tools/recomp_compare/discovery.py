@@ -47,7 +47,7 @@ def static_candidates(row, entries):
 
 
 class DiscoveryRules:
-    def __init__(self, rom, config, before, after):
+    def __init__(self, rom, config, before, after, *, after_baseline=None):
         self.rom = rom
         self.ram = decode_ram_routines(rom, config)
         self.exclusions = parse_exclusions(config, len(rom), image=rom)
@@ -55,6 +55,7 @@ class DiscoveryRules:
         self.capstone.detail = True
         self.before = eligibility(before, len(rom))
         self.after = eligibility(after, len(rom))
+        self.after_decoded = self.after if after_baseline is None else eligibility(after_baseline, len(rom))
 
     def window(self, pc, length=12):
         for routine in self.ram:
@@ -202,7 +203,7 @@ class DiscoveryRules:
             if slot + 4 > stop:
                 break
             target = (int.from_bytes(self.rom[slot : slot + 4], "big") + outer) & 0xFFFFFFFF
-            if not 0x400 <= target < len(self.after) or not self.after[target]:
+            if not 0x400 <= target < len(self.after_decoded) or not self.after_decoded[target]:
                 return scanned, target
             scanned.add(target)
             if target >= table:
