@@ -22,6 +22,8 @@ let register : Sem.register -> expr = function
   | D n -> Index (field "d", uint n)
   | A n -> Index (field "a", uint n)
   | Usp -> field "usp"
+  | Sfc -> field "sfc" | Dfc -> field "dfc" | Cacr -> field "cacr"
+  | Vbr -> field "vbr" | Caar -> field "caar" | Msp -> field "msp" | Isp -> field "ssp"
 
 let condition_code : Insn.cond -> int = function
   | T -> 0 | F -> 1 | Hi -> 2 | Ls -> 3 | Cc -> 4 | Cs -> 5 | Ne -> 6 | Eq -> 7
@@ -143,11 +145,14 @@ let rec statement ~exit_live ~live (stmt : Sem.stmt) =
         no_elision [flush; cpu_call "f3_exception" [uint vector; uint return_pc]; Return]
     | Goto addr -> no_elision (complete (expr addr))
     | Stop next -> no_elision (assign "stopped" (uint 1) :: complete (uint next))
+    | Repeat body ->
+        let body = sequence ~exit_live ~live:Ccr.all body in
+        { body with stmts = [Repeat body.stmts] }
   in
   let reads = match stmt with
     | If (test, _, _) -> Effects.expr test
     | Runtime call when Runtime_call.needs_canonical_sr call -> Ccr.none
-    | Raise _ -> Ccr.none
+    | Raise _ | Repeat _ -> Ccr.none
     | Set_flags _ when summary.writes <> Ccr.all -> Ccr.none
     | _ -> summary.reads
   in

@@ -66,6 +66,7 @@ let rec before ~exit (stmt : Sem.stmt) next =
   | Goto (Const _) -> exit
   | Goto value -> then_ (make ~reads:(expr value) ~boundary:true ()) exit
   | Stop _ -> { exit with boundary = true }
+  | Repeat _ -> make ~reads:Ccr.all ~boundary:true ()
 
 and sequence ~exit stmts next = List.fold_right (before ~exit) stmts next
 

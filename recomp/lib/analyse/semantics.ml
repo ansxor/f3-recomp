@@ -15,4 +15,6 @@ let of_insn { Insn.pc; length; op } : Sem.t =
 let of_decoded ~pc : Decode.decoded -> Sem.t = function
   | Insn insn -> of_insn insn
   | Illegal { reason = Truncated; _ } -> Unsupported "truncated instruction"
+  | Illegal { reason = Mame_default (Movec_control _); _ } ->
+      Semantics_flow.invalid_movec pc
   | Illegal { vector; _ } -> Body [Raise { vector; return_pc = pc }]

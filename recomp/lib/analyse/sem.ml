@@ -1,6 +1,7 @@
 type width = Insn.size = Byte | Word | Long
 type temp = int
 type register = D of int | A of int | Usp
+  | Sfc | Dfc | Cacr | Vbr | Caar | Msp | Isp
 (* Shr is logical, Sar arithmetic (on the 32-bit value); Mul keeps the low 32 bits. *)
 type binop = Add | Sub | And | Or | Xor | Shl | Shr | Sar | Mul | Eq | Ne | Lt
 type expr =
@@ -37,6 +38,7 @@ type stmt =
   | Raise of { vector : int; return_pc : Pc.t }
   | Goto of expr
   | Stop of Pc.t
+  | Repeat of stmt list (* Falling through the body starts the next iteration. *)
 
 type t = Body of stmt list | Unsupported of string
 

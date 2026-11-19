@@ -26,6 +26,7 @@ type stmt =
   | Return
   | Chain of string
   | Dispatch_pc
+  | Repeat of stmt list
 
 type func = { name : string; body : stmt list }
 
@@ -98,6 +99,7 @@ let rec write_stmt buffer depth stmt =
   | Return -> line "return;"
   | Chain name -> line ("F3_CHAIN(" ^ name ^ ", cpu);")
   | Dispatch_pc -> line "F3_DISPATCH_PC(cpu);"
+  | Repeat stmts -> line "for (;;) {"; body stmts; line "}"
 
 let print_stmts stmts =
   let buffer = Buffer.create 256 in
@@ -129,6 +131,7 @@ let rec stmt_names acc = function
       let acc = List.fold_left (fun acc (_, stmts) -> List.fold_left stmt_names acc stmts) acc cases in
       List.fold_left stmt_names acc otherwise
   | Goto _ | Label _ | Return | Chain _ | Dispatch_pc -> acc
+  | Repeat stmts -> List.fold_left stmt_names acc stmts
 
 let rec has_call = function
   | Call _ -> true
@@ -151,6 +154,7 @@ let rec drop_unused_decls stmts =
     | If (test, yes, no) -> Some (If (test, rewrite yes, rewrite no))
     | Switch (test, cases, otherwise) ->
         Some (Switch (test, List.map (fun (v, body) -> v, rewrite body) cases, rewrite otherwise))
+    | Repeat body -> Some (Repeat (rewrite body))
     | stmt -> Some stmt) stmts
   in
   let stmts = rewrite stmts in
