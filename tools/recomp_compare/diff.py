@@ -9,8 +9,9 @@ PC is the address key. Sprite rows have a separate key at the same PC for
 each sprite kind. An added or removed row is a disposition difference.
 --columns selects which differences to report. With --rom-image, compare
 baseline decoder entries and check for missing ordinary rows. This mode
-omits sprite metadata. The expected table selects decoder rules with
-rule:NAME in the pc field. Exit status is 0 for no unexplained differences,
+omits sprite metadata. Pass --config with the ROM image to enable discovery
+rules for disposition, chains and aligned RAM payloads. The expected table
+selects rules with rule:NAME in the pc field. Exit status is 0 for no unexplained differences,
 1 for unexplained differences, or 2 for invalid input.
 """
 
@@ -21,6 +22,7 @@ import csv
 import re
 import shutil
 import sys
+import tomllib
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from pathlib import Path
@@ -28,6 +30,7 @@ from tempfile import SpooledTemporaryFile
 
 from tools.recomp_compare.decisions import COLUMNS, SPRITE_KINDS, pc_text
 from tools.recomp_compare.decoder import category
+from tools.recomp_compare.discovery import DiscoveryRules
 
 EXPECTED_HEADER = ("pc", "column", "reason")
 EXPECTED_PATH = Path(__file__).with_name("expected.tsv")
@@ -83,22 +86,34 @@ def changes(before, after, columns, *, decoder=False):
     while left is not None or right is not None:
         if right is None or (left is not None and left[0] < right[0]):
             if decoder:
-                yield left[0], "entry", ", ".join(left[1][2:4]), "<missing>"
+                yield left[0], "entry", left[1], None
             elif "disposition" in columns:
-                yield left[0], "disposition", left[1][1], "<missing>"
+                yield left[0], "disposition", left[1], None
             left = next(before, None)
         elif left is None or right[0] < left[0]:
             if decoder:
-                yield right[0], "entry", "<missing>", ", ".join(right[1][2:4])
+                yield right[0], "entry", None, right[1]
             elif "disposition" in columns:
-                yield right[0], "disposition", "<missing>", right[1][1]
+                yield right[0], "disposition", None, right[1]
             right = next(after, None)
         else:
             for index, column in enumerate(COLUMNS[1:], 1):
                 if column in columns and left[1][index] != right[1][index]:
-                    yield left[0], column, left[1][index], right[1][index]
+                    yield left[0], column, left[1], right[1]
             left = next(before, None)
             right = next(after, None)
+
+
+def cell(row, column):
+    if row is None:
+        return "<missing>"
+    if column == "entry":
+        return ", ".join(row[2:4])
+    return row[COLUMNS.index(column)]
+
+
+def ordinary(path):
+    return (record for record in decision_records(path) if record[0][1] == 0)
 
 
 def main() -> int:
@@ -108,26 +123,34 @@ def main() -> int:
     parser.add_argument("--columns", default=",".join(COLUMNS[1:]), help="comma-separated comparison columns")
     parser.add_argument("--expected", type=Path, default=EXPECTED_PATH, help="expected differences TSV")
     parser.add_argument("--rom-image", type=Path, help="main ROM image for baseline decoder rules")
+    parser.add_argument("--config", type=Path, help="game config for discovery rules and RAM payload bytes")
     args = parser.parse_args()
+    if args.config and not args.rom_image:
+        parser.error("--config requires --rom-image")
     columns = {column.strip() for column in args.columns.split(",")}
     if unknown := columns.difference(COLUMNS[1:]):
         parser.error(f"unknown comparison columns: {', '.join(sorted(unknown))}")
     try:
         expected, rules = read_expected(args.expected)
         rom = args.rom_image.read_bytes() if args.rom_image else None
-        left, right = decision_records(args.before), decision_records(args.after)
-        if rom is not None:
-            left = (record for record in left if record[0][1] == 0)
-            right = (record for record in right if record[0][1] == 0)
+        records = ordinary if rom is not None else decision_records
+        left, right = records(args.before), records(args.after)
+        discovery = None
+        if args.config:
+            config = tomllib.loads(args.config.read_text(encoding="utf-8"))
+            discovery = DiscoveryRules(rom, config, ordinary(args.before), ordinary(args.after))
         counts = Counter()
         samples = {}
         with ExitStack() as stack:
             reports = {}
-            for (pc, kind), column, before, after in changes(left, right, columns, decoder=rom is not None):
+            for (pc, kind), column, old, new in changes(left, right, columns, decoder=rom is not None):
+                before, after = cell(old, column), cell(new, column)
                 if any(start <= pc <= end for start, end in expected[column]):
                     continue
                 if rom is not None and not kind:
                     rule = category(rom, pc, column, before, after)
+                    if rule is None and discovery is not None:
+                        rule = discovery.category(pc, column, before, after, old, new)
                     if (rule, column) in rules:
                         counts[rule] += 1
                         samples.setdefault(rule, (pc, before, after))
@@ -139,10 +162,10 @@ def main() -> int:
                 row_kind = SPRITE_KINDS[kind - 1] if kind else "entry"
                 reports[column].write(f"{pc_text(pc)}\t{row_kind}\t{before}\t{after}\n")
             if counts:
-                print("[expected decoder differences]")
+                print("[expected decision differences]" if discovery else "[expected decoder differences]")
                 for rule, count in sorted(counts.items()):
                     pc, before, after = samples[rule]
-                    window = rom[pc : pc + 12].hex(" ")
+                    window = (discovery.window(pc) if discovery else rom[pc : pc + 12]).hex(" ")
                     print(f"{rule}\t{count}\t{pc_text(pc)}\t{window}\t{before}\t{after}")
             for column in (*COLUMNS, "entry"):
                 if column in reports:

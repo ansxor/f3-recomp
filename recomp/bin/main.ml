@@ -75,12 +75,11 @@ let decisions =
   let rom_dir = Arg.(required & opt (some string) None & info [ "rom-dir" ] ~docv:"DIR") in
   let run config_path rom_dir =
     report_error (fun () ->
-        let config = Config.load config_path in
-        let manifest = Rom_manifest.of_configs [config] in
-        let rom = Rom_manifest.load_region manifest ~game:config.game.id Rom ~rom_dir in
-        Decisions.write stdout ~rom config)
+        Game.load config_path ~rom_dir
+        |> Game.discover
+        |> Decisions.write stdout)
   in
-  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline decoder decisions.")
+  Cmd.v (Cmd.info "decisions" ~doc:"Dump baseline discovery decisions.")
     Term.(const run $ config $ rom_dir)
 
 let lower =

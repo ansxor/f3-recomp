@@ -161,6 +161,6 @@ def category(rom, pc, column, before, after):
             base = 0 if ext & 0x80 else pc + 2
             width = (0, 0, 2, 4)[ext >> 4 & 3]
             disp = int.from_bytes(data[4 : 4 + width], "big", signed=True)
-            if after == f"branch:0x{(base + disp) & 0xFFFFFFFF:06x}":
+            if after == f"branch:0x{(base + disp) & 0xFFFFFF:06x}":
                 return "constant-indexed-transfer"
     return None

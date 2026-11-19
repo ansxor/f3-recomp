@@ -206,10 +206,11 @@ let flow () =
     | Decode.Illegal _ -> Alcotest.fail "expected an instruction"
   in
   List.iter (fun (words, expected) -> Alcotest.(check string) "flow" expected (flow words))
-    [[0x4eb8; 0x8000], "branch:0xffff8000"; [0x50c8; 0xfffe], "next";
+    [[0x4eb8; 0x8000], "branch:0xff8000"; [0x50c8; 0xfffe], "next";
      [0x51c8; 0xfffe], "branch:0x001000,next"; [0x4e40], "escape";
      [0x56fc], "branch:next,escape"; [0x4e73], "escape"; [0x4ed0], "escape";
-     [0x4efb; 0x0160; 0xfffe], "branch:0x001000"]
+     [0x4efb; 0x0160; 0xfffe], "branch:0x001000";
+     [0x4eb4; 0xfff0; 0x3c4e; 0xfff0], "branch:0x4efff0"]
 
 let () =
   let test name = Alcotest.test_case name `Quick in
