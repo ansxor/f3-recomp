@@ -292,6 +292,68 @@ let check_irq () =
     | _ -> Alcotest.failf "expected unknown at entry for %s" hex)
     ["4ed0"; "30174e73"]
 
+let irq_cases =
+  let open F3recomp_test.Asm in
+  let sr op mask = insn (Logic_status (op, Sr, mask)) in
+  let rte = insn Rte in
+  let push = move Long (d 1) (Predec 7) in
+  let pop = insn (Adda (Word, imm 4, 7)) in
+  let load reg disp = move Word (Disp { reg; disp }) (d 0) in
+  let lea disp = insn (Lea (Disp { reg = 7; disp }, 0)) in
+  let bitfield offset width = insn (Bitfield {
+    operation = Bftst; offset = Constant offset; width = Constant width; operand = Ind 7
+  }) in
+  [
+    "ORI to SR preserves inherited flags",
+      [sr Or 0x0700; insn (Scc (Cs, d 0)); rte], `Proven "C";
+    "ANDI to SR preserves inherited flags",
+      [sr And 0xf8ff; insn (Scc (Cs, d 0)); rte], `Proven "C";
+    "ANDI to SR reads inherited flags",
+      [sr And 0xf8fe; rte], `Proven "XNZVC";
+    "MOVE from SR reads all flags",
+      [insn (From_status (Sr, d 0)); rte], `Proven "XNZVC";
+    "A5-relative load", [load 5 0x1234; rte], `Proven "";
+    "load at entry A7", [move Word (Ind 7) (d 0); rte], `Unknown "memory read may observe stacked CCR";
+    "load at A7+4 after a push", [push; load 7 4; pop; rte], `Unknown "memory read may observe stacked CCR";
+    "load beyond the SR", [load 7 2; rte], `Proven "";
+    "load through an alias outside the SR", [lea 8; move Word (Ind 0) (d 0); rte], `Proven "";
+    "load through an alias back into the SR", [lea 8; load 0 (-8); rte], `Unknown "memory read may observe stacked CCR";
+    "bitfield ends before the CCR", [bitfield 0 8; rte], `Proven "";
+    "bitfield straddles the CCR", [bitfield 7 2; rte], `Unknown "memory read may observe stacked CCR";
+    "indexed update loses A7", [insn (Adda (Long, d 0, 7)); rte], `Unknown "stack pointer lost";
+    "RTE with adjusted A7", [push; rte], `Unknown "RTE at a nonzero stack offset";
+    "RESET and reboot reload A7",
+      [insn Reset; bra "boot"; label "boot"; insn (Movec (To_control, D 0, Cacr));
+       insn (To_status (Sr, imm 0x2700)); insn (Movea (Long, imm 0x410000, 7));
+       insn (Jmp (Ind 0))], `Proven "";
+    "TRAP inside a handler", [insn (Trap 0)], `Unknown "handler may raise an exception";
+    "LINK and UNLK preserve the stack offset", [insn (Link (6, -8)); insn (Unlk 6); rte], `Proven "";
+    "MOVEM restores a saved stack alias",
+      [lea 0; insn (Movem (To_memory, Long, [A 0], Predec 7));
+       insn (Movea (Long, imm 0, 0)); insn (Movem (From_memory, Long, [A 0], Postinc 7));
+       move Word (Ind 0) (d 0); rte], `Unknown "memory read may observe stacked CCR";
+    "STOP with F3 interrupts masked", [insn (Stop 0x2700); insn (Trap 0)], `Proven "";
+    "STOP with interrupts enabled resumes", [insn (Stop 0x2000); rte], `Proven "";
+  ]
+
+let check_irq_case statements expected () =
+  let rom = F3recomp_test.Asm.assemble ~base:0x400 statements in
+  let hex = String.to_seq rom.bytes
+    |> Seq.map (fun byte -> Printf.sprintf "%02x" (Char.code byte))
+    |> List.of_seq |> String.concat "" in
+  let insns, cfg = graph [rom.base, hex] in
+  let verdict =
+    Irq_contract.analyse ~rom ~instruction:(fun pc -> Pc.Map.find_opt pc insns) cfg rom.base in
+  match expected, verdict with
+  | `Proven expected, Proven flags -> Alcotest.(check string) "observed" expected (Ccr.to_string flags)
+  | `Unknown expected, Unknown { why; _ } -> Alcotest.(check string) "reason" expected why
+  | `Proven _, Unknown { at; why; _ } -> Alcotest.failf "Unknown at %#x: %s" at why
+  | `Unknown why, Proven flags -> Alcotest.failf "expected %s, proved %s" why (Ccr.to_string flags)
+
+let check_irq_status_writes () =
+  let writes = Irq_contract.status_logic Insn.And 0xf8fe in
+  Alcotest.(check string) "written flags" "C" (Ccr.to_string writes)
+
 let () =
   let case name = Alcotest.test_case name `Quick in
   Alcotest.run "CCR liveness"
@@ -310,4 +372,7 @@ let () =
           case "both branch predecessors supply the shared tail" check_merge;
           case "effects follow IR semantics" check_effects;
           case "producer effects and lowering over every opcode" check_all_producers];
-     "interrupts", [case "direct calls, RTE and uncertain exits" check_irq]]
+     "interrupts", [case "direct calls, RTE and uncertain exits" check_irq;
+                    case "ANDI to SR replaces carry" check_irq_status_writes]
+       @ List.map (fun (name, statements, expected) ->
+           case name (check_irq_case statements expected)) irq_cases]
