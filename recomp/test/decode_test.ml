@@ -10,10 +10,12 @@ let image words =
 
 let decode words = Decode.at (image words) base
 
+let words_text words = String.concat " " (List.map (Printf.sprintf "%04x") words)
+
 let expect ?length words op =
   let length = Option.value length ~default:(List.length words * 2) in
   if decode words <> Decode.Insn { pc = base; length; op } then
-    Alcotest.failf "unexpected decoding of %04x" (List.hd words)
+    Alcotest.failf "unexpected decoding of [%s]" (words_text words)
 
 let expect_asm length op =
   let image = Asm.(assemble ~base [insn op]) in
@@ -22,7 +24,7 @@ let expect_asm length op =
 
 let illegal words vector reason length =
   if decode words <> Decode.Illegal { vector; reason; length } then
-    Alcotest.failf "unexpected exception for %04x" (List.hd words)
+    Alcotest.failf "unexpected exception for [%s]" (words_text words)
 
 let legality () =
   let table = Array.make 65536 false in
