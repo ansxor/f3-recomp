@@ -626,6 +626,55 @@ static inline void f3_idle_poll_bcc(f3_cpu *cpu, uint32_t address, unsigned size
 #  define F3_IDLE_POLL_BCC(cpu, address, size, cond) f3_idle_poll_bcc((cpu), (address), (size), (cond))
 #endif
 
+/* An out-of-range high register denotes the single-register form. */
+enum { F3_NO_HIGH_DATA_REG = 8 };
+
+static inline void f3_multiply_long(f3_cpu *cpu, int is_signed, uint32_t src,
+                                    unsigned low, unsigned high) {
+    uint32_t upper;
+    uint32_t *upper_out = high == F3_NO_HIGH_DATA_REG ? NULL : &upper;
+    uint32_t lower = is_signed
+        ? f3_muls_l(cpu, (int32_t)src, (int32_t)cpu->d[low], upper_out)
+        : f3_mulu_l(cpu, src, cpu->d[low], upper_out);
+    if (upper_out != NULL) cpu->d[high] = upper;
+    cpu->d[low] = lower;
+}
+
+/* Semantic IR handles a zero divisor before calling either helper. */
+static inline void f3_divide_word(f3_cpu *cpu, int is_signed, uint32_t src, unsigned dst) {
+    int exception;
+    uint32_t dividend = cpu->d[dst];
+    /* A positive quotient of 2^31 cannot fit the signed word destination. */
+    if (is_signed && dividend == 0x80000000u && (int16_t)src == -1) {
+        f3_cc_flush(cpu);
+        cpu->sr = (cpu->sr & ~F3_CCR_C) | F3_CCR_V;
+        return;
+    }
+    cpu->d[dst] = is_signed
+        ? f3_divs_w(cpu, (int16_t)src, dividend, 0, &exception)
+        : f3_divu_w(cpu, (uint16_t)src, dividend, 0, &exception);
+}
+
+static inline void f3_divide_long(f3_cpu *cpu, int is_signed, uint32_t src,
+                                  unsigned high, unsigned quotient, unsigned remainder) {
+    int exception;
+    int is_double = high != F3_NO_HIGH_DATA_REG;
+    uint32_t upper = is_double ? cpu->d[high] : 0;
+    uint32_t rem = cpu->d[remainder];
+    uint32_t dividend = cpu->d[quotient];
+    if (is_signed && !is_double && dividend == 0x80000000u && src == UINT32_MAX) {
+        f3_cc_flush(cpu);
+        cpu->sr = (cpu->sr & ~F3_CCR_C) | F3_CCR_V;
+        return;
+    }
+    uint32_t quot = is_signed
+        ? f3_divs_l(cpu, (int32_t)src, dividend, upper, is_double, 0, &rem, &exception)
+        : f3_divu_l(cpu, src, dividend, upper, is_double, 0, &rem, &exception);
+    cpu->sr &= ~F3_CCR_C;
+    cpu->d[remainder] = rem;
+    cpu->d[quotient] = quot;
+}
+
 #include "bitfield.h"
 
 #ifdef __cplusplus

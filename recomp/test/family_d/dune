@@ -1,0 +1,3 @@
+(test
+ (name cases)
+ (libraries refinement f3recomp f3recomp_test alcotest))
