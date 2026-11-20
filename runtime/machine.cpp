@@ -64,10 +64,12 @@ Machine::Machine(RomSet set)
     std::vector<uint8_t>().swap(roms.tiles);
     std::vector<uint8_t>().swap(roms.tiles_hi);
     switch (f3rt_audio_init(roms.sound.data(), roms.sound.size(), roms.samples.data(),
-                            roms.samples.size(), shared.data())) {
+                            roms.samples.size(), shared.data(), roms.sound_driver_layout)) {
     case F3RT_AUDIO_OK:
         m_audio_lease.held = true;
         break;
+    case F3RT_AUDIO_LAYOUT_MISMATCH:
+        throw std::runtime_error("Sound ROM does not match [sound].driver_layout for " + roms.name);
     case F3RT_AUDIO_UNSUPPORTED_ROM:
         throw std::runtime_error("Audio is not supported for this game");
     default:

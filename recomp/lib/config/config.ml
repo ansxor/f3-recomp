@@ -61,7 +61,9 @@ type video = {
 }
 
 type input = { dial : bool; six_button : bool }
-type sound = { bankswitch : bool }
+type audio_driver_layout = Standard | Early | Early_arabian
+
+type sound = { bankswitch : bool; driver_layout : audio_driver_layout }
 type follow = Self | Anchor
 type flicker_hold = {
   name : string;
@@ -522,6 +524,13 @@ let read_cpu root =
 
 let read_id table = Table.required table "id" Table.string
 
+let audio_driver_layout where value =
+  match Table.string where value with
+  | "standard" -> Standard
+  | "early" -> Early
+  | "early_arabian" -> Early_arabian
+  | layout -> Error.fail ~where "unknown sound driver_layout %S" layout
+
 let decode ~path value =
   let root = Table.create path value in
   let game =
@@ -544,7 +553,8 @@ let decode ~path value =
   in
   let sound =
     let table = Table.section root "sound" in
-    { bankswitch = Table.default table "bankswitch" Table.bool false }
+    { bankswitch = Table.default table "bankswitch" Table.bool false;
+      driver_layout = Table.default table "driver_layout" audio_driver_layout Standard }
   in
   let enhancements = read_enhancements root in
   let cpu = read_cpu root in

@@ -1,12 +1,12 @@
 //! `audio/hle/effects.hpp`: the substitute for the ES5510 effects programs, its preset/program
 //! selection, the OTIS bus routing, the auto-bypass and the LFO phase of bypassed frames.
 //!
-//! The sound ROM holds a table of program pointers (0xc1c3a2) and a preset table (0xc1c2d2,
+//! The standard driver has a program pointer table at 0xc1c3a2 and a preset table at 0xc1c2d2 (
 //! 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15 are the ten
 //! parameters p0..p9 in the order the sound commands set them. A preset loads the program its pointer
 //! names; programs are identified here by that pointer, so the selection does not depend on the game.
-//! Five programs are decoded (every program the three profiled games Kirameki, Land Maker and Command
-//! War select) and each has its own graph; any other program panics instead of being approximated.
+//! Five programs have decoded graphs. Riding Fight preset 12 uses a dry fallback until its graph is
+//! decoded. Other unsupported programs still panic.
 //! Delay lengths, gains and topology are the ones of the loaded program as it runs in the reference
 //! backend: every delay is a (read offset - write offset) / 256 distance inside the DSP's single
 //! 64K-word delay RAM, every gain is a GPR of the program, and each graph reproduces the emulated
@@ -52,6 +52,7 @@
 use crate::hle::block::{
     BusBlock, BusSpan, MutableStereoSpan, OtisBus, PlanarAudioBlock, StereoBlock, StereoChannel,
 };
+use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::SAMPLE_RATE;
 use crate::hle::faust::generated::chorus::ChorusDsp;
 use crate::hle::faust::generated::dc_blocker::DcBlockerDsp;
@@ -59,7 +60,6 @@ use crate::hle::faust::generated::echo::EchoDsp;
 use crate::hle::faust::generated::hall::HallDsp;
 use crate::hle::faust::generated::reverb::ReverbDsp;
 use crate::hle::faust::support::{Controls, FaustDsp, FaustFloat, ParamIndex};
-use crate::hle::sound_rom_5a7e9117 as sound_5a7e9117;
 
 const _: () = assert!(
     SAMPLE_RATE == 29762,
@@ -404,6 +404,8 @@ pub struct Effects {
 
     // The sound image is owned by the Audio implementation and outlives the Effects.
     rom: &'static [u8],
+    layout: &'static DriverLayout,
+    reported_unmodelled: bool,
     parameters: [u8; 10],
     preset: u8,
 
@@ -418,8 +420,7 @@ pub struct Effects {
     dc_out: PlanarAudioBlock<2, K_CHUNK, f32>,
 }
 
-// ROM pointers of the decoded programs (the same pointer table in all three sound ROMs).
-pub const K_PROGRAM_TABLE_OFFSET: u32 = 0x1c3a2;
+// ROM pointers of the decoded programs in the standard driver.
 pub const K_PTR_REVERB: u32 = 0xc1c836;
 pub const K_PTR_HALL: u32 = 0xc1c4e2;
 pub const K_PTR_MUTE: u32 = 0xc1ce1b;
@@ -439,8 +440,7 @@ const K_THRESHOLD: f32 = 1e-8;
 
 impl Effects {
     fn table(&self, index: u32) -> f32 {
-        let p = sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET as usize
-            + index.min(127) as usize * 2;
+        let p = self.layout.volume_pan_table_offset as usize + index.min(127) as usize * 2;
         (((self.rom[p] as u16) << 8 | self.rom[p + 1] as u16) as f32) / 32768.0
     }
 
@@ -743,7 +743,7 @@ impl Effects {
             | self.rom[offset + 3] as u32
     }
 
-    pub fn new(rom: &'static [u8]) -> Effects {
+    pub fn new(rom: &'static [u8], layout: &'static DriverLayout) -> Effects {
         let mut effects = Effects {
             reverb: Box::new(ReverbProgram::new()),
             chorus: Box::new(ChorusProgram::new()),
@@ -773,6 +773,8 @@ impl Effects {
             eps_b: 0.0,
             eps_c: 0.0,
             rom,
+            layout,
+            reported_unmodelled: false,
             parameters: [0; 10],
             preset: 0,
             bucket_peaks: [0.0; K_BUCKET_COUNT],
@@ -790,21 +792,29 @@ impl Effects {
         effects
     }
 
-    /// Loads a preset: reads its parameters and the program it names. Panics for a program that has not
-    /// been decoded (the DSP would run something this model does not reproduce).
+    /// Loads a preset and its parameters. Riding Fight preset 12 uses the dry path.
     pub fn select(&mut self, preset: u8) {
         if preset >= 13 {
             return;
         }
-        let row = sound_5a7e9117::PRESET_TABLE_OFFSET as usize + preset as usize * 16;
-        let pointer =
-            self.rom_u32(K_PROGRAM_TABLE_OFFSET as usize + self.rom[row + 5] as usize * 4);
-        let program = match pointer {
+        let row = self.layout.preset_table_offset as usize + preset as usize * 16;
+        let index = self.rom[row + 5] as usize;
+        let pointer = self.rom_u32(self.layout.esp_program_table_offset as usize + index * 4);
+        let program = match pointer.wrapping_add(self.layout.esp_pointer_delta) {
             K_PTR_REVERB => Program::Reverb,
             K_PTR_HALL => Program::Hall,
             K_PTR_CHORUS => Program::Chorus,
             K_PTR_ECHO => Program::Echo,
             K_PTR_MUTE => Program::Mute,
+            _ if pointer == 0xc1e08b && self.layout.esp_pointer_delta == 0x80 => {
+                if !self.reported_unmodelled {
+                    eprintln!(
+                        "f3rt: ES5510 program {pointer:#08x} (preset {preset}) is unmodelled; using dry audio"
+                    );
+                    self.reported_unmodelled = true;
+                }
+                Program::None
+            }
             _ => panic!(
                 "ES5510 program at {} (preset {}) is not decoded",
                 pointer, preset

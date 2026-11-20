@@ -17,6 +17,11 @@ set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
 set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
 set(F3_RECOMP_EXECUTABLE "" CACHE FILEPATH "Override the f3recomp executable for configure-time code generation")
+# Old build trees can cache a garbage-collected Nix store path here.
+if(F3_RECOMP_EXECUTABLE AND NOT EXISTS "${F3_RECOMP_EXECUTABLE}")
+    message(WARNING "F3_RECOMP_EXECUTABLE=${F3_RECOMP_EXECUTABLE} does not exist; ignoring it.")
+    set_property(CACHE F3_RECOMP_EXECUTABLE PROPERTY VALUE "")
+endif()
 
 if(F3_RECOMP_EXECUTABLE)
     get_filename_component(F3_RECOMP_COMMAND "${F3_RECOMP_EXECUTABLE}" ABSOLUTE)

@@ -13,10 +13,7 @@ use std::sync::Arc;
 use crate::bytes::{read_be32, s8, s16};
 use crate::hle::events::{NoteOnEvent, SAMPLE_RATE};
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::sound_rom_5a7e9117::{
-    LFO_WAVE_TABLE, PITCH_MOD_TABLE, RATE_TABLE, REVERSE_START_OFFSET, SPECIAL_SPLIT_TABLE,
-    SPLIT_MODE_TABLE, SPLIT_RECORD_STRIDE,
-};
+use crate::hle::sound_rom::{REVERSE_START_OFFSET, SPLIT_RECORD_STRIDE};
 use crate::hle::track_parameters::TrackParameters;
 use crate::hle::voice::{
     Envelope, NATIVE_RATE, NoiseState, VOLUME_RAMP, Voice, accumulator_start, advance_glide,
@@ -824,7 +821,7 @@ fn update_lfo(v: &mut Voice, layer: &Layer, bank: &SoundBank) {
     let wave = (u32::from(layer.lfo_wave()) << 8) | u32::from(v.lfo_phase >> 8);
     let selected = i32::from(v.lfo_depth) + i32::from(modulation(v, layer.lfo_source()));
     let depth = clamp_i32(selected, 0, 32767);
-    let shape = i32::from(s8(u32::from(bank.rom.read_byte(LFO_WAVE_TABLE + wave))));
+    let shape = i32::from(s8(u32::from(bank.rom.read_byte(bank.layout.lfo_wave_table + wave))));
     v.lfo = s16(((depth * shape) >> 7) as u32);
 }
 
@@ -841,7 +838,7 @@ fn settle_level(e: &mut Envelope) {
 fn start_direct_release(e: &mut Envelope, release_rate: u32, bank: &SoundBank) {
     e.done = false;
     e.position &= 0xffff0000;
-    let rate = s16(u32::from(bank.rom.read_u16(RATE_TABLE + 2 * release_rate)));
+    let rate = s16(u32::from(bank.rom.read_u16(bank.layout.rate_table + 2 * release_rate)));
     e.slope = wrap_product(-i64::from(0x7f00) * i64::from(rate) * 2);
     e.target = if e.slope <= 0 { 0x80000000 } else { 0 };
     e.stage = 4;
@@ -1040,7 +1037,7 @@ impl LayerPatch {
         };
         v.lfo_step = ((v.lfo_target as u32).wrapping_mul(u32::from(
             bank.rom
-                .read_u16(RATE_TABLE + u32::from(self.view.lfo_fade_offset())),
+                .read_u16(bank.layout.rate_table + u32::from(self.view.lfo_fade_offset())),
         )) >> 16) as i16;
         v.filter.mode = self.view.filter_mode() as u8;
         v.random_period = self.view.random_countdown();
@@ -1069,7 +1066,7 @@ impl LayerPatch {
             0x0b
         } else {
             bank.rom
-                .read_byte(SPLIT_MODE_TABLE + u32::from(v.split.mode))
+                .read_byte(bank.layout.split_mode_table + u32::from(v.split.mode))
         };
         v.reverse = self.view.reverse() && sample.ordinary();
         if v.reverse {
@@ -1097,7 +1094,7 @@ impl LayerPatch {
             let mut d1 = if amount_end < 0xfa { amount_end } else { 0xfa };
             d0 *= 14;
             d1 *= 14;
-            let split_table = SPECIAL_SPLIT_TABLE;
+            let split_table = bank.layout.special_split_table;
             let mut d4 = unsafe { read_be32(bank.rom.pointer_bytes(split_table + d0 + 2, 4)) };
             if d4 == 0x1dcaa07f {
                 d0 += 14;
@@ -1283,7 +1280,7 @@ impl LayerPatch {
         let depth = i32::from(self.view.pitch_source_depth());
         let mut multiplier = i32::from(
             bank.rom
-                .read_u16(PITCH_MOD_TABLE + depth.unsigned_abs() * 2),
+                .read_u16(bank.layout.pitch_mod_table + depth.unsigned_abs() * 2),
         );
         if depth < 0 {
             multiplier = -i32::from(s16(multiplier as u32));
@@ -1505,7 +1502,7 @@ impl DirectPatch {
         let board = (u32::from(v.selector >> 1) & bank.board_bank_mask) << 20;
         let control = bank
             .rom
-            .read_byte(SPLIT_MODE_TABLE + u32::from(v.split.mode));
+            .read_byte(bank.layout.split_mode_table + u32::from(v.split.mode));
         v.reverse = self.view.reverse() && sample.ordinary();
         let final_control = if v.reverse { 0x43 } else { control };
         let start = if v.reverse {
@@ -1578,7 +1575,7 @@ impl DirectPatch {
             e.position = (u32::from((i32::from(self.view.level()) * scale) as u16) << 16) | 0x7fff;
             e.slope = -i32::from(s16(u32::from(
                 bank.rom
-                    .read_u16(RATE_TABLE + 2 * u32::from(self.view.decay_rate())),
+                    .read_u16(bank.layout.rate_table + 2 * u32::from(self.view.decay_rate())),
             )));
             e.target = u32::from(((e.position >> 16) ^ 0x8000) as u16) << 16;
         }

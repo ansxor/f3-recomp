@@ -125,9 +125,34 @@ size = 12
       "\x00\x00\x00\x00\x01\x00\x02\x00\x03\x00\x04\x00" (image Samples);
     Alcotest.(check string) "absent high tile plane" "" (image Tiles_hi))
 
+let driver_layout name settings enumerator =
+  Alcotest.test_case name `Quick (fun () ->
+      let config = Config.of_string ~path:"fixture/config.toml"
+          (fixture ^ sound ~size:0 ~settings []) in
+      let rendered = Rom_manifest.render (Rom_manifest.of_configs [config]) in
+      let game = String.split_on_char '\n' rendered.manifest
+        |> List.find (String.starts_with ~prefix:"    { \"fixture\",") in
+      Alcotest.(check bool) "initializer contains layout" true
+        (List.mem (enumerator ^ ",") (String.split_on_char ' ' game)))
+
+let unknown_driver_layout () =
+  let path = "fixture/config.toml" in
+  let source = fixture ^ sound ~size:0 ~settings:"driver_layout = \"unknown\"\n" [] in
+  match Config.of_string ~path source with
+  | _ -> Alcotest.fail "expected unknown driver layout to be rejected"
+  | exception Error.Invalid { where; what } ->
+      Alcotest.(check string) "config key" (path ^ ".sound.driver_layout") where;
+      Alcotest.(check string) "diagnostic" "unknown sound driver_layout \"unknown\"" what
+
 let () =
   Alcotest.run "ROM manifest"
-    ["chip validation",
+    ["sound driver layout",
+     [driver_layout "default standard" "" "F3RT_AUDIO_DRIVER_STANDARD";
+      driver_layout "explicit standard" "driver_layout = \"standard\"\n" "F3RT_AUDIO_DRIVER_STANDARD";
+      driver_layout "early" "driver_layout = \"early\"\n" "F3RT_AUDIO_DRIVER_EARLY";
+      driver_layout "early Arabian" "driver_layout = \"early_arabian\"\n" "F3RT_AUDIO_DRIVER_EARLY_ARABIAN";
+      Alcotest.test_case "unknown layout" `Quick unknown_driver_layout];
+     "chip validation",
      [rejects "size mismatch" ~chip:"\x01\x02\x03"
         ~error:"size mismatch: expected 4 bytes, got 3" (sound [chipspec]);
       rejects "corrupted mirrored chip" ~chip:"\x01\x02\x03\x05" ~error:"CRC32 mismatch"

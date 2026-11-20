@@ -10,7 +10,7 @@ use crate::hle::patch::{
     velocity_curve_index, velocity_level_scale,
 };
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::sound_rom_5a7e9117::{RATE_TABLE, Split};
+use crate::hle::sound_rom::Split;
 use crate::hle::track_service::Track;
 
 pub const NATIVE_RATE: u32 = (15238090 + 8 * 32) / (16 * 32);
@@ -516,7 +516,7 @@ pub fn set_glide(v: &mut Voice, destination: i16, rate_index: u32, bank: &SoundB
     let difference = i32::from(destination.wrapping_sub(v.glide_target));
     v.glide = s16(((i64::from(difference)
         * i64::from(s16(u32::from(
-            bank.rom.read_u16(RATE_TABLE + 2 * rate_index),
+            bank.rom.read_u16(bank.layout.rate_table + 2 * rate_index),
         )))
         * 2)
         >> 16) as u32);

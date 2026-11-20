@@ -1,40 +1,10 @@
-//! `audio/hle/sound_rom_5a7e9117.hpp`: the sound ROM's fixed addresses, record layouts and small
-//! record types.
+//! Record formats and addresses shared by the supported sound drivers.
 
 use crate::hle::patch::{DirectRegionAt, LayerAt, ProgramAt};
 
 // ROM addresses (68000 bus, 0xc00000 .. 0xc80000)
 pub const PROGRAM_DATA_BASE: u32 = 0xc00134; // Program data bank 0
-pub const BEND_RANGE_PTR: u32 = 0xc085f2; // Pitch bend range startup parameter
-pub const RATE_TABLE: u32 = 0xc089dc; // Envelope / fade rate multipliers
-pub const PHASE_RATE_TABLE: u32 = 0xc08aa4; // LFO phase rate table
-pub const PAN_TABLE: u32 = 0xc08b6c; // Stereo pan table (128 entries)
-pub const ATTENUATION_TABLE: u32 = 0xc08bec; // Attenuation curve (128 entries)
-pub const VELOCITY_CURVE_TABLE: u32 = 0xc08c6c; // Velocity response curves (512 entries)
-pub const FILTER_TABLE: u32 = 0xc08e6c; // Filter coefficient table
-pub const PITCH_TABLE: u32 = 0xc09e6c; // Pitch frequency table
-pub const PITCH_MOD_TABLE: u32 = 0xc0a46c; // Pitch modulation multipliers
-pub const SPLIT_MODE_TABLE: u32 = 0xc0a734; // Sample split mode control table
-pub const LFO_WAVE_TABLE: u32 = 0xc0a73c; // LFO waveform table
-pub const CONTROLLER_DEFAULTS_TABLE: u32 = 0xc13556; // Track controller defaults
-pub const HEAP_BASE_PTR: u32 = 0xc15fb6; // Sample RAM heap base pointer
-pub const HEAP_LIMIT_PTR_A: u32 = 0xc15fba; // Sample RAM heap limit pointer word A
-pub const HEAP_LIMIT_PTR_B: u32 = 0xc15fc0; // Sample RAM heap limit pointer word B
-pub const HEAP_RESERVE_PTR: u32 = 0xc15fcc; // Sample RAM heap reserve size pointer
-pub const HEAP_NEXT_PTR: u32 = 0xc15fd8; // Sample RAM heap next allocation pointer
-pub const NOISE_SEED_PTR: u32 = 0xc16f04; // Random noise generator seed
-pub const NOISE_HISTORY_PTR: u32 = 0xc16f0a; // Random noise generator history
-pub const RESET_START_PTR: u32 = 0xc17b60; // Voice reset start pointer
-pub const RESET_END_PTR: u32 = 0xc17b64; // Voice reset end pointer
-pub const BUDGET_TABLE: u32 = 0xc1a56e; // Voice processing budget table
-pub const SPLIT_TABLE_BASE: u32 = 0xc1ae76; // Sample split key table base
-pub const SPECIAL_SPLIT_TABLE: u32 = 0xc1ae84; // Special sample split table
-pub const SPLIT_DIRECTORY: u32 = 0xc1c1e0; // Sample split directory
 pub const SEQ_STREAM_BASE: u32 = 0xc20000; // Sequence data streams base in ROM
-
-// Sound ROM relative offsets (within 0x80000 sound image)
-pub const VOLUME_PAN_TABLE_OFFSET: u32 = 0xa634; // Volume/pan attenuation table offset (0xc0a634)
-pub const PRESET_TABLE_OFFSET: u32 = 0x1c2d2; // Effects preset parameter table offset (0xc1c2d2)
 
 // Sequencer / Voice parameter record offsets
 pub const HEAP_METADATA_OFFSET: u32 = 0x6e9c; // Metadata offset for heap header

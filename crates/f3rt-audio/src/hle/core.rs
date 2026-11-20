@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::hle::block::{self, BusBlock, StereoBlock};
 use crate::hle::command::CommandPacket;
 use crate::hle::effects::Effects;
+use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::{
     EffectEventKind, Event, MAIN_CLOCK, SAMPLE_RATE, SONG_SLOTS, TIMER_TICKS, TrackEventKind,
 };
@@ -68,9 +69,13 @@ pub fn frames_at(tick: u64) -> u64 {
 }
 
 impl Core {
-    pub fn new(sound_rom: &'static [u8], sample_words: &'static [u16]) -> Core {
-        let bank = Arc::new(SoundBank::new(sound_rom, sample_words));
-        let effects = Box::new(Effects::new(sound_rom));
+    pub fn new(
+        sound_rom: &'static [u8],
+        sample_words: &'static [u16],
+        layout: &'static DriverLayout,
+    ) -> Core {
+        let bank = Arc::new(SoundBank::new(sound_rom, sample_words, layout));
+        let effects = Box::new(Effects::new(sound_rom, layout));
         let programs = Box::new(ProgramService::new(Arc::clone(&bank)));
         let voices = Box::new(VoiceService::new(Arc::clone(&bank)));
 
@@ -82,7 +87,7 @@ impl Core {
             programs,
             tracks: Box::new(TrackService::new()),
             voices,
-            sequencer: Sequencer::new(sound_rom),
+            sequencer: Sequencer::new(sound_rom, layout),
             render_state: VoiceRenderState::new(),
             buses: BusBlock::new(),
             stereo: StereoBlock::new(),
@@ -353,11 +358,15 @@ impl Core {
 
     /// Checks that the ROM and samples can be driven by the HLE core. Throws nothing: the C++ builds a
     /// Core inside try/catch and drops the message, which is why the panic hook is silenced here.
-    pub fn validate(sound_rom: &'static [u8], sample_words: &'static [u16]) -> bool {
+    pub fn validate(
+        sound_rom: &'static [u8],
+        sample_words: &'static [u16],
+        layout: &'static DriverLayout,
+    ) -> bool {
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Core::new(sound_rom, sample_words);
+            Core::new(sound_rom, sample_words, layout);
         }));
         std::panic::set_hook(hook);
         result.is_ok()

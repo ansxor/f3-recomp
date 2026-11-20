@@ -61,7 +61,9 @@ type video = {
 }
 
 type input = { dial : bool; six_button : bool }
-type sound = { bankswitch : bool }
+type audio_driver_layout = Standard | Early | Early_arabian
+
+type sound = { bankswitch : bool; driver_layout : audio_driver_layout }
 type follow = Self | Anchor
 type flicker_hold = {
   name : string;

@@ -10,7 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::{
     audio::{self, Audio},
-    hle::events::SAMPLE_RATE,
+    hle::{driver_layout::DriverLayout, events::SAMPLE_RATE},
 };
 
 pub type f3rt_audio_status = i32;
@@ -19,6 +19,7 @@ pub const F3RT_AUDIO_UNSUPPORTED_ROM: f3rt_audio_status = 1;
 pub const F3RT_AUDIO_ALREADY_INITIALIZED: f3rt_audio_status = 2;
 pub const F3RT_AUDIO_INVALID_STATE: f3rt_audio_status = 3;
 pub const F3RT_AUDIO_INVALID_ARGUMENT: f3rt_audio_status = 4;
+pub const F3RT_AUDIO_LAYOUT_MISMATCH: f3rt_audio_status = 5;
 
 /// Size of the save-state blob written by `f3rt_audio_save_state`.
 pub const F3RT_AUDIO_STATE_SIZE: u32 = 32;
@@ -104,6 +105,7 @@ pub unsafe extern "C" fn f3rt_audio_init(
     sample_rom: *const u8,
     sample_rom_size: usize,
     shared_ram: *mut u8,
+    driver_layout: u8,
 ) -> f3rt_audio_status {
     if sound_rom.is_null() {
         return F3RT_AUDIO_INVALID_ARGUMENT;
@@ -117,12 +119,15 @@ pub unsafe extern "C" fn f3rt_audio_init(
             std::slice::from_raw_parts(sample_rom, sample_rom_size),
         )
     };
+    let Some(layout) = DriverLayout::select(driver_layout, sound) else {
+        return F3RT_AUDIO_LAYOUT_MISMATCH;
+    };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let words = audio::decode_sample_words(samples);
-        if !Audio::supported(sound, &words) {
+        if !Audio::supported(sound, &words, layout) {
             return Some(F3RT_AUDIO_UNSUPPORTED_ROM);
         }
-        *instance() = Some(Audio::new(sound, words, shared_ram));
+        *instance() = Some(Audio::new(sound, words, shared_ram, layout));
         None
     }));
     match result {

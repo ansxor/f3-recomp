@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt/abi/audio.h"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +28,7 @@ struct RomSet {
     std::string pref_dir;
     InputConfig input;
     bool sound_bankswitch = false;
+    f3rt_audio_driver_layout sound_driver_layout = F3RT_AUDIO_DRIVER_STANDARD;
     std::vector<uint8_t> main, sprites, sprites_hi, tiles, tiles_hi, sound, samples;
     // Optional immutable 128-byte factory image; guest writes never alter ROM assets.
     std::vector<uint8_t> factory_eeprom;

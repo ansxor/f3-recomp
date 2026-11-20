@@ -114,6 +114,7 @@ stride = 1
 group = 1
 
 [sound]
+driver_layout = "early_arabian"
 # MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
 size = 0x40000
 fill = 0

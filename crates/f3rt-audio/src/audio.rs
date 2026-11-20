@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::hle::command::CommandPacket;
 use crate::hle::core::{self, Core, RenderStats, SharedPcmSink};
+use crate::hle::driver_layout::DriverLayout;
 use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L};
 use crate::pcm_ring::PcmRing;
 use crate::shared_mailbox::SharedMailbox;
@@ -93,13 +94,18 @@ pub struct Synth {
 }
 
 impl Synth {
-    fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, sink: SharedPcmSink) -> Synth {
+    fn new(
+        sound_rom: &'static [u8],
+        sample_words: Vec<u16>,
+        sink: SharedPcmSink,
+        layout: &'static DriverLayout,
+    ) -> Synth {
         // SAFETY: the decoder owns both buffers for as long as this Synth lives, and a Vec's buffer does
         // not move when the Synth does, so the slices stay valid for the core's lifetime.
         let rom = sound_rom;
         let samples: &'static [u16] =
             unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        let mut core = Core::new(rom, samples);
+        let mut core = Core::new(rom, samples, layout);
         core.set_pcm_sink(Some(sink));
         Synth {
             rom: sound_rom,
@@ -148,9 +154,14 @@ pub struct Audio {
 }
 
 impl Audio {
-    pub fn new(sound_rom: &'static [u8], sample_words: Vec<u16>, shared: *mut u8) -> Audio {
+    pub fn new(
+        sound_rom: &'static [u8],
+        sample_words: Vec<u16>,
+        shared: *mut u8,
+        layout: &'static DriverLayout,
+    ) -> Audio {
         let pcm = Arc::new(Mutex::new(PcmRing::new()));
-        let mut synth = Box::new(Synth::new(sound_rom, sample_words, pcm.clone()));
+        let mut synth = Box::new(Synth::new(sound_rom, sample_words, pcm.clone(), layout));
         let worker = WorkerQueue::new(&mut *synth as *mut Synth);
         Audio {
             worker,
@@ -233,14 +244,14 @@ impl Audio {
     }
 
     /// Whether the sound program and samples can be driven; the constructor panics when this is false.
-    pub fn supported(sound_rom: &[u8], sample_words: &[u16]) -> bool {
+    pub fn supported(sound_rom: &[u8], sample_words: &[u16], layout: &'static DriverLayout) -> bool {
         // SAFETY: validate() only uses the buffers while it runs; the 'static lifetime only states that
         // the core it builds never stores them beyond the call.
         let rom: &'static [u8] =
             unsafe { std::slice::from_raw_parts(sound_rom.as_ptr(), sound_rom.len()) };
         let samples: &'static [u16] =
             unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        Core::validate(rom, samples)
+        Core::validate(rom, samples, layout)
     }
 
     pub fn shared_write(&mut self, offset: u32) {

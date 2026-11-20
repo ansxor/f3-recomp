@@ -132,6 +132,7 @@ size = 0x0
 fill = 0
 
 [sound]
+driver_layout = "early"
 # MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
 size = 0x40000
 fill = 0

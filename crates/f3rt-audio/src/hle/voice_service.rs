@@ -21,7 +21,6 @@ use super::note_timing::{DriverClock, NoteQueue};
 use super::patch::{AllocationMode, NoteStart, Patch, PriorWindow};
 use super::program_service::PatchList;
 use super::sound_bank::SoundBank;
-use super::sound_rom_5a7e9117;
 use super::track_service::Track;
 use super::voice::{NoiseState, Voice, advance_glide};
 
@@ -106,11 +105,11 @@ impl VoiceService {
         self.budget_slot = 0;
         self.tick = (tick / u64::from(TIMER_TICKS) + 1) * u64::from(TIMER_TICKS);
         // SAFETY: the bank outlives the service; it owns the ROM the noise seeds live in.
-        self.noise.value = self.bank.rom.read_u16(sound_rom_5a7e9117::NOISE_SEED_PTR);
+        self.noise.value = self.bank.rom.read_u16(self.bank.layout.noise_seed_ptr);
         self.noise.history = self
             .bank
             .rom
-            .read_u16(sound_rom_5a7e9117::NOISE_HISTORY_PTR);
+            .read_u16(self.bank.layout.noise_history_ptr);
         self.serial = 0;
     }
 
