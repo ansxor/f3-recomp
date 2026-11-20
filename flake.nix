@@ -133,7 +133,11 @@
             let tc = toolchain pkgs; in
             {
               default = pkgs.mkShell {
-                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs;
+                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
+                  # The OCaml recompiler (recomp/, built with dune).
+                  ++ (with pkgs; [ ocaml dune_3 ]) ++ (with pkgs.ocamlPackages; [
+                    findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
+                  ]);
                 env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}
