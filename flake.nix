@@ -45,6 +45,21 @@
         '';
 
         libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest ];
+
+        # The OCaml recompiler (recomp/), which CMake builds with dune at configure time.
+        ocaml = [ pkgs.ocaml pkgs.dune_3 ] ++ (with pkgs.ocamlPackages; [
+          findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
+        ]);
+        # findlib's setup hook only runs in mkShell, so helpers export this themselves.
+        ocamlpath =
+          let
+            roots = with pkgs.ocamlPackages; [ findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest ];
+            closure = builtins.genericClosure {
+              startSet = map (p: { key = p.outPath; pkg = p; }) roots;
+              operator = item: map (p: { key = p.outPath; pkg = p; })
+                (builtins.filter (p: p ? outPath) (item.pkg.propagatedBuildInputs or [ ]));
+            };
+          in pkgs.lib.makeSearchPath "lib/ocaml/${pkgs.ocaml.version}/site-lib" (map (i: i.pkg) closure);
         tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git pkgs.cargo pkgs.rustc ];
       };
 
@@ -65,6 +80,7 @@
         [ -d "$rom_dir" ] || { echo "error: ROM directory $rom_dir does not exist" >&2; exit 1; }
         rom_dir=$(realpath "$rom_dir")
         build_dir=''${BUILD_DIR:-build/$game}
+        export OCAMLPATH=${(toolchain pkgs).ocamlpath}''${OCAMLPATH:+:$OCAMLPATH}
 
         configure() {
           cmake -S . -B "$build_dir" -G Ninja \
@@ -80,7 +96,7 @@
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
           name = "f3-compile";
-          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools ++ tc.ocaml;
           text = ''
             usage() {
               echo "usage: f3-compile GAME [ROM_DIR] [-- extra cmake configure args]" >&2
@@ -101,7 +117,7 @@
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
           name = "f3-compdb";
-          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools ++ tc.ocaml;
           text = ''
             # usage: f3-compdb [GAME=landmakrj] [ROM_DIR=roms/GAME] [-- extra cmake configure args]
             # Configures $BUILD_DIR (default build/GAME) when it has no compile_commands.json or
@@ -135,9 +151,7 @@
               default = pkgs.mkShell {
                 packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
                   # The OCaml recompiler (recomp/, built with dune).
-                  ++ (with pkgs; [ ocaml dune_3 ]) ++ (with pkgs.ocamlPackages; [
-                    findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
-                  ]);
+                  ++ tc.ocaml;
                 env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}
