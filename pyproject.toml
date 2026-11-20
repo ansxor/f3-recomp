@@ -36,6 +36,7 @@ packages = ["tools"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tools/recomp_compare/tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120

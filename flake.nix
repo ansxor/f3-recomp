@@ -26,7 +26,7 @@
         };
 
       toolchain = pkgs: {
-        python = pkgs.python3.withPackages (ps: [ ps.capstone ]); # pyproject pins capstone==5.0.9
+        python = pkgs.python3.withPackages (ps: [ ps.capstone ps.pytest ]); # pyproject pins capstone==5.0.9
 
         # The build helper apps run shader Python scripts via CMake. This shim
         # runs them with Nix Python and avoids installing the Python project.
@@ -148,7 +148,7 @@
             let tc = toolchain pkgs; in
             {
               default = pkgs.mkShell {
-                packages = [ pkgs.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
+                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
                   # The OCaml recompiler (recomp/, built with dune).
                   ++ tc.ocaml;
                 env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
