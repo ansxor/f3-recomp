@@ -10,10 +10,12 @@ pub use support::*;
 
 pub mod generated {
     pub use super::*;
+    pub(super) use super::support::envelope_rom_word;
 
     pub mod chorus;
     pub mod dc_blocker;
     pub mod echo;
+    pub mod envelope;
     pub mod hall;
     pub mod reverb;
 }

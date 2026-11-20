@@ -52,7 +52,24 @@ let rec can_return = function
       List.exists can_return default
   | _ -> false
 
+let ridingf_trampoline game_id (insn : Insn.t) =
+  match game_id, insn.pc, insn.op with
+  | "ridingf", 0x039578, Jmp (Ind 2) ->
+      (* The table at $039620 supplies GE, LT, GT and LE. The ROM bypasses
+         the trampoline for zero and negative entries. CMP.W at $039572
+         sets the CCR, and the intervening JMP leaves it intact.
+         The taken Bcc +2 skips JMP (A1) and lands on JMP (A0). *)
+      let ram_pc = UInt 0x40f000 in
+      let condition = Lower.call "f3_eval_cond" [Lower.call "f3_read8" [ram_pc]] in
+      let areg reg = Index (Lower.field "a", UInt reg) in
+      [If (Bin (Eq, pc, ram_pc),
+           [Assign (pc, Select (condition, areg 0, areg 1));
+            Lower.assign "steps" (Bin (Add, Lower.field "steps", UInt 2))],
+           [])]
+  | _ -> []
+
 let function_body ~check_yield (layout : Layout.t) (func : Layout.func) =
+  let game_id = layout.selection.program.game.config.game.id in
   let starts, ends = Emit_units.hooks layout.selection.units in
   let hooks table key pc =
     Pc.Map.find_opt pc table |> Option.value ~default:[]
@@ -71,14 +88,15 @@ let function_body ~check_yield (layout : Layout.t) (func : Layout.func) =
                         [Lower.assign "halted" (UInt 1)], []); Return]
       | Some (Native lowered) ->
           let transfer = Pc.Map.find address layout.transfers in
-          let profile_indirect = match Pc.Map.find address layout.selection.entries with
+          let before_transfer = match Pc.Map.find address layout.selection.entries with
             | Selection.Native insn, _ ->
                 (match (Flow.of_insn insn).escape with
                  | Some (Computed _) ->
+                     ridingf_trampoline game_id insn @
                      [Expr (Call ("F3_PROFILE_INDIRECT_MAIN", [UInt address; pc]))]
                  | _ -> [])
             | _ -> [] in
-          splice_transfer (profile_indirect @ transfers layout func.name transfer) lowered.stmts
+          splice_transfer (before_transfer @ transfers layout func.name transfer) lowered.stmts
     in
     if address = last || List.exists can_return body then check_yield address;
     [Label (Layout.label address);

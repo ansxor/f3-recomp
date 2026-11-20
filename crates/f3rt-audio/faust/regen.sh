@@ -28,10 +28,11 @@ cd "$root"
 # name:class, the DSP list and class names of the f3rt_faust_dsp() registrations.
 dsp() {
     local name=$1 class=$2
+    shift 2
     echo "faust: $name"
     "$faust" -lang rust \
         -a crates/f3rt-audio/faust/architecture.rs \
-        -cn "$class" -double \
+        -cn "$class" -double "$@" \
         -o "crates/f3rt-audio/src/hle/faust/generated/$name.rs" \
         "crates/f3rt-audio/faust/$name.dsp"
 }
@@ -40,4 +41,5 @@ dsp reverb ReverbDsp
 dsp chorus ChorusDsp
 dsp echo EchoDsp
 dsp hall HallDsp
+dsp envelope EnvelopeDsp -it
 dsp dc_blocker DcBlockerDsp

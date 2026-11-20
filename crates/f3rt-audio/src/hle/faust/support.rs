@@ -184,3 +184,27 @@ impl UI<FaustFloat> for Controls {
 
     fn declare(&mut self, _param: Option<ParamIndex>, _key: &str, _value: &str) {}
 }
+
+// With FAUST's -it option, rdtable calls this provider only during
+// instance initialization and copies the result into the DSP's own array.
+pub(in crate::hle) const ENVELOPE_CURVE_WORDS: usize = 65;
+thread_local! {
+    static ENVELOPE_ROM: std::cell::Cell<[i16; 2 * ENVELOPE_CURVE_WORDS + 1]> =
+        const { std::cell::Cell::new([0; 2 * ENVELOPE_CURVE_WORDS + 1]) };
+}
+
+pub(super) fn envelope_rom_word(index: i32) -> i32 {
+    ENVELOPE_ROM.with(|rom| i32::from(rom.get()[index as usize]))
+}
+
+pub(in crate::hle) fn init_envelope_rom(
+    dsp: &mut impl FaustDsp,
+    words: [i16; 2 * ENVELOPE_CURVE_WORDS + 1],
+    sample_rate: i32,
+) {
+    ENVELOPE_ROM.with(|rom| {
+        rom.set(words);
+        dsp.init(sample_rate);
+        rom.set([0; 2 * ENVELOPE_CURVE_WORDS + 1]);
+    });
+}
