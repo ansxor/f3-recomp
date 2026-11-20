@@ -179,7 +179,7 @@ Measured zero-gain and zoomed-sprite baseline:
 <!-- excerpt: docs/developer/SPRITE-UNITS.md lines 18-53 -->
 ## Workflow: add or change an emit unit (behaviour anchor)
 
-Sprite grouping and origins are derived automatically by `recomp emit`; a unit is only a
+Sprite grouping and origins are derived automatically by `f3recomp emit`; a unit is only a
 behaviour anchor (sandbox replay + render-only splice).
 
 1. Find the loop that draws one object/record and note the span PCs and the register

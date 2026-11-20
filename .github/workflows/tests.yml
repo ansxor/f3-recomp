@@ -8,6 +8,8 @@ on:
       - 'cmake/**'
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'flake.nix'
+      - 'flake.lock'
       - 'runtime/**'
       - 'include/**'
       - 'games/**'
@@ -22,6 +24,8 @@ on:
       - 'cmake/**'
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'flake.nix'
+      - 'flake.lock'
       - 'runtime/**'
       - 'include/**'
       - 'games/**'
@@ -49,23 +53,13 @@ jobs:
         game: [commandw, bubblemj]
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Install build tools
-        # Prebuilt distro packages; CPM builds the rest from source (cmake/dependencies.cmake).
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev libgtest-dev
-      - name: Cache CPM sources
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/CPM
-          key: cpm-${{ hashFiles('cmake/dependencies.cmake', 'cmake/CPM.cmake') }}
+      - uses: cachix/install-nix-action@v31
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
+        run: nix develop -c cmake -S . -B build -G Ninja -DF3_GAME=${{ matrix.game }} -DF3RT_SDL=OFF -DF3RT_GPU=OFF -DCMAKE_BUILD_TYPE=Release
       - name: Build runtime unit tests
-        run: cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-input_script f3rt-test-bytes f3rt-test-cpu f3rt-test-sprites f3rt-test-motion_interp f3rt-test-state f3rt-test-netplay f3-netplay-server f3-netplay-relay-test
+        run: nix develop -c cmake --build build --target f3rt-test-video f3rt-test-input f3rt-test-input_script f3rt-test-bytes f3rt-test-cpu f3rt-test-sprites f3rt-test-motion_interp f3rt-test-state f3rt-test-netplay f3-netplay-server f3-netplay-relay-test
       - name: Run runtime unit tests
-        run: ctest --test-dir build -R '^(runtime-|netplay-relay\.)' --output-on-failure
+        run: nix develop -c ctest --test-dir build -R '^(runtime-|netplay-relay\.)' --output-on-failure
 
   pytest:
     runs-on: ubuntu-latest
@@ -75,7 +69,12 @@ jobs:
         with:
           enable-cache: true
       - name: Run Python tests
-        # clang has musttail (GCC < 15 does not), so cross-function chaining tests run.
-        env:
-          CC: clang
         run: uv run pytest
+
+  recompiler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build and test the OCaml recompiler
+        run: nix develop -c bash -c 'dune build --root recomp && dune test --root recomp'

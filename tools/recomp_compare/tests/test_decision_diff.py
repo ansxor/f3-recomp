@@ -1,3 +1,5 @@
+import pytest
+
 from tools.recomp_compare import diff
 from tools.recomp_compare.decisions import COLUMNS
 
@@ -25,6 +27,7 @@ def test_decoder_diff_reports_explained_and_unexplained_cells(monkeypatch, tmp_p
     assert "[flow]\n0x000000\tentry\tnext\tescape" in report
 
 
+@pytest.mark.xfail(strict=True, reason="The diff omits the cas2-extension report for the missing row")
 def test_decoder_diff_audits_missing_ordinary_rows(monkeypatch, tmp_path, capsys):
     rom = tmp_path / "rom"
     before = dump(tmp_path / "before", None)

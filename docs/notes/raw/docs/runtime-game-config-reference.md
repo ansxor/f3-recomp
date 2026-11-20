@@ -16,7 +16,7 @@ This page describes each key in the per-game TOML file. The recompiler uses it t
 | File | Game | State |
 | --- | --- | --- |
 | `games/landmakrj/config.toml` | Land Maker Japan 2.01J, set `landmakrj` | Supported player build; selects `all_aligned` coverage and (via `games/landmakrj/video/`) Land Maker-specific VRAM scene decoders. Finite validation only. |
-| `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but there is no `games/landmakr/video/` folder and discovery uses the default `recursive` coverage. |
+| `games/landmakr/config.toml` | Land Maker World, set `landmakr` | Untested config only; lanes are listed, but there is no `games/landmakr/video/` folder and discovery uses `all_aligned` coverage. |
 
 `F3_GAME` selects `games/SET/config.toml`; default `landmakrj`, with `landmakr`,
 `rayforce`, `commandw`, `ridingf` also accepted. The three new titles have native
@@ -25,17 +25,15 @@ Their exact revisions and finite evidence are in [porting](/developer/porting).
 You can also pass `--config` directly to the compiler; a config alone is not proof
 of a complete port.
 
-The loader is `load_rom()` in `recomp/discovery.py`. The discovery step (`discover()`) reads `[discovery]`. The emit step (`generate()` in `recomp/generate.py`) reads `[discovery] coverage` again.
-
-::: info
-The loader does not check unknown keys. A misspelled key is silently ignored. Check the spelling of every key.
-:::
+The OCaml recompiler `f3recomp` loads the TOML and uses `[discovery]` to
+configure code discovery. Validation varies by table. For example, `[cpu]`
+rejects unknown keys.
 
 ## Value formats
 
 | Format | Where | Rule |
 | --- | --- | --- |
-| Address | `entry_points`, `jump_tables`, `inline_string_helpers`, actor script addresses | An integer or a string. The parser strips whitespace. Strings with `0x` or `0X` use base 16; other strings use base 10. Python `int()` accepts signs and underscores. Invalid strings raise its conversion error. Other types raise `Invalid address value`. |
+| Address | `discovery.entry_points`, `discovery.jump_tables` | A TOML integer or a string containing a decimal or `0x`-prefixed hexadecimal integer. The parser trims whitespace around strings. |
 | CRC32 | lane `crc` | A hexadecimal string of 8 digits. The check ignores case. |
 | SHA-1 | lane `sha1` | A hexadecimal string of 40 digits. The check ignores case. |
 
@@ -43,7 +41,7 @@ All code addresses must be even (word-aligned) where the table below says so.
 
 ## [[exclude]]
 
-Reviewed instruction-start exclusions apply to both discovery modes. Bounds are
+Reviewed instruction-start exclusions apply to aligned discovery. Bounds are
 guest addresses, start inclusive and end exclusive; both must be even and
 inside the selected CPU ROM. Overlap is rejected. Each record requires nonempty
 `reason` and `evidence`; `cpu` defaults to `"main"` and may be `"sound"`.
@@ -63,7 +61,7 @@ generation. Apparent direct transfers from independent all-aligned decodes
 are reported, not assumed reachable; executing any excluded target fails
 at runtime before fallback, even when diagnostic interpretation is enabled.
 
-`tools/scan_rom_exclusions.py` writes proposals and conflicting evidence,
+`uv run f3 rom exclusions` writes proposals and conflicting evidence,
 never game configuration. Entropy and missing fetches are not proof of data.
 See the repository's [experiment report](https://github.com/ansxor/f3-recomp/blob/main/docs/developer/BINSIZE-EXCLUDE.md).
 
@@ -142,9 +140,8 @@ In the two Land Maker configs, `size` is `2097152` (2 MiB) and each lane file ha
 
 ## Additional regions and video metadata
 
-`tools/compile_roms.py` generates runtime metadata from these configs using
-`recomp/roms.py`; the sound compiler consumes the same manifest. Optional region
-tables are `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples`.
+`f3recomp compile-roms` generates runtime metadata from these configs. The sound
+compiler consumes the same manifest. Optional region tables are `sprites`, `sprites_hi`, `tiles`, `tiles_hi`, `sound`, `samples`.
 Each has explicit `size`, `fill` (0 or 255) and lanes with `file`, `size`, `crc`
 (CRC32), `sha1`, `offset`, `stride`, `group`. Every source group of consecutive
 bytes is placed at the next destination stride; bounds and hashes are validated.
@@ -201,16 +198,15 @@ size  = 0x80           # optional, default 0: bytes behaviours may access at tha
 owner = "unit"         # accepted for compatibility; grouping no longer uses it
 ```
 
-Unit ids are declaration order. `tools/compile_sprite_units.py --config <toml>
+Unit ids are declaration order. `f3recomp sprite-units --config <toml>
 --output-dir <dir>` writes, at CMake configure time and without a ROM,
 `sprite_units.h` (`F3_SPRITE_UNITS_DIGEST`, `F3_SPRITE_UNIT_COUNT`) and
 `sprite_units.hpp` (`f3rt::sprite_units::<name>` `EmitUnit`s, `all`, `digest`,
-static_asserts). Games without units get empty arrays. `recomp emit` plants
+static_asserts). Games without units get empty arrays. `f3recomp emit` plants
 `F3_UNIT_EXIT` then `F3_UNIT_ENTER` at the label of every declared end/start PC, includes
-`sprite_units.h` with a digest `#error` guard in each file that has a hook, rejects PCs that
-are not retained decoded instructions, and records per-unit hook counts under `emit_units` in
-`lowering.json`. `[video.frame_writers]` is retired: writes are no longer attributed to units
-or audited against a declared writer list.
+`sprite_units.h` with a digest `#error` guard in each file that has a hook, and
+requires each hook PC to be a retained decoded instruction. `[video.frame_writers]`
+is retired.
 
 `size` must cover every field a behaviour reads or patches (offsets are compile-time checked
 against it). Behaviours live in `games/<id>/sprites/behaviours.hpp`
@@ -225,7 +221,7 @@ verifies that emulated state is identical with sprite groups on and off.
 
 ## Sprite groups (generated)
 
-`recomp emit` writes `sprite_groups.hpp` into the generated program directory
+`f3recomp emit` writes `sprite_groups.hpp` into the generated program directory
 (`F3_GENERATED_DIR`): `f3rt::sprite_groups::table`, a `SpriteGroupTable`
 (`include/f3rt/sprite_group.hpp`) with one `SpriteGroupWrite` per sprite-RAM store PC
 (`{pc, base register, lane X/Y/XY, group class, shift, root X/Y field offsets}`) and one
@@ -258,7 +254,7 @@ every run.
 
 ## Compile-time video geometry
 
-`tools/compile_roms.py --game <id> --game-output <path>` also writes
+`f3recomp compile-roms --game <id> --game-output <path>` also writes
 `game_video_config.hpp` into the same `generated_config` directory, from the same
 validated `[video]` values as the runtime manifest: `f3rt::game_config::id`,
 `video` (a `VideoConfig`), `visible_end`, and `matches(const VideoConfig &)`, which
@@ -267,61 +263,52 @@ the one compiled in.
 
 ## [discovery]
 
-This section is optional. It controls how `discover()` finds code. Without it, all keys have their default values.
+This optional table configures aligned discovery. The recompiler decodes every
+even ROM address outside excluded ranges, including overlapping starts. It
+collects entry seeds from the 68020 vector table and the configured entry
+points. Decoded entries still require selection before they can be dispatched.
 
-| Key | Type | Required | Default | Validation | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `coverage` | string | no | `"recursive"` | Must be `"recursive"` or `"all_aligned"`. Else: `Unknown discovery coverage mode`. | `recursive` follows code from the seeds. `all_aligned` decodes every even address of the ROM independently. |
-| `entry_points` | array of addresses | no | `[]` | Each address must be even. Else: `Entry point must be word-aligned (even)`. An address outside the ROM is ignored. | Extra code start addresses. The recompiler treats them as proven seeds. |
-| `scan_jump_tables` | boolean | no | `true` | none | Look for jump tables with the pattern scanners. |
-| `scan_task_traps` | boolean | no | `true` | none | Look for task entry points that are passed to `TRAP #1`. Only in `recursive` mode. |
-| `scan_callbacks` | boolean | no | `true` | none | Look for validated callback addresses that code stores to RAM. Only in `recursive` mode. |
-| `inline_string_helpers` | array of addresses | no | `[]` | Each value must be a valid address. | Addresses of subroutines that read a text string stored right after the call. |
-| `jump_tables` | array of tables | no | `[]` | See below. | Explicit jump tables. |
-| `actor_scripts` | table | no | `{}` | See below. | Description of the actor bytecode. Only in `recursive` mode. |
-
-### Coverage modes
-
-| Mode | What it does | When to use it |
-| --- | --- | --- |
-| `recursive` | Starts at the 68020 vector table, the `entry_points`, and the seeds from the scanners. It follows branches and calls. | A game without a full list of code addresses. A scan cannot prove that skipped bytes are data. |
-| `all_aligned` | Decodes each even ROM address independently. It records failed decodes in `invalid_pcs`. The emitter registers decoded addresses, including overlapping starts. | Land Maker Japan. This avoids missing valid ROM targets because recursive discovery did not reach them. |
-
-Registration does not prove that every computed jump succeeds. Odd addresses, invalid decodes, RAM targets and unsupported instructions still need runtime handling.
-
-In `all_aligned` mode, the addresses that are already decoded are not decoded again by the recursive walk. So `jump_tables` and `inline_string_helpers` have little or no effect in this mode. `[INFERENCE]` from the control flow in `discover()`; no shipped config combines them.
-
-### Seeds
-
-The recompiler builds the start list in this order: the 68020 vector table, `entry_points`, `trap #1` task targets, validated callbacks and actor script callbacks. The first two are *proven* seeds. The others are *speculative* seeds. Both lists appear in `coverage.json`.
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `coverage` | string | `"all_aligned"` | The only supported coverage mode. |
+| `entry_points` | array of addresses | `[]` | Extra entry seeds. Each address must be even. Addresses outside the ROM are ignored and excluded addresses are rejected. |
+| `jump_tables` | array of tables | `[]` | Explicit targets for indirect transfers. The scanner handles sites without a configured table. |
 
 ### [[discovery.jump_tables]]
 
-Each table gives the targets of one indirect jump or call. Without this, the scanners must find the targets.
+| Key | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `address` | address | yes | Even PC of the indirect transfer instruction. |
+| `targets` | array of addresses | no | Explicit targets. Each must be even. Targets outside the ROM are dropped. |
+| `table` | address | no | Address of a table of 32-bit big-endian pointers. The table must fit in the ROM. |
+| `count` | integer | with `table` | Nonnegative number of pointers in the table. |
 
-| Key | Type | Required | Default | Validation | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `address` | address | yes | none | Must be even. A table without `address` is ignored. | Address of the `JMP` or `JSR` instruction that uses the table. |
-| `targets` | array of addresses | no | `[]` | Each target must be even. Targets outside the ROM are dropped. | Targets that you list directly. |
-| `table` | address | no | none | If set, `count` is required. The table must fit in the ROM. Else: `Jump table outside ROM`. | Address of a table of 32-bit big-endian pointers. |
-| `count` | integer | with `table` | none | Must be 0 or more. | Number of pointers in `table`. The loader keeps the pointers that are even and inside the ROM. |
+## [cpu]
 
-### [discovery.actor_scripts]
+This optional table declares which condition code register (CCR) flags ROM
+interrupt handlers can observe from interrupted code. The recompiler keeps the
+declared flags live at interrupt yield points. Unknown keys are rejected.
 
-This table describes a bytecode that the game uses for actor scripts. The recompiler follows the bytecode to find callback addresses. If the table is empty, the recompiler skips this step. If the table is not empty, the six required keys must all be present. A missing key raises `KeyError`, and the program prints `f3-recomp: 'key'`.
+| Key | Type | Validation and effect |
+| --- | --- | --- |
+| `interrupt_observes` | array of strings | Each item is one of `X`, `N`, `Z`, `V`, or `C` (case-insensitive). Omission defaults to an empty set. An explicit list, including `[]`, declares the contract when analysis cannot prove a handler's observations. |
+| `interrupt_handlers_trusted` | string | Optional evidence for accepting handlers whose observations cannot be proved. Leading and trailing whitespace is trimmed and the result must be nonempty. |
 
-| Key | Type | Required | Default | Meaning |
-| --- | --- | --- | --- | --- |
-| `operand_bytes` | array of integers | yes | none | For each opcode value (the index), the number of operand bytes. A negative value marks an invalid opcode. |
-| `code_pointer_opcodes` | array of integers | yes | none | Opcodes whose first operand is a code address (a callback). |
-| `pointer_field` | integer | yes | none | Displacement of the object field that holds the script pointer. The scanner looks for code that stores a script address in this field (for example `MOVE.L #script,d16(An)`). |
-| `return_opcode` | integer | yes | none | Opcode that ends a script. |
-| `call_opcode` | integer | yes | none | Opcode that calls another script. |
-| `jump_opcode` | integer | yes | none | Opcode that jumps to another script. |
-| `pointer_table_strides` | array of integers | no | `[4]` | Strides to try when reading a script pointer table. |
-| `entry_points` | array of addresses | no | `[]` | Extra script start addresses. |
-| `pointer_tables` | array of tables | no | `[]` | Tables of script pointers. Each table has `table` (address) and `count` (integer). A missing key raises `KeyError`. |
+Generation rejects any proven observation missing from `interrupt_observes`.
+An unknown handler requires an explicit declaration or trust evidence by default.
 
+## Recompiler diagnostics
+
+`f3recomp emit` prints a summary to stdout after writing generated code. It
+reports entry and tier counts, the interrupt contract and yield points, flag
+elision, idle loops, chains, and sprite writer counts. These commands take
+`--config <toml> --rom-dir <dir>` and print more focused reports to stdout.
+
+| Command | Report |
+| --- | --- |
+| `f3recomp coverage` | Counts decoded main ROM instructions whose semantics are unsupported, honoring exclusions. |
+| `f3recomp decisions` | TSV with discovery, selection, and sprite decisions. |
+| `f3recomp check-irq` | Each ROM interrupt handler's proven flag observations or the location and reason analysis could not prove them. Proven observations outside the declared set are marked undeclared. |
 
 ## [input]
 
@@ -335,7 +322,6 @@ Optional input configuration table.
 ## What the config does not contain
 
 - The board memory map and device implementations remain runtime code.
-- Timing tables are `recomp/68000_cycles.csv` and `recomp/68020_cycles.csv`; see [Generated files](/reference/generated-files).
 - Sound compiler options remain CLI arguments, but sound ROM placement, hashes, mirroring and exclusions come from the selected TOML.
 
 For how discovery and emit use these keys, read [Discovery](/developer/recompiler/discovery) and [ROM and config](/developer/recompiler/rom-and-config).
