@@ -35,7 +35,7 @@ packages = ["tools"]
 "recomp/68020_opcodes.csv" = "recomp/68020_opcodes.csv"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tools/recomp_compare/tests"]
 
 [tool.ruff]
 line-length = 120

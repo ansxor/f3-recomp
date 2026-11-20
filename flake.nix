@@ -28,9 +28,8 @@
       toolchain = pkgs: {
         python = pkgs.python3.withPackages (ps: [ ps.capstone ]); # pyproject pins capstone==5.0.9
 
-        # CMake runs `uv run --project . --locked --no-default-groups python ...`. uv would
-        # fetch capstone from PyPI; the sandbox-free Nix environment already has it, so this
-        # stand-in drops uv's options and runs the command with the Nix Python.
+        # The build helper apps run shader Python scripts via CMake. This shim
+        # runs them with Nix Python and avoids installing the Python project.
         uv = pkgs.writeShellScriptBin "uv" ''
           [ "$1" = run ] || { echo "uv shim: only 'uv run' is supported" >&2; exit 1; }
           shift
@@ -149,7 +148,7 @@
             let tc = toolchain pkgs; in
             {
               default = pkgs.mkShell {
-                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
+                packages = [ pkgs.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
                   # The OCaml recompiler (recomp/, built with dune).
                   ++ tc.ocaml;
                 env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";

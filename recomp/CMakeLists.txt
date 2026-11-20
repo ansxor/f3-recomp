@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(f3_recompiled C)
 
-set(F3_GENERATED_DIR "" CACHE PATH "Directory emitted by uv run python -m tools.recomp_py emit")
+set(F3_GENERATED_DIR "" CACHE PATH "Directory emitted by f3recomp emit")
 # Standalone builds pass it as a cache entry; the parent build sets a normal variable,
 # which a CACHE set here would hide under policy CMP0126 OLD (minimum 3.20).
 if(NOT DEFINED F3_GENERATED_CONFIG_DIR)
-    set(F3_GENERATED_CONFIG_DIR "" CACHE PATH "Directory with sprite_units.h from tools/recomp_py/compile/sprite_units.py")
+    set(F3_GENERATED_CONFIG_DIR "" CACHE PATH "Directory with sprite_units.h from f3recomp sprite-units")
 endif()
 if(NOT EXISTS "${F3_GENERATED_DIR}/sources.cmake")
     message(FATAL_ERROR "Set F3_GENERATED_DIR to emitted program directory (sources.cmake missing)")
