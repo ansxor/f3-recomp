@@ -190,21 +190,10 @@ impl Core {
         let end = frames_at(tick);
         let mut input = [0.0f32; 2];
         let mut output = [0.0f32; 2];
-        // The OTIS-to-ESP link is digital: the FCM re-clocks the serial bits, so the serial inputs
-        // carry the OTIS pair sums at full scale (gain 1.0; raw/docs/taito-f3/5505-5510.txt). The
-        // historical 0.18 host-side attenuation (MAME's pump model, docs/notes/hardware/
-        // duart-and-volume.md) is only a level bookkeeping: for the linear programs every path
-        // scales with the input together, so the 0.18/OUTPUT_BOOST split of the calibrated
-        // 0.18 * OUTPUT_BOOST total is arbitrary. Preset 12 breaks that equivalence: its overdrive
-        // output is envelope-normalised, so it does not follow its input level, and attenuating the
-        // input only silences the dry and ser2 paths around the fixed overdrive - in Riding
-        // Fight's tune FF the guitars then drown the trumpets by 1/0.18. Realise the envelope
-        // program at the chip-domain split (1.0 in, 0.18 * OUTPUT_BOOST out) instead; the driver's
-        // own writes (MAME-tapped GPRs 122-125) and the decoded ES5510 program both show that
-        // balance, and the FAUST envelope reproduces the decoded program's ser-muted output levels
-        // exactly at input gain 1.0.
-        let envelope = self.effects.program() == Program::Envelope;
-        let (link_gain, host_gain) = if envelope { (1.0, 0.18) } else { (0.18, 1.0) };
+        // The OTIS-to-ESP link is digital (gain 1.0). The overdrive's output level ignores its
+        // input, so the 0.18 must come after the ESP or it only quietens the paths around it.
+        let overdrive = self.effects.program() == Program::Overdrive;
+        let (link_gain, host_gain) = if overdrive { (1.0, 0.18) } else { (0.18, 1.0) };
         for ch in 0..2 {
             input[ch] = link_gain;
             output[ch] = OUTPUT_BOOST * host_gain * self.gain[ch];

@@ -32,7 +32,7 @@ interpolate(upper, lower, address) = upper*weight + lower*(full - weight)
 with { weight = float(int(address) & 255)*32768.0; };
 
 // The architecture supplies both curves in address order during instance initialization.
-rom_word = ffunction(int envelope_rom_word(int), "", "");
+rom_word = ffunction(int overdrive_rom_word(int), "", "");
 curve_word(index) = float(rdtable(131, rom_word((+(1) ~ _)-1), index))*256.0;
 curve(base, address) = high(interpolate(upper, lower, address))
 with {

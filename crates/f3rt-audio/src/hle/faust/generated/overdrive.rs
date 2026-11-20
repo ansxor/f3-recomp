@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------
-name: "envelope"
+name: "overdrive"
 Code generated with Faust 2.88.0 (https://faust.grame.fr)
-Compilation options: -a crates/f3rt-audio/faust/architecture.rs -lang rust -fpga-mem-th 4 -it -ct 1 -cn EnvelopeDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -double -ftz 0
+Compilation options: -a crates/f3rt-audio/faust/architecture.rs -lang rust -fpga-mem-th 4 -it -ct 1 -cn OverdriveDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -double -ftz 0
 ------------------------------------------------------------ */
 // FAUST Rust architecture for f3rt DSP modules. faust/regen.sh runs:
 //   faust -lang rust -a crates/f3rt-audio/faust/architecture.rs -cn <Class> [-double] <file>.dsp
@@ -27,7 +27,7 @@ use super::*;
 
 
 #[repr(C)]
-pub struct EnvelopeDsp {
+pub struct OverdriveDsp {
 	iVec0: [i32;3],
 	fHslider0: FaustFloat,
 	IOTA0: i32,
@@ -52,7 +52,7 @@ pub struct EnvelopeDsp {
 	fRec17: [F64;2],
 	iRec15: [i32;2],
 	fHslider7: FaustFloat,
-	itbl0EnvelopeDspSIG0: [i32;131],
+	itbl0OverdriveDspSIG0: [i32;131],
 	fVec4: [F64;2],
 	fRec14: [F64;2],
 	fHslider8: FaustFloat,
@@ -94,10 +94,10 @@ pub const FAUST_OUTPUTS: usize = 3;
 pub const FAUST_ACTIVES: usize = 18;
 pub const FAUST_PASSIVES: usize = 0;
 
-impl EnvelopeDsp {
+impl OverdriveDsp {
 		
-	pub fn new() -> EnvelopeDsp { 
-		EnvelopeDsp {
+	pub fn new() -> OverdriveDsp { 
+		OverdriveDsp {
 			iVec0: [0;3],
 			fHslider0: 0.0,
 			IOTA0: 0,
@@ -122,7 +122,7 @@ impl EnvelopeDsp {
 			fRec17: [0.0;2],
 			iRec15: [0;2],
 			fHslider7: 0.0,
-			itbl0EnvelopeDspSIG0: [0;131],
+			itbl0OverdriveDspSIG0: [0;131],
 			fVec4: [0.0;2],
 			fRec14: [0.0;2],
 			fHslider8: 0.0,
@@ -159,9 +159,9 @@ impl EnvelopeDsp {
 		}
 	}
 	pub fn metadata(&self, m: &mut dyn Meta) { 
-		m.declare("compile_options", r"-a crates/f3rt-audio/faust/architecture.rs -lang rust -fpga-mem-th 4 -it -ct 1 -cn EnvelopeDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -double -ftz 0");
-		m.declare("filename", r"envelope.dsp");
-		m.declare("name", r"envelope");
+		m.declare("compile_options", r"-a crates/f3rt-audio/faust/architecture.rs -lang rust -fpga-mem-th 4 -it -ct 1 -cn OverdriveDsp -es 1 -mcd 16 -mdd 1024 -mdy 33 -double -ftz 0");
+		m.declare("filename", r"overdrive.dsp");
+		m.declare("name", r"overdrive");
 	}
 
 	pub fn get_sample_rate(&self) -> i32 { self.fSampleRate as i32}
@@ -173,7 +173,7 @@ impl EnvelopeDsp {
 		}
 		for i1_re0 in 0..131 {
 			self.iRec19[0] = i32::wrapping_add(1, self.iRec19[1]);
-			self.itbl0EnvelopeDspSIG0[i1_re0 as usize] = envelope_rom_word(i32::wrapping_add(-1, self.iRec19[0]));
+			self.itbl0OverdriveDspSIG0[i1_re0 as usize] = overdrive_rom_word(i32::wrapping_add(-1, self.iRec19[0]));
 			self.iRec19[1] = self.iRec19[0];
 		}
 	}
@@ -327,7 +327,7 @@ impl EnvelopeDsp {
 	}
 	
 	pub fn build_user_interface_static(ui_interface: &mut dyn UI<FaustFloat>) {
-		ui_interface.open_vertical_box("envelope");
+		ui_interface.open_vertical_box("overdrive");
 		ui_interface.add_horizontal_slider("address_gain", ParamIndex(0), 0.0, -8388608.0, 8388607.0, 1.0);
 		ui_interface.add_horizontal_slider("allpass", ParamIndex(1), 0.0, -8388608.0, 8388607.0, 1.0);
 		ui_interface.add_horizontal_slider("allpass_complement", ParamIndex(2), 0.0, -8388608.0, 8388607.0, 1.0);
@@ -485,7 +485,7 @@ impl EnvelopeDsp {
 			let mut fTemp28: F64 = (iTemp27 & 255) as F64;
 			let mut iTemp29: i32 = (iTemp27 & 16777215) >> 8;
 			let mut iTemp30: i32 = i32::wrapping_add(self.iVec0[1], iTemp29);
-			self.fVec4[0] = (if iTemp26 != 0 {655.0} else {(if (fTemp25 < fSlow9) as i32 != 0 {F64::min(8388607.0, F64::max(-8388608.0, F64::floor(fSlow10 * F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (8388608.0 * (self.itbl0EnvelopeDspSIG0[((if (iTemp30 < 130) as i32 != 0 {iTemp30} else {130})) as usize]) as F64 * fTemp28 + 256.0 * (self.itbl0EnvelopeDspSIG0[((if (iTemp29 < 130) as i32 != 0 {iTemp29} else {130})) as usize]) as F64 * (8388607.0 - 32768.0 * fTemp28))))))))} else {65535.0})});
+			self.fVec4[0] = (if iTemp26 != 0 {655.0} else {(if (fTemp25 < fSlow9) as i32 != 0 {F64::min(8388607.0, F64::max(-8388608.0, F64::floor(fSlow10 * F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (8388608.0 * (self.itbl0OverdriveDspSIG0[((if (iTemp30 < 130) as i32 != 0 {iTemp30} else {130})) as usize]) as F64 * fTemp28 + 256.0 * (self.itbl0OverdriveDspSIG0[((if (iTemp29 < 130) as i32 != 0 {iTemp29} else {130})) as usize]) as F64 * (8388607.0 - 32768.0 * fTemp28))))))))} else {65535.0})});
 			let mut fTemp31: F64 = (i32::wrapping_sub(1, self.iVec0[1])) as F64;
 			self.fRec14[0] = 41942.0 * (65535.0 * fTemp31 + self.fVec4[1]) + 8346665.0 * F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * self.fRec14[1])));
 			let mut fTemp32: F64 = F64::floor(1.1920928955078125e-07 * self.fRec14[0]);
@@ -518,7 +518,7 @@ impl EnvelopeDsp {
 			let mut iTemp46: i32 = (iTemp44 & 16777215) >> 8;
 			let mut iTemp47: i32 = i32::wrapping_add(65, iTemp46);
 			let mut iTemp48: i32 = i32::wrapping_add(i32::wrapping_add(self.iVec0[1], 65), iTemp46);
-			self.fRec9[0] = F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (F64::min(8388607.0, F64::max(-8388608.0, F64::floor(fSlow17 * F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (8388608.0 * (self.itbl0EnvelopeDspSIG0[(core::cmp::max(0, core::cmp::min((if (iTemp48 < 130) as i32 != 0 {iTemp48} else {130}), 130))) as usize]) as F64 * fTemp45 + 256.0 * (self.itbl0EnvelopeDspSIG0[(core::cmp::max(0, core::cmp::min((if (iTemp47 < 130) as i32 != 0 {iTemp47} else {130}), 130))) as usize]) as F64 * (8388607.0 - 32768.0 * fTemp45)))))))) * fTemp40 - self.fRec9[1] * fTemp39))));
+			self.fRec9[0] = F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (F64::min(8388607.0, F64::max(-8388608.0, F64::floor(fSlow17 * F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (8388608.0 * (self.itbl0OverdriveDspSIG0[(core::cmp::max(0, core::cmp::min((if (iTemp48 < 130) as i32 != 0 {iTemp48} else {130}), 130))) as usize]) as F64 * fTemp45 + 256.0 * (self.itbl0OverdriveDspSIG0[(core::cmp::max(0, core::cmp::min((if (iTemp47 < 130) as i32 != 0 {iTemp47} else {130}), 130))) as usize]) as F64 * (8388607.0 - 32768.0 * fTemp45)))))))) * fTemp40 - self.fRec9[1] * fTemp39))));
 			self.fRec10[0] = F64::min(8388607.0, F64::max(-8388608.0, F64::floor(1.1920928955078125e-07 * (fTemp40 * self.fRec9[0] - fTemp39 * self.fRec10[1]))));
 			self.fVec14[0] = fSlow18;
 			let mut fTemp49: F64 = 8388607.0 - (self.fVec14[1] + 6710887.0 * fTemp31);
@@ -591,7 +591,7 @@ fn rint(val: f64) -> f64 {
 	libm::rint(val)
 }
 
-impl FaustDsp for EnvelopeDsp {
+impl FaustDsp for OverdriveDsp {
 	type T = FaustFloat;
 	fn new() -> Self where Self: Sized {
 		Self::new()

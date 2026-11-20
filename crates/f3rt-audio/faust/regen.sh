@@ -41,5 +41,5 @@ dsp reverb ReverbDsp
 dsp chorus ChorusDsp
 dsp echo EchoDsp
 dsp hall HallDsp
-dsp envelope EnvelopeDsp -it
+dsp overdrive OverdriveDsp -it
 dsp dc_blocker DcBlockerDsp

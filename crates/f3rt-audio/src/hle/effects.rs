@@ -5,7 +5,7 @@
 //! 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15 are the ten
 //! parameters p0..p9 in the order the sound commands set them. A preset loads the program its pointer
 //! names; programs are identified here by that pointer, so the selection does not depend on the game.
-//! Six programs are decoded, including the envelope-controlled preset 12 in Riding Fight and Land Maker.
+//! Six programs are decoded, including the preset 12 overdrive in Riding Fight and Land Maker.
 //! Delay lengths, gains and topology are the ones of the loaded program as it runs in the reference
 //! backend: every delay is a (read offset - write offset) / 256 distance inside the DSP's single
 //! 64K-word delay RAM, every gain is a GPR of the program, and each graph reproduces the emulated
@@ -17,7 +17,7 @@
 //!
 //! The signal processing lives in FAUST (`crates/f3rt-audio/faust/`): es5510.lib holds the all-pass
 //! networks, the interpolated tap, the LFO and the shared reverb tank, and reverb.dsp / chorus.dsp /
-//! echo.dsp / hall.dsp / envelope.dsp / dc_blocker.dsp are the programs, each with a signal-flow diagram and
+//! echo.dsp / hall.dsp / overdrive.dsp / dc_blocker.dsp are the programs, each with a signal-flow diagram and
 //! descriptive signal-flow names rather than decoded register names. This module keeps what is not
 //! signal processing: reading the preset table and the program pointer, mapping p0..p9 to the
 //! programs' controls (update()), routing the OTIS buses, the auto-bypass and the LFO phase of
@@ -56,11 +56,11 @@ use crate::hle::events::SAMPLE_RATE;
 use crate::hle::faust::generated::chorus::ChorusDsp;
 use crate::hle::faust::generated::dc_blocker::DcBlockerDsp;
 use crate::hle::faust::generated::echo::EchoDsp;
-use crate::hle::faust::generated::envelope::EnvelopeDsp;
+use crate::hle::faust::generated::overdrive::OverdriveDsp;
 use crate::hle::faust::generated::hall::HallDsp;
 use crate::hle::faust::generated::reverb::ReverbDsp;
 use crate::hle::faust::support::{
-    Controls, ENVELOPE_CURVE_WORDS, FaustDsp, FaustFloat, ParamIndex, init_envelope_rom,
+    Controls, OVERDRIVE_CURVE_WORDS, FaustDsp, FaustFloat, ParamIndex, init_overdrive_rom,
 };
 
 const _: () = assert!(
@@ -78,7 +78,7 @@ pub enum Program {
     Chorus,
     Echo,
     Mute,
-    Envelope,
+    Overdrive,
 }
 
 /// A FAUST control, assigned from update(). The Rust backend hands out a parameter index instead of a
@@ -305,29 +305,29 @@ impl EchoProgram {
     }
 }
 
-struct EnvelopeProgram {
-    instance: Instance<EnvelopeDsp>,
+struct OverdriveProgram {
+    instance: Instance<OverdriveDsp>,
     lfo: Lfo,
 }
 
-impl EnvelopeProgram {
+impl OverdriveProgram {
     fn new(rom: &[u8], layout: &DriverLayout) -> Self {
         // The length-prefixed ROM curves follow the pointer table and its trailer.
         // FAUST's array follows DSP address order, with B immediately before A.
         let first = layout.esp_program_table_offset as usize + 0x38;
-        let second = first + 2 + 2 * ENVELOPE_CURVE_WORDS;
-        let mut words = [0; 2 * ENVELOPE_CURVE_WORDS + 1];
+        let second = first + 2 + 2 * OVERDRIVE_CURVE_WORDS;
+        let mut words = [0; 2 * OVERDRIVE_CURVE_WORDS + 1];
         for (offset, range) in [
-            (second, 0..ENVELOPE_CURVE_WORDS),
-            (first, ENVELOPE_CURVE_WORDS..2 * ENVELOPE_CURVE_WORDS),
+            (second, 0..OVERDRIVE_CURVE_WORDS),
+            (first, OVERDRIVE_CURVE_WORDS..2 * OVERDRIVE_CURVE_WORDS),
         ] {
-            let data = &rom[offset + 2..offset + 2 + 2 * ENVELOPE_CURVE_WORDS];
+            let data = &rom[offset + 2..offset + 2 + 2 * OVERDRIVE_CURVE_WORDS];
             for (word, bytes) in words[range].iter_mut().zip(data.chunks_exact(2)) {
                 *word = i16::from_be_bytes([bytes[0], bytes[1]]);
             }
         }
-        let mut dsp = EnvelopeDsp::new();
-        init_envelope_rom(&mut dsp, words, SAMPLE_RATE as i32);
+        let mut dsp = OverdriveDsp::new();
+        init_overdrive_rom(&mut dsp, words, SAMPLE_RATE as i32);
         let controls = Controls::new(&dsp);
         let lfo = Lfo::new(&controls, "c");
         Self { instance: Instance { dsp, controls }, lfo }
@@ -448,7 +448,7 @@ pub struct Effects {
     chorus: Box<ChorusProgram>,
     echo_program: Box<EchoProgram>,
     hall: Box<HallProgram>,
-    envelope: Option<Box<EnvelopeProgram>>,
+    overdrive: Option<Box<OverdriveProgram>>,
     dc: Box<DcBlocker>,
 
     tank: TankConstants,
@@ -499,7 +499,7 @@ pub const K_PTR_HALL: u32 = 0xc1c4e2;
 pub const K_PTR_MUTE: u32 = 0xc1ce1b;
 pub const K_PTR_CHORUS: u32 = 0xc1d171;
 pub const K_PTR_ECHO: u32 = 0xc1d4d4;
-pub const K_PTR_ENVELOPE: u32 = 0xc1e10b;
+pub const K_PTR_OVERDRIVE: u32 = 0xc1e10b;
 
 const K_DELAY_BUFFER_SIZE: usize = 96000 * SAMPLE_RATE as usize / 48000;
 const K_BUCKET_COUNT: usize = 16;
@@ -603,7 +603,7 @@ impl Effects {
                 self.eps_c = lfo_rate(self.parameters[2], 196.608);
                 self.lfo_depth = self.parameters[3] as f32 / 2.0;
             }
-            Program::Envelope => {
+            Program::Overdrive => {
                 // Curve A can drive the tank with silent sends. Let the level detector
                 // observe this state before allowing the DSP to fall asleep again.
                 if self.bypassed {
@@ -695,7 +695,7 @@ impl Effects {
                 hall.g2.set(dsp, self.hall_g2);
                 hall.g108.set(dsp, self.hall_g108);
             }
-            Program::Envelope => self.envelope.as_mut().unwrap().update(
+            Program::Overdrive => self.overdrive.as_mut().unwrap().update(
                 self.rom,
                 self.layout,
                 self.parameters,
@@ -734,7 +734,7 @@ impl Effects {
                 self.echo_program.feedback.tank.common.instance.dsp.compute(n, &inputs, &mut outputs)
             }
             Program::Hall => self.hall.common.instance.dsp.compute(n, &inputs, &mut outputs),
-            Program::Envelope => self.envelope.as_mut().unwrap().instance.dsp.compute(
+            Program::Overdrive => self.overdrive.as_mut().unwrap().instance.dsp.compute(
                 n,
                 &inputs,
                 &mut outputs,
@@ -799,12 +799,12 @@ impl Effects {
                 self.hall.common.instance.dsp.instance_clear();
                 self.hall.common.lfo_c.restart(&mut self.hall.common.instance.dsp);
             }
-            Program::Envelope => {
-                let envelope = self.envelope.get_or_insert_with(|| {
-                    Box::new(EnvelopeProgram::new(self.rom, self.layout))
+            Program::Overdrive => {
+                let overdrive = self.overdrive.get_or_insert_with(|| {
+                    Box::new(OverdriveProgram::new(self.rom, self.layout))
                 });
-                envelope.instance.dsp.instance_clear();
-                envelope.lfo.restart(&mut envelope.instance.dsp);
+                overdrive.instance.dsp.instance_clear();
+                overdrive.lfo.restart(&mut overdrive.instance.dsp);
             }
             Program::Mute | Program::None => {}
         }
@@ -831,9 +831,9 @@ impl Effects {
                 frames,
             ),
             Program::Hall => self.hall.common.lfo_c.skip(&mut self.hall.common.instance.dsp, frames),
-            Program::Envelope => {
-                let envelope = self.envelope.as_mut().unwrap();
-                envelope.lfo.skip(&mut envelope.instance.dsp, frames);
+            Program::Overdrive => {
+                let overdrive = self.overdrive.as_mut().unwrap();
+                overdrive.lfo.skip(&mut overdrive.instance.dsp, frames);
             }
             Program::Mute | Program::None => {}
         }
@@ -852,7 +852,7 @@ impl Effects {
             chorus: Box::new(ChorusProgram::new()),
             echo_program: Box::new(EchoProgram::new()),
             hall: Box::new(HallProgram::new()),
-            envelope: None,
+            overdrive: None,
             dc: Box::new(DcBlocker::new()),
             tank: TankConstants::default(),
             program: Program::None,
@@ -909,7 +909,7 @@ impl Effects {
             K_PTR_CHORUS => Program::Chorus,
             K_PTR_ECHO => Program::Echo,
             K_PTR_MUTE => Program::Mute,
-            K_PTR_ENVELOPE => Program::Envelope,
+            K_PTR_OVERDRIVE => Program::Overdrive,
             _ => panic!(
                 "ES5510 program at {} (preset {}) is not decoded",
                 pointer, preset
@@ -949,7 +949,7 @@ impl Effects {
         for program in [Program::Reverb, Program::Chorus, Program::Echo, Program::Hall] {
             self.clear_program(program);
         }
-        self.envelope = None;
+        self.overdrive = None;
         self.bucket_peaks.fill(0.0);
         self.current_bucket_peak = 0.0;
         self.bucket_frames = 0;
@@ -1209,7 +1209,7 @@ mod tests {
         let row = presets + 12 * 16;
         rom[row + 5] = 10;
         rom[row + 6..row + 16].copy_from_slice(&[77, 252, 1, 183, 37, 0, 83, 10, 64, 20]);
-        let pointer = K_PTR_ENVELOPE - layout.esp_pointer_delta;
+        let pointer = K_PTR_OVERDRIVE - layout.esp_pointer_delta;
         rom[pointer_table + 40..pointer_table + 44].copy_from_slice(&pointer.to_be_bytes());
 
         let mut set_word = |offset, value: i16| {
@@ -1246,7 +1246,7 @@ mod tests {
                     ] {
                         effects.reset();
                         effects.select(12);
-                        assert_eq!(effects.program(), Program::Envelope);
+                        assert_eq!(effects.program(), Program::Overdrive);
                         assert!(!effects.bypassed());
                         for _ in 0..warmup / K_CHUNK {
                             effects.compute_program(K_CHUNK);

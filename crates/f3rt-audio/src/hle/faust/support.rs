@@ -187,24 +187,24 @@ impl UI<FaustFloat> for Controls {
 
 // With FAUST's -it option, rdtable calls this provider only during
 // instance initialization and copies the result into the DSP's own array.
-pub(in crate::hle) const ENVELOPE_CURVE_WORDS: usize = 65;
+pub(in crate::hle) const OVERDRIVE_CURVE_WORDS: usize = 65;
 thread_local! {
-    static ENVELOPE_ROM: std::cell::Cell<[i16; 2 * ENVELOPE_CURVE_WORDS + 1]> =
-        const { std::cell::Cell::new([0; 2 * ENVELOPE_CURVE_WORDS + 1]) };
+    static OVERDRIVE_ROM: std::cell::Cell<[i16; 2 * OVERDRIVE_CURVE_WORDS + 1]> =
+        const { std::cell::Cell::new([0; 2 * OVERDRIVE_CURVE_WORDS + 1]) };
 }
 
-pub(super) fn envelope_rom_word(index: i32) -> i32 {
-    ENVELOPE_ROM.with(|rom| i32::from(rom.get()[index as usize]))
+pub(super) fn overdrive_rom_word(index: i32) -> i32 {
+    OVERDRIVE_ROM.with(|rom| i32::from(rom.get()[index as usize]))
 }
 
-pub(in crate::hle) fn init_envelope_rom(
+pub(in crate::hle) fn init_overdrive_rom(
     dsp: &mut impl FaustDsp,
-    words: [i16; 2 * ENVELOPE_CURVE_WORDS + 1],
+    words: [i16; 2 * OVERDRIVE_CURVE_WORDS + 1],
     sample_rate: i32,
 ) {
-    ENVELOPE_ROM.with(|rom| {
+    OVERDRIVE_ROM.with(|rom| {
         rom.set(words);
         dsp.init(sample_rate);
-        rom.set([0; 2 * ENVELOPE_CURVE_WORDS + 1]);
+        rom.set([0; 2 * OVERDRIVE_CURVE_WORDS + 1]);
     });
 }
