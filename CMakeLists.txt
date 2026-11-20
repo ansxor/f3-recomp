@@ -284,10 +284,11 @@ if(F3RT_SDL)
     if(F3RT_GPU)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
 
+        find_program(UV_EXECUTABLE NAMES uv REQUIRED)
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
         add_custom_command(
             OUTPUT "${VIDEO_SHADER_HEADER}"
-            COMMAND ${F3_UV_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
+            COMMAND "${UV_EXECUTABLE}" run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups python "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
                 --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
                 --output "${VIDEO_SHADER_HEADER}"
                 --glslang "${F3_GLSLANG}"
