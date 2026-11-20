@@ -322,8 +322,8 @@ impl OverdriveProgram {
             (first, OVERDRIVE_CURVE_WORDS..2 * OVERDRIVE_CURVE_WORDS),
         ] {
             let data = &rom[offset + 2..offset + 2 + 2 * OVERDRIVE_CURVE_WORDS];
-            for (word, bytes) in words[range].iter_mut().zip(data.chunks_exact(2)) {
-                *word = i16::from_be_bytes([bytes[0], bytes[1]]);
+            for (word, &bytes) in words[range].iter_mut().zip(data.as_chunks::<2>().0) {
+                *word = i16::from_be_bytes(bytes);
             }
         }
         let mut dsp = OverdriveDsp::new();

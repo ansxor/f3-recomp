@@ -154,8 +154,10 @@ mod tests {
         ] {
             rom.fill(0);
             rom[4..8].copy_from_slice(&vector.to_be_bytes());
-            for (slot, pointer) in rom[offset..offset + 12].chunks_exact_mut(4).zip(pointers) {
-                slot.copy_from_slice(&pointer.to_be_bytes());
+            for (slot, pointer) in
+                rom[offset..offset + 12].as_chunks_mut::<4>().0.iter_mut().zip(pointers)
+            {
+                *slot = pointer.to_be_bytes();
             }
             for selected in 0..=3 {
                 assert_eq!(DriverLayout::select(selected, &rom).is_some(), selected == id);
