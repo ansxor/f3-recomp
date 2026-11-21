@@ -1,11 +1,15 @@
 #pragma once
 
+#include <cstdint>
 #include <cstdio>
 #include <iostream>
 #include <string>
 #include <string_view>
 
 namespace f3rt::tool {
+
+// First frame at which comparing the game renderer with the FDP oracle is meaningful (earlier frames are boot).
+inline constexpr uint64_t VIDEO_DIFF_MIN_FRAME = 600;
 
 int cmd_gameplay(int argc, char **argv);
 int cmd_motion(int argc, char **argv);

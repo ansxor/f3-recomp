@@ -84,22 +84,34 @@ candidate in a session opened with `sprite_writers: true`: `rt_sprites` returns 
 
 **Computed jumps, hooks, interpreters**: `flow {target: "?dispatch"}` lists unresolved sites; callees need a profile.
 
-**Sprites**: `rt_sprites {}` walks the list as the chip does (entries, bank switches, jumps, end slot). `drawn_only:
-false` lists every visited entry; `raw: true` adds the 64 KiB sprite RAM as hex.
+**Sprites**: `rt_sprites {}` walks the list the way the renderer does (`runtime/renderer/decode.cpp`): command entries
+switch bank and flipscreen for the entries after them, jumps are followed, and an entry is `drawn` only if its tile is
+non-zero and it survives the scanout-crop cull (`culled` marks the rest). `x`/`y` are as drawn (flipscreen applied),
+`raw_x`/`raw_y` before the mirror. The renderer carries bank and flipscreen across frames; the walk starts from
+`start_bank`/`start_flipscreen` (default 0/off) and `summary.end_state` is where it ends. `limit` is at most 1024, the
+renderer's traversal budget. `drawn_only: false` lists every visited entry; `raw: true` adds the 64 KiB sprite RAM as hex.
 
 **Checkpoint and replay**: `rt_save_state {slot: "before"}`, `rt_set_input {system_inputs: 0xfb}` (service/test/coin byte,
 active low) or `{port, mask, pressed}` for buttons, `rt_step {frames: 30}`, `rt_load_state {slot: "before"}`.
-`state_crc` reproduces after `rt_load_state`, so a diverging CRC means the input or code path differed. Inputs are
-not part of a state: reset them yourself after loading.
+`state_crc` reproduces right after `rt_load_state`, so a diverging CRC means the input or code path differed. A state
+holds the CPU, RAM, devices, all six input words and `system_inputs`, so `rt_load_state` also restores whatever buttons
+were held when it was saved; set inputs again only if you want something different for the replay. `path` files (`.f3s`)
+carry a header (ROM CRCs, state size, CRC) and are rejected cleanly when they come from another ROM set or build; a
+failed `rt_load_state` (corrupt, wrong size, bad header) leaves the machine unchanged.
 
 ## Gotchas
 
 - `rt_regs` and region reads do not change `state_crc`; `rt_write` does (it is a real bus write, hardware side effects
   apply). Bus reads of I/O addresses have the bus's side effects.
-- Checkpoint replays are not byte-identical in audio (the synth is not in the saved state); use a fresh session to
-  compare audio.
+- Checkpoint replays are not byte-identical in audio: only the audio board's scheduler state is saved, not the
+  synthesizer's voices. Inputs are saved. Use a fresh session to compare audio.
 - `rt_init` rebuilds the machine and clears the slots; `rt_reset` keeps the audio clock.
-- `rt_video_diff` needs `session_open {video_diff: true}` and is meaningful from about frame 600.
+- `rt_video_diff` needs `session_open {video_diff: true}` and is meaningful from frame 600. `rt_step {video_diff: true}`
+  compares only frames at or above `video_diff_min_frame` (default 600) and reports the rest as `video_diff_skipped`
+  / `video_diff_skipped_frames`; `rt_video_diff` below its `min_frame` returns `skipped: true, ok: null`.
+- Numbers are unsigned and range-checked: integers or `0x`/`$` hex strings, 32-bit addresses, values that fit the access
+  size. `"-1"`, `"+5"`, `" 5"`, `"0x100401000"` and unknown arguments are errors. `rt_read`/`rt_write` take exactly one
+  shape (scalar, byte run / hex, or region); `{}` and mixed shapes are rejected.
 - Attract mode never presses buttons; drive input with `rt_set_input` between `rt_step` calls. A poke run proves
   reachability, not that normal play gets there; say so wherever you use it. Pokes write main RAM
   (`0x400000..0x41ffff`; `xref("a5-0xNNNN").match.address` is the absolute address).

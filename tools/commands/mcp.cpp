@@ -10,6 +10,9 @@
 #include "f3rt/abi/audio.h"
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
+#include "frontend/state.hpp"
+#include "renderer/game/scene.hpp"
+#include "sprite_walk.hpp"
 
 #include <mcp/mcp.hpp>
 #include <nlohmann/json.hpp>
@@ -22,6 +25,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <concepts>
+#include <limits>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -184,7 +189,38 @@ std::vector<uint8_t> encode_png(std::span<const uint32_t> pixels, uint32_t width
 
 // ---- arguments -------------------------------------------------------------------------------------
 
-// Typed access to a tool's `arguments`; every getter throws std::runtime_error naming the key.
+// Strict unsigned integer text: decimal, or hex with a 0x/0X/$ prefix. No sign, whitespace, separators or
+// trailing characters, and the value must fit `max` (the destination width) exactly.
+uint64_t parse_unsigned_text(std::string_view text, uint64_t max, std::string_view key) {
+    const std::string name = "'" + std::string(key) + "'";
+    std::string_view digits = text;
+    unsigned base = 10;
+    if (digits.starts_with("0x") || digits.starts_with("0X")) {
+        base = 16;
+        digits.remove_prefix(2);
+    } else if (digits.starts_with('$')) {
+        base = 16;
+        digits.remove_prefix(1);
+    }
+    if (digits.empty()) throw std::runtime_error(name + " is not an unsigned number: \"" + std::string(text) + "\"");
+    uint64_t value = 0;
+    for (const char c : digits) {
+        unsigned digit;
+        if (c >= '0' && c <= '9') digit = unsigned(c - '0');
+        else if (base == 16 && c >= 'a' && c <= 'f') digit = unsigned(c - 'a') + 10;
+        else if (base == 16 && c >= 'A' && c <= 'F') digit = unsigned(c - 'A') + 10;
+        else throw std::runtime_error(name + " is not an unsigned number: \"" + std::string(text) + "\"");
+        if (digit > max || value > (max - digit) / base)
+            throw std::runtime_error(name + " is out of range (maximum " + std::to_string(max) + "): \"" +
+                                     std::string(text) + "\"");
+        value = value * base + digit;
+    }
+    return value;
+}
+
+// Typed access to a tool's `arguments`; every getter throws std::runtime_error naming the key. Numbers are
+// unsigned and range-checked against the destination type T before they are narrowed: JSON integers or
+// strict decimal / 0x / $ hex strings; negatives, floats, signs and trailing junk are rejected.
 class Args {
 public:
     explicit Args(const json &j) : m_obj(j.is_object() ? &j : nullptr) {
@@ -200,24 +236,18 @@ public:
 
     bool has(std::string_view key) const { return find(key) != nullptr; }
 
-    // Integers, or hex/decimal strings such as "0x400000" and "$400000".
-    std::optional<uint64_t> u64(std::string_view key) const {
+    template <std::unsigned_integral T> std::optional<T> num(std::string_view key) const {
         const json *v = find(key);
         if (!v) return std::nullopt;
-        if (v->is_number_unsigned()) return v->get<uint64_t>();
-        if (v->is_number_integer()) {
-            const int64_t n = v->get<int64_t>();
-            if (n < 0) throw std::runtime_error("'" + std::string(key) + "' must not be negative");
-            return uint64_t(n);
-        }
-        if (v->is_string()) return parse_number(v->get<std::string>(), key);
-        throw std::runtime_error("'" + std::string(key) + "' must be an integer or a hex string");
+        return T(number(*v, std::numeric_limits<T>::max(), key));
     }
 
-    uint64_t u64_or(std::string_view key, uint64_t fallback) const { return u64(key).value_or(fallback); }
+    template <std::unsigned_integral T> T num_or(std::string_view key, T fallback) const {
+        return num<T>(key).value_or(fallback);
+    }
 
-    uint64_t require_u64(std::string_view key) const {
-        const auto v = u64(key);
+    template <std::unsigned_integral T> T require_num(std::string_view key) const {
+        const auto v = num<T>(key);
         if (!v) throw std::runtime_error("missing '" + std::string(key) + "'");
         return *v;
     }
@@ -226,7 +256,6 @@ public:
         const json *v = find(key);
         if (!v) return std::nullopt;
         if (v->is_boolean()) return v->get<bool>();
-        if (v->is_number_unsigned() && v->get<uint64_t>() <= 1) return v->get<uint64_t>() == 1;
         throw std::runtime_error("'" + std::string(key) + "' must be a boolean");
     }
 
@@ -243,16 +272,12 @@ public:
         return *v;
     }
 
-    std::optional<std::vector<uint64_t>> u64_array(std::string_view key) const {
+    template <std::unsigned_integral T> std::optional<std::vector<T>> num_array(std::string_view key) const {
         const json *v = find(key);
         if (!v) return std::nullopt;
         if (!v->is_array()) throw std::runtime_error("'" + std::string(key) + "' must be an array");
-        std::vector<uint64_t> items;
-        for (const json &item : *v) {
-            if (item.is_number_unsigned()) items.push_back(item.get<uint64_t>());
-            else if (item.is_string()) items.push_back(parse_number(item.get<std::string>(), key));
-            else throw std::runtime_error("'" + std::string(key) + "' must hold unsigned integers");
-        }
+        std::vector<T> items;
+        for (const json &item : *v) items.push_back(T(number(item, std::numeric_limits<T>::max(), key)));
         return items;
     }
 
@@ -264,15 +289,35 @@ public:
             if (!props.contains(key)) throw std::runtime_error("unknown argument '" + key + "'");
     }
 
+    // At most one of `keys` may be present.
+    void exclusive(std::initializer_list<std::string_view> keys, std::string_view what) const {
+        std::string seen;
+        for (const std::string_view key : keys) {
+            if (!has(key)) continue;
+            if (!seen.empty())
+                throw std::runtime_error(std::string(what) + ": '" + seen + "' and '" + std::string(key) +
+                                         "' are mutually exclusive");
+            seen = std::string(key);
+        }
+    }
+
+    // `key` is not allowed alongside the argument shape `shape`.
+    void forbid(std::initializer_list<std::string_view> keys, std::string_view shape) const {
+        for (const std::string_view key : keys)
+            if (has(key)) throw std::runtime_error("'" + std::string(key) + "' is not valid for " + std::string(shape));
+    }
+
 private:
-    static uint64_t parse_number(std::string s, std::string_view key) {
-        if (!s.empty() && s[0] == '$') s = "0x" + s.substr(1);
-        char *end = nullptr;
-        errno = 0;
-        const unsigned long long v = std::strtoull(s.c_str(), &end, 0);
-        if (s.empty() || *end != '\0' || errno != 0)
-            throw std::runtime_error("'" + std::string(key) + "' is not a number: " + s);
-        return v;
+    static uint64_t number(const json &v, uint64_t max, std::string_view key) {
+        const std::string name = "'" + std::string(key) + "'";
+        if (v.is_number_unsigned()) {
+            const uint64_t n = v.get<uint64_t>();
+            if (n > max) throw std::runtime_error(name + " is out of range (maximum " + std::to_string(max) + ")");
+            return n;
+        }
+        if (v.is_number_integer()) throw std::runtime_error(name + " must not be negative");
+        if (v.is_string()) return parse_unsigned_text(v.get_ref<const std::string &>(), max, key);
+        throw std::runtime_error(name + " must be an unsigned integer or a decimal / 0x hex string");
     }
 
     const json *m_obj;
@@ -372,25 +417,28 @@ public:
         return {{"frame", m.frame}, {"pc", m.cpu.pc}, {"state_crc", crc_text(m.state_crc())}};
     }
 
-    json step(const Args &p) {
+json step(const Args &p) {
         Machine &m = machine();
-        const uint64_t frames = p.u64_or("frames", 1);
+        // Everything is validated before the first frame runs or any output file is opened.
+        const uint64_t frames = p.num_or<uint64_t>("frames", 1);
         const std::string audio = p.str("audio").value_or("discard");
         const bool diff = p.boolean("video_diff").value_or(false);
-        const unsigned mask = unsigned(p.u64_or("video_layer_mask", 511));
+        const unsigned mask = layer_mask(p, "video_layer_mask");
+        const uint64_t diff_ready_frame = p.num_or<uint64_t>("video_diff_min_frame", VIDEO_DIFF_MIN_FRAME);
         const bool stop_on_halt = p.boolean("stop_on_halt").value_or(true);
         const bool want_crc = p.boolean("crc").value_or(true);
+        if (audio != "discard" && audio != "capture" && audio != "wav")
+            throw std::runtime_error("audio must be \"discard\", \"capture\" or \"wav\"");
         std::optional<std::string> wav_path;
+        if (audio == "wav") wav_path = p.require_str("wav_path");
+        else if (p.has("wav_path")) throw std::runtime_error("wav_path needs audio:\"wav\"");
+        if (diff && !m_video_diff) throw std::runtime_error("video_diff needs init with video_diff:true");
         std::unique_ptr<WavWriter> wav;
-        if (audio == "wav") {
-            wav_path = p.require_str("wav_path");
+        if (wav_path) {
             const std::filesystem::path path(*wav_path);
             if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
             wav = std::make_unique<WavWriter>(path, f3rt_audio_sample_rate());
-        } else if (audio != "discard" && audio != "capture") {
-            throw std::runtime_error("audio must be \"discard\", \"capture\" or \"wav\"");
         }
-        if (diff && !m_video_diff) throw std::runtime_error("video_diff needs init with video_diff:true");
 
         std::vector<int16_t> captured;
         std::array<int16_t, 8192> block{};
@@ -414,7 +462,7 @@ public:
             }
         };
 
-        uint64_t run = 0;
+        uint64_t run = 0, compared = 0, skipped = 0;
         bool stopped = false;
         std::optional<std::string> video_error;
         while (run < frames) {
@@ -422,12 +470,17 @@ public:
             ++run;
             drain();
             if (diff) {
-                try {
-                    m.game_video->compare_layers(m.frame, mask);
-                } catch (const std::exception &e) {
-                    video_error = e.what();
-                    stopped = true;
-                    break;
+                if (m.frame < diff_ready_frame) {
+                    ++skipped; // the FDP oracle is not meaningful during boot (see VIDEO_DIFF_MIN_FRAME)
+                } else {
+                    ++compared;
+                    try {
+                        m.game_video->compare_layers(m.frame, mask);
+                    } catch (const std::exception &e) {
+                        video_error = e.what();
+                        stopped = true;
+                        break;
+                    }
                 }
             }
             if ((!ok || m.cpu.halted) && stop_on_halt) {
@@ -463,6 +516,10 @@ public:
         }
         if (diff) {
             r["video_diff_ok"] = !video_error;
+            r["video_diff_ready_frame"] = diff_ready_frame;
+            r["video_diff_compared"] = compared;
+            r["video_diff_skipped_frames"] = skipped;
+            r["video_diff_skipped"] = skipped > 0;
             if (video_error) r["video_error"] = *video_error;
         }
         return r;
@@ -470,19 +527,26 @@ public:
 
     json set_input(const Args &p) {
         Machine &m = machine();
-        if (const auto all = p.u64_array("inputs")) {
-            if (all->size() > m.inputs.size())
-                throw std::runtime_error("inputs holds at most " + std::to_string(m.inputs.size()) + " ports");
-            for (size_t i = 0; i < all->size(); ++i) m.inputs[i] = uint32_t((*all)[i]);
-        }
-        if (const auto sys = p.u64("system_inputs")) m.system_inputs = uint8_t(*sys);
-        if (p.has("mask")) {
-            const uint64_t mask = p.require_u64("mask");
-            const uint64_t port = p.u64_or("port", 0);
-            const bool pressed = p.boolean("pressed").value_or(true);
+        // Parse and validate everything first so a bad argument changes nothing.
+        const auto all = p.num_array<uint32_t>("inputs");
+        const auto sys = p.num<uint8_t>("system_inputs");
+        const bool has_mask = p.has("mask");
+        if (!has_mask) p.forbid({"port", "pressed"}, "set_input without 'mask'");
+        if (all && all->size() > m.inputs.size())
+            throw std::runtime_error("inputs holds at most " + std::to_string(m.inputs.size()) + " ports");
+        uint32_t mask = 0;
+        uint8_t port = 0;
+        bool pressed = true;
+        if (has_mask) {
+            mask = p.require_num<uint32_t>("mask");
+            port = p.num_or<uint8_t>("port", 0);
+            pressed = p.boolean("pressed").value_or(true);
             if (port >= m.inputs.size()) throw std::runtime_error("port out of range");
-            m.set_input(unsigned(port), uint32_t(mask), pressed);
         }
+        if (all)
+            for (size_t i = 0; i < all->size(); ++i) m.inputs[i] = (*all)[i];
+        if (sys) m.system_inputs = *sys;
+        if (has_mask) m.set_input(port, mask, pressed);
         json inputs = json::array();
         for (const uint32_t v : m.inputs) inputs.push_back(v);
         return {{"inputs", std::move(inputs)}, {"system_inputs", unsigned(m.system_inputs)}};
@@ -510,12 +574,18 @@ public:
         return {{"frame", m.frame}, {"frame_crc", crc_text(frame_crc(m))}, {"state_crc", crc_text(m.state_crc())}};
     }
 
-    json read(const Args &p) {
+json read(const Args &p) {
         Machine &m = machine();
-        if (const auto region_name = p.str("region")) {
-            const Region &region = region_named(*region_name);
-            const uint64_t offset = p.u64_or("offset", 0);
-            const uint64_t length = p.u64_or("length", region.size - std::min<uint64_t>(offset, region.size));
+        const bool region_form = p.has("region");
+        if (region_form && p.has("addr"))
+            throw std::runtime_error("read: 'region' and 'addr' are mutually exclusive");
+        if (!region_form && !p.has("addr"))
+            throw std::runtime_error("read needs 'addr' (scalar or byte run) or 'region'");
+        if (region_form) {
+            p.forbid({"size"}, "read with 'region'");
+            const Region &region = region_named(*p.str("region"));
+            const uint64_t offset = p.num_or<uint32_t>("offset", 0);
+            const uint64_t length = p.num_or<uint32_t>("length", uint32_t(region.size - std::min<uint64_t>(offset, region.size)));
             if (offset > region.size || length > region.size - offset)
                 throw std::runtime_error("range 0x" + hex_number(offset) + "+0x" + hex_number(length) +
                                          " is outside " + std::string(region.name) + " (0x" +
@@ -526,26 +596,36 @@ public:
                     {"length", length},
                     {"hex", hex_encode(std::span(bytes).subspan(offset, length))}};
         }
-        const uint32_t addr = uint32_t(p.require_u64("addr"));
+        p.forbid({"offset"}, "read with 'addr'");
+        p.exclusive({"length", "size"}, "read");
+        const uint32_t addr = p.require_num<uint32_t>("addr");
         if (p.has("length")) {
             // A byte run through the bus.
-            const uint64_t length = p.require_u64("length");
-            if (length > RAM_SIZE) throw std::runtime_error("length is too large");
+            const uint32_t length = p.require_num<uint32_t>("length");
+            if (length > RAM_SIZE) throw std::runtime_error("length is too large (maximum " + std::to_string(RAM_SIZE) + ")");
+            check_bus_span(addr, length);
             std::vector<uint8_t> bytes(length);
             for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = m.read8(addr + uint32_t(i));
             return {{"addr", addr}, {"length", length}, {"hex", hex_encode(bytes)}};
         }
         const unsigned size = access_size(p);
+        check_bus_span(addr, size);
         const uint32_t value = size == 1 ? m.read8(addr) : size == 2 ? m.read16(addr) : m.read32(addr);
         return {{"addr", addr}, {"size", size}, {"value", value}};
     }
 
     json write(const Args &p) {
         Machine &m = machine();
-        if (const auto region_name = p.str("region")) {
-            const Region &region = region_named(*region_name);
+        const bool region_form = p.has("region");
+        if (region_form && p.has("addr"))
+            throw std::runtime_error("write: 'region' and 'addr' are mutually exclusive");
+        if (!region_form && !p.has("addr"))
+            throw std::runtime_error("write needs 'addr' (scalar or hex bytes) or 'region' + 'hex'");
+        if (region_form) {
+            p.forbid({"size", "value"}, "write with 'region'");
+            const Region &region = region_named(*p.str("region"));
             if (!region.bus_base) throw std::runtime_error(std::string(region.name) + " is read only");
-            const uint64_t offset = p.u64_or("offset", 0);
+            const uint64_t offset = p.num_or<uint32_t>("offset", 0);
             const auto bytes = hex_decode(p.require_str("hex"));
             if (offset > region.size || bytes.size() > region.size - offset)
                 throw std::runtime_error("range is outside " + std::string(region.name));
@@ -553,20 +633,32 @@ public:
             for (size_t i = 0; i < bytes.size(); ++i) m.write8(region.bus_base + uint32_t(offset + i), bytes[i]);
             return {{"region", std::string(region.name)}, {"offset", offset}, {"length", bytes.size()}};
         }
-        const uint32_t addr = uint32_t(p.require_u64("addr"));
+        p.forbid({"offset"}, "write with 'addr'");
+        p.exclusive({"hex", "value"}, "write");
+        const uint32_t addr = p.require_num<uint32_t>("addr");
         if (p.has("hex")) {
+            p.forbid({"size"}, "write with 'hex'");
             const auto bytes = hex_decode(p.require_str("hex"));
+            check_bus_span(addr, bytes.size());
             for (size_t i = 0; i < bytes.size(); ++i) m.write8(addr + uint32_t(i), bytes[i]);
             return {{"addr", addr}, {"length", bytes.size()}};
         }
+        if (!p.has("value")) throw std::runtime_error("write needs 'value' (scalar) or 'hex' (bytes)");
         const unsigned size = access_size(p);
-        const uint64_t value = p.require_u64("value");
+        const uint64_t max = size == 4 ? 0xffffffffull : (1ull << (8 * size)) - 1;
+        const uint64_t value = p.require_num<uint64_t>("value");
+        if (value > max)
+            throw std::runtime_error("'value' 0x" + hex_number(value) + " does not fit in " + std::to_string(size) +
+                                     " byte(s)");
+        check_bus_span(addr, size);
         if (size == 1) m.write8(addr, uint8_t(value));
         else if (size == 2) m.write16(addr, uint16_t(value));
         else m.write32(addr, uint32_t(value));
-        return {{"addr", addr}, {"size", size}, {"value", value & (size == 4 ? 0xffffffffu : (1u << (8 * size)) - 1)}};
+        return {{"addr", addr}, {"size", size}, {"value", value}};
     }
 
+    // Slots and inline base64 hold the raw machine state of this exact session. `path` files use the shared
+    // frontend slot format (ROM CRCs, state size and CRC header) so a file from another ROM set or build is refused.
     json save_state(const Args &p) {
         Machine &m = machine();
         const auto slot = p.str("slot");
@@ -578,9 +670,7 @@ public:
         m.save_state(blob);
         json r{{"size", blob.size()}, {"state_crc", crc_text(crc32(blob.data(), blob.size()))}};
         if (path) {
-            const std::filesystem::path file(*path);
-            if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path());
-            write_bytes(file, blob);
+            frontend_state_slot(m, std::filesystem::path(*path), 1, 0, true);
             r["path"] = *path;
         }
         if (inline_state) r["base64"] = base64_encode(blob);
@@ -598,25 +688,16 @@ public:
         const auto b64 = p.str("base64");
         if (int(slot.has_value()) + int(path.has_value()) + int(b64.has_value()) != 1)
             throw std::runtime_error("load_state needs exactly one of slot, path, base64");
-        std::vector<uint8_t> blob;
-        if (slot) {
+        if (path) {
+            // Header, size (checked before any allocation) and CRC are verified first; the load rolls back on failure.
+            frontend_state_slot(m, std::filesystem::path(*path), 1, 0, false);
+        } else if (slot) {
             const auto it = m_slots.find(*slot);
             if (it == m_slots.end()) throw std::runtime_error("no saved state in slot: " + *slot);
-            blob = it->second;
-        } else if (path) {
-            std::ifstream f(*path, std::ios::binary | std::ios::ate);
-            if (!f) throw std::runtime_error("cannot read state file: " + *path);
-            blob.resize(size_t(f.tellg()));
-            f.seekg(0);
-            if (!f.read(reinterpret_cast<char *>(blob.data()), std::streamsize(blob.size())))
-                throw std::runtime_error("state file read failed: " + *path);
+            load_blob_atomic(m, it->second);
         } else {
-            blob = base64_decode(*b64);
+            load_blob_atomic(m, base64_decode(*b64));
         }
-        if (blob.size() != m.state_size())
-            throw std::runtime_error("state is " + std::to_string(blob.size()) + " bytes but this machine's state is " +
-                                     std::to_string(m.state_size()));
-        m.load_state(blob);
         return {{"frame", m.frame}, {"pc", m.cpu.pc}, {"state_crc", crc_text(m.state_crc())}};
     }
 
@@ -640,14 +721,24 @@ public:
         return {std::move(png), std::move(r)};
     }
 
-    json sprites(const Args &p) {
+json sprites(const Args &p) {
         Machine &m = machine();
-        const unsigned start_bank = unsigned(p.u64_or("start_bank", 0));
+        const auto start_bank = p.num_or<uint8_t>("start_bank", 0);
         if (start_bank > 1) throw std::runtime_error("start_bank must be 0 or 1");
-        const uint64_t limit = p.u64_or("limit", 0x400);
+        const auto limit = p.num_or<uint32_t>("limit", SPRITE_WALK_BUDGET);
+        if (limit < 1 || limit > SPRITE_WALK_BUDGET)
+            throw std::runtime_error("limit must be 1.." + std::to_string(SPRITE_WALK_BUDGET) +
+                                     " (the renderer walks at most " + std::to_string(SPRITE_WALK_BUDGET) +
+                                     " entries per frame)");
+        const bool start_flip = p.boolean("start_flipscreen").value_or(false);
         const bool drawn_only = p.boolean("drawn_only").value_or(true);
         const std::span<const uint8_t> ram = std::span<const uint8_t>(m.graphics).first(SPRITE_RAM_SIZE);
-        json r = decode_sprites(m, ram, start_bank, limit, drawn_only);
+        SpriteRamState start;
+        start.bank = start_bank != 0;
+        start.flipscreen = start_flip;
+        const SpriteWalkResult walk =
+            walk_sprite_list(ram, start, limit, int(geometry::FIRST_LINE), int(geometry::HEIGHT));
+        json r = sprites_json(m, walk, start, drawn_only);
         r["frame"] = m.frame;
         r["address"] = GRAPHICS_BASE;
         if (m.sprite_writers) {
@@ -667,8 +758,15 @@ public:
     json video_diff(const Args &p) {
         Machine &m = machine();
         if (!m_video_diff) throw std::runtime_error("video_diff needs init with video_diff:true (FDP oracle)");
-        const unsigned mask = unsigned(p.u64_or("layer_mask", 511));
-        json r{{"frame", m.frame}, {"layer_mask", mask}};
+        const unsigned mask = layer_mask(p, "layer_mask");
+        const uint64_t ready_frame = p.num_or<uint64_t>("min_frame", VIDEO_DIFF_MIN_FRAME);
+        json r{{"frame", m.frame}, {"layer_mask", mask}, {"ready_frame", ready_frame}};
+        if (m.frame < ready_frame) {
+            r["ok"] = nullptr;
+            r["skipped"] = true;
+            return r;
+        }
+        r["skipped"] = false;
         try {
             m.game_video->compare_layers(m.frame, mask);
             r["ok"] = true;
@@ -729,7 +827,7 @@ private:
         return out;
     }
 
-    // 1, 2 or 4 bytes; also "b", "w", "l".
+// 1, 2 or 4 bytes; also "b", "w", "l".
     static unsigned access_size(const Args &p) {
         if (const json *v = p.find("size"); v && v->is_string()) {
             const std::string s = v->get<std::string>();
@@ -737,128 +835,120 @@ private:
             if (s == "w" || s == "word") return 2;
             if (s == "l" || s == "long") return 4;
         }
-        const uint64_t size = p.u64_or("size", 1);
+        const auto size = p.num_or<uint8_t>("size", 1);
         if (size != 1 && size != 2 && size != 4) throw std::runtime_error("size must be 1, 2 or 4 (or b, w, l)");
-        return unsigned(size);
+        return size;
     }
 
-    // Walks the sprite list the way the chip does (runtime/renderer/decode.cpp decode_sprite_list). Two banks of
-    // 0x400 16-byte entries (0x0000 / 0x8000); a command entry (word 3 bit 15) switches banks; word 6 bit 15 jumps
-    // to entry w6 & 0x3ff, and a jump to itself ends the list. Words: w0 tile (bit 16 = w5 bit 0), w1 zoom
-    // (x low byte, y high byte), w2/w3 x/y (12-bit signed, scroll mode in w2 bits 12-15), w4 high byte sprite
-    // control, w4 low byte colour.
-    static json decode_sprites(const Machine &m, std::span<const uint8_t> ram, unsigned start_bank, uint64_t limit,
-                               bool drawn_only) {
-        struct Axis {
-            int blockScale = 0x100;
-            int64_t pos = 0, blockPos = 0;
-            int global = 0, subglobal = 0;
-            static int signed12(unsigned v) { return (v & 0x800) ? int(v & 0xfff) - 0x1000 : int(v & 0xfff); }
-            void update(unsigned scroll, unsigned posw, bool multi, unsigned blockCtrl, unsigned zoom) {
-                int value = signed12(posw);
-                if (scroll & 1) subglobal = value;
-                if (scroll & 2) global = value;
-                if (!(scroll & 8)) {
-                    value += global;
-                    if (!(scroll & 4)) value += subglobal;
-                }
-                if (blockCtrl == 0 && !multi) {
-                    blockPos = int64_t(value) * 256;
-                    blockScale = 0x100 - int(zoom);
-                }
-                if (blockCtrl == 0 || blockCtrl == 2) pos = blockPos;
-                else if (blockCtrl == 3) pos += int64_t(blockScale) * 16;
+    // A bus access must not wrap past the 32-bit address space.
+    static void check_bus_span(uint32_t addr, uint64_t length) {
+        if (uint64_t(addr) + length > 0x100000000ull)
+            throw std::runtime_error("0x" + hex_number(addr) + "+0x" + hex_number(length) +
+                                     " runs past the 32-bit address space");
+    }
+
+    // A layer mask selects PF0..3, SP0..3 and text: bits 0..8, at least one set.
+    static unsigned layer_mask(const Args &p, std::string_view key) {
+        const auto mask = p.num_or<uint32_t>(key, ALL_LAYERS);
+        if (!mask || (mask & ~ALL_LAYERS))
+            throw std::runtime_error("'" + std::string(key) + "' must select layers in bits 0.." +
+                                     std::to_string(LAYER_COUNT - 1) + " (1.." + std::to_string(ALL_LAYERS) + ")");
+        return mask;
+    }
+
+    // Loads `blob` or leaves the machine exactly as it was: Machine::load_state overwrites the CPU, RAM and devices
+    // in sequence, so a failure part-way is undone from a snapshot taken first.
+    static void load_blob_atomic(Machine &m, std::span<const uint8_t> blob) {
+        if (blob.size() != m.state_size())
+            throw std::runtime_error("state is " + std::to_string(blob.size()) + " bytes but this machine's state is " +
+                                     std::to_string(m.state_size()));
+        std::vector<uint8_t> previous(m.state_size());
+        m.save_state(previous);
+        try {
+            m.load_state(blob);
+        } catch (const std::exception &e) {
+            try {
+                m.load_state(previous);
+            } catch (const std::exception &restore) {
+                throw std::runtime_error(std::string("state load failed (") + e.what() +
+                                         ") and the rollback failed too (" + restore.what() +
+                                         "); the machine is inconsistent, call init");
             }
-        };
-        Axis x, y;
-        unsigned color = 0, bank = start_bank;
-        bool multi = false;
-        json entries = json::array();
-        json banks_read = json::array(), switches = json::array();
+            throw std::runtime_error(std::string("state load failed, machine unchanged: ") + e.what());
+        }
+    }
+
+    // The sprite tool's JSON: the renderer-accurate walk (see sprite_walk.hpp).
+    static json sprites_json(const Machine &m, const SpriteWalkResult &walk, const SpriteRamState &start,
+                             bool drawn_only) {
+        json entries = json::array(), banks_read = json::array(), switches = json::array();
         std::set<unsigned> seen_banks;
-        uint64_t jumps = 0, commands = 0, drawn_count = 0, visited = 0;
-        json end = nullptr, last_used = nullptr;
-        unsigned offs = 0;
-        while (offs < 0x400 && visited < limit) {
-            ++visited;
-            const size_t base = size_t(bank) * 0x8000 + size_t(offs) * 16;
-            if (base + 16 > ram.size()) break;
-            unsigned w[8];
-            for (int i = 0; i < 8; ++i) w[i] = unsigned(ram[base + 2 * i]) << 8 | ram[base + 2 * i + 1];
-            json notes = json::array();
-            const unsigned this_bank = bank;
-            if (seen_banks.insert(bank).second) banks_read.push_back(bank);
+        json last_used = nullptr;
+        for (size_t i = 0; i < walk.entries.size(); ++i) {
+            const SpriteWalkEntry &e = walk.entries[i];
+            if (seen_banks.insert(e.bank).second) banks_read.push_back(e.bank);
             bool any = false;
-            for (int i = 0; i < 7; ++i) any |= w[i] != 0;
-            if (any) last_used = json::array({bank, offs});
-            if (w[3] & 0x8000) {
-                ++commands;
-                if ((w[5] & 1) != bank) switches.push_back(json::array({bank, offs, w[5] & 1}));
-                bank = w[5] & 1;
+            for (int k = 0; k < 7; ++k) any |= e.words[k] != 0;
+            if (any) last_used = json::array({e.bank, e.slot});
+            if (i + 1 < walk.entries.size() && walk.entries[i + 1].bank != e.bank)
+                switches.push_back(json::array({e.bank, e.slot, walk.entries[i + 1].bank}));
+            if (drawn_only && !e.drawn) continue;
+            json notes = json::array();
+            if (e.command) {
                 char buf[96];
-                std::snprintf(buf, sizeof buf, "command: bank %u, flipscreen %u, extra planes %u, trails %u", bank,
-                              (w[5] & 0x2000) ? 1u : 0u, (w[5] >> 8) & 3, (w[5] & 2) ? 1u : 0u);
+                std::snprintf(buf, sizeof buf, "command: bank %u, flipscreen %u, extra planes %u, trails %u",
+                              unsigned(e.words[5] & 1), (e.words[5] & 0x2000) ? 1u : 0u, (e.words[5] >> 8) & 3u,
+                              (e.words[5] & 2) ? 1u : 0u);
                 notes.push_back(buf);
             }
-            const unsigned slot = offs;
-            bool at_end = false;
-            if (w[6] & 0x8000) {
-                const unsigned target = w[6] & 0x3ff;
-                if (target == offs) {
-                    notes.push_back("list end (jump to itself)");
-                    at_end = true;
-                } else {
-                    ++jumps;
-                    char buf[32];
-                    std::snprintf(buf, sizeof buf, "jump to 0x%03x", target);
-                    notes.push_back(buf);
-                    offs = target - 1;
-                }
+            if (e.list_end) {
+                notes.push_back("list end (jump to itself)");
+            } else if (e.jump >= 0) {
+                char buf[32];
+                std::snprintf(buf, sizeof buf, "jump to 0x%03x", unsigned(e.jump));
+                notes.push_back(buf);
             }
-            const unsigned control = w[4] >> 8, scroll = (w[2] >> 12) & 0xf;
-            if (!at_end) {
-                if (!(control & 4)) color = w[4] & 0xff;
-                x.update(scroll, w[2], multi, (control >> 6) & 3, w[1] & 0xff);
-                y.update(scroll, w[3], multi, (control >> 4) & 3, w[1] >> 8);
-                multi = (control & 8) != 0;
-            }
-            const unsigned tile = w[0] | ((w[5] & 1) << 16);
-            const bool drawn = tile != 0 && !at_end;
-            if (drawn) ++drawn_count;
-            if (!drawn_only || drawn) {
-                json entry{{"slot", slot},
-                           {"bank", this_bank},
-                           {"address", GRAPHICS_BASE + this_bank * 0x8000 + slot * 16},
-                           {"words", json::array({w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]})},
-                           {"tile", tile},
-                           {"color", color},
-                           {"x", double(x.pos) / 256},
-                           {"y", double(y.pos) / 256},
-                           {"scale_x", x.blockScale},
-                           {"scale_y", y.blockScale},
-                           {"control", control},
-                           {"drawn", drawn},
-                           {"notes", std::move(notes)}};
-                if (m.sprite_writers) entry["writer_pc"] = (*m.sprite_writers)[base >> 4];
-                entries.push_back(std::move(entry));
-            }
-            if (at_end) {
-                end = slot;
-                break;
-            }
-            ++offs;
+            if (e.culled) notes.push_back("culled: outside the scanout crop");
+            json entry{{"slot", e.slot},
+                       {"bank", e.bank},
+                       {"address", GRAPHICS_BASE + e.bank * SPRITE_BANK_STRIDE + e.slot * 16},
+                       {"words", json::array({e.words[0], e.words[1], e.words[2], e.words[3], e.words[4], e.words[5],
+                                              e.words[6], e.words[7]})},
+                       {"tile", e.tile},
+                       {"color", e.color},
+                       {"x", double(e.x) / 256},
+                       {"y", double(e.y) / 256},
+                       {"raw_x", double(e.raw_x) / 256},
+                       {"raw_y", double(e.raw_y) / 256},
+                       {"scale_x", e.scale_x},
+                       {"scale_y", e.scale_y},
+                       {"flip_x", e.flip_x},
+                       {"flip_y", e.flip_y},
+                       {"control", e.control},
+                       {"drawn", e.drawn},
+                       {"culled", e.culled},
+                       {"notes", std::move(notes)}};
+            if (m.sprite_writers) entry["writer_pc"] = (*m.sprite_writers)[size_t(e.bank) * 0x800 + e.slot];
+            entries.push_back(std::move(entry));
         }
         return {{"entries", std::move(entries)},
                 {"summary",
-                 {{"start_bank", start_bank},
-                  {"end", end},
-                  {"jumps", jumps},
-                  {"commands", commands},
-                  {"drawn", drawn_count},
-                  {"visited", visited},
+                 {{"start_bank", unsigned(start.bank)},
+                  {"start_flipscreen", start.flipscreen},
+                  {"end", walk.end_slot >= 0 ? json(walk.end_slot) : json(nullptr)},
+                  {"jumps", walk.jumps},
+                  {"commands", walk.commands},
+                  {"drawn", walk.drawn},
+                  {"culled", walk.culled},
+                  {"visited", walk.visited},
                   {"banks_read", std::move(banks_read)},
                   {"switches", std::move(switches)},
-                  {"last_used", last_used}}}};
+                  {"last_used", last_used},
+                  {"end_state",
+                   {{"bank", unsigned(walk.end_state.bank)},
+                    {"flipscreen", walk.end_state.flipscreen},
+                    {"extra_planes", walk.end_state.extra_planes},
+                    {"trails", walk.end_state.trails}}}}}};
     }
 
     Defaults m_defaults;
@@ -875,11 +965,18 @@ private:
 json schema_object(json properties, std::initializer_list<const char *> required = {}) {
     json req = json::array();
     for (const char *name : required) req.push_back(name);
-    return {{"type", "object"}, {"properties", std::move(properties)}, {"required", std::move(req)}};
+    return {{"type", "object"},
+            {"properties", std::move(properties)},
+            {"required", std::move(req)},
+            {"additionalProperties", false}};
 }
 
+// Unsigned integer, or strict decimal / hex text ("0x400000", "$400000"); no sign, whitespace or junk. Each
+// argument is also range-checked against the width it feeds (32-bit addresses, 8-bit bytes, ...).
 const json ADDRESS_TYPE = {{"type", json::array({"integer", "string"})},
-                           {"description", "An integer or a hex string such as \"0x400000\" or \"$400000\"."}};
+                           {"minimum", 0},
+                           {"pattern", "^(0[xX][0-9a-fA-F]+|\\$[0-9a-fA-F]+|[0-9]+)$"},
+                           {"description", "An unsigned integer or a hex string such as \"0x400000\" or \"$400000\"."}};
 
 mcp::CallToolResult text_result(const json &structured) {
     mcp::CallToolResult r;
@@ -900,9 +997,12 @@ constexpr const char *INSTRUCTIONS =
     "Call `init` first (unless the server was started with --rom-dir and without --no-init), then "
     "`step` frames, `set_input`, `regs`, `read`, `write`, `screenshot` (returns a PNG image), `sprites`, "
     "`save_state`/`load_state` to checkpoint and replay. `reset` restarts the game; `shutdown` frees the "
-    "machine. `init` always replaces the running machine. Addresses accept integers or hex strings "
-    "(\"0x401f54\", \"$401f54\"). `regs` and region reads never change `state_crc`; `write` is a real bus "
-    "write and does. Inputs are not part of a saved state: reset them yourself after `load_state`.";
+    "machine. `init` always replaces the running machine. Numbers are unsigned: integers or strict hex "
+    "strings (\"0x401f54\", \"$401f54\"), range-checked (addresses are 32-bit); negatives, signs and trailing "
+    "junk are rejected, as are unknown arguments. `regs` and region reads never change `state_crc`; `write` is a "
+    "real bus write and does. A saved state holds the CPU, RAM, devices, the six input words and `system_inputs`, "
+    "so `load_state` restores held buttons too; only the audio synthesizer's voices are outside it. A failed "
+    "`load_state` leaves the machine unchanged.";
 
 void print_help() {
     std::cout
@@ -973,13 +1073,18 @@ void serve(Runtime &runtime, int out_fd) {
 
     tool("step",
          "Run N emulated frames. Returns frame/pc/step counters, frame_crc and state_crc, and audio counters. "
-         "Stops early if the CPU halts (unless stop_on_halt is false).",
+         "Stops early if the CPU halts (unless stop_on_halt is false). With video_diff:true the FDP comparison only "
+         "runs once the frame reaches video_diff_min_frame (default 600, where the oracle becomes meaningful); earlier "
+         "frames are skipped and reported as video_diff_skipped / video_diff_skipped_frames, never as a failure.",
          schema_object({{"frames", {{"type", "integer"}, {"minimum", 0}, {"default", 1}}},
                         {"audio", {{"type", "string"}, {"enum", json::array({"discard", "capture", "wav"})},
                                    {"description", "discard (default): count only; capture: return PCM as base64 (<= 6 MiB); wav: write wav_path."}}},
                         {"wav_path", {{"type", "string"}, {"description", "Output file for audio:\"wav\"."}}},
                         {"video_diff", {{"type", "boolean"}, {"description", "Compare layers with the FDP oracle after each frame (needs init video_diff:true)."}}},
-                        {"video_layer_mask", {{"type", "integer"}, {"default", 511}}},
+                        {"video_layer_mask", {{"type", "integer"}, {"minimum", 1}, {"maximum", 511}, {"default", 511},
+                                              {"description", "Layers to compare: PF0..3, SP0..3, text (bits 0..8)."}}},
+                        {"video_diff_min_frame", {{"type", "integer"}, {"minimum", 0}, {"default", int(VIDEO_DIFF_MIN_FRAME)},
+                                                  {"description", "First frame that is compared; earlier frames are skipped."}}},
                         {"stop_on_halt", {{"type", "boolean"}, {"default", true}}},
                         {"crc", {{"type", "boolean"}, {"default", true}, {"description", "Include frame_crc and state_crc."}}}}),
          plain([&](const Args &a) { return runtime.step(a); }));
@@ -987,9 +1092,10 @@ void serve(Runtime &runtime, int out_fd) {
     tool("set_input",
          "Set controller and system inputs. `mask` with `pressed` presses/releases buttons of `port`; `inputs` sets all "
          "six port words; `system_inputs` is the coin/service/test byte (active low).",
-         schema_object({{"port", {{"type", "integer"}, {"default", 0}}},
+         schema_object({{"port", {{"type", "integer"}, {"minimum", 0}, {"maximum", 5}, {"default", 0},
+                                  {"description", "Port for `mask`; only valid together with `mask`."}}},
                         {"mask", ADDRESS_TYPE},
-                        {"pressed", {{"type", "boolean"}, {"default", true}}},
+                        {"pressed", {{"type", "boolean"}, {"default", true}, {"description", "Only valid together with `mask`."}}},
                         {"system_inputs", ADDRESS_TYPE},
                         {"inputs", {{"type", "array"}, {"items", ADDRESS_TYPE}, {"maxItems", 6}}}}),
          plain([&](const Args &a) { return runtime.set_input(a); }));
@@ -1000,8 +1106,10 @@ void serve(Runtime &runtime, int out_fd) {
          schema_object(json::object()), plain([&](const Args &) { return runtime.regs(); }));
 
     tool("read",
-         "Read memory. Scalar: addr + size (1|2|4 or b|w|l) returns `value`. Byte run: addr + length through the bus. "
-         "Region: region (ram, graphics, palette, control, shared, sprite_writers) + optional offset/length returns hex.",
+         "Read memory in exactly one shape. Scalar: `addr` + optional `size` (1|2|4 or b|w|l) returns `value`. Byte run: "
+         "`addr` + `length` through the bus (no `size`). Region: `region` (ram, graphics, palette, control, shared, "
+         "sprite_writers) + optional offset/length returns hex (no `addr`/`size`). `{}` or mixed shapes are rejected. "
+         "Addresses are 32-bit and accesses must not wrap past 0xffffffff.",
          schema_object({{"addr", ADDRESS_TYPE},
                         {"size", {{"type", json::array({"integer", "string"})}, {"default", 1}}},
                         {"length", ADDRESS_TYPE},
@@ -1010,8 +1118,10 @@ void serve(Runtime &runtime, int out_fd) {
          plain([&](const Args &a) { return runtime.read(a); }));
 
     tool("write",
-         "Write memory through the bus (hardware side effects apply, state_crc changes). Scalar: addr + size + value. "
-         "Bytes: addr + hex, or region (ram, graphics, palette, control, shared) + offset + hex.",
+         "Write memory through the bus (hardware side effects apply, state_crc changes) in exactly one shape. Scalar: "
+         "`addr` + optional `size` + `value` (must fit the size). Bytes: `addr` + `hex` (no size/value). Region: `region` "
+         "(ram, graphics, palette, control, shared) + optional `offset` + `hex` (no addr/size/value). `{}` or mixed shapes "
+         "are rejected.",
          schema_object({{"addr", ADDRESS_TYPE},
                         {"size", {{"type", json::array({"integer", "string"})}, {"default", 1}}},
                         {"value", ADDRESS_TYPE},
@@ -1027,14 +1137,18 @@ void serve(Runtime &runtime, int out_fd) {
          schema_object(json::object()), plain([&](const Args &) { return runtime.audio_stats(); }));
 
     tool("save_state",
-         "Checkpoint the machine: into an in-memory `slot`, a `path` file (.f3s), and/or inline base64.",
+         "Checkpoint the machine (CPU, RAM, devices, input words and system_inputs; not the audio synth voices): into an "
+         "in-memory `slot`, a `path` file (.f3s: header with ROM CRCs, size and CRC, then the state), and/or inline base64 "
+         "(the raw state of this session).",
          schema_object({{"slot", {{"type", "string"}}},
                         {"path", {{"type", "string"}}},
                         {"inline", {{"type", "boolean"}, {"default", false}}}}),
          plain([&](const Args &a) { return runtime.save_state(a); }));
 
     tool("load_state",
-         "Restore a checkpoint from exactly one of `slot`, `path` or `base64`. Inputs are not part of a state.",
+         "Restore a checkpoint from exactly one of `slot`, `path` (.f3s) or `base64`. Input words and system_inputs are "
+         "part of the state and are restored with it. The load is atomic: a corrupt, incompatible or wrong-size state is "
+         "rejected and the machine is left unchanged.",
          schema_object({{"slot", {{"type", "string"}}}, {"path", {{"type", "string"}}}, {"base64", {{"type", "string"}}}}),
          plain([&](const Args &a) { return runtime.load_state(a); }));
 
@@ -1054,18 +1168,28 @@ void serve(Runtime &runtime, int out_fd) {
     tool("sprites",
          "Decode the sprite list the way the chip walks it: entries (tile, colour, x/y, scale, control, notes), a summary "
          "(commands, jumps, bank switches, end slot) and, when init used sprite_writers, writer PCs (`writers` per 16-byte "
-         "slot and `writer_pc` per entry). Only drawn entries are listed unless drawn_only is false. `raw` adds the "
-         "64 KiB sprite RAM as hex.",
+         "slot and `writer_pc` per entry). Follows the renderer's walker (runtime/renderer/decode.cpp): command entries "
+         "switch bank/flipscreen for the entries after them, jumps are followed, and an entry is `drawn` only if its tile "
+         "is non-zero and it survives the scanout-crop cull (`culled` marks the rest). `x`/`y` are the coordinates as "
+         "drawn (flipscreen applied), `raw_x`/`raw_y` before the mirror; `flip_x`/`flip_y` are inverted under "
+         "flipscreen. The walk starts from `start_bank`/`start_flipscreen` (the renderer carries these across frames; "
+         "summary.end_state is the state it ends in) and visits at most `limit` <= 1024 entries, the renderer's budget. "
+         "Only drawn entries are listed unless drawn_only is false. `raw` adds the 64 KiB sprite RAM as hex.",
          schema_object({{"drawn_only", {{"type", "boolean"}, {"default", true}}},
                         {"start_bank", {{"type", "integer"}, {"enum", json::array({0, 1})}, {"default", 0}}},
-                        {"limit", {{"type", "integer"}, {"default", 1024}, {"description", "Most list entries to visit."}}},
+                        {"start_flipscreen", {{"type", "boolean"}, {"default", false}}},
+                        {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", int(SPRITE_WALK_BUDGET)},
+                                   {"default", int(SPRITE_WALK_BUDGET)},
+                                   {"description", "Most list entries to visit (the renderer's budget is 1024)."}}},
                         {"raw", {{"type", "boolean"}, {"default", false}}}}),
          plain([&](const Args &a) { return runtime.sprites(a); }));
 
     tool("video_diff",
-         "Compare the game renderer's layers with the FDP oracle for the current frame (needs init video_diff:true; "
-         "meaningful from about frame 600).",
-         schema_object({{"layer_mask", {{"type", "integer"}, {"default", 511}}}}),
+         "Compare the game renderer's layers with the FDP oracle for the current frame (needs init video_diff:true). "
+         "Below `min_frame` (default 600, where the oracle becomes meaningful) the comparison is skipped and the result "
+         "has skipped:true, ok:null.",
+         schema_object({{"layer_mask", {{"type", "integer"}, {"minimum", 1}, {"maximum", 511}, {"default", 511}}},
+                        {"min_frame", {{"type", "integer"}, {"minimum", 0}, {"default", int(VIDEO_DIFF_MIN_FRAME)}}}}),
          plain([&](const Args &a) { return runtime.video_diff(a); }));
 
     mcp::StdioTransport::Options options;
