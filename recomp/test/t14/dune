@@ -1,0 +1,18 @@
+(test
+ (name lowering)
+ (libraries f3recomp alcotest))
+
+(rule
+ (target memory.exe)
+ (deps ../../cpu_ops.h ../../bitfield.h (universe))
+ (action
+  (bash "root=$PWD
+         while [ ! -f \"$root/include/f3rt/cpu_abi.h\" ]; do
+           if [ \"$root\" = / ]; then echo 'cannot locate runtime headers' >&2; exit 1; fi
+           root=$(dirname \"$root\")
+         done
+         gcc -std=c11 -O2 -Wall -Wextra -Werror -I \"$root/include\" -I ../.. %{dep:memory.c} -o %{target}")))
+
+(rule
+ (alias runtest)
+ (action (run ./memory.exe)))

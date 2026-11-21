@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -16,6 +17,7 @@ try:
         RawTestCase,
         generate_boundary_cases,
         generate_random_cases,
+        generate_semantic_core_cases,
         load_external_instructions,
     )
     from .musashi_build import build_musashi, find_musashi_source
@@ -24,6 +26,7 @@ except (ImportError, ValueError):
         RawTestCase,
         generate_boundary_cases,
         generate_random_cases,
+        generate_semantic_core_cases,
         load_external_instructions,
     )
     from tools.differential.musashi_build import build_musashi, find_musashi_source
@@ -47,6 +50,29 @@ class SupportedCase:
     op_str: str
     insn_size: int
     statements: list[str]
+    entries: list[tuple[int, list[str]]]
+
+
+def _ocaml_lowerer():
+    root = Path(__file__).resolve().parents[2]
+    executable = shutil.which("f3recomp") or root / "recomp/_build/default/bin/main.exe"
+    if not Path(executable).is_file():
+        raise FileNotFoundError("f3recomp not found on PATH or in recomp/_build. Run dune build --root recomp.")
+
+    def lower(part):
+        result = subprocess.run(
+            [str(executable), "lower", "--pc", hex(part.address), "--hex", bytes(part.bytes).hex()],
+            capture_output=True,
+            text=True,
+        )
+        diagnostic = result.stderr.strip()
+        if result.returncode == 1 and diagnostic.startswith(f"{part.address:#x}: "):
+            return None, diagnostic
+        if result.returncode != 0 or not result.stdout.strip():
+            raise ValueError(f"f3recomp lower failed at {part.address:#x}: {diagnostic}")
+        return result.stdout.splitlines(), None
+
+    return lower
 
 
 def run_differential(
@@ -59,6 +85,7 @@ def run_differential(
     keep_temp: bool = False,
     verbose: bool = False,
     compile_only: bool = False,
+    lowerer: str = "python",
 ) -> int:
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,21 +99,27 @@ def run_differential(
     # 2. Initialize Capstone
     md = _get_capstone_disassembler()
 
-    # 3. Import recomp.emitter.lower
-    try:
-        from recomp.emitter import lower
-    except ImportError as exc:
-        print(f"ERROR: Cannot import recomp.emitter.lower: {exc}", file=sys.stderr)
-        return 2
+    if lowerer == "ocaml":
+        lower_ocaml = _ocaml_lowerer()
+    elif lowerer == "python":
+        try:
+            from tools.recomp_py.emitter import lower
+        except ImportError as exc:
+            print(f"ERROR: Cannot import tools.recomp_py.emitter.lower: {exc}", file=sys.stderr)
+            return 2
+    else:
+        raise ValueError(f"unknown lowerer: {lowerer}")
 
     # 4. Generate test cases
     raw_cases: list[RawTestCase] = []
     # Always include targeted boundary cases
     boundary_cases = generate_boundary_cases()
     raw_cases.extend(boundary_cases)
+    if lowerer == "ocaml":
+        raw_cases.extend(generate_semantic_core_cases(start_id=len(raw_cases) + 1))
 
     # Add randomized cases
-    random_count = max(0, cases_count - len(boundary_cases))
+    random_count = max(0, cases_count - len(raw_cases))
     if random_count > 0:
         rand_cases = generate_random_cases(random_count, seed=seed, start_id=len(raw_cases) + 1)
         raw_cases.extend(rand_cases)
@@ -126,10 +159,27 @@ def run_differential(
         selected = insns[: raw.instruction_count]
         if len(selected) != raw.instruction_count:
             raise ValueError(f"incomplete instruction sequence: {raw.name}")
-        lowered = [lower(part) for part in selected]
-        statements = (
-            None if any(part is None for part in lowered) else [line for part in lowered for line in ["{", *part, "}"]]
-        )
+        entries = []
+        if lowerer == "ocaml":
+            statements = []
+            reason = None
+            for part in selected:
+                lines, reason = lower_ocaml(part)
+                if lines is None:
+                    statements = None
+                    break
+                if len(selected) == 1:
+                    statements = lines
+                else:
+                    # Lower.entry returns after each instruction. Give each entry
+                    # its own callable body and dispatch the sequence by PC.
+                    entries.append((part.address, lines))
+        else:
+            lowered = [lower(part) for part in selected]
+            statements = (
+                None if any(part is None for part in lowered) else [line for part in lowered for line in ["{", *part, "}"]]
+            )
+            reason = "lower() returned None (unsupported/fallback)"
         if statements is None:
             unsupported_accounting[insn.mnemonic] += 1
             unsupported_reasons.append(
@@ -139,7 +189,7 @@ def run_differential(
                     "mnemonic": insn.mnemonic,
                     "op_str": insn.op_str,
                     "bytes": raw.code_bytes.hex(),
-                    "reason": "lower() returned None (unsupported/fallback)",
+                    "reason": reason,
                 }
             )
         else:
@@ -150,6 +200,7 @@ def run_differential(
                     op_str=insn.op_str,
                     insn_size=sum(part.size for part in selected),
                     statements=statements,
+                    entries=entries,
                 )
             )
 
@@ -202,10 +253,24 @@ def run_differential(
 
         # Recomp functions
         for i, sc in enumerate(supported_cases):
+            if sc.entries:
+                for j, (_, lines) in enumerate(sc.entries):
+                    f.write(f"static void recomp_entry_{i}_{j}(f3_cpu *cpu) {{\n")
+                    for line in lines:
+                        f.write(f"    {line}\n")
+                    f.write("}\n")
             f.write(f"static void recomp_case_{i:04d}(f3_cpu *cpu) {{\n")
+            if sc.entries:
+                f.write(f"    for (unsigned step = 0; step < {sc.raw.instruction_count}; ++step) {{\n")
+                f.write("        if (cpu->stopped || cpu->halted) return;\n")
+                f.write("        switch (cpu->pc) {\n")
+                for j, (pc, _) in enumerate(sc.entries):
+                    f.write(f"        case {pc:#x}u: recomp_entry_{i}_{j}(cpu); break;\n")
+                f.write("        default: return;\n        }\n    }\n")
             for stmt in sc.statements:
                 f.write(f"    {stmt}\n")
-            f.write("    f3_cc_flush(cpu);\n")
+            if lowerer == "python":
+                f.write("    f3_cc_flush(cpu);\n")
             f.write("}\n\n")
 
         # Memory init arrays
@@ -297,6 +362,9 @@ int main(int argc, char **argv) {
                    (unsigned long long)tc->seed,
                    tc->is_boundary ? "YES" : "NO", tc->boundary_kind);
             printf("Initial PC: 0x%08X | Initial SR: 0x%04X\n", tc->initial_pc, tc->initial_sr);
+            printf("Bytes:");
+            for (size_t byte = 0; byte < tc->code_size; ++byte) printf(" %02x", tc->code_bytes[byte]);
+            printf("\n");
             printf("Differences:\n%s", delta.description);
             printf("======================================================================\n\n");
             if (failed >= 30) {
@@ -336,6 +404,7 @@ int main(int argc, char **argv) {
 
     cmd = [
         cc,
+        *(["-std=gnu11", "-DDIFF_CPU_ONLY_RESET"] if lowerer == "ocaml" else []),
         "-O1",
         "-g",
         "-Wall",
@@ -348,6 +417,7 @@ int main(int argc, char **argv) {
         str(c_source_path),
         str(harness_c),
         str(musashi_info.library_path),
+        "-lm",
         *inc_flags,
     ]
 
@@ -370,3 +440,9 @@ int main(int argc, char **argv) {
 
     run_res = subprocess.run([str(bin_path)], text=True)
     return run_res.returncode
+
+
+if __name__ == "__main__":
+    from tools.differential.__main__ import main
+
+    sys.exit(main())

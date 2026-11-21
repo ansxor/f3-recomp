@@ -114,6 +114,7 @@ stride = 1
 group = 1
 
 [sound]
+driver_layout = "early_arabian"
 # MAME unused 0x100000 prefix omitted; program mapped at 0xc00000.
 size = 0x40000
 fill = 0
@@ -171,3 +172,6 @@ sprite_lag = 2
 extend = false
 visible_y = 31
 visible_height = 224
+
+[cpu]
+interrupt_handlers_trusted = "check-irq cannot prove every handler: return-address rewrite, computed jump. Trusted that no handler branches on the interrupted CCR, as the frozen Python recompiler assumed; interrupt_observes = XNZVC would elide no flag producers (2026-11-19)."

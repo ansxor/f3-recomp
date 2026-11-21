@@ -26,11 +26,10 @@
         };
 
       toolchain = pkgs: {
-        python = pkgs.python3.withPackages (ps: [ ps.capstone ]); # pyproject pins capstone==5.0.9
+        python = pkgs.python3.withPackages (ps: [ ps.capstone ps.pytest ]); # pyproject pins capstone==5.0.9
 
-        # CMake runs `uv run --project . --locked --no-default-groups python ...`. uv would
-        # fetch capstone from PyPI; the sandbox-free Nix environment already has it, so this
-        # stand-in drops uv's options and runs the command with the Nix Python.
+        # The build helper apps run shader Python scripts via CMake. This shim
+        # runs them with Nix Python and avoids installing the Python project.
         uv = pkgs.writeShellScriptBin "uv" ''
           [ "$1" = run ] || { echo "uv shim: only 'uv run' is supported" >&2; exit 1; }
           shift
@@ -45,6 +44,21 @@
         '';
 
         libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest ];
+
+        # The OCaml recompiler (recomp/), which CMake builds with dune at configure time.
+        ocaml = [ pkgs.ocaml pkgs.dune_3 ] ++ (with pkgs.ocamlPackages; [
+          findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
+        ]);
+        # findlib's setup hook only runs in mkShell, so helpers export this themselves.
+        ocamlpath =
+          let
+            roots = with pkgs.ocamlPackages; [ findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest ];
+            closure = builtins.genericClosure {
+              startSet = map (p: { key = p.outPath; pkg = p; }) roots;
+              operator = item: map (p: { key = p.outPath; pkg = p; })
+                (builtins.filter (p: p ? outPath) (item.pkg.propagatedBuildInputs or [ ]));
+            };
+          in pkgs.lib.makeSearchPath "lib/ocaml/${pkgs.ocaml.version}/site-lib" (map (i: i.pkg) closure);
         tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git pkgs.cargo pkgs.rustc ];
       };
 
@@ -65,6 +79,7 @@
         [ -d "$rom_dir" ] || { echo "error: ROM directory $rom_dir does not exist" >&2; exit 1; }
         rom_dir=$(realpath "$rom_dir")
         build_dir=''${BUILD_DIR:-build/$game}
+        export OCAMLPATH=${(toolchain pkgs).ocamlpath}''${OCAMLPATH:+:$OCAMLPATH}
 
         configure() {
           cmake -S . -B "$build_dir" -G Ninja \
@@ -80,7 +95,7 @@
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
           name = "f3-compile";
-          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools ++ tc.ocaml;
           text = ''
             usage() {
               echo "usage: f3-compile GAME [ROM_DIR] [-- extra cmake configure args]" >&2
@@ -101,7 +116,7 @@
         let tc = toolchain pkgs; in
         pkgs.writeShellApplication {
           name = "f3-compdb";
-          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools;
+          runtimeInputs = [ tc.uv tc.python pkgs.stdenv.cc ] ++ tc.tools ++ tc.ocaml;
           text = ''
             # usage: f3-compdb [GAME=landmakrj] [ROM_DIR=roms/GAME] [-- extra cmake configure args]
             # Configures $BUILD_DIR (default build/GAME) when it has no compile_commands.json or
@@ -133,7 +148,9 @@
             let tc = toolchain pkgs; in
             {
               default = pkgs.mkShell {
-                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs;
+                packages = [ tc.uv tc.python pkgs.clippy pkgs.rustfmt pkgs.clang-tools ] ++ tc.tools ++ tc.libs
+                  # The OCaml recompiler (recomp/, built with dune).
+                  ++ tc.ocaml;
                 env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
                 shellHook = ''
                   export CMAKE_PREFIX_PATH=${pkgs.lib.makeSearchPath "" (map pkgs.lib.getDev tc.libs)}

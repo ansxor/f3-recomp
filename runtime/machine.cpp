@@ -64,10 +64,12 @@ Machine::Machine(RomSet set)
     std::vector<uint8_t>().swap(roms.tiles);
     std::vector<uint8_t>().swap(roms.tiles_hi);
     switch (f3rt_audio_init(roms.sound.data(), roms.sound.size(), roms.samples.data(),
-                            roms.samples.size(), shared.data())) {
+                            roms.samples.size(), shared.data(), roms.sound_driver_layout)) {
     case F3RT_AUDIO_OK:
         m_audio_lease.held = true;
         break;
+    case F3RT_AUDIO_LAYOUT_MISMATCH:
+        throw std::runtime_error("Sound ROM does not match [sound].driver_layout for " + roms.name);
     case F3RT_AUDIO_UNSUPPORTED_ROM:
         throw std::runtime_error("Audio is not supported for this game");
     default:
@@ -95,7 +97,12 @@ uint64_t Machine::raster_time(uint64_t pixels) const {
     return (pixels * MAIN_CLOCK + PIXEL_CLOCK - 1) / PIXEL_CLOCK;
 }
 void Machine::bind_cpu_windows() {
+#ifdef F3RT_TRACE_STACKED_SR
+    // Route generated RAM writes through Machine so overwrites retire SR marks.
+    cpu.ram = nullptr;
+#else
     cpu.ram = ram.data();
+#endif
     cpu.rom = roms.main.data();
     cpu.rom_size = uint32_t(roms.main.size());
     cpu.ram_writer = nullptr;
@@ -180,6 +187,9 @@ void Machine::coin_write(unsigned bank, uint8_t value) {
 }
 // Unlisted addresses, including ROM, ignore writes.
 void Machine::write8(uint32_t a, uint8_t v) {
+#ifdef F3RT_TRACE_STACKED_SR
+    invalidate_stacked_sr(a, 1);
+#endif
     a &= 0xffffff;
     if (a >= RAM_BASE && a < RAM_END) {
         ram[a & RAM_MIRROR_MASK] = v;
@@ -244,6 +254,9 @@ void Machine::write8(uint32_t a, uint8_t v) {
 }
 void Machine::write16(uint32_t a, uint16_t v) {
     if (auto *p = direct_bytes<2, true>(*this, a)) {
+#ifdef F3RT_TRACE_STACKED_SR
+        invalidate_stacked_sr(a, 2);
+#endif
         p[0] = uint8_t(v >> 8);
         p[1] = uint8_t(v);
         if (sprites) sprites->note_write(a, 2);
@@ -263,6 +276,9 @@ void Machine::write16(uint32_t a, uint16_t v) {
 }
 void Machine::write32(uint32_t a, uint32_t v) {
     if (auto *p = direct_bytes<4, true>(*this, a)) {
+#ifdef F3RT_TRACE_STACKED_SR
+        invalidate_stacked_sr(a, 4);
+#endif
         p[0] = uint8_t(v >> 24);
         p[1] = uint8_t(v >> 16);
         p[2] = uint8_t(v >> 8);
@@ -279,6 +295,22 @@ void Machine::write32(uint32_t a, uint32_t v) {
     }
     write16(a, uint16_t(v >> 16));
     write16(a + 2, uint16_t(v));
+}
+#ifdef F3RT_TRACE_STACKED_SR
+void Machine::invalidate_stacked_sr(uint32_t address, unsigned width) {
+    address &= 0xffffff;
+    if (address - RAM_BASE >= RAM_END - RAM_BASE) return;
+    for (unsigned i = 0; i <= width; ++i)
+        stacked_sr_low_bytes.reset((address + i) & RAM_MIRROR_MASK);
+}
+#endif
+void Machine::write_stacked_sr(uint32_t address, uint16_t value) {
+    write16(address, value);
+#ifdef F3RT_TRACE_STACKED_SR
+    address &= 0xffffff;
+    if (address - RAM_BASE < RAM_END - RAM_BASE - 1)
+        stacked_sr_low_bytes.set((address + 1) & RAM_MIRROR_MASK);
+#endif
 }
 void Machine::idle() {
     m_idle = true;
@@ -324,7 +356,7 @@ int Machine::boundary() {
                 // 68020 interrupt from master mode: additional format-1 frame on ISP.
                 f3_set_sr(&cpu, uint16_t(cpu.sr & ~0x1000));
                 cpu.a[7] -= 8;
-                write16(cpu.a[7], uint16_t(old_sr | 0x2000));
+                write_stacked_sr(cpu.a[7], uint16_t(old_sr | 0x2000));
                 write32(cpu.a[7] + 2, old_pc);
                 write16(cpu.a[7] + 6, uint16_t(0x1000 | ((24 + level) * 4)));
             }
@@ -543,6 +575,9 @@ void Machine::load_state(std::span<const uint8_t> src) {
 
     // 3. RAM regions
     reader.read_span(std::span<uint8_t, 0x20000>(ram));
+#ifdef F3RT_TRACE_STACKED_SR
+    stacked_sr_low_bytes.reset();
+#endif
     reader.read_span(std::span<uint8_t, 0x8000>(palette));
     reader.read_span(std::span<uint8_t, 0x40000>(graphics));
     reader.read_span(std::span<uint8_t, 0x20>(control));

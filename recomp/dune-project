@@ -1,0 +1,6 @@
+(lang dune 3.0)
+(name f3recomp)
+
+(package
+ (name f3recomp)
+ (depends ocaml dune cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest))

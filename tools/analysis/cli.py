@@ -44,7 +44,7 @@ import itertools
 
 from capstone import m68k_const as M
 
-from recomp.block_profile import BlockProfile, read_profile
+from tools.recomp_py.block_profile import BlockProfile, read_profile
 
 from .relations import compile_expr, field_name, search
 from .sprites import control_text, decode

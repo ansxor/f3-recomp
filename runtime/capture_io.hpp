@@ -78,6 +78,12 @@ inline void dump_machine(const Machine &m, const std::filesystem::path &root) {
         for (uint32_t pc : *m.sprite_writers) le32(sw, pc);
         if (!sw) throw std::runtime_error("Sprite writers write failed");
     }
+#ifdef F3RT_TRACE_STACKED_SR
+    std::ofstream stacked_sr(dir / "stacked_sr_low_bytes.txt");
+    for (size_t offset = 0; offset < m.stacked_sr_low_bytes.size(); ++offset)
+        if (m.stacked_sr_low_bytes[offset]) stacked_sr << offset << '\n';
+    if (!stacked_sr) throw std::runtime_error("Stacked SR offsets write failed");
+#endif
     std::ofstream state(dir / "cpu.json");
     f3_cc_flush(const_cast<f3_cpu *>(&m.cpu));
     state << "{\"frame\":" << m.frame << ",\"steps\":" << m.cpu.steps << ",\"pc\":" << m.cpu.pc

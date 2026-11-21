@@ -205,3 +205,6 @@ visible_height = 232
 
 [input]
 dial = true
+
+[cpu]
+interrupt_handlers_trusted = "check-irq cannot prove every handler: computed call. Trusted that no handler branches on the interrupted CCR, as the frozen Python recompiler assumed; interrupt_observes = XNZVC would elide no flag producers (2026-11-19)."

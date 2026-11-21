@@ -199,3 +199,6 @@ sprite_lag = 0
 extend = false
 visible_y = 24
 visible_height = 232
+
+[cpu]
+interrupt_handlers_trusted = "check-irq cannot prove every handler: computed call. Trusted that no handler branches on the interrupted CCR, as the frozen Python recompiler assumed; interrupt_observes = XNZVC would elide no flag producers (2026-11-19)."

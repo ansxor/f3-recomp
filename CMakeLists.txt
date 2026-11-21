@@ -4,6 +4,7 @@ option(F3RT_SDL "Build SDL3 frontend" ON)
 option(F3RT_GPU "Build SDL3 GPU presentation (glslang and SPIRV-Cross are built if not installed)" ON)
 option(F3RT_NETPLAY "Build the netplay client and relay server (Yojimbo and httplib)" ON)
 option(F3RT_HOST_TOOLS "Build the host tools: f3rt-tool, f3rt-runner and f3rt-replay" ON)
+option(F3RT_TRACE_STACKED_SR "Record work RAM words written by main CPU exception entry" OFF)
 option(BUILD_TESTING "Build the unit tests" ON)
 
 project(f3rt VERSION 0.1 LANGUAGES C CXX)
@@ -171,6 +172,10 @@ endif()
 
 target_compile_options(f3rt PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(f3rt PUBLIC F3RT_DEFAULT_SET="${F3_GAME}")
+if(F3RT_TRACE_STACKED_SR)
+    target_compile_definitions(f3rt PUBLIC F3RT_TRACE_STACKED_SR)
+endif()
+
 if(F3_PROFILE_INSTRUMENT)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_INSTRUMENT=1)
 endif()
@@ -279,10 +284,11 @@ if(F3RT_SDL)
     if(F3RT_GPU)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
 
+        find_program(UV_EXECUTABLE NAMES uv REQUIRED)
         set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
         add_custom_command(
             OUTPUT "${VIDEO_SHADER_HEADER}"
-            COMMAND ${F3_UV_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
+            COMMAND "${UV_EXECUTABLE}" run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups python "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
                 --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
                 --output "${VIDEO_SHADER_HEADER}"
                 --glslang "${F3_GLSLANG}"

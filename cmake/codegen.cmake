@@ -16,14 +16,56 @@ endif()
 set(F3_GAME_EXECUTABLE "${F3_GAME}" CACHE INTERNAL "Game executable name")
 set(F3_ROM_DIR "" CACHE PATH "Selected game's ROM directory; enables automatic native generation")
 set(F3_GENERATED_DIR "" CACHE PATH "Pre-generated main CPU C directory (optional)")
+set(F3_RECOMP_EXECUTABLE "" CACHE FILEPATH "Override the f3recomp executable for configure-time code generation")
+# Old build trees can cache a garbage-collected Nix store path here.
+if(F3_RECOMP_EXECUTABLE AND NOT EXISTS "${F3_RECOMP_EXECUTABLE}")
+    message(WARNING "F3_RECOMP_EXECUTABLE=${F3_RECOMP_EXECUTABLE} does not exist; ignoring it.")
+    set_property(CACHE F3_RECOMP_EXECUTABLE PROPERTY VALUE "")
+endif()
 
-find_program(UV_EXECUTABLE uv REQUIRED)
-set(F3_UV_PYTHON "${UV_EXECUTABLE}" run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups python)
+if(F3_RECOMP_EXECUTABLE)
+    get_filename_component(F3_RECOMP_COMMAND "${F3_RECOMP_EXECUTABLE}" ABSOLUTE)
+else()
+    find_program(F3_RECOMP_COMMAND NAMES f3recomp NO_CACHE)
+    if(NOT F3_RECOMP_COMMAND)
+        find_program(F3_DUNE_EXECUTABLE NAMES dune NO_CACHE)
+        if(NOT F3_DUNE_EXECUTABLE)
+            message(FATAL_ERROR "f3recomp and dune were not found. Run cmake inside nix develop or set F3_RECOMP_EXECUTABLE.")
+        endif()
 
+        set(_recomp_dir "${CMAKE_CURRENT_SOURCE_DIR}/recomp")
+        # Watch project inputs without descending into Dune's _build directory.
+        file(GLOB _recomp_root_sources LIST_DIRECTORIES false CONFIGURE_DEPENDS "${_recomp_dir}/*")
+        file(GLOB_RECURSE _recomp_sources LIST_DIRECTORIES false CONFIGURE_DEPENDS
+            "${_recomp_dir}/bin/*"
+            "${_recomp_dir}/lib/*"
+            "${_recomp_dir}/test/*"
+        )
+        list(APPEND _recomp_sources ${_recomp_root_sources})
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_recomp_sources})
+        # Dune can reuse a byte-identical executable when a source is touched.
+        # Track source mtimes as well so a touch still reruns generation.
+        foreach(_source IN LISTS _recomp_sources)
+            file(TIMESTAMP "${_source}" _mtime "%s.%f" UTC)
+            list(APPEND F3_RECOMP_SOURCE_TIMESTAMPS "${_source}:${_mtime}")
+        endforeach()
+
+        # All game build trees share Dune's source-tree build directory.
+        set(_recomp_lock "${_recomp_dir}/_build/cmake-dune.lock")
+        file(LOCK "${_recomp_lock}" GUARD PROCESS)
+        execute_process(
+            COMMAND "${F3_DUNE_EXECUTABLE}" build --root "${_recomp_dir}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+        file(LOCK "${_recomp_lock}" RELEASE)
+        set(F3_RECOMP_COMMAND "${_recomp_dir}/_build/default/bin/main.exe")
+    endif()
+endif()
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_RECOMP_COMMAND}")
 execute_process(
-    COMMAND ${F3_UV_PYTHON} -c
-        "import pathlib, sys, tomllib; p = pathlib.Path(sys.argv[1]); identity = tomllib.loads(p.read_text())['game']['id']; sys.exit(0 if identity == sys.argv[2] else 'Configured game id does not match directory: ' + str(p))"
-        "${F3_GAME_CONFIG}" "${F3_GAME}"
+    COMMAND "${F3_RECOMP_COMMAND}" check-game "${F3_GAME_CONFIG}" "${F3_GAME}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMAND_ERROR_IS_FATAL ANY
 )
@@ -59,8 +101,8 @@ function(f3_run_generator)
     endforeach()
 
     f3_compute_generator_stamp(_computed_stamp
-        INPUT_FILES ${ARG_INPUT_FILES}
-        EXTRA_DATA ${ARG_EXTRA_DATA}
+        INPUT_FILES "${F3_RECOMP_COMMAND}" ${ARG_INPUT_FILES}
+        EXTRA_DATA ${F3_RECOMP_SOURCE_TIMESTAMPS} ${ARG_EXTRA_DATA}
     )
 
     set(_stamp_matches FALSE)
@@ -77,7 +119,7 @@ function(f3_run_generator)
     endif()
 
     execute_process(
-        COMMAND ${ARG_COMMAND}
+        COMMAND "${F3_RECOMP_COMMAND}" ${ARG_COMMAND}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMAND_ERROR_IS_FATAL ANY
     )
@@ -89,13 +131,7 @@ endfunction()
 
 set(F3_GENERATED_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_config")
 
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${F3_GAME_CONFIGS}
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-    "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
-)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${F3_GAME_CONFIGS})
 set(F3_COMPILE_ROMS_ARGS
     --configs ${F3_GAME_CONFIGS}
     --output "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
@@ -104,42 +140,29 @@ set(F3_COMPILE_ROMS_ARGS
 )
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_roms.stamp"
-    INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/roms.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/roms.py"
-        ${F3_GAME_CONFIGS}
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
+    INPUT_FILES ${F3_GAME_CONFIGS}
     EXTRA_DATA "${F3_COMPILE_ROMS_ARGS}"
     OUTPUT_FILES
         "${CMAKE_CURRENT_BINARY_DIR}/rom_manifest.hpp"
         "${F3_GENERATED_CONFIG_DIR}/game_video_config.hpp"
-    COMMAND ${F3_UV_PYTHON} recomp/compile/roms.py ${F3_COMPILE_ROMS_ARGS}
+    COMMAND compile-roms ${F3_COMPILE_ROMS_ARGS}
 )
 
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-    "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
-)
 set(F3_COMPILE_SPRITE_UNITS_ARGS
     --config "${F3_GAME_CONFIG}"
     --output-dir "${F3_GENERATED_CONFIG_DIR}"
 )
 f3_run_generator(
     STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/compile_sprite_units.stamp"
-    INPUT_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/sprite_units.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/sprite_units.py"
-        "${F3_GAME_CONFIG}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
+    INPUT_FILES "${F3_GAME_CONFIG}"
     EXTRA_DATA "${F3_COMPILE_SPRITE_UNITS_ARGS}"
     OUTPUT_FILES
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.h"
         "${F3_GENERATED_CONFIG_DIR}/sprite_units.hpp"
-    COMMAND ${F3_UV_PYTHON} recomp/compile/sprite_units.py ${F3_COMPILE_SPRITE_UNITS_ARGS}
+    COMMAND sprite-units ${F3_COMPILE_SPRITE_UNITS_ARGS}
 )
 
+option(F3_RECOMP_ALLOW_UNPROVEN_IRQ "Temporarily allow unproven OCaml interrupt handlers" OFF)
 option(F3_PROFILE_INSTRUMENT "Record every generated main/sound entry with --profile-out" OFF)
 if(F3_PROFILE_INSTRUMENT AND NOT F3_ROM_DIR)
     message(FATAL_ERROR "F3_PROFILE_INSTRUMENT requires F3_ROM_DIR to regenerate instrumentable main/sound entries")
@@ -188,14 +211,6 @@ if(F3_ROM_DIR)
         set(F3_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/${F3_GAME}")
     endif()
 
-    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.py"
-        "${CMAKE_CURRENT_SOURCE_DIR}/recomp/*.csv"
-    )
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        ${RECOMP_SOURCES} "${F3_GAME_CONFIG}"
-    )
-
     file(GLOB _rom_files LIST_DIRECTORIES false "${F3_ROM_DIR}/*")
     list(SORT _rom_files)
     set(_rom_identity "")
@@ -210,16 +225,17 @@ if(F3_ROM_DIR)
         --config "${F3_GAME_CONFIG}"
         --rom-dir "${F3_ROM_DIR}"
         --output "${F3_GENERATED_DIR}"
+        --config-output-dir "${F3_GENERATED_CONFIG_DIR}"
         ${F3_PROFILE_GENERATOR_ARGS}
     )
+    if(F3_RECOMP_ALLOW_UNPROVEN_IRQ)
+        list(APPEND F3_RECOMP_EMIT_ARGS --allow-unproven-irq)
+    endif()
     f3_run_generator(
         STAMP_FILE "${F3_GENERATED_DIR}/recomp_emit.stamp"
         INPUT_FILES
-            ${RECOMP_SOURCES}
             "${F3_GAME_CONFIG}"
             ${F3_PROFILE_INPUTS}
-            "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml"
-            "${CMAKE_CURRENT_SOURCE_DIR}/uv.lock"
         EXTRA_DATA
             "${_rom_identity}"
             "${F3_RECOMP_EMIT_ARGS}"
@@ -230,24 +246,18 @@ if(F3_ROM_DIR)
             "${F3_GENERATED_DIR}/program.bin"
             "${F3_GENERATED_DIR}/sprite_groups.hpp"
             "${F3_GENERATED_DIR}/sprite_groups.json"
-        COMMAND ${F3_UV_PYTHON} -m recomp emit ${F3_RECOMP_EMIT_ARGS}
+            "${F3_GENERATED_DIR}/profile_inventory.json"
+            "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp"
+        COMMAND emit ${F3_RECOMP_EMIT_ARGS}
+    )
+elseif(F3_GENERATED_DIR AND EXISTS "${F3_GENERATED_DIR}/enhancements.hpp")
+    configure_file("${F3_GENERATED_DIR}/enhancements.hpp"
+        "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp" COPYONLY)
+else()
+    f3_run_generator(
+        STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/enhancements.stamp"
+        INPUT_FILES "${F3_GAME_CONFIG}"
+        OUTPUT_FILES "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp"
+        COMMAND enhancements --config "${F3_GAME_CONFIG}" --output-dir "${F3_GENERATED_CONFIG_DIR}"
     )
 endif()
-
-set(F3_ENHANCEMENT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/recomp/compile/enhancements.py")
-set(F3_ENHANCEMENT_GROUPS)
-if(F3_GENERATED_DIR)
-    set(F3_ENHANCEMENT_GROUPS "${F3_GENERATED_DIR}/sprite_groups.json")
-endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GENERATOR}")
-if(EXISTS "${F3_ENHANCEMENT_GROUPS}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_ENHANCEMENT_GROUPS}")
-endif()
-f3_run_generator(
-    STAMP_FILE "${F3_GENERATED_CONFIG_DIR}/enhancements.stamp"
-    INPUT_FILES "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}" ${F3_ENHANCEMENT_GROUPS}
-    EXTRA_DATA ${F3_ENHANCEMENT_GROUPS}
-    OUTPUT_FILES "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp"
-    COMMAND ${F3_UV_PYTHON} "${F3_ENHANCEMENT_GENERATOR}" "${F3_GAME_CONFIG}"
-        "${F3_GENERATED_CONFIG_DIR}/enhancements.hpp" ${F3_ENHANCEMENT_GROUPS}
-)

@@ -176,3 +176,5 @@ sha1 = "1be54cd2ec65d8fd49a5c09b5d27791fd7a320d4"
 stride = 2
 group = 1
 
+[cpu]
+interrupt_handlers_trusted = "check-irq cannot prove every handler: task switch (A7 saved to memory). Trusted that no handler branches on the interrupted CCR, as the frozen Python recompiler assumed; interrupt_observes = XNZVC would elide no flag producers (2026-11-19)."

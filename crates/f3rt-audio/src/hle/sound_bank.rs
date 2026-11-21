@@ -2,21 +2,20 @@
 //! records and the fixed tables the voice reads).
 
 use crate::bytes::{read_be16, s16};
+use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
 use crate::hle::rom_view::RomView;
-use crate::hle::sound_rom_5a7e9117::{
-    ATTENUATION_TABLE, BEND_RANGE_PTR, BUDGET_TABLE, Bank, FILTER_TABLE, HEAP_BASE_PTR,
-    HEAP_LIMIT_PTR_A, HEAP_LIMIT_PTR_B, HEAP_METADATA_OFFSET, HEAP_NEXT_PTR, HEAP_RESERVE_PTR,
-    PAN_TABLE, PHASE_RATE_TABLE, PITCH_TABLE, PROGRAM_BANK_MASK_OFFSET, PROGRAM_COLUMN_STRIDE,
+use crate::hle::sound_rom::{
+    Bank, HEAP_METADATA_OFFSET, PROGRAM_BANK_MASK_OFFSET, PROGRAM_COLUMN_STRIDE,
     PROGRAM_DATA_BASE, PROGRAM_DEFAULT_BANK_OFFSET, PROGRAM_MAGIC_OFFSET_0, PROGRAM_MAGIC_OFFSET_1,
-    PROGRAM_RECORD_STRIDE, ProgramData, RATE_TABLE, RESET_END_PTR, RESET_START_PTR,
-    SAMPLE_BANK_SIZE, SAMPLE_HALF_BANK_SIZE, SAMPLE_TAG_PROBE_OFFSET, SPLIT_DIRECTORY,
-    SPLIT_TABLE_BASE, Split, VELOCITY_CURVE_TABLE, program_slot,
+    PROGRAM_RECORD_STRIDE, ProgramData, SAMPLE_BANK_SIZE, SAMPLE_HALF_BANK_SIZE,
+    SAMPLE_TAG_PROBE_OFFSET, Split, program_slot,
 };
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
 pub struct SoundBank {
     pub rom: RomView,
+    pub layout: &'static DriverLayout,
     /// Sample words borrowed from the sample ROM the Audio implementation owns.
     pub samples: &'static [u16],
     pub metadata: Vec<u8>,
@@ -37,9 +36,14 @@ pub struct SoundBank {
 }
 
 impl SoundBank {
-    pub fn new(sound_rom: &'static [u8], sample_words: &'static [u16]) -> SoundBank {
+    pub fn new(
+        sound_rom: &'static [u8],
+        sample_words: &'static [u16],
+        layout: &'static DriverLayout,
+    ) -> SoundBank {
         let mut bank = SoundBank {
             rom: RomView::with_image(sound_rom, 1),
+            layout,
             samples: sample_words,
             metadata: Vec::new(),
             banks: [Bank::default(); 16],
@@ -71,15 +75,15 @@ impl SoundBank {
         bank.metadata.reserve(0x10000);
         bank.decode_banks();
 
-        let heap_base = u32::from(bank.rom.read_u16(HEAP_BASE_PTR));
+        let heap_base = u32::from(bank.rom.read_u16(layout.heap_base_ptr));
         let heap_limit = bank
             .rom
-            .read_u32(HEAP_LIMIT_PTR_A)
-            .wrapping_add(bank.rom.read_u32(HEAP_LIMIT_PTR_B));
+            .read_u32(layout.heap_limit_ptr_a)
+            .wrapping_add(bank.rom.read_u32(layout.heap_limit_ptr_b));
         let heap_size = heap_limit
             .wrapping_sub(heap_base)
-            .wrapping_sub(bank.rom.read_u32(HEAP_RESERVE_PTR));
-        let heap_next = bank.rom.read_u32(HEAP_NEXT_PTR);
+            .wrapping_sub(bank.rom.read_u32(layout.heap_reserve_ptr));
+        let heap_next = bank.rom.read_u32(layout.heap_next_ptr);
         if heap_base >= HEAP_METADATA_OFFSET
             && heap_base - HEAP_METADATA_OFFSET + 8 <= bank.metadata.len() as u32
         {
@@ -92,33 +96,33 @@ impl SoundBank {
         }
         bank.cache_programs();
         for i in 0..bank.rates.len() {
-            bank.rates[i] = bank.rom.read_u16(RATE_TABLE + 2 * i as u32);
+            bank.rates[i] = bank.rom.read_u16(layout.rate_table + 2 * i as u32);
         }
         for i in 0..bank.phase_rates.len() {
-            bank.phase_rates[i] = bank.rom.read_u16(PHASE_RATE_TABLE + 2 * i as u32);
+            bank.phase_rates[i] = bank.rom.read_u16(layout.phase_rate_table + 2 * i as u32);
         }
         for i in 0..bank.filters.len() {
-            bank.filters[i] = bank.rom.read_u16(FILTER_TABLE + 2 * i as u32);
+            bank.filters[i] = bank.rom.read_u16(layout.filter_table + 2 * i as u32);
         }
         for i in 0..bank.pitches.len() {
-            bank.pitches[i] = bank.rom.read_u16(PITCH_TABLE + 2 * i as u32);
+            bank.pitches[i] = bank.rom.read_u16(layout.pitch_table + 2 * i as u32);
         }
-        bank.bend_range = bank.rom.read_u16(BEND_RANGE_PTR) as u8;
-        bank.reset_start = (u32::from(bank.rom.read_u16(RESET_START_PTR)) << 16
-            | u32::from(bank.rom.read_u16(RESET_START_PTR + 2)))
+        bank.bend_range = bank.rom.read_u16(layout.bend_range_ptr) as u8;
+        bank.reset_start = (u32::from(bank.rom.read_u16(layout.reset_start_ptr)) << 16
+            | u32::from(bank.rom.read_u16(layout.reset_start_ptr + 2)))
             & 0x1fffffe0;
-        bank.reset_end = (u32::from(bank.rom.read_u16(RESET_END_PTR)) << 16
-            | u32::from(bank.rom.read_u16(RESET_END_PTR + 2)))
+        bank.reset_end = (u32::from(bank.rom.read_u16(layout.reset_end_ptr)) << 16
+            | u32::from(bank.rom.read_u16(layout.reset_end_ptr + 2)))
             & 0x1fffffe0;
         for i in 0..128 {
-            bank.attenuation[i] = bank.rom.read_byte(ATTENUATION_TABLE + i as u32);
-            bank.pan[i] = bank.rom.read_byte(PAN_TABLE + i as u32);
+            bank.attenuation[i] = bank.rom.read_byte(layout.attenuation_table + i as u32);
+            bank.pan[i] = bank.rom.read_byte(layout.pan_table + i as u32);
         }
         for i in 0..512 {
-            bank.velocity_curves[i] = bank.rom.read_byte(VELOCITY_CURVE_TABLE + i as u32);
+            bank.velocity_curves[i] = bank.rom.read_byte(layout.velocity_curve_table + i as u32);
         }
         for i in 0..12 {
-            bank.budgets[i] = bank.rom.read_byte(BUDGET_TABLE + i as u32);
+            bank.budgets[i] = bank.rom.read_byte(layout.budget_table + i as u32);
         }
         bank
     }
@@ -259,9 +263,9 @@ impl SoundBank {
             if id > 120 {
                 panic!("HLE ROM split ID exceeds table");
             }
-            let address = SPLIT_TABLE_BASE.wrapping_add(
-                (self.rom.read_u16(SPLIT_DIRECTORY + u32::from(id) * 2) as i16) as i32 as u32,
-            );
+            let entry = self.layout.split_directory + u32::from(id) * 2;
+            let offset = self.rom.read_u16(entry) as i16;
+            let address = self.layout.split_table_base.wrapping_add_signed(i32::from(offset));
             data = self.rom.pointer_bytes(address, 14);
             available = self.rom.size() - (data as usize - self.rom.data() as usize);
         }

@@ -1,0 +1,4 @@
+(test
+ (name cases)
+ (libraries f3recomp alcotest unix)
+ (deps (glob_files *.c) (glob_files *.cpp) (glob_files *.h) ../../cpu_ops.h ../../bitfield.h (universe)))

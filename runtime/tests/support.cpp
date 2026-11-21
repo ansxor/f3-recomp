@@ -1,4 +1,5 @@
 #include "support.hpp"
+#include <algorithm>
 
 namespace {
 constexpr size_t RESET_SP_VECTOR = 0;        // initial SSP longword (big-endian)
@@ -18,6 +19,13 @@ f3rt::RomSet fixture() {
     r.tiles.resize(0x400000);
     r.tiles_hi.resize(0x200000);
     r.sound.resize(0x80000);
+    // The synthetic sound image uses the standard driver layout.
+    constexpr uint8_t sound_reset[] = {0x00, 0xc1, 0x08, 0x9e};
+    constexpr uint8_t esp_pointers[] = {
+        0x00, 0xc1, 0xc8, 0x36, 0x00, 0xc1, 0xc4, 0xe2, 0x00, 0xc1, 0xc4, 0xe2,
+    };
+    std::copy_n(sound_reset, sizeof sound_reset, r.sound.begin() + RESET_PC_VECTOR);
+    std::copy_n(esp_pointers, sizeof esp_pointers, r.sound.begin() + 0x1c3a2);
     r.samples.resize(0x1000000);
     r.main[RESET_SP_VECTOR + 1] = 0x41;
     r.main[RESET_SP_VECTOR + 2] = 0xff;

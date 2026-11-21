@@ -6,6 +6,7 @@
 use crate::hle::command::{
     Command, CommandPacket, EffectParameter, EffectPreset, SequenceRef,
 };
+use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::{
     EffectEvent, EffectEventKind, Event, NoteOnEvent, ReleaseKeyEvent, TrackEvent, TrackEventKind,
     NO_PROGRAM, SONG_SLOTS, TRACK_COUNT,
@@ -13,13 +14,13 @@ use crate::hle::events::{
 use crate::hle::mailbox::Mailbox;
 use crate::hle::pulse_timer::PulseTimer;
 use crate::hle::rom_view::{RomView, SOUND_ROM_IMAGE_SIZE};
-use crate::hle::sound_rom_5a7e9117;
+use crate::hle::sound_rom;
 use crate::hle::track_parameters::at;
 use crate::hle::track_service::{TrackConfig, TrackService, TrackStatus};
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
 const ROM_BASE: u32 = SOUND_ROM_BASE;
-const STREAM_BASE: u32 = sound_rom_5a7e9117::SEQ_STREAM_BASE;
+const STREAM_BASE: u32 = sound_rom::SEQ_STREAM_BASE;
 
 // Song track stream layout
 const CONDUCTOR_STREAM_INDEX: usize = 0;
@@ -313,22 +314,22 @@ fn parse_track_stream(rom: &RomView, mut p: u32, end: u32) -> TrackData {
     out
 }
 
-fn parse_initial_track(rom: &RomView, header_addr: u32, track_index: usize) -> TrackConfig {
+fn parse_initial_track(rom: &RomView, layout: &DriverLayout, header_addr: u32, track_index: usize) -> TrackConfig {
     let mut config = TrackConfig::default();
 
     // c13d1e/c13ca4 restore even-offset controller defaults from c13556.
     for index in (0..=0x14u32).step_by(2) {
         config.parameters.set_byte(
             at::controllers + index as usize,
-            rom.read_byte(sound_rom_5a7e9117::CONTROLLER_DEFAULTS_TABLE + index),
+            rom.read_byte(layout.controller_defaults_table + index),
         );
     }
 
     let record = header_addr
-        .wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_TRACKS_OFFSET)
-        .wrapping_add((track_index as u32).wrapping_mul(sound_rom_5a7e9117::SEQ_TRACK_RECORD_SIZE as u32));
+        .wrapping_add(sound_rom::SEQ_HEADER_TRACKS_OFFSET)
+        .wrapping_add((track_index as u32).wrapping_mul(sound_rom::SEQ_TRACK_RECORD_SIZE as u32));
 
-    for n in 0..sound_rom_5a7e9117::SEQ_TRACK_RECORD_SIZE as u32 {
+    for n in 0..sound_rom::SEQ_TRACK_RECORD_SIZE as u32 {
         config
             .parameters
             .set_byte(at::program_record + n as usize, rom.read_byte(record.wrapping_add(n)));
@@ -341,7 +342,7 @@ fn parse_initial_track(rom: &RomView, header_addr: u32, track_index: usize) -> T
     config
 }
 
-fn parse_sound_bank(rom: &RomView) -> [SongData; SONG_SLOTS] {
+fn parse_sound_bank(rom: &RomView, layout: &DriverLayout) -> [SongData; SONG_SLOTS] {
     let mut bank_data: [SongData; SONG_SLOTS] = core::array::from_fn(|_| SongData::default());
 
     let stream_limit = ROM_BASE.wrapping_add(SOUND_ROM_IMAGE_SIZE);
@@ -355,7 +356,7 @@ fn parse_sound_bank(rom: &RomView) -> [SongData; SONG_SLOTS] {
 
     let header = STREAM_BASE.wrapping_add(header_rel);
     let header_size = rom.read_u32(header);
-    if header_size < 8 + SONG_SLOTS as u32 * 2 + sound_rom_5a7e9117::SEQ_HEADER_SIZE
+    if header_size < 8 + SONG_SLOTS as u32 * 2 + sound_rom::SEQ_HEADER_SIZE
         || header.wrapping_add(header_size) > stream_limit
     {
         panic!("unsupported HLE sequence bank layout");
@@ -377,7 +378,7 @@ fn parse_sound_bank(rom: &RomView) -> [SongData; SONG_SLOTS] {
 
         let header_offset = rom.read_u16(header.wrapping_add(8).wrapping_add(id as u32 * 2));
         if u32::from(header_offset) < 208
-            || u32::from(header_offset).wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_SIZE)
+            || u32::from(header_offset).wrapping_add(sound_rom::SEQ_HEADER_SIZE)
                 > rom.read_u32(header)
         {
             panic!("invalid HLE sequence header");
@@ -387,26 +388,26 @@ fn parse_sound_bank(rom: &RomView) -> [SongData; SONG_SLOTS] {
         let song = &mut bank_data[id];
         song.present = true;
         song.flags = rom.read_byte(h.wrapping_add(1));
-        song.rate = rom.read_byte(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_RATE_OFFSET));
-        song.bars = rom.read_u16(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_BARS_OFFSET));
+        song.rate = rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_RATE_OFFSET));
+        song.bars = rom.read_u16(h.wrapping_add(sound_rom::SEQ_HEADER_BARS_OFFSET));
 
-        let exponent = rom.read_byte(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_TIME_SIG_EXP_OFFSET));
+        let exponent = rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_EXP_OFFSET));
         if exponent > 8 {
             panic!("unsupported HLE time signature");
         }
         song.exponent = exponent;
         song.numerator =
-            rom.read_byte(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET));
+            rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET));
         song.ticks_per_bar =
             ((384u32 >> exponent).wrapping_mul(u32::from(song.numerator))) as u16;
         song.loop_start =
-            rom.read_u32(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_LOOP_START_OFFSET));
+            rom.read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_START_OFFSET));
         song.loop_end =
-            rom.read_u32(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_LOOP_END_OFFSET));
-        song.linked = rom.read_byte(h.wrapping_add(sound_rom_5a7e9117::SEQ_HEADER_LINKED_OFFSET));
+            rom.read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_END_OFFSET));
+        song.linked = rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_LINKED_OFFSET));
 
         for t in 0..TRACK_COUNT {
-            song.initial[t] = parse_initial_track(rom, h, t);
+            song.initial[t] = parse_initial_track(rom, layout, h, t);
         }
 
         let mut offsets = [0u32; TOTAL_SONG_STREAMS];
@@ -554,6 +555,7 @@ impl SongState {
 
 struct Impl {
     rom: &'static [u8],
+    layout: &'static DriverLayout,
     data: [SongData; SONG_SLOTS],
     state: [SongState; SONG_SLOTS],
     beats: [PulseTimer; SONG_SLOTS],
@@ -565,6 +567,7 @@ struct Impl {
 /// writes to, borrowed for that call only.
 struct Pass<'a> {
     rom: &'static [u8],
+    layout: &'static DriverLayout,
     current_bank: u8,
     data: &'a [SongData; SONG_SLOTS],
     state: &'a mut [SongState; SONG_SLOTS],
@@ -579,12 +582,13 @@ impl Impl {
     // 1. Lifecycle & Public Entry Points
     // -------------------------------------------------------------------------
 
-    fn new(image: &'static [u8]) -> Impl {
+    fn new(image: &'static [u8], layout: &'static DriverLayout) -> Impl {
         if image.len() < SOUND_ROM_SIZE {
             panic!("HLE requires at least a 512 KiB padded sound ROM");
         }
         let mut impl_ = Impl {
             rom: image,
+            layout,
             data: core::array::from_fn(|_| SongData::default()),
             state: [SongState::default(); SONG_SLOTS],
             beats: core::array::from_fn(|_| PulseTimer::new(625, 0)),
@@ -598,12 +602,13 @@ impl Impl {
     fn load_bank(&mut self, bank: u8) {
         self.current_bank = bank;
         let rom = RomView::with_image(self.rom, self.current_bank);
-        self.data = parse_sound_bank(&rom);
+        self.data = parse_sound_bank(&rom, self.layout);
     }
 
     fn pass<'a>(&'a mut self, mailbox: &'a mut Mailbox, tracks: &'a mut TrackService) -> Pass<'a> {
         Pass {
             rom: self.rom,
+            layout: self.layout,
             current_bank: self.current_bank,
             data: &self.data,
             state: &mut self.state,
@@ -789,9 +794,8 @@ impl Pass<'_> {
             }
             Command::SequenceFade(c) => {
                 let rom_view = RomView::with_image(self.rom, self.current_bank);
-                let multiplier = rom_view.read_u16(
-                    sound_rom_5a7e9117::RATE_TABLE + u32::from(c.rate_index) * 2,
-                ) as i16;
+                let multiplier =
+                    rom_view.read_u16(self.layout.rate_table + u32::from(c.rate_index) * 2) as i16;
                 self.mailbox.push(Event::Track(TrackEvent {
                     kind: TrackEventKind::SequenceFade,
                     tick,
@@ -1394,8 +1398,10 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    pub fn new(rom: &'static [u8]) -> Sequencer {
-        Sequencer { impl_: Box::new(Impl::new(rom)) }
+    pub fn new(rom: &'static [u8], layout: &'static DriverLayout) -> Sequencer {
+        Sequencer {
+            impl_: Box::new(Impl::new(rom, layout)),
+        }
     }
 
     pub fn command(
@@ -1455,7 +1461,7 @@ impl Sequencer {
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let result = std::panic::catch_unwind(|| {
-            Sequencer::new(sound_rom);
+            Sequencer::new(sound_rom, &crate::hle::driver_layout::STANDARD);
         });
         std::panic::set_hook(hook);
         result.is_ok()

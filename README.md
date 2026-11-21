@@ -28,7 +28,8 @@ Otherwise, alternative build steps are included below.
 - Ninja, C11/C++20 compiler
 - Rust (cargo, rustc; edition 2024)
 - Git
-- `uv` (managing Python 3.11+ and Capstone 5.0.9).
+- OCaml 5, Dune, and the recompiler libraries, available through `nix develop`.
+- `uv` and Python 3.11+ for shader compilation and the Python tools. The Python tools install Capstone through `uv`.
 
 ### Build steps
 

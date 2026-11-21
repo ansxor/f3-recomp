@@ -21,6 +21,13 @@ typedef int32_t f3rt_audio_status;
 #define F3RT_AUDIO_ALREADY_INITIALIZED 2
 #define F3RT_AUDIO_INVALID_STATE 3
 
+#define F3RT_AUDIO_LAYOUT_MISMATCH 5
+
+typedef uint8_t f3rt_audio_driver_layout;
+#define F3RT_AUDIO_DRIVER_STANDARD 0u
+#define F3RT_AUDIO_DRIVER_EARLY 1u
+#define F3RT_AUDIO_DRIVER_EARLY_ARABIAN 2u
+
 /* Size of the save-state blob written by f3rt_audio_save_state. */
 #define F3RT_AUDIO_STATE_SIZE 32u
 
@@ -34,10 +41,10 @@ typedef struct f3rt_audio_stats {
  * shared_ram: the 0x800-byte dual-port RAM owned by the main CPU bus, borrowed until shutdown;
  * the board reads mailbox packets from it and writes the consumer index back.
  * Returns UNSUPPORTED_ROM when the program or samples cannot be driven, ALREADY_INITIALIZED
- * when an instance exists. */
+ * when an instance exists, and LAYOUT_MISMATCH when the sound ROM lacks the selected signature. */
 f3rt_audio_status f3rt_audio_init(const uint8_t *sound_rom, size_t sound_rom_size,
                                   const uint8_t *sample_rom, size_t sample_rom_size,
-                                  uint8_t *shared_ram);
+                                  uint8_t *shared_ram, f3rt_audio_driver_layout driver_layout);
 /* Stops the worker and releases the instance. No effect when none exists. */
 void f3rt_audio_shutdown(void);
 

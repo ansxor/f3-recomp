@@ -1,12 +1,11 @@
 //! `audio/hle/effects.hpp`: the substitute for the ES5510 effects programs, its preset/program
 //! selection, the OTIS bus routing, the auto-bypass and the LFO phase of bypassed frames.
 //!
-//! The sound ROM holds a table of program pointers (0xc1c3a2) and a preset table (0xc1c2d2,
+//! The standard driver has a program pointer table at 0xc1c3a2 and a preset table at 0xc1c2d2 (
 //! 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15 are the ten
 //! parameters p0..p9 in the order the sound commands set them. A preset loads the program its pointer
 //! names; programs are identified here by that pointer, so the selection does not depend on the game.
-//! Five programs are decoded (every program the three profiled games Kirameki, Land Maker and Command
-//! War select) and each has its own graph; any other program panics instead of being approximated.
+//! Six programs are decoded, including the preset 12 overdrive in Riding Fight and Land Maker.
 //! Delay lengths, gains and topology are the ones of the loaded program as it runs in the reference
 //! backend: every delay is a (read offset - write offset) / 256 distance inside the DSP's single
 //! 64K-word delay RAM, every gain is a GPR of the program, and each graph reproduces the emulated
@@ -18,7 +17,7 @@
 //!
 //! The signal processing lives in FAUST (`crates/f3rt-audio/faust/`): es5510.lib holds the all-pass
 //! networks, the interpolated tap, the LFO and the shared reverb tank, and reverb.dsp / chorus.dsp /
-//! echo.dsp / hall.dsp / dc_blocker.dsp are the programs, each with a signal-flow diagram and
+//! echo.dsp / hall.dsp / overdrive.dsp / dc_blocker.dsp are the programs, each with a signal-flow diagram and
 //! descriptive signal-flow names rather than decoded register names. This module keeps what is not
 //! signal processing: reading the preset table and the program pointer, mapping p0..p9 to the
 //! programs' controls (update()), routing the OTIS buses, the auto-bypass and the LFO phase of
@@ -52,14 +51,17 @@
 use crate::hle::block::{
     BusBlock, BusSpan, MutableStereoSpan, OtisBus, PlanarAudioBlock, StereoBlock, StereoChannel,
 };
+use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::SAMPLE_RATE;
 use crate::hle::faust::generated::chorus::ChorusDsp;
 use crate::hle::faust::generated::dc_blocker::DcBlockerDsp;
 use crate::hle::faust::generated::echo::EchoDsp;
+use crate::hle::faust::generated::overdrive::OverdriveDsp;
 use crate::hle::faust::generated::hall::HallDsp;
 use crate::hle::faust::generated::reverb::ReverbDsp;
-use crate::hle::faust::support::{Controls, FaustDsp, FaustFloat, ParamIndex};
-use crate::hle::sound_rom_5a7e9117 as sound_5a7e9117;
+use crate::hle::faust::support::{
+    Controls, OVERDRIVE_CURVE_WORDS, FaustDsp, FaustFloat, ParamIndex, init_overdrive_rom,
+};
 
 const _: () = assert!(
     SAMPLE_RATE == 29762,
@@ -76,6 +78,7 @@ pub enum Program {
     Chorus,
     Echo,
     Mute,
+    Overdrive,
 }
 
 /// A FAUST control, assigned from update(). The Rust backend hands out a parameter index instead of a
@@ -302,6 +305,76 @@ impl EchoProgram {
     }
 }
 
+struct OverdriveProgram {
+    instance: Instance<OverdriveDsp>,
+    lfo: Lfo,
+}
+
+impl OverdriveProgram {
+    fn new(rom: &[u8], layout: &DriverLayout) -> Self {
+        // The length-prefixed ROM curves follow the pointer table and its trailer.
+        // FAUST's array follows DSP address order, with B immediately before A.
+        let first = layout.esp_program_table_offset as usize + 0x38;
+        let second = first + 2 + 2 * OVERDRIVE_CURVE_WORDS;
+        let mut words = [0; 2 * OVERDRIVE_CURVE_WORDS + 1];
+        for (offset, range) in [
+            (second, 0..OVERDRIVE_CURVE_WORDS),
+            (first, OVERDRIVE_CURVE_WORDS..2 * OVERDRIVE_CURVE_WORDS),
+        ] {
+            let data = &rom[offset + 2..offset + 2 + 2 * OVERDRIVE_CURVE_WORDS];
+            for (word, &bytes) in words[range].iter_mut().zip(data.as_chunks::<2>().0) {
+                *word = i16::from_be_bytes(bytes);
+            }
+        }
+        let mut dsp = OverdriveDsp::new();
+        init_overdrive_rom(&mut dsp, words, SAMPLE_RATE as i32);
+        let controls = Controls::new(&dsp);
+        let lfo = Lfo::new(&controls, "c");
+        Self { instance: Instance { dsp, controls }, lfo }
+    }
+
+    fn update(&mut self, rom: &[u8], layout: &DriverLayout, p: [u8; 10]) {
+        let word = |offset| u16::from_be_bytes([rom[offset], rom[offset + 1]]);
+        let nonnegative = |value: u8| i32::from((value as i8).max(0));
+        let pan = |index: i32| {
+            f32::from(word(layout.volume_pan_table_offset as usize + 2 * index as usize)) / 32768.0
+        };
+        let square = |value: u8| {
+            let n = i32::from(value & 15);
+            // The register contains a signed 24-bit coefficient.
+            ((n * n + 6) << 24) >> 8
+        };
+        let decay = nonnegative(p[0]);
+        let allpass = (decay - 6).clamp(25, 89);
+        let effects = nonnegative(p[8]);
+        let reverb = nonnegative(p[9]);
+        let rate = word((layout.phase_rate_table - 0xc00000) as usize + 2 * usize::from(p[2]));
+        self.lfo.set_rate(&mut self.instance.dsp, f64::from(rate) / 8388608.0);
+        for (label, value) in [
+            ("tank_decay", decay << 16),
+            ("allpass", allpass << 16),
+            ("allpass_complement", (0x3fffffff - (allpass << 8).pow(2)) >> 7),
+            ("short_feedback", i32::from(p[1] as i8) << 16),
+            ("envelope_limit", i32::from(p[3] >> 4) << 19),
+            ("address_gain", square(p[3])),
+            ("tank_damp", i32::from(p[6] >> 4) << 19),
+            ("curve_gain", square(p[6])),
+            ("filter_pole", i32::from(p[7] >> 4) << 19),
+            ("diffusion_pole", i32::from(p[7] & 15) << 19),
+        ] {
+            self.instance.controls.set(&mut self.instance.dsp, label, value as f32);
+        }
+        for (label, value) in [
+            ("chorus_out", pan(127 - effects)),
+            ("chorus_to_reverb", pan(effects)),
+            ("dry_send", pan(127 - reverb)),
+            ("send", pan(reverb)),
+        ] {
+            self.instance.controls.set(&mut self.instance.dsp, label, value);
+        }
+    }
+}
+
 struct HallProgram {
     common: Common<HallDsp>,
     a: Zone,
@@ -375,6 +448,7 @@ pub struct Effects {
     chorus: Box<ChorusProgram>,
     echo_program: Box<EchoProgram>,
     hall: Box<HallProgram>,
+    overdrive: Option<Box<OverdriveProgram>>,
     dc: Box<DcBlocker>,
 
     tank: TankConstants,
@@ -404,6 +478,7 @@ pub struct Effects {
 
     // The sound image is owned by the Audio implementation and outlives the Effects.
     rom: &'static [u8],
+    layout: &'static DriverLayout,
     parameters: [u8; 10],
     preset: u8,
 
@@ -418,13 +493,13 @@ pub struct Effects {
     dc_out: PlanarAudioBlock<2, K_CHUNK, f32>,
 }
 
-// ROM pointers of the decoded programs (the same pointer table in all three sound ROMs).
-pub const K_PROGRAM_TABLE_OFFSET: u32 = 0x1c3a2;
+// ROM pointers of the decoded programs in the standard driver.
 pub const K_PTR_REVERB: u32 = 0xc1c836;
 pub const K_PTR_HALL: u32 = 0xc1c4e2;
 pub const K_PTR_MUTE: u32 = 0xc1ce1b;
 pub const K_PTR_CHORUS: u32 = 0xc1d171;
 pub const K_PTR_ECHO: u32 = 0xc1d4d4;
+pub const K_PTR_OVERDRIVE: u32 = 0xc1e10b;
 
 const K_DELAY_BUFFER_SIZE: usize = 96000 * SAMPLE_RATE as usize / 48000;
 const K_BUCKET_COUNT: usize = 16;
@@ -439,8 +514,7 @@ const K_THRESHOLD: f32 = 1e-8;
 
 impl Effects {
     fn table(&self, index: u32) -> f32 {
-        let p = sound_5a7e9117::VOLUME_PAN_TABLE_OFFSET as usize
-            + index.min(127) as usize * 2;
+        let p = self.layout.volume_pan_table_offset as usize + index.min(127) as usize * 2;
         (((self.rom[p] as u16) << 8 | self.rom[p + 1] as u16) as f32) / 32768.0
     }
 
@@ -529,6 +603,14 @@ impl Effects {
                 self.eps_c = lfo_rate(self.parameters[2], 196.608);
                 self.lfo_depth = self.parameters[3] as f32 / 2.0;
             }
+            Program::Overdrive => {
+                // Curve A can drive the tank with silent sends. Let the level detector
+                // observe this state before allowing the DSP to fall asleep again.
+                if self.bypassed {
+                    self.bypassed = false;
+                    self.silent_frames = 0;
+                }
+            }
             Program::Mute | Program::None => {}
         }
         self.write_controls();
@@ -613,6 +695,11 @@ impl Effects {
                 hall.g2.set(dsp, self.hall_g2);
                 hall.g108.set(dsp, self.hall_g108);
             }
+            Program::Overdrive => self.overdrive.as_mut().unwrap().update(
+                self.rom,
+                self.layout,
+                self.parameters,
+            ),
             Program::Mute | Program::None => {}
         }
     }
@@ -647,6 +734,11 @@ impl Effects {
                 self.echo_program.feedback.tank.common.instance.dsp.compute(n, &inputs, &mut outputs)
             }
             Program::Hall => self.hall.common.instance.dsp.compute(n, &inputs, &mut outputs),
+            Program::Overdrive => self.overdrive.as_mut().unwrap().instance.dsp.compute(
+                n,
+                &inputs,
+                &mut outputs,
+            ),
             Program::Mute | Program::None => {}
         }
     }
@@ -707,6 +799,13 @@ impl Effects {
                 self.hall.common.instance.dsp.instance_clear();
                 self.hall.common.lfo_c.restart(&mut self.hall.common.instance.dsp);
             }
+            Program::Overdrive => {
+                let overdrive = self.overdrive.get_or_insert_with(|| {
+                    Box::new(OverdriveProgram::new(self.rom, self.layout))
+                });
+                overdrive.instance.dsp.instance_clear();
+                overdrive.lfo.restart(&mut overdrive.instance.dsp);
+            }
             Program::Mute | Program::None => {}
         }
     }
@@ -732,6 +831,10 @@ impl Effects {
                 frames,
             ),
             Program::Hall => self.hall.common.lfo_c.skip(&mut self.hall.common.instance.dsp, frames),
+            Program::Overdrive => {
+                let overdrive = self.overdrive.as_mut().unwrap();
+                overdrive.lfo.skip(&mut overdrive.instance.dsp, frames);
+            }
             Program::Mute | Program::None => {}
         }
     }
@@ -743,12 +846,13 @@ impl Effects {
             | self.rom[offset + 3] as u32
     }
 
-    pub fn new(rom: &'static [u8]) -> Effects {
+    pub fn new(rom: &'static [u8], layout: &'static DriverLayout) -> Effects {
         let mut effects = Effects {
             reverb: Box::new(ReverbProgram::new()),
             chorus: Box::new(ChorusProgram::new()),
             echo_program: Box::new(EchoProgram::new()),
             hall: Box::new(HallProgram::new()),
+            overdrive: None,
             dc: Box::new(DcBlocker::new()),
             tank: TankConstants::default(),
             program: Program::None,
@@ -773,6 +877,7 @@ impl Effects {
             eps_b: 0.0,
             eps_c: 0.0,
             rom,
+            layout,
             parameters: [0; 10],
             preset: 0,
             bucket_peaks: [0.0; K_BUCKET_COUNT],
@@ -790,21 +895,21 @@ impl Effects {
         effects
     }
 
-    /// Loads a preset: reads its parameters and the program it names. Panics for a program that has not
-    /// been decoded (the DSP would run something this model does not reproduce).
+    /// Loads a preset and its parameters.
     pub fn select(&mut self, preset: u8) {
         if preset >= 13 {
             return;
         }
-        let row = sound_5a7e9117::PRESET_TABLE_OFFSET as usize + preset as usize * 16;
-        let pointer =
-            self.rom_u32(K_PROGRAM_TABLE_OFFSET as usize + self.rom[row + 5] as usize * 4);
-        let program = match pointer {
+        let row = self.layout.preset_table_offset as usize + preset as usize * 16;
+        let index = self.rom[row + 5] as usize;
+        let pointer = self.rom_u32(self.layout.esp_program_table_offset as usize + index * 4);
+        let program = match pointer.wrapping_add(self.layout.esp_pointer_delta) {
             K_PTR_REVERB => Program::Reverb,
             K_PTR_HALL => Program::Hall,
             K_PTR_CHORUS => Program::Chorus,
             K_PTR_ECHO => Program::Echo,
             K_PTR_MUTE => Program::Mute,
+            K_PTR_OVERDRIVE => Program::Overdrive,
             _ => panic!(
                 "ES5510 program at {} (preset {}) is not decoded",
                 pointer, preset
@@ -844,6 +949,7 @@ impl Effects {
         for program in [Program::Reverb, Program::Chorus, Program::Echo, Program::Hall] {
             self.clear_program(program);
         }
+        self.overdrive = None;
         self.bucket_peaks.fill(0.0);
         self.current_bucket_peak = 0.0;
         self.bucket_frames = 0;
@@ -1089,4 +1195,84 @@ fn write_feedback<D: FaustDsp<T = FaustFloat>>(
     p.feedback.set(&mut p.tank.common.instance.dsp, feedback);
     p.sin_mix.set(&mut p.tank.common.instance.dsp, sin_mix);
     p.cos_mix.set(&mut p.tank.common.instance.dsp, cos_mix);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::driver_layout::{EARLY, STANDARD};
+
+    fn preset_12_fixture(layout: &DriverLayout) -> &'static [u8] {
+        let mut rom = vec![0; 0x20000];
+        let presets = layout.preset_table_offset as usize;
+        let pointer_table = layout.esp_program_table_offset as usize;
+        let row = presets + 12 * 16;
+        rom[row + 5] = 10;
+        rom[row + 6..row + 16].copy_from_slice(&[77, 252, 1, 183, 37, 0, 83, 10, 64, 20]);
+        let pointer = K_PTR_OVERDRIVE - layout.esp_pointer_delta;
+        rom[pointer_table + 40..pointer_table + 44].copy_from_slice(&pointer.to_be_bytes());
+
+        let mut set_word = |offset, value: i16| {
+            rom[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+        };
+        let pan = layout.volume_pan_table_offset as usize;
+        for (index, gain) in [(20, 0x1f57), (107, 0x7c1a), (64, 0x5b11), (63, 0x59f2)] {
+            set_word(pan + 2 * index, gain);
+        }
+        set_word((layout.phase_rate_table - 0xc00000) as usize + 2, 41);
+        let table = pointer_table + 0x38;
+        set_word(table, 130);
+        set_word(table + 132, 130);
+        for j in 0..65 {
+            // Synthetic curves, with the same lengths, origins and controls as the ROM curves.
+            set_word(table + 2 + 2 * j, (900 * j as i32 - 29000) as i16);
+            set_word(table + 134 + 2 * j, 32767 - 311 * j as i16);
+        }
+        Box::leak(rom.into_boxed_slice())
+    }
+
+    #[test]
+    fn preset_12_impulse_matches_reference_in_both_layouts() {
+        // Debug builds construct the generated delay arrays on the stack.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                for layout in [&EARLY, &STANDARD] {
+                    let mut effects = Effects::new(preset_12_fixture(layout), layout);
+                    for (warmup, bus, expected) in [
+                        (0, 2, 0xf0e9cde274c1fd5d),
+                        (32768, 2, 0xd44c0320d0983c03),
+                        (0, 4, 0x091d3b5c91a22f9d),
+                    ] {
+                        effects.reset();
+                        effects.select(12);
+                        assert_eq!(effects.program(), Program::Overdrive);
+                        assert!(!effects.bypassed());
+                        for _ in 0..warmup / K_CHUNK {
+                            effects.compute_program(K_CHUNK);
+                        }
+                        effects.in_.set(bus, 0, 4096.0 / 32768.0);
+                        // FNV-1a over 8,192 interleaved, little-endian DAC samples from the
+                        // historical interpreter seeded with the same synthetic tables.
+                        let mut hash = 0xcbf29ce484222325_u64;
+                        for _ in 0..8192 / K_CHUNK {
+                            effects.compute_program(K_CHUNK);
+                            effects.in_.set(bus, 0, 0.0);
+                            for frame in 0..K_CHUNK {
+                                for ch in 0..2 {
+                                    let sample = (effects.out.at(ch, frame) * 32768.0) as i16;
+                                    for byte in sample.to_le_bytes() {
+                                        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+                                    }
+                                }
+                            }
+                        }
+                        assert_eq!(hash, expected, "warmup={warmup}, bus={bus}");
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

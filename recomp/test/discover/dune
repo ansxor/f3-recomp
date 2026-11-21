@@ -1,0 +1,14 @@
+(test
+ (name ram_code_test)
+ (modules ram_code_test)
+ (libraries f3recomp alcotest))
+
+(test
+ (name jump_table_test)
+ (modules jump_table_test)
+ (libraries f3recomp alcotest))
+
+(test
+ (name aligned)
+ (modules aligned)
+ (libraries f3recomp alcotest))

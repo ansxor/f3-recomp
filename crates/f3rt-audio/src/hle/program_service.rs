@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::bytes::s8;
 use crate::hle::patch::{DirectPatch, LayerPatch, Patch, Program};
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::sound_rom_5a7e9117::program_slot;
+use crate::hle::sound_rom::program_slot;
 
 /// What a note asks the program table for. `key` is the kernel key after the track transpose;
 /// `layer_mask` is the track's controller layer mask, zero when the program's own enable mask
