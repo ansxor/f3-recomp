@@ -11,3 +11,11 @@
  (modules mcp_test)
  (libraries f3recomp alcotest unix)
  (deps ../../bin/main.exe))
+
+; The runtime bridge of `f3recomp mcp` against a fake f3rt-tool (this executable re-execs itself as the
+; child): timeouts, concurrent requests, session routing and failover, rt_init/a5, one-shot runners.
+(test
+ (name mcp_bridge_test)
+ (modules mcp_bridge_test)
+ (libraries f3recomp alcotest unix digestif.ocaml)
+ (deps ../../bin/main.exe))
