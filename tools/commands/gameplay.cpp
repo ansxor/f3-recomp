@@ -144,7 +144,8 @@ int cmd_gameplay(int argc, char **argv) try {
             print_failure_state(m, seed, frame, ss.str());
             return false;
         }
-        if (cfg.video_diff && frame >= 600 && (frame - 600) % cfg.video_diff_every == 0) {
+        if (cfg.video_diff && frame >= VIDEO_DIFF_MIN_FRAME &&
+            (frame - VIDEO_DIFF_MIN_FRAME) % cfg.video_diff_every == 0) {
             try {
                 m.game_video->compare_layers(frame, cfg.video_layer_mask);
             } catch (...) {

@@ -11,6 +11,7 @@
 #include "renderer/decode.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "sprite_check.hpp"
+#include "../../tools/commands/sprite_walk.hpp"
 #include "runner.hpp"
 #include "support.hpp"
 #include <gtest/gtest.h>
@@ -1038,4 +1039,126 @@ TEST(SpriteFrame, ReadsGameFrameCounter) {
     EXPECT_EQ(frame->groups, &tracker);
     EXPECT_EQ(frame->game_frame, 0xfedc);
     EXPECT_TRUE(frame->flipped);
+}
+
+namespace {
+
+// One 16-byte sprite entry written as raw words into `bank` (0 or 1) of a 64 KiB sprite RAM.
+void sprite_words(std::vector<uint8_t> &ram, unsigned bank, unsigned slot, uint16_t w0, uint16_t w2, uint16_t w3,
+                  uint16_t w4 = 0, uint16_t w5 = 0, uint16_t w6 = 0) {
+    uint8_t *p = ram.data() + bank * f3rt::SPRITE_BANK_STRIDE + slot * 16;
+    std::memset(p, 0, 16);
+    raw16(p + 0, w0);
+    raw16(p + 4, w2);
+    raw16(p + 6, w3);
+    raw16(p + 8, w4);
+    raw16(p + 10, w5);
+    raw16(p + 12, w6);
+}
+
+constexpr int VIS_Y = int(f3rt::geometry::FIRST_LINE), VIS_H = int(f3rt::geometry::HEIGHT);
+
+// The renderer's list for the same RAM, as the reference.
+std::vector<f3rt::DecodedSpriteEntry> renderer_list(const std::vector<uint8_t> &ram, f3rt::SpriteRamState &state) {
+    std::vector<f3rt::DecodedSpriteEntry> out(1024);
+    out.resize(f3rt::decode_sprite_list(ram.data(), VIS_Y, VIS_H, out, state, true, nullptr));
+    return out;
+}
+
+} // namespace
+
+// Bank switch, jump, flipscreen with an offscreen mirrored sprite, and a list-ending self-jump.
+TEST(McpSpriteWalk, MatchesRendererOnBankJumpAndFlip) {
+    std::vector<uint8_t> ram(f3rt::SPRITE_RAM_SIZE, 0);
+    sprite_words(ram, 0, 0, 5, 100, 50);                        // visible
+    sprite_words(ram, 0, 1, 0, 0, 0x8000, 0, 0x0001);           // command: switch to bank 1
+    sprite_words(ram, 1, 2, 7, 200, 60, 0, 0, 0x8000 | 5);      // bank 1 entry that jumps to slot 5
+    sprite_words(ram, 1, 5, 0, 0, 0x8000, 0, 0x2001);           // command: flipscreen on, stay in bank 1
+    sprite_words(ram, 1, 6, 9, 100, 50);                        // visible unflipped, mirrored to x=396 -> culled
+    sprite_words(ram, 1, 7, 10, 200, 50, 0x0100);               // mirrored to x=296: drawn, flip_x control inverted
+    sprite_words(ram, 1, 8, 0, 0, 0, 0, 0, 0x8000 | 8);         // list end
+
+    const f3rt::SpriteRamState start;
+    const auto walk = f3rt::tool::walk_sprite_list(ram, start, 1024, VIS_Y, VIS_H);
+
+    std::vector<unsigned> slots, banks;
+    for (const auto &e : walk.entries) {
+        slots.push_back(e.slot);
+        banks.push_back(e.bank);
+    }
+    EXPECT_EQ(slots, (std::vector<unsigned>{0, 1, 2, 5, 6, 7, 8}));
+    EXPECT_EQ(banks, (std::vector<unsigned>{0, 0, 1, 1, 1, 1, 1})) << "the command in slot 1 selects bank 1";
+    EXPECT_EQ(walk.visited, 7u);
+    EXPECT_EQ(walk.commands, 2u);
+    EXPECT_EQ(walk.jumps, 1u);
+    EXPECT_EQ(walk.end_slot, 8);
+    EXPECT_TRUE(walk.end_state.bank);
+    EXPECT_TRUE(walk.end_state.flipscreen);
+
+    const auto &e0 = walk.entries[0], &e2 = walk.entries[2], &e6 = walk.entries[4], &e7 = walk.entries[5];
+    EXPECT_TRUE(e0.drawn);
+    EXPECT_EQ(e0.x, 100 << 8);
+    EXPECT_EQ(e2.jump, 5);
+    EXPECT_TRUE(e2.drawn);
+    EXPECT_EQ(e2.x, 200 << 8) << "flipscreen is still off for the entry before the command";
+    EXPECT_FALSE(e6.drawn);
+    EXPECT_TRUE(e6.culled) << "visible before the mirror, offscreen after it";
+    EXPECT_EQ(e6.raw_x, 100 << 8);
+    EXPECT_EQ(e6.x, (512 - 16 - 100) << 8);
+    EXPECT_TRUE(e7.drawn);
+    EXPECT_FALSE(e7.flip_x) << "control flip_x is inverted by flipscreen";
+    EXPECT_EQ(walk.drawn, 3u);
+    // The two bank-1 commands carry tile bit 16 (w5 bit 0) at the origin: the renderer sees a tile there and culls it.
+    EXPECT_EQ(walk.culled, 3u);
+
+    f3rt::SpriteRamState state;
+    const auto ref = renderer_list(ram, state);
+    ASSERT_EQ(ref.size(), walk.drawn) << "same drawn count as decode_sprite_list";
+    size_t k = 0;
+    for (const auto &e : walk.entries) {
+        if (!e.drawn) continue;
+        const auto &r = ref[k++];
+        EXPECT_EQ(e.x, r.x) << "slot " << e.slot;
+        EXPECT_EQ(e.y, r.y) << "slot " << e.slot;
+        EXPECT_EQ(e.scale_x, r.scale_x);
+        EXPECT_EQ(e.scale_y, r.scale_y);
+        EXPECT_EQ(e.tile, r.tile);
+        EXPECT_EQ(e.color, r.color);
+        EXPECT_EQ(e.flip_x, r.flip_x);
+        EXPECT_EQ(e.flip_y, r.flip_y);
+    }
+    EXPECT_EQ(state.bank, walk.end_state.bank);
+    EXPECT_EQ(state.flipscreen, walk.end_state.flipscreen);
+}
+
+// The register state persists across frames: a walk that starts in bank 1 with flipscreen on reads bank 1.
+TEST(McpSpriteWalk, StartStateSelectsBankAndMirror) {
+    std::vector<uint8_t> ram(f3rt::SPRITE_RAM_SIZE, 0);
+    sprite_words(ram, 0, 0, 5, 100, 50);
+    sprite_words(ram, 1, 0, 6, 200, 50);
+    f3rt::SpriteRamState start;
+    start.bank = true;
+    start.flipscreen = true;
+    const auto walk = f3rt::tool::walk_sprite_list(ram, start, 1, VIS_Y, VIS_H);
+    ASSERT_EQ(walk.entries.size(), 1u);
+    EXPECT_EQ(walk.entries[0].tile, 6u);
+    EXPECT_EQ(walk.entries[0].bank, 1u);
+    EXPECT_EQ(walk.entries[0].x, (512 - 16 - 200) << 8);
+    f3rt::SpriteRamState reference = start;
+    const auto ref = renderer_list(ram, reference);
+    ASSERT_FALSE(ref.empty());
+    EXPECT_EQ(ref.front().tile, 6u);
+}
+
+// A backward jump loop is cut off at the renderer's 1,024-entry budget; larger limits clamp to it.
+TEST(McpSpriteWalk, TraversalBudgetIsRendererBudget) {
+    std::vector<uint8_t> ram(f3rt::SPRITE_RAM_SIZE, 0);
+    sprite_words(ram, 0, 0, 5, 100, 50);
+    sprite_words(ram, 0, 1, 0, 0, 0, 0, 0, 0x8000 | 0); // jumps back to slot 0, never ends
+    const auto walk = f3rt::tool::walk_sprite_list(ram, {}, 100000, VIS_Y, VIS_H);
+    EXPECT_EQ(walk.visited, f3rt::tool::SPRITE_WALK_BUDGET);
+    EXPECT_EQ(walk.entries.size(), size_t(f3rt::tool::SPRITE_WALK_BUDGET));
+    f3rt::SpriteRamState state;
+    EXPECT_EQ(renderer_list(ram, state).size(), walk.drawn);
+    EXPECT_EQ(f3rt::tool::walk_sprite_list(ram, {}, 4, VIS_Y, VIS_H).visited, 4u);
 }
