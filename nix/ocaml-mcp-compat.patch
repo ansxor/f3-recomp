@@ -102,3 +102,15 @@ index 3d623bb..0e139b8 100644
    [@@deriving yojson { strict = false }]
  
    type client = {
+diff --git a/lib/mcp/mcp_server.ml b/lib/mcp/mcp_server.ml
+--- a/lib/mcp/mcp_server.ml
++++ b/lib/mcp/mcp_server.ml
+@@ -115,8 +115,6 @@
+                 let merged_result =
+                   {
+                     custom_result with
+-                    Request.Initialize.protocol_version =
+-                      params.protocol_version;
+                     capabilities = server.server_capabilities;
+                     server_info = server.server_info;
+                   }

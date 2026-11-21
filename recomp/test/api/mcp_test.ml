@@ -190,6 +190,12 @@ let ok_call client name arguments =
   if is_error result then Alcotest.failf "%s failed: %s" name (text_of result);
   result
 
+(* The message of the JSON-RPC error (not an isError result) a tools/call is answered with. *)
+let rpc_error_message client name =
+  match Json.member "error" (request_raw client "tools/call" (Object [ "name", String name; "arguments", Object [] ])) with
+  | Some error -> str (field "message" error)
+  | None -> Alcotest.failf "%s should have been a JSON-RPC error" name
+
 let failed_call client name arguments =
   let result = call client name arguments in
   if not (is_error result) then Alcotest.failf "%s should have failed: %s" name (Json.to_string result);
@@ -315,7 +321,7 @@ let static_tools () =
     Alcotest.(check string) "hex strings are accepted" "4bf90041" (str (field "bytes" rom_read_hex));
     let disasm = ok_call client "disasm" (fixture_args [ "pc", String "0x400"; "count", Int 2 ]) in
     Alcotest.(check (list string)) "disasm" [ "lea $410000,a5"; "bsr $000420" ]
-      (List.map (fun l -> str (field "text" l)) (items (structured disasm)));
+      (List.map (fun l -> str (field "text" l)) (items (field "lines" (structured disasm))));
     check_contains "text content mirrors structuredContent" ~needle:"lea $410000,a5" (text_of disasm);
     let inspect = structured (ok_call client "inspect" (fixture_args [ "routines", Bool false ])) in
     Alcotest.(check int) "inferred a5" 0x410000 (int (field "a5" inspect));
@@ -342,9 +348,9 @@ let tool_errors () =
       (failed_call client "disasm" (fixture_args [ "pc", Int 0x400; "bogus", Int 1 ]));
     check_contains "odd pc" ~needle:"even" (failed_call client "disasm" (fixture_args [ "pc", Int 0x401 ]));
     check_contains "bad game id" ~needle:"invalid game id" (failed_call client "inspect" [ "game", String "../etc" ]);
-    check_contains "unknown tool" ~needle:"unknown tool" (failed_call client "no_such_tool" []);
+    check_contains "unknown tool" ~needle:"unknown tool" (rpc_error_message client "no_such_tool");
     check_contains "no session" ~needle:"session_open" (failed_call client "session_close" []);
-    check_contains "runtime tool without a session" ~needle:"session_open" (failed_call client "rt_step" []);
+    check_contains "runtime tool without a session" ~needle:"session_open" (rpc_error_message client "rt_step");
     check_contains "missing binary" ~needle:"does not exist"
       (failed_call client "session_open" [ "game", String "fixture"; "tool_path", String "/nonexistent/f3rt-tool" ]);
     let listing = structured (ok_call client "session_list" []) in

@@ -11,3 +11,10 @@
  (modules mcp_test)
  (libraries f3recomp alcotest unix)
  (deps ../../bin/main.exe))
+
+; Protocol conformance of `f3recomp mcp`: structuredContent shape, version negotiation, error codes, schemas.
+(test
+ (name mcp_protocol_test)
+ (modules mcp_protocol_test)
+ (libraries f3recomp alcotest unix)
+ (deps ../../bin/main.exe))

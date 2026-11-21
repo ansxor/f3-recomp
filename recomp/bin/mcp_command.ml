@@ -181,25 +181,36 @@ let entries (t : Runtime_bridge.t) ~notify =
         [];
     ]
 
+(* MCP protocol versions this server speaks, newest first. *)
+let supported_protocol_versions = [ Runtime_bridge.protocol_version; "2025-06-18"; "2025-03-26"; "2024-11-05" ]
+let latest_protocol_version = List.hd supported_protocol_versions
+
+(* A requested version we support is answered as is; otherwise the server answers with its latest. *)
+let negotiate_protocol_version requested =
+  if List.mem requested supported_protocol_versions then requested else latest_protocol_version
+
+let runtime_tool_name (t : Runtime_bridge.t) name =
+  let prefix = Runtime_bridge.tool_prefix in
+  if String.starts_with ~prefix name then
+    let tool = String.sub name (String.length prefix) (String.length name - String.length prefix) in
+    if List.exists (fun (d : Mcp.Types.Tool.t) -> d.name = name) (Runtime_bridge.runtime_tools t) then Some tool
+    else None
+  else None
+
+let unknown_tool_message name =
+  if String.starts_with ~prefix:Runtime_bridge.tool_prefix name then
+    Printf.sprintf
+      "unknown tool %S: no runtime session is open. Call session_open (then refresh the tool list), or start \
+       f3recomp mcp with --game."
+      name
+  else Printf.sprintf "unknown tool %S" name
+
+(* [None] when [params.name] is not a registered tool: that is a protocol error, not a tool failure. *)
 let run_tool table (t : Runtime_bridge.t) (params : Mcp.Request.Tools.Call.params) =
   let args = Option.value params.arguments ~default:(`Assoc []) in
   match Hashtbl.find_opt table params.name with
-  | Some entry -> entry.run args
-  | None ->
-      if String.starts_with ~prefix:Runtime_bridge.tool_prefix params.name then
-        let tool = String.sub params.name (String.length Runtime_bridge.tool_prefix)
-            (String.length params.name - String.length Runtime_bridge.tool_prefix) in
-        let known =
-          List.exists (fun (d : Mcp.Types.Tool.t) -> d.name = params.name) (Runtime_bridge.runtime_tools t)
-        in
-        if known then Runtime_bridge.call_runtime t ~tool args
-        else
-          error_result
-            (Printf.sprintf
-               "%s is not available: no runtime session is open. Call session_open (then refresh the tool list), or \
-                start f3recomp mcp with --game."
-               params.name)
-      else error_result (Printf.sprintf "unknown tool %S" params.name)
+  | Some entry -> Some (entry.run args)
+  | None -> Option.map (fun tool -> Runtime_bridge.call_runtime t ~tool args) (runtime_tool_name t params.name)
 
 (* ---- the server ---- *)
 
@@ -207,10 +218,10 @@ let make_server (t : Runtime_bridge.t) ~notify =
   let table = Hashtbl.create 32 in
   let entries = entries t ~notify in
   List.iter (fun entry -> Hashtbl.replace table entry.descriptor.name entry) entries;
-  let on_initialize (_ : Mcp.Request.Initialize.params) : (Mcp.Request.Initialize.result, string) result =
+  let on_initialize (params : Mcp.Request.Initialize.params) : (Mcp.Request.Initialize.result, string) result =
     Ok
       {
-        protocol_version = Runtime_bridge.protocol_version; (* replaced by the client's version *)
+        protocol_version = negotiate_protocol_version params.protocol_version;
         capabilities = { experimental = None; logging = None; completions = None; prompts = None; resources = None; tools = Some { list_changed = Some true } };
         server_info = { name = server_name; version = server_version };
         instructions = Some instructions;
@@ -223,14 +234,46 @@ let make_server (t : Runtime_bridge.t) ~notify =
     in
     Ok { Mcp.Request.Tools.List.tools; next_cursor = None; meta = params.meta }
   in
-  let on_tools_call params = Ok (run_tool table t params) in
+  let on_tools_call params =
+    match run_tool table t params with
+    | Some result -> Ok result
+    | None -> Error (unknown_tool_message params.name) (* [dispatch] answers unknown tools before this runs *)
+  in
   let handler = { Mcp.Server.default_handler with on_initialize; on_tools_list; on_tools_call } in
-  Mcp.Server.create ~handler ~notification_handler:Mcp.Server.default_notification_handler
-    ~server_info:{ name = server_name; version = server_version }
-    ~server_capabilities:{ experimental = None; logging = None; completions = None; prompts = None; resources = None; tools = Some { list_changed = Some true } }
+  let server =
+    Mcp.Server.create ~handler ~notification_handler:Mcp.Server.default_notification_handler
+      ~server_info:{ name = server_name; version = server_version }
+      ~server_capabilities:{ experimental = None; logging = None; completions = None; prompts = None; resources = None; tools = Some { list_changed = Some true } }
+  in
+  (server, table)
+
+let json_rpc_invalid_params = -32602
+let json_rpc_method_not_found = -32601
+
+(* Request-level validation the library's handler cannot express: a tools/call for a tool that does not exist, or
+   whose arguments are not an object, is invalid params (-32602). Tool failures stay [isError] results. *)
+let dispatch (t : Runtime_bridge.t) (server, table) (message : Mcp.Protocol.incoming_message) =
+  let invalid id message = Some (Mcp.Protocol.error_to_outgoing ~id ~code:json_rpc_invalid_params ~message ()) in
+  match message with
+  | Request (id, ToolsCall params) when Mcp.Server.is_initialized server -> (
+      match params.arguments with
+      | Some (`Assoc _) | Some `Null | None ->
+          let exists = Hashtbl.mem table params.name || runtime_tool_name t params.name <> None in
+          if exists then Mcp.Server.handle_message server message else invalid id (unknown_tool_message params.name)
+      | Some _ -> invalid id "tools/call: \"arguments\" must be an object")
+  | _ -> Mcp.Server.handle_message server message
+
+(* The methods [Mcp.Request.of_jsonrpc] knows: a request for one of them that fails to parse has bad params. *)
+let known_methods =
+  [ "initialize"; "resources/list"; "resources/read"; "resources/subscribe"; "resources/unsubscribe";
+    "resources/templates/list"; "prompts/list"; "prompts/get"; "tools/list"; "tools/call";
+    "sampling/createMessage"; "elicitation/create"; "logging/setLevel"; "completion/complete"; "roots/list"; "ping" ]
+
+let parse_failure_code (request : Jsonrpc.Request.t) =
+  if List.mem request.method_ known_methods then json_rpc_invalid_params else json_rpc_method_not_found
 
 (* Reads packets until EOF. A bad line or an unsupported request must not end the server. *)
-let serve ~clock ~transport ~server ~take_notification =
+let serve ~clock ~transport ~server ~handle ~take_notification =
   let send outgoing = Mcp_eio.Stdio.send transport (Mcp.Protocol.outgoing_to_message outgoing) in
   let rec loop failures =
     match Mcp_eio.Stdio.recv transport ~clock () with
@@ -241,14 +284,14 @@ let serve ~clock ~transport ~server ~take_notification =
     | Some packet ->
         (match Mcp.Protocol.parse_message packet with
          | Ok message ->
-             Option.iter send (Mcp.Server.handle_message server message);
+             Option.iter send (handle message);
              (* After the response, so a client that refetches on the notification sees the new list. *)
              if take_notification () then
                send (Mcp.Server.send_notification server (Mcp.Notification.ToolsListChanged { meta = None }))
          | Error message -> (
              match packet with
              | Jsonrpc.Packet.Request request ->
-                 send (Mcp.Protocol.error_to_outgoing ~id:request.id ~code:(-32601) ~message ())
+                 send (Mcp.Protocol.error_to_outgoing ~id:request.id ~code:(parse_failure_code request) ~message ())
              | _ -> Logs.warn (fun m -> m "ignoring a message: %s" message)));
         loop 0
   in
@@ -284,7 +327,8 @@ let run ~root ~game =
   let t = Runtime_bridge.create ~root ~env ~sw ~api:(F3recomp.Api.session ()) in
   Option.iter (pin_game t) game;
   let pending = ref false in
-  let server = make_server t ~notify:(fun () -> pending := true) in
+  let server, table = make_server t ~notify:(fun () -> pending := true) in
+  let handle = dispatch t (server, table) in
   let take_notification () = let v = !pending in pending := false; v in
   Fun.protect
     ~finally:(fun () ->
@@ -294,4 +338,4 @@ let run ~root ~game =
            | Some session -> ignore (Runtime_bridge.close_session t session)
            | None -> ())
         t.order)
-    (fun () -> serve ~clock:(Eio.Stdenv.clock env) ~transport ~server ~take_notification)
+    (fun () -> serve ~clock:(Eio.Stdenv.clock env) ~transport ~server ~handle ~take_notification)
