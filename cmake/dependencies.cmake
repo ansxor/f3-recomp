@@ -44,8 +44,11 @@ if(F3RT_HOST_TOOLS)
     # fallback is EXCLUDE_FROM_ALL, so nothing of it is installed.
     CPMFindPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.12.0 VERSION 3.11
         EXCLUDE_FROM_ALL YES OPTIONS "JSON_BuildTests OFF" "JSON_Install ON")
-    if(NOT nlohmann_json_FOUND AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
-        # mcp-cpp resolves nlohmann_json with find_package(); point that at the source fallback.
+    # CPMFindPackage runs find_package() in its own scope, so nlohmann_json_FOUND is never visible here.
+    # *_SOURCE_DIR is only exported when CPM fetched the source (a system package leaves it unset).
+    if(nlohmann_json_SOURCE_DIR AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        # mcp-cpp resolves nlohmann_json with find_package(); point that at the source fallback, but
+        # only then, so a valid system package is not shadowed.
         file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/nlohmann_json-config.cmake"
             "set(nlohmann_json_FOUND TRUE)\n")
         file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/nlohmann_json-config-version.cmake"

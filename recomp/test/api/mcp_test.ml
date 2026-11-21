@@ -2,8 +2,10 @@
    - [f3recomp mcp] on a tiny fixture game: protocol, static tools, errors, session lifecycle errors;
    - a real [f3rt-tool mcp] (standalone) and the bridge from [f3recomp mcp] to it: session_open, bridged runtime
      calls, a5 addresses, PNG passthrough, tools/list_changed, stale-binary refusal, session_close.
-   The runtime cases need a built f3rt-tool (F3RT_TOOL, default build/<game>/f3rt-tool) and roms/<game>, and are
-   skipped without them. F3RT_TEST_GAME picks the game (default commandw). *)
+   Suites "f3recomp" and "smoke" are ROM-free: "smoke" needs only a built f3rt-tool (F3RT_TOOL, default
+   build/<game>/f3rt-tool) and is what CI runs (F3RT_REQUIRE_TOOL=1 turns a missing binary into a failure rather than
+   a skip). Suites "runtime" and "bridge" also boot the game and need roms/<game> (F3RT_ROM_DIR), and are skipped
+   without it. F3RT_TEST_GAME picks the game (default commandw). *)
 
 open F3recomp
 open Json
@@ -38,20 +40,33 @@ let rec find_root dir =
 let root = lazy (find_root (Sys.getcwd ()))
 let game = Option.value (Sys.getenv_opt "F3RT_TEST_GAME") ~default:"commandw"
 
-(* (root, f3rt-tool, ROM dir) when a runtime can be started. *)
-let runtime () =
+(* (root, f3rt-tool) when a built f3rt-tool exists. *)
+let tool_binary () =
   match Lazy.force root with
   | None -> None
   | Some root ->
       let tool = match Sys.getenv_opt "F3RT_TOOL" with
-        | Some path -> path
-        | None -> Filename.concat root (Printf.sprintf "build/%s/f3rt-tool" game) in
+        | Some path when path <> "" -> path
+        | _ -> Filename.concat root (Printf.sprintf "build/%s/f3rt-tool" game) in
+      if Sys.file_exists tool then Some (root, tool) else None
+
+(* The ROM-free cases need f3rt-tool; CI sets F3RT_REQUIRE_TOOL so that a missing binary cannot pass as a skip. *)
+let need_tool () =
+  match tool_binary () with
+  | Some r -> r
+  | None ->
+      if Sys.getenv_opt "F3RT_REQUIRE_TOOL" <> None then Alcotest.fail "f3rt-tool not found (set F3RT_TOOL)"
+      else Alcotest.skip ()
+
+(* (root, f3rt-tool, ROM dir) when a game can be booted. *)
+let runtime () =
+  match tool_binary () with
+  | None -> None
+  | Some (root, tool) ->
       let rom_dir = match Sys.getenv_opt "F3RT_ROM_DIR" with
         | Some dir -> dir
         | None -> Filename.concat root ("roms/" ^ game) in
-      if Sys.file_exists tool && Sys.file_exists rom_dir then
-        Some (root, tool, rom_dir)
-      else None
+      if rom_dir <> "" && Sys.file_exists rom_dir then Some (root, tool, rom_dir) else None
 
 let need_runtime () = match runtime () with Some r -> r | None -> Alcotest.skip ()
 
@@ -84,6 +99,9 @@ type client = {
   mutable buffer : string;
   mutable next_id : int;
   mutable notifications : Json.t list; (* messages without an id, oldest first *)
+  mutable stdin_open : bool;
+  mutable stdout_open : bool;
+  mutable reaped : bool; (* the child was waited for: its pid may be reused, never signal it again *)
 }
 
 let spawn argv =
@@ -91,9 +109,34 @@ let spawn argv =
   let stdin_r, stdin_w = Unix.pipe ~cloexec:true () in
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let err = Unix.openfile stderr_file [ O_WRONLY; O_CREAT; O_TRUNC ] 0o600 in
-  let pid = Unix.create_process (List.hd argv) (Array.of_list argv) stdin_r stdout_w err in
+  let pid =
+    try Unix.create_process (List.hd argv) (Array.of_list argv) stdin_r stdout_w err
+    with e -> List.iter Unix.close [ stdin_r; stdin_w; stdout_r; stdout_w; err ]; raise e in
   List.iter Unix.close [ stdin_r; stdout_w; err ];
-  { pid; to_server = stdin_w; from_server = stdout_r; stderr_file; buffer = ""; next_id = 0; notifications = [] }
+  { pid; to_server = stdin_w; from_server = stdout_r; stderr_file; buffer = ""; next_id = 0; notifications = [];
+    stdin_open = true; stdout_open = true; reaped = false }
+
+let close_stdin client =
+  if client.stdin_open then begin
+    client.stdin_open <- false;
+    try Unix.close client.to_server with Unix.Unix_error _ -> ()
+  end
+
+let close_stdout client =
+  if client.stdout_open then begin
+    client.stdout_open <- false;
+    try Unix.close client.from_server with Unix.Unix_error _ -> ()
+  end
+
+(* Idempotent: closes both pipes, and kills and reaps the child unless it was already reaped. *)
+let cleanup client =
+  close_stdin client;
+  if not client.reaped then begin
+    client.reaped <- true;
+    (try Unix.kill client.pid Sys.sigkill with Unix.Unix_error _ -> ());
+    (try ignore (Unix.waitpid [] client.pid) with Unix.Unix_error _ -> ())
+  end;
+  close_stdout client
 
 let send_line client line =
   let data = Bytes.of_string (line ^ "\n") in
@@ -102,8 +145,8 @@ let send_line client line =
   in
   go 0
 
-(* One line from the server, waiting at most [timeout] seconds. *)
-let read_line ?(timeout = 120.) client =
+(* One line from the server; [deadline] is an absolute Unix time bounding the whole wait, not each read. *)
+let read_line ~deadline client =
   let chunk = Bytes.create 65536 in
   let rec go () =
     match String.index_opt client.buffer '\n' with
@@ -112,8 +155,10 @@ let read_line ?(timeout = 120.) client =
         client.buffer <- String.sub client.buffer (i + 1) (String.length client.buffer - i - 1);
         line
     | None -> (
-        match Unix.select [ client.from_server ] [] [] timeout with
-        | [], _, _ -> Alcotest.failf "timed out waiting for the server; stderr: %s" (read_file client.stderr_file)
+        let remaining = deadline -. Unix.gettimeofday () in
+        if remaining <= 0. then Alcotest.failf "timed out waiting for the server; stderr: %s" (read_file client.stderr_file);
+        match Unix.select [ client.from_server ] [] [] remaining with
+        | [], _, _ -> go ()
         | _ ->
             let n = Unix.read client.from_server chunk 0 (Bytes.length chunk) in
             if n = 0 then Alcotest.failf "server closed its stdout; stderr: %s" (read_file client.stderr_file);
@@ -126,13 +171,14 @@ let parse line =
   match Json.parse line with Ok json -> json | Error message -> Alcotest.failf "invalid JSON (%s): %s" message line
 
 (* Sends a request and returns the whole response message; notifications met on the way are kept. *)
-let request_raw client meth params =
+let request_raw ?(timeout = 120.) client meth params =
+  let deadline = Unix.gettimeofday () +. timeout in
   client.next_id <- client.next_id + 1;
   let id = client.next_id in
   send_line client
     (Json.to_string (Object [ "jsonrpc", String "2.0"; "id", Int id; "method", String meth; "params", params ]));
   let rec wait () =
-    let message = parse (read_line client) in
+    let message = parse (read_line ~deadline client) in
     match Json.member "id" message with
     | Some (Int got) when got = id -> message
     | Some _ | None ->
@@ -145,7 +191,7 @@ let result_of response = match Json.member "result" response with
   | Some result -> result
   | None -> Alcotest.failf "request failed: %s" (Json.to_string response)
 
-let request client meth params = result_of (request_raw client meth params)
+let request ?timeout client meth params = result_of (request_raw ?timeout client meth params)
 
 let notify client meth =
   send_line client (Json.to_string (Object [ "jsonrpc", String "2.0"; "method", String meth ]))
@@ -161,12 +207,13 @@ let initialize client =
 
 (* Waits for a notification (already received or still in flight). *)
 let expect_notification client meth =
+  let deadline = Unix.gettimeofday () +. 30. in
   let is_meth message = Json.member "method" message = Some (String meth) in
   let rec wait () =
     match List.find_opt is_meth client.notifications with
     | Some _ -> client.notifications <- List.filter (fun m -> not (is_meth m)) client.notifications
     | None ->
-        client.notifications <- client.notifications @ [ parse (read_line ~timeout:30. client) ];
+        client.notifications <- client.notifications @ [ parse (read_line ~deadline client) ];
         wait ()
   in
   wait ()
@@ -174,8 +221,8 @@ let expect_notification client meth =
 let tools_list client =
   List.map (fun tool -> str (field "name" tool)) (items (field "tools" (request client "tools/list" (Object []))))
 
-let call client name arguments =
-  request client "tools/call" (Object [ "name", String name; "arguments", Object arguments ])
+let call ?timeout client name arguments =
+  request ?timeout client "tools/call" (Object [ "name", String name; "arguments", Object arguments ])
 
 let is_error result = Json.member "isError" result = Some (Bool true)
 let structured result = field "structuredContent" result
@@ -203,24 +250,29 @@ let failed_call client name arguments =
 
 (* Closes the server's stdin and waits for it to exit. *)
 let finish client =
-  Unix.close client.to_server;
+  close_stdin client;
   let deadline = Unix.gettimeofday () +. 30. in
   let rec wait () =
     match Unix.waitpid [ Unix.WNOHANG ] client.pid with
     | 0, _ when Unix.gettimeofday () < deadline -> Unix.sleepf 0.05; wait ()
-    | 0, _ -> Unix.kill client.pid Sys.sigkill; ignore (Unix.waitpid [] client.pid); Alcotest.fail "server did not exit"
-    | _, status -> status
+    | 0, _ -> None
+    | _, status -> client.reaped <- true; Some status
   in
-  let status = wait () in
-  Unix.close client.from_server;
-  match status with
-  | Unix.WEXITED 0 -> ()
-  | _ -> Alcotest.failf "server did not exit cleanly; stderr: %s" (read_file client.stderr_file)
+  match wait () with
+  | None -> cleanup client; Alcotest.fail "server did not exit"
+  | Some status ->
+      close_stdout client;
+      (match status with
+       | Unix.WEXITED 0 -> ()
+       | _ -> Alcotest.failf "server did not exit cleanly; stderr: %s" (read_file client.stderr_file))
+
+(* Runs [body] against a freshly spawned server; the child and its pipes are released however [body] ends. *)
+let with_client argv body =
+  let client = spawn argv in
+  Fun.protect ~finally:(fun () -> cleanup client) (fun () -> body client)
 
 let with_f3recomp ?(args = []) body =
-  let client = spawn ([ f3recomp; "mcp" ] @ args) in
-  Fun.protect ~finally:(fun () -> try Unix.kill client.pid Sys.sigkill with Unix.Unix_error _ -> ())
-    (fun () -> ignore (initialize client); body client; finish client)
+  with_client ([ f3recomp; "mcp" ] @ args) (fun client -> ignore (initialize client); body client; finish client)
 
 (* ---- the fixture game ---- *)
 
@@ -281,9 +333,7 @@ let fixture_args extra = fixture |> Lazy.force |> fun base -> base @ extra
 (* ---- f3recomp mcp: protocol and static tools ---- *)
 
 let protocol () =
-  let client = spawn [ f3recomp; "mcp" ] in
-  Fun.protect ~finally:(fun () -> try Unix.kill client.pid Sys.sigkill with Unix.Unix_error _ -> ())
-    (fun () ->
+  with_client [ f3recomp; "mcp" ] (fun client ->
        let init = initialize client in
        Alcotest.(check string) "server name" "f3recomp" (str (field "name" (field "serverInfo" init)));
        Alcotest.(check bool) "tools.listChanged" true
@@ -356,6 +406,22 @@ let tool_errors () =
     let listing = structured (ok_call client "session_list" []) in
     Alcotest.(check int) "no sessions" 0 (List.length (items (field "sessions" listing))))
 
+(* ROM-free: the bridge with no session, and session_open failing cleanly. *)
+let bridge_smoke () =
+  let root = Lazy.force scratch in
+  with_f3recomp ~args:[ "--root"; root ] (fun client ->
+    let names = tools_list client in
+    Alcotest.(check bool) "static tools listed" true (List.mem "session_open" names && List.mem "disasm" names);
+    Alcotest.(check bool) "no runtime tools without a session" false
+      (List.exists (fun n -> String.starts_with ~prefix:"rt_" n) names);
+    let empty () = Alcotest.(check int) "no sessions" 0
+      (List.length (items (field "sessions" (structured (ok_call client "session_list" []))))) in
+    empty ();
+    check_contains "nonexistent game" ~needle:"does not exist" (failed_call client "session_open" [ "game", String "no_such_game" ]);
+    empty ();
+    check_contains "no session to close" ~needle:"session_open" (failed_call client "session_close" []);
+    Alcotest.(check bool) "tool list unchanged" false (List.mem "rt_step" (tools_list client)))
+
 (* ---- f3rt-tool mcp, standalone ---- *)
 
 let png_signature = "\137PNG\r\n\026\n"
@@ -397,19 +463,53 @@ let check_png result =
 let runtime_names = [ "init"; "shutdown"; "reset"; "step"; "set_input"; "regs"; "read"; "write"; "crc"; "audio_stats";
                       "save_state"; "load_state"; "screenshot"; "sprites"; "video_diff" ]
 
+let tool_args extra = [ "mcp"; "--no-init" ] @ extra
+
+let check_tool_list client =
+  let tools = items (field "tools" (request client "tools/list" (Object []))) in
+  let names = List.map (fun t -> str (field "name" t)) tools in
+  List.iter (fun n -> Alcotest.(check bool) (n ^ " is listed") true (List.mem n names)) runtime_names;
+  List.iter (fun t ->
+    Alcotest.(check string) "input schema" "object" (str (field "type" (field "inputSchema" t)));
+    Alcotest.(check bool) "description" true (Json.member "description" t <> None)) tools
+
+(* ROM-free: a standalone f3rt-tool before any game is loaded. *)
+let standalone_smoke () =
+  let _, tool = need_tool () in
+  with_client (tool :: tool_args []) (fun client ->
+    let init = initialize client in
+    Alcotest.(check bool) "instructions" true (String.length (str (field "instructions" init)) > 0);
+    check_tool_list client;
+    check_contains "regs before init" ~needle:"not initialized" (failed_call client "regs" []);
+    check_contains "step before init" ~needle:"not initialized" (failed_call client "step" []);
+    let unknown = request_raw client "tools/call" (Object [ "name", String "no_such_tool"; "arguments", Object [] ]) in
+    Alcotest.(check bool) "unknown tool is a JSON-RPC error" true (Json.member "error" unknown <> None);
+    let shutdown = structured (ok_call client "shutdown" []) in
+    Alcotest.(check bool) "shutdown without a machine" true (field "was_initialized" shutdown = Bool false);
+    finish client)
+
+(* ROM-free: init with a bad ROM directory fails cleanly and the server keeps serving. *)
+let standalone_bad_init () =
+  let _, tool = need_tool () in
+  with_client (tool :: tool_args []) (fun client ->
+    ignore (initialize client);
+    let missing = scratch_file "no-such-rom-dir" in
+    for _ = 1 to 2 do
+      Alcotest.(check bool) "init reports an error" true
+        (String.length (failed_call client "init" [ "rom_dir", String missing ]) > 0)
+    done;
+    check_contains "still uninitialized" ~needle:"not initialized" (failed_call client "regs" []);
+    check_tool_list client;
+    Alcotest.(check bool) "still serving" true (request client "ping" (Object []) = Object []);
+    ignore (ok_call client "shutdown" []);
+    finish client)
+
+(* Boots the game: the whole runtime tool surface. *)
 let standalone_runtime () =
   let _, tool, rom_dir = need_runtime () in
-  let client = spawn [ tool; "mcp"; "--no-init" ] in
-  Fun.protect ~finally:(fun () -> try Unix.kill client.pid Sys.sigkill with Unix.Unix_error _ -> ())
-    (fun () ->
-       let init = initialize client in
-       Alcotest.(check bool) "instructions" true (String.length (str (field "instructions" init)) > 0);
-       let tools = items (field "tools" (request client "tools/list" (Object []))) in
-       let names = List.map (fun t -> str (field "name" t)) tools in
-       List.iter (fun n -> Alcotest.(check bool) (n ^ " is listed") true (List.mem n names)) runtime_names;
-       List.iter (fun t ->
-         Alcotest.(check string) "input schema" "object" (str (field "type" (field "inputSchema" t)));
-         Alcotest.(check bool) "description" true (Json.member "description" t <> None)) tools;
+  with_client (tool :: tool_args []) (fun client ->
+       ignore (initialize client);
+       check_tool_list client;
        check_contains "before init" ~needle:"not initialized" (failed_call client "regs" []);
        let init = structured (ok_call client "init" [ "rom_dir", String rom_dir ]) in
        Alcotest.(check int) "frame 0" 0 (int (field "frame" init));
@@ -465,6 +565,30 @@ let standalone_runtime () =
        ignore (ok_call client "init" [ "rom_dir", String rom_dir ]);
        ignore (ok_call client "init" [ "rom_dir", String rom_dir ]);
        finish client)
+
+(* f3-8vp: save_state/load_state carry the input words and the system byte. *)
+let standalone_state_inputs () =
+  let _, tool, rom_dir = need_runtime () in
+  with_client (tool :: tool_args []) (fun client ->
+    ignore (initialize client);
+    ignore (ok_call client "init" [ "rom_dir", String rom_dir ]);
+    ignore (ok_call client "step" [ "frames", Int 5 ]);
+    let set_input args = structured (ok_call client "set_input" args) in
+    let ports result = List.map int (items (field "inputs" result)) in
+    let saved = set_input [ "inputs", Array (List.map (fun n -> Int n) [ 0x11; 0x22; 0x33; 0x44; 0x55; 0x66 ]);
+                            "system_inputs", Int 0xfd ] in
+    ignore (ok_call client "save_state" [ "slot", String "inputs" ]);
+    let straight = str (field "state_crc" (structured (ok_call client "step" [ "frames", Int 5 ]))) in
+    let changed = set_input [ "inputs", Array (List.map (fun n -> Int n) [ 0; 0; 0; 0; 0; 0 ]); "system_inputs", Int 0xff ] in
+    Alcotest.(check bool) "inputs changed between save and load" true (ports changed <> ports saved);
+    ignore (ok_call client "step" [ "frames", Int 3 ]);
+    ignore (ok_call client "load_state" [ "slot", String "inputs" ]);
+    let restored = set_input [] in
+    Alcotest.(check (list int)) "input words restored" (ports saved) (ports restored);
+    Alcotest.(check int) "system inputs restored" (int (field "system_inputs" saved)) (int (field "system_inputs" restored));
+    let replayed = str (field "state_crc" (structured (ok_call client "step" [ "frames", Int 5 ]))) in
+    Alcotest.(check string) "replay with the restored inputs is identical" straight replayed;
+    finish client)
 
 (* ---- f3recomp mcp bridging a runtime session ---- *)
 
@@ -589,7 +713,9 @@ let () =
   let case name test = Alcotest.test_case name `Quick test in
   Alcotest.run "f3recomp mcp" [
     "f3recomp", [ case "protocol" protocol; case "static tools" static_tools; case "tool errors" tool_errors ];
-    "f3rt-tool", [ case "standalone runtime" standalone_runtime ];
+    "smoke", [ case "standalone f3rt-tool" standalone_smoke; case "standalone bad init" standalone_bad_init;
+               case "bridge without a session" bridge_smoke ];
+    "runtime", [ case "standalone runtime" standalone_runtime; case "state inputs" standalone_state_inputs ];
     "bridge", [ case "session lifecycle" session_lifecycle; case "stale binary" stale_binary;
                 case "pinned game" pinned_game ];
   ]
