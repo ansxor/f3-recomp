@@ -78,7 +78,8 @@ let session_json (t : Runtime_bridge.t) (session : Runtime_bridge.session) =
       ("rom_dir", `String session.rom_dir);
       ("alive", `Bool (not (Eio.Promise.is_resolved session.conn.dead)));
       ("binary_status", `String (Runtime_bridge.status_name (Runtime_bridge.binary_status session)));
-      ("active", `Bool (match t.order with id :: _ -> id = session.id | [] -> false));
+      (* The session a call without session_id goes to: the newest one whose child is alive. *)
+      ("active", `Bool (match Runtime_bridge.newest_live t with Some live -> live.id = session.id | None -> false));
     ]
 
 let sessions_json (t : Runtime_bridge.t) =
@@ -142,7 +143,7 @@ let entries (t : Runtime_bridge.t) ~notify =
     managed "session_close" session_close_description
       (object_schema [ ("session_id", string_prop "Session to close (default: the most recently opened).") ])
       (fun args ->
-        let session = Runtime_bridge.find_session t (string_arg "session_id" args) in
+        let session = Runtime_bridge.find_session_to_close t (string_arg "session_id" args) in
         let status = Runtime_bridge.close_session t session in
         notify ();
         structured
@@ -193,8 +194,11 @@ let runtime_tool_name (t : Runtime_bridge.t) name =
   let prefix = Runtime_bridge.tool_prefix in
   if String.starts_with ~prefix name then
     let tool = String.sub name (String.length prefix) (String.length name - String.length prefix) in
-    if List.exists (fun (d : Mcp.Types.Tool.t) -> d.name = name) (Runtime_bridge.runtime_tools t) then Some tool
-    else None
+    let in_list tools = List.exists (fun (d : Mcp.Types.Tool.t) -> d.name = tool) tools in
+    let in_any_session =
+      Hashtbl.fold (fun _ (s : Runtime_bridge.session) acc -> acc || in_list s.tools) t.sessions false
+    in
+    if in_any_session || in_list t.pinned then Some tool else None
   else None
 
 let unknown_tool_message name =
@@ -272,30 +276,75 @@ let known_methods =
 let parse_failure_code (request : Jsonrpc.Request.t) =
   if List.mem request.method_ known_methods then json_rpc_invalid_params else json_rpc_method_not_found
 
-(* Reads packets until EOF. A bad line or an unsupported request must not end the server. *)
-let serve ~clock ~transport ~server ~handle ~take_notification =
-  let send outgoing = Mcp_eio.Stdio.send transport (Mcp.Protocol.outgoing_to_message outgoing) in
-  let rec loop failures =
+(* Reads packets until EOF. A bad line or an unsupported request must not end the server.
+
+   Only [tools/call] can block (a bridged call waits on a child, a one-shot runs for minutes), so each runs in
+   its own fiber while this loop keeps reading: ping, tools/list, [notifications/cancelled] and the end of input
+   are never held up by a running call. Responses go out through [send], which serialises writers. On end of
+   input every in-flight call is cancelled before this returns. *)
+let serve ~clock ~transport ~server ~handle ~send ~take_notification ~background =
+  let inflight : (Jsonrpc.Id.t, unit Eio.Promise.u) Hashtbl.t = Hashtbl.create 16 in
+  let notify_list_changed () =
+    send (Mcp.Server.send_notification server (Mcp.Notification.ToolsListChanged { meta = None }))
+  in
+  (* Handles [message] and sends its response and then, if the call changed the tool list, the notification
+     (a client that refetches on it must see the new list). *)
+  let respond message =
+    let response = handle message in
+    let notified = take_notification () in
+    Option.iter send response;
+    if notified then notify_list_changed ()
+  in
+  let call_in_fiber ~sw id message =
+    let cancelled, cancel = Eio.Promise.create () in
+    Hashtbl.replace inflight id cancel;
+    Eio.Fiber.fork ~sw (fun () ->
+        Fun.protect
+          ~finally:(fun () -> Hashtbl.remove inflight id)
+          (fun () ->
+            try Eio.Fiber.first (fun () -> respond message) (fun () -> Eio.Promise.await cancelled)
+            with
+            | Eio.Cancel.Cancelled _ as exn -> raise exn
+            | exn ->
+                Logs.err (fun m -> m "tools/call failed: %s" (Printexc.to_string exn));
+                (try
+                   send (Mcp.Protocol.error_to_outgoing ~id ~code:(-32603) ~message:(Printexc.to_string exn) ())
+                 with Eio.Cancel.Cancelled _ as exn -> raise exn | _ -> ())))
+  in
+  let cancel_request (params : Mcp.Notification.Cancelled.params) =
+    let id : Jsonrpc.Id.t = match params.request_id with String s -> `String s | Int n -> `Int n in
+    match Hashtbl.find_opt inflight id with
+    | Some cancel -> Hashtbl.remove inflight id; Eio.Promise.resolve cancel ()
+    | None -> ()
+  in
+  let handle_packet ~sw packet =
+    match Mcp.Protocol.parse_message packet with
+    | Ok (Mcp.Protocol.Request (id, Mcp.Request.ToolsCall _) as message) -> call_in_fiber ~sw id message
+    | Ok (Mcp.Protocol.Notification (Mcp.Notification.Cancelled params)) -> cancel_request params
+    | Ok message -> respond message
+    | Error message -> (
+        match packet with
+        | Jsonrpc.Packet.Request request ->
+            send (Mcp.Protocol.error_to_outgoing ~id:request.id ~code:(parse_failure_code request) ~message ())
+        | _ -> Logs.warn (fun m -> m "ignoring a message: %s" message))
+  in
+  let rec loop ~sw failures =
     match Mcp_eio.Stdio.recv transport ~clock () with
     | None -> ()
     | exception Failure message ->
         Logs.warn (fun m -> m "ignoring a malformed line: %s" message);
-        if failures < 3 then loop (failures + 1)
+        if failures < 3 then loop ~sw (failures + 1)
     | Some packet ->
-        (match Mcp.Protocol.parse_message packet with
-         | Ok message ->
-             Option.iter send (handle message);
-             (* After the response, so a client that refetches on the notification sees the new list. *)
-             if take_notification () then
-               send (Mcp.Server.send_notification server (Mcp.Notification.ToolsListChanged { meta = None }))
-         | Error message -> (
-             match packet with
-             | Jsonrpc.Packet.Request request ->
-                 send (Mcp.Protocol.error_to_outgoing ~id:request.id ~code:(parse_failure_code request) ~message ())
-             | _ -> Logs.warn (fun m -> m "ignoring a message: %s" message)));
-        loop 0
+        handle_packet ~sw packet;
+        loop ~sw 0
   in
-  loop 0
+  try
+    Eio.Switch.run @@ fun sw ->
+    background sw;
+    loop ~sw 0;
+    (* End of input: nobody is left to answer, so stop whatever is still running. *)
+    Eio.Switch.fail sw Exit
+  with Exit -> ()
 
 (* Stdout belongs to the MCP transport: it gets a private duplicate of fd 1, and fd 1 itself now points at
    stderr, so a stray print can never corrupt the framing. *)
@@ -305,17 +354,23 @@ let take_stdout ~sw =
   Unix.dup2 ~cloexec:false Unix.stderr Unix.stdout;
   Eio_unix.File.import_rw ~sw ~close_unix:true mcp_fd
 
-let pin_game (t : Runtime_bridge.t) game =
+(* Lists the runtime's tools from a throwaway child, so a client that ignores list_changed still sees them.
+   Bounded by the handshake timeout; runs beside [serve], so a slow child never delays [initialize]. *)
+let pin_game (t : Runtime_bridge.t) game ~changed =
   match
     Static_tools.safe_game game;
     let binary = Runtime_bridge.resolve_binary t ~game ~tool_path:None in
     let conn = Runtime_bridge.spawn t ~binary ~args:[ "mcp"; "--no-init" ] in
-    let tools = try Runtime_bridge.handshake conn with exn -> ignore (Runtime_bridge.shutdown_child t conn); raise exn in
+    let tools =
+      try Runtime_bridge.handshake t conn with exn -> Runtime_bridge.abort_child t conn; raise exn
+    in
     ignore (Runtime_bridge.shutdown_child t conn);
     tools
   with
-  | tools -> t.pinned <- tools
+  | tools -> if Runtime_bridge.set_pinned t tools then changed ()
   | exception Tool_error message -> prerr_endline ("f3recomp mcp: --game " ^ game ^ ": " ^ message)
+  | exception (Eio.Cancel.Cancelled _ as exn) -> raise exn
+  | exception exn -> prerr_endline ("f3recomp mcp: --game " ^ game ^ ": " ^ Printexc.to_string exn)
 
 let run ~root ~game =
   Logs.set_reporter (Logs.format_reporter ~app:Format.err_formatter ~dst:Format.err_formatter ());
@@ -324,12 +379,26 @@ let run ~root ~game =
   Eio.Switch.run @@ fun sw ->
   let out = take_stdout ~sw in
   let transport = Mcp_eio.Stdio.create ~stdin:(Eio.Stdenv.stdin env) ~stdout:out in
+  let write_lock = Eio.Mutex.create () in
+  (* Several fibers answer at once: one packet at a time on stdout. *)
+  let send outgoing =
+    Eio.Mutex.use_ro write_lock (fun () -> Mcp_eio.Stdio.send transport (Mcp.Protocol.outgoing_to_message outgoing))
+  in
   let t = Runtime_bridge.create ~root ~env ~sw ~api:(F3recomp.Api.session ()) in
-  Option.iter (pin_game t) game;
   let pending = ref false in
   let server, table = make_server t ~notify:(fun () -> pending := true) in
   let handle = dispatch t (server, table) in
   let take_notification () = let v = !pending in pending := false; v in
+  (* Not before the handshake: a client has not asked for the list yet, and will see the current one. *)
+  let announce_tools_changed () =
+    if Mcp.Server.is_initialized server then
+      try send (Mcp.Server.send_notification server (Mcp.Notification.ToolsListChanged { meta = None }))
+      with Eio.Cancel.Cancelled _ as exn -> raise exn | _ -> ()
+  in
+  t.on_tools_changed <- announce_tools_changed;
+  let background sw =
+    Option.iter (fun game -> Eio.Fiber.fork ~sw (fun () -> pin_game t game ~changed:announce_tools_changed)) game
+  in
   Fun.protect
     ~finally:(fun () ->
       (* Every open session owns a child process: end them cleanly before the switch closes. *)
@@ -338,4 +407,4 @@ let run ~root ~game =
            | Some session -> ignore (Runtime_bridge.close_session t session)
            | None -> ())
         t.order)
-    (fun () -> serve ~clock:(Eio.Stdenv.clock env) ~transport ~server ~handle ~take_notification)
+    (fun () -> serve ~clock:(Eio.Stdenv.clock env) ~transport ~server ~handle ~send ~take_notification ~background)
