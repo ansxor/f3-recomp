@@ -1,0 +1,104 @@
+diff --git a/lib/mcp-eio/framing.ml b/lib/mcp-eio/framing.ml
+index c5aa3da..b28ac6a 100644
+--- a/lib/mcp-eio/framing.ml
++++ b/lib/mcp-eio/framing.ml
+@@ -17,12 +17,6 @@ let rec json_to_yojson (json : Jsonrpc.Json.t) : Yojson.Safe.t =
+   | `List lst -> `List (List.map json_to_yojson lst)
+   | `Null -> `Null
+   | `String s -> `String s
+-  | `Tuple lst -> `List (List.map json_to_yojson lst)
+-  | `Variant (name, opt) -> (
+-      match opt with
+-      | None -> `Assoc [ ("variant", `String name) ]
+-      | Some v ->
+-          `Assoc [ ("variant", `String name); ("value", json_to_yojson v) ])
+ 
+ let rec yojson_to_json (yojson : Yojson.Safe.t) : Jsonrpc.Json.t =
+   match yojson with
+@@ -34,12 +28,6 @@ let rec yojson_to_json (yojson : Yojson.Safe.t) : Jsonrpc.Json.t =
+   | `List lst -> `List (List.map yojson_to_json lst)
+   | `Null -> `Null
+   | `String s -> `String s
+-  | `Tuple lst -> `List (List.map yojson_to_json lst)
+-  | `Variant (name, arg) -> (
+-      match arg with
+-      | None -> `Assoc [ ("variant", `String name) ]
+-      | Some v ->
+-          `Assoc [ ("variant", `String name); ("value", yojson_to_json v) ])
+ 
+ let write_packet (sink : _ Flow.sink) (packet : Jsonrpc.Packet.t) =
+   let json = Jsonrpc.Packet.yojson_of_t packet in
+diff --git a/lib/mcp-eio/transport_stdio.ml b/lib/mcp-eio/transport_stdio.ml
+index ccd21cb..647537f 100644
+--- a/lib/mcp-eio/transport_stdio.ml
++++ b/lib/mcp-eio/transport_stdio.ml
+@@ -21,7 +21,7 @@ let create ~stdin ~stdout =
+   {
+     _stdin = (stdin :> stdin);
+     stdout :> stdout;
+-    buf_reader = Buf_read.of_flow ~max_size:1_000_000 stdin;
++    buf_reader = Buf_read.of_flow ~max_size:268_435_456 stdin;
+     closed = false;
+   }
+ 
+diff --git a/lib/mcp/mcp_protocol.ml b/lib/mcp/mcp_protocol.ml
+index b71ba35..6218bc6 100644
+--- a/lib/mcp/mcp_protocol.ml
++++ b/lib/mcp/mcp_protocol.ml
+@@ -11,14 +11,6 @@ let rec json_to_yojson (json : Json.t) : Yojson.Safe.t =
+   | `List lst -> `List (List.map json_to_yojson lst)
+   | `Null -> `Null
+   | `String s -> `String s
+-  | `Tuple lst ->
+-      `List (List.map json_to_yojson lst) (* Convert tuple to list *)
+-  | `Variant (name, opt) -> (
+-      (* Convert variant to an object *)
+-      match opt with
+-      | None -> `Assoc [ ("variant", `String name) ]
+-      | Some v ->
+-          `Assoc [ ("variant", `String name); ("value", json_to_yojson v) ])
+ 
+ (* Convert jsonrpc types to Yojson *)
+ let structured_to_yojson (s : Structured.t option) : Yojson.Safe.t option =
+diff --git a/lib/mcp/mcp_request.ml b/lib/mcp/mcp_request.ml
+index 7ada140..2565a72 100644
+--- a/lib/mcp/mcp_request.ml
++++ b/lib/mcp/mcp_request.ml
+@@ -182,7 +182,7 @@ module Tools = struct
+   module Call = struct
+     type params = {
+       name : string;
+-      arguments : Yojson.Safe.t option;
++      arguments : Yojson.Safe.t option; [@default None]
+       meta : Yojson.Safe.t option; [@default None] [@key "_meta"]
+     }
+     [@@deriving yojson { strict = false }]
+diff --git a/lib/mcp/mcp_types.ml b/lib/mcp/mcp_types.ml
+index 3d623bb..0e139b8 100644
+--- a/lib/mcp/mcp_types.ml
++++ b/lib/mcp/mcp_types.ml
+@@ -273,16 +273,20 @@ module Capabilities = struct
+   }
+   [@@deriving yojson { strict = false }]
+ 
+-  type prompts = { list_changed : bool option [@key "listChanged"] }
++  type prompts = {
++    list_changed : bool option; [@default None] [@key "listChanged"]
++  }
+   [@@deriving yojson { strict = false }]
+ 
+   type resources = {
+-    subscribe : bool option;
+-    list_changed : bool option; [@key "listChanged"]
++    subscribe : bool option; [@default None]
++    list_changed : bool option; [@default None] [@key "listChanged"]
+   }
+   [@@deriving yojson { strict = false }]
+ 
+-  type tools = { list_changed : bool option [@key "listChanged"] }
++  type tools = {
++    list_changed : bool option; [@default None] [@key "listChanged"]
++  }
+   [@@deriving yojson { strict = false }]
+ 
+   type client = {

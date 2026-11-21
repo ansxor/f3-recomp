@@ -554,112 +554,6 @@ let profile_merge () =
   write_file garbage "garbage\n";
   fails ~containing:"unsupported block profile" ["profile-merge"; "--output"; output; garbage]
 
-(* ---- serve ---- *)
-
-let request id meth params =
-  Json.to_string (Object ["id", Int id; "method", String meth; "params", Object params])
-
-let game_params =
-  let args = game () in
-  ["config", Json.String (List.nth args 1); "rom_dir", Json.String (List.nth args 3)]
-
-let serve lines =
-  let out = succeed ~input:(String.concat "\n" lines ^ "\n") ["serve"] in
-  List.map json_of (String.split_on_char '\n' (String.trim out))
-
-let serve_session () =
-  let profile = profile_file "serve.profile" ~hits:[0x400, 1; 0x420, 6] in
-  let merged = scratch_file "serve-merged.profile" in
-  let responses = serve [
-    request 1 "ping" [];
-    request 2 "version" [];
-    request 3 "rom_read" (game_params @ ["region", String "rom"; "addr", Int 0; "len", Int 8]);
-    request 4 "disasm" (game_params @ ["pc", String "0x400"; "count", Int 2]);
-    request 5 "inspect" (game_params @ ["routines", Bool false]);
-    request 6 "xref" (game_params @ ["target", String "io"]);
-    request 7 "flow" (game_params @ ["target", String "reset"; "depth", Int 1]);
-    request 8 "coverage" game_params;
-    request 9 "check_irq" game_params;
-    request 10 "decisions" (game_params @ ["sprite_only", Bool true]);
-    request 11 "lower" ["pc", Int 0x1000; "hex", String "4e75"; "live_out", String "none"];
-    request 12 "lower" (game_params @ ["pc", Int 0x404; "count", Int 2]);
-    request 13 "inspect" (game_params @ ["profile_tiers", String profile]);
-    request 14 "profile_merge" ["inputs", Array [String profile]; "output", String merged];
-    request 15 "disasm" ["pc", Int 0x1000; "hex", String "4e71"];
-    "";
-    request 16 "close" game_params;
-    request 17 "coverage" game_params;
-    request 18 "close" [];
-  ] in
-  Alcotest.(check int) "one response per request" 18 (List.length responses);
-  Alcotest.(check (list int)) "ids are echoed in order" (List.init 18 (fun i -> i + 1))
-    (List.map (fun r -> int (field "id" r)) responses);
-  List.iter (fun r -> Alcotest.(check bool) "ok" true (field "ok" r = Json.Bool true)) responses;
-  let result n = field "result" (List.nth responses (n - 1)) in
-  Alcotest.(check bool) "ping" true (result 1 = Json.Object ["pong", Json.Bool true]);
-  Alcotest.(check string) "version" "f3recomp" (str (field "name" (result 2)));
-  Alcotest.(check bool) "methods listed" true
-    (List.mem "profile_merge" (strs (field "methods" (result 2))));
-  Alcotest.(check string) "rom_read" "0041000000000400" (str (field "bytes" (result 3)));
-  Alcotest.(check (list string)) "disasm" ["lea $410000,a5"; "bsr $000420"]
-    (List.map (fun l -> str (field "text" l)) (items (result 4)));
-  Alcotest.(check bool) "inspect equals the command line"
-    true (result 5 = json_out (["inspect"] @ game () @ ["--json"; "--summary"]));
-  Alcotest.(check bool) "xref equals the command line"
-    true (result 6 = json_out (["xref"] @ game () @ ["--target"; "io"; "--json"]));
-  Alcotest.(check bool) "flow equals the command line"
-    true (result 7 = json_out (["flow"] @ game () @ ["--target"; "reset"; "--depth"; "1"; "--json"]));
-  Alcotest.(check bool) "coverage equals the command line"
-    true (result 8 = json_out (["coverage"] @ game () @ ["--json"]));
-  Alcotest.(check bool) "check_irq equals the command line"
-    true (result 9 = json_out (["check-irq"] @ game () @ ["--json"]));
-  Alcotest.(check bool) "decisions equals the command line"
-    true (result 10 = json_out (["decisions"] @ game () @ ["--sprite-only"; "--json"]));
-  Alcotest.(check bool) "lower from hex equals the command line"
-    true (result 11 = json_out ["lower"; "--pc"; "0x1000"; "--hex"; "4e75"; "--live-out"; "none"; "--json"]);
-  Alcotest.(check bool) "lower from ROM equals the command line"
-    true (result 12 = json_out (["lower"] @ game () @ ["--pc"; "0x404"; "--count"; "2"; "--json"]));
-  Alcotest.(check bool) "profiled inspect equals the command line" true
-    (result 13 = json_out (["inspect"] @ game () @ ["--json"; "--profile-tiers"; profile]));
-  Alcotest.(check int) "profile_merge" 2 (int (field "ever_executed" (result 14)));
-  Alcotest.(check string) "merged file written" (profile_text ~hits:[0x400, 1; 0x420, 6]) (read_file merged);
-  Alcotest.(check string) "hex disasm" "nop" (str (field "text" (List.hd (items (result 15)))));
-  Alcotest.(check bool) "close" true (result 16 = Json.Object ["closed", Json.Bool true]);
-  Alcotest.(check bool) "usable after close" true (result 17 = json_out (["coverage"] @ game () @ ["--json"]))
-
-let serve_errors () =
-  let responses = serve [
-    "not json";
-    "[1,2]";
-    "{\"id\":\"a\"}";
-    request 2 "nope" [];
-    request 3 "disasm" ["pc", Int 0x1000];
-    request 4 "rom_read" (game_params @ ["addr", Int 0]);
-    request 5 "rom_read" (game_params @ ["region", String "rom"; "addr", Int 0x2000; "len", Int 4]);
-    request 6 "xref" (game_params @ ["target", String "io"; "role", String "bogus"]);
-    request 7 "inspect" [ "config", Json.String "missing.toml"; "rom_dir", String "." ];
-    request 8 "flow" (game_params @ ["target", String "0x800"]);
-    request 9 "inspect" (game_params @ ["profile_tiers", String "a"; "profile_slim", String "b"]);
-    request 10 "disasm" (game_params @ ["pc", Int 0x401]);
-    request 11 "lower" ["pc", Int 0x1000; "hex", String "4e75"; "count", Int 0];
-    request 12 "ping" [];
-  ] in
-  Alcotest.(check int) "every line is answered" 14 (List.length responses);
-  let failure n = List.nth responses (n - 1) in
-  let message n = str (field "error" (failure n)) in
-  List.iter (fun n ->
-    Alcotest.(check bool) (Printf.sprintf "response %d failed" n) true
-      (field "ok" (failure n) = Json.Bool false)) (List.init 13 (fun i -> i + 1));
-  Alcotest.(check bool) "malformed JSON has a null id" true (field "id" (failure 1) = Json.Null);
-  Alcotest.(check bool) "non-object request" true (field "id" (failure 2) = Json.Null);
-  Alcotest.(check bool) "missing method keeps the id" true (field "id" (failure 3) = Json.String "a");
-  Alcotest.(check bool) "unknown method" true (message 4 = "unknown method \"nope\"");
-  Alcotest.(check bool) "missing source" true (String.length (message 5) > 0);
-  Alcotest.(check bool) "missing len" true (message 6 = "missing parameter \"len\"");
-  Alcotest.(check bool) "outside region" true
-    (String.length (message 7) > 0 && Str.string_match (Str.regexp ".*outside the region") (message 7) 0);
-  Alcotest.(check bool) "responses after errors still work" true (field "ok" (failure 14) = Json.Bool true)
-
 let () =
   let case name test = Alcotest.test_case name `Quick test in
   Alcotest.run "f3recomp JSON API" [
@@ -677,5 +571,4 @@ let () =
     "flow", [case "json" flow_json; case "callers" flow_callers; case "dispatch" flow_dispatch;
              case "errors" flow_errors; case "text" flow_text];
     "profile-merge", [case "merge" profile_merge];
-    "serve", [case "session" serve_session; case "errors" serve_errors];
   ]

@@ -54,10 +54,10 @@ supersedes: []
 
 | Kind | What it is here | Where it goes in `raw/` |
 |---|---|---|
-| `test` | A run that checks a prediction: an SDK `game.run({ inputs, ... })` (watch runs pass `--watch-entries` through `args`), `run.series`/`run.table` over every dumped frame, the per-area runtime tests | `raw/tests/` (command, script and output) |
-| `trace` | Observed execution: discovery logs, `entries.log`, frame dumps decoded by `run.table`/`run.sprites` (tools/sdk), MAME taps | `raw/traces/` |
+| `test` | A run that checks a prediction: a live `f3recomp mcp` runtime session (`rt_step`, `rt_set_input`, `rt_read`, `rt_save_state`/`rt_load_state`), an instrumented game run with `--watch-entries`, the per-area runtime tests | `raw/tests/` (command, script and output) |
+| `trace` | Observed execution: discovery logs, `entries.log`, frame dumps, `rt_sprites` and `rt_read` output from a live session, MAME taps | `raw/traces/` |
 | `emu-source` | MAME or this runtime's device code | `raw/emu-source/` |
-| `doc` | Datasheets, hardware notes, and static `f3recomp disasm`/`xref`/`flow` output (tools/sdk) | `raw/disasm/` for static output, `raw/docs/` otherwise |
+| `doc` | Datasheets, hardware notes, and static `f3recomp disasm`/`xref`/`flow` output (CLI or the `f3recomp mcp` tools) | `raw/disasm/` for static output, `raw/docs/` otherwise |
 
 Static disassembly is `doc`-level evidence: it shows what the code can do, not what it does. A run
 that uses `poke` lines shows that code is reachable, not that normal play reaches it; say so on the
@@ -72,12 +72,12 @@ observation by 12 (see `.omp/rules/hardware-observation-over-mame.md`).
 
 ```yaml
 ---
-source_url:          # or the f3recomp / SDK call
+source_url:          # or the f3recomp / MCP call
 ingested: YYYY-MM-DD
 sha256:              # of the body below the frontmatter
 game:
 rom_sha256:
-captured_with:       # e.g. "tools/sdk (git <short sha>)", "MAME 0.27x", "hardware"
+captured_with:       # e.g. "f3recomp mcp (git <short sha>)", "MAME 0.27x", "hardware"
 ---
 ```
 

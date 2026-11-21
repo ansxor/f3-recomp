@@ -1,4 +1,13 @@
 (tests
  (names json_test format_test profile_test cli_test)
+ (modules json_test format_test profile_test cli_test)
  (libraries f3recomp f3recomp_test alcotest qcheck str unix digestif.ocaml)
+ (deps ../../bin/main.exe))
+
+; End-to-end MCP tests: `f3recomp mcp` over stdio, and a real `f3rt-tool mcp` (F3RT_TOOL, default
+; build/<game>/f3rt-tool; those cases skip when the binary or the ROMs are missing).
+(test
+ (name mcp_test)
+ (modules mcp_test)
+ (libraries f3recomp alcotest unix)
  (deps ../../bin/main.exe))

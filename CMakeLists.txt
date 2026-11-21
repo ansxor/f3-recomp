@@ -235,9 +235,10 @@ if(F3RT_HOST_TOOLS)
         tools/commands/sprite_check.cpp
         tools/commands/netplay.cpp
         tools/commands/netplay_replay.cpp
+        tools/commands/mcp.cpp
     )
     target_include_directories(f3rt-tool PRIVATE tools tools/commands)
-    target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
+    target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner mcp::mcp ZLIB::ZLIB)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
@@ -377,6 +378,18 @@ if(BUILD_TESTING)
     endif()
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
+    endif()
+
+    # End-to-end MCP tests (f3recomp mcp, f3rt-tool mcp and the bridge between them). The OCaml test
+    # executable is built by dune at configure time, next to f3recomp.
+    if(F3_ROM_DIR AND F3_RECOMP_COMMAND)
+        get_filename_component(_recomp_exe_dir "${F3_RECOMP_COMMAND}" DIRECTORY)
+        get_filename_component(_mcp_test_dir "${_recomp_exe_dir}/../test/api" ABSOLUTE)
+        if(EXISTS "${_mcp_test_dir}/mcp_test.exe")
+            add_test(NAME f3-mcp-e2e COMMAND "${_mcp_test_dir}/mcp_test.exe" WORKING_DIRECTORY "${_mcp_test_dir}")
+            set_tests_properties(f3-mcp-e2e PROPERTIES
+                ENVIRONMENT "F3RT_TOOL=$<TARGET_FILE:f3rt-tool>;F3RT_ROM_DIR=${F3_ROM_DIR};F3RT_TEST_GAME=${F3_GAME}")
+        endif()
     endif()
 
     if(F3_ROM_DIR)

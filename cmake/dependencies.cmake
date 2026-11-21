@@ -38,6 +38,27 @@ target_link_libraries(cpp_yyjson INTERFACE yyjson::yyjson)
 target_compile_features(cpp_yyjson INTERFACE cxx_std_20)
 add_library(cpp_yyjson::cpp_yyjson ALIAS cpp_yyjson)
 
+if(F3RT_HOST_TOOLS)
+    # `f3rt-tool mcp` is a Model Context Protocol server (stdio) built on Neumann-Labs/mcp-cpp.
+    # JSON_Install ON only so mcp-cpp's install(EXPORT) finds the target in an export set; the source
+    # fallback is EXCLUDE_FROM_ALL, so nothing of it is installed.
+    CPMFindPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.12.0 VERSION 3.11
+        EXCLUDE_FROM_ALL YES OPTIONS "JSON_BuildTests OFF" "JSON_Install ON")
+    if(NOT nlohmann_json_FOUND AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        # mcp-cpp resolves nlohmann_json with find_package(); point that at the source fallback.
+        file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/nlohmann_json-config.cmake"
+            "set(nlohmann_json_FOUND TRUE)\n")
+        file(WRITE "${CMAKE_FIND_PACKAGE_REDIRECTS_DIR}/nlohmann_json-config-version.cmake"
+            "set(PACKAGE_VERSION 3.12.0)\nset(PACKAGE_VERSION_COMPATIBLE TRUE)\n")
+    endif()
+    # Stdio transport only: no httplib/OpenSSL. Built as a subproject, so only the mcp library is
+    # compiled and mcp-cpp's own warning set stays off f3rt targets.
+    CPMAddPackage(NAME mcp_cpp GITHUB_REPOSITORY Neumann-Labs/mcp-cpp
+        GIT_TAG 57be64093a2241b58d01292d096b266fc6a52ec8 EXCLUDE_FROM_ALL YES
+        OPTIONS "MCP_USE_SYSTEM_DEPS ON" "MCP_ENABLE_HTTP OFF" "MCP_BUILD_TESTS OFF"
+            "MCP_BUILD_EXAMPLES OFF" "MCP_WARNINGS_AS_ERRORS OFF")
+endif()
+
 if(F3RT_NETPLAY)
     CPMFindPackage(NAME httplib GITHUB_REPOSITORY yhirose/cpp-httplib GIT_TAG v0.51.0 VERSION 0.14
         OPTIONS "HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF" "HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF"

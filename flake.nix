@@ -21,11 +21,56 @@
           imgui = gh "ocornut" "imgui" "v1.93.0" "sha256-SSrZe05l78C2nea80JmK6Xc8VPYdnRkrOVXG1sYo2VE=" { };
           rapidcheck = gh "emil-e" "rapidcheck" "ff6af6fc683159deb51c543b065eba14dfcf329b"
             "sha256-Ixz5RpY0n8Un/Pv4XoTfbs40+70iyMbkQUjDqoLaWOg=" { };
+          nlohmann_json = gh "nlohmann" "json" "v3.12.0" "sha256-cECvDOLxgX7Q9R3IE86Hj9JJUxraDQvhoyPDF03B2CY=" { };
+          mcp_cpp = gh "Neumann-Labs" "mcp-cpp" "57be64093a2241b58d01292d096b266fc6a52ec8"
+            "sha256-1iBxSFWQ0xvXekztS0omgd1bljv524gHAcva25NDIyU=" { };
           Yojimbo = gh "mas-bandwidth" "yojimbo" "272153a10f32135bb44bb60e7467072baf48f762"
             "sha256-C7KepsbRlBMIIV2w7O3wZpzjgtdzgIo/c+dYGpucOi0=" { fetchSubmodules = true; };
         };
 
-      toolchain = pkgs: {
+      # tmattio/ocaml-mcp (MCP client/server SDK) and its jsonschema dependency are not in nixpkgs.
+      ocamlMcp = pkgs:
+        let
+          o = pkgs.ocamlPackages;
+          jsonschema = o.buildDunePackage {
+            pname = "jsonschema";
+            version = "0.1.0+git7cc8b36";
+            src = pkgs.fetchFromGitHub {
+              owner = "tmattio"; repo = "ocaml-jsonschema";
+              rev = "7cc8b365596295d9ac9eb68d78bb274bf3074c7c";
+              hash = "sha256-yeOAxN+dC4jFNyFPut/xjfLM8d4Eh3CknrbkpJUnWL4=";
+            };
+            propagatedBuildInputs = with o; [ re yojson ppx_deriving_yojson base64 uri ];
+            doCheck = false;
+          };
+          src = pkgs.fetchFromGitHub {
+            owner = "tmattio"; repo = "ocaml-mcp";
+            rev = "49ee348859d8167efb23dfad714250e92177d564";
+            hash = "sha256-tStg0hme5yLcg1IPVBvNZ+qUI86REg3OvqEdy2GZlRQ=";
+          };
+          # jsonrpc >= 1.25 and yojson 3 dropped the `Tuple/`Variant JSON cases the upstream converters match on;
+          # optional capability and request fields get [@default None] (mcp-cpp omits listChanged, isError and
+          # arguments); and the 1 MB stdio line limit is lifted (screenshots and sprite RAM are one JSON line).
+          patches = [ ./nix/ocaml-mcp-compat.patch ];
+          # Libraries: mcp, mcp.sdk (package mcp) and mcp-eio, mcp-eio.sdk (package mcp-eio).
+          mcp = o.buildDunePackage {
+            pname = "mcp";
+            version = "0.1.0+git49ee348";
+            inherit src patches;
+            propagatedBuildInputs = [ jsonschema ] ++ (with o; [ logs jsonrpc yojson ppx_deriving_yojson re base64 ]);
+            doCheck = false;
+          };
+          mcp-eio = o.buildDunePackage {
+            pname = "mcp-eio";
+            version = "0.1.0+git49ee348";
+            inherit src patches;
+            propagatedBuildInputs = [ mcp jsonschema ]
+              ++ (with o; [ eio eio_main logs jsonrpc yojson ppx_deriving_yojson http cohttp cohttp-eio uri cstruct ]);
+            doCheck = false;
+          };
+        in [ jsonschema mcp mcp-eio ];
+
+      toolchain = pkgs: rec {
         python = pkgs.python3.withPackages (ps: [ ps.capstone ps.pytest ]); # pyproject pins capstone==5.0.9
 
         # The build helper apps run shader Python scripts via CMake. This shim
@@ -43,16 +88,17 @@
           exec "$@"
         '';
 
-        libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest ];
+        libs = [ pkgs.sdl3 pkgs.zlib pkgs.gtest pkgs.nlohmann_json ];
 
         # The OCaml recompiler (recomp/), which CMake builds with dune at configure time.
-        ocaml = [ pkgs.ocaml pkgs.dune_3 ] ++ (with pkgs.ocamlPackages; [
-          findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
-        ]);
+        ocamlLibs = (with pkgs.ocamlPackages; [
+          findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest eio_main yojson
+        ]) ++ ocamlMcp pkgs;
+        ocaml = [ pkgs.ocaml pkgs.dune_3 ] ++ ocamlLibs;
         # findlib's setup hook only runs in mkShell, so helpers export this themselves.
         ocamlpath =
           let
-            roots = with pkgs.ocamlPackages; [ findlib cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest ];
+            roots = ocamlLibs;
             closure = builtins.genericClosure {
               startSet = map (p: { key = p.outPath; pkg = p; }) roots;
               operator = item: map (p: { key = p.outPath; pkg = p; })
@@ -132,16 +178,48 @@
           '';
         };
 
+      # The OCaml recompiler as a standalone executable, for the MCP server (CMake builds its own copy with dune).
+      f3recomp = pkgs:
+        pkgs.ocamlPackages.buildDunePackage {
+          pname = "f3recomp";
+          version = "0.1.0";
+          src = lib.cleanSourceWith {
+            src = ./recomp;
+            filter = path: _type: builtins.baseNameOf path != "_build";
+          };
+          buildInputs = with pkgs.ocamlPackages; [ cmdliner otoml checkseum digestif eio_main yojson ] ++ ocamlMcp pkgs;
+          doCheck = false;
+        };
+
+      # `f3recomp mcp`: static analysis plus live f3rt-tool sessions over MCP (stdio). Run from the repository
+      # root (or pass --root DIR): it resolves games/, roms/, profiles/ and build/<game>/f3rt-tool there.
+      mcpServer = pkgs:
+        pkgs.writeShellApplication {
+          name = "f3-mcp";
+          runtimeInputs = [ (f3recomp pkgs) ];
+          text = ''
+            exec f3recomp mcp "$@"
+          '';
+        };
+
       desktop = system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         {
-          packages = { default = compile pkgs; f3-compile = compile pkgs; f3-compdb = compdb pkgs; };
+          packages = {
+            default = compile pkgs;
+            f3-compile = compile pkgs;
+            f3-compdb = compdb pkgs;
+            f3recomp = f3recomp pkgs;
+            f3-mcp = mcpServer pkgs;
+          };
 
           apps = let app = { type = "app"; program = "${compile pkgs}/bin/f3-compile"; };
             in {
               default = app;
               compile = app;
               compdb = { type = "app"; program = "${compdb pkgs}/bin/f3-compdb"; };
+              f3-mcp = { type = "app"; program = "${mcpServer pkgs}/bin/f3-mcp"; };
+              mcp = { type = "app"; program = "${mcpServer pkgs}/bin/f3-mcp"; };
             };
 
           devShells =

@@ -15,6 +15,7 @@ void print_general_help(const char *prog) {
         << "  sprite-check   Sprite emit-unit and behaviour verification against native code\n\n"
         << "  netplay        Deterministic 2-player lockstep netplay client\n"
         << "  netplay-replay Replay / diff netplay desync bundles offline\n"
+        << "  mcp            Model Context Protocol server (stdio) over one live Machine\n"
         << "Run '" << prog << " <subcommand> --help' for details on each subcommand.\n";
 }
 
@@ -49,6 +50,10 @@ int main(int argc, char **argv) {
     }
     if (subcmd == "netplay-replay") {
         return f3rt::tool::cmd_netplay_replay(sub_argc, sub_argv);
+    }
+
+    if (subcmd == "mcp") {
+        return f3rt::tool::cmd_mcp(sub_argc, sub_argv);
     }
 
     std::cerr << "Unknown subcommand: " << subcmd << "\n\n";

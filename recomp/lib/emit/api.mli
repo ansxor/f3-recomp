@@ -1,4 +1,4 @@
-(** The structured analysis API behind the [--json] flags and [f3recomp serve].
+(** The structured analysis API behind the [--json] flags and the [f3recomp mcp] tools.
     A session caches loaded games, discovery results, profiles and analyses, so
     repeated queries against one game are cheap. *)
 
@@ -57,8 +57,14 @@ val inspect_text : Json.t -> string
 val xref_text : Json.t -> string
 val flow_text : Json.t -> string
 
-(** Answer one JSON-RPC request object. *)
-val handle : session -> Json.t -> Json.t
+(** The static analysis tools served by [f3recomp mcp], by name. *)
+val methods : string list
 
-(** Read one request per line and write one response per line until EOF. *)
-val serve : session -> in_channel -> out_channel -> unit
+(** Run one named call ([rom_read], [disasm], [inspect], [xref], [flow], [coverage], [check_irq],
+    [decisions], [lower], [profile_merge]) on a parameter object whose keys are the snake_case option
+    names ([config], [rom_dir], [pc], [target], ...). Addresses are integers or hex strings.
+    Raises {!Error.Invalid} on bad input. *)
+val call : session -> string -> Json.t -> Json.t
+
+(** The message to show for an exception raised by {!call}. *)
+val describe_exception : exn -> string

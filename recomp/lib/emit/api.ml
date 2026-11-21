@@ -265,11 +265,11 @@ let flow_text json =
     (list_of (get "unresolved" json));
   Buffer.contents buffer
 
-(* ---- JSON-RPC ---- *)
+(* ---- named calls (the MCP tools of [f3recomp mcp]) ---- *)
 
 let methods = [
-  "ping"; "version"; "rom_read"; "disasm"; "inspect"; "xref"; "flow"; "coverage"; "check_irq";
-  "decisions"; "lower"; "profile_merge"; "close";
+  "rom_read"; "disasm"; "inspect"; "xref"; "flow"; "coverage"; "check_irq"; "decisions"; "lower";
+  "profile_merge";
 ]
 
 let field params key = Json.member key params
@@ -328,17 +328,13 @@ let source_param params =
 let check_pc pc = if pc < 0 || pc > 0xffffffff || pc land 1 <> 0 then
   Error.fail "pc must be an even 32-bit address"
 
-let dispatch session meth params =
+let call session meth params =
   match meth with
-  | "ping" -> Json.Object ["pong", Json.Bool true]
-  | "version" ->
-      Json.Object ["name", Json.String "f3recomp"; "api", Int 1;
-                   "methods", Array (List.map (fun name -> Json.String name) methods)]
   | "rom_read" ->
       let config, rom_dir = game_params params in
       rom_read session ~config ~rom_dir
         ~region:(Option.value (string_param params "region") ~default:"rom")
-        ~addr:(required_number params "addr") ~len:(required_number params "len")
+        ~addr:(Option.value (number_param params "addr") ~default:0) ~len:(required_number params "len")
   | "disasm" ->
       let source = source_param params in
       let pc = required_number params "pc" in
@@ -389,15 +385,7 @@ let dispatch session meth params =
                              | _ -> Error.fail "inputs must be strings") items
         | _ -> missing "inputs" in
       profile_merge ~output:(required_string params "output") inputs
-  | "close" ->
-      (match string_param params "config", string_param params "rom_dir" with
-       | Some config, Some rom_dir -> close session ~game:(config, rom_dir) ()
-       | None, None -> close session ()
-       | _ -> Error.fail "pass both config and rom_dir, or neither");
-      Json.Object ["closed", Json.Bool true]
   | other -> Error.fail "unknown method %S" other
-
-let failure message = Json.String message
 
 let describe_exception = function
   | Error.Invalid { where; what } -> if where = "" then what else where ^ ": " ^ what
@@ -405,37 +393,3 @@ let describe_exception = function
   | Unix.Unix_error (error, operation, path) ->
       Printf.sprintf "%s %s: %s" operation path (Unix.error_message error)
   | exn -> Printexc.to_string exn
-
-let handle session request =
-  let id = Option.value (Json.member "id" request) ~default:Json.Null in
-  let respond fields = Json.Object (("id", id) :: fields) in
-  match Json.member "method" request with
-  | Some (Json.String meth) ->
-      let params = Option.value (Json.member "params" request) ~default:(Json.Object []) in
-      (match dispatch session meth params with
-       | result -> respond ["ok", Json.Bool true; "result", result]
-       | exception (Out_of_memory | Stack_overflow as exn) -> raise exn
-       | exception exn -> respond ["ok", Json.Bool false; "error", failure (describe_exception exn)])
-  | _ -> respond ["ok", Json.Bool false; "error", failure "request needs a string \"method\""]
-
-let serve session input output =
-  let rec loop () =
-    match In_channel.input_line input with
-    | None -> ()
-    | Some line when String.trim line = "" -> loop ()
-    | Some line ->
-        let response =
-          match Json.parse line with
-          | Ok (Json.Object _ as request) -> handle session request
-          | Ok _ ->
-              Json.Object ["id", Null; "ok", Bool false; "error", String "request must be an object"]
-          | Error message ->
-              Json.Object ["id", Null; "ok", Bool false;
-                           "error", String ("invalid JSON: " ^ message)]
-        in
-        output_string output (Json.to_string response);
-        output_char output '\n';
-        flush output;
-        loop ()
-  in
-  loop ()

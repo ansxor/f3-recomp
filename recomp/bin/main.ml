@@ -330,15 +330,27 @@ let profile_merge =
   Cmd.v (Cmd.info "profile-merge" ~doc:"Sum block profiles, saturating at the uint64 maximum.")
     Term.(const run $ output $ inputs $ json_flag)
 
-let serve =
-  let run () =
-    report_error (fun () ->
-        set_binary_mode_in stdin true;
-        Api.serve (Api.session ()) stdin stdout)
+let mcp =
+  let root =
+    Arg.(value & opt string (Sys.getcwd ()) & info [ "root" ] ~docv:"DIR"
+           ~doc:"Repository root: games/<game>/config.toml, roms/<game>, profiles/ and build/<game>/f3rt-tool \
+                 resolve under it (default: the current directory).")
   in
+  let game =
+    Arg.(value & opt (some string) None & info [ "game" ] ~docv:"GAME"
+           ~doc:"Discover build/<game>/f3rt-tool's tools at startup and list them as rt_<name> from the start, \
+                 before any session_open.")
+  in
+  let run root game = report_error (fun () -> Mcp_command.run ~root ~game) in
   Cmd.v
-    (Cmd.info "serve" ~doc:"Answer line-delimited JSON requests on stdin until it closes.")
-    Term.(const run $ const ())
+    (Cmd.info "mcp"
+       ~doc:"Serve static analysis and live runtime sessions over the Model Context Protocol (stdio)."
+       ~man:[ `S Manpage.s_description;
+              `P "Static tools (rom_read, disasm, inspect, xref, flow, coverage, check_irq, decisions, lower, \
+                  profile_merge) run in this process. session_open spawns build/<game>/f3rt-tool mcp and registers \
+                  its tools as rt_<name>, sending notifications/tools/list_changed; session_close removes them. A \
+                  rebuilt f3rt-tool makes rt_* calls fail until the session is reopened." ])
+    Term.(const run $ root $ game)
 
 let emit =
   let required_path name = Arg.(required & opt (some string) None & info [name]) in
@@ -387,4 +399,4 @@ let () =
     (Cmd.eval'
        (Cmd.group (Cmd.info "f3recomp")
           [sprite_units; compile_roms; check_game; check_irq; decisions; lower; coverage; enhancements; emit;
-           rom_read; disasm; inspect; xref; flow; profile_merge; serve]))
+           rom_read; disasm; inspect; xref; flow; profile_merge; mcp]))

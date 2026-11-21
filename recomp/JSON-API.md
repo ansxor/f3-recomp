@@ -1,14 +1,15 @@
 # f3recomp JSON API
 
 `f3recomp` answers structured queries about a game's ROM, listings, routines, cross-references
-and call flow. Every query exists as a one-shot subcommand with `--json` and as a method of
-`f3recomp serve`, which keeps loaded games, discovery results and profiles in memory.
+and call flow. Every query exists as a one-shot subcommand with `--json` and as a tool of
+`f3recomp mcp`, a Model Context Protocol server (stdio) that keeps loaded games, discovery
+results and profiles in memory between calls.
 
 Conventions:
 
 - Addresses are JSON integers (`0x400` is `1024`). Hit counts are integers (saturated at
   `2^63 - 1`). Hex byte strings are lowercase, two digits per byte, no separators.
-- On the command line addresses are hexadecimal with an optional `0x` or `$` prefix. In `serve`
+- On the command line addresses are hexadecimal with an optional `0x` or `$` prefix. In `mcp`
   an address parameter may be an integer or such a string. `lower --pc` keeps `Arg.int` syntax
   (decimal, or `0x` hex).
 - Every query takes `--config FILE --rom-dir DIR` (`config` and `rom_dir`), except `disasm` and
@@ -197,36 +198,42 @@ by region and unsigned CRC, then hits, then misses). Duplicate inputs are reject
 
 Text output: `merged N profiles into PATH`.
 
-## `serve`
+## `mcp`
 
-`f3recomp serve` reads one JSON object per line on stdin and writes one per line on stdout,
-flushing after each. Blank lines are skipped.
+`f3recomp mcp [--root DIR] [--game GAME]` is an MCP server (protocol 2025-11-25, newline-delimited JSON-RPC
+on stdin/stdout; stdout carries only MCP messages, diagnostics go to stderr). Each tool result carries the JSON
+document in `structuredContent` and the same JSON as a text content block; a failure is a result with
+`isError: true` and the message as text. Games are cached by `(config, rom_dir)`; discovery results, analyses (by
+profile file, its mtime and `a5`), coverage and `check_irq` results are cached with them. Argument names not in
+a tool's `inputSchema` are rejected.
 
-```
-request:  {"id": <any JSON>, "method": string, "params": {...}}
-success:  {"id": <same>, "ok": true,  "result": <JSON>}
-failure:  {"id": <same, null if unreadable>, "ok": false, "error": string}
-```
+Naming a game: every tool that reads a game takes either `config` + `rom_dir`, or `game: "<id>"`, which means
+`<root>/games/<id>/config.toml`, `<root>/roms/<id>` and, for `inspect`, `xref`, `flow` and `decisions`,
+`<root>/profiles/<id>.profile` when it exists (`no_profile: true` skips it). `--root` defaults to the current
+directory.
 
-A malformed line or a request without a string `method` gets a failure response; the server keeps
-running until EOF. Games are cached by `(config, rom_dir)`; discovery results, analyses (by
-profile file, its mtime and `a5`), coverage and `check_irq` results are cached with them.
-
-| method | params | result |
+| tool | arguments | result |
 | --- | --- | --- |
-| `ping` | | `{pong: true}` |
-| `version` | | `{name: "f3recomp", api: 1, methods: string[]}` |
-| `rom_read` | `config rom_dir region? addr len` | as `rom-read` JSON (region defaults to `rom`) |
-| `disasm` | `pc` and (`hex` or `config rom_dir region?`), `count?` (default 16) or `to?`, `a5?` | array of lines as `disasm --json` |
-| `inspect` | `config rom_dir profile_tiers? profile_slim? a5? routines?: bool` | as `inspect --json`; `routines: false` is `--summary` |
-| `xref` | `config rom_dir target role? limit? a5? profile_*?` | as `xref --json` |
-| `flow` | `config rom_dir target depth? profile_*?` | as `flow --json` |
-| `coverage` | `config rom_dir` | as `coverage --json` |
-| `check_irq` | `config rom_dir` | as `check-irq --json` |
-| `decisions` | `config rom_dir profile_*? sprite_only?: bool sprite_writers?` | as `decisions --json` |
-| `lower` | `pc` and (`hex` or `config rom_dir region?`), `count?` (default 1), `live_out?` (default `XNZVC`) | as `lower --json` |
-| `profile_merge` | `inputs: string[] output` | as `profile-merge --json` |
-| `close` | `config rom_dir` (both) or none | `{closed: true}`; evicts that game, or everything |
+| `rom_read` | game, `region?` (default `rom`) `addr?` `len` | as `rom-read` JSON |
+| `disasm` | `pc` and (`hex` or game, `region?`), `count?` (default 16) or `to?`, `a5?` | array of lines as `disasm --json` |
+| `inspect` | game, `profile_tiers?` `profile_slim?` `a5?` `routines?: bool` | as `inspect --json`; `routines: false` is `--summary` |
+| `xref` | game, `target` `role?` `limit?` `a5?` `profile_*?` | as `xref --json` |
+| `flow` | game, `target` `depth?` `profile_*?` | as `flow --json` |
+| `coverage` | game | as `coverage --json` |
+| `check_irq` | game | as `check-irq --json` |
+| `decisions` | game, `profile_*?` `sprite_only?: bool` `sprite_writers?` | as `decisions --json` |
+| `lower` | `pc` and (`hex` or game, `region?`), `count?` (default 1), `live_out?` (default `XNZVC`) | as `lower --json` |
+| `profile_merge` | `inputs: string[]` `output` | as `profile-merge --json` |
 
-`pc`, `addr`, `to` and `a5` accept integers or hex strings. `len`, `count`, `depth` and `limit` are
-integers.
+`pc`, `addr`, `to`, `a5` and `len` accept integers or hex strings. `count`, `depth` and `limit` are integers.
+
+### Runtime sessions
+
+The same server drives live machines. `session_open {game, ...}` spawns `build/<game>/f3rt-tool mcp`
+(a standalone MCP server over one `f3rt::Machine`; run `f3rt-tool mcp --help`), registers its tools as
+`rt_<name>` with an optional `session_id`, and sends `notifications/tools/list_changed`; `session_close`
+removes them again, and `session_list` reports each session and whether its binary is `fresh`, `stale` or
+`missing`. A binary that changed on disk since `session_open` makes `rt_*` calls fail until the session is
+reopened. `--game GAME` lists the `rt_*` tools from startup. `gameplay`, `sprite_check` and `motion` run the
+matching `f3rt-tool` command with `--json` once per call. The server's `instructions` (returned by
+`initialize`) describe this lifecycle for clients.
