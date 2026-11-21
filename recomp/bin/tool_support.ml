@@ -95,14 +95,19 @@ let object_schema ?(required = []) properties : Y.t =
       ("type", `String "object");
       ("properties", `Assoc properties);
       ("required", `List (List.map (fun name -> `String name) required));
+      ("additionalProperties", `Bool false);
     ]
 
 (* ---- results ---- *)
 
 let text_content text : Mcp.Types.Content.t = Text { type_ = "text"; text; meta = None }
 
-(* A structured result: the JSON object, also serialised as text for clients that only read content. *)
-let structured json = Mcp_sdk.Tool_result.structured ~text:(Y.to_string json) json
+(* A structured result: the JSON object, also serialised as text for clients that only read content. MCP requires
+   structuredContent to be an object, so any other value is wrapped as [{"<key>": value}] ([key] defaults to
+   "result"). *)
+let structured ?(key = "result") json =
+  let json = match json with `Assoc _ -> json | other -> `Assoc [ (key, other) ] in
+  Mcp_sdk.Tool_result.structured ~text:(Y.to_string json) json
 let error_result message = Mcp_sdk.Tool_result.error message
 
 (* Runs a tool body, mapping expected failures to an [isError] result. Cancellation is not caught. *)

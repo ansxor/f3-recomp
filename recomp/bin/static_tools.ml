@@ -57,12 +57,14 @@ let resolve_game ~root ~with_profile args =
        (fun (key, value) -> if key = "game" || key = "no_profile" then None else Some (key, json_of_yojson value))
        args)
 
-let call_api ~root ~with_profile session name args =
+(* [wrap] names the field that holds the result when the API returns a bare array: structuredContent must be a
+   JSON object. The CLI's --json output keeps the bare array. *)
+let call_api ~root ~with_profile ?wrap session name args =
   protect (fun () ->
       let params = resolve_game ~root ~with_profile args in
-      structured (yojson_of_json (F3recomp.Api.call session name params)))
+      structured ?key:wrap (yojson_of_json (F3recomp.Api.call session name params)))
 
-let tool ?(with_profile = false) name description properties ?required () =
+let tool ?(with_profile = false) ?wrap name description properties ?required () =
   let schema = object_schema ?required properties in
   {
     name;
@@ -72,7 +74,7 @@ let tool ?(with_profile = false) name description properties ?required () =
       (fun ~root session args ->
         protect (fun () ->
             check_known ~schema args;
-            call_api ~root ~with_profile session name args));
+            call_api ~root ~with_profile ?wrap session name args));
   }
 
 let all =
@@ -87,9 +89,9 @@ let all =
            ("len", address_prop "Number of bytes.");
          ])
       ~required:[ "len" ] ();
-    tool "disasm"
+    tool ~wrap:"lines" "disasm"
       "List decoded 68020 instructions in Motorola syntax, with operands, branch targets, memory references (resolved \
-       through a5 when given) and escapes. Reads a ROM region (game or config + rom_dir) or literal hex bytes placed at pc."
+       through a5 when given) and escapes, as {lines: [...]}. Reads a ROM region (game or config + rom_dir) or literal hex bytes placed at pc."
       (game_props
        @ [
            ("pc", address_prop "First address; must be even. Sound PCs use the 0xc00000 space.");
