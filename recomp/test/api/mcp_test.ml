@@ -647,7 +647,7 @@ let session_lifecycle () =
     check_contains "child exited" ~needle:"exited with status 0" (str (field "process" closed));
     expect_notification client "notifications/tools/list_changed";
     Alcotest.(check bool) "runtime tools removed" false (List.mem "rt_step" (tools_list client));
-    check_contains "rt_ call after close" ~needle:"session_open" (failed_call client "rt_step" []);
+    check_contains "rt_ call after close" ~needle:"session_open" (rpc_error_message client "rt_step");
     (* reopening works, and the old machine's audio/EEPROM leases were released *)
     ignore (ok_call client "session_open" (session_args []));
     expect_notification client "notifications/tools/list_changed";

@@ -218,7 +218,7 @@ let run_tool table (t : Runtime_bridge.t) (params : Mcp.Request.Tools.Call.param
 
 (* ---- the server ---- *)
 
-let make_server (t : Runtime_bridge.t) ~notify =
+let make_server ~clock ~pin_done (t : Runtime_bridge.t) ~notify =
   let table = Hashtbl.create 32 in
   let entries = entries t ~notify in
   List.iter (fun entry -> Hashtbl.replace table entry.descriptor.name entry) entries;
@@ -233,6 +233,10 @@ let make_server (t : Runtime_bridge.t) ~notify =
       }
   in
   let on_tools_list (params : Mcp.Request.Tools.List.params) =
+    (* Wait briefly for background --game discovery so clients that call tools/list right after initialize
+       and ignore list_changed see the pinned rt_* tools on their first listing, without hanging on a stall. *)
+    if not (Eio.Promise.is_resolved pin_done) then
+      ignore (Eio.Time.with_timeout clock 2.0 (fun () -> Ok (Eio.Promise.await pin_done)));
     let tools =
       List.map (fun entry -> entry.descriptor) entries @ Runtime_bridge.runtime_tools t
     in
@@ -384,9 +388,12 @@ let run ~root ~game =
   let send outgoing =
     Eio.Mutex.use_ro write_lock (fun () -> Mcp_eio.Stdio.send transport (Mcp.Protocol.outgoing_to_message outgoing))
   in
+  let clock = Eio.Stdenv.clock env in
+  let pin_done, resolve_pin = Eio.Promise.create () in
+  if Option.is_none game then Eio.Promise.resolve resolve_pin ();
   let t = Runtime_bridge.create ~root ~env ~sw ~api:(F3recomp.Api.session ()) in
   let pending = ref false in
-  let server, table = make_server t ~notify:(fun () -> pending := true) in
+  let server, table = make_server ~clock ~pin_done t ~notify:(fun () -> pending := true) in
   let handle = dispatch t (server, table) in
   let take_notification () = let v = !pending in pending := false; v in
   (* Not before the handshake: a client has not asked for the list yet, and will see the current one. *)
@@ -397,7 +404,12 @@ let run ~root ~game =
   in
   t.on_tools_changed <- announce_tools_changed;
   let background sw =
-    Option.iter (fun game -> Eio.Fiber.fork ~sw (fun () -> pin_game t game ~changed:announce_tools_changed)) game
+    Option.iter
+      (fun game ->
+        Eio.Fiber.fork ~sw (fun () ->
+            Fun.protect ~finally:(fun () -> if not (Eio.Promise.is_resolved pin_done) then Eio.Promise.resolve resolve_pin ())
+              (fun () -> pin_game t game ~changed:announce_tools_changed)))
+      game
   in
   Fun.protect
     ~finally:(fun () ->
@@ -407,4 +419,4 @@ let run ~root ~game =
            | Some session -> ignore (Runtime_bridge.close_session t session)
            | None -> ())
         t.order)
-    (fun () -> serve ~clock:(Eio.Stdenv.clock env) ~transport ~server ~handle ~send ~take_notification ~background)
+    (fun () -> serve ~clock ~transport ~server ~handle ~send ~take_notification ~background)
