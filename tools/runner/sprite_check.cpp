@@ -274,6 +274,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     result.invocations = report.invocations;
     result.spliced = report.spliced;
     result.aborted = report.aborted;
+    result.state_crc = on->state_crc();
     result.error = error;
     if (out) {
         *out << std::dec << "frames=" << on->frame << " steps=" << on->cpu.steps

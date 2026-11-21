@@ -169,6 +169,13 @@ let cas2 () =
   expect_asm 6 (Cas2 (Word, first, second));
   expect_asm 6 (Cas2 (Long, first, second))
 
+(* Bytes 0e fc 00 00 05 04 appear in ROM code areas. The second extension word has
+   reserved bits set, which are ignored. *)
+let cas2_reserved_bits () =
+  expect [0x0efc; 0x0000; 0x0504]
+    (Cas2 (Long, { address = D 0; registers = { compare = 0; update = 0 } },
+                 { address = D 0; registers = { compare = 4; update = 4 } }))
+
 let trapcc () =
   expect_asm 4 (Trapcc (Ne, Some (Word, 0x1234)));
   expect_asm 6 (Trapcc (Ne, Some (Long, 0x1234abcd)));
@@ -228,6 +235,7 @@ let () =
       test "CMPM and byte A7 stepping" a7;
       test "DIVUL, DIVSL and the double dividend" divide;
       test "CAS2 register pairs" cas2;
+      test "CAS2.L with reserved extension bits (0efc 0000 0504)" cas2_reserved_bits;
       test "TRAPcc operand words" trapcc;
       test "Bcc and BSR short, word and long" branches;
       test "A-line" (fun () -> illegal [0xa123] 10 Decode.A_line 2);

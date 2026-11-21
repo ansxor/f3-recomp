@@ -71,5 +71,5 @@ The same 25-frame, 1,856,000-pixel check was re-run as a gate for each applied R
   native OTIS rate reached correlation 0.999978 and about 1.3 LSB RMS, which isolates the device models
   and not the game. ^[raw/tests/landmakrj-mame-attract-capture-parity.md]
 - Everything in the raw record is secondhand: the captures and command output lived under ignored `build/`
-  and are not stored in `raw/`, so the numbers cannot be re-derived from the wiki. Re-run
-  `tools/mame/run_capture.sh` with the same MAME binary to reproduce.
+  and are not stored in `raw/`, so the numbers cannot be re-derived from the wiki. The capture script (`tools/mame/run_capture.sh`)
+  was retired after the OCaml cutover; reproducing needs a fresh MAME capture setup.

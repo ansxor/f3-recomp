@@ -32,8 +32,6 @@ CMakeCache.txt
 cmake_install.cmake
 CTestTestfile.cmake
 Testing/
-# tools/mame/stage_roms.py default output (ROM ZIPs)
-/tools/mame/staged_roms/
 # Root-level outputs if CMake/Ninja is configured in the source root
 /build.ninja
 /.ninja_deps

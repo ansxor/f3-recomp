@@ -1,0 +1,4 @@
+(tests
+ (names json_test format_test profile_test cli_test)
+ (libraries f3recomp f3recomp_test alcotest qcheck str unix digestif.ocaml)
+ (deps ../../bin/main.exe))

@@ -630,7 +630,7 @@ def format_table(report: dict[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="f3 compare reverb",
+        prog="python -m tools.compare.reverb",
         description="Compare reverb and wetness of rendered WAVs against a PCB recording.",
         epilog=METRIC_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -699,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
             max_lag=args.max_lag,
         )
     except (OSError, ValueError, RuntimeError) as err:
-        print(f"f3 compare reverb: error: {err}", file=sys.stderr)
+        print(f"reverb: error: {err}", file=sys.stderr)
         return 2
 
     print(format_table(report))

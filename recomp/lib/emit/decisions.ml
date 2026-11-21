@@ -3,7 +3,8 @@ let header = "pc\tdisposition\tlength\tflow\treads\twrites\tlive_out\tidle\tchai
 let flags mask =
   if mask = Ccr.none then "-" else Ccr.to_string mask
 
-let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
+let render ?(sprite_rows = []) ?(groups = Sprite_groups.empty) selection =
+  let output = Buffer.create 65536 in
   (match Selection.check selection with
    | Ok () -> ()
    | Error violations ->
@@ -13,7 +14,7 @@ let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
   let rec emit_sprite_rows include_row =
     match !remaining with
     | (pc, row) :: rest when include_row pc ->
-        output_string output row;
+        Buffer.add_string output row;
         remaining := rest;
         emit_sprite_rows include_row
     | _ -> ()
@@ -28,7 +29,7 @@ let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
    | Error violations ->
        List.map Idle_loop.describe_violation violations
        |> String.concat "\n" |> Error.fail ~where:"idle loops" "%s");
-  output_string output (header ^ "\n");
+  Buffer.add_string output (header ^ "\n");
   Pc.Map.iter (fun pc ((entry : Selection.disposition), _) ->
     emit_sprite_rows (fun sprite_pc -> sprite_pc < pc);
     let instruction disposition (insn : Insn.t) =
@@ -57,11 +58,15 @@ let write ?(sprite_rows = []) ?(groups = Sprite_groups.empty) output selection =
       | None -> "-"
       | Some loop -> Idle_loop.to_tsv loop.shape
     in
-    Printf.fprintf output "0x%06x\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
+    Printf.bprintf output "0x%06x\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n"
       pc disposition length flow reads writes live_out idle candidates;
     emit_sprite_rows (Int.equal pc))
     selection.Selection.entries;
-  emit_sprite_rows (fun _ -> true)
+  emit_sprite_rows (fun _ -> true);
+  Buffer.contents output
+
+let write ?sprite_rows ?groups output selection =
+  output_string output (render ?sprite_rows ?groups selection)
 
 let read path =
   let fail line fmt =

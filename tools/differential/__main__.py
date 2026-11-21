@@ -61,19 +61,11 @@ def main() -> int:
         help="Enable verbose output",
     )
 
-    parser.add_argument(
-        "--lowerer",
-        choices=("python", "ocaml"),
-        default="python",
-        help="Instruction lowerer (default: python)",
-    )
-
     args = parser.parse_args()
 
     try:
         return run_differential(
             musashi_path=args.musashi,
-            lowerer=args.lowerer,
             output_dir=args.output,
             cases_count=args.cases,
             seed=args.seed,
