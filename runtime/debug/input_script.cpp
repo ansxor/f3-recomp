@@ -95,7 +95,7 @@ InputScript InputScript::parse(std::string_view text, const std::string &source)
             if (address < RAM_BASE || address + rule.poke_size > RAM_PHYSICAL_END)
                 throw std::runtime_error(
                     where + ": poke address must be main RAM 0x400000..0x41ffff "
-                            "(a5 globals: f3a xref a5-0xNNNN prints the absolute address)");
+                            "(a5 globals: f3recomp xref --target a5-0xNNNN reports the absolute address)");
             if (rule.poke_size < 4 && value >> (8 * rule.poke_size))
                 throw std::runtime_error(where + ": poke value does not fit ." +
                                          std::string(1, size));

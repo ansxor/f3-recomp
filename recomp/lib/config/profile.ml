@@ -120,6 +120,41 @@ let load path =
     in
     read_records 2 empty [])
 
+type stats = { identities : int; executed : int; cold_misses : int }
+
+let stats (profile : t) =
+  let total rows = Roms.fold (fun _ counts sum -> sum + Pc.Map.cardinal counts) rows 0 in
+  { identities = Roms.cardinal profile.roms; executed = total profile.hits;
+    cold_misses = total profile.misses }
+
+(* ROM identities sort by region, then unsigned CRC, as the runtime writes them. *)
+let compare_identity (left_region, left_crc) (right_region, right_crc) =
+  match compare left_region right_region with
+  | 0 -> Int.compare (Int32.to_int left_crc land 0xffffffff) (Int32.to_int right_crc land 0xffffffff)
+  | order -> order
+
+let render profile =
+  let buffer = Buffer.create 4096 in
+  Buffer.add_string buffer "F3-BLOCK-PROFILE 1\n";
+  let sorted rows =
+    Roms.bindings rows |> List.sort (fun (a, _) (b, _) -> compare_identity a b)
+  in
+  List.iter (fun ((region, crc), (base, size)) ->
+    Printf.bprintf buffer "rom %s %08lx %08x %08x\n" (region_name region) crc base size)
+    (sorted profile.roms);
+  let rows kind counts =
+    List.iter (fun ((region, crc), counts) ->
+      Pc.Map.iter (fun pc count ->
+        Printf.bprintf buffer "%s %s %08lx %08x %Lu\n" kind (region_name region) crc pc count)
+        counts)
+      (sorted counts)
+  in
+  rows "hit" profile.hits;
+  rows "miss" profile.misses;
+  Buffer.contents buffer
+
+let write path profile = Output.write_file path (render profile)
+
 let hot profile region (image : Image.t) ~exclusions =
   let crc = Image.crc32 image in
   let size = Image.length image in

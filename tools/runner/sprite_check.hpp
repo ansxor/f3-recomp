@@ -32,6 +32,7 @@ struct SpriteCheckResult {
     uint64_t invocations = 0;
     uint64_t spliced = 0;
     uint64_t aborted = 0;
+    uint32_t state_crc = 0;
     std::string error;
 };
 

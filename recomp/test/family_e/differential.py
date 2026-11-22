@@ -152,7 +152,7 @@ def main():
         patch("tools.differential.runner.generate_boundary_cases", return_value=cases),
         patch("tools.differential.runner.generate_semantic_core_cases", return_value=[]),
     ):
-        return run_differential(lowerer="ocaml", cases_count=len(cases), output_dir=args.output, seed=args.seed)
+        return run_differential(cases_count=len(cases), output_dir=args.output, seed=args.seed)
 
 
 if __name__ == "__main__":

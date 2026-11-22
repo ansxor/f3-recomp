@@ -7,8 +7,29 @@
 
 namespace f3rt::tool {
 
+namespace {
+
+void print_json(const runner::SpriteCheckArgs &args, const runner::SpriteCheckResult &res) {
+    std::cout << "{\"status\":\"" << (res.passed ? "PASS" : "FAIL") << "\",\"set\":\""
+              << json_escape(args.set) << "\",\"seed\":" << args.seed
+              << ",\"frames\":" << res.frames << ",\"steps\":" << res.steps
+              << ",\"native_blocks\":" << res.native_blocks
+              << ",\"state_compares\":" << res.state_compares
+              << ",\"max_groups_frame\":" << res.max_groups_frame
+              << ",\"group_frames\":" << res.group_frames
+              << ",\"group_entries\":" << res.group_entries
+              << ",\"unresolved_entries\":" << res.unresolved_entries
+              << ",\"invocations\":" << res.invocations << ",\"spliced\":" << res.spliced
+              << ",\"aborted\":" << res.aborted << ",\"state_crc\":\"0x" << std::hex
+              << res.state_crc << std::dec << "\",\"error\":\"" << json_escape(res.error)
+              << "\"}\n";
+}
+
+} // namespace
+
 int cmd_sprite_check(int argc, char **argv) try {
     runner::SpriteCheckArgs args;
+    bool json_output = false;
 #ifdef F3RT_DEFAULT_ROM_DIR
     args.rom_dir = F3RT_DEFAULT_ROM_DIR;
 #endif
@@ -28,16 +49,18 @@ int cmd_sprite_check(int argc, char **argv) try {
         else if (arg == "--seed") args.seed = std::stoull(value());
         else if (arg == "--no-inputs") args.inputs = false;
         else if (arg == "--behaviour") args.behaviours.push_back(value());
+        else if (arg == "--json") json_output = true;
         else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: f3rt-tool sprite-check [--rom-dir DIR] [--set SET] [--frames N] "
                    "[--compare-every N]\n"
-                   "       [--seed N] [--no-inputs] [--behaviour NAME]...\n"
+                   "       [--seed N] [--no-inputs] [--behaviour NAME]... [--json]\n"
                    "Reports sprite-group coverage (groups per frame, grouped and unresolved "
                    "entries)\n"
                    "and exits nonzero unless emulated state is identical with sprite "
                    "groups on\n"
-                   "and off and at least one group resolved.\n";
+                   "and off and at least one group resolved.\n"
+                   "--json prints a single JSON result object instead of the text report.\n";
             return 0;
         } else throw std::runtime_error("Unknown argument: " + arg);
     }
@@ -47,10 +70,12 @@ int cmd_sprite_check(int argc, char **argv) try {
     if (!args.frames || !args.compare_every)
         throw std::runtime_error("--frames and --compare-every must be positive");
 
-    const auto res = runner::run_sprite_check(args, &std::cout);
+    const auto res = runner::run_sprite_check(args, json_output ? nullptr : &std::cout);
+    if (json_output) print_json(args, res);
     return res.passed ? 0 : 1;
 } catch (const std::exception &e) {
     std::cerr << "sprite-check error: " << e.what() << '\n';
+    if (has_flag(argc, argv, "--json")) print_json_error("ERROR", e.what());
     return 2;
 }
 

@@ -47,9 +47,9 @@ void print_failure_state(const Machine &m, uint64_t seed, uint64_t frame,
     }
 }
 
-void print_help(const char *prog) {
+void print_help() {
     std::cout
-        << "Usage: " << prog << " gameplay [options]\n\n"
+        << "Usage: f3rt-tool gameplay [options]\n\n"
         << "Deterministic strict-native seeded gameplay regression harness.\n\n"
         << "Options:\n"
         << "  --rom-dir DIR          Path to ROM directory (defaults to F3RT_DEFAULT_ROM_DIR)\n"
@@ -118,7 +118,7 @@ int cmd_gameplay(int argc, char **argv) try {
         } else if (arg == "--json") {
             json_output = true;
         } else if (arg == "--help" || arg == "-h") {
-            print_help(argv[0]);
+            print_help();
             return 0;
         } else {
             throw std::runtime_error("Unknown argument: " + arg);
@@ -144,7 +144,8 @@ int cmd_gameplay(int argc, char **argv) try {
             print_failure_state(m, seed, frame, ss.str());
             return false;
         }
-        if (cfg.video_diff && frame >= 600 && (frame - 600) % cfg.video_diff_every == 0) {
+        if (cfg.video_diff && frame >= VIDEO_DIFF_MIN_FRAME &&
+            (frame - VIDEO_DIFF_MIN_FRAME) % cfg.video_diff_every == 0) {
             try {
                 m.game_video->compare_layers(frame, cfg.video_layer_mask);
             } catch (...) {
@@ -157,6 +158,7 @@ int cmd_gameplay(int argc, char **argv) try {
     });
 
     if (!run_ok) {
+        if (json_output) print_json_error("FAILURE", "gameplay run aborted (see stderr)");
         return 1;
     }
 
@@ -176,11 +178,11 @@ int cmd_gameplay(int argc, char **argv) try {
         runner.save_bmp(capture_surface);
     }
     if (m.game_video) {
-        m.game_video->report(std::cout);
+        m.game_video->report(json_output ? std::cerr : std::cout);
     }
 
     if (json_output) {
-        std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << cfg.set << "\",\"seed\":" << seed
+        std::cout << "{\"status\":\"SUCCESS\",\"set\":\"" << json_escape(cfg.set) << "\",\"seed\":" << seed
                   << ",\"frames\":" << m.frame << ",\"pc\":\"0x" << std::hex << m.cpu.pc
                   << "\",\"frame_crc\":\"0x" << frame_crc
                   << "\",\"steps\":" << std::dec << m.cpu.steps
@@ -203,6 +205,7 @@ int cmd_gameplay(int argc, char **argv) try {
     return 0;
 } catch (const std::exception &e) {
     std::cerr << "REGRESSION ERROR: " << e.what() << '\n';
+    if (has_flag(argc, argv, "--json")) print_json_error("FAILURE", e.what());
     return 1;
 }
 

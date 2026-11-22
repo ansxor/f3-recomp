@@ -3,4 +3,5 @@
 
 (package
  (name f3recomp)
- (depends ocaml dune cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest))
+ (depends ocaml dune cmdliner alcotest otoml checkseum digestif qcheck qcheck-alcotest
+  yojson jsonrpc logs eio eio_main mcp mcp-eio))

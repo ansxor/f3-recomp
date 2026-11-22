@@ -16,7 +16,7 @@ Taito F3 package system:
 
 ## Games
 
-The hash is the SHA-256 of the main program image as `tools/f3a` loads it (`f3a.game(id).core.rom`,
+The hash is the SHA-256 of the main program image as `f3recomp inspect` reports it (`rom_sha256`,
 the ROM files interleaved). The ROM file name is not a valid identity.
 
 - landmakrj — Land Maker (Japan) — `aa050f39f5810c90bc20d1e3ed1c2510b1df067242535ad80aa86b3d174d49bc`
@@ -27,8 +27,7 @@ Add a game here before writing pages about it.
 ## File names
 
 - `routines/<game>-<addr>-<name>.md`. `<addr>` is the 8-digit hex address without `0x`; `<name>` is
-  kebab-case. Example: `routines/landmakrj-0008e20c-round-task.md`. `tools/f3a` shows `<name>` (with
-  `_` for `-`) as the routine's label, followed by `?` while the page is still a `hypothesis`.
+  kebab-case. Example: `routines/landmakrj-0008e20c-round-task.md`.
 - `quirks/<slug>.md`, `hardware/<component>.md`, `games/<game>.md`.
 
 ## Page frontmatter
@@ -55,10 +54,10 @@ supersedes: []
 
 | Kind | What it is here | Where it goes in `raw/` |
 |---|---|---|
-| `test` | A run that checks a prediction: `f3a run --inputs/--watch/--until`, `f3a records --check`, `run.series` over every dumped frame, the per-area runtime tests | `raw/tests/` (command, script and output) |
-| `trace` | Observed execution: discovery logs, `entries.log`, frame dumps decoded by `f3a records`/`sprites`, MAME taps | `raw/traces/` |
+| `test` | A run that checks a prediction: a live `f3recomp mcp` runtime session (`rt_step`, `rt_set_input`, `rt_read`, `rt_save_state`/`rt_load_state`), an instrumented game run with `--watch-entries`, the per-area runtime tests | `raw/tests/` (command, script and output) |
+| `trace` | Observed execution: discovery logs, `entries.log`, frame dumps, `rt_sprites` and `rt_read` output from a live session, MAME taps | `raw/traces/` |
 | `emu-source` | MAME or this runtime's device code | `raw/emu-source/` |
-| `doc` | Datasheets, hardware notes, and static `f3a dis`/`xref`/`flow`/`writes` output | `raw/disasm/` for f3a static output, `raw/docs/` otherwise |
+| `doc` | Datasheets, hardware notes, and static `f3recomp disasm`/`xref`/`flow` output (CLI or the `f3recomp mcp` tools) | `raw/disasm/` for static output, `raw/docs/` otherwise |
 
 Static disassembly is `doc`-level evidence: it shows what the code can do, not what it does. A run
 that uses `poke` lines shows that code is reachable, not that normal play reaches it; say so on the
@@ -73,12 +72,12 @@ observation by 12 (see `.omp/rules/hardware-observation-over-mame.md`).
 
 ```yaml
 ---
-source_url:          # or the f3a command line
+source_url:          # or the f3recomp / MCP call
 ingested: YYYY-MM-DD
 sha256:              # of the body below the frontmatter
 game:
 rom_sha256:
-captured_with:       # e.g. "tools/f3a (git <short sha>)", "MAME 0.27x", "hardware"
+captured_with:       # e.g. "f3recomp mcp (git <short sha>)", "MAME 0.27x", "hardware"
 ---
 ```
 

@@ -228,16 +228,33 @@ if(F3RT_HOST_TOOLS)
         target_compile_definitions(f3rt-runner PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
 
+    # `f3rt-tool motion` drives f3rt-gpu, which only exists with F3RT_SDL and F3RT_GPU. Without it the
+    # command is a stub, so f3rt-tool (and its mcp server) still builds, e.g. in the GPU-less CI job.
+    if(F3RT_SDL AND F3RT_GPU)
+        set(F3RT_TOOL_MOTION_SOURCE tools/commands/motion.cpp)
+    else()
+        set(F3RT_TOOL_MOTION_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/tool_motion_stub.cpp")
+        file(WRITE "${F3RT_TOOL_MOTION_SOURCE}"
+            "#include \"commands.hpp\"\n"
+            "namespace f3rt::tool {\n"
+            "int cmd_motion(int, char **) {\n"
+            "    std::cerr << \"motion needs a build with F3RT_SDL=ON and F3RT_GPU=ON\\n\";\n"
+            "    return 2;\n"
+            "}\n"
+            "}\n")
+    endif()
+
     add_executable(f3rt-tool
         tools/tool.cpp
         tools/commands/gameplay.cpp
-        tools/commands/motion.cpp
+        "${F3RT_TOOL_MOTION_SOURCE}"
         tools/commands/sprite_check.cpp
         tools/commands/netplay.cpp
         tools/commands/netplay_replay.cpp
+        tools/commands/mcp.cpp
     )
     target_include_directories(f3rt-tool PRIVATE tools tools/commands)
-    target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner)
+    target_link_libraries(f3rt-tool PRIVATE f3rt f3rt-runner mcp::mcp ZLIB::ZLIB)
     target_compile_definitions(f3rt-tool PRIVATE F3RT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-tool PRIVATE F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
@@ -377,6 +394,27 @@ if(BUILD_TESTING)
     endif()
     if(TARGET f3_recompiled)
         target_link_libraries(f3rt-test-sprites PRIVATE f3_recompiled)
+    endif()
+
+    # MCP tests (f3recomp mcp, f3rt-tool mcp and the bridge between them). The OCaml test executable is
+    # built by dune at configure time, next to f3recomp. f3-mcp-smoke is ROM-free (protocol, tool list,
+    # pre-init errors, bad init, fixture-game bridge errors) and runs wherever f3rt-tool is built;
+    # F3RT_REQUIRE_TOOL makes a missing binary a failure instead of a skip. f3-mcp-e2e runs every case,
+    # including the ones that boot the game, and needs F3_ROM_DIR.
+    if(F3_RECOMP_COMMAND)
+        get_filename_component(_recomp_exe_dir "${F3_RECOMP_COMMAND}" DIRECTORY)
+        get_filename_component(_mcp_test_dir "${_recomp_exe_dir}/../test/api" ABSOLUTE)
+        if(EXISTS "${_mcp_test_dir}/mcp_test.exe")
+            add_test(NAME f3-mcp-smoke COMMAND "${_mcp_test_dir}/mcp_test.exe" test "^(f3recomp|smoke)$"
+                WORKING_DIRECTORY "${_mcp_test_dir}")
+            set_tests_properties(f3-mcp-smoke PROPERTIES
+                ENVIRONMENT "F3RT_TOOL=$<TARGET_FILE:f3rt-tool>;F3RT_REQUIRE_TOOL=1;F3RT_ROM_DIR=;F3RT_TEST_GAME=${F3_GAME}")
+            if(F3_ROM_DIR)
+                add_test(NAME f3-mcp-e2e COMMAND "${_mcp_test_dir}/mcp_test.exe" WORKING_DIRECTORY "${_mcp_test_dir}")
+                set_tests_properties(f3-mcp-e2e PROPERTIES
+                    ENVIRONMENT "F3RT_TOOL=$<TARGET_FILE:f3rt-tool>;F3RT_ROM_DIR=${F3_ROM_DIR};F3RT_TEST_GAME=${F3_GAME}")
+            endif()
+        endif()
     endif()
 
     if(F3_ROM_DIR)

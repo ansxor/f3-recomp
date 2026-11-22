@@ -85,7 +85,6 @@ def run_differential(
     keep_temp: bool = False,
     verbose: bool = False,
     compile_only: bool = False,
-    lowerer: str = "python",
 ) -> int:
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -99,24 +98,14 @@ def run_differential(
     # 2. Initialize Capstone
     md = _get_capstone_disassembler()
 
-    if lowerer == "ocaml":
-        lower_ocaml = _ocaml_lowerer()
-    elif lowerer == "python":
-        try:
-            from tools.recomp_py.emitter import lower
-        except ImportError as exc:
-            print(f"ERROR: Cannot import tools.recomp_py.emitter.lower: {exc}", file=sys.stderr)
-            return 2
-    else:
-        raise ValueError(f"unknown lowerer: {lowerer}")
+    lower_ocaml = _ocaml_lowerer()
 
     # 4. Generate test cases
     raw_cases: list[RawTestCase] = []
     # Always include targeted boundary cases
     boundary_cases = generate_boundary_cases()
     raw_cases.extend(boundary_cases)
-    if lowerer == "ocaml":
-        raw_cases.extend(generate_semantic_core_cases(start_id=len(raw_cases) + 1))
+    raw_cases.extend(generate_semantic_core_cases(start_id=len(raw_cases) + 1))
 
     # Add randomized cases
     random_count = max(0, cases_count - len(raw_cases))
@@ -160,26 +149,19 @@ def run_differential(
         if len(selected) != raw.instruction_count:
             raise ValueError(f"incomplete instruction sequence: {raw.name}")
         entries = []
-        if lowerer == "ocaml":
-            statements = []
-            reason = None
-            for part in selected:
-                lines, reason = lower_ocaml(part)
-                if lines is None:
-                    statements = None
-                    break
-                if len(selected) == 1:
-                    statements = lines
-                else:
-                    # Lower.entry returns after each instruction. Give each entry
-                    # its own callable body and dispatch the sequence by PC.
-                    entries.append((part.address, lines))
-        else:
-            lowered = [lower(part) for part in selected]
-            statements = (
-                None if any(part is None for part in lowered) else [line for part in lowered for line in ["{", *part, "}"]]
-            )
-            reason = "lower() returned None (unsupported/fallback)"
+        statements = []
+        reason = None
+        for part in selected:
+            lines, reason = lower_ocaml(part)
+            if lines is None:
+                statements = None
+                break
+            if len(selected) == 1:
+                statements = lines
+            else:
+                # Lower.entry returns after each instruction. Give each entry
+                # its own callable body and dispatch the sequence by PC.
+                entries.append((part.address, lines))
         if statements is None:
             unsupported_accounting[insn.mnemonic] += 1
             unsupported_reasons.append(
@@ -269,8 +251,6 @@ def run_differential(
                 f.write("        default: return;\n        }\n    }\n")
             for stmt in sc.statements:
                 f.write(f"    {stmt}\n")
-            if lowerer == "python":
-                f.write("    f3_cc_flush(cpu);\n")
             f.write("}\n\n")
 
         # Memory init arrays
@@ -404,7 +384,8 @@ int main(int argc, char **argv) {
 
     cmd = [
         cc,
-        *(["-std=gnu11", "-DDIFF_CPU_ONLY_RESET"] if lowerer == "ocaml" else []),
+        "-std=gnu11",
+        "-DDIFF_CPU_ONLY_RESET",
         "-O1",
         "-g",
         "-Wall",

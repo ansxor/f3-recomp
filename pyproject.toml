@@ -8,9 +8,6 @@ dependencies = [
     "capstone==5.0.9",
 ]
 
-[project.scripts]
-f3 = "tools.cli:main"
-
 [dependency-groups]
 analysis = [
     "numpy",
@@ -31,11 +28,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["tools"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"recomp/68020_opcodes.csv" = "recomp/68020_opcodes.csv"
-
 [tool.pytest.ini_options]
-testpaths = ["tests", "tools/recomp_compare/tests"]
+testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.ruff]

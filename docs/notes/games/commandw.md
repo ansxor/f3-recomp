@@ -17,7 +17,7 @@ supersedes: []
 
 The ROM identity is in [[SCHEMA]]. There is a config (`games/commandw/config.toml`) and a build
 (`build-commandw/`), but no `games/commandw/video/` writer lists yet. An execution profile can be
-made with `f3a profile --game commandw --build`.
+made with the retired `f3a profile --game commandw --build` (now: run the instrumented build with `--profile-out`, merge with `f3recomp profile-merge`).
 
 ## Routine index
 

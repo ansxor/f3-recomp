@@ -45,6 +45,21 @@ make build GAME=landmakrj ROM_DIR=roms/landmakrj
 
 Run with `--help` for all command-line options.
 
+## Analysis over MCP
+
+`f3recomp mcp` is a Model Context Protocol server (stdio) for reverse-engineering a game: static analysis tools
+(`disasm`, `xref`, `flow`, `inspect`, ...) plus live runtime sessions that step, poke and screenshot the recompiled
+game. Run it from the repository root:
+
+```sh
+nix run .#f3-mcp          # f3recomp mcp; add `-- --game landmakrj` to list the runtime tools from the start
+```
+
+`session_open {game}` spawns `build/<game>/f3rt-tool mcp` and registers its tools as `rt_<name>`, sending
+`notifications/tools/list_changed`; refresh the tool list after `session_open` and `session_close`. If the
+`f3rt-tool` binary is rebuilt while a session is open, runtime calls fail until the session is reopened. The runtime
+is also an MCP server on its own: `build/<game>/f3rt-tool mcp`. See `recomp/JSON-API.md` and `.omp/skills/f3mcp`.
+
 ## Supported Games
 
 The following ROM sets have tested native builds:

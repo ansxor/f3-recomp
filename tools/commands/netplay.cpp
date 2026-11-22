@@ -27,7 +27,7 @@ using namespace f3rt::netplay;
 
 namespace {
 
-void print_help(const char *) {
+void print_help() {
     std::cout
         << "Usage: f3rt-tool netplay [options]\n\n"
         << "Deterministic 2-player lockstep netplay client.\n\n"
@@ -124,7 +124,7 @@ int cmd_netplay(int argc, char **argv) try {
         } else if (arg == "--set") {
             set = value();
         } else if (arg == "--help" || arg == "-h") {
-            print_help(argv[0]);
+            print_help();
             return 0;
         } else {
             throw std::runtime_error("Unknown argument: " + arg);

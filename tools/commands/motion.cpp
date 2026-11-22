@@ -102,7 +102,7 @@ Options parse(int argc, char **argv) {
             std::cout << "Strict-native seeded temporal GPU motion proof\n"
                          "--rom-dir DIR --frames N (4000) --seed N (12345) --scale N (1..8)\n"
                          "--every N (1) --dump-dir DIR --interp off|linear|fit --sprite-groups "
-                         "on|off (on)\n"
+                         "on|off (on) --json\n"
                          "--demo --demo-seconds N (30): one-window LEFT native / RIGHT motion "
                          "comparison;\n"
                          "warms up --frames emulated frames, then pans a frozen ROM playfield "
@@ -619,6 +619,7 @@ int cmd_motion(int argc, char **argv) try {
     return 0;
 } catch (const std::exception &e) {
     std::cerr << "MOTION REGRESSION ERROR: " << e.what() << '\n';
+    if (has_flag(argc, argv, "--json")) print_json_error("FAILURE", e.what());
     return 1;
 }
 

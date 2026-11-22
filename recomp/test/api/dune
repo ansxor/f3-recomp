@@ -1,0 +1,28 @@
+(tests
+ (names json_test format_test profile_test cli_test)
+ (modules json_test format_test profile_test cli_test)
+ (libraries f3recomp f3recomp_test alcotest qcheck str unix digestif.ocaml)
+ (deps ../../bin/main.exe))
+
+; End-to-end MCP tests: `f3recomp mcp` over stdio, and a real `f3rt-tool mcp` (F3RT_TOOL, default
+; build/<game>/f3rt-tool; those cases skip when the binary or the ROMs are missing).
+(test
+ (name mcp_test)
+ (modules mcp_test)
+ (libraries f3recomp alcotest unix)
+ (deps ../../bin/main.exe))
+
+; Protocol conformance of `f3recomp mcp`: structuredContent shape, version negotiation, error codes, schemas.
+(test
+ (name mcp_protocol_test)
+ (modules mcp_protocol_test)
+ (libraries f3recomp alcotest unix)
+ (deps ../../bin/main.exe))
+
+; The runtime bridge of `f3recomp mcp` against a fake f3rt-tool (this executable re-execs itself as the
+; child): timeouts, concurrent requests, session routing and failover, rt_init/a5, one-shot runners.
+(test
+ (name mcp_bridge_test)
+ (modules mcp_bridge_test)
+ (libraries f3recomp alcotest unix digestif.ocaml)
+ (deps ../../bin/main.exe))

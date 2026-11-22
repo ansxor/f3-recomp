@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name f3recomp)
- (libraries cmdliner f3recomp))
+ (libraries cmdliner f3recomp mcp mcp.sdk mcp-eio eio eio.unix eio_main jsonrpc logs unix yojson))
