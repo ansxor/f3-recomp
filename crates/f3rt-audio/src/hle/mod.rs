@@ -14,6 +14,7 @@ pub mod patch;
 pub mod program_service;
 pub mod pulse_timer;
 pub mod rom_view;
+pub mod sequence_bank;
 pub mod sequencer;
 pub mod sound_bank;
 pub mod sound_rom;

@@ -1,4 +1,4 @@
-//! `audio/hle/pulse_timer.hpp`: a rate accumulator on the 1 kHz grid.
+//! A rate accumulator on the 1 kHz grid.
 //!
 //! Every clock tick adds `step`, and each time the sum reaches `period` the timer pulses. `period` 625
 //! is one musical pulse at the ROM's tempo unit, 12 is the sequence fade pulse. A step of zero never
@@ -17,10 +17,6 @@ impl PulseTimer {
 
     pub fn reset(&mut self) {
         self.accumulator = 0;
-    }
-
-    pub fn set_period(&mut self, period: u32) {
-        self.period = period;
     }
 
     pub fn set_step(&mut self, step: u32) {

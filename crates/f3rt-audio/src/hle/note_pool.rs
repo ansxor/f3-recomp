@@ -1,7 +1,8 @@
-//! `audio/hle/note_pool.hpp`: the per-track note bookkeeping pool.
+//! The per-track note bookkeeping pool.
 //!
-//! Each track owns an intrusive singly linked list of `ActiveNote` slots; the pool hands out slots from
-//! a free list and returns them there. The C++ `template <typename Sink>` sink is the `NoteSink` trait.
+//! Each track owns an intrusive singly linked list of `ActiveNote` slots (its head index lives in
+//! the track); the pool hands out slots from a free list and takes them back. Note-offs the pool
+//! decides on go to a caller-supplied `on_note_off(instance, tick)`.
 
 pub const NOTE_CAPACITY: usize = 4096;
 pub const NO_NOTE: u16 = 0xffff;
@@ -21,13 +22,13 @@ impl Default for ActiveNote {
     }
 }
 
-/// The receiver of a note-off the pool decides on. The C++ duck-types the `Sink &` template parameter.
+/// Kept only until `VoiceService` takes a closure too; the pool itself no longer uses it.
 pub trait NoteSink {
     fn note_off(&mut self, instance: u64, tick: u64);
 }
 
 pub struct NotePool {
-    notes: [ActiveNote; NOTE_CAPACITY],
+    notes: Box<[ActiveNote; NOTE_CAPACITY]>,
     free_head: u16,
 }
 
@@ -39,20 +40,28 @@ impl Default for NotePool {
 
 impl NotePool {
     pub fn new() -> NotePool {
-        let mut pool = NotePool { notes: [ActiveNote::default(); NOTE_CAPACITY], free_head: 0 };
+        // Boxed so the 4096-slot table never lands on a stack frame.
+        let notes: Box<[ActiveNote; NOTE_CAPACITY]> = vec![ActiveNote::default(); NOTE_CAPACITY]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!());
+        let mut pool = NotePool { notes, free_head: 0 };
         pool.reset();
         pool
     }
 
+    /// Chains every slot into the free list in index order.
     pub fn reset(&mut self) {
         self.free_head = 0;
-        for n in 0..NOTE_CAPACITY as u16 {
-            self.notes[n as usize] = ActiveNote::default();
-            self.notes[n as usize].next =
-                if n + 1 == NOTE_CAPACITY as u16 { NO_NOTE } else { n + 1 };
+        for (n, note) in self.notes.iter_mut().enumerate() {
+            *note = ActiveNote {
+                next: if n + 1 == NOTE_CAPACITY { NO_NOTE } else { (n + 1) as u16 },
+                ..ActiveNote::default()
+            };
         }
     }
 
+    /// Pushes a note on the front of the track's list.
     pub fn allocate_note(
         &mut self,
         track_head: &mut u16,
@@ -76,20 +85,24 @@ impl NotePool {
         *track_head = index;
     }
 
-    pub fn release_all<S: NoteSink>(&mut self, track_head: &mut u16, sink: &mut S, tick: u64) {
+    pub fn release_all(
+        &mut self,
+        track_head: &mut u16,
+        tick: u64,
+        mut on_note_off: impl FnMut(u64, u64),
+    ) {
         while *track_head != NO_NOTE {
             let n = *track_head;
             *track_head = self.notes[n as usize].next;
-            self.release_single(n, sink, tick);
+            on_note_off(self.notes[n as usize].instance, tick);
+            self.release_entry(n);
         }
     }
 
-    /// Unlinks the first note of `kernel_key` and returns its instance id (0 when none). No sink: the
-    /// caller releases the voice itself.
-    ///
-    /// The C++ walks a `uint16_t *link` that points at the head or at a note's `next` field; here
-    /// `None` names the head and `Some(i)` the `next` of note `i`, with the same reads and writes.
+    /// Unlinks the first note of `kernel_key` and returns its instance id (0 when none). Reports no
+    /// note-off: the caller releases the voice itself.
     pub fn release_matching_key(&mut self, track_head: &mut u16, kernel_key: u8) -> u64 {
+        // `None` is the list head, `Some(i)` the `next` link of note `i`.
         let mut link: Option<usize> = None;
         loop {
             let n = match link {
@@ -115,7 +128,14 @@ impl NotePool {
         0
     }
 
-    pub fn step_durations<S: NoteSink>(&mut self, track_head: &mut u16, sink: &mut S, tick: u64) {
+    /// Counts every note down one pulse and releases those that reach zero. A note allocated with
+    /// duration 0 is released on its first pulse.
+    pub fn step_durations(
+        &mut self,
+        track_head: &mut u16,
+        tick: u64,
+        mut on_note_off: impl FnMut(u64, u64),
+    ) {
         let mut link: Option<usize> = None;
         loop {
             let n = match link {
@@ -126,16 +146,15 @@ impl NotePool {
                 return;
             }
             let index = n as usize;
-            if self.notes[index].remaining != 0 {
-                self.notes[index].remaining -= 1;
-            }
+            self.notes[index].remaining = self.notes[index].remaining.saturating_sub(1);
             if self.notes[index].remaining == 0 {
                 let next = self.notes[index].next;
                 match link {
                     None => *track_head = next,
                     Some(i) => self.notes[i].next = next,
                 }
-                self.release_single(n, sink, tick);
+                on_note_off(self.notes[index].instance, tick);
+                self.release_entry(n);
             } else {
                 link = Some(index);
             }
@@ -146,9 +165,84 @@ impl NotePool {
         self.notes[index as usize].next = self.free_head;
         self.free_head = index;
     }
+}
 
-    fn release_single<S: NoteSink>(&mut self, index: u16, sink: &mut S, tick: u64) {
-        sink.note_off(self.notes[index as usize].instance, tick);
-        self.release_entry(index);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offs(f: impl FnOnce(&mut dyn FnMut(u64, u64))) -> Vec<(u64, u64)> {
+        let mut out = Vec::new();
+        f(&mut |instance, tick| out.push((instance, tick)));
+        out
+    }
+
+    #[test]
+    fn note_is_released_when_its_duration_runs_out() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 7, 60, 81, 2);
+
+        assert!(offs(|f| pool.step_durations(&mut head, 10, f)).is_empty());
+        assert_eq!(offs(|f| pool.step_durations(&mut head, 11, f)), vec![(7, 11)]);
+        assert_eq!(head, NO_NOTE);
+    }
+
+    #[test]
+    fn zero_duration_note_is_released_on_first_pulse() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 3, 60, 81, 0);
+        assert_eq!(offs(|f| pool.step_durations(&mut head, 5, f)), vec![(3, 5)]);
+    }
+
+    #[test]
+    fn stepping_keeps_unexpired_notes_linked() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 1, 60, 81, 1);
+        pool.allocate_note(&mut head, 2, 61, 82, 3);
+        pool.allocate_note(&mut head, 3, 62, 83, 1);
+
+        assert_eq!(offs(|f| pool.step_durations(&mut head, 0, f)), vec![(3, 0), (1, 0)]);
+        assert_eq!(pool.release_matching_key(&mut head, 82), 2);
+    }
+
+    #[test]
+    fn release_matching_key_unlinks_only_the_first_match() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 1, 60, 81, 9);
+        pool.allocate_note(&mut head, 2, 60, 81, 9);
+        pool.allocate_note(&mut head, 3, 61, 82, 9);
+
+        assert_eq!(pool.release_matching_key(&mut head, 81), 2);
+        assert_eq!(pool.release_matching_key(&mut head, 81), 1);
+        assert_eq!(pool.release_matching_key(&mut head, 81), 0);
+        assert_eq!(pool.release_matching_key(&mut head, 82), 3);
+        assert_eq!(head, NO_NOTE);
+    }
+
+    #[test]
+    fn release_all_reports_every_note_newest_first() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 1, 60, 81, 9);
+        pool.allocate_note(&mut head, 2, 61, 82, 9);
+
+        assert_eq!(offs(|f| pool.release_all(&mut head, 42, f)), vec![(2, 42), (1, 42)]);
+        assert_eq!(head, NO_NOTE);
+    }
+
+    #[test]
+    fn released_slot_is_reused_first() {
+        let mut pool = NotePool::new();
+        let mut head = NO_NOTE;
+        pool.allocate_note(&mut head, 1, 60, 81, 9);
+        let slot = head;
+        pool.release_matching_key(&mut head, 81);
+
+        pool.allocate_note(&mut head, 2, 62, 83, 9);
+        assert_eq!(head, slot);
     }
 }

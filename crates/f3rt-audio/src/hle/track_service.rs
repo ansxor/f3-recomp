@@ -1,5 +1,4 @@
-//! `audio/hle/track_service.hpp` + `track_service.cpp`: the per-track parameter records, the note
-//! durations and the per-sequence volume / fade mix.
+//! The per-track parameter records, the note durations and the per-sequence volume / fade mix.
 //!
 //! Owns everything that is sequencing state rather than sequencer position. Parameters are only
 //! written through `apply_track`; `start_sequence`, `stop_sequence` and `park_sequence` are lifecycle
@@ -9,7 +8,7 @@ use crate::hle::events::{
     Event, NoteOffEvent, NoteOnEvent, TrackEvent, TrackEventKind, NO_PROGRAM, SONG_SLOTS, TRACK_COUNT,
 };
 use crate::hle::mailbox::Mailbox;
-use crate::hle::note_pool::{self, NotePool, NoteSink};
+use crate::hle::note_pool::{self, NotePool};
 use crate::hle::pulse_timer::PulseTimer;
 use crate::hle::track_parameters::TrackParameters;
 
@@ -37,9 +36,12 @@ impl Default for TrackConfig {
 #[repr(u8)]
 pub enum TrackStatus {
     #[default]
-    Inactive, // unallocated, or no stream / no program to play
-    Streaming, // reading events from the ROM track stream
-    Ended,     // reached the end of the stream; the track stays live for direct commands
+    /// Unallocated, or no stream / no program to play.
+    Inactive,
+    /// Reading events from the ROM track stream.
+    Streaming,
+    /// Reached the end of the stream; the track stays live for direct commands.
+    Ended,
 }
 
 /// The live sequencing state of one track of one sequence.
@@ -78,23 +80,18 @@ impl Track {
     }
 }
 
-/// Pushes the note-off into the mailbox; the dispatcher releases the voice.
-pub struct MailboxNoteSink<'a> {
-    pub mailbox: &'a mut Mailbox,
-}
-
-impl NoteSink for MailboxNoteSink<'_> {
-    fn note_off(&mut self, instance: u64, tick: u64) {
-        self.mailbox.push(Event::NoteOff(NoteOffEvent { instance, tick }));
-    }
+/// A note-off sink that queues the event; the mailbox dispatcher releases the voice.
+fn push_note_off(mailbox: &mut Mailbox) -> impl FnMut(u64, u64) + '_ {
+    |instance, tick| mailbox.push(Event::NoteOff(NoteOffEvent { instance, tick }))
 }
 
 // Program-selector value ranges; the extended-selector bit lives on TrackParameters.
 const SELECTOR_INTERNAL_MIN: u8 = 0x64;
-const SELECTOR_INTERNAL_MAX: u8 = 0x7b;
 const SELECTOR_SPECIAL_7B: u8 = 0x7b;
 const SELECTOR_BANK_BASE: u8 = 0x7c;
 
+/// The sequence's volume: the high byte is the level tracks see, the low byte is carried across
+/// writes of the level.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Mix {
     volume: u16,
@@ -108,13 +105,59 @@ impl Default for Mix {
     }
 }
 
+impl Mix {
+    fn level(&self) -> u8 {
+        (self.volume >> 8) as u8
+    }
+
+    fn set_level(&mut self, level: u8) {
+        self.volume = (u16::from(level) << 8) | (self.volume & 0xff);
+    }
+}
+
+/// The physical channel table: channels are handed out from the top, and a channel's previous
+/// factory key outlives its release.
+struct Channels {
+    used: [bool; MAX_TRACK_CHANNEL as usize + 1],
+    previous_key: [u8; MAX_TRACK_CHANNEL as usize + 1],
+}
+
+impl Channels {
+    fn new() -> Channels {
+        Channels {
+            used: [false; MAX_TRACK_CHANNEL as usize + 1],
+            previous_key: [0; MAX_TRACK_CHANNEL as usize + 1],
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Channels::new();
+    }
+
+    /// The highest free channel; 0 when all are taken.
+    fn allocate(&mut self) -> u8 {
+        let Some(channel) = (1..=MAX_TRACK_CHANNEL).rev().find(|&c| !self.used[usize::from(c)])
+        else {
+            return 0;
+        };
+        self.used[usize::from(channel)] = true;
+        channel
+    }
+
+    /// Channel 0 means "none held".
+    fn release(&mut self, channel: u8) {
+        if channel > 0 && channel <= MAX_TRACK_CHANNEL {
+            self.used[usize::from(channel)] = false;
+        }
+    }
+}
+
 pub struct TrackService {
     tracks: [[Track; TRACK_COUNT]; SONG_SLOTS],
     active: [bool; SONG_SLOTS],
     mix: [Mix; SONG_SLOTS],
     notes: NotePool,
-    channel_used: [bool; MAX_TRACK_CHANNEL as usize + 1],
-    channel_previous_key: [u8; MAX_TRACK_CHANNEL as usize + 1],
+    channels: Channels,
     fade: PulseTimer,
 }
 
@@ -131,8 +174,7 @@ impl TrackService {
             active: [false; SONG_SLOTS],
             mix: [Mix::default(); SONG_SLOTS],
             notes: NotePool::new(),
-            channel_used: [false; MAX_TRACK_CHANNEL as usize + 1],
-            channel_previous_key: [0; MAX_TRACK_CHANNEL as usize + 1],
+            channels: Channels::new(),
             fade: PulseTimer::new(12, 1),
         }
     }
@@ -142,16 +184,23 @@ impl TrackService {
         self.active = [false; SONG_SLOTS];
         self.mix = [Mix::default(); SONG_SLOTS];
         self.notes.reset();
-        self.channel_used.fill(false);
-        self.channel_previous_key.fill(0);
+        self.channels.reset();
         self.fade.reset();
     }
 
     pub fn tracks(&mut self, sequence: u8) -> &mut [Track; TRACK_COUNT] {
-        &mut self.tracks[sequence as usize]
+        &mut self.tracks[usize::from(sequence)]
     }
 
-    /// ---- lifecycle, called synchronously by the Sequencer before it dispatches a pulse's events.
+    pub fn track(&self, sequence: u8, track: u8) -> &Track {
+        &self.tracks[usize::from(sequence)][usize::from(track)]
+    }
+
+    pub fn track_mut(&mut self, sequence: u8, track: u8) -> &mut Track {
+        &mut self.tracks[usize::from(sequence)][usize::from(track)]
+    }
+
+    /// Lifecycle, called synchronously by the Sequencer before it dispatches a pulse's events.
     pub fn start_sequence(
         &mut self,
         sequence: u8,
@@ -159,46 +208,34 @@ impl TrackService {
         tick: u64,
         mailbox: &mut Mailbox,
     ) {
-        let index = sequence as usize;
-        let mut sink = MailboxNoteSink { mailbox };
-        for t in self.tracks[index].iter_mut() {
-            self.notes.release_all(&mut t.head, &mut sink, tick);
+        let index = usize::from(sequence);
+        for track in self.tracks[index].iter_mut() {
+            self.notes.release_all(&mut track.head, tick, push_note_off(mailbox));
+            self.channels.release(track.physical);
+            track.physical = 0;
         }
-        for i in 0..TRACK_COUNT {
-            let physical = self.tracks[index][i].physical;
-            if physical != 0 {
-                self.release_channel(physical);
+
+        self.mix[index] = Mix::default();
+        let volume = self.mix[index].level();
+        for (track, config) in self.tracks[index].iter_mut().zip(initial) {
+            track.config = *config;
+            if config.program != NO_PROGRAM {
+                track.physical = self.channels.allocate();
             }
-            self.tracks[index][i].physical = 0;
+            track.cursor = 0;
+            track.countdown = 1;
+            track.status = TrackStatus::Inactive;
+            track.sequence_volume = volume;
         }
-        self.reset_mix(sequence);
-        let volume = (self.mix[index].volume >> 8) as u8;
-        // `i` indexes both the track table and the caller's initial records, as in the C++.
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..TRACK_COUNT {
-            self.tracks[index][i].config = initial[i];
-            if self.tracks[index][i].config.program != NO_PROGRAM {
-                let physical = self.allocate_channel();
-                self.tracks[index][i].physical = physical;
-            }
-            self.tracks[index][i].cursor = 0;
-            self.tracks[index][i].countdown = 1;
-            self.tracks[index][i].status = TrackStatus::Inactive;
-            self.tracks[index][i].sequence_volume = volume;
-        }
-        self.active[sequence as usize] = true;
+        self.active[index] = true;
     }
 
     pub fn stop_sequence(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
-        let index = sequence as usize;
-        let mut sink = MailboxNoteSink { mailbox };
-        for i in 0..TRACK_COUNT {
-            self.notes.release_all(&mut self.tracks[index][i].head, &mut sink, tick);
-            let physical = self.tracks[index][i].physical;
-            if physical != 0 {
-                self.release_channel(physical);
-            }
-            self.tracks[index][i].physical = 0;
+        let index = usize::from(sequence);
+        for track in self.tracks[index].iter_mut() {
+            self.notes.release_all(&mut track.head, tick, push_note_off(mailbox));
+            self.channels.release(track.physical);
+            track.physical = 0;
         }
         self.active[index] = false;
     }
@@ -209,30 +246,27 @@ impl TrackService {
 
     /// Note-offs only: the physical channels and the track records stay.
     pub fn release_notes(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
-        let index = sequence as usize;
-        let mut sink = MailboxNoteSink { mailbox };
-        for i in 0..TRACK_COUNT {
-            self.notes.release_all(&mut self.tracks[index][i].head, &mut sink, tick);
+        for track in self.tracks[usize::from(sequence)].iter_mut() {
+            self.notes.release_all(&mut track.head, tick, push_note_off(mailbox));
         }
     }
 
     pub fn copy_mix(&mut self, from: u8, to: u8) {
-        self.mix[to as usize] = self.mix[from as usize];
-        let volume = (self.mix[to as usize].volume >> 8) as u8;
+        self.mix[usize::from(to)] = self.mix[usize::from(from)];
+        let volume = self.mix[usize::from(to)].level();
         self.set_sequence_volume(to, volume);
     }
 
     /// The channel's last factory key: read when a sequence restarts, before any of its voices exist.
     pub fn previous_key(&self, channel: u8) -> u8 {
-        self.channel_previous_key[channel as usize]
+        self.channels.previous_key[usize::from(channel)]
     }
 
-    /// ---- event application, called only by the mailbox dispatcher.
+    /// Event application, called only by the mailbox dispatcher.
     pub fn apply_note_on(&mut self, event: &NoteOnEvent) {
-        let index = event.sequence as usize;
-        let track = event.track as usize;
+        let track = &mut self.tracks[usize::from(event.sequence)][usize::from(event.track)];
         self.notes.allocate_note(
-            &mut self.tracks[index][track].head,
+            &mut track.head,
             event.instance,
             event.key,
             event.kernel_key,
@@ -241,10 +275,10 @@ impl TrackService {
     }
 
     pub fn apply_track(&mut self, event: &TrackEvent) {
-        let t = &mut self.tracks[event.sequence as usize][event.track as usize];
+        let t = &mut self.tracks[usize::from(event.sequence)][usize::from(event.track)];
         match event.kind {
             TrackEventKind::Controller => {
-                if !t.config.parameters.set_controller(event.index as usize, event.value) {
+                if !t.config.parameters.set_controller(usize::from(event.index), event.value) {
                     panic!("HLE controller outside track parameter record");
                 }
             }
@@ -257,17 +291,21 @@ impl TrackService {
             TrackEventKind::ProgramSelector => {
                 let parameters = &mut t.config.parameters;
                 parameters.set_selector(event.value);
-                if event.value >= SELECTOR_INTERNAL_MIN && event.value < SELECTOR_INTERNAL_MAX {
-                } else if event.value == SELECTOR_SPECIAL_7B {
-                    parameters.set_extended_selector(true);
-                } else if event.value >= SELECTOR_BANK_BASE {
-                    t.config.bank = event.value.wrapping_sub(SELECTOR_BANK_BASE);
-                } else {
-                    parameters.set_extended_selector(false);
-                    t.config.program = ((t.config.bank as u16) << 14) | event.value as u16;
-                    parameters.set_program_image(t.config.program);
-                    // c144e2 passes the track with bit7 set: c0edda clears the bank after selection.
-                    t.config.bank = 0;
+                match event.value {
+                    // Internal selectors only record the selector byte.
+                    SELECTOR_INTERNAL_MIN..SELECTOR_SPECIAL_7B => {}
+                    SELECTOR_SPECIAL_7B => parameters.set_extended_selector(true),
+                    SELECTOR_BANK_BASE.. => {
+                        t.config.bank = event.value.wrapping_sub(SELECTOR_BANK_BASE);
+                    }
+                    _ => {
+                        parameters.set_extended_selector(false);
+                        t.config.program = (u16::from(t.config.bank) << 14) | u16::from(event.value);
+                        parameters.set_program_image(t.config.program);
+                        // The driver selects with the track's bit 7 set, which clears the bank
+                        // after the selection.
+                        t.config.bank = 0;
+                    }
                 }
             }
 
@@ -277,20 +315,19 @@ impl TrackService {
 
             TrackEventKind::PreviousKey => {
                 t.config.parameters.set_previous_key(event.value);
-                self.channel_previous_key[t.physical as usize] = event.value;
+                self.channels.previous_key[usize::from(t.physical)] = event.value;
             }
 
             TrackEventKind::SequenceVolume => {
-                let mix = &mut self.mix[event.sequence as usize];
-                mix.volume = ((event.value as u16) << 8) | (mix.volume as u8) as u16;
+                let mix = &mut self.mix[usize::from(event.sequence)];
+                mix.set_level(event.value);
                 mix.fade_step = 0;
-                let volume = (mix.volume >> 8) as u8;
-                self.set_sequence_volume(event.sequence, volume);
+                let level = mix.level();
+                self.set_sequence_volume(event.sequence, level);
             }
 
             TrackEventKind::SequencePan => {
-                let index = event.sequence as usize;
-                for track in &mut self.tracks[index][..TRACK_COUNT] {
+                for track in self.tracks[usize::from(event.sequence)].iter_mut() {
                     if track.is_live() {
                         track.config.parameters.set_pan(event.value);
                     }
@@ -298,32 +335,32 @@ impl TrackService {
             }
 
             TrackEventKind::SequenceFade => {
-                let mix = &mut self.mix[event.sequence as usize];
-                mix.volume = ((event.start as u16) << 8) | (mix.volume as u8) as u16;
+                let mix = &mut self.mix[usize::from(event.sequence)];
+                mix.set_level(event.start);
                 mix.fade_target = event.target;
-                let difference = ((event.target.wrapping_sub(event.start) as u16) << 8) as i16;
-                let product = (difference as i32) * (event.rate as i32);
+                let difference = (u16::from(event.target.wrapping_sub(event.start)) << 8) as i16;
+                let product = i32::from(difference) * i32::from(event.rate);
                 mix.fade_step = ((product as u32).wrapping_mul(2) >> 16) as i16;
-                let volume = (mix.volume >> 8) as u8;
-                self.set_sequence_volume(event.sequence, volume);
+                let level = mix.level();
+                self.set_sequence_volume(event.sequence, level);
             }
 
             TrackEventKind::Refresh => {}
 
             TrackEventKind::SequenceFadeStep => {
-                let mix = &mut self.mix[event.sequence as usize];
+                let mix = &mut self.mix[usize::from(event.sequence)];
                 if mix.fade_step != 0 {
                     mix.volume = mix.volume.wrapping_add(mix.fade_step as u16);
-                    let current = (mix.volume >> 8) as u8 as i8;
+                    let current = mix.level() as i8;
                     let target = mix.fade_target as i8;
                     if (mix.fade_step > 0 && current >= target)
                         || (mix.fade_step < 0 && current < target)
                     {
-                        mix.volume = ((mix.fade_target as u16) << 8) | (mix.volume as u8) as u16;
+                        mix.set_level(mix.fade_target);
                         mix.fade_step = 0;
                     }
-                    let volume = (mix.volume >> 8) as u8;
-                    self.set_sequence_volume(event.sequence, volume);
+                    let level = mix.level();
+                    self.set_sequence_volume(event.sequence, level);
                 }
             }
         }
@@ -331,10 +368,8 @@ impl TrackService {
 
     /// Unlinks the track's note of `kernel_key`; returns the instance to release (0 when none).
     pub fn release_key(&mut self, sequence: u8, track: u8, kernel_key: u8, _tick: u64) -> u64 {
-        self.notes.release_matching_key(
-            &mut self.tracks[sequence as usize][track as usize].head,
-            kernel_key,
-        )
+        let track = &mut self.tracks[usize::from(sequence)][usize::from(track)];
+        self.notes.release_matching_key(&mut track.head, kernel_key)
     }
 
     /// The sequence fade pulse; the owner calls `fade_pulse` when it fires.
@@ -342,58 +377,196 @@ impl TrackService {
         &mut self.fade
     }
 
-    fn reset_mix(&mut self, sequence: u8) {
-        self.mix[sequence as usize] = Mix::default();
-    }
-
     /// The sequence's BPM note pulse: steps every note duration of its tracks.
     pub fn note_pulse(&mut self, sequence: u8, tick: u64, mailbox: &mut Mailbox) {
-        let index = sequence as usize;
-        let mut sink = MailboxNoteSink { mailbox };
-        for i in 0..TRACK_COUNT {
-            self.notes.step_durations(&mut self.tracks[index][i].head, &mut sink, tick);
+        for track in self.tracks[usize::from(sequence)].iter_mut() {
+            self.notes.step_durations(&mut track.head, tick, push_note_off(mailbox));
         }
     }
 
     /// The sequence fade pulse: queues one fade step per fading sequence.
     pub fn fade_pulse(&mut self, tick: u64, mailbox: &mut Mailbox) {
-        for sequence in 0..SONG_SLOTS {
-            if !self.active[sequence] || self.mix[sequence].fade_step == 0 {
-                continue;
+        let fading = self.active.iter().zip(&self.mix).enumerate();
+        for (sequence, (&active, mix)) in fading {
+            if active && mix.fade_step != 0 {
+                mailbox.push(Event::Track(TrackEvent::sequence_fade_step(tick, sequence as u8)));
             }
-            mailbox.push(Event::Track(TrackEvent {
-                kind: TrackEventKind::SequenceFadeStep,
-                tick,
-                sequence: sequence as u8,
-                ..TrackEvent::default()
-            }));
         }
     }
 
     fn set_sequence_volume(&mut self, sequence: u8, volume: u8) {
-        let index = sequence as usize;
-        for track in &mut self.tracks[index][..TRACK_COUNT] {
+        for track in self.tracks[usize::from(sequence)].iter_mut() {
             if track.is_live() {
                 track.sequence_volume = volume;
             }
         }
     }
+}
 
-    fn allocate_channel(&mut self) -> u8 {
-        let mut channel = MAX_TRACK_CHANNEL;
-        while channel > 0 {
-            if !self.channel_used[channel as usize] {
-                self.channel_used[channel as usize] = true;
-                return channel;
-            }
-            channel -= 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::track_parameters::at;
+
+    fn configs(programs: &[u16]) -> [TrackConfig; TRACK_COUNT] {
+        let mut initial = [TrackConfig::default(); TRACK_COUNT];
+        for (config, &program) in initial.iter_mut().zip(programs) {
+            config.program = program;
         }
-        0
+        initial
     }
 
-    fn release_channel(&mut self, channel: u8) {
-        if channel > 0 && channel <= MAX_TRACK_CHANNEL {
-            self.channel_used[channel as usize] = false;
+    fn started(programs: &[u16]) -> (TrackService, Mailbox) {
+        let mut service = TrackService::new();
+        let mut mailbox = Mailbox::new();
+        service.start_sequence(3, &configs(programs), 0, &mut mailbox);
+        (service, mailbox)
+    }
+
+    fn make_live(service: &mut TrackService, sequence: u8, track: u8) {
+        service.track_mut(sequence, track).status = TrackStatus::Streaming;
+    }
+
+    fn sequence_event(kind: TrackEventKind) -> TrackEvent {
+        TrackEvent { kind, sequence: 3, ..TrackEvent::default() }
+    }
+
+    fn drained(mailbox: &mut Mailbox) -> Vec<Event> {
+        let mut events = Vec::new();
+        mailbox.drain(|event| events.push(event));
+        events
+    }
+
+    #[test]
+    fn channels_go_to_programmed_tracks_from_the_top() {
+        let (service, _) = started(&[1, NO_PROGRAM, 2]);
+        assert_eq!(service.track(3, 0).physical, MAX_TRACK_CHANNEL);
+        assert_eq!(service.track(3, 1).physical, 0);
+        assert_eq!(service.track(3, 2).physical, MAX_TRACK_CHANNEL - 1);
+    }
+
+    #[test]
+    fn stopping_frees_channels_for_the_next_sequence() {
+        let (mut service, mut mailbox) = started(&[1, 2]);
+        service.stop_sequence(3, 0, &mut mailbox);
+        assert_eq!(service.track(3, 0).physical, 0);
+
+        service.start_sequence(4, &configs(&[9]), 0, &mut mailbox);
+        assert_eq!(service.track(4, 0).physical, MAX_TRACK_CHANNEL);
+    }
+
+    #[test]
+    fn exhausted_channels_allocate_zero() {
+        let mut channels = Channels::new();
+        for expected in (1..=MAX_TRACK_CHANNEL).rev() {
+            assert_eq!(channels.allocate(), expected);
         }
+        assert_eq!(channels.allocate(), 0);
+        channels.release(7);
+        assert_eq!(channels.allocate(), 7);
+    }
+
+    #[test]
+    fn stopping_releases_held_notes_into_the_mailbox() {
+        let (mut service, mut mailbox) = started(&[1]);
+        service.apply_note_on(&NoteOnEvent {
+            instance: 9,
+            sequence: 3,
+            track: 0,
+            duration: 5,
+            ..NoteOnEvent::default()
+        });
+        service.stop_sequence(3, 77, &mut mailbox);
+        assert_eq!(
+            drained(&mut mailbox),
+            vec![Event::NoteOff(NoteOffEvent { instance: 9, tick: 77 })]
+        );
+    }
+
+    #[test]
+    fn sequence_volume_reaches_only_live_tracks() {
+        let (mut service, _) = started(&[1, 1]);
+        make_live(&mut service, 3, 0);
+
+        service.apply_track(&TrackEvent { value: 0x40, ..sequence_event(TrackEventKind::SequenceVolume) });
+
+        assert_eq!(service.track(3, 0).sequence_volume, 0x40);
+        assert_eq!(service.track(3, 1).sequence_volume, 127);
+    }
+
+    #[test]
+    fn fade_steps_toward_the_target_and_stops_there() {
+        let (mut service, mut mailbox) = started(&[1]);
+        make_live(&mut service, 3, 0);
+
+        service.apply_track(&TrackEvent {
+            start: 127,
+            target: 0,
+            rate: 0x100,
+            ..sequence_event(TrackEventKind::SequenceFade)
+        });
+        assert_eq!(service.track(3, 0).sequence_volume, 127);
+
+        service.fade_pulse(5, &mut mailbox);
+        assert_eq!(drained(&mut mailbox), vec![Event::Track(TrackEvent::sequence_fade_step(5, 3))]);
+
+        // The step is -254 per pulse on a volume whose low byte starts at 0xff.
+        service.apply_track(&sequence_event(TrackEventKind::SequenceFadeStep));
+        assert_eq!(service.track(3, 0).sequence_volume, 0x7f);
+        service.apply_track(&sequence_event(TrackEventKind::SequenceFadeStep));
+        assert_eq!(service.track(3, 0).sequence_volume, 0x7e);
+
+        for _ in 0..1000 {
+            service.apply_track(&sequence_event(TrackEventKind::SequenceFadeStep));
+        }
+        assert_eq!(service.track(3, 0).sequence_volume, 0);
+        service.fade_pulse(6, &mut mailbox);
+        assert!(drained(&mut mailbox).is_empty());
+    }
+
+    #[test]
+    fn selector_bank_applies_to_the_next_program_selection() {
+        let (mut service, _) = started(&[1]);
+        let selector = |value| TrackEvent::program_selector(0, 3, 0, value);
+
+        service.apply_track(&selector(0x7c + 2));
+        assert_eq!(service.track(3, 0).config.bank, 2);
+
+        service.apply_track(&selector(0x05));
+        let config = service.track(3, 0).config;
+        assert_eq!(config.program, (2 << 14) | 0x05);
+        assert_eq!(config.parameters.word(at::program_high), config.program);
+        assert_eq!(config.bank, 0);
+        assert_eq!(config.parameters.selector(), 0x05);
+    }
+
+    #[test]
+    fn selector_7b_sets_and_a_plain_program_clears_the_extended_flag() {
+        let (mut service, _) = started(&[1]);
+
+        service.apply_track(&TrackEvent::program_selector(0, 3, 0, 0x7b));
+        assert_eq!(service.track(3, 0).config.parameters.flags() & 0x40, 0x40);
+
+        service.apply_track(&TrackEvent::program_selector(0, 3, 0, 0x10));
+        assert_eq!(service.track(3, 0).config.parameters.flags() & 0x40, 0);
+    }
+
+    #[test]
+    fn internal_selectors_only_record_the_selector_byte() {
+        let (mut service, _) = started(&[1]);
+        let before = service.track(3, 0).config;
+
+        service.apply_track(&TrackEvent::program_selector(0, 3, 0, 0x70));
+
+        let after = service.track(3, 0).config;
+        assert_eq!((after.program, after.bank), (before.program, before.bank));
+        assert_eq!(after.parameters.selector(), 0x70);
+    }
+
+    #[test]
+    fn previous_key_is_remembered_per_channel() {
+        let (mut service, _) = started(&[1]);
+        service.apply_track(&TrackEvent::previous_key(0, 3, 0, 66));
+        assert_eq!(service.previous_key(MAX_TRACK_CHANNEL), 66);
     }
 }

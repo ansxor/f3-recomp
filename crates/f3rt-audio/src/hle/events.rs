@@ -1,6 +1,4 @@
-//! `audio/hle/events.rs`: the sample-rate/clock constants and the mailbox event records.
-//!
-//! `F3RT_HLE_EVENTS` compiles the voice-event observer out; nothing here uses it.
+//! The sample-rate/clock constants and the mailbox event records.
 
 /// The voice and effects stages run on the ES5505 output grid (clock rate 15238090 Hz, 32 voices:
 /// 15238090 / (16 * 32) = 29761 + 229/256 = 29761.89453125 Hz, rounded to 29762 Hz per 12's PCB
@@ -84,6 +82,61 @@ pub struct TrackEvent {
     pub rate: i16,
 }
 
+impl TrackEvent {
+    fn at(kind: TrackEventKind, tick: u64, sequence: u8, track: u8) -> TrackEvent {
+        TrackEvent { kind, tick, sequence, track, ..TrackEvent::default() }
+    }
+
+    pub fn controller(tick: u64, sequence: u8, track: u8, index: u8, value: u8) -> TrackEvent {
+        TrackEvent { index, value, ..Self::at(TrackEventKind::Controller, tick, sequence, track) }
+    }
+
+    pub fn program(tick: u64, sequence: u8, track: u8, program: u16) -> TrackEvent {
+        TrackEvent { program, ..Self::at(TrackEventKind::Program, tick, sequence, track) }
+    }
+
+    pub fn program_selector(tick: u64, sequence: u8, track: u8, value: u8) -> TrackEvent {
+        TrackEvent { value, ..Self::at(TrackEventKind::ProgramSelector, tick, sequence, track) }
+    }
+
+    pub fn volume(tick: u64, sequence: u8, track: u8, value: u8) -> TrackEvent {
+        TrackEvent { value, ..Self::at(TrackEventKind::Volume, tick, sequence, track) }
+    }
+
+    pub fn pan(tick: u64, sequence: u8, track: u8, value: u8) -> TrackEvent {
+        TrackEvent { value, ..Self::at(TrackEventKind::Pan, tick, sequence, track) }
+    }
+
+    pub fn previous_key(tick: u64, sequence: u8, track: u8, key: u8) -> TrackEvent {
+        TrackEvent { value: key, ..Self::at(TrackEventKind::PreviousKey, tick, sequence, track) }
+    }
+
+    pub fn sequence_volume(tick: u64, sequence: u8, value: u8) -> TrackEvent {
+        TrackEvent { value, ..Self::at(TrackEventKind::SequenceVolume, tick, sequence, 0) }
+    }
+
+    pub fn sequence_pan(tick: u64, sequence: u8, value: u8) -> TrackEvent {
+        TrackEvent { value, ..Self::at(TrackEventKind::SequencePan, tick, sequence, 0) }
+    }
+
+    pub fn sequence_fade(tick: u64, sequence: u8, start: u8, target: u8, rate: i16) -> TrackEvent {
+        TrackEvent {
+            start,
+            target,
+            rate,
+            ..Self::at(TrackEventKind::SequenceFade, tick, sequence, 0)
+        }
+    }
+
+    pub fn sequence_fade_step(tick: u64, sequence: u8) -> TrackEvent {
+        Self::at(TrackEventKind::SequenceFadeStep, tick, sequence, 0)
+    }
+
+    pub fn refresh(tick: u64, sequence: u8, track: u8) -> TrackEvent {
+        Self::at(TrackEventKind::Refresh, tick, sequence, track)
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum EffectEventKind {
@@ -101,7 +154,16 @@ pub struct EffectEvent {
     pub value: u8,
 }
 
-/// `std::variant<NoteOnEvent, NoteOffEvent, ReleaseKeyEvent, TrackEvent, EffectEvent>`.
+impl EffectEvent {
+    pub fn preset(tick: u64, preset: u8) -> EffectEvent {
+        EffectEvent { kind: EffectEventKind::Preset, tick, preset, ..EffectEvent::default() }
+    }
+
+    pub fn parameter(tick: u64, index: u8, value: u8) -> EffectEvent {
+        EffectEvent { kind: EffectEventKind::Parameter, tick, index, value, ..EffectEvent::default() }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Event {
     NoteOn(NoteOnEvent),
