@@ -1,13 +1,13 @@
-//! `audio/pcm_ring.hpp`: the worker's PCM ring and the frame boundary of `finish_frame`. The C++
-//! class owns its mutex; here the owner shares the ring as `Arc<Mutex<PcmRing>>` with the worker,
-//! so the ring itself is plain data.
+//! The worker's PCM ring and the video-frame boundary that `drain_released` honours. The owner
+//! shares the ring with the worker as `Arc<Mutex<PcmRing>>`, so the ring itself is plain data.
 
 use crate::hle::core::PcmSink;
 
 pub const CAPACITY: usize = 32768;
 
 pub struct PcmRing {
-    frames: [f32; CAPACITY * 2],
+    // Boxed: 256 KiB would overflow small thread stacks.
+    frames: Box<[f32; CAPACITY * 2]>,
     read: u64,
     write: u64,
     released: u64,
@@ -22,7 +22,17 @@ impl Default for PcmRing {
 
 impl PcmRing {
     pub fn new() -> PcmRing {
-        PcmRing { frames: [0.0; CAPACITY * 2], read: 0, write: 0, released: 0, pending: 0 }
+        let frames = vec![0.0f32; CAPACITY * 2]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("vec length is CAPACITY * 2"));
+        PcmRing {
+            frames,
+            read: 0,
+            write: 0,
+            released: 0,
+            pending: 0,
+        }
     }
 
     pub fn available(&self) -> usize {
@@ -47,7 +57,6 @@ impl PcmRing {
     }
 
     pub fn discard(&mut self) {
-        // `m_read = m_pending = m_write`.
         self.read = self.write;
         self.pending = self.write;
         self.released = self.write;
@@ -61,7 +70,7 @@ impl PcmRing {
         ready
     }
 
-    /// `take<false, float>`: the blocking float drain never holds anything back.
+    /// The blocking float drain never holds anything back.
     fn take_f32(&mut self, out: &mut [f32], max_frames: usize) -> usize {
         let count = (max_frames as u64).min(self.ready(false)) as usize;
         for n in 0..count {
@@ -100,5 +109,64 @@ impl PcmSink for PcmRing {
         if self.write - self.read > CAPACITY as u64 {
             self.read = self.write - CAPACITY as u64;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_swaps_channels() {
+        let mut ring = PcmRing::new();
+        ring.write(&[0.25, -0.5], 1);
+        let mut out = [0.0f32; 2];
+        assert_eq!(ring.drain(&mut out, 8), 1);
+        assert_eq!(out, [-0.5, 0.25]);
+    }
+
+    #[test]
+    fn drain_i16_scales_and_clamps() {
+        let mut ring = PcmRing::new();
+        ring.write(&[1.0, -1.0, 2.0, -2.0, 0.5, 0.0], 3);
+        let mut out = [0i16; 6];
+        assert_eq!(ring.drain_i16(&mut out, 3), 3);
+        assert_eq!(out, [-32768, 32767, -32768, 32767, 0, 16384]);
+    }
+
+    #[test]
+    fn released_drain_holds_back_the_open_frame() {
+        let mut ring = PcmRing::new();
+        ring.write(&[0.0; 8], 4);
+        let mut out = [0i16; 8];
+        ring.close_frame(2);
+        assert_eq!(ring.drain_released(&mut out, 4), 0);
+        ring.close_frame(4);
+        assert_eq!(ring.drain_released(&mut out, 4), 2);
+        assert_eq!(ring.drain_released(&mut out, 4), 0);
+        ring.close_frame(4);
+        assert_eq!(ring.drain_released(&mut out, 4), 2);
+    }
+
+    #[test]
+    fn overflow_drops_oldest_frames() {
+        let mut ring = PcmRing::new();
+        let stereo: Vec<f32> = (0..CAPACITY + 1).flat_map(|n| [n as f32, 0.0]).collect();
+        ring.write(&stereo, CAPACITY + 1);
+        assert_eq!(ring.available(), CAPACITY);
+        let mut out = [0.0f32; 2];
+        ring.drain(&mut out, 1);
+        assert_eq!(out[1], 1.0);
+    }
+
+    #[test]
+    fn discard_empties_everything() {
+        let mut ring = PcmRing::new();
+        ring.write(&[0.0; 4], 2);
+        ring.close_frame(2);
+        ring.discard();
+        assert_eq!(ring.available(), 0);
+        let mut out = [0i16; 4];
+        assert_eq!(ring.drain_released(&mut out, 2), 0);
     }
 }

@@ -1,8 +1,7 @@
-//! `audio/snapshot.hpp`: the 32-byte big-endian save-state blob.
+//! The 32-byte big-endian save-state blob.
 //!
-//! `parse` reports a malformed blob as an error instead of panicking, which is the Rust form of the
-//! C++ `std::invalid_argument` the ABI shim catches to return F3RT_AUDIO_INVALID_STATE; the board is
-//! left unchanged in that case.
+//! `parse` reports a malformed blob as an error so the ABI can return invalid-state and leave the
+//! board unchanged.
 
 use crate::bytes::{read_be16_at, read_be64_at, write_be16_at, write_be64_at};
 use crate::shared_mailbox::SharedMailbox;
@@ -28,10 +27,10 @@ impl AudioSnapshot {
             return Err("Audio state size mismatch");
         }
         let index = read_be16_at(src, CONSUMER_AT);
-        if !SharedMailbox::valid_index(index)
-            || src[HELD_AT] > 1
-            || src[RESERVED_AT..].iter().any(|&byte| byte != 0)
-        {
+        let index_is_valid = SharedMailbox::valid_index(index);
+        let held_is_boolean = src[HELD_AT] <= 1;
+        let reserved_is_zero = src[RESERVED_AT..].iter().all(|&byte| byte == 0);
+        if !(index_is_valid && held_is_boolean && reserved_is_zero) {
             return Err("Invalid audio mailbox state");
         }
         Ok(AudioSnapshot {
@@ -51,5 +50,56 @@ impl AudioSnapshot {
         write_be64_at(dst, COMMANDS_AT, self.commands);
         write_be16_at(dst, CONSUMER_AT, self.consumer);
         dst[HELD_AT] = self.held as u8;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> AudioSnapshot {
+        AudioSnapshot {
+            clock: 0x0102_0304_0506_0708,
+            commands: 99,
+            consumer: 0x2a4,
+            held: true,
+        }
+    }
+
+    fn blob() -> [u8; BYTES] {
+        let mut blob = [0u8; BYTES];
+        sample().write(&mut blob);
+        blob
+    }
+
+    #[test]
+    fn round_trips() {
+        assert_eq!(AudioSnapshot::parse(&blob()), Ok(sample()));
+    }
+
+    #[test]
+    fn rejects_wrong_size() {
+        assert_eq!(
+            AudioSnapshot::parse(&blob()[..BYTES - 1]),
+            Err("Audio state size mismatch")
+        );
+    }
+
+    #[test]
+    fn rejects_bad_consumer_held_and_reserved() {
+        for (at, value) in [
+            (CONSUMER_AT, 0x08),
+            (CONSUMER_AT + 1, 0x01),
+            (HELD_AT, 2),
+            (BYTES - 1, 1),
+        ] {
+            let mut bad = blob();
+            bad[at] = value;
+            assert_eq!(
+                AudioSnapshot::parse(&bad),
+                Err("Invalid audio mailbox state"),
+                "byte {at}"
+            );
+        }
     }
 }
