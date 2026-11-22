@@ -22,11 +22,6 @@ impl Default for ActiveNote {
     }
 }
 
-/// Kept only until `VoiceService` takes a closure too; the pool itself no longer uses it.
-pub trait NoteSink {
-    fn note_off(&mut self, instance: u64, tick: u64);
-}
-
 pub struct NotePool {
     notes: Box<[ActiveNote; NOTE_CAPACITY]>,
     free_head: u16,

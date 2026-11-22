@@ -1,14 +1,4 @@
-//! Unaligned big-endian integer access and the signed narrowing helpers.
-#![allow(clippy::missing_safety_doc)]
-
-// Kept until `hle/sound_bank.rs` and `hle/patch.rs` move to the slice forms.
-pub unsafe fn read_be16(p: *const u8) -> u16 {
-    unsafe { u16::from_be_bytes([*p, *p.add(1)]) }
-}
-
-pub unsafe fn read_be32(p: *const u8) -> u32 {
-    unsafe { u32::from_be_bytes([*p, *p.add(1), *p.add(2), *p.add(3)]) }
-}
+//! Bounds-checked big-endian integer access and signed narrowing helpers.
 
 fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
     bytes[offset..offset + N]

@@ -23,8 +23,8 @@ const VOICES: usize = 32;
 const PENDING_NOTES: usize = 96;
 
 /// The track a note was played on. Voices and pending notes name their track by sequence and index.
-fn track_of<'a>(tracks: &'a mut TrackService, note: &NoteOnEvent) -> &'a Track {
-    &tracks.tracks(note.sequence)[usize::from(note.track)]
+fn track_of<'a>(tracks: &'a TrackService, note: &NoteOnEvent) -> &'a Track {
+    tracks.track(note.sequence, note.track)
 }
 
 /// The voices, the budget ring that steps them and the shared noise and ordering counters.
@@ -291,7 +291,7 @@ impl VoicePool {
     }
 
     /// Steps the voices the current budget slot of the ring reaches.
-    pub fn service_ring(&mut self, bank: &SoundBank, tracks: &mut TrackService) {
+    pub fn service_ring(&mut self, bank: &SoundBank, tracks: &TrackService) {
         let mut count = bank.budgets[usize::from(self.budget_slot)];
         self.budget_slot = (self.budget_slot + 1) % 12;
         while count != 0 {
@@ -366,7 +366,7 @@ impl VoiceService {
         event: &NoteOnEvent,
         patches: &PatchList,
         bank: &SoundBank,
-        tracks: &mut TrackService,
+        tracks: &TrackService,
     ) {
         let mut note = *event;
         note.velocity &= 127; // c16faa clears the velocity flag bit.
@@ -394,7 +394,7 @@ impl VoiceService {
         }
     }
 
-    pub fn note_off(&mut self, instance: u64, tick: u64, bank: &SoundBank, tracks: &mut TrackService) {
+    pub fn note_off(&mut self, instance: u64, tick: u64, bank: &SoundBank, tracks: &TrackService) {
         self.queue.note_off(instance, tick);
         for pending in self.pending.iter_mut() {
             if !(pending.active && pending.note.instance == instance) {
@@ -411,7 +411,7 @@ impl VoiceService {
     }
 
     /// Starts the queued notes and releases the queued note-offs the driver reached by `tick`.
-    pub fn service_queue(&mut self, tick: u64, bank: &SoundBank, tracks: &mut TrackService) {
+    pub fn service_queue(&mut self, tick: u64, bank: &SoundBank, tracks: &TrackService) {
         while let Some(action) = self.queue.pop_due(tick) {
             match action {
                 QueueAction::Begin { payload, start } => {
@@ -429,18 +429,19 @@ impl VoiceService {
         sequence: u8,
         track_index: u8,
         bank: &SoundBank,
-        tracks: &mut TrackService,
+        tracks: &TrackService,
     ) {
-        let track = &tracks.tracks(sequence)[usize::from(track_index)];
+        let track = tracks.track(sequence, track_index);
         self.pool.refresh_track(sequence, track_index, track, bank);
     }
 
-    pub fn refresh_sequence(&mut self, sequence: u8, bank: &SoundBank, tracks: &mut TrackService) {
-        self.pool.refresh_sequence(sequence, tracks.tracks(sequence), bank);
+    pub fn refresh_sequence(&mut self, sequence: u8, bank: &SoundBank, tracks: &TrackService) {
+        self.pool
+            .refresh_sequence(sequence, tracks.sequence_tracks(sequence), bank);
     }
 
     /// One 1 kHz service tick: due delayed patches, then the budget ring.
-    pub fn service(&mut self, bank: &SoundBank, tracks: &mut TrackService) {
+    pub fn service(&mut self, bank: &SoundBank, tracks: &TrackService) {
         let tick = self.tick;
         self.tick = self.tick.wrapping_add(u64::from(TIMER_TICKS));
         // Delayed layered patches whose delay elapsed; the start still pays the driver's key-on cost.
@@ -464,7 +465,7 @@ impl VoiceService {
         note: &NoteOnEvent,
         patch: Patch,
         bank: &SoundBank,
-        tracks: &mut TrackService,
+        tracks: &TrackService,
         start: u64,
     ) {
         if start == note.tick && self.queue.empty() {

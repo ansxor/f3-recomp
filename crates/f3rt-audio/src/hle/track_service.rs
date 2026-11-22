@@ -192,6 +192,10 @@ impl TrackService {
         &mut self.tracks[usize::from(sequence)]
     }
 
+    pub fn sequence_tracks(&self, sequence: u8) -> &[Track; TRACK_COUNT] {
+        &self.tracks[usize::from(sequence)]
+    }
+
     pub fn track(&self, sequence: u8, track: u8) -> &Track {
         &self.tracks[usize::from(sequence)][usize::from(track)]
     }

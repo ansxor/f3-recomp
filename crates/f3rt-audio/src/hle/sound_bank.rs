@@ -1,6 +1,8 @@
 //! The decoded sound-program ROM (sample-bank directory, instrument
 //! records and the fixed tables the voice reads).
 
+use std::sync::Arc;
+
 use crate::bytes::s16;
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
@@ -16,8 +18,7 @@ use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 pub struct SoundBank {
     pub rom: RomView,
     pub layout: &'static DriverLayout,
-    /// Sample words borrowed from the sample ROM the Audio implementation owns.
-    pub samples: &'static [u16],
+    pub samples: Arc<[u16]>,
     pub metadata: Vec<u8>,
     pub banks: [Bank; 16],
     pub programs: [ProgramData; 1024],
@@ -38,7 +39,7 @@ pub struct SoundBank {
 impl SoundBank {
     pub fn new(
         sound_rom: &'static [u8],
-        sample_words: &'static [u16],
+        sample_words: Arc<[u16]>,
         layout: &'static DriverLayout,
     ) -> SoundBank {
         let mut bank = SoundBank {

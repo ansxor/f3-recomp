@@ -48,9 +48,7 @@
 //! compute; the phase restarts at (1, 0) only when a program is loaded (select() of a different
 //! program) and on reset().
 
-use crate::hle::block::{
-    BusBlock, BusSpan, MutableStereoSpan, OtisBus, PlanarAudioBlock, StereoBlock, StereoChannel,
-};
+use crate::hle::block::{BusBlock, OtisBus, PlanarAudioBlock, StereoBlock, StereoChannel};
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::SAMPLE_RATE;
 use crate::hle::faust::generated::chorus::ChorusDsp;
@@ -862,12 +860,12 @@ impl BypassDetector {
     }
 }
 
-fn sends_silent(bus_in: &BusSpan, frames: usize) -> bool {
+fn sends_silent(buses: &BusBlock, frames: usize) -> bool {
     (0..frames).all(|f| {
-        bus_in.at_bus(f, OtisBus::DelayL) == 0.0
-            && bus_in.at_bus(f, OtisBus::DelayR) == 0.0
-            && bus_in.at_bus(f, OtisBus::ReverbL) == 0.0
-            && bus_in.at_bus(f, OtisBus::ReverbR) == 0.0
+        buses.at_bus(f, OtisBus::DelayL) == 0.0
+            && buses.at_bus(f, OtisBus::DelayR) == 0.0
+            && buses.at_bus(f, OtisBus::ReverbL) == 0.0
+            && buses.at_bus(f, OtisBus::ReverbR) == 0.0
     })
 }
 
@@ -971,38 +969,30 @@ impl Effects {
         self.update();
     }
 
-    /// Mixes one span of OTIS bus frames into interleaved stereo (`mix_block` and `mix` resize a
-    /// block destination first).
-    pub fn mix_span(
+    /// Mixes one block of OTIS bus frames into interleaved stereo.
+    pub fn mix_block(
         &mut self,
-        bus_in: BusSpan,
-        stereo_out: MutableStereoSpan,
+        buses: &BusBlock,
+        stereo: &mut StereoBlock,
         input_gain: [f32; 2],
         output_gain: [f32; 2],
     ) {
-        let frames = bus_in.size();
+        let frames = buses.size();
+        stereo.resize(frames);
         if frames == 0 {
             return;
         }
-        if stereo_out.size() < frames {
-            panic!("Effects::mix: destination buffer smaller than source");
-        }
         if self.program == Program::Mute {
-            // A single END: the DSP never writes serio3, the DAC input stays at its last (constant)
-            // value.
-            let data = stereo_out.data();
-            for i in 0..frames * 2 {
-                // SAFETY: the destination span holds frames * 2 interleaved floats.
-                unsafe { *data.add(i) = 0.0 };
-            }
+            // A single END: the DSP never writes serio3, so the DAC input stays silent.
+            stereo.active_samples_mut().fill(0.0);
             return;
         }
 
-        let silent_sends = sends_silent(&bus_in, frames);
+        let silent_sends = sends_silent(buses, frames);
         self.dc.set_gains(output_gain);
 
         if self.program == Program::None || (self.bypass.is_bypassed() && silent_sends) {
-            self.mix_dry(bus_in, stereo_out, input_gain);
+            self.mix_dry(buses, stereo, input_gain);
             return;
         }
         if self.bypass.is_bypassed() {
@@ -1013,57 +1003,35 @@ impl Effects {
         let mut offset = 0;
         while offset < frames {
             let n = K_CHUNK.min(frames - offset);
-            self.in_.assign_scaled(&bus_in.subspan(offset, n).scaled(input_gain));
+            self.in_.load_buses(buses, offset, n, input_gain, false);
             self.compute_program(n);
             self.bypass.observe_peaks(&self.out.channel(2)[..n]);
             self.dc.compute(&channels(&self.out), &mut self.dc_out, n);
-            self.interleave(stereo_out, offset, n);
+            self.interleave(stereo, offset, n);
             offset += K_CHUNK;
         }
         self.bypass.update_bypass();
     }
 
-    pub fn mix_block(
-        &mut self,
-        buses: &BusBlock,
-        stereo: &mut StereoBlock,
-        input_gain: [f32; 2],
-        output_gain: [f32; 2],
-    ) {
-        stereo.resize(buses.size());
-        self.mix_span(buses.span(), stereo.span_mut(), input_gain, output_gain);
-    }
-
-    pub fn mix(
-        &mut self,
-        buses: BusSpan,
-        stereo: &mut StereoBlock,
-        input_gain: [f32; 2],
-        output_gain: [f32; 2],
-    ) {
-        stereo.resize(buses.size());
-        self.mix_span(buses, stereo.span_mut(), input_gain, output_gain);
-    }
-
     /// Nothing audible is left in the program (or none is loaded): only the dry path is heard. The DSP
     /// is not computed, but its LFOs keep rotating (see the module comment).
-    fn mix_dry(&mut self, bus_in: BusSpan, stereo_out: MutableStereoSpan, input_gain: [f32; 2]) {
-        let frames = bus_in.size();
+    fn mix_dry(&mut self, buses: &BusBlock, stereo: &mut StereoBlock, input_gain: [f32; 2]) {
+        let frames = buses.size();
         self.skip_lfos(frames as u64);
         let mut offset = 0;
         while offset < frames {
             let n = K_CHUNK.min(frames - offset);
-            self.in_.assign_scaled(&bus_in.subspan(offset, n).dry().scaled(input_gain));
+            self.in_.load_buses(buses, offset, n, input_gain, true);
             self.dc.compute(&channels(&self.in_), &mut self.dc_out, n);
-            self.interleave(stereo_out, offset, n);
+            self.interleave(stereo, offset, n);
             offset += K_CHUNK;
         }
     }
 
-    fn interleave(&self, stereo_out: MutableStereoSpan, offset: usize, n: usize) {
+    fn interleave(&self, stereo: &mut StereoBlock, offset: usize, n: usize) {
         for f in 0..n {
-            stereo_out.set_channel(offset + f, StereoChannel::Left, self.dc_out.at(0, f));
-            stereo_out.set_channel(offset + f, StereoChannel::Right, self.dc_out.at(1, f));
+            stereo.set_channel(offset + f, StereoChannel::Left, self.dc_out.at(0, f));
+            stereo.set_channel(offset + f, StereoChannel::Right, self.dc_out.at(1, f));
         }
     }
 

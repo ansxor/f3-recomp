@@ -1,6 +1,6 @@
 //! One voice's sample read, gain ramp and four-pole filter over a span of bus frames.
 
-use super::block::{BusSelect, OtisBus, otis_target_bus};
+use super::block::OtisBus;
 use super::synthesis::VOICE_BLOCK_FRAMES;
 use super::voice::{Filter, GainSegment, SampleAdvance, Voice, interpolate_sample, interpolated_gain};
 use super::voice_filter::VoiceFilterState;
@@ -313,14 +313,8 @@ impl<const MODE: u32> VoiceFilter<MODE> {
     }
 }
 
-/// The left channel of the bus pair a voice's `pair` register routes to; `None` routes to nowhere.
 fn bus_left_channel(pair: u8) -> Option<usize> {
-    otis_target_bus(pair).map(|select| match select {
-        BusSelect::Dry => OtisBus::DryL.index(),
-        BusSelect::Delay => OtisBus::DelayL.index(),
-        BusSelect::Reverb => OtisBus::ReverbL.index(),
-        BusSelect::All => OtisBus::NcL.index(),
-    })
+    OtisBus::pair_left(pair)
 }
 
 /// Frames of interleaved eight-channel rows one voice mixes into, and the channel pair within a row.

@@ -26,7 +26,8 @@ use crate::hle::sound_bank::SoundBank;
 use crate::hle::synthesis::VoiceRenderState;
 use crate::hle::track_service::TrackService;
 use crate::hle::voice_service::VoiceService;
-use crate::output_gain::OUTPUT_BOOST;
+
+const OUTPUT_BOOST: f32 = 12.0;
 
 /// Receives rendered stereo frames in render order, in blocks of 1..Core::BLOCK_FRAMES frames.
 pub trait PcmSink: Send {
@@ -70,7 +71,7 @@ pub fn frames_at(tick: u64) -> u64 {
 impl Core {
     pub fn new(
         sound_rom: &'static [u8],
-        sample_words: &'static [u16],
+        sample_words: Arc<[u16]>,
         layout: &'static DriverLayout,
     ) -> Core {
         let bank = SoundBank::new(sound_rom, sample_words, layout);
@@ -111,7 +112,7 @@ impl Core {
         mailbox.drain(|event| match event {
             Event::NoteOn(n) => {
                 tracks.apply_note_on(&n);
-                let track = &tracks.tracks(n.sequence)[usize::from(n.track)];
+                let track = tracks.track(n.sequence, n.track);
                 let mut note = n;
                 // A ProgramSelector earlier in this batch is already applied: the note resolves
                 // with the program in force at this point of the event order.
@@ -216,7 +217,7 @@ impl Core {
             self.buses.samples[frame_start * 8..frame_end * 8].fill(0.0);
             self.render_state.render_voices(
                 self.voices.voices_mut(),
-                self.bank.samples,
+                &self.bank.samples,
                 &mut self.buses,
                 frame_start,
                 frame_end,
@@ -238,10 +239,9 @@ impl Core {
             }
             if queue_due && (!timer_due || queued <= timer) {
                 let limit = if timer_due { timer } else { now };
-                self.voices
-                    .service_queue(limit, &self.bank, &mut self.tracks);
+                self.voices.service_queue(limit, &self.bank, &self.tracks);
             } else {
-                self.voices.service(&self.bank, &mut self.tracks);
+                self.voices.service(&self.bank, &self.tracks);
             }
         }
     }
@@ -361,7 +361,7 @@ impl Core {
     /// failures are reported as `false`, which is why the panic hook is silenced here.
     pub fn validate(
         sound_rom: &'static [u8],
-        sample_words: &'static [u16],
+        sample_words: Arc<[u16]>,
         layout: &'static DriverLayout,
     ) -> bool {
         let hook = std::panic::take_hook();

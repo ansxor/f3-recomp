@@ -17,11 +17,12 @@ use crate::worker_queue::{Applies, WorkerQueue};
 pub const QUEUE_SIZE: usize = 4096;
 
 /// Raw big-endian 16-bit sample ROM bytes to host words.
-pub fn decode_sample_words(sample_rom: &[u8]) -> Vec<u16> {
+pub fn decode_sample_words(sample_rom: &[u8]) -> Arc<[u16]> {
     sample_rom
         .chunks_exact(2)
         .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-        .collect()
+        .collect::<Vec<u16>>()
+        .into()
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -74,59 +75,43 @@ pub struct SynthMetrics {
     pub tick: AtomicU64,
 }
 
-struct SendCore(Core);
-
-// SAFETY: `Core` is `!Send` only because `Voice` holds raw pointers into data the `Core` owns. The
-// core is moved once onto the single synth thread and never shared or touched from another thread.
-unsafe impl Send for SendCore {}
-
 struct Synth {
-    // Declared before `_samples`: the core borrows the sample buffer.
-    core: SendCore,
+    core: Core,
     metrics: Arc<SynthMetrics>,
-    _samples: Vec<u16>,
 }
 
 impl Synth {
     fn new(
         sound_rom: &'static [u8],
-        sample_words: Vec<u16>,
+        sample_words: Arc<[u16]>,
         sink: SharedPcmSink,
         layout: &'static DriverLayout,
         metrics: Arc<SynthMetrics>,
     ) -> Synth {
-        // SAFETY: the Vec's heap buffer does not move when the Vec does, and `Synth` keeps it alive
-        // for as long as the core that borrows it.
-        let samples: &'static [u16] =
-            unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        let mut core = Core::new(sound_rom, samples, layout);
+        let mut core = Core::new(sound_rom, sample_words, layout);
         core.set_pcm_sink(Some(sink));
-        Synth {
-            core: SendCore(core),
-            metrics,
-            _samples: sample_words,
-        }
+        Synth { core, metrics }
     }
 }
 
 impl Applies<CoreInput> for Synth {
     fn apply(&mut self, input: &CoreInput) {
         let started = Instant::now();
-        input.apply(&mut self.core.0);
+        input.apply(&mut self.core);
         let elapsed_ns = started.elapsed().as_nanos() as u64;
-        let render = self.core.0.render_stats();
+        let render = self.core.render_stats();
         let metrics = &self.metrics;
         metrics.render_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
         metrics
             .generated
-            .store(self.core.0.frames(), Ordering::Relaxed);
+            .store(self.core.frames(), Ordering::Relaxed);
         metrics
             .voices_started
             .store(render.voices_started, Ordering::Relaxed);
         metrics
             .voices_active
             .store(render.voices_active, Ordering::Relaxed);
-        metrics.tick.store(self.core.0.tick(), Ordering::Release);
+        metrics.tick.store(self.core.tick(), Ordering::Release);
     }
 }
 
@@ -197,7 +182,7 @@ pub struct Audio {
 impl Audio {
     pub fn new(
         sound_rom: &'static [u8],
-        sample_words: Vec<u16>,
+        sample_words: Arc<[u16]>,
         shared: *mut u8,
         layout: &'static DriverLayout,
     ) -> Audio {
@@ -263,17 +248,11 @@ impl Audio {
 
     /// Whether the sound program and samples can be driven; the constructor panics when this is false.
     pub fn supported(
-        sound_rom: &[u8],
-        sample_words: &[u16],
+        sound_rom: &'static [u8],
+        sample_words: Arc<[u16]>,
         layout: &'static DriverLayout,
     ) -> bool {
-        // SAFETY: validate() only uses the buffers while it runs; the 'static lifetime only states that
-        // the core it builds never stores them beyond the call.
-        let rom: &'static [u8] =
-            unsafe { std::slice::from_raw_parts(sound_rom.as_ptr(), sound_rom.len()) };
-        let samples: &'static [u16] =
-            unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        Core::validate(rom, samples, layout)
+        Core::validate(sound_rom, sample_words, layout)
     }
 
     pub fn shared_write(&mut self, offset: u32) {
