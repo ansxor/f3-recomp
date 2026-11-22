@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledMcpjsonServers": ["f3mcp"],
+  "env": {
+    "MCP_TIMEOUT": "180000"
+  }
+}

@@ -26,9 +26,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <concepts>
+#include <condition_variable>
+#include <deque>
 #include <limits>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -37,9 +41,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
+#include <pthread.h>
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -1029,26 +1036,99 @@ bool parse_01(const std::string &flag, const std::string &text) {
     throw std::runtime_error(flag + " expects 0 or 1");
 }
 
+// The one thread that builds, drives and destroys the machine. The audio ABI wants a single caller thread,
+// and building the audio board needs ~2 MiB of stack in release (~8.5 MiB with unoptimized Rust): far more
+// than the 512 KiB macOS gives the per-request worker threads mcp-cpp dispatches on.
+// It owns the Runtime, which it destroys on its own thread once the queue drains.
+class MachineThread {
+public:
+    static constexpr std::size_t STACK_BYTES = 16u << 20;
+
+    std::optional<Runtime> runtime;
+
+    MachineThread() {
+        pthread_attr_t attr;
+        if (int rc = pthread_attr_init(&attr)) throw std::system_error(rc, std::generic_category(), "machine thread");
+        int rc = pthread_attr_setstacksize(&attr, STACK_BYTES);
+        if (!rc) rc = pthread_create(&thread_, &attr, entry, this);
+        pthread_attr_destroy(&attr);
+        if (rc) throw std::system_error(rc, std::generic_category(), "machine thread");
+    }
+
+    ~MachineThread() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        wake_.notify_one();
+        pthread_join(thread_, nullptr);
+    }
+
+    MachineThread(const MachineThread &) = delete;
+    MachineThread &operator=(const MachineThread &) = delete;
+
+    // Runs `fn` on the machine thread and returns its result (or rethrows its exception) to the caller.
+    // The queue owns the task: the future can become ready before the task's call has fully returned.
+    template <class F> std::invoke_result_t<F &> run(F &&fn) {
+        auto task = std::make_shared<std::packaged_task<std::invoke_result_t<F &>()>>(std::ref(fn));
+        auto result = task->get_future();
+        {
+            std::lock_guard lock(mutex_);
+            jobs_.emplace_back([task] { (*task)(); });
+        }
+        wake_.notify_one();
+        return result.get();
+    }
+
+private:
+    static void *entry(void *self) {
+        static_cast<MachineThread *>(self)->loop();
+        return nullptr;
+    }
+
+    void loop() {
+        for (;;) {
+            std::function<void()> job;
+            {
+                std::unique_lock lock(mutex_);
+                wake_.wait(lock, [&] { return stopping_ || !jobs_.empty(); });
+                if (jobs_.empty()) break;
+                job = std::move(jobs_.front());
+                jobs_.pop_front();
+            }
+            job();
+        }
+        runtime.reset();
+    }
+
+    pthread_t thread_{};
+
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    std::deque<std::function<void()>> jobs_;
+    bool stopping_ = false;
+};
+
 // Registers the tools and serves until the client closes the transport.
-void serve(Runtime &runtime, int out_fd) {
+void serve(Runtime &runtime, MachineThread &machine, int out_fd) {
     mcp::Server server(mcp::Implementation{.name = "f3rt-tool", .version = "1.0.0",
                                            .description = "Taito F3 recompiled runtime machine"});
     server.set_instructions(INSTRUCTIONS);
 
-    // The machine is single-threaded; mcp-cpp runs each request on its own worker thread.
-    std::mutex machine_mutex;
+    // mcp-cpp runs each request on its own worker thread; the machine only ever runs on `machine`.
     auto tool = [&](const char *name, std::string description, json schema, auto fn) {
         server.tool(
             name, schema,
-            [&machine_mutex, schema, fn](const json &arguments) -> mcp::CallToolResult {
-                std::lock_guard lock(machine_mutex);
-                try {
-                    const Args args(arguments);
-                    args.reject_unknown(schema);
-                    return fn(args);
-                } catch (const std::exception &e) {
-                    return error_result(e.what());
-                }
+            [&machine, schema, fn](const json &arguments) -> mcp::CallToolResult {
+                return machine.run([&]() -> mcp::CallToolResult {
+                    try {
+                        const Args args(arguments);
+                        args.reject_unknown(schema);
+                        return fn(args);
+                    } catch (const std::exception &e) {
+                        return error_result(e.what());
+                    }
+                });
             },
             std::nullopt, std::move(description));
     };
@@ -1241,10 +1321,14 @@ int cmd_mcp(int argc, char **argv) try {
 
     const bool eager = !no_init;
     {
-        Runtime runtime(std::move(defaults));
-        if (eager && runtime.can_init_from_defaults()) runtime.init_from_defaults();
-        serve(runtime, out_fd);
-    } // the machine (and its audio/EEPROM leases) is torn down before the process exits
+        // The machine (and its audio/EEPROM leases) is torn down on its own thread before the process exits.
+        MachineThread machine;
+        machine.run([&] {
+            auto &runtime = machine.runtime.emplace(std::move(defaults));
+            if (eager && runtime.can_init_from_defaults()) runtime.init_from_defaults();
+        });
+        serve(*machine.runtime, machine, out_fd);
+    }
 #if !defined(_WIN32)
     ::close(out_fd);
 #endif
