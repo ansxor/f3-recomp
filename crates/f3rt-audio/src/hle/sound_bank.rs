@@ -1,7 +1,7 @@
-//! `audio/hle/sound_bank.hpp`: the decoded sound-program ROM (sample-bank directory, instrument
+//! The decoded sound-program ROM (sample-bank directory, instrument
 //! records and the fixed tables the voice reads).
 
-use crate::bytes::{read_be16, s16};
+use crate::bytes::s16;
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
 use crate::hle::rom_view::RomView;
@@ -9,7 +9,7 @@ use crate::hle::sound_rom::{
     Bank, HEAP_METADATA_OFFSET, PROGRAM_BANK_MASK_OFFSET, PROGRAM_COLUMN_STRIDE,
     PROGRAM_DATA_BASE, PROGRAM_DEFAULT_BANK_OFFSET, PROGRAM_MAGIC_OFFSET_0, PROGRAM_MAGIC_OFFSET_1,
     PROGRAM_RECORD_STRIDE, ProgramData, SAMPLE_BANK_SIZE, SAMPLE_HALF_BANK_SIZE,
-    SAMPLE_TAG_PROBE_OFFSET, Split, program_slot,
+    SAMPLE_TAG_PROBE_OFFSET, SPLIT_RECORD_SIZE, Split, program_slot,
 };
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 
@@ -237,27 +237,23 @@ impl SoundBank {
         if bank_idx == -2 {
             panic!("HLE instrument names missing sample bank");
         }
-        let data: *const u8;
-        let available: usize;
+        let records: &[u8];
         if bank_idx >= 0 {
             let b = &self.banks[bank_idx as usize];
             *selector = bank_idx as u8;
             if id >= b.count {
                 panic!("HLE sample ID exceeds external directory");
             }
-            let relative = unsafe {
-                read_be16(
-                    self.metadata
-                        .as_ptr()
-                        .add(b.offset as usize + 2 + id as usize * 14),
-                )
+            let directory_at = b.offset as usize + 2 + id as usize * SPLIT_RECORD_SIZE;
+            let relative = u16::from_be_bytes([
+                self.metadata[directory_at],
+                self.metadata[directory_at + 1],
+            ]);
+            let offset = (b.offset as usize).wrapping_add_signed(isize::from(relative as i16));
+            records = match self.metadata.get(offset..) {
+                Some(tail) if tail.len() >= SPLIT_RECORD_SIZE => tail,
+                _ => panic!("HLE sample offset exceeds metadata"),
             };
-            let offset = b.offset as usize + (relative as i16) as isize as usize;
-            if offset + 14 > self.metadata.len() {
-                panic!("HLE sample offset exceeds metadata");
-            }
-            data = unsafe { self.metadata.as_ptr().add(offset) };
-            available = self.metadata.len() - offset;
         } else {
             *selector = (self.board_bank_mask * 2) as u8;
             if id > 120 {
@@ -266,19 +262,14 @@ impl SoundBank {
             let entry = self.layout.split_directory + u32::from(id) * 2;
             let offset = self.rom.read_u16(entry) as i16;
             let address = self.layout.split_table_base.wrapping_add_signed(i32::from(offset));
-            data = self.rom.pointer_bytes(address, 14);
-            available = self.rom.size() - (data as usize - self.rom.data() as usize);
+            records = self.rom.tail_from(address, SPLIT_RECORD_SIZE);
         }
         let key = ((pitch >> 8) as u8) as u32;
-        let mut i: usize = 0;
-        while i + 14 <= available {
-            let result = unsafe { Split::read(data.add(i)) };
-            if key <= u32::from(result.cutoff) {
-                return result;
-            }
-            i += 14;
-        }
-        panic!("HLE sample splits do not cover key");
+        records
+            .chunks_exact(SPLIT_RECORD_SIZE)
+            .map(Split::read)
+            .find(|split| key <= u32::from(split.cutoff))
+            .unwrap_or_else(|| panic!("HLE sample splits do not cover key"))
     }
 
     fn append_word(metadata: &mut Vec<u8>, w: u16) {
@@ -287,7 +278,7 @@ impl SoundBank {
     }
 
     // `b` is the bank index the decoded half-bank's base offset is computed from, so the loop stays an
-    // index loop as in the C++.
+    // index loop.
     #[allow(clippy::needless_range_loop)]
     fn decode_banks(&mut self) {
         let SoundBank {
@@ -394,7 +385,7 @@ impl SoundBank {
         let image = self.rom.image();
         let rom_size = image.len();
         let banks = &self.banks;
-        // As in the C++, `b` indexes `banks` and is also the bank number stored in the result.
+        // `b` indexes `banks` and is also the bank number stored in the result.
         let find_bank = |tag: u8| -> i8 {
             let mut result: i8 = -2;
             for (b, bank) in banks.iter().enumerate() {

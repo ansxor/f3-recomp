@@ -1,24 +1,21 @@
-//! `audio/hle/patch.hpp` + `audio/hle/patch.cpp`: one program record and the behavior its kind
-//! selects.
+//! One program record and the behavior its kind selects.
 //!
 //! A Program is one 0x198-byte instrument. A nonzero enable mask holds three Layer records. A zero
-//! mask holds seventeen DirectRegion key regions. ProgramService turns each record into a
-//! LayerPatch or a DirectPatch, and the voice runs the behavior the record's kind selects. Every
+//! mask holds seventeen DirectRegion key regions. `ProgramQuery::resolve` turns the records a note
+//! selects into `Patch` values, and the voice runs the behavior the record's kind selects. Every
 //! field sits on an even byte. The odd bytes are unread.
 
 #![allow(non_upper_case_globals)]
 
-use std::sync::Arc;
-
-use crate::bytes::{read_be32, s8, s16};
-use crate::hle::events::{NoteOnEvent, SAMPLE_RATE};
+use crate::bytes::{s8, s16};
+use crate::hle::events::{NO_PROGRAM, NoteOnEvent};
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::sound_rom::{REVERSE_START_OFFSET, SPLIT_RECORD_STRIDE};
-use crate::hle::track_parameters::TrackParameters;
-use crate::hle::voice::{
-    Envelope, NATIVE_RATE, NoiseState, VOLUME_RAMP, Voice, accumulator_start, advance_glide,
-    initialize_envelope, segment, set_glide, update_random, volume_target, wrap_product,
+use crate::hle::sound_rom::{
+    REVERSE_START_OFFSET, SPECIAL_SPLIT_SKIP, program_slot,
 };
+use crate::hle::track_parameters::TrackParameters;
+use crate::hle::track_service::Track;
+use crate::hle::voice::{NoiseState, Voice, volume_target, wrap_product};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
@@ -47,6 +44,30 @@ pub enum ModSource {
     Pressure = 13,
     Full = 14,
     Off = 15,
+}
+
+impl ModSource {
+    /// The selector lives in the low nibble of its byte; the high nibble carries unrelated flags.
+    pub fn from_nibble(byte: u8) -> ModSource {
+        match byte & 15 {
+            0 => ModSource::Lfo,
+            1 => ModSource::PitchEnvelope,
+            2 => ModSource::FilterEnvelope,
+            3 => ModSource::AmplitudeEnvelope,
+            4 => ModSource::Random,
+            5 => ModSource::PreviousRandom,
+            6 => ModSource::Velocity,
+            7 => ModSource::Key,
+            8 => ModSource::Mod1A,
+            9 => ModSource::Mod12,
+            10 => ModSource::Bend,
+            11 => ModSource::Mod10,
+            12 => ModSource::Mod0C,
+            13 => ModSource::Pressure,
+            14 => ModSource::Full,
+            _ => ModSource::Off,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -275,24 +296,7 @@ impl Layer {
     }
 
     pub fn pitch_source(&self) -> ModSource {
-        match self.get(LayerAt::flags) & 15 {
-            0 => ModSource::Lfo,
-            1 => ModSource::PitchEnvelope,
-            2 => ModSource::FilterEnvelope,
-            3 => ModSource::AmplitudeEnvelope,
-            4 => ModSource::Random,
-            5 => ModSource::PreviousRandom,
-            6 => ModSource::Velocity,
-            7 => ModSource::Key,
-            8 => ModSource::Mod1A,
-            9 => ModSource::Mod12,
-            10 => ModSource::Bend,
-            11 => ModSource::Mod10,
-            12 => ModSource::Mod0C,
-            13 => ModSource::Pressure,
-            14 => ModSource::Full,
-            _ => ModSource::Off,
-        }
+        ModSource::from_nibble(self.get(LayerAt::flags))
     }
 
     pub fn allocation(&self) -> AllocationMode {
@@ -342,24 +346,7 @@ impl Layer {
     }
 
     pub fn filter_source(&self) -> ModSource {
-        match self.get(LayerAt::filter_source) & 15 {
-            0 => ModSource::Lfo,
-            1 => ModSource::PitchEnvelope,
-            2 => ModSource::FilterEnvelope,
-            3 => ModSource::AmplitudeEnvelope,
-            4 => ModSource::Random,
-            5 => ModSource::PreviousRandom,
-            6 => ModSource::Velocity,
-            7 => ModSource::Key,
-            8 => ModSource::Mod1A,
-            9 => ModSource::Mod12,
-            10 => ModSource::Bend,
-            11 => ModSource::Mod10,
-            12 => ModSource::Mod0C,
-            13 => ModSource::Pressure,
-            14 => ModSource::Full,
-            _ => ModSource::Off,
-        }
+        ModSource::from_nibble(self.get(LayerAt::filter_source))
     }
 
     pub fn default_pan_byte(&self) -> u8 {
@@ -411,24 +398,7 @@ impl Layer {
     }
 
     pub fn amplitude_source(&self) -> ModSource {
-        match self.get(LayerAt::amplitude_source) & 15 {
-            0 => ModSource::Lfo,
-            1 => ModSource::PitchEnvelope,
-            2 => ModSource::FilterEnvelope,
-            3 => ModSource::AmplitudeEnvelope,
-            4 => ModSource::Random,
-            5 => ModSource::PreviousRandom,
-            6 => ModSource::Velocity,
-            7 => ModSource::Key,
-            8 => ModSource::Mod1A,
-            9 => ModSource::Mod12,
-            10 => ModSource::Bend,
-            11 => ModSource::Mod10,
-            12 => ModSource::Mod0C,
-            13 => ModSource::Pressure,
-            14 => ModSource::Full,
-            _ => ModSource::Off,
-        }
+        ModSource::from_nibble(self.get(LayerAt::amplitude_source))
     }
 
     pub fn pair_choice(&self) -> u8 {
@@ -444,24 +414,7 @@ impl Layer {
     }
 
     pub fn lfo_source(&self) -> ModSource {
-        match self.get(LayerAt::lfo_source) & 15 {
-            0 => ModSource::Lfo,
-            1 => ModSource::PitchEnvelope,
-            2 => ModSource::FilterEnvelope,
-            3 => ModSource::AmplitudeEnvelope,
-            4 => ModSource::Random,
-            5 => ModSource::PreviousRandom,
-            6 => ModSource::Velocity,
-            7 => ModSource::Key,
-            8 => ModSource::Mod1A,
-            9 => ModSource::Mod12,
-            10 => ModSource::Bend,
-            11 => ModSource::Mod10,
-            12 => ModSource::Mod0C,
-            13 => ModSource::Pressure,
-            14 => ModSource::Full,
-            _ => ModSource::Off,
-        }
+        ModSource::from_nibble(self.get(LayerAt::lfo_source))
     }
 
     pub fn random_period(&self) -> u8 {
@@ -519,24 +472,7 @@ impl Layer {
     }
 
     pub fn start_source(&self) -> ModSource {
-        match self.get(LayerAt::gate) & 15 {
-            0 => ModSource::Lfo,
-            1 => ModSource::PitchEnvelope,
-            2 => ModSource::FilterEnvelope,
-            3 => ModSource::AmplitudeEnvelope,
-            4 => ModSource::Random,
-            5 => ModSource::PreviousRandom,
-            6 => ModSource::Velocity,
-            7 => ModSource::Key,
-            8 => ModSource::Mod1A,
-            9 => ModSource::Mod12,
-            10 => ModSource::Bend,
-            11 => ModSource::Mod10,
-            12 => ModSource::Mod0C,
-            13 => ModSource::Pressure,
-            14 => ModSource::Full,
-            _ => ModSource::Off,
-        }
+        ModSource::from_nibble(self.get(LayerAt::gate))
     }
 
     pub fn start_amount(&self) -> i8 {
@@ -752,7 +688,7 @@ pub struct PriorWindow {
 // A note being started, after the track's allocation decision.
 #[derive(Clone, Copy, Debug)]
 pub struct NoteStart {
-    pub event: *const NoteOnEvent,
+    pub previous_key: u8,
     pub kernel: i32,
     pub transpose: i32,
     pub mode: AllocationMode,
@@ -777,80 +713,6 @@ pub struct OnsetStep {
     pub parameters: bool,
 }
 
-fn clamp_i32(value: i32, low: i32, high: i32) -> i32 {
-    if value < low {
-        low
-    } else if high < value {
-        high
-    } else {
-        value
-    }
-}
-
-fn modulation(v: &Voice, selector: ModSource) -> i16 {
-    let parameters = unsafe { &(*v.track).config.parameters };
-    match selector {
-        ModSource::Lfo => v.lfo,
-        ModSource::PitchEnvelope => v.envelope[Voice::pitch_envelope as usize].level(),
-        ModSource::FilterEnvelope => v.envelope[Voice::filter_envelope as usize].level(),
-        ModSource::AmplitudeEnvelope => v.envelope[Voice::amplitude_envelope as usize].level(),
-        ModSource::Random => v.random,
-        ModSource::PreviousRandom => v.previous_random,
-        ModSource::Velocity => s16(u32::from(v.owner.velocity) * 257),
-        ModSource::Key => s16(((i32::from(v.effective_key) - 60) * 256) as u32),
-        ModSource::Mod1A => s16(u32::from(parameters.mod_1a())),
-        ModSource::Mod12 => s16(u32::from(parameters.mod_12())),
-        ModSource::Bend => s16(u32::from(parameters.bend())),
-        ModSource::Mod10 => s16(u32::from(parameters.mod_10())),
-        ModSource::Mod0C => s16(u32::from(parameters.mod_0c())),
-        ModSource::Pressure => s16(u32::from(v.pressure) * 256),
-        ModSource::Full => 0x7fff,
-        ModSource::Off => 0,
-    }
-}
-
-fn update_lfo(v: &mut Voice, layer: &Layer, bank: &SoundBank) {
-    v.lfo_depth = s16((i32::from(v.lfo_depth) + i32::from(v.lfo_step)) as u32);
-    if (v.lfo_depth as u16) > (v.lfo_target as u16) {
-        v.lfo_step = 0;
-        v.lfo_depth = v.lfo_target;
-    }
-    v.lfo_phase = v
-        .lfo_phase
-        .wrapping_add(bank.phase_rates[usize::from(layer.lfo_rate())]);
-    let wave = (u32::from(layer.lfo_wave()) << 8) | u32::from(v.lfo_phase >> 8);
-    let selected = i32::from(v.lfo_depth) + i32::from(modulation(v, layer.lfo_source()));
-    let depth = clamp_i32(selected, 0, 32767);
-    let shape = i32::from(s8(u32::from(bank.rom.read_byte(bank.layout.lfo_wave_table + wave))));
-    v.lfo = s16(((depth * shape) >> 7) as u32);
-}
-
-// The target may name the sign bit as a level; the position keeps the resolved level.
-fn settle_level(e: &mut Envelope) {
-    let mut level = (e.target >> 16) as u16;
-    if e.slope <= 0 {
-        level ^= 0x8000;
-    }
-    e.position = u32::from(level) << 16;
-}
-
-// c1983c: ramp the level to 0 at the direct region's release rate.
-fn start_direct_release(e: &mut Envelope, release_rate: u32, bank: &SoundBank) {
-    e.done = false;
-    e.position &= 0xffff0000;
-    let rate = s16(u32::from(bank.rom.read_u16(bank.layout.rate_table + 2 * release_rate)));
-    e.slope = wrap_product(-i64::from(0x7f00) * i64::from(rate) * 2);
-    e.target = if e.slope <= 0 { 0x80000000 } else { 0 };
-    e.stage = 4;
-}
-
-// Split addresses are word offsets inside the sample bank the selector named.
-fn apply_window(v: &mut Voice, bit: u32, board: u32, start: u32, phase: u32, end: u32) {
-    v.start = f64::from(board) + f64::from((start | bit) & 0x1fffffe0) / 512.0;
-    v.end = f64::from(board) + f64::from((end | bit) & 0x1fffffe0) / 512.0;
-    v.position = f64::from(board) + f64::from((phase | bit) & 0x1fffffff) / 512.0;
-}
-
 fn pair_choice(selected: u32, patch: u32) -> u32 {
     if selected < 3 {
         return selected;
@@ -858,106 +720,128 @@ fn pair_choice(selected: u32, patch: u32) -> u32 {
     if selected == 5 { 3 } else { patch }
 }
 
-// Volume ramp, pair and filter targets shared by both kinds. The kind has already written the
-// target volumes, the cutoff registers and the frequency.
-fn finish_parameters(v: &mut Voice, initial: bool, pair: u32) {
-    v.increment =
-        f64::from(v.frequency) * f64::from(NATIVE_RATE) / (1024.0 * f64::from(SAMPLE_RATE));
-    v.pair = ((pair + 1) & 3) as u8;
-    v.target_left = f64::from(v.left_volume);
-    v.target_right = f64::from(v.right_volume);
-    if initial {
-        v.left = v.target_left;
-        v.right = v.target_right;
-        v.gain_frames = 0;
-    } else {
-        v.gain_frames = if v.left == v.target_left && v.right == v.target_right {
-            0
-        } else {
-            VOLUME_RAMP
-        };
-    }
-    if v.gain_frames != 0 {
-        v.step_left = (v.target_left - v.left) / f64::from(v.gain_frames);
-        v.step_right = (v.target_right - v.right) / f64::from(v.gain_frames);
-    }
-    v.left_segment.frames = 0;
-    v.right_segment.frames = 0;
-    v.gain_dirty = true;
-    v.filter
-        .targets(v.filter_cutoff_low, v.filter_cutoff_high, initial);
+/// What a note asks the program table for. `key` is the kernel key after the track transpose;
+/// `layer_mask` is the track's controller layer mask, zero when the program's own enable mask
+/// applies.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ProgramQuery {
+    pub program: u16,
+    pub key: u8,
+    pub layer_mask: u8,
+    pub notes_suppressed: bool,
 }
 
-/// The fields the C++ `Patch` base class holds, shared by both patch kinds.
-pub struct PatchBase {
-    pub bank: Arc<SoundBank>,
-    pub program: Program,
-    pub index: u8,
-    pub delay_ticks: u8,
-    pub starts_on_release: bool,
+impl Default for ProgramQuery {
+    fn default() -> ProgramQuery {
+        ProgramQuery {
+            program: NO_PROGRAM,
+            key: 0,
+            layer_mask: 0,
+            notes_suppressed: false,
+        }
+    }
 }
 
-impl PatchBase {
-    pub fn new(
-        bank: Arc<SoundBank>,
-        program: Program,
-        index: u8,
-        delay_ticks: u8,
-        starts_on_release: bool,
-    ) -> PatchBase {
-        PatchBase {
-            bank,
-            program,
-            index,
-            delay_ticks,
-            starts_on_release,
+impl ProgramQuery {
+    pub fn for_note(note: &NoteOnEvent, track: &Track) -> ProgramQuery {
+        let parameters = &track.config.parameters;
+        ProgramQuery {
+            program: note.program,
+            key: parameters.transposed_key(note.kernel_key),
+            layer_mask: parameters.layer_mask(),
+            notes_suppressed: parameters.notes_suppressed(),
         }
     }
 
-    pub fn bank(&self) -> &SoundBank {
-        &self.bank
-    }
-
-    pub fn program(&self) -> Program {
-        self.program
-    }
-
-    // Layer 0..2, or region 0..16.
-    pub fn index(&self) -> u8 {
-        self.index
-    }
-
-    pub fn delay_ticks(&self) -> u8 {
-        self.delay_ticks
-    }
-
-    pub fn starts_on_release(&self) -> bool {
-        self.starts_on_release
+    /// A layered program yields up to three layer patches in descending layer order, a direct
+    /// program yields the one key region containing the key.
+    pub fn resolve(self, bank: &SoundBank) -> PatchList {
+        let mut list = PatchList::default();
+        if self.program == NO_PROGRAM {
+            return list;
+        }
+        let Some(record) = bank.program_data(program_slot(self.program)).base else {
+            return list;
+        };
+        let program = Program::new(record);
+        if program.enabled() == 0 {
+            let key = i32::from(s8(u32::from(self.key)));
+            let region = (0..Program::region_count)
+                .map(|index| DirectPatch::new(program, index as u8))
+                .find(|patch| patch.contains_key(key));
+            if let Some(patch) = region {
+                list.push(Patch::Direct(patch));
+            }
+            return list;
+        }
+        if self.notes_suppressed {
+            return list;
+        }
+        let enabled = if self.layer_mask != 0 {
+            u32::from(self.layer_mask)
+        } else {
+            u32::from(program.enabled())
+        };
+        // Descending layer order keeps the voice allocation and the driver start order of the
+        // layered onset.
+        for layer in (0..Program::layer_count).rev() {
+            if enabled & (1 << layer) != 0 {
+                list.push(Patch::Layer(LayerPatch::new(program, layer as u8)));
+            }
+        }
+        list
     }
 }
 
+/// The patches one note starts, in voice-allocation order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct PatchList {
+    patches: [Option<Patch>; Program::layer_count as usize],
+    count: u8,
+}
+
+impl PatchList {
+    fn push(&mut self, patch: Patch) {
+        self.patches[usize::from(self.count)] = Some(patch);
+        self.count += 1;
+    }
+
+    pub fn len(&self) -> usize {
+        usize::from(self.count)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Patch> + '_ {
+        self.patches[..self.len()].iter().flatten().copied()
+    }
+}
+
+/// One layer record of a layered program.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LayerPatch {
-    pub base: PatchBase,
     pub view: Layer,
+    pub program: Program,
+    pub index: u8,
 }
 
 impl LayerPatch {
-    pub fn new(
-        view: Layer,
-        bank: Arc<SoundBank>,
-        program: Program,
-        index: u8,
-        delay_ticks: u8,
-        starts_on_release: bool,
-    ) -> LayerPatch {
+    pub fn new(program: Program, index: u8) -> LayerPatch {
         LayerPatch {
-            base: PatchBase::new(bank, program, index, delay_ticks, starts_on_release),
-            view,
+            view: program.layer(u32::from(index)),
+            program,
+            index,
         }
     }
 
-    pub fn layered(&self) -> bool {
-        true
+    pub fn delay_ticks(&self) -> u8 {
+        self.view.delay_ticks()
+    }
+
+    pub fn starts_on_release(&self) -> bool {
+        self.view.starts_on_release()
     }
 
     pub fn allocation(&self) -> AllocationMode {
@@ -969,8 +853,7 @@ impl LayerPatch {
     }
 
     // Key weight, or -1 when this note is gated out of the patch.
-    pub fn weight(&self, note: &NoteOnEvent, kernel: i32) -> i32 {
-        let bank = self.base.bank();
+    pub fn weight(&self, note: &NoteOnEvent, kernel: i32, bank: &SoundBank) -> i32 {
         let key_weight = bank.key_weight(self.view, kernel);
         if key_weight < 0 {
             return -1;
@@ -989,44 +872,46 @@ impl LayerPatch {
 
     // Whether an active voice of the same layer slot may be taken over for legato or retrigger.
     pub fn reuses(&self, voice: &Voice) -> bool {
-        unsafe { (*voice.patch).layered() && (*voice.patch).index() == self.base.index() }
+        matches!(voice.patch, Some(Patch::Layer(other)) if other.index == self.index)
     }
 
     // Pitch, envelopes and LFO for the new voice; then its split and sample window.
-    pub fn initialize(&self, v: &mut Voice, start: &NoteStart, noise: &mut NoiseState) {
-        let bank = self.base.bank();
+    pub fn initialize(
+        &self,
+        v: &mut Voice,
+        start: &NoteStart,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) {
         v.glide_target = self.view.pitch_word(start.kernel);
-        v.pitch = clamp_i32(i32::from(v.glide_target), 0, 0x7f00) as i16;
+        v.pitch = i32::from(v.glide_target).clamp(0, 0x7f00) as i16;
         if start.program.glide() != 0 && (start.mode == AllocationMode::Legato || start.prior_found)
         {
             let destination = v.glide_target;
             v.glide_target = if start.prior_found {
                 s16(start.prior_pitch as u32)
             } else {
-                s16(u32::from(
-                    unsafe { (*start.event).previous_key }.wrapping_add(self.view.coarse_pitch()),
-                ) * 256)
+                s16(u32::from(start.previous_key.wrapping_add(self.view.coarse_pitch())) * 256)
             };
-            set_glide(v, destination, u32::from(start.program.glide()), bank);
+            v.set_glide(destination, u32::from(start.program.glide()), bank);
         }
-        initialize_envelope(
-            unsafe { &mut *core::ptr::addr_of_mut!(v.envelope[Voice::pitch_envelope as usize]) },
+        v.envelope[Voice::pitch_envelope as usize].initialize(
             self.view.pitch(),
-            v,
+            v.owner.velocity,
+            v.effective_key,
             bank,
         );
-        initialize_envelope(
-            unsafe { &mut *core::ptr::addr_of_mut!(v.envelope[Voice::filter_envelope as usize]) },
+        v.envelope[Voice::filter_envelope as usize].initialize(
             self.view.filter(),
-            v,
+            v.owner.velocity,
+            v.effective_key,
             bank,
         );
-        initialize_envelope(
-            unsafe {
-                &mut *core::ptr::addr_of_mut!(v.envelope[Voice::amplitude_envelope as usize])
-            },
+        v.envelope[Voice::amplitude_envelope as usize].initialize(
             self.view.amplitude(),
-            v,
+            v.owner.velocity,
+            v.effective_key,
             bank,
         );
         v.lfo_target = (u32::from(self.view.lfo_depth()) << 8) as i16;
@@ -1047,14 +932,13 @@ impl LayerPatch {
         v.random = s16(u32::from(noise.value));
         v.previous_random = v.random;
         // The opening LFO step precedes the initial parameters, which read v.lfo.
-        update_lfo(v, &self.view, bank);
+        v.update_lfo(&self.view, bank, track);
     }
 
-    pub fn address(&self, v: &mut Voice, prior: &PriorWindow) {
-        let bank = self.base.bank();
+    pub fn address(&self, v: &mut Voice, prior: &PriorWindow, bank: &SoundBank) {
         v.split = bank.split_for(
             self.view,
-            u32::from(self.base.index()),
+            u32::from(self.index),
             i32::from(v.pitch),
             &mut v.selector,
             v.owner.program,
@@ -1095,22 +979,17 @@ impl LayerPatch {
             d0 *= 14;
             d1 *= 14;
             let split_table = bank.layout.special_split_table;
-            let mut d4 = unsafe { read_be32(bank.rom.pointer_bytes(split_table + d0 + 2, 4)) };
+            let mut d4 = bank.rom.read_u32(split_table + d0 + 2);
             if d4 == 0x1dcaa07f {
                 d0 += 14;
-                d4 = unsafe { read_be32(bank.rom.pointer_bytes(split_table + d0 + 2, 4)) };
+                d4 = bank.rom.read_u32(split_table + d0 + 2);
                 if d0 == d1 {
                     d1 += 14;
                 }
             }
-            let mut d5 = unsafe { read_be32(bank.rom.pointer_bytes(split_table + d1 + 2, 4)) };
+            let mut d5 = bank.rom.read_u32(split_table + d1 + 2);
             if d5 == 0x1dcaa07f {
-                d5 = unsafe {
-                    read_be32(
-                        bank.rom
-                            .pointer_bytes(split_table + d1 + SPLIT_RECORD_STRIDE as u32, 4),
-                    )
-                };
+                d5 = bank.rom.read_u32(split_table + d1 + SPECIAL_SPLIT_SKIP);
             }
             v.reverse = self.view.reverse();
             control = if v.reverse { 0x4b } else { 0x0b };
@@ -1123,7 +1002,7 @@ impl LayerPatch {
         }
         v.r#loop = (control & 8) != 0;
         v.bidirectional = (control & 16) != 0;
-        apply_window(v, bit, board, start, phase, end);
+        v.set_window(bit, board, start, phase, end);
         if sample.ordinary() {
             let mut amount = i32::from(self.view.start_amount()) * i32::from(v.owner.velocity)
                 + (i32::from(self.view.start_offset()) << 7);
@@ -1165,27 +1044,31 @@ impl LayerPatch {
     }
 
     // Legato re-entry of a still-running voice: the new key's pitch becomes the glide destination.
-    pub fn retarget(&self, v: &mut Voice, kernel: i32, program: &Program) {
-        let bank = self.base.bank();
-        set_glide(
-            v,
-            self.view.pitch_word(kernel),
-            u32::from(program.glide()),
-            bank,
-        );
+    pub fn retarget(&self, v: &mut Voice, kernel: i32, program: &Program, bank: &SoundBank) {
+        v.set_glide(self.view.pitch_word(kernel), u32::from(program.glide()), bank);
     }
 
-    pub fn step(&self, v: &mut Voice, noise: &mut NoiseState) -> EnvelopeTick {
-        let bank = self.base.bank();
-        let result = self.advance_envelopes(v);
-        update_lfo(v, &self.view, bank);
-        update_random(v, noise);
+    pub fn step(
+        &self,
+        v: &mut Voice,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) -> EnvelopeTick {
+        let result = self.advance_envelopes(v, bank);
+        v.update_lfo(&self.view, bank, track);
+        v.update_random(noise);
         result
     }
 
-    pub fn onset(&self, v: &mut Voice, noise: &mut NoiseState) -> OnsetStep {
-        let bank = self.base.bank();
-        let envelopes = self.advance_envelopes(v);
+    pub fn onset(
+        &self,
+        v: &mut Voice,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) -> OnsetStep {
+        let envelopes = self.advance_envelopes(v, bank);
         if envelopes.ended {
             return OnsetStep {
                 ended: true,
@@ -1193,10 +1076,10 @@ impl LayerPatch {
                 parameters: false,
             };
         }
-        update_lfo(v, &self.view, bank);
-        update_random(v, noise);
-        advance_glide(v);
-        v.apply_parameters(false); // c181da calls c18372 before key-on.
+        v.update_lfo(&self.view, bank, track);
+        v.update_random(noise);
+        v.advance_glide();
+        self.apply_parameters(v, false, bank, track); // c181da calls c18372 before key-on.
         OnsetStep {
             ended: false,
             restarted: envelopes.restarted,
@@ -1208,18 +1091,17 @@ impl LayerPatch {
     // record and the current envelope/LFO state. Called at key-on and whenever a track event or the
     // ring re-syncs the voice; `initial` also snaps the volume/filter ramps instead of ramping to
     // the new targets.
-    pub fn apply_parameters(&self, v: &mut Voice, initial: bool) {
-        let bank = self.base.bank();
-        let c = unsafe { &(*v.track).config.parameters };
-        v.owner.program = unsafe { (*v.track).config.program }; // program in force, as the note's channel snapshot held it
+    pub fn apply_parameters(&self, v: &mut Voice, initial: bool, bank: &SoundBank, track: &Track) {
+        let c = &track.config.parameters;
+        v.owner.program = track.config.program; // program in force, as the note's channel snapshot held it
         let mut common = i32::from(bank.attenuation[usize::from(c.volume_index())])
-            + i32::from(bank.attenuation[usize::from(unsafe { (*v.track).sequence_volume } & 127)]);
+            + i32::from(bank.attenuation[usize::from(track.sequence_volume & 127)]);
         common += i32::from(c.expression_offset());
         let amp = self.view.amplitude_source();
         let mut base = if amp == ModSource::Off {
             254
         } else {
-            let amp_source = i32::from(modulation(v, amp));
+            let amp_source = i32::from(v.modulation(amp, track));
             let x = if amp == ModSource::Lfo {
                 (amp_source >> 1) + 0x4000
             } else if 0 < amp_source {
@@ -1255,7 +1137,7 @@ impl LayerPatch {
         let filter_env = i32::from(v.envelope[Voice::filter_envelope as usize].level());
         let key = i32::from(v.effective_key) - 60;
         let mut first = (filter_env * i32::from(self.view.k1_envelope())
-            + i32::from(modulation(v, self.view.filter_source()))
+            + i32::from(v.modulation(self.view.filter_source(), track))
                 * i32::from(self.view.filter_source_depth()))
             >> 12;
         first += (key * i32::from(self.view.k1_key())) >> 3;
@@ -1263,7 +1145,7 @@ impl LayerPatch {
         v.filter_cutoff_low = bank.coefficient(first, 0);
         let mut second = (filter_env * i32::from(self.view.k2_envelope())
             + (if self.view.k2_apply_source() {
-                i32::from(modulation(v, self.view.filter_source()))
+                i32::from(v.modulation(self.view.filter_source(), track))
             } else {
                 0
             }) * i32::from(self.view.filter_source_depth()))
@@ -1286,7 +1168,7 @@ impl LayerPatch {
             multiplier = -i32::from(s16(multiplier as u32));
         }
         pitch_mod +=
-            (i64::from(modulation(v, self.view.pitch_source())) * i64::from(multiplier)) >> 4;
+            (i64::from(v.modulation(self.view.pitch_source(), track)) * i64::from(multiplier)) >> 4;
         let bend = i32::from(s16(
             u32::from(c.bend()).wrapping_sub(TrackParameters::bend_center)
         ));
@@ -1298,10 +1180,10 @@ impl LayerPatch {
         );
         if (v.split.mode & 128) != 0 {
             let mut amount = (i32::from(self.view.start_amount())
-                * i32::from(modulation(v, self.view.start_source())))
+                * i32::from(v.modulation(self.view.start_source(), track)))
                 >> 7;
             let biased = amount + (i32::from(self.view.start_offset()) << 8);
-            amount = clamp_i32(biased, 0, 32767);
+            amount = biased.clamp(0, 32767);
             let delta = i32::from(s16(((i64::from(amount)
                 * i64::from(s16(v.split.accumulator >> 16)))
                 >> 16) as u32));
@@ -1313,8 +1195,7 @@ impl LayerPatch {
             v.pitch = s16((i32::from(v.pitch) + delta) as u32);
         }
         v.frequency = bank.frequency(i32::from(v.pitch));
-        finish_parameters(
-            v,
+        v.finish_parameters(
             initial,
             pair_choice(
                 u32::from(c.pair_select()),
@@ -1324,8 +1205,7 @@ impl LayerPatch {
     }
 
     // True when the release ends the voice immediately.
-    pub fn release(&self, v: &mut Voice) -> bool {
-        let bank = self.base.bank();
+    pub fn release(&self, v: &mut Voice, bank: &SoundBank) -> bool {
         for e in v.envelope.iter_mut() {
             if (e.flags & 64) != 0 {
                 continue;
@@ -1333,7 +1213,7 @@ impl LayerPatch {
             e.done = false;
             e.stage = 4;
             let rate = i32::from(e.rates[3]);
-            segment(e, 0, rate, bank);
+            e.start_segment(0, rate, bank);
         }
         if (v.envelope[Voice::amplitude_envelope as usize].flags & 64) == 0
             && v.envelope[Voice::amplitude_envelope as usize].level() == 0
@@ -1356,22 +1236,21 @@ impl LayerPatch {
         false
     }
 
-    fn advance_envelopes(&self, v: &mut Voice) -> EnvelopeTick {
+    fn advance_envelopes(&self, v: &mut Voice, bank: &SoundBank) -> EnvelopeTick {
         let mut result = EnvelopeTick::default();
         for which in [
             Voice::pitch_envelope,
             Voice::filter_envelope,
             Voice::amplitude_envelope,
         ] {
-            let tick = self.advance(v, which);
+            let tick = self.advance(v, which, bank);
             result.ended |= tick.ended;
             result.restarted |= tick.restarted;
         }
         result
     }
 
-    fn advance(&self, v: &mut Voice, which: u32) -> EnvelopeTick {
-        let bank = self.base.bank();
+    fn advance(&self, v: &mut Voice, which: u32, bank: &SoundBank) -> EnvelopeTick {
         let e = &mut v.envelope[which as usize];
         if e.done {
             return EnvelopeTick::default();
@@ -1379,7 +1258,7 @@ impl LayerPatch {
         if !e.advance() {
             return EnvelopeTick::default();
         }
-        settle_level(e);
+        e.settle_level();
         if e.stage == 4 {
             e.done = true;
             return EnvelopeTick {
@@ -1391,32 +1270,32 @@ impl LayerPatch {
             e.intermediate = false;
             let target = u32::from(e.levels[1]);
             let rate = i32::from(e.rates[0]);
-            segment(e, target, rate, bank);
+            e.start_segment(target, rate, bank);
             return EnvelopeTick::default();
         }
         e.stage = e.stage.wrapping_add(1);
         if e.stage == 1 {
             let target = u32::from(e.levels[2]);
             let rate = i32::from(e.rates[1]);
-            segment(e, target, rate, bank);
+            e.start_segment(target, rate, bank);
         } else if e.stage == 2 {
             let target = u32::from(e.levels[3]);
             let rate = i32::from(e.rates[2]);
-            segment(e, target, rate, bank);
+            e.start_segment(target, rate, bank);
         } else if (e.flags & 0x40) != 0 {
             e.stage = 4;
             let rate = i32::from(e.rates[3]);
-            segment(e, 0, rate, bank);
+            e.start_segment(0, rate, bank);
         } else if (e.flags & 0x80) != 0 {
             e.stage = 0;
             let target = u32::from(e.levels[1]);
             let rate = i32::from(e.rates[0]);
-            segment(e, target, rate, bank);
+            e.start_segment(target, rate, bank);
             if which == Voice::amplitude_envelope && self.view.sample().ordinary() {
                 v.position = if v.reverse {
                     v.end
                 } else {
-                    accumulator_start(v)
+                    v.accumulator_start()
                 };
                 if v.sample_finished {
                     v.sample_finished = false;
@@ -1437,30 +1316,25 @@ impl LayerPatch {
     }
 }
 
+/// One key region of a direct program.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DirectPatch {
-    pub base: PatchBase,
     pub view: DirectRegion,
+    pub program: Program,
+    pub index: u8,
 }
 
 impl DirectPatch {
-    pub fn new(
-        view: DirectRegion,
-        bank: Arc<SoundBank>,
-        program: Program,
-        index: u8,
-    ) -> DirectPatch {
+    pub fn new(program: Program, index: u8) -> DirectPatch {
         DirectPatch {
-            base: PatchBase::new(bank, program, index, 0, false),
-            view,
+            view: program.region(u32::from(index)),
+            program,
+            index,
         }
     }
 
     pub fn contains_key(&self, key: i32) -> bool {
         self.view.contains(key)
-    }
-
-    pub fn layered(&self) -> bool {
-        false
     }
 
     pub fn allocation(&self) -> AllocationMode {
@@ -1471,25 +1345,20 @@ impl DirectPatch {
         64
     }
 
-    pub fn weight(&self, _note: &NoteOnEvent, _kernel: i32) -> i32 {
+    pub fn weight(&self) -> i32 {
         127
     }
 
-    pub fn reuses(&self, _voice: &Voice) -> bool {
-        false
-    }
-
-    pub fn initialize(&self, v: &mut Voice, start: &NoteStart, _noise: &mut NoiseState) {
+    pub fn initialize(&self, v: &mut Voice, start: &NoteStart) {
         let key = i32::from(self.view.sounding_key(start.kernel, start.transpose));
-        let clamped = clamp_i32(key * 256, 0, 0x7f00);
+        let clamped = (key * 256).clamp(0, 0x7f00);
         v.pitch = s16((clamped | (i32::from(self.view.fine_pitch()) << 4)) as u32);
     }
 
-    pub fn address(&self, v: &mut Voice, _prior: &PriorWindow) {
-        let bank = self.base.bank();
+    pub fn address(&self, v: &mut Voice, bank: &SoundBank) {
         v.split = bank.split_for_region(
             self.view,
-            u32::from(self.base.index()),
+            u32::from(self.index),
             i32::from(v.pitch),
             &mut v.selector,
             v.owner.program,
@@ -1521,13 +1390,10 @@ impl DirectPatch {
         }
         v.r#loop = (final_control & 8) != 0;
         v.bidirectional = (final_control & 16) != 0;
-        apply_window(v, bit, board, start, phase, end);
+        v.set_window(bit, board, start, phase, end);
     }
 
-    pub fn retarget(&self, _v: &mut Voice, _kernel: i32, _program: &Program) {}
-
-    pub fn step(&self, v: &mut Voice, _noise: &mut NoiseState) -> EnvelopeTick {
-        let bank = self.base.bank();
+    pub fn step(&self, v: &mut Voice, bank: &SoundBank) -> EnvelopeTick {
         let e = &mut v.envelope[Voice::amplitude_envelope as usize];
         if e.done {
             return EnvelopeTick::default();
@@ -1535,7 +1401,7 @@ impl DirectPatch {
         if !e.advance() {
             return EnvelopeTick::default();
         }
-        settle_level(e);
+        e.settle_level();
         // Timer expiry dispatches on the envelope stage (c1971c -> stage routine), not on note-off:
         // stage 0 starts the release ramp (c1983c: ends the voice if the level's top byte is already
         // 0), stage 4 ends the voice (c19888). A patch whose note-off is ignored (patch[0] bit 7)
@@ -1548,21 +1414,15 @@ impl DirectPatch {
             };
         }
         let release_rate = u32::from(self.view.release_rate());
-        start_direct_release(e, release_rate, bank);
+        e.start_direct_release(release_rate, bank);
         EnvelopeTick::default()
     }
 
-    pub fn onset(&self, _v: &mut Voice, _noise: &mut NoiseState) -> OnsetStep {
-        // A direct voice writes its parameters once and waits for the ring.
-        OnsetStep::default()
-    }
-
-    pub fn apply_parameters(&self, v: &mut Voice, initial: bool) {
-        let bank = self.base.bank();
-        let c = unsafe { &(*v.track).config.parameters };
-        v.owner.program = unsafe { (*v.track).config.program };
+    pub fn apply_parameters(&self, v: &mut Voice, initial: bool, bank: &SoundBank, track: &Track) {
+        let c = &track.config.parameters;
+        v.owner.program = track.config.program;
         let common = i32::from(bank.attenuation[usize::from(c.volume_index())])
-            + i32::from(bank.attenuation[usize::from(unsafe { (*v.track).sequence_volume } & 127)])
+            + i32::from(bank.attenuation[usize::from(track.sequence_volume & 127)])
             + i32::from(c.expression_offset());
         let curve = velocity_curve_index(self.view.velocity_curve(), v.owner.velocity) as i32;
         let sensitivity = velocity_level_scale(self.view.velocity_level());
@@ -1598,8 +1458,7 @@ impl DirectPatch {
         v.filter_cutoff_high = bank.coefficient(filter_index, 0);
         v.filter_cutoff_low = v.filter_cutoff_high;
         v.frequency = bank.frequency(i32::from(v.pitch) + i32::from(v.split.tuning));
-        finish_parameters(
-            v,
+        v.finish_parameters(
             initial,
             pair_choice(
                 u32::from(c.pair_select()),
@@ -1608,60 +1467,50 @@ impl DirectPatch {
         );
     }
 
-    pub fn release(&self, v: &mut Voice) -> bool {
-        let bank = self.base.bank();
+    pub fn release(&self, v: &mut Voice, bank: &SoundBank) -> bool {
         if self.view.ignore_note_off() {
             return false;
         }
         let release_rate = u32::from(self.view.release_rate());
-        start_direct_release(
-            &mut v.envelope[Voice::amplitude_envelope as usize],
-            release_rate,
-            bank,
-        );
+        v.envelope[Voice::amplitude_envelope as usize].start_direct_release(release_rate, bank);
         false
     }
 }
 
-/// The behavior of one program record. The C++ virtual base class; each variant is one record kind.
+/// The behavior of one program record; each variant is one record kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Patch {
     Layer(LayerPatch),
     Direct(DirectPatch),
 }
 
 impl Patch {
-    fn base(&self) -> &PatchBase {
-        match self {
-            Patch::Layer(p) => &p.base,
-            Patch::Direct(p) => &p.base,
-        }
-    }
-
-    pub fn bank(&self) -> &SoundBank {
-        self.base().bank()
-    }
-
     pub fn program(&self) -> Program {
-        self.base().program()
+        match self {
+            Patch::Layer(p) => p.program,
+            Patch::Direct(p) => p.program,
+        }
     }
 
     // Layer 0..2, or region 0..16.
     pub fn index(&self) -> u8 {
-        self.base().index()
+        match self {
+            Patch::Layer(p) => p.index,
+            Patch::Direct(p) => p.index,
+        }
     }
 
     pub fn delay_ticks(&self) -> u8 {
-        self.base().delay_ticks()
+        match self {
+            Patch::Layer(p) => p.delay_ticks(),
+            Patch::Direct(_) => 0,
+        }
     }
 
     pub fn starts_on_release(&self) -> bool {
-        self.base().starts_on_release()
-    }
-
-    pub fn layered(&self) -> bool {
         match self {
-            Patch::Layer(p) => p.layered(),
-            Patch::Direct(p) => p.layered(),
+            Patch::Layer(p) => p.starts_on_release(),
+            Patch::Direct(_) => false,
         }
     }
 
@@ -1680,10 +1529,10 @@ impl Patch {
     }
 
     // Key weight, or -1 when this note is gated out of the patch.
-    pub fn weight(&self, note: &NoteOnEvent, kernel: i32) -> i32 {
+    pub fn weight(&self, note: &NoteOnEvent, kernel: i32, bank: &SoundBank) -> i32 {
         match self {
-            Patch::Layer(p) => p.weight(note, kernel),
-            Patch::Direct(p) => p.weight(note, kernel),
+            Patch::Layer(p) => p.weight(note, kernel, bank),
+            Patch::Direct(p) => p.weight(),
         }
     }
 
@@ -1691,59 +1540,78 @@ impl Patch {
     pub fn reuses(&self, voice: &Voice) -> bool {
         match self {
             Patch::Layer(p) => p.reuses(voice),
-            Patch::Direct(p) => p.reuses(voice),
+            Patch::Direct(_) => false,
         }
     }
 
     // Pitch, envelopes and LFO for the new voice; then its split and sample window.
-    pub fn initialize(&self, voice: &mut Voice, start: &NoteStart, noise: &mut NoiseState) {
+    pub fn initialize(
+        &self,
+        voice: &mut Voice,
+        start: &NoteStart,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) {
         match self {
-            Patch::Layer(p) => p.initialize(voice, start, noise),
-            Patch::Direct(p) => p.initialize(voice, start, noise),
+            Patch::Layer(p) => p.initialize(voice, start, noise, bank, track),
+            Patch::Direct(p) => p.initialize(voice, start),
         }
     }
 
-    pub fn address(&self, voice: &mut Voice, prior: &PriorWindow) {
+    pub fn address(&self, voice: &mut Voice, prior: &PriorWindow, bank: &SoundBank) {
         match self {
-            Patch::Layer(p) => p.address(voice, prior),
-            Patch::Direct(p) => p.address(voice, prior),
+            Patch::Layer(p) => p.address(voice, prior, bank),
+            Patch::Direct(p) => p.address(voice, bank),
         }
     }
 
     // Legato re-entry of a still-running voice: the new key's pitch becomes the glide destination.
-    pub fn retarget(&self, voice: &mut Voice, kernel: i32, program: &Program) {
-        match self {
-            Patch::Layer(p) => p.retarget(voice, kernel, program),
-            Patch::Direct(p) => p.retarget(voice, kernel, program),
+    pub fn retarget(&self, voice: &mut Voice, kernel: i32, program: &Program, bank: &SoundBank) {
+        if let Patch::Layer(p) = self {
+            p.retarget(voice, kernel, program, bank);
         }
     }
 
-    pub fn step(&self, voice: &mut Voice, noise: &mut NoiseState) -> EnvelopeTick {
+    pub fn step(
+        &self,
+        voice: &mut Voice,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) -> EnvelopeTick {
         match self {
-            Patch::Layer(p) => p.step(voice, noise),
-            Patch::Direct(p) => p.step(voice, noise),
+            Patch::Layer(p) => p.step(voice, noise, bank, track),
+            Patch::Direct(p) => p.step(voice, bank),
         }
     }
 
-    pub fn onset(&self, voice: &mut Voice, noise: &mut NoiseState) -> OnsetStep {
+    // A direct voice writes its parameters once and waits for the ring.
+    pub fn onset(
+        &self,
+        voice: &mut Voice,
+        noise: &mut NoiseState,
+        bank: &SoundBank,
+        track: &Track,
+    ) -> OnsetStep {
         match self {
-            Patch::Layer(p) => p.onset(voice, noise),
-            Patch::Direct(p) => p.onset(voice, noise),
+            Patch::Layer(p) => p.onset(voice, noise, bank, track),
+            Patch::Direct(_) => OnsetStep::default(),
         }
     }
 
-    pub fn apply_parameters(&self, voice: &mut Voice, initial: bool) {
+    pub fn apply_parameters(&self, voice: &mut Voice, initial: bool, bank: &SoundBank, track: &Track) {
         match self {
-            Patch::Layer(p) => p.apply_parameters(voice, initial),
-            Patch::Direct(p) => p.apply_parameters(voice, initial),
+            Patch::Layer(p) => p.apply_parameters(voice, initial, bank, track),
+            Patch::Direct(p) => p.apply_parameters(voice, initial, bank, track),
         }
     }
 
     // True when the release ends the voice immediately.
-    pub fn release(&self, voice: &mut Voice) -> bool {
+    pub fn release(&self, voice: &mut Voice, bank: &SoundBank) -> bool {
         match self {
-            Patch::Layer(p) => p.release(voice),
-            Patch::Direct(p) => p.release(voice),
+            Patch::Layer(p) => p.release(voice, bank),
+            Patch::Direct(p) => p.release(voice, bank),
         }
     }
 }

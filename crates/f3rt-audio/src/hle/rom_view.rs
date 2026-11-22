@@ -1,4 +1,4 @@
-//! `audio/hle/rom_view.hpp`: the banked sound-program ROM window.
+//! The banked sound-program ROM window.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -44,10 +44,6 @@ impl RomView {
 
     pub fn image(&self) -> &'static [u8] {
         self.rom
-    }
-
-    pub fn data(&self) -> *const u8 {
-        self.rom.as_ptr()
     }
 
     pub fn size(&self) -> usize {
@@ -98,16 +94,14 @@ impl RomView {
         ])
     }
 
-    pub fn pointer(&self, address: u32) -> *const u8 {
-        self.pointer_bytes(address, 1)
-    }
-
-    pub fn pointer_bytes(&self, address: u32, bytes: usize) -> *const u8 {
-        let off = self.resolve_offset(address) as usize;
-        if off + bytes > self.rom.len() {
+    /// The image from `address` to its end. Descriptors read from it are at least `min_bytes` long.
+    pub fn tail_from(&self, address: u32, min_bytes: usize) -> &'static [u8] {
+        let offset = self.resolve_offset(address) as usize;
+        let tail = &self.rom[offset..];
+        if tail.len() < min_bytes {
             panic!("HLE descriptor exceeds sound ROM");
         }
-        unsafe { self.rom.as_ptr().add(off) }
+        tail
     }
 
     /// `operator[](size_t offset)`: a direct image read that yields 0xff outside the image.

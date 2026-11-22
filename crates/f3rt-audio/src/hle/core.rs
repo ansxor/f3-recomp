@@ -1,4 +1,4 @@
-//! `audio/hle/core.hpp` + `core.cpp`: the composition root of the HLE sound engine.
+//! The composition root of the HLE sound engine.
 //!
 //! It owns every service, keeps the 1 kHz service grid, dispatches the mailbox and renders. Every
 //! service sees the same TIMER_TICKS boundaries, fanned out in a fixed order (`clock_tick`): the
@@ -6,24 +6,24 @@
 //! before the render reaches the tick; the voice ring is stepped from the render at the first frame
 //! that gets there (`VoiceService::service`).
 //!
-//! Services do not hold pointers to each other: a call borrows the mailbox and the track service for
-//! its duration. The bank and the track service stay boxed because the program and voice services
-//! keep pointers into them.
+//! Services do not hold references to each other: a call borrows the bank, the mailbox and the track
+//! service for its duration. The effects and the track service stay boxed so `Core::new` stays light
+//! on the stack.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::hle::block::{self, BusBlock, StereoBlock};
 use crate::hle::command::CommandPacket;
-use crate::hle::effects::{Effects, Program};
 use crate::hle::driver_layout::DriverLayout;
+use crate::hle::effects::{Effects, Program};
 use crate::hle::events::{
     EffectEventKind, Event, MAIN_CLOCK, SAMPLE_RATE, SONG_SLOTS, TIMER_TICKS, TrackEventKind,
 };
 use crate::hle::mailbox::Mailbox;
-use crate::hle::program_service::{PatchList, ProgramQuery, ProgramService};
+use crate::hle::patch::ProgramQuery;
 use crate::hle::sequencer::Sequencer;
 use crate::hle::sound_bank::SoundBank;
-use crate::hle::synthesis::{VoiceRenderState, render_voices, reset_render_state};
+use crate::hle::synthesis::VoiceRenderState;
 use crate::hle::track_service::TrackService;
 use crate::hle::voice_service::VoiceService;
 use crate::output_gain::OUTPUT_BOOST;
@@ -39,14 +39,13 @@ pub trait PcmSink: Send {
 pub type SharedPcmSink = Arc<Mutex<dyn PcmSink>>;
 
 pub struct Core {
-    pub bank: Arc<SoundBank>,
+    pub bank: SoundBank,
     pub effects: Box<Effects>,
     /// The next 1 kHz grid boundary to deliver.
     pub next_tick: u64,
     pub mailbox: Mailbox,
-    pub programs: Box<ProgramService>,
     pub tracks: Box<TrackService>,
-    pub voices: Box<VoiceService>,
+    pub voices: VoiceService,
     pub sequencer: Sequencer,
     pub render_state: VoiceRenderState,
     pub buses: BusBlock,
@@ -74,17 +73,13 @@ impl Core {
         sample_words: &'static [u16],
         layout: &'static DriverLayout,
     ) -> Core {
-        let bank = Arc::new(SoundBank::new(sound_rom, sample_words, layout));
-        let effects = Box::new(Effects::new(sound_rom, layout));
-        let programs = Box::new(ProgramService::new(Arc::clone(&bank)));
-        let voices = Box::new(VoiceService::new(Arc::clone(&bank)));
-
+        let bank = SoundBank::new(sound_rom, sample_words, layout);
+        let voices = VoiceService::new(&bank);
         let mut core = Core {
             bank,
-            effects,
+            effects: Box::new(Effects::new(sound_rom, layout)),
             next_tick: grid_after(0),
             mailbox: Mailbox::new(),
-            programs,
             tracks: Box::new(TrackService::new()),
             voices,
             sequencer: Sequencer::new(sound_rom, layout),
@@ -98,9 +93,7 @@ impl Core {
         };
 
         core.sequencer.reset(0, &mut core.mailbox, &mut core.tracks);
-        core.voices.reset(0);
         core.tracks.reset();
-        reset_render_state(&mut core.render_state, 0);
         core
     }
 
@@ -110,36 +103,29 @@ impl Core {
         let Core {
             mailbox,
             tracks,
-            programs,
             voices,
             effects,
+            bank,
             ..
         } = self;
         mailbox.drain(|event| match event {
             Event::NoteOn(n) => {
                 tracks.apply_note_on(&n);
-                // The track record is read after apply_note_on, as in the C++.
-                let t = &tracks.tracks(n.sequence)[usize::from(n.track)];
+                let track = &tracks.tracks(n.sequence)[usize::from(n.track)];
                 let mut note = n;
                 // A ProgramSelector earlier in this batch is already applied: the note resolves
                 // with the program in force at this point of the event order.
-                note.program = t.config.program;
-                let query = ProgramQuery {
-                    program: note.program,
-                    key: t.config.parameters.transposed_key(note.kernel_key),
-                    layer_mask: t.config.parameters.layer_mask(),
-                    notes_suppressed: t.config.parameters.notes_suppressed(),
-                };
-                let patches: PatchList = programs.resolve(&query);
-                if patches.count != 0 {
-                    voices.note_on(&note, &patches, t);
+                note.program = track.config.program;
+                let patches = ProgramQuery::for_note(&note, track).resolve(bank);
+                if !patches.is_empty() {
+                    voices.note_on(&note, &patches, bank, tracks);
                 }
             }
-            Event::NoteOff(n) => voices.note_off(n.instance, n.tick),
+            Event::NoteOff(n) => voices.note_off(n.instance, n.tick, bank, tracks),
             Event::ReleaseKey(r) => {
                 let instance = tracks.release_key(r.sequence, r.track, r.kernel_key, r.tick);
                 if instance != 0 {
-                    voices.note_off(instance, r.tick);
+                    voices.note_off(instance, r.tick, bank, tracks);
                 }
             }
             Event::Track(e) => {
@@ -150,11 +136,15 @@ impl Core {
                     | TrackEventKind::ProgramSelector
                     | TrackEventKind::Volume
                     | TrackEventKind::Pan
-                    | TrackEventKind::Refresh => voices.refresh_track(e.sequence, e.track),
+                    | TrackEventKind::Refresh => {
+                        voices.refresh_track(e.sequence, e.track, bank, tracks)
+                    }
                     TrackEventKind::SequenceVolume
                     | TrackEventKind::SequencePan
                     | TrackEventKind::SequenceFade
-                    | TrackEventKind::SequenceFadeStep => voices.refresh_sequence(e.sequence),
+                    | TrackEventKind::SequenceFadeStep => {
+                        voices.refresh_sequence(e.sequence, bank, tracks)
+                    }
                     TrackEventKind::PreviousKey => {}
                 }
             }
@@ -186,91 +176,98 @@ impl Core {
         self.dispatch_mailbox();
     }
 
+    /// Renders the output frames up to `tick`, one bus block at a time.
     fn render_until(&mut self, tick: u64) {
         let end = frames_at(tick);
-        let mut input = [0.0f32; 2];
-        let mut output = [0.0f32; 2];
-        // The OTIS-to-ESP link is digital (gain 1.0). The overdrive's output level ignores its
-        // input, so the 0.18 must come after the ESP or it only quietens the paths around it.
-        let overdrive = self.effects.program() == Program::Overdrive;
-        let (link_gain, host_gain) = if overdrive { (1.0, 0.18) } else { (0.18, 1.0) };
-        for ch in 0..2 {
-            input[ch] = link_gain;
-            output[ch] = OUTPUT_BOOST * host_gain * self.gain[ch];
-        }
+        let (link_gain, output_gain) = self.mix_gains();
         while self.worker_frames < end {
-            let n = (block::BLOCK_FRAMES as u64).min(end - self.worker_frames) as usize;
-            if self.render_state.frame_ticks.len() < n {
-                self.render_state.frame_ticks.resize(n, 0);
-            }
-            let mut frame_tick = self.render_state.tick;
-            let mut remainder = self.render_state.tick_remainder;
-            for slot in &mut self.render_state.frame_ticks[..n] {
-                *slot = frame_tick;
-                remainder += MAIN_CLOCK;
-                frame_tick += u64::from(remainder / SAMPLE_RATE);
-                remainder %= SAMPLE_RATE;
-            }
-            self.buses.resize(n);
-            let mut frame_start = 0;
-            while frame_start < n {
-                let now = self.render_state.frame_ticks[frame_start];
-                // The voice ring and every queued driver start due by this frame run before it is
-                // rendered.
-                loop {
-                    let timer = self.voices.next_tick();
-                    let timer_due = timer <= now;
-                    let queued = self.voices.next_queue_tick();
-                    let queue_due = queued <= now;
-                    if !timer_due && !queue_due {
-                        break;
-                    }
-                    if queue_due && (!timer_due || queued <= timer) {
-                        self.voices
-                            .service_queue(if timer_due { timer } else { now });
-                    } else {
-                        self.voices.service();
-                    }
-                }
-                let mut frame_end = frame_start + 1;
-                let horizon = self.voices.next_tick().min(self.voices.next_queue_tick());
-                while frame_end < n && self.render_state.frame_ticks[frame_end] < horizon {
-                    frame_end += 1;
-                }
-                self.buses.samples[frame_start * 8..frame_end * 8].fill(0.0);
-                render_voices(
-                    &mut self.voices,
-                    Arc::clone(&self.bank),
-                    &mut self.render_state,
-                    self.buses.span_mut(),
-                    frame_start,
-                    frame_end,
-                );
-                let clamped_high = 1.0f32 - 1.0f32 / 524288.0f32;
-                for sample in &mut self.buses.samples[frame_start * 8..frame_end * 8] {
-                    *sample = if *sample < -1.0f32 {
-                        -1.0f32
-                    } else if clamped_high < *sample {
-                        clamped_high
-                    } else {
-                        *sample
-                    };
-                }
-                frame_start = frame_end;
-            }
-            self.render_state.tick = frame_tick;
-            self.render_state.tick_remainder = remainder;
-            self.stereo.resize(n);
+            let frames = (block::BLOCK_FRAMES as u64).min(end - self.worker_frames) as usize;
+            self.render_bus_block(frames);
+            self.stereo.resize(frames);
             self.effects
-                .mix_block(&self.buses, &mut self.stereo, input, output);
-            if let Some(sink) = &self.sink {
-                let stereo: &[f32] = &self.stereo.samples[..n * 2];
-                sink.lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .write(stereo, n);
-            }
-            self.worker_frames += n as u64;
+                .mix_block(&self.buses, &mut self.stereo, link_gain, output_gain);
+            self.write_sink(frames);
+            self.worker_frames += frames as u64;
         }
+    }
+
+    /// The OTIS-to-ESP link gain and the host output gain, per channel. The link is digital (gain
+    /// 1.0). The overdrive's output level ignores its input, so the 0.18 must come after the ESP or
+    /// it only quietens the paths around it.
+    fn mix_gains(&self) -> ([f32; 2], [f32; 2]) {
+        let (link_gain, host_gain) = if self.effects.program() == Program::Overdrive {
+            (1.0, 0.18)
+        } else {
+            (0.18, 1.0)
+        };
+        let output = self.gain.map(|channel| OUTPUT_BOOST * host_gain * channel);
+        ([link_gain; 2], output)
+    }
+
+    /// Fills the bus block with the voices' output for `frames` frames, stopping at every tick
+    /// where the voice services must run.
+    fn render_bus_block(&mut self, frames: usize) {
+        self.render_state.fill_frame_ticks(frames);
+        self.buses.resize(frames);
+        let mut frame_start = 0;
+        while frame_start < frames {
+            self.service_due_voices(self.render_state.frame_ticks[frame_start]);
+            let frame_end = self.frames_before_next_service(frame_start, frames);
+            self.buses.samples[frame_start * 8..frame_end * 8].fill(0.0);
+            self.render_state.render_voices(
+                self.voices.voices_mut(),
+                self.bank.samples,
+                &mut self.buses,
+                frame_start,
+                frame_end,
+            );
+            self.clamp_otis_buses(frame_start, frame_end);
+            frame_start = frame_end;
+        }
+    }
+
+    /// Runs the voice ring and every queued driver start due by `now`, in tick order.
+    fn service_due_voices(&mut self, now: u64) {
+        loop {
+            let timer = self.voices.next_tick();
+            let queued = self.voices.next_queue_tick();
+            let timer_due = timer <= now;
+            let queue_due = queued <= now;
+            if !timer_due && !queue_due {
+                return;
+            }
+            if queue_due && (!timer_due || queued <= timer) {
+                let limit = if timer_due { timer } else { now };
+                self.voices
+                    .service_queue(limit, &self.bank, &mut self.tracks);
+            } else {
+                self.voices.service(&self.bank, &mut self.tracks);
+            }
+        }
+    }
+
+    /// The end of the run of frames, starting at `frame_start`, that precede the next voice service.
+    fn frames_before_next_service(&self, frame_start: usize, frames: usize) -> usize {
+        let horizon = self.voices.next_tick().min(self.voices.next_queue_tick());
+        let ticks = &self.render_state.frame_ticks[..frames];
+        let serviced = ticks[frame_start + 1..].iter().position(|&t| t >= horizon);
+        frame_start + 1 + serviced.unwrap_or(frames - frame_start - 1)
+    }
+
+    /// The OTIS output saturates at the DAC's signed range.
+    fn clamp_otis_buses(&mut self, frame_start: usize, frame_end: usize) {
+        let high = 1.0f32 - 1.0f32 / 524288.0f32;
+        for sample in &mut self.buses.samples[frame_start * 8..frame_end * 8] {
+            *sample = sample.clamp(-1.0, high);
+        }
+    }
+
+    fn write_sink(&self, frames: usize) {
+        let Some(sink) = &self.sink else { return };
+        let stereo: &[f32] = &self.stereo.samples[..frames * 2];
+        sink.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write(stereo, frames);
     }
 
     pub const BLOCK_FRAMES: usize = block::BLOCK_FRAMES;
@@ -335,9 +332,9 @@ impl Core {
             .reset(worker_tick, &mut self.mailbox, &mut self.tracks);
         self.mailbox.clear();
         // Voices first: their Stop events still see the tracks they point at.
-        self.voices.reset(worker_tick);
+        self.voices.reset(worker_tick, &self.bank);
         self.tracks.reset();
-        reset_render_state(&mut self.render_state, worker_tick);
+        self.render_state.reset(worker_tick);
         self.next_tick = grid_after(worker_tick);
         self.effects.reset();
         self.gain.fill(1.0);
@@ -360,8 +357,8 @@ impl Core {
             10.0f32.powf(-0.5f32 * f32::from(63 - (raw & 63)) / 20.0f32);
     }
 
-    /// Checks that the ROM and samples can be driven by the HLE core. Throws nothing: the C++ builds a
-    /// Core inside try/catch and drops the message, which is why the panic hook is silenced here.
+    /// Checks that the ROM and samples can be driven by the HLE core. Never panics: construction
+    /// failures are reported as `false`, which is why the panic hook is silenced here.
     pub fn validate(
         sound_rom: &'static [u8],
         sample_words: &'static [u16],

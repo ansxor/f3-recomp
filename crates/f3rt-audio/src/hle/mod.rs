@@ -11,7 +11,6 @@ pub mod mailbox;
 pub mod note_pool;
 pub mod note_timing;
 pub mod patch;
-pub mod program_service;
 pub mod pulse_timer;
 pub mod rom_view;
 pub mod sequence_bank;
