@@ -1,14 +1,14 @@
-//! `f3rt/audio.hpp` + `audio.cpp`: the F3 sound board, driven by main-CPU mailbox writes and rendered
-//! on a synth worker thread. Output is interleaved stereo (Left, Right) at `sample_rate()`.
+//! The F3 sound board, driven by main-CPU mailbox writes and rendered on a synth worker thread.
+//! Output is interleaved stereo (Left, Right) at `sample_rate()`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use crate::hle::command::CommandPacket;
-use crate::hle::core::{self, Core, RenderStats, SharedPcmSink};
+use crate::hle::core::{self, Core, SharedPcmSink};
 use crate::hle::driver_layout::DriverLayout;
-use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L};
+use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L, SHARED_RAM_SIZE};
 use crate::pcm_ring::PcmRing;
 use crate::shared_mailbox::SharedMailbox;
 use crate::snapshot::AudioSnapshot;
@@ -17,50 +17,32 @@ use crate::worker_queue::{Applies, WorkerQueue};
 pub const QUEUE_SIZE: usize = 4096;
 
 /// Raw big-endian 16-bit sample ROM bytes to host words.
-pub fn decode_sample_words(sample_rom: &[u8]) -> Vec<u16> {
-    let mut words = vec![0u16; sample_rom.len() / 2];
-    for (i, word) in words.iter_mut().enumerate() {
-        *word = u16::from_be_bytes([sample_rom[i * 2], sample_rom[i * 2 + 1]]);
-    }
-    words
+pub fn decode_sample_words(sample_rom: &[u8]) -> Box<[u16]> {
+    sample_rom
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_be_bytes(pair))
+        .collect::<Vec<u16>>()
+        .into_boxed_slice()
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Advance;
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Command {
-    pub packet: CommandPacket,
-    pub instance: u64,
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Reset;
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Gain {
-    pub channel: u8,
-    pub raw: u8,
-}
-
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Bank {
-    pub page: u8,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CoreInputKind {
-    Advance(Advance),
-    Command(Command),
-    Reset(Reset),
-    Gain(Gain),
-    Bank(Bank),
-}
-
-impl Default for CoreInputKind {
-    fn default() -> Self {
-        CoreInputKind::Advance(Advance)
-    }
+    #[default]
+    Advance,
+    Command {
+        packet: CommandPacket,
+        instance: u64,
+    },
+    Reset,
+    Gain {
+        channel: u8,
+        raw: u8,
+    },
+    Bank {
+        page: u8,
+    },
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -72,48 +54,44 @@ pub struct CoreInput {
 impl CoreInput {
     fn apply(&self, core: &mut Core) {
         match self.kind {
-            CoreInputKind::Advance(_) => core.advance(self.tick),
-            CoreInputKind::Command(command) => {
-                core.command(&command.packet, command.instance, self.tick)
+            CoreInputKind::Advance => core.advance(self.tick),
+            CoreInputKind::Command { packet, instance } => {
+                core.command(&packet, instance, self.tick)
             }
-            CoreInputKind::Reset(_) => core.reset(self.tick),
-            CoreInputKind::Gain(gain) => {
-                core.set_gain(u32::from(gain.channel), gain.raw, self.tick)
+            CoreInputKind::Reset => core.reset(self.tick),
+            CoreInputKind::Gain { channel, raw } => {
+                core.set_gain(u32::from(channel), raw, self.tick)
             }
-            CoreInputKind::Bank(bank) => core.set_bank(bank.page, self.tick),
+            CoreInputKind::Bank { page } => core.set_bank(page, self.tick),
         }
     }
 }
 
-pub struct Synth {
-    pub rom: &'static [u8],
-    pub samples: Vec<u16>,
-    pub core: Core,
+#[derive(Default)]
+pub struct SynthMetrics {
     pub generated: AtomicU64,
     pub render_ns: AtomicU64,
+    pub voices_started: AtomicU64,
+    pub voices_active: AtomicU32,
+    pub tick: AtomicU64,
+}
+
+struct Synth {
+    core: Core,
+    metrics: Arc<SynthMetrics>,
 }
 
 impl Synth {
-    fn new(
-        sound_rom: &'static [u8],
-        sample_words: Vec<u16>,
+    fn try_new(
+        sound_rom: Arc<[u8]>,
+        sample_words: Box<[u16]>,
         sink: SharedPcmSink,
         layout: &'static DriverLayout,
-    ) -> Synth {
-        // SAFETY: the decoder owns both buffers for as long as this Synth lives, and a Vec's buffer does
-        // not move when the Synth does, so the slices stay valid for the core's lifetime.
-        let rom = sound_rom;
-        let samples: &'static [u16] =
-            unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        let mut core = Core::new(rom, samples, layout);
+        metrics: Arc<SynthMetrics>,
+    ) -> Result<Synth, &'static str> {
+        let mut core = Core::try_new(sound_rom, sample_words, layout)?;
         core.set_pcm_sink(Some(sink));
-        Synth {
-            rom: sound_rom,
-            samples: sample_words,
-            core,
-            generated: AtomicU64::new(0),
-            render_ns: AtomicU64::new(0),
-        }
+        Ok(Synth { core, metrics })
     }
 }
 
@@ -121,10 +99,20 @@ impl Applies<CoreInput> for Synth {
     fn apply(&mut self, input: &CoreInput) {
         let started = Instant::now();
         input.apply(&mut self.core);
-        let elapsed = started.elapsed();
-        self.render_ns
-            .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
-        self.generated.store(self.core.frames(), Ordering::Relaxed);
+        let elapsed_ns = started.elapsed().as_nanos() as u64;
+        let render = self.core.render_stats();
+        let metrics = &self.metrics;
+        metrics.render_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
+        metrics
+            .generated
+            .store(self.core.rendered_frames(), Ordering::Relaxed);
+        metrics
+            .voices_started
+            .store(render.voices_started, Ordering::Relaxed);
+        metrics
+            .voices_active
+            .store(render.voices_active, Ordering::Relaxed);
+        metrics.tick.store(self.core.tick(), Ordering::Release);
     }
 }
 
@@ -137,83 +125,52 @@ pub struct AudioPerformanceStats {
     pub render_ns: u64,
 }
 
-pub struct Audio {
-    /// Declared first so it is dropped (and its thread joined) before the services it points at.
-    pub worker: WorkerQueue<CoreInput, Synth, QUEUE_SIZE>,
-    pub pcm: Arc<Mutex<PcmRing>>,
-    pub synth: Box<Synth>,
-    pub mailbox: SharedMailbox,
-    pub clock: u64,
-    pub command_count: u64,
-    pub serial: u64,
-    pub submitted_tick: u64,
-    pub clock_epoch: u64,
-    pub playback_epoch: u64,
-    pub bank: u32,
-    pub held: bool,
+struct SynthLink {
+    worker: WorkerQueue<CoreInput, QUEUE_SIZE>,
+    clock: u64,
+    clock_epoch: u64,
+    playback_epoch: u64,
+    submitted_tick: u64,
+    command_count: u64,
+    serial: u64,
 }
 
-impl Audio {
-    pub fn new(
-        sound_rom: &'static [u8],
-        sample_words: Vec<u16>,
-        shared: *mut u8,
-        layout: &'static DriverLayout,
-    ) -> Audio {
-        let pcm = Arc::new(Mutex::new(PcmRing::new()));
-        let mut synth = Box::new(Synth::new(sound_rom, sample_words, pcm.clone(), layout));
-        let worker = WorkerQueue::new(&mut *synth as *mut Synth);
-        Audio {
-            worker,
-            pcm,
-            synth,
-            mailbox: SharedMailbox::new(shared),
-            clock: 0,
-            command_count: 0,
-            serial: 0,
-            submitted_tick: 0,
-            clock_epoch: 0,
-            playback_epoch: 0,
-            bank: 1,
-            held: true,
-        }
+impl SynthLink {
+    fn advance(&mut self, ticks: u32) {
+        self.clock = self.clock.wrapping_add(u64::from(ticks));
     }
 
-    fn pcm(&self) -> MutexGuard<'_, PcmRing> {
-        self.pcm.lock().unwrap_or_else(PoisonError::into_inner)
+    fn rebase(&mut self, clock: u64, playback_epoch: u64) {
+        self.clock = clock;
+        self.clock_epoch = clock;
+        self.submitted_tick = clock;
+        self.playback_epoch = playback_epoch;
     }
 
     fn playback_now(&self) -> u64 {
-        self.playback_epoch + (self.clock - self.clock_epoch)
+        self.playback_epoch.wrapping_add(self.clock.wrapping_sub(self.clock_epoch))
     }
 
-    fn post(&mut self, kind: CoreInputKind) {
+    fn post(&self, kind: CoreInputKind) {
         let tick = self.playback_now();
         self.worker.post(CoreInput { kind, tick });
     }
 
-    fn post_gain(&mut self, channel: u32) {
-        self.post(CoreInputKind::Gain(Gain {
-            channel: channel as u8,
-            raw: self.mailbox.gain(channel),
-        }));
-    }
-
     fn record(&mut self, packet: CommandPacket) {
-        self.command_count += 1;
+        self.command_count = self.command_count.wrapping_add(1);
         self.serial += 1;
         let instance = self.serial;
         if self.serial >> 63 != 0 {
             panic!("HLE instance IDs exhausted");
         }
-        self.post(CoreInputKind::Command(Command { packet, instance }));
+        self.post(CoreInputKind::Command { packet, instance });
     }
 
     fn submit_clock(&mut self) {
-        if self.clock <= self.submitted_tick {
+        if self.clock == self.submitted_tick {
             return;
         }
-        self.post(CoreInputKind::Advance(Advance));
+        self.post(CoreInputKind::Advance);
         self.submitted_tick = self.clock;
     }
 
@@ -221,98 +178,138 @@ impl Audio {
         self.submit_clock();
         self.worker.flush();
     }
+}
+
+pub struct Audio {
+    link: SynthLink,
+    pcm: Arc<Mutex<PcmRing>>,
+    metrics: Arc<SynthMetrics>,
+    mailbox: SharedMailbox,
+    bank: u32,
+    held: bool,
+}
+
+impl Audio {
+    /// `Err` names why the sound program or the samples cannot be driven.
+    pub fn try_new(
+        sound_rom: Arc<[u8]>,
+        sample_words: Box<[u16]>,
+        layout: &'static DriverLayout,
+    ) -> Result<Audio, &'static str> {
+        let pcm = Arc::new(Mutex::new(PcmRing::new()));
+        let metrics = Arc::new(SynthMetrics::default());
+        let synth = Synth::try_new(
+            sound_rom,
+            sample_words,
+            pcm.clone(),
+            layout,
+            Arc::clone(&metrics),
+        )?;
+        Ok(Audio {
+            link: SynthLink {
+                worker: WorkerQueue::spawn(synth),
+                clock: 0,
+                clock_epoch: 0,
+                playback_epoch: 0,
+                submitted_tick: 0,
+                command_count: 0,
+                serial: 0,
+            },
+            pcm,
+            metrics,
+            mailbox: SharedMailbox::new(),
+            bank: 1,
+            held: true,
+        })
+    }
+
+    fn pcm(&self) -> MutexGuard<'_, PcmRing> {
+        self.pcm.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn post_gain(&self, ram: &[u8; SHARED_RAM_SIZE], channel: u32) {
+        let raw = self.mailbox.gain(ram, channel);
+        self.link.post(CoreInputKind::Gain {
+            channel: channel as u8,
+            raw,
+        });
+    }
 
     fn snapshot(&self) -> AudioSnapshot {
         AudioSnapshot {
-            clock: self.clock,
-            commands: self.command_count,
+            clock: self.link.clock,
+            commands: self.link.command_count,
             consumer: self.mailbox.consumer(),
             held: self.held,
         }
     }
 
-    fn restore(&mut self, state: &AudioSnapshot) {
-        self.flush();
-        self.clock = state.clock;
-        self.clock_epoch = state.clock;
-        self.submitted_tick = state.clock;
-        self.playback_epoch = self.synth.core.tick();
+    fn restore(&mut self, state: &AudioSnapshot) -> Result<(), &'static str> {
+        self.mailbox.restore(state.consumer)?;
+        self.link.flush();
+        self.link.rebase(state.clock, self.metrics.tick.load(Ordering::Acquire));
         self.pcm().discard();
-        self.command_count = state.commands;
-        self.mailbox.restore(state.consumer);
+        self.link.command_count = state.commands;
         self.held = state.held;
+        Ok(())
     }
 
-    /// Whether the sound program and samples can be driven; the constructor panics when this is false.
-    pub fn supported(sound_rom: &[u8], sample_words: &[u16], layout: &'static DriverLayout) -> bool {
-        // SAFETY: validate() only uses the buffers while it runs; the 'static lifetime only states that
-        // the core it builds never stores them beyond the call.
-        let rom: &'static [u8] =
-            unsafe { std::slice::from_raw_parts(sound_rom.as_ptr(), sound_rom.len()) };
-        let samples: &'static [u16] =
-            unsafe { std::slice::from_raw_parts(sample_words.as_ptr(), sample_words.len()) };
-        Core::validate(rom, samples, layout)
-    }
-
-    pub fn shared_write(&mut self, offset: u32) {
+    /// The main CPU wrote `offset` of `ram`: a producer-index write drains the mailbox, a gain write
+    /// posts the gain.
+    pub fn shared_write(&mut self, ram: &mut [u8; SHARED_RAM_SIZE], offset: u32) {
         if self.held {
             return;
         }
         if offset == MAILBOX_PRODUCER_L {
-            // TODO: Need to fix whatever the fuck is going on here?
-            let p: *mut Audio = &mut *self;
-            // SAFETY: record() does not touch the mailbox the drain is iterating.
-            unsafe { (*p).mailbox.drain(|packet| (*p).record(packet)) };
+            for packet in self.mailbox.drain(ram) {
+                self.link.record(packet);
+            }
         } else if offset == MAILBOX_GAIN_CH0 || offset == MAILBOX_GAIN_CH1 {
-            self.post_gain(offset & 1);
+            self.post_gain(ram, offset & 1);
         }
     }
 
     pub fn finish_frame(&mut self) {
-        // TODO: Need to fix whatever the fuck is going on here?
-        let p = &mut *self;
-        p.submit_clock();
-        let frames = core::frames_at(p.playback_now());
-        p.pcm().close_frame(frames);
+        self.link.submit_clock();
+        let frames = core::frames_at(self.link.playback_now());
+        self.pcm().close_frame(frames);
     }
 
     pub fn advance(&mut self, ticks: u32) {
-        self.clock += u64::from(ticks);
+        self.link.advance(ticks);
     }
 
     /// Continuous effective device time, not the caller's main-block endpoint.
     pub fn clock_ticks(&self) -> u64 {
-        self.clock
+        self.link.clock
     }
 
     pub fn generated_frames(&self) -> u64 {
-        self.synth.generated.load(Ordering::Relaxed)
+        self.metrics.generated.load(Ordering::Relaxed)
     }
 
     pub fn performance_stats(&self) -> AudioPerformanceStats {
-        let render: RenderStats = self.synth.core.render_stats();
         AudioPerformanceStats {
-            commands: self.command_count,
+            commands: self.link.command_count,
             rendered_frames: self.generated_frames(),
-            voices_started: render.voices_started,
-            voices_active: render.voices_active,
-            render_ns: self.synth.render_ns.load(Ordering::Relaxed),
+            voices_started: self.metrics.voices_started.load(Ordering::Relaxed),
+            voices_active: self.metrics.voices_active.load(Ordering::Relaxed),
+            render_ns: self.metrics.render_ns.load(Ordering::Relaxed),
         }
     }
 
     /// Reset control (active-high asserted = CPU held in reset).
-    pub fn set_reset(&mut self, asserted: bool) {
-        let p = &mut *self;
-        if p.held == asserted {
+    pub fn set_reset(&mut self, ram: &[u8; SHARED_RAM_SIZE], asserted: bool) {
+        if self.held == asserted {
             return;
         }
-        p.held = asserted;
+        self.held = asserted;
         if asserted {
-            p.mailbox.reset();
-            p.post(CoreInputKind::Reset(Reset));
+            self.mailbox.reset();
+            self.link.post(CoreInputKind::Reset);
         } else {
-            p.post_gain(0);
-            p.post_gain(1);
+            self.post_gain(ram, 0);
+            self.post_gain(ram, 1);
         }
     }
 
@@ -321,29 +318,29 @@ impl Audio {
     }
 
     /// Whole-machine/watchdog reset: hold the board and keep the continuous audio clock.
-    pub fn reset_board(&mut self) {
-        self.set_reset(true);
+    pub fn reset_board(&mut self, ram: &[u8; SHARED_RAM_SIZE]) {
+        self.set_reset(ram, true);
     }
 
     /// Sound CPU program ROM banking (0xc20000 - 0xc3ffff window, default page 1).
     pub fn set_sound_bank(&mut self, page: u32) {
         self.bank = page;
-        self.post(CoreInputKind::Bank(Bank { page: page as u8 }));
+        self.link.post(CoreInputKind::Bank { page: page as u8 });
     }
 
     pub fn available_frames(&mut self) -> usize {
-        self.flush();
+        self.link.flush();
         self.pcm().available()
     }
 
     pub fn render(&mut self, interleaved_stereo: &mut [i16], max_frames: usize) -> usize {
-        self.flush();
+        self.link.flush();
         self.pcm().drain_i16(interleaved_stereo, max_frames)
     }
 
-    /// The float overload: the same ring, converted to the -1..1 scale the C++ passes on.
+    /// Float variant of `render`: the same ring on the -1..1 scale.
     pub fn render_f32(&mut self, interleaved_stereo: &mut [f32], max_frames: usize) -> usize {
-        self.flush();
+        self.link.flush();
         self.pcm().drain(interleaved_stereo, max_frames)
     }
 
@@ -361,7 +358,62 @@ impl Audio {
 
     pub fn load_state(&mut self, src: &[u8]) -> Result<(), &'static str> {
         let state = AudioSnapshot::parse(src)?;
-        self.restore(&state);
-        Ok(())
+        self.restore(&state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Recorder(Arc<Mutex<Vec<CoreInput>>>);
+
+    impl Applies<CoreInput> for Recorder {
+        fn apply(&mut self, input: &CoreInput) {
+            self.0.lock().unwrap().push(*input);
+        }
+    }
+
+    fn link() -> (SynthLink, Arc<Mutex<Vec<CoreInput>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let link = SynthLink {
+            worker: WorkerQueue::spawn(Recorder(Arc::clone(&log))),
+            clock: 0,
+            clock_epoch: 0,
+            playback_epoch: 0,
+            submitted_tick: 0,
+            command_count: 0,
+            serial: 0,
+        };
+        (link, log)
+    }
+
+    fn advances(link: &SynthLink, log: &Mutex<Vec<CoreInput>>) -> Vec<u64> {
+        link.worker.flush();
+        let log = log.lock().unwrap();
+        log.iter().filter(|input| input.kind == CoreInputKind::Advance).map(|input| input.tick).collect()
+    }
+
+    #[test]
+    fn a_snapshot_clock_at_the_top_of_u64_keeps_advancing_and_submitting() {
+        let (mut link, log) = link();
+        link.rebase(u64::MAX - 1, 7);
+        link.submit_clock();
+        link.advance(1);
+        link.submit_clock();
+        link.advance(2);
+        link.submit_clock();
+        assert_eq!(link.clock, 1);
+        assert_eq!(advances(&link, &log), [8, 10]);
+        link.submit_clock();
+        assert_eq!(advances(&link, &log), [8, 10]);
+    }
+
+    #[test]
+    fn recording_commands_wraps_the_command_count() {
+        let (mut link, _log) = link();
+        link.command_count = u64::MAX;
+        link.record(CommandPacket::default());
+        assert_eq!(link.command_count, 0);
     }
 }

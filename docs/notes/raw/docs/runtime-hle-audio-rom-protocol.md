@@ -91,9 +91,9 @@ sound images differ in song and instrument tables, but the entire code bank
 configuration/program bytes, is byte-identical to Land Maker. Only `$c085f2` (bend
 range: 0x02 in Land Maker, 0x0c in Twin Cobra II) differs and is read dynamically from
 ROM. Per-game data comprises the program table at `$c00134`, song bank at `$c20000+`,
-and sample ROM. Load-time capability validation (`Sequencer::validate` and
-`Synth::validate`) validates the loaded sound and sample ROMs dynamically without
-game-specific config flags or literals.
+and sample ROM. Load-time capability validation (`Audio::try_new`, through `Core::try_new`,
+`SoundBank::try_new` and `SequenceBank::try_parse`) returns an error for a sound or
+sample ROM the HLE cannot drive, without game-specific config flags or literals.
 Physical PCB wiring observed on hardware (12's routing note,
 `docs/notes/raw/docs/otis-esp-dac-routing-2026-10-09.txt`) swaps OTIS pairs 1
 and 3 relative to MAME and leaves pair 0 unconnected. Enhanced follows it: pair

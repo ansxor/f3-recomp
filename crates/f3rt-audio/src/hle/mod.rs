@@ -1,5 +1,3 @@
-//! `runtime/audio/hle/`: one module per C++ file of the HLE sound engine.
-
 pub mod block;
 pub mod command;
 pub mod core;
@@ -11,9 +9,9 @@ pub mod mailbox;
 pub mod note_pool;
 pub mod note_timing;
 pub mod patch;
-pub mod program_service;
 pub mod pulse_timer;
 pub mod rom_view;
+pub mod sequence_bank;
 pub mod sequencer;
 pub mod sound_bank;
 pub mod sound_rom;

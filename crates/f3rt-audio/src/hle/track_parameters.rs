@@ -1,11 +1,8 @@
-//! `audio/hle/track_parameters.hpp`: the 0x38-byte track parameter record.
-//!
 //! Controllers occupy the even bytes from 0x0a; the following odd byte is the low half of that
 //! big-endian word. `byte()` and `bytes` address the rest of the record.
 
 #![allow(non_upper_case_globals)]
 
-/// `TrackParameters::At`: the byte offsets inside the record.
 pub mod at {
     pub const SIZE: usize = 0x38;
     pub const program_high: usize = 0x04;
@@ -62,14 +59,21 @@ impl TrackParameters {
         ((self.bytes[offset] as u16) << 8) | self.bytes[offset + 1] as u16
     }
 
+    pub fn valid_controller(index: usize) -> bool {
+        index
+            .checked_mul(2)
+            .and_then(|double| at::controllers.checked_add(double))
+            .is_some_and(|offset| offset < at::SIZE)
+    }
+
     /// Controller k writes the even byte at 0x0a + 2k. The layer-mask byte is stored centered
     /// (value - 0x40); every other controller stores the value. Returns false when the byte would
     /// fall outside the record.
     pub fn set_controller(&mut self, index: usize, value: u8) -> bool {
-        let offset = at::controllers + index * 2;
-        if offset >= at::SIZE {
+        if !Self::valid_controller(index) {
             return false;
         }
+        let offset = at::controllers + index * 2;
         self.bytes[offset] = if offset == at::layer_mask {
             value.wrapping_sub(Self::controller_center)
         } else {
@@ -83,7 +87,6 @@ impl TrackParameters {
         self.bytes[at::program_low] = program as u8;
     }
 
-    /// Header track-record fields copied into the live controller bytes.
     pub fn copy_record_to_live(&mut self) {
         self.bytes[at::volume] = self.bytes[at::volume_record];
         self.bytes[at::pan] = self.bytes[at::pan_record];
@@ -206,5 +209,98 @@ impl TrackParameters {
 
     pub fn transposed_key(&self, kernel_key: u8) -> u8 {
         kernel_key.wrapping_add(self.bytes[at::transpose])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn controller_index(offset: usize) -> usize {
+        (offset - at::controllers) / 2
+    }
+
+    #[test]
+    fn controller_writes_land_on_even_bytes() {
+        let mut p = TrackParameters::default();
+        assert!(p.set_controller(2, 0x55));
+        assert_eq!(p.byte(at::controllers + 4), 0x55);
+        assert_eq!(p.byte(at::controllers + 5), 0);
+    }
+
+    #[test]
+    fn layer_mask_controller_is_stored_centered() {
+        let mut p = TrackParameters::default();
+        let index = controller_index(at::layer_mask);
+
+        assert!(p.set_controller(index, 0x40));
+        assert_eq!(p.layer_mask(), 0);
+        assert!(p.set_controller(index, 0x10));
+        assert_eq!(p.layer_mask(), 0xd0);
+    }
+
+    #[test]
+    fn controller_past_the_record_is_rejected() {
+        let mut p = TrackParameters::default();
+        assert!(!p.set_controller(controller_index(at::SIZE), 1));
+        assert_eq!(p, TrackParameters::default());
+    }
+
+    #[test]
+    fn controller_index_overflow_is_rejected() {
+        let wrap_to_zero = (usize::MAX - 9) / 2;
+        let mul_overflow = usize::MAX / 2 + 1;
+        for index in [wrap_to_zero, mul_overflow, usize::MAX] {
+            assert!(!TrackParameters::valid_controller(index));
+            let mut p = TrackParameters::default();
+            assert!(!p.set_controller(index, 0xff));
+            assert_eq!(p, TrackParameters::default());
+        }
+    }
+
+    #[test]
+    fn program_image_is_big_endian() {
+        let mut p = TrackParameters::default();
+        p.set_program_image(0x4abc);
+        assert_eq!(p.byte(at::program_high), 0x4a);
+        assert_eq!(p.byte(at::program_low), 0xbc);
+        assert_eq!(p.word(at::program_high), 0x4abc);
+    }
+
+    #[test]
+    fn transposed_key_wraps_in_eight_bits() {
+        let mut p = TrackParameters::default();
+        p.set_byte(at::transpose, 0xf0);
+        assert_eq!(p.signed_transpose(), -16);
+        assert_eq!(p.transposed_key(100), 84);
+        assert_eq!(p.transposed_key(5), 245);
+    }
+
+    #[test]
+    fn notes_are_suppressed_only_with_both_flag_bits() {
+        let mut p = TrackParameters::default();
+        for (flags, suppressed) in [(0x00, false), (0x10, false), (0x20, false), (0x30, true), (0x7f, true)] {
+            p.set_byte(at::flags, flags);
+            assert_eq!(p.notes_suppressed(), suppressed, "flags {flags:#x}");
+        }
+    }
+
+    #[test]
+    fn extended_selector_toggles_one_flag_bit() {
+        let mut p = TrackParameters::default();
+        p.set_byte(at::flags, 0x31);
+        p.set_extended_selector(true);
+        assert_eq!(p.flags(), 0x71);
+        p.set_extended_selector(false);
+        assert_eq!(p.flags(), 0x31);
+    }
+
+    #[test]
+    fn volume_and_pan_also_update_their_header_records() {
+        let mut p = TrackParameters::default();
+        p.set_volume(0x70);
+        p.set_pan(0x81);
+        assert_eq!((p.byte(at::volume_record), p.byte(at::pan_record)), (0x70, 0x81));
+        assert_eq!(p.signed_pan(), -127);
     }
 }
