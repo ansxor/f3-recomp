@@ -17,8 +17,8 @@ use crate::game::scene::{
     kind, presented_playfield, sub_index, wrap_tile_index,
 };
 use crate::game::sprites::{
-    SpriteBins, SpriteCoverage, SpriteCoverageRow, SpriteCoverageView, SpriteRasterOptions,
-    raster_sprite_chunk,
+    SpriteBins, SpriteCoverage, SpriteCoverageRow, SpriteCoverageView, SpriteRaster,
+    SpriteRasterOptions,
 };
 use crate::game::tiles::GameTiles;
 
@@ -860,61 +860,67 @@ impl Default for ZoomState {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn zoom_sample(
-    work: &mut RowWork<'_>,
-    state: &mut ZoomState,
-    map_row: &[u32],
+struct ZoomedPlayfield<'a> {
+    state: ZoomState,
+    map_row: &'a [u32],
     texel_y: u32,
-    tile_pixels: &[u8],
+    tile_pixels: &'a [u8],
     tile_count: u32,
-    pf: &ScenePlayfield,
-    plan: &LayerPlan,
-    w: usize,
-    i: u32,
-    source: i32,
+    palette_add: u16,
+    plan: LayerPlan,
     screen_flip: u32,
     map_width: u32,
-    unresolved: u32,
-    settled: &mut u32,
-) {
-    if source != state.texel {
-        state.texel = source;
-        let wrapped = ((source as u32) & (map_width - 1)) ^ screen_flip;
-        if (wrapped >> 4) != state.column {
-            state.column = wrapped >> 4;
-            state.cell = decode_cell(
-                map_row[state.column as usize],
-                texel_y,
-                tile_count,
-                pf.palette_add,
+}
+
+impl ZoomedPlayfield<'_> {
+    fn sample(
+        &mut self,
+        work: &mut RowWork<'_>,
+        w: usize,
+        i: u32,
+        source: i32,
+        unresolved: u32,
+        settled: &mut u32,
+    ) {
+        if source != self.state.texel {
+            self.state.texel = source;
+            let wrapped = ((source as u32) & (self.map_width - 1)) ^ self.screen_flip;
+            if (wrapped >> 4) != self.state.column {
+                self.state.column = wrapped >> 4;
+                self.state.cell = decode_cell(
+                    self.map_row[self.state.column as usize],
+                    self.texel_y,
+                    self.tile_count,
+                    self.palette_add,
+                );
+            }
+            self.state.pen = u32::from(
+                self.tile_pixels
+                    [self.state.cell.pens + (((wrapped & 15) ^ self.state.cell.flip_x) as usize)],
+            ) & u32::from(self.state.cell.pen_mask);
+            self.state.resolves = self.plan.resolves[usize::from(self.state.cell.select)];
+            self.state.color =
+                work.lut[((self.state.cell.palette + self.state.pen as u16) as usize) & 8191];
+        }
+        if self.state.pen == 0 {
+            return;
+        }
+        let x = (w * 32) as i32 + i as i32;
+        if self.state.resolves && (unresolved >> i) & 1 != 0 {
+            work.out[x as usize] = self.state.color;
+            *settled |= 1u32 << i;
+        } else {
+            visit(
+                work,
+                x,
+                self.state.cell.palette.wrapping_add(self.state.pen as u16),
+                self.state.cell.select,
+                &self.plan,
             );
         }
-        state.pen = u32::from(
-            tile_pixels[state.cell.pens + (((wrapped & 15) ^ state.cell.flip_x) as usize)],
-        ) & u32::from(state.cell.pen_mask);
-        state.resolves = plan.resolves[usize::from(state.cell.select)];
-        state.color = work.lut[((state.cell.palette + state.pen as u16) as usize) & 8191];
-    }
-    if state.pen == 0 {
-        return;
-    }
-    let x = (w * 32) as i32 + i as i32;
-    if state.resolves && (unresolved >> i) & 1 != 0 {
-        work.out[x as usize] = state.color;
-        *settled |= 1u32 << i;
-    } else {
-        visit(
-            work,
-            x,
-            state.cell.palette.wrapping_add(state.pen as u16),
-            state.cell.select,
-            plan,
-        );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compose_zoomed_playfield(
     work: &mut RowWork<'_>,
     id: LayerId,
@@ -937,7 +943,17 @@ fn compose_zoomed_playfield(
     let map_row = &cells[(wrapped_y as usize / 16) * columns..];
     let texel_y = wrapped_y & 15;
     let origin = pf.source_x + (work.left_edge - 46) * pf.x_step;
-    let mut state = ZoomState::default();
+    let mut zoom = ZoomedPlayfield {
+        state: ZoomState::default(),
+        map_row,
+        texel_y,
+        tile_pixels,
+        tile_count,
+        palette_add: pf.palette_add,
+        plan,
+        screen_flip,
+        map_width,
+    };
     for r in 0..ranges.count {
         let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
         for_each_range_word(left, right, |w, window| {
@@ -948,23 +964,7 @@ fn compose_zoomed_playfield(
                 let end = 32 - window.leading_zeros();
                 let mut source = origin + (w * 32) as i32 * pf.x_step + first as i32 * pf.x_step;
                 for i in first..end {
-                    zoom_sample(
-                        work,
-                        &mut state,
-                        map_row,
-                        texel_y,
-                        tile_pixels,
-                        tile_count,
-                        pf,
-                        &plan,
-                        w,
-                        i,
-                        source >> 8,
-                        screen_flip,
-                        map_width,
-                        unresolved & window,
-                        &mut settled,
-                    );
+                    zoom.sample(work, w, i, source >> 8, unresolved & window, &mut settled);
                     source += pf.x_step;
                 }
             } else {
@@ -973,23 +973,7 @@ fn compose_zoomed_playfield(
                     let i = mask.trailing_zeros();
                     mask &= mask - 1;
                     let source = (origin + ((w * 32) as i32 + i as i32) * pf.x_step) >> 8;
-                    zoom_sample(
-                        work,
-                        &mut state,
-                        map_row,
-                        texel_y,
-                        tile_pixels,
-                        tile_count,
-                        pf,
-                        &plan,
-                        w,
-                        i,
-                        source,
-                        screen_flip,
-                        map_width,
-                        unresolved,
-                        &mut settled,
-                    );
+                    zoom.sample(work, w, i, source, unresolved, &mut settled);
                 }
             }
             work.unresolved[w] &= !settled;
@@ -1349,7 +1333,6 @@ fn build_setup(setup: &mut RowSetup, row: &SceneRow, active: u32, left_edge: i32
     setup.valid = true;
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compose_row(
     job: &SharedJob<'_>,
     y: usize,
@@ -1489,12 +1472,15 @@ fn compose_indexed_chunk(job: &SharedJob<'_>, chunk: usize, buffers: ChunkBuffer
     };
     {
         let mut coverage = SpriteCoverage::new(&options, geometry, buffers.layers, buffers.bits);
-        raster_sprite_chunk(
+        let raster = SpriteRaster {
+            sprites: job.sprites,
+            pen_mask: job.snapshot.pen_mask,
+            tiles: job.sprite_tiles,
+            trail_seed: job.snapshot.sprite_trail_seed,
+        };
+        raster.draw_chunk(
             job.bins,
-            job.sprites,
             chunk,
-            job.snapshot.pen_mask,
-            job.sprite_tiles,
             buffers.plane,
             geometry,
             SpriteRasterOptions {
@@ -1502,7 +1488,6 @@ fn compose_indexed_chunk(job: &SharedJob<'_>, chunk: usize, buffers: ChunkBuffer
                 flipped: job.snapshot.sprite_flipped,
             },
             &mut coverage,
-            job.snapshot.sprite_trail_seed,
         );
     }
     let layers: &[u8] = buffers.layers;
@@ -1527,23 +1512,57 @@ fn compose_indexed_chunk(job: &SharedJob<'_>, chunk: usize, buffers: ChunkBuffer
     }
 }
 
-/// Compose one non-fallback snapshot frame (scale 1, optional symmetric border).
-#[allow(clippy::too_many_arguments)]
-pub fn compose_indexed(
+#[derive(Clone, Copy)]
+pub struct IndexedLayout {
+    pub stride: usize,
+    pub format: PixelFormat,
+}
+
+pub struct IndexedOutput<'a> {
+    pub pixels: &'a mut [u32],
+    pub layout: IndexedLayout,
+}
+
+pub struct IndexedTiles<'a> {
+    pub playfield_rows: &'a TileRowTable,
+    pub playfield_pixels: &'a [u8],
+    pub sprite_pixels: &'a [u8],
+}
+
+#[derive(Default)]
+pub struct RowExecution<'a> {
+    pub workers: Option<&'a RowWorkers>,
+    pub window: Option<&'a mut dyn WorkWindow>,
+}
+
+pub(super) struct IndexedOptions {
+    pub raster: GameVideoOptions,
+    pub sprites: SpriteList,
+}
+
+pub(super) fn compose_indexed(
     snapshot: &SceneSnapshotView<'_>,
-    output: &mut [u32],
-    stride: usize,
-    format: PixelFormat,
-    options: GameVideoOptions,
+    output: IndexedOutput<'_>,
+    options: IndexedOptions,
     geometry: &Geometry,
-    playfield_tiles: &TileRowTable,
-    playfield_pixels: &[u8],
-    sprite_tiles: &[u8],
+    tiles: IndexedTiles<'_>,
     scratch: &mut IndexedScratch,
-    list: SpriteList,
-    workers: Option<&RowWorkers>,
-    window: Option<&mut dyn WorkWindow>,
+    execution: RowExecution<'_>,
 ) {
+    let IndexedOutput {
+        pixels: output,
+        layout: IndexedLayout { stride, format },
+    } = output;
+    let IndexedOptions {
+        raster: options,
+        sprites: list,
+    } = options;
+    let IndexedTiles {
+        playfield_rows: playfield_tiles,
+        playfield_pixels,
+        sprite_pixels: sprite_tiles,
+    } = tiles;
+    let RowExecution { workers, window } = execution;
     scratch.configure(options, geometry);
     let palette_15bit = scratch.prepare(snapshot, format);
     scratch.stats.reset();
@@ -1702,12 +1721,10 @@ mod tests {
             .decode(&crate::game::scene::VideoRam::new(&graphics, &control, 1));
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn run(
         snapshot: &SceneSnapshot,
         border: u32,
-        format: PixelFormat,
-        stride: usize,
+        layout: IndexedLayout,
         workers: Option<&RowWorkers>,
         tile_pixels: &[u8],
         sprite_tiles: &[u8],
@@ -1715,23 +1732,29 @@ mod tests {
     ) -> (Vec<u32>, u32) {
         let height = snapshot.geometry().height() as usize;
         let width = GameVideoOptions { scale: 1, border }.width(&snapshot.geometry()) as usize;
+        let stride = layout.stride;
         assert!(stride >= width);
         let mut output = vec![0u32; stride * height];
         let mut scratch = IndexedScratch::new();
         let tile_rows = TileRowTable::new(tile_pixels);
         snapshot
             .compose(
-                &mut output,
-                stride,
-                format,
+                IndexedOutput {
+                    pixels: &mut output,
+                    layout,
+                },
                 border,
-                &tile_rows,
-                tile_pixels,
-                sprite_tiles,
+                IndexedTiles {
+                    playfield_rows: &tile_rows,
+                    playfield_pixels: tile_pixels,
+                    sprite_pixels: sprite_tiles,
+                },
                 &mut scratch,
                 list,
-                workers,
-                None,
+                RowExecution {
+                    workers,
+                    window: None,
+                },
             )
             .unwrap();
         (output, scratch.stats.special_px())
@@ -1797,8 +1820,10 @@ mod tests {
         let (pixels, special) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1820,8 +1845,10 @@ mod tests {
         let (plain, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1830,8 +1857,10 @@ mod tests {
         let (bordered, _) = run(
             &snapshot,
             4,
-            PixelFormat::Argb8888,
-            328,
+            IndexedLayout {
+                stride: 328,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1861,8 +1890,10 @@ mod tests {
         let (pixels, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &[],
             &tiles,
@@ -1878,8 +1909,10 @@ mod tests {
         let (pixels, _) = run(
             &trails,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &[],
             &[],
@@ -1898,8 +1931,10 @@ mod tests {
         let (pixels, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &[],
             &[],
@@ -1928,8 +1963,10 @@ mod tests {
         let (pixels, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1957,8 +1994,10 @@ mod tests {
         let (mosaic, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1971,8 +2010,10 @@ mod tests {
         let (plain, _) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -1995,8 +2036,10 @@ mod tests {
         let (pixels, special) = run(
             &snapshot,
             0,
-            PixelFormat::Argb8888,
-            320,
+            IndexedLayout {
+                stride: 320,
+                format: PixelFormat::Argb8888,
+            },
             None,
             &tiles,
             &[],
@@ -2038,8 +2081,7 @@ mod tests {
                 let (serial, serial_special) = run(
                     &snapshot,
                     border,
-                    format,
-                    stride,
+                    IndexedLayout { stride, format },
                     None,
                     &tiles,
                     &tiles,
@@ -2048,8 +2090,7 @@ mod tests {
                 let (parallel, parallel_special) = run(
                     &snapshot,
                     border,
-                    format,
-                    stride,
+                    IndexedLayout { stride, format },
                     Some(compose_workers()),
                     &tiles,
                     &tiles,

@@ -743,75 +743,80 @@ impl SpriteBins {
 ///
 /// `plane` starts at absolute plane row `g.top + chunk * COMPOSE_CHUNK_ROWS`; coverage is the
 /// matching row range. Row arithmetic stays absolute so the formulas match the full-plane path.
-#[allow(clippy::too_many_arguments)]
-pub fn raster_sprite_chunk(
-    bins: &SpriteBins,
-    sprites: &[SceneSprite],
-    chunk: usize,
-    pen_mask: u8,
-    assets: &[u8],
-    plane: &mut [u16],
-    geometry: &Geometry,
-    raster: SpriteRasterOptions,
-    coverage: &mut SpriteCoverage<'_>,
-    trail_seed: &[u16],
-) {
-    let mut g = make_geometry(assets.len(), geometry, raster);
-    let first = (g.top.max(0) as usize) + chunk * COMPOSE_CHUNK_ROWS;
-    let last = std::cmp::min(
-        (g.top.max(0) as usize) + (chunk + 1) * COMPOSE_CHUNK_ROWS,
-        g.bottom.max(0) as usize,
-    );
-    if first >= last {
-        return;
-    }
-    g.row_base = first as i32;
-    for row in first..last {
-        let local_row = row - first;
-        coverage.row_mut(local_row).clear();
-        if trail_seed.is_empty() {
-            continue;
+pub(super) struct SpriteRaster<'a> {
+    pub sprites: &'a [SceneSprite],
+    pub pen_mask: u8,
+    pub tiles: &'a [u8],
+    pub trail_seed: &'a [u16],
+}
+
+impl SpriteRaster<'_> {
+    pub fn draw_chunk(
+        &self,
+        bins: &SpriteBins,
+        chunk: usize,
+        plane: &mut [u16],
+        geometry: &Geometry,
+        raster: SpriteRasterOptions,
+        coverage: &mut SpriteCoverage<'_>,
+    ) {
+        let mut g = make_geometry(self.tiles.len(), geometry, raster);
+        let first = (g.top.max(0) as usize) + chunk * COMPOSE_CHUNK_ROWS;
+        let last = std::cmp::min(
+            (g.top.max(0) as usize) + (chunk + 1) * COMPOSE_CHUNK_ROWS,
+            g.bottom.max(0) as usize,
+        );
+        if first >= last {
+            return;
         }
-        let native_y = if g.expanded {
-            row + geometry.first_line() as usize
-        } else {
-            row
-        };
-        for x in g.left..g.right {
-            let native_x = x + g.origin_x;
-            let color = if (46..366).contains(&native_x) {
-                trail_seed[native_y * SPRITE_PLANE_WIDTH + native_x as usize]
+        g.row_base = first as i32;
+        for row in first..last {
+            let local_row = row - first;
+            coverage.row_mut(local_row).clear();
+            if self.trail_seed.is_empty() {
+                continue;
+            }
+            let native_y = if g.expanded {
+                row + geometry.first_line() as usize
             } else {
-                0
+                row
             };
-            plane[local_row * g.width as usize + x as usize] = color;
-            if color != 0 {
-                coverage.row_mut(local_row).mark(
-                    (sprite_layer(color) as u32 - LayerId::Sp0 as u32) as usize,
-                    (x - g.left) as u32,
-                    1,
-                );
+            for x in g.left..g.right {
+                let native_x = x + g.origin_x;
+                let color = if (46..366).contains(&native_x) {
+                    self.trail_seed[native_y * SPRITE_PLANE_WIDTH + native_x as usize]
+                } else {
+                    0
+                };
+                plane[local_row * g.width as usize + x as usize] = color;
+                if color != 0 {
+                    coverage.row_mut(local_row).mark(
+                        (sprite_layer(color) as u32 - LayerId::Sp0 as u32) as usize,
+                        (x - g.left) as u32,
+                        1,
+                    );
+                }
             }
         }
-    }
-    if assets.is_empty() {
-        return;
-    }
-    let bucket = bins.chunk(chunk);
-    let windowed = RasterGeometry {
-        top: std::cmp::max(g.top, first as i32),
-        bottom: std::cmp::min(g.bottom, last as i32),
-        ..g
-    };
-    for index in bucket.iter().rev() {
-        draw_sprite(
-            &sprites[*index as usize],
-            assets,
-            plane,
-            &windowed,
-            pen_mask,
-            Some(coverage),
-        );
+        if self.tiles.is_empty() {
+            return;
+        }
+        let bucket = bins.chunk(chunk);
+        let windowed = RasterGeometry {
+            top: std::cmp::max(g.top, first as i32),
+            bottom: std::cmp::min(g.bottom, last as i32),
+            ..g
+        };
+        for index in bucket.iter().rev() {
+            draw_sprite(
+                &self.sprites[*index as usize],
+                self.tiles,
+                plane,
+                &windowed,
+                self.pen_mask,
+                Some(coverage),
+            );
+        }
     }
 }
 
@@ -913,8 +918,7 @@ impl GameSprites {
         };
         let count = decode_sprite_list(
             &vram.graphics[OFFS_SPRITERAM..],
-            self.geometry.first_line() as i32,
-            self.geometry.height() as i32,
+            self.geometry.first_line() as i32..self.geometry.end_line() as i32,
             &mut self.decoded,
             &mut state,
             true,
@@ -944,8 +948,7 @@ impl GameSprites {
             let mut presented_state = initial;
             let n = decode_sprite_list(
                 &vram.graphics[OFFS_SPRITERAM..],
-                self.geometry.first_line() as i32,
-                self.geometry.height() as i32,
+                self.geometry.first_line() as i32..self.geometry.end_line() as i32,
                 &mut self.presented_scratch,
                 &mut presented_state,
                 true,

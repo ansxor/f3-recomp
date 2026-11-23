@@ -32,7 +32,7 @@ struct GpuSurface {
     explicit operator bool() const noexcept { return texture != 0; }
 };
 
-/// Owned render texture shared with the Rust backend. Move-only; destroy it before its GpuVideo.
+/// Move-only render texture retaining the Rust GPU device that created it.
 class GpuTexture {
 public:
     GpuTexture();
@@ -126,7 +126,7 @@ public:
     bool present(const SceneSnapshot &scene, const PresentRequest &request = {});
     // Renders the canonical scene (presented sprites, no motion) through postprocess and rotation
     // into `destination`, re-allocating it when its size differs. Offscreen; never presents.
-    // `destination` must be destroyed before this GpuVideo.
+    // An existing destination must belong to this renderer.
     void capture_surface(const SceneSnapshot &scene, GpuTexture &destination);
 
     // Explicit opt-in; completed emulated frames are captured, never draws.

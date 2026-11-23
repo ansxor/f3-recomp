@@ -1,34 +1,35 @@
 //! Presentation postprocessing and rotation.
 
 use super::api::{Postprocess, validate_rotation};
+use super::scene_layout::uniform_words;
 use super::sdl_gpu::{
-    GpuCommand, GpuContext, GpuPipeline, GpuSurface, GpuTexture, ShaderKind, TextureFormat,
-    sampler_binding, uniform_bytes,
+    CommandBuffer, GpuContext, GpuPipeline, GpuTexture, SamplerBinding, ShaderKind, TextureFormat,
+    TextureRef,
 };
 use super::user_spirv::load_user_shader;
 use crate::config::{GameVideoOptions, Geometry};
+use std::time::Instant;
 
 const TARGET_FORMAT: TextureFormat = TextureFormat::Bgra8Unorm;
 
-fn user_pipeline(ctx: &GpuContext, path: &str) -> Result<GpuPipeline, String> {
-    let metal = ctx.is_metal();
-    let loaded = load_user_shader(path, metal)?;
-    ctx.create_user_pipeline(
-        &loaded.code,
-        loaded.size,
-        "f3_postprocess",
-        1,
-        0,
-        1,
-        TARGET_FORMAT,
-    )
+struct PostprocessUniforms {
+    width: f32,
+    height: f32,
+    scale: f32,
+    elapsed_seconds: f32,
+}
+
+impl PostprocessUniforms {
+    fn to_bytes(&self) -> [u8; 16] {
+        uniform_words([self.width, self.height, self.scale, self.elapsed_seconds].map(f32::to_bits))
+    }
 }
 
 pub struct Postprocessor {
     preset: Postprocess,
     pipeline: Option<GpuPipeline>,
     surface: Option<GpuTexture>,
-    start_ns: u64,
+    start: Instant,
 }
 
 impl Default for Postprocessor {
@@ -37,7 +38,7 @@ impl Default for Postprocessor {
             preset: Postprocess::Off,
             pipeline: None,
             surface: None,
-            start_ns: 0,
+            start: Instant::now(),
         }
     }
 }
@@ -67,7 +68,8 @@ impl Postprocessor {
                 TARGET_FORMAT,
             )?
         } else {
-            user_pipeline(ctx, user_shader)?
+            let loaded = load_user_shader(user_shader, ctx.is_metal())?;
+            ctx.create_user_pipeline(&loaded, TARGET_FORMAT)?
         };
         let next_surface = if self.surface.is_none() {
             Some(ctx.create_texture(
@@ -84,8 +86,7 @@ impl Postprocessor {
             self.surface = Some(surface);
         }
         self.preset = preset;
-        // SAFETY: SDL is initialized by the host.
-        self.start_ns = unsafe { sdl3_sys::timer::SDL_GetTicksNS() };
+        self.start = Instant::now();
         Ok(())
     }
 
@@ -118,45 +119,45 @@ impl Postprocessor {
         self.preset
     }
 
-    /// Returns `input` unchanged unless a preset is active and `apply_now`.
-    pub fn apply(
-        &mut self,
-        cmd: &mut GpuCommand,
-        input: GpuSurface,
+    pub fn surface(&self) -> TextureRef<'_> {
+        self.surface
+            .as_ref()
+            .expect("active postprocess target")
+            .as_ref()
+    }
+
+    pub fn apply<'a>(
+        &'a self,
+        cmd: &mut CommandBuffer<'_>,
+        input: TextureRef<'a>,
         ctx: &GpuContext,
-        geometry: &Geometry,
-        options: GameVideoOptions,
+        scale: u32,
         apply_now: bool,
-    ) -> Result<GpuSurface, String> {
+    ) -> Result<TextureRef<'a>, String> {
         if !self.active() || !apply_now {
             return Ok(input);
         }
-        // SAFETY: SDL is initialized by the host.
-        let now = unsafe { sdl3_sys::timer::SDL_GetTicksNS() };
-        let elapsed = (now.saturating_sub(self.start_ns)) as f64 / 1.0e9;
-        let parameters = [
-            options.width(geometry) as f32,
-            options.height(geometry) as f32,
-            options.scale as f32,
-            elapsed as f32,
-        ];
-        // SAFETY: The f32 array is initialized and has no padding.
-        let bytes = unsafe { uniform_bytes(&parameters) };
-        cmd.push_fragment_uniforms(0, bytes);
-        let target = self
-            .surface
-            .as_ref()
-            .ok_or_else(|| "GPU postprocess target missing".to_owned())?;
-        let pipeline = self
-            .pipeline
-            .as_ref()
-            .ok_or_else(|| "GPU postprocess pipeline missing".to_owned())?;
-        let pass = cmd.begin_render_pass(target.get(), false)?;
-        cmd.bind_pipeline(pass, pipeline.get());
-        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(input.texture, ctx.sampler())]);
-        cmd.draw(pass, 3, 1);
-        cmd.end_render_pass(pass);
-        Ok(target.surface())
+        let elapsed = self.start.elapsed().as_nanos() as f64 / 1.0e9;
+        let uniforms = PostprocessUniforms {
+            width: input.width() as f32,
+            height: input.height() as f32,
+            scale: scale as f32,
+            elapsed_seconds: elapsed as f32,
+        };
+        cmd.push_fragment_uniforms(0, &uniforms.to_bytes());
+        let target = self.surface();
+        let pipeline = self.pipeline.as_ref().expect("active postprocess pipeline");
+        let mut pass = cmd.begin_render_pass(target, false)?;
+        pass.bind_pipeline(pipeline);
+        pass.bind_fragment_samplers(
+            0,
+            [SamplerBinding {
+                texture: input,
+                sampler: ctx.sampler(),
+            }],
+        );
+        pass.draw(3, 1);
+        Ok(target)
     }
 }
 
@@ -232,34 +233,35 @@ impl SurfaceRotator {
         self.rotation != 0
     }
 
-    pub fn apply(
-        &mut self,
-        cmd: &mut GpuCommand,
-        input: GpuSurface,
+    pub fn apply<'a>(
+        &'a self,
+        cmd: &mut CommandBuffer<'_>,
+        input: TextureRef<'a>,
         ctx: &GpuContext,
-    ) -> Result<GpuSurface, String> {
+    ) -> Result<TextureRef<'a>, String> {
         if self.rotation == 0 {
             return Ok(input);
         }
         // rotate.frag reads a uvec4 even though only its first component is used.
-        let uniform = [self.rotation, 0, 0, 0];
-        // SAFETY: The u32 array is initialized and has no padding.
-        let bytes = unsafe { uniform_bytes(&uniform) };
-        cmd.push_fragment_uniforms(0, bytes);
+        let bytes: [u8; 16] = uniform_words([self.rotation, 0, 0, 0]);
+        cmd.push_fragment_uniforms(0, &bytes);
         let target = self
             .surface
             .as_ref()
-            .ok_or_else(|| "GPU rotation target missing".to_owned())?;
-        let pipeline = self
-            .pipeline
-            .as_ref()
-            .ok_or_else(|| "GPU rotation pipeline missing".to_owned())?;
-        let pass = cmd.begin_render_pass(target.get(), false)?;
-        cmd.bind_pipeline(pass, pipeline.get());
-        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(input.texture, ctx.sampler())]);
-        cmd.draw(pass, 3, 1);
-        cmd.end_render_pass(pass);
-        Ok(target.surface())
+            .expect("active rotation target")
+            .as_ref();
+        let pipeline = self.pipeline.as_ref().expect("active rotation pipeline");
+        let mut pass = cmd.begin_render_pass(target, false)?;
+        pass.bind_pipeline(pipeline);
+        pass.bind_fragment_samplers(
+            0,
+            [SamplerBinding {
+                texture: input,
+                sampler: ctx.sampler(),
+            }],
+        );
+        pass.draw(3, 1);
+        Ok(target)
     }
 }
 

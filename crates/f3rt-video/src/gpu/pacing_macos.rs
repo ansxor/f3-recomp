@@ -1,5 +1,6 @@
 //! CADisplayLink pacing without acquiring an SDL drawable.
 
+use super::sdl_gpu::GpuContext;
 use std::cell::{Cell, RefCell};
 
 use objc2::rc::{Retained, Weak};
@@ -11,7 +12,7 @@ use objc2_foundation::{NSObject, NSRunLoop, NSRunLoopCommonModes};
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use sdl3_sys::properties::SDL_GetPointerProperty;
 use sdl3_sys::timer::SDL_GetTicksNS;
-use sdl3_sys::video::{SDL_GetWindowProperties, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, SDL_Window};
+use sdl3_sys::video::{SDL_GetWindowProperties, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER};
 
 /// Bounded wait for one display-link tick, in nanoseconds.
 const WAIT_BUDGET_NS: u64 = 50_000_000;
@@ -90,7 +91,6 @@ impl F3MotionDisplayClock {
 
     /// Match the display link to the current screen's maximum refresh rate.
     fn request_screen_rate(&self) {
-        // SAFETY: the weak window is only used while alive; pacing runs on the main thread.
         let Some(window) = self.ivars().window.load() else {
             return;
         };
@@ -131,7 +131,8 @@ pub struct MacosDisplayLink {
 
 impl MacosDisplayLink {
     /// Creates a display link for `window`, or `None` when unsupported or no native window exists.
-    pub fn new(window: *mut SDL_Window) -> Option<Self> {
+    pub fn new(ctx: &GpuContext) -> Option<Self> {
+        let window = ctx.window_raw();
         if window.is_null() || !available!(macos = 14.0) {
             return None;
         }

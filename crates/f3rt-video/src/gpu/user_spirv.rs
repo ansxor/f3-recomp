@@ -74,12 +74,10 @@ pub mod spirv {
 
 use spirv::*;
 
-/// A user postprocess shader read from disk. `code` is 4-byte aligned storage: SPIR-V words for
-/// Vulkan, or the MSL text plus one trailing zero byte for Metal. `size` is the payload in bytes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LoadedUserShader {
-    pub code: Vec<u32>,
-    pub size: usize,
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoadedUserShader {
+    Metal(Vec<u8>),
+    Spirv(Vec<u32>),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -135,9 +133,14 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
     {
         return invalid();
     }
-    let mut ids = vec![Id::new(); words[3] as usize];
+    let ids = scan_instructions(&words[5..], words[3] as usize)?;
+    validate_interface(&ids)
+}
+
+fn scan_instructions(words: &[u32], id_bound: usize) -> Result<Vec<Id>, String> {
+    let mut ids = vec![Id::new(); id_bound];
     let mut entry = false;
-    let mut pos = 5usize;
+    let mut pos = 0;
     while pos < words.len() {
         let p = &words[pos..];
         let count = p[0] >> 16;
@@ -215,24 +218,28 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
     if !entry {
         return invalid();
     }
+    Ok(ids)
+}
+
+fn validate_interface(ids: &[Id]) -> Result<(), String> {
     let mut samplers = 0;
     let mut uniforms = 0;
-    for i in 0..ids.len() {
-        if ids[i].opcode != OP_VARIABLE {
+    for variable in ids {
+        if variable.opcode != OP_VARIABLE {
             continue;
         }
-        let pointer = *id(&ids, ids[i].first_operand)?;
-        if pointer.opcode != OP_TYPE_POINTER || pointer.first_operand != ids[i].second_operand {
+        let pointer = *id(ids, variable.first_operand)?;
+        if pointer.opcode != OP_TYPE_POINTER || pointer.first_operand != variable.second_operand {
             return invalid();
         }
-        let ty = *id(&ids, pointer.second_operand)?;
-        let storage = ids[i].second_operand;
+        let ty = *id(ids, pointer.second_operand)?;
+        let storage = variable.second_operand;
         if storage == STORAGE_UNIFORM_CONSTANT {
-            if ids[i].set != 2 || ids[i].binding != 0 || ty.opcode != OP_TYPE_SAMPLED_IMAGE {
+            if variable.set != 2 || variable.binding != 0 || ty.opcode != OP_TYPE_SAMPLED_IMAGE {
                 return invalid();
             }
-            let image = *id(&ids, ty.first_operand)?;
-            let sampled_type = *id(&ids, image.first_operand)?;
+            let image = *id(ids, ty.first_operand)?;
+            let sampled_type = *id(ids, image.first_operand)?;
             if image.opcode != OP_TYPE_IMAGE
                 || sampled_type.opcode != OP_TYPE_FLOAT
                 || sampled_type.first_operand != 32
@@ -241,8 +248,8 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
             }
             samplers += 1;
         } else if storage == STORAGE_UNIFORM {
-            if ids[i].set != 3
-                || ids[i].binding != 0
+            if variable.set != 3
+                || variable.binding != 0
                 || ty.opcode != OP_TYPE_STRUCT
                 || ty.word_count != 3
                 || !ty.block
@@ -250,8 +257,8 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
             {
                 return invalid();
             }
-            let vector = *id(&ids, ty.first_operand)?;
-            let component = *id(&ids, vector.first_operand)?;
+            let vector = *id(ids, ty.first_operand)?;
+            let component = *id(ids, vector.first_operand)?;
             if vector.opcode != OP_TYPE_VECTOR
                 || vector.second_operand != 4
                 || component.opcode != OP_TYPE_FLOAT
@@ -261,7 +268,7 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
             }
             uniforms += 1;
         } else if storage == STORAGE_INPUT {
-            if !ids[i].builtin {
+            if !variable.builtin {
                 return invalid();
             }
         } else if storage != STORAGE_OUTPUT
@@ -295,29 +302,36 @@ pub fn load_user_shader(path: &str, metal: bool) -> Result<LoadedUserShader, Str
     if end == 0 || end > MAX_USER_SHADER_BYTES as u64 {
         return Err("User shader must be 1 byte to 1 MiB".to_owned());
     }
-    let mut shader = LoadedUserShader {
-        code: vec![0; (end as usize + 4) / 4],
-        size: end as usize,
-    };
-    // SAFETY: the initialized word storage covers `size` bytes; every bit pattern is a valid u32.
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(shader.code.as_mut_ptr().cast::<u8>(), shader.size)
-    };
+    let size = end as usize;
     let read_error = |_| format!("Cannot read user shader: {path}");
     file.seek(SeekFrom::Start(0)).map_err(read_error)?;
-    file.read_exact(bytes).map_err(read_error)?;
     if metal {
-        if bytes.contains(&0) {
+        let mut text = vec![0; size + 1];
+        file.read_exact(&mut text[..size]).map_err(read_error)?;
+        if text[..size].contains(&0) {
             return Err("User Metal shader contains an embedded NUL".to_owned());
         }
-        return Ok(shader);
+        return Ok(LoadedUserShader::Metal(text));
     }
-    if !shader.size.is_multiple_of(4) {
+    if !size.is_multiple_of(4) {
         return Err("User SPIR-V size must be a multiple of four".to_owned());
     }
-    shader.code.truncate(shader.size / 4);
-    validate_user_spirv(&shader.code)?;
-    Ok(shader)
+    let mut words = Vec::with_capacity(size / 4);
+    let mut bytes = [0; 4096];
+    for offset in (0..size).step_by(bytes.len()) {
+        let count = (size - offset).min(bytes.len());
+        file.read_exact(&mut bytes[..count]).map_err(read_error)?;
+        words.extend(
+            bytes[..count]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .copied()
+                .map(u32::from_le_bytes),
+        );
+    }
+    validate_user_spirv(&words)?;
+    Ok(LoadedUserShader::Spirv(words))
 }
 
 #[cfg(test)]
@@ -356,7 +370,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn spirv_module(shape: SpirvShape) -> Vec<u32> {
         const MAIN: u32 = 1;
         const VOID: u32 = 2;
@@ -596,8 +609,7 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         let loaded = load_user_shader(good.path.to_str().unwrap(), false).unwrap();
-        assert_eq!(loaded.size, words.len() * 4);
-        assert_eq!(loaded.code, words);
+        assert_eq!(loaded, LoadedUserShader::Spirv(words.clone()));
 
         assert_eq!(
             load_user_shader(good.path.to_str().unwrap(), true).unwrap_err(),
@@ -631,13 +643,11 @@ mod tests {
         let msl = b"fragment float4 main0() { return 0; }";
         let metal = ShaderFile::new("post.metal", msl);
         let shader = load_user_shader(metal.path.to_str().unwrap(), true).unwrap();
-        assert_eq!(shader.size, msl.len());
-        let mut text = Vec::new();
-        for word in &shader.code {
-            text.extend_from_slice(&word.to_le_bytes());
-        }
-        assert_eq!(&text[..msl.len()], msl, "MSL text keeps its trailing zero");
-        assert_eq!(text[msl.len()], 0);
+        let LoadedUserShader::Metal(text) = shader else {
+            panic!("expected Metal source")
+        };
+        assert_eq!(&text[..msl.len()], msl);
+        assert_eq!(&text[msl.len()..], &[0]);
 
         let nul = ShaderFile::new("nul.metal", b"a\0b");
         assert_eq!(

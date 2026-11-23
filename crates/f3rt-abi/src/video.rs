@@ -1,18 +1,20 @@
 //! C++ runtime boundary for the F3 renderer.
 
-#![allow(clippy::too_many_arguments)]
-
 use f3rt_video as v;
 use f3rt_video::config::SpriteList as RVSpriteList;
 use f3rt_video::config::VideoConfig as RVVideoConfig;
 use f3rt_video::config::{GameVideoOptions as RVOptions, PixelFormat as RVPixelFormat};
 use f3rt_video::decode as rdecode;
 use f3rt_video::game::flicker_hold as rflicker;
-use f3rt_video::game::video::{GameVideo as RGameVideo, SpriteEnhancements, VideoStage};
+use f3rt_video::game::video::{
+    FrameSpritePresentation, GameVideo as RGameVideo, SpriteEnhancements, VideoStage,
+};
 use f3rt_video::game::{SceneRow as RSceneRow, SceneSprite as RSceneSprite};
 
 use std::pin::Pin;
 
+// CXX generates Rust ABI shims with the existing C++ argument lists.
+#[allow(clippy::too_many_arguments)]
 #[cxx::bridge(namespace = "f3rt::rust_video")]
 mod ffi {
     /// `f3rt::VideoConfig`.
@@ -446,7 +448,7 @@ mod ffi {
             scene: &SceneSnapshot,
             request: &GpuPresentRequest,
         ) -> Result<bool>;
-        unsafe fn capture_surface(
+        fn capture_surface(
             &mut self,
             scene: &SceneSnapshot,
             destination: &mut GpuTexture,
@@ -859,8 +861,7 @@ fn decode_sprites(
     };
     let count = rdecode::decode_sprite_list(
         spriteram,
-        visible_y,
-        visible_height,
+        visible_y..visible_y + visible_height,
         &mut decoded,
         &mut ram,
         apply_flip,
@@ -925,17 +926,22 @@ impl SceneSnapshot {
             v::game::indexed_compositor::TileRowTable::new(assets.inner.playfield_tiles());
         let mut scratch = v::game::indexed_compositor::IndexedScratch::new();
         self.inner.compose(
-            output,
-            stride,
-            pixel_format(format),
+            v::game::indexed_compositor::IndexedOutput {
+                pixels: output,
+                layout: v::game::indexed_compositor::IndexedLayout {
+                    stride,
+                    format: pixel_format(format),
+                },
+            },
             border,
-            &tile_rows,
-            assets.inner.playfield_tiles(),
-            assets.inner.sprite_tiles(),
+            v::game::indexed_compositor::IndexedTiles {
+                playfield_rows: &tile_rows,
+                playfield_pixels: assets.inner.playfield_tiles(),
+                sprite_pixels: assets.inner.sprite_tiles(),
+            },
             &mut scratch,
             sprite_list(list),
-            None,
-            None,
+            v::game::indexed_compositor::RowExecution::default(),
         )
     }
 
@@ -1166,29 +1172,22 @@ impl GameVideo {
             splices: &splices,
         };
         let mut stage_cb = |stage| probe.as_mut().enter(video_stage_index(stage));
-        if enhancements.as_ref().get_ref().empty() {
-            self.inner.render_frame_with(
-                &vram,
-                &assets.inner,
-                view,
-                Some(&mut stage_cb),
-                Some(&mut target.inner),
-                None,
-            );
-        } else {
-            let mut adapter = HostEnhancements {
-                host: enhancements,
-                scratch: &mut self.enhancements,
-            };
-            self.inner.render_frame_with(
-                &vram,
-                &assets.inner,
-                view,
-                Some(&mut stage_cb),
-                Some(&mut target.inner),
-                Some(&mut adapter),
-            );
-        }
+        let mut adapter = (!enhancements.as_ref().get_ref().empty()).then_some(HostEnhancements {
+            host: enhancements,
+            scratch: &mut self.enhancements,
+        });
+        self.inner.render_frame_with(
+            &vram,
+            &assets.inner,
+            FrameSpritePresentation {
+                decode: view,
+                enhancements: adapter
+                    .as_mut()
+                    .map(|adapter| adapter as &mut dyn SpriteEnhancements),
+            },
+            Some(&mut stage_cb),
+            Some(&mut target.inner),
+        );
     }
 
     fn materialize_native(&mut self, assets: &GraphicsAssets, target: &SceneSnapshot) {
@@ -1349,21 +1348,17 @@ unsafe fn new_gpu_video(
     fields: ffi::InterpolationFields,
     rotation: u32,
 ) -> Result<Box<GpuVideo>, String> {
-    // SAFETY: the C++ GPU video constructor supplies the SDL window and owns its lifetime.
-    let inner = unsafe {
-        v::gpu::GpuVideo::new(
-            window,
-            options(&opts),
-            gpu_geometry(&geometry),
-            playfield_assets,
-            sprite_assets,
-            linear,
-            vsync,
-            video_interpolation(interpolation),
-            interpolation_fields(fields),
-            rotation,
-        )
-    }?;
+    let config = v::gpu::GpuVideoConfig {
+        options: options(&opts),
+        geometry: gpu_geometry(&geometry),
+        linear,
+        vsync,
+        interpolation: video_interpolation(interpolation),
+        fields: interpolation_fields(fields),
+        rotation,
+    };
+    // SAFETY: the C++ GPU constructor supplies the SDL window and owns its lifetime.
+    let inner = unsafe { v::gpu::GpuVideo::new(window, config, playfield_assets, sprite_assets) }?;
     Ok(Box::new(GpuVideo { inner }))
 }
 
@@ -1473,16 +1468,13 @@ impl GpuVideo {
         unsafe { self.inner.present(&scene.inner, &request) }
     }
 
-    unsafe fn capture_surface(
+    fn capture_surface(
         &mut self,
         scene: &SceneSnapshot,
         destination: &mut GpuTexture,
     ) -> Result<(), String> {
-        // SAFETY: C++ owns the destination and must drop it before this renderer.
-        unsafe {
-            self.inner
-                .capture_surface(&scene.inner, &mut destination.inner)
-        }
+        self.inner
+            .capture_surface(&scene.inner, &mut destination.inner)
     }
 
     fn capture_motion(&mut self, scene: &SceneSnapshot, frame: u64) -> Result<(), String> {

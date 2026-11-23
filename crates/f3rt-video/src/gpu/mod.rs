@@ -30,8 +30,8 @@ mod stub;
 mod video;
 
 pub use api::{
-    GpuSurface, InterpolationFields, Postprocess, PresentRequest, PresentTiming, RenderRequest,
-    VideoInterpolation,
+    GpuSurface, GpuVideoConfig, InterpolationFields, Postprocess, PresentRequest, PresentTiming,
+    RenderRequest, VideoInterpolation,
 };
 pub use motion::{GpuMotionHistory, MotionInterpolationStats, MotionResult, MotionState};
 #[cfg(not(feature = "gpu"))]

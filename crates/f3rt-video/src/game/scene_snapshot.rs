@@ -1,15 +1,13 @@
 //! Render-only snapshot of the layers latched at VBSTART.
 //! Dirty versions let capture reuse unchanged tiles, text, rows and palette.
 
-use crate::config::{
-    GameVideoOptions, Geometry, NATIVE_WIDTH, PixelFormat, SpriteList, VideoConfig,
-};
+use crate::config::{GameVideoOptions, Geometry, NATIVE_WIDTH, SpriteList, VideoConfig};
 use crate::game::indexed_compositor::{
-    IndexedScratch, SceneSnapshotView, TileRowTable, compose_indexed,
+    IndexedOptions, IndexedOutput, IndexedScratch, IndexedTiles, RowExecution, SceneSnapshotView,
+    compose_indexed,
 };
 use crate::game::lines::GameLines;
 use crate::game::palette::GamePalette;
-use crate::game::row_workers::{RowWorkers, WorkWindow};
 use crate::game::scene::{MAX_HARDWARE_SPRITES, MAX_PRESENTED_SPRITES, SceneRow, SceneSprite};
 use crate::game::sprites::GameSprites;
 use crate::game::text::GameText;
@@ -173,35 +171,32 @@ impl SceneSnapshot {
     }
 
     /// Scale-1 CPU indexed composition with optional symmetric horizontal `border` columns.
-    #[allow(clippy::too_many_arguments)]
     pub fn compose(
         &self,
-        output: &mut [u32],
-        stride: usize,
-        format: PixelFormat,
+        output: IndexedOutput<'_>,
         border: u32,
-        playfield_tiles: &TileRowTable,
-        playfield_pixels: &[u8],
-        sprite_tiles: &[u8],
+        tiles: IndexedTiles<'_>,
         scratch: &mut IndexedScratch,
         list: SpriteList,
-        workers: Option<&RowWorkers>,
-        window: Option<&mut dyn WorkWindow>,
+        execution: RowExecution<'_>,
     ) -> Result<(), String> {
+        let stride = output.layout.stride;
+        let format = output.layout.format;
         if border > GameVideoOptions::MAX_BORDER {
             return Err("Indexed composition border out of range".to_string());
         }
         let options = GameVideoOptions { scale: 1, border };
         let geometry = self.geometry();
         if stride < options.width(&geometry) as usize
-            || output.len() < stride * options.height(&geometry) as usize
+            || output.pixels.len() < stride * options.height(&geometry) as usize
         {
             return Err("Incomplete indexed frame render buffers".to_string());
         }
         if self.fallback {
             let left = border as usize;
             for y in 0..options.height(&geometry) as usize {
-                let row = &mut output[y * stride..y * stride + options.width(&geometry) as usize];
+                let row =
+                    &mut output.pixels[y * stride..y * stride + options.width(&geometry) as usize];
                 for (x, pixel) in row.iter_mut().enumerate() {
                     *pixel = if x < left || x >= left + NATIVE_WIDTH as usize {
                         format.to_pixel_format(0xff00_0000)
@@ -218,17 +213,14 @@ impl SceneSnapshot {
         compose_indexed(
             &view,
             output,
-            stride,
-            format,
-            options,
+            IndexedOptions {
+                raster: options,
+                sprites: list,
+            },
             &geometry,
-            playfield_tiles,
-            playfield_pixels,
-            sprite_tiles,
+            tiles,
             scratch,
-            list,
-            workers,
-            window,
+            execution,
         );
         Ok(())
     }
@@ -249,6 +241,8 @@ impl SceneSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PixelFormat;
+    use crate::game::indexed_compositor::{IndexedLayout, TileRowTable};
     use crate::game::row_workers::COMPOSE_CHUNK_ROWS;
     use crate::game::scene::{LayerId, LayerKind, ScenePlayfield, kind, presented_playfield};
 
@@ -312,34 +306,44 @@ mod tests {
         assert!(
             scene
                 .compose(
-                    &mut output,
-                    320,
-                    PixelFormat::Argb8888,
+                    IndexedOutput {
+                        pixels: &mut output,
+                        layout: IndexedLayout {
+                            stride: 320,
+                            format: PixelFormat::Argb8888
+                        }
+                    },
                     GameVideoOptions::MAX_BORDER + 1,
-                    &tiles,
-                    &[],
-                    &[],
+                    IndexedTiles {
+                        playfield_rows: &tiles,
+                        playfield_pixels: &[],
+                        sprite_pixels: &[]
+                    },
                     &mut scratch,
                     SpriteList::Presented,
-                    None,
-                    None,
+                    RowExecution::default(),
                 )
                 .is_err()
         );
         assert!(
             scene
                 .compose(
-                    &mut output,
-                    320,
-                    PixelFormat::Argb8888,
+                    IndexedOutput {
+                        pixels: &mut output,
+                        layout: IndexedLayout {
+                            stride: 320,
+                            format: PixelFormat::Argb8888
+                        }
+                    },
                     0,
-                    &tiles,
-                    &[],
-                    &[],
+                    IndexedTiles {
+                        playfield_rows: &tiles,
+                        playfield_pixels: &[],
+                        sprite_pixels: &[]
+                    },
                     &mut scratch,
                     SpriteList::Presented,
-                    None,
-                    None,
+                    RowExecution::default(),
                 )
                 .is_ok()
         );
@@ -371,17 +375,22 @@ mod tests {
         let mut output = vec![0u32; width * height];
         scene
             .compose(
-                &mut output,
-                width,
-                PixelFormat::Rgba8888,
+                IndexedOutput {
+                    pixels: &mut output,
+                    layout: IndexedLayout {
+                        stride: width,
+                        format: PixelFormat::Rgba8888,
+                    },
+                },
                 border,
-                &tiles,
-                &[],
-                &[],
+                IndexedTiles {
+                    playfield_rows: &tiles,
+                    playfield_pixels: &[],
+                    sprite_pixels: &[],
+                },
                 &mut scratch,
                 SpriteList::Presented,
-                None,
-                None,
+                RowExecution::default(),
             )
             .unwrap();
         // Border columns are opaque black in the requested byte order.

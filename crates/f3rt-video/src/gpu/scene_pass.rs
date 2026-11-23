@@ -3,13 +3,12 @@
 use super::api::validate_tile_assets;
 use super::encode::{ENCODED_INTERPOLATION_WORDS, EncodedScene, encoded_native_words};
 use super::sdl_gpu::{
-    GpuBuffer, GpuCommand, GpuContext, GpuPipeline, GpuSurface, GpuTexture, GpuTransfer,
-    ShaderKind, TextureFormat, TransferUsage, sampler_binding, uniform_bytes,
+    CommandBuffer, CopyPass, GpuBuffer, GpuContext, GpuPipeline, GpuTexture, GpuTransfer,
+    SamplerBinding, ShaderKind, TextureFormat, TextureRef, TransferUsage,
 };
 use crate::config::{GameVideoOptions, Geometry};
 use crate::gpu::api::TILE_BYTES;
-use crate::gpu::scene_layout::{F3_MASK_BLEND_WEIGHTED, F3_MASK_HIDE_WEIGHTED, SceneUniforms};
-use sdl3_sys::gpu::{SDL_GPUBuffer, SDL_GPUCopyPass, SDL_GPUSampler, SDL_GPUTexture};
+use crate::gpu::scene_layout::{F3_MASK_BLEND_WEIGHTED, F3_MASK_HIDE_WEIGHTED};
 
 // Sprite hardware plane at native resolution: 432 x 256 scanout lines.
 const NATIVE_PLANE_WIDTH: u32 = 432;
@@ -62,17 +61,11 @@ impl GpuTileAssets {
             }
         }
         let mut cmd = ctx.begin_command()?;
-        let copy = cmd.begin_copy_pass("Begin GPU asset copy")?;
-        cmd.upload_buffer(copy, staging.get(), 0, pf_tiles.get(), pf_bytes, false);
-        cmd.upload_buffer(
-            copy,
-            staging.get(),
-            pf_bytes,
-            sp_tiles.get(),
-            sp_bytes,
-            false,
-        );
-        cmd.end_copy_pass(copy);
+        {
+            let mut copy = cmd.begin_copy_pass("Begin GPU asset copy")?;
+            copy.upload_buffer(&staging, 0, &pf_tiles, pf_bytes, false);
+            copy.upload_buffer(&staging, pf_bytes, &sp_tiles, sp_bytes, false);
+        }
         cmd.submit()?;
         Ok(Self {
             pf_tiles,
@@ -109,6 +102,11 @@ pub struct Targets {
     pub sprite_plane: GpuTexture,
     pub sprite_plane_b: GpuTexture,
     pub surface: GpuTexture,
+}
+
+enum SpritePlane {
+    Primary,
+    Unweighted,
 }
 
 pub struct ScenePass {
@@ -221,8 +219,7 @@ impl ScenePass {
 
     fn upload_trail_seed(
         &mut self,
-        cmd: &GpuCommand,
-        copy: *mut SDL_GPUCopyPass,
+        copy: &mut CopyPass<'_>,
         ctx: &GpuContext,
         seed: &[u16],
         options: GameVideoOptions,
@@ -280,156 +277,138 @@ impl ScenePass {
             .trail_upload
             .as_ref()
             .expect("trail upload created above");
-        for plane in [
-            self.targets.sprite_plane.get(),
-            self.targets.sprite_plane_b.get(),
-        ] {
-            cmd.upload_texture(copy, trail_upload.get(), 0, width, height, plane, true);
+        for plane in [&self.targets.sprite_plane, &self.targets.sprite_plane_b] {
+            copy.upload_texture(trail_upload, plane.as_ref(), true);
         }
         Ok(())
     }
 
-    /// Draws the sprite plane(s) and the scene pass; returns the composed scanout surface.
+    pub fn surface(&self) -> TextureRef<'_> {
+        self.targets.surface.as_ref()
+    }
+
     pub fn draw(
         &mut self,
-        cmd: &mut GpuCommand,
+        cmd: &mut CommandBuffer<'_>,
         encoded: &EncodedScene<'_>,
         ctx: &GpuContext,
         assets: &GpuTileAssets,
         options: GameVideoOptions,
         geometry: &Geometry,
-    ) -> Result<GpuSurface, String> {
-        let copy = cmd.begin_copy_pass("Begin GPU frame copy")?;
-        cmd.upload_buffer(
-            copy,
-            self.upload.get(),
-            0,
-            if encoded.fallback {
-                self.native_buffer.get()
+    ) -> Result<TextureRef<'_>, String> {
+        {
+            let mut copy = cmd.begin_copy_pass("Begin GPU frame copy")?;
+            let destination = if encoded.fallback {
+                &self.native_buffer
             } else {
-                self.scene_buffer.get()
-            },
-            encoded.upload_bytes,
-            true,
-        );
-        if encoded.has_trails {
-            self.upload_trail_seed(cmd, copy, ctx, encoded.trail_seed, options, geometry)?;
+                &self.scene_buffer
+            };
+            copy.upload_buffer(&self.upload, 0, destination, encoded.upload_bytes, true);
+            if encoded.has_trails {
+                self.upload_trail_seed(&mut copy, ctx, encoded.trail_seed, options, geometry)?;
+            }
         }
-        cmd.end_copy_pass(copy);
 
         let mut uniforms = encoded.uniforms;
-        let scene_buffer = self.scene_buffer.get();
-        let sp_tiles = assets.sp_tiles().get();
-        let sampler = ctx.sampler();
+        let native_geometry = (!options.expanded()).then_some(geometry);
         if !encoded.fallback {
-            let plane = self.targets.sprite_plane.get();
-            let plane_b = self.targets.sprite_plane_b.get();
             self.draw_sprite_plane(
                 cmd,
-                plane,
-                plane_b,
-                uniforms,
-                0,
-                encoded.has_trails,
-                options,
-                geometry,
-                scene_buffer,
-                sp_tiles,
-                sampler,
+                SpritePlane::Primary,
+                encoded,
+                assets,
+                ctx,
+                native_geometry,
             )?;
             if encoded.blend_weighted {
                 self.draw_sprite_plane(
                     cmd,
-                    plane_b,
-                    plane,
-                    uniforms,
-                    F3_MASK_HIDE_WEIGHTED,
-                    encoded.has_trails,
-                    options,
-                    geometry,
-                    scene_buffer,
-                    sp_tiles,
-                    sampler,
+                    SpritePlane::Unweighted,
+                    encoded,
+                    assets,
+                    ctx,
+                    native_geometry,
                 )?;
+                uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
             }
         }
-        if encoded.blend_weighted {
-            uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
-        }
-        // SAFETY: SceneUniforms is a padding-free block of initialized u32s.
-        let bytes = unsafe { uniform_bytes(&uniforms) };
-        cmd.push_fragment_uniforms(0, bytes);
-        let target = self.targets.surface.get();
-        let pass = cmd.begin_render_pass(target, false)?;
+        cmd.push_fragment_uniforms(0, &uniforms.to_bytes());
+        let target = self.surface();
+        let mut pass = cmd.begin_render_pass(target, false)?;
         let pipeline = if encoded.use_interpolation {
             self.interpolation_pipeline
                 .as_ref()
-                .map(GpuPipeline::get)
-                .unwrap_or_else(|| self.scene_pipeline.get())
+                .unwrap_or(&self.scene_pipeline)
         } else {
-            self.scene_pipeline.get()
+            &self.scene_pipeline
         };
-        cmd.bind_pipeline(pass, pipeline);
-        let second_plane = if encoded.blend_weighted {
-            self.targets.sprite_plane_b.get()
+        pass.bind_pipeline(pipeline);
+        let primary = self.targets.sprite_plane.as_ref();
+        let second = if encoded.blend_weighted {
+            self.targets.sprite_plane_b.as_ref()
         } else {
-            self.targets.sprite_plane.get()
+            primary
         };
-        let sprite_bindings = [
-            sampler_binding(self.targets.sprite_plane.get() as usize, sampler),
-            sampler_binding(second_plane as usize, sampler),
-        ];
-        cmd.bind_fragment_samplers(pass, 0, &sprite_bindings);
-        cmd.bind_fragment_storage_buffers(
-            pass,
+        let sampler = ctx.sampler();
+        pass.bind_fragment_samplers(
             0,
-            &[
-                scene_buffer,
-                assets.pf_tiles().get(),
-                self.native_buffer.get(),
+            [
+                SamplerBinding {
+                    texture: primary,
+                    sampler,
+                },
+                SamplerBinding {
+                    texture: second,
+                    sampler,
+                },
             ],
         );
-        cmd.draw(pass, 3, 1);
-        cmd.end_render_pass(pass);
-        Ok(self.targets.surface.surface())
+        pass.bind_fragment_storage_buffers(
+            0,
+            [&self.scene_buffer, assets.pf_tiles(), &self.native_buffer],
+        );
+        pass.draw(3, 1);
+        Ok(target)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_sprite_plane(
         &self,
-        cmd: &mut GpuCommand,
-        plane: *mut SDL_GPUTexture,
-        seed: *mut SDL_GPUTexture,
-        uniforms: SceneUniforms,
-        mask: u32,
-        has_trails: bool,
-        options: GameVideoOptions,
-        geometry: &Geometry,
-        scene_buffer: *mut SDL_GPUBuffer,
-        sp_tiles: *mut SDL_GPUBuffer,
-        sampler: *mut SDL_GPUSampler,
+        cmd: &mut CommandBuffer<'_>,
+        plane: SpritePlane,
+        encoded: &EncodedScene<'_>,
+        assets: &GpuTileAssets,
+        ctx: &GpuContext,
+        native_geometry: Option<&Geometry>,
     ) -> Result<(), String> {
-        let mut pass_uniforms = uniforms;
-        pass_uniforms.layer_mask |= mask;
-        // SAFETY: SceneUniforms is a padding-free block of initialized u32s.
-        let bytes = unsafe { uniform_bytes(&pass_uniforms) };
-        cmd.push_vertex_uniforms(0, bytes);
-        let pass = cmd.begin_render_pass(plane, has_trails)?;
-        cmd.bind_pipeline(pass, self.sprite_pipeline.get());
-        if !options.expanded() {
-            cmd.set_scissor(
-                pass,
+        let mut uniforms = encoded.uniforms;
+        let (target, seed) = match plane {
+            SpritePlane::Primary => (&self.targets.sprite_plane, &self.targets.sprite_plane_b),
+            SpritePlane::Unweighted => {
+                uniforms.layer_mask |= F3_MASK_HIDE_WEIGHTED;
+                (&self.targets.sprite_plane_b, &self.targets.sprite_plane)
+            }
+        };
+        cmd.push_vertex_uniforms(0, &uniforms.to_bytes());
+        let mut pass = cmd.begin_render_pass(target.as_ref(), encoded.has_trails)?;
+        pass.bind_pipeline(&self.sprite_pipeline);
+        if let Some(geometry) = native_geometry {
+            pass.set_scissor(
                 NATIVE_FIRST_COLUMN as i32,
                 geometry.first_line() as i32,
                 Geometry::NATIVE_WIDTH as i32,
                 geometry.height() as i32,
             );
         }
-        cmd.bind_vertex_storage_buffers(pass, 0, &[scene_buffer]);
-        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(seed as usize, sampler)]);
-        cmd.bind_fragment_storage_buffers(pass, 0, &[sp_tiles]);
-        cmd.draw(pass, 6, uniforms.sprite_count);
-        cmd.end_render_pass(pass);
+        pass.bind_vertex_storage_buffers(0, [&self.scene_buffer]);
+        pass.bind_fragment_samplers(
+            0,
+            [SamplerBinding {
+                texture: seed.as_ref(),
+                sampler: ctx.sampler(),
+            }],
+        );
+        pass.bind_fragment_storage_buffers(0, [assets.sp_tiles()]);
+        pass.draw(6, uniforms.sprite_count);
         Ok(())
     }
 }

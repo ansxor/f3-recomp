@@ -1,10 +1,11 @@
 //! GPU boundary for builds without SDL support.
 
 use super::api::{
-    InterpolationFields, Postprocess, PresentRequest, RenderRequest, VideoInterpolation,
+    GpuVideoConfig, InterpolationFields, Postprocess, PresentRequest, RenderRequest,
+    VideoInterpolation,
 };
 use super::motion::MotionInterpolationStats;
-use crate::config::{GameVideoOptions, Geometry, VideoScaleMode};
+use crate::config::VideoScaleMode;
 use crate::game::scene_snapshot::SceneSnapshot;
 
 const UNSUPPORTED: &str = "built without F3RT_GPU";
@@ -36,20 +37,13 @@ pub struct GpuVideo {
 }
 
 impl GpuVideo {
-    #[allow(clippy::too_many_arguments)]
     /// # Safety
     /// The host must honor the GPU backend contract when compiled with GPU support.
     pub unsafe fn new(
         _window: usize,
-        _options: GameVideoOptions,
-        _geometry: Geometry,
+        _config: GpuVideoConfig,
         _playfield_assets: &[u8],
         _sprite_assets: &[u8],
-        _linear: bool,
-        _vsync: bool,
-        _interpolation: VideoInterpolation,
-        _fields: InterpolationFields,
-        _rotation: u32,
     ) -> Result<Self, String> {
         Err(UNSUPPORTED.to_owned())
     }
@@ -117,9 +111,7 @@ impl GpuVideo {
         Err(UNSUPPORTED.to_owned())
     }
 
-    /// # Safety
-    /// The host must honor the GPU backend contract when compiled with GPU support.
-    pub unsafe fn capture_surface(
+    pub fn capture_surface(
         &mut self,
         _scene: &SceneSnapshot,
         _destination: &mut GpuTexture,

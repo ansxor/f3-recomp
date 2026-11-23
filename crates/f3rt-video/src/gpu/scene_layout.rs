@@ -123,8 +123,7 @@ pub const F3_INTERP_FLAG_VERTICAL: u32 = 4;
 pub const F3_INTERP_FLAG_PALETTE: u32 = 8;
 pub const F3_INTERP_PALETTE_STRIDE_SHIFT: u32 = 16;
 
-/// Shader uniforms: three tightly packed uvec4s.
-#[repr(C)]
+/// Shader uniforms serialized as three tightly packed uvec4s.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SceneUniforms {
     pub scale: u32,
@@ -139,6 +138,38 @@ pub struct SceneUniforms {
     pub native_height: u32,
     pub pf_tile_count: u32,
     pub sp_tile_count: u32,
+}
+
+#[cfg(any(feature = "gpu", test))]
+impl SceneUniforms {
+    pub fn to_bytes(self) -> [u8; 48] {
+        uniform_words([
+            self.scale,
+            self.border,
+            self.width,
+            self.height,
+            self.sprite_count,
+            self.pen_mask,
+            self.fallback,
+            self.layer_mask,
+            self.first_line,
+            self.native_height,
+            self.pf_tile_count,
+            self.sp_tile_count,
+        ])
+    }
+}
+
+#[cfg(any(feature = "gpu", test))]
+pub(super) fn uniform_words<const WORDS: usize, const BYTES: usize>(
+    words: [u32; WORDS],
+) -> [u8; BYTES] {
+    const { assert!(BYTES == WORDS * 4) };
+    let mut bytes = [0; BYTES];
+    for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
 }
 
 const _: () = assert!(
@@ -165,16 +196,32 @@ const _: () = assert!(F3_SCENE_SPRITE_COUNT == 4096);
 const _: () = assert!(F3_SCENE_PALETTE_WORDS == 8192);
 const _: () = assert!(F3_SCENE_WORD_COUNT == 172032);
 const _: () = assert!(F3_SCENE_INTERP_WORD_COUNT == 185344);
-const _: () = assert!(core::mem::size_of::<SceneUniforms>() == 12 * 4);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, scale) == 0);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, border) == 4);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, width) == 8);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, height) == 12);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, sprite_count) == 16);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, pen_mask) == 20);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, fallback) == 24);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, layer_mask) == 28);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, first_line) == 32);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, native_height) == 36);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, pf_tile_count) == 40);
-const _: () = assert!(core::mem::offset_of!(SceneUniforms, sp_tile_count) == 44);
+#[cfg(test)]
+mod tests {
+    use super::SceneUniforms;
+
+    #[test]
+    fn scene_uniforms_match_shader_word_order_and_endianness() {
+        let uniforms = SceneUniforms {
+            scale: 0x1234_5601,
+            border: 2,
+            width: 3,
+            height: 4,
+            sprite_count: 5,
+            pen_mask: 6,
+            fallback: 7,
+            layer_mask: 8,
+            first_line: 9,
+            native_height: 10,
+            pf_tile_count: 11,
+            sp_tile_count: 12,
+        };
+        assert_eq!(
+            uniforms.to_bytes(),
+            [
+                1, 0x56, 0x34, 0x12, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7,
+                0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0, 10, 0, 0, 0, 11, 0, 0, 0, 12, 0, 0, 0,
+            ]
+        );
+    }
+}

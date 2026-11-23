@@ -37,6 +37,12 @@ Otherwise, alternative build steps are included below.
 make build GAME=landmakrj ROM_DIR=roms/landmakrj
 ```
 
+### Renderer boundary
+
+Rust records GPU work through scoped copy and render passes. Frame textures stay borrowed while
+recording; the C++ host exchanges SDL handles only at the video and overlay ABI.
+The headless build excludes SDL and the GPU backend.
+
 ### Renderer tests
 
 `cargo test -p f3rt-video` runs the native renderer unit and property tests without SDL, a ROM,

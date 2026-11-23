@@ -1,8 +1,6 @@
 //! SDL-free renderer request types and validation, shared by the GPU backend and the ABI stubs.
 
-#[cfg(feature = "gpu")]
-use crate::config::GameVideoOptions;
-use crate::config::SpriteList;
+use crate::config::{GameVideoOptions, Geometry, SpriteList};
 use crate::game::ALL_LAYERS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,19 +31,23 @@ impl InterpolationFields {
     }
 }
 
-/// A presented or drawn texture token and its pixel size. The GPU backend casts `texture` to
-/// `SDL_GPUTexture *`; every other module treats it as opaque.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuVideoConfig {
+    pub options: GameVideoOptions,
+    pub geometry: Geometry,
+    pub linear: bool,
+    pub vsync: bool,
+    pub interpolation: VideoInterpolation,
+    pub fields: InterpolationFields,
+    pub rotation: u32,
+}
+
+/// Host-provided texture token. Only the presentation FFI boundary interprets it as a handle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GpuSurface {
     pub texture: usize,
     pub width: u32,
     pub height: u32,
-}
-
-impl GpuSurface {
-    pub fn is_valid(&self) -> bool {
-        self.texture != 0
-    }
 }
 
 /// Presentation postprocessing preset.

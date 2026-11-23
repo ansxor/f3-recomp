@@ -187,171 +187,145 @@ impl SpriteAxis {
     }
 }
 
-/// Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000) following block
-/// chaining, the jump word and command entries. Returns the number of entries written to `out`.
 struct DecodeState<'a> {
     x: SpriteAxis,
     y: SpriteAxis,
     color: u8,
     multi: bool,
     count: usize,
-    block_group: u64,
-    block_pc: u32,
-    block_x: i32,
-    block_y: i32,
+    block_group: SpriteGroupSlot,
     out: &'a mut [DecodedSpriteEntry],
     ram: &'a mut SpriteRamState,
-    visible_y: i32,
-    visible_height: i32,
+    visible: std::ops::Range<i32>,
+    apply_flip: bool,
 }
 
 /// One list entry through the hardware state machine. Returns false when the entry is a
-/// self-jump (list end). `allow_jump` is false for splice replacements.
-#[allow(clippy::too_many_arguments)]
-fn step(
-    ctx: &mut DecodeState<'_>,
-    spr: &[u8],
-    offs: &mut i32,
-    allow_jump: bool,
-    apply_flip: bool,
-    mut group: u64,
-    mut group_x: i32,
-    mut group_y: i32,
-    mut group_pc: u32,
-) -> bool {
-    let w0 = read_be16(spr, 0);
-    let w1 = read_be16(spr, 2);
-    let w2 = read_be16(spr, 4);
-    let w3 = read_be16(spr, 6);
-    let w4 = read_be16(spr, 8);
-    let w5 = read_be16(spr, 10);
-    let w6 = read_be16(spr, 12);
+/// self-jump (list end). Splice replacements cannot jump.
+impl DecodeState<'_> {
+    fn step(&mut self, spr: &[u8], jump: Option<&mut i32>, mut group: SpriteGroupSlot) -> bool {
+        let w0 = read_be16(spr, 0);
+        let w1 = read_be16(spr, 2);
+        let w2 = read_be16(spr, 4);
+        let w3 = read_be16(spr, 6);
+        let w4 = read_be16(spr, 8);
+        let w5 = read_be16(spr, 10);
+        let w6 = read_be16(spr, 12);
 
-    // Special command bit in word 3
-    if w3 & 0x8000 != 0 {
-        ctx.ram.flipscreen = (w5 & 0x2000) != 0;
-        ctx.ram.extra_planes = ((w5 >> 8) & 3) as u8;
-        ctx.ram.pen_mask = (ctx.ram.extra_planes << 4) | 0x0f;
-        ctx.ram.trails = (w5 & 0x0002) != 0;
-        ctx.ram.bank = (w5 & 0x0001) != 0;
-    }
-
-    // Sprite list jump bit in word 6
-    if allow_jump && (w6 & 0x8000) != 0 {
-        let new_offs = i32::from(w6 & 0x03ff);
-        if new_offs == *offs {
-            return false;
+        // Special command bit in word 3
+        if w3 & 0x8000 != 0 {
+            self.ram.flipscreen = (w5 & 0x2000) != 0;
+            self.ram.extra_planes = ((w5 >> 8) & 3) as u8;
+            self.ram.pen_mask = (self.ram.extra_planes << 4) | 0x0f;
+            self.ram.trails = (w5 & 0x0002) != 0;
+            self.ram.bank = (w5 & 0x0001) != 0;
         }
-        *offs = new_offs - 1;
+
+        // Sprite list jump bit in word 6
+        if (w6 & 0x8000) != 0
+            && let Some(offs) = jump
+        {
+            let new_offs = i32::from(w6 & 0x03ff);
+            if new_offs == *offs {
+                return false;
+            }
+            *offs = new_offs - 1;
+        }
+
+        let spritecont = (w4 >> 8) as u8;
+        let lock = (spritecont & 0x04) != 0;
+        if !lock {
+            self.color = (w4 & 0xff) as u8;
+        }
+
+        if spritecont & 0x08 == 0 || group.key != 0 {
+            self.block_group = group;
+        } else {
+            group = self.block_group;
+        }
+
+        let scroll_mode = ((w2 >> 12) & 0x0f) as u8;
+        self.x.update(
+            scroll_mode,
+            w2 & 0x0fff,
+            self.multi,
+            (spritecont >> 6) & 3,
+            (w1 & 0xff) as u8,
+        );
+        self.y.update(
+            scroll_mode,
+            w3 & 0x0fff,
+            self.multi,
+            (spritecont >> 4) & 3,
+            (w1 >> 8) as u8,
+        );
+        self.multi = (spritecont & 0x08) != 0;
+
+        let tile = u32::from(w0) | (u32::from(w5 & 0x0001) << 16);
+        if tile == 0 {
+            return true;
+        }
+
+        let tx = if self.ram.flipscreen {
+            (512 << 8) - self.x.block_scale * 16 - self.x.pos
+        } else {
+            self.x.pos
+        };
+        let ty = if self.ram.flipscreen {
+            (256 << 8) - self.y.block_scale * 16 - self.y.pos
+        } else {
+            self.y.pos
+        };
+
+        // Cull against the configured scanout crop, not the top edge.
+        if tx + self.x.block_scale * 16 <= (H_START << 8)
+            || tx > ((H_START + H_VIS - 1) << 8)
+            || ty + self.y.block_scale * 16 <= (self.visible.start << 8)
+            || ty > ((self.visible.end - 1) << 8)
+        {
+            return true;
+        }
+
+        if self.count >= self.out.len() {
+            return true;
+        }
+
+        let flip_x = (spritecont & 0x01) != 0;
+        let flip_y = (spritecont & 0x02) != 0;
+
+        let color = self.color;
+        let s = &mut self.out[self.count];
+        self.count += 1;
+        s.x = if self.apply_flip { tx } else { self.x.pos };
+        s.y = if self.apply_flip { ty } else { self.y.pos };
+        s.scale_x = self.x.block_scale;
+        s.scale_y = self.y.block_scale;
+        s.tile = tile;
+        s.color = color;
+        s.flip_x = if self.apply_flip && self.ram.flipscreen {
+            !flip_x
+        } else {
+            flip_x
+        };
+        s.flip_y = if self.apply_flip && self.ram.flipscreen {
+            !flip_y
+        } else {
+            flip_y
+        };
+        s.pri = (color >> 6) & 3;
+        s.group = group.key;
+        s.group_x = group.x;
+        s.group_y = group.y;
+        s.group_pc = group.pc;
+        true
     }
-
-    let spritecont = (w4 >> 8) as u8;
-    let lock = (spritecont & 0x04) != 0;
-    if !lock {
-        ctx.color = (w4 & 0xff) as u8;
-    }
-
-    let own_group = group != 0;
-    if spritecont & 0x08 == 0 {
-        ctx.block_group = group;
-        ctx.block_pc = group_pc;
-        ctx.block_x = group_x;
-        ctx.block_y = group_y;
-    } else if !own_group {
-        group = ctx.block_group;
-        group_pc = ctx.block_pc;
-        group_x = ctx.block_x;
-        group_y = ctx.block_y;
-    } else {
-        ctx.block_group = group;
-        ctx.block_pc = group_pc;
-        ctx.block_x = group_x;
-        ctx.block_y = group_y;
-    }
-
-    let scroll_mode = ((w2 >> 12) & 0x0f) as u8;
-    ctx.x.update(
-        scroll_mode,
-        w2 & 0x0fff,
-        ctx.multi,
-        (spritecont >> 6) & 3,
-        (w1 & 0xff) as u8,
-    );
-    ctx.y.update(
-        scroll_mode,
-        w3 & 0x0fff,
-        ctx.multi,
-        (spritecont >> 4) & 3,
-        (w1 >> 8) as u8,
-    );
-    ctx.multi = (spritecont & 0x08) != 0;
-
-    let tile = u32::from(w0) | (u32::from(w5 & 0x0001) << 16);
-    if tile == 0 {
-        return true;
-    }
-
-    let tx = if ctx.ram.flipscreen {
-        (512 << 8) - ctx.x.block_scale * 16 - ctx.x.pos
-    } else {
-        ctx.x.pos
-    };
-    let ty = if ctx.ram.flipscreen {
-        (256 << 8) - ctx.y.block_scale * 16 - ctx.y.pos
-    } else {
-        ctx.y.pos
-    };
-
-    // Cull against the configured scanout crop, not the top edge.
-    if tx + ctx.x.block_scale * 16 <= (H_START << 8)
-        || tx > ((H_START + H_VIS - 1) << 8)
-        || ty + ctx.y.block_scale * 16 <= (ctx.visible_y << 8)
-        || ty > ((ctx.visible_y + ctx.visible_height - 1) << 8)
-    {
-        return true;
-    }
-
-    if ctx.count >= ctx.out.len() {
-        return true;
-    }
-
-    let flip_x = (spritecont & 0x01) != 0;
-    let flip_y = (spritecont & 0x02) != 0;
-
-    let color = ctx.color;
-    let s = &mut ctx.out[ctx.count];
-    ctx.count += 1;
-    s.x = if apply_flip { tx } else { ctx.x.pos };
-    s.y = if apply_flip { ty } else { ctx.y.pos };
-    s.scale_x = ctx.x.block_scale;
-    s.scale_y = ctx.y.block_scale;
-    s.tile = tile;
-    s.color = color;
-    s.flip_x = if apply_flip && ctx.ram.flipscreen {
-        !flip_x
-    } else {
-        flip_x
-    };
-    s.flip_y = if apply_flip && ctx.ram.flipscreen {
-        !flip_y
-    } else {
-        flip_y
-    };
-    s.pri = (color >> 6) & 3;
-    s.group = group;
-    s.group_x = group_x;
-    s.group_y = group_y;
-    s.group_pc = group_pc;
-    true
 }
 
 /// Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000) following block
 /// chaining, the jump word and command entries. Returns the number of entries written to `out`.
-#[allow(clippy::too_many_arguments)]
 pub fn decode_sprite_list(
     spriteram: &[u8],
-    visible_y: i32,
-    visible_height: i32,
+    visible: std::ops::Range<i32>,
     out: &mut [DecodedSpriteEntry],
     state: &mut SpriteRamState,
     apply_flip: bool,
@@ -363,14 +337,11 @@ pub fn decode_sprite_list(
         color: 0,
         multi: false,
         count: 0,
-        block_group: 0,
-        block_pc: 0,
-        block_x: 0,
-        block_y: 0,
+        block_group: SpriteGroupSlot::default(),
         out,
         ram: state,
-        visible_y,
-        visible_height,
+        visible,
+        apply_flip,
     };
     let empty_groups: &[SpriteGroupSlot] = &[];
     let empty_splices: &[SpriteSplice<'_>] = &[];
@@ -409,13 +380,9 @@ pub fn decode_sprite_list(
             let n = i32::from(hit.last) - i32::from(hit.first) + 1;
             let reps = hit.replacement.len() / 16;
             for k in 0..reps {
-                let mut dummy = offs;
                 let group = hit.groups.get(k).copied().unwrap_or_default();
                 let entry = &hit.replacement[k * 16..k * 16 + 16];
-                step(
-                    &mut ctx, entry, &mut dummy, false, apply_flip, group.key, group.x, group.y,
-                    group.pc,
-                );
+                ctx.step(entry, None, group);
             }
             total_sprites += (n - 1) as usize;
             offs = i32::from(hit.last) + 1;
@@ -425,9 +392,7 @@ pub fn decode_sprite_list(
         {
             let slot = (if ctx.ram.bank { 0x400 } else { 0 }) + offs as usize;
             let group = groups.get(slot).copied().unwrap_or_default();
-            if !step(
-                &mut ctx, spr, &mut offs, true, apply_flip, group.key, group.x, group.y, group.pc,
-            ) {
+            if !ctx.step(spr, Some(&mut offs), group) {
                 break;
             }
         }
@@ -468,7 +433,7 @@ mod tests {
         write_entry(&mut ram, false, 1, [0, 0, 0, 0, 0, 0, 0x8001]); // self jump ends the list
         let mut out = [DecodedSpriteEntry::default(); 4];
         let mut state = SpriteRamState::default();
-        let count = decode_sprite_list(&ram, 24, 232, &mut out, &mut state, false, None);
+        let count = decode_sprite_list(&ram, 24..256, &mut out, &mut state, false, None);
         assert_eq!(count, 1);
         assert_eq!(out[0].tile, 1);
         assert_eq!(out[0].x, 100 << 8);
@@ -484,7 +449,7 @@ mod tests {
         let mut out = [DecodedSpriteEntry::default(); 4];
         let mut state = SpriteRamState::default();
         assert_eq!(
-            decode_sprite_list(&ram, 24, 232, &mut out, &mut state, false, None),
+            decode_sprite_list(&ram, 24..256, &mut out, &mut state, false, None,),
             0,
             "y = 0 is above the crop"
         );
@@ -504,7 +469,7 @@ mod tests {
         let mut out = [DecodedSpriteEntry::default(); 4];
         let mut state = SpriteRamState::default();
         assert_eq!(
-            decode_sprite_list(&ram, 24, 232, &mut out, &mut state, false, None),
+            decode_sprite_list(&ram, 24..256, &mut out, &mut state, false, None,),
             0
         );
         assert!(state.flipscreen);
@@ -521,7 +486,7 @@ mod tests {
         let mut out = [DecodedSpriteEntry::default(); 4];
         let mut state = SpriteRamState::default();
         assert_eq!(
-            decode_sprite_list(&ram, 24, 232, &mut out, &mut state, false, None),
+            decode_sprite_list(&ram, 24..256, &mut out, &mut state, false, None,),
             0
         );
     }
@@ -536,8 +501,7 @@ mod tests {
             let mut out = [DecodedSpriteEntry::default(); 4];
             let n = decode_sprite_list(
                 &ram,
-                24,
-                232,
+                24..256,
                 &mut out,
                 &mut SpriteRamState::default(),
                 false,
@@ -619,8 +583,7 @@ mod tests {
             let mut out = [DecodedSpriteEntry::default(); 4];
             let n = decode_sprite_list(
                 source,
-                24,
-                232,
+                24..256,
                 &mut out,
                 &mut SpriteRamState::default(),
                 false,
@@ -703,8 +666,7 @@ mod tests {
         let mut state = SpriteRamState::default();
         let count = decode_sprite_list(
             &ram,
-            24,
-            232,
+            24..256,
             &mut out,
             &mut state,
             false,
@@ -723,7 +685,7 @@ mod tests {
         write_entry(&mut ram, false, 2, [0, 0, 0, 0, 0, 0, 0x8002]);
         let mut out = [DecodedSpriteEntry::default(); 4];
         let mut state = SpriteRamState::default();
-        let count = decode_sprite_list(&ram, 24, 232, &mut out, &mut state, true, None);
+        let count = decode_sprite_list(&ram, 24..256, &mut out, &mut state, true, None);
         assert_eq!(count, 1);
         assert_eq!(out[0].x, (512 << 8) - 0x100 * 16 - (300 << 8));
         assert!(out[0].flip_x);

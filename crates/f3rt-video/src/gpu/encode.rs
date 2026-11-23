@@ -142,22 +142,33 @@ pub struct PreparedScene<'a, 's, 'c> {
     pub use_interpolation: bool,
 }
 
-impl<'a, 's, 'c> PreparedScene<'a, 's, 'c> {
-    #[cfg(test)]
-    fn encode_into(
-        &self,
-        out: &mut [u32],
-        pf_tiles: u32,
-        sp_tiles: u32,
-    ) -> Result<EncodedScene<'a>, String> {
-        let len = out.len();
-        // SAFETY: MaybeUninit<u32> has the same layout. The encoder only writes initialized words.
-        let out = unsafe {
-            std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<MaybeUninit<u32>>(), len)
-        };
-        self.encode_mapped(out, pf_tiles, sp_tiles)
+pub(super) trait SceneWord: Sized {
+    fn store(&mut self, value: u32);
+    fn store_slice(dst: &mut [Self], src: &[u32]);
+}
+
+impl SceneWord for MaybeUninit<u32> {
+    fn store(&mut self, value: u32) {
+        self.write(value);
     }
 
+    fn store_slice(dst: &mut [Self], src: &[u32]) {
+        dst.write_copy_of_slice(src);
+    }
+}
+
+#[cfg(test)]
+impl SceneWord for u32 {
+    fn store(&mut self, value: u32) {
+        *self = value;
+    }
+
+    fn store_slice(dst: &mut [Self], src: &[u32]) {
+        dst.copy_from_slice(src);
+    }
+}
+
+impl<'a, 's, 'c> PreparedScene<'a, 's, 'c> {
     pub fn required_words(&self) -> usize {
         if self.motion.plan.scene.fallback {
             return encoded_native_words(&self.motion.plan.scene.geometry());
@@ -186,9 +197,9 @@ impl<'a, 's, 'c> PreparedScene<'a, 's, 'c> {
     ///   (`ENCODED_INTERPOLATION_WORDS` in total).
     ///
     /// `options.border` bounds layer clip ranges. Returns an error if `out` is too small.
-    pub fn encode_mapped(
+    pub fn encode_into(
         &self,
-        out: &mut [MaybeUninit<u32>],
+        out: &mut [impl SceneWord],
         pf_tile_count: u32,
         sp_tile_count: u32,
     ) -> Result<EncodedScene<'a>, String> {
@@ -277,104 +288,112 @@ fn layer_flags(l: &crate::game::scene::SceneLayer) -> u32 {
 /// keeps moving such a row horizontally (the remap is linear in source_x); a row whose vertical
 /// phase moved samples map rows the twin was not solved for, so it keeps the canonical
 /// alternate map.
-#[allow(clippy::too_many_arguments)]
-fn encode_row(
-    r: &SceneRow,
-    text: &crate::game::text::GameText,
+struct RowEncoder<'a> {
+    text: &'a crate::game::text::GameText,
     flipped: bool,
-    motion: Option<&MotionRowState>,
     presented: bool,
-    video: &VideoConfig,
+    video: &'a VideoConfig,
     left: i16,
     right: i16,
-    at: &mut [MaybeUninit<u32>],
-) {
-    let mut pf: [ScenePlayfield; 4] = r.playfields;
-    let mut moved_y = [false; 4];
-    if let Some(motion) = motion {
-        for i in 0..4 {
-            pf[i].source_x = motion.source_x[i];
-            moved_y[i] = motion.phase[i]
-                != (r.playfields[i].source_y as u32 * 256 + u32::from(r.playfields[i].y_fraction))
-                    as i32;
-        }
-    }
-    if presented {
-        for i in 0..4 {
-            if !moved_y[i] {
-                pf[i] = presented_playfield(&pf[i], video);
-            }
-        }
-    }
-    at[F3_ROW_BACKGROUND].write(u32::from(r.background));
-    at[F3_ROW_MOSAIC].write(
-        u32::from(r.mosaic_period)
-            | if r.palette_15bit { F3_ROW_PALETTE15 } else { 0 }
-            | if r.blur { F3_ROW_BLUR } else { 0 },
-    );
-    at[F3_ROW_TEXT_X].write(r.text_x as u32);
-    at[F3_ROW_TEXT_Y].write(r.text_y as u32);
-    at[F3_ROW_BITMAP_MAP_ROW].write(if r.bitmap {
-        text.bitmap_map_row(r.text_y as u32, flipped)
-    } else {
-        0
-    });
-    at[F3_ROW_BLEND].write(u32::from_le_bytes(r.blend));
-    let order = scene_order(r);
-    for (i, id) in order.into_iter().enumerate() {
-        at[F3_ROW_ORDER + i].write(id as u32);
-        let l = r.layer(layer_id(i));
-        let la = &mut at[F3_ROW_LAYERS + i * F3_LAYER_STRIDE..];
-        let mut flags = layer_flags(l);
-        if i < 4 && pf[i].alt_map {
-            flags |= F3_LAYER_ALT_MAP;
-        }
-        if i < 4 && video.extend {
-            flags |= F3_LAYER_EXTEND;
-        }
-        if i < 4 && r.playfields[i].empty_row {
-            flags &= !F3_LAYER_ENABLED;
-        }
-        if i == 8 {
-            let text_y_adj = if flipped {
-                511 - i32::from(r.text_y)
-            } else {
-                i32::from(r.text_y)
-            };
-            if r.bitmap {
-                flags |= F3_LAYER_BITMAP;
-            } else if !text.row_used(text_y_adj as u32) {
-                flags &= !F3_LAYER_ENABLED;
-            }
-        }
-        la[F3_LAYER_FLAGS].write(flags);
-        let clips = crate::game::clip::clip_ranges_for_row(r, l, left, right);
-        la[F3_LAYER_CLIP_COUNT].write(clips.count as u32);
-        for (i, clip) in clips.iter().enumerate() {
-            la[F3_LAYER_CLIPS + i * 2].write(clip.left as i32 as u32);
-            la[F3_LAYER_CLIPS + i * 2 + 1].write(clip.right as i32 as u32);
-        }
-    }
-    for (i, (p, moved_y)) in pf.into_iter().zip(moved_y).enumerate() {
-        let pa = &mut at[F3_ROW_PF + i * F3_PF_STRIDE..];
-        pa[F3_PF_SOURCE_X].write(p.source_x as u32);
-        pa[F3_PF_SOURCE_Y].write(p.source_y as u32);
-        pa[F3_PF_X_STEP].write(p.x_step as u32);
-        pa[F3_PF_Y_STEP].write(p.y_step as u32);
-        pa[F3_PF_Y_FRACTION].write(u32::from(p.y_fraction));
-        pa[F3_PF_PALETTE_ADD].write(u32::from(p.palette_add));
-        // The snapshot phase is kept bit-exact where motion did not move it.
-        if moved_y {
-            let phase = motion.unwrap().phase[i] as u32;
-            pa[F3_PF_SOURCE_Y].write(phase >> 8);
-            pa[F3_PF_Y_FRACTION].write(phase & 255);
-        }
-    }
-    at[F3_ROW_MOTION_TEXT_X].write(motion.map_or(0, |m| m.text_x as u32));
-    at[F3_ROW_MOTION_TEXT_Y].write(motion.map_or(0, |m| m.text_y as u32));
 }
 
-fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [MaybeUninit<u32>]) {
+impl RowEncoder<'_> {
+    fn encode(&self, r: &SceneRow, motion: Option<&MotionRowState>, at: &mut [impl SceneWord]) {
+        let Self {
+            text,
+            flipped,
+            presented,
+            video,
+            left,
+            right,
+        } = *self;
+        let mut pf: [ScenePlayfield; 4] = r.playfields;
+        let mut moved_y = [false; 4];
+        if let Some(motion) = motion {
+            for i in 0..4 {
+                pf[i].source_x = motion.source_x[i];
+                moved_y[i] = motion.phase[i]
+                    != (r.playfields[i].source_y as u32 * 256
+                        + u32::from(r.playfields[i].y_fraction)) as i32;
+            }
+        }
+        if presented {
+            for i in 0..4 {
+                if !moved_y[i] {
+                    pf[i] = presented_playfield(&pf[i], video);
+                }
+            }
+        }
+        at[F3_ROW_BACKGROUND].store(u32::from(r.background));
+        at[F3_ROW_MOSAIC].store(
+            u32::from(r.mosaic_period)
+                | if r.palette_15bit { F3_ROW_PALETTE15 } else { 0 }
+                | if r.blur { F3_ROW_BLUR } else { 0 },
+        );
+        at[F3_ROW_TEXT_X].store(r.text_x as u32);
+        at[F3_ROW_TEXT_Y].store(r.text_y as u32);
+        at[F3_ROW_BITMAP_MAP_ROW].store(if r.bitmap {
+            text.bitmap_map_row(r.text_y as u32, flipped)
+        } else {
+            0
+        });
+        at[F3_ROW_BLEND].store(u32::from_le_bytes(r.blend));
+        let order = scene_order(r);
+        for (i, id) in order.into_iter().enumerate() {
+            at[F3_ROW_ORDER + i].store(id as u32);
+            let l = r.layer(layer_id(i));
+            let la = &mut at[F3_ROW_LAYERS + i * F3_LAYER_STRIDE..];
+            let mut flags = layer_flags(l);
+            if i < 4 && pf[i].alt_map {
+                flags |= F3_LAYER_ALT_MAP;
+            }
+            if i < 4 && video.extend {
+                flags |= F3_LAYER_EXTEND;
+            }
+            if i < 4 && r.playfields[i].empty_row {
+                flags &= !F3_LAYER_ENABLED;
+            }
+            if i == 8 {
+                let text_y_adj = if flipped {
+                    511 - i32::from(r.text_y)
+                } else {
+                    i32::from(r.text_y)
+                };
+                if r.bitmap {
+                    flags |= F3_LAYER_BITMAP;
+                } else if !text.row_used(text_y_adj as u32) {
+                    flags &= !F3_LAYER_ENABLED;
+                }
+            }
+            la[F3_LAYER_FLAGS].store(flags);
+            let clips = crate::game::clip::clip_ranges_for_row(r, l, left, right);
+            la[F3_LAYER_CLIP_COUNT].store(clips.count as u32);
+            for (i, clip) in clips.iter().enumerate() {
+                la[F3_LAYER_CLIPS + i * 2].store(clip.left as i32 as u32);
+                la[F3_LAYER_CLIPS + i * 2 + 1].store(clip.right as i32 as u32);
+            }
+        }
+        for (i, (p, moved_y)) in pf.into_iter().zip(moved_y).enumerate() {
+            let pa = &mut at[F3_ROW_PF + i * F3_PF_STRIDE..];
+            pa[F3_PF_SOURCE_X].store(p.source_x as u32);
+            pa[F3_PF_SOURCE_Y].store(p.source_y as u32);
+            pa[F3_PF_X_STEP].store(p.x_step as u32);
+            pa[F3_PF_Y_STEP].store(p.y_step as u32);
+            pa[F3_PF_Y_FRACTION].store(u32::from(p.y_fraction));
+            pa[F3_PF_PALETTE_ADD].store(u32::from(p.palette_add));
+            // The snapshot phase is kept bit-exact where motion did not move it.
+            if moved_y {
+                let phase = motion.unwrap().phase[i] as u32;
+                pa[F3_PF_SOURCE_Y].store(phase >> 8);
+                pa[F3_PF_Y_FRACTION].store(phase & 255);
+            }
+        }
+        at[F3_ROW_MOTION_TEXT_X].store(motion.map_or(0, |m| m.text_x as u32));
+        at[F3_ROW_MOTION_TEXT_Y].store(motion.map_or(0, |m| m.text_y as u32));
+    }
+}
+
+fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [impl SceneWord]) {
     for (row, encoded) in coefficients
         .rows
         .iter()
@@ -389,7 +408,7 @@ fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [Mayb
             } else {
                 0
             };
-            at[0].write(u32::from(c.flags) | palette_stride << F3_INTERP_PALETTE_STRIDE_SHIFT);
+            at[0].store(u32::from(c.flags) | palette_stride << F3_INTERP_PALETTE_STRIDE_SHIFT);
             const OFFSETS: [usize; 4] = [
                 F3_INTERP_SOURCE,
                 F3_INTERP_ZOOM,
@@ -400,7 +419,7 @@ fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [Mayb
                 .into_iter()
                 .zip([c.source, c.zoom, c.vertical, c.palette])
             {
-                at[offset..offset + 3].write_copy_of_slice(&triple.map(f32::to_bits));
+                SceneWord::store_slice(&mut at[offset..offset + 3], &triple.map(f32::to_bits));
             }
         }
     }
@@ -411,7 +430,7 @@ fn write_words(
     options: GameVideoOptions,
     motion: Option<&MotionState>,
     coefficients: Option<&InterpolationCoefficients>,
-    out: &mut [MaybeUninit<u32>],
+    out: &mut [impl SceneWord],
     list: SpriteList,
 ) -> Result<(), String> {
     if frame.fallback {
@@ -419,7 +438,7 @@ fn write_words(
         if out.len() < native {
             return Err("GPU native upload too small".to_string());
         }
-        out[..native].write_copy_of_slice(&frame.native_pixels[..native]);
+        SceneWord::store_slice(&mut out[..native], &frame.native_pixels[..native]);
         return Ok(());
     }
     let sprites = frame.sprite_list_for(list);
@@ -439,59 +458,57 @@ fn write_words(
         let cells = frame.tiles.cells(layer);
         let alt = (alternate_maps && layer >= 2).then(|| frame.tiles.cells(layer + 2));
         for (i, (cell, dest)) in cells.iter().zip(dest.chunks_exact_mut(2)).enumerate() {
-            dest[0].write(*cell);
-            dest[1].write(alt.map_or(0, |alt| alt[i]));
+            dest[0].store(*cell);
+            dest[1].store(alt.map_or(0, |alt| alt[i]));
         }
     }
 
     let map = frame.text.map();
     for (i, value) in map.iter().enumerate() {
-        out[F3_SCENE_TEXT_CELLS + i].write(u32::from(*value));
+        out[F3_SCENE_TEXT_CELLS + i].store(u32::from(*value));
     }
 
     debug_assert_eq!(0x2000, F3_SCENE_GLYPH_WORDS * 4);
     for (i, chunk) in frame.text.glyphs().chunks_exact(4).enumerate() {
         out[F3_SCENE_GLYPHS + i]
-            .write(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            .store(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
     let pivot = frame.text.pivot();
     debug_assert_eq!(pivot.len(), F3_SCENE_PIVOT_WORDS * 4);
     for (i, chunk) in pivot.chunks_exact(4).enumerate() {
-        out[F3_SCENE_PIVOT + i].write(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+        out[F3_SCENE_PIVOT + i].store(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
-    out[F3_SCENE_PALETTE..F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS]
-        .write_copy_of_slice(&frame.colors);
-    let left = (46 - options.border as i32) as i16;
-    let right = (366 + options.border as i32) as i16;
+    SceneWord::store_slice(
+        &mut out[F3_SCENE_PALETTE..F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS],
+        &frame.colors,
+    );
+    let rows = RowEncoder {
+        text: &frame.text,
+        flipped: frame.flipped,
+        presented: options.expanded(),
+        video: frame.video(),
+        left: (46 - options.border as i32) as i16,
+        right: (366 + options.border as i32) as i16,
+    };
     for y in 0..F3_SCENE_ROW_COUNT {
         let row_at = &mut out[F3_SCENE_ROWS + y * F3_SCENE_ROW_STRIDE..][..F3_SCENE_ROW_STRIDE];
-        encode_row(
-            &frame.rows[y],
-            &frame.text,
-            frame.flipped,
-            motion.map(|m| &m.rows[y]),
-            options.expanded(),
-            frame.video(),
-            left,
-            right,
-            row_at,
-        );
+        rows.encode(&frame.rows[y], motion.map(|m| &m.rows[y]), row_at);
     }
     for (i, s) in sprites.iter().enumerate() {
         let at = &mut out[F3_SCENE_SPRITES + i * F3_SCENE_SPRITE_STRIDE..];
-        at[F3_SPRITE_X].write(motion.map_or(s.x as u32, |m| m.sprite_x[i] as u32));
-        at[F3_SPRITE_Y].write(motion.map_or(s.y as u32, |m| m.sprite_y[i] as u32));
-        at[F3_SPRITE_SCALE_X].write(u32::from(s.scale_x));
-        at[F3_SPRITE_SCALE_Y].write(u32::from(s.scale_y));
-        at[F3_SPRITE_TILE].write(s.tile);
-        at[F3_SPRITE_PALETTE].write(u32::from(s.palette));
-        at[F3_SPRITE_WEIGHT].write(0);
+        at[F3_SPRITE_X].store(motion.map_or(s.x as u32, |m| m.sprite_x[i] as u32));
+        at[F3_SPRITE_Y].store(motion.map_or(s.y as u32, |m| m.sprite_y[i] as u32));
+        at[F3_SPRITE_SCALE_X].store(u32::from(s.scale_x));
+        at[F3_SPRITE_SCALE_Y].store(u32::from(s.scale_y));
+        at[F3_SPRITE_TILE].store(s.tile);
+        at[F3_SPRITE_PALETTE].store(u32::from(s.palette));
+        at[F3_SPRITE_WEIGHT].store(0);
         if s.weighted() {
             let weight = s.blend_weight.max(0.0);
             let fixed = (weight * F3_SPRITE_WEIGHT_SCALE as f32 + 0.5) as u32;
-            at[F3_SPRITE_WEIGHT].write(fixed.clamp(1, F3_SPRITE_WEIGHT_SCALE - 1));
+            at[F3_SPRITE_WEIGHT].store(fixed.clamp(1, F3_SPRITE_WEIGHT_SCALE - 1));
         }
-        at[F3_SPRITE_FLIP].write(
+        at[F3_SPRITE_FLIP].store(
             (if s.flip_x { F3_SPRITE_FLIP_X } else { 0 })
                 | (if s.flip_y { F3_SPRITE_FLIP_Y } else { 0 })
                 | if frame.sprite_flipped {
@@ -555,25 +572,14 @@ mod tests {
         words: Vec<u32>,
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn run_chain(
-        scene: &SceneSnapshot,
-        options: GameVideoOptions,
-        list: SpriteList,
-        layer_mask: u32,
+        plan: ScenePlan<'_>,
         history: Option<&GpuMotionHistory>,
         alpha: Option<f32>,
         interpolation: InterpolationConfig,
         scratch: &mut GpuPrepScratch,
-        pf_tiles: u32,
-        sp_tiles: u32,
+        tile_counts: (u32, u32),
     ) -> ChainResult {
-        let plan = ScenePlan {
-            scene,
-            options,
-            sprite_list: list,
-            layer_mask,
-        };
         let motion_scene = plan.apply_motion(history, alpha, &mut scratch.motion_state);
         let motion_is_some = motion_scene.motion.is_some();
         let prepared = motion_scene.analyze_interpolation(
@@ -583,7 +589,7 @@ mod tests {
         );
         let mut words = vec![0u32; prepared.required_words()];
         let encoded = prepared
-            .encode_into(&mut words, pf_tiles, sp_tiles)
+            .encode_into(&mut words, tile_counts.0, tile_counts.1)
             .expect("chain encode");
         ChainResult {
             use_interpolation: prepared.use_interpolation,
@@ -617,7 +623,6 @@ mod tests {
             encoded_native_words(&Geometry::default()),
             ENCODED_NATIVE_WORDS
         );
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 48);
     }
 
     #[test]
@@ -629,10 +634,12 @@ mod tests {
         }
         let mut scratch = GpuPrepScratch::default();
         let result = run_chain(
-            &scene,
-            scaled(2, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(2, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             Some(0.5),
             InterpolationConfig {
@@ -640,8 +647,7 @@ mod tests {
                 fields: InterpolationFields::All,
             },
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(result.words.len(), ENCODED_NATIVE_WORDS);
         assert!(result.words.iter().eq(scene.native_pixels.iter()));
@@ -688,16 +694,17 @@ mod tests {
 
         let options = scaled(1, 8);
         let result = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            11,
-            22,
+            (11, 22),
         );
         assert_eq!(result.words.len(), ENCODED_SCENE_WORDS);
         assert_eq!(
@@ -729,16 +736,17 @@ mod tests {
         assert_eq!(result.words[F3_SCENE_PALETTE + 3], 0x0012_3456);
 
         let masked = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            0x3,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: 0x3,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(
             masked.encoded.uniforms.layer_mask,
@@ -773,44 +781,47 @@ mod tests {
         let options = scaled(1, 0);
 
         let presented = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(presented.encoded.uniforms.sprite_count, 1);
         let canonical = run_chain(
-            &scene,
-            options,
-            SpriteList::Canonical,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Canonical,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(canonical.encoded.uniforms.sprite_count, 2);
 
         scene.sprites[0].blend_weight = 0.5;
         let weighted = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert!(weighted.encoded.blend_weighted);
         assert_eq!(
@@ -820,16 +831,17 @@ mod tests {
 
         scene.sprite_trail_seed = vec![0x1234; 8];
         let trailed = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert!(trailed.encoded.has_trails);
         assert!(
@@ -872,32 +884,34 @@ mod tests {
         assert_eq!(sampled_stats.alpha, 0.5);
 
         let mid = run_chain(
-            &b,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &b,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             Some(&history),
             Some(0.5),
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(sprite_word(&mid.words, 0, F3_SPRITE_X), (105 * 256) as u32);
         assert_ne!(mid.encoded.uniforms.layer_mask & MOTION_LAYER_MASK, 0);
         assert!(mid.encoded.motion_stats.paired);
 
         let end = run_chain(
-            &b,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &b,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             Some(&history),
             Some(1.0),
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(sprite_word(&end.words, 0, F3_SPRITE_X), (110 * 256) as u32);
         assert_eq!(end.encoded.uniforms.layer_mask & MOTION_LAYER_MASK, 0);
@@ -908,16 +922,17 @@ mod tests {
             (Some(&history), Some(0.5), SpriteList::Canonical),
         ] {
             let canonical = run_chain(
-                &b,
-                options,
-                list,
-                ALL_LAYERS,
+                ScenePlan {
+                    scene: &b,
+                    options,
+                    sprite_list: list,
+                    layer_mask: ALL_LAYERS,
+                },
                 history_opt,
                 alpha,
                 InterpolationConfig::default(),
                 &mut scratch,
-                0,
-                0,
+                (0, 0),
             );
             assert!(!canonical.encoded.motion_stats.paired);
             assert!(!canonical.motion_is_some);
@@ -929,16 +944,17 @@ mod tests {
 
         b.sprite_trail_seed = vec![1; 8];
         let trailed = run_chain(
-            &b,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &b,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             Some(&history),
             Some(0.5),
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert!(!trailed.motion_is_some);
         assert_eq!(
@@ -969,10 +985,12 @@ mod tests {
         let options = scaled(2, 0);
 
         let linear = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig {
@@ -980,8 +998,7 @@ mod tests {
                 fields: InterpolationFields::Geometry,
             },
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(
             linear.encoded.interp_stats.reason,
@@ -1007,10 +1024,12 @@ mod tests {
         );
 
         let palette_only = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig {
@@ -1018,22 +1037,22 @@ mod tests {
                 fields: InterpolationFields::Palette,
             },
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(palette_only.encoded.interp_stats.layers[0].source_rows, 0);
 
         let off = run_chain(
-            &scene,
-            options,
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options,
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(off.encoded.interp_stats.reason, InterpolationReason::Off);
         assert!(!off.encoded.use_interpolation);
@@ -1041,10 +1060,12 @@ mod tests {
         assert_eq!(off.words.len(), ENCODED_SCENE_WORDS);
 
         let native = run_chain(
-            &scene,
-            scaled(1, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(1, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig {
@@ -1052,8 +1073,7 @@ mod tests {
                 fields: InterpolationFields::Geometry,
             },
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(
             native.encoded.interp_stats.reason,
@@ -1166,10 +1186,12 @@ mod tests {
         history.capture(&b, 2);
         let mut scratch = GpuPrepScratch::default();
         let result = run_chain(
-            &b,
-            scaled(2, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &b,
+                options: scaled(2, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             Some(&history),
             Some(0.5),
             InterpolationConfig {
@@ -1177,8 +1199,7 @@ mod tests {
                 fields: InterpolationFields::Geometry,
             },
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         assert!(result.encoded.motion_stats.paired);
         assert!(result.encoded.motion_stats.playfield_rows > 0);
@@ -1199,10 +1220,12 @@ mod tests {
         let scene = ramped_scene(2, 0);
         let mut fresh = GpuPrepScratch::default();
         let a = run_chain(
-            &scene,
-            scaled(2, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(2, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig {
@@ -1210,8 +1233,7 @@ mod tests {
                 fields: InterpolationFields::Geometry,
             },
             &mut fresh,
-            0,
-            0,
+            (0, 0),
         );
 
         let mut dirty = GpuPrepScratch::default();
@@ -1220,10 +1242,12 @@ mod tests {
         dirty.interp_coefficients.rows[40][0].flags = 0xff;
         dirty.interp_coefficients.rows[40][0].source = [7.0, 8.0, 9.0];
         let b = run_chain(
-            &scene,
-            scaled(2, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(2, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig {
@@ -1231,8 +1255,7 @@ mod tests {
                 fields: InterpolationFields::Geometry,
             },
             &mut dirty,
-            0,
-            0,
+            (0, 0),
         );
         assert_eq!(a.words, b.words);
         assert_eq!(a.encoded.interp_stats, b.encoded.interp_stats);
@@ -1256,16 +1279,17 @@ mod tests {
 
         let mut scratch = GpuPrepScratch::default();
         let result = run_chain(
-            &scene,
-            scaled(2, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(2, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         let at = F3_SCENE_ROWS + 24 * F3_SCENE_ROW_STRIDE + F3_ROW_PF;
         assert_eq!(
@@ -1305,16 +1329,17 @@ mod tests {
 
         let mut scratch = GpuPrepScratch::default();
         let result = run_chain(
-            &scene,
-            scaled(1, 0),
-            SpriteList::Presented,
-            ALL_LAYERS,
+            ScenePlan {
+                scene: &scene,
+                options: scaled(1, 0),
+                sprite_list: SpriteList::Presented,
+                layer_mask: ALL_LAYERS,
+            },
             None,
             None,
             InterpolationConfig::default(),
             &mut scratch,
-            0,
-            0,
+            (0, 0),
         );
         let at = F3_SCENE_ROWS + 24 * F3_SCENE_ROW_STRIDE;
         assert_eq!(result.words[at + F3_ROW_BACKGROUND], 0x1234);

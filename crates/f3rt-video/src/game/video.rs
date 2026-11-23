@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 use crate::config::{Geometry, NATIVE_WIDTH, PixelFormat, SpriteList, VideoConfig};
 use crate::decode::SpritePresentation;
 use crate::game::SceneSprite;
-use crate::game::indexed_compositor::{IndexedScratch, TileRowTable};
+use crate::game::indexed_compositor::{
+    IndexedLayout, IndexedOutput, IndexedScratch, IndexedTiles, RowExecution, TileRowTable,
+};
 use crate::game::lines::GameLines;
 use crate::game::palette::GamePalette;
 use crate::game::scene::VideoRam;
@@ -76,6 +78,11 @@ pub struct GameVideo {
     native: Option<NativeCompositor>,
 }
 
+pub struct FrameSpritePresentation<'a, 'e> {
+    pub decode: SpritePresentation<'a>,
+    pub enhancements: Option<&'e mut dyn SpriteEnhancements>,
+}
+
 impl GameVideo {
     pub fn new(video: &VideoConfig, enhancements: Option<Box<dyn SpriteEnhancements>>) -> Self {
         let geometry = Geometry::from_video(video);
@@ -144,19 +151,30 @@ impl GameVideo {
         stage_cb: Option<&mut dyn FnMut(VideoStage)>,
         snapshot_target: Option<&mut SceneSnapshot>,
     ) {
-        self.render_frame_with(vram, assets, presentation, stage_cb, snapshot_target, None);
+        self.render_frame_with(
+            vram,
+            assets,
+            FrameSpritePresentation {
+                decode: presentation,
+                enhancements: None,
+            },
+            stage_cb,
+            snapshot_target,
+        );
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn render_frame_with(
         &mut self,
         vram: &VideoRam<'_>,
         assets: &GraphicsAssets,
-        presentation: SpritePresentation<'_>,
+        presentation: FrameSpritePresentation<'_, '_>,
         stage_cb: Option<&mut dyn FnMut(VideoStage)>,
         snapshot_target: Option<&mut SceneSnapshot>,
-        mut enhancements: Option<&mut dyn SpriteEnhancements>,
     ) {
+        let FrameSpritePresentation {
+            decode: presentation,
+            mut enhancements,
+        } = presentation;
         let mut stage_cb = stage_cb;
         enter(&mut stage_cb, VideoStage::Decode);
         self.tiles.decode(vram);
@@ -299,17 +317,22 @@ impl GameVideo {
         let native = native.get_or_insert_with(|| NativeCompositor::new(assets.playfield_tiles()));
         snapshot
             .compose(
-                native_pixels,
-                width,
-                PixelFormat::Argb8888,
+                IndexedOutput {
+                    pixels: native_pixels,
+                    layout: IndexedLayout {
+                        stride: width,
+                        format: PixelFormat::Argb8888,
+                    },
+                },
                 0,
-                &native.tile_rows,
-                assets.playfield_tiles(),
-                sprite_tiles,
+                IndexedTiles {
+                    playfield_rows: &native.tile_rows,
+                    playfield_pixels: assets.playfield_tiles(),
+                    sprite_pixels: sprite_tiles,
+                },
                 &mut native.scratch,
                 SpriteList::Canonical,
-                None,
-                None,
+                RowExecution::default(),
             )
             .expect("native composition buffers");
         debug_assert_eq!(native_pixels.len(), width * height);
