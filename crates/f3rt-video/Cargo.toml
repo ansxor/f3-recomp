@@ -4,5 +4,26 @@ version = "0.1.0"
 edition = "2024"
 description = "Taito F3 video renderer, mechanically ported from the C++ runtime"
 
+[features]
+default = []
+# Direct SDL3 GPU/video bindings. CMake enables this only for F3RT_SDL && F3RT_GPU builds and
+# links SDL3::SDL3 into f3rt_abi; `no-link` keeps bare `cargo check --features gpu` SDL-free.
+gpu = [
+    "dep:sdl3-sys",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-quartz-core",
+    "dep:objc2-core-foundation",
+]
+
 [dependencies]
 cxx = "1.0"
+sdl3-sys = { version = "0.7.3", optional = true, default-features = false, features = ["no-link"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true, default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSObject", "NSRunLoop", "NSString", "NSObjCRuntime"] }
+objc2-app-kit = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSResponder", "NSWindow", "NSScreen", "objc2-quartz-core"] }
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CADisplayLink", "CAFrameRateRange", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "CFString", "CFDate", "CFRunLoop"] }

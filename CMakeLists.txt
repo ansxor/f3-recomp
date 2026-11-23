@@ -307,12 +307,12 @@ if(F3RT_SDL)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
 
         find_program(UV_EXECUTABLE NAMES uv REQUIRED)
-        set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
+        set(VIDEO_SHADER_RS "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.rs")
         add_custom_command(
-            OUTPUT "${VIDEO_SHADER_HEADER}"
+            OUTPUT "${VIDEO_SHADER_RS}"
             COMMAND "${UV_EXECUTABLE}" run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups python "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
                 --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
-                --output "${VIDEO_SHADER_HEADER}"
+                --output "${VIDEO_SHADER_RS}"
                 --glslang "${F3_GLSLANG}"
                 --spirv-cross "${F3_SPIRV_CROSS}"
             DEPENDS
@@ -330,18 +330,13 @@ if(F3RT_SDL)
                 ${F3_SHADER_TOOL_TARGETS}
             VERBATIM
         )
+        add_custom_target(f3rt_video_shaders DEPENDS "${VIDEO_SHADER_RS}")
+        add_dependencies(cargo-prebuild_f3rt_abi f3rt_video_shaders)
+        corrosion_set_env_vars(f3rt_abi "F3_VIDEO_SHADERS_RS=${VIDEO_SHADER_RS}")
 
         add_library(f3rt-gpu STATIC
-            runtime/renderer/gpu/sdl_driver_shim.cpp
             runtime/renderer/gpu/video.cpp
-            "${VIDEO_SHADER_HEADER}"
         )
-        if(APPLE)
-            enable_language(OBJCXX)
-            target_sources(f3rt-gpu PRIVATE runtime/renderer/gpu/pacing_macos.mm)
-            set_source_files_properties(runtime/renderer/gpu/pacing_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-            target_link_libraries(f3rt-gpu PRIVATE "-framework AppKit" "-framework QuartzCore")
-        endif()
         target_include_directories(f3rt-gpu
             PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}"
                    "${CMAKE_CURRENT_BINARY_DIR}/generated"

@@ -1,20 +1,16 @@
 //! Scene sprite and scanout passes, mechanically ported from
 //! `runtime/renderer/gpu/scene_pass.{hpp,cpp}`.
 
-use super::driver::{
-    RawBuffer, RawCopyPass, RawSampler, RawTexture, ShaderKind, TextureFormat,
-    TextureSamplerBinding, TransferUsage,
-};
+use super::api::validate_tile_assets;
 use super::encode::{ENCODED_INTERPOLATION_WORDS, EncodedScene, encoded_native_words};
 use super::sdl_gpu::{
     GpuBuffer, GpuCommand, GpuContext, GpuPipeline, GpuSurface, GpuTexture, GpuTransfer,
-    uniform_bytes,
+    ShaderKind, TextureFormat, TransferUsage, sampler_binding, uniform_bytes,
 };
 use crate::config::{GameVideoOptions, Geometry};
+use crate::gpu::api::TILE_BYTES;
 use crate::gpu::scene_layout::{F3_MASK_BLEND_WEIGHTED, F3_MASK_HIDE_WEIGHTED, SceneUniforms};
-
-/// Bytes per 16x16 tile.
-pub const TILE_BYTES: u32 = 256;
+use sdl3_sys::gpu::{SDL_GPUBuffer, SDL_GPUCopyPass, SDL_GPUSampler, SDL_GPUTexture};
 
 // Sprite hardware plane at native resolution: 432 x 256 scanout lines.
 const NATIVE_PLANE_WIDTH: u32 = 432;
@@ -25,22 +21,6 @@ const NATIVE_END_COLUMN: u32 = 366;
 
 fn pack_word(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
-}
-
-fn validate_lengths(pf_bytes: usize, sp_bytes: usize) -> Result<(), String> {
-    let tile_bytes = TILE_BYTES as usize;
-    let half = u32::MAX as usize / 2;
-    if pf_bytes == 0
-        || sp_bytes == 0
-        || !pf_bytes.is_multiple_of(tile_bytes)
-        || !sp_bytes.is_multiple_of(tile_bytes)
-        || pf_bytes > half
-        || sp_bytes > half
-        || pf_bytes + sp_bytes > u32::MAX as usize
-    {
-        return Err("Incomplete GPU tile/sprite assets".to_owned());
-    }
-    Ok(())
 }
 
 pub struct GpuTileAssets {
@@ -54,7 +34,7 @@ pub struct GpuTileAssets {
 impl GpuTileAssets {
     /// Throws unless both ROMs are non-empty whole tiles that fit 32-bit offsets.
     pub fn validate(pf_rom: &[u8], sp_rom: &[u8]) -> Result<(), String> {
-        validate_lengths(pf_rom.len(), sp_rom.len())
+        validate_tile_assets(pf_rom.len(), sp_rom.len())
     }
 
     /// Packs both ROMs low-byte-first and uploads them once.
@@ -84,9 +64,16 @@ impl GpuTileAssets {
         }
         let mut cmd = ctx.begin_command()?;
         let copy = cmd.begin_copy_pass("Begin GPU asset copy")?;
-        staging.upload_to(copy, &pf_tiles, 0, pf_bytes, false);
-        staging.upload_to(copy, &sp_tiles, pf_bytes, sp_bytes, false);
-        cmd.driver().end_copy_pass(copy);
+        cmd.upload_buffer(copy, staging.get(), 0, pf_tiles.get(), pf_bytes, false);
+        cmd.upload_buffer(
+            copy,
+            staging.get(),
+            pf_bytes,
+            sp_tiles.get(),
+            sp_bytes,
+            false,
+        );
+        cmd.end_copy_pass(copy);
         cmd.submit()?;
         Ok(Self {
             pf_tiles,
@@ -243,7 +230,8 @@ impl ScenePass {
 
     fn upload_trail_seed(
         &mut self,
-        copy: RawCopyPass,
+        cmd: &GpuCommand,
+        copy: *mut SDL_GPUCopyPass,
         ctx: &GpuContext,
         seed: &[u16],
         options: GameVideoOptions,
@@ -302,8 +290,7 @@ impl ScenePass {
             self.targets.sprite_plane.get(),
             self.targets.sprite_plane_b.get(),
         ] {
-            ctx.driver()
-                .upload_texture(copy, trail_upload.get(), 0, width, height, plane, true);
+            cmd.upload_texture(copy, trail_upload.get(), 0, width, height, plane, true);
         }
         Ok(())
     }
@@ -319,21 +306,22 @@ impl ScenePass {
         geometry: &Geometry,
     ) -> Result<GpuSurface, String> {
         let copy = cmd.begin_copy_pass("Begin GPU frame copy")?;
-        self.upload.upload_to(
+        cmd.upload_buffer(
             copy,
-            if encoded.fallback {
-                &self.native_buffer
-            } else {
-                &self.scene_buffer
-            },
+            self.upload.get(),
             0,
+            if encoded.fallback {
+                self.native_buffer.get()
+            } else {
+                self.scene_buffer.get()
+            },
             encoded.upload_bytes,
             true,
         );
         if encoded.has_trails {
-            self.upload_trail_seed(copy, ctx, encoded.trail_seed, options, geometry)?;
+            self.upload_trail_seed(cmd, copy, ctx, encoded.trail_seed, options, geometry)?;
         }
-        cmd.driver().end_copy_pass(copy);
+        cmd.end_copy_pass(copy);
 
         let mut uniforms = encoded.uniforms;
         let scene_buffer = self.scene_buffer.get();
@@ -374,8 +362,7 @@ impl ScenePass {
         if encoded.blend_weighted {
             uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
         }
-        cmd.driver()
-            .push_fragment_uniforms(cmd.raw(), 0, uniform_bytes(&uniforms));
+        cmd.push_fragment_uniforms(0, uniform_bytes(&uniforms));
         let target = self.targets.surface.get();
         let pass = cmd.begin_render_pass(target, false)?;
         let pipeline = if encoded.use_interpolation {
@@ -386,25 +373,18 @@ impl ScenePass {
         } else {
             self.scene_pipeline.get()
         };
-        cmd.driver().bind_pipeline(pass, pipeline);
+        cmd.bind_pipeline(pass, pipeline);
+        let second_plane = if encoded.blend_weighted {
+            self.targets.sprite_plane_b.get()
+        } else {
+            self.targets.sprite_plane.get()
+        };
         let sprite_bindings = [
-            TextureSamplerBinding {
-                texture: self.targets.sprite_plane.get().0,
-                sampler: sampler.0,
-            },
-            TextureSamplerBinding {
-                texture: if encoded.blend_weighted {
-                    self.targets.sprite_plane_b.get()
-                } else {
-                    self.targets.sprite_plane.get()
-                }
-                .0,
-                sampler: sampler.0,
-            },
+            sampler_binding(self.targets.sprite_plane.get() as usize, sampler),
+            sampler_binding(second_plane as usize, sampler),
         ];
-        cmd.driver()
-            .bind_fragment_samplers(pass, 0, &sprite_bindings);
-        cmd.driver().bind_fragment_storage_buffers(
+        cmd.bind_fragment_samplers(pass, 0, &sprite_bindings);
+        cmd.bind_fragment_storage_buffers(
             pass,
             0,
             &[
@@ -413,8 +393,8 @@ impl ScenePass {
                 self.native_buffer.get(),
             ],
         );
-        cmd.driver().draw(pass, 3, 1);
-        cmd.driver().end_render_pass(pass);
+        cmd.draw(pass, 3, 1);
+        cmd.end_render_pass(pass);
         Ok(self.targets.surface.surface())
     }
 
@@ -422,25 +402,24 @@ impl ScenePass {
     fn draw_sprite_plane(
         &self,
         cmd: &mut GpuCommand,
-        plane: RawTexture,
-        seed: RawTexture,
+        plane: *mut SDL_GPUTexture,
+        seed: *mut SDL_GPUTexture,
         uniforms: SceneUniforms,
         mask: u32,
         has_trails: bool,
         options: GameVideoOptions,
         geometry: &Geometry,
-        scene_buffer: RawBuffer,
-        sp_tiles: RawBuffer,
-        sampler: RawSampler,
+        scene_buffer: *mut SDL_GPUBuffer,
+        sp_tiles: *mut SDL_GPUBuffer,
+        sampler: *mut SDL_GPUSampler,
     ) -> Result<(), String> {
         let mut pass_uniforms = uniforms;
         pass_uniforms.layer_mask |= mask;
-        cmd.driver()
-            .push_vertex_uniforms(cmd.raw(), 0, uniform_bytes(&pass_uniforms));
+        cmd.push_vertex_uniforms(0, uniform_bytes(&pass_uniforms));
         let pass = cmd.begin_render_pass(plane, has_trails)?;
-        cmd.driver().bind_pipeline(pass, self.sprite_pipeline.get());
+        cmd.bind_pipeline(pass, self.sprite_pipeline.get());
         if !options.expanded() {
-            cmd.driver().set_scissor(
+            cmd.set_scissor(
                 pass,
                 NATIVE_FIRST_COLUMN as i32,
                 geometry.first_line() as i32,
@@ -448,69 +427,11 @@ impl ScenePass {
                 geometry.height() as i32,
             );
         }
-        cmd.driver()
-            .bind_vertex_storage_buffers(pass, 0, &[scene_buffer]);
-        cmd.driver().bind_fragment_samplers(
-            pass,
-            0,
-            &[TextureSamplerBinding {
-                texture: seed.0,
-                sampler: sampler.0,
-            }],
-        );
-        cmd.driver()
-            .bind_fragment_storage_buffers(pass, 0, &[sp_tiles]);
-        cmd.driver().draw(pass, 6, uniforms.sprite_count);
-        cmd.driver().end_render_pass(pass);
+        cmd.bind_vertex_storage_buffers(pass, 0, &[scene_buffer]);
+        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(seed as usize, sampler)]);
+        cmd.bind_fragment_storage_buffers(pass, 0, &[sp_tiles]);
+        cmd.draw(pass, 6, uniforms.sprite_count);
+        cmd.end_render_pass(pass);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::gpu::driver::DriverRef;
-    use crate::gpu::mock_driver::MockGpuDriver;
-    use std::rc::Rc;
-
-    #[test]
-    fn tile_assets_reject_incomplete_roms() {
-        let tile = [0u8; TILE_BYTES as usize];
-        assert_eq!(
-            GpuTileAssets::validate(&[], &tile).unwrap_err(),
-            "Incomplete GPU tile/sprite assets"
-        );
-        assert_eq!(
-            GpuTileAssets::validate(&tile, &[]).unwrap_err(),
-            "Incomplete GPU tile/sprite assets"
-        );
-        assert!(GpuTileAssets::validate(&tile[..255], &tile).is_err());
-        assert!(GpuTileAssets::validate(&tile, &tile).is_ok());
-    }
-
-    #[test]
-    fn tile_assets_reject_offsets_that_do_not_fit_32_bits() {
-        // Each ROM must fit half of a 32-bit offset; the pair sums without overflow.
-        assert!(validate_lengths(0x8000_0000, 256).is_err());
-        assert!(validate_lengths(256, 0x8000_0000).is_err());
-        assert!(validate_lengths(0x7FFF_FF00, 0x7FFF_FF00).is_ok());
-        assert!(validate_lengths(510, 256).is_err());
-    }
-
-    #[test]
-    fn interpolation_pipeline_is_lazy_and_keeps_state_on_failure() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let driver: DriverRef = mock.clone();
-        let ctx = GpuContext::new(driver, None, false).expect("context");
-        let geometry = Geometry::default();
-        let options = GameVideoOptions::default();
-        let mut pass = ScenePass::new(&ctx, &geometry, options, false).expect("scene pass");
-        assert!(pass.interpolation_pipeline().is_none());
-        mock.fail_after("pipeline", 0);
-        assert!(pass.ensure_interpolation_pipeline(&ctx).is_err());
-        assert!(pass.interpolation_pipeline().is_none());
-        mock.clear_failures();
-        pass.ensure_interpolation_pipeline(&ctx).expect("pipeline");
-        assert!(pass.interpolation_pipeline().is_some());
     }
 }

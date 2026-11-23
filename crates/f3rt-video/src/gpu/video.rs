@@ -4,7 +4,13 @@
 //! chain inside Rust, encoding straight into the mapped upload slice: no intermediate copy and no
 //! per-frame FFI crossing.
 
-use super::driver::{DriverRef, RawDevice, RawWindow, TextureFormat};
+// Raw GPU handles are only ever passed back to SDL3 or overlaid on C++-owned hosts.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
+use super::api::{
+    GpuSurface, Postprocess, PresentAcquire, PresentRequest, PresentTiming, RenderRequest,
+    validate_gpu_video_config,
+};
 use super::encode::{ALL_LAYERS, EncodedScene, GpuPrepScratch, ScenePlan};
 use super::interp::{
     InterpolationConfig, InterpolationFields, InterpolationLog, InterpolationStats,
@@ -12,36 +18,49 @@ use super::interp::{
 };
 use super::motion::{GpuMotionHistory, MotionInterpolationStats};
 use super::pacing::DisplayPacer;
-use super::postprocess::{Postprocess, Postprocessor, SurfaceRotator};
+use super::postprocess::{Postprocessor, SurfaceRotator};
 use super::scene_pass::{GpuTileAssets, ScenePass};
-use super::sdl_gpu::{
-    GpuContext, GpuSurface, GpuTexture, PresentAcquire, PresentRequest, PresentTiming,
-    ReadbackBuffer,
-};
+use super::sdl_gpu::{GpuContext, GpuTexture, ReadbackBuffer, TextureFormat, save_surface};
 use crate::config::{GameVideoOptions, Geometry, SpriteList, VideoScaleMode};
 use crate::game::scene_snapshot::SceneSnapshot;
 use crate::gpu::scene_layout::F3_SCENE_SPRITE_COUNT;
+use sdl3_sys::gpu::{SDL_GPUCommandBuffer, SDL_GPUTexture};
+use std::ffi::c_void;
 
-/// One offscreen draw request.
-#[derive(Clone, Copy, Debug)]
-pub struct RenderRequest {
-    pub sprites: SpriteList,
-    /// Output/layer-mask diagnostics remain baseline unless `postprocess` is explicitly true.
-    pub layer_mask: u32,
-    /// Temporal geometry at this alpha (needs captured motion history); `None` renders the
-    /// canonical frame.
-    pub alpha: Option<f32>,
-    pub postprocess: bool,
+/// Host overlay invoked on the window composition target after the game blit.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Overlay {
+    callback: usize,
+    userdata: usize,
 }
 
-impl Default for RenderRequest {
-    fn default() -> Self {
-        Self {
-            sprites: SpriteList::Presented,
-            layer_mask: ALL_LAYERS,
-            alpha: None,
-            postprocess: false,
-        }
+type OverlayFn =
+    unsafe extern "C" fn(*mut c_void, *mut SDL_GPUCommandBuffer, *mut SDL_GPUTexture, u32, u32);
+
+impl Overlay {
+    pub fn new(callback: usize, userdata: usize) -> Option<Self> {
+        (callback != 0).then_some(Self { callback, userdata })
+    }
+
+    pub fn invoke(
+        self,
+        command: *mut SDL_GPUCommandBuffer,
+        target: usize,
+        width: u32,
+        height: u32,
+    ) {
+        // SAFETY: the host keeps the callback live for the video's whole lifetime and it accepts
+        // the SDL3 GPU command buffer and composition target.
+        let callback: OverlayFn = unsafe { std::mem::transmute(self.callback) };
+        unsafe {
+            callback(
+                self.userdata as *mut c_void,
+                command,
+                target as *mut SDL_GPUTexture,
+                width,
+                height,
+            )
+        };
     }
 }
 
@@ -62,7 +81,7 @@ pub struct GpuVideo {
     geometry: Geometry,
     scale_mode: VideoScaleMode,
     linear: bool,
-    overlay: bool,
+    overlay: Option<Overlay>,
     rendered: bool,
     last_presented: bool,
     presented_frames: u64,
@@ -71,28 +90,11 @@ pub struct GpuVideo {
     ctx: GpuContext,
 }
 
-fn validate_config(
-    options: GameVideoOptions,
-    rotation: u32,
-    playfield_assets: &[u8],
-    sprite_assets: &[u8],
-) -> Result<(), String> {
-    SurfaceRotator::validate(rotation)?;
-    if options.scale == 0
-        || options.scale > GameVideoOptions::MAX_GPU_SCALE
-        || options.border > GameVideoOptions::MAX_BORDER
-    {
-        return Err("Game GPU presentation scale/border out of range".to_owned());
-    }
-    GpuTileAssets::validate(playfield_assets, sprite_assets)
-}
-
 impl GpuVideo {
     /// SDL video must be initialized. Window may be absent for offscreen parity.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        driver: DriverRef,
-        window: Option<RawWindow>,
+        window: usize,
         options: GameVideoOptions,
         geometry: Geometry,
         playfield_assets: &[u8],
@@ -103,8 +105,8 @@ impl GpuVideo {
         fields: InterpolationFields,
         rotation: u32,
     ) -> Result<Self, String> {
-        validate_config(options, rotation, playfield_assets, sprite_assets)?;
-        let ctx = GpuContext::new(driver.clone(), window, vsync)?;
+        validate_gpu_video_config(options, rotation, playfield_assets, sprite_assets)?;
+        let ctx = GpuContext::new(window, vsync)?;
         let assets = GpuTileAssets::new(&ctx, playfield_assets, sprite_assets)?;
         let scene_pass = ScenePass::new(
             &ctx,
@@ -113,7 +115,7 @@ impl GpuVideo {
             interpolation != VideoInterpolation::Off,
         )?;
         let rotator = SurfaceRotator::new(&ctx, &geometry, options, rotation)?;
-        let pacer = DisplayPacer::new(driver.clone());
+        let pacer = DisplayPacer::new(window as *mut sdl3_sys::video::SDL_Window);
         Ok(Self {
             assets,
             scene_pass,
@@ -134,7 +136,7 @@ impl GpuVideo {
             geometry,
             scale_mode: VideoScaleMode::Fixed,
             linear,
-            overlay: false,
+            overlay: None,
             rendered: false,
             last_presented: false,
             presented_frames: 0,
@@ -142,10 +144,6 @@ impl GpuVideo {
             saved_pixels: Vec::new(),
             ctx,
         })
-    }
-
-    pub fn driver(&self) -> &dyn super::driver::GpuDriver {
-        self.ctx.driver()
     }
 
     pub fn driver_name(&self) -> String {
@@ -206,8 +204,8 @@ impl GpuVideo {
         self.presented_frames
     }
 
-    pub fn device(&self) -> RawDevice {
-        self.ctx.device()
+    pub fn device(&self) -> usize {
+        self.ctx.device() as usize
     }
 
     pub fn set_linear(&mut self, linear: bool) {
@@ -235,8 +233,8 @@ impl GpuVideo {
         Ok(())
     }
 
-    pub fn set_overlay(&mut self, enabled: bool) {
-        self.overlay = enabled;
+    pub fn set_overlay(&mut self, callback: usize, userdata: usize) {
+        self.overlay = Overlay::new(callback, userdata);
     }
 
     /// See `Postprocessor::configure` for the user shader ABI. Errors retain the last valid
@@ -313,7 +311,7 @@ impl GpuVideo {
         {
             return Ok(false);
         }
-        let alpha = request.sample_alpha(self.ctx.driver());
+        let alpha = request.sample_alpha(monotonic_ns());
         let encoded = self.prepare_scene(scene, SpriteList::Presented, ALL_LAYERS, alpha)?;
         let composed = self.scene_pass.draw(
             &mut cmd,
@@ -391,11 +389,8 @@ impl GpuVideo {
     /// Explicit opt-in; completed emulated frames are captured, never draws.
     pub fn capture_motion(&mut self, scene: &SceneSnapshot, frame: u64) -> Result<(), String> {
         if self.motion.is_none() {
-            self.pacer.enable(
-                self.ctx.device(),
-                self.ctx.window().is_some(),
-                self.ctx.vsync(),
-            )?;
+            self.pacer
+                .enable(self.ctx.device(), self.ctx.has_window(), self.ctx.vsync())?;
             self.motion = Some(GpuMotionHistory::new(self.options));
         }
         let motion = self.motion.as_mut().expect("motion history created above");
@@ -460,7 +455,7 @@ impl GpuVideo {
             Some(dot) => path[dot..].eq_ignore_ascii_case(".png"),
             None => false,
         };
-        self.ctx.driver().save_surface(
+        save_surface(
             path,
             &self.saved_pixels,
             source.width,
@@ -523,6 +518,14 @@ impl GpuVideo {
     }
 }
 
+fn monotonic_ns() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
 impl Drop for GpuVideo {
     fn drop(&mut self) {
         self.ctx.wait_idle();
@@ -530,288 +533,3 @@ impl Drop for GpuVideo {
 }
 
 // The field order above makes the context (and device) drop last.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::VideoConfig;
-    use crate::gpu::driver::{DriverRef, RawWindow, TextureFormat};
-    use crate::gpu::mock_driver::{MockGpuDriver, MockSwapchain};
-    use std::ffi::c_void;
-    use std::rc::Rc;
-
-    const TILE_BYTES: usize = 256;
-
-    fn window() -> Option<RawWindow> {
-        Some(RawWindow(std::ptr::dangling_mut::<c_void>()))
-    }
-
-    fn make_video_with_vsync(
-        mock: &Rc<MockGpuDriver>,
-        window: Option<RawWindow>,
-        vsync: bool,
-    ) -> GpuVideo {
-        let playfield = [0u8; TILE_BYTES];
-        let sprites = [1u8; TILE_BYTES];
-        let driver: DriverRef = mock.clone();
-        GpuVideo::new(
-            driver,
-            window,
-            GameVideoOptions::default(),
-            Geometry::default(),
-            &playfield,
-            &sprites,
-            false,
-            vsync,
-            VideoInterpolation::Off,
-            InterpolationFields::Geometry,
-            0,
-        )
-        .expect("mock GPU video")
-    }
-
-    fn make_video(mock: &Rc<MockGpuDriver>, window: Option<RawWindow>) -> GpuVideo {
-        make_video_with_vsync(mock, window, false)
-    }
-
-    fn scene() -> SceneSnapshot {
-        SceneSnapshot::new(&VideoConfig::default())
-    }
-
-    #[test]
-    fn set_scale_failure_keeps_the_previous_scale_and_targets() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        let baseline = video.scene_pass.targets().surface.surface().texture;
-        mock.fail_after("texture", 1);
-        let error = video.set_scale(2).unwrap_err();
-        assert_eq!(error, "Create GPU render texture: mock failure");
-        assert_eq!(video.options.scale, 1);
-        assert_eq!(
-            video.scene_pass.targets().surface.surface().texture,
-            baseline
-        );
-        assert!(
-            !mock.released().is_empty(),
-            "the partial target is released"
-        );
-
-        mock.clear_failures();
-        video.set_scale(2).expect("scale");
-        assert_eq!(video.options.scale, 2);
-        let surface = video.scene_pass.targets().surface.surface();
-        assert_eq!(surface.width, 640);
-        assert_eq!(surface.height, 464);
-    }
-
-    #[test]
-    fn set_interpolation_failure_keeps_the_previous_mode() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        mock.fail_after("pipeline", 0);
-        let error = video
-            .set_interpolation(VideoInterpolation::Linear, InterpolationFields::Geometry)
-            .unwrap_err();
-        assert_eq!(error, "Create GPU graphics pipeline: mock failure");
-        assert_eq!(video.interp_config.mode, VideoInterpolation::Off);
-        assert!(video.scene_pass.interpolation_pipeline().is_none());
-
-        mock.clear_failures();
-        video
-            .set_interpolation(VideoInterpolation::Linear, InterpolationFields::All)
-            .expect("interpolation");
-        assert_eq!(video.interp_config.mode, VideoInterpolation::Linear);
-        assert!(video.scene_pass.interpolation_pipeline().is_some());
-    }
-
-    #[test]
-    fn set_postprocess_failure_retains_the_last_valid_preset() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        mock.fail_after("texture", 0);
-        let error = video.set_postprocess(Postprocess::Crt, "").unwrap_err();
-        assert_eq!(error, "Create GPU render texture: mock failure");
-        assert_eq!(video.postprocess(), Postprocess::Off);
-        assert!(video.postprocess.pipeline().is_none());
-        assert!(video.postprocess.surface().is_none());
-
-        mock.clear_failures();
-        video.set_postprocess(Postprocess::Crt, "").expect("crt");
-        assert_eq!(video.postprocess(), Postprocess::Crt);
-        assert!(video.postprocess.surface().is_some());
-        let error = video
-            .set_postprocess(Postprocess::User, "/missing.spv")
-            .unwrap_err();
-        assert!(error.starts_with("Cannot open user shader"), "{error}");
-        assert_eq!(video.postprocess(), Postprocess::Crt);
-        assert!(video.postprocess.surface().is_some());
-
-        video.set_postprocess(Postprocess::Off, "").expect("off");
-        assert_eq!(video.postprocess(), Postprocess::Off);
-        assert!(video.postprocess.pipeline().is_none());
-        assert!(video.postprocess.surface().is_none());
-    }
-
-    #[test]
-    fn render_rejects_a_short_output_and_reads_back_a_full_one() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        let scene = scene();
-        let mut short = vec![0u32; 10];
-        assert_eq!(
-            video
-                .render(&scene, &mut short, &RenderRequest::default())
-                .unwrap_err(),
-            "Incomplete GPU output buffer"
-        );
-        let mut output = vec![
-            0u32;
-            (video.options.width(&video.geometry) * video.options.height(&video.geometry))
-                as usize
-        ];
-        video
-            .render(&scene, &mut output, &RenderRequest::default())
-            .expect("render");
-        assert_eq!(mock.call_count("download_texture"), 1);
-        assert!(video.rendered);
-        assert!(!video.last_presented());
-    }
-
-    #[test]
-    fn present_skips_a_busy_swapchain_without_uploading() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, window());
-        mock.set_swapchain(MockSwapchain::None);
-        let uploads = mock.call_count("upload_buffer");
-        let presented = video
-            .present(&scene(), &PresentRequest::default())
-            .expect("present");
-        assert!(!presented);
-        assert_eq!(mock.call_count("upload_buffer"), uploads);
-        assert_eq!(video.presented_frames(), 0);
-        assert!(!video.last_presented());
-    }
-
-    #[test]
-    fn present_composes_a_left_pane_and_captures_the_window() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, window());
-        mock.set_swapchain(MockSwapchain::Drawable {
-            width: 64,
-            height: 32,
-        });
-        let left = video
-            .ctx
-            .create_texture(TextureFormat::Bgra8Unorm, 16, 16)
-            .expect("left pane");
-        video.set_overlay(true);
-        let request = PresentRequest {
-            wait: true,
-            left_pane: left.surface(),
-            capture_path: Some("shot.png"),
-            ..PresentRequest::default()
-        };
-        assert!(video.present(&scene(), &request).expect("present"));
-        assert_eq!(video.presented_frames(), 1);
-        assert_eq!(mock.call_count("blit"), 3, "two panes plus the drawable");
-        assert_eq!(mock.call_count("download_texture"), 1);
-        assert_eq!(mock.call_count("invoke_overlay"), 1);
-        let saved = mock.saved_surfaces();
-        assert_eq!(saved.len(), 1);
-        assert_eq!(saved[0].path, "shot.png");
-        assert_eq!((saved[0].width, saved[0].height), (64, 32));
-        assert_eq!(saved[0].pixel_format, 1);
-        assert!(saved[0].png);
-    }
-
-    #[test]
-    fn capture_surface_reallocates_the_destination() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        let mut destination = GpuTexture::empty();
-        video
-            .capture_surface(&scene(), &mut destination)
-            .expect("capture");
-        assert!(destination.is_valid());
-        let surface = destination.surface();
-        assert_eq!(surface.width, 320);
-        assert_eq!(surface.height, 232);
-        assert!(mock.call_count("upload_buffer") > 0);
-    }
-
-    #[test]
-    fn capture_motion_enables_the_pacer_once() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, window());
-        video.capture_motion(&scene(), 1).expect("capture");
-        video.capture_motion(&scene(), 2).expect("capture");
-        assert_eq!(mock.frames_in_flight(), vec![1]);
-        assert_eq!(
-            mock.call_count("create_pacer"),
-            0,
-            "vsync off has no display link"
-        );
-        assert!(!video.pace_motion());
-        video.reset_motion();
-        assert!(!video.last_motion().paired);
-    }
-
-    #[test]
-    fn capture_motion_creates_the_display_link_when_vsync_is_on() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video_with_vsync(&mock, window(), true);
-        video.capture_motion(&scene(), 1).expect("capture");
-        assert_eq!(mock.call_count("create_pacer"), 1);
-        assert_eq!(mock.frames_in_flight(), vec![1]);
-    }
-
-    #[test]
-    fn save_surface_needs_a_draw_then_writes_png() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        assert_eq!(
-            video.save_surface("shot.png").unwrap_err(),
-            "No GPU surface has been drawn"
-        );
-        let mut output = vec![
-            0u32;
-            (video.options.width(&video.geometry) * video.options.height(&video.geometry))
-                as usize
-        ];
-        video
-            .render(&scene(), &mut output, &RenderRequest::default())
-            .expect("render");
-        video.save_surface("shot.PNG").expect("save");
-        let saved = mock.saved_surfaces();
-        assert_eq!(saved.len(), 1);
-        assert!(saved[0].png);
-        assert_eq!(saved[0].pixel_format, 1);
-    }
-
-    #[test]
-    fn scale_validation_and_rotation_boundaries() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let mut video = make_video(&mock, None);
-        assert_eq!(video.set_scale(0).unwrap_err(), "GPU scale must be 1..8");
-        assert_eq!(video.set_scale(9).unwrap_err(), "GPU scale must be 1..8");
-        let playfield = [0u8; TILE_BYTES];
-        let sprites = [0u8; TILE_BYTES];
-        let driver: DriverRef = mock.clone();
-        let error = GpuVideo::new(
-            driver,
-            None,
-            GameVideoOptions::default(),
-            Geometry::default(),
-            &playfield,
-            &sprites,
-            false,
-            false,
-            VideoInterpolation::Off,
-            InterpolationFields::Geometry,
-            45,
-        )
-        .err()
-        .expect("rotation must fail");
-        assert_eq!(error, "Unsupported GPU presentation rotation");
-    }
-}

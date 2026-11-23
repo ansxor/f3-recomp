@@ -16,8 +16,8 @@
 #include <variant>
 
 namespace f3rt {
-// `runtime/renderer/gpu/postprocess.hpp` and `sdl_gpu.hpp` were folded into this façade; the
-// implementations now live in `crates/f3rt-video/src/gpu/`.
+// The GPU backend lives in `crates/f3rt-video/src/gpu/` and calls `sdl3-sys` directly; this
+// header is the C++ façade over that Rust API.
 enum class Postprocess { Off, Crt, User };
 
 // Optional host overlay invoked on the window composition target (the swapchain directly, or the
@@ -31,8 +31,6 @@ struct GpuSurface {
     uint32_t width = 0, height = 0;
     explicit operator bool() const noexcept { return texture != 0; }
 };
-
-struct GpuDriverShim;
 
 /// Owned render texture shared with the Rust backend. Move-only; destroy it before its GpuVideo.
 class GpuTexture {
@@ -149,7 +147,6 @@ public:
     void save_surface(const char *path);
 
 private:
-    std::unique_ptr<GpuDriverShim> m_shim;
     rust::Box<rust_video::GpuVideo> m_video;
     std::string m_driver;
     mutable InterpolationStats m_interpolation{};

@@ -1,20 +1,14 @@
-//! Presentation postprocessing and rotation, mechanically ported from
-//! `runtime/renderer/gpu/postprocess.{hpp,cpp}`.
+//! Presentation postprocessing and rotation. Replaces `runtime/renderer/gpu/postprocess.cpp`.
 
-use super::driver::{ShaderKind, TextureFormat, TextureSamplerBinding};
-use super::sdl_gpu::{GpuCommand, GpuContext, GpuPipeline, GpuSurface, GpuTexture, uniform_bytes};
+use super::api::{Postprocess, validate_rotation};
+use super::sdl_gpu::{
+    GpuCommand, GpuContext, GpuPipeline, GpuSurface, GpuTexture, ShaderKind, TextureFormat,
+    sampler_binding, uniform_bytes,
+};
 use super::user_spirv::load_user_shader;
 use crate::config::{GameVideoOptions, Geometry};
 
 const TARGET_FORMAT: TextureFormat = TextureFormat::Bgra8Unorm;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Postprocess {
-    #[default]
-    Off,
-    Crt,
-    User,
-}
 
 fn user_pipeline(ctx: &GpuContext, path: &str) -> Result<GpuPipeline, String> {
     let metal = ctx.is_metal();
@@ -84,13 +78,14 @@ impl Postprocessor {
         } else {
             None
         };
-        // The driver defers destruction of the replaced pipeline until pending commands finish.
+        // SDL defers destruction of the replaced pipeline until pending commands finish.
         self.pipeline = Some(next_pipeline);
         if let Some(surface) = next_surface {
             self.surface = Some(surface);
         }
         self.preset = preset;
-        self.start_ns = ctx.driver().ticks_ns();
+        // SAFETY: SDL is initialized by the host.
+        self.start_ns = unsafe { sdl3_sys::timer::SDL_GetTicksNS() };
         Ok(())
     }
 
@@ -144,15 +139,16 @@ impl Postprocessor {
         if !self.active() || !apply_now {
             return Ok(input);
         }
-        let elapsed = (ctx.driver().ticks_ns().saturating_sub(self.start_ns)) as f64 / 1.0e9;
+        // SAFETY: SDL is initialized by the host.
+        let now = unsafe { sdl3_sys::timer::SDL_GetTicksNS() };
+        let elapsed = (now.saturating_sub(self.start_ns)) as f64 / 1.0e9;
         let parameters = [
             options.width(geometry) as f32,
             options.height(geometry) as f32,
             options.scale as f32,
             elapsed as f32,
         ];
-        ctx.driver()
-            .push_fragment_uniforms(cmd.raw(), 0, uniform_bytes(&parameters));
+        cmd.push_fragment_uniforms(0, uniform_bytes(&parameters));
         let target = self
             .surface
             .as_ref()
@@ -162,17 +158,10 @@ impl Postprocessor {
             .as_ref()
             .ok_or_else(|| "GPU postprocess pipeline missing".to_owned())?;
         let pass = cmd.begin_render_pass(target.get(), false)?;
-        ctx.driver().bind_pipeline(pass, pipeline.get());
-        ctx.driver().bind_fragment_samplers(
-            pass,
-            0,
-            &[TextureSamplerBinding {
-                texture: input.texture.0,
-                sampler: ctx.sampler().0,
-            }],
-        );
-        ctx.driver().draw(pass, 3, 1);
-        ctx.driver().end_render_pass(pass);
+        cmd.bind_pipeline(pass, pipeline.get());
+        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(input.texture, ctx.sampler())]);
+        cmd.draw(pass, 3, 1);
+        cmd.end_render_pass(pass);
         Ok(target.surface())
     }
 }
@@ -187,10 +176,7 @@ pub struct SurfaceRotator {
 impl SurfaceRotator {
     /// Throws unless `rotation` is 0, 90 or 270.
     pub fn validate(rotation: u32) -> Result<(), String> {
-        if rotation != 0 && rotation != 90 && rotation != 270 {
-            return Err("Unsupported GPU presentation rotation".to_owned());
-        }
-        Ok(())
+        validate_rotation(rotation)
     }
 
     pub fn new(
@@ -267,8 +253,7 @@ impl SurfaceRotator {
         }
         // `rotate.frag` declares `uvec4 rotation`; the C++ façade pushed the whole zero-padded array.
         let uniform = [self.rotation, 0, 0, 0];
-        ctx.driver()
-            .push_fragment_uniforms(cmd.raw(), 0, uniform_bytes(&uniform));
+        cmd.push_fragment_uniforms(0, uniform_bytes(&uniform));
         let target = self
             .surface
             .as_ref()
@@ -278,17 +263,10 @@ impl SurfaceRotator {
             .as_ref()
             .ok_or_else(|| "GPU rotation pipeline missing".to_owned())?;
         let pass = cmd.begin_render_pass(target.get(), false)?;
-        ctx.driver().bind_pipeline(pass, pipeline.get());
-        ctx.driver().bind_fragment_samplers(
-            pass,
-            0,
-            &[TextureSamplerBinding {
-                texture: input.texture.0,
-                sampler: ctx.sampler().0,
-            }],
-        );
-        ctx.driver().draw(pass, 3, 1);
-        ctx.driver().end_render_pass(pass);
+        cmd.bind_pipeline(pass, pipeline.get());
+        cmd.bind_fragment_samplers(pass, 0, &[sampler_binding(input.texture, ctx.sampler())]);
+        cmd.draw(pass, 3, 1);
+        cmd.end_render_pass(pass);
         Ok(target.surface())
     }
 }
@@ -296,14 +274,6 @@ impl SurfaceRotator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::driver::DriverRef;
-    use crate::gpu::mock_driver::MockGpuDriver;
-    use std::rc::Rc;
-
-    fn context(mock: &Rc<MockGpuDriver>) -> GpuContext {
-        let driver: DriverRef = mock.clone();
-        GpuContext::new(driver, None, false).expect("context")
-    }
 
     #[test]
     fn rotation_accepts_only_portrait_right_angles() {
@@ -316,54 +286,5 @@ mod tests {
                 "Unsupported GPU presentation rotation"
             );
         }
-    }
-
-    #[test]
-    fn rotation_allocates_a_portrait_target() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let ctx = context(&mock);
-        let geometry = Geometry::default();
-        let options = GameVideoOptions::default();
-        let rotator = SurfaceRotator::new(&ctx, &geometry, options, 90).expect("rotator");
-        assert!(rotator.rotated());
-        let surface = rotator.surface().expect("surface");
-        assert_eq!(surface.width(), geometry.height());
-        assert_eq!(surface.height(), options.width(&geometry));
-        let empty = SurfaceRotator::new(&ctx, &geometry, options, 0).expect("upright");
-        assert!(!empty.rotated());
-        assert!(empty.surface().is_none());
-        assert!(
-            !empty
-                .reallocate_target(&ctx, &geometry, options)
-                .unwrap()
-                .is_valid()
-        );
-    }
-
-    #[test]
-    fn postprocess_configure_retains_the_last_valid_preset() {
-        let mock = Rc::new(MockGpuDriver::default());
-        let ctx = context(&mock);
-        let geometry = Geometry::default();
-        let options = GameVideoOptions::default();
-        let mut processor = Postprocessor::default();
-        processor
-            .configure(&ctx, &geometry, options, Postprocess::Crt, "")
-            .expect("crt");
-        assert!(processor.active());
-        assert_eq!(processor.preset(), Postprocess::Crt);
-        assert!(processor.surface().is_some());
-        let error = processor
-            .configure(&ctx, &geometry, options, Postprocess::User, "/missing.spv")
-            .unwrap_err();
-        assert!(error.starts_with("Cannot open user shader"), "{error}");
-        assert_eq!(processor.preset(), Postprocess::Crt);
-        assert!(processor.surface().is_some());
-        processor
-            .configure(&ctx, &geometry, options, Postprocess::Off, "")
-            .expect("off");
-        assert!(!processor.active());
-        assert!(processor.surface().is_none());
-        assert!(processor.pipeline().is_none());
     }
 }

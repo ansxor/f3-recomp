@@ -1,8 +1,7 @@
-//! Thin C++ façade over `rust_video::GpuVideo`. The SDL3 calls live in `sdl_driver_shim.cpp`;
-//! all renderer logic lives in `crates/f3rt-video/src/gpu/`.
+//! Thin C++ façade over `rust_video::GpuVideo`. All SDL3 calls live in
+//! `crates/f3rt-video/src/gpu/`; the runtime links `SDL3::SDL3` through `f3rt_abi`.
 
 #include "renderer/gpu/video.hpp"
-#include "renderer/gpu/sdl_driver_shim.hpp"
 
 #include <stdexcept>
 #include <utility>
@@ -18,12 +17,6 @@ template <class F> void guarded(F &&call) {
 }
 
 uintptr_t token(const void *pointer) { return reinterpret_cast<uintptr_t>(pointer); }
-
-std::unique_ptr<GpuDriverShim> make_shim(SDL_Window *window, unsigned rotation) {
-    if (rotation != 0 && rotation != 90 && rotation != 270)
-        throw std::invalid_argument("Unsupported GPU presentation rotation");
-    return create_sdl_driver(window);
-}
 
 std::chrono::nanoseconds::rep nanos(std::chrono::nanoseconds duration) {
     return duration.count();
@@ -71,11 +64,10 @@ GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options,
                    std::span<const uint8_t> sprite_assets, bool linear, bool vsync,
                    VideoInterpolation interpolation, InterpolationFields fields,
                    unsigned rotation)
-    : m_shim(make_shim(window, rotation)),
-      m_video([&]() {
+    : m_video([&]() {
           try {
               return rust_video::new_gpu_video(
-                  token(sdl_driver_vtable()), token(m_shim.get()), token(window),
+                  token(window),
                   rust_video::GameVideoOptions{options.scale, options.border},
                   rust_video::GpuGeometry{geometry::FIRST_LINE, geometry::HEIGHT},
                   rust::Slice<const uint8_t>(playfield_assets.data(), playfield_assets.size()),
@@ -118,9 +110,7 @@ void GpuVideo::set_interpolation(VideoInterpolation mode, InterpolationFields fi
 }
 
 void GpuVideo::set_overlay(Overlay callback, void *userdata) {
-    m_shim->overlay = callback;
-    m_shim->overlay_userdata = userdata;
-    m_video->set_overlay(callback != nullptr);
+    m_video->set_overlay(token(reinterpret_cast<const void *>(callback)), token(userdata));
 }
 
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &user_shader) {

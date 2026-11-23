@@ -8,6 +8,10 @@ description = "Links the Rust runtime crates (audio, eeprom) into one staticlib 
 name = "f3rt_abi"
 crate-type = ["staticlib"]
 
+[features]
+default = []
+gpu = ["f3rt-video/gpu"]
+
 [dependencies]
 f3rt-audio = { path = "../f3rt-audio" }
 f3rt-eeprom = { path = "../f3rt-eeprom" }

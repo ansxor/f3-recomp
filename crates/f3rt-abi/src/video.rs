@@ -520,8 +520,6 @@ mod ffi {
     extern "Rust" {
         type GpuVideo;
         fn new_gpu_video(
-            vtable: usize,
-            shim: usize,
             window: usize,
             options: GameVideoOptions,
             geometry: GpuGeometry,
@@ -545,7 +543,7 @@ mod ffi {
             mode: VideoInterpolation,
             fields: InterpolationFields,
         ) -> Result<()>;
-        fn set_overlay(&mut self, enabled: bool);
+        fn set_overlay(&mut self, callback: usize, userdata: usize);
         fn set_postprocess(&mut self, preset: Postprocess, user_shader: &str) -> Result<()>;
         fn postprocess(&self) -> Postprocess;
         fn render(
@@ -1985,7 +1983,7 @@ fn abi_postprocess(value: v::gpu::Postprocess) -> ffi::Postprocess {
 }
 
 // ---------------------------------------------------------------------------
-// GPU video (SDL3 backend behind the C++ driver shim)
+// GPU video (direct SDL3 backend; stub without the `gpu` feature)
 // ---------------------------------------------------------------------------
 
 pub struct GpuVideo {
@@ -1994,8 +1992,6 @@ pub struct GpuVideo {
 
 #[allow(clippy::too_many_arguments)]
 fn new_gpu_video(
-    vtable: usize,
-    shim: usize,
     window: usize,
     opts: ffi::GameVideoOptions,
     geometry: ffi::GpuGeometry,
@@ -2007,17 +2003,7 @@ fn new_gpu_video(
     fields: ffi::InterpolationFields,
     rotation: u32,
 ) -> Result<Box<GpuVideo>, String> {
-    // SAFETY: `f3rt-gpu` passes its static driver table and keeps the shim alive for the video's
-    // whole lifetime (the C++ façade destroys the Rust box first).
-    let driver: v::gpu::DriverRef = std::rc::Rc::new(unsafe {
-        v::gpu::SdlDriver::from_raw(
-            vtable as *const v::gpu::GpuDriverVtable,
-            shim as *mut std::ffi::c_void,
-        )
-    });
-    let window = (window != 0).then_some(v::gpu::RawWindow(window as *mut std::ffi::c_void));
     let inner = v::gpu::GpuVideo::new(
-        driver,
         window,
         options(&opts),
         gpu_geometry(&geometry),
@@ -2058,7 +2044,7 @@ impl GpuVideo {
     }
 
     fn device(&self) -> usize {
-        self.inner.device().0 as usize
+        self.inner.device()
     }
 
     fn set_linear(&mut self, linear: bool) {
@@ -2074,8 +2060,8 @@ impl GpuVideo {
             .set_interpolation(video_interpolation(mode), interpolation_fields(fields))
     }
 
-    fn set_overlay(&mut self, enabled: bool) {
-        self.inner.set_overlay(enabled);
+    fn set_overlay(&mut self, callback: usize, userdata: usize) {
+        self.inner.set_overlay(callback, userdata);
     }
 
     fn set_postprocess(
@@ -2111,8 +2097,7 @@ impl GpuVideo {
         scene: &SceneSnapshot,
         request: &ffi::GpuPresentRequest,
     ) -> Result<bool, String> {
-        use v::gpu::driver::RawTexture;
-        use v::gpu::sdl_gpu::PresentTiming;
+        use v::gpu::PresentTiming;
         let timing = match request.timing.repr {
             1 => PresentTiming::Fixed(request.alpha),
             2 => PresentTiming::Live {
@@ -2125,7 +2110,7 @@ impl GpuVideo {
             v::gpu::GpuSurface::default()
         } else {
             v::gpu::GpuSurface {
-                texture: RawTexture(request.left_pane_handle as *mut std::ffi::c_void),
+                texture: request.left_pane_handle,
                 width: request.left_pane_width,
                 height: request.left_pane_height,
             }
@@ -2199,7 +2184,7 @@ fn new_gpu_texture() -> Box<GpuTexture> {
 
 impl GpuTexture {
     fn texture_handle(&self) -> usize {
-        self.inner.get().0 as usize
+        self.inner.texture_handle()
     }
 
     fn texture_width(&self) -> u32 {

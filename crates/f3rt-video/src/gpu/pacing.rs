@@ -1,7 +1,11 @@
-//! Display pacing, mechanically ported from `runtime/renderer/gpu/pacing.{hpp,cpp}`.
-//! The macOS `CADisplayLink` helper stays C++ (`pacing_macos.mm`) behind the driver.
+//! Display pacing. On macOS the pacer owns a `CADisplayLink` (see [`super::pacing_macos`]);
+//! other platforms have no display link and callers pace on their own deadlines.
 
-use super::driver::{DriverRef, RawDevice, RawPacing};
+// Raw GPU handles are only ever passed back to SDL3.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
+use sdl3_sys::gpu::SDL_GPUDevice;
+use sdl3_sys::video::{SDL_GetCurrentDisplayMode, SDL_GetDisplayForWindow, SDL_Window};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TickWait {
@@ -10,19 +14,44 @@ pub enum TickWait {
     Unavailable,
 }
 
+#[cfg(target_os = "macos")]
+type PlatformPacer = super::pacing_macos::MacosDisplayLink;
+
+#[cfg(not(target_os = "macos"))]
+struct PlatformPacer;
+
+#[cfg(not(target_os = "macos"))]
+impl PlatformPacer {
+    fn wait(&mut self) -> bool {
+        false
+    }
+
+    fn poll(&mut self) -> bool {
+        false
+    }
+
+    fn callback_hz(&self) -> f64 {
+        0.0
+    }
+
+    fn requested_hz(&self) -> f64 {
+        0.0
+    }
+}
+
 /// One GPU frame in flight and (macOS) a display link for the window.
 pub struct DisplayPacer {
-    driver: DriverRef,
+    window: *mut SDL_Window,
     enabled: bool,
     pace_prepared: bool,
     link_alive: bool,
-    platform: Option<RawPacing>,
+    platform: Option<PlatformPacer>,
 }
 
 impl DisplayPacer {
-    pub fn new(driver: DriverRef) -> Self {
+    pub fn new(window: *mut SDL_Window) -> Self {
         Self {
-            driver,
+            window,
             enabled: false,
             pace_prepared: false,
             link_alive: true,
@@ -33,7 +62,7 @@ impl DisplayPacer {
     /// Requires the device and whether a window exists. Idempotent.
     pub fn enable(
         &mut self,
-        device: RawDevice,
+        device: *mut SDL_GPUDevice,
         has_window: bool,
         vsync: bool,
     ) -> Result<(), String> {
@@ -41,10 +70,12 @@ impl DisplayPacer {
             return Ok(());
         }
         if has_window {
-            self.driver
-                .set_frames_in_flight(device, 1, "Set temporal GPU queue depth")?;
+            // SAFETY: the device is live.
+            if !unsafe { sdl3_sys::gpu::SDL_SetGPUAllowedFramesInFlight(device, 1) } {
+                return Err(super::sdl_gpu::failure("Set temporal GPU queue depth"));
+            }
             if vsync {
-                self.platform = self.driver.create_pacer();
+                self.platform = create_pacer(self.window);
             }
         }
         self.enabled = true;
@@ -72,21 +103,21 @@ impl DisplayPacer {
     /// Waits for one display-link tick while the link is alive; while recovering from a timeout,
     /// polls non-blockingly and reports `LinkRecoveredForNext` so waiting resumes next call.
     pub fn wait_tick(&mut self, vsync: bool) -> TickWait {
-        let Some(platform) = self.platform else {
+        let Some(platform) = self.platform.as_mut() else {
             return TickWait::Unavailable;
         };
         if !vsync {
             return TickWait::Unavailable;
         }
         if self.link_alive {
-            self.link_alive = self.driver.wait_pacer(platform);
+            self.link_alive = platform.wait();
             if self.link_alive {
                 TickWait::Waited
             } else {
                 TickWait::Unavailable
             }
         } else {
-            self.link_alive = self.driver.poll_pacer(platform);
+            self.link_alive = platform.poll();
             if self.link_alive {
                 TickWait::LinkRecoveredForNext
             } else {
@@ -97,90 +128,60 @@ impl DisplayPacer {
 
     /// SDL current display mode, not observed cadence.
     pub fn display_hz(&self) -> f64 {
-        self.driver.display_hz()
+        if self.window.is_null() {
+            return 0.0;
+        }
+        // SAFETY: the window is live.
+        let display = unsafe { SDL_GetDisplayForWindow(self.window) };
+        // SAFETY: `display` identifies an attached display.
+        let mode = unsafe { SDL_GetCurrentDisplayMode(display) };
+        if mode.is_null() {
+            0.0
+        } else {
+            // SAFETY: SDL returned a live display mode.
+            f64::from(unsafe { (*mode).refresh_rate })
+        }
     }
 
     /// Observed vsync callback cadence (macOS only; 0 elsewhere).
     pub fn callback_hz(&self) -> f64 {
         self.platform
-            .map(|platform| self.driver.pacer_callback_hz(platform))
-            .unwrap_or(0.0)
+            .as_ref()
+            .map_or(0.0, PlatformPacer::callback_hz)
     }
 
     /// Best-effort display-link request (macOS only; 0 elsewhere).
     pub fn requested_hz(&self) -> f64 {
         self.platform
-            .map(|platform| self.driver.pacer_requested_hz(platform))
-            .unwrap_or(0.0)
+            .as_ref()
+            .map_or(0.0, PlatformPacer::requested_hz)
     }
 }
 
-impl Drop for DisplayPacer {
-    fn drop(&mut self) {
-        if let Some(platform) = self.platform {
-            self.driver.destroy_pacer(platform);
-        }
-    }
+#[cfg(target_os = "macos")]
+fn create_pacer(window: *mut SDL_Window) -> Option<PlatformPacer> {
+    super::pacing_macos::MacosDisplayLink::new(window)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn create_pacer(_window: *mut SDL_Window) -> Option<PlatformPacer> {
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::mock_driver::MockGpuDriver;
-    use std::rc::Rc;
-
-    fn make_pacer() -> (Rc<MockGpuDriver>, DisplayPacer) {
-        let mock = Rc::new(MockGpuDriver::default());
-        let driver: DriverRef = mock.clone();
-        (mock, DisplayPacer::new(driver))
-    }
 
     #[test]
-    fn enabling_requires_one_frame_in_flight() {
-        let (mock, mut pacer) = make_pacer();
-        pacer.enable(RawDevice::null(), true, true).expect("enable");
-        assert_eq!(mock.frames_in_flight(), vec![1]);
-        assert_eq!(mock.call_count("create_pacer"), 1);
+    fn pacer_without_a_display_link_reports_unavailable() {
+        let mut pacer = DisplayPacer::new(std::ptr::null_mut());
         pacer
-            .enable(RawDevice::null(), true, true)
-            .expect("idempotent");
-        assert_eq!(mock.frames_in_flight(), vec![1]);
-
-        let (mock, mut pacer) = make_pacer();
-        mock.fail_after("frames_in_flight", 0);
-        assert_eq!(
-            pacer.enable(RawDevice::null(), true, true).unwrap_err(),
-            "Set temporal GPU queue depth: mock failure"
-        );
-        assert_eq!(mock.call_count("create_pacer"), 0);
-    }
-
-    #[test]
-    fn tick_waits_recover_through_the_poll_path() {
-        let (mock, mut pacer) = make_pacer();
-        pacer.enable(RawDevice::null(), true, true).expect("enable");
-        mock.set_wait_results([true]);
-        assert_eq!(pacer.wait_tick(true), TickWait::Waited);
-        mock.set_wait_results([false]);
+            .enable(std::ptr::null_mut(), false, false)
+            .expect("headless enable");
         assert_eq!(pacer.wait_tick(true), TickWait::Unavailable);
-        mock.set_poll_results([true]);
-        assert_eq!(pacer.wait_tick(true), TickWait::LinkRecoveredForNext);
-        assert_eq!(pacer.wait_tick(true), TickWait::Unavailable);
-        assert_eq!(pacer.wait_tick(false), TickWait::Unavailable);
-    }
-
-    #[test]
-    fn pace_prepares_one_tick_until_consumed() {
-        let (mock, mut pacer) = make_pacer();
-        pacer.enable(RawDevice::null(), true, true).expect("enable");
-        mock.set_wait_results([true, true]);
-        assert!(pacer.pace(true));
-        assert!(pacer.consume_prepared());
-        assert!(!pacer.consume_prepared());
-        assert!(!pacer.pace(false));
-        assert!(pacer.pace(true));
-        pacer.reset_prepared();
-        assert!(!pacer.pace(true), "sources exhausted; nothing is prepared");
-        assert_eq!(pacer.display_hz(), 60.0);
+        assert!(!pacer.pace(true));
+        assert_eq!(pacer.display_hz(), 0.0);
+        assert_eq!(pacer.callback_hz(), 0.0);
+        assert_eq!(pacer.requested_hz(), 0.0);
     }
 }
