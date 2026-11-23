@@ -529,14 +529,14 @@ impl Voice {
         if self.glide == 0 {
             return;
         }
-        let mut current = self.glide_target.wrapping_add(self.glide);
-        if (self.glide > 0 && current >= self.glide_destination)
-            || (self.glide < 0 && current <= self.glide_destination)
+        let mut current = i32::from(self.glide_target) + i32::from(self.glide);
+        if (self.glide > 0 && current >= i32::from(self.glide_destination))
+            || (self.glide < 0 && current <= i32::from(self.glide_destination))
         {
-            current = self.glide_destination;
+            current = i32::from(self.glide_destination);
             self.glide = 0;
         }
-        self.glide_target = current;
+        self.glide_target = current as i16;
     }
 
     pub fn modulation(&self, selector: ModSource, track: &Track) -> i16 {
@@ -750,5 +750,33 @@ mod tests {
         let mut segment = GainSegment::default();
         segment.step(0.0, 16.0);
         assert_eq!(segment.frames, 0);
+    }
+
+    #[test]
+    fn glide_step_wider_than_the_distance_lands_exactly() {
+        let mut rom = vec![0u8; 0x80000];
+        let rate_entry = (crate::hle::driver_layout::STANDARD.rate_table
+            - crate::memory_map::SOUND_ROM_BASE) as usize
+            + 4;
+        rom[rate_entry..rate_entry + 2].copy_from_slice(&0x7fffu16.to_be_bytes());
+        let bank = SoundBank::try_new(
+            rom.into(),
+            vec![0u16; 0x80000].into_boxed_slice(),
+            &crate::hle::driver_layout::STANDARD,
+        )
+        .unwrap();
+
+        let mut voice = Voice::default();
+        voice.set_glide(30000, 2, &bank);
+        voice.advance_glide();
+        assert_eq!(voice.glide_target, 29999);
+        voice.advance_glide();
+        assert_eq!((voice.glide_target, voice.glide), (30000, 0));
+
+        voice.glide_target = 0;
+        voice.set_glide(-30000, 2, &bank);
+        voice.advance_glide();
+        voice.advance_glide();
+        assert_eq!((voice.glide_target, voice.glide), (-30000, 0));
     }
 }

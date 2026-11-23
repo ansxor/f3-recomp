@@ -272,15 +272,21 @@ impl SongData {
             if offset == 0 {
                 continue;
             }
-            if offset < 48 || offset & 1 != 0 || start.wrapping_add(offset).wrapping_add(4) > end {
+            if offset < 48
+                || offset & 1 != 0
+                || start
+                    .checked_add(offset)
+                    .and_then(|at| at.checked_add(4))
+                    .is_none_or(|at| at > end)
+            {
                 return Err("invalid HLE track offset");
             }
             let bound = offsets
                 .iter()
                 .filter(|&&other| other > offset)
-                .map(|&other| start.wrapping_add(other))
+                .map(|&other| start.saturating_add(other))
                 .fold(end, u32::min);
-            *slot = TrackData::parse(rom, start.wrapping_add(offset).wrapping_add(4), bound)?;
+            *slot = TrackData::parse(rom, start + offset + 4, bound)?;
         }
         song.check_arrangement()?;
         Ok(song)
@@ -336,17 +342,16 @@ impl SequenceBank {
     pub fn try_parse(rom: &RomView, layout: &DriverLayout) -> Result<SequenceBank, &'static str> {
         let stream_limit = SOUND_ROM_BASE.wrapping_add(SOUND_ROM_IMAGE_SIZE);
         let header_rel = rom.try_read_u32(STREAM_BASE)?;
-        if header_rel < 8 + SONG_SLOTS as u32 * 4
-            || header_rel & 1 != 0
-            || STREAM_BASE.wrapping_add(header_rel) >= stream_limit
-        {
+        let Some(header) = STREAM_BASE.checked_add(header_rel) else {
+            return Err("unsupported HLE sequence bank layout");
+        };
+        if header_rel < 8 + SONG_SLOTS as u32 * 4 || header_rel & 1 != 0 || header >= stream_limit {
             return Err("unsupported HLE sequence bank layout");
         }
 
-        let header = STREAM_BASE.wrapping_add(header_rel);
         let header_size = rom.try_read_u32(header)?;
         if header_size < 8 + SONG_SLOTS as u32 * 2 + sound_rom::SEQ_HEADER_SIZE
-            || header.wrapping_add(header_size) > stream_limit
+            || header.checked_add(header_size).is_none_or(|end| end > stream_limit)
         {
             return Err("unsupported HLE sequence bank layout");
         }
@@ -377,9 +382,17 @@ impl SequenceBank {
             return Ok(SongData::default());
         }
 
-        let start = STREAM_BASE.wrapping_add(relative);
-        let end = start.wrapping_add(rom.try_read_u32(start)?);
-        if relative < 408 || relative & 1 != 0 || end > header || end < start.wrapping_add(48) {
+        let Some(start) = STREAM_BASE.checked_add(relative) else {
+            return Err("invalid HLE sequence extent");
+        };
+        let Some(end) = start.checked_add(rom.try_read_u32(start)?) else {
+            return Err("invalid HLE sequence extent");
+        };
+        if relative < 408
+            || relative & 1 != 0
+            || end > header
+            || start.checked_add(48).is_none_or(|min_end| end < min_end)
+        {
             return Err("invalid HLE sequence extent");
         }
 
@@ -445,5 +458,56 @@ mod tests {
         assert_eq!(view.try_read_u16(last), Err("HLE ROM read outside image"));
         assert_eq!(view.try_read_u32(last - 2), Err("HLE ROM read outside image"));
         assert_eq!(view.try_read_byte(last), Ok(0));
+    }
+
+    #[test]
+    fn wrapped_extents_are_rejected() {
+        const STREAM: usize = 0x20000;
+        const SONG: usize = STREAM + 408;
+        const HEADER: usize = STREAM + 0x400;
+        const RECORD: usize = HEADER + 208;
+        const SLOT: usize = 7;
+        const TRACK: usize = SONG + 48;
+
+        let put16 = |rom: &mut [u8], at: usize, n: u16| rom[at..at + 2].copy_from_slice(&n.to_be_bytes());
+        let put32 = |rom: &mut [u8], at: usize, n: u32| rom[at..at + 4].copy_from_slice(&n.to_be_bytes());
+
+        let base_rom = || {
+            let mut rom = vec![0u8; SOUND_ROM_IMAGE_SIZE as usize];
+            put32(&mut rom, STREAM, (HEADER - STREAM) as u32);
+            put32(&mut rom, HEADER, 208 + sound_rom::SEQ_HEADER_SIZE);
+            put32(&mut rom, STREAM + 8 + SLOT * 4, (SONG - STREAM) as u32);
+            put32(&mut rom, SONG, (TRACK + 6 - SONG) as u32);
+            put32(&mut rom, SONG + 4, (TRACK - SONG) as u32);
+            put16(&mut rom, HEADER + 8 + SLOT * 2, (RECORD - HEADER) as u16);
+            rom[RECORD + 0x14] = 4;
+            for track in 0..TRACK_COUNT {
+                put16(&mut rom, RECORD + 0x20 + 14 * track, NO_PROGRAM);
+            }
+            put16(&mut rom, TRACK + 4, 0x80e9);
+            rom
+        };
+
+        for kind in 0..3usize {
+            for offset in [0u32, 2, 30] {
+                let mut rom = base_rom();
+                match kind {
+                    0 => put32(&mut rom, HEADER, (u32::MAX - (SOUND_ROM_BASE + HEADER as u32) + 1) + offset),
+                    1 => {
+                        put32(&mut rom, STREAM + 8 + SLOT * 4, 0xfffe1000 + offset);
+                        put32(&mut rom, 0x1000 + offset as usize, 48);
+                    }
+                    _ => {
+                        let invalid_at = 0x1000 + offset as usize;
+                        put32(&mut rom, SONG + 4, (invalid_at as u32).wrapping_sub(SONG as u32));
+                        put16(&mut rom, invalid_at + 4, 0x80e9);
+                    }
+                }
+                assert!(
+                    SequenceBank::try_parse(&RomView::with_image(rom.into(), 1), &STANDARD).is_err(),
+                    "kind {kind} offset {offset}"
+                );
+            }
+        }
     }
 }

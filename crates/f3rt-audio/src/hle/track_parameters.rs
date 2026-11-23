@@ -60,7 +60,10 @@ impl TrackParameters {
     }
 
     pub fn valid_controller(index: usize) -> bool {
-        at::controllers + index * 2 < at::SIZE
+        index
+            .checked_mul(2)
+            .and_then(|double| at::controllers.checked_add(double))
+            .is_some_and(|offset| offset < at::SIZE)
     }
 
     /// Controller k writes the even byte at 0x0a + 2k. The layer-mask byte is stored centered
@@ -241,6 +244,18 @@ mod tests {
         let mut p = TrackParameters::default();
         assert!(!p.set_controller(controller_index(at::SIZE), 1));
         assert_eq!(p, TrackParameters::default());
+    }
+
+    #[test]
+    fn controller_index_overflow_is_rejected() {
+        let wrap_to_zero = (usize::MAX - 9) / 2;
+        let mul_overflow = usize::MAX / 2 + 1;
+        for index in [wrap_to_zero, mul_overflow, usize::MAX] {
+            assert!(!TrackParameters::valid_controller(index));
+            let mut p = TrackParameters::default();
+            assert!(!p.set_controller(index, 0xff));
+            assert_eq!(p, TrackParameters::default());
+        }
     }
 
     #[test]

@@ -346,7 +346,10 @@ impl SoundBank {
                     metadata[size - 2] = ((u32::from(offset) + 1) >> 8) as u8;
                     metadata[size - 1] = (u32::from(offset) + 1) as u8;
                 }
-                bank.count = bank.count.wrapping_add(1);
+                if bank.count == u8::MAX {
+                    return Err("HLE sample directory exceeds the 255-entry limit");
+                }
+                bank.count += 1;
                 for _ in 0..6 {
                     let word = data_word(&mut at)?;
                     SoundBank::append_word(metadata, word);
@@ -469,5 +472,33 @@ impl SoundBank {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::driver_layout::STANDARD;
+
+    #[test]
+    fn sample_directory_entry_count_does_not_wrap() {
+        let entries = 256usize;
+        let mut samples = vec![0u16; SAMPLE_HALF_BANK_SIZE];
+        let last = 14 * entries as u32 + 6;
+        let mut at = 1usize;
+        for _ in 0..entries {
+            samples[at] = last as u16;
+            at += 7;
+        }
+        at = last as usize / 2;
+        samples[at + 2] = 127;
+        samples[SAMPLE_TAG_PROBE_OFFSET as usize] = 5;
+
+        let result = SoundBank::try_new(
+            vec![0u8; 0x80000].into(),
+            samples.into_boxed_slice(),
+            &STANDARD,
+        );
+        assert_eq!(result.err(), Some("HLE sample directory exceeds the 255-entry limit"));
     }
 }
