@@ -19,8 +19,10 @@ pub const QUEUE_SIZE: usize = 4096;
 /// Raw big-endian 16-bit sample ROM bytes to host words.
 pub fn decode_sample_words(sample_rom: &[u8]) -> Box<[u16]> {
     sample_rom
-        .chunks_exact(2)
-        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_be_bytes(pair))
         .collect::<Vec<u16>>()
         .into_boxed_slice()
 }

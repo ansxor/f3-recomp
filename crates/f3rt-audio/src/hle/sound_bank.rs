@@ -241,8 +241,7 @@ impl SoundBank {
         if bank_idx == -2 {
             panic!("HLE instrument names missing sample bank");
         }
-        let records: &[u8];
-        if bank_idx >= 0 {
+        let records = if bank_idx >= 0 {
             let b = &self.banks[bank_idx as usize];
             *selector = bank_idx as u8;
             if id >= b.count {
@@ -254,10 +253,10 @@ impl SoundBank {
                 self.metadata[directory_at + 1],
             ]);
             let offset = (b.offset as usize).wrapping_add_signed(isize::from(relative as i16));
-            records = match self.metadata.get(offset..) {
+            match self.metadata.get(offset..) {
                 Some(tail) if tail.len() >= SPLIT_RECORD_SIZE => tail,
                 _ => panic!("HLE sample offset exceeds metadata"),
-            };
+            }
         } else {
             *selector = (self.board_bank_mask * 2) as u8;
             if id > 120 {
@@ -266,12 +265,14 @@ impl SoundBank {
             let entry = self.layout.split_directory + u32::from(id) * 2;
             let offset = self.rom.read_u16(entry) as i16;
             let address = self.layout.split_table_base.wrapping_add_signed(i32::from(offset));
-            records = self.rom.tail_from(address, SPLIT_RECORD_SIZE);
-        }
+            self.rom.tail_from(address, SPLIT_RECORD_SIZE)
+        };
         let key = ((pitch >> 8) as u8) as u32;
         records
-            .chunks_exact(SPLIT_RECORD_SIZE)
-            .map(Split::read)
+            .as_chunks::<SPLIT_RECORD_SIZE>()
+            .0
+            .iter()
+            .map(|chunk| Split::read(chunk))
             .find(|split| key <= u32::from(split.cutoff))
             .unwrap_or_else(|| panic!("HLE sample splits do not cover key"))
     }
