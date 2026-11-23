@@ -124,7 +124,6 @@ where
     M: Copy + Default + Send + 'static,
     W: Applies<M>,
 {
-    crate::hle::core::Core::enable_flush_denormals();
     let body = catch_unwind(AssertUnwindSafe(|| {
         loop {
             let state = shared.lock();

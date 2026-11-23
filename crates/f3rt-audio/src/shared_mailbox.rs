@@ -1,17 +1,17 @@
 //! The main-CPU mailbox ring in the 0x800-byte dual-port RAM.
 //!
-//! The RAM belongs to the main CPU bus and changes between calls, so it is read through the pointer
-//! at each use and never held as a slice.
+//! The RAM belongs to the main CPU bus and changes between calls, so the mailbox owns none of it:
+//! each message borrows the RAM for its own duration.
 
 use crate::hle::command::CommandPacket;
 use crate::memory_map::{
-    MAILBOX_CONSUMER_H, MAILBOX_GAIN_CH0, MAILBOX_PRODUCER_H, MAILBOX_RING_MASK,
+    MAILBOX_CONSUMER_H, MAILBOX_GAIN_CH0, MAILBOX_PRODUCER_H, MAILBOX_RING_MASK, SHARED_RAM_SIZE,
 };
 
 pub const INDEX_MASK: u16 = 0x7fe;
 
+#[derive(Default, Debug)]
 pub struct SharedMailbox {
-    shared: *mut u8,
     consumer: u16,
 }
 
@@ -19,35 +19,30 @@ pub struct SharedMailbox {
 /// index when dropped, so a partly consumed drain still acknowledges what it read.
 pub struct MailboxDrain<'a> {
     mailbox: &'a mut SharedMailbox,
+    ram: &'a mut [u8; SHARED_RAM_SIZE],
     producer: u16,
 }
 
 impl SharedMailbox {
+    pub fn new() -> SharedMailbox {
+        SharedMailbox::default()
+    }
+
     pub fn valid_index(index: u16) -> bool {
         (index & !INDEX_MASK) == 0
     }
 
-    /// Panics when `shared` is null.
-    pub fn new(shared: *mut u8) -> SharedMailbox {
-        if shared.is_null() {
-            panic!("HLE requires shared RAM");
-        }
-        SharedMailbox {
-            shared,
-            consumer: 0,
-        }
-    }
-
-    pub fn drain(&mut self) -> MailboxDrain<'_> {
-        let producer = self.read_be16(MAILBOX_PRODUCER_H) & INDEX_MASK;
+    pub fn drain<'a>(&'a mut self, ram: &'a mut [u8; SHARED_RAM_SIZE]) -> MailboxDrain<'a> {
+        let producer = be16(ram, MAILBOX_PRODUCER_H) & INDEX_MASK;
         MailboxDrain {
             mailbox: self,
+            ram,
             producer,
         }
     }
 
-    pub fn gain(&self, channel: u32) -> u8 {
-        self.read_byte(MAILBOX_GAIN_CH0 + (channel & 1))
+    pub fn gain(&self, ram: &[u8; SHARED_RAM_SIZE], channel: u32) -> u8 {
+        ram[(MAILBOX_GAIN_CH0 + (channel & 1)) as usize]
     }
 
     pub fn consumer(&self) -> u16 {
@@ -58,41 +53,29 @@ impl SharedMailbox {
         self.consumer = 0;
     }
 
-    pub fn restore(&mut self, consumer: u16) {
-        self.consumer = consumer;
-    }
-
-    fn read_byte(&self, offset: u32) -> u8 {
-        debug_assert!(offset < 0x800);
-        // SAFETY: `new` requires a non-null pointer to the 0x800-byte shared RAM and every offset
-        // used here is below 0x800.
-        unsafe { *self.shared.add(offset as usize) }
-    }
-
-    fn read_be16(&self, offset: u32) -> u16 {
-        u16::from_be_bytes([self.read_byte(offset), self.read_byte(offset + 1)])
-    }
-
-    fn write_be16(&mut self, offset: u32, value: u16) {
-        debug_assert!(offset + 1 < 0x800);
-        let [high, low] = value.to_be_bytes();
-        // SAFETY: same bounds as `read_byte`; the offset and its successor are inside the RAM.
-        unsafe {
-            *self.shared.add(offset as usize) = high;
-            *self.shared.add(offset as usize + 1) = low;
+    /// Installs a saved consumer index; an index the ring cannot hold is refused.
+    pub fn restore(&mut self, consumer: u16) -> Result<(), &'static str> {
+        if !Self::valid_index(consumer) {
+            return Err("Invalid audio mailbox state");
         }
+        self.consumer = consumer;
+        Ok(())
     }
+}
+
+fn be16(ram: &[u8; SHARED_RAM_SIZE], offset: u32) -> u16 {
+    let at = offset as usize;
+    u16::from_be_bytes([ram[at], ram[at + 1]])
 }
 
 impl Iterator for MailboxDrain<'_> {
     type Item = CommandPacket;
 
     fn next(&mut self) -> Option<CommandPacket> {
-        let mailbox = &mut *self.mailbox;
-        while mailbox.consumer != self.producer {
-            let index = u32::from(mailbox.consumer >> 1);
-            let length = mailbox.read_byte(index);
-            let available = (self.producer.wrapping_sub(mailbox.consumer) & 0x7ff) >> 1;
+        while self.mailbox.consumer != self.producer {
+            let index = u32::from(self.mailbox.consumer >> 1);
+            let length = self.ram[index as usize];
+            let available = (self.producer.wrapping_sub(self.mailbox.consumer) & 0x7ff) >> 1;
             // A bad length means the producer is mid-write; leave it for the next drain.
             if length < 2 || u16::from(length) > available {
                 return None;
@@ -100,13 +83,14 @@ impl Iterator for MailboxDrain<'_> {
             let packet = if usize::from(length) <= CommandPacket::MAX_BYTES {
                 let mut bytes = [0u8; CommandPacket::MAX_BYTES];
                 for (n, byte) in bytes.iter_mut().enumerate().take(length as usize) {
-                    *byte = mailbox.read_byte((index + n as u32) & MAILBOX_RING_MASK);
+                    *byte = self.ram[((index + n as u32) & MAILBOX_RING_MASK) as usize];
                 }
                 Some(CommandPacket::parse(&bytes[..length as usize]))
             } else {
                 None
             };
-            mailbox.consumer = mailbox.consumer.wrapping_add(u16::from(length) * 2) & 0x7ff;
+            self.mailbox.consumer =
+                self.mailbox.consumer.wrapping_add(u16::from(length) * 2) & 0x7ff;
             if packet.is_some() {
                 return packet;
             }
@@ -117,8 +101,8 @@ impl Iterator for MailboxDrain<'_> {
 
 impl Drop for MailboxDrain<'_> {
     fn drop(&mut self) {
-        let consumer = self.mailbox.consumer;
-        self.mailbox.write_be16(MAILBOX_CONSUMER_H, consumer);
+        let at = MAILBOX_CONSUMER_H as usize;
+        self.ram[at..at + 2].copy_from_slice(&self.mailbox.consumer.to_be_bytes());
     }
 }
 
@@ -126,8 +110,8 @@ impl Drop for MailboxDrain<'_> {
 mod tests {
     use super::*;
 
-    fn ram() -> Vec<u8> {
-        vec![0u8; 0x800]
+    fn ram() -> [u8; SHARED_RAM_SIZE] {
+        [0u8; SHARED_RAM_SIZE]
     }
 
     fn set_producer(ram: &mut [u8], producer: u16) {
@@ -156,9 +140,9 @@ mod tests {
         let start_index = 0x3fe;
         put_packet(&mut ram, start_index, 4);
         set_producer(&mut ram, 4);
-        let mut mailbox = SharedMailbox::new(ram.as_mut_ptr());
-        mailbox.restore(0x3fe << 1);
-        let drained = mailbox.drain().count();
+        let mut mailbox = SharedMailbox::new();
+        mailbox.restore(0x3fe << 1).unwrap();
+        let drained = mailbox.drain(&mut ram).count();
         assert_eq!(drained, 1);
         assert_eq!(mailbox.consumer(), ((0x3fe << 1) + 8) & 0x7ff);
         assert_eq!(consumer_ack(&ram), 4);
@@ -169,8 +153,8 @@ mod tests {
         let mut ram = ram();
         ram[0] = 1;
         set_producer(&mut ram, 4);
-        let mut mailbox = SharedMailbox::new(ram.as_mut_ptr());
-        assert_eq!(mailbox.drain().count(), 0);
+        let mut mailbox = SharedMailbox::new();
+        assert_eq!(mailbox.drain(&mut ram).count(), 0);
         assert_eq!(mailbox.consumer(), 0);
         assert_eq!(consumer_ack(&ram), 0);
     }
@@ -180,8 +164,8 @@ mod tests {
         let mut ram = ram();
         put_packet(&mut ram, 0, 4);
         set_producer(&mut ram, 4);
-        let mut mailbox = SharedMailbox::new(ram.as_mut_ptr());
-        assert_eq!(mailbox.drain().count(), 0);
+        let mut mailbox = SharedMailbox::new();
+        assert_eq!(mailbox.drain(&mut ram).count(), 0);
         assert_eq!(mailbox.consumer(), 0);
     }
 
@@ -191,8 +175,28 @@ mod tests {
         put_packet(&mut ram, 0, 10);
         put_packet(&mut ram, 10, 2);
         set_producer(&mut ram, 24);
-        let mut mailbox = SharedMailbox::new(ram.as_mut_ptr());
-        assert_eq!(mailbox.drain().count(), 1);
+        let mut mailbox = SharedMailbox::new();
+        assert_eq!(mailbox.drain(&mut ram).count(), 1);
         assert_eq!(mailbox.consumer(), 24);
+    }
+
+    #[test]
+    fn gain_reads_the_channel_byte() {
+        let mut ram = ram();
+        ram[MAILBOX_GAIN_CH0 as usize] = 7;
+        ram[MAILBOX_GAIN_CH0 as usize + 1] = 9;
+        let mailbox = SharedMailbox::new();
+        assert_eq!((mailbox.gain(&ram, 0), mailbox.gain(&ram, 1), mailbox.gain(&ram, 2)), (7, 9, 7));
+    }
+
+    #[test]
+    fn restore_refuses_indices_outside_the_ring() {
+        let mut mailbox = SharedMailbox::new();
+        for index in [0x800, 0x802, 0x001] {
+            assert_eq!(mailbox.restore(index), Err("Invalid audio mailbox state"), "{index:#x}");
+            assert_eq!(mailbox.consumer(), 0);
+        }
+        assert_eq!(mailbox.restore(0x7fe), Ok(()));
+        assert_eq!(mailbox.consumer(), 0x7fe);
     }
 }

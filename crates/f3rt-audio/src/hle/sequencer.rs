@@ -3,6 +3,8 @@
 //! It owns only sequencing position and tempo: the track records live in TrackService, and the
 //! mailbox carries every note and parameter write to the services.
 
+use std::sync::Arc;
+
 use crate::hle::command::{Command, CommandPacket};
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::{
@@ -273,7 +275,7 @@ impl Context<'_> {
 
 /// Reads the ROM sequence streams and turns them into mailbox events.
 pub struct Sequencer {
-    rom: &'static [u8],
+    rom: Arc<[u8]>,
     layout: &'static DriverLayout,
     bank: SequenceBank,
     state: [SongState; SONG_SLOTS],
@@ -285,16 +287,17 @@ pub struct Sequencer {
 impl Sequencer {
     /// `Err` names why `rom` cannot be sequenced: too small, or a malformed boot bank.
     pub fn try_new(
-        rom: &'static [u8],
+        rom: Arc<[u8]>,
         layout: &'static DriverLayout,
     ) -> Result<Sequencer, &'static str> {
         if rom.len() < SOUND_ROM_SIZE {
             return Err("HLE requires at least a 512 KiB padded sound ROM");
         }
+        let bank = Self::parse_bank(&rom, layout, BOOT_BANK)?;
         Ok(Sequencer {
             rom,
             layout,
-            bank: Self::parse_bank(rom, layout, BOOT_BANK)?,
+            bank,
             state: [SongState::default(); SONG_SLOTS],
             beats: core::array::from_fn(|_| PulseTimer::new(625, 0)),
             serial: 0,
@@ -303,18 +306,18 @@ impl Sequencer {
     }
 
     fn parse_bank(
-        rom: &'static [u8],
+        rom: &Arc<[u8]>,
         layout: &DriverLayout,
         bank: u8,
     ) -> Result<SequenceBank, &'static str> {
-        SequenceBank::try_parse(&RomView::with_image(rom, bank), layout)
+        SequenceBank::try_parse(&RomView::with_image(Arc::clone(rom), bank), layout)
     }
 
     /// A bank switch after construction: the boot bank already parsed, so a bank the game selects
     /// that does not is a fault of the running game.
     fn load_bank(&mut self, bank: u8) {
         self.current_bank = bank;
-        self.bank = Self::parse_bank(self.rom, self.layout, bank)
+        self.bank = Self::parse_bank(&self.rom, self.layout, bank)
             .unwrap_or_else(|reason| panic!("{reason}"));
     }
 
@@ -475,7 +478,7 @@ impl Sequencer {
                 self.set_beat_to_rate(id);
             }
             Command::SequenceFade(c) => {
-                let rom = RomView::with_image(self.rom, self.current_bank);
+                let rom = RomView::with_image(Arc::clone(&self.rom), self.current_bank);
                 let multiplier =
                     rom.read_u16(self.layout.rate_table + u32::from(c.rate_index) * 2) as i16;
                 cx.push_track(TrackEvent::sequence_fade(cx.tick, id, c.start, c.target, multiplier));
@@ -860,7 +863,7 @@ mod tests {
             slots[usize::from(id)] = song;
         }
         Sequencer {
-            rom: &[],
+            rom: Arc::from(&[][..]),
             layout: &STANDARD,
             bank: SequenceBank::from_songs(slots),
             state: [SongState::default(); SONG_SLOTS],

@@ -415,6 +415,7 @@ impl SequenceBank {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use crate::hle::driver_layout::STANDARD;
 
     fn song_with_arrangement(events: usize) -> SongData {
@@ -434,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_zeroed_rom_has_no_sequence_bank() {
-        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let rom: Arc<[u8]> = vec![0; SOUND_ROM_IMAGE_SIZE as usize].into();
         let reason = SequenceBank::try_parse(&RomView::with_image(rom, 1), &STANDARD).err();
         assert_eq!(reason, Some("unsupported HLE sequence bank layout"));
     }
@@ -442,7 +443,7 @@ mod tests {
     #[test]
     fn a_stream_without_an_end_event_is_an_error_not_a_panic() {
         // One note-less padding word, then the stream ends.
-        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let rom: Arc<[u8]> = vec![0; SOUND_ROM_IMAGE_SIZE as usize].into();
         let view = RomView::with_image(rom, 1);
         let start = SOUND_ROM_BASE;
         assert_eq!(TrackData::parse(&view, start, start + 2).err(), Some("HLE track missing end event"));
@@ -450,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_read_past_the_image_is_an_error() {
-        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let rom: Arc<[u8]> = vec![0; SOUND_ROM_IMAGE_SIZE as usize].into();
         let view = RomView::with_image(rom, 1);
         let last = SOUND_ROM_BASE + SOUND_ROM_IMAGE_SIZE - 1;
         assert_eq!(view.try_read_u16(last), Err("HLE ROM read outside image"));

@@ -74,7 +74,8 @@ pub struct Bank {
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct ProgramData {
-    pub base: Option<&'static [u8]>,
+    /// Byte offset of the record in `RomView::image`, with `Program::size` bytes behind it.
+    pub base: Option<usize>,
     pub sample_banks: [i8; 17],
     pub enabled: u8,
 }

@@ -179,8 +179,8 @@ impl VoicePool {
         if weight < 0 {
             return;
         }
-        let mode = patch.allocation();
-        let priority = patch.priority();
+        let mode = patch.allocation(bank);
+        let priority = patch.priority(bank);
         let mut prior_pitch = 0i32;
         let mut prior_found = false;
         if mode == AllocationMode::Retrigger {
@@ -213,7 +213,7 @@ impl VoicePool {
             v.owner = *note;
             v.owner.velocity = velocity;
             v.released = false;
-            v.retarget(kernel, &patch.program(), bank);
+            v.retarget(kernel, &patch.program(bank), bank);
             v.apply_parameters(false, bank, track);
             return;
         }
@@ -238,7 +238,6 @@ impl VoicePool {
             mode,
             prior_pitch,
             prior_found,
-            program: patch.program(),
         };
         v.initialize(&start, &mut self.noise, &prior, bank, track);
         v.active = true;
@@ -376,14 +375,14 @@ impl VoiceService {
     ) {
         let mut note = *event;
         note.velocity &= 127; // c16faa clears the velocity flag bit.
-        let immediate = patches.iter().filter(|patch| patch.delay_ticks() == 0).count() as u32;
+        let immediate = patches.iter().filter(|patch| patch.delay_ticks(bank) == 0).count() as u32;
         let start = if immediate != 0 {
             self.driver.start(note.tick, immediate)
         } else {
             note.tick
         };
         for patch in patches.iter() {
-            if patch.delay_ticks() == 0 {
+            if patch.delay_ticks(bank) == 0 {
                 self.launch(&note, patch, bank, tracks, start);
                 continue;
             }
@@ -393,9 +392,9 @@ impl VoiceService {
             *slot = Pending {
                 note,
                 patch: Some(patch),
-                tick: note.tick + u64::from(patch.delay_ticks()) * u64::from(TIMER_TICKS),
+                tick: note.tick + u64::from(patch.delay_ticks(bank)) * u64::from(TIMER_TICKS),
                 active: true,
-                release_trigger: patch.starts_on_release(),
+                release_trigger: patch.starts_on_release(bank),
             };
         }
     }

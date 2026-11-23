@@ -28,6 +28,16 @@ impl VoiceFilterState {
         *self = Default::default();
     }
 
+    /// Zeroes every stage that decayed into the subnormal range, so a silent voice's filter tail
+    /// never makes the arithmetic of later spans run at subnormal speed.
+    pub fn flush_subnormals(&mut self) {
+        for stage in [&mut self.stage1, &mut self.stage2, &mut self.stage3, &mut self.stage4] {
+            if stage.abs() < f32::MIN_POSITIVE {
+                *stage = 0.0;
+            }
+        }
+    }
+
     pub fn step<const MODE: u32>(
         &mut self,
         x: f32,
@@ -101,6 +111,13 @@ mod tests {
     fn unused_equation_cannot_leak_a_non_finite_pole() {
         let mut filter = VoiceFilterState::default();
         assert!(filter.step::<3>(1.0, 0.5, 0.5, f32::NAN).is_finite());
+    }
+
+    #[test]
+    fn flush_subnormals_zeroes_only_subnormal_stages() {
+        let mut filter = state(1e-40, -1e-40, 1e-30, -2.0);
+        filter.flush_subnormals();
+        assert_eq!(filter, state(0.0, 0.0, 1e-30, -2.0));
     }
 
     #[test]

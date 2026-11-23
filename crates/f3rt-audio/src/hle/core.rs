@@ -71,12 +71,12 @@ pub fn frames_at(tick: u64) -> u64 {
 impl Core {
     /// `Err` names why the sound program or the samples cannot be driven.
     pub fn try_new(
-        sound_rom: &'static [u8],
+        sound_rom: Arc<[u8]>,
         sample_words: Box<[u16]>,
         layout: &'static DriverLayout,
     ) -> Result<Core, &'static str> {
-        let bank = SoundBank::try_new(sound_rom, sample_words, layout)?;
-        let sequencer = Sequencer::try_new(sound_rom, layout)?;
+        let bank = SoundBank::try_new(Arc::clone(&sound_rom), sample_words, layout)?;
+        let sequencer = Sequencer::try_new(Arc::clone(&sound_rom), layout)?;
         let voices = VoiceService::new(&bank);
         let mut core = Core {
             bank,
@@ -358,52 +358,6 @@ impl Core {
         self.gain[(channel & 1) as usize] =
             10.0f32.powf(-0.5f32 * f32::from(63 - (raw & 63)) / 20.0f32);
     }
-
-    /// Sets flush-to-zero and denormals-are-zero on the calling thread (x86 SSE, aarch64 FPCR); no-op
-    /// elsewhere, including WebAssembly. Core never calls it: the thread driving the Core does.
-    pub fn enable_flush_denormals() {
-        #[cfg(all(
-            any(target_arch = "x86_64", target_arch = "x86"),
-            not(target_os = "emscripten")
-        ))]
-        {
-            // _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON) and _MM_SET_DENORMALS_ZERO_MODE(
-            // _MM_DENORMALS_ZERO_ON) are MXCSR bit 15 (FTZ) and bit 6 (DAZ).
-            const FLUSH_ZERO_MASK: u32 = 1 << 15;
-            const DENORMALS_ZERO_MASK: u32 = 1 << 6;
-            let mut csr: u32 = 0;
-            // SAFETY: reads and writes this thread's MXCSR control word.
-            unsafe {
-                std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack, preserves_flags));
-                csr |= FLUSH_ZERO_MASK;
-                csr |= DENORMALS_ZERO_MASK;
-                std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, preserves_flags));
-            }
-        }
-        #[cfg(all(target_arch = "aarch64", not(target_os = "emscripten")))]
-        {
-            const FPCR_FZ: u64 = 1 << 24;
-            // SAFETY: reads and writes the thread's FPCR control register.
-            unsafe {
-                let mut fpcr: u64;
-                std::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nomem, nostack));
-                fpcr |= FPCR_FZ;
-                std::arch::asm!("msr fpcr, {}", in(reg) fpcr, options(nomem, nostack));
-            }
-        }
-        #[cfg(all(target_arch = "arm", not(target_os = "emscripten")))]
-        {
-            // FZ: flush-to-zero, the AArch32 counterpart of FPCR.FZ.
-            const FPSCR_FZ: u32 = 1 << 24;
-            // SAFETY: reads and writes the thread's FPSCR control register.
-            unsafe {
-                let mut fpscr: u32;
-                std::arch::asm!("vmrs {}, fpscr", out(reg) fpscr, options(nomem, nostack));
-                fpscr |= FPSCR_FZ;
-                std::arch::asm!("vmsr fpscr, {}", in(reg) fpscr, options(nomem, nostack));
-            }
-        }
-    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -419,18 +373,18 @@ mod tests {
     use crate::hle::rom_view::SOUND_ROM_IMAGE_SIZE;
     use crate::memory_map::SOUND_ROM_SIZE;
 
-    fn leaked_zeros(bytes: usize) -> &'static [u8] {
-        Box::leak(vec![0u8; bytes].into_boxed_slice())
+    fn zeros(bytes: usize) -> Arc<[u8]> {
+        vec![0u8; bytes].into()
     }
 
-    fn reason(sound_rom: &'static [u8], sample_words: usize) -> Option<&'static str> {
+    fn reason(sound_rom: Arc<[u8]>, sample_words: usize) -> Option<&'static str> {
         let samples = vec![0u16; sample_words].into_boxed_slice();
         Core::try_new(sound_rom, samples, &STANDARD).err()
     }
 
     #[test]
     fn an_undersized_sound_rom_is_an_error() {
-        let rom = leaked_zeros(SOUND_ROM_SIZE - 1);
+        let rom = zeros(SOUND_ROM_SIZE - 1);
         assert_eq!(
             reason(rom, SOUND_ROM_SIZE),
             Some("HLE requires mapped sound and power-of-two sample ROM regions")
@@ -439,10 +393,10 @@ mod tests {
 
     #[test]
     fn undersized_or_odd_sized_samples_are_an_error() {
-        let rom = leaked_zeros(SOUND_ROM_IMAGE_SIZE as usize);
+        let rom = zeros(SOUND_ROM_IMAGE_SIZE as usize);
         for words in [SOUND_ROM_SIZE / 2, SOUND_ROM_SIZE + SOUND_ROM_SIZE / 2] {
             assert_eq!(
-                reason(rom, words),
+                reason(Arc::clone(&rom), words),
                 Some("HLE requires mapped sound and power-of-two sample ROM regions")
             );
         }
@@ -450,7 +404,7 @@ mod tests {
 
     #[test]
     fn a_blank_sound_rom_has_no_sequence_bank() {
-        let rom = leaked_zeros(SOUND_ROM_IMAGE_SIZE as usize);
+        let rom = zeros(SOUND_ROM_IMAGE_SIZE as usize);
         assert_eq!(reason(rom, SOUND_ROM_SIZE), Some("unsupported HLE sequence bank layout"));
     }
 }

@@ -61,7 +61,7 @@ impl<'a> SampleWords<'a> {
 
     #[inline(always)]
     pub fn outside(&self, position: f64) -> bool {
-        position < 0.0 || position >= self.limit
+        !(0.0..self.limit).contains(&position)
     }
 
     /// How many frames, up to `cap`, the voice can read without reaching a window edge or the end of
@@ -95,13 +95,11 @@ impl<'a> SampleWords<'a> {
     }
 }
 
-/// Truncates a read position to its word index. The signed conversion is one instruction; the
-/// saturating unsigned cast costs a dozen per sample on x86.
+/// Truncates a read position to its word index. A position outside the bank saturates (NaN and
+/// negatives to 0, the rest to `usize::MAX`); `room` and `outside` keep the renderer inside it.
 #[inline(always)]
 fn word_index(position: f64) -> usize {
-    // SAFETY: callers keep `position` finite and inside the bank (`room` and `outside` guard it), so
-    // it fits an i64. A negative value becomes a huge index that the slice read rejects.
-    unsafe { position.to_int_unchecked::<i64>() as usize }
+    position as usize
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -424,6 +422,7 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
             }
             first += VOICE_BLOCK_FRAMES;
         }
+        self.filter.flush_subnormals();
         self.filter
     }
 
@@ -497,5 +496,38 @@ impl<'a, const MODE: u32> VoiceSpan<'a, MODE> {
             chunk.mix(row, StereoGain::default(), filter.step(0.0));
         }
         self.filter = filter.state;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outside_rejects_everything_but_the_bank() {
+        let words = [0u16; 8];
+        let samples = SampleWords::new(&words);
+        for position in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.001, 8.0, 9.5] {
+            assert!(samples.outside(position), "{position}");
+        }
+        for position in [0.0, 0.5, 7.999] {
+            assert!(!samples.outside(position), "{position}");
+        }
+    }
+
+    #[test]
+    fn an_empty_bank_is_always_outside() {
+        let samples = SampleWords::new(&[]);
+        assert!(samples.outside(0.0));
+    }
+
+    #[test]
+    fn word_index_truncates_and_saturates() {
+        assert_eq!(word_index(0.0), 0);
+        assert_eq!(word_index(3.99), 3);
+        assert_eq!(word_index(f64::NAN), 0);
+        assert_eq!(word_index(-5.0), 0);
+        assert_eq!(word_index(f64::INFINITY), usize::MAX);
+        assert_eq!(word_index(1e300), usize::MAX);
     }
 }

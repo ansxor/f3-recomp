@@ -5,6 +5,8 @@ pub const SOUND_ROM_SIZE: usize = 0x80000;
 
 // Mailbox protocol offsets within the 2 KiB shared DPRAM.
 
+pub const SHARED_RAM_SIZE: usize = 0x800;
+
 pub const MAILBOX_RING_MASK: u32 = 0x3ff;
 
 pub const MAILBOX_PRODUCER_H: u32 = 0x480;

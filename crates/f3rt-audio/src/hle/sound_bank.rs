@@ -1,6 +1,8 @@
 //! The decoded sound-program ROM (sample-bank directory, instrument
 //! records and the fixed tables the voice reads).
 
+use std::sync::Arc;
+
 use crate::bytes::s16;
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
@@ -37,7 +39,7 @@ pub struct SoundBank {
 impl SoundBank {
     /// `Err` names the first reason the ROM and sample words cannot be driven.
     pub fn try_new(
-        sound_rom: &'static [u8],
+        sound_rom: Arc<[u8]>,
         sample_words: Box<[u16]>,
         layout: &'static DriverLayout,
     ) -> Result<SoundBank, &'static str> {
@@ -129,6 +131,11 @@ impl SoundBank {
 
     pub fn set_bank(&self, bank: u8) {
         self.rom.set_bank(bank);
+    }
+
+    /// The record `ProgramData::base` names.
+    pub fn program_at(&self, offset: usize) -> Program<'_> {
+        Program::new(&self.rom.image()[offset..][..Program::size])
     }
 
     pub fn program_data(&self, slot: u32) -> &ProgramData {
@@ -431,7 +438,7 @@ impl SoundBank {
                 let Some(record) = image.get(offset..offset + PROGRAM_RECORD_STRIDE) else {
                     continue;
                 };
-                data.base = Some(record);
+                data.base = Some(offset);
                 data.enabled = Program::new(record).enabled();
                 if data.enabled == 0 {
                     let mut mask: u32 = 0;

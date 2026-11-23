@@ -48,6 +48,8 @@
 //! compute; the phase restarts at (1, 0) only when a program is loaded (select() of a different
 //! program) and on reset().
 
+use std::sync::Arc;
+
 use crate::hle::block::{BusBlock, OtisBus, PlanarAudioBlock, StereoBlock, StereoChannel};
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::SAMPLE_RATE;
@@ -102,13 +104,13 @@ const K_THRESHOLD: f32 = 1e-8;
 const Q23: f64 = 8388608.0;
 
 /// What a program reads to turn the preset parameters p0..p9 into its controls.
-struct EffectContext<'a> {
-    rom: &'a [u8],
-    layout: &'a DriverLayout,
+struct EffectContext {
+    rom: Arc<[u8]>,
+    layout: &'static DriverLayout,
     parameters: [u8; 10],
 }
 
-impl EffectContext<'_> {
+impl EffectContext {
     /// Volume/pan table entry as a gain; the index saturates at 127.
     fn table(&self, index: u32) -> f32 {
         let p = self.layout.volume_pan_table_offset as usize + index.min(127) as usize * 2;
@@ -904,8 +906,7 @@ pub struct Effects {
     program: Program,
     bypass: BypassDetector,
 
-    // The sound image is owned by the Audio implementation and outlives the Effects.
-    rom: &'static [u8],
+    rom: Arc<[u8]>,
     layout: &'static DriverLayout,
     parameters: [u8; 10],
     preset: u8,
@@ -916,7 +917,7 @@ pub struct Effects {
 }
 
 impl Effects {
-    pub fn new(rom: &'static [u8], layout: &'static DriverLayout) -> Effects {
+    pub fn new(rom: Arc<[u8]>, layout: &'static DriverLayout) -> Effects {
         let mut effects = Effects {
             programs: Programs::new(),
             dc: Box::new(DcBlocker::new()),
@@ -1060,8 +1061,8 @@ impl Effects {
         }
     }
 
-    fn context(&self) -> EffectContext<'static> {
-        EffectContext { rom: self.rom, layout: self.layout, parameters: self.parameters }
+    fn context(&self) -> EffectContext {
+        EffectContext { rom: Arc::clone(&self.rom), layout: self.layout, parameters: self.parameters }
     }
 
     fn active_dsp_mut(&mut self) -> Option<&mut dyn EffectDsp> {
@@ -1091,7 +1092,7 @@ impl Effects {
 
     fn clear_program(&mut self, program: Program) {
         if program == Program::Overdrive {
-            let (rom, layout) = (self.rom, self.layout);
+            let (rom, layout) = (&self.rom, self.layout);
             self.programs
                 .overdrive
                 .get_or_insert_with(|| OverdriveProgram::new(rom, layout));
@@ -1122,7 +1123,7 @@ mod tests {
     use super::*;
     use crate::hle::driver_layout::{EARLY, STANDARD};
 
-    fn preset_12_fixture(layout: &DriverLayout) -> &'static [u8] {
+    fn preset_12_fixture(layout: &DriverLayout) -> Arc<[u8]> {
         let mut rom = vec![0; 0x20000];
         let presets = layout.preset_table_offset as usize;
         let pointer_table = layout.esp_program_table_offset as usize;
@@ -1148,7 +1149,7 @@ mod tests {
             set_word(table + 2 + 2 * j, (900 * j as i32 - 29000) as i16);
             set_word(table + 134 + 2 * j, 32767 - 311 * j as i16);
         }
-        Box::leak(rom.into_boxed_slice())
+        rom.into()
     }
 
     #[test]
@@ -1239,7 +1240,7 @@ mod tests {
     }
 
     /// A ROM whose preset 0 loads the reverb.
-    fn reverb_fixture(layout: &DriverLayout) -> &'static [u8] {
+    fn reverb_fixture(layout: &DriverLayout) -> Arc<[u8]> {
         let mut rom = vec![0; 0x20000];
         let row = layout.preset_table_offset as usize;
         rom[row + 5] = 0;
@@ -1252,7 +1253,7 @@ mod tests {
         for index in 0..128 {
             rom[pan + 2 * index..pan + 2 * index + 2].copy_from_slice(&0x4000u16.to_be_bytes());
         }
-        Box::leak(rom.into_boxed_slice())
+        rom.into()
     }
 
     fn bus_block(send: f32) -> BusBlock {

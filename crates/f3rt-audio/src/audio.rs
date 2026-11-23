@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::hle::command::CommandPacket;
 use crate::hle::core::{self, Core, SharedPcmSink};
 use crate::hle::driver_layout::DriverLayout;
-use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L};
+use crate::memory_map::{MAILBOX_GAIN_CH0, MAILBOX_GAIN_CH1, MAILBOX_PRODUCER_L, SHARED_RAM_SIZE};
 use crate::pcm_ring::PcmRing;
 use crate::shared_mailbox::SharedMailbox;
 use crate::snapshot::AudioSnapshot;
@@ -82,7 +82,7 @@ struct Synth {
 
 impl Synth {
     fn try_new(
-        sound_rom: &'static [u8],
+        sound_rom: Arc<[u8]>,
         sample_words: Box<[u16]>,
         sink: SharedPcmSink,
         layout: &'static DriverLayout,
@@ -196,9 +196,8 @@ pub struct Audio {
 impl Audio {
     /// `Err` names why the sound program or the samples cannot be driven.
     pub fn try_new(
-        sound_rom: &'static [u8],
+        sound_rom: Arc<[u8]>,
         sample_words: Box<[u16]>,
-        shared: *mut u8,
         layout: &'static DriverLayout,
     ) -> Result<Audio, &'static str> {
         let pcm = Arc::new(Mutex::new(PcmRing::new()));
@@ -222,7 +221,7 @@ impl Audio {
             },
             pcm,
             metrics,
-            mailbox: SharedMailbox::new(shared),
+            mailbox: SharedMailbox::new(),
             bank: 1,
             held: true,
         })
@@ -232,8 +231,8 @@ impl Audio {
         self.pcm.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn post_gain(&self, channel: u32) {
-        let raw = self.mailbox.gain(channel);
+    fn post_gain(&self, ram: &[u8; SHARED_RAM_SIZE], channel: u32) {
+        let raw = self.mailbox.gain(ram, channel);
         self.link.post(CoreInputKind::Gain {
             channel: channel as u8,
             raw,
@@ -249,25 +248,28 @@ impl Audio {
         }
     }
 
-    fn restore(&mut self, state: &AudioSnapshot) {
+    fn restore(&mut self, state: &AudioSnapshot) -> Result<(), &'static str> {
+        self.mailbox.restore(state.consumer)?;
         self.link.flush();
         self.link.rebase(state.clock, self.metrics.tick.load(Ordering::Acquire));
         self.pcm().discard();
         self.link.command_count = state.commands;
-        self.mailbox.restore(state.consumer);
         self.held = state.held;
+        Ok(())
     }
 
-    pub fn shared_write(&mut self, offset: u32) {
+    /// The main CPU wrote `offset` of `ram`: a producer-index write drains the mailbox, a gain write
+    /// posts the gain.
+    pub fn shared_write(&mut self, ram: &mut [u8; SHARED_RAM_SIZE], offset: u32) {
         if self.held {
             return;
         }
         if offset == MAILBOX_PRODUCER_L {
-            for packet in self.mailbox.drain() {
+            for packet in self.mailbox.drain(ram) {
                 self.link.record(packet);
             }
         } else if offset == MAILBOX_GAIN_CH0 || offset == MAILBOX_GAIN_CH1 {
-            self.post_gain(offset & 1);
+            self.post_gain(ram, offset & 1);
         }
     }
 
@@ -301,7 +303,7 @@ impl Audio {
     }
 
     /// Reset control (active-high asserted = CPU held in reset).
-    pub fn set_reset(&mut self, asserted: bool) {
+    pub fn set_reset(&mut self, ram: &[u8; SHARED_RAM_SIZE], asserted: bool) {
         if self.held == asserted {
             return;
         }
@@ -310,8 +312,8 @@ impl Audio {
             self.mailbox.reset();
             self.link.post(CoreInputKind::Reset);
         } else {
-            self.post_gain(0);
-            self.post_gain(1);
+            self.post_gain(ram, 0);
+            self.post_gain(ram, 1);
         }
     }
 
@@ -320,8 +322,8 @@ impl Audio {
     }
 
     /// Whole-machine/watchdog reset: hold the board and keep the continuous audio clock.
-    pub fn reset_board(&mut self) {
-        self.set_reset(true);
+    pub fn reset_board(&mut self, ram: &[u8; SHARED_RAM_SIZE]) {
+        self.set_reset(ram, true);
     }
 
     /// Sound CPU program ROM banking (0xc20000 - 0xc3ffff window, default page 1).
@@ -360,8 +362,7 @@ impl Audio {
 
     pub fn load_state(&mut self, src: &[u8]) -> Result<(), &'static str> {
         let state = AudioSnapshot::parse(src)?;
-        self.restore(&state);
-        Ok(())
+        self.restore(&state)
     }
 }
 

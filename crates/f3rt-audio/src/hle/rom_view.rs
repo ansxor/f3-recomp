@@ -1,5 +1,6 @@
 //! The banked sound-program ROM window.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
@@ -13,9 +14,9 @@ pub const SOUND_ROM_IMAGE_SIZE: u32 = 0x80000;
 
 const OUTSIDE_IMAGE: &str = "HLE ROM read outside image";
 
-/// The image is borrowed, not owned: it must outlive the view (the Audio implementation owns it).
+/// The image is shared with every reader of the sound program (bank, sequencer, effects).
 pub struct RomView {
-    rom: &'static [u8],
+    rom: Arc<[u8]>,
     bank: AtomicU8,
 }
 
@@ -28,12 +29,12 @@ impl Default for RomView {
 impl RomView {
     pub fn new() -> RomView {
         RomView {
-            rom: &[],
+            rom: Arc::from(&[][..]),
             bank: AtomicU8::new(1),
         }
     }
 
-    pub fn with_image(image: &'static [u8], bank: u8) -> RomView {
+    pub fn with_image(image: Arc<[u8]>, bank: u8) -> RomView {
         RomView {
             rom: image,
             bank: AtomicU8::new(bank),
@@ -44,8 +45,8 @@ impl RomView {
         self.bank.store(bank, Ordering::Relaxed);
     }
 
-    pub fn image(&self) -> &'static [u8] {
-        self.rom
+    pub fn image(&self) -> &[u8] {
+        &self.rom
     }
 
     pub fn size(&self) -> usize {
@@ -105,7 +106,7 @@ impl RomView {
     }
 
     /// The image from `address` to its end. Descriptors read from it are at least `min_bytes` long.
-    pub fn tail_from(&self, address: u32, min_bytes: usize) -> &'static [u8] {
+    pub fn tail_from(&self, address: u32, min_bytes: usize) -> &[u8] {
         let offset = self.resolve_offset(address) as usize;
         let tail = &self.rom[offset..];
         if tail.len() < min_bytes {
