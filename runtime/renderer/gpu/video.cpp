@@ -84,11 +84,6 @@ GpuVideo::~GpuVideo() = default;
 
 const char *GpuVideo::driver() const { return m_driver.c_str(); }
 
-const InterpolationStats &GpuVideo::last_interpolation() const {
-    m_interpolation = m_video->last_interpolation();
-    return m_interpolation;
-}
-
 void GpuVideo::set_scale(unsigned scale) {
     guarded([&] { m_video->set_scale(scale); });
 }

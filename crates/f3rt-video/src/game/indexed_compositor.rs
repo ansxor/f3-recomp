@@ -1,16 +1,11 @@
-//! Scale-1 indexed compositor, mechanically ported from
-//! `runtime/renderer/game/indexed_compositor.{hpp,cpp}`.
-//!
-//! Composition walks the visible scanout window in `COMPOSE_CHUNK_ROWS` chunks. Each chunk owns
-//! its own plane rows, coverage rows and output rows, so the same chunk routine runs serially or
-//! through [`RowWorkers`] without shared mutable state.
+//! Indexed composition over disjoint scanout chunks.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::config::{
     GameVideoOptions, Geometry, NATIVE_WIDTH, PixelFormat, SpriteList, VideoConfig,
 };
-use crate::game::clip::{clip_ranges_for_row, scene_order};
+use crate::game::clip::{ClipRanges, clip_ranges_for_row, scene_order};
 use crate::game::layer_visits::{LayerPass, LayerVisits};
 use crate::game::mix::{background_mix, color15, mix};
 use crate::game::row_bits::{
@@ -67,20 +62,14 @@ impl LayerPlan {
 #[derive(Clone, Copy)]
 struct ColumnRanges {
     count: usize,
-    range: [[i32; 2]; ClipRangesCapacity::VALUE],
-}
-
-struct ClipRangesCapacity;
-
-impl ClipRangesCapacity {
-    const VALUE: usize = 5;
+    range: [[i32; 2]; ClipRanges::CAPACITY],
 }
 
 impl Default for ColumnRanges {
     fn default() -> Self {
         Self {
             count: 0,
-            range: [[0; 2]; ClipRangesCapacity::VALUE],
+            range: [[0; 2]; ClipRanges::CAPACITY],
         }
     }
 }
@@ -97,13 +86,81 @@ struct BlendSamples {
 const FROM_ZERO: u16 = 0;
 const FROM_BACKGROUND: u16 = 0xffff;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct BlendResult {
     visits: LayerVisits,
     source: u8,
     destination: u8,
     source_weight: u8,
     destination_weight: u8,
+}
+
+struct BlendMemo {
+    entries: [BlendResult; 64],
+}
+
+impl BlendMemo {
+    fn new() -> Self {
+        Self {
+            entries: [BlendResult::default(); 64],
+        }
+    }
+
+    fn clear(&mut self) {
+        for entry in &mut self.entries {
+            entry.visits = LayerVisits::default();
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        visits: LayerVisits,
+        replay: impl FnOnce() -> BlendResult,
+    ) -> BlendResult {
+        let mut slot = (visits.hash() >> 26) as usize;
+        for _ in 0..4 {
+            if self.entries[slot].visits == visits {
+                return self.entries[slot];
+            }
+            if self.entries[slot].visits.empty() {
+                let result = replay();
+                self.entries[slot] = result;
+                return result;
+            }
+            slot = (slot + 1) & 63;
+        }
+        replay()
+    }
+}
+
+fn replay_blend(row: &SceneRow, order: &[LayerId], visits: LayerVisits) -> BlendResult {
+    let mut pixel = background_mix(FROM_BACKGROUND);
+    for &id in order {
+        let layer = row.layer(id);
+        let index = id as u32;
+        for select in 0..2u32 {
+            if !visits.saw(index, select != 0) {
+                continue;
+            }
+            let count = visits.passes(index);
+            for _ in 0..count {
+                mix(
+                    &mut pixel,
+                    layer,
+                    (index + 1) as u16,
+                    select != 0,
+                    &row.blend,
+                );
+            }
+        }
+    }
+    BlendResult {
+        visits,
+        source: sample_slot(pixel.source),
+        destination: sample_slot(pixel.destination),
+        source_weight: pixel.source_weight,
+        destination_weight: pixel.destination_weight,
+    }
 }
 
 const fn sample_slot(from: u16) -> u8 {
@@ -160,8 +217,6 @@ struct SharedJob<'a> {
     bins: &'a SpriteBins,
 }
 
-/// The read-only part of the snapshot the compositor needs (avoids referencing `SceneSnapshot`
-/// directly so tests and Wave 2B can compose either a snapshot or a borrowed view).
 pub struct SceneSnapshotView<'a> {
     pub tiles: &'a GameTiles,
     pub text: &'a crate::game::text::GameText,
@@ -174,15 +229,6 @@ pub struct SceneSnapshotView<'a> {
     pub sprite_flipped: bool,
     pub sprite_trail_seed: &'a [u16],
     pub fallback: bool,
-}
-
-/// Byte order of one composed pixel; see [`PixelFormat`].
-pub fn to_pixel_format(argb: u32, format: PixelFormat) -> u32 {
-    format.to_pixel_format(argb)
-}
-
-pub fn from_pixel_format(pixel: u32, format: PixelFormat) -> u32 {
-    format.from_pixel_format(pixel)
 }
 
 /// Palette conversion cache (`IndexedPalette`).
@@ -454,10 +500,6 @@ fn glyph_row_masks(text: &crate::game::text::GameText, rows: &mut [u8; 256]) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Row composition
-// ---------------------------------------------------------------------------
-
 struct RowWork<'a> {
     job: &'a SharedJob<'a>,
     row: &'a SceneRow,
@@ -476,7 +518,7 @@ struct RowWork<'a> {
     setup: &'a RowSetup,
     plane: &'a [u16],
     coverage: SpriteCoverageRow<'a>,
-    memo: [BlendResult; 64],
+    memo: BlendMemo,
 }
 
 impl<'a> RowWork<'a> {
@@ -505,51 +547,10 @@ impl<'a> RowWork<'a> {
         }
     }
 
-    fn replay(&self, visits: LayerVisits) -> BlendResult {
-        let mut pixel = background_mix(FROM_BACKGROUND);
-        for n in 0..self.setup.order_count {
-            let id = self.setup.order[n];
-            let layer = self.row.layer(id);
-            let index = id as u32;
-            for select in 0..2u32 {
-                if !visits.saw(index, select != 0) {
-                    continue;
-                }
-                let count = visits.passes(index);
-                for _ in 0..count {
-                    mix(
-                        &mut pixel,
-                        layer,
-                        (index + 1) as u16,
-                        select != 0,
-                        &self.row.blend,
-                    );
-                }
-            }
-        }
-        BlendResult {
-            visits,
-            source: sample_slot(pixel.source),
-            destination: sample_slot(pixel.destination),
-            source_weight: pixel.source_weight,
-            destination_weight: pixel.destination_weight,
-        }
-    }
-
     fn blend_result(&mut self, visits: LayerVisits) -> BlendResult {
-        let mut slot = (visits.hash() >> 26) as usize;
-        for _ in 0..4 {
-            if self.memo[slot].visits == visits {
-                return self.memo[slot];
-            }
-            if self.memo[slot].visits.empty() {
-                let result = self.replay(visits);
-                self.memo[slot] = result;
-                return result;
-            }
-            slot = (slot + 1) & 63;
-        }
-        self.replay(visits)
+        let order = &self.setup.order[..self.setup.order_count];
+        self.memo
+            .resolve(visits, || replay_blend(self.row, order, visits))
     }
 }
 
@@ -565,9 +566,7 @@ fn visit(work: &mut RowWork<'_>, x: i32, palette: u16, select: bool, plan: &Laye
         }
         if !work.any_pending {
             work.any_pending = true;
-            for entry in &mut work.memo {
-                entry.visits = LayerVisits::default();
-            }
+            work.memo.clear();
         }
         work.pending[word] |= bit;
         let sample = &mut work.samples[x as usize];
@@ -596,9 +595,7 @@ fn visit_bits(
     if fresh != 0 {
         if !work.any_pending {
             work.any_pending = true;
-            for entry in &mut work.memo {
-                entry.visits = LayerVisits::default();
-            }
+            work.memo.clear();
         }
         work.unresolved[w] &= !fresh;
         work.pending[w] |= fresh;
@@ -1414,7 +1411,7 @@ fn compose_row(
         setup,
         plane: plane_row,
         coverage,
-        memo: [BlendResult::default(); 64],
+        memo: BlendMemo::new(),
     };
     work.reset();
 
@@ -1454,7 +1451,7 @@ fn compose_row(
     }
     if row.blur {
         for (x, scratch) in argb_scratch.iter_mut().enumerate().take(width) {
-            *scratch = from_pixel_format(work.out[x], job.format);
+            *scratch = job.format.from_pixel_format(work.out[x]);
         }
         for x in (0..width).rev() {
             let color = argb_scratch[x];
@@ -1464,14 +1461,10 @@ fn compose_row(
             argb_scratch[x] = 0xff00_0000 | rb | g;
         }
         for (x, scratch) in argb_scratch.iter().enumerate().take(width) {
-            work.out[x] = to_pixel_format(*scratch, job.format);
+            work.out[x] = job.format.to_pixel_format(*scratch);
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Chunk driver
-// ---------------------------------------------------------------------------
 
 struct ChunkBuffers<'a> {
     output: &'a mut [u32],
@@ -1742,6 +1735,41 @@ mod tests {
             )
             .unwrap();
         (output, scratch.stats.special_px())
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+        #[test]
+        fn memo_matches_uncached_replay_across_rows(
+            visits in proptest::collection::vec(1u16..512, 65..130),
+            blend in proptest::array::uniform4(0u8..=8),
+            priorities in proptest::array::uniform9(1u8..16),
+            modes in proptest::array::uniform9(0u8..4),
+        ) {
+            use proptest::prelude::*;
+            let mut row = SceneRow { blend, ..SceneRow::default() };
+            for i in 0..LAYER_COUNT {
+                let layer = row.layer_mut(layer_id(i));
+                layer.priority = priorities[i];
+                layer.blend_mode = modes[i];
+            }
+            let order = scene_order(&row);
+            let mut memo = BlendMemo::new();
+            for _ in 0..2 {
+                for &mask in visits.iter().chain(visits.iter().rev()) {
+                    let mut visits = LayerVisits::default();
+                    for i in 0..LAYER_COUNT as u32 {
+                        if mask & (1 << i) != 0 {
+                            visits.add(LayerVisits::pass(i, i % 2 == 0));
+                        }
+                    }
+                    let actual = memo.resolve(visits, || replay_blend(&row, &order, visits));
+                    prop_assert_eq!(actual, replay_blend(&row, &order, visits));
+                }
+                row.blend = blend.map(|weight| 8 - weight);
+                memo.clear();
+            }
+        }
     }
 
     #[test]

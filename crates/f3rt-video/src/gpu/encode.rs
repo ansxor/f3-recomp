@@ -1,22 +1,19 @@
-//! GPU scene encoding, mechanically ported from `runtime/renderer/gpu/encode.{hpp,cpp}`.
-//!
-//! The chain is [`ScenePlan::apply_motion`] -> [`MotionScene::analyze_interpolation`] ->
-//! [`PreparedScene::encode_into`]. `encode_into` is the only code that writes GPU scene words,
-//! straight into the caller's mapped upload buffer (no intermediate copy).
+//! Scene encoding into mapped GPU upload buffers.
 
-use crate::config::{GameVideoOptions, Geometry, NATIVE_WIDTH, SpriteList, VideoConfig};
-use crate::game::LAYER_COUNT;
+use super::api::VideoInterpolation;
+use crate::config::{GameVideoOptions, Geometry, SpriteList, VideoConfig};
 use crate::game::clip::scene_order;
 use crate::game::scene::{ScenePlayfield, SceneRow, SceneSprite, presented_playfield};
 use crate::game::scene_snapshot::SceneSnapshot;
 use crate::gpu::interp::{
-    InterpolationCoefficients, InterpolationConfig, InterpolationStats, VideoInterpolation,
+    InterpolationCoefficients, InterpolationConfig, InterpolationStats,
     analyze_gpu_interpolation_into,
 };
 use crate::gpu::motion::{
     GpuMotionHistory, MOTION_LAYER_MASK, MotionInterpolationStats, MotionRowState, MotionState,
 };
 use crate::gpu::scene_layout::*;
+use std::mem::MaybeUninit;
 
 pub use crate::game::scene::ALL_LAYERS;
 
@@ -25,9 +22,9 @@ pub const ENCODED_SCENE_WORDS: usize = F3_SCENE_WORD_COUNT;
 pub const ENCODED_INTERPOLATION_WORDS: usize = F3_SCENE_INTERP_WORD_COUNT;
 /// `ENCODED_NATIVE_WORDS`: `320 * geometry::HEIGHT` words for the canonical/default scanout
 /// geometry. Per-game geometry travels in [`Geometry`]; use [`encoded_native_words`].
-pub const ENCODED_NATIVE_WORDS: usize = NATIVE_WIDTH as usize * 232;
+#[cfg(test)]
+const ENCODED_NATIVE_WORDS: usize = 320 * 232;
 
-/// The C++ `ENCODED_NATIVE_WORDS` for an arbitrary scanout geometry.
 pub const fn encoded_native_words(geometry: &Geometry) -> usize {
     geometry.native_pixels() as usize
 }
@@ -36,7 +33,7 @@ pub const fn encoded_native_words(geometry: &Geometry) -> usize {
 pub type GpuUniforms = SceneUniforms;
 
 /// `GpuPrepScratch`: caller-owned buffers the chain borrows instead of returning by value.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct GpuPrepScratch {
     pub motion_state: MotionState,
     pub interp_coefficients: InterpolationCoefficients,
@@ -146,6 +143,21 @@ pub struct PreparedScene<'a, 's, 'c> {
 }
 
 impl<'a, 's, 'c> PreparedScene<'a, 's, 'c> {
+    #[cfg(test)]
+    fn encode_into(
+        &self,
+        out: &mut [u32],
+        pf_tiles: u32,
+        sp_tiles: u32,
+    ) -> Result<EncodedScene<'a>, String> {
+        let len = out.len();
+        // SAFETY: MaybeUninit<u32> has the same layout. The encoder only writes initialized words.
+        let out = unsafe {
+            std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<MaybeUninit<u32>>(), len)
+        };
+        self.encode_mapped(out, pf_tiles, sp_tiles)
+    }
+
     pub fn required_words(&self) -> usize {
         if self.motion.plan.scene.fallback {
             return encoded_native_words(&self.motion.plan.scene.geometry());
@@ -174,9 +186,9 @@ impl<'a, 's, 'c> PreparedScene<'a, 's, 'c> {
     ///   (`ENCODED_INTERPOLATION_WORDS` in total).
     ///
     /// `options.border` bounds layer clip ranges. Returns an error if `out` is too small.
-    pub fn encode_into(
+    pub fn encode_mapped(
         &self,
-        out: &mut [u32],
+        out: &mut [MaybeUninit<u32>],
         pf_tile_count: u32,
         sp_tile_count: u32,
     ) -> Result<EncodedScene<'a>, String> {
@@ -275,7 +287,7 @@ fn encode_row(
     video: &VideoConfig,
     left: i16,
     right: i16,
-    at: &mut [u32],
+    at: &mut [MaybeUninit<u32>],
 ) {
     let mut pf: [ScenePlayfield; 4] = r.playfields;
     let mut moved_y = [false; 4];
@@ -294,35 +306,34 @@ fn encode_row(
             }
         }
     }
-    at[F3_ROW_BACKGROUND] = u32::from(r.background);
-    at[F3_ROW_MOSAIC] = u32::from(r.mosaic_period)
-        | if r.palette_15bit { F3_ROW_PALETTE15 } else { 0 }
-        | if r.blur { F3_ROW_BLUR } else { 0 };
-    at[F3_ROW_TEXT_X] = r.text_x as u32;
-    at[F3_ROW_TEXT_Y] = r.text_y as u32;
-    at[F3_ROW_BITMAP_MAP_ROW] = if r.bitmap {
+    at[F3_ROW_BACKGROUND].write(u32::from(r.background));
+    at[F3_ROW_MOSAIC].write(
+        u32::from(r.mosaic_period)
+            | if r.palette_15bit { F3_ROW_PALETTE15 } else { 0 }
+            | if r.blur { F3_ROW_BLUR } else { 0 },
+    );
+    at[F3_ROW_TEXT_X].write(r.text_x as u32);
+    at[F3_ROW_TEXT_Y].write(r.text_y as u32);
+    at[F3_ROW_BITMAP_MAP_ROW].write(if r.bitmap {
         text.bitmap_map_row(r.text_y as u32, flipped)
     } else {
         0
-    };
-    at[F3_ROW_BLEND] = u32::from(r.blend[0])
-        | (u32::from(r.blend[1]) << 8)
-        | (u32::from(r.blend[2]) << 16)
-        | (u32::from(r.blend[3]) << 24);
+    });
+    at[F3_ROW_BLEND].write(u32::from_le_bytes(r.blend));
     let order = scene_order(r);
-    for i in 0..LAYER_COUNT {
-        at[F3_ROW_ORDER + i] = order[i] as u32;
+    for (i, id) in order.into_iter().enumerate() {
+        at[F3_ROW_ORDER + i].write(id as u32);
         let l = r.layer(layer_id(i));
         let la = &mut at[F3_ROW_LAYERS + i * F3_LAYER_STRIDE..];
-        la[F3_LAYER_FLAGS] = layer_flags(l);
+        let mut flags = layer_flags(l);
         if i < 4 && pf[i].alt_map {
-            la[F3_LAYER_FLAGS] |= F3_LAYER_ALT_MAP;
+            flags |= F3_LAYER_ALT_MAP;
         }
         if i < 4 && video.extend {
-            la[F3_LAYER_FLAGS] |= F3_LAYER_EXTEND;
+            flags |= F3_LAYER_EXTEND;
         }
         if i < 4 && r.playfields[i].empty_row {
-            la[F3_LAYER_FLAGS] &= !F3_LAYER_ENABLED;
+            flags &= !F3_LAYER_ENABLED;
         }
         if i == 8 {
             let text_y_adj = if flipped {
@@ -331,58 +342,65 @@ fn encode_row(
                 i32::from(r.text_y)
             };
             if r.bitmap {
-                la[F3_LAYER_FLAGS] |= F3_LAYER_BITMAP;
+                flags |= F3_LAYER_BITMAP;
             } else if !text.row_used(text_y_adj as u32) {
-                la[F3_LAYER_FLAGS] &= !F3_LAYER_ENABLED;
+                flags &= !F3_LAYER_ENABLED;
             }
         }
+        la[F3_LAYER_FLAGS].write(flags);
         let clips = crate::game::clip::clip_ranges_for_row(r, l, left, right);
-        la[F3_LAYER_CLIP_COUNT] = clips.count as u32;
-        for c in 0..clips.count {
-            la[F3_LAYER_CLIPS + c * 2] = clips.ranges[c].left as i32 as u32;
-            la[F3_LAYER_CLIPS + c * 2 + 1] = clips.ranges[c].right as i32 as u32;
+        la[F3_LAYER_CLIP_COUNT].write(clips.count as u32);
+        for (i, clip) in clips.iter().enumerate() {
+            la[F3_LAYER_CLIPS + i * 2].write(clip.left as i32 as u32);
+            la[F3_LAYER_CLIPS + i * 2 + 1].write(clip.right as i32 as u32);
         }
     }
-    for i in 0..4 {
-        let p = pf[i];
+    for (i, (p, moved_y)) in pf.into_iter().zip(moved_y).enumerate() {
         let pa = &mut at[F3_ROW_PF + i * F3_PF_STRIDE..];
-        pa[F3_PF_SOURCE_X] = p.source_x as u32;
-        pa[F3_PF_SOURCE_Y] = p.source_y as u32;
-        pa[F3_PF_X_STEP] = p.x_step as u32;
-        pa[F3_PF_Y_STEP] = p.y_step as u32;
-        pa[F3_PF_Y_FRACTION] = u32::from(p.y_fraction);
-        pa[F3_PF_PALETTE_ADD] = u32::from(p.palette_add);
+        pa[F3_PF_SOURCE_X].write(p.source_x as u32);
+        pa[F3_PF_SOURCE_Y].write(p.source_y as u32);
+        pa[F3_PF_X_STEP].write(p.x_step as u32);
+        pa[F3_PF_Y_STEP].write(p.y_step as u32);
+        pa[F3_PF_Y_FRACTION].write(u32::from(p.y_fraction));
+        pa[F3_PF_PALETTE_ADD].write(u32::from(p.palette_add));
         // The snapshot phase is kept bit-exact where motion did not move it.
-        if moved_y[i] {
+        if moved_y {
             let phase = motion.unwrap().phase[i] as u32;
-            pa[F3_PF_SOURCE_Y] = phase >> 8;
-            pa[F3_PF_Y_FRACTION] = phase & 255;
+            pa[F3_PF_SOURCE_Y].write(phase >> 8);
+            pa[F3_PF_Y_FRACTION].write(phase & 255);
         }
     }
-    at[F3_ROW_MOTION_TEXT_X] = motion.map_or(0, |m| m.text_x as u32);
-    at[F3_ROW_MOTION_TEXT_Y] = motion.map_or(0, |m| m.text_y as u32);
+    at[F3_ROW_MOTION_TEXT_X].write(motion.map_or(0, |m| m.text_x as u32));
+    at[F3_ROW_MOTION_TEXT_Y].write(motion.map_or(0, |m| m.text_y as u32));
 }
 
-fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [u32]) {
-    for y in 0..F3_SCENE_ROW_COUNT {
-        for pf in 0..4 {
-            let c = &coefficients.rows[y][pf];
-            let at = &mut out[y * F3_SCENE_INTERP_ROW_STRIDE + pf * F3_INTERP_PF_STRIDE..];
-            at[0] = u32::from(c.flags);
-            if c.flags & F3_INTERP_FLAG_PALETTE as u8 != 0 {
-                at[0] |= u32::from(c.palette_stride) << F3_INTERP_PALETTE_STRIDE_SHIFT;
-            }
+fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [MaybeUninit<u32>]) {
+    for (row, encoded) in coefficients
+        .rows
+        .iter()
+        .zip(out.chunks_exact_mut(F3_SCENE_INTERP_ROW_STRIDE))
+    {
+        for (c, at) in row
+            .iter()
+            .zip(encoded.chunks_exact_mut(F3_INTERP_PF_STRIDE))
+        {
+            let palette_stride = if c.flags & F3_INTERP_FLAG_PALETTE as u8 != 0 {
+                u32::from(c.palette_stride)
+            } else {
+                0
+            };
+            at[0].write(u32::from(c.flags) | palette_stride << F3_INTERP_PALETTE_STRIDE_SHIFT);
             const OFFSETS: [usize; 4] = [
                 F3_INTERP_SOURCE,
                 F3_INTERP_ZOOM,
                 F3_INTERP_VERTICAL,
                 F3_INTERP_PALETTE,
             ];
-            let triples = [&c.source, &c.zoom, &c.vertical, &c.palette];
-            for t in 0..4 {
-                for k in 0..3 {
-                    at[OFFSETS[t] + k] = triples[t][k].to_bits();
-                }
+            for (offset, triple) in OFFSETS
+                .into_iter()
+                .zip([c.source, c.zoom, c.vertical, c.palette])
+            {
+                at[offset..offset + 3].write_copy_of_slice(&triple.map(f32::to_bits));
             }
         }
     }
@@ -393,7 +411,7 @@ fn write_words(
     options: GameVideoOptions,
     motion: Option<&MotionState>,
     coefficients: Option<&InterpolationCoefficients>,
-    out: &mut [u32],
+    out: &mut [MaybeUninit<u32>],
     list: SpriteList,
 ) -> Result<(), String> {
     if frame.fallback {
@@ -401,7 +419,7 @@ fn write_words(
         if out.len() < native {
             return Err("GPU native upload too small".to_string());
         }
-        out[..native].copy_from_slice(&frame.native_pixels[..native]);
+        out[..native].write_copy_of_slice(&frame.native_pixels[..native]);
         return Ok(());
     }
     let sprites = frame.sprite_list_for(list);
@@ -414,43 +432,35 @@ fn write_words(
         return Err("GPU scene upload too small".to_string());
     }
     let alternate_maps = frame.tiles.map_count() > 4;
-    for l in 0..4 {
-        // Raw 4-byte video-RAM cell (attributes<<16 | code); the shader decodes it exactly like
-        // `GameTiles::RowSampler`. Word 1 of each slot is unused.
-        let cells = frame.tiles.cells(l);
-        let dst =
-            &mut out[F3_SCENE_PF_CELLS + l * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE..];
-        if alternate_maps {
-            // Only PF2/PF3 have alternates (maps 4/5); word 1 carries them.
-            let alternate = l >= 2;
-            let alt_cells = frame.tiles.cells(if alternate { l + 2 } else { l });
-            for i in 0..cells.len() {
-                dst[i * 2] = cells[i];
-                dst[i * 2 + 1] = if alternate { alt_cells[i] } else { 0 };
-            }
-        } else {
-            for i in 0..cells.len() {
-                dst[i * 2] = cells[i];
-                dst[i * 2 + 1] = 0;
-            }
+    for (layer, dest) in out[F3_SCENE_PF_CELLS..F3_SCENE_TEXT_CELLS]
+        .chunks_exact_mut(F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE)
+        .enumerate()
+    {
+        let cells = frame.tiles.cells(layer);
+        let alt = (alternate_maps && layer >= 2).then(|| frame.tiles.cells(layer + 2));
+        for (i, (cell, dest)) in cells.iter().zip(dest.chunks_exact_mut(2)).enumerate() {
+            dest[0].write(*cell);
+            dest[1].write(alt.map_or(0, |alt| alt[i]));
         }
     }
-    // Raw big-endian text-map words; the shader decodes them like `GameText::pixel`.
+
     let map = frame.text.map();
     for (i, value) in map.iter().enumerate() {
-        out[F3_SCENE_TEXT_CELLS + i] = u32::from(*value);
+        out[F3_SCENE_TEXT_CELLS + i].write(u32::from(*value));
     }
-    // Raw glyph RAM, byte-packed four bytes per word; the shader indexes it as bytes.
+
     debug_assert_eq!(0x2000, F3_SCENE_GLYPH_WORDS * 4);
     for (i, chunk) in frame.text.glyphs().chunks_exact(4).enumerate() {
-        out[F3_SCENE_GLYPHS + i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        out[F3_SCENE_GLYPHS + i]
+            .write(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
     let pivot = frame.text.pivot();
     debug_assert_eq!(pivot.len(), F3_SCENE_PIVOT_WORDS * 4);
     for (i, chunk) in pivot.chunks_exact(4).enumerate() {
-        out[F3_SCENE_PIVOT + i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        out[F3_SCENE_PIVOT + i].write(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
-    out[F3_SCENE_PALETTE..F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS].copy_from_slice(&frame.colors);
+    out[F3_SCENE_PALETTE..F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS]
+        .write_copy_of_slice(&frame.colors);
     let left = (46 - options.border as i32) as i16;
     let right = (366 + options.border as i32) as i16;
     for y in 0..F3_SCENE_ROW_COUNT {
@@ -467,28 +477,29 @@ fn write_words(
             row_at,
         );
     }
-    for i in 0..sprites.len() {
-        let s = &sprites[i];
+    for (i, s) in sprites.iter().enumerate() {
         let at = &mut out[F3_SCENE_SPRITES + i * F3_SCENE_SPRITE_STRIDE..];
-        at[F3_SPRITE_X] = motion.map_or(s.x as u32, |m| m.sprite_x[i] as u32);
-        at[F3_SPRITE_Y] = motion.map_or(s.y as u32, |m| m.sprite_y[i] as u32);
-        at[F3_SPRITE_SCALE_X] = u32::from(s.scale_x);
-        at[F3_SPRITE_SCALE_Y] = u32::from(s.scale_y);
-        at[F3_SPRITE_TILE] = s.tile;
-        at[F3_SPRITE_PALETTE] = u32::from(s.palette);
-        at[F3_SPRITE_WEIGHT] = 0;
+        at[F3_SPRITE_X].write(motion.map_or(s.x as u32, |m| m.sprite_x[i] as u32));
+        at[F3_SPRITE_Y].write(motion.map_or(s.y as u32, |m| m.sprite_y[i] as u32));
+        at[F3_SPRITE_SCALE_X].write(u32::from(s.scale_x));
+        at[F3_SPRITE_SCALE_Y].write(u32::from(s.scale_y));
+        at[F3_SPRITE_TILE].write(s.tile);
+        at[F3_SPRITE_PALETTE].write(u32::from(s.palette));
+        at[F3_SPRITE_WEIGHT].write(0);
         if s.weighted() {
             let weight = s.blend_weight.max(0.0);
             let fixed = (weight * F3_SPRITE_WEIGHT_SCALE as f32 + 0.5) as u32;
-            at[F3_SPRITE_WEIGHT] = fixed.clamp(1, F3_SPRITE_WEIGHT_SCALE - 1);
+            at[F3_SPRITE_WEIGHT].write(fixed.clamp(1, F3_SPRITE_WEIGHT_SCALE - 1));
         }
-        at[F3_SPRITE_FLIP] = (if s.flip_x { F3_SPRITE_FLIP_X } else { 0 })
-            | (if s.flip_y { F3_SPRITE_FLIP_Y } else { 0 })
-            | if frame.sprite_flipped {
-                F3_SPRITE_SCREEN_FLIPPED
-            } else {
-                0
-            };
+        at[F3_SPRITE_FLIP].write(
+            (if s.flip_x { F3_SPRITE_FLIP_X } else { 0 })
+                | (if s.flip_y { F3_SPRITE_FLIP_Y } else { 0 })
+                | if frame.sprite_flipped {
+                    F3_SPRITE_SCREEN_FLIPPED
+                } else {
+                    0
+                },
+        );
     }
     if let Some(coefficients) = coefficients {
         encode_coefficients(coefficients, &mut out[F3_SCENE_INTERP..]);
@@ -498,11 +509,11 @@ fn write_words(
 
 #[cfg(test)]
 mod tests {
+    use super::super::api::InterpolationFields;
     use super::*;
     use crate::game::scene::{SceneClip, SceneSprite};
     use crate::gpu::interp::{
-        InterpolationFields, InterpolationReason, analyze_gpu_interpolation,
-        interpolation_reason_name,
+        InterpolationReason, analyze_gpu_interpolation, interpolation_reason_name,
     };
     use crate::gpu::motion::GpuMotionHistory;
 
@@ -1069,6 +1080,52 @@ mod tests {
             );
         let mut scene_sized = vec![0u32; ENCODED_SCENE_WORDS];
         assert!(prepared.encode_into(&mut scene_sized, 0, 0).is_err());
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+
+        #[test]
+        fn encoded_upload_respects_buffer_and_layout(
+            fallback in proptest::prelude::any::<bool>(),
+            flipped in proptest::prelude::any::<bool>(),
+            scale in 1u32..=8,
+            border in 0u32..=160,
+            flags in proptest::prelude::any::<u32>(),
+            dimensions in (0u32..32, 1u32..=224),
+            counts in (0u32..99, 0u32..99),
+        ) {
+            use proptest::prelude::*;
+            let video = VideoConfig { visible_y: dimensions.0, visible_height: dimensions.1, ..VideoConfig::default() };
+            let mut scene = SceneSnapshot::new(&video);
+            scene.fallback = fallback;
+            scene.flipped = flipped;
+            sprite(&mut scene, 0, 100, 7);
+            let plan = ScenePlan { scene: &scene, options: scaled(scale, border), sprite_list: SpriteList::Presented, layer_mask: flags };
+            let mut scratch = GpuPrepScratch::default();
+            let prepared = plan.apply_motion(None, None, &mut scratch.motion_state).analyze_interpolation(
+                InterpolationConfig { mode: VideoInterpolation::Linear, fields: InterpolationFields::Geometry },
+                &[], &mut scratch.interp_coefficients,
+            );
+            let expected_words = if fallback { 320 * dimensions.1 as usize } else if scale == 1 { F3_SCENE_WORD_COUNT } else { F3_SCENE_INTERP_WORD_COUNT };
+            let mut words = vec![u32::MAX; expected_words + 3];
+            prop_assert!(prepared.encode_into(&mut words[..expected_words - 1], counts.0, counts.1).is_err());
+            prop_assert!(words.iter().all(|&word| word == u32::MAX));
+            let encoded = prepared.encode_into(&mut words, counts.0, counts.1).unwrap();
+            let u = encoded.uniforms;
+            prop_assert_eq!(encoded.upload_bytes as usize, expected_words * size_of::<u32>());
+            prop_assert_eq!(&words[expected_words..], &[u32::MAX; 3]);
+            prop_assert_eq!((u.width, u.height), ((320 + 2 * border) * scale, dimensions.1 * scale));
+            prop_assert_eq!((u.first_line, u.native_height, u.fallback), (dimensions.0, dimensions.1, u32::from(fallback)));
+            prop_assert_eq!(u.layer_mask, (flags & ALL_LAYERS) | if flipped { F3_MASK_SCREEN_FLIPPED } else { 0 });
+            prop_assert_eq!((u.pf_tile_count, u.sp_tile_count), counts);
+            if fallback {
+                prop_assert_eq!(&words[..expected_words], &scene.native_pixels);
+            } else {
+                prop_assert_eq!(sprite_word(&words, 0, F3_SPRITE_X), 100 * 256);
+                prop_assert_eq!(sprite_word(&words, 0, F3_SPRITE_TILE), 7);
+            }
+        }
     }
 
     #[test]

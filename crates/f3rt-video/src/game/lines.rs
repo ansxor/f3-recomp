@@ -1,13 +1,12 @@
-//! Line-RAM decode and per-scanline scene rows, mechanically ported from
-//! `runtime/renderer/game/lines.{hpp,cpp}`.
+//! Line RAM latches and per-scanline mixer controls.
 
 use crate::config::{Geometry, VideoConfig};
 use crate::game::ram_shadow::{RamShadow, fresh_content_version};
-use crate::game::scene::{SceneClip, SceneRow, SceneSource, VideoRam};
+use crate::game::scene::{SceneClip, SceneRow, VideoRam};
 use crate::game::tiles::{FullResolutionAltMaps, GameTiles};
 use crate::memory_map::{
     LINERAM_BANK_OFFSET, LINERAM_LATCH_STRIDE, LINERAM_SECTION_STRIDE, LINERAM_SECTIONS_OFFSET,
-    LINERAM_SUBSECTION_STRIDE, OFFS_LINERAM,
+    LINERAM_SIZE, LINERAM_SUBSECTION_STRIDE, OFFS_LINERAM,
 };
 use crate::state_io::{
     CanonicalLineParams, CanonicalRecord, CanonicalSceneRow, StateReader, StateWriter,
@@ -210,11 +209,11 @@ impl GameLines {
         self.forget_decode();
     }
 
-    /// Decode line RAM and FDP controls, mirroring `Video::read_line_ram`. Fields carry forward
+    /// Line RAM fields carry forward
     /// when a subsection latch is absent, so all 256 scanlines are walked in order with a
     /// persistent scratch line.
     pub fn decode(&mut self, vram: &VideoRam<'_>, flipped: bool) {
-        let lineram = &vram.graphics[OFFS_LINERAM..];
+        let lineram = &vram.graphics[OFFS_LINERAM..OFFS_LINERAM + LINERAM_SIZE];
         let latch_span: &[u8; LATCH_BYTES] = lineram[..LATCH_BYTES]
             .try_into()
             .expect("line RAM latch tables");
@@ -671,16 +670,6 @@ impl GameLines {
             *row = unpack_row(&canonical);
         }
         Ok(())
-    }
-}
-
-impl SceneSource for GameLines {
-    fn reset(&mut self) {
-        Self::reset(self);
-    }
-
-    fn decode(&mut self, vram: &VideoRam<'_>) {
-        Self::decode(self, vram, false);
     }
 }
 

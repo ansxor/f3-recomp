@@ -1,8 +1,4 @@
-//! SDL3 GPU object lifetimes and presentation, calling `sdl3-sys` directly.
-//!
-//! Replaces the former `runtime/renderer/gpu/sdl_gpu.{hpp,cpp}` and the C driver vtable
-//! (`sdl_driver_shim.{hpp,cpp}`, `driver.rs`). Every handle here is an SDL3 GPU pointer; the
-//! device owns all of them.
+//! SDL GPU resource ownership and command submission.
 
 // Raw GPU handles are only ever passed back to SDL3 or overlaid on C++-owned hosts.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -18,6 +14,8 @@ use sdl3_sys::gpu::*;
 use sdl3_sys::pixels::SDL_FColor;
 use sdl3_sys::rect::SDL_Rect;
 use std::ffi::{CStr, CString, c_void};
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 
 pub use sdl3_sys::video::SDL_Window;
 
@@ -95,6 +93,7 @@ fn detail() -> String {
     if message.is_null() {
         String::new()
     } else {
+        // SAFETY: SDL returned a non-null NUL-terminated thread-local error string.
         unsafe { CStr::from_ptr(message) }
             .to_string_lossy()
             .into_owned()
@@ -210,7 +209,7 @@ impl GpuTexture {
         }
     }
 
-    pub fn new(
+    fn new(
         device: *mut SDL_GPUDevice,
         handle: *mut SDL_GPUTexture,
         format: TextureFormat,
@@ -226,7 +225,7 @@ impl GpuTexture {
         }
     }
 
-    pub fn get(&self) -> *mut SDL_GPUTexture {
+    pub(super) fn get(&self) -> *mut SDL_GPUTexture {
         self.handle
     }
 
@@ -234,7 +233,7 @@ impl GpuTexture {
         self.handle as usize
     }
 
-    pub fn surface(&self) -> GpuSurface {
+    pub(super) fn surface(&self) -> GpuSurface {
         GpuSurface {
             texture: self.handle as usize,
             width: self.width,
@@ -242,7 +241,7 @@ impl GpuTexture {
         }
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub(super) fn is_valid(&self) -> bool {
         !self.handle.is_null()
     }
 
@@ -255,7 +254,7 @@ impl GpuTexture {
     }
 
     /// Keeps the current texture when it already has this format and size; otherwise replaces it.
-    pub fn ensure(
+    pub(super) fn ensure(
         &mut self,
         ctx: &GpuContext,
         format: TextureFormat,
@@ -281,23 +280,23 @@ impl Drop for GpuTexture {
 }
 
 /// A mapped transfer buffer; unmaps on drop.
-pub struct GpuMapping {
-    device: *mut SDL_GPUDevice,
-    transfer: *mut SDL_GPUTransferBuffer,
-    data: *mut c_void,
+pub struct GpuMapping<'a> {
+    transfer: &'a mut GpuTransfer,
+    data: NonNull<c_void>,
 }
 
-impl GpuMapping {
-    pub fn words(&mut self, count: usize) -> &mut [u32] {
-        // SAFETY: SDL returned a mapping of at least the transfer buffer's requested size.
-        unsafe { std::slice::from_raw_parts_mut(self.data.cast::<u32>(), count) }
+impl GpuMapping<'_> {
+    pub fn words(&mut self, count: usize) -> &mut [MaybeUninit<u32>] {
+        assert!(count <= self.transfer.size as usize / size_of::<u32>());
+        // SAFETY: SDL supplies aligned, mapped storage; the transfer is exclusively borrowed.
+        unsafe { std::slice::from_raw_parts_mut(self.data.cast().as_ptr(), count) }
     }
 }
 
-impl Drop for GpuMapping {
+impl Drop for GpuMapping<'_> {
     fn drop(&mut self) {
-        // SAFETY: the buffer is mapped by this object and the device outlives it.
-        unsafe { SDL_UnmapGPUTransferBuffer(self.device, self.transfer) };
+        // SAFETY: this object owns the live mapping, and the transfer outlives it.
+        unsafe { SDL_UnmapGPUTransferBuffer(self.transfer.device, self.transfer.handle) };
     }
 }
 
@@ -325,15 +324,12 @@ impl GpuTransfer {
     }
 
     /// `cycle` lets SDL hand out fresh storage when the previous contents are in flight.
-    pub fn map(&self, cycle: bool, operation: &str) -> Result<GpuMapping, String> {
-        // SAFETY: the device owns the transfer buffer and outlives the mapping.
+    pub fn map(&mut self, cycle: bool, operation: &str) -> Result<GpuMapping<'_>, String> {
+        // SAFETY: the transfer is live and its exclusive borrow prevents a second mapping.
         let data = unsafe { SDL_MapGPUTransferBuffer(self.device, self.handle, cycle) };
-        if data.is_null() {
-            return Err(failure(operation));
-        }
+        let data = NonNull::new(data).ok_or_else(|| failure(operation))?;
         Ok(GpuMapping {
-            device: self.device,
-            transfer: self.handle,
+            transfer: self,
             data,
         })
     }
@@ -436,11 +432,12 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// SDL video must be initialized. Window may be null for offscreen use.
-    pub fn new(window: usize, vsync: bool) -> Result<Self, String> {
+    /// # Safety
+    /// SDL video must be initialized. A nonzero window must remain live until drop.
+    pub(super) unsafe fn new(window: usize, vsync: bool) -> Result<Self, String> {
         let window = window as *mut SDL_Window;
-        // SAFETY: SDL was initialized by the host before constructing the renderer.
         let device = created(
+            // SAFETY: SDL video is initialized by contract.
             unsafe {
                 SDL_CreateGPUDevice(
                     SDL_GPU_SHADERFORMAT_SPIRV
@@ -555,13 +552,12 @@ impl GpuContext {
         if !fs.is_null() {
             pipeline = build_pipeline(self.device, vs, fs, format.sdl());
         }
-        // SAFETY: both shaders were created above and the pipeline keeps what it needs.
-        unsafe {
-            if !fs.is_null() {
-                SDL_ReleaseGPUShader(self.device, fs);
-            }
-            SDL_ReleaseGPUShader(self.device, vs);
+        if !fs.is_null() {
+            // SAFETY: the fragment shader is live and the pipeline holds its own reference.
+            unsafe { SDL_ReleaseGPUShader(self.device, fs) };
         }
+        // SAFETY: the vertex shader is live and the pipeline holds its own reference.
+        unsafe { SDL_ReleaseGPUShader(self.device, vs) };
         let handle = created(pipeline, "Create GPU graphics pipeline")?;
         Ok(GpuPipeline::new(self.device, handle))
     }
@@ -651,6 +647,7 @@ impl GpuContext {
         if name.is_null() {
             String::new()
         } else {
+            // SAFETY: SDL's non-null driver name is NUL-terminated and lives with the device.
             unsafe { CStr::from_ptr(name) }
                 .to_string_lossy()
                 .into_owned()
@@ -762,76 +759,55 @@ impl GpuCommand {
         pacer: &mut DisplayPacer,
         request: &PresentRequest<'_>,
     ) -> Result<PresentAcquire, String> {
-        let pace_prepared = pacer.consume_prepared();
+        let paced = pacer.consume_prepared();
         let timed = request.timing.is_live();
-        if !request.wait {
-            if !ctx.has_window() {
-                return Ok(PresentAcquire::SkipFrame);
-            }
-            let (texture, width, height) = unsafe {
-                let command = self.raw();
-                let mut texture = std::ptr::null_mut();
-                let mut width = 0;
-                let mut height = 0;
-                if !SDL_AcquireGPUSwapchainTexture(
-                    command,
-                    ctx.window,
-                    &mut texture,
-                    &mut width,
-                    &mut height,
-                ) {
-                    return Err(failure("Try acquiring GPU swapchain"));
-                }
-                (texture, width, height)
-            };
-            if texture.is_null() {
-                return Ok(PresentAcquire::SkipFrame);
-            }
-            self.acquired = true;
-            self.swapchain = GpuSurface {
-                texture: texture as usize,
-                width,
-                height,
-            };
-            return Ok(PresentAcquire::DrawableReady);
-        }
-        if timed && !pace_prepared {
+        if request.wait && timed && !paced {
             pacer.wait_tick(ctx.vsync());
         }
-        if ctx.has_window() {
-            let operation = if timed {
-                "Acquire timed GPU swapchain"
-            } else {
-                "Acquire GPU swapchain"
-            };
-            // SAFETY: command buffer, device and window are live.
-            let (texture, width, height) = unsafe {
-                let command = self.raw();
-                let mut texture = std::ptr::null_mut();
-                let mut width = 0;
-                let mut height = 0;
-                if !SDL_WaitAndAcquireGPUSwapchainTexture(
-                    command,
-                    ctx.window,
-                    &mut texture,
-                    &mut width,
-                    &mut height,
-                ) {
-                    return Err(failure(operation));
-                }
-                (texture, width, height)
-            };
-            self.acquired = !texture.is_null();
-            if self.acquired {
-                self.swapchain = GpuSurface {
-                    texture: texture as usize,
-                    width,
-                    height,
-                };
-                return Ok(PresentAcquire::DrawableReady);
-            }
+        let idle = if request.wait {
+            PresentAcquire::HeadlessProceed
+        } else {
+            PresentAcquire::SkipFrame
+        };
+        if !ctx.has_window() {
+            return Ok(idle);
         }
-        Ok(PresentAcquire::HeadlessProceed)
+
+        let acquire = if request.wait {
+            SDL_WaitAndAcquireGPUSwapchainTexture
+        } else {
+            SDL_AcquireGPUSwapchainTexture
+        };
+        let mut texture = std::ptr::null_mut();
+        let mut width = 0;
+        let mut height = 0;
+        // SAFETY: the command and claimed SDL window are live; all three outputs are writable.
+        let ok = unsafe {
+            acquire(
+                self.raw(),
+                ctx.window,
+                &mut texture,
+                &mut width,
+                &mut height,
+            )
+        };
+        if !ok {
+            return Err(failure(match (request.wait, timed) {
+                (false, _) => "Try acquiring GPU swapchain",
+                (true, true) => "Acquire timed GPU swapchain",
+                (true, false) => "Acquire GPU swapchain",
+            }));
+        }
+        if texture.is_null() {
+            return Ok(idle);
+        }
+        self.acquired = true;
+        self.swapchain = GpuSurface {
+            texture: texture as usize,
+            width,
+            height,
+        };
+        Ok(PresentAcquire::DrawableReady)
     }
 
     pub fn raw(&self) -> *mut SDL_GPUCommandBuffer {
@@ -903,7 +879,7 @@ impl GpuCommand {
     /// submits, and optionally saves the composed window to `capture_path`. Returns whether a
     /// swapchain texture was submitted. `rotated`: the surfaces are portrait.
     #[allow(clippy::too_many_arguments)]
-    pub fn present(
+    pub(super) fn present(
         &mut self,
         ctx: &GpuContext,
         surface: GpuSurface,
@@ -1009,7 +985,7 @@ impl GpuCommand {
         );
         let copy = self.begin_copy_pass("Begin window capture download")?;
         let download = capture_download
-            .as_ref()
+            .as_mut()
             .expect("capture download created with the capture texture");
         let from = SDL_GPUTextureRegion {
             texture: composition as *mut SDL_GPUTexture,
@@ -1029,7 +1005,9 @@ impl GpuCommand {
         self.end_copy_pass(copy);
         self.submit_and_wait()?;
         let mut mapping = download.map(false, "Map window capture")?;
-        let pixels = mapping.words(usize::try_from(u64::from(w) * u64::from(h)).unwrap());
+        let words = mapping.words(usize::try_from(u64::from(w) * u64::from(h)).unwrap());
+        // SAFETY: the fenced download initialized all pixel words in this range.
+        let pixels = unsafe { words.assume_init_mut() };
         let path = capture_path.expect("capture path checked above");
         save_surface(
             path,
@@ -1343,7 +1321,7 @@ impl ReadbackBuffer {
         let copy = cmd.begin_copy_pass("Begin GPU readback copy")?;
         let download = self
             .download
-            .as_ref()
+            .as_mut()
             .expect("download transfer created above");
         cmd.download_texture(
             copy,
@@ -1355,15 +1333,18 @@ impl ReadbackBuffer {
         cmd.end_copy_pass(copy);
         cmd.submit_and_wait()?;
         let mut mapping = download.map(false, "Map GPU readback")?;
-        let source = mapping.words(pixels);
+        let words = mapping.words(pixels);
+        // SAFETY: the fenced download initialized all pixel words in this range.
+        let source = unsafe { words.assume_init_ref() };
         output[..pixels].copy_from_slice(source);
         Ok(())
     }
 }
 
-/// `cpy` helper: reinterpret a `#[repr(C)]` uniform block as bytes.
-pub fn uniform_bytes<T>(value: &T) -> &[u8] {
-    // SAFETY: `T` is a plain `#[repr(C)]` POD.
+/// # Safety
+/// Every byte of `value` must be initialized, including padding.
+pub(super) unsafe fn uniform_bytes<T>(value: &T) -> &[u8] {
+    // SAFETY: the caller guarantees initialized bytes and the slice borrows value.
     unsafe {
         std::slice::from_raw_parts((value as *const T).cast::<u8>(), std::mem::size_of::<T>())
     }
@@ -1383,7 +1364,7 @@ pub fn sampler_binding(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn save_surface(
     path: &str,
-    pixels: &[u32],
+    pixels: &mut [u32],
     width: u32,
     height: u32,
     pixel_format: u32,
@@ -1398,20 +1379,21 @@ pub(crate) fn save_surface(
     } else {
         SDL_PIXELFORMAT_ARGB8888
     };
-    // SAFETY: `pixels` is a live ARGB/ABGR image of width*height texels.
+    let path = c_path(path, save_operation)?;
+    assert!(pixels.len() >= width as usize * height as usize);
+    // SAFETY: the borrowed pixels remain live and exclusively borrowed until the surface is destroyed.
     let image = unsafe {
         SDL_CreateSurfaceFrom(
             width as i32,
             height as i32,
             format,
-            pixels.as_ptr().cast_mut().cast(),
+            pixels.as_mut_ptr().cast(),
             (width * 4) as i32,
         )
     };
     if image.is_null() {
         return Err(failure(create_operation));
     }
-    let path = c_path(path, save_operation)?;
     // SAFETY: the surface is live and the path is NUL-terminated.
     let saved = unsafe {
         if png {

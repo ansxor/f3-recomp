@@ -1,5 +1,4 @@
-//! Window scale and blit selection, mechanically ported from `runtime/renderer/scale.hpp`.
-//! The C++ code reads the compile-time `f3rt::geometry`; the port takes it as a parameter.
+//! Window scaling and blit placement.
 
 use crate::config::{GameVideoOptions, Geometry, NATIVE_WIDTH, VideoScaleMode};
 

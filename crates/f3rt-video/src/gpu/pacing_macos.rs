@@ -1,8 +1,4 @@
-//! macOS `CADisplayLink` pacing, ported from the former Objective-C++ helper.
-//!
-//! The display link is created from the window's native `NSWindow` and drives a
-//! `F3MotionDisplayClock` instance that measures the vsync callback cadence. It is a vsync
-//! notification only: this never acquires an SDL drawable.
+//! CADisplayLink pacing without acquiring an SDL drawable.
 
 use std::cell::{Cell, RefCell};
 
@@ -164,11 +160,9 @@ impl MacosDisplayLink {
         let link = unsafe { native.displayLinkWithTarget_selector(target, sel!(tick:)) };
         *clock.ivars().link.borrow_mut() = Some(link);
         clock.request_screen_rate();
-        // SAFETY: the display link is live and the main run loop may be serviced on this thread.
-        unsafe {
-            if let Some(link) = clock.ivars().link.borrow().as_ref() {
-                link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes);
-            }
+        if let Some(link) = clock.ivars().link.borrow().as_ref() {
+            // SAFETY: this live display link is registered on the main thread's run loop.
+            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
         }
         Some(Self { clock })
     }

@@ -8,7 +8,6 @@
 #include "f3rt/rom.hpp"
 #include "renderer/game/video.hpp"
 #include "renderer/gpu/video.hpp"
-#include "renderer/gpu/motion.hpp"
 #include "sprites/sprite_system.hpp"
 
 #include <SDL3/SDL.h>

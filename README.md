@@ -37,6 +37,12 @@ Otherwise, alternative build steps are included below.
 make build GAME=landmakrj ROM_DIR=roms/landmakrj
 ```
 
+### Renderer tests
+
+`cargo test -p f3rt-video` runs the native renderer unit and property tests without SDL, a ROM,
+or a GPU. The same suite runs as CTest's `f3rt-video-cargo-test`; C++ integration and GPU parity
+remain in the runtime tests. `proptest` is a Rust dev-dependency only.
+
 ## Running
 
 ```sh

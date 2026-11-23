@@ -1,7 +1,37 @@
 //! SDL-free renderer request types and validation, shared by the GPU backend and the ABI stubs.
 
-use crate::config::{GameVideoOptions, SpriteList};
-use crate::gpu::encode::ALL_LAYERS;
+#[cfg(feature = "gpu")]
+use crate::config::GameVideoOptions;
+use crate::config::SpriteList;
+use crate::game::ALL_LAYERS;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoInterpolation {
+    #[default]
+    Off,
+    Linear,
+    Fit,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InterpolationFields {
+    #[default]
+    None,
+    Geometry,
+    Palette,
+    All,
+}
+
+impl InterpolationFields {
+    pub const fn from_bits_truncate(bits: u8) -> Self {
+        match bits & 3 {
+            1 => Self::Geometry,
+            2 => Self::Palette,
+            3 => Self::All,
+            _ => Self::None,
+        }
+    }
+}
 
 /// A presented or drawn texture token and its pixel size. The GPU backend casts `texture` to
 /// `SDL_GPUTexture *`; every other module treats it as opaque.
@@ -52,6 +82,7 @@ impl Default for RenderRequest {
 
 /// How a presenting command buffer got its drawable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(feature = "gpu")]
 pub enum PresentAcquire {
     DrawableReady,
     HeadlessProceed,
@@ -123,9 +154,11 @@ impl PresentRequest<'_> {
 }
 
 /// Bytes per 16x16 tile.
+#[cfg(any(feature = "gpu", test))]
 pub const TILE_BYTES: u32 = 256;
 
 /// Throws unless both ROMs are non-empty whole tiles that fit 32-bit offsets.
+#[cfg(any(feature = "gpu", test))]
 pub fn validate_tile_assets(pf_bytes: usize, sp_bytes: usize) -> Result<(), String> {
     let tile_bytes = TILE_BYTES as usize;
     let half = u32::MAX as usize / 2;
@@ -143,6 +176,7 @@ pub fn validate_tile_assets(pf_bytes: usize, sp_bytes: usize) -> Result<(), Stri
 }
 
 /// Throws unless `rotation` is 0, 90 or 270.
+#[cfg(any(feature = "gpu", test))]
 pub fn validate_rotation(rotation: u32) -> Result<(), String> {
     if rotation != 0 && rotation != 90 && rotation != 270 {
         return Err("Unsupported GPU presentation rotation".to_owned());
@@ -151,6 +185,7 @@ pub fn validate_rotation(rotation: u32) -> Result<(), String> {
 }
 
 /// Host-only GPU presentation options and asset validation, independent of any device.
+#[cfg(feature = "gpu")]
 pub fn validate_gpu_video_config(
     options: GameVideoOptions,
     rotation: u32,

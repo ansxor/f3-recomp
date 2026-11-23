@@ -1,10 +1,4 @@
-//! Video configuration and scanout geometry, ported from `include/f3rt/rom.hpp`
-//! (`VideoConfig`), `include/f3rt/game_video.hpp` (`geometry`, `GameVideoOptions`) and
-//! `runtime/renderer/game/indexed_compositor.hpp` (`PixelFormat`, `SpriteList`).
-//!
-//! The C++ build bakes the game scanout window into `geometry` from
-//! `games/<game>/config.toml`; here the same values travel at runtime in [`Geometry`],
-//! derived from [`VideoConfig`], so one binary can describe any ROM set.
+//! Scanout geometry and video configuration.
 
 /// Visible columns 46..365 on every game (`geometry::NATIVE_WIDTH`).
 pub const NATIVE_WIDTH: u32 = 320;

@@ -1,21 +1,11 @@
-//! The GPU video façade, mechanically ported from `runtime/renderer/gpu/video.{hpp,cpp}`.
-//!
-//! `prepare_scene` runs the whole `ScenePlan -> MotionScene -> PreparedScene -> encode_into`
-//! chain inside Rust, encoding straight into the mapped upload slice: no intermediate copy and no
-//! per-frame FFI crossing.
-
-// Raw GPU handles are only ever passed back to SDL3 or overlaid on C++-owned hosts.
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
+//! GPU frame preparation, drawing and presentation.
 
 use super::api::{
-    GpuSurface, Postprocess, PresentAcquire, PresentRequest, PresentTiming, RenderRequest,
-    validate_gpu_video_config,
+    GpuSurface, InterpolationFields, Postprocess, PresentAcquire, PresentRequest, PresentTiming,
+    RenderRequest, VideoInterpolation, validate_gpu_video_config,
 };
 use super::encode::{ALL_LAYERS, EncodedScene, GpuPrepScratch, ScenePlan};
-use super::interp::{
-    InterpolationConfig, InterpolationFields, InterpolationLog, InterpolationStats,
-    VideoInterpolation,
-};
+use super::interp::{InterpolationConfig, InterpolationLog};
 use super::motion::{GpuMotionHistory, MotionInterpolationStats};
 use super::pacing::DisplayPacer;
 use super::postprocess::{Postprocessor, SurfaceRotator};
@@ -28,9 +18,9 @@ use sdl3_sys::gpu::{SDL_GPUCommandBuffer, SDL_GPUTexture};
 use std::ffi::c_void;
 
 /// Host overlay invoked on the window composition target after the game blit.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Overlay {
-    callback: usize,
+#[derive(Clone, Copy)]
+pub(super) struct Overlay {
+    callback: OverlayFn,
     userdata: usize,
 }
 
@@ -38,22 +28,17 @@ type OverlayFn =
     unsafe extern "C" fn(*mut c_void, *mut SDL_GPUCommandBuffer, *mut SDL_GPUTexture, u32, u32);
 
 impl Overlay {
-    pub fn new(callback: usize, userdata: usize) -> Option<Self> {
-        (callback != 0).then_some(Self { callback, userdata })
-    }
-
-    pub fn invoke(
+    pub(super) fn invoke(
         self,
         command: *mut SDL_GPUCommandBuffer,
         target: usize,
         width: u32,
         height: u32,
     ) {
-        // SAFETY: the host keeps the callback live for the video's whole lifetime and it accepts
-        // the SDL3 GPU command buffer and composition target.
-        let callback: OverlayFn = unsafe { std::mem::transmute(self.callback) };
+        // SAFETY: set_overlay guarantees the callback and its userdata are live; SDL owns
+        // the command and composition target for the duration of this call.
         unsafe {
-            callback(
+            (self.callback)(
                 self.userdata as *mut c_void,
                 command,
                 target as *mut SDL_GPUTexture,
@@ -74,7 +59,6 @@ pub struct GpuVideo {
     motion: Option<GpuMotionHistory>,
     prep_scratch: GpuPrepScratch,
     interp_config: InterpolationConfig,
-    interpolation_stats: InterpolationStats,
     interp_log: InterpolationLog,
     motion_stats: MotionInterpolationStats,
     options: GameVideoOptions,
@@ -91,9 +75,11 @@ pub struct GpuVideo {
 }
 
 impl GpuVideo {
-    /// SDL video must be initialized. Window may be absent for offscreen parity.
+    /// # Safety
+    /// SDL video must be initialized. A nonzero window must be a live SDL_Window on the
+    /// calling thread and outlive this renderer.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub unsafe fn new(
         window: usize,
         options: GameVideoOptions,
         geometry: Geometry,
@@ -106,7 +92,8 @@ impl GpuVideo {
         rotation: u32,
     ) -> Result<Self, String> {
         validate_gpu_video_config(options, rotation, playfield_assets, sprite_assets)?;
-        let ctx = GpuContext::new(window, vsync)?;
+        // SAFETY: the caller supplies an initialized SDL video subsystem and live window or zero.
+        let ctx = unsafe { GpuContext::new(window, vsync)? };
         let assets = GpuTileAssets::new(&ctx, playfield_assets, sprite_assets)?;
         let scene_pass = ScenePass::new(
             &ctx,
@@ -129,7 +116,6 @@ impl GpuVideo {
                 mode: interpolation,
                 fields,
             },
-            interpolation_stats: InterpolationStats::default(),
             interp_log: InterpolationLog::default(),
             motion_stats: MotionInterpolationStats::default(),
             options,
@@ -148,10 +134,6 @@ impl GpuVideo {
 
     pub fn driver_name(&self) -> String {
         self.ctx.driver_name()
-    }
-
-    pub fn last_interpolation(&self) -> &InterpolationStats {
-        &self.interpolation_stats
     }
 
     /// Host-only geometry. Assets, pipelines and canonical game state survive. Strong guarantee:
@@ -191,7 +173,6 @@ impl GpuVideo {
         self.options = next;
         self.rendered = false;
         self.unrotated_surface = GpuSurface::default();
-        self.interpolation_stats = InterpolationStats::default();
         Ok(())
     }
 
@@ -228,13 +209,19 @@ impl GpuVideo {
             self.scene_pass.ensure_interpolation_pipeline(&self.ctx)?;
         }
         self.interp_config = next;
-        self.interpolation_stats = InterpolationStats::default();
         self.interp_log.reset();
         Ok(())
     }
 
-    pub fn set_overlay(&mut self, callback: usize, userdata: usize) {
-        self.overlay = Overlay::new(callback, userdata);
+    /// # Safety
+    /// A nonzero callback must be an OverlayFn address. It and its userdata must remain valid
+    /// until replaced or until this renderer is dropped.
+    pub unsafe fn set_overlay(&mut self, callback: usize, userdata: usize) {
+        self.overlay = (callback != 0).then(|| Overlay {
+            // SAFETY: the caller guarantees this nonzero address has the overlay ABI.
+            callback: unsafe { std::mem::transmute::<usize, OverlayFn>(callback) },
+            userdata,
+        });
     }
 
     /// See `Postprocessor::configure` for the user shader ABI. Errors retain the last valid
@@ -296,7 +283,10 @@ impl GpuVideo {
     }
 
     /// Presents `scene` to the window. Returns whether a swapchain texture was submitted.
-    pub fn present(
+    ///
+    /// # Safety
+    /// Any nonempty left pane must be a live texture belonging to this renderer.
+    pub unsafe fn present(
         &mut self,
         scene: &SceneSnapshot,
         request: &PresentRequest<'_>,
@@ -352,7 +342,10 @@ impl GpuVideo {
 
     /// Renders the canonical scene through postprocess and rotation into `destination`,
     /// re-allocating it when its size differs. Offscreen; never presents.
-    pub fn capture_surface(
+    ///
+    /// # Safety
+    /// Destination must be empty or belong to this renderer and must be dropped before it.
+    pub unsafe fn capture_surface(
         &mut self,
         scene: &SceneSnapshot,
         destination: &mut GpuTexture,
@@ -457,7 +450,7 @@ impl GpuVideo {
         };
         save_surface(
             path,
-            &self.saved_pixels,
+            &mut self.saved_pixels,
             source.width,
             source.height,
             1,
@@ -502,7 +495,7 @@ impl GpuVideo {
             let upload = self.scene_pass.upload_buffer();
             let mut mapping = upload.map(true, "Map GPU frame upload")?;
             let words = mapping.words(prepared.required_words());
-            prepared.encode_into(
+            prepared.encode_mapped(
                 words,
                 self.assets.pf_tile_count(),
                 self.assets.sp_tile_count(),
@@ -511,9 +504,12 @@ impl GpuVideo {
         if alpha.is_some() {
             self.motion_stats = encoded.motion_stats;
         }
-        self.interpolation_stats = encoded.interp_stats;
-        self.interp_log
-            .observe(self.interp_config, &self.interpolation_stats);
+        if let Some(line) = self
+            .interp_log
+            .line_if_changed(self.interp_config, &encoded.interp_stats)
+        {
+            println!("{line}");
+        }
         Ok(encoded)
     }
 }

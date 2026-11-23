@@ -2,6 +2,9 @@
 #include "generated_config/enhancements.hpp"
 #include "renderer/game/scene.hpp"
 #include "sprites/groups.hpp"
+#include "f3rt_video_cxx/video.h"
+#include <bit>
+#include <ranges>
 #include <utility>
 
 namespace f3rt {
@@ -25,8 +28,21 @@ void RenderEnhancements::present(std::span<const SceneSprite> latched,
                                  std::optional<SpriteFrame> frame) {
     if (!frame) reset();
     m_presented.assign(latched.begin(), latched.end());
-    if (frame)
-        for (const auto &stage : m_stages) stage->present(m_presented, *frame);
+    if (frame) apply_stages(*frame);
+}
+
+void RenderEnhancements::present_from_rust(std::span<const rust_video::SceneSprite> latched,
+                                           std::optional<SpriteFrame> frame) {
+    if (!frame) reset();
+    auto sprites = latched | std::views::transform([](const rust_video::SceneSprite &sprite) {
+        return std::bit_cast<SceneSprite>(sprite);
+    });
+    m_presented.assign(sprites.begin(), sprites.end());
+    if (frame) apply_stages(*frame);
+}
+
+void RenderEnhancements::apply_stages(const SpriteFrame &frame) {
+    for (const auto &stage : m_stages) stage->present(m_presented, frame);
 }
 
 std::span<const SceneSprite> RenderEnhancements::sprites() const { return m_presented; }

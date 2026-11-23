@@ -1,5 +1,4 @@
-//! ROM tile/sprite unpacking, mechanically ported from
-//! `runtime/renderer/graphics_assets.cpp` (`include/f3rt/renderer/graphics_assets.hpp`).
+//! ROM graphics unpacking.
 
 /// Decoded 16x16 6bpp sprite and playfield tiles.
 #[derive(Clone, Debug, Default)]
@@ -145,7 +144,6 @@ impl GraphicsAssets {
     }
 
     fn tile(pixels: &[u8], code: u32, count: u32, mask: u32) -> &[u8] {
-        // The C++ original indexes unconditionally; empty assets have no tiles at all.
         if count == 0 {
             return &[];
         }

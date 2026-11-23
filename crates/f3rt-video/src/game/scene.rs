@@ -1,8 +1,4 @@
-//! Scene model and video-RAM access, mechanically ported from
-//! `runtime/renderer/game/scene.hpp`.
-//!
-//! The C++ header bakes `game_config::video` into constants; here the same values travel in
-//! [`VideoConfig`] so one binary describes any ROM set.
+//! The decoded scanout model.
 
 use crate::config::VideoConfig;
 use crate::memory_map::GRAPHICS_RAM_SIZE;
@@ -66,15 +62,8 @@ impl<'a> VideoRam<'a> {
     }
 }
 
-/// A scene component decoded from video RAM at VBSTART.
-pub trait SceneSource {
-    fn reset(&mut self);
-    fn decode(&mut self, vram: &VideoRam<'_>);
-}
-
 /// Tile index within an asset ROM of `count` 16x16 tiles (the ROM decides the wrap, not a fixed
 /// 15-bit field): power-of-two ROMs mask, others take the remainder.
-/// Mirrors the FDP's `wrap_tile`; GLSL `wrap_tile` in scene.glsl is the GPU twin.
 pub const fn wrap_tile_index(code: u32, count: u32) -> u32 {
     if count & count.wrapping_sub(1) == 0 {
         code & count.wrapping_sub(1)
@@ -115,7 +104,7 @@ impl SceneSprite {
 }
 
 impl PartialEq for SceneSprite {
-    /// C++ `operator==` compares geometry and tile selection only (not group or weight).
+    /// Group metadata and presentation weights do not affect geometry equality.
     fn eq(&self, o: &Self) -> bool {
         self.x == o.x
             && self.y == o.y

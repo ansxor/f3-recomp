@@ -1,8 +1,4 @@
-//! Render-only temporal sprite/playfield geometry, mechanically ported from
-//! `runtime/renderer/gpu/motion.{hpp,cpp}`.
-//!
-//! Coordinates are 24.8; interpolation rounds to the nearest fixed-point unit. The history
-//! compares two consecutive captured snapshots and samples the geometry at `alpha`.
+//! Fixed-point interpolation between consecutive captured frames.
 
 use crate::config::GameVideoOptions;
 use crate::game::clip::{ClipRanges, clip_ranges_for_row, scene_order};
@@ -12,7 +8,8 @@ use crate::game::scene::{
 use crate::game::scene_snapshot::SceneSnapshot;
 
 /// Layer-mask bit marking a frame whose scene rows carry motion geometry.
-pub const MOTION_LAYER_MASK: u32 = 0x8000_0000;
+#[cfg(any(feature = "gpu", test))]
+pub(super) const MOTION_LAYER_MASK: u32 = 0x8000_0000;
 
 /// Per-pair accounting for [`GpuMotionHistory::apply_into`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -62,7 +59,7 @@ impl MotionInterpolationStats {
 
 /// Temporal geometry of one scanout row: playfield source/phase and text scroll in 24.8.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MotionRowState {
+pub(super) struct MotionRowState {
     /// playfield source x
     pub source_x: [i32; 4],
     /// playfield source_y * 256 + y_fraction
@@ -79,7 +76,7 @@ pub struct MotionRowState {
 pub struct MotionState {
     pub sprite_x: [i32; SceneSnapshot::MAX_SPRITES],
     pub sprite_y: [i32; SceneSnapshot::MAX_SPRITES],
-    pub rows: [MotionRowState; 256],
+    pub(super) rows: [MotionRowState; 256],
 }
 
 impl Default for MotionState {
@@ -131,7 +128,7 @@ impl Default for Row {
 
 /// Render-only history. Allocate only when explicitly enabling temporal capture.
 pub struct GpuMotionHistory {
-    // C++ keeps these inline; Rust test threads have smaller stacks, so they live on the heap
+    // Keep frame-sized history off small render and test stacks.
     // once per explicitly enabled history.
     sprites: Box<[Sprite; SceneSnapshot::MAX_SPRITES]>,
     rows: Box<[Row; 256]>,
@@ -217,13 +214,11 @@ impl GpuMotionHistory {
             if v.group == 0 {
                 continue;
             }
-            let old_run = find_group(&old_groups, &previous, v.group);
-            let new_run = find_group(&new_groups, &now, v.group);
-            let paired = old_run != NO_SPRITE
-                && new_run != NO_SPRITE
-                && old_groups.origin_unique[old_run as usize]
-                && new_groups.origin_unique[new_run as usize];
-            if !paired {
+            let old_run = find_group(&old_groups, &previous, v.group)
+                .filter(|&run| old_groups.origin_unique[run]);
+            let new_run =
+                find_group(&new_groups, &now, v.group).filter(|&run| new_groups.origin_unique[run]);
+            let (Some(old_run), Some(_)) = (old_run, new_run) else {
                 if i < self.sprite_count && v == self.sprites[i].value {
                     continue;
                 }
@@ -233,8 +228,8 @@ impl GpuMotionHistory {
                     stats.sprite_count_rejections += 1;
                 }
                 continue;
-            }
-            let origin = previous(old_groups.order[old_run as usize] as usize);
+            };
+            let origin = previous(old_groups.order[old_run] as usize);
             let gx = v.group_x - origin.group_x;
             let gy = v.group_y - origin.group_y;
             if gx != 0 || gy != 0 {
@@ -243,7 +238,7 @@ impl GpuMotionHistory {
             let geometry = self.pen_mask == scene.pen_mask
                 && valid_sprite(&v)
                 && valid_origin(origin)
-                && old_groups.transform_unique[old_run as usize]
+                && old_groups.transform_unique[old_run]
                 && same_transform(&v, origin);
             let jump = motion_delta(origin.group_x, v.group_x, 0)
                 && motion_delta(origin.group_y, v.group_y, 0);
@@ -537,10 +532,9 @@ impl GpuMotionHistory {
     }
 
     pub fn apply(&self, scene: &SceneSnapshot, alpha: f32) -> MotionResult {
-        let mut result = MotionResult::default();
-        let stats = self.apply_into(scene, alpha, &mut result.state);
-        result.stats = stats;
-        result
+        let mut state = MotionState::default();
+        let stats = self.apply_into(scene, alpha, &mut state);
+        MotionResult { stats, state }
     }
 
     /// Writes the sampled geometry into caller-owned `out` (no 42 KiB return copy). `out` is
@@ -657,15 +651,11 @@ impl Default for GpuMotionHistory {
     }
 }
 
-fn floor_divide(n: i64, d: i64) -> i64 {
-    if n >= 0 { n / d } else { -1 - (-1 - n) / d }
-}
-
 fn motion_delta(before: i32, now: i32, period: i32) -> bool {
     (i64::from(now) - i64::from(before)).abs() <= i64::from(32) * 256
         && (period == 0
-            || floor_divide(i64::from(before), i64::from(period))
-                == floor_divide(i64::from(now), i64::from(period)))
+            || (i64::from(before)).div_euclid(i64::from(period))
+                == (i64::from(now)).div_euclid(i64::from(period)))
 }
 
 fn interpolate(current: i32, delta: i32, alpha: f32) -> i32 {
@@ -776,24 +766,16 @@ where
     }
 }
 
-fn find_group<'a, F>(table: &GroupTable, at: &F, key: u64) -> u32
+fn find_group<'a, F>(table: &GroupTable, at: &F, key: u64) -> Option<usize>
 where
     F: Fn(usize) -> &'a SceneSprite,
 {
-    let mut lo = 0usize;
-    let mut hi = table.count;
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if at(table.order[mid] as usize).group < key {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    if lo < table.count && at(table.order[lo] as usize).group == key {
-        return lo as u32;
-    }
-    u32::MAX
+    let order = &table.order[..table.count];
+    let run = order.partition_point(|&i| at(i as usize).group < key);
+    order
+        .get(run)
+        .filter(|&&i| at(i as usize).group == key)
+        .map(|_| run)
 }
 
 fn valid_origin(s: &SceneSprite) -> bool {
@@ -1270,56 +1252,78 @@ mod tests {
         );
     }
 
-    #[test]
-    fn endpoint_identity_and_monotonic_bounds() {
-        for x0 in [-500i32, -137, -1, 0, 1, 255, 499] {
-            for dx in [-32i32, -7, -1, 1, 5, 32] {
-                let mut a = snapshot(false);
-                sprite(&mut a, 0, x0, 10);
-                let mut b = a.clone();
-                sprite(&mut b, 0, x0 + dx, 10);
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(48))]
 
-                let mut history = GpuMotionHistory::default();
-                history.capture(&a, 10);
-                history.capture(&b, 11);
-
-                let res0 = history.apply(&b, 0.0);
-                assert!(res0.stats.paired);
-                assert_eq!(res0.stats.sprites, 1);
-                assert_eq!(res0.state.sprite_x[0], x0 * 256);
-
-                let res1 = history.apply(&b, 1.0);
-                assert!(res1.stats.paired);
-                assert_eq!(res1.stats.sprites, 1);
-                assert_eq!(res1.state.sprite_x[0], (x0 + dx) * 256);
-
-                for step in 0..=100 {
-                    let alpha = step as f32 / 100.0;
-                    let res = history.apply(&b, alpha);
-                    let min_x = x0.min(x0 + dx) * 256;
-                    let max_x = x0.max(x0 + dx) * 256;
-                    assert!(res.state.sprite_x[0] >= min_x);
-                    assert!(res.state.sprite_x[0] <= max_x);
+        #[test]
+        fn sprite_endpoints_order_and_jump_threshold(
+            x in -500i32..500,
+            dx in proptest::prop_oneof![-8192i32..=8192, 8193i32..=25_600, -25_600i32..=-8193],
+            alpha_steps in (0u8..=100, 0u8..=100),
+            grouped_sprite in proptest::prelude::any::<bool>(),
+            flipped in proptest::prelude::any::<bool>(),
+        ) {
+            use proptest::prelude::*;
+            let mut previous = snapshot(false);
+            if grouped_sprite {
+                grouped(&mut previous, 0, x, 10, 1, x, 20);
+            } else {
+                sprite(&mut previous, 0, x, 10);
+            }
+            previous.sprite_flipped = flipped;
+            let mut current = previous.clone();
+            let displacement = if grouped_sprite && flipped { -dx } else { dx };
+            current.sprites[0].x += displacement;
+            current.sprites[0].group_x += dx;
+            let mut history = GpuMotionHistory::default();
+            history.capture(&previous, 10);
+            history.capture(&current, 11);
+            let x0 = previous.sprites[0].x;
+            let x1 = current.sprites[0].x;
+            let start = history.apply(&current, 0.0);
+            let end = history.apply(&current, 1.0);
+            prop_assert!(start.stats.paired && end.stats.paired);
+            prop_assert_eq!(end.state.sprite_x[0], x1);
+            if dx.abs() > 8192 {
+                prop_assert_eq!(start.stats.sprite_jump_rejections, 1);
+                prop_assert_eq!(start.stats.sprites, 0);
+                prop_assert_eq!(start.state.sprite_x[0], x1);
+            } else {
+                prop_assert_eq!(start.stats.sprites, u32::from(dx != 0));
+                prop_assert_eq!(start.state.sprite_x[0], x0);
+                let mut steps = [alpha_steps.0, alpha_steps.1];
+                steps.sort_unstable();
+                let [a, b] = steps.map(|step| history.apply(&current, f32::from(step) / 100.0).state.sprite_x[0]);
+                if displacement >= 0 {
+                    prop_assert!(x0 <= a && a <= b && b <= x1);
+                } else {
+                    prop_assert!(x1 <= b && b <= a && a <= x0);
                 }
             }
         }
-    }
 
-    #[test]
-    fn jump_threshold_rejection() {
-        for x0 in [-300i32, 0, 299] {
-            for jump_px in [33i32, 64, 100] {
-                for sign in [1i32, -1] {
-                    let mut a = snapshot(false);
-                    sprite(&mut a, 0, x0, 10);
-                    let mut b = a.clone();
-                    sprite(&mut b, 0, x0 + sign * jump_px, 10);
-
-                    let res = pair(&a, &b, 0.5);
-                    assert!(res.stats.paired);
-                    assert_eq!(res.stats.sprites, 0);
-                    assert_eq!(res.stats.sprite_jump_rejections, 1);
-                }
+        #[test]
+        fn scroll_guards_are_per_axis_and_flips_break_the_pair(
+            dx in -8192i32..=8192,
+            dy in -32i32..=32,
+            transform_y in proptest::prelude::any::<bool>(),
+            flip in proptest::prelude::any::<bool>(),
+        ) {
+            use proptest::prelude::*;
+            let mut previous = snapshot(false);
+            layer(&mut previous);
+            let mut current = previous.clone();
+            let pf = pf0(&mut current);
+            pf.source_x += dx;
+            pf.source_y += dy;
+            if transform_y { pf.y_step = 128; }
+            current.flipped = flip;
+            let result = pair(&previous, &current, 0.5);
+            prop_assert_eq!(result.stats.paired, !flip);
+            if !flip {
+                let row = result.state.rows[current.geometry().first_line() as usize];
+                prop_assert_eq!(row.source_x[0], (100.0 * 256.0 + dx as f32 * 0.5).round() as i32);
+                prop_assert_eq!(row.phase[0], 100 * 256 + dy * if transform_y { 256 } else { 128 });
             }
         }
     }

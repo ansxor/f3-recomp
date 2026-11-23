@@ -1,15 +1,11 @@
-//! CPU-typed snapshot of one decoded scanout frame, mechanically ported from
-//! `runtime/renderer/game/scene_snapshot.{hpp,cpp}`.
-//!
-//! The snapshot is host-only and never serialized. `GameVideo` refreshes it at each VBSTART after
-//! the layer components decode video RAM; versioned layers (tiles, text, rows, colours) are copied
-//! only when their producer changed, while sprites and trails are copied every frame.
+//! Render-only snapshot of the layers latched at VBSTART.
+//! Dirty versions let capture reuse unchanged tiles, text, rows and palette.
 
 use crate::config::{
     GameVideoOptions, Geometry, NATIVE_WIDTH, PixelFormat, SpriteList, VideoConfig,
 };
 use crate::game::indexed_compositor::{
-    IndexedScratch, SceneSnapshotView, TileRowTable, compose_indexed, to_pixel_format,
+    IndexedScratch, SceneSnapshotView, TileRowTable, compose_indexed,
 };
 use crate::game::lines::GameLines;
 use crate::game::palette::GamePalette;
@@ -208,11 +204,10 @@ impl SceneSnapshot {
                 let row = &mut output[y * stride..y * stride + options.width(&geometry) as usize];
                 for (x, pixel) in row.iter_mut().enumerate() {
                     *pixel = if x < left || x >= left + NATIVE_WIDTH as usize {
-                        to_pixel_format(0xff00_0000, format)
+                        format.to_pixel_format(0xff00_0000)
                     } else {
-                        to_pixel_format(
+                        format.to_pixel_format(
                             self.native_pixels[y * NATIVE_WIDTH as usize + (x - left)],
-                            format,
                         )
                     };
                 }
@@ -246,7 +241,6 @@ impl SceneSnapshot {
         &self.video
     }
 
-    /// Row for one scanout line, wrapped like the C++ snapshot (`y & 255`).
     pub fn row(&self, y: usize) -> &SceneRow {
         &self.rows[y & 255]
     }

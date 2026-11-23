@@ -1,10 +1,8 @@
-//! SDL-free GPU façade stubs used when the `gpu` feature is off.
-//!
-//! The ABI crate bridges one `GpuVideo` type in every configuration; without SDL the constructor
-//! fails, which is exactly what a headless build reports to the C++ frontend.
+//! GPU boundary for builds without SDL support.
 
-use super::api::{GpuSurface, Postprocess, PresentRequest, RenderRequest};
-use super::interp::{InterpolationFields, InterpolationStats, VideoInterpolation};
+use super::api::{
+    InterpolationFields, Postprocess, PresentRequest, RenderRequest, VideoInterpolation,
+};
 use super::motion::MotionInterpolationStats;
 use crate::config::{GameVideoOptions, Geometry, VideoScaleMode};
 use crate::game::scene_snapshot::SceneSnapshot;
@@ -20,10 +18,6 @@ impl GpuTexture {
         Self
     }
 
-    pub fn get(&self) -> usize {
-        0
-    }
-
     pub fn texture_handle(&self) -> usize {
         0
     }
@@ -35,24 +29,17 @@ impl GpuTexture {
     pub fn height(&self) -> u32 {
         0
     }
-
-    pub fn is_valid(&self) -> bool {
-        false
-    }
-
-    pub fn surface(&self) -> GpuSurface {
-        GpuSurface::default()
-    }
 }
 
 pub struct GpuVideo {
-    interpolation: InterpolationStats,
     motion: MotionInterpolationStats,
 }
 
 impl GpuVideo {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    /// # Safety
+    /// The host must honor the GPU backend contract when compiled with GPU support.
+    pub unsafe fn new(
         _window: usize,
         _options: GameVideoOptions,
         _geometry: Geometry,
@@ -69,10 +56,6 @@ impl GpuVideo {
 
     pub fn driver_name(&self) -> String {
         String::new()
-    }
-
-    pub fn last_interpolation(&self) -> &InterpolationStats {
-        &self.interpolation
     }
 
     pub fn set_scale(&mut self, _scale: u32) -> Result<(), String> {
@@ -99,7 +82,9 @@ impl GpuVideo {
         Err(UNSUPPORTED.to_owned())
     }
 
-    pub fn set_overlay(&mut self, _callback: usize, _userdata: usize) {}
+    /// # Safety
+    /// The host must honor the GPU backend contract when compiled with GPU support.
+    pub unsafe fn set_overlay(&mut self, _callback: usize, _userdata: usize) {}
 
     pub fn set_postprocess(
         &mut self,
@@ -122,7 +107,9 @@ impl GpuVideo {
         Err(UNSUPPORTED.to_owned())
     }
 
-    pub fn present(
+    /// # Safety
+    /// The host must honor the GPU backend contract when compiled with GPU support.
+    pub unsafe fn present(
         &mut self,
         _scene: &SceneSnapshot,
         _request: &PresentRequest<'_>,
@@ -130,7 +117,9 @@ impl GpuVideo {
         Err(UNSUPPORTED.to_owned())
     }
 
-    pub fn capture_surface(
+    /// # Safety
+    /// The host must honor the GPU backend contract when compiled with GPU support.
+    pub unsafe fn capture_surface(
         &mut self,
         _scene: &SceneSnapshot,
         _destination: &mut GpuTexture,

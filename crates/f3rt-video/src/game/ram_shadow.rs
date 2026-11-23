@@ -1,4 +1,4 @@
-//! RAM change tracking, mechanically ported from `runtime/renderer/game/ram_shadow.hpp`.
+//! RAM shadowing for dirty-region detection.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -11,8 +11,7 @@ pub fn fresh_content_version() -> u64 {
 
 /// Reports whether the guarded RAM differs from the last observed contents.
 ///
-/// Like the C++ template, copies start empty (and assignments invalidate); only `changed`
-/// stores a snapshot.
+/// Cloning invalidates the saved contents.
 #[derive(Debug, Default)]
 pub struct RamShadow<const N: usize> {
     bytes: Option<Box<[u8; N]>>,
@@ -56,7 +55,6 @@ pub struct RamShadowSlice {
 }
 
 impl Clone for RamShadowSlice {
-    /// Copies start empty, mirroring `RamShadowSlice`'s C++ copy constructor.
     fn clone(&self) -> Self {
         Self::default()
     }

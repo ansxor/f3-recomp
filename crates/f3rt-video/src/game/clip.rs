@@ -1,4 +1,4 @@
-//! Scanout clipping, mechanically ported from `runtime/renderer/game/clip.hpp`.
+//! Half-open hardware clip-window algebra.
 
 use crate::game::{LAYER_COUNT, LayerId, SceneClip, SceneLayer, SceneRow};
 
@@ -177,6 +177,33 @@ mod tests {
 
     fn window(left: i16, right: i16) -> SceneClip {
         SceneClip { left, right }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn intervals_match_pointwise_window_algebra(
+            endpoints in proptest::array::uniform4((-80i16..80, -80i16..80)),
+            enabled in 0u32..16,
+            inside in 0u32..16,
+            screen in (-60i16..60, -60i16..60),
+        ) {
+            use proptest::prelude::*;
+            let windows = endpoints.map(|(left, right)| SceneClip { left, right });
+            let (left, right) = screen;
+            for invert in [false, true] {
+                let ranges = clip_ranges(&windows, enabled, inside, invert, left, right);
+                prop_assert!(ranges.iter().all(|r| left <= r.left && r.left < r.right && r.right <= right));
+                prop_assert!(ranges.as_slice().windows(2).all(|pair| pair[0].right < pair[1].left));
+                for x in left..right {
+                    let covered = windows.iter().enumerate().any(|(i, w)| {
+                        let bit = 1 << i;
+                        enabled & bit != 0 && (((w.left..w.right).contains(&x)) == (inside & bit != 0))
+                    });
+                    prop_assert_eq!(ranges.iter().any(|r| (r.left..r.right).contains(&x)), covered ^ invert);
+                }
+            }
+        }
     }
 
     #[test]

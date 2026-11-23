@@ -1,5 +1,4 @@
-//! Playfield tile decode, mechanically ported from `runtime/renderer/game/tiles.{hpp,cpp}`.
-//!
+//! Playfield map snapshots and sampling.
 //! Each physical map is 2048 cells (64 columns x 32 rows of 16x16 texels) at graphics offset
 //! 0x10000 + layer * 0x2000 (2048 cells in extended mode, 32x32 at stride 0x1000 otherwise).
 //! A cell is the raw 4-byte big-endian map entry; the snapshot is required because emulation
@@ -21,7 +20,7 @@
 
 use crate::config::VideoConfig;
 use crate::game::ram_shadow::{RamShadowSlice, fresh_content_version};
-use crate::game::scene::{ScenePixel, SceneSource, VideoRam, wrap_tile_index};
+use crate::game::scene::{ScenePixel, VideoRam, wrap_tile_index};
 use crate::memory_map::OFFS_PLAYFIELDS;
 
 /// Map columns of the widest configuration (extended mode).
@@ -123,13 +122,16 @@ impl GameTiles {
         let cells = self.cells_per_map;
         for layer in 0..self.video.map_count() {
             let base = OFFS_PLAYFIELDS + layer * stride;
-            if !self.shadow[layer].changed(&vram.graphics[base..base + stride]) {
+            let raw = &vram.graphics[base..base + stride];
+            if !self.shadow[layer].changed(raw) {
                 continue;
             }
             any = true;
-            for (i, cell) in self.maps[layer][..cells].iter_mut().enumerate() {
-                let at = base + i * 4;
-                *cell = u32::from(vram.u16(at)) << 16 | u32::from(vram.u16(at + 2));
+            for (cell, raw) in self.maps[layer][..cells]
+                .iter_mut()
+                .zip(raw.as_chunks::<4>().0)
+            {
+                *cell = u32::from_be_bytes(*raw);
             }
             let mut used = 0u32;
             for row in 0..MAP_ROWS {
@@ -246,16 +248,6 @@ impl GameTiles {
             shadow.invalidate();
         }
         self.version = fresh_content_version();
-    }
-}
-
-impl SceneSource for GameTiles {
-    fn reset(&mut self) {
-        Self::reset(self);
-    }
-
-    fn decode(&mut self, vram: &VideoRam<'_>) {
-        Self::decode(self, vram);
     }
 }
 
@@ -436,7 +428,6 @@ impl FullResolutionAltMaps {
             for m in 0..half {
                 let mut exact = true;
                 for line in 0..LINES {
-                    // Rotation by m: the two memcmp halves of the C++ solver.
                     let tail_matches = m == 0 || alt[line][half - m..half] == source[line][..m];
                     exact = tail_matches && alt[line][..half - m] == source[line][m..half];
                     if !exact {

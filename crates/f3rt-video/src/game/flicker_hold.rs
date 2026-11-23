@@ -1,9 +1,4 @@
-//! Flicker-hold sprite stage, mechanically ported from
-//! `runtime/renderer/game/flicker_hold.{hpp,cpp}`.
-//!
-//! The C++ class inherits `SpriteStage` and reads `SpriteGroupTracker::current_root`; the Rust
-//! port keeps the same shape behind a [`SpriteGroups`] trait so it stays testable without the
-//! machine.
+//! Sprite staging for objects drawn on alternating frames.
 
 use std::collections::{HashMap, HashSet};
 

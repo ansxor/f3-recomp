@@ -1,9 +1,4 @@
-//! Chunked row dispatch, mechanically ported from `runtime/renderer/game/row_workers.{hpp,cpp}`.
-//!
-//! The C++ renderer keeps a small pool of persistent helpers that pull chunk indices from an
-//! atomic cursor while the submitting thread works too. The Rust port keeps the same chunk
-//! partitioning and trace bookkeeping, but scopes one helper thread per run so the closure can
-//! borrow the frame buffers (no `'static` worker body or unsafe sharing).
+//! Scoped workers for disjoint scanout chunks.
 
 use std::sync::{LazyLock, Mutex};
 use std::thread;
@@ -39,7 +34,6 @@ pub trait WorkWindow {
 /// Chunk counts per participant, index 0 = submitting thread.
 pub type ChunkCounts = [u32; 1 + MAX_COMPOSE_HELPERS];
 
-/// Worker count the platform supports, matching `RowWorkers::RowWorkers`.
 fn helper_count() -> usize {
     let hardware = thread::available_parallelism()
         .map(|count| count.get())
@@ -71,8 +65,7 @@ impl RowWorkers {
         }
     }
 
-    /// Run `body` for every chunk in `0..count`, pushing the same chunk partition as the C++
-    /// `RowWorkers::run`.
+    /// Run the chunks concurrently; the submitting thread also pulls work.
     pub fn run(
         &self,
         count: usize,
@@ -164,7 +157,6 @@ pub fn compose_workers() -> &'static RowWorkers {
     &COMPOSE_WORKERS
 }
 
-/// Convenience for the C++ `compose_chunk_count()` over a runtime scanout window.
 pub fn compose_chunk_count(first_line: u32, end_line: u32) -> usize {
     ((end_line - first_line) as usize).div_ceil(COMPOSE_CHUNK_ROWS)
 }

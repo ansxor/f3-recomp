@@ -1,22 +1,15 @@
-//! Sprite decode, latch and raster, mechanically ported from
-//! `runtime/renderer/game/sprites.{hpp,cpp}`.
-//!
-//! The sprite display list is decoded from VRAM into a *submission* list; `latch` promotes it to
-//! the *current* list that scanout draws. `VideoConfig::sprite_lag` decides when each step runs
-//! (`before_scanout`/`after_scanout`). Sprite trails keep the previous frame's plane as the seed
-//! for the next draw (`save_trails`/`load_trails`).
-//!
-//! The chunked raster helpers (`SpriteCoverage`, `SpriteBins`, `raster_sprite_chunk`) use the same
-//! `COMPOSE_CHUNK_ROWS` partition as `row_workers` and own their per-chunk plane rows.
+//! Sprite display-list decode, lagged latch and raster.
+//! The old sprite plane seeds the next draw when the incoming frame enables trails.
 
 use crate::config::{GameVideoOptions, Geometry, NATIVE_WIDTH, VideoConfig};
 use crate::decode::{DecodedSpriteEntry, SpritePresentation, SpriteRamState, decode_sprite_list};
 use crate::game::row_bits::{PenRow, extract_columns, for_each_run, set_columns};
 use crate::game::row_workers::COMPOSE_CHUNK_ROWS;
 use crate::game::scene::{
-    LayerId, MAX_HARDWARE_SPRITES, MAX_PRESENTED_SPRITES, SceneSource, SceneSprite, VideoRam,
-    sprite_layer, wrap_tile_index,
+    LayerId, MAX_HARDWARE_SPRITES, MAX_PRESENTED_SPRITES, SceneSprite, VideoRam, sprite_layer,
+    wrap_tile_index,
 };
+use crate::memory_map::OFFS_SPRITERAM;
 use crate::state_io::{CanonicalRecord, CanonicalSceneSprite, StateReader, StateWriter};
 
 /// Native sprite-plane width (`36 + 366` scanout columns).
@@ -77,10 +70,6 @@ pub fn scene_sprite(entry: &DecodedSpriteEntry) -> SceneSprite {
         blend_weight: 1.0,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Sprite raster
-// ---------------------------------------------------------------------------
 
 /// Layers a sprite plane can use (`SpriteCoverage::LAYERS`).
 pub const SPRITE_COVERAGE_LAYERS: usize = 4;
@@ -826,10 +815,6 @@ pub fn raster_sprite_chunk(
     }
 }
 
-// ---------------------------------------------------------------------------
-// GameSprites
-// ---------------------------------------------------------------------------
-
 pub struct GameSprites {
     video: VideoConfig,
     geometry: Geometry,
@@ -856,7 +841,7 @@ pub struct GameSprites {
     presented_current_valid: bool,
     /// The last decode filled the presented list to capacity.
     presented_overflow: bool,
-    /// Reused decode scratch (the C++ presented path uses a 4096-entry stack array).
+
     presented_scratch: Vec<DecodedSpriteEntry>,
     decoded: Vec<DecodedSpriteEntry>,
 }
@@ -927,7 +912,7 @@ impl GameSprites {
             splices: &[],
         };
         let count = decode_sprite_list(
-            vram.graphics,
+            &vram.graphics[OFFS_SPRITERAM..],
             self.geometry.first_line() as i32,
             self.geometry.height() as i32,
             &mut self.decoded,
@@ -940,10 +925,16 @@ impl GameSprites {
             },
         );
 
-        for i in 0..count {
-            self.staging[i] = scene_sprite(&self.decoded[i]);
+        for ((staged, submitted), entry) in self
+            .staging
+            .iter_mut()
+            .zip(&mut self.submitted)
+            .zip(&self.decoded[..count])
+        {
+            let sprite = scene_sprite(entry);
+            *staged = sprite;
+            *submitted = sprite;
         }
-        self.submitted[..count].copy_from_slice(&self.staging[..count]);
         self.submitted_count = count;
         self.staging_count = 0;
 
@@ -952,7 +943,7 @@ impl GameSprites {
         if self.presented_submitted_valid {
             let mut presented_state = initial;
             let n = decode_sprite_list(
-                vram.graphics,
+                &vram.graphics[OFFS_SPRITERAM..],
                 self.geometry.first_line() as i32,
                 self.geometry.height() as i32,
                 &mut self.presented_scratch,
@@ -962,8 +953,12 @@ impl GameSprites {
             );
             self.presented_submitted
                 .resize(MAX_PRESENTED_SPRITES, SceneSprite::default());
-            for i in 0..n {
-                self.presented_submitted[i] = scene_sprite(&self.presented_scratch[i]);
+            for (sprite, entry) in self
+                .presented_submitted
+                .iter_mut()
+                .zip(&self.presented_scratch[..n])
+            {
+                *sprite = scene_sprite(entry);
             }
             self.presented_submitted_count = n;
             self.presented_overflow = n == MAX_PRESENTED_SPRITES;
@@ -1020,7 +1015,6 @@ impl GameSprites {
         }
     }
 
-    /// Rasterize the current list into `output` (trails cleared or retained like the C++ path).
     pub fn raster(&self, assets: &[u8], output: &mut [u16], options: GameVideoOptions) {
         raster_sprites(
             self.sprites(),
@@ -1215,16 +1209,6 @@ impl GameSprites {
     }
 }
 
-impl SceneSource for GameSprites {
-    fn reset(&mut self) {
-        Self::reset(self);
-    }
-
-    fn decode(&mut self, vram: &VideoRam<'_>) {
-        Self::decode(self, vram, SpritePresentation::default());
-    }
-}
-
 fn pack_sprite(sprite: &SceneSprite) -> CanonicalSceneSprite {
     CanonicalSceneSprite {
         x: sprite.x,
@@ -1298,7 +1282,6 @@ mod tests {
         assets
     }
 
-    /// One listed sprite plus a terminator, as the C++ trail test sets it up.
     fn sprite_list(sources: &mut Sources, y: u16) {
         sources.word(SPRITE_Y, 0x8000);
         sources.word(ENTRY_BYTES, 1);

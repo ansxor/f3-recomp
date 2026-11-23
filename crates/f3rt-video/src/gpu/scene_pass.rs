@@ -1,5 +1,4 @@
-//! Scene sprite and scanout passes, mechanically ported from
-//! `runtime/renderer/gpu/scene_pass.{hpp,cpp}`.
+//! GPU sprite and scanout passes.
 
 use super::api::validate_tile_assets;
 use super::encode::{ENCODED_INTERPOLATION_WORDS, EncodedScene, encoded_native_words};
@@ -47,19 +46,19 @@ impl GpuTileAssets {
         let pf_tiles = ctx.create_buffer(pf_bytes)?;
         let sp_tiles = ctx.create_buffer(sp_bytes)?;
         let mut tile_pen_masks = vec![0u64; pf_tile_count as usize];
-        let staging = ctx.create_transfer(pf_bytes + sp_bytes, TransferUsage::Upload)?;
+        let mut staging = ctx.create_transfer(pf_bytes + sp_bytes, TransferUsage::Upload)?;
         {
             let mut mapping = staging.map(false, "Map GPU asset upload")?;
             let words = mapping.words(((pf_bytes + sp_bytes) / 4) as usize);
             for i in (0..pf_bytes as usize).step_by(4) {
-                words[i / 4] = pack_word(pf_rom, i);
+                words[i / 4].write(pack_word(pf_rom, i));
                 tile_pen_masks[i / TILE_BYTES as usize] |= (1u64 << (pf_rom[i] & 63))
                     | (1u64 << (pf_rom[i + 1] & 63))
                     | (1u64 << (pf_rom[i + 2] & 63))
                     | (1u64 << (pf_rom[i + 3] & 63));
             }
             for i in (0..sp_bytes as usize).step_by(4) {
-                words[(pf_bytes as usize + i) / 4] = pack_word(sp_rom, i);
+                words[(pf_bytes as usize + i) / 4].write(pack_word(sp_rom, i));
             }
         }
         let mut cmd = ctx.begin_command()?;
@@ -195,16 +194,8 @@ impl ScenePass {
         Ok(())
     }
 
-    pub fn upload_buffer(&self) -> &GpuTransfer {
-        &self.upload
-    }
-
-    pub fn interpolation_pipeline(&self) -> Option<&GpuPipeline> {
-        self.interpolation_pipeline.as_ref()
-    }
-
-    pub fn targets(&self) -> &Targets {
-        &self.targets
+    pub fn upload_buffer(&mut self) -> &mut GpuTransfer {
+        &mut self.upload
     }
 
     pub fn reallocate_targets(
@@ -255,13 +246,13 @@ impl ScenePass {
         {
             let trail_upload = self
                 .trail_upload
-                .as_ref()
+                .as_mut()
                 .expect("trail upload created above");
             let mut mapping = trail_upload.map(true, "Map GPU sprite trails")?;
             let mapped = mapping.words((width * height) as usize);
             if !expanded {
                 for (dst, src) in mapped.iter_mut().zip(seed.iter()) {
-                    *dst = u32::from(*src);
+                    dst.write(u32::from(*src));
                 }
             } else {
                 for y in 0..height {
@@ -269,15 +260,18 @@ impl ScenePass {
                     for x in 0..width {
                         let native_x = (x / options.scale) as i32 + NATIVE_FIRST_COLUMN as i32
                             - options.border as i32;
-                        mapped[(y * width + x) as usize] = if native_x >= NATIVE_FIRST_COLUMN as i32
-                            && native_x < NATIVE_END_COLUMN as i32
-                        {
-                            u32::from(
-                                seed[(native_y * NATIVE_PLANE_WIDTH + native_x as u32) as usize],
-                            )
-                        } else {
-                            0
-                        };
+                        mapped[(y * width + x) as usize].write(
+                            if native_x >= NATIVE_FIRST_COLUMN as i32
+                                && native_x < NATIVE_END_COLUMN as i32
+                            {
+                                u32::from(
+                                    seed[(native_y * NATIVE_PLANE_WIDTH + native_x as u32)
+                                        as usize],
+                                )
+                            } else {
+                                0
+                            },
+                        );
                     }
                 }
             }
@@ -362,7 +356,9 @@ impl ScenePass {
         if encoded.blend_weighted {
             uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
         }
-        cmd.push_fragment_uniforms(0, uniform_bytes(&uniforms));
+        // SAFETY: SceneUniforms is a padding-free block of initialized u32s.
+        let bytes = unsafe { uniform_bytes(&uniforms) };
+        cmd.push_fragment_uniforms(0, bytes);
         let target = self.targets.surface.get();
         let pass = cmd.begin_render_pass(target, false)?;
         let pipeline = if encoded.use_interpolation {
@@ -415,7 +411,9 @@ impl ScenePass {
     ) -> Result<(), String> {
         let mut pass_uniforms = uniforms;
         pass_uniforms.layer_mask |= mask;
-        cmd.push_vertex_uniforms(0, uniform_bytes(&pass_uniforms));
+        // SAFETY: SceneUniforms is a padding-free block of initialized u32s.
+        let bytes = unsafe { uniform_bytes(&pass_uniforms) };
+        cmd.push_vertex_uniforms(0, bytes);
         let pass = cmd.begin_render_pass(plane, has_trails)?;
         cmd.bind_pipeline(pass, self.sprite_pipeline.get());
         if !options.expanded() {

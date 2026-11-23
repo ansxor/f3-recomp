@@ -1,4 +1,4 @@
-//! Blend-state accumulation, mechanically ported from `runtime/renderer/game/mix.hpp`.
+//! Palette-indexed blending.
 
 use crate::game::SceneLayer;
 
@@ -64,7 +64,8 @@ pub fn color15(color: u32) -> u32 {
 }
 
 /// Resolve the pixel to ARGB using the palette.
-pub fn rgb<const PALETTE_15: bool>(pixel: &PixelMix, palette: &[u32]) -> u32 {
+#[cfg(test)]
+fn rgb<const PALETTE_15: bool>(pixel: &PixelMix, palette: &[u32]) -> u32 {
     let fetch = |index: u16| {
         let color = palette[(index & 8191) as usize];
         if PALETTE_15 { color15(color) } else { color }
@@ -108,6 +109,34 @@ mod tests {
             priority,
             blend_mode,
             ..SceneLayer::default()
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn color_resolution_matches_channel_model(
+            colors in proptest::array::uniform2(0u32..=0xff_ffff),
+            weights in proptest::array::uniform2(0u8..=8),
+            high_bits in proptest::array::uniform2(0u16..8),
+        ) {
+            use proptest::prelude::*;
+            let mut palette = [0; 8192];
+            palette[1] = colors[0];
+            palette[2] = colors[1];
+            let pixel = PixelMix {
+                source: high_bits[0] * 8192 + 1,
+                destination: high_bits[1] * 8192 + 2,
+                source_weight: weights[0],
+                destination_weight: weights[1],
+                ..PixelMix::default()
+            };
+            let [_, r0, g0, b0] = colors[0].to_be_bytes();
+            let [_, r1, g1, b1] = colors[1].to_be_bytes();
+            let [r, g, b] = [(r0, r1), (g0, g1), (b0, b1)].map(|(a, b)| {
+                ((u16::from(a) * u16::from(weights[0]) + u16::from(b) * u16::from(weights[1])) / 8).min(255) as u8
+            });
+            prop_assert_eq!(rgb::<false>(&pixel, &palette), u32::from_be_bytes([255, r, g, b]));
         }
     }
 

@@ -1,9 +1,4 @@
-//! Temporal playfield interpolation analysis, mechanically ported from
-//! `runtime/renderer/gpu/interp.{hpp,cpp}`.
-//!
-//! On the canonical frame the coefficients are zero; the shader evaluates the native-anchored
-//! cubic from them. Motion-effective geometry comes from [`MotionState`] (`None`: the canonical
-//! frame).
+//! Native-anchored interpolation of playfield scanlines.
 
 use crate::config::{GameVideoOptions, NATIVE_WIDTH};
 use crate::game::clip::{ClipRanges, clip_ranges_for_row};
@@ -14,41 +9,10 @@ use crate::gpu::scene_layout::{
     F3_INTERP_FLAG_PALETTE, F3_INTERP_FLAG_SOURCE, F3_INTERP_FLAG_VERTICAL, F3_INTERP_FLAG_ZOOM,
 };
 
-/// `VideoInterpolation`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum VideoInterpolation {
-    #[default]
-    Off,
-    Linear,
-    Fit,
-}
+use super::api::{InterpolationFields, VideoInterpolation};
 
-/// `InterpolationFields`: which coefficient families are written.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct InterpolationFields(u8);
-
-#[allow(non_upper_case_globals)]
-impl InterpolationFields {
-    pub const None: Self = Self(0);
-    pub const Geometry: Self = Self(1);
-    pub const Palette: Self = Self(2);
-    pub const All: Self = Self(3);
-
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    pub const fn from_bits_truncate(bits: u8) -> Self {
-        Self(bits & 3)
-    }
-}
-
-/// `parse_interpolation_fields`.
-pub fn parse_interpolation_fields(value: &str) -> Option<InterpolationFields> {
+#[cfg(test)]
+fn parse_interpolation_fields(value: &str) -> Option<InterpolationFields> {
     match value {
         "none" => Some(InterpolationFields::None),
         "geometry" => Some(InterpolationFields::Geometry),
@@ -60,12 +24,11 @@ pub fn parse_interpolation_fields(value: &str) -> Option<InterpolationFields> {
 
 /// `interpolation_fields_name`.
 pub const fn interpolation_fields_name(fields: InterpolationFields) -> &'static str {
-    match fields.bits() {
-        0 => "none",
-        1 => "geometry",
-        2 => "palette",
-        3 => "geometry,palette",
-        _ => "unknown",
+    match fields {
+        InterpolationFields::None => "none",
+        InterpolationFields::Geometry => "geometry",
+        InterpolationFields::Palette => "palette",
+        InterpolationFields::All => "geometry,palette",
     }
 }
 
@@ -132,7 +95,6 @@ impl Default for LayerInterpolationStats {
 pub struct InterpolationStats {
     pub reason: InterpolationReason,
     pub layers: [LayerInterpolationStats; 4],
-    pub row_fields: [[u8; 256]; 4],
 }
 
 impl Default for InterpolationStats {
@@ -140,25 +102,17 @@ impl Default for InterpolationStats {
         Self {
             reason: InterpolationReason::Off,
             layers: [LayerInterpolationStats::default(); 4],
-            row_fields: [[0; 256]; 4],
         }
     }
 }
 
-/// Native-anchored polynomial increments for one playfield row; the canonical frame stays
-/// unchanged. Each triple is the cubic's (c1, c2, c3); a triple is zero unless its flag is set.
-pub const INTERPOLATION_SOURCE: u32 = F3_INTERP_FLAG_SOURCE;
-pub const INTERPOLATION_ZOOM: u32 = F3_INTERP_FLAG_ZOOM;
-pub const INTERPOLATION_VERTICAL: u32 = F3_INTERP_FLAG_VERTICAL;
-pub const INTERPOLATION_PALETTE: u32 = F3_INTERP_FLAG_PALETTE;
-
-/// `PlayfieldCoefficients`.
+/// Native-anchored cubic increments; a triple is zero unless its flag is set.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlayfieldCoefficients {
-    /// interpolation_* bits
+    /// F3_INTERP_FLAG_* bits
     pub flags: u8,
-    /// bank stride, meaningful with [`INTERPOLATION_PALETTE`]
+    /// bank stride, meaningful with [`F3_INTERP_FLAG_PALETTE`]
     pub palette_stride: u16,
     pub source: [f32; 3],
     pub zoom: [f32; 3],
@@ -182,7 +136,8 @@ impl Default for InterpolationCoefficients {
 
 /// `InterpolationAnalysis`.
 #[derive(Clone, Default)]
-pub struct InterpolationAnalysis {
+#[cfg(test)]
+pub(super) struct InterpolationAnalysis {
     pub stats: InterpolationStats,
     pub coefficients: InterpolationCoefficients,
 }
@@ -228,8 +183,14 @@ pub fn analyze_gpu_interpolation_into(
         return stats;
     }
     stats.reason = InterpolationReason::NoEffect;
-    let geometry = fields.contains(InterpolationFields::Geometry);
-    let palette = fields.contains(InterpolationFields::Palette);
+    let geometry = matches!(
+        fields,
+        InterpolationFields::Geometry | InterpolationFields::All
+    );
+    let palette = matches!(
+        fields,
+        InterpolationFields::Palette | InterpolationFields::All
+    );
     if !geometry && !palette {
         return stats;
     }
@@ -252,9 +213,9 @@ pub fn analyze_gpu_interpolation_into(
                 (p.source_y as u32 * 256 + u32::from(p.y_fraction)) as i32,
                 |m| m.rows[y].phase[pf],
             );
-            let mut clip = ClipRanges::default();
-            let valid = valid_row(row, pf, options, &mut clip);
-            clips[y] = clip;
+            let clip = interpolation_clip(row, pf, options);
+            let valid = clip.is_some();
+            clips[y] = clip.unwrap_or_default();
             rows[y] = Row {
                 source,
                 zoom: p.x_step as u32 as i32,
@@ -382,19 +343,22 @@ pub fn analyze_gpu_interpolation_into(
                             2 => &mut coeffs.vertical,
                             _ => &mut coeffs.palette,
                         };
-                        coefficients(
-                            triple,
+                        *triple = coefficients(
                             delta[y - 1] as f32,
                             delta[y] as f32,
                             delta[y + 1] as f32,
                             mode,
                         );
-                        let flag = 1u8 << field;
+                        let flag = [
+                            F3_INTERP_FLAG_SOURCE,
+                            F3_INTERP_FLAG_ZOOM,
+                            F3_INTERP_FLAG_VERTICAL,
+                            F3_INTERP_FLAG_PALETTE,
+                        ][field] as u8;
                         coeffs.flags |= flag;
                         if field == 3 {
                             coeffs.palette_stride = stride as u16;
                         }
-                        stats.row_fields[pf][y] |= flag;
                         match field {
                             0 => layer.source_rows += 1,
                             1 => layer.zoom_rows += 1,
@@ -433,7 +397,8 @@ pub fn analyze_gpu_interpolation_into(
 }
 
 /// `analyze_gpu_interpolation`.
-pub fn analyze_gpu_interpolation(
+#[cfg(test)]
+pub(super) fn analyze_gpu_interpolation(
     frame: &SceneSnapshot,
     options: GameVideoOptions,
     mode: VideoInterpolation,
@@ -456,39 +421,38 @@ pub fn analyze_gpu_interpolation(
 
 /// Prints one `video_interp ...` line to stdout whenever the observed reason/layer outcome
 /// changes.
-#[derive(Clone, Default)]
-pub struct InterpolationLog {
-    layers: [LayerInterpolationStats; 4],
-    reason: InterpolationReason,
-    observed: bool,
+#[derive(Default)]
+pub(super) struct InterpolationLog {
+    previous: Option<InterpolationStats>,
 }
 
 impl InterpolationLog {
     pub fn reset(&mut self) {
-        self.observed = false;
+        self.previous = None;
     }
 
-    pub fn observe(&mut self, config: InterpolationConfig, stats: &InterpolationStats) {
-        if config.mode == VideoInterpolation::Off {
-            return;
+    pub fn line_if_changed(
+        &mut self,
+        config: InterpolationConfig,
+        stats: &InterpolationStats,
+    ) -> Option<String> {
+        if config.mode == VideoInterpolation::Off || self.previous.as_ref() == Some(stats) {
+            return None;
         }
-        if self.observed && self.reason == stats.reason && self.layers == stats.layers {
-            return;
-        }
-        println!("{}", Self::line(config, stats));
-        self.reason = stats.reason;
-        self.layers = stats.layers;
-        self.observed = true;
+        self.previous = Some(*stats);
+        Some(Self::format_line(config, stats))
     }
 
-    fn line(config: InterpolationConfig, stats: &InterpolationStats) -> String {
+    fn format_line(config: InterpolationConfig, stats: &InterpolationStats) -> String {
         let mut line = format!(
             "video_interp fields={} reason={}",
             interpolation_fields_name(config.fields),
             interpolation_reason_name(stats.reason)
         );
+        use std::fmt::Write as _;
         for (i, layer) in stats.layers.iter().enumerate() {
-            line.push_str(&format!(
+            let _ = write!(
+                line,
                 " pf{i}={}:{}/{}/{}/{} invalid{i}={} boundaries{i}={} unsafe_palette{i}={}",
                 interpolation_reason_name(layer.reason),
                 layer.source_rows,
@@ -498,7 +462,7 @@ impl InterpolationLog {
                 layer.invalid_rows,
                 layer.discontinuities,
                 layer.unsafe_palette_pairs
-            ));
+            );
         }
         line
     }
@@ -539,10 +503,6 @@ fn phase_delta(a: i32, b: i32, period: i32) -> i32 {
     delta
 }
 
-fn floor_divide(n: i64, d: i64) -> i64 {
-    if n >= 0 { n / d } else { -1 - (-1 - n) / d }
-}
-
 fn tangent(a: f32, b: f32) -> f32 {
     if a * b <= 0.0 {
         0.0
@@ -551,13 +511,7 @@ fn tangent(a: f32, b: f32) -> f32 {
     }
 }
 
-fn coefficients(
-    out: &mut [f32; 3],
-    previous: f32,
-    delta: f32,
-    next: f32,
-    mode: VideoInterpolation,
-) {
+fn coefficients(previous: f32, delta: f32, next: f32, mode: VideoInterpolation) -> [f32; 3] {
     let m0 = if mode == VideoInterpolation::Fit {
         tangent(previous, delta)
     } else {
@@ -568,11 +522,10 @@ fn coefficients(
     } else {
         delta
     };
-    *out = [m0, 3.0 * delta - 2.0 * m0 - m1, m0 + m1 - 2.0 * delta];
+    [m0, 3.0 * delta - 2.0 * m0 - m1, m0 + m1 - 2.0 * delta]
 }
 
-/// Fills `clips` (visible ranges at the render border) for rows that pass the cheap checks.
-fn valid_row(row: &SceneRow, pf: usize, options: GameVideoOptions, clips: &mut ClipRanges) -> bool {
+fn interpolation_clip(row: &SceneRow, pf: usize, options: GameVideoOptions) -> Option<ClipRanges> {
     let p = &row.playfields[pf];
     let layer = p.layer;
     // Alternate-map rows switch the sampled map per scanline; never interpolated across.
@@ -588,25 +541,17 @@ fn valid_row(row: &SceneRow, pf: usize, options: GameVideoOptions, clips: &mut C
         || p.y_step as u32 > 510
         || p.palette_add > 8191
         || (i64::from(p.source_x)).abs() > (1i64 << 24)
+        || row.blend.iter().any(|&value| value > 8)
     {
-        return false;
-    }
-    for value in row.blend {
-        if value > 8 {
-            return false;
-        }
+        return None;
     }
     let left_edge = (46 - options.border as i32) as i16;
     let right_edge = (366 + options.border as i32) as i16;
-    *clips = clip_ranges_for_row(row, &layer, left_edge, right_edge);
-    for i in 0..clips.count {
-        let left = i32::from(clips.ranges[i].left);
-        let right = i32::from(clips.ranges[i].right);
-        if left >= right || left < i32::from(left_edge) || right > i32::from(right_edge) {
-            return false;
-        }
-    }
-    true
+    let clips = clip_ranges_for_row(row, &layer, left_edge, right_edge);
+    clips
+        .iter()
+        .all(|clip| left_edge <= clip.left && clip.left < clip.right && clip.right <= right_edge)
+        .then_some(clips)
 }
 
 fn same_controls(a: &SceneRow, b: &SceneRow, ca: &ClipRanges, cb: &ClipRanges, pf: usize) -> bool {
@@ -647,16 +592,16 @@ fn safe_palette(
     let x1 =
         i64::from(a.source.max(source_b)) + i64::from(NATIVE_WIDTH + options.border) * maximum_zoom;
     let phase_b = a.phase + phase_delta(a.phase, b.phase, 512 * 256);
-    let y0 = floor_divide(i64::from(a.phase.min(phase_b)), 16 * 256) as i32;
-    let y1 = floor_divide(i64::from(a.phase.max(phase_b)) + 256, 16 * 256) as i32;
+    let y0 = (i64::from(a.phase.min(phase_b))).div_euclid(16 * 256) as i32;
+    let y1 = (i64::from(a.phase.max(phase_b)) + 256).div_euclid(16 * 256) as i32;
     let low = a.palette.min(b.palette);
     let high = a.palette.max(b.palette);
     let flip = if frame.flipped { u32::MAX } else { 0 };
     let columns = frame.tiles.columns() as u32;
     let cells = frame.tiles.cells(pf);
     for cy in y0..=y1 {
-        let mut cx = floor_divide(x0 - 256, 16 * 256);
-        while cx <= floor_divide(x1 + 256, 16 * 256) {
+        let mut cx = (x0 - 256).div_euclid(16 * 256);
+        while cx <= (x1 + 256).div_euclid(16 * 256) {
             let cell = ((cy as u32 ^ flip) & 31) * columns + ((cx as u32 ^ flip) & (columns - 1));
             // Raw 4-byte PF cell (attributes<<16 | code); see runtime/renderer/game/tiles.hpp.
             let raw = cells[cell as usize];
@@ -973,20 +918,24 @@ mod tests {
                 discontinuities: 5,
                 unsafe_palette_pairs: 6,
             }; 4],
-            ..InterpolationStats::default()
         };
         let config = InterpolationConfig {
             mode: VideoInterpolation::Linear,
             fields: InterpolationFields::All,
         };
+        let mut log = InterpolationLog::default();
+        let first = log.line_if_changed(config, &stats).unwrap();
         assert_eq!(
-            InterpolationLog::line(config, &stats),
+            first,
             "video_interp fields=geometry,palette reason=applied \
 pf0=applied:3/1/2/0 invalid0=4 boundaries0=5 unsafe_palette0=6 \
 pf1=applied:3/1/2/0 invalid1=4 boundaries1=5 unsafe_palette1=6 \
 pf2=applied:3/1/2/0 invalid2=4 boundaries2=5 unsafe_palette2=6 \
 pf3=applied:3/1/2/0 invalid3=4 boundaries3=5 unsafe_palette3=6"
         );
+        assert_eq!(log.line_if_changed(config, &stats), None);
+        log.reset();
+        assert_eq!(log.line_if_changed(config, &stats), Some(first));
         assert_eq!(
             interpolation_reason_name(InterpolationReason::PaletteDiscontinuity),
             "palette-discontinuity"
@@ -1036,6 +985,59 @@ pf3=applied:3/1/2/0 invalid3=4 boundaries3=5 unsafe_palette3=6"
         assert_eq!(stats.coefficients.rows[row][0].palette_stride, 16);
         assert_eq!(stats.coefficients.rows[row][0].flags & 8, 8);
         assert_eq!(stats.coefficients.rows[row][0].palette, [16.0, 0.0, 0.0]);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+
+        #[test]
+        fn fit_and_linear_join_the_native_rows_without_overshoot(
+            deltas in proptest::array::uniform3(-2048i32..=2048),
+        ) {
+            use proptest::prelude::*;
+            let [previous, delta, next] = deltas.map(|value| value as f32);
+            for mode in [VideoInterpolation::Linear, VideoInterpolation::Fit] {
+                let [c1, c2, c3] = coefficients(previous, delta, next, mode);
+                let mut last = 0.0;
+                for step in 1..=32 {
+                    let t = step as f32 / 32.0;
+                    let value = t * (c1 + t * (c2 + t * c3));
+                    prop_assert!(value >= delta.min(0.0) - 0.002 && value <= delta.max(0.0) + 0.002);
+                    prop_assert!((value - last) * delta.signum() >= -0.002);
+                    if mode == VideoInterpolation::Linear {
+                        prop_assert_eq!(value, t * delta);
+                    }
+                    last = value;
+                }
+                prop_assert!((last - delta).abs() <= 0.002);
+            }
+        }
+
+        #[test]
+        fn palette_limits_apply_only_to_sampled_pens(
+            channel_jump in 0u8..=64,
+            pen in 1usize..16,
+            channel in 0usize..3,
+            sampled in proptest::prelude::any::<bool>(),
+        ) {
+            use proptest::prelude::*;
+            let mut scene = scene(24, 30, 0);
+            for (i, row) in scene.rows[24..30].iter_mut().enumerate() {
+                row.playfields[0].palette_add = i as u16 * 16;
+            }
+            for bank in [1, 3, 5] {
+                scene.colors[bank * 16 + pen] = u32::from(channel_jump) << (channel * 8);
+            }
+            let analysis = analyze_gpu_interpolation(
+                &scene, options(2, 0), VideoInterpolation::Fit, InterpolationFields::Palette,
+                None, &[if sampled { 1u64 << pen } else { 1 }],
+            );
+            let safe = !sampled || channel_jump <= 32;
+            prop_assert_eq!(analysis.stats.layers[0].unsafe_palette_pairs, if safe { 0 } else { 5 });
+            for row in &analysis.coefficients.rows[25..28] {
+                prop_assert_eq!(row[0].flags & F3_INTERP_FLAG_PALETTE as u8 != 0, safe);
+            }
+        }
     }
 
     #[test]

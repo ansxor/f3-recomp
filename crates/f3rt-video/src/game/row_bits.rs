@@ -1,5 +1,4 @@
-//! Bit-plane helpers, mechanically ported from `runtime/renderer/game/row_bits.hpp`.
-//! The C++ static_assert on little-endian pen byte order is a build-time property here too.
+//! Packed texels and row coverage masks.
 
 /// Extract `len` low bits starting at column `x` from a packed bit array.
 pub fn extract_columns(words: &[u32], x: i32, len: u32) -> u32 {
@@ -128,6 +127,46 @@ fn nonzero(word: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn column_updates_match_a_flat_bitset(
+            start in 0i32..=48,
+            bits in proptest::prelude::any::<u16>(),
+            previous in proptest::prelude::any::<u64>(),
+        ) {
+            use proptest::prelude::*;
+            let from_flat = |v: u64| [v as u32, (v >> 32) as u32];
+            let mask = u64::from(bits) << start;
+            let mut words = from_flat(previous);
+            prop_assert_eq!(extract_columns(&words, start, 16), (previous >> start) as u16 as u32);
+            set_columns(&mut words, start, u32::from(bits));
+            prop_assert_eq!(words, from_flat(previous | mask));
+            clear_columns(&mut words, start, u32::from(bits));
+            prop_assert_eq!(words, from_flat(previous & !mask));
+        }
+
+        #[test]
+        fn pen_row_packs_masked_texels_in_both_directions(
+            pens in proptest::array::uniform16(0u8..64),
+            mask in 0u8..64,
+        ) {
+            use proptest::prelude::*;
+            let packed = PenRow::new(&pens, mask);
+            for flipped in [false, true] {
+                let unpacked = [0, 1, 2, 3].map(|i| packed.group(i, flipped).to_le_bytes()).into_iter().flatten();
+                let visible = (0..16).fold(0, |bits, i| {
+                    let source = if flipped { 15 - i } else { i };
+                    bits | (u32::from(pens[source] & mask != 0) << i)
+                });
+                prop_assert!(unpacked.enumerate().all(|(i, pen)| pen == pens[if flipped { 15 - i } else { i }] & mask), "packed texels differ from the masked input");
+                prop_assert_eq!(packed.opaque(flipped), visible);
+                prop_assert_eq!(packed.blank(), visible == 0);
+                prop_assert_eq!(packed.all_opaque(), visible == 0xffff);
+            }
+        }
+    }
 
     #[test]
     fn extract_spans_words() {

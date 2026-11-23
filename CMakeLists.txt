@@ -178,16 +178,6 @@ if(F3_PROFILE_SLIM)
     target_compile_definitions(f3rt PUBLIC F3_PROFILE_SLIM_ENABLED=1)
 endif()
 
-add_library(f3rt-gpu-prep STATIC
-    runtime/renderer/gpu/motion.cpp
-    runtime/renderer/gpu/interp.cpp
-    runtime/renderer/gpu/encode.cpp
-    runtime/renderer/gpu/user_spirv.cpp
-)
-target_include_directories(f3rt-gpu-prep PUBLIC include runtime "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(f3rt-gpu-prep PUBLIC f3rt)
-target_compile_options(f3rt-gpu-prep PRIVATE -Wall -Wextra -Wpedantic)
-
 # --- Netplay ----------------------------------------------------------------
 
 if(F3RT_NETPLAY)
@@ -341,7 +331,7 @@ if(F3RT_SDL)
             PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}"
                    "${CMAKE_CURRENT_BINARY_DIR}/generated"
         )
-        target_link_libraries(f3rt-gpu PUBLIC f3rt-gpu-prep SDL3::SDL3)
+        target_link_libraries(f3rt-gpu PUBLIC f3rt SDL3::SDL3)
         target_compile_definitions(f3rt-gpu INTERFACE F3RT_GPU=1)
         target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -380,12 +370,12 @@ if(BUILD_TESTING)
         runtime/tests/support.cpp
     )
     target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests)
-    target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt-gpu-prep f3rt-runner GTest::gtest rapidcheck_gtest)
+    target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt-runner GTest::gtest rapidcheck_gtest)
     if(F3_ROM_DIR)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
 
-    foreach(area video input input_script cpu sprites motion_interp state netplay bytes)
+    foreach(area video input input_script cpu sprites state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)

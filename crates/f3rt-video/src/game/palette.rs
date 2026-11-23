@@ -1,7 +1,7 @@
-//! Palette decode, mechanically ported from `runtime/renderer/game/palette.hpp`.
+//! Palette RAM decoding.
 
 use crate::game::ram_shadow::{RamShadow, fresh_content_version};
-use crate::game::scene::{SceneSource, VideoRam};
+use crate::game::scene::VideoRam;
 use crate::memory_map::PALETTE_RAM_SIZE;
 
 /// Palette RAM at VBSTART, decoded to 0x00RRGGBB per entry. Palette RAM stores one big-endian
@@ -61,16 +61,6 @@ impl GamePalette {
 impl Default for GamePalette {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl SceneSource for GamePalette {
-    fn reset(&mut self) {
-        Self::reset(self);
-    }
-
-    fn decode(&mut self, vram: &VideoRam<'_>) {
-        Self::decode(self, vram);
     }
 }
 

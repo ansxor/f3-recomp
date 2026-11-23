@@ -1,5 +1,4 @@
-//! Text layer decode, mechanically ported from `runtime/renderer/game/text.{hpp,cpp}`.
-//!
+//! Text and pivot RAM snapshots.
 //! Three regions are snapshotted raw because emulation keeps writing VRAM while the frame is
 //! composited or materialized lazily:
 //!   `map`:       4096 big-endian 16-bit words at graphics offset 0x1c000 (64x64 cells, 8x8 px);
@@ -8,7 +7,7 @@
 //! `pixel` decodes them on demand, bit-identical to the FDP renderer.
 
 use crate::game::ram_shadow::{RamShadow, fresh_content_version};
-use crate::game::scene::{ScenePixel, SceneSource, VideoRam};
+use crate::game::scene::{ScenePixel, VideoRam};
 use crate::memory_map::{
     CONTROL_TEXT_SCROLL_Y_WORD, OFFS_PIVOT, OFFS_TEXTRAM_GLYPHS, OFFS_TEXTRAM_MAP,
     TEXTRAM_GLYPH_SIZE, TEXTRAM_TILES,
@@ -71,8 +70,13 @@ impl GameText {
         let glyphs_changed = self.shadow_glyphs.changed(glyph_span);
         if map_changed {
             self.row_used = 0;
-            for (i, word) in self.map.iter_mut().enumerate() {
-                *word = vram.u16(OFFS_TEXTRAM_MAP + i * 2);
+            for (i, (word, raw)) in self
+                .map
+                .iter_mut()
+                .zip(map_span.as_chunks::<2>().0)
+                .enumerate()
+            {
+                *word = u16::from_be_bytes(*raw);
                 if *word & 0xff != 0 {
                     self.row_used |= 1u64 << (i >> 6);
                 }
@@ -192,16 +196,6 @@ impl GameText {
 impl Default for GameText {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl SceneSource for GameText {
-    fn reset(&mut self) {
-        Self::reset(self);
-    }
-
-    fn decode(&mut self, vram: &VideoRam<'_>) {
-        Self::decode(self, vram);
     }
 }
 

@@ -1,10 +1,4 @@
-//! Frame driver and save-state root, mechanically ported from
-//! `runtime/renderer/game/video.{hpp,cpp}`.
-//!
-//! `GameVideo` owns the decoded layer components, the newest [`SceneSnapshot`], and the native
-//! (scale-1, no-border) framebuffer. `render_frame` performs the same decode -> resolve -> capture
-//! -> latch sequence as the C++ renderer; no `Machine` is needed, so the same code serves any F3
-//! game's `VideoConfig`.
+//! Scanout frame driver and save-state root.
 
 use std::fmt::Write as _;
 
@@ -35,7 +29,7 @@ pub enum VideoStage {
 /// Render-only sprite post-processing (`RenderEnhancements` / `SpriteStage`).
 ///
 /// `frame` is `None` when the sprite group tracker could not supply a game frame; stages reset and
-/// the latched list passes through unchanged, exactly like `RenderEnhancements::present`.
+/// the latched list passes through unchanged.
 pub trait SpriteEnhancements {
     fn present(&mut self, latched: &[SceneSprite], frame: Option<bool>, out: &mut Vec<SceneSprite>);
     fn reset(&mut self) {}
@@ -114,7 +108,6 @@ impl GameVideo {
         self.reset_with(assets, None);
     }
 
-    /// `reset` with a host-owned enhancement stage set (the C++ `RenderEnhancements`).
     pub fn reset_with(
         &mut self,
         assets: &GraphicsAssets,
@@ -154,7 +147,6 @@ impl GameVideo {
         self.render_frame_with(vram, assets, presentation, stage_cb, snapshot_target, None);
     }
 
-    /// `render_frame` with a host-owned enhancement stage set (the C++ `RenderEnhancements`).
     #[allow(clippy::too_many_arguments)]
     pub fn render_frame_with(
         &mut self,
@@ -328,8 +320,7 @@ impl GameVideo {
         &self.native_pixels
     }
 
-    /// Replace the native framebuffer before `load_state` (the C++ machine pixels come from the
-    /// machine snapshot; here they travel separately).
+    /// Restore the native pixels, which are serialized separately in the machine state.
     pub fn set_native_pixels(&mut self, pixels: &[u32]) {
         let count = pixels.len().min(self.native_pixels.len());
         self.native_pixels[..count].copy_from_slice(&pixels[..count]);
@@ -562,6 +553,83 @@ mod tests {
             None,
         );
         assert!(!game.scene_snapshot().fallback);
+    }
+
+    fn randomize(bytes: &mut [u8], seed: u64) {
+        let mut state = seed | 1;
+        for chunk in bytes.chunks_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            chunk.copy_from_slice(&state.to_le_bytes()[..chunk.len()]);
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(8))]
+        #[test]
+        fn ram_decodes_and_state_restore_is_deterministic(
+            seeds in proptest::array::uniform4(proptest::prelude::any::<u64>()),
+            x in -2048i32..2048,
+            y in -2048i32..2048,
+            alt_maps in proptest::prelude::any::<bool>(),
+            sprite_lag in 0u32..=2,
+        ) {
+            use crate::memory_map::{LINERAM_SIZE, OFFS_LINERAM, OFFS_TEXTRAM_MAP};
+            use proptest::prelude::*;
+            let mut graphics = vec![0; GRAPHICS_RAM_SIZE];
+            let mut control = [0; 0x20];
+            let mut palette = vec![0; PALETTE_RAM_SIZE];
+            randomize(&mut graphics, seeds[0]);
+            randomize(&mut graphics[OFFS_LINERAM..OFFS_LINERAM + LINERAM_SIZE], seeds[1]);
+            randomize(&mut control, seeds[2]);
+            randomize(&mut palette, seeds[3]);
+            let video = VideoConfig { extended_alt_maps: alt_maps, sprite_lag, ..VideoConfig::default() };
+            let mut assets = GraphicsAssets::default();
+            assert!(assets.load_roms(&[0x78; 384], &[], &[0x56; 384], &[]));
+            let render = |game: &mut GameVideo, frame| {
+                game.render_frame(&VideoRam::with_palette(&graphics, &control, frame, &palette), &assets, SpritePresentation::default(), None, None);
+                game.materialize_native(&assets);
+            };
+            let mut game = GameVideo::new(&video, None);
+            render(&mut game, 1);
+            render(&mut game, 2);
+            let scene = game.scene_snapshot();
+            for (color, bytes) in scene.colors.iter().zip(palette.chunks_exact(4)) {
+                prop_assert_eq!(*color, u32::from_be_bytes(bytes.try_into().unwrap()) & 0xff_ffff);
+            }
+            let text_cell = OFFS_TEXTRAM_MAP + ((y as usize & 511) / 8 * 64 + (x as usize & 511) / 8) * 2;
+            prop_assert_eq!(scene.text.map()[(text_cell - OFFS_TEXTRAM_MAP) / 2], u16::from_be_bytes(graphics[text_cell..text_cell + 2].try_into().unwrap()));
+            for flipped in [false, true] {
+                for bitmap in [false, true] {
+                    let pixel = scene.text.pixel(x, y, flipped, bitmap);
+                    prop_assert!(pixel.palette < 1024);
+                    prop_assert_eq!(pixel.flags != 0, pixel.palette & 15 != 0);
+                }
+                for layer in 0..4 {
+                    let pixel = scene.tiles.playfield_pixel(layer, x, y, flipped, assets.playfield_tiles(), alt_maps && layer >= 2);
+                    prop_assert!(pixel.palette < 8192 + 64);
+                }
+            }
+            prop_assert!(scene.rows.iter().all(|row| row.playfields.iter().all(|pf| (0..512).contains(&pf.source_y))));
+            prop_assert!(scene.canonical_sprite_list().len() <= crate::game::MAX_HARDWARE_SPRITES);
+            prop_assert_eq!(game.state_size(), 367_379);
+            let mut saved = vec![0; 367_379];
+            game.save_state(&mut saved, &assets).unwrap();
+            let mut restored = GameVideo::new(&video, None);
+            restored.set_native_pixels(game.native_pixels());
+            restored.load_state(&saved, None).unwrap();
+            prop_assert_eq!(restored.native_pixels(), game.native_pixels());
+            let mut resaved = vec![0; 367_379];
+            restored.save_state(&mut resaved, &assets).unwrap();
+            prop_assert!(saved == resaved, "save bytes changed after loading");
+            render(&mut game, 3);
+            render(&mut restored, 3);
+            prop_assert!(game.native_pixels() == restored.native_pixels(), "next scanout changed after loading");
+            game.save_state(&mut saved, &assets).unwrap();
+            restored.save_state(&mut resaved, &assets).unwrap();
+            prop_assert!(saved == resaved, "next frame state changed after loading");
+        }
     }
 
     #[test]

@@ -1,7 +1,4 @@
-//! Video-relevant constants of the F3 bus map, ported from `include/f3rt/memory_map.hpp`.
-//!
-//! Only the graphics/palette regions the renderer decodes live here; the rest of the machine
-//! map stays in the C++ runtime.
+//! Video RAM regions on the F3 bus.
 
 /// Palette RAM (0x440000-0x448000, 8 KiB).
 pub const PALETTE_RAM_SIZE: usize = 0x8000;

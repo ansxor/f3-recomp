@@ -1,7 +1,5 @@
-// GPU scene buffer layout: the single source of truth shared by the C++ encoder
-// (runtime/renderer/gpu/encode.cpp) and the GLSL shaders (#include-d from
-// runtime/renderer/shaders/scene.glsl). Plain macros with `u` suffixes are valid
-// in both languages. All offsets are 32-bit word indices into one storage buffer.
+// GPU scene buffer layout shared by the Rust encoder and GLSL.
+// All offsets are 32-bit word indices into one storage buffer.
 #ifndef F3_SCENE_LAYOUT_H
 #define F3_SCENE_LAYOUT_H
 

@@ -1,7 +1,4 @@
-//! GPU scene buffer layout, mechanically ported from `runtime/renderer/gpu/scene_layout.h`.
-//!
-//! Single source of truth shared by the encoder ([`super::encode`]) and the GLSL shaders. All
-//! offsets are 32-bit word indices into one storage buffer.
+//! GPU scene buffer layout shared with the GLSL shaders. Offsets are in 32-bit words.
 
 // Region bases.
 // PF cells: 4 layers * 2048 raw cells, two words per slot. Word 0 is the raw big-endian
@@ -69,9 +66,7 @@ pub const F3_LAYER_CLIP_COUNT: usize = 1;
 /// (left, right) pairs, up to 16
 pub const F3_LAYER_CLIPS: usize = 2;
 // Layer flag bits.
-pub const F3_LAYER_PRIORITY_MASK: u32 = 15;
 pub const F3_LAYER_MODE_SHIFT: u32 = 4;
-pub const F3_LAYER_MODE_MASK: u32 = 3;
 pub const F3_LAYER_ENABLED: u32 = 64;
 pub const F3_LAYER_SELECT_SHIFT: u32 = 7;
 pub const F3_LAYER_MOSAIC: u32 = 256;
@@ -103,11 +98,12 @@ pub const F3_SPRITE_PALETTE: usize = 5;
 /// bit 0 flip X, bit 1 flip Y
 pub const F3_SPRITE_FLIP: usize = 6;
 pub const F3_SPRITE_WEIGHT: usize = 7;
-pub const F3_SPRITE_WEIGHT_SHIFT: u32 = 16;
 pub const F3_SPRITE_WEIGHT_SCALE: u32 = 65536;
 pub const F3_MASK_SPRITE_TRAILS: u32 = 0x0400_0000;
 pub const F3_MASK_SCREEN_FLIPPED: u32 = 0x0800_0000;
+#[cfg(feature = "gpu")]
 pub const F3_MASK_HIDE_WEIGHTED: u32 = 0x1000_0000;
+#[cfg(feature = "gpu")]
 pub const F3_MASK_BLEND_WEIGHTED: u32 = 0x2000_0000;
 pub const F3_SPRITE_FLIP_X: u32 = 1;
 pub const F3_SPRITE_FLIP_Y: u32 = 2;
@@ -127,8 +123,7 @@ pub const F3_INTERP_FLAG_VERTICAL: u32 = 4;
 pub const F3_INTERP_FLAG_PALETTE: u32 = 8;
 pub const F3_INTERP_PALETTE_STRIDE_SHIFT: u32 = 16;
 
-/// Shader uniforms, three tightly packed uvec4s (see scene.glsl). `GpuUniforms` in the C++
-/// encoder; the binary layout is 12 little-endian `u32`s.
+/// Shader uniforms: three tightly packed uvec4s.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SceneUniforms {

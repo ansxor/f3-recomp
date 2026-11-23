@@ -2,7 +2,7 @@
 name = "f3rt-video"
 version = "0.1.0"
 edition = "2024"
-description = "Taito F3 video renderer, mechanically ported from the C++ runtime"
+description = "Taito F3 video renderer"
 
 [features]
 default = []
@@ -18,8 +18,10 @@ gpu = [
 ]
 
 [dependencies]
-cxx = "1.0"
 sdl3-sys = { version = "0.7.3", optional = true, default-features = false, features = ["no-link"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true, default-features = false, features = ["std"] }

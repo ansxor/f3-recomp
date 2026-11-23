@@ -1,35 +1,28 @@
 #include "f3rt/bridge_video_host.hpp"
 #include "f3rt/game_video.hpp"
+#include "f3rt_video_cxx/video.h"
 #include "f3rt/renderer/game/enhancements.hpp"
 #include "renderer/game/scene.hpp"
 #include "sprites/groups.hpp"
 #include <algorithm>
-#include <cstring>
+#include <bit>
 #include <optional>
 #include <sstream>
 
 namespace f3rt::rust_video {
-namespace {
-std::span<const SceneSprite> sprites_from_bytes(rust::Slice<const uint8_t> bytes) {
-    return {reinterpret_cast<const SceneSprite *>(bytes.data()),
-            bytes.size() / sizeof(SceneSprite)};
-}
-} // namespace
 
 bool EnhancementsHost::empty() const { return !enhancements || enhancements->empty(); }
 
-size_t EnhancementsHost::present(rust::Slice<const uint8_t> latched, bool flipped,
-                                 rust::Slice<uint8_t> out) {
+size_t EnhancementsHost::present(rust::Slice<const SceneSprite> latched, bool flipped,
+                                 rust::Slice<SceneSprite> out) {
     if (!enhancements) return 0;
-    const auto input = sprites_from_bytes(latched);
     std::optional<SpriteFrame> frame;
     if (tracker) frame = SpriteFrame::read(*tracker, flipped);
-    enhancements->present(input, frame);
+    enhancements->present_from_rust({latched.data(), latched.size()}, frame);
     const auto presented = enhancements->sprites();
-    const size_t count =
-        std::min(presented.size(), out.size() / sizeof(SceneSprite));
-    if (count)
-        std::memcpy(out.data(), presented.data(), count * sizeof(SceneSprite));
+    const size_t count = std::min(presented.size(), out.size());
+    std::transform(presented.begin(), presented.begin() + count, out.begin(),
+                   [](const f3rt::SceneSprite &sprite) { return std::bit_cast<SceneSprite>(sprite); });
     return count;
 }
 
@@ -48,14 +41,10 @@ void ProbeHost::enter(uint8_t stage) {
     if (probe) probe->enter(VideoStage(stage));
 }
 
-uint64_t SpriteGroupsHost::current_root(uint64_t key, int32_t &x, int32_t &y,
-                                        uint32_t &pc) const {
-    if (!tracker) return 0;
+SpriteRoot SpriteGroupsHost::current_root(uint64_t key) const {
+    if (!tracker) return {};
     const SpriteGroupSlot root = tracker->current_root(key);
-    x = root.x;
-    y = root.y;
-    pc = root.pc;
-    return root.key;
+    return {root.key, root.x, root.y, root.pc};
 }
 
 } // namespace f3rt::rust_video

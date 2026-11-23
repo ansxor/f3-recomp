@@ -1,13 +1,4 @@
-//! Save-state serialization, mechanically ported from `runtime/state_io.hpp`.
-//!
-//! Native byte order (little-endian on x86_64/arm64) matches the C++ `memcpy`-based writer, so a
-//! snapshot produced here is byte-identical to the C++ one. Records use `#[repr(C, packed)]`
-//! layouts pinned by compile-time size assertions; encoding is field-wise and therefore has no
-//! padding, pointer or host-ABI dependence.
-//!
-//! On the success path nothing here allocates: `save_state`/`load_state` serialize into the
-//! caller's buffer, which is sized by `state_size()`. Error paths return `Err(String)` with the
-//! same messages the C++ writer/reader throw.
+//! Canonical save-state records encode fields individually, in native byte order and without padding.
 
 use std::mem::size_of;
 
@@ -79,7 +70,7 @@ impl<'a> StateWriter<'a> {
         &self.dst[self.pos..]
     }
 
-    /// Write one packed canonical record, reserving its full size up front like the C++ writer.
+    /// Reserve the whole record before writing to avoid partial writes.
     pub fn write_canonical<T: CanonicalRecord>(&mut self, value: &T) -> Result<(), String> {
         if self.remaining() < T::SIZE {
             return Err(WRITER_OVERFLOW.to_string());

@@ -1,5 +1,5 @@
 #include "../gpu/scene_layout.h"
-// Host layout: runtime/renderer/gpu/scene_layout.h (shared with the C++ encoder). SDL uniforms are three tightly packed uvec4s.
+// SDL uniforms are three tightly packed uvec4s.
 layout(std140, set = UNIFORM_SET, binding = 0) uniform Parameters {
     uvec4 dimensions; // scale, border, width, height
     uvec4 controls;   // sprite count, pen mask, fallback, layer mask

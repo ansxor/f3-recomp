@@ -1,5 +1,4 @@
-//! User postprocess shader validation and loading, mechanically ported from
-//! `runtime/renderer/gpu/user_spirv.{hpp,cpp}`, plus the duplicate result-ID guard.
+//! Postprocess shader loading and ABI validation.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -11,13 +10,18 @@ pub const MAX_USER_SHADER_BYTES: usize = 1024 * 1024;
 /// SPIR-V opcodes and ABI constants used by the validator.
 pub mod spirv {
     pub const MAGIC: u32 = 0x0723_0203;
+    #[cfg(test)]
     pub const VERSION_1_0: u32 = 0x0001_0000;
     pub const ENTRY_MAIN_WORD: u32 = 0x6e69_616d;
 
+    #[cfg(test)]
     pub const OP_MEMORY_MODEL: u32 = 14;
     pub const OP_ENTRY_POINT: u32 = 15;
+    #[cfg(test)]
     pub const OP_EXECUTION_MODE: u32 = 16;
+    #[cfg(test)]
     pub const OP_CAPABILITY: u32 = 17;
+    #[cfg(test)]
     pub const OP_TYPE_VOID: u32 = 19;
     pub const OP_TYPE_FLOAT: u32 = 22;
     pub const OP_TYPE_VECTOR: u32 = 23;
@@ -25,24 +29,33 @@ pub mod spirv {
     pub const OP_TYPE_SAMPLED_IMAGE: u32 = 27;
     pub const OP_TYPE_STRUCT: u32 = 30;
     pub const OP_TYPE_POINTER: u32 = 32;
+    #[cfg(test)]
     pub const OP_TYPE_FUNCTION: u32 = 33;
+    #[cfg(test)]
     pub const OP_FUNCTION: u32 = 54;
+    #[cfg(test)]
     pub const OP_FUNCTION_END: u32 = 56;
     pub const OP_VARIABLE: u32 = 59;
     pub const OP_DECORATE: u32 = 71;
     pub const OP_MEMBER_DECORATE: u32 = 72;
+    #[cfg(test)]
     pub const OP_LABEL: u32 = 248;
+    #[cfg(test)]
     pub const OP_RETURN: u32 = 253;
 
+    #[cfg(test)]
     pub const CAPABILITY_SHADER: u32 = 1;
+    #[cfg(test)]
     pub const ADDRESSING_LOGICAL: u32 = 0;
+    #[cfg(test)]
     pub const MEMORY_MODEL_GLSL450: u32 = 1;
-    pub const EXEC_MODEL_VERTEX: u32 = 0;
     pub const EXEC_MODEL_FRAGMENT: u32 = 4;
+    #[cfg(test)]
     pub const EXEC_MODE_ORIGIN_UPPER_LEFT: u32 = 7;
 
     pub const DECORATION_BLOCK: u32 = 2;
     pub const DECORATION_BUILTIN: u32 = 11;
+    #[cfg(test)]
     pub const DECORATION_LOCATION: u32 = 30;
     pub const DECORATION_BINDING: u32 = 33;
     pub const DECORATION_DESCRIPTOR_SET: u32 = 34;
@@ -56,7 +69,6 @@ pub mod spirv {
     pub const STORAGE_FUNCTION: u32 = 7;
 
     pub const DIM_2D: u32 = 1;
-    pub const DIM_3D: u32 = 2;
     pub const IMAGE_SAMPLED_YES: u32 = 1;
 }
 
@@ -177,7 +189,7 @@ pub fn validate_user_spirv(words: &[u32]) -> Result<(), String> {
             need(if unary_type { 3 } else { 4 })?;
             let result = if op == OP_VARIABLE { p[2] } else { p[1] };
             let v = id_mut(&mut ids, result)?;
-            // The C++ original never checked this: a second definition of a result id would
+            // A second result ID definition would
             // silently overwrite the first and could pass the ABI check.
             if v.opcode != 0 {
                 return invalid();
@@ -510,6 +522,30 @@ mod tests {
             sampled_dimension: 2,
             ..SpirvShape::default()
         }));
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+
+        #[test]
+        fn rejects_invalid_headers_duplicate_ids_and_malformed_instructions(
+            damage in 0u8..6,
+            result_id in 4u32..=12,
+            bad_word in 1u32..=u16::MAX as u32,
+        ) {
+            use proptest::prelude::*;
+            let mut words = spirv_module(SpirvShape::default());
+            prop_assert_eq!(validate_user_spirv(&words), Ok(()));
+            match damage {
+                0 => words[0] ^= bad_word,
+                1 => words[4] = bad_word,
+                2 => words[3] = 0,
+                3 => words.extend([(3 << 16) | OP_TYPE_FLOAT, result_id, 32]),
+                4 => words.push(OP_FUNCTION_END),
+                _ => words.push(((bad_word + 1).min(u16::MAX as u32) << 16) | OP_FUNCTION_END),
+            }
+            prop_assert_eq!(validate_user_spirv(&words).unwrap_err(), INVALID);
+        }
     }
 
     #[test]

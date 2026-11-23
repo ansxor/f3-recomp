@@ -1,4 +1,4 @@
-//! Presentation postprocessing and rotation. Replaces `runtime/renderer/gpu/postprocess.cpp`.
+//! Presentation postprocessing and rotation.
 
 use super::api::{Postprocess, validate_rotation};
 use super::sdl_gpu::{
@@ -118,14 +118,6 @@ impl Postprocessor {
         self.preset
     }
 
-    pub fn surface(&self) -> Option<&GpuTexture> {
-        self.surface.as_ref()
-    }
-
-    pub fn pipeline(&self) -> Option<&GpuPipeline> {
-        self.pipeline.as_ref()
-    }
-
     /// Returns `input` unchanged unless a preset is active and `apply_now`.
     pub fn apply(
         &mut self,
@@ -148,7 +140,9 @@ impl Postprocessor {
             options.scale as f32,
             elapsed as f32,
         ];
-        cmd.push_fragment_uniforms(0, uniform_bytes(&parameters));
+        // SAFETY: The f32 array is initialized and has no padding.
+        let bytes = unsafe { uniform_bytes(&parameters) };
+        cmd.push_fragment_uniforms(0, bytes);
         let target = self
             .surface
             .as_ref()
@@ -238,10 +232,6 @@ impl SurfaceRotator {
         self.rotation != 0
     }
 
-    pub fn surface(&self) -> Option<&GpuTexture> {
-        self.surface.as_ref()
-    }
-
     pub fn apply(
         &mut self,
         cmd: &mut GpuCommand,
@@ -251,9 +241,11 @@ impl SurfaceRotator {
         if self.rotation == 0 {
             return Ok(input);
         }
-        // `rotate.frag` declares `uvec4 rotation`; the C++ façade pushed the whole zero-padded array.
+        // rotate.frag reads a uvec4 even though only its first component is used.
         let uniform = [self.rotation, 0, 0, 0];
-        cmd.push_fragment_uniforms(0, uniform_bytes(&uniform));
+        // SAFETY: The u32 array is initialized and has no padding.
+        let bytes = unsafe { uniform_bytes(&uniform) };
+        cmd.push_fragment_uniforms(0, bytes);
         let target = self
             .surface
             .as_ref()

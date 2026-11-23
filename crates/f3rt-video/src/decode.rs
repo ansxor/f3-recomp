@@ -1,5 +1,6 @@
-//! Generic TC0630FDP video-RAM decode primitives, ported from
-//! `runtime/renderer/decode.{hpp,cpp}` and `runtime/sprites/presentation.hpp`.
+//! TC0630FDP character RAM and sprite display-list decoding.
+
+use crate::memory_map::SPRITE_BANK_STRIDE;
 
 /// One 8x8 4bpp character tile: 32 raw bytes -> 64 packed-nibble pixels
 /// (`row[3 - x/2] >> ((x & 1) * 4)`).
@@ -51,8 +52,6 @@ impl Default for SpriteRamState {
         }
     }
 }
-
-// --- presentation.hpp ---
 
 /// Entries per sprite bank.
 pub const SPRITE_ENTRIES: u16 = 0x400;
@@ -124,8 +123,6 @@ impl SpritePresentation<'_> {
     }
 }
 
-/// Uses `SPRITE_BANK_STRIDE` from `include/f3rt/memory_map.hpp`.
-const SPRITE_BANK_STRIDE: u32 = 0x8000;
 const H_START: i32 = 46;
 const H_VIS: i32 = 320;
 
@@ -384,7 +381,11 @@ pub fn decode_sprite_list(
     let mut offs: i32 = 0;
     while offs < 0x400 && total_sprites < 0x400 {
         total_sprites += 1;
-        let bank_offset = if ctx.ram.bank { SPRITE_BANK_STRIDE } else { 0 };
+        let bank_offset = if ctx.ram.bank {
+            SPRITE_BANK_STRIDE as u32
+        } else {
+            0
+        };
         let entry_start = bank_offset as usize + offs as usize * 16;
         let spr = &spriteram[entry_start..entry_start + 16];
 
@@ -440,7 +441,7 @@ mod tests {
     use super::*;
 
     fn write_entry(ram: &mut [u8], bank: bool, index: usize, entry: [u16; 7]) {
-        let base = if bank { SPRITE_BANK_STRIDE as usize } else { 0 } + index * 16;
+        let base = if bank { SPRITE_BANK_STRIDE } else { 0 } + index * 16;
         for (i, word) in entry.iter().enumerate() {
             ram[base + i * 2..base + i * 2 + 2].copy_from_slice(&word.to_be_bytes());
         }
@@ -522,6 +523,156 @@ mod tests {
         assert_eq!(
             decode_sprite_list(&ram, 24, 232, &mut out, &mut state, false, None),
             0
+        );
+    }
+
+    #[test]
+    fn groups_follow_block_heads_and_empty_presentation_is_neutral() {
+        let mut ram = vec![0; 0x10000];
+        write_entry(&mut ram, false, 0, [1, 0, 100, 50, 0x0800, 0, 0]);
+        write_entry(&mut ram, false, 1, [2, 0, 120, 50, 0x0800, 0, 0]);
+        write_entry(&mut ram, false, 2, [3, 0, 200, 60, 0, 0, 0]);
+        let decode = |presentation: Option<&SpritePresentation<'_>>| {
+            let mut out = [DecodedSpriteEntry::default(); 4];
+            let n = decode_sprite_list(
+                &ram,
+                24,
+                232,
+                &mut out,
+                &mut SpriteRamState::default(),
+                false,
+                presentation,
+            );
+            assert_eq!(n, 3);
+            out
+        };
+        let baseline = decode(None);
+        assert_eq!(baseline[0].x, 100 * 256);
+        assert_eq!(baseline[2].tile, 3);
+        assert_eq!(decode(Some(&SpritePresentation::default())), baseline);
+
+        let head = SpriteGroupSlot {
+            key: 42,
+            x: 100 * 256,
+            y: 50 * 256,
+            pc: 0x1000,
+        };
+        let independent = SpriteGroupSlot {
+            key: 44,
+            x: 200 * 256,
+            y: 60 * 256,
+            pc: 0x2000,
+        };
+        let mut expected = baseline;
+        for (entry, group) in expected.iter_mut().zip([head, head, independent]) {
+            entry.group = group.key;
+            entry.group_x = group.x;
+            entry.group_y = group.y;
+            entry.group_pc = group.pc;
+        }
+        assert_eq!(
+            decode(Some(&SpritePresentation {
+                groups: &[head, SpriteGroupSlot::default(), independent],
+                splices: &[]
+            })),
+            expected
+        );
+    }
+
+    #[test]
+    fn splice_preserves_chaining_and_matches_its_bank_and_source() {
+        let mut ram = vec![0; 0x10000];
+        write_entry(&mut ram, false, 0, [1, 0, 100, 50, 0, 0, 0]);
+        write_entry(&mut ram, false, 1, [2, 0, 120, 50, 0, 0, 0]);
+        write_entry(&mut ram, false, 2, [3, 0, 200, 60, 0, 0, 0]);
+        let mut replacement = [0; 32];
+        write_entry(
+            &mut replacement,
+            false,
+            0,
+            [9, 0x0080, 150, 70, 0x0800, 0, 0],
+        );
+        write_entry(&mut replacement, false, 1, [10, 0, 0, 0, 0xf000, 0, 0x8001]);
+        let groups = [
+            SpriteGroupSlot {
+                key: 42,
+                x: 150 * 256,
+                y: 70 * 256,
+                pc: 0x1000,
+            },
+            SpriteGroupSlot {
+                key: 43,
+                x: 151 * 256,
+                y: 71 * 256,
+                pc: 0x2000,
+            },
+        ];
+        let splice = SpriteSplice {
+            bank: false,
+            first: 0,
+            last: 1,
+            real: &ram[..32],
+            replacement: &replacement,
+            groups: &groups,
+        };
+        let decode = |source: &[u8], splice| {
+            let mut out = [DecodedSpriteEntry::default(); 4];
+            let n = decode_sprite_list(
+                source,
+                24,
+                232,
+                &mut out,
+                &mut SpriteRamState::default(),
+                false,
+                Some(&SpritePresentation {
+                    groups: &[],
+                    splices: &[splice],
+                }),
+            );
+            out[..n].to_vec()
+        };
+        let out = decode(&ram, splice);
+        assert_eq!(
+            out.iter().map(|entry| entry.tile).collect::<Vec<_>>(),
+            [9, 10, 3]
+        );
+        assert_eq!((out[0].scale_x, out[1].scale_x), (128, 128));
+        assert_eq!((out[1].x, out[1].y), (150 * 256 + 128 * 16, 86 * 256));
+        for (entry, group) in out.iter().zip(groups) {
+            assert_eq!(
+                (entry.group, entry.group_x, entry.group_y, entry.group_pc),
+                (group.key, group.x, group.y, group.pc)
+            );
+        }
+        assert_eq!(
+            decode(
+                &ram,
+                SpriteSplice {
+                    bank: true,
+                    ..splice
+                }
+            )[0]
+            .tile,
+            1
+        );
+        assert_eq!(
+            decode(
+                &ram,
+                SpriteSplice {
+                    replacement: &[],
+                    ..splice
+                }
+            ),
+            out[2..]
+        );
+        let mut stale = ram.clone();
+        write_entry(&mut stale, false, 1, [77, 0, 120, 50, 0, 0, 0]);
+        assert_eq!(
+            decode(&stale, splice)
+                .iter()
+                .map(|entry| entry.tile)
+                .collect::<Vec<_>>(),
+            [1, 77, 3]
         );
     }
 

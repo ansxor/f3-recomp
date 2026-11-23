@@ -3,7 +3,7 @@
 #include "f3rt_video_cxx/video.h"
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/gpu/interp.hpp"
-#include "renderer/gpu/motion.hpp"
+
 #include "renderer/scale.hpp"
 #include <SDL3/SDL.h>
 #include <chrono>
@@ -16,8 +16,8 @@
 #include <variant>
 
 namespace f3rt {
-// The GPU backend lives in `crates/f3rt-video/src/gpu/` and calls `sdl3-sys` directly; this
-// header is the C++ façade over that Rust API.
+using MotionInterpolationStats = rust_video::MotionInterpolationStats;
+
 enum class Postprocess { Off, Crt, User };
 
 // Optional host overlay invoked on the window composition target (the swapchain directly, or the
@@ -96,7 +96,7 @@ public:
     GpuVideo(const GpuVideo &) = delete;
     GpuVideo &operator=(const GpuVideo &) = delete;
     const char *driver() const;
-    const InterpolationStats &last_interpolation() const;
+
     // Host-only geometry. Assets, pipelines and canonical game state survive. Strong guarantee:
     // on failure the previous scale and every live resource are untouched.
     void set_scale(unsigned scale);
@@ -149,7 +149,7 @@ public:
 private:
     rust::Box<rust_video::GpuVideo> m_video;
     std::string m_driver;
-    mutable InterpolationStats m_interpolation{};
+
     mutable MotionInterpolationStats m_motion{};
 };
 } // namespace f3rt

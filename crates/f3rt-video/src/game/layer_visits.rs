@@ -1,5 +1,4 @@
-//! Per-pixel layer visitation masks, mechanically ported from
-//! `runtime/renderer/game/layer_visits.hpp`.
+//! Per-pixel layer visit masks.
 
 use crate::game::LAYER_COUNT;
 
