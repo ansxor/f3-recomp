@@ -17,6 +17,7 @@ use crate::hle::sequence_bank::{
     EV_NOTE_LONG_MAX, EV_NOTE_SHORT_MAX, EV_NOTIFICATION, EV_PROGRAM_SELECTOR, EV_SPECIAL_TRACK_DA,
     EV_SPECIAL_TRACK_DB, SEQ_FLAG_LOOP,
 };
+use crate::hle::track_parameters::TrackParameters;
 use crate::hle::track_service::{Track, TrackService, TrackStatus};
 use crate::memory_map::SOUND_ROM_SIZE;
 
@@ -282,28 +283,39 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    pub fn new(rom: &'static [u8], layout: &'static DriverLayout) -> Sequencer {
+    /// `Err` names why `rom` cannot be sequenced: too small, or a malformed boot bank.
+    pub fn try_new(
+        rom: &'static [u8],
+        layout: &'static DriverLayout,
+    ) -> Result<Sequencer, &'static str> {
         if rom.len() < SOUND_ROM_SIZE {
-            panic!("HLE requires at least a 512 KiB padded sound ROM");
+            return Err("HLE requires at least a 512 KiB padded sound ROM");
         }
-        Sequencer {
+        Ok(Sequencer {
             rom,
             layout,
-            bank: Self::parse_bank(rom, layout, BOOT_BANK),
+            bank: Self::parse_bank(rom, layout, BOOT_BANK)?,
             state: [SongState::default(); SONG_SLOTS],
             beats: core::array::from_fn(|_| PulseTimer::new(625, 0)),
             serial: 0,
             current_bank: BOOT_BANK,
-        }
+        })
     }
 
-    fn parse_bank(rom: &'static [u8], layout: &DriverLayout, bank: u8) -> SequenceBank {
-        SequenceBank::parse(&RomView::with_image(rom, bank), layout)
+    fn parse_bank(
+        rom: &'static [u8],
+        layout: &DriverLayout,
+        bank: u8,
+    ) -> Result<SequenceBank, &'static str> {
+        SequenceBank::try_parse(&RomView::with_image(rom, bank), layout)
     }
 
+    /// A bank switch after construction: the boot bank already parsed, so a bank the game selects
+    /// that does not is a fault of the running game.
     fn load_bank(&mut self, bank: u8) {
         self.current_bank = bank;
-        self.bank = Self::parse_bank(self.rom, self.layout, bank);
+        self.bank = Self::parse_bank(self.rom, self.layout, bank)
+            .unwrap_or_else(|reason| panic!("{reason}"));
     }
 
     pub fn command(
@@ -365,21 +377,6 @@ impl Sequencer {
     /// The per-sequence tempo pulses. Step 0 while the sequence is not playing.
     pub fn beats(&mut self) -> &mut [PulseTimer; SONG_SLOTS] {
         &mut self.beats
-    }
-
-    /// True when the default bank of `sound_rom` parses.
-    pub fn validate(sound_rom: &'static [u8]) -> bool {
-        if sound_rom.len() < SOUND_ROM_SIZE {
-            return false;
-        }
-        // Parsing reports malformed ROM by panicking; keep the hook from printing that.
-        let hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(|| {
-            Sequencer::new(sound_rom, &crate::hle::driver_layout::STANDARD);
-        });
-        std::panic::set_hook(hook);
-        result.is_ok()
     }
 
     /// Applies a sequence-addressed command to its sequence and then to each linked alias.
@@ -455,6 +452,10 @@ impl Sequencer {
                 if !self.state[usize::from(id)].is_active() {
                     self.start_sequence(id, cx);
                 }
+                // An absent song slot cannot start: there is nothing to seek in.
+                if !self.state[usize::from(id)].is_active() {
+                    return;
+                }
                 self.initialize_tracks(id, id, cx);
                 let mut ticks = 0u64;
                 while ticks < u64::from(c.position) && self.state[usize::from(id)].is_active() {
@@ -501,7 +502,9 @@ impl Sequencer {
             }
             Command::TrackPan(c) => cx.push_track(TrackEvent::pan(cx.tick, id, track, c.value)),
             Command::TrackController(c) => {
-                cx.push_track(TrackEvent::controller(cx.tick, id, track, c.index, c.value));
+                if TrackParameters::valid_controller(usize::from(c.index)) {
+                    cx.push_track(TrackEvent::controller(cx.tick, id, track, c.index, c.value));
+                }
             }
             Command::TrackProgram(c) => {
                 cx.push_track(TrackEvent::program(cx.tick, id, track, c.program));
@@ -638,20 +641,23 @@ impl Sequencer {
         // A loop marker is not a playable phase. At the terminator the playlist returns to the
         // phase following its last marker.
         for _ in 0..=list_len {
-            let s = &mut self.state[usize::from(id)];
-            s.phase = s.phase.wrapping_add(1);
-            let phase = s.phase;
             let list = self.bank.song(id).arrangement();
-
-            if usize::from(phase) > list_len || list[usize::from(phase) - 1].opcode == EV_END {
+            let s = &mut self.state[usize::from(id)];
+            // Phases are 1-based: `None` is past the end, whether the playlist or the `u8` ran out.
+            let playable = s
+                .phase
+                .checked_add(1)
+                .filter(|&phase| usize::from(phase) <= list_len)
+                .filter(|&phase| list[usize::from(phase) - 1].opcode != EV_END);
+            let Some(phase) = playable else {
                 let last_marker = list.iter().rposition(|e| e.is_arrangement() && e.is_loop_marker());
-                let s = &mut self.state[usize::from(id)];
-                s.phase = last_marker.map_or(0, |n| (n + 1) as u8);
+                s.phase = last_marker.and_then(|n| u8::try_from(n + 1).ok()).unwrap_or(0);
                 if s.phase == 0 {
                     return 0;
                 }
                 continue;
-            }
+            };
+            s.phase = phase;
 
             let entry = list[usize::from(phase) - 1];
             if entry.is_loop_marker() {
@@ -789,5 +795,241 @@ impl Sequencer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::command::{
+        SequenceRate, SequenceRef, SequenceSeek, SequenceStart, SequenceVolume, TrackController,
+    };
+    use crate::hle::driver_layout::STANDARD;
+    use crate::hle::events::TrackEventKind;
+    use crate::hle::sequence_bank::{
+        ARRANGEMENT_LOOP_MARKER, ARRANGEMENT_STREAM_INDEX, EV_ARRANGEMENT, FIRST_MUSIC_STREAM_INDEX,
+        SongData, TrackData,
+    };
+    use crate::hle::track_service::TrackConfig;
+
+    const PARENT: u8 = 1;
+    const FIRST_CHILD: u8 = 2;
+    const SECOND_CHILD: u8 = 3;
+    const SOLO: u8 = 4;
+    const ABSENT: u8 = 5;
+
+    fn end_event() -> StreamEvent {
+        StreamEvent { opcode: EV_END, ..StreamEvent::default() }
+    }
+
+    /// A song with one program-bearing track whose stream ends at once.
+    fn playable_song(rate: u8) -> SongData {
+        let mut song = SongData { present: true, rate, ..SongData::default() };
+        song.initial[0] = TrackConfig { program: 0, ..TrackConfig::default() };
+        song.tracks[FIRST_MUSIC_STREAM_INDEX] = TrackData { events: vec![end_event()] };
+        song
+    }
+
+    fn playlist_entry(child: u8, repeats: u16) -> StreamEvent {
+        StreamEvent {
+            opcode: EV_ARRANGEMENT,
+            arrangement: [u16::from(child), 0, 0, repeats],
+            ..StreamEvent::default()
+        }
+    }
+
+    fn loop_marker() -> StreamEvent {
+        StreamEvent {
+            opcode: EV_ARRANGEMENT,
+            arrangement: [0, 0, 0, ARRANGEMENT_LOOP_MARKER],
+            ..StreamEvent::default()
+        }
+    }
+
+    fn arranged_song(entries: impl IntoIterator<Item = StreamEvent>) -> SongData {
+        let mut song = SongData { present: true, ..SongData::default() };
+        let mut events: Vec<StreamEvent> = entries.into_iter().collect();
+        events.push(end_event());
+        song.tracks[ARRANGEMENT_STREAM_INDEX] = TrackData { events };
+        song
+    }
+
+    fn sequencer(songs: impl IntoIterator<Item = (u8, SongData)>) -> Sequencer {
+        let mut slots: Vec<SongData> = (0..SONG_SLOTS).map(|_| SongData::default()).collect();
+        for (id, song) in songs {
+            slots[usize::from(id)] = song;
+        }
+        Sequencer {
+            rom: &[],
+            layout: &STANDARD,
+            bank: SequenceBank::from_songs(slots),
+            state: [SongState::default(); SONG_SLOTS],
+            beats: core::array::from_fn(|_| PulseTimer::new(625, 0)),
+            serial: 0,
+            current_bank: BOOT_BANK,
+        }
+    }
+
+    /// The sequencer's two output services, with the events a call queued applied to the tracks.
+    struct Services {
+        mailbox: Mailbox,
+        tracks: Box<TrackService>,
+    }
+
+    impl Services {
+        fn new() -> Services {
+            Services { mailbox: Mailbox::new(), tracks: Box::new(TrackService::new()) }
+        }
+
+        fn send(&mut self, sequencer: &mut Sequencer, command: Command) {
+            let packet = CommandPacket::new(0, command);
+            sequencer.command(&packet, 1, 0, &mut self.mailbox, &mut self.tracks);
+        }
+
+        /// Applies the queued track events and returns every event the sequencer queued.
+        fn settle(&mut self) -> Vec<Event> {
+            let mut events = Vec::new();
+            self.mailbox.drain(|event| {
+                if let Event::Track(e) = &event {
+                    self.tracks.apply_track(e);
+                }
+                events.push(event);
+            });
+            events
+        }
+    }
+
+    fn id(id: u8) -> SequenceRef {
+        SequenceRef { id, selection: false }
+    }
+
+    fn arrangement_start(id: u8) -> Command {
+        Command::SequenceStart(SequenceStart { sequence: SequenceRef { id, selection: true } })
+    }
+
+    #[test]
+    fn carry_holds_the_tempo_only_when_it_was_overridden() {
+        let mut state = SongState::started(90, 0);
+        state.selected = 7;
+        assert_eq!(state.carry(), ArrangementCarry { selected: 7, rate_override: None });
+        state.override_rate(120);
+        assert_eq!(state.carry(), ArrangementCarry { selected: 7, rate_override: Some(120) });
+    }
+
+    #[test]
+    fn a_finished_child_hands_its_mix_and_tempo_override_to_the_next_child() {
+        let mut sequencer = sequencer([
+            (PARENT, arranged_song([playlist_entry(FIRST_CHILD, 1), playlist_entry(SECOND_CHILD, 1)])),
+            (FIRST_CHILD, playable_song(100)),
+            (SECOND_CHILD, playable_song(100)),
+        ]);
+        let mut services = Services::new();
+
+        services.send(&mut sequencer, arrangement_start(PARENT));
+        services.settle();
+        assert!(sequencer.state[usize::from(FIRST_CHILD)].is_active());
+        assert!(!sequencer.state[usize::from(SECOND_CHILD)].is_active());
+
+        services.send(&mut sequencer, Command::SequenceRate(SequenceRate { sequence: id(FIRST_CHILD), rate: 77 }));
+        services.send(
+            &mut sequencer,
+            Command::SequenceVolume(SequenceVolume { sequence: id(FIRST_CHILD), volume: 40 }),
+        );
+        services.settle();
+
+        // The first child's only track has ended: its next pulse finishes it.
+        sequencer.pulse(FIRST_CHILD, 1, &mut services.mailbox, &mut services.tracks);
+        services.settle();
+
+        assert!(!sequencer.state[usize::from(FIRST_CHILD)].is_active());
+        let next = &sequencer.state[usize::from(SECOND_CHILD)];
+        assert!(next.is_active());
+        assert_eq!(next.arrangement_owner, PARENT);
+        assert!(next.rate_override);
+        assert_eq!((next.rate, next.saved_rate), (77, 77));
+        assert_eq!(services.tracks.track(SECOND_CHILD, 0).sequence_volume, 40);
+    }
+
+    #[test]
+    fn seeking_an_absent_slot_does_nothing() {
+        let mut sequencer = sequencer([]);
+        let mut services = Services::new();
+        let seek = SequenceSeek { sequence: id(ABSENT), position: 16 };
+        services.send(&mut sequencer, Command::SequenceSeek(seek));
+        assert!(services.settle().is_empty());
+        assert!(!sequencer.state[usize::from(ABSENT)].is_active());
+    }
+
+    #[test]
+    fn seeking_a_present_slot_starts_it_and_parks_it_at_the_end() {
+        let mut sequencer = sequencer([(SOLO, playable_song(100))]);
+        let mut services = Services::new();
+        let seek = SequenceSeek { sequence: id(SOLO), position: 4 };
+        services.send(&mut sequencer, Command::SequenceSeek(seek));
+        assert_eq!(sequencer.state[usize::from(SOLO)].status, SequenceStatus::Parked);
+    }
+
+    fn controller_events(events: &[Event]) -> Vec<TrackEvent> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Track(e) if e.kind == TrackEventKind::Controller => Some(*e),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn controllers_beyond_the_track_record_are_ignored() {
+        let mut sequencer = sequencer([(SOLO, playable_song(100))]);
+        let mut services = Services::new();
+        services.send(&mut sequencer, Command::SequenceStart(SequenceStart { sequence: id(SOLO) }));
+        services.settle();
+
+        let last_valid = (0..=u8::MAX)
+            .take_while(|&index| TrackParameters::valid_controller(usize::from(index)))
+            .last()
+            .unwrap();
+        for index in [last_valid + 1, u8::MAX] {
+            let command = TrackController { sequence: id(SOLO), track: 1, index, value: 5 };
+            services.send(&mut sequencer, Command::TrackController(command));
+            assert!(controller_events(&services.settle()).is_empty(), "index {index}");
+        }
+
+        let command = TrackController { sequence: id(SOLO), track: 1, index: last_valid, value: 5 };
+        services.send(&mut sequencer, Command::TrackController(command));
+        let queued = controller_events(&services.settle());
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].index, last_valid);
+    }
+
+    /// `entries` playable children (slot 2), then the terminator.
+    fn long_playlist(entries: usize, marker_at: Option<usize>) -> Sequencer {
+        let playlist = (0..entries).map(|n| {
+            if Some(n) == marker_at { loop_marker() } else { playlist_entry(FIRST_CHILD, 1) }
+        });
+        sequencer([(PARENT, arranged_song(playlist)), (FIRST_CHILD, playable_song(100))])
+    }
+
+    #[test]
+    fn a_playlist_at_the_phase_limit_ends_without_overflowing() {
+        let longest = usize::from(u8::MAX) - 2;
+        let mut sequencer = long_playlist(longest, None);
+        let mut services = Services::new();
+        // On the terminator, the last phase before the `u8` runs out.
+        sequencer.state[usize::from(PARENT)].phase = u8::try_from(longest).unwrap();
+        let mut cx = Context { tick: 0, mailbox: &mut services.mailbox, tracks: &mut services.tracks };
+        assert_eq!(sequencer.advance_arrangement(PARENT, None, &mut cx), 0);
+        assert_eq!(sequencer.state[usize::from(PARENT)].phase, 0);
+    }
+
+    #[test]
+    fn a_phase_past_the_u8_range_returns_to_the_last_loop_marker() {
+        let mut sequencer = long_playlist(3, Some(0));
+        let mut services = Services::new();
+        sequencer.state[usize::from(PARENT)].phase = u8::MAX;
+        let mut cx = Context { tick: 0, mailbox: &mut services.mailbox, tracks: &mut services.tracks };
+        assert_eq!(sequencer.advance_arrangement(PARENT, None, &mut cx), FIRST_CHILD);
+        assert_eq!(sequencer.state[usize::from(PARENT)].phase, 2);
     }
 }

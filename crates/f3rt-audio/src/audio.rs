@@ -17,12 +17,12 @@ use crate::worker_queue::{Applies, WorkerQueue};
 pub const QUEUE_SIZE: usize = 4096;
 
 /// Raw big-endian 16-bit sample ROM bytes to host words.
-pub fn decode_sample_words(sample_rom: &[u8]) -> Arc<[u16]> {
+pub fn decode_sample_words(sample_rom: &[u8]) -> Box<[u16]> {
     sample_rom
         .chunks_exact(2)
         .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
         .collect::<Vec<u16>>()
-        .into()
+        .into_boxed_slice()
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -81,16 +81,16 @@ struct Synth {
 }
 
 impl Synth {
-    fn new(
+    fn try_new(
         sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
+        sample_words: Box<[u16]>,
         sink: SharedPcmSink,
         layout: &'static DriverLayout,
         metrics: Arc<SynthMetrics>,
-    ) -> Synth {
-        let mut core = Core::new(sound_rom, sample_words, layout);
+    ) -> Result<Synth, &'static str> {
+        let mut core = Core::try_new(sound_rom, sample_words, layout)?;
         core.set_pcm_sink(Some(sink));
-        Synth { core, metrics }
+        Ok(Synth { core, metrics })
     }
 }
 
@@ -137,8 +137,22 @@ struct SynthLink {
 }
 
 impl SynthLink {
+    /// Moves the main-thread clock on; the clock is a free-running 64-bit counter that wraps.
+    fn advance(&mut self, ticks: u32) {
+        self.clock = self.clock.wrapping_add(u64::from(ticks));
+    }
+
+    /// Re-bases the clock on a restored snapshot: nothing is owed to the synth at `clock`, and
+    /// playback continues from `playback_epoch`.
+    fn rebase(&mut self, clock: u64, playback_epoch: u64) {
+        self.clock = clock;
+        self.clock_epoch = clock;
+        self.submitted_tick = clock;
+        self.playback_epoch = playback_epoch;
+    }
+
     fn playback_now(&self) -> u64 {
-        self.playback_epoch + (self.clock - self.clock_epoch)
+        self.playback_epoch.wrapping_add(self.clock.wrapping_sub(self.clock_epoch))
     }
 
     fn post(&self, kind: CoreInputKind) {
@@ -147,7 +161,7 @@ impl SynthLink {
     }
 
     fn record(&mut self, packet: CommandPacket) {
-        self.command_count += 1;
+        self.command_count = self.command_count.wrapping_add(1);
         self.serial += 1;
         let instance = self.serial;
         if self.serial >> 63 != 0 {
@@ -157,7 +171,7 @@ impl SynthLink {
     }
 
     fn submit_clock(&mut self) {
-        if self.clock <= self.submitted_tick {
+        if self.clock == self.submitted_tick {
             return;
         }
         self.post(CoreInputKind::Advance);
@@ -180,22 +194,23 @@ pub struct Audio {
 }
 
 impl Audio {
-    pub fn new(
+    /// `Err` names why the sound program or the samples cannot be driven.
+    pub fn try_new(
         sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
+        sample_words: Box<[u16]>,
         shared: *mut u8,
         layout: &'static DriverLayout,
-    ) -> Audio {
+    ) -> Result<Audio, &'static str> {
         let pcm = Arc::new(Mutex::new(PcmRing::new()));
         let metrics = Arc::new(SynthMetrics::default());
-        let synth = Synth::new(
+        let synth = Synth::try_new(
             sound_rom,
             sample_words,
             pcm.clone(),
             layout,
             Arc::clone(&metrics),
-        );
-        Audio {
+        )?;
+        Ok(Audio {
             link: SynthLink {
                 worker: WorkerQueue::spawn(synth),
                 clock: 0,
@@ -210,7 +225,7 @@ impl Audio {
             mailbox: SharedMailbox::new(shared),
             bank: 1,
             held: true,
-        }
+        })
     }
 
     fn pcm(&self) -> MutexGuard<'_, PcmRing> {
@@ -236,23 +251,11 @@ impl Audio {
 
     fn restore(&mut self, state: &AudioSnapshot) {
         self.link.flush();
-        self.link.clock = state.clock;
-        self.link.clock_epoch = state.clock;
-        self.link.submitted_tick = state.clock;
-        self.link.playback_epoch = self.metrics.tick.load(Ordering::Acquire);
+        self.link.rebase(state.clock, self.metrics.tick.load(Ordering::Acquire));
         self.pcm().discard();
         self.link.command_count = state.commands;
         self.mailbox.restore(state.consumer);
         self.held = state.held;
-    }
-
-    /// Whether the sound program and samples can be driven; the constructor panics when this is false.
-    pub fn supported(
-        sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
-        layout: &'static DriverLayout,
-    ) -> bool {
-        Core::validate(sound_rom, sample_words, layout)
     }
 
     pub fn shared_write(&mut self, offset: u32) {
@@ -275,7 +278,7 @@ impl Audio {
     }
 
     pub fn advance(&mut self, ticks: u32) {
-        self.link.clock += u64::from(ticks);
+        self.link.advance(ticks);
     }
 
     /// Continuous effective device time, not the caller's main-block endpoint.
@@ -359,5 +362,63 @@ impl Audio {
         let state = AudioSnapshot::parse(src)?;
         self.restore(&state);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records the ticks the worker is told to advance to.
+    struct Recorder(Arc<Mutex<Vec<CoreInput>>>);
+
+    impl Applies<CoreInput> for Recorder {
+        fn apply(&mut self, input: &CoreInput) {
+            self.0.lock().unwrap().push(*input);
+        }
+    }
+
+    fn link() -> (SynthLink, Arc<Mutex<Vec<CoreInput>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let link = SynthLink {
+            worker: WorkerQueue::spawn(Recorder(Arc::clone(&log))),
+            clock: 0,
+            clock_epoch: 0,
+            playback_epoch: 0,
+            submitted_tick: 0,
+            command_count: 0,
+            serial: 0,
+        };
+        (link, log)
+    }
+
+    fn advances(link: &SynthLink, log: &Mutex<Vec<CoreInput>>) -> Vec<u64> {
+        link.worker.flush();
+        let log = log.lock().unwrap();
+        log.iter().filter(|input| input.kind == CoreInputKind::Advance).map(|input| input.tick).collect()
+    }
+
+    #[test]
+    fn a_snapshot_clock_at_the_top_of_u64_keeps_advancing_and_submitting() {
+        let (mut link, log) = link();
+        link.rebase(u64::MAX - 1, 7);
+        link.submit_clock();
+        link.advance(1);
+        link.submit_clock();
+        // The free-running clock wraps past zero; playback time keeps its distance from the epoch.
+        link.advance(2);
+        link.submit_clock();
+        assert_eq!(link.clock, 1);
+        assert_eq!(advances(&link, &log), [8, 10]);
+        link.submit_clock();
+        assert_eq!(advances(&link, &log), [8, 10]);
+    }
+
+    #[test]
+    fn recording_commands_wraps_the_command_count() {
+        let (mut link, _log) = link();
+        link.command_count = u64::MAX;
+        link.record(CommandPacket::default());
+        assert_eq!(link.command_count, 0);
     }
 }

@@ -1,8 +1,6 @@
 //! The decoded sound-program ROM (sample-bank directory, instrument
 //! records and the fixed tables the voice reads).
 
-use std::sync::Arc;
-
 use crate::bytes::s16;
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
@@ -18,7 +16,7 @@ use crate::memory_map::{SOUND_ROM_BASE, SOUND_ROM_SIZE};
 pub struct SoundBank {
     pub rom: RomView,
     pub layout: &'static DriverLayout,
-    pub samples: Arc<[u16]>,
+    pub samples: Box<[u16]>,
     pub metadata: Vec<u8>,
     pub banks: [Bank; 16],
     pub programs: [ProgramData; 1024],
@@ -37,11 +35,18 @@ pub struct SoundBank {
 }
 
 impl SoundBank {
-    pub fn new(
+    /// `Err` names the first reason the ROM and sample words cannot be driven.
+    pub fn try_new(
         sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
+        sample_words: Box<[u16]>,
         layout: &'static DriverLayout,
-    ) -> SoundBank {
+    ) -> Result<SoundBank, &'static str> {
+        if sound_rom.len() < SOUND_ROM_SIZE
+            || sample_words.len() < SOUND_ROM_SIZE
+            || !sample_words.len().is_power_of_two()
+        {
+            return Err("HLE requires mapped sound and power-of-two sample ROM regions");
+        }
         let mut bank = SoundBank {
             rom: RomView::with_image(sound_rom, 1),
             layout,
@@ -62,19 +67,13 @@ impl SoundBank {
             reset_start: 0,
             reset_end: 0,
         };
-        if bank.rom.size() < SOUND_ROM_SIZE
-            || bank.samples.len() < SOUND_ROM_SIZE
-            || !bank.samples.len().is_power_of_two()
-        {
-            panic!("HLE requires mapped sound and power-of-two sample ROM regions");
-        }
         bank.board_bank_mask = if bank.samples.len() >= SAMPLE_BANK_SIZE {
             (bank.samples.len() / SAMPLE_BANK_SIZE - 1) as u32
         } else {
             0
         };
         bank.metadata.reserve(0x10000);
-        bank.decode_banks();
+        bank.decode_banks()?;
 
         let heap_base = u32::from(bank.rom.read_u16(layout.heap_base_ptr));
         let heap_limit = bank
@@ -125,7 +124,7 @@ impl SoundBank {
         for i in 0..12 {
             bank.budgets[i] = bank.rom.read_byte(layout.budget_table + i as u32);
         }
-        bank
+        Ok(bank)
     }
 
     pub fn set_bank(&self, bank: u8) {
@@ -281,7 +280,7 @@ impl SoundBank {
     // `b` is the bank index the decoded half-bank's base offset is computed from, so the loop stays an
     // index loop.
     #[allow(clippy::needless_range_loop)]
-    fn decode_banks(&mut self) {
+    fn decode_banks(&mut self) -> Result<(), &'static str> {
         let SoundBank {
             banks,
             metadata,
@@ -297,22 +296,22 @@ impl SoundBank {
         for b in 0..num_banks {
             let mut at: usize = 0;
             let base = b * SAMPLE_HALF_BANK_SIZE;
-            let sample_word = |at: &mut usize| -> u16 {
+            let sample_word = |at: &mut usize| -> Result<u16, &'static str> {
                 if *at >= SAMPLE_HALF_BANK_SIZE || base + *at >= samples.len() {
-                    panic!("HLE sample metadata exceeds half-bank");
+                    return Err("HLE sample metadata exceeds half-bank");
                 }
                 let word = samples[base + *at];
                 *at += 1;
-                word
+                Ok(word)
             };
-            let flag = sample_word(&mut at);
+            let flag = sample_word(&mut at)?;
             let packed = (flag & 0x8000) != 0;
-            let data_word = |at: &mut usize| -> u16 {
+            let data_word = |at: &mut usize| -> Result<u16, &'static str> {
                 if !packed {
                     return sample_word(at);
                 }
-                let hi = sample_word(at);
-                (hi & 0xff00) | (sample_word(at) >> 8)
+                let hi = sample_word(at)?;
+                Ok((hi & 0xff00) | (sample_word(at)? >> 8))
             };
             let bank = &mut banks[b];
             bank.offset = metadata.len() as u32;
@@ -320,7 +319,7 @@ impl SoundBank {
             let mut last: u32 = 0;
             let mut valid = true;
             loop {
-                let offset = data_word(&mut at);
+                let offset = data_word(&mut at)?;
                 SoundBank::append_word(metadata, offset);
                 if offset == 0 {
                     break;
@@ -346,7 +345,7 @@ impl SoundBank {
                 }
                 bank.count = bank.count.wrapping_add(1);
                 for _ in 0..6 {
-                    let word = data_word(&mut at);
+                    let word = data_word(&mut at)?;
                     SoundBank::append_word(metadata, word);
                 }
             }
@@ -356,16 +355,16 @@ impl SoundBank {
                 continue;
             }
             while at as u32 * 2 < last {
-                let word = data_word(&mut at);
+                let word = data_word(&mut at)?;
                 SoundBank::append_word(metadata, word);
             }
             if at as u32 * 2 != last {
-                panic!("HLE split metadata is not aligned");
+                return Err("HLE split metadata is not aligned");
             }
             loop {
                 let begin = metadata.len();
                 for _ in 0..7 {
-                    let word = data_word(&mut at);
+                    let word = data_word(&mut at)?;
                     SoundBank::append_word(metadata, word);
                 }
                 if metadata[begin + 5] == 127 {
@@ -379,6 +378,7 @@ impl SoundBank {
             };
             bank.tag = if packed { (tag >> 8) as u8 } else { tag as u8 };
         }
+        Ok(())
     }
 
     fn cache_programs(&mut self) {

@@ -11,6 +11,8 @@ pub const BANK_PAGE_SIZE: u32 = 0x20000;
 pub const BANK_OVERFLOW_OFFSET: u32 = 0x40000;
 pub const SOUND_ROM_IMAGE_SIZE: u32 = 0x80000;
 
+const OUTSIDE_IMAGE: &str = "HLE ROM read outside image";
+
 /// The image is borrowed, not owned: it must outlive the view (the Audio implementation owns it).
 pub struct RomView {
     rom: &'static [u8],
@@ -51,8 +53,13 @@ impl RomView {
     }
 
     pub fn resolve_offset(&self, address: u32) -> u32 {
+        self.try_resolve_offset(address).unwrap_or_else(|reason| panic!("{reason}"))
+    }
+
+    /// The image offset `address` maps to under the current bank, or why it maps nowhere.
+    pub fn try_resolve_offset(&self, address: u32) -> Result<u32, &'static str> {
         if !(SOUND_ROM_BASE..SOUND_ROM_BASE + SOUND_ROM_IMAGE_SIZE).contains(&address) {
-            panic!("HLE ROM read outside image");
+            return Err(OUTSIDE_IMAGE);
         }
         let mut off = address - SOUND_ROM_BASE;
         if self.rom.len() > SOUND_ROM_SIZE {
@@ -64,34 +71,37 @@ impl RomView {
             }
         }
         if off as usize >= self.rom.len() {
-            panic!("HLE ROM read outside image");
+            return Err(OUTSIDE_IMAGE);
         }
-        off
+        Ok(off)
     }
 
     pub fn read_byte(&self, address: u32) -> u8 {
-        self.rom[self.resolve_offset(address) as usize]
+        self.try_read_byte(address).unwrap_or_else(|reason| panic!("{reason}"))
     }
 
     pub fn read_u16(&self, address: u32) -> u16 {
-        let off = self.resolve_offset(address) as usize;
-        if off + 1 >= self.rom.len() {
-            panic!("HLE ROM read outside image");
-        }
-        u16::from_be_bytes([self.rom[off], self.rom[off + 1]])
+        self.try_read_u16(address).unwrap_or_else(|reason| panic!("{reason}"))
     }
 
     pub fn read_u32(&self, address: u32) -> u32 {
-        let off = self.resolve_offset(address) as usize;
-        if off + 3 >= self.rom.len() {
-            panic!("HLE ROM read outside image");
-        }
-        u32::from_be_bytes([
-            self.rom[off],
-            self.rom[off + 1],
-            self.rom[off + 2],
-            self.rom[off + 3],
-        ])
+        self.try_read_u32(address).unwrap_or_else(|reason| panic!("{reason}"))
+    }
+
+    pub fn try_read_byte(&self, address: u32) -> Result<u8, &'static str> {
+        Ok(self.rom[self.try_resolve_offset(address)? as usize])
+    }
+
+    pub fn try_read_u16(&self, address: u32) -> Result<u16, &'static str> {
+        let off = self.try_resolve_offset(address)? as usize;
+        let bytes = self.rom.get(off..off + 2).ok_or(OUTSIDE_IMAGE)?;
+        Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
+    }
+
+    pub fn try_read_u32(&self, address: u32) -> Result<u32, &'static str> {
+        let off = self.try_resolve_offset(address)? as usize;
+        let bytes = self.rom.get(off..off + 4).ok_or(OUTSIDE_IMAGE)?;
+        Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
     /// The image from `address` to its end. Descriptors read from it are at least `min_bytes` long.

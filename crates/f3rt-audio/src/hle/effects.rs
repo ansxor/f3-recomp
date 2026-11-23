@@ -164,9 +164,28 @@ impl Zone {
     }
 }
 
-fn new_dsp<D: FaustDsp<T = FaustFloat>>() -> (D, Controls) {
-    let mut dsp = D::new();
-    let controls = Controls::new(&dsp);
+/// Stack for building the generated DSPs: they are constructed by value, which in a debug build
+/// reserves more than the 2 MiB of a default thread (the echo alone is about 2.3 MiB).
+const DSP_BUILD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Runs `build` on a scoped thread with `DSP_BUILD_STACK_BYTES` of stack, so its result does not
+/// depend on how deep the caller's own stack is.
+fn build_on_large_stack<T: Send>(build: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DSP_BUILD_STACK_BYTES)
+            .spawn_scoped(scope, build)
+            .expect("spawn the effects build thread")
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    })
+}
+
+/// A heap-allocated, initialised DSP with its control registry. Call it only from
+/// `build_on_large_stack`, or for a DSP small enough for the caller's stack.
+fn new_dsp<D: FaustDsp<T = FaustFloat>>() -> (Box<D>, Controls) {
+    let mut dsp = Box::new(D::new());
+    let controls = Controls::new(&*dsp);
     dsp.init(SAMPLE_RATE as i32);
     (dsp, controls)
 }
@@ -425,7 +444,7 @@ impl FeedbackControls {
 }
 
 struct ReverbProgram {
-    dsp: ReverbDsp,
+    dsp: Box<ReverbDsp>,
     common: CommonControls,
     tank: TankControls,
 }
@@ -449,8 +468,8 @@ impl EffectDsp for ReverbProgram {
             depth: p[3] as f32 / 2.0,
             ..CommonParams::new(ctx)
         };
-        self.common.apply(&mut self.dsp, &common);
-        self.tank.apply(&mut self.dsp, &TankConstants::reverb(ctx));
+        self.common.apply(&mut *self.dsp, &common);
+        self.tank.apply(&mut *self.dsp, &TankConstants::reverb(ctx));
     }
 
     fn compute(&mut self, frames: usize, inputs: &[&[f32]; 6], outputs: &mut [&mut [f32]; 3]) {
@@ -459,16 +478,16 @@ impl EffectDsp for ReverbProgram {
 
     fn clear(&mut self) {
         self.dsp.instance_clear();
-        self.common.lfo_c.restart(&mut self.dsp);
+        self.common.lfo_c.restart(&mut *self.dsp);
     }
 
     fn skip_lfos(&mut self, frames: u64) {
-        self.common.lfo_c.skip(&mut self.dsp, frames);
+        self.common.lfo_c.skip(&mut *self.dsp, frames);
     }
 }
 
 struct ChorusProgram {
-    dsp: ChorusDsp,
+    dsp: Box<ChorusDsp>,
     common: CommonControls,
     tank: TankControls,
     feedback: FeedbackControls,
@@ -493,11 +512,11 @@ impl ChorusProgram {
 impl EffectDsp for ChorusProgram {
     fn apply(&mut self, ctx: &EffectContext) {
         let p2 = ctx.parameters[2];
-        self.common.apply(&mut self.dsp, &CommonParams::new(ctx));
-        self.tank.apply(&mut self.dsp, &TankConstants::default());
-        self.feedback.apply(&mut self.dsp, &FeedbackParams::new(ctx));
-        self.lfo_a.set_rate(&mut self.dsp, lfo_rate(p2, 196.608));
-        self.lfo_b.set_rate(&mut self.dsp, lfo_rate(p2, 296.4));
+        self.common.apply(&mut *self.dsp, &CommonParams::new(ctx));
+        self.tank.apply(&mut *self.dsp, &TankConstants::default());
+        self.feedback.apply(&mut *self.dsp, &FeedbackParams::new(ctx));
+        self.lfo_a.set_rate(&mut *self.dsp, lfo_rate(p2, 196.608));
+        self.lfo_b.set_rate(&mut *self.dsp, lfo_rate(p2, 296.4));
     }
 
     fn compute(&mut self, frames: usize, inputs: &[&[f32]; 6], outputs: &mut [&mut [f32]; 3]) {
@@ -506,20 +525,20 @@ impl EffectDsp for ChorusProgram {
 
     fn clear(&mut self) {
         self.dsp.instance_clear();
-        self.lfo_a.restart(&mut self.dsp);
-        self.lfo_b.restart(&mut self.dsp);
-        self.common.lfo_c.restart(&mut self.dsp);
+        self.lfo_a.restart(&mut *self.dsp);
+        self.lfo_b.restart(&mut *self.dsp);
+        self.common.lfo_c.restart(&mut *self.dsp);
     }
 
     fn skip_lfos(&mut self, frames: u64) {
-        self.lfo_a.skip(&mut self.dsp, frames);
-        self.lfo_b.skip(&mut self.dsp, frames);
-        self.common.lfo_c.skip(&mut self.dsp, frames);
+        self.lfo_a.skip(&mut *self.dsp, frames);
+        self.lfo_b.skip(&mut *self.dsp, frames);
+        self.common.lfo_c.skip(&mut *self.dsp, frames);
     }
 }
 
 struct EchoProgram {
-    dsp: EchoDsp,
+    dsp: Box<EchoDsp>,
     common: CommonControls,
     tank: TankControls,
     feedback: FeedbackControls,
@@ -547,14 +566,14 @@ impl EffectDsp for EchoProgram {
     fn apply(&mut self, ctx: &EffectContext) {
         let p = &ctx.parameters;
         let common = CommonParams { decay: 0.25, damp: 0.3125, ..CommonParams::new(ctx) };
-        self.common.apply(&mut self.dsp, &common);
-        self.tank.apply(&mut self.dsp, &TankConstants::default());
-        self.feedback.apply(&mut self.dsp, &FeedbackParams::new(ctx));
+        self.common.apply(&mut *self.dsp, &common);
+        self.tank.apply(&mut *self.dsp, &TankConstants::default());
+        self.feedback.apply(&mut *self.dsp, &FeedbackParams::new(ctx));
         let nibble = (p[6] >> 4) as u32;
         let tap = ((p[1] as i8) as f32).clamp(0.0, 127.0);
-        self.echo.set(&mut self.dsp, p[2] as f32 * 112.0);
-        self.mod_center.set(&mut self.dsp, tap * 256.0 + 0.49);
-        self.enhance.set(&mut self.dsp, ((nibble * nibble + 3) as f32) / 1024.0);
+        self.echo.set(&mut *self.dsp, p[2] as f32 * 112.0);
+        self.mod_center.set(&mut *self.dsp, tap * 256.0 + 0.49);
+        self.enhance.set(&mut *self.dsp, ((nibble * nibble + 3) as f32) / 1024.0);
     }
 
     fn compute(&mut self, frames: usize, inputs: &[&[f32]; 6], outputs: &mut [&mut [f32]; 3]) {
@@ -563,16 +582,16 @@ impl EffectDsp for EchoProgram {
 
     fn clear(&mut self) {
         self.dsp.instance_clear();
-        self.common.lfo_c.restart(&mut self.dsp);
+        self.common.lfo_c.restart(&mut *self.dsp);
     }
 
     fn skip_lfos(&mut self, frames: u64) {
-        self.common.lfo_c.skip(&mut self.dsp, frames);
+        self.common.lfo_c.skip(&mut *self.dsp, frames);
     }
 }
 
 struct HallProgram {
-    dsp: HallDsp,
+    dsp: Box<HallDsp>,
     common: CommonControls,
     a: Zone,
     g: Zone,
@@ -603,11 +622,11 @@ impl EffectDsp for HallProgram {
             ..CommonParams::new(ctx)
         };
         let g = p[7] as f32 / 128.0;
-        self.common.apply(&mut self.dsp, &common);
-        self.a.set(&mut self.dsp, (u32::from(p[0]) + 7) as f32 / 128.0);
-        self.g.set(&mut self.dsp, g);
-        self.g2.set(&mut self.dsp, 0.796875 * g);
-        self.g108.set(&mut self.dsp, p[1] as f32 / 128.0);
+        self.common.apply(&mut *self.dsp, &common);
+        self.a.set(&mut *self.dsp, (u32::from(p[0]) + 7) as f32 / 128.0);
+        self.g.set(&mut *self.dsp, g);
+        self.g2.set(&mut *self.dsp, 0.796875 * g);
+        self.g108.set(&mut *self.dsp, p[1] as f32 / 128.0);
     }
 
     fn compute(&mut self, frames: usize, inputs: &[&[f32]; 6], outputs: &mut [&mut [f32]; 3]) {
@@ -616,22 +635,27 @@ impl EffectDsp for HallProgram {
 
     fn clear(&mut self) {
         self.dsp.instance_clear();
-        self.common.lfo_c.restart(&mut self.dsp);
+        self.common.lfo_c.restart(&mut *self.dsp);
     }
 
     fn skip_lfos(&mut self, frames: u64) {
-        self.common.lfo_c.skip(&mut self.dsp, frames);
+        self.common.lfo_c.skip(&mut *self.dsp, frames);
     }
 }
 
 struct OverdriveProgram {
-    dsp: OverdriveDsp,
+    dsp: Box<OverdriveDsp>,
     controls: Controls,
     lfo: Lfo,
 }
 
 impl OverdriveProgram {
-    fn new(rom: &[u8], layout: &DriverLayout) -> Self {
+    /// Builds on a large stack: see `build_on_large_stack`.
+    fn new(rom: &[u8], layout: &DriverLayout) -> Box<Self> {
+        build_on_large_stack(|| Box::new(Self::build(rom, layout)))
+    }
+
+    fn build(rom: &[u8], layout: &DriverLayout) -> Self {
         // The length-prefixed ROM curves follow the pointer table and its trailer.
         // FAUST's array follows DSP address order, with B immediately before A.
         let first = layout.esp_program_table_offset as usize + 0x38;
@@ -646,9 +670,9 @@ impl OverdriveProgram {
                 *word = i16::from_be_bytes(bytes);
             }
         }
-        let mut dsp = OverdriveDsp::new();
-        init_overdrive_rom(&mut dsp, words, SAMPLE_RATE as i32);
-        let controls = Controls::new(&dsp);
+        let mut dsp = Box::new(OverdriveDsp::new());
+        init_overdrive_rom(&mut *dsp, words, SAMPLE_RATE as i32);
+        let controls = Controls::new(&*dsp);
         let lfo = Lfo::new(&controls, "c");
         Self { dsp, controls, lfo }
     }
@@ -673,7 +697,7 @@ impl EffectDsp for OverdriveProgram {
         let effects = nonnegative(p[8]);
         let reverb = nonnegative(p[9]);
         let rate = word((ctx.layout.phase_rate_table - 0xc00000) as usize + 2 * usize::from(p[2]));
-        self.lfo.set_rate(&mut self.dsp, f64::from(rate) / 8388608.0);
+        self.lfo.set_rate(&mut *self.dsp, f64::from(rate) / 8388608.0);
         for (label, value) in [
             ("tank_decay", decay << 16),
             ("allpass", allpass << 16),
@@ -686,7 +710,7 @@ impl EffectDsp for OverdriveProgram {
             ("filter_pole", i32::from(p[7] >> 4) << 19),
             ("diffusion_pole", i32::from(p[7] & 15) << 19),
         ] {
-            self.controls.set(&mut self.dsp, label, value as f32);
+            self.controls.set(&mut *self.dsp, label, value as f32);
         }
         for (label, value) in [
             ("chorus_out", pan(127 - effects)),
@@ -694,7 +718,7 @@ impl EffectDsp for OverdriveProgram {
             ("dry_send", pan(127 - reverb)),
             ("send", pan(reverb)),
         ] {
-            self.controls.set(&mut self.dsp, label, value);
+            self.controls.set(&mut *self.dsp, label, value);
         }
     }
 
@@ -704,42 +728,43 @@ impl EffectDsp for OverdriveProgram {
 
     fn clear(&mut self) {
         self.dsp.instance_clear();
-        self.lfo.restart(&mut self.dsp);
+        self.lfo.restart(&mut *self.dsp);
     }
 
     fn skip_lfos(&mut self, frames: u64) {
-        self.lfo.skip(&mut self.dsp, frames);
+        self.lfo.skip(&mut *self.dsp, frames);
     }
 }
 
 /// The decoded programs. The generated classes hold their delay memory inline (about 900 KB for all
-/// four), so each is allocated once and never moves. Overdrive is built on first load because its
+/// four), so each lives in its own heap allocation and never moves. Overdrive is built on first load because its
 /// curves come from the ROM.
 struct Programs {
-    reverb: Box<ReverbProgram>,
-    chorus: Box<ChorusProgram>,
-    echo: Box<EchoProgram>,
-    hall: Box<HallProgram>,
+    reverb: ReverbProgram,
+    chorus: ChorusProgram,
+    echo: EchoProgram,
+    hall: HallProgram,
     overdrive: Option<Box<OverdriveProgram>>,
 }
 
 impl Programs {
+    /// Builds on a large stack: see `build_on_large_stack`.
     fn new() -> Programs {
-        Programs {
-            reverb: Box::new(ReverbProgram::new()),
-            chorus: Box::new(ChorusProgram::new()),
-            echo: Box::new(EchoProgram::new()),
-            hall: Box::new(HallProgram::new()),
+        build_on_large_stack(|| Programs {
+            reverb: ReverbProgram::new(),
+            chorus: ChorusProgram::new(),
+            echo: EchoProgram::new(),
+            hall: HallProgram::new(),
             overdrive: None,
-        }
+        })
     }
 
     fn dsp_mut(&mut self, program: Program) -> Option<&mut dyn EffectDsp> {
         match program {
-            Program::Reverb => Some(&mut *self.reverb),
-            Program::Chorus => Some(&mut *self.chorus),
-            Program::Echo => Some(&mut *self.echo),
-            Program::Hall => Some(&mut *self.hall),
+            Program::Reverb => Some(&mut self.reverb),
+            Program::Chorus => Some(&mut self.chorus),
+            Program::Echo => Some(&mut self.echo),
+            Program::Hall => Some(&mut self.hall),
             Program::Overdrive => self.overdrive.as_deref_mut().map(|p| p as &mut dyn EffectDsp),
             Program::Mute | Program::None => None,
         }
@@ -748,7 +773,7 @@ impl Programs {
 
 /// Output DC blocker: one pole, 20 Hz.
 struct DcBlocker {
-    dsp: DcBlockerDsp,
+    dsp: Box<DcBlockerDsp>,
     gain_l: Zone,
     gain_r: Zone,
 }
@@ -757,7 +782,7 @@ impl DcBlocker {
     fn new() -> DcBlocker {
         let (mut dsp, controls) = new_dsp::<DcBlockerDsp>();
         let pole = (-2.0f32 * std::f32::consts::PI * 20.0f32 / SAMPLE_RATE as f32).exp();
-        Zone::new(&controls, "r").set(&mut dsp, pole);
+        Zone::new(&controls, "r").set(&mut *dsp, pole);
         DcBlocker {
             dsp,
             gain_l: Zone::new(&controls, "gain_l"),
@@ -766,8 +791,8 @@ impl DcBlocker {
     }
 
     fn set_gains(&mut self, gain: [f32; 2]) {
-        self.gain_l.set(&mut self.dsp, gain[0]);
-        self.gain_r.set(&mut self.dsp, gain[1]);
+        self.gain_l.set(&mut *self.dsp, gain[0]);
+        self.gain_r.set(&mut *self.dsp, gain[1]);
     }
 
     /// Reads the first two channels of `inputs`, writes both channels of `out`.
@@ -1069,7 +1094,7 @@ impl Effects {
             let (rom, layout) = (self.rom, self.layout);
             self.programs
                 .overdrive
-                .get_or_insert_with(|| Box::new(OverdriveProgram::new(rom, layout)));
+                .get_or_insert_with(|| OverdriveProgram::new(rom, layout));
         }
         if let Some(dsp) = self.programs.dsp_mut(program) {
             dsp.clear();
@@ -1128,47 +1153,39 @@ mod tests {
 
     #[test]
     fn preset_12_impulse_matches_reference_in_both_layouts() {
-        // Debug builds construct the generated delay arrays on the stack.
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                for layout in [&EARLY, &STANDARD] {
-                    let mut effects = Effects::new(preset_12_fixture(layout), layout);
-                    for (warmup, bus, expected) in [
-                        (0, 2, 0xf0e9cde274c1fd5d),
-                        (32768, 2, 0xd44c0320d0983c03),
-                        (0, 4, 0x091d3b5c91a22f9d),
-                    ] {
-                        effects.reset();
-                        effects.select(12);
-                        assert_eq!(effects.program(), Program::Overdrive);
-                        assert!(!effects.bypassed());
-                        for _ in 0..warmup / K_CHUNK {
-                            effects.compute_program(K_CHUNK);
-                        }
-                        effects.in_.set(bus, 0, 4096.0 / 32768.0);
-                        // FNV-1a over 8,192 interleaved, little-endian DAC samples from the
-                        // historical interpreter seeded with the same synthetic tables.
-                        let mut hash = 0xcbf29ce484222325_u64;
-                        for _ in 0..8192 / K_CHUNK {
-                            effects.compute_program(K_CHUNK);
-                            effects.in_.set(bus, 0, 0.0);
-                            for frame in 0..K_CHUNK {
-                                for ch in 0..2 {
-                                    let sample = (effects.out.at(ch, frame) * 32768.0) as i16;
-                                    for byte in sample.to_le_bytes() {
-                                        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-                                    }
-                                }
+        for layout in [&EARLY, &STANDARD] {
+            let mut effects = Effects::new(preset_12_fixture(layout), layout);
+            for (warmup, bus, expected) in [
+                (0, 2, 0xf0e9cde274c1fd5d),
+                (32768, 2, 0xd44c0320d0983c03),
+                (0, 4, 0x091d3b5c91a22f9d),
+            ] {
+                effects.reset();
+                effects.select(12);
+                assert_eq!(effects.program(), Program::Overdrive);
+                assert!(!effects.bypassed());
+                for _ in 0..warmup / K_CHUNK {
+                    effects.compute_program(K_CHUNK);
+                }
+                effects.in_.set(bus, 0, 4096.0 / 32768.0);
+                // FNV-1a over 8,192 interleaved, little-endian DAC samples from the
+                // historical interpreter seeded with the same synthetic tables.
+                let mut hash = 0xcbf29ce484222325_u64;
+                for _ in 0..8192 / K_CHUNK {
+                    effects.compute_program(K_CHUNK);
+                    effects.in_.set(bus, 0, 0.0);
+                    for frame in 0..K_CHUNK {
+                        for ch in 0..2 {
+                            let sample = (effects.out.at(ch, frame) * 32768.0) as i16;
+                            for byte in sample.to_le_bytes() {
+                                hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
                             }
                         }
-                        assert_eq!(hash, expected, "warmup={warmup}, bus={bus}");
                     }
                 }
-            })
-            .unwrap()
-            .join()
-            .unwrap();
+                assert_eq!(hash, expected, "warmup={warmup}, bus={bus}");
+            }
+        }
     }
 
     fn awake() -> BypassDetector {
@@ -1219,5 +1236,87 @@ mod tests {
         assert!(!detector.is_bypassed());
         detector.update_bypass();
         assert!(!detector.is_bypassed());
+    }
+
+    /// A ROM whose preset 0 loads the reverb.
+    fn reverb_fixture(layout: &DriverLayout) -> &'static [u8] {
+        let mut rom = vec![0; 0x20000];
+        let row = layout.preset_table_offset as usize;
+        rom[row + 5] = 0;
+        rom[row + 6..row + 16].copy_from_slice(&[0, 0, 15, 0, 0, 0, 0, 0, 0, 0]);
+        let pointer = K_PTR_REVERB - layout.esp_pointer_delta;
+        let table = layout.esp_program_table_offset as usize;
+        rom[table..table + 4].copy_from_slice(&pointer.to_be_bytes());
+        // A flat volume/pan table: every send is routed to the DAC at half gain.
+        let pan = layout.volume_pan_table_offset as usize;
+        for index in 0..128 {
+            rom[pan + 2 * index..pan + 2 * index + 2].copy_from_slice(&0x4000u16.to_be_bytes());
+        }
+        Box::leak(rom.into_boxed_slice())
+    }
+
+    fn bus_block(send: f32) -> BusBlock {
+        let mut buses = BusBlock::new();
+        buses.resize(K_CHUNK);
+        buses.set(0, OtisBus::ReverbL.index(), send);
+        buses.set(0, OtisBus::ReverbR.index(), send);
+        buses
+    }
+
+    fn mixed(effects: &mut Effects, buses: &BusBlock) -> StereoBlock {
+        let mut stereo = StereoBlock::new();
+        effects.mix_block(buses, &mut stereo, [1.0; 2], [1.0; 2]);
+        stereo
+    }
+
+    fn loudest(stereo: &StereoBlock) -> f32 {
+        stereo.samples[..stereo.size() * 2].iter().fold(0.0, |peak, &s| peak.max(s.abs()))
+    }
+
+    // Runs on the default test thread: building the effects must not need a larger caller stack.
+    #[test]
+    fn effects_sleep_after_a_silent_delay_length_and_wake_on_a_send() {
+        let mut effects = Effects::new(reverb_fixture(&STANDARD), &STANDARD);
+        effects.select(0);
+        assert_eq!(effects.program(), Program::Reverb);
+        assert!(effects.bypassed());
+
+        let stereo = mixed(&mut effects, &bus_block(0.25));
+        assert!(!effects.bypassed());
+        assert!(loudest(&stereo) > 0.0);
+        assert!(stereo.samples[..K_CHUNK * 2].iter().all(|s| s.is_finite()));
+
+        let silence = bus_block(0.0);
+        let mut silent_frames = 0;
+        while !effects.bypassed() {
+            assert!(silent_frames < 8 * K_DELAY_BUFFER_SIZE, "the reverb never fell asleep");
+            let stereo = mixed(&mut effects, &silence);
+            assert!(stereo.samples[..K_CHUNK * 2].iter().all(|s| s.is_finite()));
+            silent_frames += K_CHUNK;
+        }
+        assert!(silent_frames >= K_DELAY_BUFFER_SIZE);
+
+        // Asleep: only the DC blocker's residue is left.
+        assert!(loudest(&mixed(&mut effects, &silence)) < K_THRESHOLD);
+        assert!(effects.bypassed());
+
+        let stereo = mixed(&mut effects, &bus_block(0.25));
+        assert!(!effects.bypassed());
+        assert!(loudest(&stereo) > 0.0);
+        assert!(stereo.samples[..K_CHUNK * 2].iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn dry_bus_reaches_the_output_while_the_program_sleeps() {
+        let mut effects = Effects::new(reverb_fixture(&STANDARD), &STANDARD);
+        effects.select(0);
+        let mut buses = BusBlock::new();
+        buses.resize(K_CHUNK);
+        for frame in 0..K_CHUNK {
+            buses.set(frame, OtisBus::DryL.index(), 0.5);
+        }
+        let stereo = mixed(&mut effects, &buses);
+        assert!(effects.bypassed());
+        assert!(loudest(&stereo) > 0.0);
     }
 }

@@ -124,10 +124,10 @@ pub unsafe extern "C" fn f3rt_audio_init(
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let words = audio::decode_sample_words(samples);
-        if !Audio::supported(sound, std::sync::Arc::clone(&words), layout) {
+        let Ok(audio) = Audio::try_new(sound, words, shared_ram, layout) else {
             return Some(F3RT_AUDIO_UNSUPPORTED_ROM);
-        }
-        *instance() = Some(Audio::new(sound, words, shared_ram, layout));
+        };
+        *instance() = Some(audio);
         None
     }));
     match result {

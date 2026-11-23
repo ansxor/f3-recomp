@@ -120,12 +120,23 @@ impl<P: Copy + Default, const CAPACITY: usize> NoteQueue<P, CAPACITY> {
 
     /// Earliest tick at which `pop_due` has something to hand out.
     pub fn next_event(&self) -> u64 {
+        if self.used == 0 {
+            return Self::NONE;
+        }
         self.live().map(|(_, e)| e.due_tick()).min().unwrap_or(Self::NONE)
     }
 
     pub fn note_off(&mut self, instance: u64, at: u64) {
+        let mut remaining = self.used;
         for e in self.entries.iter_mut() {
-            if e.state == NoteQueueState::Free || e.instance != instance || e.has_off {
+            if remaining == 0 {
+                return;
+            }
+            if e.state == NoteQueueState::Free {
+                continue;
+            }
+            remaining -= 1;
+            if e.instance != instance || e.has_off {
                 continue;
             }
             e.has_off = true;
@@ -159,14 +170,19 @@ impl<P: Copy + Default, const CAPACITY: usize> NoteQueue<P, CAPACITY> {
         Some(QueueAction::Begin { payload: e.payload, start: e.start })
     }
 
+    /// The live entries, ending as soon as all `used` of them have been visited.
     fn live(&self) -> impl Iterator<Item = (usize, &NoteQueueEntry<P>)> {
         self.entries
             .iter()
             .enumerate()
             .filter(|(_, e)| e.state != NoteQueueState::Free)
+            .take(self.used)
     }
 
     fn pick_next_due(&self, limit: u64) -> Option<usize> {
+        if self.used == 0 {
+            return None;
+        }
         self.live()
             .filter(|(_, e)| e.due_tick() <= limit)
             .min_by_key(|(_, e)| (e.due_tick(), e.state == NoteQueueState::Started, e.serial))

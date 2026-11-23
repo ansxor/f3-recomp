@@ -7,8 +7,8 @@
 //! that gets there (`VoiceService::service`).
 //!
 //! Services do not hold references to each other: a call borrows the bank, the mailbox and the track
-//! service for its duration. The effects and the track service stay boxed so `Core::new` stays light
-//! on the stack.
+//! service for its duration. The effects and the track service stay boxed so `Core::try_new` stays
+//! light on the stack.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -69,12 +69,14 @@ pub fn frames_at(tick: u64) -> u64 {
 }
 
 impl Core {
-    pub fn new(
+    /// `Err` names why the sound program or the samples cannot be driven.
+    pub fn try_new(
         sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
+        sample_words: Box<[u16]>,
         layout: &'static DriverLayout,
-    ) -> Core {
-        let bank = SoundBank::new(sound_rom, sample_words, layout);
+    ) -> Result<Core, &'static str> {
+        let bank = SoundBank::try_new(sound_rom, sample_words, layout)?;
+        let sequencer = Sequencer::try_new(sound_rom, layout)?;
         let voices = VoiceService::new(&bank);
         let mut core = Core {
             bank,
@@ -83,7 +85,7 @@ impl Core {
             mailbox: Mailbox::new(),
             tracks: Box::new(TrackService::new()),
             voices,
-            sequencer: Sequencer::new(sound_rom, layout),
+            sequencer,
             render_state: VoiceRenderState::new(),
             buses: BusBlock::new(),
             stereo: StereoBlock::new(),
@@ -95,7 +97,7 @@ impl Core {
 
         core.sequencer.reset(0, &mut core.mailbox, &mut core.tracks);
         core.tracks.reset();
-        core
+        Ok(core)
     }
 
     /// Applies one batch of events in arrival order: notes allocate, track events rewrite parameters,
@@ -357,22 +359,6 @@ impl Core {
             10.0f32.powf(-0.5f32 * f32::from(63 - (raw & 63)) / 20.0f32);
     }
 
-    /// Checks that the ROM and samples can be driven by the HLE core. Never panics: construction
-    /// failures are reported as `false`, which is why the panic hook is silenced here.
-    pub fn validate(
-        sound_rom: &'static [u8],
-        sample_words: Arc<[u16]>,
-        layout: &'static DriverLayout,
-    ) -> bool {
-        let hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Core::new(sound_rom, sample_words, layout);
-        }));
-        std::panic::set_hook(hook);
-        result.is_ok()
-    }
-
     /// Sets flush-to-zero and denormals-are-zero on the calling thread (x86 SSE, aarch64 FPCR); no-op
     /// elsewhere, including WebAssembly. Core never calls it: the thread driving the Core does.
     pub fn enable_flush_denormals() {
@@ -424,4 +410,47 @@ impl Core {
 pub struct RenderStats {
     pub voices_started: u64,
     pub voices_active: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::driver_layout::STANDARD;
+    use crate::hle::rom_view::SOUND_ROM_IMAGE_SIZE;
+    use crate::memory_map::SOUND_ROM_SIZE;
+
+    fn leaked_zeros(bytes: usize) -> &'static [u8] {
+        Box::leak(vec![0u8; bytes].into_boxed_slice())
+    }
+
+    fn reason(sound_rom: &'static [u8], sample_words: usize) -> Option<&'static str> {
+        let samples = vec![0u16; sample_words].into_boxed_slice();
+        Core::try_new(sound_rom, samples, &STANDARD).err()
+    }
+
+    #[test]
+    fn an_undersized_sound_rom_is_an_error() {
+        let rom = leaked_zeros(SOUND_ROM_SIZE - 1);
+        assert_eq!(
+            reason(rom, SOUND_ROM_SIZE),
+            Some("HLE requires mapped sound and power-of-two sample ROM regions")
+        );
+    }
+
+    #[test]
+    fn undersized_or_odd_sized_samples_are_an_error() {
+        let rom = leaked_zeros(SOUND_ROM_IMAGE_SIZE as usize);
+        for words in [SOUND_ROM_SIZE / 2, SOUND_ROM_SIZE + SOUND_ROM_SIZE / 2] {
+            assert_eq!(
+                reason(rom, words),
+                Some("HLE requires mapped sound and power-of-two sample ROM regions")
+            );
+        }
+    }
+
+    #[test]
+    fn a_blank_sound_rom_has_no_sequence_bank() {
+        let rom = leaked_zeros(SOUND_ROM_IMAGE_SIZE as usize);
+        assert_eq!(reason(rom, SOUND_ROM_SIZE), Some("unsupported HLE sequence bank layout"));
+    }
 }

@@ -1,7 +1,8 @@
 //! The ROM sequence bank, parsed once per bank switch into per-song header fields and decoded track
 //! event streams. Pure: reads the ROM view, touches no engine state.
 //!
-//! Malformed ROM data panics; `Sequencer::validate` is the one place that turns that into a result.
+//! Malformed ROM data is an `Err` naming the first fault: `SequenceBank::try_parse` is the one place
+//! that decides whether a bank can be driven.
 
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::{NO_PROGRAM, SONG_SLOTS, TRACK_COUNT};
@@ -28,12 +29,12 @@ pub const EV_SPECIAL_TRACK_DA: u8 = 0xda;
 pub const EV_SPECIAL_TRACK_DB: u8 = 0xdb;
 const EV_RELATIVE_NOTE: u8 = 0xdc;
 pub const EV_DELAY: u8 = 0xe6;
-const EV_ARRANGEMENT: u8 = 0xe7;
+pub const EV_ARRANGEMENT: u8 = 0xe7;
 pub const EV_NOTIFICATION: u8 = 0xe8;
 pub const EV_END: u8 = 0xe9;
 
 /// An arrangement entry whose last word is this value marks where the playlist loops back to.
-const ARRANGEMENT_LOOP_MARKER: u16 = 100;
+pub const ARRANGEMENT_LOOP_MARKER: u16 = 100;
 
 /// Header flags (+1) bit 1: a standalone song restarts at its last bar.
 pub const SEQ_FLAG_LOOP: u8 = 0x02;
@@ -71,23 +72,23 @@ struct StreamReader<'a> {
 }
 
 impl StreamReader<'_> {
-    fn token(&mut self) -> Option<u16> {
+    fn token(&mut self) -> Result<Option<u16>, &'static str> {
         if self.position.wrapping_add(2) > self.end {
-            return None;
+            return Ok(None);
         }
-        let word = self.rom.read_u16(self.position);
+        let word = self.rom.try_read_u16(self.position)?;
         self.position += 2;
-        Some(word)
+        Ok(Some(word))
     }
 
-    fn operand(&mut self) -> u16 {
-        self.token().expect("truncated HLE event operand")
+    fn operand(&mut self) -> Result<u16, &'static str> {
+        self.token()?.ok_or("truncated HLE event operand")
     }
 }
 
 impl StreamEvent {
     /// `token` has bit 15 set; its low byte is the opcode and bits 8..14 the delay.
-    fn decode(token: u16, stream: &mut StreamReader) -> StreamEvent {
+    fn decode(token: u16, stream: &mut StreamReader) -> Result<StreamEvent, &'static str> {
         let mut e = StreamEvent {
             opcode: token as u8,
             delay: u32::from((token >> 8) & 0x7f),
@@ -96,35 +97,35 @@ impl StreamEvent {
 
         if e.opcode < EV_NOTE_SHORT_MAX {
             e.key = e.opcode;
-            e.operand = stream.operand();
+            e.operand = stream.operand()?;
             e.duration = e.operand & 0x3ff;
             if e.duration == 0 {
-                e.duration = stream.operand();
+                e.duration = stream.operand()?;
             }
             e.velocity = decode_short_note_velocity(e.operand);
         } else if e.opcode < EV_NOTE_LONG_MAX {
             e.key = e.opcode - EV_NOTE_KEY_OFFSET;
-            e.operand = stream.operand();
+            e.operand = stream.operand()?;
             e.duration = (e.operand & 0x3ff).max(1);
             e.velocity = decode_long_note_velocity(e.operand);
         } else if e.opcode < EV_RELATIVE_NOTE {
-            e.operand = stream.operand();
+            e.operand = stream.operand()?;
         } else if e.opcode == EV_RELATIVE_NOTE {
-            panic!("relative-note references are absent from supported ROM bank");
+            return Err("relative-note references are absent from supported ROM bank");
         } else if e.opcode == EV_DELAY {
-            e.operand = stream.operand();
+            e.operand = stream.operand()?;
             e.delay = u32::from(e.operand | ((u32::from(token) << 1) as u16 & 0x8000));
         } else if e.opcode == EV_ARRANGEMENT {
             for word in e.arrangement.iter_mut() {
-                *word = stream.operand();
+                *word = stream.operand()?;
             }
             e.delay = 0;
         } else if e.opcode == EV_NOTIFICATION || e.opcode == EV_END {
             e.delay = 0;
         } else {
-            panic!("unsupported HLE sequence opcode");
+            return Err("unsupported HLE sequence opcode");
         }
-        e
+        Ok(e)
     }
 
     pub fn is_arrangement(&self) -> bool {
@@ -147,22 +148,22 @@ pub struct TrackData {
 }
 
 impl TrackData {
-    fn parse(rom: &RomView, start: u32, end: u32) -> TrackData {
+    fn parse(rom: &RomView, start: u32, end: u32) -> Result<TrackData, &'static str> {
         let mut stream = StreamReader { rom, position: start, end };
         let mut events = Vec::new();
 
-        while let Some(token) = stream.token() {
+        while let Some(token) = stream.token()? {
             // Words without bit 15 are padding between events.
             if token & 0x8000 == 0 {
                 continue;
             }
-            let event = StreamEvent::decode(token, &mut stream);
+            let event = StreamEvent::decode(token, &mut stream)?;
             events.push(event);
             if event.opcode == EV_END {
-                return TrackData { events };
+                return Ok(TrackData { events });
             }
         }
-        panic!("HLE track missing end event");
+        Err("HLE track missing end event")
     }
 }
 
@@ -229,29 +230,36 @@ impl SongData {
     }
 
     /// The song's header record at `h` and its streams between `start` and `end`.
-    fn parse(rom: &RomView, layout: &DriverLayout, h: u32, start: u32, end: u32) -> SongData {
+    fn parse(
+        rom: &RomView,
+        layout: &DriverLayout,
+        h: u32,
+        start: u32,
+        end: u32,
+    ) -> Result<SongData, &'static str> {
         let mut song = SongData {
             present: true,
-            flags: rom.read_byte(h.wrapping_add(1)),
-            rate: rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_RATE_OFFSET)),
-            bars: rom.read_u16(h.wrapping_add(sound_rom::SEQ_HEADER_BARS_OFFSET)),
+            flags: rom.try_read_byte(h.wrapping_add(1))?,
+            rate: rom.try_read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_RATE_OFFSET))?,
+            bars: rom.try_read_u16(h.wrapping_add(sound_rom::SEQ_HEADER_BARS_OFFSET))?,
             ..SongData::default()
         };
 
-        let exponent = rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_EXP_OFFSET));
+        let exponent = rom.try_read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_EXP_OFFSET))?;
         if exponent > 8 {
-            panic!("unsupported HLE time signature");
+            return Err("unsupported HLE time signature");
         }
         song.exponent = exponent;
         song.numerator =
-            rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET));
+            rom.try_read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_TIME_SIG_FACTOR_OFFSET))?;
         song.ticks_per_bar = ((384u32 >> exponent).wrapping_mul(u32::from(song.numerator))) as u16;
-        song.loop_start = rom.read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_START_OFFSET));
-        song.loop_end = rom.read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_END_OFFSET));
-        song.linked = rom.read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_LINKED_OFFSET));
+        song.loop_start =
+            rom.try_read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_START_OFFSET))?;
+        song.loop_end = rom.try_read_u32(h.wrapping_add(sound_rom::SEQ_HEADER_LOOP_END_OFFSET))?;
+        song.linked = rom.try_read_byte(h.wrapping_add(sound_rom::SEQ_HEADER_LINKED_OFFSET))?;
 
         for (track, config) in song.initial.iter_mut().enumerate() {
-            *config = parse_initial_track(rom, layout, h, track);
+            *config = parse_initial_track(rom, layout, h, track)?;
         }
 
         // The driver only reads music stream offsets for channels the header assigns, so the HLE
@@ -264,7 +272,7 @@ impl SongData {
             .into_iter()
             .chain(music_streams)
         {
-            offsets[stream] = rom.read_u32(start + 4 + stream as u32 * 4);
+            offsets[stream] = rom.try_read_u32(start + 4 + stream as u32 * 4)?;
         }
 
         for (slot, &offset) in song.tracks.iter_mut().zip(&offsets) {
@@ -272,7 +280,7 @@ impl SongData {
                 continue;
             }
             if offset < 48 || offset & 1 != 0 || start.wrapping_add(offset).wrapping_add(4) > end {
-                panic!("invalid HLE track offset");
+                return Err("invalid HLE track offset");
             }
             // A stream ends where the next stream above it begins.
             let bound = offsets
@@ -280,9 +288,19 @@ impl SongData {
                 .filter(|&&other| other > offset)
                 .map(|&other| start.wrapping_add(other))
                 .fold(end, u32::min);
-            *slot = TrackData::parse(rom, start.wrapping_add(offset).wrapping_add(4), bound);
+            *slot = TrackData::parse(rom, start.wrapping_add(offset).wrapping_add(4), bound)?;
         }
-        song
+        song.check_arrangement()?;
+        Ok(song)
+    }
+
+    /// The sequencer's playlist `phase` is a 1-based `u8` index, so the stream, terminator included,
+    /// must leave `u8::MAX` free as the past-the-end phase.
+    fn check_arrangement(&self) -> Result<(), &'static str> {
+        if self.arrangement().len() >= usize::from(u8::MAX) {
+            return Err("HLE arrangement exceeds the 254-phase limit");
+        }
+        Ok(())
     }
 }
 
@@ -291,14 +309,14 @@ fn parse_initial_track(
     layout: &DriverLayout,
     header_addr: u32,
     track_index: usize,
-) -> TrackConfig {
+) -> Result<TrackConfig, &'static str> {
     let mut config = TrackConfig::default();
 
     // The driver restores even-offset controller defaults from a ROM table on every track init.
     for index in (0..=0x14u32).step_by(2) {
         config.parameters.set_byte(
             at::controllers + index as usize,
-            rom.read_byte(layout.controller_defaults_table + index),
+            rom.try_read_byte(layout.controller_defaults_table + index)?,
         );
     }
 
@@ -309,14 +327,14 @@ fn parse_initial_track(
     for n in 0..sound_rom::SEQ_TRACK_RECORD_SIZE as u32 {
         config
             .parameters
-            .set_byte(at::program_record + n as usize, rom.read_byte(record.wrapping_add(n)));
+            .set_byte(at::program_record + n as usize, rom.try_read_byte(record.wrapping_add(n))?);
     }
 
-    config.program = rom.read_u16(record);
+    config.program = rom.try_read_u16(record)?;
     config.parameters.set_program_image(config.program);
     config.parameters.copy_record_to_live();
 
-    config
+    Ok(config)
 }
 
 /// Every sequence slot of one ROM bank; absent slots have `present == false`.
@@ -325,51 +343,63 @@ pub struct SequenceBank {
 }
 
 impl SequenceBank {
-    pub fn parse(rom: &RomView, layout: &DriverLayout) -> SequenceBank {
+    pub fn try_parse(rom: &RomView, layout: &DriverLayout) -> Result<SequenceBank, &'static str> {
         let stream_limit = SOUND_ROM_BASE.wrapping_add(SOUND_ROM_IMAGE_SIZE);
-        let header_rel = rom.read_u32(STREAM_BASE);
+        let header_rel = rom.try_read_u32(STREAM_BASE)?;
         if header_rel < 8 + SONG_SLOTS as u32 * 4
             || header_rel & 1 != 0
             || STREAM_BASE.wrapping_add(header_rel) >= stream_limit
         {
-            panic!("unsupported HLE sequence bank layout");
+            return Err("unsupported HLE sequence bank layout");
         }
 
         let header = STREAM_BASE.wrapping_add(header_rel);
-        let header_size = rom.read_u32(header);
+        let header_size = rom.try_read_u32(header)?;
         if header_size < 8 + SONG_SLOTS as u32 * 2 + sound_rom::SEQ_HEADER_SIZE
             || header.wrapping_add(header_size) > stream_limit
         {
-            panic!("unsupported HLE sequence bank layout");
+            return Err("unsupported HLE sequence bank layout");
         }
 
-        // Boxed from a Vec: 100 songs would otherwise be built on the stack first.
-        let songs: Vec<SongData> = (0..SONG_SLOTS as u32)
+        let songs = (0..SONG_SLOTS as u32)
             .map(|id| Self::parse_song(rom, layout, header, id))
-            .collect();
-        let songs = songs.into_boxed_slice().try_into().unwrap_or_else(|_| unreachable!());
+            .collect::<Result<Vec<SongData>, _>>()?;
+        Ok(SequenceBank::from_songs(songs))
+    }
+
+    /// `songs` holds one entry per slot. Boxed from a Vec: 100 songs would otherwise be built on the
+    /// stack first.
+    pub fn from_songs(songs: Vec<SongData>) -> SequenceBank {
+        let songs = songs.into_boxed_slice().try_into().unwrap_or_else(|_| {
+            panic!("a sequence bank holds {SONG_SLOTS} songs")
+        });
         SequenceBank { songs }
     }
 
     /// `id` is the sequence id: it indexes the bank table and the ROM's id-indexed tables.
-    fn parse_song(rom: &RomView, layout: &DriverLayout, header: u32, id: u32) -> SongData {
-        let relative = rom.read_u32(STREAM_BASE.wrapping_add(8).wrapping_add(id * 4));
+    fn parse_song(
+        rom: &RomView,
+        layout: &DriverLayout,
+        header: u32,
+        id: u32,
+    ) -> Result<SongData, &'static str> {
+        let relative = rom.try_read_u32(STREAM_BASE.wrapping_add(8).wrapping_add(id * 4))?;
         if relative == 0 {
-            return SongData::default();
+            return Ok(SongData::default());
         }
 
         let start = STREAM_BASE.wrapping_add(relative);
-        let end = start.wrapping_add(rom.read_u32(start));
+        let end = start.wrapping_add(rom.try_read_u32(start)?);
         if relative < 408 || relative & 1 != 0 || end > header || end < start.wrapping_add(48) {
-            panic!("invalid HLE sequence extent");
+            return Err("invalid HLE sequence extent");
         }
 
-        let header_offset = rom.read_u16(header.wrapping_add(8).wrapping_add(id * 2));
+        let header_offset = rom.try_read_u16(header.wrapping_add(8).wrapping_add(id * 2))?;
         if u32::from(header_offset) < 208
             || u32::from(header_offset).wrapping_add(sound_rom::SEQ_HEADER_SIZE)
-                > rom.read_u32(header)
+                > rom.try_read_u32(header)?
         {
-            panic!("invalid HLE sequence header");
+            return Err("invalid HLE sequence header");
         }
 
         let record = header.wrapping_add(u32::from(header_offset));
@@ -379,5 +409,52 @@ impl SequenceBank {
     /// `id` must be below `SONG_SLOTS`.
     pub fn song(&self, id: u8) -> &SongData {
         &self.songs[usize::from(id)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::driver_layout::STANDARD;
+
+    fn song_with_arrangement(events: usize) -> SongData {
+        let mut song = SongData::default();
+        let mut stream = vec![StreamEvent { opcode: EV_ARRANGEMENT, ..StreamEvent::default() }; events - 1];
+        stream.push(StreamEvent { opcode: EV_END, ..StreamEvent::default() });
+        song.tracks[ARRANGEMENT_STREAM_INDEX] = TrackData { events: stream };
+        song
+    }
+
+    #[test]
+    fn a_playlist_leaves_the_last_u8_phase_free() {
+        let longest = usize::from(u8::MAX) - 1;
+        assert_eq!(song_with_arrangement(longest).check_arrangement(), Ok(()));
+        assert!(song_with_arrangement(longest + 1).check_arrangement().is_err());
+    }
+
+    #[test]
+    fn a_zeroed_rom_has_no_sequence_bank() {
+        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let reason = SequenceBank::try_parse(&RomView::with_image(rom, 1), &STANDARD).err();
+        assert_eq!(reason, Some("unsupported HLE sequence bank layout"));
+    }
+
+    #[test]
+    fn a_stream_without_an_end_event_is_an_error_not_a_panic() {
+        // One note-less padding word, then the stream ends.
+        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let view = RomView::with_image(rom, 1);
+        let start = SOUND_ROM_BASE;
+        assert_eq!(TrackData::parse(&view, start, start + 2).err(), Some("HLE track missing end event"));
+    }
+
+    #[test]
+    fn a_read_past_the_image_is_an_error() {
+        let rom: &'static [u8] = Box::leak(vec![0; SOUND_ROM_IMAGE_SIZE as usize].into_boxed_slice());
+        let view = RomView::with_image(rom, 1);
+        let last = SOUND_ROM_BASE + SOUND_ROM_IMAGE_SIZE - 1;
+        assert_eq!(view.try_read_u16(last), Err("HLE ROM read outside image"));
+        assert_eq!(view.try_read_u32(last - 2), Err("HLE ROM read outside image"));
+        assert_eq!(view.try_read_byte(last), Ok(0));
     }
 }

@@ -62,14 +62,19 @@ impl TrackParameters {
         ((self.bytes[offset] as u16) << 8) | self.bytes[offset + 1] as u16
     }
 
+    /// Whether controller `index` has a byte inside the record.
+    pub fn valid_controller(index: usize) -> bool {
+        at::controllers + index * 2 < at::SIZE
+    }
+
     /// Controller k writes the even byte at 0x0a + 2k. The layer-mask byte is stored centered
     /// (value - 0x40); every other controller stores the value. Returns false when the byte would
     /// fall outside the record.
     pub fn set_controller(&mut self, index: usize, value: u8) -> bool {
-        let offset = at::controllers + index * 2;
-        if offset >= at::SIZE {
+        if !Self::valid_controller(index) {
             return false;
         }
+        let offset = at::controllers + index * 2;
         self.bytes[offset] = if offset == at::layer_mask {
             value.wrapping_sub(Self::controller_center)
         } else {

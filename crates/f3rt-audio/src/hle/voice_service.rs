@@ -135,6 +135,12 @@ impl VoicePool {
                 self.release(index, bank);
             }
         }
+        self.steal(priority)
+    }
+
+    /// The highest free voice, else the voice a note of `priority` may take over, stopped: the
+    /// oldest released voice of the lowest class, then the oldest held one. `VOICES` when none.
+    fn steal(&mut self, priority: u32) -> usize {
         if let Some(free) = self.voices.iter().rposition(|v| !v.active) {
             return free;
         }
@@ -504,5 +510,136 @@ impl VoiceService {
 
     pub fn active_voices(&self) -> u32 {
         self.pool.active_voices()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool() -> VoicePool {
+        VoicePool {
+            voices: std::array::from_fn(|_| Voice::default()),
+            next: [0; VOICES],
+            prev: [0; VOICES],
+            cursor: 0,
+            budget_slot: 0,
+            noise: NoiseState::default(),
+            serial: 0,
+            filter_epoch: 0,
+            launched: 0,
+        }
+    }
+
+    fn service() -> VoiceService {
+        VoiceService {
+            pool: pool(),
+            queue: NoteQueue::new(),
+            pending: [Pending::default(); PENDING_NOTES],
+            driver: DriverClock::new(),
+            tick: 0,
+        }
+    }
+
+    impl VoicePool {
+        /// What `begin` leaves behind on the voice it allocates: a held voice of `priority`,
+        /// numbered by start order.
+        fn occupy(&mut self, index: usize, priority: u8) {
+            self.serial += 1;
+            let voice = &mut self.voices[index];
+            voice.active = true;
+            voice.released = false;
+            voice.priority = priority;
+            voice.serial = self.serial;
+        }
+
+        fn occupy_all(&mut self, priority: u8) {
+            for index in 0..VOICES {
+                self.occupy(index, priority);
+            }
+        }
+
+        fn release_at(&mut self, index: usize) {
+            self.serial += 1;
+            let voice = &mut self.voices[index];
+            voice.released = true;
+            voice.release_serial = self.serial;
+        }
+    }
+
+    #[test]
+    fn a_free_voice_is_taken_before_any_is_stolen() {
+        let mut pool = pool();
+        pool.occupy_all(0);
+        pool.voices[7].stop();
+        pool.voices[12].stop();
+        assert_eq!(pool.steal(0), 12);
+        assert_eq!(pool.active_voices(), VOICES as u32 - 2);
+    }
+
+    #[test]
+    fn the_lowest_class_is_stolen_first_and_the_oldest_within_it() {
+        let mut pool = pool();
+        pool.occupy_all(64);
+        pool.voices[9].priority = 0;
+        pool.voices[20].priority = 0;
+        pool.voices[3].priority = 128;
+
+        // Class 0, oldest first.
+        assert_eq!(pool.steal(64), 9);
+        assert!(!pool.voices[9].active);
+        pool.occupy(9, 64);
+        assert_eq!(pool.steal(64), 20);
+        pool.occupy(20, 64);
+        // No class 0 left: the oldest of class 64, which a priority 64 note may take.
+        assert_eq!(pool.steal(64), 0);
+    }
+
+    #[test]
+    fn released_voices_go_before_held_ones_oldest_release_first() {
+        let mut pool = pool();
+        pool.occupy_all(64);
+        pool.release_at(20);
+        pool.release_at(5);
+        assert_eq!(pool.steal(64), 20);
+        pool.occupy(20, 64);
+        assert_eq!(pool.steal(64), 5);
+        pool.occupy(5, 64);
+        // Only held voices remain; voice 0 started first.
+        assert_eq!(pool.steal(64), 0);
+    }
+
+    #[test]
+    fn a_note_cannot_steal_from_a_class_above_its_priority() {
+        let mut pool = pool();
+        pool.occupy_all(192);
+        assert_eq!(pool.steal(0), VOICES);
+        assert_eq!(pool.steal(64), VOICES);
+        assert_eq!(pool.steal(128), 0);
+        assert!(!pool.voices[0].active);
+    }
+
+    #[test]
+    fn delayed_starts_are_stolen_in_start_order_not_request_order() {
+        let mut service = service();
+        // Requested first but held back by the driver until 300; the second request starts at once.
+        assert!(service.queue.push(Pending::default(), 1, 0, 300));
+        assert!(service.queue.push(Pending::default(), 2, 100, 100));
+        let mut began = Vec::new();
+        while let Some(action) = service.queue.pop_due(1000) {
+            let QueueAction::Begin { start, .. } = action else { panic!("no note-off was queued") };
+            let index = service.pool.steal(64);
+            service.pool.occupy(index, 64);
+            began.push((start, index));
+        }
+        assert_eq!(began, [(100, VOICES - 1), (300, VOICES - 2)]);
+
+        // Later notes fill the rest of the pool; the voice that started at 100 is the oldest.
+        for index in 0..VOICES - 2 {
+            service.pool.occupy(index, 64);
+        }
+        assert_eq!(service.pool.steal(64), VOICES - 1);
+        service.pool.occupy(VOICES - 1, 64);
+        assert_eq!(service.pool.steal(64), VOICES - 2);
     }
 }
