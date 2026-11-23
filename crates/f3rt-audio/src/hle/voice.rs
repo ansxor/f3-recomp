@@ -1,6 +1,3 @@
-//! The voice record, its envelope/filter/gain helpers and the per-tick
-//! advancement rules.
-
 #![allow(non_upper_case_globals)]
 
 use crate::bytes::{s8, s16};
@@ -60,9 +57,6 @@ pub struct GainSegment {
 }
 
 impl GainSegment {
-    // gain[] is linear between adjacent entries and ramps move the encoded
-    // volume by a constant step, so a running sum tracks interpolated_gain (to
-    // double rounding) until the ramp crosses into the next table interval.
     pub fn step(&mut self, encoded: f64, step: f64) -> f32 {
         if self.frames != 0 {
             self.frames -= 1;
@@ -105,6 +99,13 @@ pub enum SampleAdvance {
     Ended,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ParameterUpdate {
+    Snap,
+    Ramp,
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Envelope {
     pub position: u32,
@@ -128,6 +129,16 @@ impl Envelope {
         self.position.wrapping_sub(self.target) as i32 >= 0
     }
 
+    pub fn encode_target(level: u16, slope: i32) -> u32 {
+        let encoded = if slope <= 0 { level ^ 0x8000 } else { level };
+        u32::from(encoded) << 16
+    }
+
+    pub fn decode_target(target: u32, slope: i32) -> u16 {
+        let level = (target >> 16) as u16;
+        if slope <= 0 { level ^ 0x8000 } else { level }
+    }
+
     pub fn start_segment(&mut self, target: u32, rate_index: i32, bank: &SoundBank) {
         let difference = i32::from(s16(target.wrapping_sub(self.level() as u16 as u32)));
         let rate = s16(u32::from(bank.rate(rate_index)));
@@ -138,7 +149,7 @@ impl Envelope {
             self.slope = -i32::from(rate);
             self.position = (self.position & 0xffff0000) | 0x7fff;
         }
-        self.target = u32::from((target ^ (if self.slope <= 0 { 0x8000 } else { 0 })) as u16) << 16;
+        self.target = Envelope::encode_target(target as u16, self.slope);
     }
 
     pub fn initialize<const ROLE: u8>(
@@ -183,13 +194,8 @@ impl Envelope {
         self.start_segment(target, rate, bank);
     }
 
-    // The target may name the sign bit as a level; the position keeps the resolved level.
     pub fn settle_level(&mut self) {
-        let mut level = (self.target >> 16) as u16;
-        if self.slope <= 0 {
-            level ^= 0x8000;
-        }
-        self.position = u32::from(level) << 16;
+        self.position = u32::from(Envelope::decode_target(self.target, self.slope)) << 16;
     }
 
     // c1983c: ramp the level to 0 at the direct region's release rate.
@@ -198,7 +204,7 @@ impl Envelope {
         self.position &= 0xffff0000;
         let rate = s16(u32::from(bank.rom.read_u16(bank.layout.rate_table + 2 * release_rate)));
         self.slope = wrap_product(-i64::from(0x7f00) * i64::from(rate) * 2);
-        self.target = if self.slope <= 0 { 0x80000000 } else { 0 };
+        self.target = Envelope::encode_target(0, self.slope);
         self.stage = 4;
     }
 }
@@ -235,8 +241,9 @@ impl Default for Filter {
 }
 
 impl Filter {
-    pub fn targets(&mut self, k1: u16, k2: u16, initial: bool) {
-        if !initial && k1 == self.last_k1 && k2 == self.last_k2 {
+    pub fn targets(&mut self, k1: u16, k2: u16, mode: ParameterUpdate) {
+        let snap = mode == ParameterUpdate::Snap;
+        if !snap && k1 == self.last_k1 && k2 == self.last_k2 {
             return;
         }
         self.last_k1 = k1;
@@ -248,7 +255,7 @@ impl Filter {
         // Native highpass pole is (1+k/65536)/2. Converting its
         // pole rather than cutoff-Hz guesses keeps low-k differences.
         self.target_high_pole = ((1.0 + f64::from(k2 & 0xfff0) / 65536.0) * 0.5).powf(RATE_RATIO);
-        if initial {
+        if snap {
             self.a1 = self.target1;
             self.a2 = self.target2;
             self.high_pole = self.target_high_pole;
@@ -277,10 +284,10 @@ pub struct NoiseState {
 
 pub struct Voice {
     pub owner: NoteOnEvent,
+    pub program: u16,
     pub patch: Option<Patch>,
     pub filter_epoch: u32,
     pub split: Split,
-    // envelope[] slots, in EnvelopeRole order.
     pub envelope: [Envelope; 3],
     pub filter: Filter,
     pub position: f64,
@@ -309,7 +316,7 @@ pub struct Voice {
     pub random_countdown: u16,
     pub random_period: u16,
     pub random: i16,
-    pub previous_random: i16,
+    pub onset_random: i16,
     pub pitch: i16,
     pub glide: i16,
     pub glide_target: i16,
@@ -342,6 +349,7 @@ impl Default for Voice {
     fn default() -> Voice {
         Voice {
             owner: NoteOnEvent::default(),
+            program: 0,
             patch: None,
             filter_epoch: 0,
             split: Split::default(),
@@ -372,7 +380,7 @@ impl Default for Voice {
             random_countdown: 0,
             random_period: 0,
             random: 0,
-            previous_random: 0,
+            onset_random: 0,
             pitch: 0,
             glide: 0,
             glide_target: 0,
@@ -404,12 +412,10 @@ impl Default for Voice {
 }
 
 impl Voice {
-    // envelope[] slots, in EnvelopeRole order.
     pub const pitch_envelope: u32 = EnvelopeRole::Pitch as u32;
     pub const filter_envelope: u32 = EnvelopeRole::Filter as u32;
     pub const amplitude_envelope: u32 = EnvelopeRole::Amplitude as u32;
 
-    // The patch owns the kind-specific behavior; the voice exposes one interface for it.
     fn started_patch(&self) -> Patch {
         self.patch.expect("a voice runs only after its note named a patch")
     }
@@ -427,8 +433,8 @@ impl Voice {
         patch.address(self, prior, bank);
     }
 
-    pub fn apply_parameters(&mut self, initial: bool, bank: &SoundBank, track: &Track) {
-        self.started_patch().apply_parameters(self, initial, bank, track);
+    pub fn apply_parameters(&mut self, mode: ParameterUpdate, bank: &SoundBank, track: &Track) {
+        self.started_patch().apply_parameters(self, mode, bank, track);
     }
 
     pub fn retarget(&mut self, kernel: i32, program: &Program, bank: &SoundBank) {
@@ -501,7 +507,7 @@ impl Voice {
         self.random_countdown = self.random_period;
         noise.history = noise.history.wrapping_add(noise.value);
         noise.value = noise.value.wrapping_add(noise.history);
-        self.random = s16(u32::from(noise.value)); // previous_random retains the onset value.
+        self.random = s16(u32::from(noise.value));
     }
 
     pub fn set_glide(&mut self, destination: i16, rate_index: u32, bank: &SoundBank) {
@@ -541,7 +547,7 @@ impl Voice {
             ModSource::FilterEnvelope => self.envelope[Voice::filter_envelope as usize].level(),
             ModSource::AmplitudeEnvelope => self.envelope[Voice::amplitude_envelope as usize].level(),
             ModSource::Random => self.random,
-            ModSource::PreviousRandom => self.previous_random,
+            ModSource::PreviousRandom => self.onset_random,
             ModSource::Velocity => s16(u32::from(self.owner.velocity) * 257),
             ModSource::Key => s16(((i32::from(self.effective_key) - 60) * 256) as u32),
             ModSource::Mod1A => s16(u32::from(parameters.mod_1a())),
@@ -578,15 +584,13 @@ impl Voice {
         self.position = f64::from(board) + f64::from((phase | bit) & 0x1fffffff) / 512.0;
     }
 
-    // Volume ramp, pair and filter targets shared by both patch kinds. The kind has already written
-    // the target volumes, the cutoff registers and the frequency.
-    pub fn finish_parameters(&mut self, initial: bool, pair: u32) {
+    pub fn finish_parameters(&mut self, mode: ParameterUpdate, pair: u32) {
         self.increment =
             f64::from(self.frequency) * f64::from(NATIVE_RATE) / (1024.0 * f64::from(SAMPLE_RATE));
         self.pair = ((pair + 1) & 3) as u8;
         self.target_left = f64::from(self.left_volume);
         self.target_right = f64::from(self.right_volume);
-        if initial {
+        if mode == ParameterUpdate::Snap {
             self.left = self.target_left;
             self.right = self.target_right;
             self.gain_frames = 0;
@@ -605,7 +609,7 @@ impl Voice {
         self.right_segment.frames = 0;
         self.gain_dirty = true;
         self.filter
-            .targets(self.filter_cutoff_low, self.filter_cutoff_high, initial);
+            .targets(self.filter_cutoff_low, self.filter_cutoff_high, mode);
     }
 }
 
@@ -731,7 +735,6 @@ mod tests {
 
     #[test]
     fn gain_segment_arms_a_linear_run_inside_a_table_interval() {
-        // Table entries 200 and 201 are 1.5 and 1.5625; the ramp starts half way between them.
         let mut segment = GainSegment::default();
         let exact = segment.step(200.5 * 256.0, 16.0);
         assert_eq!(exact, 1.53125);

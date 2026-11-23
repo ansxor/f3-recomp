@@ -1,8 +1,3 @@
-//! The render-time voice state: per-slot filter memory, the frame -> tick map and the scratch rows
-//! of voices without an OTIS bus pair.
-//!
-//! The register filter mode picks the monomorphisation of `render_span`.
-
 use super::block::BusBlock;
 use super::events::{MAIN_CLOCK, SAMPLE_RATE};
 use super::voice::Voice;
@@ -15,7 +10,6 @@ pub struct VoiceRenderState {
     pub filters: [VoiceFilterState; 32],
     pub filter_epoch: [u32; 32],
     pub frame_ticks: Vec<u64>,
-    /// Scratch rows for voices with no OTIS bus pair.
     pub discard: [[f32; 8]; VOICE_BLOCK_FRAMES],
     pub tick: u64,
     pub tick_remainder: u32,

@@ -65,7 +65,6 @@ impl CoreInput {
     }
 }
 
-/// Worker-side progress the caller reads without touching the `Core`.
 #[derive(Default)]
 pub struct SynthMetrics {
     pub generated: AtomicU64,
@@ -104,7 +103,7 @@ impl Applies<CoreInput> for Synth {
         metrics.render_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
         metrics
             .generated
-            .store(self.core.frames(), Ordering::Relaxed);
+            .store(self.core.rendered_frames(), Ordering::Relaxed);
         metrics
             .voices_started
             .store(render.voices_started, Ordering::Relaxed);
@@ -124,8 +123,6 @@ pub struct AudioPerformanceStats {
     pub render_ns: u64,
 }
 
-/// Main-thread clock and the queue into the synth; split from `Audio` so mailbox draining can
-/// record commands while the mailbox is borrowed.
 struct SynthLink {
     worker: WorkerQueue<CoreInput, QUEUE_SIZE>,
     clock: u64,
@@ -137,13 +134,10 @@ struct SynthLink {
 }
 
 impl SynthLink {
-    /// Moves the main-thread clock on; the clock is a free-running 64-bit counter that wraps.
     fn advance(&mut self, ticks: u32) {
         self.clock = self.clock.wrapping_add(u64::from(ticks));
     }
 
-    /// Re-bases the clock on a restored snapshot: nothing is owed to the synth at `clock`, and
-    /// playback continues from `playback_epoch`.
     fn rebase(&mut self, clock: u64, playback_epoch: u64) {
         self.clock = clock;
         self.clock_epoch = clock;
@@ -370,7 +364,6 @@ impl Audio {
 mod tests {
     use super::*;
 
-    /// Records the ticks the worker is told to advance to.
     struct Recorder(Arc<Mutex<Vec<CoreInput>>>);
 
     impl Applies<CoreInput> for Recorder {
@@ -406,7 +399,6 @@ mod tests {
         link.submit_clock();
         link.advance(1);
         link.submit_clock();
-        // The free-running clock wraps past zero; playback time keeps its distance from the epoch.
         link.advance(2);
         link.submit_clock();
         assert_eq!(link.clock, 1);

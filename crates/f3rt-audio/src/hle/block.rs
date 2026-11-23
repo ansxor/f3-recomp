@@ -1,5 +1,3 @@
-//! Interleaved 8-channel OTIS bus blocks, stereo output blocks, and planar FAUST DSP buffers.
-
 pub const BLOCK_FRAMES: usize = 256;
 
 /// Physical PCB wiring from OTIS (ES5505) to ESP (ES5510) and DAC.

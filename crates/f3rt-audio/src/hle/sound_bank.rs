@@ -1,12 +1,9 @@
-//! The decoded sound-program ROM (sample-bank directory, instrument
-//! records and the fixed tables the voice reads).
-
 use std::sync::Arc;
 
 use crate::bytes::s16;
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::patch::{DirectRegion, Layer, Program};
-use crate::hle::rom_view::RomView;
+use crate::hle::rom_view::{BOOT_BANK, RomView};
 use crate::hle::sound_rom::{
     Bank, HEAP_METADATA_OFFSET, PROGRAM_BANK_MASK_OFFSET, PROGRAM_COLUMN_STRIDE,
     PROGRAM_DATA_BASE, PROGRAM_DEFAULT_BANK_OFFSET, PROGRAM_MAGIC_OFFSET_0, PROGRAM_MAGIC_OFFSET_1,
@@ -50,7 +47,7 @@ impl SoundBank {
             return Err("HLE requires mapped sound and power-of-two sample ROM regions");
         }
         let mut bank = SoundBank {
-            rom: RomView::with_image(sound_rom, 1),
+            rom: RomView::with_image(sound_rom, BOOT_BANK),
             layout,
             samples: sample_words,
             metadata: Vec::new(),
@@ -168,37 +165,37 @@ impl SoundBank {
         self.split_lookup(patch.sample_id(), layer, pitch, selector, program_id)
     }
 
-    pub fn key_weight(&self, patch: Layer, key: i32) -> i32 {
+    pub fn key_weight(&self, patch: Layer, key: i32) -> Option<i32> {
         let amount = i32::from(patch.weight_amount());
         let lo = i32::from(patch.weight_low());
         let hi = i32::from(patch.weight_high());
         if amount == -128 {
-            return if key < lo || key > hi { -1 } else { 127 };
+            return (key >= lo && key <= hi).then_some(127);
         }
         if amount < 0 {
             if key <= lo {
-                return 127;
+                return Some(127);
             }
             if key >= hi {
-                return 127 + amount;
+                return Some(127 + amount);
             }
-            return if hi <= lo {
+            return Some(if hi <= lo {
                 127
             } else {
                 127 + amount + (-amount) * (hi - key) / (hi - lo)
-            };
+            });
         }
         if key >= hi {
-            return 127;
+            return Some(127);
         }
         if key <= lo {
-            return 127 - amount;
+            return Some(127 - amount);
         }
-        if hi <= lo {
+        Some(if hi <= lo {
             127
         } else {
             127 - amount + amount * (key - lo) / (hi - lo)
-        }
+        })
     }
 
     pub fn frequency(&self, pitch: i32) -> u16 {
@@ -284,8 +281,6 @@ impl SoundBank {
         metadata.push(w as u8);
     }
 
-    // `b` is the bank index the decoded half-bank's base offset is computed from, so the loop stays an
-    // index loop.
     #[allow(clippy::needless_range_loop)]
     fn decode_banks(&mut self) -> Result<(), &'static str> {
         let SoundBank {
@@ -393,7 +388,6 @@ impl SoundBank {
         let image = self.rom.image();
         let rom_size = image.len();
         let banks = &self.banks;
-        // `b` indexes `banks` and is also the bank number stored in the result.
         let find_bank = |tag: u8| -> i8 {
             let mut result: i8 = -2;
             for (b, bank) in banks.iter().enumerate() {

@@ -1,29 +1,7 @@
-//! The substitute for the ES5510 effects programs, its preset/program
-//! selection, the OTIS bus routing, the auto-bypass and the LFO phase of bypassed frames.
-//!
 //! The standard driver has a program pointer table at 0xc1c3a2 and a preset table at 0xc1c2d2 (
 //! 16 bytes per preset); byte 5 of a preset row indexes the pointer table and bytes 6..15 are the ten
 //! parameters p0..p9 in the order the sound commands set them. A preset loads the program its pointer
 //! names; programs are identified here by that pointer, so the selection does not depend on the game.
-//! Six programs are decoded, including the preset 12 overdrive in Riding Fight and Land Maker.
-//! Delay lengths, gains and topology are the ones of the loaded program as it runs in the reference
-//! backend: every delay is a (read offset - write offset) / 256 distance inside the DSP's single
-//! 64K-word delay RAM, every gain is a GPR of the program, and each graph reproduces the emulated
-//! ES5510 impulse response to about -70 dB re peak (the 16-bit truncation floor), checked by
-//! tools/compare/esp_graph.py verify.
-//! docs/notes/raw/tests/2026-10-16-kirameki-187-pcb-stereo-reverb.md sections 8 and 9 list the graphs
-//! and the parameter mappings, which were read by patching preset rows in a ROM copy and diffing the
-//! GPRs. No DSP instructions or sampled audio are stored.
-//!
-//! The signal processing lives in FAUST (`crates/f3rt-audio/faust/`): es5510.lib holds the all-pass
-//! networks, the interpolated tap, the LFO and the shared reverb tank, and reverb.dsp / chorus.dsp /
-//! echo.dsp / hall.dsp / overdrive.dsp / dc_blocker.dsp are the programs, each with a signal-flow diagram and
-//! descriptive signal-flow names rather than decoded register names. This module keeps what is not
-//! signal processing: reading the preset table and the program pointer, mapping p0..p9 to the
-//! programs' controls (`EffectDsp::apply`), routing the OTIS buses, the auto-bypass and the LFO phase of
-//! bypassed frames.
-//!
-//!   serio0 (OTIS pair 1, buses 2/3): dry in every program.
 //!   serio1 (pair 2, buses 4/5) and serio2 (pair 3, buses 6/7) feed a reverb.
 //!   Reverb (0xc1c836, Command War preset 1): serio1 and serio2 go to the reverb and to the output on
 //!     the same frame; the reverb tank is mono (nested all-pass blocks around a 1105 frame loop, see
@@ -40,8 +18,6 @@
 //!     LFO-modulated tap; each side's output is low-passed and injected into the other side's input
 //!     with gain p0/128.
 //!   Mute (0xc1ce1b, Kirameki preset 4): the program is a single END, the DAC gets nothing.
-//!   DAC L/R = dry + table(127-p8) * serio1 path + table(127-p9) * serio2 + reverb taps.
-//!
 //! LFOs: the ES5510 LFOs are GPR pairs the microcode rotates every frame, and the DSP executes its
 //! whole program every frame whatever the input is (once per frame), so an LFO phase keeps advancing through silence. Here
 //! too: every LFO advances by its rate on every frame, including the frames the auto-bypass does not
@@ -92,18 +68,13 @@ pub const K_PTR_OVERDRIVE: u32 = 0xc1e10b;
 
 const K_DELAY_BUFFER_SIZE: usize = 96000 * SAMPLE_RATE as usize / 48000;
 const K_BUCKET_COUNT: usize = 16;
-// 16 * K_BUCKET_SIZE ~ K_DELAY_BUFFER_SIZE
 const K_BUCKET_SIZE: usize = 6000 * SAMPLE_RATE as usize / 48000;
-// Frames per FAUST compute() call (the caller renders at most 256 at a time).
 const K_CHUNK: usize = 256;
 
-// Silence threshold: maximum output gain is Audio::output_boost (12.0) * route (3.2) = 38.4 and the
-// wet path gain is bounded by ~3.0, so a line peak below 1e-8 is under 0.02 int16 LSB at the output.
 const K_THRESHOLD: f32 = 1e-8;
 
 const Q23: f64 = 8388608.0;
 
-/// What a program reads to turn the preset parameters p0..p9 into its controls.
 struct EffectContext {
     rom: Arc<[u8]>,
     layout: &'static DriverLayout,
@@ -111,18 +82,13 @@ struct EffectContext {
 }
 
 impl EffectContext {
-    /// Volume/pan table entry as a gain; the index saturates at 127.
     fn table(&self, index: u32) -> f32 {
         let p = self.layout.volume_pan_table_offset as usize + index.min(127) as usize * 2;
         (((self.rom[p] as u16) << 8 | self.rom[p + 1] as u16) as f32) / 32768.0
     }
 }
 
-/// The messages every ES5510 program understands.
 trait EffectDsp {
-    /// Maps the preset parameters onto the program's controls. Every mapping was read by patching the
-    /// preset row in a ROM copy and diffing the ES5510 GPRs the driver writes (section 9 of the note);
-    /// GPR formulas are exact unless marked.
     ///   all programs: p8 -> G124/G125 = table(p8)/table(127-p8), p9 -> G122/G123 = table(p9)/table(127-p9).
     ///   LFO rate G = 196.608 * (p2 - 15) / 2^23 rad per frame (Reverb/Hall G106, Chorus G133; Chorus
     ///     G107 = 296.4 * ...).
@@ -140,13 +106,10 @@ trait EffectDsp {
     ///     it (Reverb 0.0703 for p6 = 94, Hall 0.0078 for p6 = 143, Chorus/Echo 0.0075).
     fn apply(&mut self, ctx: &EffectContext);
 
-    /// Planar inputs a0l a0r a1l a1r a2l a2r, outputs DAC L, DAC R, peak.
     fn compute(&mut self, frames: usize, inputs: &[&[f32]; 6], outputs: &mut [&mut [f32]; 3]);
 
-    /// Program load and reset: clears the delay memory and state and restarts the LFOs at (1, 0).
     fn clear(&mut self);
 
-    /// Frames the program was not computed (auto-bypass): every LFO keeps rotating.
     fn skip_lfos(&mut self, frames: u64);
 }
 
@@ -170,8 +133,6 @@ impl Zone {
 /// reserves more than the 2 MiB of a default thread (the echo alone is about 2.3 MiB).
 const DSP_BUILD_STACK_BYTES: usize = 8 * 1024 * 1024;
 
-/// Runs `build` on a scoped thread with `DSP_BUILD_STACK_BYTES` of stack, so its result does not
-/// depend on how deep the caller's own stack is.
 fn build_on_large_stack<T: Send>(build: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -183,8 +144,6 @@ fn build_on_large_stack<T: Send>(build: impl FnOnce() -> T + Send) -> T {
     })
 }
 
-/// A heap-allocated, initialised DSP with its control registry. Call it only from
-/// `build_on_large_stack`, or for a DSP small enough for the caller's stack.
 fn new_dsp<D: FaustDsp<T = FaustFloat>>() -> (Box<D>, Controls) {
     let mut dsp = Box::new(D::new());
     let controls = Controls::new(&*dsp);
@@ -203,11 +162,6 @@ fn loop_decay(p0: u8) -> f32 {
     if value < 0.9 { value } else { 0.9 }
 }
 
-/// Sine LFO of a program. FAUST rotates the GPR pair by eps every frame it computes; the frames it
-/// does not compute (auto-bypass) are carried as a phase offset (double, mod 2 pi) that rotates the
-/// LFO output. The rate and the offset are doubles (a float rate shifts the phase by up to 8e-5 rad in
-/// 30 s, 0.01 frame of delay at the deepest modulation), passed through the float controls as the sum
-/// of two floats.
 struct Lfo {
     eps_hi: Zone,
     eps_lo: Zone,
@@ -251,7 +205,6 @@ impl Lfo {
     }
 }
 
-/// Parameters every ES5510 program has (p8 / p9 gains, loop decay and damping, LFO C depth and rate).
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct CommonParams {
     chorus_out: f32,
@@ -280,7 +233,6 @@ impl CommonParams {
     }
 }
 
-/// Reverb tank constants of the Reverb/Chorus/Echo programs (GPR values of the decoded programs).
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct TankConstants {
     scale: f32, // input scale: G59 * G4 (Chorus/Echo) or ASR * G4 (Reverb)
@@ -325,7 +277,6 @@ impl TankConstants {
     }
 }
 
-/// Chorus/Echo cross-fed feedback and the p6 low nibble mix angle.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct FeedbackParams {
     feedback: f32,
@@ -346,7 +297,6 @@ impl FeedbackParams {
     }
 }
 
-/// Zones every program has, and the LFO C they share.
 struct CommonControls {
     chorus_out: Zone,
     dry_send: Zone,
@@ -384,7 +334,6 @@ impl CommonControls {
     }
 }
 
-/// The Reverb, Chorus and Echo programs share the reverb tank and its constants.
 struct TankControls {
     scale: Zone,
     leak: Zone,
@@ -652,7 +601,6 @@ struct OverdriveProgram {
 }
 
 impl OverdriveProgram {
-    /// Builds on a large stack: see `build_on_large_stack`.
     fn new(rom: &[u8], layout: &DriverLayout) -> Box<Self> {
         build_on_large_stack(|| Box::new(Self::build(rom, layout)))
     }
@@ -738,9 +686,6 @@ impl EffectDsp for OverdriveProgram {
     }
 }
 
-/// The decoded programs. The generated classes hold their delay memory inline (about 900 KB for all
-/// four), so each lives in its own heap allocation and never moves. Overdrive is built on first load because its
-/// curves come from the ROM.
 struct Programs {
     reverb: ReverbProgram,
     chorus: ChorusProgram,
@@ -750,7 +695,6 @@ struct Programs {
 }
 
 impl Programs {
-    /// Builds on a large stack: see `build_on_large_stack`.
     fn new() -> Programs {
         build_on_large_stack(|| Programs {
             reverb: ReverbProgram::new(),
@@ -773,7 +717,6 @@ impl Programs {
     }
 }
 
-/// Output DC blocker: one pole, 20 Hz.
 struct DcBlocker {
     dsp: Box<DcBlockerDsp>,
     gain_l: Zone,
@@ -797,7 +740,6 @@ impl DcBlocker {
         self.gain_r.set(&mut *self.dsp, gain[1]);
     }
 
-    /// Reads the first two channels of `inputs`, writes both channels of `out`.
     fn compute(
         &mut self,
         inputs: &[&[f32]],
@@ -810,8 +752,6 @@ impl DcBlocker {
     }
 }
 
-/// Auto-bypass: after a delay-memory length of silent sends, a program whose peak output (line 2 of
-/// its output block) stayed below the silence threshold is not computed until a send arrives.
 struct BypassDetector {
     bucket_peaks: [f32; K_BUCKET_COUNT],
     bucket_frames: usize,
@@ -877,8 +817,6 @@ impl BypassDetector {
             peak = if peak < bucket_peak { bucket_peak } else { peak };
         }
         if peak < K_THRESHOLD {
-            // Everything the detector watches is under 0.02 LSB: the state is not cleared (it would
-            // only drop that residue), the program is just not computed until a send arrives.
             self.bucket_peaks.fill(0.0);
             self.current_bucket_peak = 0.0;
             self.bucket_frames = 0;
@@ -935,7 +873,6 @@ impl Effects {
         effects
     }
 
-    /// Loads a preset and its parameters.
     pub fn select(&mut self, preset: u8) {
         if preset >= 13 {
             return;
@@ -995,7 +932,6 @@ impl Effects {
         self.update();
     }
 
-    /// Mixes one block of OTIS bus frames into interleaved stereo.
     pub fn mix_block(
         &mut self,
         buses: &BusBlock,
@@ -1039,8 +975,6 @@ impl Effects {
         self.bypass.update_bypass();
     }
 
-    /// Nothing audible is left in the program (or none is loaded): only the dry path is heard. The DSP
-    /// is not computed, but its LFOs keep rotating (see the module comment).
     fn mix_dry(&mut self, buses: &BusBlock, stereo: &mut StereoBlock, input_gain: [f32; 2]) {
         let frames = buses.size();
         self.skip_lfos(frames as u64);
@@ -1070,8 +1004,6 @@ impl Effects {
     }
 
     fn update(&mut self) {
-        // Curve A can drive the tank with silent sends. Let the level detector
-        // observe this state before allowing the DSP to fall asleep again.
         if self.program == Program::Overdrive && self.bypass.is_bypassed() {
             self.bypass.wake();
         }
@@ -1145,7 +1077,6 @@ mod tests {
         set_word(table, 130);
         set_word(table + 132, 130);
         for j in 0..65 {
-            // Synthetic curves, with the same lengths, origins and controls as the ROM curves.
             set_word(table + 2 + 2 * j, (900 * j as i32 - 29000) as i16);
             set_word(table + 134 + 2 * j, 32767 - 311 * j as i16);
         }
@@ -1239,7 +1170,6 @@ mod tests {
         assert!(!detector.is_bypassed());
     }
 
-    /// A ROM whose preset 0 loads the reverb.
     fn reverb_fixture(layout: &DriverLayout) -> Arc<[u8]> {
         let mut rom = vec![0; 0x20000];
         let row = layout.preset_table_offset as usize;
@@ -1248,7 +1178,6 @@ mod tests {
         let pointer = K_PTR_REVERB - layout.esp_pointer_delta;
         let table = layout.esp_program_table_offset as usize;
         rom[table..table + 4].copy_from_slice(&pointer.to_be_bytes());
-        // A flat volume/pan table: every send is routed to the DAC at half gain.
         let pan = layout.volume_pan_table_offset as usize;
         for index in 0..128 {
             rom[pan + 2 * index..pan + 2 * index + 2].copy_from_slice(&0x4000u16.to_be_bytes());
@@ -1274,7 +1203,6 @@ mod tests {
         stereo.samples[..stereo.size() * 2].iter().fold(0.0, |peak, &s| peak.max(s.abs()))
     }
 
-    // Runs on the default test thread: building the effects must not need a larger caller stack.
     #[test]
     fn effects_sleep_after_a_silent_delay_length_and_wake_on_a_send() {
         let mut effects = Effects::new(reverb_fixture(&STANDARD), &STANDARD);
@@ -1297,7 +1225,6 @@ mod tests {
         }
         assert!(silent_frames >= K_DELAY_BUFFER_SIZE);
 
-        // Asleep: only the DC blocker's residue is left.
         assert!(loudest(&mixed(&mut effects, &silence)) < K_THRESHOLD);
         assert!(effects.bypassed());
 

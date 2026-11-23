@@ -1,5 +1,3 @@
-//! The banked sound-program ROM window.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -11,10 +9,11 @@ pub const BANKED_OVERFLOW_BASE: u32 = 0xc40000;
 pub const BANK_PAGE_SIZE: u32 = 0x20000;
 pub const BANK_OVERFLOW_OFFSET: u32 = 0x40000;
 pub const SOUND_ROM_IMAGE_SIZE: u32 = 0x80000;
+/// The bank the sound CPU boots with.
+pub const BOOT_BANK: u8 = 1;
 
 const OUTSIDE_IMAGE: &str = "HLE ROM read outside image";
 
-/// The image is shared with every reader of the sound program (bank, sequencer, effects).
 pub struct RomView {
     rom: Arc<[u8]>,
     bank: AtomicU8,
@@ -30,7 +29,7 @@ impl RomView {
     pub fn new() -> RomView {
         RomView {
             rom: Arc::from(&[][..]),
-            bank: AtomicU8::new(1),
+            bank: AtomicU8::new(BOOT_BANK),
         }
     }
 

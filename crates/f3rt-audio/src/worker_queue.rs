@@ -1,8 +1,3 @@
-//! The synth worker thread and its bounded input queue.
-//!
-//! The thread owns the worker outright. A panic inside `Worker::apply` is kept and re-raised on the
-//! caller's thread by the next `post`/`flush`, so a failed synth aborts the owner with its message.
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -24,7 +19,6 @@ impl<M, const CAPACITY: usize> Shared<M, CAPACITY> {
 }
 
 struct State<M, const CAPACITY: usize> {
-    // Boxed: the slots are ~96 KiB and must not land on the caller's stack.
     slots: Box<[M; CAPACITY]>,
     pushed: u64,
     popped: u64,
@@ -50,7 +44,6 @@ impl<M, const CAPACITY: usize> WorkerQueue<M, CAPACITY>
 where
     M: Copy + Default + Send + 'static,
 {
-    /// Moves `worker` onto a new synth thread.
     pub fn spawn<W: Applies<M> + Send + 'static>(worker: W) -> WorkerQueue<M, CAPACITY> {
         let slots: Box<[M; CAPACITY]> = vec![M::default(); CAPACITY]
             .into_boxed_slice()
@@ -138,7 +131,6 @@ where
             state.popped += 1;
             let ticket = state.popped;
             drop(state);
-            // A slot is free now; wake a producer blocked on capacity.
             shared.completed.notify_all();
             worker.apply(&message);
             shared.lock().done = ticket;

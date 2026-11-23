@@ -1,11 +1,9 @@
-//! The driver clock and the queue of notes whose start it delayed.
-
-use super::events::DRIVER_KEYON_CYCLES;
+use super::events::DRIVER_KEYON_TICKS;
 
 /// The sound driver programs the ES5505 voices of a sequencer pulse one after another on a CPU that is
 /// also servicing the 1 kHz timer interrupt, so the Nth voice of a busy pulse sounds later than the
 /// first. The clock models that single resource: a request made at `tick` for `voices` voices starts at
-/// max(tick, busy) and keeps the driver busy for voices * DRIVER_KEYON_CYCLES afterwards. Requests are
+/// max(tick, busy) and keeps the driver busy for voices * DRIVER_KEYON_TICKS afterwards. Requests are
 /// made in the order the driver handles them (pulse order, track-major), which is the order
 /// notes reach the voice service in.
 #[derive(Default)]
@@ -20,7 +18,7 @@ impl DriverClock {
 
     pub fn start(&mut self, tick: u64, voices: u32) -> u64 {
         let at = tick.max(self.busy);
-        self.busy = at + u64::from(voices) * u64::from(DRIVER_KEYON_CYCLES);
+        self.busy = at + u64::from(voices) * u64::from(DRIVER_KEYON_TICKS);
         at
     }
 
@@ -55,7 +53,6 @@ struct NoteQueueEntry<P> {
 }
 
 impl<P> NoteQueueEntry<P> {
-    /// The tick of the entry's next action: its start while waiting, its note-off once started.
     fn due_tick(&self) -> u64 {
         if self.state == NoteQueueState::Started {
             self.off
@@ -65,7 +62,6 @@ impl<P> NoteQueueEntry<P> {
     }
 }
 
-/// What the queue asks its owner to do next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QueueAction<P> {
     Begin { payload: P, start: u64 },
@@ -170,7 +166,6 @@ impl<P: Copy + Default, const CAPACITY: usize> NoteQueue<P, CAPACITY> {
         Some(QueueAction::Begin { payload: e.payload, start: e.start })
     }
 
-    /// The live entries, ending as soon as all `used` of them have been visited.
     fn live(&self) -> impl Iterator<Item = (usize, &NoteQueueEntry<P>)> {
         self.entries
             .iter()
@@ -203,7 +198,7 @@ mod tests {
     #[test]
     fn driver_clock_staggers_voices_of_one_pulse() {
         let mut clock = DriverClock::new();
-        let cycles = u64::from(DRIVER_KEYON_CYCLES);
+        let cycles = u64::from(DRIVER_KEYON_TICKS);
         assert_eq!(clock.start(1000, 2), 1000);
         assert_eq!(clock.start(1000, 1), 1000 + 2 * cycles);
         assert_eq!(clock.busy_until(), 1000 + 3 * cycles);
@@ -213,7 +208,7 @@ mod tests {
     fn driver_clock_idles_until_the_request() {
         let mut clock = DriverClock::new();
         clock.start(0, 1);
-        let later = 10 * u64::from(DRIVER_KEYON_CYCLES);
+        let later = 10 * u64::from(DRIVER_KEYON_TICKS);
         assert_eq!(clock.start(later, 1), later);
     }
 
@@ -228,7 +223,6 @@ mod tests {
     #[test]
     fn note_off_before_a_delayed_start_keeps_the_note_length() {
         let mut queue = Queue::new();
-        // Requested at 100, started by the driver at 300; the note-off arrives at 150.
         assert!(queue.push(7, 1, 100, 300));
         queue.note_off(1, 150);
         assert_eq!(queue.next_event(), 300);
@@ -254,7 +248,6 @@ mod tests {
         let mut queue = Queue::new();
         queue.push(1, 1, 0, 100);
         queue.note_off(1, 300);
-        // The first note starts at 100 and is released at 400, when the second note also starts.
         queue.push(2, 2, 400, 400);
         queue.push(3, 3, 400, 400);
         assert_eq!(

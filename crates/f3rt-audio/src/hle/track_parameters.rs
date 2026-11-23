@@ -1,11 +1,8 @@
-//! The 0x38-byte track parameter record.
-//!
 //! Controllers occupy the even bytes from 0x0a; the following odd byte is the low half of that
 //! big-endian word. `byte()` and `bytes` address the rest of the record.
 
 #![allow(non_upper_case_globals)]
 
-/// Byte offsets inside the record.
 pub mod at {
     pub const SIZE: usize = 0x38;
     pub const program_high: usize = 0x04;
@@ -62,7 +59,6 @@ impl TrackParameters {
         ((self.bytes[offset] as u16) << 8) | self.bytes[offset + 1] as u16
     }
 
-    /// Whether controller `index` has a byte inside the record.
     pub fn valid_controller(index: usize) -> bool {
         at::controllers + index * 2 < at::SIZE
     }
@@ -88,7 +84,6 @@ impl TrackParameters {
         self.bytes[at::program_low] = program as u8;
     }
 
-    /// Header track-record fields copied into the live controller bytes.
     pub fn copy_record_to_live(&mut self) {
         self.bytes[at::volume] = self.bytes[at::volume_record];
         self.bytes[at::pan] = self.bytes[at::pan_record];

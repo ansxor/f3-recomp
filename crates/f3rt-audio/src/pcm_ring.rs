@@ -1,12 +1,8 @@
-//! The worker's PCM ring and the video-frame boundary that `drain_released` honours. The owner
-//! shares the ring with the worker as `Arc<Mutex<PcmRing>>`, so the ring itself is plain data.
-
 use crate::hle::core::PcmSink;
 
 pub const CAPACITY: usize = 32768;
 
 pub struct PcmRing {
-    // Boxed: 256 KiB would overflow small thread stacks.
     frames: Box<[f32; CAPACITY * 2]>,
     read: u64,
     write: u64,
@@ -70,7 +66,6 @@ impl PcmRing {
         ready
     }
 
-    /// The blocking float drain never holds anything back.
     fn take_f32(&mut self, out: &mut [f32], max_frames: usize) -> usize {
         let count = (max_frames as u64).min(self.ready(false)) as usize;
         for n in 0..count {

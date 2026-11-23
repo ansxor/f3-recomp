@@ -1,7 +1,4 @@
 //! The 32-byte big-endian save-state blob.
-//!
-//! `parse` reports a malformed blob as an error so the ABI can return invalid-state and leave the
-//! board unchanged.
 
 use crate::bytes::{read_be16_at, read_be64_at, write_be16_at, write_be64_at};
 use crate::shared_mailbox::SharedMailbox;

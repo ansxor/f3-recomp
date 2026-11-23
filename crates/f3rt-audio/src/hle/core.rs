@@ -1,15 +1,3 @@
-//! The composition root of the HLE sound engine.
-//!
-//! It owns every service, keeps the 1 kHz service grid, dispatches the mailbox and renders. Every
-//! service sees the same TIMER_TICKS boundaries, fanned out in a fixed order (`clock_tick`): the
-//! sequence tempo pulses, then the fade pulse, then the mailbox, so a tick's events reach the services
-//! before the render reaches the tick; the voice ring is stepped from the render at the first frame
-//! that gets there (`VoiceService::service`).
-//!
-//! Services do not hold references to each other: a call borrows the bank, the mailbox and the track
-//! service for its duration. The effects and the track service stay boxed so `Core::try_new` stays
-//! light on the stack.
-
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::hle::block::{self, BusBlock, StereoBlock};
@@ -21,6 +9,7 @@ use crate::hle::events::{
 };
 use crate::hle::mailbox::Mailbox;
 use crate::hle::patch::ProgramQuery;
+use crate::hle::rom_view::BOOT_BANK;
 use crate::hle::sequencer::Sequencer;
 use crate::hle::sound_bank::SoundBank;
 use crate::hle::synthesis::VoiceRenderState;
@@ -28,6 +17,12 @@ use crate::hle::track_service::TrackService;
 use crate::hle::voice_service::VoiceService;
 
 const OUTPUT_BOOST: f32 = 12.0;
+const ESP_HEADROOM: f32 = 0.18;
+
+struct MixGains {
+    pre_dsp: [f32; 2],
+    post_dsp: [f32; 2],
+}
 
 /// Receives rendered stereo frames in render order, in blocks of 1..Core::BLOCK_FRAMES frames.
 pub trait PcmSink: Send {
@@ -36,7 +31,6 @@ pub trait PcmSink: Send {
     fn write(&mut self, stereo: &[f32], frames: usize);
 }
 
-/// A sink shared between the rendering thread and whoever drains it.
 pub type SharedPcmSink = Arc<Mutex<dyn PcmSink>>;
 
 pub struct Core {
@@ -57,7 +51,6 @@ pub struct Core {
     pub sink: Option<SharedPcmSink>,
 }
 
-/// The first service-grid boundary after `tick`.
 fn grid_after(tick: u64) -> u64 {
     (tick / TIMER_TICKS as u64 + 1) * TIMER_TICKS as u64
 }
@@ -100,8 +93,6 @@ impl Core {
         Ok(core)
     }
 
-    /// Applies one batch of events in arrival order: notes allocate, track events rewrite parameters,
-    /// effects apply.
     fn dispatch_mailbox(&mut self) {
         let Core {
             mailbox,
@@ -112,13 +103,9 @@ impl Core {
             ..
         } = self;
         mailbox.drain(|event| match event {
-            Event::NoteOn(n) => {
-                tracks.apply_note_on(&n);
-                let track = tracks.track(n.sequence, n.track);
-                let mut note = n;
-                // A ProgramSelector earlier in this batch is already applied: the note resolves
-                // with the program in force at this point of the event order.
-                note.program = track.config.program;
+            Event::NoteOn(note) => {
+                tracks.apply_note_on(&note);
+                let track = tracks.track(note.sequence, note.track);
                 let patches = ProgramQuery::for_note(&note, track).resolve(bank);
                 if !patches.is_empty() {
                     voices.note_on(&note, &patches, bank, tracks);
@@ -134,21 +121,21 @@ impl Core {
             Event::Track(e) => {
                 tracks.apply_track(&e);
                 match e.kind {
-                    TrackEventKind::Controller
-                    | TrackEventKind::Program
-                    | TrackEventKind::ProgramSelector
-                    | TrackEventKind::Volume
-                    | TrackEventKind::Pan
+                    TrackEventKind::Controller { .. }
+                    | TrackEventKind::Program(_)
+                    | TrackEventKind::ProgramSelector(_)
+                    | TrackEventKind::Volume(_)
+                    | TrackEventKind::Pan(_)
                     | TrackEventKind::Refresh => {
                         voices.refresh_track(e.sequence, e.track, bank, tracks)
                     }
-                    TrackEventKind::SequenceVolume
-                    | TrackEventKind::SequencePan
-                    | TrackEventKind::SequenceFade
+                    TrackEventKind::SequenceVolume(_)
+                    | TrackEventKind::SequencePan(_)
+                    | TrackEventKind::SequenceFade { .. }
                     | TrackEventKind::SequenceFadeStep => {
                         voices.refresh_sequence(e.sequence, bank, tracks)
                     }
-                    TrackEventKind::PreviousKey => {}
+                    TrackEventKind::PreviousKey(_) => {}
                 }
             }
             Event::Effect(e) => {
@@ -161,8 +148,6 @@ impl Core {
         });
     }
 
-    /// One 1 kHz boundary: per sequence the note-duration pulse then the sequencer pulse, then the
-    /// fade pulse, then the events they queued.
     fn clock_tick(&mut self) {
         let tick = self.next_tick;
         self.next_tick += TIMER_TICKS as u64;
@@ -179,36 +164,35 @@ impl Core {
         self.dispatch_mailbox();
     }
 
-    /// Renders the output frames up to `tick`, one bus block at a time.
     fn render_until(&mut self, tick: u64) {
         let end = frames_at(tick);
-        let (link_gain, output_gain) = self.mix_gains();
+        let gains = self.mix_gains();
         while self.worker_frames < end {
             let frames = (block::BLOCK_FRAMES as u64).min(end - self.worker_frames) as usize;
             self.render_bus_block(frames);
             self.stereo.resize(frames);
             self.effects
-                .mix_block(&self.buses, &mut self.stereo, link_gain, output_gain);
+                .mix_block(&self.buses, &mut self.stereo, gains.pre_dsp, gains.post_dsp);
             self.write_sink(frames);
             self.worker_frames += frames as u64;
         }
     }
 
-    /// The OTIS-to-ESP link gain and the host output gain, per channel. The link is digital (gain
-    /// 1.0). The overdrive's output level ignores its input, so the 0.18 must come after the ESP or
-    /// it only quietens the paths around it.
-    fn mix_gains(&self) -> ([f32; 2], [f32; 2]) {
-        let (link_gain, host_gain) = if self.effects.program() == Program::Overdrive {
-            (1.0, 0.18)
+    fn mix_gains(&self) -> MixGains {
+        let (pre_dsp, post_dsp_headroom) = if self.effects.program() == Program::Overdrive {
+            (1.0, ESP_HEADROOM)
         } else {
-            (0.18, 1.0)
+            (ESP_HEADROOM, 1.0)
         };
-        let output = self.gain.map(|channel| OUTPUT_BOOST * host_gain * channel);
-        ([link_gain; 2], output)
+        let post_dsp = self
+            .gain
+            .map(|channel| OUTPUT_BOOST * post_dsp_headroom * channel);
+        MixGains {
+            pre_dsp: [pre_dsp; 2],
+            post_dsp,
+        }
     }
 
-    /// Fills the bus block with the voices' output for `frames` frames, stopping at every tick
-    /// where the voice services must run.
     fn render_bus_block(&mut self, frames: usize) {
         self.render_state.fill_frame_ticks(frames);
         self.buses.resize(frames);
@@ -229,7 +213,6 @@ impl Core {
         }
     }
 
-    /// Runs the voice ring and every queued driver start due by `now`, in tick order.
     fn service_due_voices(&mut self, now: u64) {
         loop {
             let timer = self.voices.next_tick();
@@ -248,7 +231,6 @@ impl Core {
         }
     }
 
-    /// The end of the run of frames, starting at `frame_start`, that precede the next voice service.
     fn frames_before_next_service(&self, frame_start: usize, frames: usize) -> usize {
         let horizon = self.voices.next_tick().min(self.voices.next_queue_tick());
         let ticks = &self.render_state.frame_ticks[..frames];
@@ -284,8 +266,7 @@ impl Core {
         self.worker_tick
     }
 
-    /// Frames handed to the sink so far.
-    pub fn frames(&self) -> u64 {
+    pub fn rendered_frames(&self) -> u64 {
         self.worker_frames
     }
 
@@ -333,7 +314,6 @@ impl Core {
         self.sequencer
             .reset(worker_tick, &mut self.mailbox, &mut self.tracks);
         self.mailbox.clear();
-        // Voices first: their Stop events still see the tracks they point at.
         self.voices.reset(worker_tick, &self.bank);
         self.tracks.reset();
         self.render_state.reset(worker_tick);
@@ -341,10 +321,9 @@ impl Core {
         self.effects.reset();
         self.gain.fill(1.0);
         // The sound CPU's cold-boot bank, as in sequencer.reset.
-        self.bank.set_bank(1);
+        self.bank.set_bank(BOOT_BANK);
     }
 
-    /// `page` = the value the Audio implementation passes to `set_sound_bank`.
     pub fn set_bank(&mut self, page: u8, tick: u64) {
         self.advance(tick);
         self.bank.set_bank(page);

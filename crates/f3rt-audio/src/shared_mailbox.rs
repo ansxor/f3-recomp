@@ -1,8 +1,3 @@
-//! The main-CPU mailbox ring in the 0x800-byte dual-port RAM.
-//!
-//! The RAM belongs to the main CPU bus and changes between calls, so the mailbox owns none of it:
-//! each message borrows the RAM for its own duration.
-
 use crate::hle::command::CommandPacket;
 use crate::memory_map::{
     MAILBOX_CONSUMER_H, MAILBOX_GAIN_CH0, MAILBOX_PRODUCER_H, MAILBOX_RING_MASK, SHARED_RAM_SIZE,
@@ -76,8 +71,9 @@ impl Iterator for MailboxDrain<'_> {
             let index = u32::from(self.mailbox.consumer >> 1);
             let length = self.ram[index as usize];
             let available = (self.producer.wrapping_sub(self.mailbox.consumer) & 0x7ff) >> 1;
-            // A bad length means the producer is mid-write; leave it for the next drain.
-            if length < 2 || u16::from(length) > available {
+            let malformed_length = length < 2;
+            let incomplete_packet = u16::from(length) > available;
+            if malformed_length || incomplete_packet {
                 return None;
             }
             let packet = if usize::from(length) <= CommandPacket::MAX_BYTES {
@@ -125,7 +121,6 @@ mod tests {
         ])
     }
 
-    /// Packet of `length` bytes written ring-wise from byte index `at`.
     fn put_packet(ram: &mut [u8], at: u32, length: u8) {
         ram[at as usize] = length;
         ram[((at + 1) & MAILBOX_RING_MASK) as usize] = 0xff;

@@ -1,7 +1,4 @@
 //! The F3 sound board HLE engine and its C ABI (`include/f3rt/abi/audio.h`).
-//!
-//! `abi` exposes a single-owner process-wide `Audio` instance over `audio`, which mediates between
-//! main-CPU mailbox writes and the HLE synth worker thread (`hle::core::Core`).
 
 pub mod abi;
 pub mod audio;

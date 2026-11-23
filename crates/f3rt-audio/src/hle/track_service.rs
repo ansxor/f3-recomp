@@ -1,9 +1,3 @@
-//! The per-track parameter records, the note durations and the per-sequence volume / fade mix.
-//!
-//! Owns everything that is sequencing state rather than sequencer position. Parameters are only
-//! written through `apply_track`; `start_sequence`, `stop_sequence` and `park_sequence` are lifecycle
-//! calls from the Sequencer.
-
 use crate::hle::events::{
     Event, NoteOffEvent, NoteOnEvent, TrackEvent, TrackEventKind, NO_PROGRAM, SONG_SLOTS, TRACK_COUNT,
 };
@@ -17,8 +11,6 @@ use crate::hle::track_parameters::TrackParameters;
 /// logical-track history.
 pub const MAX_TRACK_CHANNEL: u8 = 56;
 
-/// The parameters a sequence header supplies for one track: the 0x38-byte record the firmware keeps
-/// per track, the selected program id and the program-selector bank.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TrackConfig {
     pub parameters: TrackParameters,
@@ -36,15 +28,12 @@ impl Default for TrackConfig {
 #[repr(u8)]
 pub enum TrackStatus {
     #[default]
-    /// Unallocated, or no stream / no program to play.
     Inactive,
-    /// Reading events from the ROM track stream.
     Streaming,
     /// Reached the end of the stream; the track stays live for direct commands.
     Ended,
 }
 
-/// The live sequencing state of one track of one sequence.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Track {
     pub config: TrackConfig,
@@ -80,12 +69,10 @@ impl Track {
     }
 }
 
-/// A note-off sink that queues the event; the mailbox dispatcher releases the voice.
 fn push_note_off(mailbox: &mut Mailbox) -> impl FnMut(u64, u64) + '_ {
     |instance, tick| mailbox.push(Event::NoteOff(NoteOffEvent { instance, tick }))
 }
 
-// Program-selector value ranges; the extended-selector bit lives on TrackParameters.
 const SELECTOR_INTERNAL_MIN: u8 = 0x64;
 const SELECTOR_SPECIAL_7B: u8 = 0x7b;
 const SELECTOR_BANK_BASE: u8 = 0x7c;
@@ -115,8 +102,6 @@ impl Mix {
     }
 }
 
-/// The physical channel table: channels are handed out from the top, and a channel's previous
-/// factory key outlives its release.
 struct Channels {
     used: [bool; MAX_TRACK_CHANNEL as usize + 1],
     previous_key: [u8; MAX_TRACK_CHANNEL as usize + 1],
@@ -204,7 +189,6 @@ impl TrackService {
         &mut self.tracks[usize::from(sequence)][usize::from(track)]
     }
 
-    /// Lifecycle, called synchronously by the Sequencer before it dispatches a pulse's events.
     pub fn start_sequence(
         &mut self,
         sequence: u8,
@@ -266,7 +250,6 @@ impl TrackService {
         self.channels.previous_key[usize::from(channel)]
     }
 
-    /// Event application, called only by the mailbox dispatcher.
     pub fn apply_note_on(&mut self, event: &NoteOnEvent) {
         let track = &mut self.tracks[usize::from(event.sequence)][usize::from(event.track)];
         self.notes.allocate_note(
@@ -281,30 +264,29 @@ impl TrackService {
     pub fn apply_track(&mut self, event: &TrackEvent) {
         let t = &mut self.tracks[usize::from(event.sequence)][usize::from(event.track)];
         match event.kind {
-            TrackEventKind::Controller => {
-                if !t.config.parameters.set_controller(usize::from(event.index), event.value) {
+            TrackEventKind::Controller { index, value } => {
+                if !t.config.parameters.set_controller(usize::from(index), value) {
                     panic!("HLE controller outside track parameter record");
                 }
             }
 
-            TrackEventKind::Program => {
-                t.config.program = event.program;
-                t.config.parameters.set_program_image(event.program);
+            TrackEventKind::Program(program) => {
+                t.config.program = program;
+                t.config.parameters.set_program_image(program);
             }
 
-            TrackEventKind::ProgramSelector => {
+            TrackEventKind::ProgramSelector(value) => {
                 let parameters = &mut t.config.parameters;
-                parameters.set_selector(event.value);
-                match event.value {
-                    // Internal selectors only record the selector byte.
+                parameters.set_selector(value);
+                match value {
                     SELECTOR_INTERNAL_MIN..SELECTOR_SPECIAL_7B => {}
                     SELECTOR_SPECIAL_7B => parameters.set_extended_selector(true),
                     SELECTOR_BANK_BASE.. => {
-                        t.config.bank = event.value.wrapping_sub(SELECTOR_BANK_BASE);
+                        t.config.bank = value.wrapping_sub(SELECTOR_BANK_BASE);
                     }
                     _ => {
                         parameters.set_extended_selector(false);
-                        t.config.program = (u16::from(t.config.bank) << 14) | u16::from(event.value);
+                        t.config.program = (u16::from(t.config.bank) << 14) | u16::from(value);
                         parameters.set_program_image(t.config.program);
                         // The driver selects with the track's bit 7 set, which clears the bank
                         // after the selection.
@@ -313,37 +295,37 @@ impl TrackService {
                 }
             }
 
-            TrackEventKind::Volume => t.config.parameters.set_volume(event.value),
+            TrackEventKind::Volume(value) => t.config.parameters.set_volume(value),
 
-            TrackEventKind::Pan => t.config.parameters.set_pan(event.value),
+            TrackEventKind::Pan(value) => t.config.parameters.set_pan(value),
 
-            TrackEventKind::PreviousKey => {
-                t.config.parameters.set_previous_key(event.value);
-                self.channels.previous_key[usize::from(t.physical)] = event.value;
+            TrackEventKind::PreviousKey(key) => {
+                t.config.parameters.set_previous_key(key);
+                self.channels.previous_key[usize::from(t.physical)] = key;
             }
 
-            TrackEventKind::SequenceVolume => {
+            TrackEventKind::SequenceVolume(value) => {
                 let mix = &mut self.mix[usize::from(event.sequence)];
-                mix.set_level(event.value);
+                mix.set_level(value);
                 mix.fade_step = 0;
                 let level = mix.level();
                 self.set_sequence_volume(event.sequence, level);
             }
 
-            TrackEventKind::SequencePan => {
+            TrackEventKind::SequencePan(value) => {
                 for track in self.tracks[usize::from(event.sequence)].iter_mut() {
                     if track.is_live() {
-                        track.config.parameters.set_pan(event.value);
+                        track.config.parameters.set_pan(value);
                     }
                 }
             }
 
-            TrackEventKind::SequenceFade => {
+            TrackEventKind::SequenceFade { start, target, rate } => {
                 let mix = &mut self.mix[usize::from(event.sequence)];
-                mix.set_level(event.start);
-                mix.fade_target = event.target;
-                let difference = (u16::from(event.target.wrapping_sub(event.start)) << 8) as i16;
-                let product = i32::from(difference) * i32::from(event.rate);
+                mix.set_level(start);
+                mix.fade_target = target;
+                let difference = (u16::from(target.wrapping_sub(start)) << 8) as i16;
+                let product = i32::from(difference) * i32::from(rate);
                 mix.fade_step = ((product as u32).wrapping_mul(2) >> 16) as i16;
                 let level = mix.level();
                 self.set_sequence_volume(event.sequence, level);
@@ -376,7 +358,6 @@ impl TrackService {
         self.notes.release_matching_key(&mut track.head, kernel_key)
     }
 
-    /// The sequence fade pulse; the owner calls `fade_pulse` when it fires.
     pub fn fade_timer(&mut self) -> &mut PulseTimer {
         &mut self.fade
     }
@@ -388,7 +369,6 @@ impl TrackService {
         }
     }
 
-    /// The sequence fade pulse: queues one fade step per fading sequence.
     pub fn fade_pulse(&mut self, tick: u64, mailbox: &mut Mailbox) {
         let fading = self.active.iter().zip(&self.mix).enumerate();
         for (sequence, (&active, mix)) in fading {
@@ -492,7 +472,7 @@ mod tests {
         let (mut service, _) = started(&[1, 1]);
         make_live(&mut service, 3, 0);
 
-        service.apply_track(&TrackEvent { value: 0x40, ..sequence_event(TrackEventKind::SequenceVolume) });
+        service.apply_track(&sequence_event(TrackEventKind::SequenceVolume(0x40)));
 
         assert_eq!(service.track(3, 0).sequence_volume, 0x40);
         assert_eq!(service.track(3, 1).sequence_volume, 127);
@@ -503,18 +483,16 @@ mod tests {
         let (mut service, mut mailbox) = started(&[1]);
         make_live(&mut service, 3, 0);
 
-        service.apply_track(&TrackEvent {
+        service.apply_track(&sequence_event(TrackEventKind::SequenceFade {
             start: 127,
             target: 0,
             rate: 0x100,
-            ..sequence_event(TrackEventKind::SequenceFade)
-        });
+        }));
         assert_eq!(service.track(3, 0).sequence_volume, 127);
 
         service.fade_pulse(5, &mut mailbox);
         assert_eq!(drained(&mut mailbox), vec![Event::Track(TrackEvent::sequence_fade_step(5, 3))]);
 
-        // The step is -254 per pulse on a volume whose low byte starts at 0xff.
         service.apply_track(&sequence_event(TrackEventKind::SequenceFadeStep));
         assert_eq!(service.track(3, 0).sequence_volume, 0x7f);
         service.apply_track(&sequence_event(TrackEventKind::SequenceFadeStep));

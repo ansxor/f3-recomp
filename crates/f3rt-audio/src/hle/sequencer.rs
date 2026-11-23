@@ -1,8 +1,3 @@
-//! The ROM sequence streams to mailbox events.
-//!
-//! It owns only sequencing position and tempo: the track records live in TrackService, and the
-//! mailbox carries every note and parameter write to the services.
-
 use std::sync::Arc;
 
 use crate::hle::command::{Command, CommandPacket};
@@ -13,27 +8,21 @@ use crate::hle::events::{
 };
 use crate::hle::mailbox::Mailbox;
 use crate::hle::pulse_timer::PulseTimer;
-use crate::hle::rom_view::RomView;
+use crate::hle::rom_view::{BOOT_BANK, RomView};
 use crate::hle::sequence_bank::{
     SequenceBank, StreamEvent, EV_CONTROLLER_MAX, EV_CONTROLLER_MIN, EV_DELAY, EV_END,
     EV_NOTE_LONG_MAX, EV_NOTE_SHORT_MAX, EV_NOTIFICATION, EV_PROGRAM_SELECTOR, EV_SPECIAL_TRACK_DA,
-    EV_SPECIAL_TRACK_DB, SEQ_FLAG_LOOP,
+    EV_SPECIAL_TRACK_DB, MAX_ARRANGEMENT_PHASES, SEQ_FLAG_LOOP,
 };
 use crate::hle::track_parameters::TrackParameters;
 use crate::hle::track_service::{Track, TrackService, TrackStatus};
 use crate::memory_map::SOUND_ROM_SIZE;
 
-/// The bank the sound CPU boots with.
-const BOOT_BANK: u8 = 1;
-
 /// Effect presets at or above this value are not driver presets.
 const EFFECT_PRESET_COUNT: u8 = 13;
 
-/// Direct notes are held until their note-off, not for a counted duration.
-const DIRECT_NOTE_DURATION: u16 = 0x7fff;
+const DIRECT_NOTE_PULSE_LIMIT: u16 = 0x7fff;
 
-/// The instance id bit that marks a note started by a sequence stream, keeping those ids apart
-/// from the instance ids the main CPU's direct notes carry.
 const MUSIC_INSTANCE_BIT: u64 = 1 << 63;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -50,15 +39,12 @@ enum SequenceStatus {
     Parked,
 }
 
-/// What a finishing child sequence hands to the next arrangement child: its mix and, when the
-/// tempo was overridden, the tempo.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ArrangementCarry {
     selected: u8,
     rate_override: Option<u16>,
 }
 
-/// Sequencing position and tempo of one sequence slot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct SongState {
     status: SequenceStatus,
@@ -101,7 +87,6 @@ impl Default for SongState {
 }
 
 impl SongState {
-    /// A fresh playing state; the arrangement phase survives a restart.
     fn started(rate: u16, phase: u8) -> SongState {
         SongState {
             status: SequenceStatus::Playing,
@@ -146,7 +131,6 @@ impl SongState {
         }
     }
 
-    /// Counts one finished pass of the current arrangement entry; true when its repeats are used up.
     fn count_arrangement_repeat(&mut self) -> bool {
         if self.arrangement_repeat == 0 {
             return false;
@@ -155,8 +139,6 @@ impl SongState {
         self.arrangement_repeat == 0
     }
 
-    /// The kernel key `key` sounds at, or `None` when the arrangement transpose pushes it out of
-    /// the key range.
     fn kernel_key(&self, track: u8, key: u8, transposed: bool) -> Option<u8> {
         let mut effective = i32::from(key);
         if transposed && self.transpose_mask & (1u16 << track) != 0 {
@@ -168,8 +150,6 @@ impl SongState {
         Some((effective + 21) as u8)
     }
 
-    /// Runs the conductor stream's delay events: one pulse of its countdown, or, when `initial`,
-    /// the first events without waiting.
     fn advance_conductor(&mut self, stream: &[StreamEvent], initial: bool) {
         let mut due = initial;
         if !self.conductor_ended && !due && self.conductor_countdown != 0 {
@@ -196,7 +176,6 @@ impl SongState {
     }
 }
 
-/// A note to start on a track.
 struct Note {
     key: u8,
     velocity: u8,
@@ -204,7 +183,6 @@ struct Note {
     instance: u64,
 }
 
-/// The services one sequencer call writes to, and the tick the call happens at.
 struct Context<'a> {
     tick: u64,
     mailbox: &'a mut Mailbox,
@@ -220,7 +198,6 @@ impl Context<'_> {
         self.tracks.release_notes(sequence, self.tick, self.mailbox);
     }
 
-    /// Starts `note` unless the track has no voice to play it or the transpose pushes it out of range.
     fn note_on(&mut self, state: &SongState, sequence: u8, track: u8, note: Note, transposed: bool) {
         let t = self.tracks.track(sequence, track);
         if !t.is_live() || t.config.program == NO_PROGRAM {
@@ -229,27 +206,26 @@ impl Context<'_> {
         let Some(kernel_key) = state.kernel_key(track, note.key, transposed) else {
             return;
         };
+        self.enqueue_note_transition(sequence, track, note, kernel_key);
+    }
 
+    fn enqueue_note_transition(&mut self, sequence: u8, track: u8, note: Note, kernel_key: u8) {
+        let previous_key = self.tracks.track(sequence, track).config.parameters.previous_key();
         let event = NoteOnEvent {
             instance: note.instance,
             tick: self.tick,
             duration: note.duration,
-            program: t.config.program,
             sequence,
             track,
             key: note.key,
             kernel_key,
             velocity: note.velocity,
-            previous_key: t.config.parameters.previous_key(),
+            previous_key,
         };
         self.mailbox.push(Event::NoteOn(event));
-
-        // The previous key is consumed by this note's onset and replaced only afterwards, so every
-        // instrument layer of the note sees the old one.
         self.push_track(TrackEvent::previous_key(self.tick, sequence, track, kernel_key));
     }
 
-    /// Forwards a stream control event to the parameter writer. Silent seeks skip the writes.
     fn stream_control(&mut self, sequence: u8, track: u8, event: &StreamEvent, silent: bool) {
         let op = event.opcode;
         let value = (event.operand & 0x7f) as u8;
@@ -273,7 +249,6 @@ impl Context<'_> {
     }
 }
 
-/// Reads the ROM sequence streams and turns them into mailbox events.
 pub struct Sequencer {
     rom: Arc<[u8]>,
     layout: &'static DriverLayout,
@@ -339,7 +314,6 @@ impl Sequencer {
             Command::EffectParameter(c) => {
                 cx.mailbox.push(Event::Effect(EffectEvent::parameter(tick, c.index, c.value)));
             }
-            // An unknown opcode, or a payload length the driver rejects.
             Command::Ignored(_) => {}
             addressed => self.dispatch_addressed(addressed, instance, &mut cx),
         }
@@ -455,7 +429,6 @@ impl Sequencer {
                 if !self.state[usize::from(id)].is_active() {
                     self.start_sequence(id, cx);
                 }
-                // An absent song slot cannot start: there is nothing to seek in.
                 if !self.state[usize::from(id)].is_active() {
                     return;
                 }
@@ -519,7 +492,7 @@ impl Sequencer {
                 let note = Note {
                     key: c.key,
                     velocity: c.velocity,
-                    duration: DIRECT_NOTE_DURATION,
+                    duration: DIRECT_NOTE_PULSE_LIMIT,
                     instance,
                 };
                 cx.note_on(&self.state[usize::from(id)], id, track, note, false);
@@ -560,8 +533,6 @@ impl Sequencer {
         self.initialize_tracks(id, id, cx);
     }
 
-    /// Points `owner` at the streams of `selected` (itself, or an arrangement child) and runs the
-    /// events due at position 0.
     fn initialize_tracks(&mut self, owner: u8, selected: u8, cx: &mut Context) {
         let song = self.bank.song(selected);
         if !song.present {
@@ -575,7 +546,6 @@ impl Sequencer {
         s.conductor_countdown = 1;
         s.conductor_ended = song.conductor().is_empty();
 
-        // Note-offs only: the physical tracks survive a repeat.
         cx.release_notes(owner);
         for (index, initial) in song.initial.iter().enumerate() {
             let t = index as u8;
@@ -589,8 +559,6 @@ impl Sequencer {
             let can_stream =
                 track.physical != 0 && !song.music(index).is_empty() && track.config.program != NO_PROGRAM;
             track.status = if can_stream { TrackStatus::Streaming } else { TrackStatus::Inactive };
-            // Voices of this track still sounding pick up the rewritten record before the pulse's
-            // own events are applied.
             if track.is_live() {
                 cx.push_track(TrackEvent::refresh(cx.tick, owner, t));
             }
@@ -631,8 +599,6 @@ impl Sequencer {
         self.state[usize::from(id)].phase = 0;
     }
 
-    /// Moves `id`'s playlist to its next playable entry and starts that child; returns it, or 0
-    /// when the playlist has none. `previous` is the child that just finished, if any.
     fn advance_arrangement(
         &mut self,
         id: u8,
@@ -641,20 +607,23 @@ impl Sequencer {
     ) -> u8 {
         let list_len = self.bank.song(id).arrangement().len();
 
+        let max_phase = list_len.min(MAX_ARRANGEMENT_PHASES);
         // A loop marker is not a playable phase. At the terminator the playlist returns to the
         // phase following its last marker.
-        for _ in 0..=list_len {
+        for _ in 0..=max_phase {
             let list = self.bank.song(id).arrangement();
             let s = &mut self.state[usize::from(id)];
-            // Phases are 1-based: `None` is past the end, whether the playlist or the `u8` ran out.
             let playable = s
                 .phase
                 .checked_add(1)
-                .filter(|&phase| usize::from(phase) <= list_len)
+                .filter(|&phase| usize::from(phase) <= max_phase)
                 .filter(|&phase| list[usize::from(phase) - 1].opcode != EV_END);
             let Some(phase) = playable else {
                 let last_marker = list.iter().rposition(|e| e.is_arrangement() && e.is_loop_marker());
-                s.phase = last_marker.and_then(|n| u8::try_from(n + 1).ok()).unwrap_or(0);
+                s.phase = last_marker
+                    .and_then(|n| u8::try_from(n + 1).ok())
+                    .filter(|&p| usize::from(p) <= MAX_ARRANGEMENT_PHASES)
+                    .unwrap_or(0);
                 if s.phase == 0 {
                     return 0;
                 }
@@ -701,7 +670,6 @@ impl Sequencer {
         0
     }
 
-    /// One musical tick of `id`. `silent` advances the streams without emitting events (seek).
     fn tick_sequence(&mut self, id: u8, silent: bool, cx: &mut Context) {
         if !self.state[usize::from(id)].is_active() {
             return;
@@ -745,8 +713,6 @@ impl Sequencer {
         }
     }
 
-    /// Runs the conductor and every streaming track of `id` up to the events that wait.
-    /// `initial` is the position-0 pass: nothing counts down first.
     fn process_due_events(&mut self, id: u8, silent: bool, initial: bool, cx: &mut Context) {
         let selected = self.state[usize::from(id)].selected;
         let song = self.bank.song(selected);
@@ -825,7 +791,6 @@ mod tests {
         StreamEvent { opcode: EV_END, ..StreamEvent::default() }
     }
 
-    /// A song with one program-bearing track whose stream ends at once.
     fn playable_song(rate: u8) -> SongData {
         let mut song = SongData { present: true, rate, ..SongData::default() };
         song.initial[0] = TrackConfig { program: 0, ..TrackConfig::default() };
@@ -873,7 +838,6 @@ mod tests {
         }
     }
 
-    /// The sequencer's two output services, with the events a call queued applied to the tracks.
     struct Services {
         mailbox: Mailbox,
         tracks: Box<TrackService>,
@@ -889,7 +853,6 @@ mod tests {
             sequencer.command(&packet, 1, 0, &mut self.mailbox, &mut self.tracks);
         }
 
-        /// Applies the queued track events and returns every event the sequencer queued.
         fn settle(&mut self) -> Vec<Event> {
             let mut events = Vec::new();
             self.mailbox.drain(|event| {
@@ -940,7 +903,6 @@ mod tests {
         );
         services.settle();
 
-        // The first child's only track has ended: its next pulse finishes it.
         sequencer.pulse(FIRST_CHILD, 1, &mut services.mailbox, &mut services.tracks);
         services.settle();
 
@@ -972,11 +934,14 @@ mod tests {
         assert_eq!(sequencer.state[usize::from(SOLO)].status, SequenceStatus::Parked);
     }
 
-    fn controller_events(events: &[Event]) -> Vec<TrackEvent> {
+    fn controller_events(events: &[Event]) -> Vec<(u8, u8)> {
         events
             .iter()
             .filter_map(|event| match event {
-                Event::Track(e) if e.kind == TrackEventKind::Controller => Some(*e),
+                Event::Track(TrackEvent {
+                    kind: TrackEventKind::Controller { index, value },
+                    ..
+                }) => Some((*index, *value)),
                 _ => None,
             })
             .collect()
@@ -1002,11 +967,9 @@ mod tests {
         let command = TrackController { sequence: id(SOLO), track: 1, index: last_valid, value: 5 };
         services.send(&mut sequencer, Command::TrackController(command));
         let queued = controller_events(&services.settle());
-        assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].index, last_valid);
+        assert_eq!(queued, vec![(last_valid, 5)]);
     }
 
-    /// `entries` playable children (slot 2), then the terminator.
     fn long_playlist(entries: usize, marker_at: Option<usize>) -> Sequencer {
         let playlist = (0..entries).map(|n| {
             if Some(n) == marker_at { loop_marker() } else { playlist_entry(FIRST_CHILD, 1) }
@@ -1019,7 +982,6 @@ mod tests {
         let longest = usize::from(u8::MAX) - 2;
         let mut sequencer = long_playlist(longest, None);
         let mut services = Services::new();
-        // On the terminator, the last phase before the `u8` runs out.
         sequencer.state[usize::from(PARENT)].phase = u8::try_from(longest).unwrap();
         let mut cx = Context { tick: 0, mailbox: &mut services.mailbox, tracks: &mut services.tracks };
         assert_eq!(sequencer.advance_arrangement(PARENT, None, &mut cx), 0);

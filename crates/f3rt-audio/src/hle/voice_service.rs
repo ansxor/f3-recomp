@@ -1,33 +1,17 @@
-//! The 32-voice pool, the driver clock and the delayed patches.
-//!
-//! Programs are already resolved to patches; this stage schedules them, keeps the voices and their
-//! envelopes, and walks the slots on the 12 ms sound CPU budget ring.
-//!
-//! The ring is serviced from the render at the first rendered frame whose tick reached the service
-//! tick, not at the clock tick itself: the 1 kHz grid can name a tick whose frame is still pending in
-//! the frame -> tick map, and the pre-refactor ring was always stepped on the frame that reached the
-//! tick.
-//!
-//! `VoicePool` owns the voices and the ring. `VoiceService` sits between the sequencer's notes and the
-//! pool: it owns the driver clock, the key-on queue and the delayed-patch table that decide when a
-//! note reaches the pool.
-
 use super::events::{NoteOnEvent, TIMER_TICKS, TRACK_COUNT};
 use super::note_timing::{DriverClock, NoteQueue, QueueAction};
 use super::patch::{AllocationMode, NoteStart, Patch, PatchList, PriorWindow};
 use super::sound_bank::SoundBank;
 use super::track_service::{Track, TrackService};
-use super::voice::{NoiseState, Voice};
+use super::voice::{NoiseState, ParameterUpdate, Voice};
 
 const VOICES: usize = 32;
 const PENDING_NOTES: usize = 96;
 
-/// The track a note was played on. Voices and pending notes name their track by sequence and index.
 fn track_of<'a>(tracks: &'a TrackService, note: &NoteOnEvent) -> &'a Track {
     tracks.track(note.sequence, note.track)
 }
 
-/// The voices, the budget ring that steps them and the shared noise and ordering counters.
 pub struct VoicePool {
     pub voices: [Voice; VOICES],
     next: [u8; VOICES],
@@ -96,7 +80,6 @@ impl VoicePool {
         self.prev[self.cursor as usize] = i as u8;
     }
 
-    /// Whether `voice` plays a note of the same track and layer slot as `note`, and may be taken over.
     fn takeable_by(voice: &Voice, note: &NoteOnEvent, patch: &Patch) -> bool {
         voice.active
             && !voice.released
@@ -175,10 +158,9 @@ impl VoicePool {
     pub fn begin(&mut self, note: &NoteOnEvent, patch: Patch, bank: &SoundBank, track: &Track) {
         self.launched = self.launched.wrapping_add(1);
         let kernel = i32::from(track.config.parameters.transposed_key(note.kernel_key));
-        let weight = patch.weight(note, kernel, bank);
-        if weight < 0 {
+        let Some(weight) = patch.weight(note, kernel, bank) else {
             return;
-        }
+        };
         let mode = patch.allocation(bank);
         let priority = patch.priority(bank);
         let mut prior_pitch = 0i32;
@@ -212,9 +194,10 @@ impl VoicePool {
             let velocity = v.owner.velocity;
             v.owner = *note;
             v.owner.velocity = velocity;
+            v.program = track.config.program;
             v.released = false;
             v.retarget(kernel, &patch.program(bank), bank);
-            v.apply_parameters(false, bank, track);
+            v.apply_parameters(ParameterUpdate::Ramp, bank, track);
             return;
         }
         v.stop();
@@ -224,6 +207,7 @@ impl VoicePool {
         self.filter_epoch = self.filter_epoch.wrapping_add(1);
         v.filter_epoch = self.filter_epoch;
         v.owner = *note;
+        v.program = track.config.program;
         v.patch = Some(patch);
         v.priority = priority as u8;
         v.allocation = mode as u8;
@@ -242,11 +226,9 @@ impl VoicePool {
         v.initialize(&start, &mut self.noise, &prior, bank, track);
         v.active = true;
         v.hardware_valid = true;
-        // Ring admission, then the opening step: a layered voice steps once here, a direct voice waits
-        // for the ring.
         self.move_before_cursor(index);
         let v = &mut self.voices[index];
-        v.apply_parameters(true, bank, track);
+        v.apply_parameters(ParameterUpdate::Snap, bank, track);
         let step = v.onset(&mut self.noise, bank, track);
         if step.ended {
             v.active = false;
@@ -278,12 +260,11 @@ impl VoicePool {
     pub fn refresh_track(&mut self, sequence: u8, track_index: u8, track: &Track, bank: &SoundBank) {
         for voice in &mut self.voices {
             if voice.active && voice.owner.sequence == sequence && voice.owner.track == track_index {
-                voice.apply_parameters(false, bank, track);
+                voice.apply_parameters(ParameterUpdate::Ramp, bank, track);
             }
         }
     }
 
-    /// Track-major: all voices of track 0, then track 1, and so on.
     pub fn refresh_sequence(
         &mut self,
         sequence: u8,
@@ -295,7 +276,6 @@ impl VoicePool {
         }
     }
 
-    /// Steps the voices the current budget slot of the ring reaches.
     pub fn service_ring(&mut self, bank: &SoundBank, tracks: &TrackService) {
         let mut count = bank.budgets[usize::from(self.budget_slot)];
         self.budget_slot = (self.budget_slot + 1) % 12;
@@ -314,12 +294,11 @@ impl VoicePool {
                 continue;
             }
             v.advance_glide();
-            v.apply_parameters(false, bank, track);
+            v.apply_parameters(ParameterUpdate::Ramp, bank, track);
         }
     }
 }
 
-/// A note the driver clock or a delayed-patch delay starts later than it was requested.
 #[derive(Clone, Copy, Default)]
 struct Pending {
     note: NoteOnEvent,
@@ -449,7 +428,6 @@ impl VoiceService {
     pub fn service(&mut self, bank: &SoundBank, tracks: &TrackService) {
         let tick = self.tick;
         self.tick = self.tick.wrapping_add(u64::from(TIMER_TICKS));
-        // Delayed layered patches whose delay elapsed; the start still pays the driver's key-on cost.
         for i in 0..self.pending.len() {
             let pending = self.pending[i];
             if !(pending.active && !pending.release_trigger && pending.tick <= tick) {
@@ -464,7 +442,6 @@ impl VoiceService {
         self.pool.service_ring(bank, tracks);
     }
 
-    /// Starts the note now when the driver is free, else queues it for the tick the driver reaches it.
     fn launch(
         &mut self,
         note: &NoteOnEvent,
@@ -541,8 +518,6 @@ mod tests {
     }
 
     impl VoicePool {
-        /// What `begin` leaves behind on the voice it allocates: a held voice of `priority`,
-        /// numbered by start order.
         fn occupy(&mut self, index: usize, priority: u8) {
             self.serial += 1;
             let voice = &mut self.voices[index];
@@ -584,13 +559,11 @@ mod tests {
         pool.voices[20].priority = 0;
         pool.voices[3].priority = 128;
 
-        // Class 0, oldest first.
         assert_eq!(pool.steal(64), 9);
         assert!(!pool.voices[9].active);
         pool.occupy(9, 64);
         assert_eq!(pool.steal(64), 20);
         pool.occupy(20, 64);
-        // No class 0 left: the oldest of class 64, which a priority 64 note may take.
         assert_eq!(pool.steal(64), 0);
     }
 
@@ -604,7 +577,6 @@ mod tests {
         pool.occupy(20, 64);
         assert_eq!(pool.steal(64), 5);
         pool.occupy(5, 64);
-        // Only held voices remain; voice 0 started first.
         assert_eq!(pool.steal(64), 0);
     }
 
@@ -621,7 +593,6 @@ mod tests {
     #[test]
     fn delayed_starts_are_stolen_in_start_order_not_request_order() {
         let mut service = service();
-        // Requested first but held back by the driver until 300; the second request starts at once.
         assert!(service.queue.push(Pending::default(), 1, 0, 300));
         assert!(service.queue.push(Pending::default(), 2, 100, 100));
         let mut began = Vec::new();
@@ -633,7 +604,6 @@ mod tests {
         }
         assert_eq!(began, [(100, VOICES - 1), (300, VOICES - 2)]);
 
-        // Later notes fill the rest of the pool; the voice that started at 100 is the oldest.
         for index in 0..VOICES - 2 {
             service.pool.occupy(index, 64);
         }

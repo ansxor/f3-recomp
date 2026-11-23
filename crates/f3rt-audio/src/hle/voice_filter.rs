@@ -4,9 +4,6 @@
 //! the previous stage's previous output):
 //!   low-pass:   y = previous + coef*(x - previous)
 //!   high-pass:  y = highpass_pole*previous + (x - x')   (evaluated as (x + pole*previous) - x')
-//! A stage picks one equation, so the unused one cannot leak a non-finite value. Every stage
-//! updates every sample whatever the mode, so a mode change keeps its state.
-//!
 //!   mode   stage 1    stage 2    stage 3    stage 4
 //!   0      LP coef1   LP coef1   HP         HP
 //!   1      LP coef1   LP coef1   LP coef1   HP

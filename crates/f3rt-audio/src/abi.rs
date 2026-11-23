@@ -1,12 +1,3 @@
-//! `include/f3rt/abi/audio.h` over `crate::audio`: one process-wide instance, panics turned into
-//! status codes (`init`, `load_state`) or an abort with the message the C++ ABI shim prints.
-//!
-//! This is the only module of the crate with `unsafe`: every raw pointer the header hands over is
-//! checked and turned into a borrowed slice or array here, so the rest of the crate is safe Rust.
-//!
-//! The C++ shim caught `std::exception` and aborted with `what()`; the Rust counterpart catches the
-//! panic payload and aborts with the same text, so a failure prints the same line.
-
 #![allow(non_camel_case_types)] // The names are `include/f3rt/abi/audio.h`'s.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -42,7 +33,6 @@ pub struct f3rt_audio_stats {
     pub voices_active: u32,
 }
 
-/// The 0x800-byte dual-port RAM the main CPU bus owns, borrowed from C++ until shutdown.
 struct RawSharedRam(NonNull<[u8; SHARED_RAM_SIZE]>);
 
 impl RawSharedRam {
@@ -58,14 +48,12 @@ impl RawSharedRam {
     /// # Safety
     /// The `from_raw` contract holds and no `&mut` to the RAM is live.
     unsafe fn as_ref(&self) -> &[u8; SHARED_RAM_SIZE] {
-        // SAFETY: the caller upholds the `from_raw` contract.
         unsafe { self.0.as_ref() }
     }
 
     /// # Safety
     /// The `from_raw` contract holds and no other reference to the RAM is live.
     unsafe fn as_mut(&mut self) -> &mut [u8; SHARED_RAM_SIZE] {
-        // SAFETY: the caller upholds the `from_raw` contract.
         unsafe { self.0.as_mut() }
     }
 }
@@ -74,15 +62,12 @@ impl RawSharedRam {
 // calls, so the RAM is never touched from two threads at once.
 unsafe impl Send for RawSharedRam {}
 
-/// The `Audio` and the RAM it reads, which only the ABI knows how to reach.
 struct AbiSession {
     audio: Audio,
     shared_ram: RawSharedRam,
 }
 
 impl AbiSession {
-    /// Runs `body` with a shared view of the RAM that ends when it returns, before control goes
-    /// back to C++.
     fn with_ram<R>(&mut self, body: impl FnOnce(&mut Audio, &[u8; SHARED_RAM_SIZE]) -> R) -> R {
         // SAFETY: `init` built `shared_ram` under the `from_raw` contract; this `&` ends with
         // `body`, and the C++ caller is inside this call, not touching the RAM.
@@ -90,12 +75,10 @@ impl AbiSession {
         body(&mut self.audio, ram)
     }
 
-    /// Like `with_ram`, with an exclusive view.
     fn with_ram_mut<R>(
         &mut self,
         body: impl FnOnce(&mut Audio, &mut [u8; SHARED_RAM_SIZE]) -> R,
     ) -> R {
-        // SAFETY: as in `with_ram`; the `&mut` is the only reference to the RAM until `body` returns.
         let ram = unsafe { self.shared_ram.as_mut() };
         body(&mut self.audio, ram)
     }
@@ -134,7 +117,6 @@ unsafe fn bytes<'a>(data: *const u8, size: usize) -> &'a [u8] {
     if size == 0 {
         &[]
     } else {
-        // SAFETY: the caller vouches for `size` readable bytes at `data`.
         unsafe { std::slice::from_raw_parts(data, size) }
     }
 }
@@ -145,14 +127,10 @@ unsafe fn bytes_mut<'a>(data: *mut u8, size: usize) -> &'a mut [u8] {
     if size == 0 {
         &mut []
     } else {
-        // SAFETY: the caller vouches for `size` writable bytes at `data`.
         unsafe { std::slice::from_raw_parts_mut(data, size) }
     }
 }
 
-/// The caller's `max_frames` stereo frames; an empty slice for zero frames, an abort for a buffer
-/// that cannot hold them.
-///
 /// # Safety
 /// A valid `data` must point to `max_frames * 2` writable `int16_t`.
 unsafe fn stereo_out_mut<'a>(function: &str, data: *mut i16, max_frames: usize) -> &'a mut [i16] {
@@ -189,7 +167,6 @@ pub unsafe extern "C" fn f3rt_audio_init(
     shared_ram: *mut u8,
     driver_layout: u8,
 ) -> f3rt_audio_status {
-    // SAFETY: the caller vouches for `shared_ram`, per this function's contract.
     let Some(shared_ram) = (unsafe { RawSharedRam::from_raw(shared_ram) }) else {
         return F3RT_AUDIO_INVALID_ARGUMENT;
     };
@@ -204,7 +181,6 @@ pub unsafe extern "C" fn f3rt_audio_init(
     if instance.is_some() {
         return F3RT_AUDIO_ALREADY_INITIALIZED;
     }
-    // SAFETY: both pointers are checked above, and the caller vouches for their sizes.
     let (sound, samples) = unsafe {
         (
             bytes(sound_rom, sound_rom_size),
@@ -231,8 +207,7 @@ pub unsafe extern "C" fn f3rt_audio_init(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn f3rt_audio_shutdown() {
-    let session = instance().take();
-    // Dropping the session joins the synth worker; do it without holding the lock.
+    let session = { instance().take() };
     drop(session);
 }
 
@@ -279,7 +254,6 @@ pub unsafe extern "C" fn f3rt_audio_render(
     max_frames: usize,
 ) -> usize {
     guarded("f3rt_audio_render", |session| {
-        // SAFETY: the caller vouches for 2 * max_frames writable samples, which is the C contract.
         let out =
             unsafe { stereo_out_mut("f3rt_audio_render", interleaved_stereo, max_frames) };
         session.audio.render(out, max_frames)
@@ -295,7 +269,6 @@ pub unsafe extern "C" fn f3rt_audio_render_ready(
     max_frames: usize,
 ) -> usize {
     guarded("f3rt_audio_render_ready", |session| {
-        // SAFETY: the caller vouches for 2 * max_frames writable samples, which is the C contract.
         let out =
             unsafe { stereo_out_mut("f3rt_audio_render_ready", interleaved_stereo, max_frames) };
         session.audio.render_ready(out, max_frames)
@@ -324,7 +297,6 @@ pub unsafe extern "C" fn f3rt_audio_save_state(dst: *mut u8) {
         if dst.is_null() {
             fail("f3rt_audio_save_state", "null state buffer");
         }
-        // SAFETY: non-null, and the caller vouches for F3RT_AUDIO_STATE_SIZE writable bytes.
         let out = unsafe { bytes_mut(dst, F3RT_AUDIO_STATE_SIZE as usize) };
         session.audio.save_state(out);
     });
@@ -338,7 +310,6 @@ pub unsafe extern "C" fn f3rt_audio_load_state(src: *const u8) -> f3rt_audio_sta
         if src.is_null() {
             return F3RT_AUDIO_INVALID_STATE;
         }
-        // SAFETY: non-null, and the caller vouches for F3RT_AUDIO_STATE_SIZE readable bytes.
         let input = unsafe { bytes(src, F3RT_AUDIO_STATE_SIZE as usize) };
         match session.audio.load_state(input) {
             Ok(()) => F3RT_AUDIO_OK,
@@ -358,7 +329,6 @@ mod tests {
         vec![0u8; SHARED_RAM_SIZE]
     }
 
-    /// A sound ROM carrying the standard driver's signature.
     fn standard_rom() -> Vec<u8> {
         let mut rom = vec![0u8; SOUND_ROM_LEN];
         rom[4..8].copy_from_slice(&0x00c1089eu32.to_be_bytes());
@@ -399,7 +369,6 @@ mod tests {
         };
         assert_eq!(status, F3RT_AUDIO_LAYOUT_MISMATCH);
         let rom = standard_rom();
-        // SAFETY: as above.
         let status = unsafe {
             f3rt_audio_init(rom.as_ptr(), rom.len(), std::ptr::null(), 0, shared.as_mut_ptr(), 0)
         };

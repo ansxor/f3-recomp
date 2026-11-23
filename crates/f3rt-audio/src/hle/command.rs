@@ -1,9 +1,3 @@
-//! The mailbox packet opcodes and their decoded payloads.
-//!
-//! `parse` panics on a malformed length prefix; an opcode or payload length the driver rejects
-//! becomes `Ignored`.
-
-/// A payload field with a fixed wire size. `read` gets exactly `SIZE` bytes.
 trait Wire: Sized {
     const SIZE: usize;
     fn read(bytes: &[u8]) -> Self;
@@ -58,9 +52,6 @@ pub struct Ignored {
     pub opcode: u8,
 }
 
-/// Declares every mailbox command once: `Name = opcode { field: WireType, ... }`, fields in wire
-/// order. Generates the payload struct, its `OPCODE` and `LENGTH`, the `Command` variant and the
-/// decode arm.
 macro_rules! commands {
     ($(
         $(#[$meta:meta])*
@@ -78,7 +69,6 @@ macro_rules! commands {
                 /// The whole packet: length byte, opcode byte, fields.
                 pub const LENGTH: usize = 2 $(+ <$ty as Wire>::SIZE)*;
 
-                /// `payload` is exactly `LENGTH - 2` bytes.
                 fn read(mut payload: &[u8]) -> $name {
                     $name { $( $field: take(&mut payload) ),* }
                 }
@@ -92,8 +82,6 @@ macro_rules! commands {
         }
 
         impl Command {
-            /// The firmware dispatcher consumes an unknown opcode or a wrong length without acting
-            /// on it.
             fn decode(opcode: u8, payload: &[u8]) -> Command {
                 match opcode {
                     $(
@@ -148,8 +136,6 @@ commands! {
     Nop = 0x90 { sequence: SequenceRef, track: u8, key: u8, value: u8 }
 }
 
-/// The accessors only the sequence-addressed (and, for `track`, track-addressed) variants answer;
-/// every other variant yields `None`. Listing the variants here keeps the match arms in one place.
 macro_rules! addressed {
     (sequence: [$($seq:ident),* $(,)?], track: [$($trk:ident),* $(,)?]) => {
         impl Command {

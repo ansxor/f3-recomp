@@ -1,9 +1,5 @@
-//! Bus-map constants the sound board uses.
-
 pub const SOUND_ROM_BASE: u32 = 0xc00000;
 pub const SOUND_ROM_SIZE: usize = 0x80000;
-
-// Mailbox protocol offsets within the 2 KiB shared DPRAM.
 
 pub const SHARED_RAM_SIZE: usize = 0x800;
 

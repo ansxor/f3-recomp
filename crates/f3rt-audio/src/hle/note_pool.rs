@@ -1,9 +1,3 @@
-//! The per-track note bookkeeping pool.
-//!
-//! Each track owns an intrusive singly linked list of `ActiveNote` slots (its head index lives in
-//! the track); the pool hands out slots from a free list and takes them back. Note-offs the pool
-//! decides on go to a caller-supplied `on_note_off(instance, tick)`.
-
 pub const NOTE_CAPACITY: usize = 4096;
 pub const NO_NOTE: u16 = 0xffff;
 
@@ -35,7 +29,6 @@ impl Default for NotePool {
 
 impl NotePool {
     pub fn new() -> NotePool {
-        // Boxed so the 4096-slot table never lands on a stack frame.
         let notes: Box<[ActiveNote; NOTE_CAPACITY]> = vec![ActiveNote::default(); NOTE_CAPACITY]
             .into_boxed_slice()
             .try_into()
@@ -45,7 +38,6 @@ impl NotePool {
         pool
     }
 
-    /// Chains every slot into the free list in index order.
     pub fn reset(&mut self) {
         self.free_head = 0;
         for (n, note) in self.notes.iter_mut().enumerate() {
@@ -56,7 +48,6 @@ impl NotePool {
         }
     }
 
-    /// Pushes a note on the front of the track's list.
     pub fn allocate_note(
         &mut self,
         track_head: &mut u16,
@@ -97,12 +88,16 @@ impl NotePool {
     /// Unlinks the first note of `kernel_key` and returns its instance id (0 when none). Reports no
     /// note-off: the caller releases the voice itself.
     pub fn release_matching_key(&mut self, track_head: &mut u16, kernel_key: u8) -> u64 {
-        // `None` is the list head, `Some(i)` the `next` link of note `i`.
-        let mut link: Option<usize> = None;
+        enum LinkSlot {
+            Head,
+            After(usize),
+        }
+
+        let mut slot = LinkSlot::Head;
         loop {
-            let n = match link {
-                None => *track_head,
-                Some(i) => self.notes[i].next,
+            let n = match slot {
+                LinkSlot::Head => *track_head,
+                LinkSlot::After(i) => self.notes[i].next,
             };
             if n == NO_NOTE {
                 break;
@@ -110,15 +105,15 @@ impl NotePool {
             let index = n as usize;
             if self.notes[index].kernel_key == kernel_key {
                 let next = self.notes[index].next;
-                match link {
-                    None => *track_head = next,
-                    Some(i) => self.notes[i].next = next,
+                match slot {
+                    LinkSlot::Head => *track_head = next,
+                    LinkSlot::After(i) => self.notes[i].next = next,
                 }
                 let instance = self.notes[index].instance;
                 self.release_entry(n);
                 return instance;
             }
-            link = Some(index);
+            slot = LinkSlot::After(index);
         }
         0
     }

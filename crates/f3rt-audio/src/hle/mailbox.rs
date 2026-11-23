@@ -23,7 +23,6 @@ impl Default for Mailbox {
 
 impl Mailbox {
     pub fn new() -> Mailbox {
-        // Boxed so the 1024-event ring never lands on a stack frame.
         let events: Box<[Event; CAPACITY]> = vec![Event::default(); CAPACITY]
             .into_boxed_slice()
             .try_into()

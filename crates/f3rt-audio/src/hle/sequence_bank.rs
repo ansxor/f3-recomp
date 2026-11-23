@@ -1,9 +1,3 @@
-//! The ROM sequence bank, parsed once per bank switch into per-song header fields and decoded track
-//! event streams. Pure: reads the ROM view, touches no engine state.
-//!
-//! Malformed ROM data is an `Err` naming the first fault: `SequenceBank::try_parse` is the one place
-//! that decides whether a bank can be driven.
-
 use crate::hle::driver_layout::DriverLayout;
 use crate::hle::events::{NO_PROGRAM, SONG_SLOTS, TRACK_COUNT};
 use crate::hle::rom_view::{RomView, SOUND_ROM_IMAGE_SIZE};
@@ -18,6 +12,7 @@ pub const CONDUCTOR_STREAM_INDEX: usize = 0;
 pub const FIRST_MUSIC_STREAM_INDEX: usize = 1;
 pub const ARRANGEMENT_STREAM_INDEX: usize = 10;
 pub const TOTAL_SONG_STREAMS: usize = 11;
+pub const MAX_ARRANGEMENT_PHASES: usize = (u8::MAX - 1) as usize;
 
 pub const EV_NOTE_SHORT_MAX: u8 = 0x58;
 pub const EV_NOTE_LONG_MAX: u8 = 0xb0;
@@ -64,7 +59,6 @@ pub struct StreamEvent {
     pub arrangement: [u16; 4],
 }
 
-/// Cursor over one track stream's 16-bit words, bounded by the stream's end.
 struct StreamReader<'a> {
     rom: &'a RomView,
     position: u32,
@@ -229,7 +223,6 @@ impl SongData {
         }
     }
 
-    /// The song's header record at `h` and its streams between `start` and `end`.
     fn parse(
         rom: &RomView,
         layout: &DriverLayout,
@@ -282,7 +275,6 @@ impl SongData {
             if offset < 48 || offset & 1 != 0 || start.wrapping_add(offset).wrapping_add(4) > end {
                 return Err("invalid HLE track offset");
             }
-            // A stream ends where the next stream above it begins.
             let bound = offsets
                 .iter()
                 .filter(|&&other| other > offset)
@@ -294,10 +286,8 @@ impl SongData {
         Ok(song)
     }
 
-    /// The sequencer's playlist `phase` is a 1-based `u8` index, so the stream, terminator included,
-    /// must leave `u8::MAX` free as the past-the-end phase.
     fn check_arrangement(&self) -> Result<(), &'static str> {
-        if self.arrangement().len() >= usize::from(u8::MAX) {
+        if self.arrangement().len() > MAX_ARRANGEMENT_PHASES {
             return Err("HLE arrangement exceeds the 254-phase limit");
         }
         Ok(())
@@ -376,7 +366,6 @@ impl SequenceBank {
         SequenceBank { songs }
     }
 
-    /// `id` is the sequence id: it indexes the bank table and the ROM's id-indexed tables.
     fn parse_song(
         rom: &RomView,
         layout: &DriverLayout,
@@ -442,7 +431,6 @@ mod tests {
 
     #[test]
     fn a_stream_without_an_end_event_is_an_error_not_a_panic() {
-        // One note-less padding word, then the stream ends.
         let rom: Arc<[u8]> = vec![0; SOUND_ROM_IMAGE_SIZE as usize].into();
         let view = RomView::with_image(rom, 1);
         let start = SOUND_ROM_BASE;

@@ -1,5 +1,3 @@
-//! `runtime/audio/hle/`: one module per C++ file of the HLE sound engine.
-
 pub mod block;
 pub mod command;
 pub mod core;

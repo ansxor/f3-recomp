@@ -1,5 +1,3 @@
-//! One voice's sample read, gain ramp and four-pole filter over a span of bus frames.
-
 use super::block::OtisBus;
 use super::synthesis::VOICE_BLOCK_FRAMES;
 use super::voice::{Filter, GainSegment, SampleAdvance, Voice, interpolate_sample, interpolated_gain};
@@ -41,7 +39,6 @@ impl<'a> SampleWords<'a> {
         )
     }
 
-    /// The loop end wraps to zero outside the sample window.
     #[inline(always)]
     pub fn interpolate_voice(&self, voice: &Voice) -> f32 {
         let index = word_index(voice.position);
@@ -95,8 +92,6 @@ impl<'a> SampleWords<'a> {
     }
 }
 
-/// Truncates a read position to its word index. A position outside the bank saturates (NaN and
-/// negatives to 0, the rest to `usize::MAX`); `room` and `outside` keep the renderer inside it.
 #[inline(always)]
 fn word_index(position: f64) -> usize {
     position as usize
@@ -193,7 +188,6 @@ impl Voice {
     }
 }
 
-/// A constant or a ramping stereo gain for one run of frames.
 pub trait RunGain {
     fn next(&mut self) -> StereoGain;
     fn store(&mut self, voice: &mut Voice, frames: usize);
@@ -315,7 +309,6 @@ fn bus_left_channel(pair: u8) -> Option<usize> {
     OtisBus::pair_left(pair)
 }
 
-/// Frames of interleaved eight-channel rows one voice mixes into, and the channel pair within a row.
 pub struct Chunk<'a> {
     rows: &'a mut [[f32; 8]],
     left: usize,
@@ -334,8 +327,6 @@ impl Chunk<'_> {
     }
 }
 
-/// Where one voice's output goes: the selected bus pair of the block, or scratch rows when the
-/// voice has none.
 pub struct VoiceBus<'a> {
     buses: &'a mut [f32],
     discard: &'a mut [[f32; 8]; VOICE_BLOCK_FRAMES],
