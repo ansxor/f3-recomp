@@ -61,15 +61,10 @@ set(F3RT_CORE_SOURCES
     runtime/machine.cpp
     runtime/renderer/fdp/video.cpp
     runtime/renderer/game/video.cpp
-    runtime/renderer/game/video_log.cpp
+    runtime/renderer/game/oracle.cpp
+    runtime/renderer/game/bridge_video_host.cpp
     runtime/renderer/decode.cpp
     runtime/renderer/graphics_assets.cpp
-    runtime/renderer/game/tiles.cpp
-    runtime/renderer/game/text.cpp
-    runtime/renderer/game/sprites.cpp
-    runtime/renderer/game/lines.cpp
-    runtime/renderer/game/row_workers.cpp
-    runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
     ${F3RT_GAME_BOOT_SOURCES}
     ${F3RT_GAME_NETPLAY_SOURCES}
@@ -163,7 +158,7 @@ endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(f3rt
-    PUBLIC f3rt_abi
+    PUBLIC f3rt_abi f3rt_video_cxx
     PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson
 )
 if(WIN32)
@@ -302,12 +297,12 @@ if(F3RT_SDL)
         target_compile_definitions(f3rt-ui PRIVATE F3RT_GPU=1)
 
         find_program(UV_EXECUTABLE NAMES uv REQUIRED)
-        set(VIDEO_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.hpp")
+        set(VIDEO_SHADER_RS "${CMAKE_CURRENT_BINARY_DIR}/generated/video_shaders.rs")
         add_custom_command(
-            OUTPUT "${VIDEO_SHADER_HEADER}"
+            OUTPUT "${VIDEO_SHADER_RS}"
             COMMAND "${UV_EXECUTABLE}" run --project "${CMAKE_CURRENT_SOURCE_DIR}" --locked --no-default-groups python "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders/compile.py"
                 --source-dir "${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/shaders"
-                --output "${VIDEO_SHADER_HEADER}"
+                --output "${VIDEO_SHADER_RS}"
                 --glslang "${F3_GLSLANG}"
                 --spirv-cross "${F3_SPIRV_CROSS}"
             DEPENDS
@@ -325,25 +320,18 @@ if(F3RT_SDL)
                 ${F3_SHADER_TOOL_TARGETS}
             VERBATIM
         )
+        add_custom_target(f3rt_video_shaders DEPENDS "${VIDEO_SHADER_RS}")
+        add_dependencies(cargo-prebuild_f3rt_abi f3rt_video_shaders)
+        corrosion_set_env_vars(f3rt_abi "F3_VIDEO_SHADERS_RS=${VIDEO_SHADER_RS}")
 
         add_library(f3rt-gpu STATIC
             runtime/renderer/gpu/video.cpp
-            runtime/renderer/gpu/encode.cpp
-            runtime/renderer/gpu/interp.cpp
-            runtime/renderer/gpu/motion.cpp
-            "${VIDEO_SHADER_HEADER}"
         )
-        if(APPLE)
-            enable_language(OBJCXX)
-            target_sources(f3rt-gpu PRIVATE runtime/renderer/gpu/pacing_macos.mm)
-            set_source_files_properties(runtime/renderer/gpu/pacing_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-            target_link_libraries(f3rt-gpu PRIVATE "-framework AppKit" "-framework QuartzCore")
-        endif()
         target_include_directories(f3rt-gpu
             PUBLIC include runtime runtime/frontend "${CMAKE_CURRENT_BINARY_DIR}"
-            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated"
         )
-        target_link_libraries(f3rt-gpu PUBLIC SDL3::SDL3)
+        target_link_libraries(f3rt-gpu PUBLIC f3rt SDL3::SDL3)
         target_compile_definitions(f3rt-gpu INTERFACE F3RT_GPU=1)
         target_compile_options(f3rt-gpu PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -364,6 +352,12 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake
     )
 
+    add_test(NAME f3rt-video-cargo-test
+        COMMAND ${CMAKE_COMMAND} -E env "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+            cargo test -p f3rt-video
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
     include(GoogleTest)
 
     if(F3RT_NETPLAY)
@@ -374,7 +368,6 @@ if(BUILD_TESTING)
 
     add_library(f3rt-test-support STATIC
         runtime/tests/support.cpp
-        runtime/renderer/gpu/motion.cpp
     )
     target_include_directories(f3rt-test-support PUBLIC runtime runtime/tests)
     target_link_libraries(f3rt-test-support PUBLIC f3rt f3rt-runner GTest::gtest rapidcheck_gtest)
@@ -382,7 +375,7 @@ if(BUILD_TESTING)
         target_compile_definitions(f3rt-test-support PUBLIC F3RT_DEFAULT_ROM_DIR="${F3_ROM_DIR}")
     endif()
 
-    foreach(area video input input_script cpu sprites motion_interp state netplay bytes)
+    foreach(area video input input_script cpu sprites state netplay bytes)
         file(GLOB GAME_AREA_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/tests/${area}*.cpp")
         add_executable(f3rt-test-${area} runtime/tests/${area}.cpp ${GAME_AREA_TEST_SOURCES})
         target_link_libraries(f3rt-test-${area} PRIVATE f3rt-test-support GTest::gtest_main)

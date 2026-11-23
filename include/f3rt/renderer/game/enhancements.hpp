@@ -10,6 +10,7 @@ namespace f3rt {
 
 class SpriteGroupTracker;
 struct SceneSprite;
+namespace rust_video { struct SceneSprite; }
 
 enum class VideoBackend { Cpu, Gpu };
 
@@ -39,11 +40,15 @@ public:
 
     bool empty() const { return m_stages.empty(); }
     void present(std::span<const SceneSprite> latched, std::optional<SpriteFrame> frame);
+    void present_from_rust(std::span<const rust_video::SceneSprite> latched,
+                           std::optional<SpriteFrame> frame);
     std::span<const SceneSprite> sprites() const;
     void reset();
     void report(std::ostream &out) const;
 
 private:
+    void apply_stages(const SpriteFrame &frame);
+
     std::vector<std::unique_ptr<SpriteStage>> m_stages;
     std::vector<SceneSprite> m_presented;
 };

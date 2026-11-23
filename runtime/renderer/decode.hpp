@@ -1,13 +1,14 @@
 // license:BSD-3-Clause
 // Generic TC0630FDP video-RAM decode primitives, shared by the FDP renderer
-// (runtime/renderer/fdp/video.cpp) and the per-game scene decoders under games/<game>/video/,
-// so both read video RAM through one implementation.
+// (runtime/renderer/fdp/video.cpp) and the game-side sprite decoder. The display-list walk
+// itself lives in Rust (`rust_video::decode_sprites`).
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
+#include "renderer/game/scene.hpp"
 #include "sprites/presentation.hpp"
 
 namespace f3rt {
@@ -32,8 +33,9 @@ struct SpriteRamState {
     uint8_t pen_mask = 0x0f;
 };
 
-// when apply_flip is false (the caller's sprite latch applies the flipscreen
-// mirror) or already mirrored when true. `color` is the raw colour byte: its low
+// One decoded display-list entry. `x`/`y` are 24.8 producer coordinates in the 432x256 scanout
+// space, already mirrored when apply_flip is false (the caller's sprite latch applies the
+// flipscreen mirror) or already mirrored when true. `color` is the raw colour byte: its low
 // 6 bits select the 16x16 tile palette and bits 6..7 its priority group.
 struct DecodedSpriteEntry {
     int32_t x, y;
@@ -46,6 +48,14 @@ struct DecodedSpriteEntry {
     int32_t group_x, group_y;
     uint32_t group_pc;
 };
+
+// `scene_sprite`: the serialized-canonical view of one decoded display-list entry.
+inline SceneSprite scene_sprite(const DecodedSpriteEntry &entry) {
+    return {entry.x,       entry.y,       uint16_t(entry.scale_x), uint16_t(entry.scale_y),
+            entry.tile,    entry.color,   entry.flip_x,            entry.flip_y,
+            entry.group,   entry.group_x, entry.group_y,           entry.group_pc,
+            1.0f};
+}
 
 // Walk the sprite display list in `spriteram` (0x10000 bytes, base 0x600000)
 // following block chaining, the jump word and command entries (which update `state`).

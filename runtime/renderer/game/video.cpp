@@ -1,176 +1,25 @@
-#include "f3rt/game_video.hpp"
+#include "renderer/game/video.hpp"
 #include "f3rt/machine.hpp"
-#include "f3rt/video.hpp"
-#include "renderer/game/tiles.hpp"
-#include "renderer/game/text.hpp"
-#include "renderer/game/sprites.hpp"
-#include "renderer/game/lines.hpp"
-#include "renderer/game/scene_snapshot.hpp"
-#include "renderer/game/indexed_compositor.hpp"
-#include "state_io.hpp"
 #include "sprites/sprite_system.hpp"
+#include "sprites/groups.hpp"
 #include <algorithm>
-#include <array>
 #include <ostream>
-#include <sstream>
 #include <stdexcept>
-#include <vector>
-#include <tuple>
 
 namespace f3rt {
 namespace {
-bool differs(ScenePixel game, ScenePixel oracle) {
-    const bool visible = (game.flags & 0x10) != 0;
-    return visible != ((oracle.flags & 0x10) != 0) ||
-           (visible && (game.palette != oracle.palette || game.flags != oracle.flags));
+
+rust_video::VideoConfig rust_config(const VideoConfig &config) {
+    return {config.rotation,       config.sprite_lag,
+            config.visible_y,      config.visible_height,
+            config.extend,         config.extended_alt_maps,
+            config.full_resolution_alt_maps};
 }
-} // namespace
-struct GameVideo::Impl {
-    Impl(Machine &value, GameVideoMode selected, RenderEnhancements stages)
-        : machine(value), mode(selected), enhancements(std::move(stages)) {}
-    Machine &machine;
-    GameVideoMode mode;
-    std::unique_ptr<Video> oracle;
-    VideoProbe *probe = nullptr;
-    void enter(VideoStage stage) {
-        if (probe) probe->enter(stage);
-    }
-    uint64_t rendered_frames = 0;
-    GameTiles tiles;
-    GameText text;
-    GameSprites sprites;
-    RenderEnhancements enhancements;
-    GameLines lines;
-    bool native_pending = false;
-    std::unique_ptr<SceneSnapshot> snapshot_storage = std::make_unique<SceneSnapshot>();
-    SceneSnapshot *snapshot = snapshot_storage.get();
-    // Optional caller-owned destination for the next capture or load. `snapshot` always names the newest frame
-    // and is never rewritten in place once a target is installed, so a frame handed to another thread stays immutable.
-    SceneSnapshot *snapshot_target = nullptr;
-    SceneSnapshot &snapshot_dest() { return snapshot_target ? *snapshot_target : *snapshot; }
-    struct NativeCompositor {
-        explicit NativeCompositor(std::span<const uint8_t> tile_pixels) : tile_rows(tile_pixels) {}
-        TileRowTable tile_rows;
-        IndexedScratch scratch;
-    };
-    std::unique_ptr<NativeCompositor> native;
-    void compose_native(std::span<uint32_t> output) {
-        if (!native) native = std::make_unique<NativeCompositor>(machine.graphics_assets.playfield_tiles());
-        compose_snapshot_indexed(*snapshot, native->tile_rows, machine.graphics_assets.sprite_tiles(),
-                                 native->scratch, output, geometry::NATIVE_WIDTH,
-                                 PixelFormat::Argb8888, GameVideoOptions{}, ComposeMode::Serial,
-                                 SpriteList::Canonical);
-    }
-    std::vector<uint32_t> composite;
-    std::vector<uint16_t> sprite_plane;
 
-    RamShadow<PALETTE_RAM_SIZE> palette_shadow;
-    std::array<uint32_t, SceneSnapshot::PALETTE_SIZE> colors{};
-    uint64_t colors_version = fresh_content_version();
-    void refresh_colors() {
-        const auto &palette = machine.palette;
-        if (!palette_shadow.changed(palette.data())) return;
-        for (unsigned i = 0; i < colors.size(); ++i)
-            colors[i] = (uint32_t(palette[i * 4 + 1]) << 16) | (uint32_t(palette[i * 4 + 2]) << 8) |
-                        palette[i * 4 + 3];
-        colors_version = fresh_content_version();
-    }
+rust::Slice<const uint8_t> view_of(std::span<const uint8_t> span) {
+    return rust::Slice<const uint8_t>(span.data(), span.size());
+}
 
-    void take_snapshot() {
-        auto &frame = snapshot_dest();
-        snapshot = &frame;
-        frame.fallback = false;
-        if (mode == GameVideoMode::Compare)
-            std::copy(machine.m_pixels.begin(), machine.m_pixels.end(),
-                      frame.native_pixels.begin());
-        if (frame.tiles.version() != tiles.version()) frame.tiles = tiles;
-        if (frame.text.version() != text.version()) frame.text = text;
-        if (frame.rows_version != lines.rows_version()) {
-            std::copy(lines.rows().begin(), lines.rows().end(), frame.rows.begin());
-            frame.rows_version = lines.rows_version();
-        }
-        auto current = sprites.sprites();
-        if (!sprites.trails())
-            current = enhancements.empty() ? sprites.presented_sprites() : enhancements.sprites();
-        frame.sprite_count = unsigned(current.size());
-        std::copy(current.begin(), current.end(), frame.sprites.begin());
-        const auto canonical = sprites.sprites();
-        frame.canonical_sprite_count = unsigned(canonical.size());
-        std::copy(canonical.begin(), canonical.end(), frame.canonical_sprites.begin());
-        frame.pen_mask = sprites.pen_mask();
-        frame.flipped = scanout_flipped();
-        frame.sprite_flipped = sprites.flipped();
-        const auto trail_seed = sprites.trail_seed();
-        frame.sprite_trail_seed.assign(trail_seed.begin(), trail_seed.end());
-        if (frame.colors_version != colors_version) {
-            frame.colors = colors;
-            frame.colors_version = colors_version;
-        }
-    }
-
-    void materialize_native() {
-        if (!native_pending) return;
-        compose_native(machine.m_pixels);
-        native_pending = false;
-    }
-    uint64_t composite_frames = 0, composite_mismatches = 0;
-    std::array<uint64_t, 9> frames{}, mismatches{};
-    // PF2/PF3 alternate physical maps (4/5), compared only for extended_alt_maps games.
-    std::array<uint64_t, 2> alt_frames{}, alt_mismatches{};
-    // Frames whose render-only presented sprite list (unit splices) existed / filled its capacity.
-    uint64_t presented_frames = 0, presented_overflow_frames = 0;
-    // Render-only full-resolution alternate-map presentation (game_config::video.full_resolution_alt_maps):
-    // the row solver cache and, over rendered frames, visible PF2/PF3 alt-map rows that draw from the
-    // main map (remapped) versus the canonical alternate map (fallback).
-    FullResolutionAltMaps alt_maps;
-    uint64_t alt_rows_remapped = 0, alt_rows_fallback = 0;
-    // Layer components in decode order; the constrained helpers below enforce
-    // that each one satisfies the scene lifecycle concepts.
-    auto sources() { return std::tie(tiles, text, sprites, lines); }
-    // Components whose state is not derivable from video RAM, in snapshot order.
-    auto stateful() { return std::tie(sprites, lines); }
-    auto stateful() const { return std::tie(sprites, lines); }
-    template <SceneSource... S> static void reset_all(S &...s) { (s.reset(), ...); }
-    bool scanout_flipped() const {
-        // Lag 2 delays the sprite framebuffer, while the scanout sees the latest register.
-        return game_config::video.sprite_lag == 2 ? sprites.m_reg_flipped : sprites.flipped();
-    }
-    void latch_sprites() {
-        sprites.latch(machine.graphics_assets.sprite_tiles());
-        if (!enhancements.empty()) {
-            const auto frame = machine.sprites
-                                   ? SpriteFrame::read(machine.sprites->tracker(), sprites.flipped())
-                                   : std::nullopt;
-            enhancements.present(sprites.presented_sprites(), frame);
-        }
-    }
-    template <Snapshotable... S> static size_t state_size_all(const S &...s) {
-        return (size_t(0) + ... + s.state_size());
-    }
-    template <Snapshotable... S> static void save_all(StateWriter &w, const S &...s) {
-        (s.save_state(w), ...);
-    }
-    template <Snapshotable... S> static void load_all(StateReader &r, S &...s) {
-        (s.load_state(r), ...);
-    }
-    // Playfield tiles and text are derived from serialized video RAM, so
-    // their caches are not serialized.
-    size_t state_size() const {
-        return GameSprites::TRAIL_STATE_SIZE +
-               std::apply([](const auto &...c) { return Impl::state_size_all(c...); }, stateful());
-    }
-    void save_state(StateWriter &writer) const {
-        std::apply([&](const auto &...c) { Impl::save_all(writer, c...); }, stateful());
-        sprites.save_trails(writer);
-    }
-    void load_state(StateReader &reader) {
-        std::apply([&](auto &...c) { Impl::load_all(reader, c...); }, stateful());
-        sprites.load_trails(reader);
-        native_pending = false;
-    }
-};
-
-namespace {
 // The renderer is compiled against games/<game>/config.toml [video]; a ROM set
 // carrying different geometry must never be drawn with it.
 Machine &require_matching_video(Machine &machine) {
@@ -180,312 +29,167 @@ Machine &require_matching_video(Machine &machine) {
             "differs from the geometry this build was configured for");
     return machine;
 }
+
+rust::Box<rust_video::SpritePresentation> rust_presentation(const SpritePresentation *source) {
+    auto presented = rust_video::new_sprite_presentation();
+    if (!source) return presented;
+    for (const auto &group : source->groups)
+        presented->push_group(group.key, group.x, group.y, group.pc);
+    for (const auto &splice : source->splices) {
+        presented->push_splice(splice.bank, splice.first, splice.last, view_of(splice.real),
+                               view_of(splice.replacement));
+        for (const auto &group : splice.groups)
+            presented->push_splice_group(group.key, group.x, group.y, group.pc);
+    }
+    return presented;
+}
+
 } // namespace
 
-GameVideo::GameVideo(Machine &machine, GameVideoMode mode, RenderEnhancements enhancements)
-    : m_impl(std::make_unique<Impl>(require_matching_video(machine), mode, std::move(enhancements))) {
-    if (mode != GameVideoMode::Game) {
-        m_impl->oracle = std::make_unique<Video>(machine.graphics_assets, machine.roms.video);
-        m_impl->oracle->enable_scene_inspection();
-    }
+GameVideo::GameVideo(Machine &machine, RenderEnhancements enhancements)
+    : m_machine(require_matching_video(machine)), m_enhancements(std::move(enhancements)),
+      m_video(rust_video::new_game_video(rust_config(machine.roms.video))),
+      m_snapshot_storage(std::make_unique<SceneSnapshot>(machine.roms.video)) {
     reset();
 }
-GameVideo::~GameVideo() = default;
+
+SceneSnapshot &GameVideo::next_snapshot_slot() {
+    return m_snapshot_target ? *m_snapshot_target : *m_snapshot_storage;
+}
+
+rust_video::EnhancementsHost GameVideo::enhancements_host() const {
+    const auto *tracker =
+        m_machine.sprites ? &m_machine.sprites->tracker() : nullptr;
+    return {const_cast<RenderEnhancements *>(&m_enhancements), tracker};
+}
+
 void GameVideo::reset() {
-    m_impl->materialize_native();
-    std::apply([](auto &...c) { Impl::reset_all(c...); }, m_impl->sources());
-    m_impl->native_pending = false;
-    m_impl->enhancements.reset();
-    {
-        auto &frame = m_impl->snapshot_dest();
-        m_impl->snapshot = &frame;
-        frame.fallback = true;
-        frame.native_pixels.fill(0xff000000);
-    }
-    m_impl->frames.fill(0);
-    m_impl->mismatches.fill(0);
-    m_impl->presented_frames = m_impl->presented_overflow_frames = 0;
-    m_impl->alt_maps.reset();
-    m_impl->alt_rows_remapped = m_impl->alt_rows_fallback = 0;
-    m_impl->alt_frames.fill(0);
-    m_impl->alt_mismatches.fill(0);
-    m_impl->composite_frames = m_impl->composite_mismatches = 0;
-    m_impl->rendered_frames = 0;
-    if (m_impl->oracle) m_impl->oracle->reset();
+    auto host = enhancements_host();
+    m_video->reset_with(m_machine.graphics_assets.inner(), host);
+    next_snapshot_slot().capture_fallback();
+    next_snapshot_slot().refresh();
 }
 
 void GameVideo::render_frame() {
-    auto &state = *m_impl;
-    auto &m = state.machine;
-    state.enter(VideoStage::Decode);
-    const VideoRam vram{m.graphics, m.control, m.frame + 1};
-    const auto decode_sprites = [&] {
-        state.sprites.decode(vram, m.sprites && m.sprites->active() ? m.sprites->presentation()
-                                                                   : SpritePresentation{});
-    };
-    state.tiles.decode(vram);
-    state.text.decode(vram);
-    // Lag 0 draws before scanout. Lag 2 draws the old submission after scanout.
-    if constexpr (game_config::video.sprite_lag != 2) decode_sprites();
-    if constexpr (game_config::video.sprite_lag == 0) state.latch_sprites();
-    state.lines.decode(vram, state.scanout_flipped());
-    state.refresh_colors();
-    state.enter(VideoStage::Scene);
-    render();
-    if (state.oracle) {
-        state.enter(VideoStage::Oracle);
-        state.oracle->render_frame(m.palette, m.graphics, m.control, m.m_pixels);
-    }
-    state.enter(VideoStage::Capture);
-    state.take_snapshot();
-    state.native_pending = state.mode == GameVideoMode::Game;
-    if (state.mode == GameVideoMode::Compare) compare_composite(m.frame + 1);
-    state.enter(VideoStage::Latch);
-    if constexpr (game_config::video.sprite_lag != 0) state.latch_sprites();
-    if constexpr (game_config::video.sprite_lag == 2) decode_sprites();
-    if (state.sprites.presented_valid()) {
-        ++state.presented_frames;
-        state.presented_overflow_frames += state.sprites.presented_overflow();
-    }
-    state.enter(VideoStage::Idle);
+    auto &m = m_machine;
+    const SpritePresentation presentation =
+        m.sprites && m.sprites->active() ? m.sprites->presentation() : SpritePresentation{};
+    auto rust_presented = rust_presentation(&presentation);
+    rust_video::ProbeHost probe{m_probe};
+    auto host = enhancements_host();
+    SceneSnapshot &target = next_snapshot_slot();
+    m_video->render_frame(m.graphics_assets.inner(), view_of(m.graphics), view_of(m.control),
+                          view_of(m.palette), m.frame + 1, *rust_presented, probe, host,
+                          target.destination());
+    target.refresh();
 }
 
-void GameVideo::set_probe(VideoProbe *probe) { m_impl->probe = probe; }
-
-void GameVideo::render() {
-    auto &state = *m_impl;
-    state.lines.prepare(state.scanout_flipped());
-    state.lines.cull_empty_rows(state.tiles);
-    if constexpr (game_config::video.full_resolution_alt_maps) {
-        state.alt_maps.update(state.tiles, state.machine.graphics_assets.playfield_tiles());
-        const auto counts = state.lines.resolve_full_resolution_alt(state.alt_maps);
-        state.alt_rows_remapped += counts.remapped;
-        state.alt_rows_fallback += counts.fallback;
-    }
-    ++state.rendered_frames;
+const SceneSnapshot &GameVideo::scene_snapshot() const {
+    auto &snapshot = const_cast<GameVideo *>(this)->next_snapshot_slot();
+    snapshot.refresh();
+    return snapshot;
 }
 
-void GameVideo::materialize_native() const { m_impl->materialize_native(); }
-void GameVideo::set_snapshot_target(SceneSnapshot *target) { m_impl->snapshot_target = target; }
-const SceneSnapshot &GameVideo::scene_snapshot() const { return *m_impl->snapshot; }
-
-void GameVideo::compare_layers(uint64_t frame, unsigned layer_mask) {
-    if (!layer_mask || (layer_mask & ~ALL_LAYERS))
-        throw std::runtime_error("Video layer mask must select PF0..3, SP0..3, text (bits 0..8)");
-    auto &m = m_impl->machine;
-    if (!m_impl->oracle) throw std::logic_error("Layer comparison requires an FDP oracle");
-    auto &oracle = *m_impl->oracle;
-    const auto assets = m.graphics_assets.playfield_tiles();
-    auto &plane = m_impl->sprite_plane;
-    plane.resize(size_t(432) * 256);
-    std::ranges::fill(plane, 0);
-    const auto seed = m_impl->sprites.trail_seed();
-    std::ranges::copy(seed, plane.begin());
-    m_impl->sprites.raster(m.graphics_assets.sprite_tiles(), plane);
-    if (layer_mask & layer_bit(LayerId::Text)) oracle.prepare_text_inspection(m.graphics);
-    if (layer_mask == ALL_LAYERS) m_impl->lines.compare_rows(oracle, frame);
-    for (unsigned layer = 0; layer < LAYER_COUNT; ++layer) {
-        const LayerId id{uint8_t(layer)};
-        if (!(layer_mask & layer_bit(id))) continue;
-        // Every layer is decoded from video RAM at VBSTART; nothing is
-        // unsupported by producer identity.
-        uint64_t count = 0;
-        int first_x = -1, first_y = -1;
-        ScenePixel first_game{}, first_oracle{};
-        const int width = LAYER_INFO[layer].width;
-        const int height = LAYER_INFO[layer].height;
-        const LayerKind layer_kind = kind(id);
-        const bool indexed = layer_kind != LayerKind::Sprite;
-        for (int y = 0; y < height; ++y) {
-            const auto reference_line =
-                layer_kind == LayerKind::Playfield
-                    ? oracle.inspect_playfield_line(sub_index(id), y, m.graphics)
-                : layer_kind == LayerKind::Text ? oracle.inspect_text_line(y, m.graphics)
-                                               : VideoLine{};
-            for (int x = 0; x < width; ++x) {
-                ScenePixel game{}, expected{};
-                if (layer_kind == LayerKind::Playfield)
-                    game = m_impl->tiles.playfield_pixel(sub_index(id), x, y, oracle.flipscreen(),
-                                                         assets);
-                else if (layer_kind == LayerKind::Text)
-                    game = m_impl->text.pixel(x, y, oracle.flipscreen());
-                if (indexed) expected = {reference_line.palette[x], reference_line.flags[x]};
-                else {
-                    const unsigned offset = (y + geometry::FIRST_LINE) * 432 + x + 46;
-                    const uint16_t actual = plane[offset];
-                    const uint16_t reference = oracle.sprite_plane()[offset];
-                    game = {actual, uint8_t(actual && sprite_layer(actual) == id ? 0x10 : 0)};
-                    expected = {reference,
-                                uint8_t(reference && sprite_layer(reference) == id ? 0x10 : 0)};
-                }
-                if (differs(game, expected)) {
-                    if (!count) {
-                        first_x = x;
-                        first_y = y;
-                        first_game = game;
-                        first_oracle = expected;
-                    }
-                    ++count;
-                }
-            }
-        }
-        ++m_impl->frames[layer];
-        m_impl->mismatches[layer] += count;
-        if (count) {
-            std::ostringstream error;
-            error << "Game " << LAYER_INFO[layer].name << " frame " << frame << ": " << count
-                  << " indexed pixel mismatches; first (" << first_x << ',' << first_y
-                  << ") game=0x" << std::hex << first_game.palette << '/'
-                  << unsigned(first_game.flags) << " oracle=0x" << first_oracle.palette << '/'
-                  << unsigned(first_oracle.flags);
-            if (layer_kind == LayerKind::Sprite) {
-                for (const auto &sprite : m_impl->sprites.sprites()) {
-                    const int dx = (sprite.x >> 8) - (first_x + 46);
-                    const int dy = (sprite.y >> 8) - (first_y + int(geometry::FIRST_LINE));
-                    if (dx < -32 || dx > 32 || dy < -32 || dy > 32) continue;
-                    error << "\n nearby tile=0x" << std::hex << sprite.tile << " palette=0x"
-                          << unsigned(sprite.palette) << std::dec << " xy8=(" << sprite.x << ','
-                          << sprite.y << ") scale=(" << sprite.scale_x << ',' << sprite.scale_y
-                          << ") flip=(" << sprite.flip_x << ',' << sprite.flip_y << ')';
-                }
-            }
-            throw std::runtime_error(error.str());
-        }
-    }
-    if constexpr (!game_config::video.extend || game_config::video.extended_alt_maps) {
-        for (unsigned alt = 0; alt < 2; ++alt) {
-            const LayerId id = playfield(2 + alt);
-            if (!(layer_mask & layer_bit(id))) continue;
-            uint64_t count = 0;
-            int first_x = -1, first_y = -1;
-            ScenePixel first_game{}, first_oracle{};
-            for (int y = 0; y < LAYER_INFO[unsigned(id)].height; ++y) {
-                const auto reference = oracle.inspect_playfield_line(4 + alt, y, m.graphics);
-                for (int x = 0; x < LAYER_INFO[unsigned(id)].width; ++x) {
-                    const ScenePixel game = m_impl->tiles.playfield_pixel(
-                        2 + alt, x, y, oracle.flipscreen(), assets, true);
-                    const ScenePixel expected{reference.palette[x], reference.flags[x]};
-                    if (!differs(game, expected)) continue;
-                    if (!count) {
-                        first_x = x;
-                        first_y = y;
-                        first_game = game;
-                        first_oracle = expected;
-                    }
-                    ++count;
-                }
-            }
-            ++m_impl->alt_frames[alt];
-            m_impl->alt_mismatches[alt] += count;
-            if (count) {
-                std::ostringstream error;
-                error << "Game " << LAYER_INFO[unsigned(id)].name << " alternate map frame "
-                      << frame << ": " << count << " indexed pixel mismatches; first (" << first_x
-                      << ',' << first_y << ") game=0x" << std::hex << first_game.palette << '/'
-                      << unsigned(first_game.flags) << " oracle=0x" << first_oracle.palette << '/'
-                      << unsigned(first_oracle.flags);
-                throw std::runtime_error(error.str());
-            }
-        }
-    }
-    if (layer_mask == ALL_LAYERS) compare_composite(frame);
+ScenePixel GameVideo::playfield_pixel(unsigned layer, int x, int y, bool flipped, bool alt) const {
+    const auto pixel = m_video->playfield_pixel(layer, x, y, flipped,
+                                               m_machine.graphics_assets.inner(), alt);
+    return {pixel.palette, pixel.flags};
 }
 
-void GameVideo::compare_composite(uint64_t frame) {
-    m_impl->materialize_native();
-    auto &game = m_impl->composite;
-    game.resize(geometry::NATIVE_PIXELS);
-    m_impl->compose_native(game);
-    uint64_t count = 0;
-    unsigned first = 0;
-    const auto &oracle = m_impl->machine.m_pixels;
-    for (unsigned i = 0; i < game.size(); ++i) {
-        if (game[i] == oracle[i]) continue;
-        if (!count) first = i;
-        ++count;
+ScenePixel GameVideo::text_pixel(int x, int y, bool flipped) const {
+    const auto pixel = m_video->text_pixel(x, y, flipped);
+    return {pixel.palette, pixel.flags};
+}
+
+SceneRow GameVideo::row(unsigned screen_y) const {
+    const auto row = m_video->row(screen_y);
+    SceneRow out{};
+    for (unsigned i = 0; i < 4; ++i) {
+        const auto &pf = row.playfields[i];
+        out.playfields[i].layer = {pf.layer.priority,    pf.layer.blend_mode,
+                                   pf.layer.clip_enabled, pf.layer.clip_inverted,
+                                   pf.layer.clip_inverse, pf.layer.enabled,
+                                   pf.layer.blend_select, pf.layer.mosaic};
+        out.playfields[i].source_x = pf.source_x;
+        out.playfields[i].source_y = pf.source_y;
+        out.playfields[i].x_step = pf.x_step;
+        out.playfields[i].y_step = pf.y_step;
+        out.playfields[i].y_fraction = pf.y_fraction;
+        out.playfields[i].palette_add = pf.palette_add;
+        out.playfields[i].alt_map = pf.alt_map;
+        out.playfields[i].empty_row = pf.empty_row;
+        out.playfields[i].full_res_offset = pf.full_res_offset;
+        const auto &sp = row.sprites[i];
+        out.sprites[i] = {sp.priority,    sp.blend_mode,  sp.clip_enabled, sp.clip_inverted,
+                          sp.clip_inverse, sp.enabled,     sp.blend_select, sp.mosaic};
+        out.clips[i] = {row.clips[i].left, row.clips[i].right};
+        out.blend[i] = row.blend[i];
     }
-    ++m_impl->composite_frames;
-    m_impl->composite_mismatches += count;
-    if (count) {
-        std::ostringstream error;
-        error << "Game composite frame " << frame << ": " << count
-              << " RGB pixel mismatches; first (" << first % geometry::NATIVE_WIDTH << ','
-              << first / geometry::NATIVE_WIDTH << ") game=0x" << std::hex << game[first]
-              << " oracle=0x" << oracle[first];
-        throw std::runtime_error(error.str());
+    out.text = {row.text.priority,   row.text.blend_mode,  row.text.clip_enabled,
+                row.text.clip_inverted, row.text.clip_inverse, row.text.enabled,
+                row.text.blend_select,  row.text.mosaic};
+    out.background = row.background;
+    out.text_x = row.text_x;
+    out.text_y = row.text_y;
+    out.mosaic_period = row.mosaic_period;
+    out.bitmap = row.bitmap;
+    out.palette_15bit = row.palette_15bit;
+    out.blur = row.blur;
+    return out;
+}
+
+std::vector<SceneSprite> GameVideo::sprite_snapshot() const {
+    std::vector<rust_video::SceneSprite> buffer(MAX_HARDWARE_SPRITES);
+    const size_t count = m_video->sprite_list(
+        rust::Slice<rust_video::SceneSprite>(buffer.data(), buffer.size()));
+    std::vector<SceneSprite> out;
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &s = buffer[i];
+        out.push_back({s.x,        s.y,        s.scale_x, s.scale_y, s.tile,     s.palette,
+                       s.flip_x,   s.flip_y,   s.group,   s.group_x, s.group_y, s.group_pc,
+                       s.blend_weight});
     }
+    return out;
+}
+
+void GameVideo::raster_sprites(std::span<uint16_t> plane) const {
+    m_video->raster_sprites(m_machine.graphics_assets.inner(),
+                            rust::Slice<uint16_t>(plane.data(), plane.size()));
 }
 
 void GameVideo::report(std::ostream &output) const {
-    m_impl->enhancements.report(output);
-    for (unsigned layer = 0; layer < LAYER_COUNT; ++layer) {
-        if (!m_impl->frames[layer]) continue;
-        const unsigned pixels = LAYER_INFO[layer].width * LAYER_INFO[layer].height;
-        output << "VIDEO layer=" << LAYER_INFO[layer].name << " domain=" << LAYER_INFO[layer].width
-               << 'x' << LAYER_INFO[layer].height << '-' << LAYER_INFO[layer].domain
-               << " sampled_frames=" << m_impl->frames[layer]
-               << " compared_pixels=" << m_impl->frames[layer] * pixels
-               << " pixel_mismatches=" << m_impl->mismatches[layer] << '\n';
-    }
-    if constexpr (!game_config::video.extend || game_config::video.extended_alt_maps) {
-        for (unsigned alt = 0; alt < 2; ++alt) {
-            if (!m_impl->alt_frames[alt]) continue;
-            const auto &info = LAYER_INFO[unsigned(LayerId::Pf2) + alt];
-            output << "VIDEO layer=" << info.name << "-alt domain=" << info.width << 'x'
-                   << info.height << '-' << info.domain
-                   << " sampled_frames=" << m_impl->alt_frames[alt]
-                   << " compared_pixels=" << m_impl->alt_frames[alt] * info.width * info.height
-                   << " pixel_mismatches=" << m_impl->alt_mismatches[alt] << '\n';
-        }
-    }
-    if (m_impl->composite_frames)
-        output << "VIDEO layer=composite domain=" << geometry::NATIVE_WIDTH << 'x'
-               << geometry::HEIGHT << "-RGB sampled_frames=" << m_impl->composite_frames
-               << " compared_pixels=" << m_impl->composite_frames * geometry::NATIVE_PIXELS
-               << " pixel_mismatches=" << m_impl->composite_mismatches << '\n';
-    if (m_impl->presented_frames || game_config::video.full_resolution_alt_maps) {
-        output << "VIDEO presented_sprite_frames=" << m_impl->presented_frames
-               << " presented_sprite_overflow_frames=" << m_impl->presented_overflow_frames;
-        if constexpr (game_config::video.full_resolution_alt_maps)
-            output << " presented_alt_rows_remapped=" << m_impl->alt_rows_remapped
-                   << " presented_alt_rows_fallback=" << m_impl->alt_rows_fallback
-                   << " presented_alt_rows_solved=" << m_impl->alt_maps.solved_rows();
-        output << '\n';
-    }
-    output << "VIDEO game_frames=" << m_impl->rendered_frames << '\n';
-}
-size_t GameVideo::state_size() const { return m_impl->state_size(); }
-void GameVideo::save_state(std::span<uint8_t> dst) const {
-    static_assert(Snapshotable<Impl>);
-    if (dst.size() != state_size()) {
-        throw std::invalid_argument("GameVideo::save_state size mismatch");
-    }
-    m_impl->materialize_native();
-    StateWriter writer(dst);
-    m_impl->save_state(writer);
-    if (writer.remaining() != 0) {
-        throw std::logic_error("GameVideo::save_state remaining unwritten bytes");
-    }
-}
-void GameVideo::load_state(std::span<const uint8_t> src) {
-    if (src.size() != state_size()) {
-        throw std::invalid_argument("GameVideo::load_state size mismatch");
-    }
-    StateReader reader(src);
-    m_impl->load_state(reader);
-    if (!m_impl->enhancements.empty())
-        m_impl->enhancements.present(m_impl->sprites.presented_sprites(), std::nullopt);
-    {
-        auto &frame = m_impl->snapshot_dest();
-        m_impl->snapshot = &frame;
-        frame.fallback = true;
-        std::copy(m_impl->machine.m_pixels.begin(), m_impl->machine.m_pixels.end(),
-                  frame.native_pixels.begin());
-    }
-    if (reader.remaining() != 0) {
-        throw std::logic_error("GameVideo::load_state remaining unread bytes");
-    }
+    m_enhancements.report(output);
+    output << m_video->report();
 }
 
-static_assert(SnapshotRoot<GameVideo>);
+size_t GameVideo::state_size() const { return m_video->state_size(); }
+
+void GameVideo::save_state(std::span<uint8_t> dst) const {
+    if (dst.size() != state_size()) throw std::invalid_argument("GameVideo::save_state size mismatch");
+    auto &video = const_cast<rust_video::GameVideo &>(*m_video);
+    video.save_state(rust::Slice<uint8_t>(dst.data(), dst.size()),
+                     m_machine.graphics_assets.inner());
+}
+
+void GameVideo::materialize_native() const {
+    auto &video = const_cast<rust_video::GameVideo &>(*m_video);
+    const auto &target =
+        m_snapshot_target ? *m_snapshot_target : *m_snapshot_storage;
+    video.materialize_native(m_machine.graphics_assets.inner(), target.inner());
+    const auto pixels = video.native_pixels();
+    std::ranges::copy(pixels, m_machine.m_pixels.begin());
+}
+
+void GameVideo::load_state(std::span<const uint8_t> src) {
+    if (src.size() != state_size()) throw std::invalid_argument("GameVideo::load_state size mismatch");
+    m_video->set_native_pixels(rust::Slice<const uint32_t>(
+        m_machine.m_pixels.data(), m_machine.m_pixels.size()));
+    auto host = enhancements_host();
+    SceneSnapshot &target = next_snapshot_slot();
+    m_video->load_state(rust::Slice<const uint8_t>(src.data(), src.size()), host,
+                        target.destination());
+    target.refresh();
+}
+
 } // namespace f3rt

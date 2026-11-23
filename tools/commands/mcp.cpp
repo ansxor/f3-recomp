@@ -8,10 +8,11 @@
 #include "../runner/runner.hpp"
 #include "capture_io.hpp"
 #include "f3rt/abi/audio.h"
-#include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
 #include "frontend/state.hpp"
+#include "renderer/game/oracle.hpp"
 #include "renderer/game/scene.hpp"
+#include "renderer/game/video.hpp"
 #include "sprite_walk.hpp"
 
 #include <mcp/mcp.hpp>
@@ -381,11 +382,11 @@ public:
                 "no ROM directory: pass rom_dir, --rom-dir, or build with F3RT_DEFAULT_ROM_DIR");
 
         destroy();
-        auto machine = runner::create_strict_machine(rom_dir, set, game_video && !video_diff);
+        auto machine = runner::create_strict_machine(rom_dir, set, game_video || video_diff);
         if (sprite_writers)
             machine->sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
         if (video_diff) {
-            machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Diagnostic);
+            m_verifier = std::make_unique<OracleVerifier>(machine->graphics_assets, machine->roms.video);
         } else if (!game_video) {
             m_oracle = std::make_unique<Video>(machine->graphics_assets, machine->roms.video);
             Machine *raw = machine.get();
@@ -421,6 +422,7 @@ public:
     json reset() {
         Machine &m = machine();
         m.reset();
+        if (m_verifier) m_verifier->reset();
         return {{"frame", m.frame}, {"pc", m.cpu.pc}, {"state_crc", crc_text(m.state_crc())}};
     }
 
@@ -474,6 +476,7 @@ json step(const Args &p) {
         std::optional<std::string> video_error;
         while (run < frames) {
             const bool ok = m.run_frame();
+            if (m_verifier) m_verifier->step(m);
             ++run;
             drain();
             if (diff) {
@@ -482,7 +485,7 @@ json step(const Args &p) {
                 } else {
                     ++compared;
                     try {
-                        m.game_video->compare_layers(m.frame, mask);
+                        m_verifier->compare_layers(m, *m.game_video, m.frame, mask);
                     } catch (const std::exception &e) {
                         video_error = e.what();
                         stopped = true;
@@ -775,7 +778,7 @@ json sprites(const Args &p) {
         }
         r["skipped"] = false;
         try {
-            m.game_video->compare_layers(m.frame, mask);
+            m_verifier->compare_layers(m, *m.game_video, m.frame, mask);
             r["ok"] = true;
         } catch (const std::exception &e) {
             r["ok"] = false;
@@ -802,6 +805,7 @@ private:
     }
 
     void destroy() {
+        m_verifier.reset();
         m_machine.reset(); // releases the process-wide audio board and EEPROM
         m_oracle.reset();
         m_slots.clear();
@@ -961,6 +965,7 @@ private:
     Defaults m_defaults;
     std::unique_ptr<Video> m_oracle; // the machine's scanout hook borrows it; destroy() releases the machine first
     std::unique_ptr<Machine> m_machine;
+    std::unique_ptr<OracleVerifier> m_verifier;
     std::unordered_map<std::string, std::vector<uint8_t>> m_slots;
     std::string m_set;
     bool m_sprite_writers = false;

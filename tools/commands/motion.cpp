@@ -6,8 +6,8 @@
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
 #include "f3rt/rom.hpp"
+#include "renderer/game/video.hpp"
 #include "renderer/gpu/video.hpp"
-#include "renderer/gpu/motion.hpp"
 #include "sprites/sprite_system.hpp"
 
 #include <SDL3/SDL.h>
@@ -146,14 +146,15 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
     if (o.scale % 2)
         return; // Half-native-pixel translation is an integer output shift at even scales.
     auto a = std::make_unique<f3rt::SceneSnapshot>(source);
+    const auto text_map = source.text_map();
     uint16_t cell = 0;
     bool found = false;
     for (unsigned i = 0; i < 4096 && !found; ++i) {
-        cell = source.text.map()[i];
+        cell = text_map[i];
         // Visible texel of this captured cell: opaque pen with a non-black palette color.
         const int cell_x = int(i % 64) * 8, cell_y = int(i / 64) * 8;
         for (unsigned p = 0; p < 64 && !found; ++p) {
-            const auto pixel = source.text.pixel(cell_x + int(p % 8), cell_y + int(p / 8), false);
+            const auto pixel = source.text_pixel(cell_x + int(p % 8), cell_y + int(p / 8), false);
             found = (pixel.flags & 0x10) && source.colors[pixel.palette & 8191u];
         }
     }
@@ -161,7 +162,7 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
     a->fallback = false;
     a->sprite_count = 0;
     a->colors[0] = 0;
-    std::fill(a->text.map().begin(), a->text.map().end(), cell);
+    a->set_text_map(std::vector<uint16_t>(4096, cell));
     a->rows = {};
     for (unsigned y = 24; y < 256; ++y) {
         auto &row = a->rows[y];
@@ -178,15 +179,15 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
     auto b = std::make_unique<f3rt::SceneSnapshot>();
     std::vector<uint32_t> before(size_t(o.width()) * o.height()), after(before.size()),
         middle(before.size());
-    gpu.draw(*a, before, 256);
+    gpu.render(*a, before, {.layer_mask = 256});
     for (unsigned axis = 0; axis < 2; ++axis) {
         *b = *a;
         for (unsigned y = 24; y < 256; ++y) ++(axis ? b->rows[y].text_y : b->rows[y].text_x);
         gpu.reset_motion();
         gpu.capture_motion(*a, 100);
         gpu.capture_motion(*b, 101);
-        gpu.draw(*b, after, 256);
-        gpu.draw_motion(*b, .5f, middle, 256);
+        gpu.render(*b, after, {.layer_mask = 256});
+        gpu.render(*b, middle, {.layer_mask = 256, .alpha = .5f});
         require(gpu.last_motion().text_rows == 232 && middle != before && middle != after,
                 "Text half-pixel motion must be visibly distinct from both endpoints");
         const unsigned shift = o.scale / 2;
@@ -233,6 +234,8 @@ int comparison(const Options &o) {
     f3rt::GpuVideo gpu(window.value, o.video, m.graphics_assets.playfield_tiles(), m.graphics_assets.sprite_tiles(),
                        false, true, o.interp);
     gpu.set_scale_mode(f3rt::VideoScaleMode::Auto);
+    f3rt::GpuTexture left_pane;
+    bool left_stale = true;
     auto scene = std::make_unique<f3rt::SceneSnapshot>(base);
     auto pan = [&](uint64_t step) {
         const int phase = int(step % 128);
@@ -251,8 +254,8 @@ int comparison(const Options &o) {
         gpu.capture_motion(*scene, 7);
         pan(8);
         gpu.capture_motion(*scene, 8);
-        gpu.draw(*scene, native);
-        gpu.draw_motion(*scene, .5f, midpoint);
+        gpu.render(*scene, native);
+        gpu.render(*scene, midpoint, {.alpha = .5f});
         require(native != midpoint, "Frozen ROM PF pan produced no visible interpolated pixels");
         png(o.dump_dir / "demo-native.png", native, o.video);
         png(o.dump_dir / "demo-interpolated.png", midpoint, o.video);
@@ -277,6 +280,7 @@ int comparison(const Options &o) {
     gpu.reset_motion();
     pan(0);
     gpu.capture_motion(*scene, 0);
+    left_stale = true;
     const auto period = std::chrono::nanoseconds(
         uint64_t(1e9 * f3rt::Machine::FRAME_PIXELS / f3rt::Machine::PIXEL_CLOCK));
     const auto begin = Clock::now();
@@ -314,6 +318,7 @@ int comparison(const Options &o) {
         while (now >= next_frame) {
             pan(++step);
             gpu.capture_motion(*scene, step);
+            left_stale = true;
             frame_start = next_frame;
             next_frame += period;
         }
@@ -322,8 +327,14 @@ int comparison(const Options &o) {
             continue;
         }
         const bool capture = capture_pending && step >= 16;
-        gpu.draw_motion_comparison_timed(*scene, frame_start, period,
-                                         capture ? capture_file.c_str() : nullptr);
+        if (left_stale) {
+            gpu.capture_surface(*scene, left_pane);
+            left_stale = false;
+        }
+        gpu.present(*scene, {.wait = true,
+                             .timing = f3rt::MotionLiveClock{frame_start, period},
+                             .left_pane = left_pane.surface(),
+                             .capture_path = capture ? capture_file.c_str() : nullptr});
         const auto &stats = gpu.last_motion();
         if (gpu.last_presented()) {
             if (capture) capture_pending = false;
@@ -457,18 +468,18 @@ int cmd_motion(int argc, char **argv) try {
         const auto pixels = m.native_pixels();
         require(before == ref_states[ref_state_idx++],
                 "Seeded canonical state parity frame " + std::to_string(m.frame));
-        gpu.draw(scene, canonical);
-        gpu.draw(scene, repeat, ~0u);
+        gpu.render(scene, canonical);
+        gpu.render(scene, repeat, {.layer_mask = ~0u});
         require(repeat == canonical, "Caller layer-mask high bits must not enable motion sampling");
-        gpu.draw_motion(scene, 1, out);
+        gpu.render(scene, out, {.alpha = 1.0f});
         require(out == canonical, "Alpha1 != canonical GPU frame " + std::to_string(m.frame));
-        gpu.draw_motion(scene, std::numeric_limits<float>::quiet_NaN(), out);
+        gpu.render(scene, out, {.alpha = std::numeric_limits<float>::quiet_NaN()});
         require(out == canonical, "Nonfinite GPU alpha must snap to canonical");
         bool frame_visible = false;
         constexpr std::array<float, 9> PHASES{0,       1.f / 12, .25f,    5.f / 12, .5f,
                                               2.f / 3, .75f,     5.f / 6, 1};
         for (float alpha : PHASES) {
-            gpu.draw_motion(scene, alpha, out);
+            gpu.render(scene, out, {.alpha = alpha});
             auto stats = gpu.last_motion();
             eligible += stats.sprites + stats.playfield_rows + stats.text_rows;
             sprite_draws += stats.sprites;
@@ -494,7 +505,7 @@ int cmd_motion(int argc, char **argv) try {
                 census.row_transform_rejections += stats.row_transform_rejections;
                 census.row_jump_rejections += stats.row_jump_rejections;
             }
-            gpu.draw_motion(scene, alpha, repeat);
+            gpu.render(scene, repeat, {.alpha = alpha});
             require(out == repeat, "Repeated frozen motion draw changed pixels");
             if (alpha > 0 && alpha < 1 && out != canonical) {
                 require(stats.paired && stats.sprites + stats.playfield_rows + stats.text_rows > 0,
@@ -504,7 +515,7 @@ int cmd_motion(int argc, char **argv) try {
             }
             if (!dumped && frame_visible && !o.dump_dir.empty()) {
                 for (size_t p = 0; p < PHASES.size(); ++p) {
-                    gpu.draw_motion(scene, PHASES[p], repeat);
+                    gpu.render(scene, repeat, {.alpha = PHASES[p]});
                     png(o.dump_dir / ("frame_" + std::to_string(m.frame) + "_phase_" +
                                       std::to_string(p) + ".png"),
                         repeat, o.video);
@@ -532,7 +543,7 @@ int cmd_motion(int argc, char **argv) try {
     if (!o.dump_dir.empty()) {
         const auto &final_scene = m.game_video->scene_snapshot();
         for (unsigned phase = 0; phase < 3; ++phase) {
-            gpu.draw_motion(final_scene, float(phase) / 2, out);
+            gpu.render(final_scene, out, {.alpha = float(phase) / 2});
             png(o.dump_dir / ("final_" + std::to_string(m.frame) + "_phase_" +
                               std::to_string(phase) + ".png"),
                 out, o.video);
@@ -545,8 +556,8 @@ int cmd_motion(int argc, char **argv) try {
     const auto &scene = m.game_video->scene_snapshot();
     text_sampling(gpu, scene, o.video);
     auto snap = [&](const std::string &label) {
-        gpu.draw(scene, canonical);
-        gpu.draw_motion(scene, .5f, out);
+        gpu.render(scene, canonical);
+        gpu.render(scene, out, {.alpha = .5f});
         require(out == canonical && !gpu.last_motion().paired, label + " must snap to canonical");
     };
     gpu.reset_motion();

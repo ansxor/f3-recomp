@@ -2,7 +2,7 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/abi/audio.h"
 #include "f3rt/abi/eeprom.h"
-#include "f3rt/game_video.hpp"
+#include "renderer/game/video.hpp"
 #include "sprites/sprite_system.hpp"
 #include "state_io.hpp"
 #include <algorithm>

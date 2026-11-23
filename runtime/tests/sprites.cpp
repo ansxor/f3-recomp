@@ -9,7 +9,8 @@
 #include "sprites/enhancements.hpp"
 #include "renderer/game/flicker_hold.hpp"
 #include "renderer/decode.hpp"
-#include "renderer/gpu/motion.hpp"
+#include "renderer/game/video.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "sprite_check.hpp"
 #include "../../tools/commands/sprite_walk.hpp"
 #include "runner.hpp"
@@ -620,7 +621,7 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
 
     uint64_t frames = 1500;
     if (const char *env = std::getenv("MOTION_GROUP_FRAMES")) frames = std::stoull(env);
-    f3rt::GpuMotionHistory history;
+    auto history = f3rt::rust_video::new_motion_history({1, 0});
     std::unordered_map<uint64_t, std::pair<int32_t, int32_t>> previous, current;
     std::unordered_set<uint64_t> previous_ambiguous, current_ambiguous;
     uint64_t paired_frames = 0, grouped = 0, paired_group_sprites = 0, moving_grouped = 0,
@@ -653,8 +654,8 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
                            it->second.second != sprite.group_y))
                 current_ambiguous.insert(sprite.group);
         }
-        history.capture(scene, f);
-        const f3rt::MotionResult motion = history.apply(scene, 0.5f);
+        history->capture(scene.inner(), f);
+        const auto motion = history->apply(scene.inner(), 0.5f);
         multi_origin_keys += current_ambiguous.size();
         if (motion.stats.paired) {
             ++paired_frames;
@@ -720,8 +721,8 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
                         ++base_changed;
                     }
                 }
-                const bool moved = motion.state.sprite_x[i] != sprite.x ||
-                                   motion.state.sprite_y[i] != sprite.y;
+                const bool moved = motion.sprite_x[i] != sprite.x ||
+                                   motion.sprite_y[i] != sprite.y;
                 if (!unique) {
                     ++key_changed;
                     if (moved) ++key_change_moved;
@@ -737,8 +738,8 @@ TEST(SpriteSystem, RomMotionGroupPairing) {
                 const int32_t expected_y =
                     int32_t(std::llround(double(sprite.y) - double(dy) * 0.5));
                 const int32_t error =
-                    std::max(std::abs(expected_x - motion.state.sprite_x[i]),
-                             std::abs(expected_y - motion.state.sprite_y[i]));
+                    std::max(std::abs(expected_x - motion.sprite_x[i]),
+                             std::abs(expected_y - motion.sprite_y[i]));
                 max_error = std::max<uint64_t>(max_error, uint64_t(error));
                 if (error <= 1) ++verified;
                 else ++cross_paired;

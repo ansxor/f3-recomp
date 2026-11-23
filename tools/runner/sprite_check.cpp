@@ -6,7 +6,6 @@
 #include "renderer/decode.hpp"
 #include "renderer/game/scene.hpp"
 #include "sprites/enhancements.hpp"
-#include "renderer/game/sprites.hpp"
 #include "sprites/sprite_system.hpp"
 
 #include <array>

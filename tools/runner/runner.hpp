@@ -10,12 +10,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace f3rt {
+class OracleVerifier;
 class Video;
 }
 
@@ -107,6 +109,11 @@ public:
 
     void finish();
 
+    // FDP-oracle comparison (config.video_diff). The oracle renders each frame right after
+    // run_frame(); compare_layers throws on the first mismatch against the machine's GameVideo.
+    void compare_layers(uint64_t frame, unsigned layer_mask);
+    void report_oracle(std::ostream &output) const;
+
     // Stats
     uint64_t audio_frames() const { return total_audio_frames_; }
     uint64_t nonzero_samples() const { return nonzero_samples_; }
@@ -117,6 +124,7 @@ private:
     RunnerConfig config_;
     std::unique_ptr<Machine> machine_;
     std::unique_ptr<Video> oracle_;
+    std::unique_ptr<OracleVerifier> oracle_verifier_;
     std::unique_ptr<WavWriter> wav_;
     std::unique_ptr<BlockProfileSession> profile_;
     std::array<int16_t, 8192> audio_buffer_{};

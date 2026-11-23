@@ -26,7 +26,7 @@ Otherwise, alternative build steps are included below.
 
 - CMake 3.24+
 - Ninja, C11/C++20 compiler
-- Rust (cargo, rustc; edition 2024)
+- Rust (cargo, rustc; edition 2024). Corrosion uses a matching `cxxbridge` on `PATH` or builds the version resolved by Cargo.
 - Git
 - OCaml 5, Dune, and the recompiler libraries, available through `nix develop`.
 - `uv` and Python 3.11+ for shader compilation and the Python tools. The Python tools install Capstone through `uv`.
@@ -36,6 +36,18 @@ Otherwise, alternative build steps are included below.
 ```sh
 make build GAME=landmakrj ROM_DIR=roms/landmakrj
 ```
+
+### Renderer boundary
+
+Rust records GPU work through scoped copy and render passes. Frame textures stay borrowed while
+recording; the C++ host exchanges SDL handles only at the video and overlay ABI.
+The headless build excludes SDL and the GPU backend.
+
+### Renderer tests
+
+`cargo test -p f3rt-video` runs the native renderer unit and property tests without SDL, a ROM,
+or a GPU. The same suite runs as CTest's `f3rt-video-cargo-test`; C++ integration and GPU parity
+remain in the runtime tests. `proptest` is a Rust dev-dependency only.
 
 ## Running
 
