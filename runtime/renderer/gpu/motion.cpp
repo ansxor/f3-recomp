@@ -345,14 +345,17 @@ void GpuMotionHistory::capture(const SceneSnapshot &scene, uint64_t frame) noexc
     m_captured = true;
 }
 MotionResult GpuMotionHistory::apply(const SceneSnapshot &scene, float alpha) const noexcept {
+    MotionResult result;
+    result.stats = apply_into(scene, alpha, result.state);
+    return result;
+}
+MotionInterpolationStats GpuMotionHistory::apply_into(const SceneSnapshot &scene, float alpha,
+                                                      MotionState &state) const noexcept {
     if (!std::isfinite(alpha) || alpha < 0 || alpha > 1 || !m_paired || scene.fallback ||
         scene.sprite_count != m_sprite_count || scene.pen_mask != m_pen_mask ||
         scene.flipped != m_flipped || scene.sprite_flipped != m_sprite_flipped)
         return {};
-    MotionResult result;
-    MotionInterpolationStats &stats = result.stats;
-    MotionState &state = result.state;
-    stats = m_pair_stats;
+    MotionInterpolationStats stats = m_pair_stats;
     stats.paired = true;
     stats.alpha = alpha;
     for (unsigned i = 0; i < m_sprite_count; ++i) {
@@ -410,6 +413,6 @@ MotionResult GpuMotionHistory::apply(const SceneSnapshot &scene, float alpha) co
             }
         }
     }
-    return result;
+    return stats;
 }
 } // namespace f3rt

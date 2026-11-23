@@ -3,6 +3,7 @@
 #include "renderer/game/row_bits.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "f3rt/game_video.hpp"
+#include "f3rt/renderer/game/enhancements.hpp"
 #include "sprites/presentation.hpp"
 #include <algorithm>
 #include <array>
@@ -22,6 +23,7 @@ constexpr size_t sprite_plane_size(GameVideoOptions geometry) {
     return geometry.expanded() ? size_t(geometry.width()) * geometry.height() : size_t(432) * 256;
 }
 enum class SpriteTrails : bool { Off, On };
+enum class SpriteLatch : uint8_t { Unchanged, Latched };
 
 void raster_sprites(std::span<const SceneSprite> sprites, uint8_t pen_mask,
                     std::span<const uint8_t> assets, std::span<uint16_t> output,
@@ -134,6 +136,17 @@ public:
     // Render-only: latched sprite list with unit splices applied.
     std::span<const SceneSprite> presented_sprites() const;
     bool flipped() const;
+    bool scanout_flipped() const {
+        return game_config::video.sprite_lag == 2 ? m_reg_flipped : m_current_flipped;
+    }
+    SpriteLatch before_scanout(const VideoRam &vram, const SpritePresentation &presentation,
+                               std::span<const uint8_t> assets);
+    SpriteLatch after_scanout(const VideoRam &vram, const SpritePresentation &presentation,
+                              std::span<const uint8_t> assets);
+    std::span<const SceneSprite> presented_for(const RenderEnhancements &enhancements) const {
+        if (trails()) return sprites();
+        return enhancements.empty() ? presented_sprites() : enhancements.sprites();
+    }
     // The last decode produced a presented list (splices) and whether it hit MAX_PRESENTED_SPRITES.
     bool presented_valid() const { return m_presented_submitted_valid; }
     bool presented_overflow() const { return m_presented_overflow; }
@@ -144,7 +157,6 @@ public:
     void load_state(StateReader &reader);
 
 private:
-    friend class GameVideo;
     static constexpr size_t MAX_SPRITES = f3rt::MAX_HARDWARE_SPRITES;
     static constexpr size_t MAX_PRESENTED_SPRITES = f3rt::MAX_PRESENTED_SPRITES;
 

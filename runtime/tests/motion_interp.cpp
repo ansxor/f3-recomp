@@ -1,15 +1,21 @@
 // rapidcheck uses std::current_exception without including <exception>; this must come first
 // so the project's C++23 libc++ exposes a complete exception_ptr.
 #include <exception>
+#include "renderer/gpu/encode.hpp"
 #include "renderer/gpu/motion.hpp"
+#include "renderer/gpu/user_spirv.hpp"
 #include "renderer/decode.hpp"
 #include "f3rt/memory_map.hpp"
 #include <gtest/gtest.h>
 #include <rapidcheck/gtest.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -718,4 +724,399 @@ RC_GTEST_PROP(MotionInterp, JumpThresholdRejection, ()) {
     RC_ASSERT(res.stats.paired);
     RC_ASSERT(res.stats.sprites == 0);
     RC_ASSERT(res.stats.sprite_jump_rejections == 1);
+}
+
+namespace {
+
+f3rt::GameVideoOptions scaled(unsigned scale, unsigned border = 0) {
+    f3rt::GameVideoOptions options;
+    options.scale = scale;
+    options.border = border;
+    return options;
+}
+
+struct ChainResult {
+    f3rt::PreparedScene prepared;
+    f3rt::EncodedScene encoded;
+    std::vector<uint32_t> words;
+};
+
+ChainResult run_chain(const f3rt::ScenePlan &plan, const f3rt::GpuMotionHistory *history,
+                      std::optional<float> alpha, f3rt::InterpolationConfig interpolation,
+                      f3rt::GpuPrepScratch &scratch, uint32_t pf_tiles = 0, uint32_t sp_tiles = 0) {
+    const f3rt::PreparedScene prepared =
+        plan.apply_motion(history, alpha, scratch.motion_state)
+            .analyze_interpolation(interpolation, {}, scratch.interp_coefficients);
+    std::vector<uint32_t> words(prepared.required_words());
+    const f3rt::EncodedScene encoded = prepared.encode_into(words, pf_tiles, sp_tiles);
+    return {prepared, encoded, std::move(words)};
+}
+
+uint32_t sprite_word(const std::vector<uint32_t> &words, unsigned slot, unsigned field) {
+    return words[F3_SCENE_SPRITES + size_t(slot) * F3_SCENE_SPRITE_STRIDE + field];
+}
+
+std::unique_ptr<SceneSnapshot> drawable_scene() {
+    auto scene = std::make_unique<SceneSnapshot>();
+    scene->fallback = false;
+    return scene;
+}
+
+}
+
+TEST(GpuPrep, FallbackEncodesOnlyNativePixels) {
+    auto scene = std::make_unique<SceneSnapshot>();
+    ASSERT_TRUE(scene->fallback);
+    for (size_t i = 0; i < scene->native_pixels.size(); ++i)
+        scene->native_pixels[i] = 0xff000000u | uint32_t(i);
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+    const auto result = run_chain({*scene, scaled(2)}, nullptr, 0.5f,
+                                  {f3rt::VideoInterpolation::Linear}, *scratch);
+    ASSERT_EQ(result.words.size(), f3rt::ENCODED_NATIVE_WORDS);
+    EXPECT_TRUE(std::equal(result.words.begin(), result.words.end(), scene->native_pixels.begin()));
+    EXPECT_TRUE(result.encoded.fallback);
+    EXPECT_EQ(result.encoded.uniforms.fallback, 1u);
+    EXPECT_EQ(result.encoded.upload_bytes, f3rt::ENCODED_NATIVE_WORDS * sizeof(uint32_t));
+    EXPECT_EQ(result.prepared.coefficients, nullptr);
+    EXPECT_FALSE(result.prepared.use_interpolation);
+    EXPECT_FALSE(result.encoded.use_interpolation);
+    EXPECT_EQ(result.encoded.interp_stats.reason, f3rt::InterpolationReason::Oracle);
+    EXPECT_FALSE(result.encoded.motion_stats.paired);
+
+    std::vector<uint32_t> too_small(f3rt::ENCODED_NATIVE_WORDS - 1);
+    EXPECT_THROW(result.prepared.encode_into(too_small), std::invalid_argument);
+}
+
+TEST(GpuPrep, CanonicalSceneUniformsAndWords) {
+    auto scene = drawable_scene();
+    scene->pen_mask = 63;
+    scene->flipped = true;
+    scene->colors[3] = 0x123456;
+    sprite(*scene, 0, 100, 7);
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+
+    const f3rt::GameVideoOptions options = scaled(1, 8);
+    const auto result =
+        run_chain({*scene, options}, nullptr, std::nullopt, {}, *scratch, 11, 22);
+    ASSERT_EQ(result.words.size(), f3rt::ENCODED_SCENE_WORDS);
+    EXPECT_EQ(result.encoded.upload_bytes, f3rt::ENCODED_SCENE_WORDS * sizeof(uint32_t));
+    EXPECT_FALSE(result.encoded.fallback);
+    EXPECT_FALSE(result.encoded.use_interpolation);
+    EXPECT_FALSE(result.encoded.has_trails);
+    EXPECT_FALSE(result.encoded.blend_weighted);
+    const auto &u = result.encoded.uniforms;
+    EXPECT_EQ(u.scale, 1u);
+    EXPECT_EQ(u.border, 8u);
+    EXPECT_EQ(u.width, options.width());
+    EXPECT_EQ(u.height, options.height());
+    EXPECT_EQ(u.sprite_count, 1u);
+    EXPECT_EQ(u.pen_mask, 63u);
+    EXPECT_EQ(u.fallback, 0u);
+    EXPECT_EQ(u.layer_mask, f3rt::ALL_LAYERS | F3_MASK_SCREEN_FLIPPED);
+    EXPECT_EQ(u.pf_tile_count, 11u);
+    EXPECT_EQ(u.sp_tile_count, 22u);
+    EXPECT_EQ(sprite_word(result.words, 0, F3_SPRITE_X), uint32_t(100 * 256));
+    EXPECT_EQ(sprite_word(result.words, 0, F3_SPRITE_TILE), 7u);
+    EXPECT_EQ(result.words[F3_SCENE_PALETTE + 3], 0x123456u);
+
+    f3rt::ScenePlan masked{*scene, options, f3rt::SpriteList::Presented, 0x3};
+    EXPECT_EQ(run_chain(masked, nullptr, std::nullopt, {}, *scratch).encoded.uniforms.layer_mask,
+              0x3u | F3_MASK_SCREEN_FLIPPED);
+
+    std::vector<uint32_t> too_small(f3rt::ENCODED_SCENE_WORDS - 1);
+    EXPECT_THROW(result.prepared.encode_into(too_small), std::invalid_argument);
+}
+
+TEST(GpuPrep, SpriteListChoiceTrailsAndWeights) {
+    auto scene = drawable_scene();
+    sprite(*scene, 0, 10);
+    scene->canonical_sprites[0] = scene->sprites[0];
+    scene->canonical_sprites[1] = scene->sprites[0];
+    scene->canonical_sprite_count = 2;
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+
+    const f3rt::GameVideoOptions options = scaled(1);
+    EXPECT_EQ(run_chain({*scene, options, f3rt::SpriteList::Presented}, nullptr, std::nullopt, {},
+                        *scratch)
+                  .encoded.uniforms.sprite_count,
+              1u);
+    EXPECT_EQ(run_chain({*scene, options, f3rt::SpriteList::Canonical}, nullptr, std::nullopt, {},
+                        *scratch)
+                  .encoded.uniforms.sprite_count,
+              2u);
+
+    scene->sprites[0].blend_weight = 0.5f;
+    auto weighted = run_chain({*scene, options}, nullptr, std::nullopt, {}, *scratch);
+    EXPECT_TRUE(weighted.encoded.blend_weighted);
+    EXPECT_EQ(sprite_word(weighted.words, 0, F3_SPRITE_WEIGHT), F3_SPRITE_WEIGHT_SCALE / 2);
+
+    scene->sprite_trail_seed.assign(8, 0x1234);
+    auto trailed = run_chain({*scene, options}, nullptr, std::nullopt, {}, *scratch);
+    EXPECT_TRUE(trailed.encoded.has_trails);
+    EXPECT_FALSE(trailed.encoded.blend_weighted) << "trail frames are never blend-weighted";
+    EXPECT_NE(trailed.encoded.uniforms.layer_mask & F3_MASK_SPRITE_TRAILS, 0u);
+    EXPECT_EQ(trailed.encoded.trail_seed.data(), scene->sprite_trail_seed.data());
+}
+
+TEST(GpuPrep, MotionSamplesHistoryAtAlpha) {
+    auto a = drawable_scene();
+    sprite(*a, 0, 100);
+    auto b = std::make_unique<SceneSnapshot>(*a);
+    sprite(*b, 0, 110);
+    b->canonical_sprites[0] = b->sprites[0];
+    b->canonical_sprite_count = 1;
+    f3rt::GpuMotionHistory history;
+    history.capture(*a, 10);
+    history.capture(*b, 11);
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+    const f3rt::GameVideoOptions options = scaled(1);
+
+    const f3rt::MotionScene sampled =
+        f3rt::ScenePlan{*b, options}.apply_motion(&history, 0.5f, scratch->motion_state);
+    ASSERT_TRUE(sampled.motion_stats.paired);
+    EXPECT_EQ(sampled.motion, &scratch->motion_state);
+    EXPECT_EQ(scratch->motion_state.sprite_x[0], 105 * 256);
+    EXPECT_EQ(sampled.motion_stats.alpha, 0.5f);
+
+    const auto mid = run_chain({*b, options}, &history, 0.5f, {}, *scratch);
+    EXPECT_EQ(sprite_word(mid.words, 0, F3_SPRITE_X), uint32_t(105 * 256));
+    EXPECT_NE(mid.encoded.uniforms.layer_mask & f3rt::MOTION_LAYER_MASK, 0u);
+    EXPECT_TRUE(mid.encoded.motion_stats.paired);
+
+    const auto end = run_chain({*b, options}, &history, 1.0f, {}, *scratch);
+    EXPECT_EQ(sprite_word(end.words, 0, F3_SPRITE_X), uint32_t(110 * 256));
+    EXPECT_EQ(end.encoded.uniforms.layer_mask & f3rt::MOTION_LAYER_MASK, 0u);
+
+    for (const auto &canonical_case :
+         {run_chain({*b, options}, &history, std::nullopt, {}, *scratch),
+          run_chain({*b, options}, nullptr, 0.5f, {}, *scratch),
+          run_chain({*b, options, f3rt::SpriteList::Canonical}, &history, 0.5f, {}, *scratch)}) {
+        EXPECT_FALSE(canonical_case.encoded.motion_stats.paired);
+        EXPECT_EQ(canonical_case.prepared.motion.motion, nullptr);
+        EXPECT_EQ(sprite_word(canonical_case.words, 0, F3_SPRITE_X), uint32_t(110 * 256));
+    }
+    b->sprite_trail_seed.assign(8, 1);
+    const auto trailed = run_chain({*b, options}, &history, 0.5f, {}, *scratch);
+    EXPECT_EQ(trailed.prepared.motion.motion, nullptr);
+    EXPECT_EQ(sprite_word(trailed.words, 0, F3_SPRITE_X), uint32_t(110 * 256));
+}
+
+TEST(GpuPrep, InterpolationModesAndWordRegions) {
+    auto scene = drawable_scene();
+    for (unsigned y = f3rt::geometry::FIRST_LINE; y < f3rt::geometry::END_LINE; ++y) {
+        auto &p = scene->rows[y].playfields[0];
+        const int row = int(y - f3rt::geometry::FIRST_LINE);
+        p.layer.enabled = true;
+        p.layer.clip_inverse = true;
+        p.source_x = (100 + 2 * row) * 256;
+        p.source_y = 100 + row;
+        p.x_step = 256;
+        p.y_step = 256;
+    }
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+    const f3rt::GameVideoOptions options = scaled(2);
+
+    const auto linear = run_chain({*scene, options}, nullptr, std::nullopt,
+                                  {f3rt::VideoInterpolation::Linear}, *scratch);
+    EXPECT_EQ(linear.encoded.interp_stats.reason, f3rt::InterpolationReason::Applied);
+    EXPECT_GT(linear.encoded.interp_stats.layers[0].source_rows, 0u);
+    EXPECT_TRUE(linear.encoded.use_interpolation);
+    EXPECT_EQ(linear.prepared.coefficients, &scratch->interp_coefficients);
+    ASSERT_EQ(linear.words.size(), f3rt::ENCODED_INTERPOLATION_WORDS);
+    EXPECT_EQ(linear.encoded.upload_bytes, f3rt::ENCODED_INTERPOLATION_WORDS * sizeof(uint32_t));
+    const unsigned row = f3rt::geometry::FIRST_LINE + 10;
+    EXPECT_NE(linear.words[F3_SCENE_INTERP + row * F3_SCENE_INTERP_ROW_STRIDE] &
+                  F3_INTERP_FLAG_SOURCE,
+              0u)
+        << "interior ramp row carries source coefficients";
+    EXPECT_EQ(linear.words[F3_SCENE_INTERP + row * F3_SCENE_INTERP_ROW_STRIDE + F3_INTERP_PF_STRIDE],
+              0u)
+        << "PF1 is disabled and carries no coefficients";
+
+    const auto palette_only = run_chain({*scene, options}, nullptr, std::nullopt,
+                                        {f3rt::VideoInterpolation::Linear,
+                                         f3rt::InterpolationFields::Palette},
+                                        *scratch);
+    EXPECT_EQ(palette_only.encoded.interp_stats.layers[0].source_rows, 0u);
+
+    const auto off = run_chain({*scene, options}, nullptr, std::nullopt, {}, *scratch);
+    EXPECT_EQ(off.encoded.interp_stats.reason, f3rt::InterpolationReason::Off);
+    EXPECT_FALSE(off.encoded.use_interpolation);
+    EXPECT_EQ(off.prepared.coefficients, nullptr);
+    EXPECT_EQ(off.words.size(), f3rt::ENCODED_SCENE_WORDS);
+    const auto native = run_chain({*scene, scaled(1)}, nullptr, std::nullopt,
+                                  {f3rt::VideoInterpolation::Fit}, *scratch);
+    EXPECT_EQ(native.encoded.interp_stats.reason, f3rt::InterpolationReason::NativeScale);
+    EXPECT_FALSE(native.encoded.use_interpolation);
+    EXPECT_EQ(native.words.size(), f3rt::ENCODED_SCENE_WORDS);
+
+    std::vector<uint32_t> scene_sized(f3rt::ENCODED_SCENE_WORDS);
+    EXPECT_THROW(linear.prepared.encode_into(scene_sized), std::invalid_argument);
+}
+
+TEST(GpuPrep, InterpolationComposesWithMotion) {
+    auto a = drawable_scene();
+    auto b = drawable_scene();
+    for (auto *scene : {a.get(), b.get()})
+        for (unsigned y = f3rt::geometry::FIRST_LINE; y < f3rt::geometry::END_LINE; ++y) {
+            auto &p = scene->rows[y].playfields[0];
+            const int row = int(y - f3rt::geometry::FIRST_LINE);
+            p.layer.enabled = true;
+            p.layer.clip_inverse = true;
+            p.source_x = (100 + 2 * row + (scene == b.get() ? 4 : 0)) * 256;
+            p.source_y = 100 + row;
+            p.x_step = 256;
+            p.y_step = 256;
+        }
+    f3rt::GpuMotionHistory history;
+    history.capture(*a, 1);
+    history.capture(*b, 2);
+    auto scratch = std::make_unique<f3rt::GpuPrepScratch>();
+    const auto result = run_chain({*b, scaled(2)}, &history, 0.5f,
+                                  {f3rt::VideoInterpolation::Linear}, *scratch);
+    ASSERT_TRUE(result.encoded.motion_stats.paired);
+    EXPECT_GT(result.encoded.motion_stats.playfield_rows, 0u);
+    EXPECT_EQ(result.encoded.interp_stats.reason, f3rt::InterpolationReason::Applied);
+    EXPECT_EQ(result.words.size(), f3rt::ENCODED_INTERPOLATION_WORDS);
+    const unsigned y = f3rt::geometry::FIRST_LINE;
+    EXPECT_EQ(result.words[F3_SCENE_ROWS + y * F3_SCENE_ROW_STRIDE + F3_ROW_PF + F3_PF_SOURCE_X],
+              uint32_t(102 * 256));
+}
+
+namespace {
+
+struct SpirvShape {
+    uint32_t execution_model = f3rt::spirv::EXEC_MODEL_FRAGMENT;
+    uint32_t entry_name = f3rt::spirv::ENTRY_MAIN_WORD;
+    uint32_t sampler_set = 2, sampler_binding = 0;
+    uint32_t block_set = 3, block_binding = 0;
+    uint32_t member_offset = 0;
+    bool block_decoration = true;
+    bool second_member = false;
+    uint32_t sampled_dimension = f3rt::spirv::DIM_2D;
+};
+
+std::vector<uint32_t> spirv_module(const SpirvShape &shape = {}) {
+    using namespace f3rt::spirv;
+    enum : uint32_t {
+        Main = 1, Void, FnType, Float, Vec4, Image, SampledImage, SamplerPtr, Sampler, Block,
+        BlockPtr, BlockVar, OutPtr, OutVar, Label, Bound
+    };
+    std::vector<uint32_t> w{MAGIC, VERSION_1_0, 0, Bound, 0};
+    const auto op = [&](uint32_t code, std::initializer_list<uint32_t> operands) {
+        w.push_back(uint32_t(operands.size() + 1) << 16 | code);
+        w.insert(w.end(), operands);
+    };
+    op(OP_CAPABILITY, {CAPABILITY_SHADER});
+    op(OP_MEMORY_MODEL, {ADDRESSING_LOGICAL, MEMORY_MODEL_GLSL450});
+    op(OP_ENTRY_POINT, {shape.execution_model, Main, shape.entry_name, 0, OutVar});
+    op(OP_EXECUTION_MODE, {Main, EXEC_MODE_ORIGIN_UPPER_LEFT});
+    op(OP_DECORATE, {Sampler, DECORATION_DESCRIPTOR_SET, shape.sampler_set});
+    op(OP_DECORATE, {Sampler, DECORATION_BINDING, shape.sampler_binding});
+    op(OP_DECORATE, {BlockVar, DECORATION_DESCRIPTOR_SET, shape.block_set});
+    op(OP_DECORATE, {BlockVar, DECORATION_BINDING, shape.block_binding});
+    op(OP_DECORATE, {OutVar, DECORATION_LOCATION, 0});
+    if (shape.block_decoration) op(OP_DECORATE, {Block, DECORATION_BLOCK});
+    op(OP_MEMBER_DECORATE, {Block, 0, DECORATION_OFFSET, shape.member_offset});
+    op(OP_TYPE_VOID, {Void});
+    op(OP_TYPE_FUNCTION, {FnType, Void});
+    op(OP_TYPE_FLOAT, {Float, 32});
+    op(OP_TYPE_VECTOR, {Vec4, Float, 4});
+    op(OP_TYPE_IMAGE, {Image, Float, shape.sampled_dimension, 0, 0, 0, IMAGE_SAMPLED_YES, 0});
+    op(OP_TYPE_SAMPLED_IMAGE, {SampledImage, Image});
+    op(OP_TYPE_POINTER, {SamplerPtr, STORAGE_UNIFORM_CONSTANT, SampledImage});
+    op(OP_VARIABLE, {SamplerPtr, Sampler, STORAGE_UNIFORM_CONSTANT});
+    if (shape.second_member) op(OP_TYPE_STRUCT, {Block, Vec4, Vec4});
+    else op(OP_TYPE_STRUCT, {Block, Vec4});
+    op(OP_TYPE_POINTER, {BlockPtr, STORAGE_UNIFORM, Block});
+    op(OP_VARIABLE, {BlockPtr, BlockVar, STORAGE_UNIFORM});
+    op(OP_TYPE_POINTER, {OutPtr, STORAGE_OUTPUT, Vec4});
+    op(OP_VARIABLE, {OutPtr, OutVar, STORAGE_OUTPUT});
+    op(OP_FUNCTION, {Void, Main, 0, FnType});
+    op(OP_LABEL, {Label});
+    op(OP_RETURN, {});
+    op(OP_FUNCTION_END, {});
+    return w;
+}
+
+}
+
+TEST(UserSpirv, AcceptsPostprocessAbi) {
+    const auto words = spirv_module();
+    EXPECT_NO_THROW(f3rt::validate_user_spirv(words));
+}
+
+TEST(UserSpirv, RejectsBrokenAbi) {
+    const auto rejects = [](const std::vector<uint32_t> &words) {
+        EXPECT_THROW(f3rt::validate_user_spirv(words), std::runtime_error);
+    };
+    rejects({});
+    auto bad_magic = spirv_module();
+    bad_magic[0] ^= 1;
+    rejects(bad_magic);
+    auto bad_schema = spirv_module();
+    bad_schema[4] = 1;
+    rejects(bad_schema);
+    auto zero_bound = spirv_module();
+    zero_bound[3] = 0;
+    rejects(zero_bound);
+    auto truncated = spirv_module();
+    truncated.pop_back();
+    truncated.pop_back();
+    truncated.push_back(0x00ff0000 | 56);
+    rejects(truncated);
+
+    rejects(spirv_module({.execution_model = 0}));
+    rejects(spirv_module({.entry_name = 0x6e69616e}));
+    rejects(spirv_module({.sampler_set = 1}));
+    rejects(spirv_module({.sampler_binding = 1}));
+    rejects(spirv_module({.block_set = 2}));
+    rejects(spirv_module({.block_binding = 1}));
+    rejects(spirv_module({.member_offset = 16}));
+    rejects(spirv_module({.block_decoration = false}));
+    rejects(spirv_module({.second_member = true}));
+    rejects(spirv_module({.sampled_dimension = 2}));
+}
+
+namespace {
+struct ShaderFile {
+    std::filesystem::path path;
+    ShaderFile(const std::string &name, const void *bytes, size_t size) {
+        const auto directory = std::filesystem::temp_directory_path() / "f3rt-user-spirv-test";
+        std::filesystem::create_directories(directory);
+        path = directory / name;
+        std::ofstream(path, std::ios::binary).write(static_cast<const char *>(bytes), std::streamsize(size));
+    }
+    ~ShaderFile() { std::filesystem::remove(path); }
+};
+}
+
+TEST(UserSpirv, LoadsAndChecksShaderFiles) {
+    const auto words = spirv_module();
+    ShaderFile good("good.spv", words.data(), words.size() * 4);
+    const auto loaded = f3rt::load_user_shader(good.path, false);
+    EXPECT_EQ(loaded.size, words.size() * 4);
+    EXPECT_EQ(loaded.code, words);
+
+    EXPECT_THROW(f3rt::load_user_shader(good.path, true), std::runtime_error) << "metal wants .metal";
+    ShaderFile unaligned("odd.spv", words.data(), words.size() * 4 - 1);
+    EXPECT_THROW(f3rt::load_user_shader(unaligned.path, false), std::runtime_error);
+    ShaderFile empty("empty.spv", "", 0);
+    EXPECT_THROW(f3rt::load_user_shader(empty.path, false), std::runtime_error);
+    EXPECT_THROW(f3rt::load_user_shader(good.path.parent_path() / "missing.spv", false),
+                 std::runtime_error);
+    auto broken = words;
+    broken[0] ^= 1;
+    ShaderFile bad_abi("bad.spv", broken.data(), broken.size() * 4);
+    EXPECT_THROW(f3rt::load_user_shader(bad_abi.path, false), std::runtime_error);
+
+    const std::string msl = "fragment float4 main0() { return 0; }";
+    ShaderFile metal("post.metal", msl.data(), msl.size());
+    const auto shader = f3rt::load_user_shader(metal.path, true);
+    EXPECT_EQ(shader.size, msl.size());
+    EXPECT_EQ(std::string(reinterpret_cast<const char *>(shader.code.data())), msl)
+        << "MSL text is followed by a terminating zero byte";
+    const std::string nul("a\0b", 3);
+    ShaderFile embedded("nul.metal", nul.data(), nul.size());
+    EXPECT_THROW(f3rt::load_user_shader(embedded.path, true), std::runtime_error);
 }

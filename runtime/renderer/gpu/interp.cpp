@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <iostream>
 #include <numeric>
 
 namespace f3rt {
@@ -106,38 +107,39 @@ bool safe_palette(const SceneSnapshot &frame, const Row &a, const Row &b, unsign
 }
 } // namespace
 
-InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
-                                                GameVideoOptions options, VideoInterpolation mode,
-                                                InterpolationFields fields,
-                                                const MotionState *motion,
-                                                std::span<const uint64_t> tile_pen_masks) noexcept {
-    InterpolationAnalysis result;
-    InterpolationStats &stats = result.stats;
+InterpolationStats analyze_gpu_interpolation_into(const SceneSnapshot &frame,
+                                                 GameVideoOptions options, VideoInterpolation mode,
+                                                 InterpolationFields fields,
+                                                 const MotionState *motion,
+                                                 std::span<const uint64_t> tile_pen_masks,
+                                                 InterpolationCoefficients &out) noexcept {
+    InterpolationStats stats;
     const auto reject = [&](InterpolationReason reason) {
         stats.reason = reason;
         for (auto &layer : stats.layers) layer.reason = reason;
     };
     if (mode == VideoInterpolation::Off) {
         reject(InterpolationReason::Off);
-        return result;
+        return stats;
     }
     if (options.scale == 1) {
         reject(InterpolationReason::NativeScale);
-        return result;
+        return stats;
     }
     if (frame.fallback) {
         reject(InterpolationReason::Oracle);
-        return result;
+        return stats;
     }
+    out = InterpolationCoefficients{};
     if (options.scale == 0 || options.scale > GameVideoOptions::MAX_GPU_SCALE ||
         options.border > GameVideoOptions::MAX_BORDER) {
         reject(InterpolationReason::InvalidRows);
-        return result;
+        return stats;
     }
     stats.reason = InterpolationReason::NoEffect;
     const bool geometry = (unsigned(fields) & unsigned(InterpolationFields::Geometry)) != 0;
     const bool palette = (unsigned(fields) & unsigned(InterpolationFields::Palette)) != 0;
-    if (!geometry && !palette) return result;
+    if (!geometry && !palette) return stats;
     for (unsigned pf = 0; pf < 4; ++pf) {
         auto &layer = stats.layers[pf];
         std::array<Row, 256> rows{};
@@ -220,16 +222,16 @@ InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                         if (y + 2 > last || !delta[y] ||
                             (field == 3 && (!safe[y - 1] || !safe[y] || !safe[y + 1])))
                             continue;
-                        auto &out = result.coefficients.rows[y][pf];
-                        std::array<float, 3> &triple = field == 0   ? out.source
-                                                       : field == 1 ? out.zoom
-                                                       : field == 2 ? out.vertical
-                                                                    : out.palette;
+                        auto &coeffs = out.rows[y][pf];
+                        std::array<float, 3> &triple = field == 0   ? coeffs.source
+                                                       : field == 1 ? coeffs.zoom
+                                                       : field == 2 ? coeffs.vertical
+                                                                    : coeffs.palette;
                         coefficients(triple, float(delta[y - 1]), float(delta[y]),
                                      float(delta[y + 1]), mode);
                         const uint32_t flag = 1u << field;
-                        out.flags |= uint8_t(flag);
-                        if (field == 3) out.palette_stride = uint16_t(stride);
+                        coeffs.flags |= uint8_t(flag);
+                        if (field == 3) coeffs.palette_stride = uint16_t(stride);
                         stats.row_fields[pf][y] |= uint8_t(flag);
                         if (field == 0) ++layer.source_rows;
                         if (field == 1) ++layer.zoom_rows;
@@ -252,7 +254,37 @@ InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                  layer.reason != InterpolationReason::NoEffect)
             stats.reason = layer.reason;
     }
+    return stats;
+}
+
+InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
+                                                GameVideoOptions options, VideoInterpolation mode,
+                                                InterpolationFields fields,
+                                                const MotionState *motion,
+                                                std::span<const uint64_t> tile_pen_masks) noexcept {
+    InterpolationAnalysis result;
+    result.stats = analyze_gpu_interpolation_into(frame, options, mode, fields, motion,
+                                                  tile_pen_masks, result.coefficients);
     return result;
+}
+
+void InterpolationLog::observe(InterpolationConfig config, const InterpolationStats &stats) {
+    if (config.mode == VideoInterpolation::Off) return;
+    if (m_observed && m_reason == stats.reason && m_layers == stats.layers) return;
+    std::cout << "video_interp fields=" << interpolation_fields_name(config.fields)
+              << " reason=" << interpolation_reason_name(stats.reason);
+    for (unsigned i = 0; i < stats.layers.size(); ++i) {
+        const auto &layer = stats.layers[i];
+        std::cout << " pf" << i << '=' << interpolation_reason_name(layer.reason) << ':'
+                  << layer.source_rows << '/' << layer.zoom_rows << '/' << layer.vertical_rows
+                  << '/' << layer.palette_rows << " invalid" << i << '=' << layer.invalid_rows
+                  << " boundaries" << i << '=' << layer.discontinuities << " unsafe_palette" << i
+                  << '=' << layer.unsafe_palette_pairs;
+    }
+    std::cout << '\n';
+    m_reason = stats.reason;
+    m_layers = stats.layers;
+    m_observed = true;
 }
 
 const char *interpolation_reason_name(InterpolationReason reason) noexcept {

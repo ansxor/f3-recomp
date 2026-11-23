@@ -119,7 +119,6 @@ public:
     }
 
 private:
-    friend class GameVideo;
     // Raw 4-byte cell per 16x16 tile: attributes in the high word, code low.
     std::array<std::array<uint32_t, CELLS_PER_MAP>, MAP_COUNT> m_maps{};
     std::array<uint32_t, MAP_COUNT> m_row_used{}; // bit r: map row r has a nonzero tile code

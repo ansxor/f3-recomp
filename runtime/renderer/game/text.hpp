@@ -79,7 +79,6 @@ public:
     std::span<const uint8_t, 0x10000> pivot() const { return m_pivot_ram; }
 
 private:
-    friend class GameVideo;
     std::array<uint16_t, 4096> m_map{};
     std::array<uint8_t, 0x2000> m_glyph_ram{};
     std::array<uint8_t, 0x10000> m_pivot_ram{};

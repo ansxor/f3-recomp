@@ -3,6 +3,7 @@
 #include "renderer/game/layer_visits.hpp"
 #include "renderer/game/mix.hpp"
 #include "renderer/game/row_bits.hpp"
+#include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/text.hpp"
 #include <algorithm>
 #include <array>
@@ -238,7 +239,7 @@ ColumnRanges column_ranges(const SceneRow &row, const SceneLayer &layer, int lef
 
 ScenePlayfield playfield_row(const RowWork &work, LayerId id) {
     const ScenePlayfield &pf = work.row.playfields[sub_index(id)];
-    return work.expanded && work.job.scene.presented ? presented_playfield(pf) : pf;
+    return work.expanded ? presented_playfield(pf) : pf;
 }
 
 [[gnu::noinline]] void compose_mosaic_layer(RowWork &work, LayerId id, const SceneLayer &layer,
@@ -249,8 +250,8 @@ ScenePlayfield playfield_row(const RowWork &work, LayerId id) {
     GameTiles::RowSampler sampler;
     if (layer_kind == LayerKind::Playfield) {
         pf = playfield_row(work, id);
-        sampler = work.job.scene.tiles.row_sampler(sub_index(id), pf.source_y, work.flipped,
-                                                   work.job.scene.tile_pixels, pf.alt_map);
+        sampler = work.job.snapshot.tiles.row_sampler(sub_index(id), pf.source_y, work.flipped,
+                                                      work.job.tile_pixels, pf.alt_map);
     }
     const uint16_t *plane = work.job.plane.data() + size_t(work.plane_row) * work.plane_stride;
     const uint32_t *covered =
@@ -280,7 +281,7 @@ ScenePlayfield playfield_row(const RowWork &work, LayerId id) {
                 source.palette = plane[source_x];
             } else {
                 const int source_x = work.row.text_x + sample_x - 46;
-                source = work.job.scene.text.pixel(source_x, work.row.text_y, work.flipped,
+                source = work.job.snapshot.text.pixel(source_x, work.row.text_y, work.flipped,
                                                        work.row.bitmap);
                 if (!(source.flags & 0x10)) return;
             }
@@ -316,8 +317,8 @@ struct PlayfieldCell {
                                                 const ScenePlayfield &pf) {
     const LayerPlan plan = work.plan(layer, id);
     const auto cells =
-        work.job.scene.tiles.cells(GameTiles::physical_map(sub_index(id), pf.alt_map));
-    const auto tile_pixels = work.job.scene.tile_pixels;
+        work.job.snapshot.tiles.cells(GameTiles::physical_map(sub_index(id), pf.alt_map));
+    const auto tile_pixels = work.job.tile_pixels;
     const uint32_t tile_count = uint32_t(tile_pixels.size() / 256);
     constexpr unsigned MAP_WIDTH = GameTiles::MAP_WIDTH_PX;
     const unsigned screen_flip = work.flipped ? MAP_WIDTH - 1 : 0;
@@ -396,8 +397,8 @@ struct PlayfieldCell {
     }
     const LayerPlan plan = work.plan(layer, id);
     const auto cells =
-        work.job.scene.tiles.cells(GameTiles::physical_map(sub_index(id), pf.alt_map));
-    const auto tile_pixels = work.job.scene.tile_pixels;
+        work.job.snapshot.tiles.cells(GameTiles::physical_map(sub_index(id), pf.alt_map));
+    const auto tile_pixels = work.job.tile_pixels;
     const TileRows *tile_rows = work.job.tile_rows.data();
     const uint32_t tile_count = uint32_t(tile_pixels.size() / 256);
     constexpr unsigned MAP_WIDTH = GameTiles::MAP_WIDTH_PX;
@@ -471,7 +472,7 @@ struct PlayfieldCell {
 [[gnu::noinline]] void compose_text(RowWork &work, const SceneLayer &layer,
                                     const ColumnRanges &ranges) {
     constexpr LayerId id = LayerId::Text;
-    const auto &text = work.job.scene.text;
+    const auto &text = work.job.snapshot.text;
     const LayerPlan plan = work.plan(layer, id);
     const bool resolves = plan.resolves[layer.blend_select];
     const bool bitmap = work.row.bitmap;
@@ -657,7 +658,7 @@ void build_setup(RowSetup &setup, const SceneRow &row, unsigned active, int left
 
 void compose_row(const IndexedComposeJob &job, unsigned y, RowSetup &setup,
                  uint32_t *argb_scratch) {
-    const auto &scene = job.scene;
+    const auto &scene = job.snapshot;
     const auto &row = scene.rows[y & 255];
     const unsigned width = job.geometry.width();
     const unsigned picture_row = y - geometry::FIRST_LINE;
@@ -674,7 +675,7 @@ void compose_row(const IndexedComposeJob &job, unsigned y, RowSetup &setup,
             (kind(id) == LayerKind::Playfield && row.playfields[sub_index(id)].empty_row) ||
             (id == LayerId::Text && !row.bitmap && !scene.text.row_used(unsigned(text_y))) ||
             (kind(id) == LayerKind::Sprite && !sprite_cover.covers(sub_index(id)));
-        if (row.layer(id).enabled && (scene.layer_mask & layer_bit(id)) != 0 && !empty)
+        if (row.layer(id).enabled && !empty)
             active |= 1u << i;
     }
     const int left_edge = 46 - int(job.geometry.border);
@@ -804,13 +805,13 @@ TileRowTable::TileRowTable(std::span<const uint8_t> tile_pixels)
 }
 
 namespace {
-bool uses_15bit_palette(const FrameScene &scene) noexcept {
+bool uses_15bit_palette(const SceneSnapshot &scene) noexcept {
     for (unsigned y = geometry::FIRST_LINE; y < geometry::END_LINE; ++y)
         if (scene.rows[y & 255].palette_15bit) return true;
     return false;
 }
 
-void glyph_row_masks(const FrameScene &scene, std::array<uint8_t, 256> &rows) noexcept {
+void glyph_row_masks(const SceneSnapshot &scene, std::array<uint8_t, 256> &rows) noexcept {
     const auto glyphs = scene.text.glyphs();
     for (unsigned glyph = 0; glyph < rows.size(); ++glyph) {
         const uint8_t *data = glyphs.data() + size_t(glyph) * 32;
@@ -825,10 +826,10 @@ void glyph_row_masks(const FrameScene &scene, std::array<uint8_t, 256> &rows) no
 }
 } // namespace
 
-bool IndexedScratch::prepare(const FrameScene &scene, PixelFormat format) {
-    const bool need_15bit = uses_15bit_palette(scene);
-    palette.build(scene.colors, format, need_15bit);
-    glyph_row_masks(scene, glyph_rows);
+bool IndexedScratch::prepare(const SceneSnapshot &snapshot, PixelFormat format) {
+    const bool need_15bit = uses_15bit_palette(snapshot);
+    palette.build(snapshot.colors, format, need_15bit);
+    glyph_row_masks(snapshot, glyph_rows);
     return need_15bit;
 }
 
@@ -837,9 +838,9 @@ void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept {
     const unsigned first = chunk * COMPOSE_CHUNK_ROWS;
     const unsigned last = std::min(first + COMPOSE_CHUNK_ROWS, rows);
     if (first >= last) return;
-    raster_sprite_chunk(*job.bins, job.sprites, chunk, job.pen_mask, job.sprite_tiles, job.plane,
-                        SpriteRasterOptions{job.geometry, job.sprite_flipped}, job.coverage,
-                        job.sprite_trail_seed);
+    raster_sprite_chunk(*job.bins, job.sprites, chunk, job.snapshot.pen_mask, job.sprite_tiles,
+                        job.plane, SpriteRasterOptions{job.geometry, job.snapshot.sprite_flipped},
+                        job.coverage, job.snapshot.sprite_trail_seed);
     std::array<uint32_t, MAX_WIDTH> argb_scratch;
     RowSetup setup;
     setup.valid = false;

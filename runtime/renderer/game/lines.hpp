@@ -10,7 +10,6 @@
 namespace f3rt {
 class StateWriter;
 class StateReader;
-class Video;
 
 class GameLines {
 public:
@@ -19,27 +18,22 @@ public:
     void reset();
     // Decode the per-scanline line RAM plus the control registers from VRAM.
     void decode(const VideoRam &vram, bool flipped = false);
-    void prepare(bool flipped);
-    // After prepare(): flag playfield rows whose sampled map row holds no tile codes.
-    void cull_empty_rows(const class GameTiles &tiles);
+    GameLines &prepare(bool flipped);
     // Presented alt-map rows (PF2/PF3 alt_map rows that draw) over the visible scanlines.
     struct AltRowCounts {
         uint64_t remapped = 0, fallback = 0;
     };
-    // After cull_empty_rows(): set ScenePlayfield::full_res_offset on every alt_map row whose sampled
-    // tile rows all have a common exact full-resolution twin (FullResolutionAltMaps). Render-only;
-    // canonical row fields are untouched. No-op unless game_config::video.full_resolution_alt_maps.
-    AltRowCounts resolve_full_resolution_alt(const class FullResolutionAltMaps &maps);
+    AltRowCounts resolve_scene(bool flipped, const class GameTiles &tiles,
+                               class FullResolutionAltMaps &maps,
+                               std::span<const uint8_t> tile_pixels);
     const SceneRow &row(unsigned scanout_y) const { return m_rows[scanout_y & 255]; }
     std::span<const SceneRow, 256> rows() const { return m_rows; }
     uint64_t rows_version() const { return m_rows_version; }
-    void compare_rows(const Video &oracle, uint64_t frame);
     size_t state_size() const;
     void save_state(StateWriter &writer) const;
     void load_state(StateReader &reader);
 
 private:
-    friend class GameVideo;
     struct LineClip {
         int16_t left = 0;
         int16_t right = 0;
@@ -145,6 +139,9 @@ private:
         m_rows_version = fresh_content_version();
     }
 
+    void cull_empty_rows(const class GameTiles &tiles);
+    AltRowCounts resolve_alt_maps(class FullResolutionAltMaps &maps, const class GameTiles &tiles,
+                                  std::span<const uint8_t> tile_pixels);
     void get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool flipped) const;
 };
 static_assert(SceneSource<GameLines>);

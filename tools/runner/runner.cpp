@@ -1,8 +1,9 @@
 #include "runner.hpp"
 #include "f3rt/rom.hpp"
 
-#include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
+#include "renderer/game/oracle.hpp"
+#include "renderer/game/video.hpp"
 
 #if defined(F3RT_GENERATED)
 #include "program.h"
@@ -36,7 +37,7 @@ std::unique_ptr<Machine> create_strict_machine(const std::filesystem::path &rom_
         "Strict-native machine requires compiled generated blocks (F3RT_GENERATED)");
 #endif
     if (enable_game_video) {
-        machine->game_video = std::make_unique<GameVideo>(*machine, GameVideoMode::Game);
+        machine->game_video = std::make_unique<GameVideo>(*machine);
     }
     return machine;
 }
@@ -155,7 +156,9 @@ MachineRunner::MachineRunner(RunnerConfig config) : config_(std::move(config)) {
             (config_.video_layer_mask & ~511u)) {
             throw std::runtime_error("Video diff requires a positive interval and nine-layer mask");
         }
-        machine_->game_video = std::make_unique<GameVideo>(*machine_, GameVideoMode::Diagnostic);
+        machine_->game_video = std::make_unique<GameVideo>(*machine_);
+        oracle_verifier_ =
+            std::make_unique<OracleVerifier>(machine_->graphics_assets, machine_->roms.video);
     } else {
         auto &m = *machine_;
         oracle_ = std::make_unique<Video>(m.graphics_assets, m.roms.video);
@@ -203,6 +206,7 @@ bool MachineRunner::run_frames(uint64_t target_frames,
         }
 
         bool ok = machine_->run_frame();
+        if (oracle_verifier_) oracle_verifier_->step(*machine_);
         if (!ok || machine_->cpu.halted) {
             return false;
         }
@@ -221,6 +225,15 @@ void MachineRunner::save_bmp(const std::filesystem::path &path) {
         std::filesystem::create_directories(path.parent_path());
     }
     write_bmp(path, machine_->native_pixels());
+}
+
+void MachineRunner::compare_layers(uint64_t frame, unsigned layer_mask) {
+    if (!oracle_verifier_) throw std::logic_error("Layer comparison requires video_diff");
+    oracle_verifier_->compare_layers(*machine_, *machine_->game_video, frame, layer_mask);
+}
+
+void MachineRunner::report_oracle(std::ostream &output) const {
+    if (oracle_verifier_) oracle_verifier_->report(output);
 }
 
 void MachineRunner::finish() {

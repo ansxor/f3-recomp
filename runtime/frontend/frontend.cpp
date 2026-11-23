@@ -15,6 +15,8 @@
 #include "frame_slots.hpp"
 #include "capture_io.hpp"
 #include "renderer/scale.hpp"
+#include "renderer/game/oracle.hpp"
+#include "renderer/game/video.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "debug/profile.hpp"
 #include "debug/input_script.hpp"
@@ -644,9 +646,20 @@ int main(int argc, char **argv) try {
     std::unique_ptr<f3rt::IndirectWatch> indirect_watch;
     if (!indirect_path.empty())
         indirect_watch = std::make_unique<f3rt::IndirectWatch>(indirect_path, profile);
-    m.game_video = std::make_unique<f3rt::GameVideo>(
-        m, compare_gpu ? f3rt::GameVideoMode::Compare : f3rt::GameVideoMode::Game,
-        enhancements.render(backend));
+    m.game_video = std::make_unique<f3rt::GameVideo>(m, enhancements.render(backend));
+    std::unique_ptr<f3rt::OracleVerifier> oracle_verifier;
+    if (compare_gpu)
+        oracle_verifier =
+            std::make_unique<f3rt::OracleVerifier>(m.graphics_assets, m.roms.video);
+    auto verify_frame = [&] {
+        if (!oracle_verifier) return;
+        oracle_verifier->step(m);
+        oracle_verifier->compare_composite(m.game_video->scene_snapshot(), m.graphics_assets,
+                                           m.frame);
+    };
+    auto reset_oracle = [&] {
+        if (oracle_verifier) oracle_verifier->reset();
+    };
     m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
@@ -932,10 +945,14 @@ int main(int argc, char **argv) try {
                                          std::chrono::steady_clock::now() - netplay_trigger_time)
                                          .count();
         f3rt::FrameSnapshot *slot = begin_unpublished();
-        if (!netplay_trigger_snapshot.empty()) m.load_state(netplay_trigger_snapshot);
+        if (!netplay_trigger_snapshot.empty()) {
+            m.load_state(netplay_trigger_snapshot);
+            reset_oracle();
+        }
         while (netplay_hook->in_versus && !netplay_hook->in_versus(m)) {
             f3rt::apply_local_inputs(m, {});
             m.run_frame();
+            verify_frame();
         }
         netplay_meta.edge_machine_frame = netplay_meta.sync_machine_frame = m.frame;
         // From here until GO the machine must not run a single frame (see `halted` in the loop).
@@ -1016,6 +1033,7 @@ int main(int argc, char **argv) try {
         if (!netplay_trigger_snapshot.empty()) {
             f3rt::FrameSnapshot *slot = begin_unpublished();
             m.load_state(netplay_trigger_snapshot);
+            reset_oracle();
             netplay_trigger_snapshot.clear();
             publish_jump(slot);
         }
@@ -1216,6 +1234,10 @@ int main(int argc, char **argv) try {
                 link.deadline.store((next_frame + frame_time).time_since_epoch().count(),
                                     std::memory_order_relaxed);
             fill_snapshot(*slot, scheduled);
+            if (oracle_verifier && slot->scene_snapshot) {
+                const auto pixels = oracle_verifier->oracle_pixels();
+                std::ranges::copy(pixels, slot->scene_snapshot->native_pixels.begin());
+            }
             link.publish(true, compare_gpu);
         }
         if (!dumpdir.empty() && m.frame >= dump_start && (m.frame - dump_start) % dump_every == 0)
@@ -1255,6 +1277,7 @@ int main(int argc, char **argv) try {
         if (in_lobby && has_hold) netplay_hook->lobby_hold_frame(m);
         if (!m.run_frame())
             throw std::runtime_error("CPU halted at " + std::to_string(m.cpu.pc));
+        verify_frame();
         if (in_lobby && has_hold) netplay_hook->lobby_hold_frame(m);
         finish_frame(slot, scheduled);
         return true;
@@ -1283,6 +1306,7 @@ int main(int argc, char **argv) try {
         if (!step_lockstep_frame(m, *netplay_session, netplay_match_frame, netplay_hook, 60,
                                  netplay_recorder.get()))
             throw std::runtime_error("CPU halted at " + std::to_string(m.cpu.pc));
+        verify_frame();
         ++netplay_match_frame;
         finish_frame(slot, scheduled);
         return true;
@@ -1729,11 +1753,16 @@ int main(int argc, char **argv) try {
                         const char *capture_path =
                             screenshot_pending ? screenshot_str.c_str() : nullptr;
                         if (throttle && !draw_menu && !capture_final && !screenshot_pending)
-                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start,
-                                                                frame_time, false, nullptr);
+                            presented = sdl.gpu->present(
+                                *shot->scene_snapshot,
+                                {.wait = false,
+                                 .timing = f3rt::MotionLiveClock{shot->start, frame_time}});
                         else
-                            presented = sdl.gpu->present_motion(*shot->scene_snapshot, shot->start,
-                                                                frame_time, true, capture_path);
+                            presented = sdl.gpu->present(
+                                *shot->scene_snapshot,
+                                {.wait = true,
+                                 .timing = f3rt::MotionLiveClock{shot->start, frame_time},
+                                 .capture_path = capture_path});
                         if (presented) {
                             ++motion_presentations;
                             const auto &stats = sdl.gpu->last_motion();
@@ -1752,8 +1781,10 @@ int main(int argc, char **argv) try {
                             gpu_fdp_readback.resize(video_options.width() * video_options.height());
                             const auto &scene = *shot->scene_snapshot;
                             const bool enhanced_sprites = scene.presents_enhanced_sprites();
-                            if (enhanced_sprites) sdl.gpu->draw_canonical(scene, gpu_fdp_readback);
-                            else sdl.gpu->draw(scene, gpu_fdp_readback);
+                            if (enhanced_sprites)
+                                sdl.gpu->render(scene, gpu_fdp_readback,
+                                                {.sprites = f3rt::SpriteList::Canonical});
+                            else sdl.gpu->render(scene, gpu_fdp_readback);
                             const auto &fdp = shot->scene_snapshot->native_pixels;
                             if (gpu_fdp_readback.size() != fdp.size())
                                 throw std::runtime_error("GPU/FDP comparison size mismatch");
@@ -1774,13 +1805,16 @@ int main(int argc, char **argv) try {
                                       << fdp[first];
                                 throw std::runtime_error(error.str());
                             }
-                            if (enhanced_sprites && !screenshot_pending) sdl.gpu->draw(scene);
+                            if (!screenshot_pending) sdl.gpu->present(scene, {.wait = true});
                         } else if (!screenshot_pending) {
-                            if (capture_final || !throttle) sdl.gpu->draw(*shot->scene_snapshot);
+                            if (capture_final || !throttle)
+                                sdl.gpu->present(*shot->scene_snapshot, {.wait = true});
                             else sdl.gpu->present(*shot->scene_snapshot);
                         }
                         if (screenshot_pending)
-                            sdl.gpu->present(*shot->scene_snapshot, screenshot.string().c_str());
+                            sdl.gpu->present(*shot->scene_snapshot,
+                                             {.wait = true,
+                                              .capture_path = screenshot.string().c_str()});
                         if (capture_final) sdl.gpu->save_surface(surface.string().c_str());
                     }
                 } else
@@ -1846,6 +1880,7 @@ int main(int argc, char **argv) try {
               << std::dec << " steps=" << m.cpu.steps << " native_blocks=" << m.native_blocks
               << " audio_frames=" << audio_frames << " audio_peak=" << audio_peak
               << " nonzero_samples=" << nonzero_samples << '\n';
+    if (oracle_verifier) oracle_verifier->report(std::cout);
     if (compare_gpu)
         std::cout << "GPU-VS-FDP frames=" << gpu_fdp_frames << " pixel_mismatches=0\n";
     if (motion_interp && motion_presentation)

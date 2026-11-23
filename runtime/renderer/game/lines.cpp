@@ -1,26 +1,11 @@
 #include "renderer/game/lines.hpp"
 #include "f3rt/bytes.hpp"
 #include "f3rt/memory_map.hpp"
-#include "f3rt/video.hpp"
 #include "renderer/game/tiles.hpp"
 #include "state_io.hpp"
 #include <algorithm>
-#include <sstream>
-#include <stdexcept>
 
 namespace f3rt {
-namespace {
-
-std::string format_layer(const SceneLayer &l) {
-    std::ostringstream ss;
-    ss << "{en=" << l.enabled << " pri=" << int(l.priority) << " bm=" << int(l.blend_mode)
-       << " clip_en=" << int(l.clip_enabled) << " clip_inv=" << int(l.clip_inverted)
-       << " clip_mode=" << l.clip_inverse << " b_sel=" << l.blend_select << " mos=" << l.mosaic
-       << "}";
-    return ss.str();
-}
-
-} // namespace
 
 void GameLines::reset() {
     m_control_0.fill(0);
@@ -217,8 +202,8 @@ void GameLines::get_pf_scroll(int pf_num, int32_t &reg_sx, int32_t &reg_sy, bool
     reg_sy = sy;
 }
 
-void GameLines::prepare(bool flipped) {
-    if (m_rows_current && m_rows_flipped == flipped) return;
+GameLines &GameLines::prepare(bool flipped) {
+    if (m_rows_current && m_rows_flipped == flipped) return *this;
     m_rows_current = true;
     m_rows_flipped = flipped;
     m_rows_version = fresh_content_version();
@@ -320,6 +305,15 @@ void GameLines::prepare(bool flipped) {
             }
         }
     }
+    return *this;
+}
+
+GameLines::AltRowCounts GameLines::resolve_scene(bool flipped, const GameTiles &tiles,
+                                                 FullResolutionAltMaps &maps,
+                                                 std::span<const uint8_t> tile_pixels) {
+    prepare(flipped);
+    cull_empty_rows(tiles);
+    return resolve_alt_maps(maps, tiles, tile_pixels);
 }
 
 void GameLines::cull_empty_rows(const GameTiles &tiles) {
@@ -335,9 +329,12 @@ void GameLines::cull_empty_rows(const GameTiles &tiles) {
     if (changed) m_rows_version = fresh_content_version();
 }
 
-GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolutionAltMaps &maps) {
+GameLines::AltRowCounts GameLines::resolve_alt_maps(FullResolutionAltMaps &maps,
+                                                    const GameTiles &tiles,
+                                                    std::span<const uint8_t> tile_pixels) {
     AltRowCounts counts;
     if constexpr (f3rt::game_config::video.full_resolution_alt_maps) {
+        maps.update(tiles, tile_pixels);
         m_rows_version = fresh_content_version();
         for (unsigned y = 0; y < m_rows.size(); ++y)
             for (unsigned i = 2; i < 4; ++i) {
@@ -357,126 +354,6 @@ GameLines::AltRowCounts GameLines::resolve_full_resolution_alt(const FullResolut
             }
     }
     return counts;
-}
-
-void GameLines::compare_rows(const Video &oracle, uint64_t frame) {
-    prepare(m_decode_flipped);
-    for (unsigned screen_y = geometry::FIRST_LINE; screen_y < geometry::END_LINE; ++screen_y) {
-        const auto &g = row(screen_y);
-        const auto &o = oracle.inspect_scene_row(screen_y);
-
-        if (g.background != o.background) {
-            std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y << " background mismatch: game 0x"
-               << std::hex << g.background << " vs oracle 0x" << o.background;
-            throw std::runtime_error(ss.str());
-        }
-
-        if (g.mosaic_period != o.mosaic_period) {
-            std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y << " mosaic_period mismatch: game "
-               << int(g.mosaic_period) << " vs oracle " << int(o.mosaic_period);
-            throw std::runtime_error(ss.str());
-        }
-
-        if (g.bitmap != o.bitmap) {
-            std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y << " bitmap mismatch: game " << g.bitmap
-               << " vs oracle " << o.bitmap;
-            throw std::runtime_error(ss.str());
-        }
-
-        for (int i = 0; i < 4; ++i) {
-            if (g.blend[i] != o.blend[i]) {
-                std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y << " blend[" << i
-                   << "] mismatch: game " << int(g.blend[i]) << " vs oracle " << int(o.blend[i]);
-                throw std::runtime_error(ss.str());
-            }
-            if (g.clips[i].left != o.clips[i].left || g.clips[i].right != o.clips[i].right) {
-                std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y << " clip[" << i
-                   << "] mismatch: game [" << g.clips[i].left << ", " << g.clips[i].right
-                   << "] vs oracle [" << o.clips[i].left << ", " << o.clips[i].right << "]";
-                throw std::runtime_error(ss.str());
-            }
-        }
-
-        // Text layer
-        if (g.text.enabled != o.text.enabled || g.text.priority != o.text.priority ||
-            g.text.blend_mode != o.text.blend_mode || g.text.clip_enabled != o.text.clip_enabled ||
-            g.text.clip_inverted != o.text.clip_inverted ||
-            g.text.clip_inverse != o.text.clip_inverse ||
-            g.text.blend_select != o.text.blend_select || g.text.mosaic != o.text.mosaic) {
-            std::ostringstream ss;
-            ss << "Frame " << frame << " row " << screen_y << " text layer mismatch: game "
-               << format_layer(g.text) << " vs oracle " << format_layer(o.text);
-            throw std::runtime_error(ss.str());
-        }
-        if (g.text.enabled) {
-            if (g.text_x != o.text_x || g.text_y != o.text_y) {
-                std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y << " text coords mismatch: game ("
-                   << g.text_x << ", " << g.text_y << ") vs oracle (" << o.text_x << ", "
-                   << o.text_y << ")";
-                throw std::runtime_error(ss.str());
-            }
-        }
-
-        // Sprites
-        for (int i = 0; i < 4; ++i) {
-            if (g.sprites[i].enabled != o.sprites[i].enabled ||
-                g.sprites[i].priority != o.sprites[i].priority ||
-                g.sprites[i].blend_mode != o.sprites[i].blend_mode ||
-                g.sprites[i].clip_enabled != o.sprites[i].clip_enabled ||
-                g.sprites[i].clip_inverted != o.sprites[i].clip_inverted ||
-                g.sprites[i].clip_inverse != o.sprites[i].clip_inverse ||
-                g.sprites[i].blend_select != o.sprites[i].blend_select ||
-                g.sprites[i].mosaic != o.sprites[i].mosaic) {
-                std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y << " sprite[" << i
-                   << "] mismatch: game " << format_layer(g.sprites[i]) << " vs oracle "
-                   << format_layer(o.sprites[i]);
-                throw std::runtime_error(ss.str());
-            }
-        }
-
-        // Playfields
-        for (int i = 0; i < 4; ++i) {
-            const auto &g_pf = g.playfields[i];
-            const auto &o_pf = o.playfields[i];
-            if (g_pf.layer.enabled != o_pf.layer.enabled ||
-                g_pf.layer.priority != o_pf.layer.priority ||
-                g_pf.layer.blend_mode != o_pf.layer.blend_mode ||
-                g_pf.layer.clip_enabled != o_pf.layer.clip_enabled ||
-                g_pf.layer.clip_inverted != o_pf.layer.clip_inverted ||
-                g_pf.layer.clip_inverse != o_pf.layer.clip_inverse ||
-                g_pf.layer.blend_select != o_pf.layer.blend_select ||
-                g_pf.layer.mosaic != o_pf.layer.mosaic) {
-                std::ostringstream ss;
-                ss << "Frame " << frame << " row " << screen_y << " PF[" << i
-                   << "] layer mismatch: game " << format_layer(g_pf.layer) << " vs oracle "
-                   << format_layer(o_pf.layer);
-                throw std::runtime_error(ss.str());
-            }
-            if (g_pf.layer.enabled) {
-                if (g_pf.source_x != o_pf.source_x || g_pf.source_y != o_pf.source_y ||
-                    g_pf.x_step != o_pf.x_step || g_pf.y_step != o_pf.y_step ||
-                    g_pf.y_fraction != o_pf.y_fraction || g_pf.palette_add != o_pf.palette_add) {
-                    std::ostringstream ss;
-                    ss << "Frame " << frame << " row " << screen_y << " PF[" << i
-                       << "] coords mismatch: game {sx=" << g_pf.source_x << " sy=" << g_pf.source_y
-                       << " step=" << g_pf.x_step << " y_step=" << g_pf.y_step
-                       << " y_phase=" << int(g_pf.y_fraction) << " pal_add=" << g_pf.palette_add
-                       << "} vs oracle {sx=" << o_pf.source_x << " sy=" << o_pf.source_y
-                       << " step=" << o_pf.x_step << " y_step=" << o_pf.y_step
-                       << " y_phase=" << int(o_pf.y_fraction) << " pal_add=" << o_pf.palette_add
-                       << "}";
-                    throw std::runtime_error(ss.str());
-                }
-            }
-        }
-    }
 }
 
 namespace {

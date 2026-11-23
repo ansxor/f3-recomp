@@ -1,1079 +1,192 @@
 #include "renderer/gpu/video.hpp"
-#include "renderer/gpu/encode.hpp"
-#include "video_shaders.hpp"
-#ifdef __APPLE__
-#include "renderer/gpu/pacing_macos.hpp"
-#endif
-#include <algorithm>
 #include <cstring>
-#include <fstream>
-#include <iostream>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 namespace f3rt {
 namespace {
-[[noreturn]] void fail(const char *operation) {
-    throw std::runtime_error(std::string(operation) + ": " + SDL_GetError());
-}
-template <class T> T *checked(T *value, const char *operation) {
-    if (!value) fail(operation);
-    return value;
-}
-struct Command {
-    SDL_GPUCommandBuffer *value;
-    bool acquired_swapchain = false;
-    explicit Command(SDL_GPUDevice *device)
-        : value(checked(SDL_AcquireGPUCommandBuffer(device), "Acquire GPU command buffer")) {}
-    ~Command() {
-        if (value) {
-            if (acquired_swapchain) SDL_SubmitGPUCommandBuffer(value);
-            else SDL_CancelGPUCommandBuffer(value);
-        }
-    }
-    SDL_GPUCommandBuffer *take() {
-        auto *result = value;
-        value = nullptr;
-        return result;
-    }
-};
-struct WindowCapture {
-    SDL_GPUDevice *device;
-    SDL_GPUTexture *texture = nullptr;
-    SDL_GPUTransferBuffer *download = nullptr;
-    SDL_GPUFence *fence = nullptr;
-    bool mapped = false;
-    SDL_PixelFormat pixel_format = SDL_PIXELFORMAT_UNKNOWN;
-    explicit WindowCapture(SDL_GPUDevice *value) : device(value) {}
-    ~WindowCapture() {
-        if (mapped) SDL_UnmapGPUTransferBuffer(device, download);
-        if (fence) SDL_ReleaseGPUFence(device, fence);
-        if (download) SDL_ReleaseGPUTransferBuffer(device, download);
-        if (texture) SDL_ReleaseGPUTexture(device, texture);
-    }
-};
-constexpr Uint32 SCENE_BYTES = ENCODED_SCENE_WORDS * sizeof(uint32_t);
-constexpr Uint32 INTERPOLATION_SCENE_BYTES = ENCODED_INTERPOLATION_WORDS * sizeof(uint32_t);
-constexpr Uint32 NATIVE_BYTES = ENCODED_NATIVE_WORDS * sizeof(uint32_t);
-constexpr size_t MAX_USER_SHADER_BYTES = size_t(1024) * 1024;
-
-// Validate the fixed descriptor/interface ABI before handing user SPIR-V to the
-// driver. Compilation/pipeline creation performs the remaining shader validation.
-void validate_user_spirv(const std::vector<uint32_t> &words) {
-    auto invalid = [] {
-        throw std::runtime_error("User SPIR-V: invalid module or postprocess ABI");
-    };
-    if (words.size() < 5 || words[0] != 0x07230203 || words[4] != 0 || words[3] == 0 ||
-        words[3] > MAX_USER_SHADER_BYTES / 4)
-        invalid();
-    struct Id {
-        uint32_t opcode = 0, a = 0, b = 0, c = 0;
-        uint32_t set = UINT32_MAX, binding = UINT32_MAX;
-        bool builtin = false, block = false, zero_offset = false;
-    };
-    std::vector<Id> ids(words[3]);
-    auto id = [&](uint32_t n) -> Id & {
-        if (!n || n >= ids.size()) invalid();
-        return ids[n];
-    };
-    bool entry = false;
-    for (size_t pos = 5; pos < words.size();) {
-        const auto *p = words.data() + pos;
-        uint32_t count = p[0] >> 16, op = p[0] & 0xffff;
-        if (!count || count > words.size() - pos) invalid();
-        auto need = [&](uint32_t n) {
-            if (count < n) invalid();
-        };
-        if (op == 15) { // OpEntryPoint: Fragment main, no alternate entries.
-            need(5);
-            if (entry || p[1] != 4 || p[3] != 0x6e69616d || p[4] != 0) invalid();
-            id(p[2]);
-            entry = true;
-        } else if (op == 71) { // OpDecorate
-            need(3);
-            auto &v = id(p[1]);
-            if (p[2] == 33 || p[2] == 34) {
-                need(4);
-                (p[2] == 33 ? v.binding : v.set) = p[3];
-            } else if (p[2] == 11) v.builtin = true;
-            else if (p[2] == 2) v.block = true;
-        } else if (op == 72) { // OpMemberDecorate
-            need(4);
-            if (p[3] == 35) {
-                need(5);
-                if (p[2] == 0 && p[4] == 0) id(p[1]).zero_offset = true;
-            }
-        } else if (op == 22 || op == 23 || op == 25 || op == 27 || op == 30 || op == 32 ||
-                   op == 59) {
-            need(op == 22 || op == 27 || op == 30 ? 3 : 4);
-            auto &v = id(op == 59 ? p[2] : p[1]);
-            v.opcode = op;
-            v.a = op == 59 ? p[1] : p[2];
-            v.b = (count > 3) ? p[3] : 0;
-            v.c = count;
-            if (op == 25) { // Only a non-arrayed sampled 2D float image.
-                need(9);
-                if (p[3] != 1 || p[4] != 0 || p[5] != 0 || p[6] != 0 || p[7] != 1) invalid();
-            }
-        }
-        pos += count;
-    }
-    if (!entry) invalid();
-    unsigned samplers = 0, uniforms = 0;
-    for (const auto &v : ids) {
-        if (v.opcode != 59) continue;
-        const auto &pointer = id(v.a);
-        if (pointer.opcode != 32 || pointer.a != v.b) invalid();
-        const auto &type = id(pointer.b);
-        if (v.b == 0) { // UniformConstant: combined sampler, set2/binding0.
-            if (v.set != 2 || v.binding != 0 || type.opcode != 27) invalid();
-            const auto &image = id(type.a);
-            if (image.opcode != 25 || id(image.a).opcode != 22 || id(image.a).a != 32) invalid();
-            ++samplers;
-        } else if (v.b == 2) { // Uniform: one struct member, a float4 at offset zero.
-            if (v.set != 3 || v.binding != 0 || type.opcode != 30 || type.c != 3 || !type.block ||
-                !type.zero_offset)
-                invalid();
-            const auto &vector = id(type.a);
-            if (vector.opcode != 23 || vector.b != 4 || id(vector.a).opcode != 22 ||
-                id(vector.a).a != 32)
-                invalid();
-            ++uniforms;
-        } else if (v.b == 1) {
-            if (!v.builtin) invalid(); // Fullscreen vertex shader exports no varyings.
-        } else if (v.b != 3 && v.b != 6 && v.b != 7) invalid();
-    }
-    if (samplers != 1 || uniforms != 1) invalid();
+void validate_gpu_video_config(GameVideoOptions options, unsigned rotation,
+                               std::span<const uint8_t> playfield_assets,
+                               std::span<const uint8_t> sprite_assets) {
+    SurfaceRotator::validate(rotation);
+    if (!options.scale || options.scale > GameVideoOptions::MAX_GPU_SCALE ||
+        options.border > GameVideoOptions::MAX_BORDER)
+        throw std::runtime_error("Game GPU presentation scale/border out of range");
+    GpuTileAssets::validate(playfield_assets, sprite_assets);
 }
 } // namespace
-
-struct GpuVideo::Impl {
-    SDL_GPUDevice *device = nullptr;
-    SDL_Window *window = nullptr;
-    bool claimed = false, linear = false, rendered = false;
-    bool vsync = true;
-    bool last_presented = false;
-    bool motion_pace_prepared = false;
-    bool display_pacing = false;
-    // The display link stops while the window is hidden/occluded. A wait that times out marks it dead: from
-    // then on nothing blocks on it (callers pace on the native-frame timer) until a tick shows up again.
-    bool display_link_alive = true;
-    bool wait_display_tick() {
-#ifdef __APPLE__
-        if (!motion_pacing || !vsync) return false;
-        if (display_link_alive) {
-            display_link_alive = wait_macos_motion_pacing(motion_pacing);
-            return display_link_alive;
-        }
-        display_link_alive =
-            poll_macos_motion_pacing(motion_pacing); // a recovered link is waited on next time
-#endif
-        return false;
-    }
-#ifdef __APPLE__
-    void *motion_pacing = nullptr;
-#endif
-    GpuVideo::Overlay overlay = nullptr;
-    void *overlay_userdata = nullptr;
-    GameVideoOptions options{};
-    VideoScaleMode scale_mode = VideoScaleMode::Fixed;
-    VideoInterpolation interpolation = VideoInterpolation::Off;
-    InterpolationFields fields = InterpolationFields::Geometry;
-    InterpolationStats interpolation_stats{};
-    std::unique_ptr<GpuMotionHistory> motion;
-    MotionInterpolationStats motion_stats{};
-    std::array<LayerInterpolationStats, 4> logged_layers{};
-    InterpolationReason logged_reason = InterpolationReason::Off;
-    bool have_interpolation_log = false;
-    std::vector<uint64_t> tile_pen_masks;
-    // Asset ROM sizes in bytes (256 per 16x16 tile): fixed by the loaded ROM set, not the hardware maximum.
-    Uint32 pf_asset_bytes = 0, sp_asset_bytes = 0;
-    SDL_GPUBuffer *scene_buffer = nullptr, *pf_assets = nullptr, *sp_assets = nullptr,
-                  *native_buffer = nullptr;
-    SDL_GPUTexture *sprite_plane = nullptr, *sprite_plane_b = nullptr, *surface = nullptr;
-    SDL_GPUSampler *sampler = nullptr;
-    SDL_GPUGraphicsPipeline *sprite_pipeline = nullptr, *scene_pipeline = nullptr,
-                            *interpolation_pipeline = nullptr;
-    uint64_t presented_frames = 0; // accepted swapchain submissions
-    SDL_GPUTransferBuffer *upload = nullptr, *download = nullptr, *trail_upload = nullptr;
-    std::vector<uint32_t> saved_pixels;
-    Postprocess postprocess = Postprocess::Off;
-    SDL_GPUGraphicsPipeline *post_pipeline = nullptr;
-    SDL_GPUTexture *post_surface = nullptr;
-    unsigned rotation = 0;
-    SDL_GPUGraphicsPipeline *rotation_pipeline = nullptr;
-    SDL_GPUTexture *rotated_surface = nullptr;
-    SDL_GPUTexture *comparison_native = nullptr;
-    bool comparison_native_valid = false;
-    bool rendered_post = false;
-    Uint64 post_start = 0;
-
-    ~Impl() {
-#ifdef __APPLE__
-        destroy_macos_motion_pacing(motion_pacing);
-#endif
-        if (!device) return;
-        SDL_WaitForGPUIdle(device);
-        if (trail_upload) SDL_ReleaseGPUTransferBuffer(device, trail_upload);
-        if (rotation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, rotation_pipeline);
-        if (sprite_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, sprite_pipeline);
-        if (scene_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, scene_pipeline);
-        if (interpolation_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, interpolation_pipeline);
-        if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
-        if (sampler) SDL_ReleaseGPUSampler(device, sampler);
-        if (sprite_plane) SDL_ReleaseGPUTexture(device, sprite_plane);
-        if (sprite_plane_b) SDL_ReleaseGPUTexture(device, sprite_plane_b);
-        if (surface) SDL_ReleaseGPUTexture(device, surface);
-        if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
-        if (rotated_surface) SDL_ReleaseGPUTexture(device, rotated_surface);
-        if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
-        for (auto *buffer : {scene_buffer, pf_assets, sp_assets, native_buffer})
-            if (buffer) SDL_ReleaseGPUBuffer(device, buffer);
-        if (upload) SDL_ReleaseGPUTransferBuffer(device, upload);
-        if (download) SDL_ReleaseGPUTransferBuffer(device, download);
-        if (claimed) SDL_ReleaseWindowFromGPUDevice(device, window);
-        SDL_DestroyGPUDevice(device);
-    }
-    SDL_GPUBuffer *buffer(Uint32 size) {
-        SDL_GPUBufferCreateInfo info{};
-        info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-        info.size = size;
-        return checked(SDL_CreateGPUBuffer(device, &info), "Create GPU storage buffer");
-    }
-    SDL_GPUTransferBuffer *transfer(Uint32 size, SDL_GPUTransferBufferUsage usage) {
-        SDL_GPUTransferBufferCreateInfo info{};
-        info.usage = usage;
-        info.size = size;
-        return checked(SDL_CreateGPUTransferBuffer(device, &info), "Create GPU transfer buffer");
-    }
-    SDL_GPUTexture *texture(SDL_GPUTextureFormat format, GameVideoOptions geometry,
-                            bool sprite = false, bool portrait = false) {
-        SDL_GPUTextureCreateInfo info{};
-        info.type = SDL_GPU_TEXTURETYPE_2D;
-        info.format = format;
-        info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        bool native_plane = sprite && !geometry.expanded();
-        info.width = native_plane ? 432 : geometry.width();
-        info.height = native_plane ? 256 : geometry.height();
-        if (portrait) std::swap(info.width, info.height);
-        info.layer_count_or_depth = 1;
-        info.num_levels = 1;
-        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
-        return checked(SDL_CreateGPUTexture(device, &info), "Create GPU render texture");
-    }
-    SDL_GPUShader *shader(const video_shaders::Shader &source, SDL_GPUShaderStage stage) {
-        SDL_GPUShaderCreateInfo info{};
-        bool metal = (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_MSL) != 0;
-        info.format = metal ? SDL_GPU_SHADERFORMAT_MSL : SDL_GPU_SHADERFORMAT_SPIRV;
-        info.code = metal ? reinterpret_cast<const Uint8 *>(source.msl) : source.spirv;
-        info.code_size = metal ? source.msl_size : source.spirv_size;
-        info.entrypoint = metal ? source.msl_entry : "main";
-        info.stage = stage;
-        info.num_samplers = source.samplers;
-        info.num_storage_buffers = source.buffers;
-        info.num_uniform_buffers = source.uniforms;
-        return checked(SDL_CreateGPUShader(device, &info), "Create GPU shader");
-    }
-    SDL_GPUGraphicsPipeline *pipeline(const video_shaders::Shader &vertex,
-                                      const video_shaders::Shader &fragment,
-                                      SDL_GPUTextureFormat format) {
-        auto *vs = shader(vertex, SDL_GPU_SHADERSTAGE_VERTEX);
-        SDL_GPUShader *fs = nullptr;
-        try {
-            fs = shader(fragment, SDL_GPU_SHADERSTAGE_FRAGMENT);
-            SDL_GPUColorTargetDescription target{};
-            target.format = format;
-            SDL_GPUGraphicsPipelineCreateInfo info{};
-            info.vertex_shader = vs;
-            info.fragment_shader = fs;
-            info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-            info.rasterizer_state.enable_depth_clip = true;
-            info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
-            info.target_info.color_target_descriptions = &target;
-            info.target_info.num_color_targets = 1;
-            auto *result = checked(SDL_CreateGPUGraphicsPipeline(device, &info),
-                                   "Create GPU graphics pipeline");
-            SDL_ReleaseGPUShader(device, fs);
-            SDL_ReleaseGPUShader(device, vs);
-            return result;
-        } catch (...) {
-            if (fs) SDL_ReleaseGPUShader(device, fs);
-            SDL_ReleaseGPUShader(device, vs);
-            throw;
-        }
-    }
-    void set_postprocess(Postprocess preset, const std::filesystem::path &path) {
-        if (preset != Postprocess::Off && preset != Postprocess::Crt && preset != Postprocess::User)
-            throw std::runtime_error("Unknown GPU postprocess preset");
-        if (preset == Postprocess::Off) {
-            if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
-            if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
-            post_pipeline = nullptr;
-            post_surface = nullptr;
-            postprocess = preset;
-            rendered = false;
-            rendered_post = false;
-            return;
-        }
-        SDL_GPUGraphicsPipeline *next_pipeline = nullptr;
-        SDL_GPUTexture *next_surface = nullptr;
-        try {
-            if (preset == Postprocess::Crt) {
-                next_pipeline =
-                    pipeline(video_shaders::fullscreen_vert, video_shaders::postprocess_frag,
-                             SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-            } else {
-                const bool metal =
-                    (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_MSL) != 0;
-                if (path.extension() != (metal ? ".metal" : ".spv"))
-                    throw std::runtime_error(metal ? "Metal user shader requires a .metal file"
-                                                   : "Vulkan user shader requires a .spv file");
-                std::ifstream file(path, std::ios::binary | std::ios::ate);
-                if (!file) throw std::runtime_error("Cannot open user shader: " + path.string());
-                const auto end = file.tellg();
-                if (end <= 0 || end > std::streamoff(MAX_USER_SHADER_BYTES))
-                    throw std::runtime_error("User shader must be 1 byte to 1 MiB");
-                const size_t size = size_t(end);
-                // Aligned storage for SPIR-V; one trailing zero for native MSL.
-                std::vector<uint32_t> code((size + 4) / 4, 0);
-                file.seekg(0);
-                if (!file.read(reinterpret_cast<char *>(code.data()), std::streamsize(size)))
-                    throw std::runtime_error("Cannot read user shader: " + path.string());
-                if (metal) {
-                    if (std::memchr(code.data(), 0, size))
-                        throw std::runtime_error("User Metal shader contains an embedded NUL");
-                } else {
-                    if (size % 4)
-                        throw std::runtime_error("User SPIR-V size must be a multiple of four");
-                    code.resize(size / 4);
-                    validate_user_spirv(code);
-                }
-                video_shaders::Shader source{reinterpret_cast<const uint8_t *>(code.data()),
-                                             size,
-                                             reinterpret_cast<const char *>(code.data()),
-                                             size,
-                                             "f3_postprocess",
-                                             1,
-                                             0,
-                                             1};
-                next_pipeline = pipeline(video_shaders::fullscreen_vert, source,
-                                         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-            }
-            if (!post_surface)
-                next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
-        } catch (...) {
-            if (next_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, next_pipeline);
-            if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
-            throw;
-        }
-        // SDL releases are deferred until pending commands finish using resources.
-        if (post_pipeline) SDL_ReleaseGPUGraphicsPipeline(device, post_pipeline);
-        post_pipeline = next_pipeline;
-        if (next_surface) post_surface = next_surface;
-        postprocess = preset;
-        post_start = SDL_GetTicksNS();
-        rendered = false;
-        rendered_post = false;
-    }
-    // Created on first use, so an interpolation-off session never compiles the shader.
-    void ensure_interpolation_pipeline() {
-        if (!interpolation_pipeline)
-            interpolation_pipeline =
-                pipeline(video_shaders::fullscreen_vert, video_shaders::scene_interp_frag,
-                         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-    }
-    void set_interpolation(VideoInterpolation mode, InterpolationFields next_fields) {
-        if (mode == interpolation && next_fields == fields) return;
-        if (mode != VideoInterpolation::Off)
-            ensure_interpolation_pipeline(); // throws before any state changes
-        interpolation = mode;
-        fields = next_fields;
-        interpolation_stats = {};
-        have_interpolation_log = false;
-    }
-    void upload_buffer(SDL_GPUCopyPass *pass, SDL_GPUTransferBuffer *source,
-                       SDL_GPUBuffer *destination, Uint32 offset, Uint32 size, bool cycle) {
-        SDL_GPUTransferBufferLocation from{source, offset};
-        SDL_GPUBufferRegion to{destination, 0, size};
-        SDL_UploadToGPUBuffer(pass, &from, &to, cycle);
-    }
-    void init(std::span<const uint8_t> tiles, std::span<const uint8_t> sprites) {
-        if (!options.scale || options.scale > GameVideoOptions::MAX_GPU_SCALE ||
-            options.border > GameVideoOptions::MAX_BORDER)
-            throw std::runtime_error("Game GPU presentation scale/border out of range");
-        if (tiles.empty() || sprites.empty() || tiles.size() % 256 || sprites.size() % 256 ||
-            tiles.size() > UINT32_MAX / 2 || sprites.size() > UINT32_MAX / 2 ||
-            tiles.size() + sprites.size() > UINT32_MAX)
-            throw std::runtime_error("Incomplete GPU tile/sprite assets");
-        pf_asset_bytes = Uint32(tiles.size());
-        sp_asset_bytes = Uint32(sprites.size());
-        device = checked(SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL |
-                                                 SDL_GPU_SHADERFORMAT_METALLIB,
-                                             false, nullptr),
-                         "Create SDL GPU device");
-        if (window) {
-            if (!SDL_ClaimWindowForGPUDevice(device, window)) fail("Claim GPU window");
-            claimed = true;
-            // FIFO can make a slow display throttle native simulation/audio.
-            // Mailbox remains tear-free without queuing obsolete display frames.
-            const auto mode =
-                !vsync && SDL_WindowSupportsGPUPresentMode(device, window,
-                                                           SDL_GPU_PRESENTMODE_IMMEDIATE)
-                    ? SDL_GPU_PRESENTMODE_IMMEDIATE
-                : SDL_WindowSupportsGPUPresentMode(device, window, SDL_GPU_PRESENTMODE_MAILBOX)
-                    ? SDL_GPU_PRESENTMODE_MAILBOX
-                    : SDL_GPU_PRESENTMODE_VSYNC;
-            if (mode != SDL_GPU_PRESENTMODE_VSYNC &&
-                !SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
-                                               mode))
-                fail("Set GPU presentation mode");
-        }
-        // Sized for the interpolation region in every mode so the mode can change live (+52 KiB).
-        scene_buffer = buffer(INTERPOLATION_SCENE_BYTES);
-        native_buffer = buffer(NATIVE_BYTES);
-        pf_assets = buffer(pf_asset_bytes);
-        sp_assets = buffer(sp_asset_bytes);
-        sprite_plane = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, options, true);
-        sprite_plane_b = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, options, true);
-        surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options);
-        SDL_GPUSamplerCreateInfo sampling{};
-        sampling.min_filter = sampling.mag_filter = SDL_GPU_FILTER_NEAREST;
-        sampling.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-        sampling.address_mode_u = sampling.address_mode_v = sampling.address_mode_w =
-            SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        sampler = checked(SDL_CreateGPUSampler(device, &sampling), "Create GPU sampler");
-        sprite_pipeline = pipeline(video_shaders::sprite_vert, video_shaders::sprite_frag,
-                                   SDL_GPU_TEXTUREFORMAT_R32_UINT);
-        scene_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::scene_frag,
-                                  SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-        if (rotation) {
-            rotation_pipeline = pipeline(video_shaders::fullscreen_vert, video_shaders::rotate_frag,
-                                         SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
-            rotated_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options, false, true);
-        }
-        if (interpolation != VideoInterpolation::Off) ensure_interpolation_pipeline();
-        upload = transfer(pf_asset_bytes + sp_asset_bytes, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-        // Built unconditionally: palette interpolation may be enabled live (256 KiB per 8 MiB of tiles).
-        tile_pen_masks.assign(pf_asset_bytes / 256, 0);
-        auto *mapped = static_cast<uint32_t *>(
-            checked(SDL_MapGPUTransferBuffer(device, upload, false), "Map GPU asset upload"));
-        // Explicit low-byte-first packing also works on big-endian hosts.
-        for (Uint32 i = 0; i < pf_asset_bytes; i += 4) {
-            mapped[i / 4] = uint32_t(tiles[i]) | (uint32_t(tiles[i + 1]) << 8) |
-                            (uint32_t(tiles[i + 2]) << 16) | (uint32_t(tiles[i + 3]) << 24);
-            tile_pen_masks[i / 256] |=
-                (uint64_t{1} << (tiles[i] & 63)) | (uint64_t{1} << (tiles[i + 1] & 63)) |
-                (uint64_t{1} << (tiles[i + 2] & 63)) | (uint64_t{1} << (tiles[i + 3] & 63));
-        }
-        for (Uint32 i = 0; i < sp_asset_bytes; i += 4)
-            mapped[(pf_asset_bytes + i) / 4] =
-                uint32_t(sprites[i]) | (uint32_t(sprites[i + 1]) << 8) |
-                (uint32_t(sprites[i + 2]) << 16) | (uint32_t(sprites[i + 3]) << 24);
-        SDL_UnmapGPUTransferBuffer(device, upload);
-        Command command(device);
-        auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU asset copy");
-        upload_buffer(copy, upload, pf_assets, 0, pf_asset_bytes, false);
-        upload_buffer(copy, upload, sp_assets, pf_asset_bytes, sp_asset_bytes, false);
-        SDL_EndGPUCopyPass(copy);
-        if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU asset upload");
-        SDL_ReleaseGPUTransferBuffer(device, upload);
-        upload = nullptr;
-        upload = transfer(std::max(INTERPOLATION_SCENE_BYTES, NATIVE_BYTES),
-                          SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-    }
-    void set_scale(unsigned scale) {
-        if (!scale || scale > GameVideoOptions::MAX_GPU_SCALE)
-            throw std::runtime_error("GPU scale must be 1..8");
-        if (scale == options.scale) return;
-        auto geometry = options;
-        geometry.scale = scale;
-        SDL_GPUTexture *next_plane = nullptr, *next_plane_b = nullptr, *next_surface = nullptr,
-                       *next_post = nullptr, *next_rotated = nullptr;
-        SDL_GPUTransferBuffer *next_download = nullptr;
-        std::vector<uint32_t> next_pixels;
-        try {
-            next_plane = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, geometry, true);
-            next_plane_b = texture(SDL_GPU_TEXTUREFORMAT_R32_UINT, geometry, true);
-            next_surface = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
-            if (rotation)
-                next_rotated = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry, false, true);
-            if (post_surface) next_post = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, geometry);
-            if (download)
-                next_download = transfer(geometry.width() * geometry.height() * 4,
-                                         SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
-            if (!saved_pixels.empty())
-                next_pixels.resize(size_t(geometry.width()) * geometry.height());
-        } catch (...) {
-            if (next_plane) SDL_ReleaseGPUTexture(device, next_plane);
-            if (next_plane_b) SDL_ReleaseGPUTexture(device, next_plane_b);
-            if (next_surface) SDL_ReleaseGPUTexture(device, next_surface);
-            if (next_post) SDL_ReleaseGPUTexture(device, next_post);
-            if (next_rotated) SDL_ReleaseGPUTexture(device, next_rotated);
-            if (next_download) SDL_ReleaseGPUTransferBuffer(device, next_download);
-            throw;
-        }
-        // SDL defers destruction until queued users finish: no GPU-idle stall.
-        SDL_ReleaseGPUTexture(device, sprite_plane);
-        SDL_ReleaseGPUTexture(device, sprite_plane_b);
-        SDL_ReleaseGPUTexture(device, surface);
-        if (post_surface) SDL_ReleaseGPUTexture(device, post_surface);
-        if (rotated_surface) SDL_ReleaseGPUTexture(device, rotated_surface);
-        rotated_surface = next_rotated;
-        if (comparison_native) SDL_ReleaseGPUTexture(device, comparison_native);
-        comparison_native = nullptr;
-        comparison_native_valid = false;
-        if (download) SDL_ReleaseGPUTransferBuffer(device, download);
-        if (trail_upload) SDL_ReleaseGPUTransferBuffer(device, trail_upload);
-        trail_upload = nullptr;
-        sprite_plane = next_plane;
-        sprite_plane_b = next_plane_b;
-        surface = next_surface;
-        download = next_download;
-        post_surface = next_post;
-        saved_pixels.swap(next_pixels);
-        options = geometry;
-        rendered = false;
-        interpolation_stats = {};
-    }
-    SDL_GPURenderPass *render_pass(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target,
-                                      bool load = false) {
-        SDL_GPUColorTargetInfo info{};
-        info.texture = target;
-        info.load_op = load ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
-        info.store_op = SDL_GPU_STOREOP_STORE;
-        info.clear_color = {0, 0, 0, 1};
-        info.cycle = !load;
-        return checked(SDL_BeginGPURenderPass(command, &info, 1, nullptr), "Begin GPU render pass");
-    }
-    void upload_trail_seed(SDL_GPUCopyPass *copy, std::span<const uint16_t> seed) {
-        const bool expanded = options.expanded();
-        const unsigned width = expanded ? options.width() : 432;
-        const unsigned height = expanded ? options.height() : 256;
-        if (!trail_upload)
-            trail_upload = transfer(width * height * sizeof(uint32_t),
-                                    SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD);
-        auto *mapped = static_cast<uint32_t *>(
-            checked(SDL_MapGPUTransferBuffer(device, trail_upload, true), "Map GPU sprite trails"));
-        if (!expanded) {
-            std::copy(seed.begin(), seed.end(), mapped);
-        } else {
-            for (unsigned y = 0; y < height; ++y) {
-                const unsigned native_y = y / options.scale + geometry::FIRST_LINE;
-                for (unsigned x = 0; x < width; ++x) {
-                    const int native_x = int(x / options.scale) + 46 - int(options.border);
-                    mapped[size_t(y) * width + x] = native_x >= 46 && native_x < 366
-                        ? seed[size_t(native_y) * 432 + native_x] : 0;
-                }
-            }
-        }
-        SDL_UnmapGPUTransferBuffer(device, trail_upload);
-        // Display threads can skip scenes. Each snapshot carries its own hardware history.
-        const SDL_GPUTextureTransferInfo source{trail_upload, 0, width, height};
-        for (auto *plane : {sprite_plane, sprite_plane_b}) {
-            const SDL_GPUTextureRegion destination{plane, 0, 0, 0, 0, 0, width, height, 1};
-            SDL_UploadToGPUTexture(copy, &source, &destination, true);
-        }
-    }
-    void rotate_surface(SDL_GPUCommandBuffer *command, SDL_GPUTexture *source,
-                        SDL_GPUTexture *destination) {
-        const std::array<Uint32, 4> uniform{rotation};
-        SDL_PushGPUFragmentUniformData(command, 0, uniform.data(), sizeof(uniform));
-        auto *pass = render_pass(command, destination);
-        SDL_BindGPUGraphicsPipeline(pass, rotation_pipeline);
-        const SDL_GPUTextureSamplerBinding binding{source, sampler};
-        SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
-        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-        SDL_EndGPURenderPass(pass);
-    }
-    void queue_download(SDL_GPUCommandBuffer *command, SDL_GPUTexture *target,
-                        bool portrait = false) {
-        const unsigned width = portrait ? options.height() : options.width();
-        const unsigned height = portrait ? options.width() : options.height();
-        if (!download)
-            download = transfer(width * height * 4,
-                                SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
-        auto *copy = checked(SDL_BeginGPUCopyPass(command), "Begin GPU readback copy");
-        SDL_GPUTextureRegion from{target, 0, 0, 0, 0, 0, width, height, 1};
-        SDL_GPUTextureTransferInfo to{download, 0, width, height};
-        SDL_DownloadFromGPUTexture(copy, &from, &to);
-        SDL_EndGPUCopyPass(copy);
-    }
-    void finish_readback(Command &command, std::span<uint32_t> output) {
-        auto *fence = checked(SDL_SubmitGPUCommandBufferAndAcquireFence(command.take()),
-                              "Submit GPU readback");
-        bool success = SDL_WaitForGPUFences(device, true, &fence, 1);
-        SDL_ReleaseGPUFence(device, fence);
-        if (!success) fail("Wait for GPU readback");
-        auto *mapped =
-            checked(SDL_MapGPUTransferBuffer(device, download, false), "Map GPU readback");
-        std::memcpy(output.data(), mapped, size_t(options.width()) * options.height() * 4);
-        SDL_UnmapGPUTransferBuffer(device, download);
-    }
-    void report_interpolation() {
-        if (interpolation == VideoInterpolation::Off) return;
-        const auto &stats = interpolation_stats;
-        if (have_interpolation_log && logged_reason == stats.reason &&
-            logged_layers == stats.layers)
-            return;
-        std::cout << "video_interp fields=" << interpolation_fields_name(fields)
-                  << " reason=" << interpolation_reason_name(stats.reason);
-        for (unsigned i = 0; i < stats.layers.size(); ++i) {
-            const auto &layer = stats.layers[i];
-            std::cout << " pf" << i << '=' << interpolation_reason_name(layer.reason) << ':'
-                      << layer.source_rows << '/' << layer.zoom_rows << '/' << layer.vertical_rows
-                      << '/' << layer.palette_rows << " invalid" << i << '=' << layer.invalid_rows
-                      << " boundaries" << i << '=' << layer.discontinuities << " unsafe_palette"
-                      << i << '=' << layer.unsafe_palette_pairs;
-        }
-        std::cout << '\n';
-        logged_reason = stats.reason;
-        logged_layers = stats.layers;
-        have_interpolation_log = true;
-    }
-    enum class Presentation { Wait, SkipBusy, Offscreen };
-    void draw(const SceneSnapshot &scene, std::span<uint32_t> output, unsigned layer_mask,
-              bool process_diagnostic, bool temporal = false, float alpha = 1.0f,
-              const std::chrono::steady_clock::time_point *frame_start = nullptr,
-              std::chrono::nanoseconds period = {}, Presentation presentation = Presentation::Wait,
-              bool comparison = false, const char *capture_path = nullptr,
-              SpriteList list = SpriteList::Presented) {
-        const auto sprites = scene.sprite_list(list);
-        const bool no_present = presentation == Presentation::Offscreen;
-        const bool skip_busy = presentation == Presentation::SkipBusy;
-        size_t count = size_t(options.width()) * options.height();
-        if (!output.empty() && output.size() < count)
-            throw std::runtime_error("Incomplete GPU output buffer");
-        if (sprites.size() > F3_SCENE_SPRITE_COUNT)
-            throw std::runtime_error("GPU sprite count out of range");
-        [[maybe_unused]] const bool pace_prepared = !no_present && motion_pace_prepared;
-        if (!no_present) motion_pace_prepared = false;
-        if (comparison && !comparison_native_valid) {
-            // Cache only the current canonical scene, never temporally modified
-            // words. This offscreen pass does not acquire or pace a swapchain.
-            draw(scene, {}, layer_mask, process_diagnostic, false, 1.0f, nullptr, {},
-                 Presentation::Offscreen);
-            if (!comparison_native)
-                comparison_native = texture(SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, options,
-                                            false, rotation != 0);
-            Command cache(device);
-            auto *source = rendered_post ? post_surface : surface;
-            if (rotation) {
-                rotate_surface(cache.value, source, comparison_native);
-            } else {
-                SDL_GPUBlitInfo blit{};
-                blit.source = {source, 0, 0, 0, 0, options.width(), options.height()};
-                blit.destination = {comparison_native, 0, 0, 0, 0, options.width(), options.height()};
-                blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
-                blit.filter = SDL_GPU_FILTER_NEAREST;
-                SDL_BlitGPUTexture(cache.value, &blit);
-            }
-            if (!SDL_SubmitGPUCommandBuffer(cache.take())) fail("Submit native comparison cache");
-            comparison_native_valid = true;
-        }
-        last_presented = false;
-        Command command(device);
-        SDL_GPUTexture *swapchain = nullptr;
-        Uint32 w = 0, h = 0;
-        if (skip_busy) {
-            if (!window) return;
-            if (!SDL_AcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
-                fail("Try acquiring GPU swapchain");
-            if (!swapchain) return; // Command cancels; no uploads/resource cycling.
-            command.acquired_swapchain = true;
-        }
-        if (frame_start) {
-#ifdef __APPLE__
-            if (vsync && !pace_prepared && !skip_busy) wait_display_tick();
-#endif
-            if (window && !no_present && !skip_busy) {
-                if (!SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w,
-                                                           &h))
-                    fail("Acquire timed GPU swapchain");
-                command.acquired_swapchain = swapchain != nullptr;
-            }
-            alpha = period.count() > 0
-                        ? std::clamp(float(std::chrono::duration<double>(
-                                               std::chrono::steady_clock::now() - *frame_start)
-                                               .count() /
-                                           std::chrono::duration<double>(period).count()),
-                                     0.0f, 1.0f)
-                        : 1.0f;
-        }
-        const bool active_interpolation =
-            interpolation != VideoInterpolation::Off && options.scale > 1;
-        const Uint32 frame_scene_bytes =
-            active_interpolation ? INTERPOLATION_SCENE_BYTES : SCENE_BYTES;
-        auto *mapped = static_cast<uint8_t *>(
-            checked(SDL_MapGPUTransferBuffer(device, upload, true), "Map GPU frame upload"));
-        std::span<uint32_t> words{reinterpret_cast<uint32_t *>(mapped),
-                                  size_t(scene.fallback ? NATIVE_BYTES : frame_scene_bytes) /
-                                      sizeof(uint32_t)};
-        if (scene.fallback) {
-            if (motion) motion->reset();
-            encode(scene, options, nullptr, nullptr, words);
-            interpolation_stats = {};
-            if (interpolation != VideoInterpolation::Off)
-                interpolation_stats.reason = options.scale == 1 ? InterpolationReason::NativeScale
-                                                                : InterpolationReason::Oracle;
-            for (auto &layer : interpolation_stats.layers)
-                layer.reason = interpolation_stats.reason;
-        } else {
-            // Per present: temporal geometry -> interpolation analysis -> one-way encode.
-            MotionResult temporal_state;
-            if (temporal && motion && scene.sprite_trail_seed.empty()) {
-                temporal_state = motion->apply(scene, alpha);
-                motion_stats = temporal_state.stats;
-            }
-            const MotionState *motion_state =
-                temporal && motion && motion_stats.paired ? &temporal_state.state : nullptr;
-            InterpolationAnalysis analysis;
-            if (active_interpolation) {
-                analysis = analyze_gpu_interpolation(scene, options, interpolation, fields,
-                                                     motion_state, tile_pen_masks);
-                interpolation_stats = analysis.stats;
-            } else {
-                interpolation_stats = {};
-                if (interpolation != VideoInterpolation::Off)
-                    interpolation_stats.reason = InterpolationReason::NativeScale;
-                for (auto &layer : interpolation_stats.layers)
-                    layer.reason = interpolation_stats.reason;
-            }
-            encode(scene, options, motion_state,
-                   active_interpolation ? &analysis.coefficients : nullptr, words, list);
-        }
-        SDL_UnmapGPUTransferBuffer(device, upload);
-        report_interpolation();
-        auto *copy = checked(SDL_BeginGPUCopyPass(command.value), "Begin GPU frame copy");
-        upload_buffer(copy, upload, scene.fallback ? native_buffer : scene_buffer, 0,
-                      scene.fallback ? NATIVE_BYTES : frame_scene_bytes, true);
-        const bool trails = !scene.fallback && !scene.sprite_trail_seed.empty();
-        if (trails) upload_trail_seed(copy, scene.sprite_trail_seed);
-        SDL_EndGPUCopyPass(copy);
-        GpuUniforms uniforms{options.scale,           options.border,         options.width(),
-                             options.height(),        uint32_t(sprites.size()), scene.pen_mask,
-                             unsigned(scene.fallback), layer_mask & ALL_LAYERS};
-        if (trails) uniforms.layer_mask |= F3_MASK_SPRITE_TRAILS;
-        if (scene.flipped) uniforms.layer_mask |= F3_MASK_SCREEN_FLIPPED;
-        uniforms.pf_tile_count = pf_asset_bytes / 256;
-        uniforms.sp_tile_count = sp_asset_bytes / 256;
-        if (temporal && motion_stats.paired && motion_stats.alpha < 1.0f)
-            uniforms.layer_mask |= MOTION_LAYER_MASK;
-        const bool blend = !scene.fallback && !trails &&
-                           std::ranges::any_of(sprites, &SceneSprite::weighted);
-        if (!scene.fallback) {
-            const auto sprite_pass = [&](SDL_GPUTexture *plane, SDL_GPUTexture *seed,
-                                         uint32_t mask) {
-                auto pass_uniforms = uniforms;
-                pass_uniforms.layer_mask |= mask;
-                SDL_PushGPUVertexUniformData(command.value, 0, &pass_uniforms, sizeof(pass_uniforms));
-                auto *pass = render_pass(command.value, plane, trails);
-                SDL_BindGPUGraphicsPipeline(pass, sprite_pipeline);
-                if (!options.expanded()) {
-                    SDL_Rect scissor{46, int(geometry::FIRST_LINE), int(geometry::NATIVE_WIDTH),
-                                     int(geometry::HEIGHT)};
-                    SDL_SetGPUScissor(pass, &scissor);
-                }
-                SDL_BindGPUVertexStorageBuffers(pass, 0, &scene_buffer, 1);
-                const SDL_GPUTextureSamplerBinding trail_binding{seed, sampler};
-                SDL_BindGPUFragmentSamplers(pass, 0, &trail_binding, 1);
-                SDL_BindGPUFragmentStorageBuffers(pass, 0, &sp_assets, 1);
-                SDL_DrawGPUPrimitives(pass, 6, uint32_t(sprites.size()), 0, 0);
-                SDL_EndGPURenderPass(pass);
-            };
-            sprite_pass(sprite_plane, sprite_plane_b, 0);
-            if (blend) sprite_pass(sprite_plane_b, sprite_plane, F3_MASK_HIDE_WEIGHTED);
-        }
-        if (blend) uniforms.layer_mask |= F3_MASK_BLEND_WEIGHTED;
-        SDL_PushGPUFragmentUniformData(command.value, 0, &uniforms, sizeof(uniforms));
-        auto *pass = render_pass(command.value, surface);
-        // Same decision as the upload size and coefficient encode above: the interpolation shader reads
-        // coefficient words that exist only when active_interpolation.
-        SDL_BindGPUGraphicsPipeline(pass,
-                                    active_interpolation ? interpolation_pipeline : scene_pipeline);
-        SDL_GPUTextureSamplerBinding sprite_bindings[]{
-            {sprite_plane, sampler}, {blend ? sprite_plane_b : sprite_plane, sampler}};
-        SDL_BindGPUFragmentSamplers(pass, 0, sprite_bindings, 2);
-        SDL_GPUBuffer *buffers[]{scene_buffer, pf_assets, native_buffer};
-        SDL_BindGPUFragmentStorageBuffers(pass, 0, buffers, 3);
-        SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
-        SDL_EndGPURenderPass(pass);
-        SDL_GPUTexture *present_surface = surface;
-        const bool apply_post =
-            postprocess != Postprocess::Off &&
-            (process_diagnostic || (output.empty() && layer_mask == ALL_LAYERS));
-        if (apply_post) {
-            const float parameters[]{float(options.width()), float(options.height()),
-                                     float(options.scale),
-                                     float(double(SDL_GetTicksNS() - post_start) / 1.0e9)};
-            SDL_PushGPUFragmentUniformData(command.value, 0, parameters, sizeof(parameters));
-            auto *post_pass = render_pass(command.value, post_surface);
-            SDL_BindGPUGraphicsPipeline(post_pass, post_pipeline);
-            SDL_GPUTextureSamplerBinding binding{surface, sampler};
-            SDL_BindGPUFragmentSamplers(post_pass, 0, &binding, 1);
-            SDL_DrawGPUPrimitives(post_pass, 3, 1, 0, 0);
-            SDL_EndGPURenderPass(post_pass);
-            present_surface = post_surface;
-        }
-        if (!output.empty()) queue_download(command.value, present_surface);
-        WindowCapture capture(device);
-        if (window && !no_present) {
-            if (!frame_start && !skip_busy &&
-                !SDL_WaitAndAcquireGPUSwapchainTexture(command.value, window, &swapchain, &w, &h))
-                fail("Acquire GPU swapchain");
-            if (swapchain) {
-                command.acquired_swapchain = true;
-                SDL_GPUTexture *composition = swapchain;
-                if (capture_path) {
-                    const auto format = SDL_GetGPUSwapchainTextureFormat(device, window);
-                    if (format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM)
-                        capture.pixel_format = SDL_PIXELFORMAT_ARGB8888;
-                    else if (format == SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)
-                        capture.pixel_format = SDL_PIXELFORMAT_ABGR8888;
-                    else throw std::runtime_error("Window capture requires an 8-bit SDR swapchain");
-                    SDL_GPUTextureCreateInfo info{};
-                    info.type = SDL_GPU_TEXTURETYPE_2D;
-                    info.format = format;
-                    info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
-                    info.width = w;
-                    info.height = h;
-                    info.layer_count_or_depth = 1;
-                    info.num_levels = 1;
-                    capture.texture = checked(SDL_CreateGPUTexture(device, &info),
-                                              "Create window capture composition");
-                    composition = capture.texture;
-                    const uint64_t bytes = uint64_t(w) * h * 4;
-                    if (bytes > UINT32_MAX)
-                        throw std::runtime_error("Window capture exceeds GPU transfer size");
-                    capture.download =
-                        transfer(Uint32(bytes), SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD);
-                }
-                if (rotation) {
-                    rotate_surface(command.value, present_surface, rotated_surface);
-                    present_surface = rotated_surface;
-                }
-                const unsigned panes = comparison && w >= 2 ? 2 : 1;
-                for (unsigned pane = 0; pane < panes; ++pane) {
-                    const Uint32 offset = panes == 2 && pane == 1 ? w / 2 : 0;
-                    const Uint32 pane_width = panes == 1 ? w : (pane == 0 ? w / 2 : w - w / 2);
-                    const auto viewport = video_blit_for_window(scale_mode, options, pane_width, h, rotation != 0);
-                    SDL_GPUBlitInfo blit{};
-                    blit.source = {panes == 2 && pane == 0 ? comparison_native : present_surface,
-                                   0,
-                                   0,
-                                   viewport.source_x,
-                                   viewport.source_y,
-                                   viewport.source_width,
-                                   viewport.source_height};
-                    blit.destination = {composition,         0,          0,
-                                        offset + viewport.x, viewport.y, viewport.width,
-                                        viewport.height};
-                    blit.load_op = pane == 0 ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
-                    blit.clear_color = {0, 0, 0, 1};
-                    blit.filter = linear && scale_mode != VideoScaleMode::AutoInteger
-                                      ? SDL_GPU_FILTER_LINEAR
-                                      : SDL_GPU_FILTER_NEAREST;
-                    SDL_BlitGPUTexture(command.value, &blit);
-                }
-                if (overlay) overlay(overlay_userdata, command.value, composition, w, h);
-                if (capture.texture) {
-                    // Download the exact full-window composition submitted to
-                    // the drawable. Do not assume the backend's swapchain
-                    // permits readback or reconfigure its native layer.
-                    SDL_GPUBlitInfo final_blit{};
-                    final_blit.source = {composition, 0, 0, 0, 0, w, h};
-                    final_blit.destination = {swapchain, 0, 0, 0, 0, w, h};
-                    final_blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
-                    final_blit.filter = SDL_GPU_FILTER_NEAREST;
-                    SDL_BlitGPUTexture(command.value, &final_blit);
-                    auto *copy = checked(SDL_BeginGPUCopyPass(command.value),
-                                         "Begin window capture download");
-                    SDL_GPUTextureRegion from{composition, 0, 0, 0, 0, 0, w, h, 1};
-                    SDL_GPUTextureTransferInfo to{capture.download, 0, w, h};
-                    SDL_DownloadFromGPUTexture(copy, &from, &to);
-                    SDL_EndGPUCopyPass(copy);
-                }
-            }
-        }
-        if (capture.texture) {
-            capture.fence = checked(SDL_SubmitGPUCommandBufferAndAcquireFence(command.take()),
-                                    "Submit window capture");
-            last_presented = command.acquired_swapchain;
-            presented_frames += last_presented;
-            if (!SDL_WaitForGPUFences(device, true, &capture.fence, 1))
-                fail("Wait for window capture");
-            auto *pixels = checked(SDL_MapGPUTransferBuffer(device, capture.download, false),
-                                   "Map window capture");
-            capture.mapped = true;
-            std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> image(
-                checked(
-                    SDL_CreateSurfaceFrom(int(w), int(h), capture.pixel_format, pixels, int(w * 4)),
-                    "Create window capture image"),
-                SDL_DestroySurface);
-            if (!SDL_SavePNG(image.get(), capture_path)) fail("Save window capture PNG");
-        } else {
-            if (!output.empty()) finish_readback(command, output);
-            else if (!SDL_SubmitGPUCommandBuffer(command.take())) fail("Submit GPU frame");
-            last_presented = command.acquired_swapchain;
-            presented_frames += last_presented;
-        }
-        rendered = true;
-        rendered_post = apply_post;
-    }
-};
 
 GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options,
                    std::span<const uint8_t> playfield_assets,
                    std::span<const uint8_t> sprite_assets, bool linear, bool vsync,
                    VideoInterpolation interpolation, InterpolationFields fields, unsigned rotation)
-    : m_impl(std::make_unique<Impl>()) {
-    if (rotation != 0 && rotation != 90 && rotation != 270)
-        throw std::invalid_argument("Unsupported GPU presentation rotation");
-    m_impl->rotation = rotation;
-    m_impl->window = window;
-    m_impl->options = options;
-    m_impl->linear = linear;
-    m_impl->vsync = vsync;
-    m_impl->interpolation = interpolation;
-    m_impl->fields = fields;
-    m_impl->init(playfield_assets, sprite_assets);
-}
-GpuVideo::~GpuVideo() = default;
-const char *GpuVideo::driver() const { return SDL_GetGPUDeviceDriver(m_impl->device); }
-const InterpolationStats &GpuVideo::last_interpolation() const {
-    return m_impl->interpolation_stats;
-}
-void GpuVideo::set_scale(unsigned scale) { m_impl->set_scale(scale); }
-void GpuVideo::set_scale_mode(VideoScaleMode mode) { m_impl->scale_mode = mode; }
-uint64_t GpuVideo::presented_frames() const { return m_impl->presented_frames; }
-SDL_GPUDevice *GpuVideo::device() const { return m_impl->device; }
-void GpuVideo::set_linear(bool linear) { m_impl->linear = linear; }
-void GpuVideo::set_interpolation(VideoInterpolation mode, InterpolationFields fields) {
-    m_impl->set_interpolation(mode, fields);
-}
-void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &path) {
-    m_impl->set_postprocess(preset, path);
-    m_impl->comparison_native_valid = false;
-}
-Postprocess GpuVideo::postprocess() const { return m_impl->postprocess; }
+    : m_ctx((validate_gpu_video_config(options, rotation, playfield_assets, sprite_assets), window),
+            vsync),
+      m_options(options), m_assets(m_ctx, playfield_assets, sprite_assets),
+      m_scene_pass(m_ctx, options, interpolation != VideoInterpolation::Off),
+      m_rotator(m_ctx, options, rotation), m_interp_config{interpolation, fields},
+      m_linear(linear) {}
+
+GpuVideo::~GpuVideo() { m_ctx.wait_idle(); }
+
+const char *GpuVideo::driver() const { return m_ctx.driver(); }
+const InterpolationStats &GpuVideo::last_interpolation() const { return m_interpolation_stats; }
+void GpuVideo::set_scale_mode(VideoScaleMode mode) { m_scale_mode = mode; }
+uint64_t GpuVideo::presented_frames() const { return m_presented_frames; }
+SDL_GPUDevice *GpuVideo::device() const { return m_ctx.device(); }
+void GpuVideo::set_linear(bool linear) { m_linear = linear; }
+Postprocess GpuVideo::postprocess() const { return m_postprocess.preset(); }
 void GpuVideo::set_overlay(Overlay callback, void *userdata) {
-    m_impl->overlay = callback;
-    m_impl->overlay_userdata = userdata;
+    m_overlay = callback;
+    m_overlay_userdata = userdata;
 }
-void GpuVideo::draw(const SceneSnapshot &scene, std::span<uint32_t> output, unsigned layer_mask,
-                    bool process_diagnostic) {
-    m_impl->draw(scene, output, layer_mask, process_diagnostic);
+const MotionInterpolationStats &GpuVideo::last_motion() const { return m_motion_stats; }
+bool GpuVideo::last_presented() const { return m_last_presented; }
+double GpuVideo::display_hz() const { return m_pacer.display_hz(m_ctx.window()); }
+double GpuVideo::display_callback_hz() const { return m_pacer.callback_hz(); }
+double GpuVideo::requested_display_hz() const { return m_pacer.requested_hz(); }
+
+void GpuVideo::set_scale(unsigned scale) {
+    if (!scale || scale > GameVideoOptions::MAX_GPU_SCALE)
+        throw std::runtime_error("GPU scale must be 1..8");
+    if (scale == m_options.scale) return;
+    GameVideoOptions next = m_options;
+    next.scale = scale;
+    auto next_scene = m_scene_pass.reallocate_targets(m_ctx, next);
+    auto next_post = m_postprocess.reallocate_target(m_ctx, next);
+    auto next_rotated = m_rotator.reallocate_target(m_ctx, next);
+    std::vector<uint32_t> next_pixels;
+    if (!m_saved_pixels.empty()) next_pixels.resize(size_t(next.width()) * next.height());
+    // SDL defers destruction of the replaced targets until queued users finish: no GPU-idle stall.
+    m_scene_pass.commit_targets(std::move(next_scene));
+    m_postprocess.commit_target(std::move(next_post));
+    m_rotator.commit_target(std::move(next_rotated));
+    m_readback.reset();
+    m_saved_pixels.swap(next_pixels);
+    m_options = next;
+    m_rendered = false;
+    m_unrotated_surface = {};
+    m_interpolation_stats = {};
 }
-void GpuVideo::draw_canonical(const SceneSnapshot &scene, std::span<uint32_t> output) {
-    m_impl->draw(scene, output, ALL_LAYERS, false, false, 1.0f, nullptr, {},
-                 Impl::Presentation::Offscreen, false, nullptr, SpriteList::Canonical);
+
+void GpuVideo::set_interpolation(VideoInterpolation mode, InterpolationFields fields) {
+    const InterpolationConfig next{mode, fields};
+    if (next == m_interp_config) return;
+    if (mode != VideoInterpolation::Off)
+        m_scene_pass.ensure_interpolation_pipeline(m_ctx);
+    m_interp_config = next;
+    m_interpolation_stats = {};
+    m_interp_log.reset();
 }
-bool GpuVideo::present(const SceneSnapshot &scene, const char *capture_path) {
-    m_impl->draw(scene, {}, ALL_LAYERS, false, false, 1.0f, nullptr, {},
-                 capture_path ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy, false,
-                 capture_path);
-    return m_impl->last_presented;
+
+void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &user_shader) {
+    m_postprocess.configure(m_ctx, m_options, preset, user_shader);
+    m_rendered = false;
+    m_unrotated_surface = {};
 }
-// One GPU frame in flight and (macOS) a display-link tick for pace_motion/present_motion.
-void GpuVideo::enable_display_pacing() {
-    if (m_impl->display_pacing) return;
-    if (m_impl->window && !SDL_SetGPUAllowedFramesInFlight(m_impl->device, 1))
-        fail("Set temporal GPU queue depth");
-#ifdef __APPLE__
-    if (m_impl->window && m_impl->vsync)
-        m_impl->motion_pacing = create_macos_motion_pacing(m_impl->window);
-#endif
-    m_impl->display_pacing = true;
+
+EncodedScene GpuVideo::prepare_scene(const SceneSnapshot &scene, SpriteList list,
+                                     uint32_t layer_mask, std::optional<float> alpha) {
+    if (scene.sprite_list(list).size() > F3_SCENE_SPRITE_COUNT)
+        throw std::runtime_error("GPU sprite count out of range");
+    if (scene.fallback && m_motion) m_motion->reset();
+    const ScenePlan plan{scene, m_options, list, layer_mask};
+    const PreparedScene prepared =
+        plan.apply_motion(m_motion.get(), alpha, m_prep_scratch.motion_state)
+            .analyze_interpolation(m_interp_config, m_assets.tile_pen_masks(),
+                                   m_prep_scratch.interp_coefficients);
+    EncodedScene encoded;
+    {
+        const auto upload = m_scene_pass.upload_buffer().map(true, "Map GPU frame upload");
+        encoded = prepared.encode_into(upload.words(prepared.required_words()),
+                                       m_assets.pf_tile_count(), m_assets.sp_tile_count());
+    }
+    if (alpha) m_motion_stats = encoded.motion_stats;
+    m_interpolation_stats = encoded.interp_stats;
+    m_interp_log.observe(m_interp_config, m_interpolation_stats);
+    return encoded;
 }
+
+void GpuVideo::render(const SceneSnapshot &scene, std::span<uint32_t> output,
+                      const RenderRequest &request) {
+    if (output.size() < size_t(m_options.width()) * m_options.height())
+        throw std::runtime_error("Incomplete GPU output buffer");
+    m_last_presented = false;
+    const EncodedScene encoded =
+        prepare_scene(scene, request.sprites, request.layer_mask, request.alpha);
+    auto cmd = m_ctx.begin_command();
+    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
+    const GpuSurface final_surface = m_postprocess.apply(
+        cmd, composed, m_ctx, m_options, m_postprocess.active() && request.postprocess);
+    m_readback.finish(cmd, final_surface, m_ctx, output);
+    m_unrotated_surface = final_surface;
+    m_rendered = true;
+}
+
+bool GpuVideo::present(const SceneSnapshot &scene, const PresentRequest &request) {
+    m_last_presented = false;
+    if (!std::holds_alternative<std::monostate>(request.timing)) m_motion_stats = {};
+    auto cmd = m_ctx.begin_command();
+    if (cmd.acquire_for_present(m_ctx, m_pacer, request) == PresentAcquire::SkipFrame) return false;
+    const EncodedScene encoded = prepare_scene(scene, SpriteList::Presented, ALL_LAYERS,
+                                               request.sample_alpha());
+    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
+    const GpuSurface post =
+        m_postprocess.apply(cmd, composed, m_ctx, m_options, m_postprocess.active());
+    const GpuSurface oriented = m_rotator.apply(cmd, post, m_ctx);
+    m_last_presented = cmd.present(m_ctx, oriented, request.left_pane, m_scale_mode, m_options,
+                                   m_linear, m_rotator.rotated(), m_overlay, m_overlay_userdata,
+                                   request.capture_path);
+    m_presented_frames += m_last_presented;
+    m_unrotated_surface = post;
+    m_rendered = true;
+    return m_last_presented;
+}
+
+void GpuVideo::capture_surface(const SceneSnapshot &scene, GpuTexture &destination) {
+    const EncodedScene encoded =
+        prepare_scene(scene, SpriteList::Presented, ALL_LAYERS, std::nullopt);
+    auto cmd = m_ctx.begin_command();
+    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
+    const GpuSurface post =
+        m_postprocess.apply(cmd, composed, m_ctx, m_options, m_postprocess.active());
+    const GpuSurface oriented = m_rotator.apply(cmd, post, m_ctx);
+    destination.ensure(m_ctx, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, oriented.width, oriented.height);
+    cmd.blit_copy(oriented, destination.surface());
+    cmd.submit();
+}
+
 void GpuVideo::capture_motion(const SceneSnapshot &scene, uint64_t frame) {
-    if (!m_impl->motion) {
-        enable_display_pacing();
-        m_impl->motion = std::make_unique<GpuMotionHistory>(m_impl->options);
+    if (!m_motion) {
+        m_pacer.enable(m_ctx.device(), m_ctx.window(), m_ctx.vsync());
+        m_motion = std::make_unique<GpuMotionHistory>(m_options);
     }
-    if (scene.sprite_trail_seed.empty()) m_impl->motion->capture(scene, frame);
-    else m_impl->motion->reset();
-    m_impl->comparison_native_valid = false;
+    if (scene.sprite_trail_seed.empty()) m_motion->capture(scene, frame);
+    else m_motion->reset();
 }
+
 void GpuVideo::reset_motion() {
-    if (m_impl->motion) m_impl->motion->reset();
-    m_impl->motion_stats = {};
-    m_impl->comparison_native_valid = false;
-    m_impl->motion_pace_prepared = false;
+    if (m_motion) m_motion->reset();
+    m_motion_stats = {};
+    m_pacer.reset_prepared();
 }
-const MotionInterpolationStats &GpuVideo::last_motion() const { return m_impl->motion_stats; }
-bool GpuVideo::pace_motion() {
-#ifdef __APPLE__
-    if (m_impl->motion_pacing && m_impl->vsync && !m_impl->motion_pace_prepared)
-        m_impl->motion_pace_prepared = m_impl->wait_display_tick();
-#endif
-    return m_impl->motion_pace_prepared;
-}
-void GpuVideo::draw_motion(const SceneSnapshot &scene, float alpha, std::span<uint32_t> output,
-                           unsigned layer_mask, bool process_diagnostic) {
-    m_impl->motion_stats = {};
-    m_impl->draw(scene, output, layer_mask, process_diagnostic, true, alpha);
-}
-bool GpuVideo::present_motion(const SceneSnapshot &scene,
-                              std::chrono::steady_clock::time_point frame_start,
-                              std::chrono::nanoseconds period, bool wait,
-                              const char *capture_path) {
-    m_impl->motion_stats = {};
-    m_impl->draw(scene, {}, ALL_LAYERS, false, true, 1.0f, &frame_start, period,
-                 wait ? Impl::Presentation::Wait : Impl::Presentation::SkipBusy, false,
-                 capture_path);
-    return m_impl->last_presented;
-}
-void GpuVideo::draw_motion_comparison_timed(const SceneSnapshot &scene,
-                                            std::chrono::steady_clock::time_point frame_start,
-                                            std::chrono::nanoseconds period,
-                                            const char *capture_path) {
-    m_impl->motion_stats = {};
-    m_impl->draw(scene, {}, ALL_LAYERS, false, true, 1.0f, &frame_start, period,
-                 Impl::Presentation::Wait, true, capture_path);
-}
-bool GpuVideo::last_presented() const { return m_impl->last_presented; }
-double GpuVideo::display_hz() const {
-    if (!m_impl->window) return 0;
-    const auto *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(m_impl->window));
-    return mode ? mode->refresh_rate : 0;
-}
-double GpuVideo::display_callback_hz() const {
-#ifdef __APPLE__
-    return macos_motion_callback_hz(m_impl->motion_pacing);
-#else
-    return 0;
-#endif
-}
-double GpuVideo::requested_display_hz() const {
-#ifdef __APPLE__
-    return macos_motion_requested_hz(m_impl->motion_pacing);
-#else
-    return 0;
-#endif
-}
+
+bool GpuVideo::pace_motion() { return m_pacer.pace(m_ctx.vsync()); }
+
 void GpuVideo::save_surface(const char *path) {
-    if (!m_impl->rendered) throw std::runtime_error("No GPU surface has been drawn");
-    m_impl->saved_pixels.resize(size_t(m_impl->options.width()) * m_impl->options.height());
-    Command command(m_impl->device);
-    auto *source = m_impl->rendered_post ? m_impl->post_surface : m_impl->surface;
-    const bool portrait = m_impl->rotation != 0;
-    if (portrait) {
-        m_impl->rotate_surface(command.value, source, m_impl->rotated_surface);
-        source = m_impl->rotated_surface;
-    }
-    m_impl->queue_download(command.value, source, portrait);
-    m_impl->finish_readback(command, m_impl->saved_pixels);
-    const unsigned width = portrait ? m_impl->options.height() : m_impl->options.width();
-    const unsigned height = portrait ? m_impl->options.width() : m_impl->options.height();
-    auto *surface = checked(SDL_CreateSurfaceFrom(int(width), int(height), SDL_PIXELFORMAT_ARGB8888,
-                                                   m_impl->saved_pixels.data(), int(width * 4)),
-                            "Create GPU capture surface");
+    if (!m_rendered) throw std::runtime_error("No GPU surface has been drawn");
+    auto cmd = m_ctx.begin_command();
+    const GpuSurface source = m_rotator.apply(cmd, m_unrotated_surface, m_ctx);
+    m_saved_pixels.resize(size_t(source.width) * source.height);
+    m_readback.finish(cmd, source, m_ctx, m_saved_pixels);
+    auto *surface = gpu_checked(SDL_CreateSurfaceFrom(int(source.width), int(source.height),
+                                                      SDL_PIXELFORMAT_ARGB8888,
+                                                      m_saved_pixels.data(), int(source.width * 4)),
+                                "Create GPU capture surface");
     const char *extension = std::strrchr(path, '.');
-    bool saved = extension && SDL_strcasecmp(extension, ".png") == 0 ? SDL_SavePNG(surface, path)
-                                                                     : SDL_SaveBMP(surface, path);
+    const bool saved = extension && SDL_strcasecmp(extension, ".png") == 0
+                           ? SDL_SavePNG(surface, path)
+                           : SDL_SaveBMP(surface, path);
     SDL_DestroySurface(surface);
-    if (!saved) fail("Save GPU surface");
+    if (!saved) gpu_fail("Save GPU surface");
 }
 } // namespace f3rt

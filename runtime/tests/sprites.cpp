@@ -9,6 +9,7 @@
 #include "sprites/enhancements.hpp"
 #include "renderer/game/flicker_hold.hpp"
 #include "renderer/decode.hpp"
+#include "renderer/game/video.hpp"
 #include "renderer/gpu/motion.hpp"
 #include "sprite_check.hpp"
 #include "../../tools/commands/sprite_walk.hpp"

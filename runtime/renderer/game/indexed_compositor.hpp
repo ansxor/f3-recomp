@@ -1,6 +1,5 @@
 #pragma once
 #include "f3rt/game_video.hpp"
-#include "renderer/game/frame_scene.hpp"
 #include "renderer/game/row_workers.hpp"
 #include "renderer/game/sprites.hpp"
 #include "renderer/game/tiles.hpp"
@@ -11,7 +10,8 @@
 #include <vector>
 
 namespace f3rt {
-enum class ComposeMode { Parallel, Serial };
+struct SceneSnapshot;
+
 enum class SpriteList { Presented, Canonical };
 
 // Byte order of one composed pixel. Argb8888 is the canonical 0xAARRGGBB word the CPU composers
@@ -73,19 +73,19 @@ struct IndexedScratch {
     IndexedFrameStats stats;
 
     void configure(GameVideoOptions geometry);
-    bool prepare(const FrameScene &scene, PixelFormat format);
+    bool prepare(const SceneSnapshot &snapshot, PixelFormat format);
     SpriteCoverage coverage(GameVideoOptions geometry) {
         return {geometry, coverage_layers, coverage_bits};
     }
 };
 
 struct IndexedComposeJob {
-    const FrameScene &scene;
+    const SceneSnapshot &snapshot;
+    std::span<const uint8_t> tile_pixels;
     std::span<uint16_t> plane;
     SpriteCoverage coverage;
     const SpriteBins *bins = nullptr;
     std::span<const SceneSprite> sprites;
-    uint8_t pen_mask = 15;
     std::span<const uint8_t> sprite_tiles;
     std::span<const TileRows> tile_rows;
     std::span<const uint8_t> glyph_rows;
@@ -96,8 +96,6 @@ struct IndexedComposeJob {
     PixelFormat format = PixelFormat::Argb8888;
     GameVideoOptions geometry{};
     IndexedFrameStats *stats = nullptr;
-    bool sprite_flipped = false;
-    std::span<const uint16_t> sprite_trail_seed;
 };
 
 void compose_indexed_chunk(IndexedComposeJob &job, unsigned chunk) noexcept;

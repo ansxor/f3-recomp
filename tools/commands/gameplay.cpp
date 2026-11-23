@@ -5,7 +5,7 @@
 #include "f3rt/rom.hpp"
 #include "capture_io.hpp"
 
-#include "f3rt/game_video.hpp"
+#include "renderer/game/video.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -147,9 +147,10 @@ int cmd_gameplay(int argc, char **argv) try {
         if (cfg.video_diff && frame >= VIDEO_DIFF_MIN_FRAME &&
             (frame - VIDEO_DIFF_MIN_FRAME) % cfg.video_diff_every == 0) {
             try {
-                m.game_video->compare_layers(frame, cfg.video_layer_mask);
+                runner.compare_layers(frame, cfg.video_layer_mask);
             } catch (...) {
                 m.game_video->report(std::cerr);
+                runner.report_oracle(std::cerr);
                 if (!cfg.dump_dir.empty()) dump_machine(m, cfg.dump_dir);
                 throw;
             }
@@ -178,7 +179,9 @@ int cmd_gameplay(int argc, char **argv) try {
         runner.save_bmp(capture_surface);
     }
     if (m.game_video) {
-        m.game_video->report(json_output ? std::cerr : std::cout);
+        std::ostream &report = json_output ? std::cerr : std::cout;
+        m.game_video->report(report);
+        runner.report_oracle(report);
     }
 
     if (json_output) {

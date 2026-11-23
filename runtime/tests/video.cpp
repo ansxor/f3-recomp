@@ -7,6 +7,10 @@
 #include "renderer/game/sprites.hpp"
 #include "renderer/game/lines.hpp"
 #include "renderer/game/scene_snapshot.hpp"
+#include "renderer/game/video.hpp"
+#include "renderer/game/oracle.hpp"
+#include "renderer/game/palette.hpp"
+#include "f3rt/renderer/game/enhancements.hpp"
 #include "renderer/game/clip.hpp"
 #include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/layer_visits.hpp"
@@ -31,6 +35,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -846,12 +851,12 @@ TEST(GameCompositor, IndexedParallelMatchesSerial) {
         f3rt::IndexedScratch scratch;
         std::vector<uint32_t> serial(size_t(options.width()) * options.height()),
             parallel(serial.size());
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->graphics_assets.sprite_tiles(), scratch,
-                                       serial, options.width(), f3rt::PixelFormat::Argb8888,
-                                       options, f3rt::ComposeMode::Serial);
-        f3rt::compose_snapshot_indexed(captured, playfield, machine->graphics_assets.sprite_tiles(), scratch,
-                                       parallel, options.width(), f3rt::PixelFormat::Argb8888,
-                                       options, f3rt::ComposeMode::Parallel);
+        captured.compose(serial, options.width(), f3rt::PixelFormat::Argb8888, border, playfield,
+                         machine->graphics_assets.sprite_tiles(), scratch,
+                         f3rt::SpriteList::Presented, nullptr);
+        captured.compose(parallel, options.width(), f3rt::PixelFormat::Argb8888, border, playfield,
+                         machine->graphics_assets.sprite_tiles(), scratch,
+                         f3rt::SpriteList::Presented, &f3rt::compose_workers());
         EXPECT_EQ(parallel, serial) << "border=" << border;
     }
 }
@@ -884,7 +889,7 @@ public:
 #ifdef F3RT_GPU
         auto *gpu = render_at(options.border);
         if (!gpu) return std::nullopt;
-        gpu->draw(frame, output);
+        gpu->render(frame, output);
         return output;
 #else
         (void)frame;
@@ -938,8 +943,8 @@ IndexedComparison compare_indexed_frame(const f3rt::SceneSnapshot &frame,
     auto expected = gpu.render(frame, options);
     if (!expected) throw std::runtime_error("GPU reference unavailable");
     std::vector<uint32_t> indexed(pixel_count);
-    f3rt::compose_snapshot_indexed(frame, playfield_tiles, sprite_tiles, scratch, indexed,
-                                   options.width(), f3rt::PixelFormat::Argb8888, options);
+    frame.compose(indexed, options.width(), f3rt::PixelFormat::Argb8888, border, playfield_tiles,
+                  sprite_tiles, scratch, f3rt::SpriteList::Presented, &f3rt::compose_workers());
     IndexedComparison result;
     result.pixels = pixel_count;
     result.rows = options.height();
@@ -956,8 +961,8 @@ IndexedComparison compare_indexed_frame(const f3rt::SceneSnapshot &frame,
             ++result.plane_mismatches;
         }
     std::vector<uint32_t> staging(pixel_count);
-    f3rt::compose_snapshot_indexed(frame, playfield_tiles, sprite_tiles, scratch, staging,
-                                   options.width(), f3rt::PixelFormat::Rgba8888, options);
+    frame.compose(staging, options.width(), f3rt::PixelFormat::Rgba8888, border, playfield_tiles,
+                  sprite_tiles, scratch, f3rt::SpriteList::Presented, &f3rt::compose_workers());
     for (size_t i = 0; i < pixel_count; ++i)
         if (staging[i] != f3rt::to_pixel_format((*expected)[i], f3rt::PixelFormat::Rgba8888)) {
             if (result.first_pixel == SIZE_MAX) result.first_pixel = i;
@@ -1151,8 +1156,8 @@ TEST(GameCompositor, FlippedBitmapPivotMatchesFdpWithWrappedAttributeBank) {
     ASSERT_NE(std::ranges::count(expected, 0xff000000u), std::ssize(expected));
     const f3rt::TileRowTable tiles(fdp.playfield_tiles());
     f3rt::IndexedScratch scratch;
-    f3rt::compose_snapshot_indexed(*scene, tiles, fdp.sprite_tiles(), scratch, actual, 320,
-                                    f3rt::PixelFormat::Argb8888, {});
+    scene->compose(actual, 320, f3rt::PixelFormat::Argb8888, 0, tiles, fdp.sprite_tiles(), scratch,
+                   f3rt::SpriteList::Presented, &f3rt::compose_workers());
     EXPECT_EQ(actual, expected);
     GpuReference gpu(fdp.playfield_tiles(), fdp.sprite_tiles());
     if (const auto pixels = gpu.render(*scene, {})) EXPECT_EQ(*pixels, expected);
@@ -1215,8 +1220,8 @@ TEST(GameCompositor, TrailSeedKeepsPreviousPixelsAcrossFramesAndStateLoad) {
         frame->pen_mask = source.pen_mask();
         frame->sprite_count = unsigned(source.sprites().size());
         std::ranges::copy(source.sprites(), frame->sprites.begin());
-        f3rt::compose_snapshot_indexed(*frame, tile_rows, sprites, scratch, pixels, 320,
-                                        f3rt::PixelFormat::Argb8888, {});
+        frame->compose(pixels, 320, f3rt::PixelFormat::Argb8888, 0, tile_rows, sprites, scratch,
+                       f3rt::SpriteList::Presented, &f3rt::compose_workers());
         if (const auto gpu_pixels = gpu.render(*frame, {})) EXPECT_EQ(*gpu_pixels, pixels);
     };
     draw();
@@ -2020,4 +2025,258 @@ TEST(SceneSnapshot, SpriteListSelectsCanonicalOrPresented) {
     EXPECT_EQ(presented.size(), 2u);
     EXPECT_EQ(canonical.data(), scene->canonical_sprites.data());
     EXPECT_EQ(canonical.size(), 1u);
+}
+
+TEST(GamePalette, DecodesColorsFromPaletteRam) {
+    auto graphics = std::make_unique<std::array<uint8_t, 0x40000>>();
+    auto palette = std::make_unique<std::array<uint8_t, 0x8000>>();
+    std::array<uint8_t, 0x20> control{};
+    set_color(*palette, 5 * 4, 0xff123456); // byte 0 is not part of the color
+    set_color(*palette, 8191 * 4, 0x00abcdef);
+    f3rt::GamePalette decoded;
+    decoded.decode({*graphics, control, 1, *palette});
+    EXPECT_EQ(decoded.colors()[5], 0x123456u);
+    EXPECT_EQ(decoded.colors()[8191], 0xabcdefu);
+    EXPECT_EQ(decoded.colors()[6], 0u);
+}
+
+TEST(GamePalette, SkipsUnchangedRamAndBumpsVersionOnChange) {
+    auto graphics = std::make_unique<std::array<uint8_t, 0x40000>>();
+    auto palette = std::make_unique<std::array<uint8_t, 0x8000>>();
+    std::array<uint8_t, 0x20> control{};
+    const f3rt::VideoRam vram{*graphics, control, 1, *palette};
+    f3rt::GamePalette decoded;
+    const uint64_t initial = decoded.version();
+    set_color(*palette, 4, 0x00112233);
+    decoded.decode(vram);
+    const uint64_t first = decoded.version();
+    EXPECT_NE(first, initial);
+
+    decoded.decode(vram);
+    EXPECT_EQ(decoded.version(), first) << "unchanged palette RAM must not re-decode";
+
+    set_color(*palette, 4, 0x00445566);
+    decoded.decode(vram);
+    EXPECT_NE(decoded.version(), first);
+    EXPECT_EQ(decoded.colors()[1], 0x445566u);
+
+    const uint64_t current = decoded.version();
+    decoded.decode({*graphics, control, 2});
+    EXPECT_EQ(decoded.version(), current);
+    EXPECT_EQ(decoded.colors()[1], 0x445566u);
+}
+
+TEST(GamePalette, ResetClearsColorsAndForcesRedecode) {
+    auto graphics = std::make_unique<std::array<uint8_t, 0x40000>>();
+    auto palette = std::make_unique<std::array<uint8_t, 0x8000>>();
+    std::array<uint8_t, 0x20> control{};
+    const f3rt::VideoRam vram{*graphics, control, 1, *palette};
+    f3rt::GamePalette decoded;
+    set_color(*palette, 12, 0x00778899);
+    decoded.decode(vram);
+    const uint64_t before = decoded.version();
+
+    decoded.reset();
+    EXPECT_NE(decoded.version(), before);
+    EXPECT_EQ(decoded.colors()[3], 0u);
+    decoded.decode(vram);
+    EXPECT_EQ(decoded.colors()[3], 0x778899u);
+}
+
+namespace {
+struct DecodedSources {
+    std::unique_ptr<std::array<uint8_t, 0x40000>> graphics =
+        std::make_unique<std::array<uint8_t, 0x40000>>();
+    std::unique_ptr<std::array<uint8_t, 0x8000>> palette =
+        std::make_unique<std::array<uint8_t, 0x8000>>();
+    std::array<uint8_t, 0x20> control{};
+    f3rt::GameTiles tiles;
+    f3rt::GameText text;
+    f3rt::GamePalette colors;
+    f3rt::GameSprites sprites;
+    f3rt::GameLines lines;
+    f3rt::RenderEnhancements enhancements;
+
+    void decode() {
+        const f3rt::VideoRam vram{*graphics, control, 1, *palette};
+        tiles.decode(vram);
+        text.decode(vram);
+        colors.decode(vram);
+        lines.decode(vram);
+    }
+};
+}
+
+TEST(SceneSnapshot, CaptureCopiesChangedComponentsAndClearsFallback) {
+    auto sources = std::make_unique<DecodedSources>();
+    set_color(*sources->palette, 7 * 4, 0x00abcdef);
+    set_word(*sources->graphics, GAME_TILE_CELLS, 0x0003);
+    sources->decode();
+
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    ASSERT_TRUE(scene->fallback);
+    EXPECT_EQ(&scene->capture(sources->tiles, sources->text, sources->colors, sources->sprites,
+                              sources->lines, sources->enhancements),
+              scene.get());
+    EXPECT_FALSE(scene->fallback);
+    EXPECT_EQ(scene->colors[7], 0xabcdefu);
+    EXPECT_EQ(scene->colors_version, sources->colors.version());
+    EXPECT_EQ(scene->tiles.version(), sources->tiles.version());
+    EXPECT_EQ(scene->text.version(), sources->text.version());
+    EXPECT_EQ(scene->rows_version, sources->lines.rows_version());
+    EXPECT_EQ(scene->sprite_count, 0u);
+    EXPECT_EQ(scene->pen_mask, sources->sprites.pen_mask());
+
+    scene->colors[7] = 0xdeadbeef;
+    scene->capture(sources->tiles, sources->text, sources->colors, sources->sprites,
+                   sources->lines, sources->enhancements);
+    EXPECT_EQ(scene->colors[7], 0xdeadbeefu) << "unchanged palette version must not recopy";
+
+    set_color(*sources->palette, 7 * 4, 0x00010203);
+    sources->decode();
+    scene->capture(sources->tiles, sources->text, sources->colors, sources->sprites,
+                   sources->lines, sources->enhancements);
+    EXPECT_EQ(scene->colors[7], 0x010203u);
+    EXPECT_EQ(scene->colors_version, sources->colors.version());
+}
+
+TEST(SceneSnapshot, CaptureFallbackFillsBlackOrCopiesNative) {
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    scene->fallback = false;
+    scene->native_pixels.fill(0x12345678);
+    EXPECT_EQ(&scene->capture_fallback(), scene.get());
+    EXPECT_TRUE(scene->fallback);
+    EXPECT_TRUE(std::ranges::all_of(scene->native_pixels, [](uint32_t p) { return p == 0xff000000u; }));
+
+    std::vector<uint32_t> native(f3rt::geometry::NATIVE_PIXELS);
+    for (size_t i = 0; i < native.size(); ++i) native[i] = 0xff000000u | uint32_t(i);
+    scene->fallback = false;
+    scene->capture_fallback(native);
+    EXPECT_TRUE(scene->fallback);
+    EXPECT_TRUE(std::ranges::equal(scene->native_pixels, native));
+}
+
+TEST(SceneSnapshot, ComposeFallbackPlacesNativeFrameInsideBorder) {
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    std::vector<uint32_t> native(f3rt::geometry::NATIVE_PIXELS);
+    for (size_t i = 0; i < native.size(); ++i) native[i] = 0xff000000u | uint32_t(i);
+    scene->capture_fallback(native);
+    const f3rt::TileRowTable no_tiles;
+    for (const unsigned border : {0u, 40u}) {
+        f3rt::GameVideoOptions options;
+        options.scale = 1;
+        options.border = border;
+        std::vector<uint32_t> serial(size_t(options.width()) * options.height(), 1u),
+            parallel(serial.size(), 2u);
+        f3rt::IndexedScratch scratch;
+        scene->compose(serial, options.width(), f3rt::PixelFormat::Argb8888, border, no_tiles, {},
+                       scratch, f3rt::SpriteList::Presented, nullptr);
+        scene->compose(parallel, options.width(), f3rt::PixelFormat::Argb8888, border, no_tiles, {},
+                       scratch, f3rt::SpriteList::Presented, &f3rt::compose_workers());
+        EXPECT_EQ(serial, parallel) << "border=" << border;
+        for (unsigned y = 0; y < options.height(); ++y) {
+            for (unsigned x = 0; x < options.width(); ++x) {
+                const bool inside = x >= border && x < border + f3rt::geometry::NATIVE_WIDTH;
+                const uint32_t expected =
+                    inside ? native[y * f3rt::geometry::NATIVE_WIDTH + x - border] : 0xff000000u;
+                ASSERT_EQ(serial[size_t(y) * options.width() + x], expected)
+                    << "border=" << border << " x=" << x << " y=" << y;
+            }
+        }
+    }
+}
+
+TEST(SceneSnapshot, ComposeRejectsOutOfRangeBorderAndShortBuffers) {
+    auto scene = std::make_unique<f3rt::SceneSnapshot>();
+    const f3rt::TileRowTable no_tiles;
+    f3rt::IndexedScratch scratch;
+    f3rt::GameVideoOptions options;
+    std::vector<uint32_t> output(size_t(options.width()) * options.height());
+    EXPECT_THROW(scene->compose(output, options.width(), f3rt::PixelFormat::Argb8888,
+                                f3rt::GameVideoOptions::MAX_BORDER + 1, no_tiles, {}, scratch),
+                 std::runtime_error);
+    output.resize(size_t(options.width()) * options.height() - 1);
+    EXPECT_THROW(scene->compose(output, options.width(), f3rt::PixelFormat::Argb8888, 0, no_tiles,
+                                {}, scratch),
+                 std::runtime_error);
+}
+
+TEST(GameVideo, NullSnapshotTargetRestoresInternalSlot) {
+    auto machine = strict_machine_or_skip(true);
+    if (!machine) GTEST_SKIP() << "ROM-backed strict machine unavailable";
+    auto external = std::make_unique<f3rt::SceneSnapshot>();
+    machine->game_video->set_snapshot_target(external.get());
+    ASSERT_TRUE(machine->run_frame());
+    EXPECT_EQ(&machine->game_video->scene_snapshot(), external.get());
+
+    machine->game_video->set_snapshot_target(nullptr);
+    ASSERT_TRUE(machine->run_frame());
+    EXPECT_NE(&machine->game_video->scene_snapshot(), external.get());
+}
+
+RC_GTEST_PROP(SceneSnapshot, ComposeSerialMatchesParallelSynthetic, ()) {
+    static SyntheticAssets assets;
+    const auto seed = *rc::gen::arbitrary<uint64_t>();
+    const auto border = *rc::gen::element(0u, 40u);
+    std::mt19937_64 rng(seed);
+    const f3rt::SceneSnapshot frame = synthetic_frame(rng);
+    f3rt::GameVideoOptions options;
+    options.scale = 1;
+    options.border = border;
+    std::vector<uint32_t> serial(size_t(options.width()) * options.height()),
+        parallel(serial.size());
+    f3rt::IndexedScratch serial_scratch, parallel_scratch;
+    frame.compose(serial, options.width(), f3rt::PixelFormat::Argb8888, border, assets.playfield,
+                  assets.sprite_tiles, serial_scratch, f3rt::SpriteList::Presented, nullptr);
+    frame.compose(parallel, options.width(), f3rt::PixelFormat::Argb8888, border, assets.playfield,
+                  assets.sprite_tiles, parallel_scratch, f3rt::SpriteList::Presented,
+                  &f3rt::compose_workers());
+    RC_ASSERT(serial == parallel);
+}
+
+TEST(OracleVerifier, RejectsEmptyLayerMask) {
+    auto machine = strict_machine_or_skip(true);
+    if (!machine) GTEST_SKIP() << "ROM-backed strict machine unavailable";
+    f3rt::OracleVerifier oracle(machine->graphics_assets, machine->roms.video);
+    oracle.step(*machine);
+    EXPECT_THROW(oracle.compare_layers(*machine, *machine->game_video, machine->frame, 0),
+                 std::runtime_error);
+}
+
+TEST(OracleVerifier, ComparesLayersAndCompositeAgainstGameVideo) {
+    auto machine = strict_machine_or_skip(true);
+    if (!machine) GTEST_SKIP() << "ROM-backed strict machine unavailable";
+    ASSERT_NE(machine->game_video, nullptr);
+    f3rt::OracleVerifier oracle(machine->graphics_assets, machine->roms.video);
+    for (unsigned frame = 0; frame < 900; ++frame) {
+        f3rt::apply_local_inputs(*machine, {});
+        ASSERT_TRUE(machine->run_frame());
+        oracle.step(*machine);
+    }
+    const auto &captured = machine->game_video->scene_snapshot();
+    ASSERT_FALSE(captured.fallback) << "Frame 900 must be a supported native scanout";
+    ASSERT_EQ(oracle.oracle_pixels().size(), size_t(f3rt::geometry::NATIVE_PIXELS));
+
+    EXPECT_NO_THROW(oracle.compare_layers(*machine, *machine->game_video, machine->frame,
+                                          f3rt::ALL_LAYERS));
+    EXPECT_NO_THROW(oracle.compare_composite(captured, machine->graphics_assets, machine->frame));
+    std::ostringstream report;
+    oracle.report(report);
+    EXPECT_NE(report.str().find("layer=composite"), std::string::npos) << report.str();
+    EXPECT_NE(report.str().find("pixel_mismatches=0"), std::string::npos) << report.str();
+
+    auto broken = std::make_unique<f3rt::SceneSnapshot>(captured);
+    broken->colors.fill(0x00123456);
+    try {
+        oracle.compare_composite(*broken, machine->graphics_assets, machine->frame);
+        ADD_FAILURE() << "a recolored snapshot must not match the oracle";
+    } catch (const std::runtime_error &error) {
+        EXPECT_NE(std::string(error.what()).find(std::to_string(machine->frame)), std::string::npos)
+            << error.what();
+    }
+
+    oracle.reset();
+    std::ostringstream cleared;
+    oracle.report(cleared);
+    EXPECT_TRUE(cleared.str().empty()) << cleared.str();
 }

@@ -15,6 +15,9 @@ struct VideoRam {
     std::span<const uint8_t> graphics; // 0x40000 bytes
     std::span<const uint8_t> control;  // 0x20 bytes
     uint64_t frame = 0;                // Machine::frame + 1; diagnostics only
+    std::span<const uint8_t> palette{}; // 0x8000 bytes of palette RAM; empty = none
+    // The video RAM the machine presents at the VBSTART that ends its current frame.
+    static VideoRam from(const Machine &m);
     uint16_t u16(size_t offset) const {
         return uint16_t(uint16_t(graphics[offset]) << 8 | graphics[offset + 1]);
     }
@@ -92,7 +95,7 @@ struct ScenePlayfield {
     // The sampled map row has no nonzero tile code, so the hardware skips the layer on this
     // scanline (GameLines::cull_empty_rows). Derived each frame, never serialized.
     bool empty_row = false;
-    // Render-only presentation hint, derived each frame (GameLines::resolve_full_resolution_alt),
+    // Render-only presentation hint, derived each frame (GameLines::resolve_alt_maps),
     // never serialized and never compared with the oracle: for an alt_map row, the offset c in
     // [0, PF_MAP_WIDTH_PX) with alt(x, y) == main((2x + c) mod PF_MAP_WIDTH_PX, y) for every tile
     // row the scanline samples; -1 = none (the canonical alternate-map sampling stands).

@@ -40,6 +40,11 @@ enum class InterpolationReason {
     PaletteDiscontinuity,
     Applied
 };
+struct InterpolationConfig {
+    VideoInterpolation mode = VideoInterpolation::Off;
+    InterpolationFields fields = InterpolationFields::Geometry;
+    bool operator==(const InterpolationConfig &) const = default;
+};
 struct LayerInterpolationStats {
     InterpolationReason reason = InterpolationReason::NoEffect;
     unsigned source_rows = 0, zoom_rows = 0, vertical_rows = 0, palette_rows = 0;
@@ -71,10 +76,30 @@ struct InterpolationAnalysis {
     InterpolationCoefficients coefficients;
 };
 // Motion-effective geometry comes from `motion` (null: the canonical frame).
+// Writes the coefficients into caller-owned `out` (no 56 KiB return copy). `out` is rewritten
+// whenever the frame can upload a coefficient region; the Off, NativeScale and Oracle rejections
+// leave it untouched because nothing reads it.
+InterpolationStats analyze_gpu_interpolation_into(const SceneSnapshot &frame,
+                                                  GameVideoOptions options, VideoInterpolation mode,
+                                                  InterpolationFields fields,
+                                                  const MotionState *motion,
+                                                  std::span<const uint64_t> tile_pen_masks,
+                                                  InterpolationCoefficients &out) noexcept;
 InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                                                 GameVideoOptions options, VideoInterpolation mode,
                                                 InterpolationFields fields,
                                                 const MotionState *motion,
                                                 std::span<const uint64_t> tile_pen_masks) noexcept;
 const char *interpolation_reason_name(InterpolationReason reason) noexcept;
+// Prints one `video_interp ...` line to stdout whenever the observed reason/layer outcome changes.
+class InterpolationLog {
+public:
+    void reset() noexcept { m_observed = false; }
+    void observe(InterpolationConfig config, const InterpolationStats &stats);
+
+private:
+    std::array<LayerInterpolationStats, 4> m_layers{};
+    InterpolationReason m_reason = InterpolationReason::Off;
+    bool m_observed = false;
+};
 } // namespace f3rt

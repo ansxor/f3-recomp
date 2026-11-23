@@ -44,6 +44,10 @@ public:
         : m_border(int(options.border)) {}
     void capture(const SceneSnapshot &frame, uint64_t frame_id) noexcept;
     void reset() noexcept;
+    // Writes the sampled geometry into caller-owned `out` (no 42 KiB return copy). `out` is
+    // meaningful only when the returned stats.paired; an unpaired result leaves it untouched.
+    MotionInterpolationStats apply_into(const SceneSnapshot &frame, float alpha,
+                                        MotionState &out) const noexcept;
     MotionResult apply(const SceneSnapshot &frame, float alpha) const noexcept;
 
 private:

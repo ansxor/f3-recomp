@@ -115,6 +115,24 @@ std::span<const SceneSprite> GameSprites::presented_sprites() const {
 
 bool GameSprites::flipped() const { return m_current_flipped; }
 
+SpriteLatch GameSprites::before_scanout(const VideoRam &vram,
+                                        const SpritePresentation &presentation,
+                                        std::span<const uint8_t> assets) {
+    if constexpr (game_config::video.sprite_lag != 2) decode(vram, presentation);
+    if constexpr (game_config::video.sprite_lag == 0) {
+        latch(assets);
+        return SpriteLatch::Latched;
+    }
+    return SpriteLatch::Unchanged;
+}
+
+SpriteLatch GameSprites::after_scanout(const VideoRam &vram, const SpritePresentation &presentation,
+                                       std::span<const uint8_t> assets) {
+    if constexpr (game_config::video.sprite_lag != 0) latch(assets);
+    if constexpr (game_config::video.sprite_lag == 2) decode(vram, presentation);
+    return game_config::video.sprite_lag != 0 ? SpriteLatch::Latched : SpriteLatch::Unchanged;
+}
+
 uint8_t GameSprites::pen_mask() const { return m_current_pen_mask; }
 
 bool GameSprites::trails() const { return m_current_trails; }

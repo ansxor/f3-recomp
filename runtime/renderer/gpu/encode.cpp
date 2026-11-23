@@ -119,10 +119,9 @@ void encode_coefficients(const InterpolationCoefficients &coefficients, uint32_t
                     at[OFFSETS[t] + k] = std::bit_cast<uint32_t>((*triples[t])[k]);
         }
 }
-} // namespace
-
-void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
-            const InterpolationCoefficients *coefficients, std::span<uint32_t> out, SpriteList list) {
+void write_words(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
+                 const InterpolationCoefficients *coefficients, std::span<uint32_t> out,
+                 SpriteList list) {
     if (frame.fallback) {
         if (out.size() < ENCODED_NATIVE_WORDS)
             throw std::invalid_argument("GPU native upload too small");
@@ -192,5 +191,75 @@ void encode(const SceneSnapshot &frame, GameVideoOptions options, const MotionSt
                              (frame.sprite_flipped ? F3_SPRITE_SCREEN_FLIPPED : 0u);
     }
     if (coefficients) encode_coefficients(*coefficients, w + F3_SCENE_INTERP);
+}
+}
+
+MotionScene ScenePlan::apply_motion(const GpuMotionHistory *history, std::optional<float> alpha,
+                                    MotionState &scratch) const noexcept {
+    MotionScene result{*this};
+    if (!alpha || !history || sprite_list != SpriteList::Presented ||
+        !scene.sprite_trail_seed.empty())
+        return result;
+    result.motion_stats = history->apply_into(scene, *alpha, scratch);
+    if (result.motion_stats.paired) result.motion = &scratch;
+    return result;
+}
+
+PreparedScene MotionScene::analyze_interpolation(InterpolationConfig config,
+                                                 std::span<const uint64_t> tile_pen_masks,
+                                                 InterpolationCoefficients &scratch) const noexcept {
+    PreparedScene prepared{*this};
+    prepared.interp_stats = analyze_gpu_interpolation_into(
+        plan.scene, plan.options, config.mode, config.fields, motion, tile_pen_masks, scratch);
+    const bool active =
+        !plan.scene.fallback && config.mode != VideoInterpolation::Off && plan.options.scale > 1;
+    prepared.use_interpolation = active;
+    if (active) prepared.coefficients = &scratch;
+    return prepared;
+}
+
+size_t PreparedScene::required_words() const noexcept {
+    if (motion.plan.scene.fallback) return ENCODED_NATIVE_WORDS;
+    return use_interpolation ? ENCODED_INTERPOLATION_WORDS : ENCODED_SCENE_WORDS;
+}
+
+uint32_t PreparedScene::upload_bytes() const noexcept {
+    return uint32_t(required_words() * sizeof(uint32_t));
+}
+
+EncodedScene PreparedScene::encode_into(std::span<uint32_t> out, uint32_t pf_tile_count,
+                                        uint32_t sp_tile_count) const {
+    const ScenePlan &plan = motion.plan;
+    const SceneSnapshot &scene = plan.scene;
+    const GameVideoOptions options = plan.options;
+    const auto sprites = scene.sprite_list(plan.sprite_list);
+    write_words(scene, options, motion.motion, coefficients, out, plan.sprite_list);
+
+    EncodedScene encoded;
+    encoded.upload_bytes = upload_bytes();
+    encoded.fallback = scene.fallback;
+    encoded.use_interpolation = use_interpolation;
+    encoded.has_trails = !scene.fallback && !scene.sprite_trail_seed.empty();
+    encoded.blend_weighted =
+        !scene.fallback && !encoded.has_trails && std::ranges::any_of(sprites, &SceneSprite::weighted);
+    if (encoded.has_trails) encoded.trail_seed = scene.sprite_trail_seed;
+    encoded.motion_stats = motion.motion_stats;
+    encoded.interp_stats = interp_stats;
+
+    GpuUniforms &u = encoded.uniforms;
+    u = {options.scale,
+         options.border,
+         options.width(),
+         options.height(),
+         uint32_t(sprites.size()),
+         scene.pen_mask,
+         unsigned(scene.fallback),
+         plan.layer_mask & ALL_LAYERS};
+    u.pf_tile_count = pf_tile_count;
+    u.sp_tile_count = sp_tile_count;
+    if (encoded.has_trails) u.layer_mask |= F3_MASK_SPRITE_TRAILS;
+    if (scene.flipped) u.layer_mask |= F3_MASK_SCREEN_FLIPPED;
+    if (motion.motion && motion.motion_stats.alpha < 1.0f) u.layer_mask |= MOTION_LAYER_MASK;
+    return encoded;
 }
 } // namespace f3rt

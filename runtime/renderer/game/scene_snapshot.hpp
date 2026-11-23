@@ -1,7 +1,7 @@
 #pragma once
 #include "f3rt/game_video.hpp"
-#include "renderer/game/frame_scene.hpp"
 #include "renderer/game/indexed_compositor.hpp"
+#include "renderer/game/palette.hpp"
 #include "renderer/game/scene.hpp"
 #include "renderer/game/text.hpp"
 #include "renderer/game/tiles.hpp"
@@ -11,6 +11,11 @@
 #include <vector>
 
 namespace f3rt {
+class GameLines;
+class GameSprites;
+class RenderEnhancements;
+class RowWorkers;
+class WorkWindow;
 
 // Host-only, CPU-typed snapshot of one decoded scanout frame; never serialized
 // into machine state. GameVideo overwrites its single instance at
@@ -18,7 +23,7 @@ namespace f3rt {
 // encoder (runtime/renderer/gpu/encode.hpp) into its own word layout once per
 // present. Nothing in renderer/game knows about the GPU buffer layout.
 struct SceneSnapshot {
-    static constexpr size_t MAX_SPRITES = MAX_PRESENTED_SPRITES, PALETTE_SIZE = 8192;
+    static constexpr size_t MAX_SPRITES = MAX_PRESENTED_SPRITES, PALETTE_SIZE = GamePalette::SIZE;
     GameTiles tiles;
     GameText text;
     std::array<SceneRow, 256> rows{};
@@ -42,18 +47,23 @@ struct SceneSnapshot {
     std::span<const SceneSprite> canonical_sprite_list() const {
         return {canonical_sprites.data(), canonical_sprite_count};
     }
-    // CPU compositor view. `tile_pixels` is the playfield asset ROM. Expanded outputs of this view are
-    // presented (FrameScene::presented); the native frame composed from it is canonical.
-    FrameScene scene(std::span<const uint8_t> tile_pixels, uint32_t layer_mask = ALL_LAYERS) const {
-        return {tiles, text, rows, tile_pixels, colors, layer_mask, flipped, true};
-    }
-};
 
-void compose_snapshot_indexed(const SceneSnapshot &frame, const TileRowTable &playfield_tiles,
-                              std::span<const uint8_t> sprite_tiles, IndexedScratch &scratch,
-                              std::span<uint32_t> output, size_t stride, PixelFormat format,
-                              GameVideoOptions options, ComposeMode mode = ComposeMode::Parallel,
-                              SpriteList list = SpriteList::Presented,
-                              WorkWindow *window = nullptr);
+    SceneSnapshot &capture(const GameTiles &tiles, const GameText &text, const GamePalette &palette,
+                           const GameSprites &sprites, const GameLines &lines,
+                           const RenderEnhancements &enhancements);
+    // Make this an oracle-fallback frame: `native` (320 x geometry::HEIGHT ARGB) becomes
+    // native_pixels, or opaque black when empty.
+    SceneSnapshot &capture_fallback(std::span<const uint32_t> native = {});
+    // Scale-1 CPU indexed composition with optional symmetric horizontal `border` columns.
+    void compose(std::span<uint32_t> output, size_t stride, PixelFormat format, unsigned border,
+                 const TileRowTable &playfield_tiles, std::span<const uint8_t> sprite_tiles,
+                 IndexedScratch &scratch, SpriteList list = SpriteList::Presented,
+                 RowWorkers *workers = nullptr, WorkWindow *window = nullptr) const;
+
+private:
+    void sync_versioned_layers(const GameTiles &tiles, const GameText &text,
+                               const GamePalette &palette, const GameLines &lines);
+    void copy_frame_sprites(const GameSprites &sprites, const RenderEnhancements &enhancements);
+};
 
 } // namespace f3rt
