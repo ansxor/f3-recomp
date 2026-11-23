@@ -855,7 +855,9 @@ TEST(GpuPrep, SpriteListChoiceTrailsAndWeights) {
     EXPECT_TRUE(trailed.encoded.has_trails);
     EXPECT_FALSE(trailed.encoded.blend_weighted) << "trail frames are never blend-weighted";
     EXPECT_NE(trailed.encoded.uniforms.layer_mask & F3_MASK_SPRITE_TRAILS, 0u);
-    EXPECT_EQ(trailed.encoded.trail_seed.data(), scene->sprite_trail_seed.data());
+    EXPECT_EQ(trailed.encoded.trail_seed.size(), scene->sprite_trail_seed.size());
+    EXPECT_TRUE(std::equal(trailed.encoded.trail_seed.begin(), trailed.encoded.trail_seed.end(),
+                           scene->sprite_trail_seed.begin()));
 }
 
 TEST(GpuPrep, MotionSamplesHistoryAtAlpha) {
@@ -1044,6 +1046,17 @@ std::vector<uint32_t> spirv_module(const SpirvShape &shape = {}) {
 TEST(UserSpirv, AcceptsPostprocessAbi) {
     const auto words = spirv_module();
     EXPECT_NO_THROW(f3rt::validate_user_spirv(words));
+}
+
+TEST(UserSpirv, RejectsDuplicateResultId) {
+    auto words = spirv_module();
+    words.insert(words.end(), {(3u << 16) | f3rt::spirv::OP_TYPE_FLOAT, 4u, 32u});
+    try {
+        f3rt::validate_user_spirv(words);
+        FAIL() << "Duplicate result ID was accepted";
+    } catch (const std::runtime_error &error) {
+        EXPECT_STREQ(error.what(), "User SPIR-V: invalid module or postprocess ABI");
+    }
 }
 
 TEST(UserSpirv, RejectsBrokenAbi) {

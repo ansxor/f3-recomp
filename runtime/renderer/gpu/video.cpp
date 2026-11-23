@@ -1,192 +1,198 @@
+//! Thin C++ façade over `rust_video::GpuVideo`. The SDL3 calls live in `sdl_driver_shim.cpp`;
+//! all renderer logic lives in `crates/f3rt-video/src/gpu/`.
+
 #include "renderer/gpu/video.hpp"
-#include <cstring>
+#include "renderer/gpu/sdl_driver_shim.hpp"
+
 #include <stdexcept>
+#include <utility>
 
 namespace f3rt {
 namespace {
-void validate_gpu_video_config(GameVideoOptions options, unsigned rotation,
-                               std::span<const uint8_t> playfield_assets,
-                               std::span<const uint8_t> sprite_assets) {
-    SurfaceRotator::validate(rotation);
-    if (!options.scale || options.scale > GameVideoOptions::MAX_GPU_SCALE ||
-        options.border > GameVideoOptions::MAX_BORDER)
-        throw std::runtime_error("Game GPU presentation scale/border out of range");
-    GpuTileAssets::validate(playfield_assets, sprite_assets);
+template <class F> void guarded(F &&call) {
+    try {
+        call();
+    } catch (const rust::Error &error) {
+        throw std::runtime_error(error.what());
+    }
+}
+
+uintptr_t token(const void *pointer) { return reinterpret_cast<uintptr_t>(pointer); }
+
+std::unique_ptr<GpuDriverShim> make_shim(SDL_Window *window, unsigned rotation) {
+    if (rotation != 0 && rotation != 90 && rotation != 270)
+        throw std::invalid_argument("Unsupported GPU presentation rotation");
+    return create_sdl_driver(window);
+}
+
+std::chrono::nanoseconds::rep nanos(std::chrono::nanoseconds duration) {
+    return duration.count();
+}
+
+rust_video::Postprocess abi_postprocess(Postprocess preset) {
+    switch (preset) {
+    case Postprocess::Off:
+        return rust_video::Postprocess::Off;
+    case Postprocess::Crt:
+        return rust_video::Postprocess::Crt;
+    case Postprocess::User:
+        return rust_video::Postprocess::User;
+    }
+    throw std::runtime_error("Unknown GPU postprocess preset");
+}
+
+Postprocess postprocess_from_abi(rust_video::Postprocess preset) {
+    switch (preset) {
+    case rust_video::Postprocess::Off:
+        return Postprocess::Off;
+    case rust_video::Postprocess::Crt:
+        return Postprocess::Crt;
+    case rust_video::Postprocess::User:
+        return Postprocess::User;
+    }
+    return Postprocess::Off;
 }
 } // namespace
+
+GpuTexture::GpuTexture() : m_texture(rust_video::new_gpu_texture()) {}
+GpuTexture::~GpuTexture() = default;
+GpuTexture::GpuTexture(GpuTexture &&other) noexcept = default;
+GpuTexture &GpuTexture::operator=(GpuTexture &&other) noexcept = default;
+
+GpuSurface GpuTexture::surface() const {
+    return {m_texture->texture_handle(), m_texture->texture_width(),
+            m_texture->texture_height()};
+}
+
+bool GpuTexture::empty() const { return m_texture->texture_handle() == 0; }
 
 GpuVideo::GpuVideo(SDL_Window *window, GameVideoOptions options,
                    std::span<const uint8_t> playfield_assets,
                    std::span<const uint8_t> sprite_assets, bool linear, bool vsync,
-                   VideoInterpolation interpolation, InterpolationFields fields, unsigned rotation)
-    : m_ctx((validate_gpu_video_config(options, rotation, playfield_assets, sprite_assets), window),
-            vsync),
-      m_options(options), m_assets(m_ctx, playfield_assets, sprite_assets),
-      m_scene_pass(m_ctx, options, interpolation != VideoInterpolation::Off),
-      m_rotator(m_ctx, options, rotation), m_interp_config{interpolation, fields},
-      m_linear(linear) {}
-
-GpuVideo::~GpuVideo() { m_ctx.wait_idle(); }
-
-const char *GpuVideo::driver() const { return m_ctx.driver(); }
-const InterpolationStats &GpuVideo::last_interpolation() const { return m_interpolation_stats; }
-void GpuVideo::set_scale_mode(VideoScaleMode mode) { m_scale_mode = mode; }
-uint64_t GpuVideo::presented_frames() const { return m_presented_frames; }
-SDL_GPUDevice *GpuVideo::device() const { return m_ctx.device(); }
-void GpuVideo::set_linear(bool linear) { m_linear = linear; }
-Postprocess GpuVideo::postprocess() const { return m_postprocess.preset(); }
-void GpuVideo::set_overlay(Overlay callback, void *userdata) {
-    m_overlay = callback;
-    m_overlay_userdata = userdata;
+                   VideoInterpolation interpolation, InterpolationFields fields,
+                   unsigned rotation)
+    : m_shim(make_shim(window, rotation)),
+      m_video([&]() {
+          try {
+              return rust_video::new_gpu_video(
+                  token(sdl_driver_vtable()), token(m_shim.get()), token(window),
+                  rust_video::GameVideoOptions{options.scale, options.border},
+                  rust_video::GpuGeometry{geometry::FIRST_LINE, geometry::HEIGHT},
+                  rust::Slice<const uint8_t>(playfield_assets.data(), playfield_assets.size()),
+                  rust::Slice<const uint8_t>(sprite_assets.data(), sprite_assets.size()), linear,
+                  vsync, interpolation, fields, rotation);
+          } catch (const rust::Error &error) {
+              throw std::runtime_error(error.what());
+          }
+      }()) {
+    m_driver = std::string(m_video->driver().c_str());
 }
-const MotionInterpolationStats &GpuVideo::last_motion() const { return m_motion_stats; }
-bool GpuVideo::last_presented() const { return m_last_presented; }
-double GpuVideo::display_hz() const { return m_pacer.display_hz(m_ctx.window()); }
-double GpuVideo::display_callback_hz() const { return m_pacer.callback_hz(); }
-double GpuVideo::requested_display_hz() const { return m_pacer.requested_hz(); }
+
+GpuVideo::~GpuVideo() = default;
+
+const char *GpuVideo::driver() const { return m_driver.c_str(); }
+
+const InterpolationStats &GpuVideo::last_interpolation() const {
+    m_interpolation = m_video->last_interpolation();
+    return m_interpolation;
+}
 
 void GpuVideo::set_scale(unsigned scale) {
-    if (!scale || scale > GameVideoOptions::MAX_GPU_SCALE)
-        throw std::runtime_error("GPU scale must be 1..8");
-    if (scale == m_options.scale) return;
-    GameVideoOptions next = m_options;
-    next.scale = scale;
-    auto next_scene = m_scene_pass.reallocate_targets(m_ctx, next);
-    auto next_post = m_postprocess.reallocate_target(m_ctx, next);
-    auto next_rotated = m_rotator.reallocate_target(m_ctx, next);
-    std::vector<uint32_t> next_pixels;
-    if (!m_saved_pixels.empty()) next_pixels.resize(size_t(next.width()) * next.height());
-    // SDL defers destruction of the replaced targets until queued users finish: no GPU-idle stall.
-    m_scene_pass.commit_targets(std::move(next_scene));
-    m_postprocess.commit_target(std::move(next_post));
-    m_rotator.commit_target(std::move(next_rotated));
-    m_readback.reset();
-    m_saved_pixels.swap(next_pixels);
-    m_options = next;
-    m_rendered = false;
-    m_unrotated_surface = {};
-    m_interpolation_stats = {};
+    guarded([&] { m_video->set_scale(scale); });
 }
 
+void GpuVideo::set_scale_mode(VideoScaleMode mode) {
+    m_video->set_scale_mode(static_cast<rust_video::VideoScaleMode>(static_cast<int>(mode)));
+}
+
+uint64_t GpuVideo::presented_frames() const { return m_video->presented_frames(); }
+
+SDL_GPUDevice *GpuVideo::device() const {
+    return reinterpret_cast<SDL_GPUDevice *>(m_video->device());
+}
+
+void GpuVideo::set_linear(bool linear) { m_video->set_linear(linear); }
+
 void GpuVideo::set_interpolation(VideoInterpolation mode, InterpolationFields fields) {
-    const InterpolationConfig next{mode, fields};
-    if (next == m_interp_config) return;
-    if (mode != VideoInterpolation::Off)
-        m_scene_pass.ensure_interpolation_pipeline(m_ctx);
-    m_interp_config = next;
-    m_interpolation_stats = {};
-    m_interp_log.reset();
+    guarded([&] { m_video->set_interpolation(mode, fields); });
+}
+
+void GpuVideo::set_overlay(Overlay callback, void *userdata) {
+    m_shim->overlay = callback;
+    m_shim->overlay_userdata = userdata;
+    m_video->set_overlay(callback != nullptr);
 }
 
 void GpuVideo::set_postprocess(Postprocess preset, const std::filesystem::path &user_shader) {
-    m_postprocess.configure(m_ctx, m_options, preset, user_shader);
-    m_rendered = false;
-    m_unrotated_surface = {};
+    guarded([&] { m_video->set_postprocess(abi_postprocess(preset), user_shader.string()); });
 }
 
-EncodedScene GpuVideo::prepare_scene(const SceneSnapshot &scene, SpriteList list,
-                                     uint32_t layer_mask, std::optional<float> alpha) {
-    if (scene.sprite_list(list).size() > F3_SCENE_SPRITE_COUNT)
-        throw std::runtime_error("GPU sprite count out of range");
-    if (scene.fallback && m_motion) m_motion->reset();
-    const ScenePlan plan{scene, m_options, list, layer_mask};
-    const PreparedScene prepared =
-        plan.apply_motion(m_motion.get(), alpha, m_prep_scratch.motion_state)
-            .analyze_interpolation(m_interp_config, m_assets.tile_pen_masks(),
-                                   m_prep_scratch.interp_coefficients);
-    EncodedScene encoded;
-    {
-        const auto upload = m_scene_pass.upload_buffer().map(true, "Map GPU frame upload");
-        encoded = prepared.encode_into(upload.words(prepared.required_words()),
-                                       m_assets.pf_tile_count(), m_assets.sp_tile_count());
-    }
-    if (alpha) m_motion_stats = encoded.motion_stats;
-    m_interpolation_stats = encoded.interp_stats;
-    m_interp_log.observe(m_interp_config, m_interpolation_stats);
-    return encoded;
-}
+Postprocess GpuVideo::postprocess() const { return postprocess_from_abi(m_video->postprocess()); }
 
 void GpuVideo::render(const SceneSnapshot &scene, std::span<uint32_t> output,
                       const RenderRequest &request) {
-    if (output.size() < size_t(m_options.width()) * m_options.height())
-        throw std::runtime_error("Incomplete GPU output buffer");
-    m_last_presented = false;
-    const EncodedScene encoded =
-        prepare_scene(scene, request.sprites, request.layer_mask, request.alpha);
-    auto cmd = m_ctx.begin_command();
-    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
-    const GpuSurface final_surface = m_postprocess.apply(
-        cmd, composed, m_ctx, m_options, m_postprocess.active() && request.postprocess);
-    m_readback.finish(cmd, final_surface, m_ctx, output);
-    m_unrotated_surface = final_surface;
-    m_rendered = true;
+    rust_video::GpuRenderRequest abi{};
+    abi.sprites = static_cast<rust_video::SpriteList>(static_cast<int>(request.sprites));
+    abi.layer_mask = request.layer_mask;
+    abi.has_alpha = request.alpha.has_value();
+    abi.alpha = request.alpha.value_or(0.0f);
+    abi.postprocess = request.postprocess;
+    guarded([&] { m_video->render(scene.inner(), rust::Slice<uint32_t>(output.data(), output.size()),
+                       abi); });
 }
 
 bool GpuVideo::present(const SceneSnapshot &scene, const PresentRequest &request) {
-    m_last_presented = false;
-    if (!std::holds_alternative<std::monostate>(request.timing)) m_motion_stats = {};
-    auto cmd = m_ctx.begin_command();
-    if (cmd.acquire_for_present(m_ctx, m_pacer, request) == PresentAcquire::SkipFrame) return false;
-    const EncodedScene encoded = prepare_scene(scene, SpriteList::Presented, ALL_LAYERS,
-                                               request.sample_alpha());
-    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
-    const GpuSurface post =
-        m_postprocess.apply(cmd, composed, m_ctx, m_options, m_postprocess.active());
-    const GpuSurface oriented = m_rotator.apply(cmd, post, m_ctx);
-    m_last_presented = cmd.present(m_ctx, oriented, request.left_pane, m_scale_mode, m_options,
-                                   m_linear, m_rotator.rotated(), m_overlay, m_overlay_userdata,
-                                   request.capture_path);
-    m_presented_frames += m_last_presented;
-    m_unrotated_surface = post;
-    m_rendered = true;
-    return m_last_presented;
+    rust_video::GpuPresentRequest abi{};
+    abi.wait = request.wait;
+    if (const auto *alpha = std::get_if<float>(&request.timing)) {
+        abi.timing = rust_video::GpuPresentTiming::Fixed;
+        abi.alpha = *alpha;
+    } else if (const auto *clock = std::get_if<MotionLiveClock>(&request.timing)) {
+        abi.timing = rust_video::GpuPresentTiming::Live;
+        abi.frame_start_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock->frame_start.time_since_epoch())
+                .count());
+        abi.period_ns = static_cast<int64_t>(nanos(clock->period));
+    } else {
+        abi.timing = rust_video::GpuPresentTiming::Canonical;
+    }
+    abi.left_pane_handle = request.left_pane.texture;
+    abi.left_pane_width = request.left_pane.width;
+    abi.left_pane_height = request.left_pane.height;
+    abi.capture_path =
+        rust::String(request.capture_path ? request.capture_path : "");
+    bool presented = false;
+    guarded([&] { presented = m_video->present(scene.inner(), abi); });
+    return presented;
 }
 
 void GpuVideo::capture_surface(const SceneSnapshot &scene, GpuTexture &destination) {
-    const EncodedScene encoded =
-        prepare_scene(scene, SpriteList::Presented, ALL_LAYERS, std::nullopt);
-    auto cmd = m_ctx.begin_command();
-    const GpuSurface composed = m_scene_pass.draw(cmd, encoded, m_ctx, m_assets, m_options);
-    const GpuSurface post =
-        m_postprocess.apply(cmd, composed, m_ctx, m_options, m_postprocess.active());
-    const GpuSurface oriented = m_rotator.apply(cmd, post, m_ctx);
-    destination.ensure(m_ctx, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, oriented.width, oriented.height);
-    cmd.blit_copy(oriented, destination.surface());
-    cmd.submit();
+    guarded([&] { m_video->capture_surface(scene.inner(), *destination.inner()); });
 }
 
 void GpuVideo::capture_motion(const SceneSnapshot &scene, uint64_t frame) {
-    if (!m_motion) {
-        m_pacer.enable(m_ctx.device(), m_ctx.window(), m_ctx.vsync());
-        m_motion = std::make_unique<GpuMotionHistory>(m_options);
-    }
-    if (scene.sprite_trail_seed.empty()) m_motion->capture(scene, frame);
-    else m_motion->reset();
+    guarded([&] { m_video->capture_motion(scene.inner(), frame); });
 }
 
-void GpuVideo::reset_motion() {
-    if (m_motion) m_motion->reset();
-    m_motion_stats = {};
-    m_pacer.reset_prepared();
+void GpuVideo::reset_motion() { m_video->reset_motion(); }
+
+const MotionInterpolationStats &GpuVideo::last_motion() const {
+    m_motion = m_video->last_motion();
+    return m_motion;
 }
 
-bool GpuVideo::pace_motion() { return m_pacer.pace(m_ctx.vsync()); }
+bool GpuVideo::pace_motion() { return m_video->pace_motion(); }
+
+bool GpuVideo::last_presented() const { return m_video->last_presented(); }
+
+double GpuVideo::display_hz() const { return m_video->display_hz(); }
+
+double GpuVideo::display_callback_hz() const { return m_video->display_callback_hz(); }
+
+double GpuVideo::requested_display_hz() const { return m_video->requested_display_hz(); }
 
 void GpuVideo::save_surface(const char *path) {
-    if (!m_rendered) throw std::runtime_error("No GPU surface has been drawn");
-    auto cmd = m_ctx.begin_command();
-    const GpuSurface source = m_rotator.apply(cmd, m_unrotated_surface, m_ctx);
-    m_saved_pixels.resize(size_t(source.width) * source.height);
-    m_readback.finish(cmd, source, m_ctx, m_saved_pixels);
-    auto *surface = gpu_checked(SDL_CreateSurfaceFrom(int(source.width), int(source.height),
-                                                      SDL_PIXELFORMAT_ARGB8888,
-                                                      m_saved_pixels.data(), int(source.width * 4)),
-                                "Create GPU capture surface");
-    const char *extension = std::strrchr(path, '.');
-    const bool saved = extension && SDL_strcasecmp(extension, ".png") == 0
-                           ? SDL_SavePNG(surface, path)
-                           : SDL_SaveBMP(surface, path);
-    SDL_DestroySurface(surface);
-    if (!saved) gpu_fail("Save GPU surface");
+    guarded([&] { m_video->save_surface(path); });
 }
 } // namespace f3rt

@@ -7,3 +7,12 @@ get_filename_component(F3RT_CARGO_MANIFEST "${CMAKE_CURRENT_LIST_DIR}/../Cargo.t
 
 # Imports the target `f3rt_abi`.
 corrosion_import_crate(MANIFEST_PATH "${F3RT_CARGO_MANIFEST}" CRATES f3rt-abi)
+corrosion_add_cxxbridge(f3rt_video_cxx CRATE f3rt_abi FILES video.rs)
+
+# The generated bridge header includes the host adaptor declarations, which pull in the
+# renderer headers they wrap.
+target_include_directories(f3rt_video_cxx PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)

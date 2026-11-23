@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt_video_cxx/video.h"
 #include "renderer/gpu/motion.hpp"
 #include "renderer/gpu/scene_layout.h"
 #include <array>
@@ -7,8 +8,10 @@
 #include <string_view>
 
 namespace f3rt {
-enum class VideoInterpolation { Off, Linear, Fit };
-enum class InterpolationFields : uint8_t { None = 0, Geometry = 1, Palette = 2, All = 3 };
+using VideoInterpolation = rust_video::VideoInterpolation;
+using InterpolationFields = rust_video::InterpolationFields;
+using InterpolationReason = rust_video::InterpolationReason;
+
 inline std::optional<InterpolationFields>
 parse_interpolation_fields(std::string_view value) noexcept {
     if (value == "none") return InterpolationFields::None;
@@ -30,55 +33,29 @@ inline constexpr const char *interpolation_fields_name(InterpolationFields field
     }
     return "unknown";
 }
-enum class InterpolationReason {
-    Off,
-    NativeScale,
-    Oracle,
-    NoEffect,
-    InvalidRows,
-    DiscreteBoundary,
-    PaletteDiscontinuity,
-    Applied
-};
 struct InterpolationConfig {
     VideoInterpolation mode = VideoInterpolation::Off;
     InterpolationFields fields = InterpolationFields::Geometry;
     bool operator==(const InterpolationConfig &) const = default;
 };
-struct LayerInterpolationStats {
-    InterpolationReason reason = InterpolationReason::NoEffect;
-    unsigned source_rows = 0, zoom_rows = 0, vertical_rows = 0, palette_rows = 0;
-    unsigned invalid_rows = 0, discontinuities = 0, unsafe_palette_pairs = 0;
-    bool operator==(const LayerInterpolationStats &) const = default;
-};
-struct InterpolationStats {
-    InterpolationReason reason = InterpolationReason::Off;
-    std::array<LayerInterpolationStats, 4> layers{};
-    std::array<std::array<uint8_t, 256>, 4> row_fields{};
-};
-// Native-anchored polynomial increments for one playfield row; the canonical
-// frame stays unchanged. Each triple is the cubic's (c1, c2, c3); a triple is
-// zero unless its flag is set.
-inline constexpr uint32_t INTERPOLATION_SOURCE = F3_INTERP_FLAG_SOURCE;
-inline constexpr uint32_t INTERPOLATION_ZOOM = F3_INTERP_FLAG_ZOOM;
-inline constexpr uint32_t INTERPOLATION_VERTICAL = F3_INTERP_FLAG_VERTICAL;
-inline constexpr uint32_t INTERPOLATION_PALETTE = F3_INTERP_FLAG_PALETTE;
-struct PlayfieldCoefficients {
-    uint8_t flags = 0;           // interpolation_* bits
-    uint16_t palette_stride = 0; // bank stride, meaningful with interpolation_palette
-    std::array<float, 3> source{}, zoom{}, vertical{}, palette{};
-};
-struct InterpolationCoefficients {
-    std::array<std::array<PlayfieldCoefficients, 4>, 256> rows{}; // [scanline][playfield]
-};
+using LayerInterpolationStats = rust_video::LayerInterpolationStats;
+using InterpolationStats = rust_video::InterpolationStats;
+using PlayfieldCoefficients = rust_video::PlayfieldCoefficients;
+using InterpolationCoefficients = rust_video::InterpolationCoefficients;
 struct InterpolationAnalysis {
     InterpolationStats stats;
     InterpolationCoefficients coefficients;
 };
+
+// Native-anchored polynomial increments for one playfield row; the canonical frame stays
+// unchanged. Each triple is the cubic's (c1, c2, c3); a triple is zero unless its flag is set.
+inline constexpr uint32_t INTERPOLATION_SOURCE = F3_INTERP_FLAG_SOURCE;
+inline constexpr uint32_t INTERPOLATION_ZOOM = F3_INTERP_FLAG_ZOOM;
+inline constexpr uint32_t INTERPOLATION_VERTICAL = F3_INTERP_FLAG_VERTICAL;
+inline constexpr uint32_t INTERPOLATION_PALETTE = F3_INTERP_FLAG_PALETTE;
+
 // Motion-effective geometry comes from `motion` (null: the canonical frame).
-// Writes the coefficients into caller-owned `out` (no 56 KiB return copy). `out` is rewritten
-// whenever the frame can upload a coefficient region; the Off, NativeScale and Oracle rejections
-// leave it untouched because nothing reads it.
+// Writes the coefficients into caller-owned `out` (no 56 KiB return copy).
 InterpolationStats analyze_gpu_interpolation_into(const SceneSnapshot &frame,
                                                   GameVideoOptions options, VideoInterpolation mode,
                                                   InterpolationFields fields,
@@ -91,15 +68,22 @@ InterpolationAnalysis analyze_gpu_interpolation(const SceneSnapshot &frame,
                                                 const MotionState *motion,
                                                 std::span<const uint64_t> tile_pen_masks) noexcept;
 const char *interpolation_reason_name(InterpolationReason reason) noexcept;
+
 // Prints one `video_interp ...` line to stdout whenever the observed reason/layer outcome changes.
 class InterpolationLog {
 public:
-    void reset() noexcept { m_observed = false; }
+    InterpolationLog();
+    ~InterpolationLog();
+    InterpolationLog(const InterpolationLog &) = delete;
+    InterpolationLog &operator=(const InterpolationLog &) = delete;
+    InterpolationLog(InterpolationLog &&) noexcept;
+    InterpolationLog &operator=(InterpolationLog &&) noexcept;
+
+    void reset() noexcept;
     void observe(InterpolationConfig config, const InterpolationStats &stats);
 
 private:
-    std::array<LayerInterpolationStats, 4> m_layers{};
-    InterpolationReason m_reason = InterpolationReason::Off;
-    bool m_observed = false;
+    rust::Box<rust_video::InterpolationLog> m_log;
 };
+
 } // namespace f3rt

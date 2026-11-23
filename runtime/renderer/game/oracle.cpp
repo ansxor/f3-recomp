@@ -1,6 +1,5 @@
 #include "renderer/game/oracle.hpp"
 #include "f3rt/machine.hpp"
-#include "renderer/game/lines.hpp"
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/game/video.hpp"
 #include <algorithm>
@@ -54,9 +53,9 @@ void OracleVerifier::step(const Machine &machine) {
     m_oracle.render_frame(machine.palette, machine.graphics, machine.control, m_oracle_pixels);
 }
 
-void OracleVerifier::compare_rows(const GameLines &lines, uint64_t frame) const {
+void OracleVerifier::compare_rows(const GameVideo &video, uint64_t frame) const {
     for (unsigned screen_y = geometry::FIRST_LINE; screen_y < geometry::END_LINE; ++screen_y) {
-        const auto &g = lines.row(screen_y);
+        const SceneRow g = video.row(screen_y);
         const auto &o = m_oracle.inspect_scene_row(screen_y);
 
         if (g.background != o.background) {
@@ -162,7 +161,6 @@ void OracleVerifier::compare_layer(LayerId id, const Machine &machine, const Gam
     const int height = LAYER_INFO[layer].height;
     const LayerKind layer_kind = kind(id);
     const bool indexed = layer_kind != LayerKind::Sprite;
-    const auto assets = machine.graphics_assets.playfield_tiles();
     for (int y = 0; y < height; ++y) {
         const auto reference_line =
             layer_kind == LayerKind::Playfield
@@ -172,10 +170,9 @@ void OracleVerifier::compare_layer(LayerId id, const Machine &machine, const Gam
         for (int x = 0; x < width; ++x) {
             ScenePixel game{}, expected{};
             if (layer_kind == LayerKind::Playfield)
-                game = video.tiles().playfield_pixel(sub_index(id), x, y, m_oracle.flipscreen(),
-                                                     assets);
+                game = video.playfield_pixel(sub_index(id), x, y, m_oracle.flipscreen());
             else if (layer_kind == LayerKind::Text)
-                game = video.text().pixel(x, y, m_oracle.flipscreen());
+                game = video.text_pixel(x, y, m_oracle.flipscreen());
             if (indexed) expected = {reference_line.palette[x], reference_line.flags[x]};
             else {
                 const unsigned offset = (y + geometry::FIRST_LINE) * 432 + x + 46;
@@ -205,7 +202,7 @@ void OracleVerifier::compare_layer(LayerId id, const Machine &machine, const Gam
           << std::hex << first_game.palette << '/' << unsigned(first_game.flags)
           << " oracle=0x" << first_oracle.palette << '/' << unsigned(first_oracle.flags);
     if (layer_kind == LayerKind::Sprite) {
-        for (const auto &sprite : video.sprites().sprites()) {
+        for (const auto &sprite : video.sprite_snapshot()) {
             const int dx = (sprite.x >> 8) - (first_x + 46);
             const int dy = (sprite.y >> 8) - (first_y + int(geometry::FIRST_LINE));
             if (dx < -32 || dx > 32 || dy < -32 || dy > 32) continue;
@@ -221,16 +218,14 @@ void OracleVerifier::compare_layer(LayerId id, const Machine &machine, const Gam
 void OracleVerifier::compare_alt_map(unsigned alt, const Machine &machine, const GameVideo &video,
                                      uint64_t frame) {
     const LayerId id = playfield(2 + alt);
-    const auto assets = machine.graphics_assets.playfield_tiles();
     uint64_t count = 0;
     int first_x = -1, first_y = -1;
     ScenePixel first_game{}, first_oracle{};
     for (int y = 0; y < LAYER_INFO[unsigned(id)].height; ++y) {
         const auto reference = m_oracle.inspect_playfield_line(4 + alt, y, machine.graphics);
         for (int x = 0; x < LAYER_INFO[unsigned(id)].width; ++x) {
-            const ScenePixel game = video.tiles().playfield_pixel(2 + alt, x, y,
-                                                                  m_oracle.flipscreen(), assets,
-                                                                  true);
+            const ScenePixel game = video.playfield_pixel(2 + alt, x, y, m_oracle.flipscreen(),
+                                                          true);
             const ScenePixel expected{reference.palette[x], reference.flags[x]};
             if (!differs(game, expected)) continue;
             if (!count) {
@@ -259,18 +254,17 @@ void OracleVerifier::compare_layers(const Machine &machine, const GameVideo &vid
         throw std::runtime_error("Video layer mask must select PF0..3, SP0..3, text (bits 0..8)");
     m_sprite_plane.resize(size_t(432) * 256);
     std::ranges::fill(m_sprite_plane, 0);
-    const auto seed = video.sprites().trail_seed();
-    std::ranges::copy(seed, m_sprite_plane.begin());
-    video.sprites().raster(machine.graphics_assets.sprite_tiles(), m_sprite_plane);
+    video.raster_sprites(m_sprite_plane);
     if (layer_mask & layer_bit(LayerId::Text)) m_oracle.prepare_text_inspection(machine.graphics);
-    if (layer_mask == ALL_LAYERS) compare_rows(video.lines(), frame);
+    if (layer_mask == ALL_LAYERS) compare_rows(video, frame);
     for (unsigned layer = 0; layer < LAYER_COUNT; ++layer) {
         const LayerId id{uint8_t(layer)};
         if (layer_mask & layer_bit(id)) compare_layer(id, machine, video, frame);
     }
     if constexpr (!game_config::video.extend || game_config::video.extended_alt_maps) {
         for (unsigned alt = 0; alt < 2; ++alt)
-            if (layer_mask & layer_bit(playfield(2 + alt))) compare_alt_map(alt, machine, video, frame);
+            if (layer_mask & layer_bit(playfield(2 + alt)))
+                compare_alt_map(alt, machine, video, frame);
     }
     if (layer_mask == ALL_LAYERS)
         compare_composite(video.scene_snapshot(), machine.graphics_assets, frame);
@@ -278,10 +272,9 @@ void OracleVerifier::compare_layers(const Machine &machine, const GameVideo &vid
 
 void OracleVerifier::compare_composite(const SceneSnapshot &snapshot, const GraphicsAssets &assets,
                                        uint64_t frame) {
-    if (!m_tile_rows) m_tile_rows = std::make_unique<TileRowTable>(assets.playfield_tiles());
     m_composite.resize(geometry::NATIVE_PIXELS);
-    snapshot.compose(m_composite, geometry::NATIVE_WIDTH, PixelFormat::Argb8888, 0, *m_tile_rows,
-                     assets.sprite_tiles(), m_scratch, SpriteList::Canonical);
+    snapshot.compose(m_composite, geometry::NATIVE_WIDTH, PixelFormat::Argb8888, 0, assets,
+                     SpriteList::Canonical);
     uint64_t count = 0;
     unsigned first = 0;
     for (unsigned i = 0; i < m_composite.size(); ++i) {
@@ -326,4 +319,4 @@ void OracleVerifier::report(std::ostream &output) const {
                << " pixel_mismatches=" << m_composite_mismatches << '\n';
 }
 
-} // namespace
+} // namespace f3rt

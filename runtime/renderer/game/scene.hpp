@@ -1,44 +1,13 @@
 #pragma once
 #include "f3rt/game_video.hpp"
+#include <algorithm>
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <utility>
 
 namespace f3rt {
-
-// Video RAM as seen at VBSTART. Offsets match Machine::graphics (0x600000) and
-// Machine::control (0x660000); data is big-endian as stored by the 68020.
-struct VideoRam {
-    std::span<const uint8_t> graphics; // 0x40000 bytes
-    std::span<const uint8_t> control;  // 0x20 bytes
-    uint64_t frame = 0;                // Machine::frame + 1; diagnostics only
-    std::span<const uint8_t> palette{}; // 0x8000 bytes of palette RAM; empty = none
-    // The video RAM the machine presents at the VBSTART that ends its current frame.
-    static VideoRam from(const Machine &m);
-    uint16_t u16(size_t offset) const {
-        return uint16_t(uint16_t(graphics[offset]) << 8 | graphics[offset + 1]);
-    }
-    uint16_t control_u16(size_t index) const {
-        return uint16_t(uint16_t(control[index * 2]) << 8 | control[index * 2 + 1]);
-    }
-};
-
-// A scene component decoded from video RAM at VBSTART.
-template <class T>
-concept SceneSource = requires(T &t, const VideoRam &vram) {
-    t.reset();
-    t.decode(vram);
-};
-
-// Tile index within an asset ROM of `count` 16x16 tiles (the ROM decides the
-// wrap, not a fixed 15-bit field): power-of-two ROMs mask, others take the remainder.
-// Mirrors the FDP's wrap_tile; GLSL `wrap_tile` in scene.glsl is the GPU twin.
-constexpr uint32_t wrap_tile_index(uint32_t code, uint32_t count) {
-    return (count & (count - 1)) == 0 ? code & (count - 1) : code % count;
-}
 
 // Hardware display-list limit: canonical (serialized) sprite lists never exceed it.
 inline constexpr size_t MAX_HARDWARE_SPRITES = 1024;
@@ -96,34 +65,9 @@ struct ScenePlayfield {
     // scanline (GameLines::cull_empty_rows). Derived each frame, never serialized.
     bool empty_row = false;
     // Render-only presentation hint, derived each frame (GameLines::resolve_alt_maps),
-    // never serialized and never compared with the oracle: for an alt_map row, the offset c in
-    // [0, PF_MAP_WIDTH_PX) with alt(x, y) == main((2x + c) mod PF_MAP_WIDTH_PX, y) for every tile
-    // row the scanline samples; -1 = none (the canonical alternate-map sampling stands).
-    // Consumed only through presented_playfield().
+    // never serialized and never compared with the oracle.
     int16_t full_res_offset = -1;
 };
-
-// Playfield map width in texels (64 columns of 16 in extended mode, 32 columns in standard mode).
-inline constexpr unsigned PF_MAP_WIDTH_PX = game_config::video.extend ? 1024 : 512;
-
-// The presented (expanded GPU/CPU output) view of one playfield row. With
-// game_config::video.full_resolution_alt_maps, an alt_map row that has a solved full-resolution
-// twin samples the main map at twice the step: x' = 2x + c, so alt_map=false, x_step*2 and
-// source_x = 2*source_x + (c << 8) wrapped to the map period (24.8). Vertical geometry is unchanged.
-// Canonical rows, native composition and snapshots never call this.
-constexpr ScenePlayfield presented_playfield(const ScenePlayfield &p) {
-    if constexpr (game_config::video.full_resolution_alt_maps) {
-        if (p.alt_map && p.full_res_offset >= 0) {
-            ScenePlayfield q = p;
-            q.alt_map = false;
-            q.x_step = p.x_step * 2;
-            q.source_x = int32_t((uint32_t(p.source_x) * 2u + (uint32_t(p.full_res_offset) << 8)) &
-                                 (PF_MAP_WIDTH_PX * 256u - 1u));
-            return q;
-        }
-    }
-    return p;
-}
 
 struct SceneClip {
     int16_t left = 0, right = 0; // Half-open scanout coordinates, calibration applied.
@@ -209,5 +153,92 @@ struct SceneRow {
     // words and a horizontal two-pixel blur. Not serialized: rows are re-decoded every VBSTART.
     bool palette_15bit = false, blur = false;
 };
+
+// Presented pixel byte order of the scale-1 indexed compositor.
+enum class PixelFormat { Argb8888, Rgba8888 };
+constexpr uint32_t to_pixel_format(uint32_t argb, PixelFormat format) {
+    return format == PixelFormat::Rgba8888 ? (argb << 8) | 0xff : argb;
+}
+// Which sprite list the compositor/encoder draws.
+enum class SpriteList { Presented, Canonical };
+
+struct ClipRanges {
+    // Four inside intervals leave at most five gaps. With an outside window,
+    // at most three inside intervals can join the two edge intervals.
+    static constexpr unsigned capacity = 5;
+    std::array<SceneClip, capacity> ranges{};
+    unsigned count = 0;
+
+    const SceneClip *begin() const { return ranges.data(); }
+    const SceneClip *end() const { return ranges.data() + count; }
+};
+
+inline ClipRanges clip_ranges(const std::array<SceneClip, 4> &windows, unsigned enabled,
+                              unsigned inside, bool invert, int16_t left, int16_t right) {
+    if (left >= right) return {};
+
+    ClipRanges parts;
+    if (!enabled) {
+        if (invert) {
+            parts.ranges[0] = {left, right};
+            parts.count = 1;
+        }
+        return parts;
+    }
+    // The union of all selected outsides is the complement of their common inside.
+    SceneClip common_inside{left, right};
+    for (unsigned n = 0; n < windows.size(); ++n) {
+        if (!(enabled & (1u << n))) continue;
+        const SceneClip window{std::max(left, windows[n].left), std::min(right, windows[n].right)};
+        if (inside & (1u << n)) {
+            if (window.left < window.right) parts.ranges[parts.count++] = window;
+        } else {
+            common_inside.left = std::max(common_inside.left, window.left);
+            common_inside.right = std::min(common_inside.right, window.right);
+        }
+    }
+    if (common_inside.left >= common_inside.right) {
+        if (invert) return {};
+        parts.ranges[0] = {left, right};
+        parts.count = 1;
+        return parts;
+    }
+    if (left < common_inside.left) parts.ranges[parts.count++] = {left, common_inside.left};
+    if (common_inside.right < right) parts.ranges[parts.count++] = {common_inside.right, right};
+
+    for (unsigned i = 1; i < parts.count; ++i) {
+        const auto part = parts.ranges[i];
+        unsigned j = i;
+        while (j && parts.ranges[j - 1].left > part.left) {
+            parts.ranges[j] = parts.ranges[j - 1];
+            --j;
+        }
+        parts.ranges[j] = part;
+    }
+    ClipRanges visible;
+    for (const auto part : parts) {
+        if (visible.count && part.left <= visible.ranges[visible.count - 1].right) {
+            auto &last = visible.ranges[visible.count - 1];
+            last.right = std::max(last.right, part.right);
+        } else {
+            visible.ranges[visible.count++] = part;
+        }
+    }
+    if (!invert) return visible;
+
+    ClipRanges gaps;
+    for (const auto part : visible) {
+        if (left < part.left) gaps.ranges[gaps.count++] = {left, part.left};
+        left = part.right;
+    }
+    if (left < right) gaps.ranges[gaps.count++] = {left, right};
+    return gaps;
+}
+
+inline ClipRanges clip_ranges(const SceneRow &row, const SceneLayer &layer, int16_t left,
+                              int16_t right) {
+    return clip_ranges(row.clips, layer.clip_enabled, layer.clip_inverted, layer.clip_inverse,
+                       left, right);
+}
 
 } // namespace f3rt

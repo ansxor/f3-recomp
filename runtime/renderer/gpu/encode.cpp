@@ -1,226 +1,110 @@
 #include "renderer/gpu/encode.hpp"
-#include "renderer/game/clip.hpp"
-#include <algorithm>
-#include <bit>
-#include <cstring>
 #include <stdexcept>
 
 namespace f3rt {
 namespace {
-static_assert(std::endian::native == std::endian::little, "glyph RAM is packed little-endian");
-static_assert(F3_SCENE_PF_CELLS + 4 * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE ==
-              F3_SCENE_TEXT_CELLS);
-static_assert(F3_SCENE_TEXT_CELLS + 4096 == F3_SCENE_GLYPHS);
-static_assert(F3_SCENE_GLYPHS + 4096 == F3_SCENE_PALETTE);
-static_assert(F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS <= F3_SCENE_ROWS);
-static_assert(F3_SCENE_ROWS + F3_SCENE_ROW_COUNT * F3_SCENE_ROW_STRIDE == F3_SCENE_SPRITES);
-static_assert(4 * F3_INTERP_PF_STRIDE == F3_SCENE_INTERP_ROW_STRIDE);
-// scene.glsl LAYER_COUNT/LAYER_SP0/LAYER_TEXT come from these macros: they must track LayerId.
-static_assert(F3_SCENE_LAYER_COUNT == LAYER_COUNT);
-static_assert(F3_SCENE_LAYER_SP0 == unsigned(LayerId::Sp0));
-static_assert(F3_SCENE_LAYER_TEXT == unsigned(LayerId::Text));
-static_assert(F3_ROW_ORDER + LAYER_COUNT <= F3_ROW_MOTION_TEXT_X &&
-              F3_ROW_MOTION_TEXT_Y < F3_ROW_LAYERS);
-static_assert(F3_LAYER_CLIPS + 2 * ClipRanges::capacity <= F3_LAYER_STRIDE);
-static_assert(F3_ROW_LAYERS + LAYER_COUNT * F3_LAYER_STRIDE == F3_ROW_PF);
-static_assert(F3_ROW_PF + 4 * F3_PF_STRIDE == F3_ROW_BITMAP_MAP_ROW);
-static_assert(F3_ROW_BITMAP_MAP_ROW < F3_SCENE_ROW_STRIDE);
-static_assert(GameTiles::MAP_COUNT == 4 || GameTiles::MAP_COUNT == 6);
-static_assert(SceneSnapshot::MAX_SPRITES == F3_SCENE_SPRITE_COUNT &&
-              SceneSnapshot::PALETTE_SIZE == F3_SCENE_PALETTE_WORDS);
 
-uint32_t layer_flags(const SceneLayer &l) {
-    return uint32_t(l.priority) | (uint32_t(l.blend_mode) << F3_LAYER_MODE_SHIFT) |
-           (l.enabled ? F3_LAYER_ENABLED : 0u) |
-           (uint32_t(l.blend_select) << F3_LAYER_SELECT_SHIFT) | (l.mosaic ? F3_LAYER_MOSAIC : 0u);
+rust_video::GameVideoOptions rust_options(GameVideoOptions options) {
+    return {options.scale, options.border};
 }
-constexpr unsigned ALTERNATE_MAPS = GameTiles::MAP_COUNT - 4;
-// `presented` (expanded output) routes playfield geometry through presented_playfield(): alt-map rows
-// with an exact full-resolution twin sample the main map at twice the step. Motion keeps moving such a
-// row horizontally (the remap is linear in source_x); a row whose vertical phase moved samples map rows
-// the twin was not solved for, so it keeps the canonical alternate map.
-void encode_row(const SceneRow &r, const GameText &text, bool flipped,
-                const MotionState::Row *motion, bool presented, int16_t left, int16_t right,
-                uint32_t *at) {
-    std::array<ScenePlayfield, 4> pf = r.playfields;
-    std::array<bool, 4> moved_y{};
-    for (unsigned i = 0; i < 4; ++i) {
-        if (!motion) continue;
-        pf[i].source_x = motion->source_x[i];
-        moved_y[i] = motion->phase[i] != int32_t(uint32_t(r.playfields[i].source_y) * 256u +
-                                                 r.playfields[i].y_fraction);
-    }
-    if (presented)
-        for (unsigned i = 0; i < 4; ++i)
-            if (!moved_y[i]) pf[i] = presented_playfield(pf[i]);
-    at[F3_ROW_BACKGROUND] = r.background;
-    at[F3_ROW_MOSAIC] =
-        r.mosaic_period | (r.palette_15bit ? F3_ROW_PALETTE15 : 0u) | (r.blur ? F3_ROW_BLUR : 0u);
-    at[F3_ROW_TEXT_X] = uint32_t(int32_t(r.text_x));
-    at[F3_ROW_TEXT_Y] = uint32_t(int32_t(r.text_y));
-    at[F3_ROW_BITMAP_MAP_ROW] = r.bitmap ? text.bitmap_map_row(unsigned(r.text_y), flipped) : 0u;
-    at[F3_ROW_BLEND] = r.blend[0] | (uint32_t(r.blend[1]) << 8) | (uint32_t(r.blend[2]) << 16) |
-                       (uint32_t(r.blend[3]) << 24);
-    const auto order = scene_order(r);
-    for (unsigned i = 0; i < LAYER_COUNT; ++i) {
-        at[F3_ROW_ORDER + i] = unsigned(order[i]);
-        const auto &l = r.layer(LayerId(i));
-        uint32_t *la = at + F3_ROW_LAYERS + size_t(i) * F3_LAYER_STRIDE;
-        la[F3_LAYER_FLAGS] = layer_flags(l);
-        if (i < 4 && pf[i].alt_map) la[F3_LAYER_FLAGS] |= F3_LAYER_ALT_MAP;
-        if (i < 4 && game_config::video.extend) la[F3_LAYER_FLAGS] |= F3_LAYER_EXTEND;
-        if (i < 4 && r.playfields[i].empty_row) la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
-        if (i == unsigned(LayerId::Text)) {
-            const int text_y_adj = flipped ? (511 - r.text_y) : r.text_y;
-            if (r.bitmap)
-                la[F3_LAYER_FLAGS] |= F3_LAYER_BITMAP;
-            else if (!text.row_used(unsigned(text_y_adj)))
-                la[F3_LAYER_FLAGS] &= ~F3_LAYER_ENABLED;
-        }
-        const auto clips = clip_ranges(r, l, left, right);
-        la[F3_LAYER_CLIP_COUNT] = clips.count;
-        for (unsigned c = 0; c < clips.count; ++c) {
-            la[F3_LAYER_CLIPS + c * 2] = uint32_t(int32_t(clips.ranges[c].left));
-            la[F3_LAYER_CLIPS + c * 2 + 1] = uint32_t(int32_t(clips.ranges[c].right));
-        }
-    }
-    for (unsigned i = 0; i < 4; ++i) {
-        const auto &p = pf[i];
-        uint32_t *pa = at + F3_ROW_PF + size_t(i) * F3_PF_STRIDE;
-        pa[F3_PF_SOURCE_X] = uint32_t(p.source_x);
-        pa[F3_PF_SOURCE_Y] = uint32_t(p.source_y);
-        pa[F3_PF_X_STEP] = uint32_t(p.x_step);
-        pa[F3_PF_Y_STEP] = uint32_t(p.y_step);
-        pa[F3_PF_Y_FRACTION] = p.y_fraction;
-        pa[F3_PF_PALETTE_ADD] = p.palette_add;
-        // The snapshot phase is kept bit-exact where motion did not move it.
-        if (moved_y[i]) {
-            pa[F3_PF_SOURCE_Y] = uint32_t(motion->phase[i]) >> 8;
-            pa[F3_PF_Y_FRACTION] = uint32_t(motion->phase[i]) & 255u;
-        }
-    }
-    at[F3_ROW_MOTION_TEXT_X] = motion ? uint32_t(motion->text_x) : 0u;
-    at[F3_ROW_MOTION_TEXT_Y] = motion ? uint32_t(motion->text_y) : 0u;
+
+rust_video::SpriteList rust_list(SpriteList list) {
+    return list == SpriteList::Canonical ? rust_video::SpriteList::Canonical
+                                         : rust_video::SpriteList::Presented;
 }
-void encode_coefficients(const InterpolationCoefficients &coefficients, uint32_t *out) {
-    for (unsigned y = 0; y < F3_SCENE_ROW_COUNT; ++y)
-        for (unsigned pf = 0; pf < 4; ++pf) {
-            const auto &c = coefficients.rows[y][pf];
-            uint32_t *at =
-                out + size_t(y) * F3_SCENE_INTERP_ROW_STRIDE + size_t(pf) * F3_INTERP_PF_STRIDE;
-            at[0] = c.flags;
-            if (c.flags & F3_INTERP_FLAG_PALETTE)
-                at[0] |= uint32_t(c.palette_stride) << F3_INTERP_PALETTE_STRIDE_SHIFT;
-            const std::array<float, 3> *triples[]{&c.source, &c.zoom, &c.vertical, &c.palette};
-            constexpr unsigned OFFSETS[]{F3_INTERP_SOURCE, F3_INTERP_ZOOM, F3_INTERP_VERTICAL,
-                                         F3_INTERP_PALETTE};
-            for (unsigned t = 0; t < 4; ++t)
-                for (unsigned k = 0; k < 3; ++k)
-                    at[OFFSETS[t] + k] = std::bit_cast<uint32_t>((*triples[t])[k]);
-        }
+
+} // namespace
+
+GpuPrepScratch::GpuPrepScratch()
+    : m_scratch(rust_video::new_prep_scratch()), motion_state(m_scratch->motion_state()),
+      interp_coefficients(m_scratch->interp_coefficients()) {}
+
+GpuPrepScratch::~GpuPrepScratch() = default;
+
+EncodedScene::EncodedScene(const EncodedScene &other)
+    : uniforms(other.uniforms), upload_bytes(other.upload_bytes), fallback(other.fallback),
+      use_interpolation(other.use_interpolation), has_trails(other.has_trails),
+      blend_weighted(other.blend_weighted), trail_storage(other.trail_storage),
+      trail_seed(trail_storage.data(), trail_storage.size()),
+      motion_stats(other.motion_stats), interp_stats(other.interp_stats) {}
+
+EncodedScene &EncodedScene::operator=(const EncodedScene &other) {
+    if (this == &other) return *this;
+    uniforms = other.uniforms;
+    upload_bytes = other.upload_bytes;
+    fallback = other.fallback;
+    use_interpolation = other.use_interpolation;
+    has_trails = other.has_trails;
+    blend_weighted = other.blend_weighted;
+    trail_storage = other.trail_storage;
+    trail_seed = {trail_storage.data(), trail_storage.size()};
+    motion_stats = other.motion_stats;
+    interp_stats = other.interp_stats;
+    return *this;
 }
-void write_words(const SceneSnapshot &frame, GameVideoOptions options, const MotionState *motion,
-                 const InterpolationCoefficients *coefficients, std::span<uint32_t> out,
-                 SpriteList list) {
-    if (frame.fallback) {
-        if (out.size() < ENCODED_NATIVE_WORDS)
-            throw std::invalid_argument("GPU native upload too small");
-        std::memcpy(out.data(), frame.native_pixels.data(),
-                    ENCODED_NATIVE_WORDS * sizeof(uint32_t));
-        return;
-    }
-    const auto sprites = frame.sprite_list(list);
-    if (out.size() < (coefficients ? ENCODED_INTERPOLATION_WORDS : ENCODED_SCENE_WORDS) ||
-        sprites.size() > F3_SCENE_SPRITE_COUNT)
-        throw std::invalid_argument("GPU scene upload too small");
-    uint32_t *w = out.data();
-    for (unsigned l = 0; l < 4; ++l) {
-        // Raw 4-byte video-RAM cell (attributes<<16 | code); the shader decodes it
-        // exactly like GameTiles::RowSampler. Word 1 of each slot is unused.
-        const auto cells = frame.tiles.cells(l);
-        uint32_t *dst =
-            w + F3_SCENE_PF_CELLS + size_t(l) * F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE;
-        if constexpr (ALTERNATE_MAPS) {
-            // Only PF2/PF3 have alternates (maps 4/5); word 1 carries them.
-            const bool alternate = l >= 2;
-            const auto alt_cells = frame.tiles.cells(alternate ? l + 2 : l);
-            for (unsigned i = 0; i < cells.size(); ++i) {
-                dst[size_t(i) * 2] = cells[i];
-                dst[i * 2 + 1] = alternate ? alt_cells[i] : 0;
-            }
-        } else {
-            for (unsigned i = 0; i < cells.size(); ++i) {
-                dst[size_t(i) * 2] = cells[i];
-                dst[i * 2 + 1] = 0;
-            }
-        }
-    }
-    // Raw big-endian text-map words; the shader decodes them like GameText::pixel.
-    const auto map = frame.text.map();
-    std::copy(map.begin(), map.end(), w + F3_SCENE_TEXT_CELLS);
-    // Raw glyph RAM, byte-packed four bytes per word; the shader indexes it as bytes.
-    static_assert(0x2000 == F3_SCENE_GLYPH_WORDS * sizeof(uint32_t));
-    std::memcpy(w + F3_SCENE_GLYPHS, frame.text.glyphs().data(), 0x2000);
-    const auto pivot = frame.text.pivot();
-    static_assert(decltype(pivot)::extent == F3_SCENE_PIVOT_WORDS * sizeof(uint32_t));
-    std::memcpy(w + F3_SCENE_PIVOT, pivot.data(), pivot.size_bytes());
-    std::memcpy(w + F3_SCENE_PALETTE, frame.colors.data(),
-                F3_SCENE_PALETTE_WORDS * sizeof(uint32_t));
-    const int16_t left = int16_t(46 - int(options.border)), right = int16_t(366 + options.border);
-    for (unsigned y = 0; y < F3_SCENE_ROW_COUNT; ++y)
-        encode_row(frame.rows[y], frame.text, frame.flipped,
-                   motion ? &motion->rows[y] : nullptr, options.expanded(), left, right,
-                   w + F3_SCENE_ROWS + size_t(y) * F3_SCENE_ROW_STRIDE);
-    for (unsigned i = 0; i < sprites.size(); ++i) {
-        const auto &s = sprites[i];
-        uint32_t *at = w + F3_SCENE_SPRITES + size_t(i) * F3_SCENE_SPRITE_STRIDE;
-        at[F3_SPRITE_X] = uint32_t(motion ? motion->sprite_x[i] : s.x);
-        at[F3_SPRITE_Y] = uint32_t(motion ? motion->sprite_y[i] : s.y);
-        at[F3_SPRITE_SCALE_X] = s.scale_x;
-        at[F3_SPRITE_SCALE_Y] = s.scale_y;
-        at[F3_SPRITE_TILE] = s.tile;
-        at[F3_SPRITE_PALETTE] = s.palette;
-        at[F3_SPRITE_WEIGHT] = 0;
-        if (s.weighted()) {
-            const float weight = std::max(0.0f, s.blend_weight);
-            const auto fixed = uint32_t(weight * F3_SPRITE_WEIGHT_SCALE + 0.5f);
-            at[F3_SPRITE_WEIGHT] = std::clamp(fixed, 1u, F3_SPRITE_WEIGHT_SCALE - 1);
-        }
-        at[F3_SPRITE_FLIP] = (s.flip_x ? F3_SPRITE_FLIP_X : 0u) |
-                             (s.flip_y ? F3_SPRITE_FLIP_Y : 0u) |
-                             (frame.sprite_flipped ? F3_SPRITE_SCREEN_FLIPPED : 0u);
-    }
-    if (coefficients) encode_coefficients(*coefficients, w + F3_SCENE_INTERP);
-}
+
+EncodedScene::EncodedScene(EncodedScene &&other) noexcept
+    : uniforms(other.uniforms), upload_bytes(other.upload_bytes), fallback(other.fallback),
+      use_interpolation(other.use_interpolation), has_trails(other.has_trails),
+      blend_weighted(other.blend_weighted), trail_storage(std::move(other.trail_storage)),
+      trail_seed(trail_storage.data(), trail_storage.size()),
+      motion_stats(other.motion_stats), interp_stats(other.interp_stats) {}
+
+EncodedScene &EncodedScene::operator=(EncodedScene &&other) noexcept {
+    uniforms = other.uniforms;
+    upload_bytes = other.upload_bytes;
+    fallback = other.fallback;
+    use_interpolation = other.use_interpolation;
+    has_trails = other.has_trails;
+    blend_weighted = other.blend_weighted;
+    trail_storage = std::move(other.trail_storage);
+    trail_seed = {trail_storage.data(), trail_storage.size()};
+    motion_stats = other.motion_stats;
+    interp_stats = other.interp_stats;
+    return *this;
 }
 
 MotionScene ScenePlan::apply_motion(const GpuMotionHistory *history, std::optional<float> alpha,
                                     MotionState &scratch) const noexcept {
-    MotionScene result{*this};
-    if (!alpha || !history || sprite_list != SpriteList::Presented ||
-        !scene.sprite_trail_seed.empty())
-        return result;
-    result.motion_stats = history->apply_into(scene, *alpha, scratch);
+    MotionScene result{*this, nullptr, {}};
+    const auto opts = rust_options(options);
+    if (history && alpha) {
+        result.motion_stats = rust_video::apply_motion_history(
+            scene.inner(), opts, rust_list(sprite_list), layer_mask, history->inner(), *alpha,
+            scratch);
+    } else {
+        result.motion_stats = rust_video::apply_motion(scene.inner(), opts, rust_list(sprite_list),
+                                                       layer_mask, scratch);
+    }
     if (result.motion_stats.paired) result.motion = &scratch;
     return result;
 }
 
-PreparedScene MotionScene::analyze_interpolation(InterpolationConfig config,
-                                                 std::span<const uint64_t> tile_pen_masks,
-                                                 InterpolationCoefficients &scratch) const noexcept {
-    PreparedScene prepared{*this};
-    prepared.interp_stats = analyze_gpu_interpolation_into(
-        plan.scene, plan.options, config.mode, config.fields, motion, tile_pen_masks, scratch);
-    const bool active =
-        !plan.scene.fallback && config.mode != VideoInterpolation::Off && plan.options.scale > 1;
-    prepared.use_interpolation = active;
-    if (active) prepared.coefficients = &scratch;
+PreparedScene MotionScene::analyze_interpolation(
+    InterpolationConfig config, std::span<const uint64_t> tile_pen_masks,
+    InterpolationCoefficients &scratch) const noexcept {
+    const auto masks = rust::Slice<const uint64_t>(tile_pen_masks.data(), tile_pen_masks.size());
+    const auto opts = rust_options(plan.options);
+    rust_video::InterpolationResult result{};
+    if (motion) {
+        result = rust_video::analyze_interpolation_motion(
+            plan.scene.inner(), opts, rust_list(plan.sprite_list), plan.layer_mask, *motion,
+            config.mode, config.fields, masks, scratch);
+    } else {
+        result = rust_video::analyze_interpolation(plan.scene.inner(), opts,
+                                                   rust_list(plan.sprite_list), plan.layer_mask,
+                                                   config.mode, config.fields, masks, scratch);
+    }
+    PreparedScene prepared{*this,
+                           result.use_interpolation ? &scratch : nullptr,
+                           result.stats,
+                           result.use_interpolation};
     return prepared;
 }
 
 size_t PreparedScene::required_words() const noexcept {
-    if (motion.plan.scene.fallback) return ENCODED_NATIVE_WORDS;
-    return use_interpolation ? ENCODED_INTERPOLATION_WORDS : ENCODED_SCENE_WORDS;
+    return rust_video::required_scene_words(motion.plan.scene.inner(), rust_options(motion.plan.options),
+                                            use_interpolation);
 }
 
 uint32_t PreparedScene::upload_bytes() const noexcept {
@@ -229,37 +113,57 @@ uint32_t PreparedScene::upload_bytes() const noexcept {
 
 EncodedScene PreparedScene::encode_into(std::span<uint32_t> out, uint32_t pf_tile_count,
                                         uint32_t sp_tile_count) const {
-    const ScenePlan &plan = motion.plan;
-    const SceneSnapshot &scene = plan.scene;
-    const GameVideoOptions options = plan.options;
-    const auto sprites = scene.sprite_list(plan.sprite_list);
-    write_words(scene, options, motion.motion, coefficients, out, plan.sprite_list);
+    const auto opts = rust_options(motion.plan.options);
+    const auto list = rust_list(motion.plan.sprite_list);
+    const auto words = rust::Slice<uint32_t>(out.data(), out.size());
+    const auto &scene = motion.plan.scene;
+    rust::Vec<uint16_t> trail;
+    const size_t trail_capacity = scene.trail_len();
+    if (trail_capacity) {
+        trail.reserve(trail_capacity);
+        for (size_t i = 0; i < trail_capacity; ++i) trail.push_back(0);
+    }
+    auto trail_slice = rust::Slice<uint16_t>(trail.data(), trail.size());
+    rust_video::EncodedSceneMeta meta{};
+    try {
+        if (motion.motion && coefficients) {
+            meta = rust_video::encode_prepared_motion_coefficients(
+                scene.inner(), opts, list, motion.plan.layer_mask, motion.motion_stats,
+                interp_stats, use_interpolation, *motion.motion, *coefficients, words, trail_slice,
+                pf_tile_count, sp_tile_count);
+        } else if (motion.motion) {
+            meta = rust_video::encode_prepared_motion(
+                scene.inner(), opts, list, motion.plan.layer_mask, motion.motion_stats,
+                interp_stats, use_interpolation, *motion.motion, words, trail_slice, pf_tile_count,
+                sp_tile_count);
+        } else if (coefficients) {
+            meta = rust_video::encode_prepared_coefficients(
+                scene.inner(), opts, list, motion.plan.layer_mask, motion.motion_stats,
+                interp_stats, use_interpolation, *coefficients, words, trail_slice, pf_tile_count,
+                sp_tile_count);
+        } else {
+            meta = rust_video::encode_prepared(
+                scene.inner(), opts, list, motion.plan.layer_mask, motion.motion_stats,
+                interp_stats, use_interpolation, words, trail_slice, pf_tile_count,
+                sp_tile_count);
+        }
+    } catch (const rust::Error &error) {
+        throw std::invalid_argument(error.what());
+    }
+    if (meta.trail_seed_len <= trail_capacity) trail.truncate(meta.trail_seed_len);
 
     EncodedScene encoded;
-    encoded.upload_bytes = upload_bytes();
-    encoded.fallback = scene.fallback;
-    encoded.use_interpolation = use_interpolation;
-    encoded.has_trails = !scene.fallback && !scene.sprite_trail_seed.empty();
-    encoded.blend_weighted =
-        !scene.fallback && !encoded.has_trails && std::ranges::any_of(sprites, &SceneSprite::weighted);
-    if (encoded.has_trails) encoded.trail_seed = scene.sprite_trail_seed;
-    encoded.motion_stats = motion.motion_stats;
-    encoded.interp_stats = interp_stats;
-
-    GpuUniforms &u = encoded.uniforms;
-    u = {options.scale,
-         options.border,
-         options.width(),
-         options.height(),
-         uint32_t(sprites.size()),
-         scene.pen_mask,
-         unsigned(scene.fallback),
-         plan.layer_mask & ALL_LAYERS};
-    u.pf_tile_count = pf_tile_count;
-    u.sp_tile_count = sp_tile_count;
-    if (encoded.has_trails) u.layer_mask |= F3_MASK_SPRITE_TRAILS;
-    if (scene.flipped) u.layer_mask |= F3_MASK_SCREEN_FLIPPED;
-    if (motion.motion && motion.motion_stats.alpha < 1.0f) u.layer_mask |= MOTION_LAYER_MASK;
+    encoded.uniforms = meta.uniforms;
+    encoded.upload_bytes = meta.upload_bytes;
+    encoded.fallback = meta.fallback;
+    encoded.use_interpolation = meta.use_interpolation;
+    encoded.has_trails = meta.has_trails;
+    encoded.blend_weighted = meta.blend_weighted;
+    encoded.trail_storage = std::move(trail);
+    encoded.trail_seed = {encoded.trail_storage.data(), encoded.trail_storage.size()};
+    encoded.motion_stats = meta.motion_stats;
+    encoded.interp_stats = meta.interp_stats;
     return encoded;
 }
+
 } // namespace f3rt

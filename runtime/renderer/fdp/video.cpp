@@ -6,7 +6,7 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/rom.hpp"
 #include "state_io.hpp"
-#include "renderer/game/clip.hpp"
+#include "renderer/game/scene.hpp"
 #include "renderer/decode.hpp"
 
 #include <algorithm>

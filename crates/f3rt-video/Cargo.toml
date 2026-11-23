@@ -1,0 +1,8 @@
+[package]
+name = "f3rt-video"
+version = "0.1.0"
+edition = "2024"
+description = "Taito F3 video renderer, mechanically ported from the C++ runtime"
+
+[dependencies]
+cxx = "1.0"

@@ -147,14 +147,15 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
     if (o.scale % 2)
         return; // Half-native-pixel translation is an integer output shift at even scales.
     auto a = std::make_unique<f3rt::SceneSnapshot>(source);
+    const auto text_map = source.text_map();
     uint16_t cell = 0;
     bool found = false;
     for (unsigned i = 0; i < 4096 && !found; ++i) {
-        cell = source.text.map()[i];
+        cell = text_map[i];
         // Visible texel of this captured cell: opaque pen with a non-black palette color.
         const int cell_x = int(i % 64) * 8, cell_y = int(i / 64) * 8;
         for (unsigned p = 0; p < 64 && !found; ++p) {
-            const auto pixel = source.text.pixel(cell_x + int(p % 8), cell_y + int(p / 8), false);
+            const auto pixel = source.text_pixel(cell_x + int(p % 8), cell_y + int(p / 8), false);
             found = (pixel.flags & 0x10) && source.colors[pixel.palette & 8191u];
         }
     }
@@ -162,7 +163,7 @@ void text_sampling(f3rt::GpuVideo &gpu, const f3rt::SceneSnapshot &source,
     a->fallback = false;
     a->sprite_count = 0;
     a->colors[0] = 0;
-    std::fill(a->text.map().begin(), a->text.map().end(), cell);
+    a->set_text_map(std::vector<uint16_t>(4096, cell));
     a->rows = {};
     for (unsigned y = 24; y < 256; ++y) {
         auto &row = a->rows[y];

@@ -62,14 +62,9 @@ set(F3RT_CORE_SOURCES
     runtime/renderer/fdp/video.cpp
     runtime/renderer/game/video.cpp
     runtime/renderer/game/oracle.cpp
+    runtime/renderer/game/bridge_video_host.cpp
     runtime/renderer/decode.cpp
     runtime/renderer/graphics_assets.cpp
-    runtime/renderer/game/tiles.cpp
-    runtime/renderer/game/text.cpp
-    runtime/renderer/game/sprites.cpp
-    runtime/renderer/game/lines.cpp
-    runtime/renderer/game/row_workers.cpp
-    runtime/renderer/game/indexed_compositor.cpp
     runtime/renderer/game/scene_snapshot.cpp
     ${F3RT_GAME_BOOT_SOURCES}
     ${F3RT_GAME_NETPLAY_SOURCES}
@@ -163,7 +158,7 @@ endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(f3rt
-    PUBLIC f3rt_abi
+    PUBLIC f3rt_abi f3rt_video_cxx
     PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson
 )
 if(WIN32)
@@ -337,10 +332,7 @@ if(F3RT_SDL)
         )
 
         add_library(f3rt-gpu STATIC
-            runtime/renderer/gpu/sdl_gpu.cpp
-            runtime/renderer/gpu/scene_pass.cpp
-            runtime/renderer/gpu/postprocess.cpp
-            runtime/renderer/gpu/pacing.cpp
+            runtime/renderer/gpu/sdl_driver_shim.cpp
             runtime/renderer/gpu/video.cpp
             "${VIDEO_SHADER_HEADER}"
         )
@@ -373,6 +365,12 @@ if(BUILD_TESTING)
     add_test(NAME game-geometry-literals
         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_game_geometry_literals.cmake
+    )
+
+    add_test(NAME f3rt-video-cargo-test
+        COMMAND ${CMAKE_COMMAND} -E env "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+            cargo test -p f3rt-video
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
     include(GoogleTest)

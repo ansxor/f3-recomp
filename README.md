@@ -26,7 +26,7 @@ Otherwise, alternative build steps are included below.
 
 - CMake 3.24+
 - Ninja, C11/C++20 compiler
-- Rust (cargo, rustc; edition 2024)
+- Rust (cargo, rustc; edition 2024). Corrosion uses a matching `cxxbridge` on `PATH` or builds the version resolved by Cargo.
 - Git
 - OCaml 5, Dune, and the recompiler libraries, available through `nix develop`.
 - `uv` and Python 3.11+ for shader compilation and the Python tools. The Python tools install Capstone through `uv`.

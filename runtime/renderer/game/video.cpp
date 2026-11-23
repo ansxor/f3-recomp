@@ -1,14 +1,25 @@
 #include "renderer/game/video.hpp"
 #include "f3rt/machine.hpp"
 #include "sprites/sprite_system.hpp"
-#include "state_io.hpp"
-#include <optional>
+#include "sprites/groups.hpp"
+#include <algorithm>
 #include <ostream>
 #include <stdexcept>
-#include <utility>
 
 namespace f3rt {
 namespace {
+
+rust_video::VideoConfig rust_config(const VideoConfig &config) {
+    return {config.rotation,       config.sprite_lag,
+            config.visible_y,      config.visible_height,
+            config.extend,         config.extended_alt_maps,
+            config.full_resolution_alt_maps};
+}
+
+rust::Slice<const uint8_t> view_of(std::span<const uint8_t> span) {
+    return rust::Slice<const uint8_t>(span.data(), span.size());
+}
+
 // The renderer is compiled against games/<game>/config.toml [video]; a ROM set
 // carrying different geometry must never be drawn with it.
 Machine &require_matching_video(Machine &machine) {
@@ -18,135 +29,167 @@ Machine &require_matching_video(Machine &machine) {
             "differs from the geometry this build was configured for");
     return machine;
 }
+
+rust::Box<rust_video::SpritePresentation> rust_presentation(const SpritePresentation *source) {
+    auto presented = rust_video::new_sprite_presentation();
+    if (!source) return presented;
+    for (const auto &group : source->groups)
+        presented->push_group(group.key, group.x, group.y, group.pc);
+    for (const auto &splice : source->splices) {
+        presented->push_splice(splice.bank, splice.first, splice.last, view_of(splice.real),
+                               view_of(splice.replacement));
+        for (const auto &group : splice.groups)
+            presented->push_splice_group(group.key, group.x, group.y, group.pc);
+    }
+    return presented;
+}
+
 } // namespace
 
-VideoRam VideoRam::from(const Machine &m) { return {m.graphics, m.control, m.frame + 1, m.palette}; }
-
 GameVideo::GameVideo(Machine &machine, RenderEnhancements enhancements)
-    : m_machine(require_matching_video(machine)), m_enhancements(std::move(enhancements)) {
+    : m_machine(require_matching_video(machine)), m_enhancements(std::move(enhancements)),
+      m_video(rust_video::new_game_video(rust_config(machine.roms.video))),
+      m_snapshot_storage(std::make_unique<SceneSnapshot>(machine.roms.video)) {
     reset();
 }
 
 SceneSnapshot &GameVideo::next_snapshot_slot() {
-    m_snapshot = m_snapshot_target ? m_snapshot_target : m_snapshot_storage.get();
-    return *m_snapshot;
+    return m_snapshot_target ? *m_snapshot_target : *m_snapshot_storage;
+}
+
+rust_video::EnhancementsHost GameVideo::enhancements_host() const {
+    const auto *tracker =
+        m_machine.sprites ? &m_machine.sprites->tracker() : nullptr;
+    return {const_cast<RenderEnhancements *>(&m_enhancements), tracker};
 }
 
 void GameVideo::reset() {
-    materialize_native();
-    m_tiles.reset();
-    m_text.reset();
-    m_palette.reset();
-    m_sprites.reset();
-    m_lines.reset();
-    m_native_pending = false;
-    m_enhancements.reset();
+    auto host = enhancements_host();
+    m_video->reset_with(m_machine.graphics_assets.inner(), host);
     next_snapshot_slot().capture_fallback();
-    m_presented_frames = m_presented_overflow_frames = 0;
-    m_alt_maps.reset();
-    m_alt_rows_remapped = m_alt_rows_fallback = 0;
-    m_rendered_frames = 0;
+    next_snapshot_slot().refresh();
 }
 
 void GameVideo::render_frame() {
     auto &m = m_machine;
-    enter(VideoStage::Decode);
-    const VideoRam vram = VideoRam::from(m);
     const SpritePresentation presentation =
         m.sprites && m.sprites->active() ? m.sprites->presentation() : SpritePresentation{};
-    const auto sprite_assets = m.graphics_assets.sprite_tiles();
-    const auto present_enhancements = [&] {
-        if (m_enhancements.empty()) return;
-        const auto frame = m.sprites ? SpriteFrame::read(m.sprites->tracker(), m_sprites.flipped())
-                                     : std::nullopt;
-        m_enhancements.present(m_sprites.presented_sprites(), frame);
-    };
-
-    m_tiles.decode(vram);
-    m_text.decode(vram);
-    m_palette.decode(vram);
-    if (m_sprites.before_scanout(vram, presentation, sprite_assets) == SpriteLatch::Latched)
-        present_enhancements();
-    m_lines.decode(vram, m_sprites.scanout_flipped());
-
-    enter(VideoStage::Scene);
-    const auto alt_counts = m_lines.resolve_scene(m_sprites.scanout_flipped(), m_tiles, m_alt_maps,
-                                                  m.graphics_assets.playfield_tiles());
-    m_alt_rows_remapped += alt_counts.remapped;
-    m_alt_rows_fallback += alt_counts.fallback;
-    ++m_rendered_frames;
-
-    enter(VideoStage::Capture);
-    next_snapshot_slot().capture(m_tiles, m_text, m_palette, m_sprites, m_lines, m_enhancements);
-    m_native_pending = true;
-
-    enter(VideoStage::Latch);
-    if (m_sprites.after_scanout(vram, presentation, sprite_assets) == SpriteLatch::Latched)
-        present_enhancements();
-    if (m_sprites.presented_valid()) {
-        ++m_presented_frames;
-        m_presented_overflow_frames += m_sprites.presented_overflow();
-    }
-    enter(VideoStage::Idle);
+    auto rust_presented = rust_presentation(&presentation);
+    rust_video::ProbeHost probe{m_probe};
+    auto host = enhancements_host();
+    SceneSnapshot &target = next_snapshot_slot();
+    m_video->render_frame(m.graphics_assets.inner(), view_of(m.graphics), view_of(m.control),
+                          view_of(m.palette), m.frame + 1, *rust_presented, probe, host,
+                          target.destination());
+    target.refresh();
 }
 
-void GameVideo::materialize_native() const {
-    if (!m_native_pending) return;
-    if (!m_native)
-        m_native = std::make_unique<NativeCompositor>(m_machine.graphics_assets.playfield_tiles());
-    m_snapshot->compose(m_machine.m_pixels, geometry::NATIVE_WIDTH, PixelFormat::Argb8888, 0,
-                        m_native->tile_rows, m_machine.graphics_assets.sprite_tiles(),
-                        m_native->scratch, SpriteList::Canonical);
-    m_native_pending = false;
+const SceneSnapshot &GameVideo::scene_snapshot() const {
+    auto &snapshot = const_cast<GameVideo *>(this)->next_snapshot_slot();
+    snapshot.refresh();
+    return snapshot;
+}
+
+ScenePixel GameVideo::playfield_pixel(unsigned layer, int x, int y, bool flipped, bool alt) const {
+    const auto pixel = m_video->playfield_pixel(layer, x, y, flipped,
+                                               m_machine.graphics_assets.inner(), alt);
+    return {pixel.palette, pixel.flags};
+}
+
+ScenePixel GameVideo::text_pixel(int x, int y, bool flipped) const {
+    const auto pixel = m_video->text_pixel(x, y, flipped);
+    return {pixel.palette, pixel.flags};
+}
+
+SceneRow GameVideo::row(unsigned screen_y) const {
+    const auto row = m_video->row(screen_y);
+    SceneRow out{};
+    for (unsigned i = 0; i < 4; ++i) {
+        const auto &pf = row.playfields[i];
+        out.playfields[i].layer = {pf.layer.priority,    pf.layer.blend_mode,
+                                   pf.layer.clip_enabled, pf.layer.clip_inverted,
+                                   pf.layer.clip_inverse, pf.layer.enabled,
+                                   pf.layer.blend_select, pf.layer.mosaic};
+        out.playfields[i].source_x = pf.source_x;
+        out.playfields[i].source_y = pf.source_y;
+        out.playfields[i].x_step = pf.x_step;
+        out.playfields[i].y_step = pf.y_step;
+        out.playfields[i].y_fraction = pf.y_fraction;
+        out.playfields[i].palette_add = pf.palette_add;
+        out.playfields[i].alt_map = pf.alt_map;
+        out.playfields[i].empty_row = pf.empty_row;
+        out.playfields[i].full_res_offset = pf.full_res_offset;
+        const auto &sp = row.sprites[i];
+        out.sprites[i] = {sp.priority,    sp.blend_mode,  sp.clip_enabled, sp.clip_inverted,
+                          sp.clip_inverse, sp.enabled,     sp.blend_select, sp.mosaic};
+        out.clips[i] = {row.clips[i].left, row.clips[i].right};
+        out.blend[i] = row.blend[i];
+    }
+    out.text = {row.text.priority,   row.text.blend_mode,  row.text.clip_enabled,
+                row.text.clip_inverted, row.text.clip_inverse, row.text.enabled,
+                row.text.blend_select,  row.text.mosaic};
+    out.background = row.background;
+    out.text_x = row.text_x;
+    out.text_y = row.text_y;
+    out.mosaic_period = row.mosaic_period;
+    out.bitmap = row.bitmap;
+    out.palette_15bit = row.palette_15bit;
+    out.blur = row.blur;
+    return out;
+}
+
+std::vector<SceneSprite> GameVideo::sprite_snapshot() const {
+    std::vector<rust_video::SceneSprite> buffer(MAX_HARDWARE_SPRITES);
+    const size_t count = m_video->sprite_list(
+        rust::Slice<rust_video::SceneSprite>(buffer.data(), buffer.size()));
+    std::vector<SceneSprite> out;
+    out.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &s = buffer[i];
+        out.push_back({s.x,        s.y,        s.scale_x, s.scale_y, s.tile,     s.palette,
+                       s.flip_x,   s.flip_y,   s.group,   s.group_x, s.group_y, s.group_pc,
+                       s.blend_weight});
+    }
+    return out;
+}
+
+void GameVideo::raster_sprites(std::span<uint16_t> plane) const {
+    m_video->raster_sprites(m_machine.graphics_assets.inner(),
+                            rust::Slice<uint16_t>(plane.data(), plane.size()));
 }
 
 void GameVideo::report(std::ostream &output) const {
     m_enhancements.report(output);
-    if (m_presented_frames || game_config::video.full_resolution_alt_maps) {
-        output << "VIDEO presented_sprite_frames=" << m_presented_frames
-               << " presented_sprite_overflow_frames=" << m_presented_overflow_frames;
-        if constexpr (game_config::video.full_resolution_alt_maps)
-            output << " presented_alt_rows_remapped=" << m_alt_rows_remapped
-                   << " presented_alt_rows_fallback=" << m_alt_rows_fallback
-                   << " presented_alt_rows_solved=" << m_alt_maps.solved_rows();
-        output << '\n';
-    }
-    output << "VIDEO game_frames=" << m_rendered_frames << '\n';
+    output << m_video->report();
 }
 
-size_t GameVideo::state_size() const {
-    return GameSprites::TRAIL_STATE_SIZE + m_sprites.state_size() + m_lines.state_size();
-}
+size_t GameVideo::state_size() const { return m_video->state_size(); }
 
 void GameVideo::save_state(std::span<uint8_t> dst) const {
-    if (dst.size() != state_size()) {
-        throw std::invalid_argument("GameVideo::save_state size mismatch");
-    }
-    materialize_native();
-    StateWriter writer(dst);
-    m_sprites.save_state(writer);
-    m_lines.save_state(writer);
-    m_sprites.save_trails(writer);
-    if (writer.remaining() != 0) {
-        throw std::logic_error("GameVideo::save_state remaining unwritten bytes");
-    }
+    if (dst.size() != state_size()) throw std::invalid_argument("GameVideo::save_state size mismatch");
+    auto &video = const_cast<rust_video::GameVideo &>(*m_video);
+    video.save_state(rust::Slice<uint8_t>(dst.data(), dst.size()),
+                     m_machine.graphics_assets.inner());
+}
+
+void GameVideo::materialize_native() const {
+    auto &video = const_cast<rust_video::GameVideo &>(*m_video);
+    const auto &target =
+        m_snapshot_target ? *m_snapshot_target : *m_snapshot_storage;
+    video.materialize_native(m_machine.graphics_assets.inner(), target.inner());
+    const auto pixels = video.native_pixels();
+    std::ranges::copy(pixels, m_machine.m_pixels.begin());
 }
 
 void GameVideo::load_state(std::span<const uint8_t> src) {
-    if (src.size() != state_size()) {
-        throw std::invalid_argument("GameVideo::load_state size mismatch");
-    }
-    StateReader reader(src);
-    m_sprites.load_state(reader);
-    m_lines.load_state(reader);
-    m_sprites.load_trails(reader);
-    m_native_pending = false;
-    if (!m_enhancements.empty()) m_enhancements.present(m_sprites.presented_sprites(), std::nullopt);
-    next_snapshot_slot().capture_fallback(m_machine.m_pixels);
-    if (reader.remaining() != 0) {
-        throw std::logic_error("GameVideo::load_state remaining unread bytes");
-    }
+    if (src.size() != state_size()) throw std::invalid_argument("GameVideo::load_state size mismatch");
+    m_video->set_native_pixels(rust::Slice<const uint32_t>(
+        m_machine.m_pixels.data(), m_machine.m_pixels.size()));
+    auto host = enhancements_host();
+    SceneSnapshot &target = next_snapshot_slot();
+    m_video->load_state(rust::Slice<const uint8_t>(src.data(), src.size()), host,
+                        target.destination());
+    target.refresh();
 }
 
-static_assert(SnapshotRoot<GameVideo>);
 } // namespace f3rt

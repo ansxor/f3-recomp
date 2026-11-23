@@ -1,22 +1,23 @@
 #pragma once
 #include "f3rt/game_video.hpp"
 #include "f3rt/video.hpp"
-#include "renderer/game/indexed_compositor.hpp"
 #include "renderer/game/scene.hpp"
 #include <array>
 #include <cstdint>
 #include <iosfwd>
-#include <memory>
 #include <span>
 #include <vector>
 
 namespace f3rt {
-class GameLines;
+class GameVideo;
 class GraphicsAssets;
 class Machine;
 struct SceneSnapshot;
 struct VideoConfig;
 
+// Independent differential oracle: the C++ FDP renderer (`Video`) against the Rust-backed game
+// renderer. Both sides decode video RAM; the game side is queried per layer through its
+// inspection helpers, never through shared state.
 class OracleVerifier {
 public:
     OracleVerifier(const GraphicsAssets &assets, const VideoConfig &config);
@@ -36,7 +37,7 @@ public:
     void report(std::ostream &output) const;
 
 private:
-    void compare_rows(const GameLines &lines, uint64_t frame) const;
+    void compare_rows(const GameVideo &video, uint64_t frame) const;
     void compare_layer(LayerId id, const Machine &machine, const GameVideo &video, uint64_t frame);
     void compare_alt_map(unsigned alt, const Machine &machine, const GameVideo &video,
                          uint64_t frame);
@@ -45,11 +46,9 @@ private:
     std::vector<uint32_t> m_oracle_pixels;
     std::vector<uint32_t> m_composite;
     std::vector<uint16_t> m_sprite_plane;
-    std::unique_ptr<TileRowTable> m_tile_rows;
-    IndexedScratch m_scratch;
     std::array<uint64_t, LAYER_COUNT> m_frames{}, m_mismatches{};
     std::array<uint64_t, 2> m_alt_frames{}, m_alt_mismatches{};
     uint64_t m_composite_frames = 0, m_composite_mismatches = 0;
 };
 
-}
+} // namespace f3rt

@@ -1,29 +1,88 @@
 #pragma once
+#include "f3rt/game_video.hpp"
+#include "f3rt_video_cxx/video.h"
 #include "renderer/game/scene_snapshot.hpp"
-#include "renderer/gpu/encode.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "renderer/gpu/motion.hpp"
-#include "renderer/gpu/pacing.hpp"
-#include "renderer/gpu/postprocess.hpp"
-#include "renderer/gpu/scene_pass.hpp"
-#include "renderer/gpu/sdl_gpu.hpp"
 #include "renderer/scale.hpp"
-#include "sprites/presentation.hpp"
 #include <SDL3/SDL.h>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
-#include <vector>
+#include <string>
+#include <variant>
 
 namespace f3rt {
+// `runtime/renderer/gpu/postprocess.hpp` and `sdl_gpu.hpp` were folded into this façade; the
+// implementations now live in `crates/f3rt-video/src/gpu/`.
+enum class Postprocess { Off, Crt, User };
+
+// Optional host overlay invoked on the window composition target (the swapchain directly, or the
+// offscreen capture texture during window capture) after the game blit.
+using GpuOverlay = void (*)(void *, SDL_GPUCommandBuffer *, SDL_GPUTexture *composition_target,
+                            Uint32, Uint32);
+
+// Opaque Rust texture token; only the GPU backend interprets it.
+struct GpuSurface {
+    uintptr_t texture = 0;
+    uint32_t width = 0, height = 0;
+    explicit operator bool() const noexcept { return texture != 0; }
+};
+
+struct GpuDriverShim;
+
+/// Owned render texture shared with the Rust backend. Move-only; destroy it before its GpuVideo.
+class GpuTexture {
+public:
+    GpuTexture();
+    ~GpuTexture();
+    GpuTexture(GpuTexture &&other) noexcept;
+    GpuTexture &operator=(GpuTexture &&other) noexcept;
+    GpuTexture(const GpuTexture &) = delete;
+    GpuTexture &operator=(const GpuTexture &) = delete;
+
+    GpuSurface surface() const;
+    bool empty() const;
+    explicit operator bool() const { return !empty(); }
+    rust::Box<rust_video::GpuTexture> &inner() { return m_texture; }
+
+private:
+    rust::Box<rust_video::GpuTexture> m_texture;
+};
+
+/// One offscreen draw request.
 struct RenderRequest {
     SpriteList sprites = SpriteList::Presented;
     // Output/layer-mask diagnostics remain baseline unless `postprocess` is explicitly true.
     uint32_t layer_mask = ALL_LAYERS;
-    // Temporal geometry at this alpha (needs capture_motion history); nullopt renders the canonical frame.
+    // Temporal geometry at this alpha (needs capture_motion history); nullopt renders the
+    // canonical frame.
     std::optional<float> alpha = std::nullopt;
     bool postprocess = false;
+};
+
+// Live motion alpha is the elapsed fraction of the native frame period, sampled after acquisition.
+struct MotionLiveClock {
+    std::chrono::steady_clock::time_point frame_start;
+    std::chrono::nanoseconds period{};
+};
+// monostate: static (canonical); float: fixed alpha; MotionLiveClock: timed live alpha.
+using PresentTiming = std::variant<std::monostate, float, MotionLiveClock>;
+
+struct PresentRequest {
+    // Block for the swapchain and any display tick. False skips the frame when the GPU is busy:
+    // nothing is uploaded or rendered, and no fence is waited on.
+    bool wait = false;
+    PresentTiming timing{};
+    // Empty: one full-window blit. Otherwise the left half shows this (already oriented) surface
+    // and the right half the presented game image.
+    GpuSurface left_pane{};
+    // One-shot PNG of the full-window composition submitted to the drawable, including overlay.
+    // Null adds no readback, allocation or fence wait.
+    const char *capture_path = nullptr;
 };
 
 class GpuVideo {
@@ -55,7 +114,8 @@ public:
     // Strong guarantee: if the pipeline cannot be built the previous mode stays.
     void set_interpolation(VideoInterpolation mode, InterpolationFields fields);
     void set_overlay(Overlay callback, void *userdata);
-    // See Postprocessor::configure for the user shader ABI. Errors throw and retain the last valid preset.
+    // See the user postprocess shader ABI in the GPU backend. Errors throw and retain the last
+    // valid preset.
     void set_postprocess(Postprocess preset, const std::filesystem::path &user_shader = {});
     Postprocess postprocess() const;
 
@@ -89,31 +149,10 @@ public:
     void save_surface(const char *path);
 
 private:
-    EncodedScene prepare_scene(const SceneSnapshot &scene, SpriteList list, uint32_t layer_mask,
-                               std::optional<float> alpha);
-
-    GpuContext m_ctx;
-    GameVideoOptions m_options;
-    GpuTileAssets m_assets;
-    ScenePass m_scene_pass;
-    Postprocessor m_postprocess;
-    SurfaceRotator m_rotator;
-    ReadbackBuffer m_readback;
-    DisplayPacer m_pacer;
-    std::unique_ptr<GpuMotionHistory> m_motion;
-    GpuPrepScratch m_prep_scratch;
-    InterpolationConfig m_interp_config;
-    InterpolationStats m_interpolation_stats{};
-    InterpolationLog m_interp_log;
-    MotionInterpolationStats m_motion_stats{};
-    VideoScaleMode m_scale_mode = VideoScaleMode::Fixed;
-    bool m_linear = false;
-    bool m_rendered = false;
-    bool m_last_presented = false;
-    uint64_t m_presented_frames = 0;
-    GpuSurface m_unrotated_surface{};
-    std::vector<uint32_t> m_saved_pixels;
-    Overlay m_overlay = nullptr;
-    void *m_overlay_userdata = nullptr;
+    std::unique_ptr<GpuDriverShim> m_shim;
+    rust::Box<rust_video::GpuVideo> m_video;
+    std::string m_driver;
+    mutable InterpolationStats m_interpolation{};
+    mutable MotionInterpolationStats m_motion{};
 };
 } // namespace f3rt

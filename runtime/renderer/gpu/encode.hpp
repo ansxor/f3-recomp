@@ -1,4 +1,5 @@
 #pragma once
+#include "f3rt_video_cxx/video.h"
 #include "renderer/game/scene_snapshot.hpp"
 #include "renderer/gpu/interp.hpp"
 #include "renderer/gpu/motion.hpp"
@@ -13,17 +14,21 @@ inline constexpr size_t ENCODED_SCENE_WORDS = F3_SCENE_WORD_COUNT;
 inline constexpr size_t ENCODED_INTERPOLATION_WORDS = F3_SCENE_INTERP_WORD_COUNT;
 inline constexpr size_t ENCODED_NATIVE_WORDS = geometry::NATIVE_PIXELS;
 
-// Shader uniforms, three tightly packed uvec4s (see scene.glsl).
-struct GpuUniforms {
-    uint32_t scale, border, width, height;
-    uint32_t sprite_count, pen_mask, fallback, layer_mask;
-    uint32_t first_line = geometry::FIRST_LINE, native_height = geometry::HEIGHT, pf_tile_count = 0,
-             sp_tile_count = 0;
-};
+using GpuUniforms = rust_video::SceneUniforms;
 
-struct GpuPrepScratch {
-    MotionState motion_state;
-    InterpolationCoefficients interp_coefficients;
+// Caller-owned chain scratch. The references point into `rust_video::GpuPrepScratch`, whose
+// storage is stable for the lifetime of this object (move-only).
+class GpuPrepScratch {
+public:
+    GpuPrepScratch();
+    ~GpuPrepScratch();
+    GpuPrepScratch(const GpuPrepScratch &) = delete;
+    GpuPrepScratch &operator=(const GpuPrepScratch &) = delete;
+
+    rust::Box<rust_video::GpuPrepScratch> m_scratch;
+    // Bind into the box's stable storage.
+    MotionState &motion_state;
+    InterpolationCoefficients &interp_coefficients;
 };
 
 struct EncodedScene {
@@ -33,9 +38,17 @@ struct EncodedScene {
     bool use_interpolation = false;
     bool has_trails = false;
     bool blend_weighted = false;
+    // Owns the trail plane; `trail_seed` points into it. Move-only.
+    rust::Vec<uint16_t> trail_storage;
     std::span<const uint16_t> trail_seed;
     MotionInterpolationStats motion_stats{};
     InterpolationStats interp_stats{};
+
+    EncodedScene() = default;
+    EncodedScene(const EncodedScene &other);
+    EncodedScene &operator=(const EncodedScene &other);
+    EncodedScene(EncodedScene &&other) noexcept;
+    EncodedScene &operator=(EncodedScene &&other) noexcept;
 };
 
 struct MotionScene;
@@ -75,15 +88,9 @@ struct PreparedScene {
     uint32_t upload_bytes() const noexcept;
     // The only code that writes GPU scene words: a one-way encoding of the snapshot into `out`,
     // typically the mapped upload buffer, with no intermediate copy.
-    //   * fallback frame: copies native_pixels (320 x geometry::HEIGHT ARGB) to out[0..ENCODED_NATIVE_WORDS).
-    //   * otherwise writes the canonical scene (ENCODED_SCENE_WORDS), with `motion`'s
-    //     sprite/playfield/text geometry replacing the snapshot values when non-null. Expanded
-    //     output (`options.expanded()`) writes playfield rows through presented_playfield()
-    //     (game_config::video.full_resolution_alt_maps); the snapshot rows themselves stay canonical.
-    //   * non-null `coefficients` additionally writes the interpolation region
-    //     (ENCODED_INTERPOLATION_WORDS in total).
-    // `options.border` bounds layer clip ranges. Throws std::invalid_argument if `out` is too small.
+    // Throws std::invalid_argument if `out` is too small.
     EncodedScene encode_into(std::span<uint32_t> out, uint32_t pf_tile_count = 0,
                              uint32_t sp_tile_count = 0) const;
 };
+
 } // namespace f3rt
