@@ -721,9 +721,10 @@ impl SpriteBins {
             }
             let begin_chunk = (first as usize - g.top as usize) / COMPOSE_CHUNK_ROWS;
             let end_chunk = (last as usize - g.top as usize) / COMPOSE_CHUNK_ROWS;
-            for chunk in begin_chunk..=end_chunk {
-                if chunk < chunks {
-                    self.chunks[chunk].push(i as u16);
+            let limit = end_chunk.saturating_add(1).min(chunks);
+            if begin_chunk < limit {
+                for bucket in &mut self.chunks[begin_chunk..limit] {
+                    bucket.push(i as u16);
                 }
             }
         }

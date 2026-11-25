@@ -151,6 +151,9 @@ target_link_libraries(f3rt
     PUBLIC f3rt_abi f3rt_video_cxx f3rt_sprites_cxx
     PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson
 )
+# f3rt_video_cxx calls host adaptors defined in f3rt (bridge_video_host.cpp); record the mutual
+# static-library dependency so single-pass linkers (GNU ld.bfd) rescan libf3rt.a after it.
+target_link_libraries(f3rt_video_cxx PRIVATE f3rt)
 if(WIN32)
     target_link_libraries(f3rt PRIVATE ws2_32)
 endif()

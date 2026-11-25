@@ -743,8 +743,7 @@ fn compose_mosaic_layer(
         None
     };
     let job = work.job;
-    for r in 0..ranges.count {
-        let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
+    for &[left, right] in &ranges.range[..ranges.count] {
         let mut mask_holder = 0u32;
         for_each_range_word(left, right, |w, window| {
             mask_holder = (work.unresolved[w] | work.pending[w]) & window;
@@ -954,8 +953,7 @@ fn compose_zoomed_playfield(
         screen_flip,
         map_width,
     };
-    for r in 0..ranges.count {
-        let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
+    for &[left, right] in &ranges.range[..ranges.count] {
         for_each_range_word(left, right, |w, window| {
             let unresolved = work.unresolved[w];
             let mut settled = 0u32;
@@ -1019,8 +1017,7 @@ fn compose_playfield(
     let wrapped_y = (pf.source_y as u32 & 511) ^ if work.flipped { 511 } else { 0 };
     let map_row = &cells[(wrapped_y as usize / 16) * columns..];
     let texel_y = wrapped_y & 15;
-    for r in 0..ranges.count {
-        let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
+    for &[left, right] in &ranges.range[..ranges.count] {
         let mut x = left;
         while x < right {
             let wrapped = ((base + x - work.border) as u32 & (map_width - 1)) ^ screen_flip;
@@ -1120,8 +1117,7 @@ fn compose_text(work: &mut RowWork<'_>, layer: &SceneLayer, ranges: &ColumnRange
         y / 8
     };
     let texel_y = y & 7;
-    for r in 0..ranges.count {
-        let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
+    for &[left, right] in &ranges.range[..ranges.count] {
         let mut x = left;
         while x < right {
             let u = (i32::from(work.row.text_x) + x - work.border) as u32 & 511;
@@ -1201,8 +1197,7 @@ fn compose_sprites(work: &mut RowWork<'_>, id: LayerId, layer: &SceneLayer, rang
     };
     let plan = work.plan(layer, id);
     let resolves = plan.resolves[usize::from(layer.blend_select)];
-    for r in 0..ranges.count {
-        let (left, right) = (ranges.range[r][0], ranges.range[r][1]);
+    for &[left, right] in &ranges.range[..ranges.count] {
         for_each_range_word(left, right, |w, window| {
             let mut pending = covered[w] & work.pending[w] & window;
             let direct = covered[w] & work.unresolved[w] & window;
@@ -1292,8 +1287,8 @@ fn setup_matches(setup: &RowSetup, row: &SceneRow, active: u32) -> bool {
     if !setup.valid || setup.active != active || setup.clips != row.clips {
         return false;
     }
-    for i in 0..LAYER_COUNT {
-        if setup.layers[i] != *row.layer(layer_id(i)) {
+    for (i, layer) in setup.layers.iter().enumerate() {
+        if *layer != *row.layer(layer_id(i)) {
             return false;
         }
     }
@@ -1301,8 +1296,8 @@ fn setup_matches(setup: &RowSetup, row: &SceneRow, active: u32) -> bool {
 }
 
 fn build_setup(setup: &mut RowSetup, row: &SceneRow, active: u32, left_edge: i32, right_edge: i32) {
-    for i in 0..LAYER_COUNT {
-        setup.layers[i] = *row.layer(layer_id(i));
+    for (i, layer) in setup.layers.iter_mut().enumerate() {
+        *layer = *row.layer(layer_id(i));
     }
     setup.clips = row.clips;
     setup.active = active;
@@ -1319,8 +1314,8 @@ fn build_setup(setup: &mut RowSetup, row: &SceneRow, active: u32, left_edge: i32
     for n in 0..setup.order_count {
         let layer = row.layer(setup.order[n]);
         let mut tie = false;
-        for m in n + 1..setup.order_count {
-            let later = row.layer(setup.order[m]);
+        for &later_id in &setup.order[n + 1..setup.order_count] {
+            let later = row.layer(later_id);
             if later.priority != layer.priority {
                 break;
             }
