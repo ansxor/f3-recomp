@@ -6,6 +6,7 @@ use f3rt_video::config::VideoConfig as RVVideoConfig;
 use f3rt_video::config::{GameVideoOptions as RVOptions, PixelFormat as RVPixelFormat};
 use f3rt_video::decode as rdecode;
 use f3rt_video::game::flicker_hold as rflicker;
+use f3rt_video::game::full_detail as rfulldetail;
 use f3rt_video::game::video::{
     FrameSpritePresentation, GameVideo as RGameVideo, SpriteEnhancements, VideoStage,
 };
@@ -268,9 +269,21 @@ mod ffi {
         pc: u32,
     }
 
+    struct FullDetailRecord {
+        valid: bool,
+        flags0: u8,
+        color: u8,
+        desc: u16,
+        screen_x: i16,
+        screen_y: i16,
+        zoom_x: u8,
+        zoom_y: u8,
+    }
+
     unsafe extern "C++" {
         type SpriteGroupsHost;
         fn current_root(&self, key: u64) -> SpriteRoot;
+        fn full_detail_record(&self, key: u64, group_x: i32, group_y: i32) -> FullDetailRecord;
     }
 
     extern "Rust" {
@@ -294,15 +307,6 @@ mod ffi {
         fn new_sprite_presentation() -> Box<SpritePresentation>;
         fn clear(&mut self);
         fn push_group(&mut self, key: u64, x: i32, y: i32, pc: u32);
-        fn push_splice(
-            &mut self,
-            bank: bool,
-            first: u16,
-            last: u16,
-            real: &[u8],
-            replacement: &[u8],
-        );
-        fn push_splice_group(&mut self, key: u64, x: i32, y: i32, pc: u32);
         fn is_empty(&self) -> bool;
 
         fn decode_sprites(
@@ -490,6 +494,22 @@ mod ffi {
         );
         fn reset(&mut self);
         fn report(&self) -> String;
+    }
+
+    extern "Rust" {
+        type CommandwFullDetail;
+        fn new_commandw_full_detail(visible_y: i32, visible_height: i32)
+        -> Box<CommandwFullDetail>;
+        fn present(
+            &mut self,
+            sprites: &mut Vec<SceneSprite>,
+            groups: &SpriteGroupsHost,
+            rom: &[u8],
+            flipped: bool,
+        );
+        fn reset(&mut self);
+        fn report(&self) -> String;
+        fn expanded_objects(&self) -> u64;
     }
 }
 
@@ -729,6 +749,10 @@ fn new_flicker_hold(
     FlickerHold::new_flicker_hold(name, group_class, anchor_class, period, self_follow)
 }
 
+fn new_commandw_full_detail(visible_y: i32, visible_height: i32) -> Box<CommandwFullDetail> {
+    CommandwFullDetail::new_commandw_full_detail(visible_y, visible_height)
+}
+
 pub struct GraphicsAssets {
     inner: v::GraphicsAssets,
 }
@@ -768,72 +792,25 @@ impl GraphicsAssets {
     }
 }
 
-struct OwnedSplice {
-    bank: bool,
-    first: u16,
-    last: u16,
-    real: Vec<u8>,
-    replacement: Vec<u8>,
-    groups: Vec<rdecode::SpriteGroupSlot>,
-}
-
 pub struct SpritePresentation {
     groups: Vec<rdecode::SpriteGroupSlot>,
-    splices: Vec<OwnedSplice>,
 }
 
 impl SpritePresentation {
     fn new_sprite_presentation() -> Box<Self> {
-        Box::new(Self {
-            groups: Vec::new(),
-            splices: Vec::new(),
-        })
+        Box::new(Self { groups: Vec::new() })
     }
 
     fn clear(&mut self) {
         self.groups.clear();
-        self.splices.clear();
     }
 
     fn push_group(&mut self, key: u64, x: i32, y: i32, pc: u32) {
         self.groups.push(rdecode::SpriteGroupSlot { key, x, y, pc });
     }
 
-    fn push_splice(&mut self, bank: bool, first: u16, last: u16, real: &[u8], replacement: &[u8]) {
-        self.splices.push(OwnedSplice {
-            bank,
-            first,
-            last,
-            real: real.to_vec(),
-            replacement: replacement.to_vec(),
-            groups: Vec::new(),
-        });
-    }
-
-    fn push_splice_group(&mut self, key: u64, x: i32, y: i32, pc: u32) {
-        if let Some(splice) = self.splices.last_mut() {
-            splice
-                .groups
-                .push(rdecode::SpriteGroupSlot { key, x, y, pc });
-        }
-    }
-
     fn is_empty(&self) -> bool {
-        self.groups.is_empty() && self.splices.is_empty()
-    }
-
-    fn splice_views(&self) -> Vec<rdecode::SpriteSplice<'_>> {
-        self.splices
-            .iter()
-            .map(|s| rdecode::SpriteSplice {
-                bank: s.bank,
-                first: s.first,
-                last: s.last,
-                real: &s.real,
-                replacement: &s.replacement,
-                groups: &s.groups,
-            })
-            .collect()
+        self.groups.is_empty()
     }
 }
 
@@ -854,10 +831,8 @@ fn decode_sprites(
         pen_mask: state.pen_mask,
     };
     let mut decoded = vec![rdecode::DecodedSpriteEntry::default(); out.len()];
-    let splices = presentation.splice_views();
     let view = rdecode::SpritePresentation {
         groups: &presentation.groups,
-        splices: &splices,
     };
     let count = rdecode::decode_sprite_list(
         spriteram,
@@ -1166,10 +1141,8 @@ impl GameVideo {
             frame,
             palette,
         };
-        let splices = presentation.splice_views();
         let view = rdecode::SpritePresentation {
             groups: &presentation.groups,
-            splices: &splices,
         };
         let mut stage_cb = |stage| probe.as_mut().enter(video_stage_index(stage));
         let mut adapter = (!enhancements.as_ref().get_ref().empty()).then_some(HostEnhancements {
@@ -1547,6 +1520,28 @@ impl rflicker::SpriteGroups for GroupsAdapter<'_> {
     }
 }
 
+impl rfulldetail::FullDetailLookup for GroupsAdapter<'_> {
+    fn full_detail_record(
+        &self,
+        key: u64,
+        group_x: i32,
+        group_y: i32,
+    ) -> Option<f3rt_sprites::commandw::FullDetailRecord> {
+        let r = self.0.full_detail_record(key, group_x, group_y);
+        r.valid.then_some(f3rt_sprites::commandw::FullDetailRecord {
+            flags0: r.flags0,
+            color: r.color,
+            desc: r.desc,
+            projected: f3rt_sprites::commandw::ProjectedBody {
+                screen_x: r.screen_x,
+                screen_y: r.screen_y,
+                zoom_x: r.zoom_x,
+                zoom_y: r.zoom_y,
+            },
+        })
+    }
+}
+
 pub struct FlickerHold {
     inner: rflicker::FlickerHoldStage,
     sprites: Vec<RSceneSprite>,
@@ -1601,5 +1596,46 @@ impl FlickerHold {
 
     fn report(&self) -> String {
         self.inner.report()
+    }
+}
+
+pub struct CommandwFullDetail {
+    inner: rfulldetail::CommandwFullDetailStage,
+    sprites: Vec<RSceneSprite>,
+}
+
+impl CommandwFullDetail {
+    fn new_commandw_full_detail(visible_y: i32, visible_height: i32) -> Box<Self> {
+        Box::new(Self {
+            inner: rfulldetail::CommandwFullDetailStage::new(visible_y, visible_height),
+            sprites: Vec::new(),
+        })
+    }
+
+    fn present(
+        &mut self,
+        sprites: &mut Vec<ffi::SceneSprite>,
+        groups: &ffi::SpriteGroupsHost,
+        rom: &[u8],
+        flipped: bool,
+    ) {
+        self.sprites.clear();
+        self.sprites.extend(sprites.iter().map(scene_sprite));
+        self.inner
+            .present(&mut self.sprites, &GroupsAdapter(groups), rom, flipped);
+        sprites.clear();
+        sprites.extend(self.sprites.iter().map(out_scene_sprite));
+    }
+
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    fn report(&self) -> String {
+        self.inner.report()
+    }
+
+    fn expanded_objects(&self) -> u64 {
+        self.inner.stats().expanded_objects
     }
 }

@@ -74,11 +74,9 @@ set(F3RT_CORE_SOURCES
     runtime/sprites/enhancements.cpp
     runtime/renderer/game/enhancements.cpp
     runtime/renderer/game/flicker_hold.cpp
+    runtime/renderer/game/full_detail.cpp
     runtime/sprites/groups.cpp
-    runtime/sprites/replay.cpp
-    runtime/sprites/sandbox.cpp
     runtime/sprites/sprite_system.cpp
-    runtime/sprites/behaviours.cpp
     ${F3RT_NETPLAY_SOURCES}
 )
 
@@ -148,19 +146,14 @@ if(F3_GENERATED_DIR)
     target_include_directories(f3rt PRIVATE "${F3_GENERATED_DIR}")
 endif()
 
-# Header-only sprite behaviour registry: sprites/behaviours.cpp includes it directly
-# so static registrars cannot be dead-stripped from the archive.
-set(F3_SPRITE_BEHAVIOURS_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/games/${F3_GAME}/sprites/behaviours.hpp")
-if(EXISTS "${F3_SPRITE_BEHAVIOURS_HEADER}")
-    target_compile_definitions(f3rt PRIVATE F3RT_SPRITE_BEHAVIOURS_HEADER="${F3_SPRITE_BEHAVIOURS_HEADER}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${F3_SPRITE_BEHAVIOURS_HEADER}")
-endif()
-
 find_package(Threads REQUIRED)
 target_link_libraries(f3rt
-    PUBLIC f3rt_abi f3rt_video_cxx
+    PUBLIC f3rt_abi f3rt_video_cxx f3rt_sprites_cxx
     PRIVATE Threads::Threads ZLIB::ZLIB cpp_yyjson::cpp_yyjson
 )
+# f3rt_video_cxx calls host adaptors defined in f3rt (bridge_video_host.cpp); record the mutual
+# static-library dependency so single-pass linkers (GNU ld.bfd) rescan libf3rt.a after it.
+target_link_libraries(f3rt_video_cxx PRIVATE f3rt)
 if(WIN32)
     target_link_libraries(f3rt PRIVATE ws2_32)
 endif()
@@ -355,6 +348,12 @@ if(BUILD_TESTING)
     add_test(NAME f3rt-video-cargo-test
         COMMAND ${CMAKE_COMMAND} -E env "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
             cargo test -p f3rt-video
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+
+    add_test(NAME f3rt-sprites-cargo-test
+        COMMAND ${CMAKE_COMMAND} -E env "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+            cargo test -p f3rt-sprites
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 

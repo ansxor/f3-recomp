@@ -418,9 +418,7 @@ int cmd_motion(int argc, char **argv) try {
     auto owner = runner::create_strict_machine(o.rom_dir, o.set, true);
     auto &m = *owner;
     if (o.sprites)
-        m.sprites = std::make_unique<f3rt::SpriteSystem>(
-            m, f3rt::SpriteSystem::game_table(), f3rt::SpriteSystem::game_units(),
-            f3rt::SpriteSystem::Options{});
+        m.sprites = std::make_unique<f3rt::SpriteSystem>(m, f3rt::SpriteSystem::game_table());
     f3rt::GpuVideo gpu(nullptr, o.video, m.graphics_assets.playfield_tiles(), m.graphics_assets.sprite_tiles(), false,
                        false, o.interp);
     if (!o.dump_dir.empty()) std::filesystem::create_directories(o.dump_dir);

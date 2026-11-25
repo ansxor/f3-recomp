@@ -2,59 +2,24 @@
 #include "f3rt/memory_map.hpp"
 #include "f3rt/machine.hpp"
 #include "f3rt/block_profile.h"
-#include "sprites/sprite_system.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 
 namespace {
 f3rt::Machine &machine(f3_cpu *cpu) { return *static_cast<f3rt::Machine *>(cpu->runtime); }
-// Emit-unit replay clone of the main CPU, or null for every other CPU (including the real one).
-// Sandbox CPUs never reach devices: every entry point below diverts them before side effects.
-f3rt::SpriteSystem *sandbox(f3_cpu *cpu) {
-    auto *sprites = machine(cpu).sprites.get();
-    return sprites && sprites->is_sandbox(cpu) ? sprites : nullptr;
-}
 uint32_t &stack(f3_cpu *cpu, uint16_t sr) {
     return !(sr & 0x2000) ? cpu->usp : (sr & 0x1000) ? cpu->msp : cpu->ssp;
 }
 } // namespace
 extern "C" {
-uint8_t f3_read8(f3_cpu *cpu, uint32_t a) {
-    if (auto *s = sandbox(cpu)) return uint8_t(s->sandbox_read(a, 1));
-    return machine(cpu).read8(a);
-}
-uint16_t f3_read16(f3_cpu *cpu, uint32_t a) {
-    if (auto *s = sandbox(cpu)) return uint16_t(s->sandbox_read(a, 2));
-    return machine(cpu).read16(a);
-}
-uint32_t f3_read32(f3_cpu *cpu, uint32_t a) {
-    if (auto *s = sandbox(cpu)) return s->sandbox_read(a, 4);
-    return machine(cpu).read32(a);
-}
-void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_write(a, v, 1);
-        return;
-    }
-    machine(cpu).write8(a, v);
-}
-void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_write(a, v, 2);
-        return;
-    }
-    machine(cpu).write16(a, v);
-}
-void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_write(a, v, 4);
-        return;
-    }
-    machine(cpu).write32(a, v);
-}
+uint8_t f3_read8(f3_cpu *cpu, uint32_t a) { return machine(cpu).read8(a); }
+uint16_t f3_read16(f3_cpu *cpu, uint32_t a) { return machine(cpu).read16(a); }
+uint32_t f3_read32(f3_cpu *cpu, uint32_t a) { return machine(cpu).read32(a); }
+void f3_write8(f3_cpu *cpu, uint32_t a, uint8_t v) { machine(cpu).write8(a, v); }
+void f3_write16(f3_cpu *cpu, uint32_t a, uint16_t v) { machine(cpu).write16(a, v); }
+void f3_write32(f3_cpu *cpu, uint32_t a, uint32_t v) { machine(cpu).write32(a, v); }
 uint8_t *f3_ram(f3_cpu *cpu, uint32_t a, uint32_t size) {
-    if (sandbox(cpu)) return nullptr;
     auto &m = machine(cpu);
     a &= 0xffffff;
     if (a - f3rt::RAM_BASE >= f3rt::RAM_END - f3rt::RAM_BASE) return nullptr;
@@ -74,10 +39,6 @@ void f3_set_sr(f3_cpu *cpu, uint16_t sr) {
     cpu->cc_op = 0;
 }
 void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::Sandbox::Abort::Exception);
-        return;
-    }
     if (vector > 255) {
         cpu->halted = 1;
         return;
@@ -95,24 +56,9 @@ void f3_exception(f3_cpu *cpu, unsigned vector, uint32_t return_pc) {
     if (format2) f3_write32(cpu, cpu->a[7] + 8, instruction_pc);
     cpu->pc = f3_read32(cpu, cpu->vbr + vector * 4);
 }
-void f3_reset_devices(f3_cpu *cpu) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::Sandbox::Abort::ResetDevices);
-        return;
-    }
-    machine(cpu).reset_devices();
-}
-void f3_idle(f3_cpu *cpu) {
-    if (sandbox(cpu)) return;
-    machine(cpu).idle();
-}
-int f3_boundary(f3_cpu *cpu) {
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::Sandbox::Abort::Stopped);
-        return 1;
-    }
-    return machine(cpu).boundary();
-}
+void f3_reset_devices(f3_cpu *cpu) { machine(cpu).reset_devices(); }
+void f3_idle(f3_cpu *cpu) { machine(cpu).idle(); }
+int f3_boundary(f3_cpu *cpu) { return machine(cpu).boundary(); }
 int f3_validate_main_rom(f3_cpu *cpu, size_t size, uint32_t crc) {
     if (!cpu || !cpu->runtime) return 0;
     const auto &rom = machine(cpu).roms.main;
@@ -197,10 +143,6 @@ int f3_register_ram_code(f3_cpu *cpu, const f3_ram_code_range *ranges, size_t co
 }
 int f3_dispatch(f3_cpu *cpu) {
     if (!cpu || !cpu->runtime || cpu->halted) return 0;
-    if (sandbox(cpu)) {
-        f3_boundary(cpu);
-        return 0;
-    } // replays run blocks directly, never via dispatch
     if (f3_boundary(cpu)) return !cpu->halted;
     auto &m = machine(cpu);
     // Trace must execute instruction by instruction; never defer T0/T1 in a block.
@@ -257,19 +199,7 @@ int f3_dispatch(f3_cpu *cpu) {
 #endif
     return f3_fallback(cpu);
 }
-int f3_fallback(f3_cpu *cpu) {
-    // Untranslated or excluded instruction inside a replay: abandon it.
-    if (auto *s = sandbox(cpu)) {
-        s->sandbox_abort(f3rt::Sandbox::Abort::Untranslated);
-        return 0;
-    }
-    return machine(cpu).fallback();
-}
-void f3_unit_enter(f3_cpu *cpu, uint32_t unit) {
-    if (auto *s = machine(cpu).sprites.get()) s->unit_enter(cpu, unit);
-}
-int f3_unit_exit(f3_cpu *cpu, uint32_t unit) {
-    auto *s = machine(cpu).sprites.get();
-    return s ? s->unit_exit(cpu, unit) : 0;
-}
+int f3_fallback(f3_cpu *cpu) { return machine(cpu).fallback(); }
+void f3_unit_enter(f3_cpu *, uint32_t) {}
+int f3_unit_exit(f3_cpu *, uint32_t) { return 0; }
 }

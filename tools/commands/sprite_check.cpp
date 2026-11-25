@@ -19,10 +19,9 @@ void print_json(const runner::SpriteCheckArgs &args, const runner::SpriteCheckRe
               << ",\"group_frames\":" << res.group_frames
               << ",\"group_entries\":" << res.group_entries
               << ",\"unresolved_entries\":" << res.unresolved_entries
-              << ",\"invocations\":" << res.invocations << ",\"spliced\":" << res.spliced
-              << ",\"aborted\":" << res.aborted << ",\"state_crc\":\"0x" << std::hex
-              << res.state_crc << std::dec << "\",\"error\":\"" << json_escape(res.error)
-              << "\"}\n";
+              << ",\"presented_entries\":" << res.presented_entries << ",\"state_crc\":\"0x"
+              << std::hex << res.state_crc << std::dec << "\",\"error\":\""
+              << json_escape(res.error) << "\"}\n";
 }
 
 } // namespace
@@ -48,13 +47,13 @@ int cmd_sprite_check(int argc, char **argv) try {
         else if (arg == "--compare-every") args.compare_every = std::stoull(value());
         else if (arg == "--seed") args.seed = std::stoull(value());
         else if (arg == "--no-inputs") args.inputs = false;
-        else if (arg == "--behaviour") args.behaviours.push_back(value());
+        else if (arg == "--enhance") args.enhancements.push_back(value());
         else if (arg == "--json") json_output = true;
         else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: f3rt-tool sprite-check [--rom-dir DIR] [--set SET] [--frames N] "
                    "[--compare-every N]\n"
-                   "       [--seed N] [--no-inputs] [--behaviour NAME]... [--json]\n"
+                   "       [--seed N] [--no-inputs] [--enhance NAME=on|off]... [--json]\n"
                    "Reports sprite-group coverage (groups per frame, grouped and unresolved "
                    "entries)\n"
                    "and exits nonzero unless emulated state is identical with sprite "

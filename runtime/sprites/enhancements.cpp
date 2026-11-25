@@ -1,82 +1,58 @@
 #include "sprites/enhancements.hpp"
+#include "f3rt/game_video.hpp"
 #include "renderer/game/flicker_hold.hpp"
-#include <algorithm>
+#include "renderer/game/full_detail.hpp"
 #include <ostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 
 namespace f3rt {
 
-EnhancementSet::EnhancementSet() {
-    for (const auto *behaviour : registered_sprite_behaviours())
-        m_entries.push_back({behaviour});
-    for (const auto &hold : game_config::flicker_holds)
-        m_entries.push_back({RenderEntry{
-            hold.name, "flicker_hold", {VideoBackend::Gpu},
-            [hold] { return std::make_unique<FlickerHoldStage>(hold); }}});
+EnhancementSet::EnhancementSet() : m_inner(rust_sprites::new_enhancement_set()) {
+    if (std::string_view(F3RT_DEFAULT_SET) == "commandw") {
+        m_inner->push_entry("full-detail", rust_sprites::EnhancementKind::FullDetail);
+        m_entries.push_back({"full-detail", "full_detail", [] {
+                                 return std::make_unique<FullDetailStage>(int(geometry::FIRST_LINE),
+                                                                          int(geometry::HEIGHT));
+                             }});
+    }
+    for (const auto &hold : game_config::flicker_holds) {
+        m_inner->push_entry(hold.name, rust_sprites::EnhancementKind::FlickerHold);
+        m_entries.push_back({hold.name, "flicker_hold",
+                             [hold] { return std::make_unique<FlickerHoldStage>(hold); }});
+    }
 }
 
 EnhancementSet &EnhancementSet::override_setting(std::string_view setting) {
-    const auto equals = setting.find('=');
-    const auto value = equals == setting.npos ? "" : setting.substr(equals + 1);
-    if (value != "on" && value != "off")
-        throw std::invalid_argument("--enhance expects NAME=on|off");
-    return set(setting.substr(0, equals), value == "on");
+    try {
+        m_inner->override_setting(rust::Str(setting.data(), setting.size()));
+    } catch (const rust::Error &error) {
+        throw std::invalid_argument(error.what());
+    }
+    return *this;
 }
 
 EnhancementSet &EnhancementSet::set(std::string_view name, bool enabled) {
-    const auto entry = std::ranges::find(m_entries, name, &Entry::name);
-    if (entry == m_entries.end())
-        throw std::invalid_argument("Unknown enhancement '" + std::string(name) + "'");
-    entry->enabled = enabled;
-    return *this;
-}
-
-std::string_view EnhancementSet::Entry::kind() const {
-    if (const auto *render = std::get_if<RenderEntry>(&target)) return render->kind;
-    return "behaviour";
-}
-
-std::string_view EnhancementSet::Entry::name() const {
-    if (const auto *render = std::get_if<RenderEntry>(&target)) return render->name;
-    return std::get<const SpriteBehaviour *>(target)->name;
-}
-
-EnhancementSet &EnhancementSet::enable_only_behaviours(std::span<const std::string> names) {
-    for (const auto &name : names) {
-        if (std::ranges::none_of(m_entries, [&](const Entry &entry) {
-                return std::holds_alternative<const SpriteBehaviour *>(entry.target) &&
-                       entry.name() == name;
-            }))
-            throw std::invalid_argument("Unknown --behaviour '" + name + "'");
+    try {
+        m_inner->set(rust::Str(name.data(), name.size()), enabled);
+    } catch (const rust::Error &error) {
+        throw std::invalid_argument(error.what());
     }
-    for (auto &entry : m_entries)
-        if (std::holds_alternative<const SpriteBehaviour *>(entry.target))
-            entry.enabled = std::ranges::find(names, entry.name()) != names.end();
     return *this;
 }
 
-void EnhancementSet::list(std::ostream &out) const {
-    for (const auto &entry : m_entries) out << entry.kind() << ' ' << entry.name() << '\n';
+bool EnhancementSet::enabled(std::string_view name, VideoBackend backend) const {
+    return m_inner->is_enabled(rust::Str(name.data(), name.size()), backend == VideoBackend::Gpu);
 }
 
-std::vector<const SpriteBehaviour *> EnhancementSet::behaviours() const {
-    std::vector<const SpriteBehaviour *> result;
-    for (const auto &entry : m_entries)
-        if (const auto *behaviour = std::get_if<const SpriteBehaviour *>(&entry.target);
-            entry.enabled && behaviour)
-            result.push_back(*behaviour);
-    return result;
-}
+void EnhancementSet::list(std::ostream &out) const { out << m_inner->list(); }
 
 RenderEnhancements EnhancementSet::render(VideoBackend backend) const {
     std::vector<std::unique_ptr<SpriteStage>> stages;
     for (const auto &entry : m_entries) {
-        const auto *render = std::get_if<RenderEntry>(&entry.target);
-        if (entry.enabled && render &&
-            std::ranges::find(render->backends, backend) != render->backends.end())
-            stages.push_back(render->make_stage());
+        if (enabled(entry.name, backend)) {
+            stages.push_back(entry.make_stage());
+        }
     }
     return RenderEnhancements(std::move(stages));
 }

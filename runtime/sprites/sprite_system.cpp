@@ -1,7 +1,7 @@
 #include "sprites/sprite_system.hpp"
 #include "f3rt/machine.hpp"
+#include "sprites/enhancements.hpp"
 #include <ostream>
-#include <utility>
 
 #if __has_include("sprite_groups.hpp")
 #include "sprite_groups.hpp"
@@ -10,147 +10,42 @@ namespace f3rt::sprite_groups {
 inline constexpr SpriteGroupTable table{};
 }
 #endif
-#include "generated_config/sprite_units.hpp"
 
 namespace f3rt {
 
 const SpriteGroupTable &SpriteSystem::game_table() { return sprite_groups::table; }
 
-const SpriteUnitTable &SpriteSystem::game_units() {
-    static const SpriteUnitTable TABLE{std::span<const EmitUnit *const>(sprite_units::all)};
-    return TABLE;
-}
-
 std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine) {
-    const auto behaviours = registered_sprite_behaviours();
-    return make_game_sprites(machine, {behaviours.begin(), behaviours.end()});
+    const EnhancementSet enhancements;
+    return make_game_sprites(machine, enhancements);
 }
 
 std::unique_ptr<SpriteSystem> make_game_sprites(Machine &machine,
-                                               std::vector<const SpriteBehaviour *> behaviours) {
+                                                const EnhancementSet &enhancements) {
     const auto &group_table = SpriteSystem::game_table();
-    const auto &unit_table = SpriteSystem::game_units();
-    if (group_table.writes.empty() && unit_table.units.empty()) return nullptr;
+    if (group_table.writes.empty()) return nullptr;
     SpriteSystem::Options options;
-    options.behaviours = std::move(behaviours);
-    return std::make_unique<SpriteSystem>(machine, group_table, unit_table, std::move(options));
+    options.full_detail = enhancements.enabled("full-detail", VideoBackend::Cpu) ||
+                          enhancements.enabled("full-detail", VideoBackend::Gpu);
+    return std::make_unique<SpriteSystem>(machine, group_table, options);
 }
 
-SpriteSystem::SpriteSystem(Machine &machine, const SpriteGroupTable &table,
-                           const SpriteUnitTable &units, Options options)
-    : m_tracker(machine, table), m_sandbox(machine, m_tracker),
-      m_replay(machine, m_sandbox, units, std::move(options.behaviours)) {}
+SpriteSystem::SpriteSystem(Machine &machine, const SpriteGroupTable &table, Options options)
+    : m_tracker(machine, table) {
+    if (options.full_detail) m_tracker.enable_commandw_full_detail();
+}
 
 void SpriteSystem::note_write(uint32_t address, unsigned width) {
-    if (const auto write = m_tracker.note_write(address, width)) m_replay.note_sprite_write(*write);
-}
-
-void SpriteSystem::unit_enter(f3_cpu *cpu, uint32_t unit) {
-    if (!m_sandbox.owns(cpu)) m_replay.unit_enter(cpu, unit);
-}
-
-int SpriteSystem::unit_exit(f3_cpu *cpu, uint32_t unit) {
-    return m_sandbox.owns(cpu) ? m_sandbox.unit_exit(unit) : m_replay.unit_exit(cpu, unit);
+    m_tracker.note_write(address, width);
 }
 
 SpritePresentation SpriteSystem::presentation() {
     m_tracker.count_ambiguity();
-    return {m_tracker.groups_active() ? m_tracker.slots() : std::span<const SpriteGroupSlot>{},
-            m_replay.present()};
+    return {m_tracker.groups_active() ? m_tracker.slots() : std::span<const SpriteGroupSlot>{}};
 }
 
-void SpriteSystem::frame_end() {
-    ++m_frames;
-    m_replay.frame_end();
-}
+void SpriteSystem::frame_end() { m_tracker.frame_end(); }
 
-void SpriteSystem::reset() {
-    m_replay.reset();
-    m_tracker.reset();
-}
-
-SpriteSystem::Report SpriteSystem::report() const {
-    const SpriteGroupTracker::Report writes = m_tracker.report();
-    const BehaviourReplay::Stats &replay = m_replay.stats();
-    Report r;
-    r.units = replay.units;
-    r.frames = m_frames;
-    r.sprite_writes = writes.sprite_writes;
-    r.grouped_writes = writes.grouped_writes;
-    r.unresolved_writes = writes.unresolved_writes;
-    r.first_unresolved_pc = writes.first_unresolved_pc;
-    r.generation_bumps = writes.generation_bumps;
-    r.periodic_resets = writes.periodic_resets;
-    r.ambiguous_key_frames = writes.ambiguous_key_frames;
-    r.ambiguous_keys = writes.ambiguous_keys;
-    r.ambiguous_slots = writes.ambiguous_slots;
-    r.max_ambiguous_keys_frame = writes.max_ambiguous_keys_frame;
-    r.max_ambiguous_slots_frame = writes.max_ambiguous_slots_frame;
-    r.top_bump_pcs = writes.top_bump_pcs;
-    r.classes = writes.classes;
-    r.class_writes = writes.class_writes;
-    r.invocations = replay.invocations;
-    r.replays = replay.replays;
-    r.completed = replay.completed;
-    r.aborted = replay.aborted;
-    r.spliced = replay.spliced;
-    r.unmatched_exits = replay.unmatched_exits;
-    r.discarded = replay.discarded;
-    r.no_native_skips = replay.no_native_skips;
-    return r;
-}
-
-void SpriteSystem::write_summary(std::ostream &out) const {
-    const SpriteGroupTracker::Report writes = m_tracker.report();
-    const BehaviourReplay::Stats &replay = m_replay.stats();
-    out << "sprite_groups: classes=" << writes.classes
-        << " invocations=" << replay.invocations << " replays=" << replay.replays
-        << " spliced=" << replay.spliced << " aborted=" << replay.aborted
-        << " frames=" << m_frames << '\n';
-}
-
-void SpriteSystem::write_report(std::ostream &out) const {
-    const SpriteGroupTracker::Report writes = m_tracker.report();
-    const BehaviourReplay::Stats &replay = m_replay.stats();
-    out << "sprite groups: write_rules=" << m_tracker.write_rules()
-        << " reset_rules=" << m_tracker.reset_rules() << " classes=" << writes.classes
-        << " frames=" << m_frames << " sprite_writes=" << writes.sprite_writes
-        << " grouped_writes=" << writes.grouped_writes
-        << " unresolved_writes=" << writes.unresolved_writes << " first_unresolved_pc=0x"
-        << std::hex << writes.first_unresolved_pc << std::dec << '\n';
-    out << "  ambiguity: key_frames=" << writes.ambiguous_key_frames
-        << " keys=" << writes.ambiguous_keys << " slots=" << writes.ambiguous_slots
-        << " max_keys_frame=" << writes.max_ambiguous_keys_frame
-        << " max_slots_frame=" << writes.max_ambiguous_slots_frame << '\n';
-    out << "  generations: bumps=" << writes.generation_bumps
-        << " periodic_suppressed=" << writes.periodic_resets << " top_pcs:";
-    for (const auto &pc : writes.top_bump_pcs)
-        out << " 0x" << std::hex << pc.pc << std::dec << "=" << pc.count;
-    out << '\n';
-    out << "  class writes:";
-    for (size_t cls = 1; cls < writes.class_writes.size(); ++cls)
-        if (writes.class_writes[cls])
-            out << " class" << cls << "=" << writes.class_writes[cls];
-    out << '\n';
-    out << "sprite groups replay: invocations=" << replay.invocations
-        << " replays=" << replay.replays << " completed=" << replay.completed
-        << " aborted=" << replay.aborted << " spliced=" << replay.spliced
-        << " unmatched_exits=" << replay.unmatched_exits << " discarded=" << replay.discarded
-        << " no_native_skips=" << replay.no_native_skips << '\n';
-    out << "  replacement entries:";
-    for (size_t cls = 0; cls < replay.replacement_classes.size(); ++cls)
-        if (replay.replacement_classes[cls])
-            out << " class" << cls << "=" << replay.replacement_classes[cls];
-    out << '\n';
-    for (const BehaviourReplay::UnitStats &unit : replay.units) {
-        out << "  unit " << unit.name << ": invocations=" << unit.invocations
-            << " replays=" << unit.replays << " completed=" << unit.completed
-            << " aborted=" << unit.aborted << " spliced=" << unit.spliced << '\n';
-        for (size_t i = 0; i < unit.aborts.size(); ++i)
-            if (unit.aborts[i])
-                out << "    abort " << Sandbox::abort_name(Sandbox::Abort(i)) << ": "
-                    << unit.aborts[i] << '\n';
-    }
-}
+void SpriteSystem::reset() { m_tracker.reset(); }
 
 }

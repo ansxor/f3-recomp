@@ -618,8 +618,8 @@ mod tests {
             render(&mut game, 1);
             render(&mut game, 2);
             let scene = game.scene_snapshot();
-            for (color, bytes) in scene.colors.iter().zip(palette.chunks_exact(4)) {
-                prop_assert_eq!(*color, u32::from_be_bytes(bytes.try_into().unwrap()) & 0xff_ffff);
+            for (color, bytes) in scene.colors.iter().zip(palette.as_chunks::<4>().0) {
+                prop_assert_eq!(*color, u32::from_be_bytes(*bytes) & 0xff_ffff);
             }
             let text_cell = OFFS_TEXTRAM_MAP + ((y as usize & 511) / 8 * 64 + (x as usize & 511) / 8) * 2;
             prop_assert_eq!(scene.text.map()[(text_cell - OFFS_TEXTRAM_MAP) / 2], u16::from_be_bytes(graphics[text_cell..text_cell + 2].try_into().unwrap()));

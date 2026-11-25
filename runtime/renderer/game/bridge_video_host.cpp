@@ -47,4 +47,12 @@ SpriteRoot SpriteGroupsHost::current_root(uint64_t key) const {
     return {root.key, root.x, root.y, root.pc};
 }
 
+FullDetailRecord SpriteGroupsHost::full_detail_record(uint64_t key, int32_t group_x,
+                                                      int32_t group_y) const {
+    if (!tracker) return {};
+    const auto rec = tracker->full_detail_record(key, group_x, group_y);
+    return {rec.valid, rec.flags0, rec.color, rec.desc, rec.screen_x, rec.screen_y, rec.zoom_x,
+            rec.zoom_y};
+}
+
 } // namespace f3rt::rust_video

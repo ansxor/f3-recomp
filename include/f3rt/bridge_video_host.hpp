@@ -13,6 +13,7 @@ namespace f3rt::rust_video {
 
 struct SceneSprite;
 struct SpriteRoot;
+struct FullDetailRecord;
 
 struct EnhancementsHost {
     RenderEnhancements *enhancements = nullptr;
@@ -33,6 +34,7 @@ struct ProbeHost {
 struct SpriteGroupsHost {
     const SpriteGroupTracker *tracker = nullptr;
     SpriteRoot current_root(uint64_t key) const;
+    FullDetailRecord full_detail_record(uint64_t key, int32_t group_x, int32_t group_y) const;
 };
 
 } // namespace f3rt::rust_video

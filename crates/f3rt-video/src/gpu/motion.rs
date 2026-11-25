@@ -672,9 +672,9 @@ fn valid_layer(layer: &SceneLayer, clips: &ClipRanges) -> bool {
     if !layer.enabled || layer.mosaic || clips.count == 0 {
         return false;
     }
-    for i in 0..clips.count {
-        let lo = i32::from(clips.ranges[i].left);
-        let hi = i32::from(clips.ranges[i].right);
+    for range in clips.as_slice() {
+        let lo = i32::from(range.left);
+        let hi = i32::from(range.right);
         if lo >= hi || lo < -4096 || hi > 4096 {
             return false;
         }

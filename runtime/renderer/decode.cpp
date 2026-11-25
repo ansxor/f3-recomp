@@ -4,11 +4,6 @@
 #include <vector>
 
 namespace f3rt {
-namespace {
-rust::Slice<const uint8_t> view_of(std::span<const uint8_t> span) {
-    return rust::Slice<const uint8_t>(span.data(), span.size());
-}
-} // namespace
 
 size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_height,
                           std::span<DecodedSpriteEntry> out, SpriteRamState &state, bool apply_flip,
@@ -17,12 +12,6 @@ size_t decode_sprite_list(const uint8_t *spriteram, int visible_y, int visible_h
     if (presentation) {
         for (const auto &group : presentation->groups)
             presented->push_group(group.key, group.x, group.y, group.pc);
-        for (const auto &splice : presentation->splices) {
-            presented->push_splice(splice.bank, splice.first, splice.last, view_of(splice.real),
-                                   view_of(splice.replacement));
-            for (const auto &group : splice.groups)
-                presented->push_splice_group(group.key, group.x, group.y, group.pc);
-        }
     }
 
     std::vector<rust_video::DecodedSpriteEntry> decoded(out.size());

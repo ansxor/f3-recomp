@@ -2,6 +2,7 @@
 
 pub(crate) mod clip;
 pub mod flicker_hold;
+pub mod full_detail;
 pub mod indexed_compositor;
 pub(crate) mod layer_visits;
 pub mod lines;

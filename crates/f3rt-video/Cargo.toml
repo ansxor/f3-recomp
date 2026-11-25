@@ -18,6 +18,7 @@ gpu = [
 ]
 
 [dependencies]
+f3rt-sprites = { path = "../f3rt-sprites" }
 sdl3-sys = { version = "0.7.3", optional = true, default-features = false, features = ["no-link"] }
 
 [dev-dependencies]

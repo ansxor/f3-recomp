@@ -6,4 +6,5 @@
 extern crate f3rt_audio;
 extern crate f3rt_eeprom;
 
+pub mod sprites;
 pub mod video;

@@ -294,11 +294,11 @@ impl GameLines {
             }
 
             // 5000 (clip planes low 8 bits)
-            for i in 0..4 {
+            for (i, clip) in line.clip.iter_mut().enumerate() {
                 if let Some(at) = latched_addr(&latches, 1, i, y) {
                     let clip_lows = read_be16(at);
                     set_clip_lower(
-                        &mut line.clip[i],
+                        clip,
                         (clip_lows & 0xff) as u8,
                         ((clip_lows >> 8) & 0xff) as u8,
                     );
@@ -310,18 +310,17 @@ impl GameLines {
                 let value = read_be16(at);
                 line.pivot.blend_select_v = value & 0x0200 != 0;
                 line.pivot.pivot_control = ((value >> 8) & 0xff) as u8;
-                for group in 0..4 {
+                for (group, sp) in line.sp.iter_mut().enumerate() {
                     let blend = ((value >> (group * 2)) & 3) as u8;
-                    line.sp[group].mix_value =
-                        (line.sp[group].mix_value & 0x3fff) | (u16::from(blend) << 14);
-                    line.sp[group].blend_mode = blend;
+                    sp.mix_value = (sp.mix_value & 0x3fff) | (u16::from(blend) << 14);
+                    sp.blend_mode = blend;
                 }
             }
             if let Some(at) = latched_addr(&latches, 2, 1, y) {
                 let blend_vals = read_be16(at);
-                for idx in 0..4 {
+                for (idx, blend) in line.blend.iter_mut().enumerate() {
                     let alpha = ((blend_vals >> (4 * idx)) & 0x0f) as u8;
-                    line.blend[idx] = 8.min(0x0f - alpha);
+                    *blend = 8.min(0x0f - alpha);
                 }
             }
             if let Some(at) = latched_addr(&latches, 2, 2, y) {
@@ -376,26 +375,26 @@ impl GameLines {
             }
 
             // 9000 (playfield palette add)
-            for i in 0..4 {
+            for (i, pf) in line.pf.iter_mut().enumerate() {
                 if let Some(at) = latched_addr(&latches, 5, i, y) {
-                    line.pf[i].pal_add = read_be16(at).wrapping_mul(16);
+                    pf.pal_add = read_be16(at).wrapping_mul(16);
                 }
             }
 
             // A000 (playfield rowscroll)
-            for i in 0..4 {
+            for (i, pf) in line.pf.iter_mut().enumerate() {
                 if let Some(at) = latched_addr(&latches, 6, i, y) {
                     let rowscroll = i32::from(read_be16(at)) << (8 - 6);
-                    line.pf[i].rowscroll = ((rowscroll as u32 & 0xffff_ff00)
+                    pf.rowscroll = ((rowscroll as u32 & 0xffff_ff00)
                         .wrapping_sub(rowscroll as u32 & 0xff))
                         as i32;
                 }
             }
 
             // B000 (playfield mixing info)
-            for i in 0..4 {
+            for (i, pf) in line.pf.iter_mut().enumerate() {
                 if let Some(at) = latched_addr(&latches, 7, i, y) {
-                    line.pf[i].set_mix(read_be16(at));
+                    pf.set_mix(read_be16(at));
                 }
             }
 
@@ -582,8 +581,7 @@ impl GameLines {
         let mut changed = false;
         let flipped = self.rows_flipped;
         for row in &mut self.rows {
-            for i in 0..4 {
-                let pf = &mut row.playfields[i];
+            for (i, pf) in row.playfields.iter_mut().enumerate() {
                 let source_y = (pf.source_y as u32 & 511) ^ if flipped { 511 } else { 0 };
                 let empty = !tiles.row_used(GameTiles::physical_map(i, pf.alt_map), source_y);
                 changed |= pf.empty_row != empty;
@@ -611,8 +609,7 @@ impl GameLines {
         let first_line = self.geometry.first_line() as usize;
         let end_line = self.geometry.end_line() as usize;
         for (y, row) in self.rows.iter_mut().enumerate() {
-            for i in 2..4 {
-                let pf = &mut row.playfields[i];
+            for (i, pf) in row.playfields.iter_mut().enumerate().skip(2) {
                 pf.full_res_offset = -1;
                 if !pf.alt_map || pf.empty_row || flipped {
                     continue;
