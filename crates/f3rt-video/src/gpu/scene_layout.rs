@@ -166,8 +166,8 @@ pub(super) fn uniform_words<const WORDS: usize, const BYTES: usize>(
 ) -> [u8; BYTES] {
     const { assert!(BYTES == WORDS * 4) };
     let mut bytes = [0; BYTES];
-    for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
-        chunk.copy_from_slice(&word.to_le_bytes());
+    for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+        *chunk = word.to_le_bytes();
     }
     bytes
 }

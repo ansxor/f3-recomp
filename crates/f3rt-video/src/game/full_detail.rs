@@ -355,7 +355,7 @@ mod tests {
                 let count = decode_emitted_entries(&emitted, 16..240, bias_x, bias_y, flipped, true, &mut decoded);
                 let parts: &[(u8, u8)] = if composite { &[(3, 1), (7, 2)] } else { &[(0, 0)] };
                 proptest::prop_assert_eq!(count, parts.len() * 4);
-                for ((color, xor), grid) in parts.iter().copied().zip(decoded[..count].chunks_exact(4)) {
+                for ((color, xor), grid) in parts.iter().copied().zip(decoded[..count].as_chunks::<4>().0) {
                     let part_flip = flip ^ xor;
                     let mut part = body(0, 0, part_flip);
                     part.projected.screen_x = x;

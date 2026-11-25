@@ -105,7 +105,7 @@
                 (builtins.filter (p: p ? outPath) (item.pkg.propagatedBuildInputs or [ ]));
             };
           in pkgs.lib.makeSearchPath "lib/ocaml/${pkgs.ocaml.version}/site-lib" (map (i: i.pkg) closure);
-        tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git pkgs.cargo pkgs.rustc pkgs.cxxbridge ];
+        tools = [ pkgs.cmake pkgs.ninja pkgs.pkg-config pkgs.glslang pkgs.spirv-cross pkgs.git pkgs.cargo pkgs.rustc ];
       };
 
       cmakeFlags = pkgs:

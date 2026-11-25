@@ -319,8 +319,8 @@ impl Grid<'_> {
                     )
                 };
                 let mut bytes = [0; 16];
-                for (dst, word) in bytes.chunks_exact_mut(2).zip(words) {
-                    dst.copy_from_slice(&word.to_be_bytes());
+                for (dst, word) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(words) {
+                    *dst = word.to_be_bytes();
                 }
                 out.push(EmittedEntry { bytes, group: tag });
             }

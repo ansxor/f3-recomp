@@ -394,14 +394,14 @@ impl RowEncoder<'_> {
 }
 
 fn encode_coefficients(coefficients: &InterpolationCoefficients, out: &mut [impl SceneWord]) {
-    for (row, encoded) in coefficients
-        .rows
-        .iter()
-        .zip(out.chunks_exact_mut(F3_SCENE_INTERP_ROW_STRIDE))
-    {
+    for (row, encoded) in coefficients.rows.iter().zip(
+        out.as_chunks_mut::<F3_SCENE_INTERP_ROW_STRIDE>()
+            .0
+            .iter_mut(),
+    ) {
         for (c, at) in row
             .iter()
-            .zip(encoded.chunks_exact_mut(F3_INTERP_PF_STRIDE))
+            .zip(encoded.as_chunks_mut::<F3_INTERP_PF_STRIDE>().0.iter_mut())
         {
             let palette_stride = if c.flags & F3_INTERP_FLAG_PALETTE as u8 != 0 {
                 u32::from(c.palette_stride)
@@ -452,12 +452,18 @@ fn write_words(
     }
     let alternate_maps = frame.tiles.map_count() > 4;
     for (layer, dest) in out[F3_SCENE_PF_CELLS..F3_SCENE_TEXT_CELLS]
-        .chunks_exact_mut(F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE)
+        .as_chunks_mut::<{ F3_SCENE_PF_LAYER_CELLS * F3_SCENE_PF_CELL_STRIDE }>()
+        .0
+        .iter_mut()
         .enumerate()
     {
         let cells = frame.tiles.cells(layer);
         let alt = (alternate_maps && layer >= 2).then(|| frame.tiles.cells(layer + 2));
-        for (i, (cell, dest)) in cells.iter().zip(dest.chunks_exact_mut(2)).enumerate() {
+        for (i, (cell, dest)) in cells
+            .iter()
+            .zip(dest.as_chunks_mut::<2>().0.iter_mut())
+            .enumerate()
+        {
             dest[0].store(*cell);
             dest[1].store(alt.map_or(0, |alt| alt[i]));
         }
@@ -469,14 +475,13 @@ fn write_words(
     }
 
     debug_assert_eq!(0x2000, F3_SCENE_GLYPH_WORDS * 4);
-    for (i, chunk) in frame.text.glyphs().chunks_exact(4).enumerate() {
-        out[F3_SCENE_GLYPHS + i]
-            .store(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for (i, chunk) in frame.text.glyphs().as_chunks::<4>().0.iter().enumerate() {
+        out[F3_SCENE_GLYPHS + i].store(u32::from_le_bytes(*chunk));
     }
     let pivot = frame.text.pivot();
     debug_assert_eq!(pivot.len(), F3_SCENE_PIVOT_WORDS * 4);
-    for (i, chunk) in pivot.chunks_exact(4).enumerate() {
-        out[F3_SCENE_PIVOT + i].store(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for (i, chunk) in pivot.as_chunks::<4>().0.iter().enumerate() {
+        out[F3_SCENE_PIVOT + i].store(u32::from_le_bytes(*chunk));
     }
     SceneWord::store_slice(
         &mut out[F3_SCENE_PALETTE..F3_SCENE_PALETTE + F3_SCENE_PALETTE_WORDS],
