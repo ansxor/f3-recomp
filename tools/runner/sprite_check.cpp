@@ -8,8 +8,8 @@
 #include "sprites/enhancements.hpp"
 #include "sprites/sprite_system.hpp"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -139,14 +139,12 @@ struct OffCheckpoint {
 SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *out) {
     SpriteCheckResult result;
     EnhancementSet enhancements;
-    enhancements.enable_only_behaviours(args.behaviours);
-    const SpriteSystem::Options options{enhancements.behaviours()};
+    for (const auto &setting : args.enhancements) enhancements.override_setting(setting);
     auto render_enhancements = enhancements.render(VideoBackend::Gpu);
     const bool has_stages = !render_enhancements.empty();
 
-    if (SpriteSystem::game_table().writes.empty() &&
-        (SpriteSystem::game_units().units.empty() || options.behaviours.empty())) {
-        result.error = "game declares no sprite groups and no behaviour anchor";
+    if (SpriteSystem::game_table().writes.empty()) {
+        result.error = "game declares no sprite groups";
         if (out) *out << "FAIL: " << result.error << '\n';
         return result;
     }
@@ -170,12 +168,11 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     }
 
     auto on = create_strict_machine(args.rom_dir, args.set, false);
-    on->sprites = std::make_unique<SpriteSystem>(*on, SpriteSystem::game_table(),
-                                                 SpriteSystem::game_units(), options);
-    const bool groups_available = on->sprites->groups_active();
+    on->sprites = make_game_sprites(*on, enhancements);
+    const bool groups_available = on->sprites && on->sprites->groups_active();
 
     Inputs inputs_on(args.seed);
-    uint64_t state_compares = 0, group_frames = 0, max_groups = 0;
+    uint64_t state_compares = 0, group_frames = 0, max_groups = 0, presented_entries = 0;
     FrameCoverage total;
     std::vector<SceneSprite> latched_sprites;
     SpriteRamState latch;
@@ -203,9 +200,12 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
             SpriteRamState presented_state = latch;
             const FrameCoverage coverage =
                 cover(*on, presentation, presented_state, has_stages ? &latched_sprites : nullptr);
-            if (has_stages)
-                render_enhancements.present(latched_sprites,
-                                            SpriteFrame::read(on->sprites->tracker(), false));
+            if (has_stages) {
+                render_enhancements.present(
+                    latched_sprites,
+                    SpriteFrame::read(on->sprites->tracker(), presented_state.flipscreen));
+                presented_entries += render_enhancements.sprites().size();
+            }
             latch = presented_state;
             total.groups += coverage.groups;
             total.entries += coverage.entries;
@@ -215,7 +215,8 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
         }
         if (compare) {
             if (has_stages && pre_render_crc != on->state_crc()) {
-                error = "flicker hold changed state_crc at frame " + std::to_string(frame + 1);
+                error = "render enhancements changed state_crc at frame " +
+                        std::to_string(frame + 1);
                 break;
             }
             const OffCheckpoint &off = off_checkpoints[checkpoint_index++];
@@ -235,7 +236,6 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
         }
     }
 
-    const auto report = on->sprites->report();
     if (out) {
         on->sprites->write_report(*out);
         render_enhancements.report(*out);
@@ -247,10 +247,6 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
         failed = true;
         if (out) *out << "FAIL: no sprite group resolved in any frame\n";
     }
-    if (!failed && !options.behaviours.empty() && report.spliced == 0) {
-        failed = true;
-        if (out) *out << "FAIL: behaviours enabled but no splice produced\n";
-    }
     if (out) {
         *out << "  group coverage: frames_with_groups=" << group_frames
              << " mean_groups_all_frames="
@@ -258,7 +254,8 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
              << " mean_groups_active_frames="
              << (group_frames ? double(total.groups) / double(group_frames) : 0.0)
              << " max_groups_frame=" << max_groups << " grouped_entries=" << total.entries
-             << " unresolved_entries=" << total.unresolved << '\n';
+             << " unresolved_entries=" << total.unresolved
+             << " presented_entries=" << presented_entries << '\n';
     }
     result.passed = !failed;
     result.frames = on->frame;
@@ -270,9 +267,7 @@ SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *ou
     result.group_entries = total.entries;
     result.unresolved_entries = total.unresolved;
     result.max_groups_frame = max_groups;
-    result.invocations = report.invocations;
-    result.spliced = report.spliced;
-    result.aborted = report.aborted;
+    result.presented_entries = presented_entries;
     result.state_crc = on->state_crc();
     result.error = error;
     if (out) {

@@ -53,73 +53,19 @@ impl Default for SpriteRamState {
     }
 }
 
-/// Entries per sprite bank.
-pub const SPRITE_ENTRIES: u16 = 0x400;
-/// Slots across both banks.
-pub const SPRITE_SLOTS: usize = 0x800;
-
-pub const fn sprite_slot_for(offset: u32) -> u16 {
-    (((offset >> 15) & 1) * SPRITE_ENTRIES as u32 + ((offset & 0x7fff) >> 4)) as u16
-}
-
-pub const fn sprite_slot_listed(offset: u32) -> bool {
-    ((offset & 0x7fff) >> 4) < SPRITE_ENTRIES as u32
-}
-
-pub const fn pack_group_key(base: u32, group_class: u32, gen_x: u16, gen_y: u16) -> u64 {
-    ((base & 0x00ff_ffff) as u64) << 40
-        | ((group_class & 0xff) as u64) << 32
-        | (gen_x as u64) << 16
-        | gen_y as u64
-}
-
-pub const fn group_key_base(key: u64) -> u32 {
-    ((key >> 40) & 0x00ff_ffff) as u32
-}
-
-pub const fn group_key_class(key: u64) -> u32 {
-    ((key >> 32) & 0xff) as u32
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SpriteGroupSlot {
-    pub key: u64,
-    pub x: i32,
-    pub y: i32,
-    pub pc: u32,
-}
-
-impl SpriteGroupSlot {
-    pub fn after_write(&self, entry_byte: u32, writer: &Self) -> Self {
-        if writer.key != 0 {
-            return *writer;
-        }
-        if (4..8).contains(&entry_byte) {
-            return Self::default();
-        }
-        *self
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SpriteSplice<'a> {
-    pub bank: bool, // false: 0x600000 half, true: 0x608000 half
-    pub first: u16, // inclusive entry index within the bank (0..0x3ff)
-    pub last: u16,
-    pub real: &'a [u8],
-    pub replacement: &'a [u8], // n * 16 raw entries; jump words inside are ignored
-    pub groups: &'a [SpriteGroupSlot],
-}
+pub use f3rt_sprites::presentation::{
+    SPRITE_ENTRIES, SPRITE_SLOTS, SpriteGroupSlot, group_key_base, group_key_class, pack_group_key,
+    sprite_slot_for, sprite_slot_listed,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SpritePresentation<'a> {
     pub groups: &'a [SpriteGroupSlot],
-    pub splices: &'a [SpriteSplice<'a>],
 }
 
 impl SpritePresentation<'_> {
     pub fn empty(&self) -> bool {
-        self.groups.is_empty() && self.splices.is_empty()
+        self.groups.is_empty()
     }
 }
 
@@ -238,10 +184,10 @@ impl DecodeState<'_> {
             self.color = (w4 & 0xff) as u8;
         }
 
-        if spritecont & 0x08 == 0 || group.key != 0 {
-            self.block_group = group;
-        } else {
+        if self.multi || ((spritecont & 0xf0) != 0 && group.key == 0) {
             group = self.block_group;
+        } else {
+            self.block_group = group;
         }
 
         let scroll_mode = ((w2 >> 12) & 0x0f) as u8;
@@ -344,8 +290,6 @@ pub fn decode_sprite_list(
         apply_flip,
     };
     let empty_groups: &[SpriteGroupSlot] = &[];
-    let empty_splices: &[SpriteSplice<'_>] = &[];
-    let splices = presentation.map_or(empty_splices, |p| p.splices);
     let groups = presentation.map_or(empty_groups, |p| p.groups);
 
     let mut total_sprites = 0;
@@ -359,44 +303,51 @@ pub fn decode_sprite_list(
         };
         let entry_start = bank_offset as usize + offs as usize * 16;
         let spr = &spriteram[entry_start..entry_start + 16];
-
-        let mut hit: Option<&SpriteSplice<'_>> = None;
-        for sp in splices {
-            if sp.bank != ctx.ram.bank || i32::from(sp.first) != offs {
-                continue;
-            }
-            let n = i32::from(sp.last) - i32::from(sp.first) + 1;
-            if sp.last < sp.first
-                || sp.last >= 0x400
-                || sp.real.len() != n as usize * 16
-                || &spriteram[entry_start..entry_start + n as usize * 16] != sp.real
-            {
-                break;
-            }
-            hit = Some(sp);
+        let slot = (if ctx.ram.bank { 0x400 } else { 0 }) + offs as usize;
+        let group = groups.get(slot).copied().unwrap_or_default();
+        if !ctx.step(spr, Some(&mut offs), group) {
             break;
         }
-        if let Some(hit) = hit {
-            let n = i32::from(hit.last) - i32::from(hit.first) + 1;
-            let reps = hit.replacement.len() / 16;
-            for k in 0..reps {
-                let group = hit.groups.get(k).copied().unwrap_or_default();
-                let entry = &hit.replacement[k * 16..k * 16 + 16];
-                ctx.step(entry, None, group);
-            }
-            total_sprites += (n - 1) as usize;
-            offs = i32::from(hit.last) + 1;
-            continue;
-        }
-
-        {
-            let slot = (if ctx.ram.bank { 0x400 } else { 0 }) + offs as usize;
-            let group = groups.get(slot).copied().unwrap_or_default();
-            if !ctx.step(spr, Some(&mut offs), group) {
-                break;
-            }
-        }
         offs += 1;
+    }
+    ctx.count
+}
+
+/// Decode a sequence of standalone emitted 16-byte sprite entries using the exact same
+/// hardware state machine (`DecodeState`) with a fixed global scroll bias `(bias_x, bias_y)`.
+pub fn decode_emitted_entries(
+    entries: &[f3rt_sprites::commandw::EmittedEntry],
+    visible: std::ops::Range<i32>,
+    bias_x: i16,
+    bias_y: i16,
+    flipscreen: bool,
+    apply_flip: bool,
+    out: &mut [DecodedSpriteEntry],
+) -> usize {
+    let mut ram = SpriteRamState {
+        flipscreen,
+        ..SpriteRamState::default()
+    };
+    let mut ctx = DecodeState {
+        x: SpriteAxis {
+            global: bias_x,
+            ..SpriteAxis::default()
+        },
+        y: SpriteAxis {
+            global: bias_y,
+            ..SpriteAxis::default()
+        },
+        color: 0,
+        multi: false,
+        count: 0,
+        block_group: SpriteGroupSlot::default(),
+        out,
+        ram: &mut ram,
+        visible,
+        apply_flip,
+    };
+    for entry in entries {
+        ctx.step(&entry.bytes, None, entry.group);
     }
     ctx.count
 }
@@ -494,8 +445,10 @@ mod tests {
     #[test]
     fn groups_follow_block_heads_and_empty_presentation_is_neutral() {
         let mut ram = vec![0; 0x10000];
+        // Entry 0 (head, multi=1 for next), entry 1 (last tile of block, multi=0 for next),
+        // entry 2 (independent head).
         write_entry(&mut ram, false, 0, [1, 0, 100, 50, 0x0800, 0, 0]);
-        write_entry(&mut ram, false, 1, [2, 0, 120, 50, 0x0800, 0, 0]);
+        write_entry(&mut ram, false, 1, [2, 0, 120, 50, 0x7400, 0, 0]);
         write_entry(&mut ram, false, 2, [3, 0, 200, 60, 0, 0, 0]);
         let decode = |presentation: Option<&SpritePresentation<'_>>| {
             let mut out = [DecodedSpriteEntry::default(); 4];
@@ -512,6 +465,7 @@ mod tests {
         };
         let baseline = decode(None);
         assert_eq!(baseline[0].x, 100 * 256);
+        assert_eq!(baseline[2].x, 200 * 256);
         assert_eq!(baseline[2].tile, 3);
         assert_eq!(decode(Some(&SpritePresentation::default())), baseline);
 
@@ -520,6 +474,12 @@ mod tests {
             x: 100 * 256,
             y: 50 * 256,
             pc: 0x1000,
+        };
+        let stale = SpriteGroupSlot {
+            key: 99,
+            x: 999 * 256,
+            y: 999 * 256,
+            pc: 0x9999,
         };
         let independent = SpriteGroupSlot {
             key: 44,
@@ -536,145 +496,64 @@ mod tests {
         }
         assert_eq!(
             decode(Some(&SpritePresentation {
-                groups: &[head, SpriteGroupSlot::default(), independent],
-                splices: &[]
+                groups: &[head, stale, independent],
             })),
             expected
         );
     }
 
-    #[test]
-    fn splice_preserves_chaining_and_matches_its_bank_and_source() {
-        let mut ram = vec![0; 0x10000];
-        write_entry(&mut ram, false, 0, [1, 0, 100, 50, 0, 0, 0]);
-        write_entry(&mut ram, false, 1, [2, 0, 120, 50, 0, 0, 0]);
-        write_entry(&mut ram, false, 2, [3, 0, 200, 60, 0, 0, 0]);
-        let mut replacement = [0; 32];
-        write_entry(
-            &mut replacement,
-            false,
-            0,
-            [9, 0x0080, 150, 70, 0x0800, 0, 0],
-        );
-        write_entry(&mut replacement, false, 1, [10, 0, 0, 0, 0xf000, 0, 0x8001]);
-        let groups = [
-            SpriteGroupSlot {
-                key: 42,
-                x: 150 * 256,
-                y: 70 * 256,
-                pc: 0x1000,
-            },
-            SpriteGroupSlot {
-                key: 43,
-                x: 151 * 256,
-                y: 71 * 256,
-                pc: 0x2000,
-            },
-        ];
-        let splice = SpriteSplice {
-            bank: false,
-            first: 0,
-            last: 1,
-            real: &ram[..32],
-            replacement: &replacement,
-            groups: &groups,
-        };
-        let decode = |source: &[u8], splice| {
-            let mut out = [DecodedSpriteEntry::default(); 4];
-            let n = decode_sprite_list(
-                source,
-                24..256,
-                &mut out,
-                &mut SpriteRamState::default(),
-                false,
-                Some(&SpritePresentation {
-                    groups: &[],
-                    splices: &[splice],
-                }),
-            );
-            out[..n].to_vec()
-        };
-        let out = decode(&ram, splice);
-        assert_eq!(
-            out.iter().map(|entry| entry.tile).collect::<Vec<_>>(),
-            [9, 10, 3]
-        );
-        assert_eq!((out[0].scale_x, out[1].scale_x), (128, 128));
-        assert_eq!((out[1].x, out[1].y), (150 * 256 + 128 * 16, 86 * 256));
-        for (entry, group) in out.iter().zip(groups) {
-            assert_eq!(
-                (entry.group, entry.group_x, entry.group_y, entry.group_pc),
-                (group.key, group.x, group.y, group.pc)
-            );
-        }
-        assert_eq!(
-            decode(
-                &ram,
-                SpriteSplice {
-                    bank: true,
-                    ..splice
-                }
-            )[0]
-            .tile,
-            1
-        );
-        assert_eq!(
-            decode(
-                &ram,
-                SpriteSplice {
-                    replacement: &[],
-                    ..splice
-                }
-            ),
-            out[2..]
-        );
-        let mut stale = ram.clone();
-        write_entry(&mut stale, false, 1, [77, 0, 120, 50, 0, 0, 0]);
-        assert_eq!(
-            decode(&stale, splice)
-                .iter()
-                .map(|entry| entry.tile)
-                .collect::<Vec<_>>(),
-            [1, 77, 3]
-        );
-    }
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(384))]
 
-    #[test]
-    fn splice_replaces_entries() {
-        let mut ram = vec![0u8; 0x10000];
-        write_entry(&mut ram, false, 0, [0x1111, 0, 0, 0, 0, 0, 0x8000]);
-        let real = ram[0..32].to_vec();
-        let mut replacement = vec![0u8; 32];
-        let base = 0;
-        let entry: [u16; 7] = [1, 0, 100, 200, 0, 0, 0];
-        for (i, word) in entry.iter().enumerate() {
-            replacement[base + i * 2..base + i * 2 + 2].copy_from_slice(&word.to_be_bytes());
+        #[test]
+        fn multi_tile_group_matches_logical_blocks(
+            blocks in proptest::collection::vec((1usize..=8, proptest::bool::ANY, 0u8..4), 0..30),
+            bank in proptest::bool::ANY,
+            flipscreen in proptest::bool::ANY,
+        ) {
+            let mut ram = vec![0; 0x10000];
+            let mut groups = vec![SpriteGroupSlot::default(); SPRITE_SLOTS];
+            let mut expected = Vec::new();
+            let bank_start = if bank { usize::from(SPRITE_ENTRIES) } else { 0 };
+            for (block, (count, resolved, stale)) in blocks.into_iter().enumerate() {
+                let head = if resolved {
+                    SpriteGroupSlot { key: block as u64 + 1, x: 127, y: -345, pc: 99 + block as u32 }
+                } else {
+                    SpriteGroupSlot::default()
+                };
+                for member in 0..count {
+                    let entry = expected.len();
+                    let tile = entry as u16 + 1;
+                    let control = match (member == 0, member + 1 == count) {
+                        (true, true) => 0x0000,
+                        (true, false) => 0x0800,
+                        (false, true) => 0x7400,
+                        (false, false) => 0x7c00,
+                    };
+                    write_entry(&mut ram, bank, entry, [tile, 0xc080, 260, 100, control, 0, 0]);
+                    groups[bank_start + entry] = if member == 0 {
+                        head
+                    } else if stale & (1 << (member % 2)) != 0 {
+                        SpriteGroupSlot { key: 900 + entry as u64, x: -1, y: 17, pc: 65 }
+                    } else {
+                        SpriteGroupSlot::default()
+                    };
+                    expected.push((u32::from(tile), head));
+                }
+            }
+            let end = expected.len();
+            write_entry(&mut ram, bank, end, [0, 0, 0, 0, 0, 0, 0x8000 | end as u16]);
+            let mut out = vec![DecodedSpriteEntry::default(); end + 1];
+            let count = decode_sprite_list(
+                &ram, 0..256, &mut out,
+                &mut SpriteRamState { bank, flipscreen, ..Default::default() }, true,
+                Some(&SpritePresentation { groups: &groups }),
+            );
+            let actual: Vec<_> = out[..count].iter().map(|tile| (tile.tile, SpriteGroupSlot {
+                key: tile.group, x: tile.group_x, y: tile.group_y, pc: tile.group_pc,
+            })).collect();
+            proptest::prop_assert_eq!(actual, expected);
         }
-        let splice = SpriteSplice {
-            bank: false,
-            first: 0,
-            last: 1,
-            real: &real,
-            replacement: &replacement,
-            groups: &[],
-        };
-        let presentation = SpritePresentation {
-            groups: &[],
-            splices: &[splice],
-        };
-        let mut out = [DecodedSpriteEntry::default(); 4];
-        let mut state = SpriteRamState::default();
-        let count = decode_sprite_list(
-            &ram,
-            24..256,
-            &mut out,
-            &mut state,
-            false,
-            Some(&presentation),
-        );
-        // The second replacement entry is all zeros (tile 0), so only the first decodes.
-        assert_eq!(count, 1);
-        assert_eq!(out[0].tile, 1);
     }
 
     #[test]

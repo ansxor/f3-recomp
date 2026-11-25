@@ -15,7 +15,7 @@ struct SpriteCheckArgs {
     uint64_t compare_every = 60;
     uint64_t seed = 12345;
     bool inputs = true;
-    std::vector<std::string> behaviours;
+    std::vector<std::string> enhancements;
 };
 
 struct SpriteCheckResult {
@@ -29,15 +29,13 @@ struct SpriteCheckResult {
     uint64_t group_entries = 0;
     uint64_t unresolved_entries = 0;
     uint64_t max_groups_frame = 0;
-    uint64_t invocations = 0;
-    uint64_t spliced = 0;
-    uint64_t aborted = 0;
+    uint64_t presented_entries = 0;
     uint32_t state_crc = 0;
     std::string error;
 };
 
-// Runs the game with render-only sprite groups and checks that emulated state (steps,
-// native block count, state CRC) is identical with groups off; reports group coverage.
+// Runs the game with render-only sprite groups and presentation enhancements and checks that
+// emulated state (steps, native block count, state CRC) is identical with groups off.
 SpriteCheckResult run_sprite_check(const SpriteCheckArgs &args, std::ostream *out = nullptr);
 
 } // namespace f3rt::runner

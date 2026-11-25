@@ -15,5 +15,6 @@ gpu = ["f3rt-video/gpu"]
 [dependencies]
 f3rt-audio = { path = "../f3rt-audio" }
 f3rt-eeprom = { path = "../f3rt-eeprom" }
+f3rt-sprites = { path = "../f3rt-sprites" }
 f3rt-video = { path = "../f3rt-video" }
 cxx = "1.0"

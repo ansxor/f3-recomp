@@ -35,12 +35,6 @@ rust::Box<rust_video::SpritePresentation> rust_presentation(const SpritePresenta
     if (!source) return presented;
     for (const auto &group : source->groups)
         presented->push_group(group.key, group.x, group.y, group.pc);
-    for (const auto &splice : source->splices) {
-        presented->push_splice(splice.bank, splice.first, splice.last, view_of(splice.real),
-                               view_of(splice.replacement));
-        for (const auto &group : splice.groups)
-            presented->push_splice_group(group.key, group.x, group.y, group.pc);
-    }
     return presented;
 }
 

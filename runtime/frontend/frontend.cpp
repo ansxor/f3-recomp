@@ -660,7 +660,7 @@ int main(int argc, char **argv) try {
     auto reset_oracle = [&] {
         if (oracle_verifier) oracle_verifier->reset();
     };
-    m.sprites = f3rt::make_game_sprites(m, enhancements.behaviours());
+    m.sprites = f3rt::make_game_sprites(m, enhancements);
     if (!dumpdir.empty()) {
         m.sprite_writers = std::make_unique<std::array<uint32_t, 0x1000>>();
     }

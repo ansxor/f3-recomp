@@ -184,6 +184,7 @@ dependencies = [
  "cxx",
  "f3rt-audio",
  "f3rt-eeprom",
+ "f3rt-sprites",
  "f3rt-video",
 ]
 
@@ -196,9 +197,17 @@ name = "f3rt-eeprom"
 version = "0.1.0"
 
 [[package]]
+name = "f3rt-sprites"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "f3rt-video"
 version = "0.1.0"
 dependencies = [
+ "f3rt-sprites",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",

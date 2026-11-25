@@ -1,0 +1,10 @@
+[package]
+name = "f3rt-sprites"
+version = "0.1.0"
+edition = "2024"
+description = "Taito F3 render-only sprite grouping, presentation metadata, and enhancements"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

@@ -49,6 +49,10 @@ The headless build excludes SDL and the GPU backend.
 or a GPU. The same suite runs as CTest's `f3rt-video-cargo-test`; C++ integration and GPU parity
 remain in the runtime tests. `proptest` is a Rust dev-dependency only.
 
+`cargo test -p f3rt-sprites` checks grouping and draw-time LoD capture against stateful
+reference models. The renderer suite also checks emitted grids through the display-list
+decoder. For Command War ROM parity, run `f3rt-tool sprite-check --rom-dir <dir> --frames 6000`.
+
 ## Running
 
 ```sh

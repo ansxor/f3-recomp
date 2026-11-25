@@ -6,8 +6,7 @@ use crate::decode::{DecodedSpriteEntry, SpritePresentation, SpriteRamState, deco
 use crate::game::row_bits::{PenRow, extract_columns, for_each_run, set_columns};
 use crate::game::row_workers::COMPOSE_CHUNK_ROWS;
 use crate::game::scene::{
-    LayerId, MAX_HARDWARE_SPRITES, MAX_PRESENTED_SPRITES, SceneSprite, VideoRam, sprite_layer,
-    wrap_tile_index,
+    LayerId, MAX_HARDWARE_SPRITES, SceneSprite, VideoRam, sprite_layer, wrap_tile_index,
 };
 use crate::memory_map::OFFS_SPRITERAM;
 use crate::state_io::{CanonicalRecord, CanonicalSceneSprite, StateReader, StateWriter};
@@ -838,16 +837,6 @@ pub struct GameSprites {
     reg_pen_mask: u8,
     reg_trails: bool,
     reg_bank: bool,
-    presented_submitted: Vec<SceneSprite>,
-    presented_current: Vec<SceneSprite>,
-    presented_submitted_count: usize,
-    presented_current_count: usize,
-    presented_submitted_valid: bool,
-    presented_current_valid: bool,
-    /// The last decode filled the presented list to capacity.
-    presented_overflow: bool,
-
-    presented_scratch: Vec<DecodedSpriteEntry>,
     decoded: Vec<DecodedSpriteEntry>,
 }
 
@@ -870,14 +859,6 @@ impl GameSprites {
             reg_pen_mask: 15,
             reg_trails: false,
             reg_bank: false,
-            presented_submitted: Vec::new(),
-            presented_current: Vec::new(),
-            presented_submitted_count: 0,
-            presented_current_count: 0,
-            presented_submitted_valid: false,
-            presented_current_valid: false,
-            presented_overflow: false,
-            presented_scratch: vec![DecodedSpriteEntry::default(); MAX_PRESENTED_SPRITES],
             decoded: vec![DecodedSpriteEntry::default(); MAX_HARDWARE_SPRITES],
         };
         sprites.reset();
@@ -897,8 +878,6 @@ impl GameSprites {
         self.reg_pen_mask = 15;
         self.reg_trails = false;
         self.reg_bank = false;
-        self.presented_submitted_valid = false;
-        self.presented_current_valid = false;
     }
 
     /// Decode the sprite display list from VRAM into the next submission.
@@ -910,23 +889,14 @@ impl GameSprites {
             extra_planes: self.reg_pen_mask >> 4,
             pen_mask: self.reg_pen_mask,
         };
-        let initial = state;
 
-        let groups_presentation = SpritePresentation {
-            groups: presentation.groups,
-            splices: &[],
-        };
         let count = decode_sprite_list(
             &vram.graphics[OFFS_SPRITERAM..],
             self.geometry.first_line() as i32..self.geometry.end_line() as i32,
             &mut self.decoded,
             &mut state,
             true,
-            if groups_presentation.groups.is_empty() {
-                None
-            } else {
-                Some(&groups_presentation)
-            },
+            (!presentation.empty()).then_some(&presentation),
         );
 
         for ((staged, submitted), entry) in self
@@ -941,33 +911,6 @@ impl GameSprites {
         }
         self.submitted_count = count;
         self.staging_count = 0;
-
-        // Render-only presented list with splices; capacity-truncated like the canonical one.
-        self.presented_submitted_valid = !presentation.splices.is_empty();
-        if self.presented_submitted_valid {
-            let mut presented_state = initial;
-            let n = decode_sprite_list(
-                &vram.graphics[OFFS_SPRITERAM..],
-                self.geometry.first_line() as i32..self.geometry.end_line() as i32,
-                &mut self.presented_scratch,
-                &mut presented_state,
-                true,
-                Some(&presentation),
-            );
-            self.presented_submitted
-                .resize(MAX_PRESENTED_SPRITES, SceneSprite::default());
-            for (sprite, entry) in self
-                .presented_submitted
-                .iter_mut()
-                .zip(&self.presented_scratch[..n])
-            {
-                *sprite = scene_sprite(entry);
-            }
-            self.presented_submitted_count = n;
-            self.presented_overflow = n == MAX_PRESENTED_SPRITES;
-        } else {
-            self.presented_overflow = false;
-        }
 
         self.reg_flipped = state.flipscreen;
         self.reg_pen_mask = state.pen_mask;
@@ -1007,15 +950,6 @@ impl GameSprites {
         self.current_count = self.submitted_count;
 
         self.current[..self.current_count].copy_from_slice(&self.submitted[..self.current_count]);
-
-        self.presented_current_valid = self.presented_submitted_valid;
-        if self.presented_current_valid {
-            self.presented_current
-                .resize(MAX_PRESENTED_SPRITES, SceneSprite::default());
-            self.presented_current_count = self.presented_submitted_count;
-            self.presented_current[..self.presented_current_count]
-                .copy_from_slice(&self.presented_submitted[..self.presented_current_count]);
-        }
     }
 
     pub fn raster(&self, assets: &[u8], output: &mut [u16], options: GameVideoOptions) {
@@ -1046,12 +980,8 @@ impl GameSprites {
         &self.current[..self.current_count]
     }
 
-    /// Render-only: the latched sprite list with unit splices applied.
     pub fn presented_sprites(&self) -> &[SceneSprite] {
-        if !self.presented_current_valid {
-            return self.sprites();
-        }
-        &self.presented_current[..self.presented_current_count]
+        self.sprites()
     }
 
     pub fn flipped(&self) -> bool {
@@ -1116,14 +1046,12 @@ impl GameSprites {
         }
     }
 
-    /// The last decode produced a presented list (splices).
     pub fn presented_valid(&self) -> bool {
-        self.presented_submitted_valid
+        false
     }
 
-    /// The last decode hit `MAX_PRESENTED_SPRITES`.
     pub fn presented_overflow(&self) -> bool {
-        self.presented_overflow
+        false
     }
 
     pub fn pen_mask(&self) -> u8 {
@@ -1192,8 +1120,6 @@ impl GameSprites {
         self.reg_pen_mask = reader.read_u8()?;
         self.reg_trails = reader.read_u8()? != 0;
         self.reg_bank = reader.read_u8()? != 0;
-        self.presented_submitted_valid = false;
-        self.presented_current_valid = false;
         Ok(())
     }
 
@@ -1500,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn presented_list_applies_splices_without_touching_the_canonical_list() {
+    fn presented_list_keeps_group_tags_without_changing_serialized_state() {
         let mut sources = Sources::new();
         sources.graphics[1] = 1;
         sources.graphics[5] = 50;
@@ -1511,46 +1437,26 @@ mod tests {
         canonical.latch(&[]);
         assert_eq!(canonical.sprites().len(), 1);
         assert_eq!(canonical.presented_sprites(), canonical.sprites());
-        assert!(!canonical.presented_valid());
 
-        let real = sources.graphics[..16].to_vec();
-        let mut replacement = real.clone();
-        replacement[1] = 2;
         let groups = [crate::decode::SpriteGroupSlot {
             key: 42,
             x: 1,
             y: 2,
             pc: 3,
         }];
-        let splices = [crate::decode::SpriteSplice {
-            bank: false,
-            first: 0,
-            last: 0,
-            real: &real,
-            replacement: &replacement,
-            groups: &groups,
-        }];
-        let presentation = SpritePresentation {
-            groups: &[],
-            splices: &splices,
-        };
-        let mut enhanced = GameSprites::new(&VideoConfig::default());
-        enhanced.decode(&sources.vram(), presentation);
-        enhanced.latch(&[]);
+        let mut grouped = GameSprites::new(&VideoConfig::default());
+        grouped.decode(&sources.vram(), SpritePresentation { groups: &groups });
+        grouped.latch(&[]);
 
-        assert!(enhanced.presented_valid());
-        assert!(!enhanced.presented_overflow());
-        assert_eq!(enhanced.presented_sprites().len(), 1);
-        assert_eq!(enhanced.presented_sprites()[0].tile, 2);
-        assert_eq!(enhanced.presented_sprites()[0].group, 42);
-        assert_eq!(enhanced.sprites(), canonical.sprites());
+        assert_eq!(grouped.sprites().len(), 1);
+        assert_eq!(grouped.sprites()[0].group, 42);
 
         let mut before = vec![0u8; canonical.state_size()];
         let mut writer = StateWriter::new(&mut before);
         canonical.save_state(&mut writer).unwrap();
-        let mut after = vec![0u8; enhanced.state_size()];
+        let mut after = vec![0u8; grouped.state_size()];
         let mut writer = StateWriter::new(&mut after);
-        enhanced.save_state(&mut writer).unwrap();
+        grouped.save_state(&mut writer).unwrap();
         assert_eq!(
             after, before,
             "presentation never reaches the canonical snapshot"
