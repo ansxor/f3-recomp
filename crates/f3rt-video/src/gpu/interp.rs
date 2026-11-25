@@ -661,9 +661,8 @@ mod tests {
     fn scene(first_line: usize, end_line: usize, delta: i32) -> Box<SceneSnapshot> {
         let mut scene = Box::new(SceneSnapshot::new(&VideoConfig::default()));
         scene.fallback = false;
-        for y in first_line..end_line {
-            let row = y - first_line;
-            let p = &mut scene.rows[y].playfields[0];
+        for (row, scene_row) in scene.rows[first_line..end_line].iter_mut().enumerate() {
+            let p = &mut scene_row.playfields[0];
             p.layer.enabled = true;
             p.layer.clip_inverse = true;
             p.source_x = (100 + delta * row as i32) * 256;
@@ -834,13 +833,11 @@ mod tests {
     #[test]
     fn pen_mask_gates_palette_and_motion_state_is_used() {
         let mut scene = scene(24, 256, 2);
-        for y in 24..256 {
-            let p = &mut scene.rows[y].playfields[0];
-            p.palette_add = ((y - 24) as u16) * 16;
+        for (row, scene_row) in scene.rows[24..256].iter_mut().enumerate() {
+            let p = &mut scene_row.playfields[0];
+            p.palette_add = (row as u16) * 16;
         }
-        for c in 0..8192 {
-            scene.colors[c] = 0x0010_1010;
-        }
+        scene.colors.fill(0x0010_1010);
         // No pen masks: palette interpolation is unsafe, so no palette coefficients.
         let stats = analyze_gpu_interpolation(
             &scene,
@@ -857,9 +854,9 @@ mod tests {
         );
 
         let mut motion = MotionState::default();
-        for y in 24..256 {
-            motion.rows[y].source_x[0] = (100 + 4 * (y - 24) as i32) * 256;
-            motion.rows[y].phase[0] = (100 + (y - 24) as i32) * 256;
+        for (row, motion_row) in motion.rows[24..256].iter_mut().enumerate() {
+            motion_row.source_x[0] = (100 + 4 * row as i32) * 256;
+            motion_row.phase[0] = (100 + row as i32) * 256;
         }
         let analyzed = analyze_gpu_interpolation(
             &scene,
@@ -954,14 +951,14 @@ pf3=applied:3/1/2/0 invalid3=4 boundaries3=5 unsafe_palette3=6"
     #[test]
     fn palette_ramp_with_safe_masks_gets_palette_coefficients() {
         let mut scene = scene(24, 256, 0);
-        for y in 24..256 {
-            let p = &mut scene.rows[y].playfields[0];
-            p.palette_add = (y as u16 - 24) * 16;
+        for (row, scene_row) in scene.rows[24..256].iter_mut().enumerate() {
+            let p = &mut scene_row.playfields[0];
+            p.palette_add = (row as u16) * 16;
             p.source_x = 0;
         }
-        for c in 0..8192 {
+        for (c, color) in scene.colors.iter_mut().enumerate() {
             let bank = (c / 16) as u32;
-            scene.colors[c] = 0x0010_1010 + bank;
+            *color = 0x0010_1010 + bank;
         }
         let cell = 0x0000_0000u32;
         {

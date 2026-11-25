@@ -970,9 +970,9 @@ mod tests {
 
     fn ramped_scene(delta: i32, offset: i32) -> Box<SceneSnapshot> {
         let mut scene = drawable_scene();
-        for y in 24..256 {
-            let row = (y - 24) as i32;
-            let p = &mut scene.rows[y].playfields[0];
+        for (row, scene_row) in scene.rows[24..256].iter_mut().enumerate() {
+            let row = row as i32;
+            let p = &mut scene_row.playfields[0];
             p.layer.enabled = true;
             p.layer.clip_inverse = true;
             p.source_x = (100 + delta * row + offset) * 256;
